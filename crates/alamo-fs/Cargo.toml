@@ -1,0 +1,8 @@
+[package]
+name = "alamo-fs"
+description = "Read-only access to Alamo engine (Star Wars: Empire at War) game files: MEG archives, layered mod file system, install detection."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]

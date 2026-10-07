@@ -1,0 +1,22 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/alamo-fs",
+    "crates/alamo-data",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/msch128/space-peace-not-at-war"
+
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

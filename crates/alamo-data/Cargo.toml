@@ -1,0 +1,9 @@
+[package]
+name = "alamo-data"
+description = "Parsers for Alamo engine game data: XML definitions (galaxy, planets, trade routes, factions) and .dat string tables."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+alamo-fs = { path = "../alamo-fs" }
