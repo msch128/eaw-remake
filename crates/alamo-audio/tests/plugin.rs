@@ -177,3 +177,14 @@ fn music_director_switches_playlists() {
         Some("Space_Map_Empire_Battle_Music_Event")
     );
 }
+
+#[test]
+fn volume_categories_map_to_percent() {
+    use alamo_audio::{AudioBuses, Bus, VolumeCategory};
+    let mut b = AudioBuses::default();
+    b.set_percent(VolumeCategory::Master, 50.0);
+    b.set_percent(VolumeCategory::Sfx, 200.0);
+    assert_eq!(b.percent(VolumeCategory::Sfx), 100.0);
+    assert!((b.gain(Bus::Sfx) - 0.5).abs() < 1e-6);
+    assert!((b.gain(Bus::Ambient) - 0.5 * b.ambient).abs() < 1e-6);
+}

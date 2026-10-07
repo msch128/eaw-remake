@@ -1,4 +1,4 @@
-﻿//! Bevy plugin: SFX / speech playback with EaW-like voice rules and a music director.
+//! Bevy plugin: SFX / speech playback with EaW-like voice rules and a music director.
 //!
 //! Add [`AlamoAudioPlugin`] next to Bevy's own `AudioPlugin` (part of `DefaultPlugins`), then use
 //! [`SfxCommands`] to play events and [`MusicDirector`] to select the music scene. Nothing here talks to
@@ -34,10 +34,11 @@ use bevy::prelude::*;
 use rand::Rng;
 use rand::seq::SliceRandom;
 
+use crate::music::{MusicPlanner, MusicScene};
 use crate::sfx::SfxEvent;
 use crate::speech::UnitResponseKind;
 use crate::wav::Wav;
-use crate::{MusicEvent, MusicKind, MusicLibrary, SampleResolver, SfxLibrary, SpeechLibrary};
+use crate::{MusicEvent, MusicLibrary, SampleResolver, SfxLibrary, SpeechLibrary};
 use alamo_fs::FileSource;
 
 /// Volume group a sound belongs to.
@@ -88,7 +89,7 @@ impl AudioBuses {
                 Bus::Music => self.music,
                 Bus::Sfx => self.sfx,
                 Bus::Speech => self.speech,
-                Bus::Ambient => self.ambient,
+                Bus::Ambient => self.ambient * self.sfx,
             }
     }
 }
@@ -119,6 +120,69 @@ impl Default for AudioSettings {
             speech_global_cooldown: 0.6,
             cache_budget_bytes: 256 << 20,
             default_music_fade: 2.0,
+        }
+    }
+}
+
+/// The four sliders of an options menu.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum VolumeCategory {
+    /// Everything.
+    Master,
+    /// Music.
+    Music,
+    /// Effects (also scales the ambient bus).
+    Sfx,
+    /// Speech (unit responses, advisor, campaign lines).
+    Speech,
+}
+
+impl AudioBuses {
+    /// Slider value of a category in percent (0..=100).
+    pub fn percent(&self, c: VolumeCategory) -> f32 {
+        100.0
+            * match c {
+                VolumeCategory::Master => self.master,
+                VolumeCategory::Music => self.music,
+                VolumeCategory::Sfx => self.sfx,
+                VolumeCategory::Speech => self.speech,
+            }
+    }
+
+    /// Sets a category from a slider value in percent (clamped to 0..=100).
+    pub fn set_percent(&mut self, c: VolumeCategory, percent: f32) {
+        let v = (percent / 100.0).clamp(0.0, 1.0);
+        match c {
+            VolumeCategory::Master => self.master = v,
+            VolumeCategory::Music => self.music = v,
+            VolumeCategory::Sfx => self.sfx = v,
+            VolumeCategory::Speech => self.speech = v,
+        }
+    }
+}
+
+/// A galactic-map happening for the advisor: resolved to the faction's HUD voice line (see
+/// [`crate::galaxy`]) and played as an SFX event on the speech bus.
+#[derive(Message, Debug, Clone)]
+pub struct GalaxyAudio {
+    /// Player faction (`"Empire"`, `"Rebel"`, `"Underworld"`).
+    pub faction: String,
+    /// What happened.
+    pub event: crate::GalaxyEvent,
+}
+
+fn galaxy_audio_system(
+    mut events: MessageReader<GalaxyAudio>,
+    audio: Res<AlamoAudio>,
+    mut out: MessageWriter<PlaySfx>,
+) {
+    for g in events.read() {
+        if let Some(event) = crate::resolve_galaxy_event(&audio.sfx, &g.faction, g.event) {
+            out.write(PlaySfx {
+                event,
+                position: None,
+                source: None,
+            });
         }
     }
 }
@@ -334,9 +398,11 @@ impl Plugin for AlamoAudioPlugin {
             .init_resource::<SfxState>()
             .init_resource::<MusicDirector>()
             .add_message::<PlaySfx>()
+            .add_message::<GalaxyAudio>()
             .add_systems(
                 Update,
                 (
+                    galaxy_audio_system,
                     process_sfx_requests,
                     update_voices,
                     music_system,
@@ -760,126 +826,37 @@ fn update_voices(
 // Music
 // ----------------------------------------------------------------------------------------------
 
-/// What the game is currently doing, as far as music is concerned.
-#[derive(Debug, Clone, PartialEq)]
-pub enum MusicScene {
-    /// Silence.
-    None,
-    /// Main menu theme.
-    MainMenu,
-    /// Strategic map of a faction (`"Rebel"`, `"Empire"`, `"Underworld"`).
-    Galactic(String),
-    /// Space battle of a faction; the ambient / battle playlist is chosen from the battle intensity.
-    Space(String),
-    /// Win or lose stinger.
-    Result {
-        /// Faction (`"Rebel"`, ...).
-        faction: String,
-        /// Win or lose.
-        win: bool,
-        /// Tactical (after a battle) or strategic (campaign end).
-        tactical: bool,
-    },
-    /// Any music event by name.
-    Event(String),
-}
-
 /// Selects music. Set the [`scene`](MusicScene) and, during battles, the intensity (0..1, e.g. the share
-/// of ships in combat); the director switches between ambient and battle playlists with hysteresis
-/// and crossfades.
-#[derive(Resource, Debug)]
+/// of ships in combat); the [`MusicPlanner`] inside switches between ambient and battle playlists with
+/// hysteresis and this director crossfades.
+#[derive(Resource, Debug, Default)]
 pub struct MusicDirector {
-    scene: MusicScene,
-    intensity: f32,
-    /// Intensity above which the battle playlist starts.
-    pub battle_threshold: f32,
-    /// Intensity below which (for [`calm_seconds`](Self::calm_seconds)) the ambient playlist returns.
-    pub calm_threshold: f32,
-    /// How long the battle must be calm before returning to ambient music.
-    pub calm_seconds: f32,
-    in_battle: bool,
-    calm_for: f32,
+    /// Data-driven track selection (tunable thresholds live here).
+    pub planner: MusicPlanner,
     current: Option<String>,
     queue: Vec<String>,
     oneshot_done: bool,
 }
 
-impl Default for MusicDirector {
-    fn default() -> Self {
-        Self {
-            scene: MusicScene::None,
-            intensity: 0.0,
-            battle_threshold: 0.35,
-            calm_threshold: 0.1,
-            calm_seconds: 25.0,
-            in_battle: false,
-            calm_for: 0.0,
-            current: None,
-            queue: Vec::new(),
-            oneshot_done: false,
-        }
-    }
-}
-
 impl MusicDirector {
     /// Switches the scene; the change is applied (with crossfade) on the next frame.
     pub fn set_scene(&mut self, scene: MusicScene) {
-        if self.scene != scene {
-            self.scene = scene;
-            self.in_battle = false;
-            self.calm_for = 0.0;
-        }
+        self.planner.set_scene(scene);
     }
 
     /// Battle intensity in 0..1 (only used in [`MusicScene::Space`]).
     pub fn set_battle_intensity(&mut self, intensity: f32) {
-        self.intensity = intensity.clamp(0.0, 1.0);
+        self.planner.set_battle_intensity(intensity);
     }
 
     /// The scene currently set.
     pub fn scene(&self) -> &MusicScene {
-        &self.scene
+        self.planner.scene()
     }
 
     /// Name of the music event that is playing (or about to).
     pub fn current_event(&self) -> Option<&str> {
         self.current.as_deref()
-    }
-
-    fn wanted_event(&self, lib: &MusicLibrary) -> Option<String> {
-        let faction_kind = |f: &str, make: &dyn Fn(String) -> MusicKind| -> Option<&MusicEvent> {
-            lib.by_kind(&make(f.to_string()))
-                .or_else(|| lib.by_kind(&make("Empire".into())))
-        };
-        match &self.scene {
-            MusicScene::None => None,
-            MusicScene::MainMenu => lib.by_kind(&MusicKind::MainMenu).map(|e| e.name.clone()),
-            MusicScene::Galactic(f) => {
-                faction_kind(f, &MusicKind::Galactic).map(|e| e.name.clone())
-            }
-            MusicScene::Space(f) => if self.in_battle {
-                faction_kind(f, &MusicKind::SpaceBattle)
-            } else {
-                faction_kind(f, &MusicKind::SpaceAmbient)
-            }
-            .map(|e| e.name.clone()),
-            MusicScene::Result {
-                faction,
-                win,
-                tactical,
-            } => lib
-                .iter()
-                .find(|e| {
-                    e.kind
-                        == MusicKind::Result {
-                            faction: faction.clone(),
-                            win: *win,
-                            tactical: *tactical,
-                        }
-                })
-                .map(|e| e.name.clone()),
-            MusicScene::Event(n) => lib.get(n).map(|e| e.name.clone()),
-        }
     }
 }
 
@@ -941,22 +918,8 @@ fn music_system(
     mut tracks: Query<(Entity, &mut MusicTrack, Option<&AudioSink>)>,
 ) {
     let dt = time.delta_secs();
-    // Battle / calm hysteresis.
-    if matches!(director.scene, MusicScene::Space(_)) {
-        if director.intensity >= director.battle_threshold {
-            director.in_battle = true;
-            director.calm_for = 0.0;
-        } else if director.in_battle && director.intensity <= director.calm_threshold {
-            director.calm_for += dt;
-            if director.calm_for >= director.calm_seconds {
-                director.in_battle = false;
-                director.calm_for = 0.0;
-            }
-        } else {
-            director.calm_for = 0.0;
-        }
-    }
-    let wanted = director.wanted_event(&audio.music);
+    director.planner.step(dt);
+    let wanted = director.planner.wanted_event(&audio.music);
     let changed = wanted != director.current;
     if changed {
         director.current = wanted.clone();
@@ -1046,4 +1009,3 @@ fn update_music_gain(
         }
     }
 }
-

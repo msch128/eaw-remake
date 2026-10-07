@@ -199,6 +199,150 @@ pub fn classify(name: &str) -> MusicKind {
     }
 }
 
+/// What the game is currently doing, as far as music is concerned.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub enum MusicScene {
+    /// Silence.
+    #[default]
+    None,
+    /// Main menu theme.
+    MainMenu,
+    /// Strategic map of a faction (`"Rebel"`, `"Empire"`, `"Underworld"`).
+    Galactic(String),
+    /// Battle load screen (`Tactical_Battle_Loading_Loop_Event`; the Remake disables the older
+    /// `Galactic_Battle_Pending_*` / `Tactical_Battle_Load_Screen_*` events).
+    BattleLoading,
+    /// Space battle of a faction; the ambient / battle playlist is chosen from the battle intensity.
+    Space(String),
+    /// Win or lose stinger.
+    Result {
+        /// Faction (`"Rebel"`, ...).
+        faction: String,
+        /// Win or lose.
+        win: bool,
+        /// Tactical (after a battle) or strategic (campaign end).
+        tactical: bool,
+    },
+    /// Any music event by name.
+    Event(String),
+}
+
+/// Pure (no Bevy) music selection: scene + battle intensity -> music event name, with the ambient /
+/// battle hysteresis of EaW's tactical music (battle music starts when fighting begins and the calm
+/// playlist only returns after a quiet spell).
+#[derive(Debug, Clone)]
+pub struct MusicPlanner {
+    scene: MusicScene,
+    intensity: f32,
+    /// Intensity above which the battle playlist starts.
+    pub battle_threshold: f32,
+    /// Intensity below which (for [`calm_seconds`](Self::calm_seconds)) the ambient playlist returns.
+    pub calm_threshold: f32,
+    /// How long the battle must be calm before returning to ambient music.
+    pub calm_seconds: f32,
+    in_battle: bool,
+    calm_for: f32,
+}
+
+impl Default for MusicPlanner {
+    fn default() -> Self {
+        Self {
+            scene: MusicScene::None,
+            intensity: 0.0,
+            battle_threshold: 0.35,
+            calm_threshold: 0.1,
+            calm_seconds: 25.0,
+            in_battle: false,
+            calm_for: 0.0,
+        }
+    }
+}
+
+impl MusicPlanner {
+    /// Switches the scene (resets the battle state).
+    pub fn set_scene(&mut self, scene: MusicScene) {
+        if self.scene != scene {
+            self.scene = scene;
+            self.in_battle = false;
+            self.calm_for = 0.0;
+        }
+    }
+
+    /// Battle intensity in 0..1 (only used in [`MusicScene::Space`]).
+    pub fn set_battle_intensity(&mut self, intensity: f32) {
+        self.intensity = intensity.clamp(0.0, 1.0);
+    }
+
+    /// The scene currently set.
+    pub fn scene(&self) -> &MusicScene {
+        &self.scene
+    }
+
+    /// True while the battle playlist is selected.
+    pub fn in_battle(&self) -> bool {
+        self.in_battle
+    }
+
+    /// Advances the battle / calm hysteresis by `dt` seconds.
+    pub fn step(&mut self, dt: f32) {
+        if !matches!(self.scene, MusicScene::Space(_)) {
+            return;
+        }
+        if self.intensity >= self.battle_threshold {
+            self.in_battle = true;
+            self.calm_for = 0.0;
+        } else if self.in_battle && self.intensity <= self.calm_threshold {
+            self.calm_for += dt;
+            if self.calm_for >= self.calm_seconds {
+                self.in_battle = false;
+                self.calm_for = 0.0;
+            }
+        } else {
+            self.calm_for = 0.0;
+        }
+    }
+
+    /// The music event for the current scene. Unknown factions fall back to Empire.
+    pub fn wanted_event(&self, lib: &MusicLibrary) -> Option<String> {
+        let faction_kind = |f: &str, make: &dyn Fn(String) -> MusicKind| -> Option<&MusicEvent> {
+            lib.by_kind(&make(f.to_string()))
+                .or_else(|| lib.by_kind(&make("Empire".into())))
+        };
+        let named = |n: &str| lib.get(n).map(|e| e.name.clone());
+        match &self.scene {
+            MusicScene::None => None,
+            MusicScene::MainMenu => lib.by_kind(&MusicKind::MainMenu).map(|e| e.name.clone()),
+            MusicScene::Galactic(f) => {
+                faction_kind(f, &MusicKind::Galactic).map(|e| e.name.clone())
+            }
+            MusicScene::BattleLoading => named("Tactical_Battle_Loading_Loop_Event")
+                .or_else(|| named("Tactical_Battle_Loading_Loop_Event_1")),
+            MusicScene::Space(f) => if self.in_battle {
+                faction_kind(f, &MusicKind::SpaceBattle)
+            } else {
+                faction_kind(f, &MusicKind::SpaceAmbient)
+            }
+            .map(|e| e.name.clone()),
+            MusicScene::Result {
+                faction,
+                win,
+                tactical,
+            } => lib
+                .iter()
+                .find(|e| {
+                    e.kind
+                        == MusicKind::Result {
+                            faction: faction.clone(),
+                            win: *win,
+                            tactical: *tactical,
+                        }
+                })
+                .map(|e| e.name.clone()),
+            MusicScene::Event(n) => named(n),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
