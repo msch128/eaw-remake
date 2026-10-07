@@ -52,6 +52,8 @@ pub struct EawUiSettings {
     /// shipped with the game; this is looked up in the system font database at runtime.
     /// `None` uses Bevy's built-in default font.
     pub font_family: Option<String>,
+    /// Font family of tooltips (`Tool_Tip_Font_Name` in `GameConstants.xml` is Arial).
+    pub tooltip_font_family: Option<String>,
     /// Camera the UI is drawn by. `None` uses the default (the primary window's camera); set
     /// it for UI rendered into an image.
     pub camera: Option<Entity>,
@@ -62,7 +64,8 @@ impl Default for EawUiSettings {
         Self {
             scale: UiScaleMode::Auto,
             faceplate_oversample: 2.0,
-            font_family: Some("Arial".to_string()),
+            font_family: Some("Bahnschrift".to_string()),
+            tooltip_font_family: Some("Arial".to_string()),
             camera: None,
         }
     }
@@ -79,10 +82,10 @@ pub struct EawUiAssets {
     pub game: Option<Arc<GameData>>,
 }
 
-/// Icon texture name of a unit/structure (`Icon_Name` in its XML definition).
+/// Icon texture name of a unit/structure (`Icon_Name` in its XML definition), `None` if it has none.
 pub fn unit_icon(game: &GameData, unit: &str) -> Option<String> {
     let r = game.objects.resolve(unit)?;
-    r.get("Icon_Name").map(str::to_string)
+    r.get("icon_name").map(str::to_string)
 }
 
 /// The plugin: resources, systems and the tooltip panel.
@@ -172,4 +175,6 @@ impl EawUiCommandsExt for Commands<'_, '_> {
         });
     }
 }
+
+
 

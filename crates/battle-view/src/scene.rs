@@ -1,4 +1,4 @@
-//! The static scene of a space map: sky, nebula, lights, ambient, bounds and placed props.
+﻿//! The static scene of a space map: sky, nebula, lights, ambient, bounds and placed props.
 
 use alamo_data::GameData;
 use alamo_fs::FileSource;
@@ -99,11 +99,11 @@ impl SpaceScene {
             .map_err(|e| format!("cannot read {map_path}: {e}"))?;
         let mut map = SpaceMap::parse(&bytes).map_err(|e| format!("cannot parse {map_path}: {e}"))?;
         map.resolve_names(data.objects.iter().map(|o| o.name.as_str()));
-        Ok(Self::from_map(&map, data))
+        Ok(Self::from_map(&map, data, Some(fs)))
     }
 
     /// Builds the scene from an already parsed map (object names must be resolved).
-    pub fn from_map(map: &SpaceMap, data: &GameData) -> Self {
+    pub fn from_map(map: &SpaceMap, data: &GameData, fs: Option<&dyn FileSource>) -> Self {
         let env = &map.environment;
         let light = |i: usize| {
             let l = &env.lights[i];
@@ -113,7 +113,22 @@ impl SpaceScene {
                 color: Vec3::from(l.color),
             }
         };
-        let name_or = |s: &str| (!s.trim().is_empty()).then(|| format!("{}.ALO", s.trim()));
+        let exists = |model: &str| {
+            fs.is_none_or(|f| f.exists(&format!("Art/Models/{model}")))
+        };
+        // Sky and nebula are named by game object; the object names the model file.
+        let name_or = |s: &str| {
+            let s = s.trim();
+            if s.is_empty() {
+                return None;
+            }
+            let model = data
+                .objects
+                .resolve(s)
+                .and_then(|r| r.string("space_model_name"))
+                .unwrap_or_else(|| format!("{s}.ALO"));
+            exists(&model).then_some(model)
+        };
         let mut props = Vec::new();
         for o in &map.objects {
             let class = o.class();
@@ -132,6 +147,9 @@ impl SpaceScene {
             let Some(model) = r.string("space_model_name") else {
                 continue;
             };
+            if !exists(&model) {
+                continue;
+            }
             let scale = r
                 .num::<f32>("scale_factor")
                 .filter(|s| *s > 0.0)
@@ -185,19 +203,6 @@ pub fn spawn_scene(commands: &mut Commands, scene: &SpaceScene, sky_radius: f32)
         Color::srgb(sun.color.x, sun.color.y, sun.color.z),
     );
     commands.entity(sun_entity).insert(BattleEntity);
-    for l in &scene.lights[1..] {
-        commands.spawn((
-            Name::new("fill light"),
-            BattleEntity,
-            DirectionalLight {
-                color: Color::srgb(l.color.x, l.color.y, l.color.z),
-                illuminance: 0.0,
-                shadow_maps_enabled: false,
-                ..default()
-            },
-            Transform::IDENTITY.looking_to(l.direction, Vec3::Y),
-        ));
-    }
     let sky_rot = |deg: [f32; 3]| map_object_rotation(deg);
     if let Some(sky) = &scene.skydome {
         commands.spawn((
@@ -236,3 +241,5 @@ pub fn spawn_scene(commands: &mut Commands, scene: &SpaceScene, sky_radius: f32)
         ));
     }
 }
+
+

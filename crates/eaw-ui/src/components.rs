@@ -210,7 +210,7 @@ impl CommandBarComponent {
     }
 
     /// Faction dependent entry of a texture list: single-entry lists apply to everybody.
-    pub fn pick<'a>(list: &'a [String], index: usize) -> Option<&'a str> {
+    pub fn pick(list: &[String], index: usize) -> Option<&str> {
         list.get(index).or_else(|| list.first()).map(String::as_str)
     }
 }
@@ -281,4 +281,5 @@ impl CommandBarDb {
         self.components.values()
     }
 }
+
 

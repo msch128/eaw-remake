@@ -139,11 +139,14 @@ fn sample_data(game: &alamo_data::GameData, faction: UiFaction) -> CommandBarDat
     let mut icons: Vec<String> = game
         .objects
         .iter()
-        .filter(|o| o.kind.eq_ignore_ascii_case("SpaceUnit") || o.kind.eq_ignore_ascii_case("UniqueUnit"))
+        .filter(|o| {
+            ["Squadron", "SpaceUnit", "UniqueUnit"].iter().any(|k| o.kind.eq_ignore_ascii_case(k))
+                && !o.name.to_lowercase().contains("template")
+        })
         .filter(|o| {
             game.objects
                 .resolve(&o.name)
-                .and_then(|r| r.get("Affiliation").map(|a| a.to_lowercase()))
+                .and_then(|r| r.get("affiliation").map(|a| a.to_lowercase()))
                 .is_some_and(|a| a.contains(&want) || (want == "underworld" && a.contains("underworld")))
         })
         .filter_map(|o| unit_icon(game, &o.name))
@@ -231,5 +234,7 @@ fn drive(
     }
     let _ = &mut exit;
 }
+
+
 
 

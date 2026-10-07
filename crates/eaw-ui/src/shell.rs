@@ -1,4 +1,4 @@
-//! Shell models: the placement data of the interface.
+﻿//! Shell models: the placement data of the interface.
 //!
 //! Every screen of the original UI (galactic command bar, tactical command bar, reinforcement
 //! window, hero frame ...) is an `.alo` model made of flat quads. Hidden quads named like a
@@ -112,7 +112,9 @@ impl ShellLayout {
             {
                 let triangles = sub
                     .indices
-                    .chunks_exact(3)
+                    .as_chunks::<3>()
+                    .0
+                    .iter()
                     .filter_map(|c| {
                         let v = |k: u16| {
                             sub.vertices.get(k as usize).map(|v| ArtVertex {
@@ -257,3 +259,4 @@ pub fn rasterize(
         pixels: acc.iter().map(|v| v.round().clamp(0.0, 255.0) as u8).collect(),
     }
 }
+

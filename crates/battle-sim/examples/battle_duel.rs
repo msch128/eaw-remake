@@ -11,8 +11,9 @@ use alamo_fs::{GameFs, GameInstall};
 use battle_sim::*;
 
 type Fleet<'a> = &'a [(&'a str, u32)];
+type Scenario = (&'static str, Fleet<'static>, Fleet<'static>);
 
-const SCENARIOS: &[(&str, &[(&str, u32)], &[(&str, u32)])] = &[
+const SCENARIOS: &[Scenario] = &[
     ("ISD vs MC80", &[("Star_Destroyer", 1)], &[("MC-80_Star_Cruiser", 1)]),
     ("VSD vs Nebulon-B", &[("Victory_Destroyer", 1)], &[("Nebulon_B_Frigate", 1)]),
     ("CR90 vs Tartan", &[("CR-90_Corvette", 1)], &[("Tartan_Patrol_Cruiser", 1)]),

@@ -1,4 +1,4 @@
-//! Empire at War Lua scripts running against [`galaxy_sim`].
+﻿//! Empire at War Lua scripts running against [`galaxy_sim`].
 //!
 //! [`ScriptedSim`] steps the simulation and the script scheduler together:
 //!
@@ -60,7 +60,7 @@ pub struct StepReport {
     pub script_events: Vec<ScriptEvent>,
 }
 
-/// Accumulated wall-clock cost.
+/// Accumulated cost (thread CPU time on Windows).
 #[derive(Debug, Default, Clone, Copy)]
 pub struct Timing {
     /// Time spent in `Sim::step`.
@@ -79,6 +79,27 @@ pub struct ScriptedSim {
     pub timing: Timing,
     /// Errors of scripts that failed to start.
     pub start_errors: Vec<String>,
+}
+
+/// CPU cost of the calling thread, from the thread cycle counter (fine grained and unaffected by other
+/// processes competing for the cores, unlike wall time). Converted at an assumed 3 GHz, so only relative
+/// numbers are meaningful.
+#[cfg(windows)]
+fn thread_cpu_time() -> Duration {
+    unsafe extern "system" {
+        fn GetCurrentThread() -> isize;
+        fn QueryThreadCycleTime(thread: isize, cycles: *mut u64) -> i32;
+    }
+    let mut cycles = 0u64;
+    // SAFETY: plain Win32 call with a valid out pointer for the current thread.
+    unsafe {
+        QueryThreadCycleTime(GetCurrentThread(), &mut cycles);
+    }
+    Duration::from_nanos(cycles / 3)
+}
+#[cfg(not(windows))]
+fn thread_cpu_time() -> Duration {
+    Duration::ZERO
 }
 
 fn read_dialog(fs: &Arc<dyn FileSource>) -> host::DialogReader {
@@ -201,18 +222,18 @@ impl ScriptedSim {
 
     /// Advances simulation and scripts by `dt` game seconds.
     pub fn step(&mut self, dt: f32) -> StepReport {
-        let t0 = Instant::now();
+        let t0 = thread_cpu_time();
         let sim_events = self.inner.borrow_mut().sim.step(dt);
-        self.timing.sim += t0.elapsed();
+        self.timing.sim += thread_cpu_time() - t0;
 
-        let t1 = Instant::now();
+        let t1 = thread_cpu_time();
         self.notify_story(&sim_events);
         self.script_clock += f64::from(dt);
         while self.script_clock >= self.script_step {
             self.runtime.update(self.script_step);
             self.script_clock -= self.script_step;
         }
-        self.timing.scripts += t1.elapsed();
+        self.timing.scripts += thread_cpu_time() - t1;
 
         let script_events = std::mem::take(&mut self.inner.borrow_mut().events);
         StepReport {
@@ -272,3 +293,5 @@ impl ScriptedSim {
             .collect()
     }
 }
+
+

@@ -36,6 +36,7 @@ struct Scene {
     isd: Entity,
     mc: Entity,
     rate: f32,
+    ready_at: Option<std::time::Instant>,
     spawn_acc: f32,
     rng: u32,
     hull_phase: bool,
@@ -176,6 +177,7 @@ fn main() {
         isd,
         mc,
         rate,
+        ready_at: None,
         spawn_acc: 0.0,
         rng: 0x1234_5678,
         hull_phase: false,
@@ -192,10 +194,20 @@ fn script(
     mut sc: ResMut<Scene>,
     time: Res<Time>,
     roots: Query<(&AlamoModelLoaded, &GlobalTransform)>,
+    mut strategy: ResMut<TimeUpdateStrategy>,
 ) {
     let (Ok((li, gi)), Ok((lm, gm))) = (roots.get(sc.isd), roots.get(sc.mc)) else {
         return;
     };
+    // Hold simulation time until shaders and textures had a moment to get ready.
+    let ready_at = *sc
+        .ready_at
+        .get_or_insert_with(|| std::time::Instant::now() + Duration::from_millis(3000));
+    if std::time::Instant::now() < ready_at {
+        *strategy = TimeUpdateStrategy::ManualDuration(Duration::ZERO);
+        return;
+    }
+    *strategy = TimeUpdateStrategy::ManualDuration(Duration::from_millis(STEP_MS));
     let t = time.elapsed_secs();
     sc.frame += 1;
     let (ci, ri) = (gi.transform_point(li.center), li.radius);

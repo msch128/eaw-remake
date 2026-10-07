@@ -1,4 +1,4 @@
-# Tactical space battle rules used by `battle-sim`
+﻿# Tactical space battle rules used by `battle-sim`
 
 Everything is derived from the Remake 4.0 data (`Data/Xml`) plus the `.alo` models for hardpoint
 positions. Where the engine (closed source) defines a rule that is not visible in the data, the value
@@ -19,14 +19,14 @@ is an **estimate** and marked as such; estimates live in `BattleConfig` or in `d
 
 | Rule | Data |
 |---|---|
-| Hull `Tactical_Health`, shield `Shield_Points` and `Shield_Refresh_Rate` per second | unit XML (`Units/Space/*.xml`), star bases `Buildings/Space/GC/**`, structures |
+| Hull `Tactical_Health`, shield `Shield_Points`; `Shield_Refresh_Rate` is gained once per `ShieldRechargeIntervalInSecs` (2 s) as a continuous `rate/2` per second, only after `shield_regen_delay` (2 s, estimate) without taking damage | unit XML (`Units/Space/*.xml`), star bases `Buildings/Space/GC/**`, structures |
 | `Armor_Type` / `Shield_Armor_Type` and the 673-entry `Damage_To_Armor_Mod` matrix scale hull and shield damage | `Xml/Gameconstants.xml` |
-| Hardpoint position and firing direction = `Fire_Bone_A` (else `Attachment_Bone`) in the `.alo`; firing direction is the bone's local +X axis | `Units/Space/Hardpoints/*.xml`, `Art/Models/*.ALO` via `alamo-model` |
-| Cone: `Fire_Cone_Width` / `Fire_Cone_Height` are full angles in degrees around the bone direction (yaw / pitch) | hardpoint XML |
+| Hardpoint position = `Fire_Bone_A` (else `Attachment_Bone`) in the ship `.alo`. Fixed weapons fire along that bone's local +X axis. **Turrets** (`Is_Turret`, `Model_To_Attach`) take their rest direction from the barrel of the attached turret model: `FP_01` minus `Barrel` bone in `Art/Models/<Model_To_Attach>`, rotated by the mount bone (the mount axes alone are authored arbitrarily: mirrored turret pairs point opposite ways) | `Units/Space/Hardpoints/*.xml`, `Art/Models/*.ALO` via `alamo-model` |
+| Arc = larger of the fire cone (`Fire_Cone_Width`/`Height`, full angles in degrees) and the turret extents (`Turret_Rotate/Elevate_Extent_Degrees`), measured in the mount frame (forward = rest direction, up = bone Z). A mount whose arc cannot reach the battle plane at all is re-centered on the ship's bow | hardpoint XML |
 | Range `Fire_Range_Distance`, `Fire_Min_Range_Distance` (measured to the target's bounding sphere) | hardpoint XML |
 | Volley: `Fire_Pulse_Count` pulses `Fire_Pulse_Delay_Seconds` apart, then a random recharge between `Fire_Min/Max_Recharge_Seconds` | hardpoint XML |
 | `Fire_Inaccuracy_Distance` per target class is added as aim error | hardpoint XML |
-| `Fire_Category_Restrictions`: weapon may only target those classes | hardpoint XML |
+| `Fire_Category_Restrictions` lists the classes the weapon must **not** fire at (only ion cannons use it: no fighters, bombers, gunships, transports, corvettes) | hardpoint XML |
 | Hardpoint `Health`, `Is_Destroyable`, `Is_Targetable` | hardpoint XML |
 | Projectile: `Projectile_Damage`, `Damage_Type`, `Max_Speed`, `Max_Rate_Of_Turn` (homing), `Projectile_Max_Flight_Distance`, `Projectile_Does_Shield/Hitpoint_Damage`, blast area range/damage/victims, ion stun duration and speed/rate reduction | `Xml/PROJECTILES.XML` |
 | Fighters fire a hull weapon: `Projectile_Types`, `Projectile_Fire_*`, range `Targeting_Max_Attack_Distance`, cone `Turret_Rotate_Extent_Degrees` | unit XML |
@@ -53,13 +53,17 @@ Ion stun slows the target and its fire rate for `Projectile_Ion_Stun_Duration`.
 
 ## 4. Targeting and movement (AI)
 
-* Every 0.4 s a ship scans enemies and keeps a candidate list sorted by priority class and distance (fighters prefer
-  fighters/bombers, bombers prefer capitals/frigates/structures, everyone else prefers big ships, structures and
-  corvettes over bombers over fighters; the `Targeting_Priority_Set` tables are not parsed). Each weapon fires at the
-  first candidate that is in range, inside its cone and allowed. Heavy guns (damage >= 150) and shield-only weapons
-  never fire at fighters or bombers.
-* Large ships close to the damage-weighted mean weapon range (x0.9) and hold there, turning their bow towards the target
-  if they have a facing/narrow-cone weapon. Defender ships with a star base `Guard` the planet; attackers `AttackMove`.
+* Every 0.4 s a ship scans enemies and keeps a candidate list sorted by `Targeting_Priority_Set` weight (lower first, then
+  distance). The sets come from `Xml/TARGETINGPRIORITYSETFILES.XML` (`SpaceUnitTargetingPriorities.xml`): `Attack_Priorities`
+  (class -> weight, `Golan` for Golan platforms), `Category_Exclusions`, `Hard_Point_Priorities`. A ship uses its own
+  `Targeting_Priority_Set` (e.g. `Capital`) and, under AI `AttackMove` orders, the `<set>_Attack_Move` variant, which
+  also excludes frigates/capitals for fighters and corvettes and lists the hardpoints to snipe (shield generator,
+  engines, hangar, weapons). Classes missing from a set are only opportunity targets (lowest priority).
+* Each weapon fires at the first candidate that is in range, inside its arc and allowed. Heavy guns (damage >= 150) and
+  shield-only weapons never fire at fighters or bombers.
+* Large ships close to the range that puts 80% of their weapon damage in reach (x0.95) and hold there, turning to the
+  bearing (bow, broadside or stern) at which the largest share of their hardpoint damage can bear on the target
+  (`ShipDef::bearing_dps`, computed from the arcs). Defender ships with a star base `Guard` the planet; attackers `AttackMove`.
 * Orders: `Move`, `AttackMove`, `Attack(ship)`, `AttackHardpoint(ship, hardpoint)` (aims at the hardpoint and the hit
   routes to it), `Stop`, `Retreat`, stances Aggressive / Defensive / HoldFire.
 * No ship-ship collision or avoidance, no formation keeping for capital ships.
@@ -71,8 +75,15 @@ data: `SPEED_MULTIPLIER`, `SHIELD_REGEN_MULTIPLIER` (negative values are clamped
 (applied to the recharge, below 1 = faster) and `TAKE_DAMAGE_MULTIPLIER`. `FULL_SALVO` uses the per-hardpoint
 `Full_Salvo_Weapon_Delay_Multiplier`, `POWER_TO_WEAPONS` additionally the per-hardpoint
 `Power_To_Weapons_Mode_Weapon_Delay_Multiplier`. `Recharge_Seconds` starts after the effect ends. AI sides trigger
-weapon boosts when something is in range. Not implemented: tractor beam, missile shield, interdiction, stealth,
-sensor jamming, and every other ability type.
+weapon boosts when something is in range. Also implemented:
+
+* `TRACTOR_BEAM`: needs a living tractor-beam hardpoint; picks the current or nearest enemy in `Activation_Max_Range` whose
+  class is in `Applicable_Unit_Categories` and slows it by `Target_Speed_Decrease_Percent` while active and in range.
+* `MISSILE_SHIELD`: a toggle (`Expiration_Seconds` 0) that destroys enemy missiles, torpedoes and rockets inside
+  `Effective_Radius` and pins the ship (`Disable_Movement`); AI sides switch it on under missile fire and off again.
+* `INTERDICT`: a toggle that pins the ship and, while on (or for `Is_Interdictor` units), blocks the enemy `Retreat` command.
+
+Not implemented: stealth, sensor jamming, and every other ability type.
 
 ## 6. Reinforcements, unit cap, retreat, victory
 
@@ -83,8 +94,12 @@ sensor jamming, and every other ability type.
   leave the battle area; they count as survivors. `Space_Retreat_Attrition_Factor` is 0 in the data.
 * A side loses when it has no ship other than fighters/bombers left (a fighter-only side loses when its fighters are gone).
   The loser's remaining fighters are destroyed with it. Battles are a draw after `max_time` (30 min).
-* Setup places fleets in rows by size class, attackers at -X, defenders near the planet at +X. The real space map
-  (`.ted`) bounds and obstacles (asteroids, nebula, the planet) are not read; the arena is a square of `half_size` = 10000.
+* Arena: `BattleConfig::arena` (`Arena::load(data, fs, "<map>.ted")` via the `alamo-map` crate) gives the playable bounds,
+  `Attacker Entry Position` markers (attackers, at -Y), `Defending Forces Position` markers (defenders, at +Y), the
+  `Space Station Position` (star base), structure marker spots (`Shipyard N Marker`, `Golan All-in-One Marker`, ...) and asteroids
+  as round obstacles that absorb projectiles and push ships away (radius by name: huge 600, large 350, medium 180,
+  small 80). Without an arena fleets start in rows by size class in an empty square of `half_size` = 10000. Nebulae, the planet
+  and backdrop props are not obstacles.
 
 ## 7. Performance design
 

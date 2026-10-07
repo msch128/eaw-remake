@@ -33,6 +33,9 @@ pub struct BattleConfig {
     pub reinforce_delay: f32,
     /// Use rayon for per-entity work.
     pub parallel: bool,
+    /// Shields only recharge after this many seconds without taking damage (0 = recharge continuously).
+    /// Estimate: the data only gives `ShieldRechargeIntervalInSecs`, not whether combat pauses it.
+    pub shield_regen_delay: f32,
     /// Arena (bounds, spawn markers, asteroids) from a space map; `None` = empty square of `half_size`.
     pub arena: Option<std::sync::Arc<crate::arena::Arena>>,
 }
@@ -50,6 +53,7 @@ impl Default for BattleConfig {
             unit_cap: 150,
             reinforce_delay: 5.0,
             parallel: true,
+            shield_regen_delay: 2.0,
             arena: None,
         }
     }
@@ -418,6 +422,8 @@ pub struct Ship {
     pub reserve: Vec<(ShipId, u32)>,
     /// Abilities.
     pub abilities: Vec<AbilityState>,
+    /// Seconds since the ship last took damage.
+    pub since_hit: f32,
     /// Tractor beam speed reduction currently applied to this ship (0..1).
     pub tractor_cut: f32,
     /// Ion stun seconds left.

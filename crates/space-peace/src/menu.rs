@@ -320,7 +320,8 @@ pub fn spawn_menu(commands: &mut Commands, spec: &MenuSpec, marker: impl Compone
                 root.spawn((
                     Text::new(spec.subtitle.clone()),
                     TextFont { font_size: FontSize::Px(22.0), ..default() },
-                    TextColor(Color::srgb(0.55, 0.7, 0.9)),
+                    TextColor(Color::srgb(0.75, 0.86, 1.0)),
+                    TextShadow { offset: Vec2::splat(1.5), color: Color::srgba(0.0, 0.0, 0.1, 0.95) },
                 ));
             }
             root.spawn(Node {

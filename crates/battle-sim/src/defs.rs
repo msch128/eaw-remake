@@ -1055,7 +1055,7 @@ impl Catalog {
         let half_yaw = (h.fire_cone_width.to_radians() * 0.5).clamp(0.0, std::f32::consts::PI);
         let half_pitch = (h.fire_cone_height.to_radians() * 0.5).clamp(0.0, std::f32::consts::FRAC_PI_2);
         let mut arc_yaw = half_yaw.max(turret_yaw).min(std::f32::consts::PI);
-        let mut arc_pitch = half_pitch.max(turret_pitch).min(std::f32::consts::FRAC_PI_2).max(0.1);
+        let mut arc_pitch = half_pitch.max(turret_pitch).clamp(0.1, std::f32::consts::FRAC_PI_2);
         // Some bones are oriented in ways that cannot reach the battle plane at all (e.g. a gunship's
         // nose gun whose bone axis points sideways); re-center those on the ship's forward axis.
         let mut arc_fallback = false;

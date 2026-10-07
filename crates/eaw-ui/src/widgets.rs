@@ -75,6 +75,7 @@ pub enum SlotKind {
     Pad,
     Select,
     Ability,
+    Border,
 }
 
 /// A component whose content comes from a list in [`CommandBarData`].
@@ -156,6 +157,9 @@ fn slot_for(name: &str) -> Option<Slot> {
     }
     if let Some(i) = num("s_select_") {
         return Some(Slot { kind: SlotKind::Select, index: i });
+    }
+    if let Some(i) = num("special_border_") {
+        return Some(Slot { kind: SlotKind::Border, index: i });
     }
     if let Some(i) = num("special_button_") {
         return Some(Slot { kind: SlotKind::Ability, index: i });
@@ -272,6 +276,12 @@ pub fn spawn_command_bar(world: &mut World, spec: CommandBarSpec) -> Option<Enti
 }
 
 impl Builder<'_> {
+    fn hide(&mut self, e: Entity) {
+        if let Some(mut n) = self.world.entity_mut(e).get_mut::<Node>() {
+            n.display = Display::None;
+        }
+    }
+
     fn tex(&mut self, name: &str) -> Option<UiTexture> {
         let mut images = self.world.get_resource_mut::<Assets<Image>>()?;
         self.textures.get(&mut images, name)
@@ -559,17 +569,16 @@ impl Builder<'_> {
             self.world.entity_mut(button).insert(s);
             // Slots stay invisible until data fills them.
             self.world.entity_mut(button).insert(Visibility::Hidden);
-            self.world
-                .entity_mut(button)
-                .get_mut::<Node>()
-                .map(|mut n| n.display = Display::None);
+            self.hide(button);
         }
 
         let mut layers = ButtonLayers::default();
+        let mut icon_px = 40.0f32;
         let tint = def.color.map_or(Color::WHITE, rgba);
         let scaled = |t: &UiTexture| t.size.as_vec2() * def.scale;
         if let Some(t) = CommandBarComponent::pick(&def.blank, fi).and_then(|n| self.tex(n)) {
             let sz = scaled(&t);
+            icon_px = (sz.min_element() * 0.84).max(20.0);
             self.layer(button, size, &t, sz, Vec2::ZERO, tint);
         }
         let icon_tex = CommandBarComponent::pick(&def.icon, fi)
@@ -586,19 +595,19 @@ impl Builder<'_> {
         if let Some(t) = CommandBarComponent::pick(&def.disabled, fi).and_then(|n| self.tex(n)) {
             let sz = scaled(&t);
             let e = self.layer(button, size, &t, sz, def.icon_offset, tint);
-            self.world.entity_mut(e).get_mut::<Node>().map(|mut n| n.display = Display::None);
+            self.hide(e);
             layers.disabled = Some(e);
         }
         if let Some(t) = CommandBarComponent::pick(&def.selected, fi).and_then(|n| self.tex(n)) {
             let sz = scaled(&t);
             let e = self.layer(button, size, &t, sz, def.icon_offset, tint);
-            self.world.entity_mut(e).get_mut::<Node>().map(|mut n| n.display = Display::None);
+            self.hide(e);
             layers.selected = Some(e);
         }
         if let Some(t) = CommandBarComponent::pick(&def.mouse_over, fi).and_then(|n| self.tex(n)) {
             let sz = scaled(&t);
             let e = self.layer(button, size, &t, sz, Vec2::ZERO, tint);
-            self.world.entity_mut(e).get_mut::<Node>().map(|mut n| n.display = Display::None);
+            self.hide(e);
             layers.over = Some(e);
         }
         self.world.entity_mut(button).insert(layers);
@@ -612,10 +621,10 @@ impl Builder<'_> {
                     ImageNode::default(),
                     Node {
                         position_type: PositionType::Absolute,
-                        left: Val::Px(size.x * 0.5 - 20.0),
-                        top: Val::Px(size.y * 0.5 - 20.0),
-                        width: Val::Px(40.0),
-                        height: Val::Px(40.0),
+                        left: Val::Px(size.x * 0.5 - icon_px * 0.5),
+                        top: Val::Px(size.y * 0.5 - icon_px * 0.5),
+                        width: Val::Px(icon_px),
+                        height: Val::Px(icon_px),
                         display: Display::None,
                         ..default()
                     },
@@ -628,9 +637,9 @@ impl Builder<'_> {
                 SlotPart::Progress,
                 Node {
                     position_type: PositionType::Absolute,
-                    left: Val::Px(size.x * 0.5 - 20.0),
-                    bottom: Val::Px(size.y * 0.5 - 20.0),
-                    width: Val::Px(40.0),
+                    left: Val::Px(size.x * 0.5 - icon_px * 0.5),
+                    bottom: Val::Px(size.y * 0.5 - icon_px * 0.5),
+                    width: Val::Px(icon_px),
                     height: Val::Px(0.0),
                     ..default()
                 },
@@ -638,12 +647,17 @@ impl Builder<'_> {
                 FocusPolicy::Pass,
                 ChildOf(button),
             ));
-            let label_off = if def.text_offset == Vec2::ZERO {
+            let label_off = if def.text_offset2 != Vec2::ZERO {
+                def.text_offset2
+            } else if def.text_offset == Vec2::ZERO {
                 Vec2::new(0.0, -size.y * 0.5 - 6.0)
             } else {
                 def.text_offset
             };
-            let color = def.text_color.map_or(Color::srgb(0.85, 0.9, 1.0), rgba);
+            let color = def
+                .text_color2
+                .or(def.text_color)
+                .map_or(Color::srgb(0.85, 0.9, 1.0), rgba);
             let l = self.text_layer(button, size, def, "", label_off, color);
             self.world.entity_mut(l).insert(SlotPart::Label);
             let _ = s;
@@ -686,6 +700,7 @@ pub(crate) fn button_clicks(
 }
 
 /// Swaps the state layers of buttons.
+#[allow(clippy::type_complexity)]
 pub(crate) fn button_visuals(
     buttons: Query<
         (&ButtonLayers, &Interaction, &EawButtonState),
@@ -713,7 +728,9 @@ pub(crate) fn button_visuals(
 }
 
 /// Writes credits, planet name etc. into bound text fields and the allegiance symbol.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn bound_fields(
+    fresh: Query<(), Added<BoundField>>,
     data: Res<CommandBarData>,
     assets: Res<EawUiAssets>,
     mut texts: Query<(&BoundField, &mut Text)>,
@@ -722,7 +739,7 @@ pub(crate) fn bound_fields(
     db: Res<CommandBarDb>,
     mut images: ResMut<Assets<Image>>,
 ) {
-    if !data.is_changed() {
+    if !data.is_changed() && fresh.is_empty() {
         return;
     }
     let label = |key: &str| assets.text.get(key).unwrap_or("").to_string();
@@ -754,7 +771,7 @@ fn group_digits(v: i64) -> String {
     let s = v.abs().to_string();
     let mut out = String::new();
     for (i, c) in s.chars().enumerate() {
-        if i > 0 && (s.len() - i) % 3 == 0 {
+        if i > 0 && (s.len() - i).is_multiple_of(3) {
             out.push(',');
         }
         out.push(c);
@@ -763,8 +780,9 @@ fn group_digits(v: i64) -> String {
 }
 
 /// Fills queue, pad, selection and ability slots from [`CommandBarData`].
-#[allow(clippy::type_complexity)]
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
 pub(crate) fn slots(
+    fresh: Query<(), Added<Slot>>,
     data: Res<CommandBarData>,
     mut tex: ResMut<UiTextures>,
     mut images: ResMut<Assets<Image>>,
@@ -775,7 +793,7 @@ pub(crate) fn slots(
         Without<Slot>,
     >,
 ) {
-    if !data.is_changed() {
+    if !data.is_changed() && fresh.is_empty() {
         return;
     }
     for (e, slot, mut node, mut st, mut vis) in &mut slots {
@@ -808,6 +826,8 @@ pub(crate) fn slots(
                     false,
                 )
             }),
+            SlotKind::Border => (data.selection.len() > slot.index * 2)
+                .then(|| (String::new(), 0.0, String::new(), false, false)),
             SlotKind::Ability => data.abilities.get(slot.index).map(|a| {
                 (a.icon.clone(), 1.0 - a.ready, String::new(), a.disabled, a.active)
             }),
@@ -842,7 +862,11 @@ pub(crate) fn slots(
                         }
                     }
                 }
-                SlotPart::Progress => n.height = Val::Px(40.0 * progress.clamp(0.0, 1.0)),
+                SlotPart::Progress => {
+                    if let Val::Px(w) = n.width {
+                        n.height = Val::Px(w * progress.clamp(0.0, 1.0));
+                    }
+                }
                 SlotPart::Label => {
                     if let Some(mut t) = text {
                         t.0 = label.clone();
@@ -855,12 +879,13 @@ pub(crate) fn slots(
 
 /// Picks the level texture of status bars from the selection.
 pub(crate) fn status_bars(
+    fresh: Query<(), Added<StatusBar>>,
     data: Res<CommandBarData>,
     mut bars: Query<(Entity, &StatusBar, &BarTextures, &mut Node), Without<BarLayer>>,
     children: Query<&Children>,
     mut layers: Query<(&BarLayer, &mut ImageNode)>,
 ) {
-    if !data.is_changed() {
+    if !data.is_changed() && fresh.is_empty() {
         return;
     }
     for (e, bar, tex, mut node) in &mut bars {
@@ -887,7 +912,7 @@ pub(crate) fn status_bars(
 
 /// Spawns the global tooltip panel.
 pub(crate) fn spawn_tooltip(mut commands: Commands, settings: Res<EawUiSettings>) {
-    let font = match &settings.font_family {
+    let font = match &settings.tooltip_font_family {
         Some(f) => TextFont {
             font: FontSource::Family(f.as_str().into()),
             font_size: FontSize::Px(10.5),
@@ -1000,6 +1025,11 @@ pub(crate) fn ui_scale(
         scale.0 = v;
     }
 }
+
+
+
+
+
 
 
 

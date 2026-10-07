@@ -63,6 +63,9 @@ struct Shot {
     root: Option<Entity>,
     enable: Vec<String>,
     enabled_done: bool,
+    /// Wall-clock moment after which simulation time starts (pipelines compile before that).
+    ready_at: Option<std::time::Instant>,
+    bench_start: Option<(std::time::Instant, u32)>,
 }
 
 fn parse_vec(s: &str) -> Vec<f32> {
@@ -80,6 +83,8 @@ fn main() {
     let (mut fx, mut enable, mut times) = (Vec::new(), Vec::new(), vec![0.0f32]);
     let mut look = vec![0.0, 0.0, 0.0];
     let mut no_alpha = false;
+    let mut hdr = false;
+    let mut teams = 6usize;
     let mut fxn = 1usize;
     let mut mv: Vec<f32> = vec![0.0; 3];
     let mut it = args.iter();
@@ -111,6 +116,8 @@ fn main() {
             "--times" => times = parse_vec(it.next().unwrap()),
             "--radius" => radius = it.next().unwrap().parse().unwrap_or(100.0),
             "--addalpha" => no_alpha = true,
+            "--hdr" => hdr = true,
+            "--teams" => teams = it.next().unwrap().parse().unwrap_or(6),
             "--fxn" => fxn = it.next().unwrap().parse().unwrap_or(1),
             "--move" => mv = parse_vec(it.next().unwrap()),
             "--look" => look = parse_vec(it.next().unwrap()),
@@ -171,7 +178,7 @@ fn main() {
         for i in 0..many {
             let (gx, gz) = ((i % 15) as f32, (i / 15) as f32);
             let mut m = AlamoModel::new(model.clone()).with_team_color(Color::hsl(
-                (i * 37 % 360) as f32,
+                ((i % teams) * 360 / teams) as f32,
                 0.8,
                 0.5,
             ));
@@ -194,6 +201,7 @@ fn main() {
             ));
         }
     }
+    let hdr_camera = hdr;
     {
         let mut commands = app.world_mut().commands();
         spawn_sun(
@@ -202,7 +210,7 @@ fn main() {
             1.0,
             Color::WHITE,
         );
-        commands.spawn((
+        let mut camera = commands.spawn((
             Camera3d::default(),
             Camera::default(),
             RenderTarget::Image(target.clone().into()),
@@ -215,6 +223,9 @@ fn main() {
             }),
             Transform::default(),
         ));
+        if hdr_camera {
+            camera.insert((bevy::camera::Hdr, bevy::post_process::bloom::Bloom::NATURAL));
+        }
     }
     app.world_mut().flush();
     app.insert_resource(Shot {
@@ -232,6 +243,8 @@ fn main() {
         root,
         enable,
         enabled_done: false,
+        ready_at: None,
+        bench_start: None,
     });
     app.add_systems(Update, (mover, drive));
     app.run();
@@ -245,6 +258,11 @@ fn drive(
     mut cam: Query<&mut Transform, With<Camera3d>>,
     mut particles: Query<(&mut AlamoParticles, Option<&Name>)>,
     stats: Res<ParticleStats>,
+    mut strategy: ResMut<TimeUpdateStrategy>,
+    drawables: Query<(
+        &Mesh3d,
+        &MeshMaterial3d<alamo_render::material::AlamoMaterial>,
+    )>,
 ) {
     let (center, radius) = match shot.root {
         Some(r) => match loaded.get(r) {
@@ -258,6 +276,15 @@ fn drive(
     if let Ok(mut t) = cam.single_mut() {
         *t = Transform::from_translation(eye).looking_at(center + shot.look, Vec3::Y);
     }
+    // Hold simulation time until shaders and textures had a moment to get ready.
+    let ready_at = *shot
+        .ready_at
+        .get_or_insert_with(|| std::time::Instant::now() + Duration::from_millis(3000));
+    if std::time::Instant::now() < ready_at {
+        *strategy = TimeUpdateStrategy::ManualDuration(Duration::ZERO);
+        return;
+    }
+    *strategy = TimeUpdateStrategy::ManualDuration(Duration::from_millis(STEP_MS));
     if !shot.enabled_done {
         shot.enabled_done = true;
         // Entries are `name` (all proxies of that name) or `name#k` (k-th proxy of that name).
@@ -283,6 +310,9 @@ fn drive(
         return;
     }
     shot.frame += 1;
+    if shot.frame == 5 {
+        shot.bench_start = Some((std::time::Instant::now(), shot.frame));
+    }
     // Capture 3 frames after the target time so the screenshot shows that moment.
     let now = shot.frame as f32 * STEP_MS as f32 / 1000.0;
     let warmup = 20.0 * STEP_MS as f32 / 1000.0;
@@ -299,6 +329,22 @@ fn drive(
         } else {
             shot.out.clone()
         };
+        if let Some((t0, f0)) = shot.bench_start {
+            let frames = (shot.frame - f0).max(1);
+            println!(
+                "average frame time {:.1} ms over {frames} frames (wall clock, includes readback)",
+                t0.elapsed().as_secs_f32() * 1000.0 / frames as f32
+            );
+        }
+        let pairs: std::collections::HashSet<_> = drawables
+            .iter()
+            .map(|(m, k)| (m.0.id(), k.0.id()))
+            .collect();
+        println!(
+            "mesh entities {}, distinct (mesh, material) pairs = draw calls after batching {}",
+            drawables.iter().count(),
+            pairs.len()
+        );
         println!(
             "capture t={t:.2}s: {} live particles, {} batches, {:.2} ms cpu",
             stats.live, stats.batches, stats.cpu_ms

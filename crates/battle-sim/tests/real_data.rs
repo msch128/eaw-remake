@@ -117,7 +117,8 @@ fn attack_hardpoint_and_abilities() {
     }
     assert_eq!(b.command(1, Command::Attack { ships: vec![0], target: 1 }), Err(CommandError::InvalidShip), "cannot order the enemy's ship");
 
-    // Full Salvo roughly doubles the number of volleys.
+    // Full Salvo speeds up the hardpoints that define a salvo multiplier (heavy turbolaser turrets).
+    let isd_def = cat.ship_id("Star_Destroyer").unwrap();
     let count = |salvo: bool| {
         let mut b = mk();
         b.command(0, Command::Attack { ships: vec![0], target: 1 }).unwrap();
@@ -132,13 +133,17 @@ fn attack_hardpoint_and_abilities() {
             assert_eq!(b.command(0, Command::UseAbility { ship: 0, ability: idx as u16 }), Err(CommandError::AbilityUnavailable));
         }
         let mut fired = 0;
-        for _ in 0..30 * 10 {
-            fired += b.step().iter().filter(|e| matches!(e, Event::ProjectileFired { ship: 0, .. })).count();
+        for _ in 0..30 * 15 {
+            fired += b
+                .step()
+                .iter()
+                .filter(|e| matches!(e, Event::ProjectileFired { ship: 0, hardpoint: Some(h), .. } if cat.ship(isd_def).hardpoints[*h as usize].full_salvo_mult < 1.0))
+                .count();
         }
         fired
     };
     let (normal, salvo) = (count(false), count(true));
-    assert!(normal > 20, "the ISD fires ({normal})");
-    assert!(salvo as f32 > normal as f32 * 1.03, "full salvo fires faster: {normal} vs {salvo}");
+    assert!(normal >= 4, "the salvo turrets fire ({normal})");
+    assert!(salvo as f32 > normal as f32 * 1.2, "full salvo fires faster: {normal} vs {salvo}");
 }
 

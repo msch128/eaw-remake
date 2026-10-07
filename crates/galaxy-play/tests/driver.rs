@@ -1,4 +1,4 @@
-//! Tests of the threaded driver against the real Remake data; skipped when the game is missing.
+﻿//! Tests of the threaded driver against the real Remake data; skipped when the game is missing.
 
 use alamo_data::{GameData, load_galaxy};
 use alamo_fs::{GameFs, GameInstall};
@@ -74,7 +74,15 @@ fn script(sim: &Sim, human: FactionId) -> Vec<Op> {
         ops.push(Op::Advance(0.25));
     }
     let fleet = g.fleets.values().find(|f| f.owner == human && f.planet().is_some()).expect("fleet");
-    let to = w.adjacency[fleet.planet().unwrap() as usize][0].0;
+    // A quiet destination, so the human is not held in a battle and time keeps flowing.
+    let to = w.adjacency[fleet.planet().unwrap() as usize]
+        .iter()
+        .map(|&(n, _)| n)
+        .find(|&n| {
+            let ps = &g.planets[n as usize];
+            ps.owner.is_none_or(|o| o == human) && ps.starbase.is_none() && g.fleets_at(n).all(|f| f.owner == human)
+        })
+        .expect("quiet neighbour");
     ops.push(Op::Cmd(Command::MoveFleet { faction: human, fleet: fleet.id, to }));
     // A refused command must not change anything either way.
     ops.push(Op::Cmd(Command::BuildUnit { faction: human, planet: 99_999, unit: 0 }));
@@ -115,8 +123,8 @@ fn driver_matches_direct_sim() {
     assert_eq!(results.iter().filter(|r| r.result.is_ok()).count(), 4);
     assert_eq!(results.iter().filter(|r| r.result == Err(CommandError::Invalid)).count(), 1);
     assert!(results.windows(2).all(|w| w[0].ticket < w[1].ticket));
-    assert!(last.time >= 60.0 + 40.0 * 2.25);
-    println!("worker batch times (ms): {:?}", snaps.iter().map(|s| s.work_micros / 1000).collect::<Vec<_>>());
+    assert!(last.time >= 155.0, "time stopped at {}", last.time);
+    println!("final time {} week {} held {} batch ms {:?}", last.time, last.week, last.human_battles.len(), snaps.iter().map(|s| s.work_micros / 1000).collect::<Vec<_>>());
 }
 
 #[test]
@@ -193,3 +201,6 @@ fn all_ai_galaxy_runs_and_reports_weeks() {
     let weeks: Vec<u64> = snaps.iter().flat_map(|s| s.events.iter()).filter_map(|e| if let Event::WeekEnded { week } = e { Some(*week) } else { None }).collect();
     assert_eq!(weeks, (1..=6).collect::<Vec<_>>());
 }
+
+
+

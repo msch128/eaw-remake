@@ -19,7 +19,10 @@ struct Bits<'a> {
 impl<'a> Bits<'a> {
     fn need(&mut self, n: u32) -> Result<()> {
         while self.nbits < n {
-            let b = *self.d.get(self.pos).ok_or(Error::Truncated("deflate stream"))?;
+            let b = *self
+                .d
+                .get(self.pos)
+                .ok_or(Error::Truncated("deflate stream"))?;
             self.pos += 1;
             self.bit |= (b as u32) << self.nbits;
             self.nbits += 8;
@@ -113,11 +116,14 @@ fn inflate(d: &[u8], limit: usize) -> Result<Vec<u8>> {
             0 => {
                 b.bit = 0;
                 b.nbits = 0;
-                let h = d.get(b.pos..b.pos + 4).ok_or(Error::Truncated("stored block"))?;
+                let h = d
+                    .get(b.pos..b.pos + 4)
+                    .ok_or(Error::Truncated("stored block"))?;
                 let len = u16::from_le_bytes([h[0], h[1]]) as usize;
                 b.pos += 4;
                 out.extend_from_slice(
-                    d.get(b.pos..b.pos + len).ok_or(Error::Truncated("stored block"))?,
+                    d.get(b.pos..b.pos + len)
+                        .ok_or(Error::Truncated("stored block"))?,
                 );
                 b.pos += len;
             }
@@ -137,8 +143,9 @@ fn inflate(d: &[u8], limit: usize) -> Result<Vec<u8>> {
                     let hlit = b.get(5)? as usize + 257;
                     let hdist = b.get(5)? as usize + 1;
                     let hclen = b.get(4)? as usize + 4;
-                    const ORDER: [usize; 19] =
-                        [16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15];
+                    const ORDER: [usize; 19] = [
+                        16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15,
+                    ];
                     let mut cl = [0u8; 19];
                     for &o in ORDER.iter().take(hclen) {
                         cl[o] = b.get(3)? as u8;
@@ -154,25 +161,36 @@ fn inflate(d: &[u8], limit: usize) -> Result<Vec<u8>> {
                                 i += 1;
                             }
                             16 => {
-                                let prev = *lengths
-                                    .get(i.wrapping_sub(1))
-                                    .ok_or_else(|| Error::Invalid("repeat without previous".into()))?;
+                                let prev = *lengths.get(i.wrapping_sub(1)).ok_or_else(|| {
+                                    Error::Invalid("repeat without previous".into())
+                                })?;
                                 for _ in 0..3 + b.get(2)? {
-                                    *lengths.get_mut(i).ok_or_else(|| Error::Invalid("length overflow".into()))? = prev;
+                                    *lengths.get_mut(i).ok_or_else(|| {
+                                        Error::Invalid("length overflow".into())
+                                    })? = prev;
                                     i += 1;
                                 }
                             }
                             17 | 18 => {
-                                let n = if sym == 17 { 3 + b.get(3)? } else { 11 + b.get(7)? };
+                                let n = if sym == 17 {
+                                    3 + b.get(3)?
+                                } else {
+                                    11 + b.get(7)?
+                                };
                                 for _ in 0..n {
-                                    *lengths.get_mut(i).ok_or_else(|| Error::Invalid("length overflow".into()))? = 0;
+                                    *lengths.get_mut(i).ok_or_else(|| {
+                                        Error::Invalid("length overflow".into())
+                                    })? = 0;
                                     i += 1;
                                 }
                             }
                             _ => return Err(Error::Invalid("bad code length symbol".into())),
                         }
                     }
-                    (Huffman::new(&lengths[..hlit]), Huffman::new(&lengths[hlit..]))
+                    (
+                        Huffman::new(&lengths[..hlit]),
+                        Huffman::new(&lengths[hlit..]),
+                    )
                 };
                 loop {
                     let sym = lit.decode(&mut b)? as usize;
@@ -186,7 +204,8 @@ fn inflate(d: &[u8], limit: usize) -> Result<Vec<u8>> {
                             if ds >= 30 {
                                 return Err(Error::Invalid("bad distance symbol".into()));
                             }
-                            let dd = DIST_BASE[ds] as usize + b.get(DIST_EXTRA[ds] as u32)? as usize;
+                            let dd =
+                                DIST_BASE[ds] as usize + b.get(DIST_EXTRA[ds] as u32)? as usize;
                             if dd > out.len() {
                                 return Err(Error::Invalid("distance too far back".into()));
                             }
@@ -248,7 +267,7 @@ pub fn decode_png(d: &[u8]) -> Result<Rgba8> {
                 ctype = body[9];
                 interlace = body[12];
             }
-            b"PLTE" => palette = body.chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect(),
+            b"PLTE" => palette = body.as_chunks::<3>().0.to_vec(),
             b"tRNS" => trns = body.to_vec(),
             b"IDAT" => idat.extend_from_slice(body),
             b"IEND" => break,
@@ -288,9 +307,21 @@ pub fn decode_png(d: &[u8]) -> Result<Rgba8> {
         let filter = raw[y * (stride + 1)];
         let src = &raw[y * (stride + 1) + 1..(y + 1) * (stride + 1)];
         for x in 0..stride {
-            let a = if x >= bpp { img[y * stride + x - bpp] as i32 } else { 0 };
-            let b = if y > 0 { img[(y - 1) * stride + x] as i32 } else { 0 };
-            let c = if x >= bpp && y > 0 { img[(y - 1) * stride + x - bpp] as i32 } else { 0 };
+            let a = if x >= bpp {
+                img[y * stride + x - bpp] as i32
+            } else {
+                0
+            };
+            let b = if y > 0 {
+                img[(y - 1) * stride + x] as i32
+            } else {
+                0
+            };
+            let c = if x >= bpp && y > 0 {
+                img[(y - 1) * stride + x - bpp] as i32
+            } else {
+                0
+            };
             let v = src[x] as i32;
             let r = match filter {
                 0 => v,

@@ -1,4 +1,4 @@
-//! Renders and drives a [`battle_sim`] space battle in Bevy with the Empire at War look and controls.
+﻿//! Renders and drives a [`battle_sim`] space battle in Bevy with the Empire at War look and controls.
 //!
 //! ```ignore
 //! app.add_plugins(AlamoRenderPlugin::new(fs.clone()))   // required, provides models and particles
@@ -76,6 +76,8 @@ pub struct BattleViewSettings {
     pub sky_radius: f32,
     /// Vertical field of view in degrees.
     pub fov_degrees: f32,
+    /// Camera distance when the battle starts.
+    pub start_distance: f32,
 }
 
 impl Default for BattleViewSettings {
@@ -95,6 +97,7 @@ impl Default for BattleViewSettings {
             ui_scale: 1.0,
             sky_radius: 90_000.0,
             fov_degrees: 45.0,
+            start_distance: 4500.0,
         }
     }
 }
@@ -320,7 +323,6 @@ fn advance_clock(
     mut rt: ResMut<BattleRuntime>,
     mut status: ResMut<BattleStatus>,
     mut cam: Single<&mut BattleCamera>,
-    proj: Single<&Projection, With<BattleCamera>>,
 ) {
     rt.speed = if settings.paused { 0.0 } else { settings.speed };
     let step = rt.dt as f64;
@@ -354,19 +356,23 @@ fn advance_clock(
     status.step_ms = cur.step_ms;
     if !rt.framed && !cur.ships.is_empty() {
         rt.framed = true;
-        let pts: Vec<Vec3> = cur.ships.iter().map(|s| convert::sim_to_bevy(s.pos)).collect();
-        let center = pts.iter().copied().sum::<Vec3>() / pts.len() as f32;
-        let radius = pts
+        // Start over the player's fleet, like the original game does.
+        let pts: Vec<Vec3> = cur
+            .ships
             .iter()
-            .map(|p| (*p - center).length())
-            .fold(0.0f32, f32::max);
-        let fov = match &**proj {
-            Projection::Perspective(p) => p.fov,
-            _ => 0.8,
-        };
-        cam.frame(center, radius.max(1500.0), fov);
+            .filter(|s| s.side == settings.player_side)
+            .map(|s| convert::sim_to_bevy(s.pos))
+            .collect();
+        if !pts.is_empty() {
+            let center = pts.iter().copied().sum::<Vec3>() / pts.len() as f32;
+            cam.focus = center;
+            cam.target_focus = center;
+            cam.distance = settings.start_distance;
+            cam.target_distance = settings.start_distance;
+        }
     }
     rt.cur = Some(cur);
     rt.next = next;
     rt.alpha = alpha;
 }
+

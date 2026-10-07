@@ -980,7 +980,8 @@ mod tests {
         assert_eq!(kind("Planet.fx").0, ShaderKind::Planet as u32);
         assert_eq!(kind("MeshShield.fx").0, ShaderKind::Shield as u32);
         assert_ne!(kind("MeshGloss.fx").1 & FLAG_SPEC_FROM_BASE_ALPHA, 0);
-        assert_eq!(kind("Nebula.fx").3, 1);
+        assert_eq!(kind("Nebula.fx").0, ShaderKind::Additive as u32);
+        assert_eq!(kind("Tree.fx").3, 1);
     }
 
     #[test]

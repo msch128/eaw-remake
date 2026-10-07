@@ -5,6 +5,11 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+default = ["system-fonts"]
+# Resolve UI fonts (Arial etc.) from the operating system at runtime.
+system-fonts = ["bevy/system_font_discovery"]
+
 [dependencies]
 bevy = { version = "=0.19.1", default-features = false, features = [
     "default_app", "std", "multi_threaded", "bevy_window",
@@ -13,3 +18,4 @@ bevy = { version = "=0.19.1", default-features = false, features = [
 alamo-fs = { path = "../alamo-fs" }
 alamo-data = { path = "../alamo-data" }
 alamo-model = { path = "../alamo-model" }
+

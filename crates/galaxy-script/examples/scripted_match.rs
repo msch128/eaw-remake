@@ -102,6 +102,21 @@ fn main() {
         worst
     );
 
+    let series: Vec<String> = per_week.iter().take(8).map(|w| format!("{:.1}", w.1)).collect();
+    println!("script ms of the first weeks: {}", series.join(" "));
+    let steady: Vec<f64> = per_week.iter().skip(1).map(|w| w.1).collect();
+    println!("steady-state scripts (weeks 2..): {:.2} ms/week", steady.iter().sum::<f64>() / steady.len().max(1) as f64);
+
+    for (name, d, n) in rt.profile() {
+        println!("  script {name:<40} {:>8.1} ms over {n} services", d.as_secs_f64() * 1000.0);
+    }
+
+    let mut sorted = steady.clone();
+    sorted.sort_by(f64::total_cmp);
+    if !sorted.is_empty() {
+        println!("median week {:.2} ms, fastest week {:.2} ms", sorted[sorted.len() / 2], sorted[0]);
+    }
+
     println!("\nerrors ({}):", rt.errors().len());
     for e in rt.errors().iter().take(10) {
         println!("  {}: {}", e.script, e.message.lines().next().unwrap_or(""));

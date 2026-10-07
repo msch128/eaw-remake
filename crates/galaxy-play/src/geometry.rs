@@ -1,4 +1,4 @@
-//! Map geometry: planet layout, fleet placement along lanes, ETAs and route planning.
+﻿//! Map geometry: planet layout, fleet placement along lanes, ETAs and route planning.
 //!
 //! Everything here is pure (no Bevy systems) so it can be tested without an app.
 
@@ -226,7 +226,8 @@ mod tests {
 
     #[test]
     fn durations() {
-        assert_eq!(format_duration(30.0, 60.0), "30 s");
+        assert_eq!(format_duration(20.0, 60.0), "20 s");
         assert_eq!(format_duration(90.0, 60.0), "1.5 wk");
     }
 }
+

@@ -44,7 +44,10 @@ pub fn read_texture_file(fs: &GameFs, name: &str) -> Option<Vec<u8>> {
     let mut stems = vec![stem.to_string()];
     // Some `_gc` (galactic) variants referenced by models were never shipped; the plain texture
     // is the closest match.
-    if let Some(plain) = stem.strip_suffix("_gc").or_else(|| stem.strip_suffix("_GC")) {
+    if let Some(plain) = stem
+        .strip_suffix("_gc")
+        .or_else(|| stem.strip_suffix("_GC"))
+    {
         stems.push(plain.to_string());
     }
     let mut candidates = vec![name.to_string()];

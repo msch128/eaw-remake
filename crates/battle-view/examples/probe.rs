@@ -6,6 +6,20 @@ fn main() {
     let install = GameInstall::detect().expect("install");
     let fs = GameFs::for_mod(&install, Some("1770851727")).expect("fs");
     match args.first().map(String::as_str) {
+        Some("ls") => {
+            for f in fs.list(&args[1]) {
+                if f.to_lowercase().contains(&args[2].to_lowercase()) {
+                    println!("{f}");
+                }
+            }
+        }
+        Some("bbox") => {
+            let data = fs.read(&format!("Art/Models/{}", args[1])).expect("read");
+            let m = alamo_model::Model::parse(&data).expect("parse");
+            for me in &m.meshes {
+                println!("{} lod {} bbox {:?} .. {:?} hidden {} shaders {:?}", me.name, me.lod, me.bbox_min, me.bbox_max, me.hidden, me.sub_meshes.iter().map(|s| s.material.shader.clone()).collect::<Vec<_>>());
+            }
+        }
         Some("maps") => {
             for f in fs.list("Art/Maps") {
                 if f.to_lowercase().contains("space") {
@@ -59,6 +73,8 @@ fn main() {
         _ => {}
     }
 }
+
+
 
 
 

@@ -1,4 +1,4 @@
-//! [`ScriptHost`] implementation on top of galaxy-sim's public API.
+﻿//! [`ScriptHost`] implementation on top of galaxy-sim's public API.
 //!
 //! # Object model
 //!
@@ -793,7 +793,7 @@ impl SimHost {
     fn type_number_uncached(&self, type_name: &str, what: &str) -> Option<f32> {
         let s = self.inner.borrow();
         let tag = match what {
-            "combat_rating" => "combat_rating",
+            "combat_rating" => "ai_combat_power",
             "build_cost" => "build_cost_credits",
             "score_cost" => "score_cost_credits",
             _ => return None,
@@ -804,11 +804,23 @@ impl SimHost {
             return Some(v);
         }
         if what == "combat_rating" {
-            return s
+            // The engine derives the rating from unit stats; no XML tag carries it. Use `AI_Combat_Power`
+            // where set, otherwise half the build cost (similar magnitude: fighters ~100, frigates ~500).
+            // A rating of 0 would make the spawn scripts' budget loops run to their 999-iteration limit.
+            let unit = s
                 .world
                 .unit_index
                 .get(&type_name.to_ascii_lowercase())
-                .map(|&u| s.world.units[u as usize].ai_power);
+                .map(|&u| &s.world.units[u as usize]);
+            return Some(unit.map_or(50.0, |u| {
+                if u.ai_power > 0.0 {
+                    u.ai_power
+                } else if u.cost > 0.0 {
+                    u.cost * 0.5
+                } else {
+                    50.0
+                }
+            }));
         }
         None
     }
@@ -876,3 +888,4 @@ mod tests {
         }
     }
 }
+

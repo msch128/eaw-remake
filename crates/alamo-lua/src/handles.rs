@@ -52,12 +52,36 @@ pub struct HandleData {
 
 impl UserData for HandleData {
     fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
-        methods.add_meta_method(MetaMethod::Index, |lua, this, key: Value| {
-            let name = match key {
+        methods.add_meta_function(MetaMethod::Index, |lua, (ud, key): (AnyUserData, Value)| {
+            let name = match &key {
                 Value::String(s) => s.to_string_lossy().to_string(),
                 _ => return Ok(Value::Nil),
             };
-            let this = this.clone();
+            // Bound methods are created once per handle and name (weak-keyed cache), because scripts call
+            // `obj.Method()` in tight loops and creating a closure per access dominated their cost.
+            let cache: mlua::Table = match lua.named_registry_value::<Option<mlua::Table>>("method_cache")? {
+                Some(t) => t,
+                None => {
+                    let t = lua.create_table()?;
+                    let mt = lua.create_table()?;
+                    mt.set("__mode", "k")?;
+                    t.set_metatable(Some(mt))?;
+                    lua.set_named_registry_value("method_cache", t.clone())?;
+                    t
+                }
+            };
+            let per_handle: mlua::Table = match cache.get::<Option<mlua::Table>>(ud.clone())? {
+                Some(t) => t,
+                None => {
+                    let t = lua.create_table()?;
+                    cache.set(ud.clone(), t.clone())?;
+                    t
+                }
+            };
+            if let Some(f) = per_handle.get::<Option<mlua::Function>>(key.clone())? {
+                return Ok(Value::Function(f));
+            }
+            let this = ud.borrow::<HandleData>()?.clone();
             let f = lua.create_function(move |lua, args: MultiValue| {
                 let mut args: Vec<Value> = args.into_iter().collect();
                 // Drop an explicit `self` (colon syntax).
@@ -69,6 +93,7 @@ impl UserData for HandleData {
                 }
                 api::call_method(lua, &this, &name, args)
             })?;
+            per_handle.set(key, f.clone())?;
             Ok(Value::Function(f))
         });
         methods.add_meta_method(MetaMethod::Eq, |_, this, other: AnyUserData| {

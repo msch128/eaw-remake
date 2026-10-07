@@ -345,6 +345,7 @@ impl Battle {
             reserve: def.reserve.clone(),
             abilities: vec![AbilityState { active: 0.0, cooldown: 0.0, target: NONE }; def.abilities.len()],
             tractor_cut: 0.0,
+            since_hit: 1.0e3,
             stun: 0.0,
             stun_speed_cut: 0.0,
             stun_rate_cut: 0.0,
@@ -793,6 +794,7 @@ impl Battle {
             .filter(|(_, st)| st.active > 0.0)
             .map(|(a, _)| a.take_damage_mult)
             .product();
+        s.since_hit = 0.0;
         let dmg = raw * take;
         let mut hull_part = 0.0;
         let mut shield_hit = false;
@@ -929,7 +931,8 @@ impl Battle {
                     s.stun_speed_cut = 0.0;
                     s.stun_rate_cut = 0.0;
                 }
-                if s.shield_gen_ok && def.shield > 0.0 && s.shield < def.shield {
+                s.since_hit += dt;
+                if s.shield_gen_ok && def.shield > 0.0 && s.shield < def.shield && s.since_hit >= self.config.shield_regen_delay {
                     let mult: f32 = def.abilities.iter().zip(&s.abilities).filter(|(_, st)| st.active > 0.0).map(|(a, _)| a.shield_regen_mult).product();
                     s.shield = (s.shield + def.shield_regen / cat.shield_interval * mult * dt).min(def.shield);
                 }
@@ -1436,7 +1439,13 @@ fn weapons(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, rng:
                     if aim_hp != NO_HP
                         && let Some(h) = tdef.hardpoints.get(aim_hp as usize)
                     {
-                        aim += h.offset.rotate_yaw(t.yaw);
+                        // Aim at the hardpoint, but keep the aim point inside the hit sphere.
+                        let mut off = h.offset.rotate_yaw(t.yaw);
+                        let max = t.radius * 0.85;
+                        if off.len() > max {
+                            off = off * (max / off.len());
+                        }
+                        aim += off;
                     } else {
                         aim += rng.in_ball() * (t.radius * 0.45);
                     }
