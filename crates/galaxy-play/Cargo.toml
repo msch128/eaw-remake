@@ -13,9 +13,10 @@ bevy = { version = "=0.19.1", default-features = false, features = [
 alamo-data = { path = "../alamo-data" }
 alamo-render = { path = "../alamo-render" }
 galaxy-sim = { path = "../galaxy-sim" }
+galaxy-script = { path = "../galaxy-script" }
+alamo-fs = { path = "../alamo-fs" }
 
 [dev-dependencies]
-alamo-fs = { path = "../alamo-fs" }
 alamo-model = { path = "../alamo-model" }
 
 [[example]]

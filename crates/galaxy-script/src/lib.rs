@@ -29,7 +29,7 @@ use galaxy_sim::{Event, ProductionKind, Sim, SimConfig, SimError};
 use galaxy_ai::{AiTier, Personality};
 
 pub use host::{HostStats, Inner, ScriptEvent, SimHost};
-pub use save::{Checkpoint, SAVE_VERSION, SaveError, SaveFile, SaveHeader};
+pub use save::{Checkpoint, LoadProgress, SAVE_VERSION, SaveError, SaveFile, SaveHeader};
 
 /// Options of a scripted match.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -168,9 +168,15 @@ impl ScriptedSim {
         sim_config: SimConfig,
         config: ScriptedConfig,
     ) -> Result<ScriptedSim, SimError> {
-        let header_sim_config = sim_config.clone();
-        let header_config = config.clone();
         let sim = Sim::new(&data, campaign, sim_config)?;
+        Ok(Self::from_sim(sim, fs, data, campaign, config))
+    }
+
+    /// Wraps an already built simulation (`Sim` is `Send`, `ScriptedSim` is not: build the `Sim` anywhere and call this on the thread that
+    /// runs the match) and starts the story scripts. The sim must be fresh (journal and replay assume it starts at time 0).
+    pub fn from_sim(sim: Sim, fs: Arc<dyn FileSource>, data: Arc<GameData>, campaign: &Campaign, config: ScriptedConfig) -> ScriptedSim {
+        let header_sim_config = sim.world().config.clone();
+        let header_config = config.clone();
         let world = sim.world().clone();
         let human_name = config
             .human
@@ -249,7 +255,7 @@ impl ScriptedSim {
         if config.remake_ai {
             sim.start_ai(&fs_for_ai, campaign, &config);
         }
-        Ok(sim)
+        sim
     }
 
     /// Switches from galaxy-sim's built-in AI to the Remake AI for all AI factions of the campaign.
@@ -324,6 +330,11 @@ impl ScriptedSim {
     }
 
     /// Runs `f` with the simulation for commands.
+    /// Runtime-only setup that is not part of the game state (tactical catalog and arenas): not journaled and does not block saving.
+    pub fn with_sim_runtime<R>(&self, f: impl FnOnce(&mut Sim) -> R) -> R {
+        f(&mut self.inner.borrow_mut().sim)
+    }
+
     /// The change is *not* journaled: afterwards [`ScriptedSim::save`] refuses (use the journaled methods in `save.rs` instead).
     pub fn with_sim_mut<R>(&self, f: impl FnOnce(&mut Sim) -> R) -> R {
         self.journal.tainted.set(true);

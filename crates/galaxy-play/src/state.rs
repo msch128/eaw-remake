@@ -9,7 +9,8 @@ use galaxy_sim::{Command, CommandError, Event, FactionId, FleetId, Galaxy, Plane
 
 use crate::build_menu::{BuildMenu, BuildTarget};
 use crate::catalog::PlayCatalog;
-use crate::driver::{SimDriver, Snapshot};
+use crate::driver::{ScriptSetup, SimDriver, Snapshot};
+use alamo_fs::FileSource;
 use crate::notify::Notification;
 
 /// Settings of the plugin; insert before adding [`crate::GalaxyPlayPlugin`] to override defaults.
@@ -39,6 +40,11 @@ pub struct PlayConfig {
     pub notification_seconds: f64,
     /// Seconds between rebuilds of the UI model.
     pub ui_interval: f32,
+    /// Difficulty of the AI factions when the game runs on the scripted backend ([`PlayInit::scripted`]): Easy/Normal/Hard come from the
+    /// mod's `DifficultyAdjustments.xml`, Brutal/Fair are our own estimates. Ignored with `classic_ai`.
+    pub difficulty: Option<galaxy_script::DifficultyTier>,
+    /// Use galaxy-sim's built-in (classic) AI instead of the Remake AI with strategy ([`PlayInit::scripted`]).
+    pub classic_ai: bool,
 }
 
 impl Default for PlayConfig {
@@ -54,6 +60,8 @@ impl Default for PlayConfig {
             human_is_ai: false,
             notification_seconds: 12.0,
             ui_interval: 0.2,
+            difficulty: Some(galaxy_script::DifficultyTier::Normal),
+            classic_ai: false,
         }
     }
 }
@@ -73,19 +81,52 @@ pub struct PlayInit {
     pub catalog: PlayCatalog,
     /// Settings.
     pub config: PlayConfig,
+    /// Run the game on `galaxy-script` (Remake scripts, Remake AI, save/load) instead of plain galaxy-sim; see [`PlayInit::scripted`].
+    pub script: Option<ScriptSetup>,
 }
 
 impl PlayInit {
+    /// Like [`PlayInit::from_data`] but the game runs with the Remake story scripts, the Remake AI + strategy (`config.classic_ai` = false) at
+    /// `config.difficulty`, and supports [`PlayAction::Save`] / [`PlayAction::Load`]. The player faction is the campaign's active player
+    /// (every other faction is AI; `config.human_is_ai` makes all of them AI).
+    pub fn scripted(data: Arc<GameData>, fs: Arc<dyn FileSource>, campaign: &Campaign, config: PlayConfig) -> Result<Self, SimError> {
+        let sim = Sim::new(&data, campaign, config.sim_config())?;
+        let catalog = PlayCatalog::from_data(sim.world(), &data);
+        let human = if config.human_is_ai { None } else { sim.world().victory.active_player };
+        let human_name = human.map_or_else(|| "none".to_string(), |h| sim.world().factions[h as usize].name.clone());
+        let script_config = galaxy_script::ScriptedConfig {
+            human: Some(human_name),
+            remake_ai: !config.classic_ai,
+            difficulty: if config.classic_ai { None } else { config.difficulty },
+            ..Default::default()
+        };
+        let script = ScriptSetup { fs, data, campaign: campaign.name.clone(), config: script_config, load: None, load_path: None };
+        Ok(Self { sim, catalog, config, script: Some(script) })
+    }
+
+    /// Starts a game from a save file written by [`PlayAction::Save`]. The worker replays it (progress: `SimDriver::load_progress`,
+    /// placeholder snapshots have `loading = true`); the game settings of the save (campaign, difficulty, classic AI, seed) win over `config`.
+    pub fn from_save(path: impl Into<std::path::PathBuf>, data: Arc<GameData>, fs: Arc<dyn FileSource>, mut config: PlayConfig) -> Result<Self, String> {
+        let path = path.into();
+        let file = galaxy_script::SaveFile::read(&path).map_err(|e| e.to_string())?;
+        let campaign = data.campaign(&file.header.campaign).ok_or_else(|| format!("campaign {} not found", file.header.campaign))?.clone();
+        config.sim = file.header.sim_config.clone();
+        let sim = Sim::new(&data, &campaign, config.sim_config()).map_err(|e| e.to_string())?;
+        let catalog = PlayCatalog::from_data(sim.world(), &data);
+        let script = ScriptSetup { fs, data, campaign: campaign.name.clone(), config: file.header.config.clone(), load: Some(file), load_path: Some(path) };
+        Ok(Self { sim, catalog, config, script: Some(script) })
+    }
+
     /// Builds the simulation for `campaign` plus the display catalog.
     pub fn from_data(data: &GameData, campaign: &Campaign, config: PlayConfig) -> Result<Self, SimError> {
         let sim = Sim::new(data, campaign, config.sim_config())?;
         let catalog = PlayCatalog::from_data(sim.world(), data);
-        Ok(Self { sim, catalog, config })
+        Ok(Self { sim, catalog, config, script: None })
     }
 
     /// Wraps an existing simulation (it must have been created with `auto_resolve_battles` off).
     pub fn new(sim: Sim, catalog: PlayCatalog, config: PlayConfig) -> Self {
-        Self { sim, catalog, config }
+        Self { sim, catalog, config, script: None }
     }
 }
 
@@ -238,6 +279,11 @@ pub enum PlayAction {
     CancelTactical(u32),
     /// Remove a notification.
     DismissNotification(u64),
+    /// Write a save file (needs [`PlayInit::scripted`]); answered by [`PlayEvent::SaveFinished`].
+    Save(std::path::PathBuf),
+    /// Replace the running game with a save of the same game; answered by [`PlayEvent::LoadFinished`]. Progress: `SimState::driver.load_progress()`.
+    /// A save of another campaign or player is refused: restart with [`PlayInit::from_save`] instead.
+    Load(std::path::PathBuf),
 }
 
 /// Things the host app may want to react to.
@@ -248,6 +294,22 @@ pub enum PlayEvent {
     /// The player chose "Fight (tactical)" and [`PlayConfig::tactical_hook`] is on: the simulation prepared the fight. Open
     /// the battle view for this request, then send [`PlayAction::ApplyTactical`] (or [`PlayAction::CancelTactical`]).
     TacticalReady(Box<galaxy_sim::TacticalRequest>),
+    /// A [`PlayAction::Save`] finished.
+    SaveFinished {
+        /// File.
+        path: std::path::PathBuf,
+        /// `Ok` or the reason.
+        result: Result<(), String>,
+    },
+    /// A [`PlayAction::Load`] (or the save the game was started from with [`PlayInit::from_save`]) finished: `Ok(week reached)`.
+    LoadFinished {
+        /// File.
+        path: std::path::PathBuf,
+        /// `Ok(week)` or the reason.
+        result: Result<u64, String>,
+    },
+    /// A script event of the Remake scripts (dialog, message, buildable changed; scripted backend).
+    Script(galaxy_script::ScriptEvent),
     /// The simulation refused an order of the player.
     CommandRejected {
         /// The order.

@@ -53,6 +53,10 @@ pub enum Entry {
     ResolveAuto(u32),
     /// `Sim::cancel_tactical`.
     CancelTactical(u32),
+    /// `Sim::resolve_battle` (resolver of the `SimConfig`).
+    Resolve(u32),
+    /// `Sim::resolve_battle_tactical`.
+    ResolveTactical(u32),
 }
 
 /// How the match was set up.
@@ -198,6 +202,18 @@ impl ScriptedSim {
         self.inner.borrow_mut().sim.resolve_battle_auto(battle_id)
     }
 
+    /// `Sim::resolve_battle` (journaled).
+    pub fn resolve_battle(&mut self, battle_id: u32) -> Option<Vec<Event>> {
+        self.journal.entries.push(Entry::Resolve(battle_id));
+        self.inner.borrow_mut().sim.resolve_battle(battle_id)
+    }
+
+    /// `Sim::resolve_battle_tactical` (journaled).
+    pub fn resolve_battle_tactical(&mut self, battle_id: u32) -> Option<Vec<Event>> {
+        self.journal.entries.push(Entry::ResolveTactical(battle_id));
+        self.inner.borrow_mut().sim.resolve_battle_tactical(battle_id)
+    }
+
     /// `Sim::cancel_tactical` (journaled).
     pub fn cancel_tactical(&mut self, battle_id: u32) {
         self.journal.entries.push(Entry::CancelTactical(battle_id));
@@ -242,13 +258,18 @@ impl ScriptedSim {
     /// Like [`ScriptedSim::load`], with a hook that runs on the rebuilt match before the replay (for runtime-only setup such as
     /// `with_sim_mut(|s| s.set_tactical_catalog(..))` when the match resolves battles tactically).
     pub fn load_with(path: impl AsRef<Path>, fs: Arc<dyn FileSource>, data: Arc<GameData>, setup: impl FnOnce(&mut ScriptedSim)) -> Result<ScriptedSim, SaveError> {
-        let text = std::fs::read_to_string(path)?;
-        let file: SaveFile = serde_json::from_str(&text).map_err(|e| SaveError::Format(e.to_string()))?;
-        Self::from_save(file, fs, data, setup)
+        Self::from_save(SaveFile::read(path)?, fs, data, setup)
     }
 
     /// Rebuilds a match from a save value.
     pub fn from_save(file: SaveFile, fs: Arc<dyn FileSource>, data: Arc<GameData>, setup: impl FnOnce(&mut ScriptedSim)) -> Result<ScriptedSim, SaveError> {
+        Self::from_save_progress(file, fs, data, setup, &mut |_| {})
+    }
+
+    /// Like [`ScriptedSim::from_save`], reporting how far the replay is (for a loading bar).
+    pub fn from_save_progress(file: SaveFile, fs: Arc<dyn FileSource>, data: Arc<GameData>, setup: impl FnOnce(&mut ScriptedSim), progress: &mut dyn FnMut(LoadProgress)) -> Result<ScriptedSim, SaveError> {
+        let total = file.total_steps();
+        let mut done = 0u64;
         if file.format != FORMAT {
             return Err(SaveError::Format(format!("unexpected format {}", file.format)));
         }
@@ -265,8 +286,12 @@ impl ScriptedSim {
         for e in &file.journal {
             match e {
                 Entry::Steps { dt, n } => {
-                    for _ in 0..*n {
+                    for k in 0..*n {
                         sim.step(*dt);
+                        done += 1;
+                        if k % 20 == 0 {
+                            progress(LoadProgress { done, total, week: sim.checkpoint_week() });
+                        }
                     }
                 }
                 Entry::Command(c) => {
@@ -283,8 +308,15 @@ impl ScriptedSim {
                     sim.resolve_battle_auto(*id);
                 }
                 Entry::CancelTactical(id) => sim.cancel_tactical(*id),
+                Entry::Resolve(id) => {
+                    sim.resolve_battle(*id);
+                }
+                Entry::ResolveTactical(id) => {
+                    sim.resolve_battle_tactical(*id);
+                }
             }
         }
+        progress(LoadProgress { done: total, total, week: sim.checkpoint_week() });
         let replayed = sim.checkpoint();
         if replayed.galaxy_hash != file.checkpoint.galaxy_hash || replayed.time.to_bits() != file.checkpoint.time.to_bits() {
             return Err(SaveError::Diverged { saved: Box::new(file.checkpoint), replayed: Box::new(replayed) });
@@ -296,4 +328,34 @@ impl ScriptedSim {
 /// Builds the journal header of a new match.
 pub(crate) fn header(campaign: &str, sim_config: &SimConfig, config: &ScriptedConfig, world: [usize; 3]) -> SaveHeader {
     SaveHeader { campaign: campaign.to_string(), sim_config: sim_config.clone(), config: config.clone(), world }
+}
+
+/// How far a replay has come.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LoadProgress {
+    /// Steps replayed.
+    pub done: u64,
+    /// Steps in the save.
+    pub total: u64,
+    /// Game week reached.
+    pub week: u64,
+}
+
+impl SaveFile {
+    /// Reads a save file without replaying it (cheap: use it for slot lists, `checkpoint` has week and faction summary).
+    pub fn read(path: impl AsRef<Path>) -> Result<SaveFile, SaveError> {
+        let text = std::fs::read_to_string(path)?;
+        serde_json::from_str(&text).map_err(|e| SaveError::Format(e.to_string()))
+    }
+
+    /// Number of simulation steps the journal replays.
+    pub fn total_steps(&self) -> u64 {
+        self.journal.iter().map(|e| if let Entry::Steps { n, .. } = e { u64::from(*n) } else { 0 }).sum()
+    }
+}
+
+impl ScriptedSim {
+    pub(crate) fn checkpoint_week(&self) -> u64 {
+        self.with_sim(|s| (s.galaxy().time / f64::from(s.world().config.week_seconds)) as u64)
+    }
 }

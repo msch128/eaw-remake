@@ -10,11 +10,16 @@
 //! the worker immediately, battles that do stay pending (and block the passage of time) until
 //! the player decides via [`SimDriver::resolve_battle`].
 
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Instant;
 
+use alamo_data::GameData;
+use alamo_fs::FileSource;
+use galaxy_script::{LoadProgress, SaveFile, ScriptEvent, ScriptedConfig, ScriptedSim};
 use galaxy_sim::{Command, CommandError, CommandOk, Event, FactionId, Galaxy, PendingBattle, Sim, TacticalRequest, TacticalResult, World};
 
 /// Identifies a submitted command so its result can be matched in a later snapshot.
@@ -59,8 +64,91 @@ pub enum Request {
     },
     /// Abandon the tactical fight and auto-resolve the battle instead.
     CancelTactical(u32),
+    /// Write a save file (scripted backend only); the answer arrives in [`Snapshot::saves`].
+    Save(PathBuf),
+    /// Replace the running game with a save of the same game (replays it; progress in [`SimDriver::load_progress`]); the answer arrives in [`Snapshot::loads`].
+    Load(PathBuf),
     /// Stop the worker.
     Shutdown,
+}
+
+/// Everything the worker needs to run the game with the Remake scripts, AI and the save journal (`galaxy-script`).
+pub struct ScriptSetup {
+    /// Game files (scripts, AI data).
+    pub fs: Arc<dyn FileSource>,
+    /// Game data.
+    pub data: Arc<GameData>,
+    /// Campaign name.
+    pub campaign: String,
+    /// Script and AI options (human faction name, difficulty, classic AI, personalities).
+    pub config: ScriptedConfig,
+    /// A save to replay instead of starting fresh (progress through [`SimDriver::load_progress`]).
+    pub load: Option<SaveFile>,
+    /// Path of that save (reported back in [`Snapshot::loads`]).
+    pub load_path: Option<PathBuf>,
+}
+
+/// Result of a [`Request::Save`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct SaveResult {
+    /// File.
+    pub path: PathBuf,
+    /// `Ok` or the reason.
+    pub result: Result<(), String>,
+}
+
+/// Result of a [`Request::Load`] (or of the save a game was started from): the week reached, or the reason.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LoadResult {
+    /// File.
+    pub path: PathBuf,
+    /// `Ok(week)` or the reason.
+    pub result: Result<u64, String>,
+}
+
+/// Replay progress shared between the worker and the UI thread.
+#[derive(Debug, Default)]
+pub struct LoadState {
+    active: AtomicBool,
+    done: AtomicU64,
+    total: AtomicU64,
+    week: AtomicU64,
+}
+
+impl LoadState {
+    fn begin(&self, total: u64) {
+        self.done.store(0, Ordering::Relaxed);
+        self.week.store(0, Ordering::Relaxed);
+        self.total.store(total, Ordering::Relaxed);
+        self.active.store(true, Ordering::Release);
+    }
+
+    fn update(&self, p: LoadProgress) {
+        self.done.store(p.done, Ordering::Relaxed);
+        self.week.store(p.week, Ordering::Relaxed);
+    }
+
+    fn end(&self) {
+        self.active.store(false, Ordering::Release);
+    }
+}
+
+/// A running replay: `fraction` is 0..1, `week` the game week reached so far.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LoadProgressView {
+    /// Steps replayed.
+    pub done: u64,
+    /// Steps in the save.
+    pub total: u64,
+    /// Game week reached.
+    pub week: u64,
+}
+
+impl LoadProgressView {
+    /// Progress 0..1.
+    pub fn fraction(&self) -> f32 {
+        if self.total == 0 { 1.0 } else { (self.done as f32 / self.total as f32).clamp(0.0, 1.0) }
+    }
 }
 
 /// Outcome of a submitted command.
@@ -99,6 +187,38 @@ pub struct Snapshot {
     pub requests_done: u64,
     /// Wall-clock microseconds the worker spent on the batch that produced this snapshot.
     pub work_micros: u64,
+    /// Events of the Remake scripts (dialogs, messages, buildable changes) since the previous snapshot (scripted backend).
+    pub script_events: Vec<ScriptEvent>,
+    /// Results of save requests since the previous snapshot.
+    pub saves: Vec<SaveResult>,
+    /// Results of load requests (and of the save the game was started from) since the previous snapshot.
+    pub loads: Vec<LoadResult>,
+    /// True for the placeholder shown while the worker is still setting up (scripts, AI, replay of a save): the galaxy is the
+    /// starting state, not the game.
+    pub loading: bool,
+}
+
+impl Snapshot {
+    /// Starting-state placeholder shown while the worker sets the game up.
+    pub fn placeholder(galaxy: Galaxy) -> Snapshot {
+        Snapshot {
+            seq: 0,
+            time: galaxy.time,
+            galaxy,
+            week: 0,
+            events: Vec::new(),
+            results: Vec::new(),
+            human_battles: Vec::new(),
+            tactical: Vec::new(),
+            advances_done: 0,
+            requests_done: 0,
+            work_micros: 0,
+            script_events: Vec::new(),
+            saves: Vec::new(),
+            loads: Vec::new(),
+            loading: true,
+        }
+    }
 }
 
 /// Handle to the simulation worker.
@@ -111,6 +231,7 @@ pub struct SimDriver {
     next_ticket: Ticket,
     advances_sent: u64,
     requests_sent: u64,
+    progress: Arc<LoadState>,
 }
 
 impl SimDriver {
@@ -121,16 +242,51 @@ impl SimDriver {
     /// For the player to get a choice the sim must have been built with
     /// `SimConfig::auto_resolve_battles = false` (see [`crate::PlayConfig::sim_config`]).
     pub fn spawn(mut sim: Sim, human: Option<FactionId>) -> SimDriver {
-        let world = sim.world().clone();
-        let ai: Vec<FactionId> = (0..world.factions.len() as FactionId).filter(|&f| Some(f) != human).collect();
+        let ai: Vec<FactionId> = (0..sim.world().factions.len() as FactionId).filter(|&f| Some(f) != human).collect();
         sim.set_ai_factions(ai);
+        Self::spawn_inner(sim, None, human)
+    }
+
+    /// Like [`SimDriver::spawn`] but the worker thread builds a `galaxy_script::ScriptedSim` around `sim` (a fresh simulation): Remake story
+    /// scripts, the Remake AI with strategy and difficulty (or the classic AI, see `ScriptedConfig`), and the save journal. All input goes through
+    /// the journaled methods, so [`SimDriver::save`] works at any time. Setting up takes about a second on the worker thread; the first snapshot
+    /// arrives when it is done (use [`SimDriver::wait_initial`] in tests, or poll). With `setup.load` the worker replays that save instead
+    /// (progress in [`SimDriver::load_progress`]).
+    pub fn spawn_scripted(sim: Sim, setup: ScriptSetup, human: Option<FactionId>) -> SimDriver {
+        Self::spawn_inner(sim, Some(setup), human)
+    }
+
+    fn spawn_inner(sim: Sim, script: Option<ScriptSetup>, human: Option<FactionId>) -> SimDriver {
+        let world = sim.world().clone();
+        let progress = Arc::new(LoadState::default());
+        if script.as_ref().is_some_and(|s| s.load.is_some()) {
+            progress.begin(script.as_ref().and_then(|s| s.load.as_ref()).map_or(0, SaveFile::total_steps));
+        }
         let (tx, req_rx) = mpsc::channel();
         let (snap_tx, rx) = mpsc::channel();
+        let p2 = progress.clone();
         let handle = std::thread::Builder::new()
             .name("galaxy-sim".into())
-            .spawn(move || worker(sim, human, req_rx, snap_tx))
+            .spawn(move || worker(sim, script, human, p2, req_rx, snap_tx))
             .expect("spawn simulation thread");
-        SimDriver { tx, rx: Mutex::new(rx), handle: Some(handle), world, human, next_ticket: 1, advances_sent: 0, requests_sent: 0 }
+        SimDriver { tx, rx: Mutex::new(rx), handle: Some(handle), world, human, next_ticket: 1, advances_sent: 0, requests_sent: 0, progress }
+    }
+
+    /// Asks the worker to write a save file; the result arrives in [`Snapshot::saves`].
+    pub fn save(&mut self, path: impl Into<PathBuf>) {
+        self.requests_sent += 1;
+        let _ = self.tx.send(Request::Save(path.into()));
+    }
+
+    /// Asks the worker to replace the running game with a save of the same game; the result arrives in [`Snapshot::loads`].
+    pub fn load(&mut self, path: impl Into<PathBuf>) {
+        self.requests_sent += 1;
+        let _ = self.tx.send(Request::Load(path.into()));
+    }
+
+    /// Progress of a running replay (loading a save), `None` when none runs.
+    pub fn load_progress(&self) -> Option<LoadProgressView> {
+        self.progress.active.load(Ordering::Acquire).then(|| LoadProgressView { done: self.progress.done.load(Ordering::Relaxed), total: self.progress.total.load(Ordering::Relaxed), week: self.progress.week.load(Ordering::Relaxed) })
     }
 
     /// The immutable world description (shared with the worker).
@@ -231,64 +387,225 @@ impl Drop for SimDriver {
     }
 }
 
+/// The simulation the worker drives: plain galaxy-sim, or galaxy-sim with the Remake scripts, AI and save journal.
+enum Core {
+    Plain(Sim),
+    Scripted(Box<ScriptedSim>),
+}
+
+impl Core {
+    fn galaxy(&self) -> Galaxy {
+        match self {
+            Core::Plain(s) => s.galaxy().clone(),
+            Core::Scripted(s) => s.with_sim(|s| s.galaxy().clone()),
+        }
+    }
+
+    fn decided(&self) -> bool {
+        match self {
+            Core::Plain(s) => s.galaxy().winner.is_some(),
+            Core::Scripted(s) => s.with_sim(|s| s.galaxy().winner.is_some()),
+        }
+    }
+
+    fn tick_seconds(&self) -> f32 {
+        match self {
+            Core::Plain(s) => s.world().config.tick_seconds,
+            Core::Scripted(s) => s.with_sim(|s| s.world().config.tick_seconds),
+        }
+        .max(0.001)
+    }
+
+    fn pending_battles(&self) -> Vec<PendingBattle> {
+        match self {
+            Core::Plain(s) => s.pending_battles().to_vec(),
+            Core::Scripted(s) => s.with_sim(|s| s.pending_battles().to_vec()),
+        }
+    }
+
+    fn step(&mut self, dt: f32, script_events: &mut Vec<ScriptEvent>) -> Vec<Event> {
+        match self {
+            Core::Plain(s) => s.step(dt),
+            Core::Scripted(s) => {
+                let r = s.step(dt);
+                script_events.extend(r.script_events);
+                r.sim_events
+            }
+        }
+    }
+
+    fn apply(&mut self, c: Command) -> Result<CommandOk, CommandError> {
+        match self {
+            Core::Plain(s) => s.apply(c),
+            Core::Scripted(s) => s.apply(c),
+        }
+    }
+
+    fn tactical_setup(&mut self, id: u32) -> Option<TacticalRequest> {
+        match self {
+            Core::Plain(s) => s.tactical_setup(id),
+            Core::Scripted(s) => s.tactical_setup(id),
+        }
+    }
+
+    fn apply_tactical(&mut self, id: u32, r: &TacticalResult) -> Vec<Event> {
+        match self {
+            Core::Plain(s) => s.apply_tactical_result(id, r).unwrap_or_default(),
+            Core::Scripted(s) => s.apply_tactical_result(id, r).unwrap_or_default(),
+        }
+    }
+
+    fn cancel_tactical(&mut self, id: u32) {
+        match self {
+            Core::Plain(s) => s.cancel_tactical(id),
+            Core::Scripted(s) => s.cancel_tactical(id),
+        }
+    }
+
+    fn resolve_auto(&mut self, id: u32) -> Vec<Event> {
+        match self {
+            Core::Plain(s) => s.resolve_battle_auto(id),
+            Core::Scripted(s) => s.resolve_battle_auto(id),
+        }
+        .unwrap_or_default()
+    }
+
+    fn resolve(&mut self, id: u32) -> Vec<Event> {
+        match self {
+            Core::Plain(s) => s.resolve_battle(id),
+            Core::Scripted(s) => s.resolve_battle(id),
+        }
+        .unwrap_or_default()
+    }
+
+    fn resolve_tactical(&mut self, id: u32) -> Vec<Event> {
+        match self {
+            Core::Plain(s) => s.resolve_battle_tactical(id),
+            Core::Scripted(s) => s.resolve_battle_tactical(id),
+        }
+        .unwrap_or_default()
+    }
+}
+
 fn involves(human: Option<FactionId>, b: &PendingBattle) -> bool {
     human.is_some_and(|h| b.factions.contains(&h))
 }
 
 /// Resolves every pending battle without the human with the configured resolver.
-fn resolve_ai_battles(sim: &mut Sim, human: Option<FactionId>, events: &mut Vec<Event>) {
-    let ids: Vec<u32> = sim.pending_battles().iter().filter(|b| !involves(human, b)).map(|b| b.id).collect();
+fn resolve_ai_battles(core: &mut Core, human: Option<FactionId>, events: &mut Vec<Event>) {
+    let ids: Vec<u32> = core.pending_battles().iter().filter(|b| !involves(human, b)).map(|b| b.id).collect();
     for id in ids {
-        events.extend(sim.resolve_battle(id).unwrap_or_default());
+        events.extend(core.resolve(id));
     }
 }
 
-fn human_battles(sim: &Sim, human: Option<FactionId>) -> Vec<PendingBattle> {
-    sim.pending_battles().iter().filter(|b| involves(human, b)).cloned().collect()
+fn human_battles(core: &Core, human: Option<FactionId>) -> Vec<PendingBattle> {
+    core.pending_battles().into_iter().filter(|b| involves(human, b)).collect()
 }
 
 /// Steps in whole simulation ticks so battles are settled (or the player is asked) the moment
 /// they appear. Returns early when a battle waits for the human.
-fn advance(sim: &mut Sim, human: Option<FactionId>, dt: f32, events: &mut Vec<Event>) {
-    if !human_battles(sim, human).is_empty() {
+fn advance(core: &mut Core, human: Option<FactionId>, dt: f32, events: &mut Vec<Event>, script_events: &mut Vec<ScriptEvent>) {
+    if !human_battles(core, human).is_empty() {
         return;
     }
-    let tick = sim.world().config.tick_seconds.max(0.001);
+    let tick = core.tick_seconds();
     let mut remaining = dt;
-    while remaining > 0.0 && sim.galaxy().winner.is_none() {
+    while remaining > 0.0 && !core.decided() {
         let d = remaining.min(tick);
         remaining -= d;
-        events.extend(sim.step(d));
-        resolve_ai_battles(sim, human, events);
-        if !human_battles(sim, human).is_empty() {
+        events.extend(core.step(d, script_events));
+        resolve_ai_battles(core, human, events);
+        if !human_battles(core, human).is_empty() {
             break;
         }
     }
 }
 
-fn worker(mut sim: Sim, human: Option<FactionId>, rx: Receiver<Request>, tx: Sender<Arc<Snapshot>>) {
+/// Builds the scripted core on the worker thread (new game, or replay of a save with progress reporting).
+fn build_scripted(sim: Sim, setup: &ScriptSetup, human: Option<FactionId>, progress: &LoadState, loads: &mut Vec<LoadResult>) -> Core {
+    let campaign = setup.data.campaign(&setup.campaign).expect("campaign of the game").clone();
+    let fresh = |sim: Sim| {
+        let mut s = ScriptedSim::from_sim(sim, setup.fs.clone(), setup.data.clone(), &campaign, setup.config.clone());
+        if !setup.config.remake_ai {
+            s.set_ai_factions((0..s.with_sim(|x| x.world().factions.len()) as FactionId).filter(|&f| Some(f) != human));
+        }
+        s
+    };
+    if let Some(file) = &setup.load {
+        progress.begin(file.total_steps());
+        let path = setup.load_path.clone().unwrap_or_default();
+        let r = ScriptedSim::from_save_progress(file.clone(), setup.fs.clone(), setup.data.clone(), |_| {}, &mut |p| progress.update(p));
+        progress.end();
+        match r {
+            Ok(s) => {
+                loads.push(LoadResult { path, result: Ok(s.checkpoint().week) });
+                return Core::Scripted(Box::new(s));
+            }
+            Err(e) => loads.push(LoadResult { path, result: Err(e.to_string()) }),
+        }
+    }
+    Core::Scripted(Box::new(fresh(sim)))
+}
+
+/// In-game load: only a save of the same game (campaign and human) is accepted.
+fn load_into(core: &mut Core, path: &std::path::Path, setup: Option<&ScriptSetup>, progress: &LoadState) -> Result<u64, String> {
+    let Some(setup) = setup else { return Err("loading needs the scripted backend".into()) };
+    let file = SaveFile::read(path).map_err(|e| e.to_string())?;
+    if file.header.campaign != setup.campaign || file.header.config.human != setup.config.human {
+        return Err("this save belongs to another campaign or player; start the game from the save instead".into());
+    }
+    progress.begin(file.total_steps());
+    let r = ScriptedSim::from_save_progress(file, setup.fs.clone(), setup.data.clone(), |_| {}, &mut |p| progress.update(p));
+    progress.end();
+    let s = r.map_err(|e| e.to_string())?;
+    let week = s.checkpoint().week;
+    *core = Core::Scripted(Box::new(s));
+    Ok(week)
+}
+
+fn worker(sim: Sim, script: Option<ScriptSetup>, human: Option<FactionId>, progress: Arc<LoadState>, rx: Receiver<Request>, tx: Sender<Arc<Snapshot>>) {
     let mut seq = 0u64;
     let mut week = 0u64;
     let mut advances_done = 0u64;
     let mut requests_done = 0u64;
-    let publish = |sim: &Sim, seq: &mut u64, week: u64, events: Vec<Event>, results: Vec<CommandResult>, tactical: Vec<TacticalRequest>, counts: (u64, u64), micros: u64| {
+    let mut first_loads = Vec::new();
+    let mut core = match &script {
+        Some(setup) => build_scripted(sim, setup, human, &progress, &mut first_loads),
+        None => Core::Plain(sim),
+    };
+    if let Core::Scripted(s) = &core {
+        week = s.checkpoint().week;
+    }
+    // The setup kept for in-game loads must not carry the save that started the game.
+    let script = script.map(|mut s| {
+        s.load = None;
+        s
+    });
+    let publish = |core: &Core, seq: &mut u64, week: u64, p: Published, counts: (u64, u64), micros: u64| {
+        let galaxy = core.galaxy();
         let snap = Snapshot {
             seq: *seq,
-            galaxy: sim.galaxy().clone(),
-            time: sim.galaxy().time,
+            time: galaxy.time,
+            galaxy,
             week,
-            events,
-            results,
-            human_battles: human_battles(sim, human),
-            tactical,
+            events: p.events,
+            results: p.results,
+            human_battles: human_battles(core, human),
+            tactical: p.tactical,
             advances_done: counts.0,
             requests_done: counts.1,
             work_micros: micros,
+            script_events: p.script_events,
+            saves: p.saves,
+            loads: p.loads,
+            loading: false,
         };
         *seq += 1;
         tx.send(Arc::new(snap)).is_ok()
     };
-    if !publish(&sim, &mut seq, week, Vec::new(), Vec::new(), Vec::new(), (0, 0), 0) {
+    let first = Published { loads: first_loads, ..Published::default() };
+    if !publish(&core, &mut seq, week, first, (0, 0), 0) {
         return;
     }
     loop {
@@ -296,9 +613,7 @@ fn worker(mut sim: Sim, human: Option<FactionId>, rx: Receiver<Request>, tx: Sen
         let mut batch = vec![first];
         batch.extend(rx.try_iter());
         let started = Instant::now();
-        let mut events = Vec::new();
-        let mut results = Vec::new();
-        let mut tactical = Vec::new();
+        let mut p = Published::default();
         requests_done += batch.len() as u64;
         let mut i = 0;
         while i < batch.len() {
@@ -312,39 +627,63 @@ fn worker(mut sim: Sim, human: Option<FactionId>, rx: Receiver<Request>, tx: Sen
                         advances_done += 1;
                         i += 1;
                     }
-                    advance(&mut sim, human, total, &mut events);
+                    advance(&mut core, human, total, &mut p.events, &mut p.script_events);
                     continue;
                 }
                 Request::Command { ticket, command } => {
-                    let result = sim.apply(command.clone());
-                    results.push(CommandResult { ticket: *ticket, command: command.clone(), result });
+                    let result = core.apply(command.clone());
+                    p.results.push(CommandResult { ticket: *ticket, command: command.clone(), result });
                 }
-                Request::TacticalSetup(id) => tactical.extend(sim.tactical_setup(*id)),
-                Request::ApplyTactical { id, result } => events.extend(sim.apply_tactical_result(*id, result).unwrap_or_default()),
+                Request::TacticalSetup(id) => p.tactical.extend(core.tactical_setup(*id)),
+                Request::ApplyTactical { id, result } => p.events.extend(core.apply_tactical(*id, result)),
                 Request::CancelTactical(id) => {
-                    sim.cancel_tactical(*id);
-                    events.extend(sim.resolve_battle_auto(*id).unwrap_or_default());
+                    core.cancel_tactical(*id);
+                    p.events.extend(core.resolve_auto(*id));
                 }
                 Request::ResolveBattle { id, mode } => {
                     let evs = match mode {
-                        ResolveMode::Auto => sim.resolve_battle_auto(*id),
-                        ResolveMode::Headless => sim.resolve_battle_tactical(*id),
+                        ResolveMode::Auto => core.resolve_auto(*id),
+                        ResolveMode::Headless => core.resolve_tactical(*id),
                     };
-                    events.extend(evs.unwrap_or_default());
+                    p.events.extend(evs);
+                }
+                Request::Save(path) => {
+                    let result = match &core {
+                        Core::Scripted(s) => s.save(path).map_err(|e| e.to_string()),
+                        Core::Plain(_) => Err("saving needs the scripted backend (PlayInit::scripted)".to_string()),
+                    };
+                    p.saves.push(SaveResult { path: path.clone(), result });
+                }
+                Request::Load(path) => {
+                    let result = load_into(&mut core, path, script.as_ref(), &progress);
+                    if let Ok(w) = &result {
+                        week = *w;
+                    }
+                    p.loads.push(LoadResult { path: path.clone(), result });
                 }
             }
             i += 1;
         }
-        for e in &events {
+        for e in &p.events {
             if let Event::WeekEnded { week: w } = e {
                 week = *w;
             }
         }
         let micros = started.elapsed().as_micros() as u64;
-        if !publish(&sim, &mut seq, week, events, results, tactical, (advances_done, requests_done), micros) {
+        if !publish(&core, &mut seq, week, p, (advances_done, requests_done), micros) {
             return;
         }
     }
+}
+
+#[derive(Default)]
+struct Published {
+    events: Vec<Event>,
+    results: Vec<CommandResult>,
+    tactical: Vec<TacticalRequest>,
+    script_events: Vec<ScriptEvent>,
+    saves: Vec<SaveResult>,
+    loads: Vec<LoadResult>,
 }
 
 #[cfg(test)]
@@ -359,5 +698,3 @@ mod tests {
         assert!(!involves(None, &b));
     }
 }
-
-

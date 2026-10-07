@@ -2554,6 +2554,7 @@ dependencies = [
  "alamo-model",
  "alamo-render",
  "bevy",
+ "galaxy-script",
  "galaxy-sim",
 ]
 

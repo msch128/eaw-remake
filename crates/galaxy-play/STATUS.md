@@ -27,3 +27,32 @@ Integration test path: `space-peace --offscreen out.png --campaign GC_Full_Web_W
 - No order to cancel a queue entry (no galaxy-sim command).
 - Fleet picking/dragging was only verified in offscreen scenarios and unit tests, never with a real mouse.
 - Orders to fleets in hyperspace are refused (retreat first).
+
+## Scripted backend, difficulty, save/load (new)
+The worker can run `galaxy_script::ScriptedSim` (Remake GC story scripts, Remake AI + strategy, difficulty, journaled save/load) instead of plain galaxy-sim. All input goes through
+the journaled methods, so a save is possible at any moment. `PlayInit::from_data` / `SimDriver::spawn` still give the old plain backend (no scripts, no save).
+- `PlayConfig::difficulty: Option<DifficultyTier>` (default `Some(Normal)`) and `PlayConfig::classic_ai: bool` (default false = Remake AI; true = galaxy-sim's built-in AI, no tiers).
+- `PlayInit::scripted(data: Arc<GameData>, fs: Arc<dyn FileSource>, &campaign, config)`: player = the campaign's active player, every other faction AI (`human_is_ai` = all AI).
+- `PlayInit::from_save(path, data, fs, config)`: starts a game by replaying a save (campaign, seed, difficulty, AI choice come from the file).
+- `PlayAction::Save(path)` -> `PlayEvent::SaveFinished { path, result }`; `PlayAction::Load(path)` -> `PlayEvent::LoadFinished { path, result: Ok(week) | Err(reason) }` (same campaign and player only;
+  otherwise restart with `from_save`). Both also put a ticker notification. `PlayEvent::Script(ScriptEvent)` forwards story dialogs/messages of the scripts.
+- Placeholder: with a scripted init `start_play` returns at once; `SimState::current.loading` is true (starting galaxy) until the worker finished the setup (about 1 s) or the replay of a save.
+  The game clock holds while `loading` or while a replay runs. `SimState::driver.load_progress() -> Option<LoadProgressView { done, total, week }>` (`fraction()` 0..1) feeds a loading bar
+  (also during an in-game `Load`); `None` when no replay runs.
+- Cost (tests/scripted.rs, release, 12 factions): 20 game weeks at 60 fps and the fastest speed (16x) take ~210 ms of worker time per game week (AI, scripts, sim, snapshot clone), the worst single batch was 41 ms,
+  the worst `poll()` on the render thread 27 us. The worker is a separate thread and `drive_clock` already limits the backlog (3 advances in flight), so the AI cannot stall rendering; at 16x the worker uses ~6% of a core.
+  Replay (load) speed: ~0.2 s per game week plus ~1 s setup; a 200-week save takes ~40 s: show the loading bar. No keyframes yet (a state-hash checkpoint every N weeks would only verify, not speed up).
+- Tests: `tests/scripted.rs` (render-loop responsiveness, save -> continue -> load -> identical continuation, `from_save` with monotone progress, classic-AI save/load, plain backend refusing to save).
+
+### Steps for the app (integrator, `space-peace`)
+1. Settings/menu data: add to the campaign start screen a difficulty selector (Easy / Normal / Hard from the mod, plus "Brutal" and "Fair" labelled as custom) and a checkbox "Classic AI"
+   (disables the selector). Store them in `PlayConfig { difficulty, classic_ai, .. }`.
+2. New game: `let fs: Arc<dyn FileSource> = game_fs.clone(); let data: Arc<GameData> = ...; start_play(world, PlayInit::scripted(data, fs, &campaign, cfg)?)` (replaces `PlayInit::from_data`).
+   Keep `cfg.pick_planets = false` as before. Show a "Preparing galaxy..." overlay while `SimState.current.loading`.
+3. Save: a button/hotkey sends `PlayAction::Save(path)`; slots live in e.g. `%APPDATA%\SpacePeace\saves\<slot>.json`. Read `PlayEvent::SaveFinished` for success/failure.
+   A slot list can use `galaxy_script::SaveFile::read(path)` (cheap): `checkpoint.week`, `checkpoint.factions`, `header.campaign`, `header.config.difficulty`, `header.config.remake_ai`.
+4. Load from the main menu: `start_play(world, PlayInit::from_save(path, data, fs, PlayConfig::default())?)`, show a loading bar from `SimState.driver.load_progress()` (fraction + week) while it is `Some`
+   or `current.loading`. Load from inside a game of the same campaign/player: `PlayAction::Load(path)` with the same bar, then handle `PlayEvent::LoadFinished` (on `Err` show the text).
+5. Battles keep working as before (`tactical_hook`, `TacticalReady`, `ApplyTactical`); they are journaled, so a save made while a battle is pending replays correctly. For tactical resolution of AI battles
+   the catalog/arenas are runtime-only (see `galaxy-script/STATUS.md`); the worker uses the statistical resolver unless a catalog is installed through `ScriptedSim::with_sim_runtime`.
+6. Do not call `Sim` mutators from the app thread; everything goes through `PlayAction`.

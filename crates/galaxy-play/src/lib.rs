@@ -27,13 +27,13 @@ pub mod state;
 pub mod ui;
 pub mod visuals;
 
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use bevy::prelude::*;
 
 pub use build_menu::{Availability, BuildCategory, BuildMenu, BuildOption, BuildTarget, QueueEntry, build_command};
 pub use catalog::{FleetModelStyle, PlayCatalog};
-pub use driver::{CommandResult, ResolveMode, SimDriver, Snapshot, Ticket};
+pub use driver::{CommandResult, LoadProgressView, LoadResult, ResolveMode, SaveResult, ScriptSetup, SimDriver, Snapshot, Ticket};
 pub use geometry::{FleetPlace, GalaxyLayout, RoutePlan, galaxy_to_world};
 pub use input::{PlayCursorBlocked, PlayHover, PlayUiBlock};
 
@@ -94,11 +94,30 @@ impl GalaxyPlayPlugin {
 /// Starts (or restarts) a game: spawns the worker thread and inserts the per-game resources.
 pub fn start_play(world: &mut World, init: PlayInit) {
     stop_play(world);
-    let PlayInit { sim, catalog, config } = init;
-    let human = if config.human_is_ai { None } else { sim.world().victory.active_player };
+    let PlayInit { sim, catalog, config, script } = init;
     let sim_world = sim.world().clone();
-    let mut driver = SimDriver::spawn(sim, human);
-    let current = driver.wait_initial();
+    let human = match &script {
+        // A scripted game (or a save) names its human faction in the script config; "none" = spectator.
+        Some(s) => match s.config.human.as_deref() {
+            Some(n) if n.eq_ignore_ascii_case("none") => None,
+            Some(n) => sim_world.faction_index.get(&n.to_ascii_lowercase()).copied(),
+            None => sim_world.victory.active_player,
+        },
+        None if config.human_is_ai => None,
+        None => sim_world.victory.active_player,
+    };
+    let (driver, current) = match script {
+        Some(setup) => {
+            // The worker thread sets up scripts, AI (and replays a save): show the starting state, flagged `loading`, until it is done.
+            let placeholder = Arc::new(Snapshot::placeholder(sim.galaxy().clone()));
+            (SimDriver::spawn_scripted(sim, setup, human), placeholder)
+        }
+        None => {
+            let mut driver = SimDriver::spawn(sim, human);
+            let current = driver.wait_initial();
+            (driver, current)
+        }
+    };
     world.insert_resource(GalaxyLayout::from_world(&sim_world));
     world.insert_resource(GameClock::new(&config));
     world.insert_resource(PlayerFaction(human));

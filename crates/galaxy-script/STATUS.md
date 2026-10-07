@@ -43,3 +43,5 @@ Runs the Remake's Lua plot scripts and `GameScoring` on top of `galaxy-sim` (`Sc
 - **Defaults:** `ScriptedConfig::default()` now means Remake AI + strategic layer + `DifficultyTier::Normal` (use `remake_ai: false, difficulty: None` for the old stub).
   Reason: over 40 weeks all-AI the stub snowballs (Rebel 38 planets, factions eliminated, 449 enemy-owner captures), the Remake AI stays sane (largest faction 24 planets,
   nobody eliminated, 18 enemy-owner captures).
+- Added for galaxy-play: `ScriptedSim::from_sim` (wrap a `Send` `Sim` built elsewhere; `ScriptedSim` itself is not `Send`, build it on the thread that runs it), `from_save_progress` with `LoadProgress`
+  (steps done/total, week), `SaveFile::read`/`total_steps`, journaled `resolve_battle` / `resolve_battle_tactical`, and `with_sim_runtime` for runtime-only setup that does not block saving.

@@ -32,6 +32,25 @@ pub fn pump_snapshots(
     let snaps = state.driver.poll();
     let Some(last) = snaps.last().cloned() else { return };
     for s in &snaps {
+        for e in &s.script_events {
+            out.write(PlayEvent::Script(e.clone()));
+        }
+        for r in &s.saves {
+            let text = match &r.result {
+                Ok(()) => format!("Game saved to {}", r.path.display()),
+                Err(e) => format!("Saving failed: {e}"),
+            };
+            notes.push(if r.result.is_ok() { NotificationKind::Campaign } else { NotificationKind::Error }, text, None, now);
+            out.write(PlayEvent::SaveFinished { path: r.path.clone(), result: r.result.clone() });
+        }
+        for r in &s.loads {
+            let text = match &r.result {
+                Ok(w) => format!("Game loaded (week {w})"),
+                Err(e) => format!("Loading failed: {e}"),
+            };
+            notes.push(if r.result.is_ok() { NotificationKind::Campaign } else { NotificationKind::Error }, text, None, now);
+            out.write(PlayEvent::LoadFinished { path: r.path.clone(), result: r.result.clone() });
+        }
         for r in &s.results {
             if let Err(e) = &r.result {
                 notes.push(NotificationKind::Error, describe_error(e), None, now);
@@ -59,7 +78,7 @@ pub fn pump_snapshots(
 
 /// Sends elapsed game time to the worker, limited by how far it lags behind.
 pub fn drive_clock(time: Res<Time>, mut clock: ResMut<GameClock>, mut state: ResMut<SimState>) {
-    let held = battle_holds_game(&state);
+    let held = battle_holds_game(&state) || state.current.loading || state.driver.load_progress().is_some();
     let rate = if held || state.current.galaxy.winner.is_some() { 0.0 } else { clock.rate() };
     let dt = time.delta_secs().min(0.25);
     clock.pending += dt * rate;
@@ -108,6 +127,8 @@ pub fn handle_actions(
                     clock.level = 0;
                 }
             }
+            PlayAction::Save(path) => state.driver.save(path.clone()),
+            PlayAction::Load(path) => state.driver.load(path.clone()),
             PlayAction::SelectPlanet(p) => selection.planet = *p,
             PlayAction::SelectFleets(f) => selection.fleets = f.iter().copied().collect(),
             PlayAction::DismissNotification(id) => notes.list.retain(|n| n.id != *id),
