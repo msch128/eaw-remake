@@ -33,13 +33,10 @@ F9 on the map opens the placeholder screen. Needed: galaxy-sim API to apply a ta
 - Map selection feeds the sim; owners and credits flow back into `GalaxyView` (rings, labels, faction bar). Real planet radii go to the fleet layout.
 - Original `eaw-ui` galactic command bar (faction skin): credits, pop, tech, day, planet name/owner/income, production queue with icons, build pads (space tab = ships/star base/tech, planet tab = structures), pause and fast-forward buttons. Queue entries cannot be cancelled (no sim command). The minimap shows planets by owner, fleets and the camera rectangle; click or drag pans.
 - HUD: notification ticker, speed/paused/battle-pending read-out, selected fleet list, route hint. Planet info panel moves to the right.
-- Battle: pending battle with the player opens an `eaw-ui` dialog (Fight / Auto-resolve). Fight -> `PlayEvent::OpenTacticalBattle` -> `OpenBattle` -> SpaceBattle screen (galaxy + fleets hidden, clock held); `BattleFinished` -> auto-resolve in the sim -> back to the map. Auto-resolve -> sim auto-resolve.
+- Battle: a pending battle with the player opens an `eaw-ui` dialog (Fight / Auto-resolve). Fight -> sim worker `tactical_setup` -> `PlayEvent::TacticalReady` -> `PendingTactical` + SpaceBattle screen (`battle_play.rs`): galaxy camera, sky dome, sun, HUD and fleets are suspended, `BattleSession::from_request` runs `battle-view` with the `eaw-ui` tactical bar; `battle_view::BattleFinished` -> `PlayAction::ApplyTactical` (events reach the ticker) -> map restored (command bar respawned: the tactical UI removes every bar). F10 abandons the fight (`CancelTactical`: sim auto-resolve). Auto-resolve -> sim auto-resolve.
 - UI scale: eaw-ui owns `UiScale` (height/768 x settings scale) so bar and HUD match; labels compensate.
+- Battle scenarios: `--battle-choice fight|auto`, `--battle-auto` (AI plays both sides), `--battle-speed X`, `--battle-seconds S` (mid-battle capture `<out>_battle.png`, camera framed on all ships); the final capture waits for the return to the map.
 - Offscreen scenarios: `--battle-choice fight|auto` clicks the battle dialog button when it opens (verifies the seam headless). `--select P --weeks N --build TEXT --move PLANET` (orders at the selected planet, then N weeks, stops early on a pending battle; capture waits for it).
-
-## Needs from battleloop
-- galaxy-sim: apply a tactical `BattleResult` to a pending battle (survivors per fleet, winner) instead of `resolve_battle_auto`; then `play::finish_battles` should send it (today it always auto-resolves).
-- `battle_seam` placeholder to be replaced by the real battle-view hook (it listens to `OpenBattle`, must write `BattleFinished`).
 
 ## Gaps
 - Real window input (clicks on pads, fleet drag, Esc) never run live; only offscreen renders and unit tests.

@@ -48,6 +48,11 @@ pub fn pump_snapshots(
     state.previous = Some(if snaps.len() >= 2 { snaps[snaps.len() - 2].clone() } else { state.current.clone() });
     state.current = last;
     state.received_at = now;
+    for s in &snaps {
+        for r in &s.tactical {
+            out.write(PlayEvent::TacticalReady(Box::new(r.clone())));
+        }
+    }
     let alive: Vec<u32> = state.current.human_battles.iter().map(|b| b.id).collect();
     state.awaiting_external.retain(|id| alive.contains(id));
 }
@@ -78,7 +83,6 @@ pub fn handle_actions(
     mut clock: ResMut<GameClock>,
     mut selection: ResMut<PlayerSelection>,
     mut notes: ResMut<Notifications>,
-    mut out: MessageWriter<PlayEvent>,
     player: Res<PlayerFaction>,
     cfg: Res<PlayConfig>,
     time: Res<Time>,
@@ -168,12 +172,14 @@ pub fn handle_actions(
                     }
                 }
             }
+            PlayAction::ApplyTactical { id, result } => state.driver.apply_tactical(*id, (**result).clone()),
+            PlayAction::CancelTactical(id) => state.driver.cancel_tactical(*id),
             PlayAction::ResolveBattle { id, choice } => {
                 let Some(b) = state.current.human_battles.iter().find(|b| b.id == *id).cloned() else { continue };
                 match choice {
                     BattleChoice::Fight if cfg.tactical_hook && !state.awaiting_external.contains(id) => {
                         state.awaiting_external.insert(*id);
-                        out.write(PlayEvent::OpenTacticalBattle(b));
+                        state.driver.tactical_setup(b.id);
                     }
                     BattleChoice::Fight if !cfg.tactical_hook => state.driver.resolve_battle(*id, ResolveMode::Headless),
                     // Host finished (or declined) the tactical fight and reports back.
@@ -302,7 +308,10 @@ pub fn update_ui_model(
 }
 
 /// Space = pause, 1..9 = speed levels, M/S/R = merge/split/retreat.
-pub fn hotkeys(keys: Res<ButtonInput<KeyCode>>, mut actions: MessageWriter<PlayAction>) {
+pub fn hotkeys(keys: Res<ButtonInput<KeyCode>>, hidden: Res<crate::PlayMapHidden>, mut actions: MessageWriter<PlayAction>) {
+    if hidden.0 {
+        return;
+    }
     if keys.just_pressed(KeyCode::Space) {
         actions.write(PlayAction::TogglePause);
     }

@@ -73,8 +73,8 @@ impl Plugin for PlayUiPlugin {
                 (
                     spawn_bar.run_if(resource_exists::<EawUiAssets>),
                     spawn_hud,
-                    feed_bar,
-                    feed_minimap.run_if(resource_exists::<MinimapData>),
+                    feed_bar.run_if(in_state(AppScreen::Galaxy)),
+                    feed_minimap.run_if(resource_exists::<MinimapData>.and_then(in_state(AppScreen::Galaxy))),
                     minimap_pan,
                     bar_clicks,
                     refresh_ticker,
@@ -123,11 +123,27 @@ fn ui_faction(state: &SimState, player: &PlayerFaction) -> UiFaction {
 }
 
 /// Spawns the galactic bar once for the running game (waits for the UI textures by itself).
-fn spawn_bar(mut commands: Commands, mut bar: ResMut<BarState>, state: Res<SimState>, player: Res<PlayerFaction>) {
-    if bar.spawned || player.0.is_none() {
+#[allow(clippy::too_many_arguments)]
+fn spawn_bar(
+    mut commands: Commands,
+    mut bar: ResMut<BarState>,
+    state: Res<SimState>,
+    player: Res<PlayerFaction>,
+    screen: Res<State<AppScreen>>,
+    bars: Query<(), With<EawCommandBar>>,
+    mut last_spawn: Local<u32>,
+    mut frame: Local<u32>,
+) {
+    *frame += 1;
+    // The tactical UI removes every command bar when a battle ends: bring the galactic one back.
+    if bar.spawned && bars.is_empty() && *screen.get() == AppScreen::Galaxy && *frame > *last_spawn + 30 {
+        bar.spawned = false;
+    }
+    if bar.spawned || player.0.is_none() || *screen.get() != AppScreen::Galaxy {
         return;
     }
     bar.spawned = true;
+    *last_spawn = *frame;
     commands.spawn_eaw_command_bar(CommandBarSpec { mode: CommandBarMode::Galactic, faction: ui_faction(&state, &player) });
 }
 

@@ -38,6 +38,11 @@ The next milestone is integration (see below) – that is the critical path.
 2. **Battle loop:** BattlePending → `battle-view` with a `BattleSetup` from the fleets and the planet's .ted map → result applied back into galaxy-sim (an API to apply a tactical result is still missing – see `space-peace/STATUS.md`) → return to galaxy. `eaw-ui` tactical bar in battle.
 3. Hook `alamo-audio` into battles (weapon SFX, unit responses, battle music intensity).
 4. Switch `galaxy-script` to the new galaxy-sim APIs (`galaxy-sim/NEEDS-DONE.md`), then finish `galaxy-ai` and replace the stub AI.
+   AI goal (user, later – after the basics work): smart, not just aggressive – a measured urge to expand
+   (not too strong), prefers flanking / weak spots, etc. Difficulty option (Easy/Normal/Hard) from the mod's
+   `Data/Xml/DIFFICULTYADJUSTMENTS.XML` (Credit_Multiplier 1/2/3 = the original "cheat", AI contrast = attack-force
+   superiority it wants, build-time/damage/health/shield multipliers, goal-cycle sleep = reaction delay). Possibly an
+   extra "Brutal" tier of our own on top (named estimate).
 5. First live play test with the user (ask when it suits them – they game on this machine), then balance/feel polish.
 
 ## Verification assets

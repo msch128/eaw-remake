@@ -16,7 +16,7 @@ the player selects and orders them, builds at owned planets, controls game speed
 - Notifications (captured/lost planets, battle pending/resolved, construction, income, refused orders).
 - `PlayUiModel` (plain data) is the UI seam: `GalaxyPlayUiPlugin` is a simple built-in UI; the app uses `eaw-ui` instead.
 - `PlayCursorBlocked` lets the host disable mouse handling (over its UI, menus, other screens).
-- Battles: with `PlayConfig::tactical_hook` "Fight" emits `PlayEvent::OpenTacticalBattle`; the host reports back with
+- Battles: with `PlayConfig::tactical_hook` "Fight" asks the worker for the tactical setup (`PlayEvent::TacticalReady(TacticalRequest)`); the host plays it and answers `PlayAction::ApplyTactical` (result applied by galaxy-sim) or `PlayAction::CancelTactical` (auto-resolve).
   `PlayAction::ResolveBattle` (currently always auto-resolved).
 
 ## Run
@@ -24,7 +24,6 @@ the player selects and orders them, builds at owned planets, controls game speed
 Integration test path: `space-peace --offscreen out.png --campaign GC_Full_Web_Way_Rebel --select "The Yavin System" --weeks 8 --build Squadron --move Hoth`.
 
 ## Gaps
-- Tactical results cannot be applied to a pending battle yet (needs galaxy-sim API, see `space-peace/STATUS.md`).
 - No order to cancel a queue entry (no galaxy-sim command).
 - Fleet picking/dragging was only verified in offscreen scenarios and unit tests, never with a real mouse.
 - Orders to fleets in hyperspace are refused (retreat first).

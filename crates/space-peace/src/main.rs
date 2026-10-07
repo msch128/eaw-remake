@@ -1,5 +1,6 @@
 ﻿//! Space Peace: Not at War - Empire at War galactic conquest shell.
 
+mod battle_play;
 mod battle_seam;
 mod camera;
 mod cli;
@@ -31,6 +32,7 @@ use bevy::{
     winit::WinitPlugin,
 };
 
+use battle_play::BattlePlayPlugin;
 use battle_seam::BattleSeamPlugin;
 use camera::CameraPlugin;
 use cli::Args;
@@ -127,6 +129,7 @@ fn main() {
     if let Some(fs) = &fs {
         app.add_plugins(AlamoRenderPlugin::new(fs.clone()));
         app.add_plugins(eaw_ui::EawUiPlugin::new(fs.clone()));
+        app.add_plugins((battle_view::BattleViewPlugin, battle_view::tactical_ui::TacticalUiPlugin));
         if offscreen.is_none() {
             app.add_plugins(AlamoAudioPlugin::new(fs.clone() as Arc<dyn FileSource>));
         }
@@ -151,6 +154,7 @@ fn main() {
             OptionsPlugin,
             SettingsPlugin,
             BattleSeamPlugin,
+            BattlePlayPlugin,
             CameraPlugin,
             GalaxyMapPlugin,
             UiPlugin,

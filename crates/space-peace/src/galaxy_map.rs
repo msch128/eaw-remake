@@ -264,7 +264,7 @@ struct PlanetLabel(usize);
 
 /// Marks the sky sphere that follows the camera.
 #[derive(Component)]
-struct Skybox;
+pub(crate) struct Skybox;
 
 /// Converts EaW galactic coordinates (x/y plane, z up) to Bevy world space (y up).
 pub fn galaxy_to_world(p: Vec3) -> Vec3 {

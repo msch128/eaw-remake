@@ -41,7 +41,7 @@ struct FpsText;
 
 /// Marks the galaxy HUD (info panel, faction bar, tooltip, hint); removed when leaving the map.
 #[derive(Component)]
-struct HudEntity;
+pub(crate) struct HudEntity;
 
 fn despawn_hud(mut commands: Commands, hud: Query<Entity, With<HudEntity>>) {
     for e in &hud {

@@ -13,7 +13,7 @@ use galaxy_play::{
 };
 use galaxy_sim::{FleetLocation, PlanetId};
 
-use crate::battle_seam::{BattleFinished, BattleRequest, OpenBattle};
+use crate::battle_seam::{BattleFinished, BattleOutcome, BattleRequest, OpenBattle};
 use crate::cli::Args;
 use crate::flow::{AppScreen, CurrentCampaign, Paused};
 use crate::galaxy_map::Selection;
@@ -41,12 +41,14 @@ pub struct ScriptHold {
     pub active: bool,
     /// When it finished.
     pub done_at: Option<Instant>,
+    /// A tactical battle will open and the capture has to wait for it and the return.
+    pub waiting_battle: bool,
 }
 
 impl ScriptHold {
     /// True once a finished script had time to show its result.
     pub fn settled(&self) -> bool {
-        !self.active && self.done_at.is_none_or(|t| t.elapsed().as_secs_f32() > 1.5)
+        !self.active && !self.waiting_battle && self.done_at.is_none_or(|t| t.elapsed().as_secs_f32() > 1.5)
     }
 }
 
@@ -242,22 +244,25 @@ fn cursor_blocked(
 }
 
 /// "Fight (tactical)" opens the battle screen through the seam.
-fn forward_battles(mut events: MessageReader<PlayEvent>, state: Option<Res<SimState>>, mut open: MessageWriter<OpenBattle>) {
+fn forward_battles(mut commands: Commands, mut events: MessageReader<PlayEvent>, state: Option<Res<SimState>>, mut open: MessageWriter<OpenBattle>) {
     let Some(state) = state else { return };
     for e in events.read() {
-        if let PlayEvent::OpenTacticalBattle(b) = e {
-            let planet_name = state.world.planets[b.planet as usize].display_name.clone();
-            let sides = b.factions.iter().map(|&f| state.world.factions[f as usize].name.clone()).collect();
-            open.write(OpenBattle(BattleRequest { id: b.id, planet_name, sides }));
+        if let PlayEvent::TacticalReady(req) = e {
+            let planet_name = state.world.planets[req.planet as usize].display_name.clone();
+            let sides = req.sides.iter().map(|s| s.faction_name.clone()).collect();
+            commands.insert_resource(crate::battle_play::PendingTactical(req.clone()));
+            open.write(OpenBattle(BattleRequest { id: req.battle_id, planet_name, sides }));
         }
     }
 }
 
-/// A finished tactical battle settles the pending battle. Until the simulation can apply a
-/// tactical result it is auto-resolved (see `STATUS.md`).
+/// A battle left without a result is abandoned: the sim auto-resolves it. Real results are
+/// applied by `battle_play`.
 fn finish_battles(mut finished: MessageReader<BattleFinished>, mut actions: MessageWriter<PlayAction>) {
     for f in finished.read() {
-        actions.write(PlayAction::ResolveBattle { id: f.id, choice: galaxy_play::BattleChoice::AutoResolve });
+        if f.outcome == BattleOutcome::Aborted {
+            actions.write(PlayAction::CancelTactical(f.id));
+        }
     }
 }
 
@@ -362,6 +367,7 @@ fn run_script(
             // Orders were handled in the frame before; now advance time in week-sized steps.
             let battle = !state.current.human_battles.is_empty();
             if script.sent >= script.goal || battle {
+                hold.waiting_battle = battle && args.battle_choice.as_deref() == Some("fight");
                 let idle = state.driver.advances_in_flight(&state.current) == 0;
                 if idle || script.frames > 6000 {
                     script.phase = 3;

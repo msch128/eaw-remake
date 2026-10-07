@@ -46,6 +46,12 @@ pub struct Args {
     pub stop_on_battle: bool,
     /// Offscreen only: click this button of the battle dialog once it opens (`--battle-choice fight|auto`).
     pub battle_choice: Option<String>,
+    /// Offscreen only: the AI plays both sides of a tactical battle (`--battle-auto`).
+    pub battle_auto: bool,
+    /// Tactical battle speed multiplier (`--battle-speed <x>`).
+    pub battle_speed: Option<f32>,
+    /// Offscreen only: battle time of the mid-battle capture (`--battle-seconds <s>`).
+    pub battle_seconds: Option<f32>,
 }
 
 impl Default for Args {
@@ -70,6 +76,9 @@ impl Default for Args {
             move_to: None,
             stop_on_battle: false,
             battle_choice: None,
+            battle_auto: false,
+            battle_speed: None,
+            battle_seconds: None,
         }
     }
 }
@@ -97,6 +106,9 @@ OPTIONS:
   --move <planet>        Offscreen: send the fleets at the selected planet to another planet
   --stop-on-battle       Offscreen: stop advancing as soon as a battle waits for a decision
   --battle-choice <c>    Offscreen: click fight or auto in the battle dialog when it opens
+  --battle-auto           Offscreen: the AI plays both sides of a tactical battle
+  --battle-speed <x>     Tactical battle speed multiplier
+  --battle-seconds <s>   Offscreen: battle time of the mid-battle capture (default 12)
   --no-vsync             Disable vertical sync
   --fullscreen           Start in borderless fullscreen
   -h, --help             Show this help
@@ -153,6 +165,15 @@ impl Args {
                 "--build" => out.build = Some(it.next().ok_or("--build needs a value")?),
                 "--move" => out.move_to = Some(it.next().ok_or("--move needs a value")?),
                 "--stop-on-battle" => out.stop_on_battle = true,
+                "--battle-auto" => out.battle_auto = true,
+                "--battle-speed" => {
+                    let v = it.next().ok_or("--battle-speed needs a value")?;
+                    out.battle_speed = Some(v.parse().map_err(|e| format!("bad --battle-speed: {e}"))?);
+                }
+                "--battle-seconds" => {
+                    let v = it.next().ok_or("--battle-seconds needs a value")?;
+                    out.battle_seconds = Some(v.parse().map_err(|e| format!("bad --battle-seconds: {e}"))?);
+                }
                 "--battle-choice" => {
                     let v = it.next().ok_or("--battle-choice needs fight or auto")?;
                     if v != "fight" && v != "auto" {

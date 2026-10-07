@@ -15,7 +15,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Instant;
 
-use galaxy_sim::{Command, CommandError, CommandOk, Event, FactionId, Galaxy, PendingBattle, Sim, World};
+use galaxy_sim::{Command, CommandError, CommandOk, Event, FactionId, Galaxy, PendingBattle, Sim, TacticalRequest, TacticalResult, World};
 
 /// Identifies a submitted command so its result can be matched in a later snapshot.
 pub type Ticket = u64;
@@ -48,6 +48,17 @@ pub enum Request {
         /// Resolver.
         mode: ResolveMode,
     },
+    /// Prepare the tactical fight of a pending battle; the request arrives in a snapshot.
+    TacticalSetup(u32),
+    /// Apply the result of the tactical fight.
+    ApplyTactical {
+        /// Battle id.
+        id: u32,
+        /// Result of the fight.
+        result: Box<TacticalResult>,
+    },
+    /// Abandon the tactical fight and auto-resolve the battle instead.
+    CancelTactical(u32),
     /// Stop the worker.
     Shutdown,
 }
@@ -80,6 +91,8 @@ pub struct Snapshot {
     pub results: Vec<CommandResult>,
     /// Pending battles that involve the human faction and wait for a decision.
     pub human_battles: Vec<PendingBattle>,
+    /// Tactical fights prepared since the previous snapshot.
+    pub tactical: Vec<TacticalRequest>,
     /// How many [`Request::Advance`] messages (before coalescing) have been processed so far.
     pub advances_done: u64,
     /// How many requests of any kind have been processed so far.
@@ -151,6 +164,24 @@ impl SimDriver {
     /// Number of advance requests the worker has not finished yet.
     pub fn advances_in_flight(&self, latest: &Snapshot) -> u64 {
         self.advances_sent.saturating_sub(latest.advances_done)
+    }
+
+    /// Prepares the tactical fight of a pending battle (answer: [`Snapshot::tactical`]).
+    pub fn tactical_setup(&mut self, id: u32) {
+        self.requests_sent += 1;
+        let _ = self.tx.send(Request::TacticalSetup(id));
+    }
+
+    /// Applies the result of a tactical fight to its pending battle.
+    pub fn apply_tactical(&mut self, id: u32, result: TacticalResult) {
+        self.requests_sent += 1;
+        let _ = self.tx.send(Request::ApplyTactical { id, result: Box::new(result) });
+    }
+
+    /// Abandons a tactical fight; the battle is auto-resolved.
+    pub fn cancel_tactical(&mut self, id: u32) {
+        self.requests_sent += 1;
+        let _ = self.tx.send(Request::CancelTactical(id));
     }
 
     /// Settles a pending battle.
@@ -240,7 +271,7 @@ fn worker(mut sim: Sim, human: Option<FactionId>, rx: Receiver<Request>, tx: Sen
     let mut week = 0u64;
     let mut advances_done = 0u64;
     let mut requests_done = 0u64;
-    let publish = |sim: &Sim, seq: &mut u64, week: u64, events: Vec<Event>, results: Vec<CommandResult>, counts: (u64, u64), micros: u64| {
+    let publish = |sim: &Sim, seq: &mut u64, week: u64, events: Vec<Event>, results: Vec<CommandResult>, tactical: Vec<TacticalRequest>, counts: (u64, u64), micros: u64| {
         let snap = Snapshot {
             seq: *seq,
             galaxy: sim.galaxy().clone(),
@@ -249,6 +280,7 @@ fn worker(mut sim: Sim, human: Option<FactionId>, rx: Receiver<Request>, tx: Sen
             events,
             results,
             human_battles: human_battles(sim, human),
+            tactical,
             advances_done: counts.0,
             requests_done: counts.1,
             work_micros: micros,
@@ -256,7 +288,7 @@ fn worker(mut sim: Sim, human: Option<FactionId>, rx: Receiver<Request>, tx: Sen
         *seq += 1;
         tx.send(Arc::new(snap)).is_ok()
     };
-    if !publish(&sim, &mut seq, week, Vec::new(), Vec::new(), (0, 0), 0) {
+    if !publish(&sim, &mut seq, week, Vec::new(), Vec::new(), Vec::new(), (0, 0), 0) {
         return;
     }
     loop {
@@ -266,6 +298,7 @@ fn worker(mut sim: Sim, human: Option<FactionId>, rx: Receiver<Request>, tx: Sen
         let started = Instant::now();
         let mut events = Vec::new();
         let mut results = Vec::new();
+        let mut tactical = Vec::new();
         requests_done += batch.len() as u64;
         let mut i = 0;
         while i < batch.len() {
@@ -286,6 +319,12 @@ fn worker(mut sim: Sim, human: Option<FactionId>, rx: Receiver<Request>, tx: Sen
                     let result = sim.apply(command.clone());
                     results.push(CommandResult { ticket: *ticket, command: command.clone(), result });
                 }
+                Request::TacticalSetup(id) => tactical.extend(sim.tactical_setup(*id)),
+                Request::ApplyTactical { id, result } => events.extend(sim.apply_tactical_result(*id, result).unwrap_or_default()),
+                Request::CancelTactical(id) => {
+                    sim.cancel_tactical(*id);
+                    events.extend(sim.resolve_battle_auto(*id).unwrap_or_default());
+                }
                 Request::ResolveBattle { id, mode } => {
                     let evs = match mode {
                         ResolveMode::Auto => sim.resolve_battle_auto(*id),
@@ -302,7 +341,7 @@ fn worker(mut sim: Sim, human: Option<FactionId>, rx: Receiver<Request>, tx: Sen
             }
         }
         let micros = started.elapsed().as_micros() as u64;
-        if !publish(&sim, &mut seq, week, events, results, (advances_done, requests_done), micros) {
+        if !publish(&sim, &mut seq, week, events, results, tactical, (advances_done, requests_done), micros) {
             return;
         }
     }

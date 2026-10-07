@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use alamo_data::{Campaign, GameData};
 use bevy::prelude::*;
-use galaxy_sim::{Command, CommandError, Event, FactionId, FleetId, Galaxy, PendingBattle, PlanetId, Sim, SimConfig, SimError, World};
+use galaxy_sim::{Command, CommandError, Event, FactionId, FleetId, Galaxy, PlanetId, Sim, SimConfig, SimError, World};
 
 use crate::build_menu::{BuildMenu, BuildTarget};
 use crate::catalog::PlayCatalog;
@@ -227,6 +227,15 @@ pub enum PlayAction {
         /// Decision.
         choice: BattleChoice,
     },
+    /// The tactical fight of a battle is over: apply its result to the simulation.
+    ApplyTactical {
+        /// Battle id.
+        id: u32,
+        /// Survivors and winner.
+        result: Box<galaxy_sim::TacticalResult>,
+    },
+    /// Abandon the tactical fight of a battle; it is auto-resolved.
+    CancelTactical(u32),
     /// Remove a notification.
     DismissNotification(u64),
 }
@@ -236,9 +245,9 @@ pub enum PlayAction {
 pub enum PlayEvent {
     /// A simulation event.
     Sim(Event),
-    /// The player chose "Fight (tactical)" and [`PlayConfig::tactical_hook`] is on: open the
-    /// space battle view for this battle, then send [`PlayAction::ResolveBattle`].
-    OpenTacticalBattle(PendingBattle),
+    /// The player chose "Fight (tactical)" and [`PlayConfig::tactical_hook`] is on: the simulation prepared the fight. Open
+    /// the battle view for this request, then send [`PlayAction::ApplyTactical`] (or [`PlayAction::CancelTactical`]).
+    TacticalReady(Box<galaxy_sim::TacticalRequest>),
     /// The simulation refused an order of the player.
     CommandRejected {
         /// The order.

@@ -59,7 +59,6 @@ pub struct BattleRequest {
 pub struct OpenBattle(pub BattleRequest);
 
 /// How a tactical battle ended.
-#[allow(dead_code)] // `Victory` and `Draw` are produced once battle-view is connected.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BattleOutcome {
     /// The side with this index (into [`BattleRequest::sides`]) won.
@@ -71,7 +70,6 @@ pub enum BattleOutcome {
 }
 
 /// A tactical battle is over; the result goes back into the galaxy simulation.
-#[allow(dead_code)] // read by the galaxy-play host system once it exists
 #[derive(Message, Debug, Clone)]
 pub struct BattleFinished {
     /// Id of the pending battle.
@@ -95,7 +93,8 @@ impl Plugin for BattleSeamPlugin {
                 Update,
                 (debug_open_battle.run_if(in_state(AppScreen::Galaxy)), open_battle, finish_battle),
             )
-            .add_systems(OnEnter(AppScreen::SpaceBattle), (hide_galaxy, spawn_placeholder))
+            .add_systems(OnEnter(AppScreen::SpaceBattle), hide_galaxy)
+            .add_systems(OnEnter(AppScreen::SpaceBattle), spawn_placeholder.run_if(not(resource_exists::<crate::battle_play::PendingTactical>)))
             .add_systems(OnExit(AppScreen::SpaceBattle), (show_galaxy, despawn_placeholder));
     }
 }

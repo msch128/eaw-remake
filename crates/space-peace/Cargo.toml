@@ -32,4 +32,5 @@ rand = "0.9"
 galaxy-sim = { path = "../galaxy-sim" }
 galaxy-play = { path = "../galaxy-play" }
 eaw-ui = { path = "../eaw-ui" }
+battle-view = { path = "../battle-view" }
 
