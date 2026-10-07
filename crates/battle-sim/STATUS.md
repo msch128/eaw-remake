@@ -24,3 +24,9 @@ Deterministic, rayon-parallel space-battle simulation (fixed dt 1/30). Rules and
 ## Difficulty and carried damage (new)
 `BattleConfig::side_mults` (damage dealt, hull and shield multipliers per side) and `BattleConfig::start_health` (ships start with a share of hull/shield);
 `GroupResult::health` reports the survivors' hull/shield fractions of single ships (not squadrons) so galaxy-sim can keep the damage.
+
+## Tactical AI review (see RULES.md section 9)
+- New: data-based AI retreat (`Retreat_From_Space` thresholds, `BattleConfig::retreat_allowed`), focus on weak ships, generic ability use (speed / shield regen / damage reduction), separation of big ships.
+- Tests `tests/tactical_ai.rs` (real data): outgunned AI retreats (and does not when forbidden), even fights are fought out, no ship stacking, real-map duels are decided and deterministic (threads included),
+  defenders with a station do not flee. The ability rules have no dedicated test.
+- Known gaps: strength estimate for the retreat rule is ours; retreat orders at age 120 s often come too late to save slow ships; AI never calls reinforcements; no flank/escort goals.

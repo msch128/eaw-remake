@@ -129,3 +129,25 @@ shield generator and win every size.
 ### Time units and depleted shields (audit)
 
 All XML `*_Seconds` fields are real seconds; `Max_Speed` (ships and projectiles) is per frame and is multiplied by 30 (the 30 Hz logic tick). A shield drained to zero stays offline for `Depleted_Shield_Disable_Time` (4 s, from Gameconstants) before regeneration resumes; this is what makes continuously regenerating shields breakable and shortens the 1v1 ISD vs MC-80 duel from ~800 s to ~270 s. Squadron-only fleets start at the side origin (rows are packed), not 2100 units ahead of it. Energy (`Energy_Capacity`) is not modelled; neither the ISD nor the MC-80 uses it.
+
+## 9. Tactical AI review against the Remake data (what is data, what is estimate)
+Source: `XML/AI/GoalFunctions/Remake_SpaceCombat.xml`, `PerceptualEquations/Remake_SpaceCombatEquations.xml`, `Scripts/AI/Spacemode/*.lua`. The Remake tactical AI is a set of goals
+(Destroy / Flank / Bomb / Strike / Focus_Weak / Escort / Reinforce / Retreat); the engine part that matters for us is implemented as follows.
+
+* **Retreat (`Retreat_From_Space`, implemented):** an AI side orders `Command::Retreat` (every 2 s check) when it is clearly outgunned. Attacker: enemy force >= 2 x own force and battle age > 120 s;
+  defender: enemy >= 3 x own (4 x with a living station) and age > 120 s (> 30 s when it has no station). Also required: the side's `BattleConfig::retreat_allowed` (`Allowed_To_Retreat_Space`:
+  campaign only, faction holds more than one planet, never Pirates; galaxy-sim sets it per `TacticalSide::may_retreat`), the retreat countdown (60 s) passed, and no enemy interdiction
+  (`RetreatBlocked` is simply retried). The thresholds and ages are data; "force" is an **estimate**: sum over living ships of `sqrt((hull + shield) x best-bearing damage rate)` (the engine's
+  `FriendlyForceUnnormalized` is not visible), reinforcements are not counted (`ReinforcementsUnnormalized` x 0.8 is ignored), the "mainly transports" clause and the Hard-difficulty
+  "finish low-health enemies before leaving" step are not modelled. Retreating ships must still fly out of the arena, so a late order saves only the fast or distant ships.
+* **Focus weak (`Prevent_Retreat_On_Priority_Target`, implemented):** a non-fighter enemy with less than 33% of hull + shield left (data threshold) inside weapon reach gets its priority weight halved
+  (factor 0.5 is an estimate), so ships finish off wounded targets instead of spreading fire.
+* **Ability use (implemented generically from the ability numbers, not names):** besides the weapon boosts, tractor beams and missile shields of section 5, AI ships now use expiring abilities
+  with `speed_mult > 1.05` when fleeing or when the target is more than twice the weapon range away while on a move order, `shield_regen_mult > 1.05` when the shield is below 50% and
+  was hit in the last 3 s, and `take_damage_mult < 0.95` when the hull is below 60% under fire (the percentages are estimates; the data does not list AI hints for these).
+* **Separation (new, estimate):** mobile non-fighter ships push each other apart when closer than 0.85 x the sum of their (frigate+ shrunk) radii, half of the overlap each, at most one
+  tick of speed per tick; stations are excluded (defenders guard the station position). Measured with 8 ISD vs 6 MC-80 + 6 Nebulon-B: worst overlap 16% of the radii (before: ships stacked).
+* **Already data-driven before:** target priorities by `Targeting_Priority_Set` (counter types, fighters vs bombers/capitals), hardpoint priorities (shield generator, engines, hangar, weapons) for
+  attack-move sets (off by default, see section 4), squadron launch and replacement from carriers/stations (section 3), defenders guarding their station, attackers attack-moving.
+* **Not implemented:** Flank/Escort/Bombing-run goals as separate behaviours (bombers use their priority sets), AI-called reinforcements (`Command::Reinforce` needs a reinforcement pool
+  from the galaxy), the Death Star, stealth/cloak (`Try_Ability STEALTH`), and formation keeping for capital ships.

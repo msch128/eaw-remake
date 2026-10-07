@@ -39,3 +39,4 @@ Headless, deterministic, `Send` Galactic Conquest simulation. Rules: `RULES.md`.
   of their hull per week, shields 4x faster. These three numbers are **estimates**: the data only has tactical repair (`Repair_Amount_Per_Frame` of repair hardpoints), nothing galactic.
   Not persisted: hardpoint damage (repaired), squadron fighters, structures, statistical auto-resolve results (they only remove units).
 - `Command`, `SimConfig`, `TacticalResult` are serde-serialisable (used by the galaxy-script save journal).
+- `TacticalSide::may_retreat` (faction holds more than one planet and is not Pirates) feeds `BattleConfig::retreat_allowed`, so the battle AI may retreat only where the Remake rules allow it.

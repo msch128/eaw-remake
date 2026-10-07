@@ -31,6 +31,8 @@ struct Snap {
     golan: bool,
     /// Bit i set = hardpoint i (of the first 64) is alive.
     hp_alive: u64,
+    /// Hull and shield left as a share of the maximum (0..1).
+    health: f32,
 }
 
 /// Uniform grid of ship ids for projectile collision.
@@ -615,6 +617,7 @@ impl Battle {
                     alive: s.alive && !s.retreated,
                     golan: d.golan,
                     hp_alive: s.hps.iter().take(64).enumerate().fold(0u64, |m, (i, h)| m | (u64::from(h.alive) << i)),
+                    health: ((s.hull.max(0.0) + s.shield.max(0.0)) / (d.hull.max(1.0) + d.shield)).clamp(0.0, 1.0),
                 }
             })
             .collect();
@@ -627,6 +630,8 @@ impl Battle {
         let spawn = self.spawn_pos.clone();
         let arena = cfg.arena.clone();
         let obstacles: &[crate::arena::Obstacle] = arena.as_ref().map_or(&[], |a| a.obstacles.as_slice());
+        // Mobile ships that keep each other apart (fighters and stations excluded).
+        let big: Vec<u32> = self.ships.iter().filter(|s| s.alive && !s.retreated && !cat.ship(s.def).is_static && !matches!(cat.ship(s.def).class, TargetClass::Fighter | TargetClass::Bomber)).map(|s| s.id).collect();
         let squad_leaders: Vec<u32> = self
             .squads
             .iter()
@@ -639,7 +644,7 @@ impl Battle {
                 }
                 scan(s, &snaps, &cat, &cfg);
                 let mut rng = Rng::for_entity(cfg.seed, tick, s.id, 0x30FE);
-                mov(s, &snaps, &cat, &cfg, &spawn, &squad_leaders, obstacles, &mut rng);
+                mov(s, &snaps, &cat, &cfg, &spawn, &squad_leaders, obstacles, &big, &mut rng);
             };
             if par && self.ships.len() > 16 {
                 self.ships.par_iter_mut().for_each(work);
@@ -913,10 +918,56 @@ impl Battle {
         }
     }
 
+    /// Strength of a side for the retreat decision: sum of `sqrt((hull + shield) x damage rate)` over its living ships (estimate of the
+    /// engine's `FriendlyForceUnnormalized`; the thresholds below come from `Retreat_From_Space`).
+    fn side_power(&self, side: u8) -> f32 {
+        let cat = &self.catalog;
+        self.ships
+            .iter()
+            .filter(|s| s.side == side && s.alive && !s.retreated)
+            .map(|s| {
+                let d = cat.ship(s.def);
+                ((s.hull.max(0.0) + s.shield.max(0.0)) * crate::defs::dps_estimate(d, cat)).sqrt()
+            })
+            .sum()
+    }
+
+    /// `Retreat_From_Space` of the Remake AI (Remake_SpaceCombatEquations.xml): an AI side that is clearly outgunned orders the retreat. Attacker: enemy
+    /// force at least 2x its own after 120 s; defender: at least 3x (4x with a station) after 120 s, or after 30 s without any station. Not for sides
+    /// that may not retreat (`BattleConfig::retreat_allowed`, the galaxy says whether the faction holds more than one planet), not before
+    /// the retreat countdown, and not while an interdictor blocks it.
+    fn ai_retreat(&mut self) {
+        let n = self.sides.len();
+        for side in 0..n as u8 {
+            if !self.sides[side as usize].ai || self.retreat_ordered[side as usize] || !self.config.retreat_allowed.get(side as usize).copied().unwrap_or(true) {
+                continue;
+            }
+            if self.time < self.config.retreat_countdown.max(30.0) {
+                continue;
+            }
+            let cat = self.catalog.clone();
+            let stations = self.ships.iter().filter(|s| s.side == side && s.alive && cat.ship(s.def).is_static).count();
+            let defender = !self.sides[side as usize].structures.is_empty();
+            let age_ok = if defender { if stations == 0 { self.time > 30.0 } else { self.time > 120.0 } } else { self.time > 120.0 };
+            if !age_ok {
+                continue;
+            }
+            let mine = self.side_power(side);
+            let theirs: f32 = (0..n as u8).filter(|&o| o != side).map(|o| self.side_power(o)).sum();
+            let factor = if defender { 3.0 + f32::from(u8::from(stations > 0)) } else { 2.0 };
+            if theirs > 0.0 && theirs >= factor * mine {
+                let _ = self.command(side, Command::Retreat);
+            }
+        }
+    }
+
     fn upkeep(&mut self, dt: f32, half: f32) {
         let cat = self.catalog.clone();
         let record = self.config.record_events;
         let tick = self.tick;
+        if tick.is_multiple_of(60) {
+            self.ai_retreat();
+        }
         // Tractor beams: slow their targets for as long as the beam is active and in range.
         for s in &mut self.ships {
             s.tractor_cut = 0.0;
@@ -1009,6 +1060,13 @@ impl Battle {
                         && s.stance != Stance::HoldFire
                         && self.tractor_target(i as u32, t).is_some()
                     {
+                        auto_use.push(k);
+                    } else if !a.toggle && a.speed_mult > 1.05 && (matches!(s.order, Order::Retreat) || (s.target != NONE && matches!(s.order, Order::AttackMove(_) | Order::Move(_)) && self.ships[s.target as usize].pos.dist(s.pos) > def.max_weapon_range * 2.0)) {
+                        // Speed abilities: flee, or close a large gap while on the move.
+                        auto_use.push(k);
+                    } else if !a.toggle && a.shield_regen_mult > 1.05 && def.shield > 0.0 && s.shield < 0.5 * def.shield && s.since_hit < 3.0 {
+                        auto_use.push(k);
+                    } else if !a.toggle && a.take_damage_mult < 0.95 && s.hull < 0.6 * def.hull && s.since_hit < 3.0 {
                         auto_use.push(k);
                     } else if a.missile_radius > 0.0 {
                         let incoming = self
@@ -1171,6 +1229,8 @@ fn scan(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig) {
             }
             None => f32::from(target_priority(me.class, t.class)),
         };
+        // Finish off weak ships in reach first (AotR_Focus_Weak_Unit: health below 0.33; the factor 0.5 on the weight is an estimate).
+        let weight = if t.health < 0.33 && !matches!(t.class, TargetClass::Fighter | TargetClass::Bomber) && d <= def.max_weapon_range * 1.1 { weight * 0.5 } else { weight };
         found.push((weight, d, i as u32));
     }
     found.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.total_cmp(&b.1)).then(a.2.cmp(&b.2)));
@@ -1217,7 +1277,8 @@ fn align_to_target(s: &mut Ship, def: &ShipDef, tpos: Vec3, dt: f32) {
 
 /// Movement controller.
 #[allow(clippy::too_many_arguments)]
-fn mov(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, spawn: &[Vec3], leaders: &[u32], obstacles: &[crate::arena::Obstacle], rng: &mut Rng) {
+#[allow(clippy::too_many_arguments)]
+fn mov(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, spawn: &[Vec3], leaders: &[u32], obstacles: &[crate::arena::Obstacle], big: &[u32], rng: &mut Rng) {
     let def = cat.ship(s.def);
     if def.is_static {
         return;
@@ -1337,6 +1398,28 @@ fn mov(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, spawn: &
     s.speed = s.speed.clamp(0.0, max_speed.max(0.0));
     let fwd = Vec3::from_yaw(s.yaw);
     s.pos += fwd * (s.speed * dt);
+    // Separation: mobile big ships do not sit on top of each other (each pair is resolved by both, half each; estimate 0.85 of the radii).
+    if !fighter {
+        let me = snaps[s.id as usize];
+        let cap = def.max_speed.max(60.0) * dt;
+        for &j in big {
+            if j == s.id {
+                continue;
+            }
+            let o = &snaps[j as usize];
+            let min = (me.radius + o.radius) * 0.85;
+            let (dx, dy) = (s.pos.x - o.pos.x, s.pos.y - o.pos.y);
+            if dx.abs() < min && dy.abs() < min {
+                let d = (dx * dx + dy * dy).sqrt();
+                if d < min {
+                    let (ux, uy) = if d > 1e-3 { (dx / d, dy / d) } else { (1.0 - 2.0 * f32::from(s.id as u8 & 1), 0.0) };
+                    let push = ((min - d) * 0.5).min(cap);
+                    s.pos.x += ux * push;
+                    s.pos.y += uy * push;
+                }
+            }
+        }
+    }
     // Asteroids: push the ship out of any rock it overlaps and scrub some speed.
     for o in obstacles {
         let (dx, dy) = (s.pos.x - o.pos.x, s.pos.y - o.pos.y);

@@ -1208,3 +1208,18 @@ fn ability_defs(u: &SpaceUnitDef) -> Vec<AbilityDef> {
 fn kind_is_weapon(h: &HardpointDef) -> bool {
     h.projectile.is_some() && h.hp_type.to_ascii_uppercase().contains("WEAPON")
 }
+
+/// Damage per second a definition can put out at its best bearing (hardpoints) or with its hull weapon (fighters); used for strength estimates.
+pub fn dps_estimate(d: &ShipDef, cat: &Catalog) -> f32 {
+    let hp = d.bearing_dps.iter().copied().fold(0.0f32, f32::max);
+    if hp > 0.0 {
+        return hp;
+    }
+    if let Some(w) = &d.direct
+        && let Some(p) = cat.projectiles.get(w.projectile as usize)
+    {
+        let cycle = (w.pulses as f32 * w.pulse_delay + w.recharge).max(0.2);
+        return p.damage * w.pulses as f32 / cycle;
+    }
+    d.members.iter().map(|(m, c)| dps_estimate(cat.ship(*m), cat) * *c as f32).sum()
+}

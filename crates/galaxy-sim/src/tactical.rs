@@ -59,6 +59,8 @@ pub struct TacticalSide {
     pub damage_mult: f32,
     /// Hull multiplier.
     pub health_mult: f32,
+    /// May the battle AI of this side order a retreat (`Allowed_To_Retreat_Space`: holds more than one planet, not Pirates).
+    pub may_retreat: bool,
     /// Shield multiplier.
     pub shield_mult: f32,
     /// Groups; indices are used by [`TacticalResult`].
@@ -169,6 +171,7 @@ impl TacticalRequest {
                     defender: battle.defender == Some(side.faction),
                     damage_mult: world_diff(side.faction).damage,
                     health_mult: world_diff(side.faction).health,
+                    may_retreat: galaxy.factions.get(side.faction as usize).is_some_and(|f| f.planets_owned > 1) && !world.factions[side.faction as usize].name.eq_ignore_ascii_case("pirates"),
                     shield_mult: world_diff(side.faction).shield,
                     groups,
                 }
@@ -190,7 +193,8 @@ impl TacticalRequest {
     pub fn battle_config(&self, arena: Option<Arc<Arena>>) -> BattleConfig {
         let half_size = arena.as_ref().map_or(BattleConfig::default().half_size, |a| a.half_size());
         let side_mults = self.sides.iter().map(|s| battle_sim::SideMult { damage: s.damage_mult, health: s.health_mult, shield: s.shield_mult }).collect();
-        BattleConfig { seed: self.seed, max_time: self.max_seconds, half_size, arena, side_mults, ..BattleConfig::default() }
+        let retreat_allowed = self.sides.iter().map(|s| s.may_retreat).collect();
+        BattleConfig { seed: self.seed, max_time: self.max_seconds, half_size, arena, side_mults, retreat_allowed, ..BattleConfig::default() }
     }
 
     /// Builds the `battle-sim` setup. Fleet groups carry their group index as the tag; side `i` of the request is

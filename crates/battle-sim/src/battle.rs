@@ -46,6 +46,9 @@ pub struct BattleConfig {
     pub arena: Option<std::sync::Arc<crate::arena::Arena>>,
     /// Difficulty multipliers per side (index = side); missing entries mean 1.0.
     pub side_mults: Vec<SideMult>,
+    /// Per side: may the AI of this side order a retreat when it is clearly losing (`Allowed_To_Retreat_Space`: only in the campaign, only for
+    /// a faction holding more than one planet, never Pirates). Missing entries mean true.
+    pub retreat_allowed: Vec<bool>,
     /// Damage carried over from earlier battles: ships of the group start with this share of hull and shield.
     pub start_health: Vec<StartHealth>,
 }
@@ -68,6 +71,7 @@ impl Default for BattleConfig {
             engage_range_scale: 1.0,
             arena: None,
             side_mults: Vec::new(),
+            retreat_allowed: Vec::new(),
             start_health: Vec::new(),
         }
     }
