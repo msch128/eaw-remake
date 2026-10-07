@@ -85,6 +85,8 @@ enum Job {
     Structures(StructJob),
     Move { block: u64, tf: u64, to: PlanetId, started: f64, issued: f64, retries: u32 },
     Invade { block: u64, tf: u64, target: PlanetId, deadline: f64 },
+    /// Waits at the stage until the partner forces of a pincer attack are ready, then leaves at a time that makes all arrive together.
+    Rally { block: u64, tf: u64, to: PlanetId, started: f64 },
 }
 
 #[derive(Debug)]
@@ -129,6 +131,8 @@ pub struct TaskForceStats {
     pub failure_reasons: HashMap<String, u32>,
     /// Moves ordered.
     pub moves: u32,
+    /// Pincer attacks whose forces left together.
+    pub pincers: u32,
     /// Moves that arrived.
     pub arrivals: u32,
     /// Forces wiped out.
@@ -152,6 +156,16 @@ pub struct TaskForces {
     /// Money earmarked per `(player, goal category)`; see [`TaskForces::fund`].
     accounts: HashMap<(PlayerId, String), f64>,
     plan_category: HashMap<u64, String>,
+    /// Believed hostile strength per player and planet (set by the engine from the strategic layer; empty = use AI power).
+    pub(crate) believed: HashMap<PlayerId, Vec<f64>>,
+    sizing: HashMap<PlayerId, f64>,
+    /// Number of coordinated forces attacking the same target (pincer); each is sized for its share.
+    split: HashMap<(PlayerId, PlanetId), u32>,
+    rally: HashMap<(PlayerId, PlanetId), Vec<u64>>,
+    depart: HashMap<u64, f64>,
+    /// Fleets released after assembling a force for a target stay reserved for that target for a while.
+    reserved: HashMap<FleetId, (PlanetId, f64)>,
+    clock: f64,
     /// Statistics.
     pub stats: TaskForceStats,
 }
@@ -193,6 +207,26 @@ fn next_rand(rng: &mut u64) -> f64 {
 }
 
 impl TaskForces {
+    /// Factor on the force margin of a player (difficulty contrast and personality).
+    pub fn set_sizing(&mut self, player: PlayerId, factor: f64) {
+        self.sizing.insert(player, factor);
+    }
+
+    /// Sets what a player believes hostile forces hold at every planet (square-law strength); enables predicted-outcome sizing.
+    pub fn set_believed(&mut self, player: PlayerId, per_planet: Vec<f64>) {
+        self.believed.insert(player, per_planet);
+    }
+
+    /// The sizing factor of a player (1.0 if none).
+    pub fn sizing_of(&self, player: PlayerId) -> f64 {
+        self.sizing.get(&player).copied().unwrap_or(1.0)
+    }
+
+    /// Declares that `parts` forces attack `target` together; each is sized for its share.
+    pub fn set_split(&mut self, player: PlayerId, target: PlanetId, parts: u32) {
+        self.split.insert((player, target), parts);
+    }
+
     /// Remembers the goal category a plan belongs to; its spending comes from that category's account.
     pub fn set_plan_category(&mut self, plan: u64, category: &str) {
         self.plan_category.insert(plan, category.to_ascii_lowercase());
@@ -283,9 +317,14 @@ impl TaskForces {
     }
 
     fn release(&mut self, tf: u64) {
+        let clock = self.clock;
         if let Some(t) = self.forces.get_mut(&tf) {
             if let Some(f) = t.fleet.take() {
                 self.owned_fleets.remove(&f);
+                if let (Some(target), ForceKind::Units, true) = (t.target, t.kind, t.worked) {
+                    // Estimate: five minutes of game time to be picked up by the next plan for the same target.
+                    self.reserved.insert(f, (target, clock + 300.0));
+                }
             }
             for p in t.pieces.drain(..) {
                 self.owned_fleets.remove(&p);
@@ -386,7 +425,7 @@ impl TaskForces {
                 }
                 let t = self.forces.get(&tf_id)?;
                 let wanted = self.compose(sim, snap, t, rng);
-                HostValue::Bool(self.free_store_covers(sim, t.player, &wanted))
+                HostValue::Bool(self.free_store_covers(sim, t.player, &wanted, t.target))
             }
             "Produce_Force" => {
                 let block = self.new_block();
@@ -398,6 +437,11 @@ impl TaskForces {
                 let block = self.new_block();
                 let to = obj_planet(sim, args.first());
                 match (kind, to) {
+                    (ForceKind::Units, Some(to)) if self.forces.get(&tf_id).is_some_and(|t| self.split.get(&(t.player, to)).is_some_and(|n| *n > 1)) => {
+                        let player = self.forces[&tf_id].player;
+                        self.rally.entry((player, to)).or_default().push(tf_id);
+                        self.jobs.push(Job::Rally { block, tf: tf_id, to, started: now });
+                    }
                     (ForceKind::Units, Some(to)) => {
                         let moved = self.start_move(sim, tf_id, to);
                         if moved {
@@ -460,7 +504,11 @@ impl TaskForces {
     // ---- composition ---------------------------------------------------------------------------------
 
     /// The list of unit types a force should consist of.
-    fn compose(&self, sim: &dyn AiSim, snap: &Snapshot, t: &TaskForce, rng: &mut u64) -> Vec<String> {
+    fn compose(&self, sim: &dyn AiSim, snap: &Snapshot, t: &TaskForce, _rng: &mut u64) -> Vec<String> {
+        // The composition is a function of (player, target, force) so that repeated asks (ready check, production, a later plan for
+        // the same target) agree and ships built by an earlier plan are recognised on the free store.
+        let mut seeded: u64 = 0x9E37_79B9_7F4A_7C15 ^ (u64::from(t.player) << 40) ^ (u64::from(t.target.unwrap_or(0)) << 8) ^ t.name.bytes().fold(7u64, |a, b| a.wrapping_mul(31).wrapping_add(u64::from(b)));
+        let rng = &mut seeded;
         let mut candidates: Vec<(String, String, f64)> = Vec::new(); // name, category, power
         for name in sim.buildable_units(t.player) {
             if t.reqs.excluded.contains(&name.to_ascii_lowercase()) {
@@ -479,6 +527,24 @@ impl TaskForces {
                 continue;
             }
             candidates.push((name, info.category.to_ascii_uppercase(), info.power.max(1.0)));
+        }
+        // Ships already on the free store are part of the candidate list (whether or not they could be built now) and are used first,
+        // so a force assembled by an earlier plan is recognised as ready.
+        let mut avail: HashMap<String, u32> = HashMap::new();
+        if t.reqs.allow_free_store {
+            for ((_, u), (_, c)) in self.free_ships(sim, t.player, t.target) {
+                *avail.entry(u).or_default() += c;
+            }
+            let mut names: Vec<String> = avail.keys().cloned().collect();
+            names.sort();
+            for u in names {
+                if candidates.iter().any(|c| c.0.eq_ignore_ascii_case(&u)) || t.reqs.excluded.contains(&u) {
+                    continue;
+                }
+                if let Some(info) = sim.unit_info(&u).filter(|i| !(i.is_hero && t.reqs.deny_hero)) {
+                    candidates.push((info.name.clone(), info.category.to_ascii_uppercase(), info.power.max(1.0)));
+                }
+            }
         }
         let matches = |c: &(String, String, f64), types: &[String]| types.iter().any(|ty| ty.eq_ignore_ascii_case(&c.0) || (is_category(ty) && ty.eq_ignore_ascii_case(&c.1)));
         let pick = |rng: &mut u64, pool: &[&(String, String, f64)]| -> Option<String> {
@@ -521,7 +587,23 @@ impl TaskForces {
             let min_total = t.reqs.min_total.max(1) as usize;
             let mut power = 0.0;
             let mut guard = 0;
-            while (wanted.len() < min_total || power < needed) && wanted.len() < cap && guard < 200 {
+            // Predicted-outcome sizing: what the player believes defends the target (square-law strength) times the margin it
+            // asks for (1.25 estimate x plan contrast scale x difficulty/personality sizing), shared between pincer forces.
+            let believed = self.believed.get(&t.player).and_then(|v| t.target.map(|tp| v[tp as usize]));
+            let strength_mode = believed.is_some() && candidates.first().is_some_and(|c| sim.force_strength(&[(c.0.clone(), 1)]) > 0.0);
+            let split = t.target.and_then(|tp| self.split.get(&(t.player, tp))).copied().unwrap_or(1).max(1);
+            let needed_strength = believed.unwrap_or(0.0) * 1.25 * scale * self.sizing.get(&t.player).copied().unwrap_or(1.0) / f64::from(split);
+            let strength_of = |w: &[String]| {
+                let mut counts: Vec<(String, u32)> = Vec::new();
+                for n in w {
+                    match counts.iter_mut().find(|c| c.0 == *n) {
+                        Some(c) => c.1 += 1,
+                        None => counts.push((n.clone(), 1)),
+                    }
+                }
+                sim.force_strength(&counts)
+            };
+            while (wanted.len() < min_total || if strength_mode { strength_of(&wanted) < needed_strength } else { power < needed }) && wanted.len() < cap && guard < 200 {
                 guard += 1;
                 let total_pct: f64 = pct.iter().filter_map(|g| g.percent).sum::<f64>().max(1.0);
                 let mut r = next_rand(rng) * total_pct;
@@ -533,9 +615,13 @@ impl TaskForces {
                         break;
                     }
                 }
-                let pool: Vec<_> = candidates.iter().filter(|c| matches(c, &chosen.types)).collect();
+                let free_pool: Vec<_> = candidates.iter().filter(|c| matches(c, &chosen.types) && avail.get(&c.0.to_ascii_lowercase()).copied().unwrap_or(0) > 0).collect();
+                let pool: Vec<_> = if free_pool.is_empty() { candidates.iter().filter(|c| matches(c, &chosen.types)).collect() } else { free_pool };
                 if let Some(n) = pick(rng, &pool) {
                     power += candidates.iter().find(|c| c.0 == n).map_or(0.0, |c| c.2);
+                    if let Some(a) = avail.get_mut(&n.to_ascii_lowercase()) {
+                        *a = a.saturating_sub(1);
+                    }
                     wanted.push(n);
                 } else {
                     break;
@@ -545,11 +631,17 @@ impl TaskForces {
         wanted
     }
 
-    fn free_ships(&self, sim: &dyn AiSim, player: PlayerId) -> HashMap<(PlanetId, String), (FleetId, u32)> {
+    fn free_ships(&self, sim: &dyn AiSim, player: PlayerId, target: Option<PlanetId>) -> HashMap<(PlanetId, String), (FleetId, u32)> {
         let mut out: HashMap<(PlanetId, String), (FleetId, u32)> = HashMap::new();
         for f in sim.fleets_of(player) {
             let Some(at) = f.at else { continue };
             if self.owned_fleets.contains(&f.id) {
+                continue;
+            }
+            if let Some(&(for_target, until)) = self.reserved.get(&f.id)
+                && until > self.clock
+                && Some(for_target) != target
+            {
                 continue;
             }
             for (u, c) in &f.units {
@@ -560,8 +652,8 @@ impl TaskForces {
         out
     }
 
-    fn free_store_covers(&self, sim: &dyn AiSim, player: PlayerId, wanted: &[String]) -> bool {
-        let free = self.free_ships(sim, player);
+    fn free_store_covers(&self, sim: &dyn AiSim, player: PlayerId, wanted: &[String], target: Option<PlanetId>) -> bool {
+        let free = self.free_ships(sim, player, target);
         let mut have: HashMap<String, u32> = HashMap::new();
         for ((_, u), (_, c)) in &free {
             *have.entry(u.clone()).or_default() += c;
@@ -626,6 +718,7 @@ impl TaskForces {
     /// Advances all pending commands.
     pub fn tick(&mut self, sim: &mut dyn AiSim, snap: &Snapshot, rng: &mut u64) {
         let now = sim.time();
+        self.clock = now;
         let jobs = std::mem::take(&mut self.jobs);
         let mut keep = Vec::new();
         for job in jobs {
@@ -646,6 +739,11 @@ impl TaskForces {
                         None => {}
                     }
                 }
+                Job::Rally { block, tf, to, started } => {
+                    if let Some(j) = self.tick_rally(sim, block, tf, to, started, now) {
+                        keep.push(j);
+                    }
+                }
                 Job::Invade { block, tf, target, deadline } => {
                     let player = self.forces.get(&tf).map(|t| t.player);
                     if player.is_some() && sim.planet_owner(target) == player {
@@ -661,7 +759,8 @@ impl TaskForces {
         keep.append(&mut self.jobs);
         self.jobs = keep;
         // Forces whose fleet vanished.
-        let ids: Vec<u64> = self.forces.keys().copied().collect();
+        let mut ids: Vec<u64> = self.forces.keys().copied().collect();
+        ids.sort_unstable();
         for id in ids {
             let (gone, plan, name) = {
                 let t = &self.forces[&id];
@@ -680,6 +779,40 @@ impl TaskForces {
                 self.events.push(PlanEvent { plan, function: format!("{name}_No_Units_Remaining"), args: Vec::new() });
             }
         }
+    }
+
+    /// Pincer rendezvous: once every partner is staged (or after 90 s) each force departs so that all arrive together.
+    fn tick_rally(&mut self, sim: &mut dyn AiSim, block: u64, tf: u64, to: PlanetId, started: f64, now: f64) -> Option<Job> {
+        let Some(t) = self.forces.get(&tf) else {
+            self.finish(block, false);
+            return None;
+        };
+        let player = t.player;
+        if !self.depart.contains_key(&tf) {
+            let parts = self.split.get(&(player, to)).copied().unwrap_or(1) as usize;
+            let members: Vec<u64> = self.rally.get(&(player, to)).cloned().unwrap_or_default().into_iter().filter(|m| self.forces.contains_key(m)).collect();
+            if members.len() < parts && now - started < 90.0 {
+                return Some(Job::Rally { block, tf, to, started });
+            }
+            let etas: Vec<(u64, f64)> = members.iter().map(|m| (*m, self.forces[m].fleet.and_then(|f| sim.eta(f, to)).unwrap_or(0.0))).collect();
+            let longest = etas.iter().map(|e| e.1).fold(0.0, f64::max);
+            for (m, e) in etas {
+                self.depart.insert(m, now + (longest - e).max(0.0));
+            }
+            self.stats.pincers += 1;
+        }
+        if now < self.depart.get(&tf).copied().unwrap_or(now) {
+            return Some(Job::Rally { block, tf, to, started });
+        }
+        self.depart.remove(&tf);
+        if let Some(v) = self.rally.get_mut(&(player, to)) {
+            v.retain(|m| *m != tf);
+        }
+        if self.start_move(sim, tf, to) {
+            return Some(Job::Move { block, tf, to, started: now, issued: now, retries: 0 });
+        }
+        self.finish(block, false);
+        None
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -767,12 +900,14 @@ impl TaskForces {
         j.pending = still;
         // 2. Take wanted units from the free store, else queue them.
         let mut remaining: Vec<String> = Vec::new();
-        let mut free = if allow_free { self.free_ships(sim, player) } else { HashMap::new() };
+        let mut free = if allow_free { self.free_ships(sim, player, self.forces.get(&j.tf).and_then(|t| t.target)) } else { HashMap::new() };
         let dist = hop_distances(snap, j.stage);
         for unit in std::mem::take(&mut j.wanted) {
             let key = unit.to_ascii_lowercase();
             let mut best: Option<(PlanetId, FleetId, u32)> = None;
-            for ((pl, u), (fid, cnt)) in &free {
+            let mut entries: Vec<_> = free.iter().collect();
+            entries.sort_by_key(|((pl, _), _)| *pl);
+            for ((pl, u), (fid, cnt)) in entries {
                 if *u == key && *cnt > 0 && best.is_none_or(|b| dist[*pl as usize] < dist[b.0 as usize]) {
                     best = Some((*pl, *fid, *cnt));
                 }
@@ -1025,6 +1160,6 @@ fn job_tf(j: &Job) -> u64 {
     match j {
         Job::Units(u) => u.tf,
         Job::Structures(s) => s.tf,
-        Job::Move { tf, .. } | Job::Invade { tf, .. } => *tf,
+        Job::Move { tf, .. } | Job::Invade { tf, .. } | Job::Rally { tf, .. } => *tf,
     }
 }

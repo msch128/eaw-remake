@@ -44,6 +44,8 @@ pub struct BattleConfig {
     pub shield_regen_delay: f32,
     /// Arena (bounds, spawn markers, asteroids) from a space map; `None` = empty square of `half_size`.
     pub arena: Option<std::sync::Arc<crate::arena::Arena>>,
+    /// Difficulty multipliers per side (index = side); missing entries mean 1.0.
+    pub side_mults: Vec<SideMult>,
 }
 
 impl Default for BattleConfig {
@@ -63,6 +65,7 @@ impl Default for BattleConfig {
             attack_move_sets: false,
             engage_range_scale: 1.0,
             arena: None,
+            side_mults: Vec::new(),
         }
     }
 }
@@ -608,5 +611,23 @@ impl Battle {
             }
         }
         BattleResult { winner: self.winner, duration: self.time, groups }
+    }
+}
+
+/// Damage, hull and shield multipliers of one side (`DifficultyAdjustments.xml`). Damage dealt by the side is scaled
+/// by `damage`; damage it takes is divided by `health` (hull) or `shield`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SideMult {
+    /// Multiplier on damage dealt.
+    pub damage: f32,
+    /// Multiplier on hull points.
+    pub health: f32,
+    /// Multiplier on shield points.
+    pub shield: f32,
+}
+
+impl Default for SideMult {
+    fn default() -> Self {
+        Self { damage: 1.0, health: 1.0, shield: 1.0 }
     }
 }

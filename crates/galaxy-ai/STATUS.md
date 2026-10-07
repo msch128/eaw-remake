@@ -42,3 +42,18 @@ The Remake's galactic AI on top of an abstract `AiSim` (implemented for galaxy-s
   the plan's own failure path. 20 weeks all-AI: 1-2 captures from enemy owners, ~9 captures in total (the stub AI takes ~500 in 30 weeks, which is
   unrealistically fast; do not use it as the target).
 - Dead-code warnings removed.
+
+## Strategic layer and difficulty (see STRATEGY.md)
+- `strategy.rs`: influence maps, utility scoring (flank, pocket, expansion, consolidation, defend), fog of war with memory, personalities, tiers.
+  `AiEngine::strategy` (enabled by default; `ScriptedConfig::strategy`). Force sizing by predicted square-law strength, pincer rally, free-store reuse
+  and reservation. Tests: `tests/strategy.rs` (flank scenario, risk/distance/expansion, honest information, consolidation, personalities, cost) and
+  `galaxy-script/tests/ai_match.rs` (tiers over 30 weeks, strategy vs plain over 4 seeds: 36 vs 19 enemy-owner captures, no faction gains more than +5
+  planets in 10 weeks; same-seed determinism).
+- Cost: strategy layer ~1 ms per game week; whole AI ~75-90 ms per game week.
+- **Difficulty setting needs (for the app, space-peace):** pass `ScriptedConfig { difficulty: Some(DifficultyTier::{Easy,Normal,Hard,Brutal,Fair}), remake_ai: true, .. }`;
+  show Brutal/Fair as "custom" (not part of the mod). The player's own faction gets no multipliers. For tactical battles the multipliers arrive in
+  `TacticalRequest::sides[i].{damage,health,shield}_mult` and `request.battle_config(arena)` already puts them into `BattleConfig::side_mults`; a front end
+  that builds its own `BattleConfig` must copy `side_mults` from the request. The galaxy-sim credit multiplier applies to income of non-human factions only
+  once `Sim::set_faction_difficulty` is called for them (done by `ScriptedSim` when a tier is configured; the built-in stub AI does not use tiers).
+- Known limits: the pincer only triggers when the single-force requirement lies between 50% and 90% of the player's strength; fog applies to the
+  strategy layer and force sizing, not to the original equations; weights are estimates.

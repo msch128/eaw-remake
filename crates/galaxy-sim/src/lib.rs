@@ -26,7 +26,7 @@ pub mod world;
 pub use sim::Sim;
 pub use state::{
     Command, CommandError, CommandOk, Event, FactionState, ShipId, Fleet, FleetLocation, Galaxy, Lane, PendingBattle, PlanetState,
-    ProductionItem, ProductionKind,
+    ProductionItem, ProductionKind, Difficulty,
 };
 pub use world::{
     BattleResolver, CombatStats, ObjectKind, FactionId, FactionInfo, FleetId, PlanetId, PlanetInfo, RouteInfo, SimConfig, SimError, StarbaseTypeId,

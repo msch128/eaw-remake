@@ -18,7 +18,7 @@ fn main() {
     let weeks: u64 = args.first().and_then(|a| a.parse().ok()).unwrap_or(20);
     let campaign_name = args
         .get(1)
-        .filter(|a| !a.contains('=') && a.as_str() != "stub")
+        .filter(|a| !a.contains('=') && a.as_str() != "stub" && a.as_str() != "nostrat")
         .map_or("GC_Full_Web_Way_Rebel", String::as_str);
     let stub = args.iter().any(|a| a == "stub");
     let human = args.iter().find_map(|a| a.strip_prefix("human=")).unwrap_or("none").to_string();
@@ -34,7 +34,20 @@ fn main() {
         data,
         &campaign,
         SimConfig { victory_enabled: false, ..SimConfig::default() },
-        ScriptedConfig { remake_ai: !stub, human: Some(human), game_scoring: false, ..ScriptedConfig::default() },
+        ScriptedConfig {
+            remake_ai: !stub,
+            human: Some(human),
+            game_scoring: false,
+            strategy: !args.iter().any(|a| a == "nostrat"),
+            difficulty: args.iter().find_map(|a| a.strip_prefix("diff=")).map(|d| match d {
+                "easy" => galaxy_script::DifficultyTier::Easy,
+                "hard" => galaxy_script::DifficultyTier::Hard,
+                "brutal" => galaxy_script::DifficultyTier::Brutal,
+                "fair" => galaxy_script::DifficultyTier::Fair,
+                _ => galaxy_script::DifficultyTier::Normal,
+            }),
+            ..ScriptedConfig::default()
+        },
     )
     .expect("cannot build simulation");
     if stub {
@@ -64,6 +77,7 @@ fn main() {
     let mut last = sim.timing;
     let mut captures: BTreeMap<String, u32> = BTreeMap::new();
     let mut battles = 0;
+    let mut enemy_caps = 0u32;
     while weeks_done < weeks {
         let r = sim.step(1.0);
         for e in &r.sim_events {
@@ -77,13 +91,17 @@ fn main() {
                         summary(&sim, &format!("week {week}"));
                     }
                 }
-                Event::PlanetCaptured { new_owner, .. } => *captures.entry(names[*new_owner as usize].clone()).or_default() += 1,
+                Event::PlanetCaptured { new_owner, old_owner, .. } => {
+                    *captures.entry(names[*new_owner as usize].clone()).or_default() += 1;
+                    enemy_caps += u32::from(old_owner.is_some_and(|o| o != 99 && names[o as usize] != "Pirates"));
+                }
                 Event::BattleResolved { .. } => battles += 1,
                 _ => {}
             }
         }
     }
     summary(&sim, "final");
+    println!("captures from non-pirate owners: {enemy_caps}");
     println!("battles {battles}, captures by faction {captures:?}");
 
     let n = per_week.len().max(1) as f64;
@@ -107,7 +125,7 @@ fn main() {
     println!("unimplemented API: {un:?}");
 
     if let Ok(filter) = std::env::var("AI_LOG") {
-        for l in sim.script_log().iter().filter(|l| l.contains(&filter)).take(2000) {
+        for l in sim.script_log().iter().filter(|l| l.contains(&filter)).take(200000) {
             println!("  log: {l}");
         }
     }

@@ -20,6 +20,7 @@ use crate::data::{AiData, AiPlayerDef, AiTemplate, GoalDef};
 use crate::equation::{EvalCache, EvalStats, Params};
 use crate::perception::{PerceptionCtx, PlayerBrainView, Snapshot};
 use crate::sim::{AiSim, PlanetId, PlayerId};
+use crate::strategy::Strategy;
 use crate::taskforce::{TaskForceStats, TaskForces};
 
 /// A plan the host should start.
@@ -97,6 +98,8 @@ pub struct AiStats {
     pub eval_nanos: u128,
     /// Nanoseconds spent advancing task force jobs (production, moves).
     pub tick_nanos: u128,
+    /// Nanoseconds spent refreshing the strategic layer.
+    pub strategy_nanos: u128,
     /// Nanoseconds spent building perception snapshots.
     pub snapshot_nanos: u128,
     /// Unknown variables / missing equations aggregated over all evaluations.
@@ -117,6 +120,9 @@ pub struct AiEngine {
     pub interval: f64,
     /// Task forces and their commands.
     pub task_forces: TaskForces,
+    /// Strategic layer (influence maps, utility scoring); see `strategy.rs`.
+    pub strategy: Strategy,
+    strategy_at: f64,
     stats: AiStats,
     expired: Vec<u64>,
 }
@@ -172,6 +178,8 @@ impl AiEngine {
             next_plan: 0,
             interval: 8.0,
             task_forces: TaskForces::default(),
+            strategy: Strategy::default(),
+            strategy_at: f64::NAN,
             stats: AiStats::default(),
             expired: Vec::new(),
         }
@@ -267,7 +275,9 @@ impl AiEngine {
                     (true, _, true) => tracking.max(60.0),
                     (true, _, false) => 300.0,
                     (false, false, _) => 600.0,
-                    (false, true, _) => limit.max(60.0),
+                    // An offensive plan that only assembled its force is proposed again at once: the next plan finds the ships ready and attacks.
+                    (false, true, true) => self.interval * 2.0,
+                    (false, true, false) => limit.max(60.0),
                 };
                 if failed {
                     *self.stats.plans_failed.entry(key).or_default() += 1;
@@ -313,8 +323,21 @@ impl AiEngine {
         }
         let t0 = std::time::Instant::now();
         let snap = self.snapshot(sim, 0.5).clone();
+        if self.strategy.config.enabled && (self.strategy_at.is_nan() || snap.time - self.strategy_at >= 4.0) {
+            let t_s = std::time::Instant::now();
+            self.strategy.refresh(&snap);
+            self.strategy_at = snap.time;
+            self.stats.strategy_nanos += t_s.elapsed().as_nanos();
+            for b in &self.brains {
+                let (p, t) = (self.strategy.personality(b.player), self.strategy.tier(b.player));
+                self.task_forces.set_sizing(b.player, t.contrast * (p.caution / p.aggression.max(0.1)).sqrt());
+                let believed: Vec<f64> = (0..snap.owner.len() as u32).map(|pl| self.strategy.believed_hostile_strength(&snap, b.player, pl)).collect();
+                self.task_forces.set_believed(b.player, believed);
+            }
+        }
         for i in due {
-            self.brains[i].next_eval = now + self.interval;
+            let sleep = self.strategy.tier(self.brains[i].player).goal_sleep;
+            self.brains[i].next_eval = now + self.interval * (1.0 + sleep);
             self.evaluate_player(i, &snap, now, &mut requests);
         }
         self.stats.eval_nanos += t0.elapsed().as_nanos();
@@ -456,6 +479,9 @@ impl AiEngine {
                 let fails = b.failures.iter().filter(|f| f.failed && f.target == Some(pl) && now - f.time < f64::from(g.def.tracking_duration.max(1.0)) && f.goal.eq_ignore_ascii_case(&g.def.name)).count() as f64;
                 desire += fails * f64::from(g.def.per_failure_desire_adjust);
                 desire += b.bonuses.iter().filter(|x| x.0.eq_ignore_ascii_case(&g.def.name) && x.1 == pl && now < x.3).map(|x| x.2).sum::<f64>();
+                if self.strategy.config.enabled {
+                    desire *= self.strategy.factor(snap, player, pl, g.def.category.eq_ignore_ascii_case("offensive"));
+                }
                 if desire > 0.0 {
                     candidates.push((desire, e.gi, Some(pl)));
                 }
@@ -500,13 +526,29 @@ impl AiEngine {
                 *self.stats.goals_without_plan.entry(goal).or_default() += 1;
                 continue;
             };
-            let script = scripts[(self.next_plan as usize) % scripts.len()].clone();
-            self.next_plan += 1;
-            let plan = self.next_plan;
-            *self.stats.plans_started.entry((player, goal.clone())).or_default() += 1;
-            self.task_forces.set_plan_category(plan, &category);
-            self.brains[i].active.push(ActiveGoal { goal: goal.clone(), category, target, plan, started: now, limit });
-            out.push(PlanRequest { plan, script, player, target, goal });
+            // Pincer: a target too strong for one force but within reach of two is attacked by two coordinated plans.
+            let copies = match target {
+                Some(tp) if self.strategy.config.enabled && category.eq_ignore_ascii_case("offensive") && snap.owner[tp as usize].is_some_and(|o| snap.enemy[me][o as usize]) && self.brains[i].active.len() + 2 <= max_total => {
+                    let need = self.strategy.believed_hostile_strength(snap, player, tp) * 1.25 * self.task_forces.sizing_of(player);
+                    let own = self.strategy.total_strength(player);
+                    if need > 0.5 * own && need < 0.9 * own { 2 } else { 1 }
+                }
+                _ => 1,
+            };
+            if copies > 1 {
+                if let Some(tp) = target {
+                    self.task_forces.set_split(player, tp, copies);
+                }
+            }
+            for _ in 0..copies {
+                let script = scripts[(self.next_plan as usize) % scripts.len()].clone();
+                self.next_plan += 1;
+                let plan = self.next_plan;
+                *self.stats.plans_started.entry((player, goal.clone())).or_default() += 1;
+                self.task_forces.set_plan_category(plan, &category);
+                self.brains[i].active.push(ActiveGoal { goal: goal.clone(), category: category.clone(), target, plan, started: now, limit });
+                out.push(PlanRequest { plan, script, player, target, goal: goal.clone() });
+            }
             started += 1;
         }
         self.rng = rng;

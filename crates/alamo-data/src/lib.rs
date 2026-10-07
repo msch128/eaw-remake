@@ -6,6 +6,7 @@
 //! MEG archives) still yields a usable [`GameData`].
 
 pub mod combat;
+pub mod difficulty;
 pub mod galaxy;
 pub mod model;
 pub mod objects;
@@ -14,6 +15,7 @@ pub mod text;
 pub mod xml;
 
 pub use combat::CombatTable;
+pub use difficulty::{DifficultyAdjustment, DifficultyTable};
 pub use galaxy::{GameData, load_galaxy};
 pub use model::{
     Campaign, CampaignFaction, Faction, LineSettings, Planet, StartingForce, TradeRoute,

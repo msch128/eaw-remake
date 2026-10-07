@@ -168,6 +168,25 @@ pub trait AiSim {
     /// Hyperspace path between planets (inclusive), if any.
     fn path(&self, from: PlanetId, to: PlanetId) -> Option<Vec<PlanetId>>;
 
+    // ---- combat prediction (optional; the strategy layer degrades gracefully without) ------------------------------
+    /// Combined combat strength of a group of ships (Lanchester square-law measure `sqrt(durability x damage rate)`, the
+    /// same units as [`defense_strength`](Self::defense_strength)). 0 when unknown.
+    fn force_strength(&self, _units: &[(String, u32)]) -> f64 {
+        0.0
+    }
+    /// Strength a force of `attacker` meets at a planet: star base, armed structures, garrison and the fleets of hostile players.
+    fn defense_strength(&self, _pl: PlanetId, _attacker: PlayerId) -> f64 {
+        0.0
+    }
+    /// Strength of the fixed defenses of a planet (star base, armed structures, garrison) for its owner; 0 if none or unknown.
+    fn planet_defense(&self, _pl: PlanetId) -> f64 {
+        0.0
+    }
+    /// Seconds a fleet needs to reach a planet from where it is, `None` if unknown or unreachable.
+    fn eta(&self, _fleet: FleetId, _to: PlanetId) -> Option<f64> {
+        None
+    }
+
     // ---- mapping between the script world and ids ----------------------------------------------------
     /// The script object id of a planet.
     fn planet_object(&self, pl: PlanetId) -> u64;

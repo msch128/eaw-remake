@@ -25,6 +25,7 @@ use alamo_data::{Campaign, GameData, GameObjects};
 use alamo_fs::FileSource;
 use alamo_lua::ScriptRuntime;
 use galaxy_sim::{Event, ProductionKind, Sim, SimConfig, SimError};
+use galaxy_ai::{AiTier, Personality};
 
 pub use host::{HostStats, Inner, ScriptEvent, SimHost};
 
@@ -41,6 +42,34 @@ pub struct ScriptedConfig {
     pub human: Option<String>,
     /// Run the Remake AI (galaxy-ai) for every AI faction of the campaign instead of galaxy-sim's built-in AI.
     pub remake_ai: bool,
+    /// Difficulty of the AI factions (credits, build times, battle multipliers, contrast, goal sleep); `None` = no multipliers.
+    pub difficulty: Option<DifficultyTier>,
+    /// Strategic layer of the Remake AI (influence maps, utility scoring, pincers, honest information); see `galaxy-ai/STRATEGY.md`.
+    pub strategy: bool,
+    /// Personality per faction name (lower case); factions without an entry use `default_personality`.
+    pub personalities: std::collections::HashMap<String, Personality>,
+}
+
+/// Difficulty tiers. `Easy`, `Normal` and `Hard` read `Xml/DifficultyAdjustments.xml` (`<Tier>_Default` for the major
+/// factions, `<Tier>_Minor` for minor ones). `Brutal` and `Fair` are our own estimates, not part of the mod data.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DifficultyTier {
+    /// `Easy_*`.
+    Easy,
+    /// `Normal_*`.
+    Normal,
+    /// `Hard_*`.
+    Hard,
+    /// Estimate: `Hard_*` with credits x4 (instead of x3) and full map knowledge.
+    Brutal,
+    /// Estimate: no economic or combat cheats at all (credits 1.0, build time 1.0, battle multipliers 1.0), `Normal` contrast, honest information.
+    Fair,
+}
+
+/// Default personalities (estimates): the Empire presses harder, the Rebels expand and stay careful, the Underworld is cautious.
+pub fn default_personalities() -> std::collections::HashMap<String, Personality> {
+    let p = |aggression, expansion, caution| Personality { aggression, expansion, caution };
+    [("empire", p(1.25, 1.0, 0.9)), ("rebel", p(0.95, 1.2, 1.0)), ("underworld", p(1.0, 1.0, 1.1))].into_iter().map(|(k, v)| (k.to_string(), v)).collect()
 }
 
 impl Default for ScriptedConfig {
@@ -51,6 +80,9 @@ impl Default for ScriptedConfig {
             script_step: 0.2,
             human: None,
             remake_ai: false,
+            difficulty: None,
+            strategy: true,
+            personalities: default_personalities(),
         }
     }
 }
@@ -209,13 +241,13 @@ impl ScriptedSim {
             ai_errors: Vec::new(),
         };
         if config.remake_ai {
-            sim.start_ai(&fs_for_ai, campaign);
+            sim.start_ai(&fs_for_ai, campaign, &config);
         }
         Ok(sim)
     }
 
     /// Switches from galaxy-sim's built-in AI to the Remake AI for all AI factions of the campaign.
-    fn start_ai(&mut self, fs: &Arc<dyn FileSource>, campaign: &Campaign) {
+    fn start_ai(&mut self, fs: &Arc<dyn FileSource>, campaign: &Campaign, config: &ScriptedConfig) {
         let data = galaxy_ai::AiData::load(&**fs);
         let plans = galaxy_ai::discover_plans(&**fs);
         let mut engine = galaxy_ai::AiEngine::new(Arc::new(data), plans);
@@ -253,7 +285,29 @@ impl ScriptedSim {
                 }
             }
         }
+        // Difficulty and strategic layer.
+        let table = alamo_data::DifficultyTable::load(&**fs, &mut Vec::new());
+        let minor: std::collections::HashSet<u32> = galaxy_ai::campaign_ai_players(&**fs, campaign)
+            .into_iter()
+            .filter(|(_, t)| t.eq_ignore_ascii_case("GC_MinorAi"))
+            .filter_map(|(f, _)| world.faction_index.get(&f.to_ascii_lowercase()).copied())
+            .collect();
         let mut i = self.inner.borrow_mut();
+        engine.strategy.config.enabled = config.strategy;
+        for (id, f) in world.factions.iter().enumerate() {
+            let id = id as u32;
+            if id == human || ["neutral", "hostile"].iter().any(|n| f.name.eq_ignore_ascii_case(n)) {
+                continue;
+            }
+            if let Some(pers) = config.personalities.get(&f.name.to_ascii_lowercase()) {
+                engine.strategy.config.personalities.insert(id, *pers);
+            }
+            if let Some(tier) = config.difficulty {
+                let (diff, ai_tier) = tier_settings(&table, tier, minor.contains(&id));
+                i.sim.set_faction_difficulty(id, diff);
+                engine.strategy.tiers.insert(id, ai_tier);
+            }
+        }
         i.sim.set_ai_factions(std::iter::empty());
         i.ai = Some(engine);
     }
@@ -400,5 +454,29 @@ impl ScriptedSim {
             .map(|n| (hits.get(&n).copied().unwrap_or(0), n))
             .map(|(c, n)| (n, c))
             .collect()
+    }
+}
+
+/// Maps a tier to the sim multipliers and the AI tier (see [`DifficultyTier`]).
+fn tier_settings(table: &alamo_data::DifficultyTable, tier: DifficultyTier, minor: bool) -> (galaxy_sim::Difficulty, AiTier) {
+    let suffix = if minor { "Minor" } else { "Default" };
+    let entry = |name: &str| table.get(&format!("{name}_{suffix}")).cloned().unwrap_or_default();
+    let ai = |name: &str, a: &alamo_data::DifficultyAdjustment, full: bool| AiTier { name: name.into(), contrast: f64::from(a.galactic_contrast), goal_sleep: f64::from(a.galactic_goal_sleep), full_map_knowledge: full };
+    match tier {
+        DifficultyTier::Easy | DifficultyTier::Normal | DifficultyTier::Hard => {
+            let name = match tier { DifficultyTier::Easy => "Easy", DifficultyTier::Normal => "Normal", _ => "Hard" };
+            let a = entry(name);
+            (galaxy_sim::Difficulty::from_adjustment(&a), ai(name, &a, false))
+        }
+        DifficultyTier::Brutal => {
+            let a = entry("Hard");
+            let mut d = galaxy_sim::Difficulty::from_adjustment(&a);
+            d.credit = 4.0;
+            (d, ai("Brutal", &a, true))
+        }
+        DifficultyTier::Fair => {
+            let a = entry("Normal");
+            (galaxy_sim::Difficulty::default(), ai("Fair", &a, false))
+        }
     }
 }

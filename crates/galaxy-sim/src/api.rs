@@ -255,3 +255,13 @@ impl Sim {
         }
     }
 }
+
+impl Sim {
+    /// Sets the difficulty multipliers of a faction (credits, build times, battle damage/health/shield). They apply to
+    /// whatever the faction does from now on; typically only AI factions get non-neutral values.
+    pub fn set_faction_difficulty(&mut self, faction: FactionId, difficulty: crate::state::Difficulty) {
+        if let Some(f) = self.galaxy.factions.get_mut(faction as usize) {
+            f.difficulty = difficulty;
+        }
+    }
+}

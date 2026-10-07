@@ -65,6 +65,10 @@ pub struct Snapshot {
     pub short_names: Vec<String>,
     /// Weeks since the start.
     pub weeks: f64,
+    /// Combat strength (square-law measure, see [`AiSim::force_strength`]) of the fleets of each player at each planet (entries > 0).
+    pub strength: Vec<Vec<(PlayerId, f64)>>,
+    /// Strength of the fixed defenses of each planet for its owner.
+    pub static_defense: Vec<f64>,
 }
 
 impl Snapshot {
@@ -145,6 +149,25 @@ impl Snapshot {
             }
         }
         s.max_power = s.power.iter().flatten().map(|e| e.1).fold(1000.0, f64::max);
+        // Combat strength of the forces at each planet and of the fixed defenses (for the strategy layer).
+        let mut groups: HashMap<(PlanetId, PlayerId), Vec<(String, u32)>> = HashMap::new();
+        for p in 0..players as u32 {
+            for f in sim.fleets_of(p) {
+                if let Some(at) = f.at {
+                    groups.entry((at, p)).or_default().extend(f.units.iter().cloned());
+                }
+            }
+        }
+        s.strength = vec![Vec::new(); n];
+        let mut keys: Vec<_> = groups.keys().copied().collect();
+        keys.sort_unstable();
+        for (at, p) in keys {
+            let v = sim.force_strength(&groups[&(at, p)]);
+            if v > 0.0 {
+                s.strength[at as usize].push((p, v));
+            }
+        }
+        s.static_defense = (0..n as u32).map(|pl| if s.owner[pl as usize].is_some() && s.real[pl as usize] { sim.planet_defense(pl) } else { 0.0 }).collect();
         s.weeks = s.time / sim.week_seconds().max(1.0);
         s
     }

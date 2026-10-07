@@ -123,6 +123,11 @@ fn target_priority(attacker: TargetClass, target: TargetClass) -> u8 {
 }
 
 impl Battle {
+    /// `(damage dealt, health, shield)` multipliers of a side (1.0 without an entry).
+    fn side_mult(&self, side: u8) -> (f32, f32, f32) {
+        self.config.side_mults.get(side as usize).map_or((1.0, 1.0, 1.0), |m| (m.damage.max(0.01), m.health.max(0.01), m.shield.max(0.01)))
+    }
+
     /// Creates a battle from a setup: places fleets, launches initial squadrons.
     pub fn new(setup: BattleSetup) -> Battle {
         let BattleSetup { catalog, sides, mut config } = setup;
@@ -781,6 +786,8 @@ impl Battle {
     fn damage_ship(&mut self, id: u32, attacker: u32, pd: &ProjDef, proj: ProjId, raw: f32, pos: Vec3, aim_hp: u16) {
         let cat = self.catalog.clone();
         let record = self.config.record_events;
+        let (atk_damage, _, _) = self.side_mult(self.ships.get(attacker as usize).map_or(u8::MAX, |a| a.side));
+        let (_, tgt_health, tgt_shield) = self.side_mult(self.ships[id as usize].side);
         let s = &mut self.ships[id as usize];
         if !s.alive {
             return;
@@ -794,11 +801,11 @@ impl Battle {
             .map(|(a, _)| a.take_damage_mult)
             .product();
         s.since_hit = 0.0;
-        let dmg = raw * take;
+        let dmg = raw * take * atk_damage;
         let mut hull_part = 0.0;
         let mut shield_hit = false;
         if s.shield > 0.0 && pd.shield_damage {
-            let sd = dmg * cat.damage.multiplier(pd.damage_type, def.shield_armor);
+            let sd = dmg * cat.damage.multiplier(pd.damage_type, def.shield_armor) / tgt_shield;
             if sd <= s.shield {
                 s.shield -= sd;
                 if s.shield <= 0.0 {
@@ -818,7 +825,7 @@ impl Battle {
             hull_part = dmg;
         }
         if !shield_hit && pd.hull_damage && hull_part > 0.0 && (s.shield <= 0.0 || !pd.shield_damage) {
-            let h = hull_part * cat.damage.multiplier(pd.damage_type, def.armor);
+            let h = hull_part * cat.damage.multiplier(pd.damage_type, def.armor) / tgt_health;
             s.hull -= h;
             // Hardpoint: the aimed one, else the destroyable hardpoint nearest to the impact.
             let local = (pos - s.pos).rotate_yaw(-s.yaw);

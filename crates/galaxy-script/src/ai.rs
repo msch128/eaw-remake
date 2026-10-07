@@ -229,6 +229,63 @@ impl AiSim for SimAdapter<'_> {
     fn path(&self, from: PlanetId, to: PlanetId) -> Option<Vec<PlanetId>> {
         self.world.find_path(from, to)
     }
+    fn force_strength(&self, units: &[(String, u32)]) -> f64 {
+        let members = units.iter().filter_map(|(n, c)| Some((galaxy_sim::combat::Source::Unit(*self.world.unit_index.get(&n.to_ascii_lowercase())?), *c)));
+        f64::from(self.world.strength(members))
+    }
+    fn defense_strength(&self, pl: PlanetId, attacker: PlayerId) -> f64 {
+        use galaxy_sim::combat::Source;
+        let g = self.sim.galaxy();
+        let mut members: Vec<(Source, u32)> = Vec::new();
+        for f in g.fleets_at(pl) {
+            if g.hostile(&self.world, attacker, f.owner) {
+                members.extend(f.units.iter().map(|(u, c)| (Source::Unit(*u), *c)));
+            }
+        }
+        let ps = &g.planets[pl as usize];
+        if ps.owner.is_some_and(|o| g.hostile(&self.world, attacker, o)) {
+            if let Some(sb) = ps.starbase {
+                members.push((Source::Starbase(sb), 1));
+                members.extend(self.world.starbases[sb as usize].garrison.iter().map(|&(u, c)| (Source::Garrison(u), c)));
+            }
+            for &s in &ps.structures {
+                if self.world.structures[s as usize].combat.is_some() {
+                    members.push((Source::Structure(s), 1));
+                }
+            }
+        }
+        f64::from(self.world.strength(members))
+    }
+    fn planet_defense(&self, pl: PlanetId) -> f64 {
+        use galaxy_sim::combat::Source;
+        let ps = &self.sim.galaxy().planets[pl as usize];
+        let mut members: Vec<(Source, u32)> = Vec::new();
+        if let Some(sb) = ps.starbase {
+            members.push((Source::Starbase(sb), 1));
+            members.extend(self.world.starbases[sb as usize].garrison.iter().map(|&(u, c)| (Source::Garrison(u), c)));
+        }
+        for &s in &ps.structures {
+            if self.world.structures[s as usize].combat.is_some() {
+                members.push((Source::Structure(s), 1));
+            }
+        }
+        if members.is_empty() { 0.0 } else { f64::from(self.world.strength(members)) }
+    }
+    fn eta(&self, fleet: u32, to: PlanetId) -> Option<f64> {
+        let f = self.sim.galaxy().fleets.get(&fleet)?;
+        let from = f.planet()?;
+        if from == to {
+            return Some(0.0);
+        }
+        let path = self.world.find_path(from, to)?;
+        let speed = f64::from(self.world.fleet_speed(f)) * f64::from(self.world.config.galactic_speed_scale);
+        let mut t = 0.0;
+        for w in path.windows(2) {
+            let r = &self.world.routes[self.world.route_between(w[0], w[1])? as usize];
+            t += f64::from(r.length) / (speed * f64::from(r.hs_factor)).max(1e-6);
+        }
+        Some(t)
+    }
     fn planet_object(&self, pl: PlanetId) -> u64 {
         PLANET_OBJECT_TAG | u64::from(pl)
     }

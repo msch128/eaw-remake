@@ -88,11 +88,13 @@ impl World {
 
 /// Resolves a battle between the given sides.
 pub fn resolve(world: &World, sides: &[SideInput], rng: &mut Rng) -> CombatResult {
-    resolve_allied(world, sides, rng, &Default::default())
+    resolve_allied(world, sides, rng, &Default::default(), &[])
 }
 
 /// Like [`resolve`], but factions in `allied` (sorted pairs) do not shoot at each other.
-pub fn resolve_allied(world: &World, sides: &[SideInput], rng: &mut Rng, allied: &std::collections::BTreeSet<(FactionId, FactionId)>) -> CombatResult {
+/// `mults` are the difficulty multipliers by faction id (empty = all neutral).
+pub fn resolve_allied(world: &World, sides: &[SideInput], rng: &mut Rng, allied: &std::collections::BTreeSet<(FactionId, FactionId)>, mults: &[crate::state::Difficulty]) -> CombatResult {
+    let mult = |f: FactionId| mults.get(f as usize).copied().unwrap_or_default();
     let dt = world.config.combat_round_seconds;
     // Expand into instances.
     let mut insts: Vec<Vec<Inst>> = sides
@@ -102,7 +104,8 @@ pub fn resolve_allied(world: &World, sides: &[SideInput], rng: &mut Rng, allied:
             for (mi, m) in s.members.iter().enumerate() {
                 let Some(st) = world.stats_of(m.source) else { continue };
                 for _ in 0..m.count {
-                    v.push(Inst { member: mi, src: m.source, hull: st.hull.max(1.0), shield: st.shield, max_shield: st.shield });
+                    let dm = mult(s.faction);
+                    v.push(Inst { member: mi, src: m.source, hull: st.hull.max(1.0) * dm.health, shield: st.shield * dm.shield, max_shield: st.shield * dm.shield });
                 }
             }
             v
@@ -127,6 +130,7 @@ pub fn resolve_allied(world: &World, sides: &[SideInput], rng: &mut Rng, allied:
             if enemies.is_empty() {
                 continue;
             }
+            let dmg_mult = mult(sides[si].faction).damage;
             for a in 0..insts[si].len() {
                 let Some(att) = world.stats_of(insts[si][a].src) else { continue };
                 for w in &att.weapons {
@@ -138,13 +142,13 @@ pub fn resolve_allied(world: &World, sides: &[SideInput], rng: &mut Rng, allied:
                     let hm = world.damage.multiplier(w.damage_type, tstats.armor);
                     let e = &mut acc[ts][ti];
                     if w.shield_dps > 0.0 {
-                        e.0 += w.shield_dps * sm * dt;
+                        e.0 += w.shield_dps * sm * dt * dmg_mult;
                     }
                     if w.hull_dps > 0.0 {
                         if w.shield_dps > 0.0 {
-                            e.1 += w.hull_dps * hm * dt;
+                            e.1 += w.hull_dps * hm * dt * dmg_mult;
                         } else {
-                            e.2 += w.hull_dps * hm * dt;
+                            e.2 += w.hull_dps * hm * dt * dmg_mult;
                         }
                     }
                 }

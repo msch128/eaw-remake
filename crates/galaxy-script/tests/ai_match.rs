@@ -88,3 +88,120 @@ fn built_in_ai_stays_the_default() {
     assert!(sim.ai_stats().is_none());
     assert!(!ScriptedConfig::default().remake_ai);
 }
+
+struct RunStats {
+    enemy_captures: u32,
+    max_gain_week10: i64,
+    credits_week10: f64,
+    week_ms: f64,
+    strategy_ms_per_week: f64,
+}
+
+fn run_tier(tier: galaxy_script::DifficultyTier, strategy: bool, weeks_total: u64, seed: u64) -> Option<RunStats> {
+    let install = GameInstall::detect()?;
+    if !install.mod_data("1770851727").is_dir() {
+        return None;
+    }
+    let fs: Arc<dyn FileSource> = Arc::new(GameFs::for_mod(&install, Some("1770851727")).ok()?);
+    let (data, _) = load_galaxy(&*fs);
+    let data = Arc::new(data);
+    let campaign = data.campaign("GC_Full_Web_Way_Rebel")?.clone();
+    let mut sim = ScriptedSim::new(
+        fs,
+        data,
+        &campaign,
+        SimConfig { victory_enabled: false, seed, ..SimConfig::default() },
+        ScriptedConfig { remake_ai: true, human: Some("none".into()), game_scoring: false, strategy, difficulty: Some(tier), ..ScriptedConfig::default() },
+    )
+    .ok()?;
+    let n = sim.with_sim(|s| s.world().factions.len());
+    let pirates = sim.with_sim(|s| s.world().faction_id("Pirates"));
+    let owned = |sim: &ScriptedSim| -> Vec<i64> { sim.with_sim(|s| (0..n as u32).map(|f| s.galaxy().factions[f as usize].planets_owned as i64).collect()) };
+    let start = owned(&sim);
+    let (mut weeks, mut enemy_captures, mut max_gain, mut credits10) = (0, 0u32, 0i64, 0.0);
+    let t0 = Instant::now();
+    while weeks < weeks_total {
+        for e in sim.step(1.0).sim_events {
+            match e {
+                Event::WeekEnded { week } => {
+                    weeks = week;
+                    if week == 10 {
+                        let now = owned(&sim);
+                        max_gain = (0..n).filter(|&f| Some(f as u32) != pirates).map(|f| now[f] - start[f]).max().unwrap_or(0);
+                        credits10 = sim.with_sim(|s| s.galaxy().factions.iter().map(|f| f.credits).sum());
+                    }
+                }
+                Event::PlanetCaptured { old_owner: Some(o), .. } if Some(o) != pirates => enemy_captures += 1,
+                _ => {}
+            }
+        }
+    }
+    let strategy_ms = sim.ai_stats().map_or(0.0, |s| s.strategy_nanos as f64 / 1e6) / weeks as f64;
+    Some(RunStats { enemy_captures, max_gain_week10: max_gain, credits_week10: credits10, week_ms: t0.elapsed().as_secs_f64() * 1e3 / weeks as f64, strategy_ms_per_week: strategy_ms })
+}
+
+#[test]
+fn difficulty_tiers_scale_without_snowballing() {
+    use galaxy_script::DifficultyTier::*;
+    let Some(baseline) = run_tier(Normal, false, 30, 1) else { return };
+    let mut credits = Vec::new();
+    println!("normal without strategy: {} enemy captures, {:.0} ms/week", baseline.enemy_captures, baseline.week_ms);
+    for (name, tier) in [("easy", Easy), ("normal", Normal), ("hard", Hard), ("brutal", Brutal), ("fair", Fair)] {
+        let r = run_tier(tier, true, 30, 1).unwrap();
+        println!(
+            "{name:<7} {:>2} enemy captures, best faction +{} planets by week 10, treasury sum {:.0}k at week 10, {:.0} ms/week wall, strategy layer {:.1} ms/week",
+            r.enemy_captures,
+            r.max_gain_week10,
+            r.credits_week10 / 1e3,
+            r.week_ms,
+            r.strategy_ms_per_week
+        );
+        assert!(r.max_gain_week10 <= 12, "{name}: a faction snowballed (+{} planets in 10 weeks)", r.max_gain_week10);
+        assert!(r.strategy_ms_per_week < 30.0);
+        if matches!(name, "easy" | "normal" | "hard" | "brutal") {
+            credits.push(r.credits_week10);
+        }
+    }
+    assert!(credits.windows(2).all(|w| w[1] > w[0]), "treasuries should grow with the tier: {credits:?}");
+}
+
+#[test]
+fn strategic_layer_captures_more_enemy_planets_over_several_seeds() {
+    use galaxy_script::DifficultyTier::Normal;
+    let (mut with, mut without) = (0, 0);
+    for seed in 1..=4 {
+        let Some(a) = run_tier(Normal, true, 30, seed) else { return };
+        let b = run_tier(Normal, false, 30, seed).unwrap();
+        println!("seed {seed}: strategy {} vs plain {} enemy captures (best faction +{} / +{} planets by week 10)", a.enemy_captures, b.enemy_captures, a.max_gain_week10, b.max_gain_week10);
+        with += a.enemy_captures;
+        without += b.enemy_captures;
+    }
+    assert!(with > without, "{with} vs {without}");
+}
+
+#[test]
+fn remake_ai_with_strategy_is_deterministic() {
+    use galaxy_script::DifficultyTier::Normal;
+    let hash = || -> Option<(u64, u32)> {
+        let install = GameInstall::detect()?;
+        if !install.mod_data("1770851727").is_dir() {
+            return None;
+        }
+        let fs: Arc<dyn FileSource> = Arc::new(GameFs::for_mod(&install, Some("1770851727")).ok()?);
+        let (data, _) = load_galaxy(&*fs);
+        let data = Arc::new(data);
+        let campaign = data.campaign("GC_Full_Web_Way_Rebel")?.clone();
+        let mut sim = ScriptedSim::new(fs, data, &campaign, SimConfig { victory_enabled: false, ..SimConfig::default() }, ScriptedConfig { remake_ai: true, human: Some("none".into()), game_scoring: false, difficulty: Some(Normal), ..ScriptedConfig::default() }).ok()?;
+        let mut weeks = 0;
+        while weeks < 12 {
+            for e in sim.step(1.0).sim_events {
+                if let Event::WeekEnded { week } = e {
+                    weeks = week;
+                }
+            }
+        }
+        Some((sim.with_sim(|s| s.galaxy().state_hash()), sim.ai_stats()?.taskforces.ships_queued))
+    };
+    let Some(a) = hash() else { return };
+    assert_eq!(a, hash().unwrap(), "same seed must give the same match");
+}

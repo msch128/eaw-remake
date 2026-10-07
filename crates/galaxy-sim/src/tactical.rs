@@ -52,6 +52,12 @@ pub struct TacticalSide {
     pub faction_name: String,
     /// True for the owner of the planet whose defenses take part.
     pub defender: bool,
+    /// Difficulty multipliers of the faction (damage dealt, hull, shield; 1.0 = none); `battle_config` passes them to battle-sim.
+    pub damage_mult: f32,
+    /// Hull multiplier.
+    pub health_mult: f32,
+    /// Shield multiplier.
+    pub shield_mult: f32,
     /// Groups; indices are used by [`TacticalResult`].
     pub groups: Vec<TacticalGroup>,
 }
@@ -113,7 +119,8 @@ impl std::error::Error for TacticalError {}
 
 impl TacticalRequest {
     /// Orders `sides` for battle (defender last) and drops garrison squadrons, which the star base definition launches itself.
-    pub(crate) fn from_sides(world: &World, battle: &PendingBattle, sides: &[SideInput], seed: u64) -> Self {
+    pub(crate) fn from_sides(world: &World, battle: &PendingBattle, sides: &[SideInput], seed: u64, difficulty: &[crate::state::Difficulty]) -> Self {
+        let world_diff = |f: FactionId| difficulty.get(f as usize).copied().unwrap_or_default();
         let has_structs = |s: &SideInput| s.members.iter().any(|m| matches!(m.source, Source::Starbase(_) | Source::Structure(_)));
         let mut order: Vec<usize> = (0..sides.len()).collect();
         if sides.len() == 2 && has_structs(&sides[0]) && !has_structs(&sides[1]) {
@@ -145,6 +152,9 @@ impl TacticalRequest {
                     faction: side.faction,
                     faction_name: world.factions[side.faction as usize].name.clone(),
                     defender: battle.defender == Some(side.faction),
+                    damage_mult: world_diff(side.faction).damage,
+                    health_mult: world_diff(side.faction).health,
+                    shield_mult: world_diff(side.faction).shield,
                     groups,
                 }
             })
@@ -164,7 +174,8 @@ impl TacticalRequest {
     /// Battle constants for this request (seed, arena, time limit); everything else is `BattleConfig::default()`.
     pub fn battle_config(&self, arena: Option<Arc<Arena>>) -> BattleConfig {
         let half_size = arena.as_ref().map_or(BattleConfig::default().half_size, |a| a.half_size());
-        BattleConfig { seed: self.seed, max_time: self.max_seconds, half_size, arena, ..BattleConfig::default() }
+        let side_mults = self.sides.iter().map(|s| battle_sim::SideMult { damage: s.damage_mult, health: s.health_mult, shield: s.shield_mult }).collect();
+        BattleConfig { seed: self.seed, max_time: self.max_seconds, half_size, arena, side_mults, ..BattleConfig::default() }
     }
 
     /// Builds the `battle-sim` setup. Fleet groups carry their group index as the tag; side `i` of the request is
@@ -289,7 +300,7 @@ impl Sim {
         let battle = self.galaxy.battles.iter().find(|b| b.id == battle_id)?.clone();
         let sides = self.battle_sides(&battle);
         let seed = self.battle_rng(battle_id).next_u64();
-        let request = TacticalRequest::from_sides(&self.world, &battle, &sides, seed);
+        let request = TacticalRequest::from_sides(&self.world, &battle, &sides, seed, &self.galaxy.factions.iter().map(|f| f.difficulty).collect::<Vec<_>>());
         self.tactical_requests.insert(battle_id, request.clone());
         Some(request)
     }

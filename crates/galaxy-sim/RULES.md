@@ -127,3 +127,8 @@ A tactical battle (front end or `run_headless`) reports survivors per group; los
 statistical result. Units that left the battle by `Retreat` count as survivors and, when their side did not win (or the battle was a draw and they
 attack), their fleets fall back along the lane they came from (estimate: no attrition, `Space_Retreat_Attrition_Factor` is 0 in the data). Damage is
 not carried over between battles (surviving ships are repaired), also an estimate.
+
+## 8. Difficulty multipliers
+`Sim::set_faction_difficulty(faction, Difficulty)` (from `alamo_data::DifficultyAdjustment`): positive income x `credit`, build times x `build_time`,
+and in battles damage dealt x `damage`, damage taken divided by `health` (hull) / `shield`. Statistical results use them in `combat::resolve_allied`;
+tactical battles get them as `TacticalSide::{damage,health,shield}_mult` and `BattleConfig::side_mults`. Default 1.0 for everyone.

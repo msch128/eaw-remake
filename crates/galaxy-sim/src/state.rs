@@ -132,6 +132,8 @@ pub struct FactionState {
     pub population_cap: i32,
     /// Planets owned.
     pub planets_owned: u32,
+    /// Difficulty multipliers of this faction (neutral 1.0 unless set with [`crate::Sim::set_faction_difficulty`]).
+    pub difficulty: Difficulty,
 }
 
 /// A battle waiting to be resolved (by a tactical battle or auto-resolve).
@@ -487,5 +489,34 @@ impl Galaxy {
             }
         }
         h.finish()
+    }
+}
+
+/// Per-faction difficulty multipliers (`DifficultyAdjustments.xml`, see `alamo_data::DifficultyAdjustment`). Credits
+/// and build time act in the galaxy layer; damage, health and shield in battles (statistical and tactical).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Difficulty {
+    /// Multiplier on positive income.
+    pub credit: f32,
+    /// Multiplier on build times.
+    pub build_time: f32,
+    /// Multiplier on damage dealt in battle.
+    pub damage: f32,
+    /// Multiplier on hull points in battle.
+    pub health: f32,
+    /// Multiplier on shield points in battle.
+    pub shield: f32,
+}
+
+impl Default for Difficulty {
+    fn default() -> Self {
+        Self { credit: 1.0, build_time: 1.0, damage: 1.0, health: 1.0, shield: 1.0 }
+    }
+}
+
+impl Difficulty {
+    /// From a table entry (galactic build time).
+    pub fn from_adjustment(a: &alamo_data::DifficultyAdjustment) -> Self {
+        Self { credit: a.credit_multiplier, build_time: a.galactic_build_time, damage: a.damage, health: a.health, shield: a.shield }
     }
 }

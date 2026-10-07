@@ -32,7 +32,7 @@ mod rng;
 mod sim;
 
 pub use battle::{
-    AbilityState, Battle, BattleConfig, BattleResult, BattleSetup, Command, CommandError, Event, GroupResult, HitKind, HpState,
+    AbilityState, Battle, BattleConfig, SideMult, BattleResult, BattleSetup, Command, CommandError, Event, GroupResult, HitKind, HpState,
     NONE, NO_TAG, Order, Projectile, Ship, SideSetup, SquadSlot, Stance, UnitSetup,
 };
 pub use defs::{

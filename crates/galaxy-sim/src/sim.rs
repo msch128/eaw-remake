@@ -92,7 +92,7 @@ impl Sim {
                 world.check_build_unit(g, faction, planet, unit)?;
                 let ut = &world.units[unit as usize];
                 g.factions[faction as usize].credits -= ut.cost as f64;
-                let t = ut.build_time * world.config.build_time_scale;
+                let t = ut.build_time * world.config.build_time_scale * g.factions[faction as usize].difficulty.build_time;
                 g.planets[planet as usize].queues[Lane::Units as usize].push_back(ProductionItem {
                     kind: ProductionKind::Unit(unit),
                     remaining: t,
@@ -105,7 +105,7 @@ impl Sim {
                 world.check_build_structure(g, faction, planet, structure)?;
                 let st = &world.structures[structure as usize];
                 g.factions[faction as usize].credits -= st.cost as f64;
-                let t = st.build_time * world.config.build_time_scale;
+                let t = st.build_time * world.config.build_time_scale * g.factions[faction as usize].difficulty.build_time;
                 g.planets[planet as usize].queues[Lane::Structures as usize].push_back(ProductionItem {
                     kind: ProductionKind::Structure(structure),
                     remaining: t,
@@ -118,7 +118,7 @@ impl Sim {
                 let next = world.check_upgrade_starbase(g, faction, planet)?;
                 let sb = &world.starbases[next as usize];
                 g.factions[faction as usize].credits -= sb.cost as f64;
-                let t = sb.build_time * world.config.build_time_scale;
+                let t = sb.build_time * world.config.build_time_scale * g.factions[faction as usize].difficulty.build_time;
                 g.planets[planet as usize].queues[Lane::Base as usize].push_back(ProductionItem {
                     kind: ProductionKind::Starbase(next),
                     remaining: t,
@@ -131,7 +131,7 @@ impl Sim {
                 let idx = world.check_upgrade_tech(g, faction, planet)?;
                 let up = &world.factions[faction as usize].tech_upgrades[idx];
                 g.factions[faction as usize].credits -= up.cost as f64;
-                let t = up.time * world.config.build_time_scale;
+                let t = up.time * world.config.build_time_scale * g.factions[faction as usize].difficulty.build_time;
                 g.planets[planet as usize].queues[Lane::Base as usize].push_back(ProductionItem {
                     kind: ProductionKind::Tech(idx),
                     remaining: t,
@@ -267,7 +267,8 @@ impl Sim {
                 continue;
             }
             let cap = w.config.credit_cap_per_planet * fs.planets_owned as f64;
-            fs.credits += fs.income_per_week * dt as f64 / w.config.week_seconds as f64;
+            let income = if fs.income_per_week > 0.0 { fs.income_per_week * f64::from(fs.difficulty.credit) } else { fs.income_per_week };
+            fs.credits += income * dt as f64 / w.config.week_seconds as f64;
             if fs.planets_owned > 0 && fs.credits > cap {
                 fs.credits = cap;
             }
@@ -568,13 +569,13 @@ impl Sim {
         let seed = rng.next_u64();
         if tactical && let Some(catalog) = self.tactical.clone() {
             let arena = w.planets[p as usize].space_map.as_ref().and_then(|m| self.arenas.get(&m.to_ascii_lowercase())).cloned();
-            let request = crate::tactical::TacticalRequest::from_sides(w, &battle, &sides, seed);
+            let request = crate::tactical::TacticalRequest::from_sides(w, &battle, &sides, seed, &self.galaxy.factions.iter().map(|f| f.difficulty).collect::<Vec<_>>());
             if let Some(result) = crate::tactical::run_headless(&request, &catalog, arena) {
                 let (sides, combat) = request.combat_result(&result);
                 return Some(self.apply_combat(&battle, &sides, combat));
             }
         }
-        let result = combat::resolve_allied(w, &sides, &mut rng, &self.galaxy.allied);
+        let result = combat::resolve_allied(w, &sides, &mut rng, &self.galaxy.allied, &self.galaxy.factions.iter().map(|f| f.difficulty).collect::<Vec<_>>());
         Some(self.apply_combat(&battle, &sides, result))
     }
 
