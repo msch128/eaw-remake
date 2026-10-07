@@ -26,3 +26,5 @@ Runs the Remake's Lua plot scripts and `GameScoring` on top of `galaxy-sim` (`Sc
 - Test `tests/ai_match.rs`: 20 weeks AI vs AI (ships 182 -> ~750, ~120 ships and ~140 structures queued by plans, 8 captures, ~1150 plans, all factions
   active). Per game week (60 s): median ~310 ms wall, worst ~410 ms; of that sim ~3 ms, story scripts ~33 ms, AI ~240 ms (goal evaluation ~60 ms, task
   force jobs ~5 ms, the rest is starting plan scripts: a fresh Lua VM with API and prelude per plan, ~3 ms each, ~57 plans per week).
+- alamo-lua now caches compiled chunks (bytecode per script path and the prelude) across plan VMs: AI cost per game week fell from ~240 ms to ~85 ms
+  (20 weeks all-AI: median 121 ms wall per week including scripts, worst 155 ms).

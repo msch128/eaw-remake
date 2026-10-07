@@ -31,3 +31,14 @@ The Remake's galactic AI on top of an abstract `AiSim` (implemented for galaxy-s
   as well, which are "assembled" instantly, and the AI avoids fights it does not expect to win). The stub AI stays the default until the
   behaviour is compared against it over longer runs.
 - Perf: ~240 ms AI per game week for 12 factions, mostly plan script start-up (new Lua VM per plan); a VM/chunk cache in alamo-lua would cut it.
+
+## Update 2 (money budgets, attacks, perf)
+- **Why enemy attacks were rare:** `Need_To_Conquer_Enemy_Planet/Space` multiply by `Is_Player_Economically_Wealthy` (credits > 25000 + 1750 x planets) and the
+  engine did not reserve money per category, so build plans spent everything. `TaskForces::fund/set_plan_category` now keep a per-category account:
+  the treasury at the first evaluation plus the net income since the last one is split by the template's budget fractions, plans only spend what their
+  category holds, and unused earmarks stay in the treasury (estimate; the engine's bookkeeping is not in the data). Factions that save up now start
+  `GC_Conquer_Enemy_Planet`; the ground part needed no change (ground forces are already instant).
+- Plans run to the attack (forces ready -> `Move_To` -> orbit check); many attacks are lost against star bases/fleets ("SpaceForce lost battle"), which is
+  the plan's own failure path. 20 weeks all-AI: 1-2 captures from enemy owners, ~9 captures in total (the stub AI takes ~500 in 30 weeks, which is
+  unrealistically fast; do not use it as the target).
+- Dead-code warnings removed.

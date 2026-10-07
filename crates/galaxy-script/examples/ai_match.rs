@@ -107,7 +107,7 @@ fn main() {
     println!("unimplemented API: {un:?}");
 
     if let Ok(filter) = std::env::var("AI_LOG") {
-        for l in sim.script_log().iter().filter(|l| l.contains(&filter)).take(150) {
+        for l in sim.script_log().iter().filter(|l| l.contains(&filter)).take(2000) {
             println!("  log: {l}");
         }
     }
@@ -123,7 +123,7 @@ fn main() {
             goals.sort_by_key(|g| std::cmp::Reverse(g.1));
             let total: u32 = goals.iter().map(|g| g.1).sum();
             println!("  {} started {total} plans:", names[p as usize]);
-            for (g, n, ok, bad) in goals.iter().take(8) {
+            for (g, n, ok, bad) in goals.iter().take(40) {
                 println!("      {g:<32} started {n:>4} ok {ok:>4} failed {bad:>4}");
             }
         }

@@ -79,6 +79,8 @@ pub struct Shared {
     /// Per-function counters (see ast_counter); one entry per bound function and script instance.
     /// Engine-call counter that polling scripts do not move (see `ScriptRuntime::set_idle_backoff`).
     pub activity: Rc<std::cell::Cell<u64>>,
+    /// Compiled chunks by script path (plus `<prelude>`): every plan runs in a fresh Lua state, compiling is the expensive part.
+    pub compiled: HashMap<String, Rc<Vec<u8>>>,
     /// Set when story flags changed: idle scripts must be serviced again.
     pub wake: bool,
     /// Events queued for plan scripts (GetEvent): function name and arguments, per script instance.

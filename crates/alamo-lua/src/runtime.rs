@@ -127,6 +127,7 @@ impl ScriptRuntime {
             event_queues: HashMap::new(),
             event_params: HashMap::new(),
             activity: Rc::new(std::cell::Cell::new(0)),
+            compiled: HashMap::new(),
             wake: false,
             method_logged: HashSet::new(),
             type_cache: HashMap::new(),
@@ -296,7 +297,7 @@ impl ScriptRuntime {
         let sh = self.shared.clone();
         let setup = || -> mlua::Result<Vec<ThreadSlot>> {
             api::install(&lua, &sh, id)?;
-            lua.load(api::PRELUDE).set_name("prelude").exec()?;
+            load_cached(&lua, &sh, "<prelude>", || Ok(api::PRELUDE.to_string()))?;
             install_require(&lua, &sh, id)?;
             let g = lua.globals();
             let script_handle = crate::handles::make(
@@ -715,10 +716,27 @@ fn resolve(s: &Shared, name: &str) -> Option<String> {
     s.index.get(&base).cloned()
 }
 
+/// Compiles `text` once per path and loads the cached bytecode into later states.
+fn load_cached(lua: &Lua, sh: &Rc<RefCell<Shared>>, key: &str, source: impl FnOnce() -> mlua::Result<String>) -> mlua::Result<Value> {
+    let cached = sh.borrow().compiled.get(key).cloned();
+    let code = match cached {
+        Some(c) => c,
+        None => {
+            let text = source()?;
+            let f = lua.load(text.as_str()).set_name(key).into_function()?;
+            let code = Rc::new(f.dump(false));
+            sh.borrow_mut().compiled.insert(key.to_string(), code.clone());
+            code
+        }
+    };
+    lua.load(&code[..]).set_name(key).set_mode(mlua::ChunkMode::Binary).eval::<Value>()
+}
+
 fn run_file(lua: &Lua, sh: &Rc<RefCell<Shared>>, path: &str) -> mlua::Result<Value> {
-    let bytes = sh.borrow().fs.read(path).map_err(mlua::Error::external)?;
-    let text = String::from_utf8_lossy(&bytes);
-    lua.load(text.as_ref()).set_name(path).eval::<Value>()
+    load_cached(lua, sh, path, || {
+        let bytes = sh.borrow().fs.read(path).map_err(mlua::Error::external)?;
+        Ok(String::from_utf8_lossy(&bytes).into_owned())
+    })
 }
 
 /// `require(name)`: loads a script file once per state, resolving the name through the script index.

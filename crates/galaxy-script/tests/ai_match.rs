@@ -40,7 +40,7 @@ fn remake_ai_builds_moves_and_attacks() {
     let names: Vec<String> = sim.with_sim(|s| s.world().factions.iter().map(|f| f.name.clone()).collect());
     let ships = |sim: &ScriptedSim| sim.with_sim(|s| s.galaxy().fleets.values().map(|f| f.unit_count()).sum::<u32>());
     let ships_at_start = ships(&sim);
-    let (mut weeks, mut captures, mut battles, mut week_ms) = (0, 0, 0, Vec::new());
+    let (mut weeks, mut captures, mut enemy_captures, mut battles, mut week_ms) = (0, 0, 0, 0, Vec::new());
     let mut t = Instant::now();
     while weeks < 20 {
         for e in sim.step(1.0).sim_events {
@@ -50,7 +50,10 @@ fn remake_ai_builds_moves_and_attacks() {
                     week_ms.push(t.elapsed().as_secs_f64() * 1e3);
                     t = Instant::now();
                 }
-                Event::PlanetCaptured { .. } => captures += 1,
+                Event::PlanetCaptured { old_owner, .. } => {
+                    captures += 1;
+                    enemy_captures += u32::from(old_owner.is_some());
+                }
                 Event::BattlePending(_) | Event::BattleResolved { .. } => battles += 1,
                 _ => {}
             }
@@ -60,7 +63,7 @@ fn remake_ai_builds_moves_and_attacks() {
     let tf = &st.taskforces;
     week_ms.sort_by(f64::total_cmp);
     println!(
-        "20 weeks: ships {ships_at_start} -> {}, queued {} ships / {} structures, free-store claims {}, plans {}, captures {captures}, battle events {battles}",
+        "20 weeks: ships {ships_at_start} -> {}, queued {} ships / {} structures, free-store claims {}, plans {}, captures {captures} ({enemy_captures} from enemy owners), battle events {battles}",
         ships(&sim),
         tf.ships_queued,
         tf.structures_queued,
@@ -72,6 +75,7 @@ fn remake_ai_builds_moves_and_attacks() {
     assert!(tf.ships_queued > 20, "the AI should build ships");
     assert!(tf.structures_queued > 20, "the AI should build structures");
     assert!(captures > 0, "the AI should conquer planets");
+    assert!(enemy_captures >= 1, "the AI should take planets from enemy owners");
     // Every faction, the campaign's own Rebel included, started plans.
     let rebel = names.iter().position(|n| n == "Rebel").unwrap() as u32;
     assert!(st.plans_started.keys().any(|(p, _)| *p == rebel), "Rebel AI never acted");

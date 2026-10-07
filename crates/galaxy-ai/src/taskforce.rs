@@ -77,7 +77,6 @@ pub struct Block {
 struct Pending {
     unit: String,
     planet: PlanetId,
-    queued_at: f64,
 }
 
 #[derive(Debug)]
@@ -95,7 +94,6 @@ struct UnitJob {
     stage: PlanetId,
     wanted: Vec<String>,
     pending: Vec<Pending>,
-    started: f64,
     deadline: f64,
     refused: HashMap<String, u32>,
 }
@@ -111,7 +109,6 @@ struct StructJob {
     queued: Option<String>,
     /// Something was built (or stood there already).
     built: bool,
-    started: f64,
     deadline: f64,
 }
 
@@ -152,6 +149,9 @@ pub struct TaskForces {
     next_id: u64,
     next_block: u64,
     events: Vec<PlanEvent>,
+    /// Money earmarked per `(player, goal category)`; see [`TaskForces::fund`].
+    accounts: HashMap<(PlayerId, String), f64>,
+    plan_category: HashMap<u64, String>,
     /// Statistics.
     pub stats: TaskForceStats,
 }
@@ -193,6 +193,40 @@ fn next_rand(rng: &mut u64) -> f64 {
 }
 
 impl TaskForces {
+    /// Remembers the goal category a plan belongs to; its spending comes from that category's account.
+    pub fn set_plan_category(&mut self, plan: u64, category: &str) {
+        self.plan_category.insert(plan, category.to_ascii_lowercase());
+    }
+
+    /// Earmarks `amount` credits for the categories of `player` in proportion to `fractions` (the budget equations of the
+    /// player's template). Plans may only spend what their category holds; money nobody can use stays in the treasury, which
+    /// is what makes a player "wealthy" (an estimate inferred from how the budget and wealth equations fit together; the
+    /// engine's exact bookkeeping is not visible in the data).
+    pub fn fund(&mut self, player: PlayerId, fractions: &HashMap<String, f64>, amount: f64) {
+        if amount <= 0.0 {
+            return;
+        }
+        for (cat, f) in fractions {
+            if *f > 0.0 {
+                *self.accounts.entry((player, cat.clone())).or_default() += amount * f;
+            }
+        }
+    }
+
+    /// What a plan may still spend; `None` = unlimited (category without a budget).
+    fn allowance(&self, player: PlayerId, plan: u64) -> Option<f64> {
+        let cat = self.plan_category.get(&plan)?;
+        self.accounts.get(&(player, cat.clone())).copied()
+    }
+
+    fn charge(&mut self, player: PlayerId, plan: u64, cost: f64) {
+        if let Some(cat) = self.plan_category.get(&plan)
+            && let Some(a) = self.accounts.get_mut(&(player, cat.clone()))
+        {
+            *a = (*a - cost).max(0.0);
+        }
+    }
+
     /// Plan callbacks accumulated since the last call.
     pub fn take_events(&mut self) -> Vec<PlanEvent> {
         std::mem::take(&mut self.events)
@@ -553,7 +587,7 @@ impl TaskForces {
                 if groups.is_empty() {
                     return self.finish(block, true);
                 }
-                self.jobs.push(Job::Structures(StructJob { block, tf: tf_id, planet, groups, queued: None, built: false, started: now, deadline: now + 900.0 }));
+                self.jobs.push(Job::Structures(StructJob { block, tf: tf_id, planet, groups, queued: None, built: false, deadline: now + 900.0 }));
             }
             ForceKind::Units => {
                 let stage = stage_arg.or(t.stage).or_else(|| self.choose_stage(snap, t));
@@ -571,7 +605,6 @@ impl TaskForces {
                     stage,
                     wanted,
                     pending: Vec::new(),
-                    started: now,
                     deadline: now + 1200.0,
                     refused: HashMap::new(),
                 }));
@@ -758,15 +791,24 @@ impl TaskForces {
             planets.sort_by_key(|&p| dist[p as usize]);
             let mut queued = false;
             let mut no_credits = false;
+            let unit_cost = sim.unit_info(&unit).map_or(0.0, |u| u.cost);
+            let affordable = self.allowance(player, plan).is_none_or(|a| a >= unit_cost);
+            if !affordable {
+                no_credits = true;
+            }
             for pl in planets.into_iter().take(6) {
+                if !affordable {
+                    break;
+                }
                 match sim.queue_unit(player, pl, &unit) {
                     Ok(cost) => {
+                        self.charge(player, plan, cost);
                         self.stats.ships_queued += 1;
                         self.stats.credits_spent += cost;
                         if let Some(t) = self.forces.get_mut(&j.tf) {
                             t.worked = true;
                         }
-                        j.pending.push(Pending { unit: unit.clone(), planet: pl, queued_at: now });
+                        j.pending.push(Pending { unit: unit.clone(), planet: pl });
                         queued = true;
                         break;
                     }
@@ -949,9 +991,14 @@ impl TaskForces {
                 fail(self, &j, group.types.first().map_or("", String::as_str));
                 return None;
             };
+            let cost_hint = if starbase { 0.0 } else { sim.structure_info(ty).map_or(0.0, |s| s.cost) };
+            if self.allowance(player, plan).is_some_and(|a| a < cost_hint.max(1.0)) {
+                return Some(j);
+            }
             let r = if starbase { sim.queue_starbase(player, j.planet) } else { sim.queue_structure(player, j.planet, ty) };
             match r {
                 Ok(cost) => {
+                    self.charge(player, plan, cost);
                     self.stats.structures_queued += 1;
                     self.stats.credits_spent += cost;
                     if let Some(t) = self.forces.get_mut(&j.tf) {

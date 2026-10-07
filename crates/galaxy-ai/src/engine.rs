@@ -76,6 +76,8 @@ struct PlayerBrain {
     /// Earliest time each goal is evaluated again.
     goal_next: Vec<f64>,
     bonuses: Vec<(String, PlanetId, f64, f64)>,
+    /// Game time money was last earmarked for the budget categories.
+    last_fund: Option<f64>,
 }
 
 /// Report counters.
@@ -218,6 +220,7 @@ impl AiEngine {
             next_eval: 2.0 + 3.0 * self.brains.len() as f64,
             goal_next: Vec::new(),
             bonuses: Vec::new(),
+            last_fund: None,
         });
         Ok(())
     }
@@ -355,6 +358,14 @@ impl AiEngine {
             }
         }
         self.brains[i].fractions = fractions.clone();
+        // Earmark money by budget share: the treasury at the first evaluation, then the net income since the last one.
+        let amount = match self.brains[i].last_fund {
+            None => snap.credits[me],
+            Some(t) if snap.weeks > 0.0 => snap.net_income[me] * (now - t) / (snap.time / snap.weeks),
+            Some(_) => 0.0,
+        };
+        self.brains[i].last_fund = Some(now);
+        self.task_forces.fund(player, &fractions, amount);
         let view = self.view(i);
         let enabled: HashSet<String> = self.brains[i]
             .template
@@ -493,6 +504,7 @@ impl AiEngine {
             self.next_plan += 1;
             let plan = self.next_plan;
             *self.stats.plans_started.entry((player, goal.clone())).or_default() += 1;
+            self.task_forces.set_plan_category(plan, &category);
             self.brains[i].active.push(ActiveGoal { goal: goal.clone(), category, target, plan, started: now, limit });
             out.push(PlanRequest { plan, script, player, target, goal });
             started += 1;
