@@ -1,0 +1,9 @@
+﻿[package]
+name = "alamo-model"
+description = "Parser for Alamo engine (Star Wars: Empire at War) .ALO models and .ALA animations into engine-neutral data."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+alamo-fs = { path = "../alamo-fs" }

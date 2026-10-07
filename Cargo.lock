@@ -102,6 +102,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "alamo-model"
+version = "0.1.0"
+dependencies = [
+ "alamo-fs",
+]
+
+[[package]]
 name = "allocator-api2"
 version = "0.2.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4290,6 +4297,8 @@ dependencies = [
 name = "space-peace"
 version = "0.1.0"
 dependencies = [
+ "alamo-data",
+ "alamo-fs",
  "bevy",
  "mp3-duration",
  "rand 0.9.5",

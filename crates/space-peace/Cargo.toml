@@ -25,5 +25,7 @@ bevy = { version = "=0.19.1", default-features = false, features = [
     "bevy_audio", "mp3",
 ] }
 mp3-duration = "0.1"
+alamo-fs = { path = "../alamo-fs" }
+alamo-data = { path = "../alamo-data" }
 rand = "0.9"
 

@@ -11,7 +11,9 @@ use crate::xml::{Element, parse_bool, parse_floats, split_list};
 fn collect_fields(el: &Element) -> HashMap<String, String> {
     let mut fields = HashMap::new();
     for c in &el.children {
-        fields.entry(c.name.clone()).or_insert_with(|| c.text_trimmed().to_string());
+        fields
+            .entry(c.name.clone())
+            .or_insert_with(|| c.text_trimmed().to_string());
     }
     fields
 }
@@ -21,11 +23,15 @@ fn get<'a>(fields: &'a HashMap<String, String>, key: &str) -> Option<&'a str> {
 }
 
 fn get_string(fields: &HashMap<String, String>, key: &str) -> Option<String> {
-    get(fields, key).filter(|s| !s.is_empty()).map(str::to_string)
+    get(fields, key)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
 }
 
 fn get_num<T: std::str::FromStr + Default>(fields: &HashMap<String, String>, key: &str) -> T {
-    get(fields, key).and_then(|s| s.parse().ok()).unwrap_or_default()
+    get(fields, key)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or_default()
 }
 
 fn get_bool(fields: &HashMap<String, String>, key: &str) -> bool {
@@ -38,7 +44,11 @@ fn get_list(fields: &HashMap<String, String>, key: &str) -> Vec<String> {
 
 fn get_vec3(fields: &HashMap<String, String>, key: &str) -> [f32; 3] {
     let v = get(fields, key).map(parse_floats).unwrap_or_default();
-    [v.first().copied().unwrap_or(0.0), v.get(1).copied().unwrap_or(0.0), v.get(2).copied().unwrap_or(0.0)]
+    [
+        v.first().copied().unwrap_or(0.0),
+        v.get(1).copied().unwrap_or(0.0),
+        v.get(2).copied().unwrap_or(0.0),
+    ]
 }
 
 fn get_color(fields: &HashMap<String, String>, key: &str) -> Option<[u8; 4]> {
@@ -122,7 +132,11 @@ impl Planet {
             .filter(|s| !s.is_empty())
             .collect();
         let legacy_structures: i32 = get_num(&f, "special_structures");
-        let land = f.get("special_structures_land").map_or(legacy_structures, |_| get_num(&f, "special_structures_land"));
+        let land = f
+            .get("special_structures_land")
+            .map_or(legacy_structures, |_| {
+                get_num(&f, "special_structures_land")
+            });
         Some(Self {
             name,
             description: el.attr("description").map(str::to_string),
@@ -157,7 +171,9 @@ impl Planet {
     /// True for actual planets (behavior contains `PLANET`), false for background art,
     /// icons and dummies that share the `Planet` object type.
     pub fn is_real_planet(&self) -> bool {
-        self.behavior.iter().any(|b| b.eq_ignore_ascii_case("planet"))
+        self.behavior
+            .iter()
+            .any(|b| b.eq_ignore_ascii_case("planet"))
     }
 }
 
@@ -390,7 +406,11 @@ pub struct Campaign {
 }
 
 impl Campaign {
-    pub(crate) fn from_element(el: &Element, source_file: &str, warn: &mut dyn FnMut(u32, String)) -> Option<Self> {
+    pub(crate) fn from_element(
+        el: &Element,
+        source_file: &str,
+        warn: &mut dyn FnMut(u32, String),
+    ) -> Option<Self> {
         let name = el.attr("name")?.trim().to_string();
         let f = collect_fields(el);
         let mut c = Campaign {
@@ -403,12 +423,30 @@ impl Campaign {
             camera_shift_y: get_num(&f, "camera_shift_y"),
             camera_distance: get_num(&f, "camera_distance"),
             starting_active_player: get_string(&f, "starting_active_player"),
-            human_victory_conditions: el.children_named("human_victory_conditions").flat_map(|e| split_list(&e.text)).collect(),
-            human_victory_planets: el.children_named("human_victory_planet_names").flat_map(|e| split_list(&e.text)).collect(),
-            ai_victory_conditions: el.children_named("ai_victory_conditions").flat_map(|e| split_list(&e.text)).collect(),
-            ai_victory_planets: el.children_named("ai_victory_planet_names").flat_map(|e| split_list(&e.text)).collect(),
-            locations: el.children_named("locations").flat_map(|e| split_list(&e.text)).collect(),
-            trade_routes: el.children_named("trade_routes").flat_map(|e| split_list(&e.text)).collect(),
+            human_victory_conditions: el
+                .children_named("human_victory_conditions")
+                .flat_map(|e| split_list(&e.text))
+                .collect(),
+            human_victory_planets: el
+                .children_named("human_victory_planet_names")
+                .flat_map(|e| split_list(&e.text))
+                .collect(),
+            ai_victory_conditions: el
+                .children_named("ai_victory_conditions")
+                .flat_map(|e| split_list(&e.text))
+                .collect(),
+            ai_victory_planets: el
+                .children_named("ai_victory_planet_names")
+                .flat_map(|e| split_list(&e.text))
+                .collect(),
+            locations: el
+                .children_named("locations")
+                .flat_map(|e| split_list(&e.text))
+                .collect(),
+            trade_routes: el
+                .children_named("trade_routes")
+                .flat_map(|e| split_list(&e.text))
+                .collect(),
             source_file: source_file.to_string(),
             fields: f,
             ..Campaign::default()
@@ -420,15 +458,30 @@ impl Campaign {
             match tag {
                 "starting_forces" => {
                     if let [faction, planet, object, ..] = toks.as_slice() {
-                        c.starting_forces.push(StartingForce { faction: faction.clone(), planet: planet.clone(), object: object.clone() });
+                        c.starting_forces.push(StartingForce {
+                            faction: faction.clone(),
+                            planet: planet.clone(),
+                            object: object.clone(),
+                        });
                     } else {
-                        warn(child.line, format!("malformed Starting_Forces '{}'", child.text_trimmed()));
+                        warn(
+                            child.line,
+                            format!("malformed Starting_Forces '{}'", child.text_trimmed()),
+                        );
                     }
                 }
-                "starting_credits" | "starting_tech_level" | "max_tech_level" | "home_location" | "ai_player_control"
-                | "story_name" | "markup_filename" => {
+                "starting_credits"
+                | "starting_tech_level"
+                | "max_tech_level"
+                | "home_location"
+                | "ai_player_control"
+                | "story_name"
+                | "markup_filename" => {
                     let [faction, value, ..] = toks.as_slice() else {
-                        warn(child.line, format!("malformed <{tag}> '{}'", child.text_trimmed()));
+                        warn(
+                            child.line,
+                            format!("malformed <{tag}> '{}'", child.text_trimmed()),
+                        );
                         continue;
                     };
                     let value = value.clone();
@@ -444,7 +497,8 @@ impl Campaign {
                     }
                 }
                 _ => {
-                    if let Some(faction) = tag.strip_suffix("_story_name").filter(|f| !f.is_empty()) {
+                    if let Some(faction) = tag.strip_suffix("_story_name").filter(|f| !f.is_empty())
+                    {
                         // `<Rebel_Story_Name>file.xml</Rebel_Story_Name>`; match the real faction
                         // spelling when the faction is already known, else use the tag prefix.
                         let faction = c
@@ -452,7 +506,8 @@ impl Campaign {
                             .iter()
                             .find(|x| x.name.eq_ignore_ascii_case(faction))
                             .map_or_else(|| faction.to_string(), |x| x.name.clone());
-                        c.faction_entry(&faction).story_name = Some(child.text_trimmed().to_string());
+                        c.faction_entry(&faction).story_name =
+                            Some(child.text_trimmed().to_string());
                     }
                 }
             }
@@ -462,13 +517,20 @@ impl Campaign {
         let forces = std::mem::take(&mut c.starting_forces);
         for sf in &forces {
             let cf = c.faction_entry(&sf.faction);
-            if !cf.presence_planets.iter().any(|p| p.eq_ignore_ascii_case(&sf.planet)) {
+            if !cf
+                .presence_planets
+                .iter()
+                .any(|p| p.eq_ignore_ascii_case(&sf.planet))
+            {
                 cf.presence_planets.push(sf.planet.clone());
             }
         }
         for cf in &mut c.factions {
             if let Some(home) = cf.home_location.clone()
-                && !cf.presence_planets.iter().any(|p| p.eq_ignore_ascii_case(&home))
+                && !cf
+                    .presence_planets
+                    .iter()
+                    .any(|p| p.eq_ignore_ascii_case(&home))
             {
                 cf.presence_planets.insert(0, home);
             }
@@ -478,10 +540,17 @@ impl Campaign {
     }
 
     fn faction_entry(&mut self, name: &str) -> &mut CampaignFaction {
-        let idx = match self.factions.iter().position(|f| f.name.eq_ignore_ascii_case(name)) {
+        let idx = match self
+            .factions
+            .iter()
+            .position(|f| f.name.eq_ignore_ascii_case(name))
+        {
             Some(i) => i,
             None => {
-                self.factions.push(CampaignFaction { name: name.to_string(), ..CampaignFaction::default() });
+                self.factions.push(CampaignFaction {
+                    name: name.to_string(),
+                    ..CampaignFaction::default()
+                });
                 self.factions.len() - 1
             }
         };
@@ -490,7 +559,9 @@ impl Campaign {
 
     /// Per-faction settings by (case-insensitive) faction name.
     pub fn faction(&self, name: &str) -> Option<&CampaignFaction> {
-        self.factions.iter().find(|f| f.name.eq_ignore_ascii_case(name))
+        self.factions
+            .iter()
+            .find(|f| f.name.eq_ignore_ascii_case(name))
     }
 
     /// True if this campaign actually defines a galaxy (has locations); menu-only entries

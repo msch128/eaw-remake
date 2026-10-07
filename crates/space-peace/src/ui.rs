@@ -1,4 +1,4 @@
-﻿//! HUD: planet info panel, FPS counter, controls hint and fullscreen toggling.
+//! HUD: planet info panel, FPS counter, controls hint and fullscreen toggling.
 
 use bevy::{
     diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin},
@@ -16,7 +16,10 @@ impl Plugin for UiPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(FrameTimeDiagnosticsPlugin::default())
             .add_systems(Startup, spawn_hud)
-            .add_systems(Update, (toggle_fullscreen, toggle_fps, update_fps, update_info_panel));
+            .add_systems(
+                Update,
+                (toggle_fullscreen, toggle_fps, update_fps, update_info_panel),
+            );
     }
 }
 
@@ -41,9 +44,17 @@ fn spawn_hud(mut commands: Commands) {
     // FPS counter, top right (F3).
     commands.spawn((
         Text::new("FPS --"),
-        TextFont { font_size: FontSize::Px(16.0), ..default() },
+        TextFont {
+            font_size: FontSize::Px(16.0),
+            ..default()
+        },
         TextColor(Color::srgb(0.6, 1.0, 0.6)),
-        Node { position_type: PositionType::Absolute, top: Val::Px(8.0), right: Val::Px(12.0), ..default() },
+        Node {
+            position_type: PositionType::Absolute,
+            top: Val::Px(8.0),
+            right: Val::Px(12.0),
+            ..default()
+        },
         FpsText,
     ));
 
@@ -75,11 +86,30 @@ fn spawn_hud(mut commands: Commands) {
             InfoPanel,
         ))
         .with_children(|p| {
-            p.spawn((Text::new(""), TextFont { font_size: FontSize::Px(22.0), ..default() }, TextColor(Color::WHITE), InfoLine::Name));
-            p.spawn((Text::new(""), TextFont { font_size: FontSize::Px(15.0), ..default() }, TextColor(Color::WHITE), InfoLine::Owner));
             p.spawn((
                 Text::new(""),
-                TextFont { font_size: FontSize::Px(15.0), ..default() },
+                TextFont {
+                    font_size: FontSize::Px(22.0),
+                    ..default()
+                },
+                TextColor(Color::WHITE),
+                InfoLine::Name,
+            ));
+            p.spawn((
+                Text::new(""),
+                TextFont {
+                    font_size: FontSize::Px(15.0),
+                    ..default()
+                },
+                TextColor(Color::WHITE),
+                InfoLine::Owner,
+            ));
+            p.spawn((
+                Text::new(""),
+                TextFont {
+                    font_size: FontSize::Px(15.0),
+                    ..default()
+                },
                 TextColor(Color::srgb(1.0, 0.9, 0.5)),
                 InfoLine::Income,
             ));
@@ -122,7 +152,11 @@ fn update_info_panel(
 
 fn toggle_fps(keys: Res<ButtonInput<KeyCode>>, mut fps: Single<&mut Visibility, With<FpsText>>) {
     if keys.just_pressed(KeyCode::F3) {
-        **fps = if **fps == Visibility::Hidden { Visibility::Inherited } else { Visibility::Hidden };
+        **fps = if **fps == Visibility::Hidden {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        };
     }
 }
 
@@ -138,16 +172,24 @@ fn update_fps(
         return;
     }
     *acc = 0.0;
-    let fps_val = diagnostics.get(&FrameTimeDiagnosticsPlugin::FPS).and_then(|d| d.smoothed());
-    let ms = diagnostics.get(&FrameTimeDiagnosticsPlugin::FRAME_TIME).and_then(|d| d.smoothed());
+    let fps_val = diagnostics
+        .get(&FrameTimeDiagnosticsPlugin::FPS)
+        .and_then(|d| d.smoothed());
+    let ms = diagnostics
+        .get(&FrameTimeDiagnosticsPlugin::FRAME_TIME)
+        .and_then(|d| d.smoothed());
     if let (Some(f), Some(ms)) = (fps_val, ms) {
         fps.0 = format!("{f:.0} FPS  {ms:.2} ms");
     }
 }
 
 /// F11 or Alt+Enter toggles borderless fullscreen.
-fn toggle_fullscreen(keys: Res<ButtonInput<KeyCode>>, mut window: Single<&mut Window, With<PrimaryWindow>>) {
-    let alt_enter = keys.just_pressed(KeyCode::Enter) && keys.any_pressed([KeyCode::AltLeft, KeyCode::AltRight]);
+fn toggle_fullscreen(
+    keys: Res<ButtonInput<KeyCode>>,
+    mut window: Single<&mut Window, With<PrimaryWindow>>,
+) {
+    let alt_enter = keys.just_pressed(KeyCode::Enter)
+        && keys.any_pressed([KeyCode::AltLeft, KeyCode::AltRight]);
     if keys.just_pressed(KeyCode::F11) || alt_enter {
         window.mode = match window.mode {
             WindowMode::Windowed => WindowMode::BorderlessFullscreen(MonitorSelection::Current),

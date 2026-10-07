@@ -1,10 +1,12 @@
-﻿//! Index-file driven loader that assembles [`GameData`] from a [`FileSource`].
+//! Index-file driven loader that assembles [`GameData`] from a [`FileSource`].
 
 use std::collections::HashMap;
 
 use alamo_fs::FileSource;
 
+use crate::combat::CombatTable;
 use crate::model::{Campaign, Faction, Planet, TradeRoute, TradeRouteLine};
+use crate::objects::GameObjects;
 use crate::text::TextTable;
 use crate::xml::{self, Element, Warning};
 
@@ -24,14 +26,21 @@ pub struct GameData {
     pub factions: Vec<Faction>,
     /// `Gameconstants.xml` as `lower-case tag -> trimmed text` (last occurrence wins).
     pub game_constants: HashMap<String, String>,
+    /// Damage type vs armor type multipliers from `Gameconstants.xml`.
+    pub combat: CombatTable,
     /// Localized strings (empty if the `.dat` was not found).
     pub text: TextTable,
-    /// Files listed by `GameObjectFiles.XML` (all object types, for later loaders).
+    /// Every named object definition (units, hardpoints, projectiles, structures ...).
+    pub objects: GameObjects,
+    /// Files listed by `GameObjectFiles.XML`.
     pub game_object_files: Vec<String>,
     planet_index: HashMap<String, usize>,
     route_index: HashMap<String, usize>,
     faction_index: HashMap<String, usize>,
 }
+
+/// `(planet, factions)` pairs, see [`GameData::campaign_ownership_conflicts`].
+pub type Conflicts = Vec<(String, Vec<String>)>;
 
 fn key(name: &str) -> String {
     name.trim().to_ascii_lowercase()
@@ -45,17 +54,23 @@ impl GameData {
 
     /// Trade route by case-insensitive name.
     pub fn trade_route(&self, name: &str) -> Option<&TradeRoute> {
-        self.route_index.get(&key(name)).map(|&i| &self.trade_routes[i])
+        self.route_index
+            .get(&key(name))
+            .map(|&i| &self.trade_routes[i])
     }
 
     /// Faction by case-insensitive name.
     pub fn faction(&self, name: &str) -> Option<&Faction> {
-        self.faction_index.get(&key(name)).map(|&i| &self.factions[i])
+        self.faction_index
+            .get(&key(name))
+            .map(|&i| &self.factions[i])
     }
 
     /// Campaign by case-insensitive name.
     pub fn campaign(&self, name: &str) -> Option<&Campaign> {
-        self.campaigns.iter().find(|c| c.name.eq_ignore_ascii_case(name))
+        self.campaigns
+            .iter()
+            .find(|c| c.name.eq_ignore_ascii_case(name))
     }
 
     /// Localized string for a text key.
@@ -65,18 +80,86 @@ impl GameData {
 
     /// Display name of a planet: its localized `Text_ID`, falling back to the object name.
     pub fn planet_display_name<'a>(&'a self, planet: &'a Planet) -> &'a str {
-        planet.text_id.as_deref().and_then(|id| self.text.get(id)).unwrap_or(&planet.name)
+        planet
+            .text_id
+            .as_deref()
+            .and_then(|id| self.text.get(id))
+            .unwrap_or(&planet.name)
     }
 
     /// Planets of a campaign (its `Locations` that resolve to a planet definition).
     /// Includes dummies/art objects; filter with [`Planet::is_real_planet`].
     pub fn campaign_planets(&self, campaign: &Campaign) -> Vec<&Planet> {
-        campaign.locations.iter().filter_map(|n| self.planet(n)).collect()
+        campaign
+            .locations
+            .iter()
+            .filter_map(|n| self.planet(n))
+            .collect()
     }
 
     /// Trade routes of a campaign (its `Trade_Routes` that resolve to a definition).
     pub fn campaign_trade_routes(&self, campaign: &Campaign) -> Vec<&TradeRoute> {
-        campaign.trade_routes.iter().filter_map(|n| self.trade_route(n)).collect()
+        campaign
+            .trade_routes
+            .iter()
+            .filter_map(|n| self.trade_route(n))
+            .collect()
+    }
+
+    /// Planets of `campaign` and the faction that owns each at game start, keyed by the planet
+    /// object name. Planets missing from the map start neutral/unowned.
+    ///
+    /// Rule (derived from the Remake campaigns): a faction owns a planet when one of its
+    /// `Starting_Forces` entries for that planet is a *structure* (`StarBase`, `SpecialStructure`,
+    /// ...); ships, squadrons, heroes and companies alone confer no ownership. If several factions
+    /// place structures on one planet, the first in file order wins (see
+    /// [`GameData::campaign_ownership_conflicts`]). A faction's `Home_Location` is owned by it when
+    /// no structure decided otherwise.
+    pub fn campaign_planet_owners(&self, campaign: &Campaign) -> HashMap<String, String> {
+        self.ownership(campaign).0
+    }
+
+    /// Planets where several factions place starting structures, as `(planet, factions)` with the
+    /// winning (first) faction first.
+    pub fn campaign_ownership_conflicts(&self, campaign: &Campaign) -> Conflicts {
+        self.ownership(campaign).1
+    }
+
+    fn ownership(&self, campaign: &Campaign) -> (HashMap<String, String>, Conflicts) {
+        let canon = |name: &str| {
+            self.planet(name)
+                .map_or_else(|| name.to_string(), |p| p.name.clone())
+        };
+        let mut owners: HashMap<String, String> = HashMap::new();
+        let mut claims: Conflicts = Vec::new();
+        for sf in &campaign.starting_forces {
+            if !self.objects.is_structure(&sf.object) {
+                continue;
+            }
+            let planet = canon(&sf.planet);
+            match owners.get(&planet) {
+                None => {
+                    owners.insert(planet.clone(), sf.faction.clone());
+                    claims.push((planet, vec![sf.faction.clone()]));
+                }
+                Some(_) => {
+                    let entry = claims
+                        .iter_mut()
+                        .find(|(p, _)| *p == planet)
+                        .expect("claim recorded with owner");
+                    if !entry.1.iter().any(|f| f.eq_ignore_ascii_case(&sf.faction)) {
+                        entry.1.push(sf.faction.clone());
+                    }
+                }
+            }
+        }
+        for cf in &campaign.factions {
+            if let Some(home) = &cf.home_location {
+                owners.entry(canon(home)).or_insert_with(|| cf.name.clone());
+            }
+        }
+        claims.retain(|(_, f)| f.len() > 1);
+        (owners, claims)
     }
 
     fn rebuild_indexes(&mut self) {
@@ -107,73 +190,111 @@ pub fn load_galaxy(src: &dyn FileSource) -> (GameData, Vec<Warning>) {
 
     // Campaigns.
     for file in index_files(src, "Xml/CampaignFiles.xml", &mut w) {
-        let Some(root) = read_xml(src, &xml_path(&file), &mut w) else { continue };
+        let Some(root) = read_xml(src, &xml_path(&file), &mut w) else {
+            continue;
+        };
         for el in root.children_named("campaign") {
             let mut local = Vec::new();
             let c = Campaign::from_element(el, &file, &mut |line, msg| local.push((line, msg)));
             w.extend(local.into_iter().map(|(l, m)| Warning::new(&file, l, m)));
             match c {
-                Some(c) if data.campaigns.iter().any(|x| x.name.eq_ignore_ascii_case(&c.name)) => {
-                    w.push(Warning::new(&file, el.line, format!("duplicate campaign '{}' ignored", c.name)));
+                Some(c)
+                    if data
+                        .campaigns
+                        .iter()
+                        .any(|x| x.name.eq_ignore_ascii_case(&c.name)) =>
+                {
+                    w.push(Warning::new(
+                        &file,
+                        el.line,
+                        format!("duplicate campaign '{}' ignored", c.name),
+                    ));
                 }
                 Some(c) => data.campaigns.push(c),
-                None => w.push(Warning::new(&file, el.line, "campaign without Name attribute")),
+                None => w.push(Warning::new(
+                    &file,
+                    el.line,
+                    "campaign without Name attribute",
+                )),
             }
         }
     }
 
-    // Planets live in the object files; only parse files that mention a Planet element.
+    // Object definitions (units, structures, hardpoints, projectiles, planets ...).
+    data.objects = GameObjects::load(src, &mut w);
     data.game_object_files = index_files(src, "Xml/GameObjectFiles.XML", &mut w);
-    for file in data.game_object_files.clone() {
-        let path = xml_path(&file);
-        let Ok(bytes) = src.read(&path) else {
-            w.push(Warning::new(&path, 0, "object file listed in GameObjectFiles.XML not found"));
-            continue;
-        };
-        if !contains_ci(&bytes, b"<planet") {
-            continue;
-        }
-        let Some(root) = xml::parse(&bytes, &path, &mut w) else { continue };
-        for el in root.children_named("planet") {
-            match Planet::from_element(el, &file) {
-                Some(p) if data.planets.iter().any(|x| x.name.eq_ignore_ascii_case(&p.name)) => {
-                    w.push(Warning::new(&path, el.line, format!("duplicate planet '{}' ignored", p.name)));
-                }
-                Some(p) => data.planets.push(p),
-                None => w.push(Warning::new(&path, el.line, "planet without Name attribute")),
-            }
+    for obj in data.objects.of_kind("planet") {
+        match Planet::from_element(&obj.element, &obj.source_file) {
+            Some(p) => data.planets.push(p),
+            None => w.push(Warning::new(
+                &obj.source_file,
+                obj.element.line,
+                "planet without Name attribute",
+            )),
         }
     }
-
     // Trade routes.
     for file in index_files(src, "Xml/TradeRouteFiles.xml", &mut w) {
         let path = xml_path(&file);
-        let Some(root) = read_xml(src, &path, &mut w) else { continue };
+        let Some(root) = read_xml(src, &path, &mut w) else {
+            continue;
+        };
         for el in root.children_named("traderoute") {
             match TradeRoute::from_element(el, &file) {
-                Some(r) if data.trade_routes.iter().any(|x| x.name.eq_ignore_ascii_case(&r.name)) => {
-                    w.push(Warning::new(&path, el.line, format!("duplicate trade route '{}' ignored", r.name)));
+                Some(r)
+                    if data
+                        .trade_routes
+                        .iter()
+                        .any(|x| x.name.eq_ignore_ascii_case(&r.name)) =>
+                {
+                    w.push(Warning::new(
+                        &path,
+                        el.line,
+                        format!("duplicate trade route '{}' ignored", r.name),
+                    ));
                 }
                 Some(r) => data.trade_routes.push(r),
-                None => w.push(Warning::new(&path, el.line, "trade route without Name attribute")),
+                None => w.push(Warning::new(
+                    &path,
+                    el.line,
+                    "trade route without Name attribute",
+                )),
             }
         }
     }
     if let Some(root) = read_xml(src, "Xml/TRADEROUTELINES.XML", &mut w) {
-        data.trade_route_lines = root.children_named("traderouteline").filter_map(TradeRouteLine::from_element).collect();
+        data.trade_route_lines = root
+            .children_named("traderouteline")
+            .filter_map(TradeRouteLine::from_element)
+            .collect();
     }
 
     // Factions.
     for file in index_files(src, "Xml/FACTIONFILES.XML", &mut w) {
         let path = xml_path(&file);
-        let Some(root) = read_xml(src, &path, &mut w) else { continue };
+        let Some(root) = read_xml(src, &path, &mut w) else {
+            continue;
+        };
         for el in root.children_named("faction") {
             match Faction::from_element(el, &file) {
-                Some(f) if data.factions.iter().any(|x| x.name.eq_ignore_ascii_case(&f.name)) => {
-                    w.push(Warning::new(&path, el.line, format!("duplicate faction '{}' ignored", f.name)));
+                Some(f)
+                    if data
+                        .factions
+                        .iter()
+                        .any(|x| x.name.eq_ignore_ascii_case(&f.name)) =>
+                {
+                    w.push(Warning::new(
+                        &path,
+                        el.line,
+                        format!("duplicate faction '{}' ignored", f.name),
+                    ));
                 }
                 Some(f) => data.factions.push(f),
-                None => w.push(Warning::new(&path, el.line, "faction without Name attribute")),
+                None => w.push(Warning::new(
+                    &path,
+                    el.line,
+                    "faction without Name attribute",
+                )),
             }
         }
     }
@@ -181,15 +302,21 @@ pub fn load_galaxy(src: &dyn FileSource) -> (GameData, Vec<Warning>) {
     // Game constants (flat key/value list).
     if let Some(root) = read_xml(src, "Xml/Gameconstants.xml", &mut w) {
         for c in &root.children {
-            data.game_constants.insert(c.name.clone(), c.text_trimmed().to_string());
+            data.game_constants
+                .insert(c.name.clone(), c.text_trimmed().to_string());
         }
+        data.combat = CombatTable::from_constants(&root);
     }
 
     // Localized strings.
     let text_path = "Text/MasterTextFile_ENGLISH.DAT".to_string();
     match TextTable::load(src, &text_path) {
         Ok(t) => data.text = t,
-        Err(e) => w.push(Warning::new(&text_path, 0, format!("string table not loaded: {e}"))),
+        Err(e) => w.push(Warning::new(
+            &text_path,
+            0,
+            format!("string table not loaded: {e}"),
+        )),
     }
 
     data.rebuild_indexes();
@@ -197,12 +324,12 @@ pub fn load_galaxy(src: &dyn FileSource) -> (GameData, Vec<Warning>) {
 }
 
 /// Resolves a file name from an index file (relative to `Data/Xml`).
-fn xml_path(file: &str) -> String {
+pub(crate) fn xml_path(file: &str) -> String {
     format!("Xml/{}", file.trim().replace('\\', "/"))
 }
 
 /// Reads and leniently parses an XML file, warning when it is missing or empty.
-fn read_xml(src: &dyn FileSource, path: &str, w: &mut Vec<Warning>) -> Option<Element> {
+pub(crate) fn read_xml(src: &dyn FileSource, path: &str, w: &mut Vec<Warning>) -> Option<Element> {
     let bytes = match src.read(path) {
         Ok(b) => b,
         Err(e) => {
@@ -218,7 +345,7 @@ fn read_xml(src: &dyn FileSource, path: &str, w: &mut Vec<Warning>) -> Option<El
 }
 
 /// Reads an index file (`<File>name</File>` entries) and returns the listed names.
-fn index_files(src: &dyn FileSource, path: &str, w: &mut Vec<Warning>) -> Vec<String> {
+pub(crate) fn index_files(src: &dyn FileSource, path: &str, w: &mut Vec<Warning>) -> Vec<String> {
     read_xml(src, path, w)
         .map(|root| {
             root.children_named("file")
@@ -227,11 +354,6 @@ fn index_files(src: &dyn FileSource, path: &str, w: &mut Vec<Warning>) -> Vec<St
                 .collect()
         })
         .unwrap_or_default()
-}
-
-/// Case-insensitive (ASCII) substring search.
-fn contains_ci(hay: &[u8], needle: &[u8]) -> bool {
-    hay.windows(needle.len()).any(|w| w.eq_ignore_ascii_case(needle))
 }
 
 #[cfg(test)]
@@ -243,7 +365,10 @@ mod tests {
 
     impl FileSource for Mem {
         fn read(&self, path: &str) -> io::Result<Vec<u8>> {
-            self.0.get(&alamo_fs::normalize(path)).cloned().ok_or_else(|| io::ErrorKind::NotFound.into())
+            self.0
+                .get(&alamo_fs::normalize(path))
+                .cloned()
+                .ok_or_else(|| io::ErrorKind::NotFound.into())
         }
         fn exists(&self, path: &str) -> bool {
             self.0.contains_key(&alamo_fs::normalize(path))
@@ -254,13 +379,19 @@ mod tests {
     }
 
     fn mem(files: &[(&str, &str)]) -> Mem {
-        Mem(files.iter().map(|(k, v)| (alamo_fs::normalize(k), v.as_bytes().to_vec())).collect())
+        Mem(files
+            .iter()
+            .map(|(k, v)| (alamo_fs::normalize(k), v.as_bytes().to_vec()))
+            .collect())
     }
 
     #[test]
     fn loads_small_galaxy() {
         let src = mem(&[
-            ("Xml/CampaignFiles.xml", "<Campaign_Files><File>c.xml</File><!--<File>x.xml</File>--></Campaign_Files>"),
+            (
+                "Xml/CampaignFiles.xml",
+                "<Campaign_Files><File>c.xml</File><!--<File>x.xml</File>--></Campaign_Files>",
+            ),
             (
                 "Xml/c.xml",
                 "<Campaigns><Campaign Name=\"C1\"><Locations>A, B,\n Missing</Locations><Trade_Routes>R1</Trade_Routes>\
@@ -268,16 +399,25 @@ mod tests {
                  <Starting_Forces>Empire, B, Star_Base</Starting_Forces><Empire_Story_Name>s.xml</Empire_Story_Name>\
                  </Campaign></Campaigns>",
             ),
-            ("Xml/GameObjectFiles.XML", "<Game_Object_Files><File>p.xml</File><File>gone.xml</File></Game_Object_Files>"),
+            (
+                "Xml/GameObjectFiles.XML",
+                "<Game_Object_Files><File>p.xml</File><File>gone.xml</File></Game_Object_Files>",
+            ),
             (
                 "Xml/p.xml",
                 "<Planets><Planet Name=\"A\"><Behavior>SELECTABLE, PLANET</Behavior><Galactic_Position>1, 2.5, 3</Galactic_Position>\
                  <Planet_Credit_Value>50</Planet_Credit_Value></Planet><PLANET Name=\"b\"><Text_ID>T_B</Text_ID></PLANET></Planets>",
             ),
             ("Xml/TradeRouteFiles.xml", "<X><File>t.xml</File></X>"),
-            ("Xml/t.xml", "<TradeRoutes><TradeRoute Name=\"R1\"><Point_A>A</Point_A><Point_B>B</Point_B></TradeRoute></TradeRoutes>"),
+            (
+                "Xml/t.xml",
+                "<TradeRoutes><TradeRoute Name=\"R1\"><Point_A>A</Point_A><Point_B>B</Point_B></TradeRoute></TradeRoutes>",
+            ),
             ("Xml/FACTIONFILES.XML", "<X><File>f.xml</File></X>"),
-            ("Xml/f.xml", "<Factions><Faction Name=\"Rebel\"><Color>1,2,3,4</Color><Is_Playable>Yes</Is_Playable></Faction></Factions>"),
+            (
+                "Xml/f.xml",
+                "<Factions><Faction Name=\"Rebel\"><Color>1,2,3,4</Color><Is_Playable>Yes</Is_Playable></Faction></Factions>",
+            ),
         ]);
         let (d, w) = load_galaxy(&src);
         assert_eq!(d.campaigns.len(), 1);
@@ -285,7 +425,10 @@ mod tests {
         assert_eq!(c.locations, ["A", "B", "Missing"]);
         assert_eq!(c.faction("rebel").unwrap().starting_credits, Some(100));
         assert_eq!(c.faction("Rebel").unwrap().presence_planets, ["A"]);
-        assert_eq!(c.faction("empire").unwrap().story_name.as_deref(), Some("s.xml"));
+        assert_eq!(
+            c.faction("empire").unwrap().story_name.as_deref(),
+            Some("s.xml")
+        );
         assert_eq!(c.faction("empire").unwrap().presence_planets, ["B"]);
         assert_eq!(d.campaign_planets(c).len(), 2);
         let a = d.planet("a").unwrap();
@@ -295,6 +438,10 @@ mod tests {
         assert_eq!(d.campaign_trade_routes(c)[0].point_b, "B");
         assert_eq!(d.faction("REBEL").unwrap().color, Some([1, 2, 3, 4]));
         assert!(d.faction("rebel").unwrap().is_playable);
-        assert!(w.iter().any(|x| x.message.contains("gone") || x.file.contains("gone")), "{w:?}");
+        assert!(
+            w.iter()
+                .any(|x| x.message.contains("gone") || x.file.contains("gone")),
+            "{w:?}"
+        );
     }
 }

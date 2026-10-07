@@ -1,4 +1,4 @@
-﻿//! Rendering and interaction of the galactic conquest map: starfield, planets, owner halos,
+//! Rendering and interaction of the galactic conquest map: starfield, planets, owner halos,
 //! trade routes, name labels and click selection.
 
 use bevy::{
@@ -22,6 +22,7 @@ pub struct GalaxyMapPlugin;
 impl Plugin for GalaxyMapPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Selection>()
+            .init_resource::<MapScale>()
             .insert_resource(ClearColor(Color::BLACK))
             .insert_resource(GlobalAmbientLight {
                 color: Color::srgb(0.55, 0.62, 0.85),
@@ -63,9 +64,40 @@ pub fn galaxy_to_world(p: Vec3) -> Vec3 {
     Vec3::new(p.x, p.z, -p.y)
 }
 
+/// Scale of the loaded galaxy, derived from the data so any map size works.
+#[derive(Resource, Debug, Clone, Copy)]
+pub struct MapScale {
+    /// World-space radius of a planet with `size == 1.0`.
+    pub unit: f32,
+}
+
+impl Default for MapScale {
+    fn default() -> Self {
+        Self { unit: 4.5 }
+    }
+}
+
 /// World-space radius of a planet sphere.
-fn planet_radius(size: f32) -> f32 {
-    4.5 * size
+fn planet_radius(scale: &MapScale, size: f32) -> f32 {
+    scale.unit * size
+}
+
+/// Median distance from a planet to its nearest neighbour (galaxy plane), a robust density measure.
+fn median_nearest_neighbour(points: &[Vec2]) -> f32 {
+    let mut nn: Vec<f32> = points
+        .iter()
+        .enumerate()
+        .filter_map(|(i, p)| {
+            points
+                .iter()
+                .enumerate()
+                .filter(|&(j, _)| j != i)
+                .map(|(_, q)| p.distance(*q))
+                .min_by(f32::total_cmp)
+        })
+        .collect();
+    nn.sort_by(f32::total_cmp);
+    nn.get(nn.len() / 2).copied().unwrap_or(30.0)
 }
 
 /// Converts an sRGB triple to a Bevy colour.
@@ -91,7 +123,11 @@ fn setup_scene(
 ) {
     // Sun-like key light from the upper left, as in the original galaxy map.
     commands.spawn((
-        DirectionalLight { illuminance: 14_000.0, color: Color::srgb(1.0, 0.96, 0.9), ..default() },
+        DirectionalLight {
+            illuminance: 14_000.0,
+            color: Color::srgb(1.0, 0.96, 0.9),
+            ..default()
+        },
         Transform::from_xyz(-1.0, 1.4, 0.8).looking_at(Vec3::ZERO, Vec3::Y),
     ));
 
@@ -105,7 +141,18 @@ fn setup_scene(
         ..default()
     });
     commands.spawn((
-        Mesh3d(meshes.add(SphereMeshBuilder::new(8000.0, SphereKind::Uv { sectors: 64, stacks: 32 }).build())),
+        Mesh3d(
+            meshes.add(
+                SphereMeshBuilder::new(
+                    8000.0,
+                    SphereKind::Uv {
+                        sectors: 64,
+                        stacks: 32,
+                    },
+                )
+                .build(),
+            ),
+        ),
         MeshMaterial3d(sky_mat),
         Skybox,
         NoFrustumCulling,
@@ -124,29 +171,63 @@ fn spawn_galaxy(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut bounds: ResMut<CameraBounds>,
+    mut scale: ResMut<MapScale>,
 ) {
-    let planet_mesh = meshes.add(SphereMeshBuilder::new(1.0, SphereKind::Uv { sectors: 48, stacks: 24 }).build());
+    // Derive world scale from the planet density: sphere radius, camera range, label range.
+    let flat: Vec<Vec2> = view
+        .planets
+        .iter()
+        .map(|p| {
+            let w = galaxy_to_world(p.position);
+            Vec2::new(w.x, w.z)
+        })
+        .collect();
+    if flat.len() > 1 {
+        scale.unit = (0.15 * median_nearest_neighbour(&flat)).clamp(0.5, 200.0);
+    }
+    let scale = *scale;
+
+    let planet_mesh = meshes.add(
+        SphereMeshBuilder::new(
+            1.0,
+            SphereKind::Uv {
+                sectors: 48,
+                stacks: 24,
+            },
+        )
+        .build(),
+    );
     // Flat ring lying in the galaxy plane (Annulus faces +Z, rotate onto XZ).
     let ring_mesh = meshes.add(Annulus::new(1.22, 1.42));
     let thin_ring_mesh = meshes.add(Annulus::new(1.62, 1.72));
     let ring_rot = Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2);
 
     // One shared halo material per faction (+ neutral).
-    let halo_mat = |c: [f32; 3], strength: f32, alpha: f32, materials: &mut Assets<StandardMaterial>| {
-        let l = rgb(c).to_linear();
-        materials.add(StandardMaterial {
-            base_color: Color::LinearRgba(LinearRgba::new(l.red * strength, l.green * strength, l.blue * strength, alpha)),
-            unlit: true,
-            alpha_mode: AlphaMode::Blend,
-            cull_mode: None,
-            ..default()
-        })
-    };
-    let faction_halos: Vec<_> = view.factions.iter().map(|f| halo_mat(f.color, 3.0, 0.9, &mut materials)).collect();
+    let halo_mat =
+        |c: [f32; 3], strength: f32, alpha: f32, materials: &mut Assets<StandardMaterial>| {
+            let l = rgb(c).to_linear();
+            materials.add(StandardMaterial {
+                base_color: Color::LinearRgba(LinearRgba::new(
+                    l.red * strength,
+                    l.green * strength,
+                    l.blue * strength,
+                    alpha,
+                )),
+                unlit: true,
+                alpha_mode: AlphaMode::Blend,
+                cull_mode: None,
+                ..default()
+            })
+        };
+    let faction_halos: Vec<_> = view
+        .factions
+        .iter()
+        .map(|f| halo_mat(f.color, 3.0, 0.9, &mut materials))
+        .collect();
     let neutral_halo = halo_mat(NEUTRAL, 0.9, 0.35, &mut materials);
 
     for (i, planet) in view.planets.iter().enumerate() {
-        let radius = planet_radius(planet.size);
+        let radius = planet_radius(&scale, planet.size);
         let pos = galaxy_to_world(planet.position);
         let owner_c = rgb(faction_color(&view, planet.owner)).to_linear();
         let s = planet.surface_color;
@@ -161,13 +242,20 @@ fn spawn_galaxy(
             base_color: base,
             perceptual_roughness: 0.75,
             emissive: if planet.owner.is_some() {
-                LinearRgba::new(owner_c.red * 0.05, owner_c.green * 0.05, owner_c.blue * 0.05, 1.0)
+                LinearRgba::new(
+                    owner_c.red * 0.05,
+                    owner_c.green * 0.05,
+                    owner_c.blue * 0.05,
+                    1.0,
+                )
             } else {
                 LinearRgba::BLACK
             },
             ..default()
         });
-        let halo = planet.owner.map_or(neutral_halo.clone(), |o| faction_halos[o].clone());
+        let halo = planet
+            .owner
+            .map_or(neutral_halo.clone(), |o| faction_halos[o].clone());
 
         commands
             .spawn((
@@ -177,18 +265,32 @@ fn spawn_galaxy(
             ))
             .with_children(|p| {
                 // Child scale inherits the planet radius, so ring radii are relative to it.
-                p.spawn((Mesh3d(ring_mesh.clone()), MeshMaterial3d(halo.clone()), Transform::from_rotation(ring_rot)));
+                p.spawn((
+                    Mesh3d(ring_mesh.clone()),
+                    MeshMaterial3d(halo.clone()),
+                    Transform::from_rotation(ring_rot),
+                ));
                 if planet.owner.is_some() {
-                    p.spawn((Mesh3d(thin_ring_mesh.clone()), MeshMaterial3d(halo), Transform::from_rotation(ring_rot)));
+                    p.spawn((
+                        Mesh3d(thin_ring_mesh.clone()),
+                        MeshMaterial3d(halo),
+                        Transform::from_rotation(ring_rot),
+                    ));
                 }
             });
 
         // Name label (positioned every frame in screen space).
         commands.spawn((
             Text::new(planet.display_name.clone()),
-            TextFont { font_size: FontSize::Px(14.0), ..default() },
+            TextFont {
+                font_size: FontSize::Px(14.0),
+                ..default()
+            },
             TextColor(Color::srgba(0.85, 0.92, 1.0, 0.95)),
-            Node { position_type: PositionType::Absolute, ..default() },
+            Node {
+                position_type: PositionType::Absolute,
+                ..default()
+            },
             Visibility::Hidden,
             PlanetLabel(i),
         ));
@@ -218,8 +320,13 @@ fn spawn_galaxy(
             min = min.min(Vec2::new(w.x, w.z));
             max = max.max(Vec2::new(w.x, w.z));
         }
-        bounds.min = min - Vec2::splat(20.0);
-        bounds.max = max + Vec2::splat(20.0);
+        let margin = Vec2::splat(scale.unit * 4.0);
+        bounds.min = min - margin;
+        bounds.max = max + margin;
+        let extent = (max - min).max_element().max(scale.unit * 10.0);
+        bounds.min_distance = scale.unit * 9.0;
+        bounds.max_distance = extent * 1.6;
+        bounds.initial_distance = extent * 1.15;
         bounds.dirty = true;
     }
 }
@@ -227,15 +334,19 @@ fn spawn_galaxy(
 /// Hides/positions the label of each planet below its sphere.
 fn update_labels(
     view: Res<GalaxyView>,
+    scale: Res<MapScale>,
+    bounds: Res<CameraBounds>,
+    selection: Res<Selection>,
     camera: Single<(&Camera, &GlobalTransform, &GalaxyCamera)>,
     mut labels: Query<(&PlanetLabel, &mut Node, &mut Visibility, &ComputedNode)>,
 ) {
     let (camera, cam_tf, orbit) = *camera;
     // Labels fade out of existence when zoomed far out to avoid clutter.
-    let show = orbit.distance < 560.0;
+    let show_all = orbit.distance < bounds.max_distance * 0.85;
     for (label, mut node, mut vis, computed) in &mut labels {
         let planet = &view.planets[label.0];
-        let radius = planet_radius(planet.size);
+        let show = show_all || selection.0 == Some(label.0);
+        let radius = planet_radius(&scale, planet.size);
         let below = galaxy_to_world(planet.position) + Vec3::new(0.0, 0.0, radius * 1.9);
         let screen = camera.world_to_viewport(cam_tf, below).ok();
         match (show, screen) {
@@ -254,6 +365,7 @@ fn update_labels(
 fn update_selection_ring(
     time: Res<Time>,
     view: Res<GalaxyView>,
+    scale: Res<MapScale>,
     selection: Res<Selection>,
     mut ring: Single<(&mut Transform, &mut Visibility), With<SelectionRing>>,
 ) {
@@ -262,7 +374,7 @@ fn update_selection_ring(
         Some(p) => {
             let pulse = 1.0 + 0.06 * (time.elapsed_secs() * 3.0).sin();
             tf.translation = galaxy_to_world(p.position);
-            tf.scale = Vec3::splat(planet_radius(p.size) * pulse);
+            tf.scale = Vec3::splat(planet_radius(&scale, p.size) * pulse);
             **vis = Visibility::Visible;
         }
         None => **vis = Visibility::Hidden,
@@ -272,15 +384,32 @@ fn update_selection_ring(
 /// Draws all trade routes as glowing lines, coloured by the owners of both ends.
 fn draw_routes(view: Res<GalaxyView>, mut gizmos: Gizmos) {
     for r in &view.routes {
-        let (Some(a), Some(b)) = (view.planets.get(r.a), view.planets.get(r.b)) else { continue };
+        let (Some(a), Some(b)) = (view.planets.get(r.a), view.planets.get(r.b)) else {
+            continue;
+        };
         let (ca, cb) = (faction_color(&view, a.owner), faction_color(&view, b.owner));
         // Same owner -> faction glow, otherwise a dim neutral blue.
         let c = if a.owner.is_some() && a.owner == b.owner {
             let l = rgb(ca).to_linear();
-            Color::LinearRgba(LinearRgba::new(l.red * 2.2, l.green * 2.2, l.blue * 2.2, 0.9))
+            Color::LinearRgba(LinearRgba::new(
+                l.red * 2.2,
+                l.green * 2.2,
+                l.blue * 2.2,
+                0.9,
+            ))
         } else {
-            let l = rgb([(ca[0] + cb[0]) * 0.25, (ca[1] + cb[1]) * 0.25, (ca[2] + cb[2]) * 0.25]).to_linear();
-            Color::LinearRgba(LinearRgba::new(l.red * 1.2 + 0.04, l.green * 1.2 + 0.07, l.blue * 1.2 + 0.12, 0.7))
+            let l = rgb([
+                (ca[0] + cb[0]) * 0.25,
+                (ca[1] + cb[1]) * 0.25,
+                (ca[2] + cb[2]) * 0.25,
+            ])
+            .to_linear();
+            Color::LinearRgba(LinearRgba::new(
+                l.red * 1.2 + 0.04,
+                l.green * 1.2 + 0.07,
+                l.blue * 1.2 + 0.12,
+                0.7,
+            ))
         };
         gizmos.line(galaxy_to_world(a.position), galaxy_to_world(b.position), c);
     }
@@ -293,10 +422,13 @@ fn pick_planet(
     window: Single<&Window, With<PrimaryWindow>>,
     camera: Single<(&Camera, &GlobalTransform)>,
     view: Res<GalaxyView>,
+    scale: Res<MapScale>,
     mut selection: ResMut<Selection>,
     mut press: Local<Option<Vec2>>,
 ) {
-    let Some(cursor) = window.cursor_position() else { return };
+    let Some(cursor) = window.cursor_position() else {
+        return;
+    };
     if buttons.just_pressed(MouseButton::Left) {
         *press = Some(cursor);
     }
@@ -308,14 +440,16 @@ fn pick_planet(
         return;
     }
     let (camera, cam_tf) = *camera;
-    let Ok(ray) = camera.viewport_to_world(cam_tf, cursor) else { return };
+    let Ok(ray) = camera.viewport_to_world(cam_tf, cursor) else {
+        return;
+    };
     let cam_pos = cam_tf.translation();
 
     let mut best: Option<(usize, f32)> = None;
     for (i, p) in view.planets.iter().enumerate() {
         let center = galaxy_to_world(p.position);
         // Generous pick radius that never gets smaller than a few pixels on screen.
-        let r = (planet_radius(p.size) * 1.5).max(center.distance(cam_pos) * 0.012);
+        let r = (planet_radius(&scale, p.size) * 1.5).max(center.distance(cam_pos) * 0.012);
         if let Some(t) = ray_sphere(ray.origin, *ray.direction, center, r)
             && best.is_none_or(|(_, bt)| t < bt)
         {
@@ -335,7 +469,9 @@ fn ray_sphere(origin: Vec3, dir: Vec3, center: Vec3, radius: f32) -> Option<f32>
         return None;
     }
     let t = -b - disc.sqrt();
-    (t >= 0.0).then_some(t).or_else(|| (-b + disc.sqrt() >= 0.0).then_some(0.0))
+    (t >= 0.0)
+        .then_some(t)
+        .or_else(|| (-b + disc.sqrt() >= 0.0).then_some(0.0))
 }
 
 /// Keeps the sky sphere centred on the camera so it never parallaxes.
@@ -370,7 +506,9 @@ fn make_starfield(width: u32, height: u32) -> Image {
         for x in 0..w {
             let u = x as f32 / w as f32;
             let n = ((sample(u, v) - 0.5) * 2.0).max(0.0).powf(1.8);
-            let m = ((sample((u * 2.0 + 0.37) % 1.0, 1.0 - v) - 0.5) * 2.0).max(0.0).powf(1.8);
+            let m = ((sample((u * 2.0 + 0.37) % 1.0, 1.0 - v) - 0.5) * 2.0)
+                .max(0.0)
+                .powf(1.8);
             let i = (y * w + x) * 4;
             data[i] = (n * 22.0 + m * 6.0) as u8;
             data[i + 1] = (n * 10.0 + m * 12.0) as u8;
@@ -405,7 +543,11 @@ fn make_starfield(width: u32, height: u32) -> Image {
     }
 
     Image::new(
-        Extent3d { width, height, depth_or_array_layers: 1 },
+        Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
         TextureDimension::D2,
         data,
         TextureFormat::Rgba8UnormSrgb,

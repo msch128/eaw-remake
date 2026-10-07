@@ -1,4 +1,4 @@
-﻿//! Decoupled view model of the galactic conquest map.
+//! Decoupled view model of the galactic conquest map.
 //!
 //! The renderer, camera, UI and picking code only ever read a [`GalaxyView`]. Real game data
 //! (parsed from the Empire at War XML by `alamo-data`) is mapped into these plain types, so the
@@ -84,9 +84,18 @@ impl GalaxyView {
         const BARREN: [f32; 3] = [0.55, 0.50, 0.46];
 
         let factions = vec![
-            FactionView { name: "Galactic Empire".into(), color: [0.30, 0.85, 0.45] },
-            FactionView { name: "Rebel Alliance".into(), color: [1.00, 0.28, 0.22] },
-            FactionView { name: "Underworld".into(), color: [1.00, 0.72, 0.15] },
+            FactionView {
+                name: "Galactic Empire".into(),
+                color: [0.30, 0.85, 0.45],
+            },
+            FactionView {
+                name: "Rebel Alliance".into(),
+                color: [1.00, 0.28, 0.22],
+            },
+            FactionView {
+                name: "Underworld".into(),
+                color: [1.00, 0.72, 0.15],
+            },
         ];
 
         // (id, name, x, y, z, owner, income, size, surface)
@@ -136,15 +145,17 @@ impl GalaxyView {
 
         let planets: Vec<PlanetView> = raw
             .iter()
-            .map(|&(id, name, x, y, z, owner, income, size, surface)| PlanetView {
-                id: id.to_owned(),
-                display_name: name.to_owned(),
-                position: Vec3::new(x, y, z),
-                owner,
-                income,
-                size,
-                surface_color: surface,
-            })
+            .map(
+                |&(id, name, x, y, z, owner, income, size, surface)| PlanetView {
+                    id: id.to_owned(),
+                    display_name: name.to_owned(),
+                    position: Vec3::new(x, y, z),
+                    owner,
+                    income,
+                    size,
+                    surface_color: surface,
+                },
+            )
             .collect();
 
         #[rustfmt::skip]
@@ -171,10 +182,19 @@ impl GalaxyView {
         let find = |id: &str| planets.iter().position(|p| p.id == id);
         let routes = route_names
             .iter()
-            .filter_map(|&(a, b)| Some(RouteView { a: find(a)?, b: find(b)? }))
+            .filter_map(|&(a, b)| {
+                Some(RouteView {
+                    a: find(a)?,
+                    b: find(b)?,
+                })
+            })
             .collect();
 
-        Self { planets, routes, factions }
+        Self {
+            planets,
+            routes,
+            factions,
+        }
     }
 }
 
@@ -188,7 +208,15 @@ mod tests {
         assert!(g.planets.len() >= 40);
         // every route name resolved
         assert_eq!(g.routes.len(), 54);
-        assert!(g.routes.iter().all(|r| r.a < g.planets.len() && r.b < g.planets.len() && r.a != r.b));
-        assert!(g.planets.iter().all(|p| p.owner.is_none_or(|o| o < g.factions.len())));
+        assert!(
+            g.routes
+                .iter()
+                .all(|r| r.a < g.planets.len() && r.b < g.planets.len() && r.a != r.b)
+        );
+        assert!(
+            g.planets
+                .iter()
+                .all(|p| p.owner.is_none_or(|o| o < g.factions.len()))
+        );
     }
 }

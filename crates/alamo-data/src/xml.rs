@@ -1,4 +1,4 @@
-﻿//! Lenient XML reader for Alamo engine data files.
+//! Lenient XML reader for Alamo engine data files.
 //!
 //! The original engine's XML parser is very forgiving and mod authors rely on that: comments
 //! containing `--`, stray `&`, duplicate attributes, mismatched tag case, unclosed or stray end
@@ -23,7 +23,11 @@ pub struct Warning {
 
 impl Warning {
     pub(crate) fn new(file: &str, line: u32, message: impl Into<String>) -> Self {
-        Self { file: file.to_string(), line, message: message.into() }
+        Self {
+            file: file.to_string(),
+            line,
+            message: message.into(),
+        }
     }
 }
 
@@ -42,6 +46,8 @@ impl fmt::Display for Warning {
 pub struct Element {
     /// Lower-cased tag name.
     pub name: String,
+    /// Tag name with the original capitalization.
+    pub raw_name: String,
     /// Attributes as `(lower-cased name, value)`. Duplicates are dropped (first wins).
     pub attrs: Vec<(String, String)>,
     /// Child elements in document order.
@@ -55,7 +61,10 @@ pub struct Element {
 impl Element {
     /// Returns the attribute value for the (lower-case) attribute `name`.
     pub fn attr(&self, name: &str) -> Option<&str> {
-        self.attrs.iter().find(|(k, _)| k == name).map(|(_, v)| v.as_str())
+        self.attrs
+            .iter()
+            .find(|(k, _)| k == name)
+            .map(|(_, v)| v.as_str())
     }
 
     /// First child element named `name` (lower-case).
@@ -104,7 +113,12 @@ fn decode_utf16(bytes: &[u8], conv: fn([u8; 2]) -> u16) -> String {
 /// tab/newline/carriage return, and (embedded) byte order marks.
 pub fn sanitize(text: &str) -> String {
     text.chars()
-        .filter(|&c| c == '\t' || c == '\n' || c == '\r' || (c >= ' ' && c != '\u{FEFF}' && c != '\u{FFFE}' && c != '\u{FFFF}'))
+        .filter(|&c| {
+            c == '\t'
+                || c == '\n'
+                || c == '\r'
+                || (c >= ' ' && c != '\u{FEFF}' && c != '\u{FFFE}' && c != '\u{FFFF}')
+        })
         .collect()
 }
 
@@ -157,7 +171,13 @@ struct Lines(Vec<usize>);
 
 impl Lines {
     fn new(s: &str) -> Self {
-        Self(s.bytes().enumerate().filter(|&(_, b)| b == b'\n').map(|(i, _)| i).collect())
+        Self(
+            s.bytes()
+                .enumerate()
+                .filter(|&(_, b)| b == b'\n')
+                .map(|(i, _)| i)
+                .collect(),
+        )
     }
 
     fn line(&self, offset: usize) -> u32 {
@@ -182,7 +202,10 @@ pub fn parse_str(s: &str, file: &str, warnings: &mut Vec<Warning>) -> Option<Ele
     let n = s.len();
     let mut i = 0;
     // stack[0] is a virtual document element holding the top-level elements.
-    let mut stack: Vec<Element> = vec![Element { name: "#document".into(), ..Element::default() }];
+    let mut stack: Vec<Element> = vec![Element {
+        name: "#document".into(),
+        ..Element::default()
+    }];
 
     while i < n {
         let rest = &s[i..];
@@ -195,7 +218,11 @@ pub fn parse_str(s: &str, file: &str, warnings: &mut Vec<Warning>) -> Option<Ele
             match body.find("-->") {
                 Some(e) => i += 4 + e + 3,
                 None => {
-                    warnings.push(Warning::new(file, lines.line(i), "unterminated comment, ignoring rest of file"));
+                    warnings.push(Warning::new(
+                        file,
+                        lines.line(i),
+                        "unterminated comment, ignoring rest of file",
+                    ));
                     i = n;
                 }
             }
@@ -204,7 +231,11 @@ pub fn parse_str(s: &str, file: &str, warnings: &mut Vec<Warning>) -> Option<Ele
                 Some(e) => (&cdata[..e], 9 + e + 3),
                 None => (cdata, rest.len()),
             };
-            stack.last_mut().expect("document element").text.push_str(body);
+            stack
+                .last_mut()
+                .expect("document element")
+                .text
+                .push_str(body);
             i += adv;
         } else if rest.starts_with("<?") {
             i += rest.find("?>").map_or(rest.len(), |e| e + 2);
@@ -212,7 +243,9 @@ pub fn parse_str(s: &str, file: &str, warnings: &mut Vec<Warning>) -> Option<Ele
             i += rest.find('>').map_or(rest.len(), |e| e + 1);
         } else if let Some(close) = rest.strip_prefix("</") {
             let end = close.find('>');
-            let name = close[..end.unwrap_or(close.len())].trim().to_ascii_lowercase();
+            let name = close[..end.unwrap_or(close.len())]
+                .trim()
+                .to_ascii_lowercase();
             i += 2 + end.map_or(close.len(), |e| e + 1);
             close_element(&mut stack, &name, file, lines.line(i), warnings);
         } else if rest[1..].chars().next().is_some_and(is_name_start) {
@@ -228,39 +261,83 @@ pub fn parse_str(s: &str, file: &str, warnings: &mut Vec<Warning>) -> Option<Ele
         warnings.push(Warning::new(
             file,
             stack.last().map_or(0, |e| e.line),
-            format!("unclosed <{}> at end of file", stack.last().map_or("", |e| e.name.as_str())),
+            format!(
+                "unclosed <{}> at end of file",
+                stack.last().map_or("", |e| e.name.as_str())
+            ),
         ));
     }
     while stack.len() > 1 {
         let done = stack.pop().expect("non-empty");
-        stack.last_mut().expect("document element").children.push(done);
+        stack
+            .last_mut()
+            .expect("document element")
+            .children
+            .push(done);
     }
     let mut doc = stack.pop().expect("document element");
     if doc.children.len() > 1 {
-        warnings.push(Warning::new(file, doc.children[1].line, "multiple top-level elements, using the first"));
+        warnings.push(Warning::new(
+            file,
+            doc.children[1].line,
+            "multiple top-level elements, using the first",
+        ));
     }
-    if doc.children.is_empty() { None } else { Some(doc.children.swap_remove(0)) }
+    if doc.children.is_empty() {
+        None
+    } else {
+        Some(doc.children.swap_remove(0))
+    }
 }
 
 /// Handles `</name>`: closes the nearest matching open element, implicitly closing any
 /// elements opened inside it; ignores end tags that match nothing.
-fn close_element(stack: &mut Vec<Element>, name: &str, file: &str, line: u32, warnings: &mut Vec<Warning>) {
-    let Some(pos) = stack.iter().rposition(|e| e.name == name).filter(|&p| p > 0) else {
+fn close_element(
+    stack: &mut Vec<Element>,
+    name: &str,
+    file: &str,
+    line: u32,
+    warnings: &mut Vec<Warning>,
+) {
+    let Some(pos) = stack
+        .iter()
+        .rposition(|e| e.name == name)
+        .filter(|&p| p > 0)
+    else {
         warnings.push(Warning::new(file, line, format!("stray end tag </{name}>")));
         return;
     };
     while stack.len() > pos + 1 {
         let done = stack.pop().expect("non-empty");
-        warnings.push(Warning::new(file, done.line, format!("<{}> not closed before </{name}>", done.name)));
-        stack.last_mut().expect("document element").children.push(done);
+        warnings.push(Warning::new(
+            file,
+            done.line,
+            format!("<{}> not closed before </{name}>", done.name),
+        ));
+        stack
+            .last_mut()
+            .expect("document element")
+            .children
+            .push(done);
     }
     let done = stack.pop().expect("non-empty");
-    stack.last_mut().expect("document element").children.push(done);
+    stack
+        .last_mut()
+        .expect("document element")
+        .children
+        .push(done);
 }
 
 /// Parses a start tag at the beginning of `rest` (which starts with `<`), pushes the element
 /// and returns the number of bytes consumed.
-fn parse_open_tag(rest: &str, offset: usize, lines: &Lines, file: &str, warnings: &mut Vec<Warning>, stack: &mut Vec<Element>) -> usize {
+fn parse_open_tag(
+    rest: &str,
+    offset: usize,
+    lines: &Lines,
+    file: &str,
+    warnings: &mut Vec<Warning>,
+    stack: &mut Vec<Element>,
+) -> usize {
     let line = lines.line(offset);
     let bytes = rest.as_bytes();
     let n = rest.len();
@@ -268,7 +345,12 @@ fn parse_open_tag(rest: &str, offset: usize, lines: &Lines, file: &str, warnings
     let name_end = rest[1..]
         .find(|c: char| c.is_whitespace() || c == '/' || c == '>' || c == '<')
         .map_or(n, |e| e + 1);
-    let mut el = Element { name: rest[1..name_end].to_ascii_lowercase(), line, ..Element::default() };
+    let mut el = Element {
+        name: rest[1..name_end].to_ascii_lowercase(),
+        raw_name: rest[1..name_end].to_string(),
+        line,
+        ..Element::default()
+    };
     p = p.max(name_end);
     let mut self_closing = false;
 
@@ -277,7 +359,11 @@ fn parse_open_tag(rest: &str, offset: usize, lines: &Lines, file: &str, warnings
             p += 1;
         }
         if p >= n {
-            warnings.push(Warning::new(file, line, format!("unterminated start tag <{}>", el.name)));
+            warnings.push(Warning::new(
+                file,
+                line,
+                format!("unterminated start tag <{}>", el.name),
+            ));
             break;
         }
         match bytes[p] {
@@ -294,7 +380,11 @@ fn parse_open_tag(rest: &str, offset: usize, lines: &Lines, file: &str, warnings
                 }
             }
             b'<' => {
-                warnings.push(Warning::new(file, line, format!("start tag <{}> not terminated before next tag", el.name)));
+                warnings.push(Warning::new(
+                    file,
+                    line,
+                    format!("start tag <{}> not terminated before next tag", el.name),
+                ));
                 break;
             }
             _ => {
@@ -319,7 +409,9 @@ fn parse_open_tag(rest: &str, offset: usize, lines: &Lines, file: &str, warnings
                         value = decode_entities(&rest[start..end]);
                         p = (end + 1).min(n);
                     } else {
-                        let end = rest[p..].find(|c: char| c.is_whitespace() || c == '>').map_or(n, |e| p + e);
+                        let end = rest[p..]
+                            .find(|c: char| c.is_whitespace() || c == '>')
+                            .map_or(n, |e| p + e);
                         value = decode_entities(&rest[p..end]);
                         p = end;
                     }
@@ -327,7 +419,11 @@ fn parse_open_tag(rest: &str, offset: usize, lines: &Lines, file: &str, warnings
                 if key.is_empty() {
                     p += 1; // Avoid looping forever on junk like `="x"`.
                 } else if el.attrs.iter().any(|(k, _)| *k == key) {
-                    warnings.push(Warning::new(file, line, format!("duplicate attribute '{key}' on <{}>", el.name)));
+                    warnings.push(Warning::new(
+                        file,
+                        line,
+                        format!("duplicate attribute '{key}' on <{}>", el.name),
+                    ));
                 } else {
                     el.attrs.push((key, value));
                 }
@@ -336,16 +432,20 @@ fn parse_open_tag(rest: &str, offset: usize, lines: &Lines, file: &str, warnings
     }
 
     if self_closing {
-        stack.last_mut().expect("document element").children.push(el);
+        stack
+            .last_mut()
+            .expect("document element")
+            .children
+            .push(el);
     } else {
         stack.push(el);
     }
     p
 }
 
-/// Splits a value like `"A, B C;D"` into tokens on commas, semicolons and whitespace.
+/// Splits a value like `"A, B C;D|E"` into tokens on commas, semicolons, `|` and whitespace.
 pub fn split_list(s: &str) -> Vec<String> {
-    s.split(|c: char| c == ',' || c == ';' || c.is_whitespace())
+    s.split(|c: char| matches!(c, ',' | ';' | '|') || c.is_whitespace())
         .filter(|t| !t.is_empty())
         .map(str::to_string)
         .collect()
@@ -353,12 +453,18 @@ pub fn split_list(s: &str) -> Vec<String> {
 
 /// Parses an Alamo boolean (`yes`/`true`/`1` are true, anything else false).
 pub fn parse_bool(s: &str) -> bool {
-    matches!(s.trim().to_ascii_lowercase().as_str(), "yes" | "true" | "1" | "on")
+    matches!(
+        s.trim().to_ascii_lowercase().as_str(),
+        "yes" | "true" | "1" | "on"
+    )
 }
 
 /// Parses a comma/space separated list of floats; unparsable items become 0.
 pub fn parse_floats(s: &str) -> Vec<f32> {
-    split_list(s).iter().map(|t| t.parse().unwrap_or(0.0)).collect()
+    split_list(s)
+        .iter()
+        .map(|t| t.parse().unwrap_or(0.0))
+        .collect()
 }
 
 #[cfg(test)]
@@ -373,7 +479,9 @@ mod tests {
 
     #[test]
     fn basic_and_case_insensitive() {
-        let (e, w) = p("<?xml version=\"1.0\"?>\n<Root><Planet Name=\"A\"><X_Y> 1, 2 </x_y></Planet></ROOT>");
+        let (e, w) = p(
+            "<?xml version=\"1.0\"?>\n<Root><Planet Name=\"A\"><X_Y> 1, 2 </x_y></Planet></ROOT>",
+        );
         let e = e.unwrap();
         assert!(w.is_empty(), "{w:?}");
         assert_eq!(e.name, "root");
@@ -403,7 +511,10 @@ mod tests {
     fn mismatched_and_trailing_garbage() {
         let (e, w) = p("\u{FEFF}<a><b>x<c>y</b>z</a> trailing </junk> <");
         let e = e.unwrap();
-        assert_eq!(e.child("b").unwrap().child("c").unwrap().text_trimmed(), "y");
+        assert_eq!(
+            e.child("b").unwrap().child("c").unwrap().text_trimmed(),
+            "y"
+        );
         assert!(!w.is_empty());
     }
 

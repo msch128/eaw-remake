@@ -28,7 +28,11 @@ fn main() {
         warnings.len()
     );
     for c in &data.campaigns {
-        let title = c.text_id.as_deref().and_then(|id| data.text(id)).unwrap_or("-");
+        let title = c
+            .text_id
+            .as_deref()
+            .and_then(|id| data.text(id))
+            .unwrap_or("-");
         println!(
             "  {:<40} set={:<12} locations={:<4} routes={:<4} title={title}",
             c.name,
@@ -40,7 +44,11 @@ fn main() {
 
     let campaign = match &wanted {
         Some(n) => data.campaign(n),
-        None => data.campaigns.iter().filter(|c| c.has_galaxy()).max_by_key(|c| c.locations.len()),
+        None => data
+            .campaigns
+            .iter()
+            .filter(|c| c.has_galaxy())
+            .max_by_key(|c| c.locations.len()),
     };
     let Some(c) = campaign else {
         println!("no matching campaign with a galaxy");
@@ -49,9 +57,22 @@ fn main() {
     let planets = data.campaign_planets(c);
     let real: Vec<_> = planets.iter().filter(|p| p.is_real_planet()).collect();
     let routes = data.campaign_trade_routes(c);
-    println!("\nCampaign {} (active player: {})", c.name, c.starting_active_player.as_deref().unwrap_or("-"));
-    println!("  locations: {} listed, {} resolved, {} real planets", c.locations.len(), planets.len(), real.len());
-    println!("  trade routes: {} listed, {} resolved", c.trade_routes.len(), routes.len());
+    println!(
+        "\nCampaign {} (active player: {})",
+        c.name,
+        c.starting_active_player.as_deref().unwrap_or("-")
+    );
+    println!(
+        "  locations: {} listed, {} resolved, {} real planets",
+        c.locations.len(),
+        planets.len(),
+        real.len()
+    );
+    println!(
+        "  trade routes: {} listed, {} resolved",
+        c.trade_routes.len(),
+        routes.len()
+    );
     println!("  factions:");
     for f in &c.factions {
         println!(
@@ -80,12 +101,17 @@ fn main() {
     }
     println!("  sample routes:");
     for r in routes.iter().take(5) {
-        println!("    {:<8} {} <-> {} (speed {})", r.name, r.point_a, r.point_b, r.hs_speed_factor);
+        println!(
+            "    {:<8} {} <-> {} (speed {})",
+            r.name, r.point_a, r.point_b, r.hs_speed_factor
+        );
     }
 
     let mut counts: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
     for w in &warnings {
-        *counts.entry(w.message.split(['\'', '<']).next().unwrap_or("")).or_default() += 1;
+        *counts
+            .entry(w.message.split(['\'', '<']).next().unwrap_or(""))
+            .or_default() += 1;
     }
     println!("\nwarning kinds:");
     for (k, n) in counts {

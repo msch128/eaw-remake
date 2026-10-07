@@ -1,4 +1,4 @@
-﻿//! Reader for Alamo `.dat` string tables (`MasterTextFile_ENGLISH.DAT` and friends).
+//! Reader for Alamo `.dat` string tables (`MasterTextFile_ENGLISH.DAT` and friends).
 //!
 //! Layout (all integers little endian `u32`):
 //! `count`, then `count` entries of `(crc, value_len, key_len)`, then all values as UTF-16LE
@@ -56,7 +56,10 @@ impl TextTable {
                 .ok_or(TextError::Truncated)
         };
         let count = u32_at(0)?;
-        let header_end = count.checked_mul(12).and_then(|v| v.checked_add(4)).ok_or(TextError::Truncated)?;
+        let header_end = count
+            .checked_mul(12)
+            .and_then(|v| v.checked_add(4))
+            .ok_or(TextError::Truncated)?;
         if header_end > data.len() {
             return Err(TextError::Truncated);
         }
@@ -70,11 +73,18 @@ impl TextTable {
         let mut kpos = vpos.checked_add(values_len).ok_or(TextError::Truncated)?;
         let mut map = HashMap::with_capacity(count);
         for (vlen, klen) in entries {
-            let vbytes = data.get(vpos..vpos + vlen * 2).ok_or(TextError::Truncated)?;
+            let vbytes = data
+                .get(vpos..vpos + vlen * 2)
+                .ok_or(TextError::Truncated)?;
             let kbytes = data.get(kpos..kpos + klen).ok_or(TextError::Truncated)?;
             vpos += vlen * 2;
             kpos += klen;
-            let units: Vec<u16> = vbytes.as_chunks::<2>().0.iter().map(|&c| u16::from_le_bytes(c)).collect();
+            let units: Vec<u16> = vbytes
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|&c| u16::from_le_bytes(c))
+                .collect();
             let value = String::from_utf16_lossy(&units);
             let key: String = kbytes.iter().map(|&b| b as char).collect();
             map.entry(key.to_ascii_uppercase()).or_insert(value);
@@ -135,7 +145,12 @@ mod tests {
 
     #[test]
     fn parses_table() {
-        let t = TextTable::parse(&build(&[("TEXT_A", "Alpha"), ("Text_B", "B\u{e9}ta \u{1F600}"), ("EMPTY", "")])).unwrap();
+        let t = TextTable::parse(&build(&[
+            ("TEXT_A", "Alpha"),
+            ("Text_B", "B\u{e9}ta \u{1F600}"),
+            ("EMPTY", ""),
+        ]))
+        .unwrap();
         assert_eq!(t.len(), 3);
         assert_eq!(t.get("text_a"), Some("Alpha"));
         assert_eq!(t.get(" TEXT_B "), Some("B\u{e9}ta \u{1F600}"));
@@ -149,7 +164,10 @@ mod tests {
         let mut d = build(&[("K", "value")]);
         d.truncate(d.len() - 1);
         assert!(matches!(TextTable::parse(&d), Err(TextError::Truncated)));
-        assert!(matches!(TextTable::parse(&[1, 0]), Err(TextError::Truncated)));
+        assert!(matches!(
+            TextTable::parse(&[1, 0]),
+            Err(TextError::Truncated)
+        ));
         assert!(TextTable::parse(&[0, 0, 0, 0]).unwrap().is_empty());
     }
 }

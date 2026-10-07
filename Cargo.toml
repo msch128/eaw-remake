@@ -3,6 +3,7 @@ resolver = "3"
 members = [
     "crates/alamo-fs",
     "crates/alamo-data",
+    "crates/alamo-model",
     "crates/space-peace",
 ]
 
@@ -21,4 +22,5 @@ opt-level = 3
 [profile.release]
 lto = "thin"
 codegen-units = 1
+
 

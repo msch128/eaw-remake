@@ -16,6 +16,16 @@ pub struct Args {
     pub no_vsync: bool,
     /// Start in borderless fullscreen (`--fullscreen`).
     pub fullscreen: bool,
+    /// Game root directory override (`--game-dir <path>`).
+    pub game_dir: Option<PathBuf>,
+    /// Workshop mod id (`--mod <id>`).
+    pub mod_id: Option<String>,
+    /// Campaign to display (`--campaign <name>`).
+    pub campaign: Option<String>,
+    /// Print the galaxy campaigns and exit (`--list-campaigns`).
+    pub list_campaigns: bool,
+    /// Use the built-in demo galaxy even if a game install exists (`--demo`).
+    pub demo: bool,
 }
 
 impl Default for Args {
@@ -26,6 +36,11 @@ impl Default for Args {
             music_volume: 0.5,
             no_vsync: false,
             fullscreen: false,
+            game_dir: None,
+            mod_id: None,
+            campaign: None,
+            list_campaigns: false,
+            demo: false,
         }
     }
 }
@@ -39,6 +54,11 @@ OPTIONS:
   --music-dir <dir>      Play shuffled mp3 files from this directory
   --music-prefix <name>  Only play files starting with this prefix (e.g. GC_)
   --music-volume <0..1>  Master music volume (default 0.5)
+  --game-dir <path>      Empire at War root (default: auto-detect / EAW_GAME_DIR)
+  --mod <id>             Workshop mod id (default 1770851727)
+  --campaign <name>      Galactic conquest campaign (default GC_Full_Web_Way_Rebel)
+  --list-campaigns       List galaxy campaigns and exit
+  --demo                 Use the built-in demo galaxy
   --no-vsync             Disable vertical sync
   --fullscreen           Start in borderless fullscreen
   -h, --help             Show this help
@@ -62,12 +82,26 @@ impl Args {
         let mut it = args.into_iter();
         while let Some(arg) = it.next() {
             match arg.as_str() {
-                "--music-dir" => out.music_dir = Some(it.next().ok_or("--music-dir needs a value")?.into()),
-                "--music-prefix" => out.music_prefix = Some(it.next().ok_or("--music-prefix needs a value")?),
+                "--music-dir" => {
+                    out.music_dir = Some(it.next().ok_or("--music-dir needs a value")?.into())
+                }
+                "--music-prefix" => {
+                    out.music_prefix = Some(it.next().ok_or("--music-prefix needs a value")?)
+                }
                 "--music-volume" => {
                     let v = it.next().ok_or("--music-volume needs a value")?;
-                    out.music_volume = v.parse::<f32>().map_err(|e| format!("bad --music-volume: {e}"))?.clamp(0.0, 1.0);
+                    out.music_volume = v
+                        .parse::<f32>()
+                        .map_err(|e| format!("bad --music-volume: {e}"))?
+                        .clamp(0.0, 1.0);
                 }
+                "--game-dir" => {
+                    out.game_dir = Some(it.next().ok_or("--game-dir needs a value")?.into())
+                }
+                "--mod" => out.mod_id = Some(it.next().ok_or("--mod needs a value")?),
+                "--campaign" => out.campaign = Some(it.next().ok_or("--campaign needs a value")?),
+                "--list-campaigns" => out.list_campaigns = true,
+                "--demo" => out.demo = true,
                 "--no-vsync" => out.no_vsync = true,
                 "--fullscreen" => out.fullscreen = true,
                 "-h" | "--help" => return Err(String::new()),

@@ -27,13 +27,26 @@ pub struct CameraBounds {
     pub min: Vec2,
     /// Maximum focus corner (x, z).
     pub max: Vec2,
+    /// Closest allowed camera distance.
+    pub min_distance: f32,
+    /// Farthest allowed camera distance.
+    pub max_distance: f32,
+    /// Distance used when (re)framing the galaxy.
+    pub initial_distance: f32,
     /// Set whenever the bounds change so the camera can re-frame the galaxy.
     pub dirty: bool,
 }
 
 impl Default for CameraBounds {
     fn default() -> Self {
-        Self { min: Vec2::splat(-100.0), max: Vec2::splat(100.0), dirty: true }
+        Self {
+            min: Vec2::splat(-100.0),
+            max: Vec2::splat(100.0),
+            min_distance: 40.0,
+            max_distance: 650.0,
+            initial_distance: 400.0,
+            dirty: true,
+        }
     }
 }
 
@@ -54,8 +67,6 @@ pub struct GalaxyCamera {
     pub pitch: f32,
 }
 
-const MIN_DISTANCE: f32 = 40.0;
-const MAX_DISTANCE: f32 = 650.0;
 const ZOOM_STEP: f32 = 0.88;
 const ZOOM_SMOOTH: f32 = 12.0;
 const PAN_SMOOTH: f32 = 14.0;
@@ -67,7 +78,10 @@ fn spawn_camera(mut commands: Commands) {
         Camera3d::default(),
         Hdr,
         Tonemapping::TonyMcMapface,
-        Bloom { intensity: 0.22, ..Bloom::NATURAL },
+        Bloom {
+            intensity: 0.22,
+            ..Bloom::NATURAL
+        },
         Projection::Perspective(PerspectiveProjection {
             fov: 40f32.to_radians(),
             near: 1.0,
@@ -106,8 +120,9 @@ fn control_camera(
         let center = (bounds.min + bounds.max) * 0.5;
         cam.target_focus = Vec3::new(center.x, 0.0, center.y);
         cam.focus = cam.target_focus;
-        let half = (bounds.max - bounds.min).max_element() * 0.5;
-        cam.target_distance = (half * 2.3).clamp(MIN_DISTANCE, MAX_DISTANCE);
+        cam.target_distance = bounds
+            .initial_distance
+            .clamp(bounds.min_distance, bounds.max_distance);
         cam.distance = cam.target_distance;
     }
 
@@ -117,8 +132,8 @@ fn control_camera(
         MouseScrollUnit::Pixel => scroll.delta.y / 40.0,
     };
     if notches != 0.0 {
-        cam.target_distance =
-            (cam.target_distance * ZOOM_STEP.powf(notches)).clamp(MIN_DISTANCE, MAX_DISTANCE);
+        cam.target_distance = (cam.target_distance * ZOOM_STEP.powf(notches))
+            .clamp(bounds.min_distance, bounds.max_distance);
     }
 
     // Pan basis on the galaxy plane, rotated by yaw.
@@ -145,7 +160,10 @@ fn control_camera(
 
     // Screen edge scrolling (only in fullscreen, so windowed use stays comfortable).
     if window.focused
-        && matches!(window.mode, WindowMode::BorderlessFullscreen(_) | WindowMode::Fullscreen(..))
+        && matches!(
+            window.mode,
+            WindowMode::BorderlessFullscreen(_) | WindowMode::Fullscreen(..)
+        )
         && let Some(p) = window.cursor_position()
     {
         if p.x <= EDGE_PIXELS {
@@ -159,7 +177,11 @@ fn control_camera(
             dir.y -= 1.0;
         }
     }
-    let speed = if keys.pressed(KeyCode::ShiftLeft) { 2.5 } else { 1.0 };
+    let speed = if keys.pressed(KeyCode::ShiftLeft) {
+        2.5
+    } else {
+        1.0
+    };
     pan += (right * dir.x + forward * dir.y) * KEY_PAN_SPEED * cam.distance * dt * speed;
 
     // Right / middle mouse drag: grab the map. World units per pixel from the projection.
@@ -194,10 +216,12 @@ fn control_camera(
     cam.focus += delta * pan_k;
 }
 
-fn apply_camera(mut q: Query<(&GalaxyCamera, &mut Transform)>) {
+fn apply_camera(bounds: Res<CameraBounds>, mut q: Query<(&GalaxyCamera, &mut Transform)>) {
     for (cam, mut t) in &mut q {
         // Zooming in tilts the view slightly flatter, like the original game.
-        let zoom_t = ((cam.distance - MIN_DISTANCE) / (MAX_DISTANCE - MIN_DISTANCE)).clamp(0.0, 1.0);
+        let zoom_t = ((cam.distance - bounds.min_distance)
+            / (bounds.max_distance - bounds.min_distance).max(1.0))
+        .clamp(0.0, 1.0);
         let pitch = cam.pitch - (1.0 - zoom_t) * 0.2;
         let rot = Quat::from_rotation_y(-cam.yaw) * Quat::from_rotation_x(-pitch);
         t.rotation = rot;
