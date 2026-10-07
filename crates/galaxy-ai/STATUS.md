@@ -21,3 +21,13 @@ The Remake's galactic AI on top of an abstract `AiSim` (implemented for galaxy-s
 - `NBT*` variables are approximated by their plain versions; unmodelled variables need review against AI behaviour.
 - Needs the galaxy-sim API additions listed in `galaxy-script/NEEDS.md`, then replacing the stub AI in the live game.
 - No behaviour comparison against the original AI yet.
+
+## Update (AI-vs-AI test)
+- Force composition only picks ships some owned planet can build right now (`can_build_unit` Ok or NoCredits); before, plans asked for
+  high-tier ships nobody could build and every conquer plan died with "Space Production Failed".
+- `TaskForceStats::failure_reasons` (per unit and reason) and `AiStats::{tick_nanos, snapshot_nanos}` for diagnostics (`ai_match` prints them).
+- With `ScriptedConfig::remake_ai = true` (galaxy-script) all AI factions build, expand to neutral/pirate planets via
+  `GC_Conquer_To_Unite_Territory_Ground`, and capture planets; direct `GC_Conquer_Enemy_Planet` attacks are rare (the plans need ground `Regiment`s
+  as well, which are "assembled" instantly, and the AI avoids fights it does not expect to win). The stub AI stays the default until the
+  behaviour is compared against it over longer runs.
+- Perf: ~240 ms AI per game week for 12 factions, mostly plan script start-up (new Lua VM per plan); a VM/chunk cache in alamo-lua would cut it.

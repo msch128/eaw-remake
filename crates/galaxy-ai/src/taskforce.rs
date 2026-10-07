@@ -128,6 +128,8 @@ pub struct TaskForceStats {
     pub structures_queued: u32,
     /// Produce jobs that failed.
     pub production_failures: u32,
+    /// Why ship produce jobs failed (`unit: reason`).
+    pub failure_reasons: HashMap<String, u32>,
     /// Moves ordered.
     pub moves: u32,
     /// Moves that arrived.
@@ -434,6 +436,14 @@ impl TaskForces {
             if info.is_hero && t.reqs.deny_hero {
                 continue;
             }
+            // Only ships some owned planet can build right now (tech, shipyard, slots); money may still be missing.
+            let buildable = snap.owned[t.player as usize]
+                .iter()
+                .take(10)
+                .any(|&pl| matches!(sim.can_build_unit(t.player, pl, &name), Ok(()) | Err(Refused::NoCredits)));
+            if !buildable {
+                continue;
+            }
             candidates.push((name, info.category.to_ascii_uppercase(), info.power.max(1.0)));
         }
         let matches = |c: &(String, String, f64), types: &[String]| types.iter().any(|ty| ty.eq_ignore_ascii_case(&c.0) || (is_category(ty) && ty.eq_ignore_ascii_case(&c.1)));
@@ -687,8 +697,9 @@ impl TaskForces {
         let plan = t.plan;
         let name = t.name.clone();
         let allow_free = t.reqs.allow_free_store;
-        let fail = |me: &mut Self, j: &UnitJob, unit: &str| {
+        let fail = |me: &mut Self, j: &UnitJob, unit: &str, why: &str| {
             me.stats.production_failures += 1;
+            *me.stats.failure_reasons.entry(format!("{unit}: {why}")).or_default() += 1;
             if let Some(t) = me.forces.get_mut(&j.tf) {
                 t.result = Some(false);
             }
@@ -697,7 +708,7 @@ impl TaskForces {
         };
         if now > j.deadline {
             let unit = j.wanted.first().cloned().unwrap_or_default();
-            fail(self, &j, &unit);
+            fail(self, &j, &unit, "deadline");
             return None;
         }
         // 1. Completed builds: claim the new ship.
@@ -776,7 +787,7 @@ impl TaskForces {
                     if *n <= 3 {
                         remaining.push(unit);
                     } else {
-                        fail(self, &j, &unit);
+                        fail(self, &j, &unit, "refused by every planet");
                         return None;
                     }
                 }

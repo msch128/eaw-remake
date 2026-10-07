@@ -93,6 +93,10 @@ pub struct AiStats {
     pub evaluations: u64,
     /// Nanoseconds spent evaluating goals.
     pub eval_nanos: u128,
+    /// Nanoseconds spent advancing task force jobs (production, moves).
+    pub tick_nanos: u128,
+    /// Nanoseconds spent building perception snapshots.
+    pub snapshot_nanos: u128,
     /// Unknown variables / missing equations aggregated over all evaluations.
     pub eval: EvalStats,
     /// Task force statistics.
@@ -280,10 +284,14 @@ impl AiEngine {
         let snap_age = 4.0;
         // Task force jobs run every call.
         {
+            let t_snap = std::time::Instant::now();
             self.snapshot(sim, snap_age);
+            self.stats.snapshot_nanos += t_snap.elapsed().as_nanos();
             let snap = self.snap.take().unwrap();
             let mut rng = self.rng;
+            let t_tick = std::time::Instant::now();
             self.task_forces.tick(sim, &snap, &mut rng);
+            self.stats.tick_nanos += t_tick.elapsed().as_nanos();
             self.rng = rng;
             self.snap = Some(snap);
         }

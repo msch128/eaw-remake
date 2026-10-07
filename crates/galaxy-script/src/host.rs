@@ -135,7 +135,8 @@ pub struct Inner {
     /// DebugMessage output of scripts (first 3000 lines).
     pub script_log: Vec<String>,
     type_cache: std::collections::HashMap<(String, String), Option<f32>>,
-    next_fleet: u32,
+    /// Sim events caused by script calls (captures, tech); `ScriptedSim::step` reports them with the next step.
+    pub pending_events: Vec<galaxy_sim::Event>,
 }
 
 impl Inner {
@@ -161,7 +162,7 @@ impl Inner {
             ai: None,
             script_log: Vec::new(),
             type_cache: std::collections::HashMap::new(),
-            next_fleet: 0x4000_0000,
+            pending_events: Vec::new(),
         }
     }
 
@@ -202,44 +203,13 @@ impl Inner {
     }
 
     fn add_ships(&mut self, owner: u32, planet: u32, unit: u32, count: u32) -> u64 {
-        let g = self.sim.galaxy_mut();
-        let existing = g
-            .fleets
-            .values_mut()
-            .find(|f| f.owner == owner && f.location == FleetLocation::AtPlanet(planet));
-        let fleet = if let Some(f) = existing {
-            *f.units.entry(unit).or_default() += count;
-            f.id
-        } else {
-            // NEEDS.md: Sim::spawn_units. Ids from a high range avoid colliding with the sim's counter.
-            let id = self.next_fleet;
-            self.next_fleet += 1;
-            let mut units = BTreeMap::new();
-            units.insert(unit, count);
-            g.fleets.insert(
-                id,
-                galaxy_sim::Fleet {
-                    id,
-                    owner,
-                    units,
-                    location: FleetLocation::AtPlanet(planet),
-                    previous_planet: planet,
-                },
-            );
-            id
-        };
+        let fleet = self.sim.spawn_units(owner, planet, unit, count);
         self.stats.spawned += count;
         ship_id(fleet, unit)
     }
 
     fn unlock(&mut self, faction: u32, object: &str, on: bool) {
-        let key = object.to_ascii_lowercase();
-        let set = &mut self.sim.galaxy_mut().factions[faction as usize].unlocked;
-        if on {
-            set.insert(key);
-        } else {
-            set.remove(&key);
-        }
+        self.sim.set_unlocked(faction, object, on);
         self.events.push(ScriptEvent::BuildableChanged {
             object: object.to_string(),
             faction: self.world.factions[faction as usize].name.clone(),
@@ -248,11 +218,14 @@ impl Inner {
     }
 
     fn remove_units(&mut self, faction: u32, unit: u32) {
-        let g = self.sim.galaxy_mut();
-        for f in g.fleets.values_mut().filter(|f| f.owner == faction) {
-            f.units.remove(&unit);
+        let fleets: Vec<u32> = self.sim.galaxy().fleets.values().filter(|f| f.owner == faction).map(|f| f.id).collect();
+        for fleet in fleets {
+            for (ship, u) in self.sim.ships_of(fleet) {
+                if u == unit {
+                    self.sim.despawn_ship(ship);
+                }
+            }
         }
-        g.fleets.retain(|_, f| !f.units.is_empty());
     }
 
     fn apply_reward(&mut self, r: &StoryReward) -> bool {
@@ -266,7 +239,7 @@ impl Inner {
                     _ => (None, 0.0),
                 };
                 if let Some(f) = faction {
-                    self.sim.galaxy_mut().factions[f as usize].credits += amount;
+                    self.sim.add_credits(f, amount);
                     self.stats.credits_given += amount;
                     return true;
                 }
@@ -280,7 +253,8 @@ impl Inner {
                     return false;
                 };
                 let max = self.world.factions[f as usize].max_tech;
-                self.sim.galaxy_mut().factions[f as usize].tech = level.min(max);
+                let events = self.sim.set_tech_level(f, level.min(max));
+                self.pending_events.extend(events);
                 true
             }
             "SPAWN_HERO" | "UNIQUE_UNIT" => {
@@ -336,7 +310,8 @@ impl Inner {
                 else {
                     return false;
                 };
-                self.sim.galaxy_mut().planets[pl as usize].owner = Some(f);
+                let events = self.sim.set_planet_owner_keeping_buildings(pl, Some(f));
+                self.pending_events.extend(events);
                 self.events.push(ScriptEvent::PlanetChanged {
                     planet: self.planet_name(pl),
                     faction: self.world.factions[f as usize].name.clone(),
@@ -514,21 +489,27 @@ impl ScriptHost for SimHost {
 
     fn give_money(&mut self, player: PlayerId, amount: f32) {
         let mut s = self.inner.borrow_mut();
-        if let Some(f) = s.sim.galaxy_mut().factions.get_mut(player as usize) {
-            f.credits += f64::from(amount);
+        if (player as usize) < s.world.factions.len() {
+            s.sim.add_credits(player, f64::from(amount));
         }
         s.stats.credits_given += f64::from(amount);
     }
 
     fn set_tech_level(&mut self, player: PlayerId, level: i32) {
         let mut s = self.inner.borrow_mut();
-        if let Some(f) = s.sim.galaxy_mut().factions.get_mut(player as usize) {
-            f.tech = level;
+        if (player as usize) < s.world.factions.len() {
+            let max = s.world.factions[player as usize].max_tech;
+            let events = s.sim.set_tech_level(player, level.min(max));
+            s.pending_events.extend(events);
         }
     }
 
     fn make_ally(&mut self, a: PlayerId, b: PlayerId) {
-        self.inner.borrow_mut().allies.insert((a.min(b), a.max(b)));
+        let mut s = self.inner.borrow_mut();
+        s.allies.insert((a.min(b), a.max(b)));
+        if (a as usize) < s.world.factions.len() && (b as usize) < s.world.factions.len() {
+            s.sim.set_alliance(a, b, true);
+        }
     }
 
     fn is_enemy(&self, a: PlayerId, b: PlayerId) -> bool {
@@ -672,10 +653,9 @@ impl ScriptHost for SimHost {
         if let Some(&st) = s.world.structure_index.get(&lower)
             && s.sim.galaxy().planets[planet as usize].owner == Some(owner)
         {
-            let ps = &mut s.sim.galaxy_mut().planets[planet as usize];
-            let new = !ps.structures.contains(&st);
+            let already = s.sim.galaxy().planets[planet as usize].structures.contains(&st);
+            let new = !already && s.sim.add_structure(planet, st);
             if new {
-                ps.structures.push(st);
                 s.stats.structures_added += 1;
             }
             *s.stats
@@ -699,22 +679,13 @@ impl ScriptHost for SimHost {
         let mut s = self.inner.borrow_mut();
         match decode(id) {
             Some(Obj::Ships { fleet, unit }) => {
-                let g = s.sim.galaxy_mut();
-                if let Some(f) = g.fleets.get_mut(&fleet) {
-                    // One ship group object stands for a single unit.
-                    if let Some(c) = f.units.get_mut(&unit) {
-                        *c = c.saturating_sub(1);
-                        if *c == 0 {
-                            f.units.remove(&unit);
-                        }
-                    }
+                // One ship group object stands for a single unit.
+                if let Some((ship, _)) = s.sim.ships_of(fleet).into_iter().find(|(_, u)| *u == unit) {
+                    s.sim.despawn_ship(ship);
                 }
-                g.fleets.retain(|_, f| !f.units.is_empty());
             }
             Some(Obj::Structure { planet, structure }) => {
-                s.sim.galaxy_mut().planets[planet as usize]
-                    .structures
-                    .retain(|&x| x != structure);
+                s.sim.remove_structure(planet, structure);
             }
             _ => {}
         }
@@ -726,10 +697,13 @@ impl ScriptHost for SimHost {
             return;
         }
         match decode(id) {
-            Some(Obj::Planet(p)) => s.sim.galaxy_mut().planets[p as usize].owner = Some(owner),
-            Some(Obj::Ships { fleet, .. }) => {
-                if let Some(f) = s.sim.galaxy_mut().fleets.get_mut(&fleet) {
-                    f.owner = owner;
+            Some(Obj::Planet(p)) => {
+                let events = s.sim.set_planet_owner_keeping_buildings(p, Some(owner));
+                s.pending_events.extend(events);
+            }
+            Some(Obj::Ships { fleet, unit }) => {
+                if let Some((ship, _)) = s.sim.ships_of(fleet).into_iter().find(|(_, u)| *u == unit) {
+                    s.sim.change_ship_owner(ship, owner);
                 }
             }
             _ => {}
@@ -834,9 +808,9 @@ impl SimHost {
         f: impl FnOnce(&mut galaxy_ai::AiEngine, &mut crate::ai::SimAdapter<'_>) -> R,
     ) -> Option<R> {
         let mut guard = self.inner.borrow_mut();
-        let Inner { sim, world, human, allies, ai, .. } = &mut *guard;
+        let Inner { sim, world, human, allies, ai, pending_events, .. } = &mut *guard;
         let ai = ai.as_mut()?;
-        let mut adapter = crate::ai::SimAdapter { sim, world: world.clone(), human: *human, allies };
+        let mut adapter = crate::ai::SimAdapter { sim, world: world.clone(), human: *human, allies, pending: pending_events };
         Some(f(ai, &mut adapter))
     }
 

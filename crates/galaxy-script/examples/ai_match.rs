@@ -133,6 +133,10 @@ fn main() {
             tf.created, tf.free_store_claims, tf.ships_queued, tf.structures_queued, tf.production_failures, tf.moves, tf.arrivals, tf.forces_lost, tf.credits_spent
         );
         println!("  unimplemented task force methods {:?}", tf.unimplemented);
+        println!("  ai cost: goal evaluation {:.0} ms, task force ticks {:.0} ms, snapshots {:.0} ms", st.eval_nanos as f64 / 1e6, st.tick_nanos as f64 / 1e6, st.snapshot_nanos as f64 / 1e6);
+        let mut why: Vec<_> = tf.failure_reasons.iter().collect();
+        why.sort_by_key(|w| std::cmp::Reverse(*w.1));
+        println!("  production failure reasons {:?}", &why[..why.len().min(12)]);
         let mut uv: Vec<_> = st.eval.unknown_variables.iter().collect();
         uv.sort_by_key(|x| std::cmp::Reverse(*x.1));
         println!("  unknown variables {:?}", &uv[..uv.len().min(12)]);

@@ -18,6 +18,8 @@ pub struct SimAdapter<'a> {
     pub human: u32,
     /// Alliances made by scripts.
     pub allies: &'a std::collections::HashSet<(u32, u32)>,
+    /// Sim events caused by AI actions, reported with the next step.
+    pub pending: &'a mut Vec<galaxy_sim::Event>,
 }
 
 fn power_of(w: &World, u: u32) -> f64 {
@@ -216,9 +218,12 @@ impl AiSim for SimAdapter<'_> {
         self.sim.apply(Command::MergeFleets { faction: p, into, from }).map(|_| ()).map_err(refuse)
     }
     fn capture_planet(&mut self, p: PlayerId, pl: PlanetId) -> Result<(), Refused> {
-        // NEEDS: Sim::set_planet_owner (see NEEDS.md); direct state write meanwhile.
-        let g = self.sim.galaxy_mut();
-        g.planets.get_mut(pl as usize).ok_or(Refused::Invalid)?.owner = Some(p);
+        if pl as usize >= self.world.planets.len() {
+            return Err(Refused::Invalid);
+        }
+        // The events (PlanetCaptured ...) are picked up by ScriptedSim through the sim's next step report.
+        let events = self.sim.set_planet_owner(pl, Some(p));
+        self.pending.extend(events);
         Ok(())
     }
     fn path(&self, from: PlanetId, to: PlanetId) -> Option<Vec<PlanetId>> {

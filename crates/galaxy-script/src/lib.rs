@@ -223,13 +223,34 @@ impl ScriptedSim {
             let i = self.inner.borrow();
             (i.world.clone(), i.human)
         };
+        let mut added = std::collections::HashSet::new();
+        let mut default_type = None;
         for (faction, ai_type) in galaxy_ai::campaign_ai_players(&**fs, campaign) {
             let Some(&id) = world.faction_index.get(&faction.to_ascii_lowercase()) else { continue };
             if id == human {
                 continue;
             }
+            // `SandboxHuman` is the template of the human slot; when nobody is human the faction plays with its own AI type.
+            let ai_type = if ai_type.eq_ignore_ascii_case("SandboxHuman") { format!("GC_{faction}Ai") } else { ai_type };
+            if !ai_type.eq_ignore_ascii_case("GC_MinorAi") {
+                default_type.get_or_insert_with(|| ai_type.clone());
+            }
+            added.insert(id);
             if let Err(e) = engine.add_player(id, &ai_type) {
                 self.start_errors.push(e);
+            }
+        }
+        // The campaign's own active player has no `AI_Player_Control` entry; when nobody is human (headless AI-vs-AI
+        // runs) it plays like the others. Neutral forces never act.
+        if let Some(ai_type) = default_type {
+            for (id, f) in world.factions.iter().enumerate() {
+                let id = id as u32;
+                let passive = ["neutral", "pirates", "hostile"].iter().any(|n| f.name.eq_ignore_ascii_case(n));
+                if id != human && !added.contains(&id) && !passive {
+                    if let Err(e) = engine.add_player(id, &ai_type) {
+                        self.start_errors.push(e);
+                    }
+                }
             }
         }
         let mut i = self.inner.borrow_mut();
@@ -270,7 +291,12 @@ impl ScriptedSim {
     /// Advances simulation and scripts by `dt` game seconds.
     pub fn step(&mut self, dt: f32) -> StepReport {
         let t0 = thread_cpu_time();
-        let sim_events = self.inner.borrow_mut().sim.step(dt);
+        let sim_events = {
+            let mut g = self.inner.borrow_mut();
+            let mut events = std::mem::take(&mut g.pending_events);
+            events.extend(g.sim.step(dt));
+            events
+        };
         self.timing.sim += thread_cpu_time() - t0;
 
         let t1 = thread_cpu_time();
@@ -296,9 +322,9 @@ impl ScriptedSim {
     fn step_ai(&mut self) {
         let (requests, expired, now) = {
             let mut g = self.inner.borrow_mut();
-            let Inner { sim, world, human, allies, ai, .. } = &mut *g;
+            let Inner { sim, world, human, allies, ai, pending_events, .. } = &mut *g;
             let Some(ai) = ai.as_mut() else { return };
-            let mut adapter = ai::SimAdapter { sim, world: world.clone(), human: *human, allies };
+            let mut adapter = ai::SimAdapter { sim, world: world.clone(), human: *human, allies, pending: pending_events };
             let now = galaxy_ai::AiSim::time(&adapter);
             let requests = ai.update(&mut adapter);
             (requests, ai.take_expired(), now)
