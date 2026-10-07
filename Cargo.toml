@@ -1,10 +1,11 @@
-﻿[workspace]
+[workspace]
 resolver = "3"
 members = [
     "crates/alamo-fs",
     "crates/alamo-map",
     "crates/alamo-lua",
     "crates/galaxy-script",
+    "crates/galaxy-ai",
     "crates/alamo-audio",
     "crates/alamo-data",
     "crates/galaxy-sim",

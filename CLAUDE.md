@@ -7,6 +7,16 @@ No ground combat, story campaigns or movies. Windows, edition 2024.
 **No game files in the repo, ever.** All assets and data are read at runtime from the user's Steam install
 (see `.claude/skills/remake-data`).
 
+## Hard rules (user decisions)
+- **Never open visible windows and never take desktop screenshots** – the user games on this machine. Visual checks are
+  offscreen renders of our own scene only (PNG into the scratchpad or `target/`, never the repo).
+- **Game and workshop folders are read-only.** No audible playback in tests.
+- **No CI / GitHub Actions, no prebuilt binaries.** Users build locally with `build.bat` / `build.ps1`.
+- **English only** (no localization). Talk to the user in German.
+- **Usage budget:** 5-hour usage window – 7 parallel agents burned ~33% in 25 min. Default to 3–4 agents on the
+  critical path, few render iterations, short reports. Current plan and state: `HANDOFF.md`.
+- Commit + push to `main` after `cargo check --workspace --all-targets` passes.
+
 ## Crates (pipeline order)
 `alamo-fs` (MEG + layered VFS) -> `alamo-data` (XML, string tables, game objects) / `alamo-model` (.alo/.ala/particles)
 / `alamo-map` (.ted) / `alamo-audio` / `alamo-lua` (script runtime) -> `galaxy-sim` (headless GC) / `battle-sim`
