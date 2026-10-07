@@ -5,6 +5,10 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use crate::rng::Rng;
 use crate::world::*;
 
+/// Stable identity of one ship; survives fleet merges, splits and moves. Ids are never reused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ShipId(pub u64);
+
 /// Where a fleet is.
 #[derive(Debug, Clone, PartialEq)]
 pub enum FleetLocation {
@@ -160,6 +164,12 @@ pub struct Galaxy {
     pub battles: Vec<PendingBattle>,
     /// Winner, once decided.
     pub winner: Option<FactionId>,
+    /// Runtime alliances (sorted pairs); allied factions are not hostile to each other. Set with
+    /// [`crate::Sim::set_alliance`].
+    pub allied: std::collections::BTreeSet<(FactionId, FactionId)>,
+    /// Stable per-ship ids of every fleet, kept in sync with `Fleet::units` (see [`crate::Sim::ships_of`]).
+    pub ships: BTreeMap<FleetId, Vec<(ShipId, UnitTypeId)>>,
+    pub(crate) next_ship_id: u64,
     pub(crate) next_fleet_id: FleetId,
     pub(crate) next_battle_id: u32,
     pub(crate) rng: Rng,
@@ -321,6 +331,40 @@ pub enum Event {
         /// New owner.
         new_owner: FactionId,
     },
+    /// A faction reached a higher tech level (by research, or set by a script).
+    TechAdvanced {
+        /// Faction.
+        faction: FactionId,
+        /// New tech level.
+        level: i32,
+    },
+    /// A faction won a battle (it was the only side left).
+    BattleWon {
+        /// Faction.
+        faction: FactionId,
+        /// Planet.
+        planet: PlanetId,
+    },
+    /// A faction took part in a battle and lost it (or was wiped out in a draw).
+    BattleLost {
+        /// Faction.
+        faction: FactionId,
+        /// Planet.
+        planet: PlanetId,
+    },
+    /// Ships were destroyed in a battle (one event per faction and unit type).
+    UnitsDestroyed {
+        /// Owner.
+        faction: FactionId,
+        /// Planet.
+        planet: PlanetId,
+        /// Unit type.
+        unit: UnitTypeId,
+        /// Number lost.
+        count: u32,
+        /// Ship ids that were lost.
+        ships: Vec<ShipId>,
+    },
     /// A faction lost its last planet and fleet.
     FactionEliminated {
         /// Faction.
@@ -346,6 +390,9 @@ impl Galaxy {
             fleets: BTreeMap::new(),
             battles: Vec::new(),
             winner: None,
+            allied: Default::default(),
+            ships: BTreeMap::new(),
+            next_ship_id: 1,
             next_fleet_id: 1,
             next_battle_id: 1,
             rng: Rng::new(seed),
@@ -353,6 +400,50 @@ impl Galaxy {
             ai_timer: 0.0,
             tick_accum: 0.0,
         }
+    }
+
+    /// Brings the per-ship id lists in line with the unit counts of every fleet: surplus ids (lost
+    /// ships) are dropped from the back, missing ones get fresh ids, removed fleets lose their list.
+    /// Called by the simulation; call it before reading [`Galaxy::ships`] after editing fleets directly.
+    pub fn sync_ships(&mut self) {
+        self.ships.retain(|id, _| self.fleets.contains_key(id));
+        for (id, fleet) in &self.fleets {
+            let list = self.ships.entry(*id).or_default();
+            // Drop ids of types the fleet no longer has enough of.
+            let mut seen: BTreeMap<UnitTypeId, u32> = BTreeMap::new();
+            list.retain(|(_, t)| {
+                let n = seen.entry(*t).or_default();
+                *n += 1;
+                *n <= fleet.units.get(t).copied().unwrap_or(0)
+            });
+            for (&u, &want) in &fleet.units {
+                let have = seen.get(&u).copied().unwrap_or(0).min(want);
+                for _ in have..want {
+                    list.push((ShipId(self.next_ship_id), u));
+                    self.next_ship_id += 1;
+                }
+            }
+        }
+    }
+
+    /// Removes and returns up to `count` ship ids of type `unit` from a fleet's id list (the units
+    /// themselves must be removed by the caller).
+    pub(crate) fn take_ships(&mut self, fleet: FleetId, unit: UnitTypeId, count: u32) -> Vec<(ShipId, UnitTypeId)> {
+        let mut out = Vec::new();
+        if let Some(list) = self.ships.get_mut(&fleet) {
+            for _ in 0..count {
+                match list.iter().rposition(|(_, t)| *t == unit) {
+                    Some(pos) => out.push(list.remove(pos)),
+                    None => break,
+                }
+            }
+        }
+        out
+    }
+
+    /// True if `a` and `b` are at war: hostile in the data and not allied at runtime.
+    pub fn hostile(&self, world: &World, a: FactionId, b: FactionId) -> bool {
+        world.hostile(a, b) && !self.allied.contains(&(a.min(b), a.max(b)))
     }
 
     /// Fleets of `faction` orbiting `planet`.

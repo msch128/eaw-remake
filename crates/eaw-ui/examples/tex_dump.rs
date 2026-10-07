@@ -6,7 +6,7 @@ fn main() {
     let a: Vec<String> = std::env::args().skip(1).collect();
     let install = GameInstall::detect().unwrap();
     let fs = Arc::new(GameFs::for_mod(&install, Some("1770851727")).unwrap());
-    let lib = TextureLibrary::new(fs);
+    let lib = TextureLibrary::new_blocking(fs);
     let out = &a[0];
     for n in &a[1..] {
         match lib.load(n) {
@@ -19,3 +19,4 @@ fn main() {
         }
     }
 }
+

@@ -1,4 +1,4 @@
-﻿//! [`ScriptHost`] implementation on top of galaxy-sim's public API.
+//! [`ScriptHost`] implementation on top of galaxy-sim's public API.
 //!
 //! # Object model
 //!
@@ -21,7 +21,8 @@ use std::sync::Arc;
 
 use alamo_data::{GameData, GameObjects};
 use alamo_lua::{
-    ObjectFilter, ObjectId, ObjectInfo, PlayerId, PlayerInfo, ScriptHost, SpawnAt, StoryReward,
+    HostValue, ObjectFilter, ObjectId, ObjectInfo, PlanEvent, PlayerId, PlayerInfo, ScriptHost, SpawnAt, StoryReward,
+    TaskForceSpec,
 };
 use galaxy_sim::{FleetLocation, Sim, UnitRole, World};
 
@@ -129,6 +130,10 @@ pub struct Inner {
     pub stats: HostStats,
     /// Dialog texts: `(dialog file, chapter)` -> (title, lines, sfx, speech).
     pub dialogs: DialogReader,
+    /// The Remake AI, if enabled.
+    pub ai: Option<galaxy_ai::AiEngine>,
+    /// DebugMessage output of scripts (first 3000 lines).
+    pub script_log: Vec<String>,
     type_cache: std::collections::HashMap<(String, String), Option<f32>>,
     next_fleet: u32,
 }
@@ -153,6 +158,8 @@ impl Inner {
             events: Vec::new(),
             stats: HostStats::default(),
             dialogs,
+            ai: None,
+            script_log: Vec::new(),
             type_cache: std::collections::HashMap::new(),
             next_fleet: 0x4000_0000,
         }
@@ -609,16 +616,16 @@ impl ScriptHost for SimHost {
             }
         }
         // Structures.
-        if want_cat.is_none() || want_cat.as_deref() == Some("STRUCTURE") {
-            if let Some(t) = &want_type {
-                for (pi, ps) in g.planets.iter().enumerate() {
-                    if planet_filter.is_some_and(|p| p != pi as u32) || !owner_ok(ps.owner) {
-                        continue;
-                    }
-                    for &st in &ps.structures {
-                        if w.structures[st as usize].name.eq_ignore_ascii_case(t) {
-                            out.push((3u64 << 56) | ((pi as u64) << 24) | u64::from(st));
-                        }
+        if (want_cat.is_none() || want_cat.as_deref() == Some("STRUCTURE"))
+            && let Some(t) = &want_type
+        {
+            for (pi, ps) in g.planets.iter().enumerate() {
+                if planet_filter.is_some_and(|p| p != pi as u32) || !owner_ok(ps.owner) {
+                    continue;
+                }
+                for &st in &ps.structures {
+                    if w.structures[st as usize].name.eq_ignore_ascii_case(t) {
+                        out.push((3u64 << 56) | ((pi as u64) << 24) | u64::from(st));
                     }
                 }
             }
@@ -729,6 +736,13 @@ impl ScriptHost for SimHost {
         }
     }
 
+    fn log(&mut self, script: &str, text: &str) {
+        let mut s = self.inner.borrow_mut();
+        if s.script_log.len() < 40000 {
+            s.script_log.push(format!("[{script}] {text}"));
+        }
+    }
+
     fn message(&mut self, text: &str) {
         self.inner
             .borrow_mut()
@@ -772,6 +786,30 @@ impl ScriptHost for SimHost {
         v
     }
 
+    fn create_taskforce(&mut self, spec: &TaskForceSpec) -> Option<u64> {
+        self.with_ai(|ai, sim| ai.create_taskforce(sim, spec))
+    }
+
+    fn taskforce_call(&mut self, tf: u64, method: &str, args: &[HostValue]) -> Option<HostValue> {
+        self.with_ai(|ai, sim| ai.taskforce_call(sim, tf, method, args)).flatten()
+    }
+
+    fn block_status(&mut self, block: u64) -> (bool, Option<bool>) {
+        self.with_ai(|ai, _| ai.block_status(block)).unwrap_or((true, Some(false)))
+    }
+
+    fn ai_call(&mut self, function: &str, args: &[HostValue]) -> Option<HostValue> {
+        self.with_ai(|ai, sim| ai.ai_call(sim, function, args)).flatten()
+    }
+
+    fn take_plan_events(&mut self) -> Vec<PlanEvent> {
+        self.with_ai(|ai, _| ai.take_plan_events()).unwrap_or_default()
+    }
+
+    fn evaluate_perception(&self, name: &str, player: PlayerId, target: Option<ObjectId>) -> Option<f32> {
+        self.with_ai(|ai, sim| ai.evaluate_perception(sim, name, player, target)).flatten().map(|v| v as f32)
+    }
+
     fn story_reward(&mut self, reward: &StoryReward) {
         let mut s = self.inner.borrow_mut();
         if s.apply_reward(reward) {
@@ -790,6 +828,18 @@ impl ScriptHost for SimHost {
 }
 
 impl SimHost {
+    /// Runs `f` with the AI engine and a simulation adapter; `None` if the Remake AI is not enabled.
+    fn with_ai<R>(
+        &self,
+        f: impl FnOnce(&mut galaxy_ai::AiEngine, &mut crate::ai::SimAdapter<'_>) -> R,
+    ) -> Option<R> {
+        let mut guard = self.inner.borrow_mut();
+        let Inner { sim, world, human, allies, ai, .. } = &mut *guard;
+        let ai = ai.as_mut()?;
+        let mut adapter = crate::ai::SimAdapter { sim, world: world.clone(), human: *human, allies };
+        Some(f(ai, &mut adapter))
+    }
+
     fn type_number_uncached(&self, type_name: &str, what: &str) -> Option<f32> {
         let s = self.inner.borrow();
         let tag = match what {
@@ -888,4 +938,3 @@ mod tests {
         }
     }
 }
-

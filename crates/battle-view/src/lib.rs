@@ -274,7 +274,7 @@ fn start_battle(
         ec.insert((
             Hdr,
             Bloom {
-                intensity: 0.1,
+                intensity: 0.03,
                 ..Bloom::NATURAL
             },
         ));

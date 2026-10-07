@@ -1,4 +1,4 @@
-# Empire at War UI: findings and design
+﻿# Empire at War UI: findings and design
 
 Everything here was derived from the mod "Empire at War Remake 4.0" (workshop 1770851727) and
 the base game; nothing is copied into the repository, all assets are read at runtime.
@@ -123,4 +123,91 @@ The UI camera must be set in `EawUiSettings::camera` when rendering to an image.
   rectangle); a few buttons may be a pixel or two off compared to the game.
 * The tactical selection slots draw one centred unit icon; the original also uses
   `Overlay`/`Icon_Offset` boxes for sub-icons.
-* The first spawn decodes the 64 MB mega texture on the calling thread (about 4 s in a dev build).
+* Faceplate textures (2048x512 DDS) are still decoded on the spawning thread (milliseconds).
+
+## Second iteration: async loading, panels, minimaps, dialogs
+
+* **Async textures:** `EawUiPlugin` decodes `MT_COMMANDBAR` on `AsyncComputeTaskPool`; a
+  `UiTexturesLoaded` message fires when done. `spawn_eaw_command_bar` queues the bar until then;
+  `spawn_command_bar`/`spawn_shell` return `None` before. `TextureLibrary::new_blocking` is for tools.
+* **Generic shells:** `spawn_shell(world, &ShellSpec{model, faction, anchor, offset, art_alt})` builds
+  any `I_*.ALO` interface model. Verified models: `I_Galactic_Organize_New` (fleet organizer: three
+  fleet frames `q1/q2/q3_RRCC`, planet land art `land_art_ALTn` and `Planet_structure_NN` slots),
+  `I_Planetary_Mode` (planet screen: info column, map window; the 80 `build_pad`/`unit_pad` bones
+  are all at the origin - the engine lays them out in code, which is not reproduced),
+  `I_Main_Reinforce` (`reinforcement_window_ALTn` = frame for n+1 rows), hero frames
+  (`*_hero_frame_ALTn` = frame for n+1 slots, both faction models use the `ALT` meshes of the Rebel
+  name, so pass `art_alt`).
+* **Data:** `PanelData` (slots / texts / bars by lower-cased component name), `MinimapData`.
+* **Events:** `EawButtonClicked`, `EawSlotDropped {from, to, shift}` (drag between buttons with
+  `Drag_And_Drop`, used for splitting/merging fleets), `EawMinimapClicked {world, normalized,
+  just_pressed}`, `EawDialogResult`.
+* **Minimap:** the `radar_galactic` / `radar` bone rectangles become click surfaces; dots and the
+  camera rectangle are drawn from `MinimapData` (galactic: owner coloured planets, camera frustum;
+  tactical: unit dots, map bounds).
+* **Dialog:** `spawn_dialog` draws a faction coloured story box with portrait (faction symbol when
+  none is given), title and text ids resolved through the string table, and buttons.
+* **Day counter:** `Text_Day_Counter` shows "Day N" (no string id exists for it).
+
+### Gaps (second iteration)
+* Planet screen build pads and unit pads need the engine layout; hero health bars and special
+  ability/bonus slots of the planet panel are wired by name but untested with real art; the
+  advisor movie (`Movie_galactic`) and portraits from story data are not available; the dialog is
+  not a reproduction of a specific original shell.
+
+
+## Scope
+
+Galactic conquest and space battles only. Out of scope by decision: story campaign UI (objectives,
+cinematic letterbox, holocron/story screens) and all land/ground UI (ground filters, land fleets,
+land build pads, `unit_pad`/`land_fleet` parts of the planet screen are present in the shell data
+but not a goal). `spawn_dialog` is for GC messages (GC intro transmissions, game messages) only.
+
+
+## Third iteration: space tactical (`tactical.rs`)
+
+* **Abilities from data:** each `Unit_Ability` `Type` of a unit (`Unit_Abilities_Data`) maps by
+  convention to the icon `I_SA_<TYPE>.TGA` (mega texture) and the strings
+  `TEXT_TOOLTIP_ABILITY_<TYPE>_NAME` / `_DESCRIPTION`. `HUNT`/`SPOILER_LOCK` are AI behaviours and
+  types without an icon are skipped. `unit_abilities` / `TacticalUnit::from_game` build them.
+  The `special_button_NN` components (24 small slots above the selection) show them; their own
+  `sa_ami_outline_NN` textures are an animated outline, not ability icons.
+* **API:** `TacticalData { active, selection: Vec<TacticalUnit>, focus, reinforcement_points, pop,
+  retreat: RetreatState, overlays: Vec<ShipOverlay>, hardpoints: Vec<HardpointMarker> }`.
+  With `active` set the plugin fills the bar slots (`s_select_NN` + health/shield bars, abilities
+  with cooldown overlay and active state, population text). `spawn_unit_panel` adds the selected
+  unit panel (icon, localized name, hull and shield bars with numbers).
+* **Messages:** `EawAbilityClicked { unit_type, ability }`, `EawSelectionClicked { index,
+  unit_type, shift }` (sub-select), `EawHardpointClicked { id }`; retreat and reinforcement stay
+  `EawButtonClicked` ("b_retreat", "b_reinforcement").
+* **Overlays:** brackets and bars (`ShipOverlay`) and hardpoint markers (`HardpointMarker`) are UI
+  nodes in a full-screen layer, positioned from caller supplied logical window pixels (the caller
+  projects world positions). Nodes persist by `id` between frames.
+* **Retreat / reinforcements:** labels on `b_retreat` (m:ss countdown, pressed look while counting,
+  disabled when unavailable) and `b_reinforcement` (points).
+* **Ground UI** is dropped everywhere (`is_ground_component`).
+
+Gaps: ability buttons are only as large as the bar's small `special_button` rectangles; the
+numeric unit panel is our own layout (the original shows the name as a floating label); overlay bars
+are flat colour, not the `i_bar_*` textures; the cooldown overlay is a rising tint.
+
+
+## Polish round (tactical)
+
+* **Ability buttons:** the shell rectangle of `special_button_NN` is 24x25 design px (textures
+  26x26; `I_SA_*` icons 26x26), i.e. about 34 px at 1080p; the tactical bar really has small ability
+  buttons in a row above the selection, there is no separate ability shell or engine rescale in
+  the data. They are now drawn at the natural 26 px border with the icon filling it.
+* **Bars:** world-space bars use the original `i_bar_health_{small,medium,large}0..10` level
+  textures (34/68/102 px wide, 2 px tall), `i_bar_control_wide` as frame and the full
+  `i_bar_shield_*10` texture clipped to the shield fraction. `bar_class(half_size)` picks the set.
+* **Selection brackets:** no bracket texture exists (`i_selection_cutout_*` are 1024 px white
+  masks, `selection_*_neutral` are ground decals), so brackets stay drawn corners.
+* **Hardpoints:** the original reticles `I_HARD_POINT_RETICLE_<KIND>[_TRACKED].DDS` (GENERIC, ENGINES,
+  SHIELD_GEN, DOCKING_BAY, GRAV_WELL, WEAPONS[_ION|_MISSILE|_TORPEDO|_TURBO|_MASS_DRIVER], EMPTY) are used;
+  `HardpointMarker::kind` / `tracked` select the texture.
+* **Names:** `GameConstants` defines a `Game_Object_Name` font (7 pt), i.e. object names float above
+  ships; `ShipOverlay::name` draws that label. The original has no unit info panel (selection info
+  lives in the bar slots and tooltips), so `spawn_unit_panel` is kept only as an optional extra and
+  the demo no longer uses it.
+

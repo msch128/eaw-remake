@@ -1,0 +1,11 @@
+[package]
+name = "galaxy-ai"
+description = "Empire at War galactic AI: perceptual equations, goals, budgets and Lua plan execution on top of galaxy-sim."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+alamo-fs = { path = "../alamo-fs" }
+alamo-data = { path = "../alamo-data" }
+alamo-lua = { path = "../alamo-lua" }

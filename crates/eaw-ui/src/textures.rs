@@ -1,4 +1,4 @@
-//! UI texture access: the `MT_CommandBar` mega texture (with its `.mtd` directory) plus loose
+﻿//! UI texture access: the `MT_CommandBar` mega texture (with its `.mtd` directory) plus loose
 //! files, decoded on the CPU and uploaded as individual Bevy images.
 //!
 //! Nearly every small UI texture of the command bar (`i_button_*.tga`, `i_bar_*`, unit icons ...)
@@ -8,7 +8,7 @@
 //! `Art/Textures` (`.dds`/`.tga` are interchangeable, like in the original engine).
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use alamo_fs::{FileSource, GameFs};
 use alamo_model::image::{Rgba8, decode_texture};
@@ -76,7 +76,16 @@ impl MegaTextureDirectory {
 pub struct TextureLibrary {
     fs: Arc<GameFs>,
     mtd: MegaTextureDirectory,
-    mega: Option<Rgba8>,
+    mega: Arc<OnceLock<Option<Rgba8>>>,
+}
+
+/// Decodes the command bar mega texture (`MT_CommandBar.tga`, falling back to the compressed
+/// `.dds`). Slow (64 MB); run it off the main thread, see [`TextureLibrary::mega_slot`].
+pub fn decode_mega_texture(fs: &GameFs) -> Option<Rgba8> {
+    ["MT_CommandBar.tga", "MT_CommandBarCompressed.dds"]
+        .iter()
+        .filter_map(|n| fs.read(&format!("{TEXTURE_DIR}/{n}")).ok())
+        .find_map(|d| decode_texture(&d).ok())
 }
 
 /// Normalizes a texture name to `STEM` (upper case, no extension, no directory).
@@ -88,9 +97,9 @@ fn stem_key(name: &str) -> String {
 }
 
 impl TextureLibrary {
-    /// Opens the library: reads `MT_CommandBar.mtd` and decodes `MT_CommandBar.tga`
-    /// (falling back to the compressed `.dds`). Missing mega textures only mean that every
-    /// lookup falls through to loose files.
+    /// Opens the library: reads the small `MT_CommandBar.mtd` directory only. The mega texture
+    /// itself is decoded separately (see [`Self::mega_slot`] / [`Self::new_blocking`]); until it is
+    /// ready, lookups of packed textures return `None`.
     pub fn new(fs: Arc<GameFs>) -> Self {
         let mtd = fs
             .read(&format!("{TEXTURE_DIR}/MT_CommandBar.mtd"))
@@ -101,11 +110,28 @@ impl TextureLibrary {
             by_stem.insert(stem_key(&k), v);
         }
         let mtd = MegaTextureDirectory { entries: by_stem };
-        let mega = ["MT_CommandBar.tga", "MT_CommandBarCompressed.dds"]
-            .iter()
-            .filter_map(|n| fs.read(&format!("{TEXTURE_DIR}/{n}")).ok())
-            .find_map(|d| decode_texture(&d).ok());
-        Self { fs, mtd, mega }
+        Self {
+            fs,
+            mtd,
+            mega: Arc::new(OnceLock::new()),
+        }
+    }
+
+    /// Like [`Self::new`] but decodes the mega texture right away (tools, tests).
+    pub fn new_blocking(fs: Arc<GameFs>) -> Self {
+        let lib = Self::new(fs);
+        let _ = lib.mega.set(decode_mega_texture(&lib.fs));
+        lib
+    }
+
+    /// The slot a background task fills with the decoded mega texture (`None` = not available).
+    pub fn mega_slot(&self) -> Arc<OnceLock<Option<Rgba8>>> {
+        self.mega.clone()
+    }
+
+    /// True once the mega texture has been decoded (or found missing).
+    pub fn is_ready(&self) -> bool {
+        self.mega.get().is_some()
     }
 
     /// The game file system this library reads from.
@@ -124,8 +150,13 @@ impl TextureLibrary {
         if name.is_empty() {
             return None;
         }
-        if let (Some(e), Some(mega)) = (self.mtd.entries.get(&stem_key(name)), &self.mega) {
-            return Some(crop(mega, e));
+        if let Some(e) = self.mtd.entries.get(&stem_key(name)) {
+            match self.mega.get() {
+                Some(Some(mega)) => return Some(crop(mega, e)),
+                // Still decoding: do not fall back, the caller retries later.
+                None => return None,
+                Some(None) => {}
+            }
         }
         let stem = name
             .rsplit_once('.')
@@ -193,6 +224,9 @@ impl UiTextures {
         if let Some(hit) = self.cache.get(&key) {
             return hit.clone();
         }
+        if !self.library.is_ready() && self.library.in_mega_texture(name) {
+            return None;
+        }
         let tex = self
             .library
             .load(name)
@@ -235,3 +269,67 @@ pub fn upload(images: &mut Assets<Image>, rgba: Rgba8) -> UiTexture {
         size,
     }
 }
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn record(name: &str, x: u32, y: u32, w: u32, h: u32) -> Vec<u8> {
+        let mut r = vec![0u8; MTD_RECORD];
+        r[..name.len()].copy_from_slice(name.as_bytes());
+        for (i, v) in [x, y, w, h].iter().enumerate() {
+            r[64 + i * 4..68 + i * 4].copy_from_slice(&v.to_le_bytes());
+        }
+        r[80] = 1;
+        r
+    }
+
+    #[test]
+    fn mtd_parse_records() {
+        let mut data = 3u32.to_le_bytes().to_vec();
+        data.extend(record("ADVANCE_BUILD_BUTTON.TGA", 1, 425, 298, 34));
+        data.extend(record("BACK_BUTTON.TGA", 469, 988, 128, 32));
+        data.extend(record("I_BUTTON_BUILD.TGA", 0, 0, 50, 50));
+        let mtd = MegaTextureDirectory::parse(&data);
+        assert_eq!(mtd.entries.len(), 3);
+        assert_eq!(
+            mtd.entries["BACK_BUTTON.TGA"],
+            MtdEntry { x: 469, y: 988, w: 128, h: 32 }
+        );
+    }
+
+    #[test]
+    fn mtd_parse_truncated_and_empty() {
+        assert!(MegaTextureDirectory::parse(&[]).entries.is_empty());
+        // Count says 5 but only one record present: keep what is there.
+        let mut data = 5u32.to_le_bytes().to_vec();
+        data.extend(record("A.TGA", 1, 2, 3, 4));
+        data.extend([0u8; 10]);
+        assert_eq!(MegaTextureDirectory::parse(&data).entries.len(), 1);
+    }
+
+    #[test]
+    fn stem_keys_ignore_case_dir_and_extension() {
+        assert_eq!(stem_key("I_Button_Build.tga"), "I_BUTTON_BUILD");
+        assert_eq!(stem_key("Art\\Textures\\i_button_build.DDS"), "I_BUTTON_BUILD");
+        assert_eq!(stem_key("  "), "");
+    }
+
+    #[test]
+    fn crop_copies_the_rectangle() {
+        let src = Rgba8 {
+            width: 4,
+            height: 4,
+            pixels: (0..64).collect(),
+        };
+        let c = crop(&src, &MtdEntry { x: 1, y: 2, w: 2, h: 2 });
+        assert_eq!((c.width, c.height), (2, 2));
+        // Row 2, column 1 starts at pixel index 9 -> bytes 36..44.
+        assert_eq!(&c.pixels[..8], &(36u8..44).collect::<Vec<_>>()[..]);
+        // Rectangles reaching past the edge are clamped.
+        let c = crop(&src, &MtdEntry { x: 3, y: 3, w: 5, h: 5 });
+        assert_eq!((c.width, c.height), (1, 1));
+    }
+}
+

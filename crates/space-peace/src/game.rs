@@ -54,6 +54,7 @@ pub fn replay_startup_log(log: bevy::prelude::Res<StartupLog>) {
 #[derive(Clone)]
 pub struct GameAssets {
     /// Layered file system (mod over FoC over EaW), used to load models and sounds.
+    #[allow(dead_code)] // used by tests and the upcoming battle integration
     pub fs: Arc<GameFs>,
     /// Campaigns, planets, routes, factions and the English string table.
     pub data: Arc<GameData>,
@@ -63,8 +64,9 @@ pub struct GameAssets {
 #[derive(Resource, Clone, Default)]
 pub struct Game(pub Option<GameAssets>);
 
-/// Opens the game file system and loads the galaxy data (blocking).
-fn open(args: &Args, log: &mut StartupLog) -> Result<(GameInstall, Arc<GameFs>, GameData), String> {
+/// Locates the install and opens the layered game file system (fast: reads archive indexes only).
+pub fn open_fs(args: &Args, log: &mut StartupLog) -> Result<(GameInstall, Arc<GameFs>), String> {
+    let started = Instant::now();
     let install = match &args.game_dir {
         Some(dir) => GameInstall::from_root(dir),
         None => GameInstall::detect(),
@@ -73,14 +75,22 @@ fn open(args: &Args, log: &mut StartupLog) -> Result<(GameInstall, Arc<GameFs>, 
     let mod_id = args.mod_id.as_deref().unwrap_or(DEFAULT_MOD_ID);
     let fs = GameFs::for_mod(&install, Some(mod_id))
         .map_err(|e| format!("cannot open game files: {e}"))?;
-    let fs = Arc::new(fs);
+    log.info(format!(
+        "game: install {} | mod {mod_id} | {} files | opened in {:.2?}",
+        install.game_root.display(),
+        fs.file_count(),
+        started.elapsed()
+    ));
+    Ok((install, Arc::new(fs)))
+}
 
+/// Opens the game file system and loads the galaxy data (blocking).
+fn open(args: &Args, log: &mut StartupLog) -> Result<(GameInstall, Arc<GameFs>, GameData), String> {
+    let (install, fs) = open_fs(args, log)?;
     let started = Instant::now();
     let (data, warnings) = alamo_data::load_galaxy(fs.as_ref());
     log.info(format!(
-        "game: install {} | mod {mod_id} | {} files | data loaded in {:.2?} ({} warnings)",
-        install.game_root.display(),
-        fs.file_count(),
+        "game: data loaded in {:.2?} ({} warnings)",
         started.elapsed(),
         warnings.len()
     ));
@@ -89,7 +99,6 @@ fn open(args: &Args, log: &mut StartupLog) -> Result<(GameInstall, Arc<GameFs>, 
     }
     Ok((install, fs, data))
 }
-
 /// Locates and loads the game (blocking).
 pub fn load_assets(args: &Args, log: &mut StartupLog) -> Result<GameAssets, String> {
     let (_, fs, data) = open(args, log)?;

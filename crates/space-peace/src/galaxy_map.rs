@@ -48,7 +48,14 @@ impl Plugin for GalaxyMapPlugin {
             })
             .add_systems(Startup, setup_scene)
             .add_systems(OnEnter(AppScreen::Galaxy), spawn_galaxy)
-            .add_systems(OnExit(AppScreen::Galaxy), despawn_galaxy)
+            .add_systems(
+                OnTransition { exited: AppScreen::Galaxy, entered: AppScreen::MainMenu },
+                despawn_galaxy,
+            )
+            .add_systems(
+                OnTransition { exited: AppScreen::Galaxy, entered: AppScreen::CampaignSelect },
+                despawn_galaxy,
+            )
             .add_systems(
                 Update,
                 (follow_camera_skybox, fix_star_dome.run_if(resource_exists::<AlamoFs>)),
@@ -363,6 +370,7 @@ fn setup_scene(
 }
 
 /// Spawns planets, labels and the selection ring from the [`GalaxyView`] resource.
+#[allow(clippy::too_many_arguments)]
 fn spawn_galaxy(
     mut commands: Commands,
     view: Res<GalaxyView>,
@@ -371,7 +379,12 @@ fn spawn_galaxy(
     mut bounds: ResMut<CameraBounds>,
     mut scale: ResMut<MapScale>,
     alamo: Option<Res<AlamoFs>>,
+    existing: Query<(), With<GalaxyEntity>>,
 ) {
+    // Coming back from a tactical battle the scene is still there.
+    if !existing.is_empty() {
+        return;
+    }
     // Derive world scale from the planet density: sphere radius, camera range, label range.
     let flat: Vec<Vec2> = view
         .planets

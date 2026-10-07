@@ -8,7 +8,8 @@ use bevy::{app::AppExit, prelude::*};
 use crate::camera::GalaxyCamera;
 use crate::flow::{AppScreen, Paused, StartCampaign, UiSound};
 use crate::galaxy_map::spawn_props;
-use crate::game::{self, CampaignEntry, DEFAULT_CAMPAIGN, Game, StartupLog};
+use crate::game::{self, CampaignEntry, DEFAULT_CAMPAIGN, Game, GameAssets, StartupLog};
+use crate::options::OptionsOpen;
 
 /// SFX event played when the cursor enters a button.
 pub const SFX_HOVER: &str = "GUI_Common_Dialog_Button_Hilight";
@@ -26,6 +27,8 @@ pub const SFX_PLANET_HOVER: &str = "GUI_Planet_Mouse_Over";
 pub enum MenuAction {
     /// Open the campaign selection.
     OpenCampaigns,
+    /// Open the options overlay.
+    Options,
     /// Start the named campaign.
     Campaign(String),
     /// Back to the main menu.
@@ -34,6 +37,8 @@ pub enum MenuAction {
     Resume,
     /// Quit the application.
     Quit,
+    /// Leave the (placeholder) tactical battle screen.
+    EndBattle,
 }
 
 /// One button.
@@ -48,7 +53,7 @@ pub struct MenuItem {
 }
 
 impl MenuItem {
-    fn new(label: impl Into<String>, action: MenuAction) -> Self {
+    pub fn new(label: impl Into<String>, action: MenuAction) -> Self {
         Self { label: label.into(), action, accent: None }
     }
 }
@@ -105,6 +110,7 @@ pub fn main_menu_spec() -> MenuSpec {
         columns: vec![MenuColumn {
             items: vec![
                 MenuItem::new("Galactic Conquest", MenuAction::OpenCampaigns),
+                MenuItem::new("Options", MenuAction::Options),
                 MenuItem::new("Quit", MenuAction::Quit),
             ],
             ..default()
@@ -152,6 +158,7 @@ pub fn pause_spec() -> MenuSpec {
         columns: vec![MenuColumn {
             items: vec![
                 MenuItem::new("Resume", MenuAction::Resume),
+                MenuItem::new("Options", MenuAction::Options),
                 MenuItem::new("Main Menu", MenuAction::MainMenu),
                 MenuItem::new("Quit", MenuAction::Quit),
             ],
@@ -208,7 +215,9 @@ impl Plugin for MenuPlugin {
             .add_systems(
                 Update,
                 (
-                    sync_pause_menu.run_if(resource_changed::<Paused>),
+                    sync_pause_menu
+                        .run_if(resource_changed::<Paused>)
+                        .run_if(in_state(AppScreen::Galaxy)),
                     button_interaction,
                     apply_clicks,
                 )
@@ -227,7 +236,7 @@ fn spawn_campaign_menu(mut commands: Commands, campaigns: Res<Campaigns>) {
 
 /// Marks the 3D scene behind the menus: the galaxy art with its star dome.
 #[derive(Component, Clone)]
-struct MenuBackdrop;
+pub struct MenuBackdrop;
 
 /// Spawns the galaxy art behind the menus (once; it stays while moving between menu screens).
 fn spawn_backdrop(
@@ -238,10 +247,15 @@ fn spawn_backdrop(
     if !existing.is_empty() {
         return;
     }
-    let Some(assets) = &game.0 else { return };
-    // Only the props (galaxy disc, nebulae, star dome) are shown, not the planets.
+    if let Some(assets) = &game.0 {
+        spawn_backdrop_props(&mut commands, assets);
+    }
+}
+
+/// Spawns the galaxy art (disc, nebulae, star dome; no planets) of the default campaign.
+pub fn spawn_backdrop_props(commands: &mut Commands, assets: &GameAssets) {
     if let Ok((view, _)) = game::build_campaign(assets, DEFAULT_CAMPAIGN, &mut StartupLog::default()) {
-        spawn_props(&mut commands, &view.props, MenuBackdrop);
+        spawn_props(commands, &view.props, MenuBackdrop);
     }
 }
 
@@ -438,16 +452,21 @@ fn button_interaction(
 }
 
 /// Carries out the clicked button's action.
+#[allow(clippy::too_many_arguments)]
 fn apply_clicks(
+    request: Option<Res<crate::battle_seam::BattleRequest>>,
+    mut finished: MessageWriter<crate::battle_seam::BattleFinished>,
     mut clicks: MessageReader<MenuClicked>,
     mut next: ResMut<NextState<AppScreen>>,
     mut paused: ResMut<Paused>,
+    mut options: ResMut<OptionsOpen>,
     mut start: MessageWriter<StartCampaign>,
     mut exit: MessageWriter<AppExit>,
 ) {
     for MenuClicked(action) in clicks.read() {
         match action {
             MenuAction::OpenCampaigns => next.set(AppScreen::CampaignSelect),
+            MenuAction::Options => options.0 = true,
             MenuAction::Campaign(name) => {
                 start.write(StartCampaign(name.clone()));
             }
@@ -456,6 +475,12 @@ fn apply_clicks(
                 next.set(AppScreen::MainMenu);
             }
             MenuAction::Resume => paused.0 = false,
+            MenuAction::EndBattle => {
+                finished.write(crate::battle_seam::BattleFinished {
+                    id: request.as_ref().map_or(0, |r| r.id),
+                    outcome: crate::battle_seam::BattleOutcome::Aborted,
+                });
+            }
             MenuAction::Quit => {
                 exit.write(AppExit::Success);
             }

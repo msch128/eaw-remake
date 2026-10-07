@@ -4,7 +4,7 @@
 //! # Units and conventions
 //! * Battle space: X forward at yaw 0, Y left, Z up, distances in the game's world units.
 //! * Speeds and projectile speeds in the XML are per "frame"; they are multiplied by
-//!   [`Catalog::speed_scale`] (default 20) to get units per second. Turn rates are per second.
+//!   [`Catalog::speed_scale`] (default 30, the 30 Hz logic tick) to get units per second. Turn rates are per second.
 //! * Model space is Z-up with the ship's bow along -Y; it is converted to battle space with
 //!   `(x, y, z) -> (-y, x, z)`. A hardpoint fires along its bone's local +X axis.
 
@@ -420,10 +420,12 @@ pub struct Catalog {
     pub projectiles: Vec<ProjDef>,
     /// Damage matrix.
     pub damage: DamageMatrix,
-    /// Frame-to-second factor applied to XML speeds (default 20).
+    /// Frame-to-second factor applied to XML speeds (default 30, the 30 Hz logic tick).
     pub speed_scale: f32,
     /// `ShieldRechargeIntervalInSecs`: shields gain `Shield_Refresh_Rate` once per interval.
     pub shield_interval: f32,
+    /// `Depleted_Shield_Disable_Time`: seconds a fully drained shield stays offline.
+    pub depleted_shield_disable: f32,
     /// Targeting priority sets.
     pub priority_sets: Vec<PrioritySet>,
     priority_index: HashMap<String, u16>,
@@ -685,7 +687,8 @@ impl Catalog {
         let priority_sets = fs.map(parse_priority_sets).unwrap_or_default();
         let priority_index: HashMap<String, u16> = priority_sets.iter().enumerate().map(|(i, s)| (s.name.clone(), i as u16)).collect();
         let shield_interval = data.game_constants.get("shieldrechargeintervalinsecs").and_then(|v| v.parse().ok()).unwrap_or(2.0f32).max(0.1);
-        let mut cat = Catalog { damage, speed_scale: 20.0, shield_interval, priority_sets, priority_index, ..Catalog::default() };
+        let depleted_shield_disable = data.game_constants.get("depleted_shield_disable_time").and_then(|v| v.parse().ok()).unwrap_or(0.0f32).max(0.0);
+        let mut cat = Catalog { damage, speed_scale: 30.0, shield_interval, depleted_shield_disable, priority_sets, priority_index, ..Catalog::default() };
         // Projectiles.
         let mut proj_names: Vec<String> = Vec::new();
         let hp_defs: Vec<Vec<HardpointDef>> = sources
@@ -1146,7 +1149,7 @@ impl Catalog {
     pub fn from_defs(ships: Vec<ShipDef>, projectiles: Vec<ProjDef>) -> Catalog {
         let ship_index = ships.iter().enumerate().map(|(i, s)| (s.name.to_ascii_lowercase(), i as ShipId)).collect();
         let proj_index = projectiles.iter().enumerate().map(|(i, p)| (p.name.to_ascii_lowercase(), i as ProjId)).collect();
-        Catalog { ships, projectiles, speed_scale: 20.0, shield_interval: 1.0, ship_index, proj_index, ..Catalog::default() }
+        Catalog { ships, projectiles, speed_scale: 30.0, shield_interval: 1.0, ship_index, proj_index, ..Catalog::default() }
     }
 
     /// Ship definition by id.

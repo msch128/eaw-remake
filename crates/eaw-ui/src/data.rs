@@ -1,4 +1,4 @@
-//! Data binding: what the application tells the interface to show, and what the interface tells
+﻿//! Data binding: what the application tells the interface to show, and what the interface tells
 //! the application back.
 //!
 //! The interface never owns game state. The application writes the [`CommandBarData`] resource
@@ -68,6 +68,10 @@ pub struct AbilityEntry {
     pub active: bool,
     /// Ability cannot be used.
     pub disabled: bool,
+    /// Ability `Type` (`FULL_SALVO`), reported when the button is clicked.
+    pub kind: String,
+    /// Tooltip text (already localized).
+    pub tooltip: String,
 }
 
 /// Everything the command bars display (resource).
@@ -115,3 +119,4 @@ pub struct EawButtonState {
 /// Debug/offscreen helper: show the tooltip of this button as if the mouse hovered it.
 #[derive(Resource, Debug, Clone, Default)]
 pub struct ForcedTooltip(pub Option<String>);
+

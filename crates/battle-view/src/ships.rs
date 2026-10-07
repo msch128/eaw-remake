@@ -33,6 +33,8 @@ pub struct ShipView {
     last_yaw: f32,
     /// Smoothed bank angle.
     bank: f32,
+    /// Radius of the visible geometry in world units (0 until the model has loaded).
+    visual_radius: f32,
 }
 
 /// A destroyed ship that keeps drifting while it burns and blows up.
@@ -245,6 +247,7 @@ pub fn update_ships(
                             hp_parts: Vec::new(),
                             last_yaw: yaw,
                             bank: 0.0,
+                            visual_radius: 0.0,
                         },
                     ))
                     .id();
@@ -259,7 +262,16 @@ pub fn update_ships(
             0.0
         };
         let hp_alive: Vec<bool> = s.hps.iter().map(|h| h.alive).collect();
+        let mut radius = def.radius;
         if let Ok((mut view, mut tf)) = views.get_mut(entity) {
+            if view.visual_radius == 0.0
+                && let Ok(l) = touch.loaded.get(entity)
+            {
+                view.visual_radius = l.radius * vis.scale;
+            }
+            if view.visual_radius > 0.0 {
+                radius = view.visual_radius * 0.8;
+            }
             // Bank into turns a little, like the real ships do.
             let fast = matches!(def.class, TargetClass::Fighter | TargetClass::Bomber);
             let yaw_rate = {
@@ -304,7 +316,7 @@ pub fn update_ships(
                 yaw,
                 side: s.side,
                 def: s.def,
-                radius: def.radius,
+                radius,
                 hull: hull_frac,
                 shield: shield_frac,
                 hp_alive,
@@ -489,6 +501,7 @@ pub fn update_dying(
 pub fn default_effect(class: TargetClass) -> &'static str {
     ship_death_effect(class)
 }
+
 
 
 

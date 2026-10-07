@@ -260,3 +260,79 @@ pub fn rasterize(
     }
 }
 
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn quad(lo: Vec2, hi: Vec2, uv_lo: Vec2, uv_hi: Vec2) -> Vec<[ArtVertex; 3]> {
+        let v = |x: f32, y: f32, u: f32, w: f32| ArtVertex {
+            pos: Vec2::new(x, y),
+            uv: Vec2::new(u, w),
+        };
+        let (a, b, c, d) = (
+            v(lo.x, hi.y, uv_lo.x, uv_lo.y),
+            v(hi.x, hi.y, uv_hi.x, uv_lo.y),
+            v(hi.x, lo.y, uv_hi.x, uv_hi.y),
+            v(lo.x, lo.y, uv_lo.x, uv_hi.y),
+        );
+        vec![[a, b, c], [a, c, d]]
+    }
+
+    #[test]
+    fn alt_suffix_parses() {
+        assert_eq!(alt_suffix("Rebel_Faceplate_ALT1"), Some(1));
+        assert_eq!(alt_suffix("b_Help_Droid_Empire_ALT0"), Some(0));
+        assert_eq!(alt_suffix("Text_Planet"), None);
+        assert_eq!(alt_suffix("thing_ALTx"), None);
+    }
+
+    #[test]
+    fn rasterize_maps_uv_and_flips_y() {
+        // 2x2 texture: red, green / blue, white.
+        let tex = Rgba8 {
+            width: 2,
+            height: 2,
+            pixels: vec![
+                255, 0, 0, 255, 0, 255, 0, 255, //
+                0, 0, 255, 255, 255, 255, 255, 255,
+            ],
+        };
+        let tris = quad(Vec2::ZERO, Vec2::new(2.0, 2.0), Vec2::ZERO, Vec2::ONE);
+        let img = rasterize(&tris, &tex, Vec2::ZERO, Vec2::new(2.0, 2.0), 1.0);
+        assert_eq!((img.width, img.height), (2, 2));
+        // Top-left of the image (y up in the mesh, uv (0,0) = top-left of the texture) is red.
+        assert_eq!(&img.pixels[0..4], &[255, 0, 0, 255]);
+        // Bottom-right is white.
+        assert_eq!(&img.pixels[12..16], &[255, 255, 255, 255]);
+    }
+
+    #[test]
+    fn rasterize_oversample_scales_the_image() {
+        let tex = Rgba8 { width: 1, height: 1, pixels: vec![10, 20, 30, 255] };
+        let tris = quad(Vec2::new(5.0, 5.0), Vec2::new(8.0, 7.0), Vec2::ZERO, Vec2::ONE);
+        let img = rasterize(&tris, &tex, Vec2::new(5.0, 5.0), Vec2::new(8.0, 7.0), 2.0);
+        assert_eq!((img.width, img.height), (6, 4));
+        assert!(img.pixels.chunks(4).all(|p| p == [10, 20, 30, 255]));
+    }
+
+    #[test]
+    fn art_filtering_by_faction() {
+        let art = |name: &str, alt| ShellArt {
+            name: name.into(),
+            alt,
+            texture: String::new(),
+            triangles: quad(Vec2::ZERO, Vec2::ONE, Vec2::ZERO, Vec2::ONE),
+            z: 0.0,
+        };
+        let layout = ShellLayout {
+            art: vec![art("a", Some(0)), art("b", Some(1)), art("c", None)],
+            ..Default::default()
+        };
+        let names = |f| layout.art_for(f).map(|a| a.name.clone()).collect::<Vec<_>>();
+        assert_eq!(names(UiFaction::Empire), ["a", "c"]);
+        assert_eq!(names(UiFaction::Rebel), ["b", "c"]);
+        assert_eq!(names(UiFaction::Underworld), ["c"]);
+    }
+}
+

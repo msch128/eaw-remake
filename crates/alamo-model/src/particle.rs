@@ -41,7 +41,7 @@ use crate::error::{Error, Result};
 pub enum BlendMode {
     /// Additive (emitter type 1). Inferred.
     Additive,
-    /// Type 4: dynamic light emitters (`light_*`, `muzzle_flash` light halos) whose "size" is a light
+    /// Type 4, or a `light_*` / `lens_*` emitter larger than 400 units: dynamic light emitters (`light_*`, `muzzle_flash` light halos) whose "size" is a light
     /// radius of hundreds to thousands of units; not sprites. The track colors are the light color
     /// over its life. Inferred.
     Light,
@@ -374,6 +374,11 @@ fn parse_emitter(c: &Chunk) -> Result<Emitter> {
         links,
         props,
     };
+    let big = e.size.start.max(e.size.end);
+    let lower = e.name.to_ascii_lowercase();
+    // `light_*` / `lens_*` emitters whose size is hundreds to tens of thousands of units are light
+    // radii (or screen-space lens flares), not sprites, even when their type says additive.
+    let light_named = (lower.starts_with("light_") || lower.starts_with("lens_")) && big > 400.0;
     e.blend = match e.prop_u32(0x04).unwrap_or(0) {
         1 => BlendMode::Additive,
         4 => BlendMode::Light,
@@ -382,6 +387,9 @@ fn parse_emitter(c: &Chunk) -> Result<Emitter> {
         11 => BlendMode::Mesh,
         o => BlendMode::Other(o),
     };
+    if light_named {
+        e.blend = BlendMode::Light;
+    }
     e.world_space = e.prop_flag(0x07);
     e.oriented = e.prop_flag(0x08);
     e.lifetime = e.prop_f32(0x0f).unwrap_or(1.0).max(0.001);

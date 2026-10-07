@@ -112,6 +112,8 @@ pub struct PlanetInfo {
     pub population_capacity: i32,
     /// `Space_Tactical_Map` (.ted file name), the arena of space battles over this planet.
     pub space_map: Option<String>,
+    /// `Planet_Surface_Accessible`: ground forces could land.
+    pub surface_accessible: bool,
 }
 
 /// A hyperspace lane.
@@ -415,6 +417,23 @@ pub struct VictoryRules {
     pub ai_named_planets: Vec<PlanetId>,
 }
 
+/// What kind of game object a name refers to, as far as the simulation is concerned.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ObjectKind {
+    /// A ship or squadron in the unit catalog.
+    SpaceUnit,
+    /// A star base level.
+    Starbase,
+    /// A planetary or orbital structure in the catalog.
+    Structure,
+    /// A ground unit, ground company or ground building: exists in the data, is not simulated.
+    Ground,
+    /// A hero or hero team: exists in the data, is not simulated.
+    Hero,
+    /// Anything else (props, markers, unknown names).
+    Other,
+}
+
 /// Immutable world description.
 #[derive(Debug)]
 pub struct World {
@@ -460,6 +479,9 @@ pub struct World {
     pub damage: DamageMatrix,
     /// Victory conditions.
     pub victory: VictoryRules,
+    /// Ground units, heroes and other objects that are named in the data but not simulated
+    /// (lower-case name to kind). Ships, structures and star bases are looked up in their catalogs.
+    pub unsimulated: HashMap<String, ObjectKind>,
 }
 
 /// Why a world could not be built.
@@ -515,6 +537,7 @@ impl World {
                 ground_slots: p.special_structures_land,
                 population_capacity: pop,
                 space_map: p.space_tactical_map.clone(),
+                surface_accessible: p.surface_accessible,
             });
         }
         if planets.is_empty() {
@@ -604,6 +627,21 @@ impl World {
             first_starbase: Vec::new(),
             damage,
             victory: VictoryRules::default(),
+            unsimulated: data
+                .objects
+                .iter()
+                .filter_map(|o| {
+                    let k = o.kind.to_ascii_lowercase();
+                    let kind = if k.contains("hero") {
+                        ObjectKind::Hero
+                    } else if k.starts_with("ground") || k == "transportunit" || k == "indigenous_unit" || k == "landbombingunit" {
+                        ObjectKind::Ground
+                    } else {
+                        return None;
+                    };
+                    Some((o.name.to_ascii_lowercase(), kind))
+                })
+                .collect(),
         };
         world.build_catalogs(data);
         world.build_tech_upgrades(data);

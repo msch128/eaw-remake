@@ -7,7 +7,7 @@
 use std::collections::HashMap;
 
 use bevy::prelude::*;
-use bevy::ui::{ComputedNode, FocusPolicy, UiGlobalTransform};
+use bevy::ui::{ComputedNode, FocusPolicy, RelativeCursorPosition, UiGlobalTransform};
 use bevy::window::PrimaryWindow;
 
 use crate::EawUiAssets;
@@ -15,6 +15,9 @@ use crate::EawUiSettings;
 use crate::components::{CommandBarComponent, CommandBarDb, ComponentKind};
 use crate::data::{CommandBarData, EawButtonClicked, EawButtonState, ForcedTooltip};
 use crate::faction::UiFaction;
+use crate::panels::{
+    MinimapKind, MinimapSurface, PanelBarName, PanelData, PanelSlotName, PanelText, is_panel_slot,
+};
 use crate::shell::{ShellLayout, rasterize};
 use crate::textures::{UiTexture, UiTextures};
 
@@ -54,8 +57,12 @@ pub struct EawButton {
     pub name: String,
     /// Tooltip text ids (`Tooltip_Text`).
     pub tooltips: Vec<String>,
+    /// Literal tooltip text that overrides `tooltips` (set for data driven slots).
+    pub tooltip_literal: Option<String>,
     /// Keeps its pressed look after a click.
     pub toggle: bool,
+    /// Can be dragged onto other draggable buttons ([`crate::panels::EawSlotDropped`]).
+    pub drag: bool,
     /// Whether the mouse was pressed on it (click fires on release).
     armed: bool,
 }
@@ -76,6 +83,8 @@ pub enum SlotKind {
     Select,
     Ability,
     Border,
+    /// Filled by name from [`PanelData`].
+    Panel,
 }
 
 /// A component whose content comes from a list in [`CommandBarData`].
@@ -92,6 +101,10 @@ pub enum SlotPart {
     Progress,
     Label,
 }
+
+/// Text label of a button (`b_retreat` countdown, `b_reinforcement` points); holds the button name.
+#[derive(Component, Debug, Clone)]
+pub struct ButtonLabel(pub String);
 
 /// A discrete bar of the selection (`s_health_NN`, `s_shield_NN`).
 #[derive(Component, Debug, Clone, Copy)]
@@ -176,6 +189,57 @@ pub struct CommandBarSpec {
     pub faction: UiFaction,
 }
 
+/// Where a shell panel sits on the screen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ShellAnchor {
+    /// Bottom-left corner (command bars).
+    #[default]
+    BottomLeft,
+    /// Bottom-right corner.
+    BottomRight,
+    /// Top-left corner.
+    TopLeft,
+    /// Top-right corner.
+    TopRight,
+    /// Screen centre (fleet organizer, planet screen, dialogs).
+    Center,
+}
+
+/// A generic shell panel: any `Art/Models/I_*.ALO` interface model.
+#[derive(Debug, Clone)]
+pub struct ShellSpec {
+    /// Model file name, e.g. `I_Galactic_Organize_New.ALO`.
+    pub model: String,
+    /// Faction skin.
+    pub faction: UiFaction,
+    /// Screen anchor.
+    pub anchor: ShellAnchor,
+    /// Offset from the anchor in design pixels (x right, y up).
+    pub offset: Vec2,
+    /// Use this `_ALTn` art variant instead of the faction's (hero frames use a fixed one).
+    pub art_alt: Option<usize>,
+}
+
+impl ShellSpec {
+    /// A panel with default anchor and offset.
+    pub fn new(model: &str, faction: UiFaction) -> Self {
+        Self {
+            model: model.to_string(),
+            faction,
+            anchor: ShellAnchor::Center,
+            offset: Vec2::ZERO,
+            art_alt: None,
+        }
+    }
+}
+
+/// Marks the root of a spawned shell panel.
+#[derive(Component, Debug, Clone)]
+pub struct EawPanel {
+    /// Model the panel was built from.
+    pub model: String,
+}
+
 struct Builder<'a> {
     world: &'a mut World,
     textures: UiTextures,
@@ -186,37 +250,94 @@ struct Builder<'a> {
     faction: UiFaction,
 }
 
-/// Spawns a command bar and returns its root entity. The bar is a bottom-left anchored node;
-/// despawn the entity to remove it. Loads textures synchronously (first call decodes the
-/// 4096x4096 mega texture, which takes a moment).
+/// Spawns a command bar and returns its root entity (bottom-left anchored; despawn to remove).
+/// Needs the textures to be loaded ([`crate::UiTexturesLoaded`]); returns `None` before that.
+/// Prefer [`crate::EawUiCommandsExt::spawn_eaw_command_bar`], which waits for it.
 pub fn spawn_command_bar(world: &mut World, spec: CommandBarSpec) -> Option<Entity> {
-    let (fs, font, oversample) = {
+    let root = spawn_shell(
+        world,
+        &ShellSpec {
+            model: spec.mode.model().to_string(),
+            faction: spec.faction,
+            anchor: ShellAnchor::BottomLeft,
+            offset: Vec2::ZERO,
+            art_alt: None,
+        },
+    )?;
+    world.entity_mut(root).insert(EawCommandBar {
+        mode: spec.mode,
+        faction: spec.faction,
+    });
+    Some(root)
+}
+
+/// Builds any shell model as a UI panel: rasterized frame art plus every component of
+/// `CommandBarComponents.xml` placed by the model's bones. Returns the root entity.
+pub fn spawn_shell(world: &mut World, spec: &ShellSpec) -> Option<Entity> {
+    let (fs, font, oversample, camera) = {
         let a = world.get_resource::<EawUiAssets>()?;
         let s = world.get_resource::<EawUiSettings>()?;
-        (a.fs.clone(), s.font_family.clone(), s.faceplate_oversample)
+        (a.fs.clone(), s.font_family.clone(), s.faceplate_oversample, s.camera)
     };
-    let layout = ShellLayout::load(&fs, spec.mode.model())?;
+    let layout = ShellLayout::load(&fs, &spec.model)?;
+    if !world.get_resource::<UiTextures>()?.library().is_ready() {
+        warn!("shell spawned before the UI textures finished loading");
+        return None;
+    }
     let textures = world.remove_resource::<UiTextures>()?;
     let db = world.remove_resource::<CommandBarDb>()?;
-    let (lo, hi) = layout.art_bounds(spec.faction);
-    let (width, height) = (hi.x.max(1.0), hi.y.max(1.0));
+    let alt = spec.art_alt.unwrap_or_else(|| spec.faction.mesh_alt());
+    let arts: Vec<_> = layout
+        .art
+        .iter()
+        .filter(|a| a.alt.is_none_or(|n| n == alt))
+        .filter(|a| !is_ground_component(&a.name.to_lowercase()))
+        .collect();
+    let (lo, hi) = bounds_of(arts.iter().map(|a| a.bounds()));
+    let (width, height) = ((hi.x - lo.x).max(1.0), (hi.y - lo.y).max(1.0));
 
-    let camera = world.resource::<EawUiSettings>().camera;
+    let mut node = Node {
+        position_type: PositionType::Absolute,
+        width: Val::Px(width),
+        height: Val::Px(height),
+        ..default()
+    };
+    let (ox, oy) = (spec.offset.x, spec.offset.y);
+    match spec.anchor {
+        ShellAnchor::BottomLeft => {
+            // Bar coordinates are absolute in the shell space (origin = bar corner).
+            node.left = Val::Px(ox + lo.x);
+            node.bottom = Val::Px(oy + lo.y);
+        }
+        ShellAnchor::BottomRight => {
+            node.right = Val::Px(-ox);
+            node.bottom = Val::Px(oy);
+        }
+        ShellAnchor::TopLeft => {
+            node.left = Val::Px(ox);
+            node.top = Val::Px(-oy);
+        }
+        ShellAnchor::TopRight => {
+            node.right = Val::Px(-ox);
+            node.top = Val::Px(-oy);
+        }
+        ShellAnchor::Center => {
+            node.left = Val::Percent(50.0);
+            node.top = Val::Percent(50.0);
+            node.margin = UiRect {
+                left: Val::Px(-width * 0.5 + ox),
+                top: Val::Px(-height * 0.5 - oy),
+                ..default()
+            };
+        }
+    }
     let root = world
         .spawn((
-            Name::new(format!("EaW command bar ({:?})", spec.mode)),
-            EawCommandBar {
-                mode: spec.mode,
-                faction: spec.faction,
+            Name::new(format!("EaW panel {}", spec.model)),
+            EawPanel {
+                model: spec.model.clone(),
             },
-            Node {
-                position_type: PositionType::Absolute,
-                left: Val::Px(0.0),
-                bottom: Val::Px(0.0),
-                width: Val::Px(width),
-                height: Val::Px(height),
-                ..default()
-            },
+            node,
             FocusPolicy::Pass,
         ))
         .id();
@@ -234,7 +355,7 @@ pub fn spawn_command_bar(world: &mut World, spec: CommandBarSpec) -> Option<Enti
     };
 
     // Frame art (rasterized meshes), back to front.
-    let mut arts: Vec<_> = layout.art_for(spec.faction).collect();
+    let mut arts = arts;
     arts.sort_by(|a, c| a.z.total_cmp(&c.z));
     let mut decoded = HashMap::new();
     for art in arts {
@@ -245,11 +366,11 @@ pub fn spawn_command_bar(world: &mut World, spec: CommandBarSpec) -> Option<Enti
         let (alo, ahi) = art.bounds();
         let img = rasterize(&art.triangles, tex, alo, ahi, oversample);
         let handle = b.upload_raw(&art.name, img);
-        b.image_at(root, &handle, (alo + ahi) * 0.5, ahi - alo, Color::WHITE, Some(&art.name));
-        let _ = lo;
+        b.image_at(root, &handle, (alo + ahi) * 0.5 - lo, ahi - alo, Color::WHITE, Some(&art.name));
     }
 
-    // Components in draw order (z, then base layer).
+    // Components in draw order (z, then base layer). Components far outside the art belong to
+    // other panels (e.g. the ground filters below the galactic bar).
     let mut items: Vec<_> = layout.order.iter().filter_map(|n| layout.item(n)).collect();
     items.sort_by(|a, c| {
         let la = b.db.get(&a.name).map_or(0, |d| d.base_layer);
@@ -257,14 +378,16 @@ pub fn spawn_command_bar(world: &mut World, spec: CommandBarSpec) -> Option<Enti
         a.z.total_cmp(&c.z).then(la.cmp(&lc))
     });
     for item in items {
-        // Components placed outside the bar (e.g. ground filters below it) belong to other panels.
-        if item.center.y < 0.0 || item.center.y > height + 40.0 {
+        if is_ground_component(&item.name.to_lowercase()) {
+            continue;
+        }
+        if !within(item.center, lo - Vec2::splat(MARGIN), hi + Vec2::splat(MARGIN)) {
             continue;
         }
         let Some(def) = b.db.get(&item.name).cloned() else {
             continue;
         };
-        b.spawn_component(&def, item.center, item.size);
+        b.spawn_component(&def, item.center - lo, item.size);
     }
 
     let Builder {
@@ -275,6 +398,29 @@ pub fn spawn_command_bar(world: &mut World, spec: CommandBarSpec) -> Option<Enti
     Some(root)
 }
 
+/// Ground (land) interface parts are out of scope and never spawned.
+pub fn is_ground_component(lname: &str) -> bool {
+    ["land_fleet_", "ground_forces", "drage_drop", "unit_pad", "build_pad", "land_art", "b_filters_walker", "b_filters_infantry", "b_filters_tracked", "b_filters_structure"]
+        .iter()
+        .any(|p| lname.starts_with(p))
+}
+
+/// Components further than this (design px) outside the frame art are not part of the panel.
+const MARGIN: f32 = 40.0;
+
+fn within(p: Vec2, lo: Vec2, hi: Vec2) -> bool {
+    p.x >= lo.x && p.x <= hi.x && p.y >= lo.y && p.y <= hi.y
+}
+
+/// Union of `(min, max)` rectangles; an empty iterator gives `(0, 0)..(1, 1)`.
+pub fn bounds_of(rects: impl Iterator<Item = (Vec2, Vec2)>) -> (Vec2, Vec2) {
+    let (mut lo, mut hi) = (Vec2::splat(f32::MAX), Vec2::splat(f32::MIN));
+    for (l, h) in rects {
+        lo = lo.min(l);
+        hi = hi.max(h);
+    }
+    if lo.x > hi.x { (Vec2::ZERO, Vec2::ONE) } else { (lo, hi) }
+}
 impl Builder<'_> {
     fn hide(&mut self, e: Entity) {
         if let Some(mut n) = self.world.entity_mut(e).get_mut::<Node>() {
@@ -418,16 +564,15 @@ impl Builder<'_> {
 
         // Discrete bars.
         if def.kind == Some(ComponentKind::Bar) {
-            let Some(slot) = lname
+            let parsed = lname
                 .strip_prefix("s_health_")
                 .map(|n| (n, false))
                 .or_else(|| lname.strip_prefix("s_shield_").map(|n| (n, true)))
-            else {
-                return;
-            };
-            let Ok(index) = slot.0.parse::<usize>() else {
-                return;
-            };
+                .and_then(|(n, s)| n.parse::<usize>().ok().map(|i| (i, s)));
+            // Other bars (hero health, ...) are driven by name through `PanelData::bars`.
+            let (index, shield) = parsed.unwrap_or((0, false));
+            let bar_w = if parsed.is_some() { 34.0 } else { size.x.max(8.0) };
+            let bar_h = if parsed.is_some() { 2.0 } else { size.y.clamp(2.0, 6.0) };
             let frame = def
                 .bar_texture
                 .iter()
@@ -444,22 +589,25 @@ impl Builder<'_> {
                     Name::new(def.name.clone()),
                     StatusBar {
                         index,
-                        shield: slot.1,
+                        shield,
                         max_level: def.max_bar_level.max(1),
                     },
                     BarTextures { frame, fill },
                     Node {
                         position_type: PositionType::Absolute,
-                        left: Val::Px(center.x - 17.0),
-                        top: Val::Px(self.root_h - center.y - 1.0),
-                        width: Val::Px(34.0),
-                        height: Val::Px(2.0),
+                        left: Val::Px(center.x - bar_w * 0.5),
+                        top: Val::Px(self.root_h - center.y - bar_h * 0.5),
+                        width: Val::Px(bar_w),
+                        height: Val::Px(bar_h),
                         display: Display::None,
                         ..default()
                     },
                     ChildOf(self.root),
                 ))
                 .id();
+            if parsed.is_none() {
+                self.world.entity_mut(bar).insert(PanelBarName(lname.clone()));
+            }
             for fill in [false, true] {
                 self.world.spawn((
                     BarLayer { fill },
@@ -473,6 +621,33 @@ impl Builder<'_> {
                     ChildOf(bar),
                 ));
             }
+            return;
+        }
+
+        // Minimap click surface (the faceplate art provides the frame).
+        if matches!(lname.as_str(), "radar_galactic" | "radar" | "radar_galactic_adv_map") {
+            self.world.spawn((
+                Name::new(def.name.clone()),
+                MinimapSurface {
+                    kind: if lname == "radar" {
+                        MinimapKind::Tactical
+                    } else {
+                        MinimapKind::Galactic
+                    },
+                },
+                Button,
+                RelativeCursorPosition::default(),
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: Val::Px(center.x - size.x * 0.5),
+                    top: Val::Px(self.root_h - center.y - size.y * 0.5),
+                    width: Val::Px(size.x),
+                    height: Val::Px(size.y),
+                    overflow: Overflow::clip(),
+                    ..default()
+                },
+                ChildOf(self.root),
+            ));
             return;
         }
 
@@ -533,10 +708,33 @@ impl Builder<'_> {
         ]
         .iter()
         .any(|l| !l.is_empty());
-        if !has_art && slot_for(&lname).is_none() {
+        let slot = slot_for(&lname)
+            .or_else(|| is_panel_slot(&lname).then_some(Slot { kind: SlotKind::Panel, index: 0 }));
+        if !has_art && slot.is_none() {
+            // Text components of shell panels (names, counters) are driven by `PanelData::texts`.
+            if def.kind == Some(ComponentKind::TextButton) && def.font_name.is_some() {
+                let holder = self
+                    .world
+                    .spawn((
+                        Name::new(def.name.clone()),
+                        Node {
+                            position_type: PositionType::Absolute,
+                            left: Val::Px(center.x - size.x * 0.5),
+                            top: Val::Px(self.root_h - center.y - size.y * 0.5),
+                            width: Val::Px(size.x),
+                            height: Val::Px(size.y),
+                            ..default()
+                        },
+                        FocusPolicy::Pass,
+                        ChildOf(self.root),
+                    ))
+                    .id();
+                let color = def.text_color.map_or(Color::WHITE, rgba);
+                let t = self.text_layer(holder, size, def, "", def.text_offset, color);
+                self.world.entity_mut(t).insert(PanelText(lname.clone()));
+            }
             return;
         }
-        let slot = slot_for(&lname);
         let alt_icons = CommandBarComponent::pick(&def.icon_alt, 0).is_some();
 
         let button = self
@@ -546,7 +744,9 @@ impl Builder<'_> {
                 EawButton {
                     name: lname.clone(),
                     tooltips: def.tooltips.clone(),
+                    tooltip_literal: None,
                     toggle: def.toggle,
+                    drag: def.drag_and_drop,
                     armed: false,
                 },
                 EawButtonState {
@@ -567,6 +767,9 @@ impl Builder<'_> {
             .id();
         if let Some(s) = slot {
             self.world.entity_mut(button).insert(s);
+            if s.kind == SlotKind::Panel {
+                self.world.entity_mut(button).insert(PanelSlotName(lname.clone()));
+            }
             // Slots stay invisible until data fills them.
             self.world.entity_mut(button).insert(Visibility::Hidden);
             self.hide(button);
@@ -575,10 +778,22 @@ impl Builder<'_> {
         let mut layers = ButtonLayers::default();
         let mut icon_px = 40.0f32;
         let tint = def.color.map_or(Color::WHITE, rgba);
-        let scaled = |t: &UiTexture| t.size.as_vec2() * def.scale;
+        // Texture size x Scale, but never much larger than the component rectangle (some panels
+        // reuse components with a Scale tuned for a different layout).
+        let scaled = |t: &UiTexture| {
+            let s = t.size.as_vec2() * def.scale;
+            let cap = size.max_element().max(8.0) * 1.5;
+            s * (cap / s.max_element().max(1.0)).min(1.0)
+        };
         if let Some(t) = CommandBarComponent::pick(&def.blank, fi).and_then(|n| self.tex(n)) {
-            let sz = scaled(&t);
+            let mut sz = scaled(&t);
             icon_px = (sz.min_element() * 0.84).max(20.0);
+            if slot.is_some_and(|s| s.kind == SlotKind::Ability) {
+                // The ability border is drawn at its natural size and the icon fills it
+                // (the shell rectangle is 24x25, the textures are 26x26).
+                sz = t.size.as_vec2();
+                icon_px = sz.min_element() * 0.88;
+            }
             self.layer(button, size, &t, sz, Vec2::ZERO, tint);
         }
         let icon_tex = CommandBarComponent::pick(&def.icon, fi)
@@ -611,6 +826,11 @@ impl Builder<'_> {
             layers.over = Some(e);
         }
         self.world.entity_mut(button).insert(layers);
+        if matches!(lname.as_str(), "b_retreat" | "b_reinforcement") {
+            let off = Vec2::new(0.0, -size.y * 0.5 - 4.0);
+            let l = self.text_layer(button, size, def, "", off, Color::srgb(0.9, 0.95, 1.0));
+            self.world.entity_mut(l).insert(ButtonLabel(lname.clone()));
+        }
 
         if let Some(s) = slot {
             // Slot content: unit icon, build progress, count/price label.
@@ -732,7 +952,6 @@ pub(crate) fn button_visuals(
 pub(crate) fn bound_fields(
     fresh: Query<(), Added<BoundField>>,
     data: Res<CommandBarData>,
-    assets: Res<EawUiAssets>,
     mut texts: Query<(&BoundField, &mut Text)>,
     mut icons: Query<(&BoundField, &mut ImageNode), Without<Text>>,
     mut tex: ResMut<UiTextures>,
@@ -742,13 +961,12 @@ pub(crate) fn bound_fields(
     if !data.is_changed() && fresh.is_empty() {
         return;
     }
-    let label = |key: &str| assets.text.get(key).unwrap_or("").to_string();
     for (f, mut t) in &mut texts {
         t.0 = match f.0 {
             Field::Credits => group_digits(data.credits),
             Field::Income => group_digits(data.planet_income),
             Field::PlanetName => data.planet_name.clone(),
-            Field::Day => format!("{} {}", label("TEXT_DAY"), data.day).trim().to_string(),
+            Field::Day => format!("Day {}", data.day),
             Field::TechLevel => data.tech_level.to_string(),
             Field::Pop => format!("{}/{}", data.pop_current, data.pop_cap),
             Field::Allegiance => String::new(),
@@ -784,19 +1002,35 @@ fn group_digits(v: i64) -> String {
 pub(crate) fn slots(
     fresh: Query<(), Added<Slot>>,
     data: Res<CommandBarData>,
+    panel: Res<PanelData>,
     mut tex: ResMut<UiTextures>,
     mut images: ResMut<Assets<Image>>,
-    mut slots: Query<(Entity, &Slot, &mut Node, &mut EawButtonState, &mut Visibility), Without<SlotPart>>,
+    mut slots: Query<
+        (
+            Entity,
+            &Slot,
+            Option<&PanelSlotName>,
+            &mut Node,
+            &mut EawButtonState,
+            &mut Visibility,
+            &mut EawButton,
+        ),
+        Without<SlotPart>,
+    >,
     children: Query<&Children>,
     mut parts: Query<
         (&SlotPart, &mut Node, Option<&mut ImageNode>, Option<&mut Text>),
         Without<Slot>,
     >,
 ) {
-    if !data.is_changed() && fresh.is_empty() {
+    if !data.is_changed() && !panel.is_changed() && fresh.is_empty() {
         return;
     }
-    for (e, slot, mut node, mut st, mut vis) in &mut slots {
+    for (e, slot, pname, mut node, mut st, mut vis, mut button) in &mut slots {
+        button.tooltip_literal = match slot.kind {
+            SlotKind::Ability => data.abilities.get(slot.index).map(|a| a.tooltip.clone()),
+            _ => None,
+        };
         // (icon, progress, label, disabled, selected)
         let content: Option<(String, f32, String, bool, bool)> = match slot.kind {
             SlotKind::Queue => data.queue.get(slot.index).map(|q| {
@@ -825,6 +1059,9 @@ pub(crate) fn slots(
                     false,
                     false,
                 )
+            }),
+            SlotKind::Panel => pname.and_then(|n| panel.slots.get(&n.0)).map(|s| {
+                (s.icon.clone(), s.progress, s.label.clone(), s.disabled, s.selected)
             }),
             SlotKind::Border => (data.selection.len() > slot.index * 2)
                 .then(|| (String::new(), 0.0, String::new(), false, false)),
@@ -878,20 +1115,28 @@ pub(crate) fn slots(
 }
 
 /// Picks the level texture of status bars from the selection.
+#[allow(clippy::type_complexity)]
 pub(crate) fn status_bars(
     fresh: Query<(), Added<StatusBar>>,
     data: Res<CommandBarData>,
-    mut bars: Query<(Entity, &StatusBar, &BarTextures, &mut Node), Without<BarLayer>>,
+    panel: Res<PanelData>,
+    mut bars: Query<
+        (Entity, &StatusBar, Option<&PanelBarName>, &BarTextures, &mut Node),
+        Without<BarLayer>,
+    >,
     children: Query<&Children>,
     mut layers: Query<(&BarLayer, &mut ImageNode)>,
 ) {
-    if !data.is_changed() && fresh.is_empty() {
+    if !data.is_changed() && !panel.is_changed() && fresh.is_empty() {
         return;
     }
-    for (e, bar, tex, mut node) in &mut bars {
-        let frac = data.selection.get(bar.index).and_then(|s| {
-            if bar.shield { s.shield } else { Some(s.health) }
-        });
+    for (e, bar, pname, tex, mut node) in &mut bars {
+        let frac = match pname {
+            Some(n) => panel.bars.get(&n.0).copied(),
+            None => data.selection.get(bar.index).and_then(|s| {
+                if bar.shield { s.shield } else { Some(s.health) }
+            }),
+        };
         let Some(frac) = frac else {
             node.display = Display::None;
             continue;
@@ -927,6 +1172,7 @@ pub(crate) fn spawn_tooltip(mut commands: Commands, settings: Res<EawUiSettings>
                 position_type: PositionType::Absolute,
                 padding: UiRect::axes(Val::Px(7.0), Val::Px(4.0)),
                 border: UiRect::all(Val::Px(1.0)),
+                max_width: Val::Px(330.0),
                 display: Display::None,
                 ..default()
             },
@@ -965,7 +1211,9 @@ pub(crate) fn tooltip(
     let mut hit = None;
     for (b, i, cn, gt) in &buttons {
         let forced_hit = forced.0.as_deref().is_some_and(|f| f.eq_ignore_ascii_case(&b.name));
-        if (*i != Interaction::None || forced_hit) && !b.tooltips.is_empty() {
+        if (*i != Interaction::None || forced_hit)
+            && (!b.tooltips.is_empty() || b.tooltip_literal.is_some())
+        {
             hit = Some((b, cn, gt, forced_hit));
             if !forced_hit {
                 break;
@@ -980,6 +1228,7 @@ pub(crate) fn tooltip(
         .tooltips
         .iter()
         .find_map(|k| assets.text.get(k).filter(|t| !t.is_empty()))
+        .or(b.tooltip_literal.as_deref())
         .unwrap_or("");
     if text.is_empty() {
         node.display = Display::None;
@@ -1029,6 +1278,78 @@ pub(crate) fn ui_scale(
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+/// Writes [`PanelData::texts`] into text components of shell panels.
+pub(crate) fn panel_texts(
+    panel: Res<PanelData>,
+    fresh: Query<(), Added<PanelText>>,
+    mut texts: Query<(&PanelText, &mut Text)>,
+) {
+    if !panel.is_changed() && fresh.is_empty() {
+        return;
+    }
+    for (n, mut t) in &mut texts {
+        t.0 = panel.texts.get(&n.0).cloned().unwrap_or_default();
+    }
+}
+
+
+
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn digits_are_grouped() {
+        assert_eq!(group_digits(0), "0");
+        assert_eq!(group_digits(999), "999");
+        assert_eq!(group_digits(12_450), "12,450");
+        assert_eq!(group_digits(-1_234_567), "-1,234,567");
+    }
+
+    #[test]
+    fn slot_names_map_to_kinds() {
+        assert_eq!(slot_for("queue03").map(|s| (s.kind, s.index)), Some((SlotKind::Queue, 3)));
+        assert_eq!(slot_for("tqueue09").map(|s| s.index), Some(9));
+        assert_eq!(slot_for("b_create_17").map(|s| s.kind), Some(SlotKind::Pad));
+        assert_eq!(slot_for("s_select_05").map(|s| s.kind), Some(SlotKind::Select));
+        assert!(slot_for("b_zoom").is_none());
+    }
+
+    #[test]
+    fn bounds_union_and_within() {
+        let (lo, hi) = bounds_of([
+            (Vec2::new(0.0, 0.0), Vec2::new(10.0, 5.0)),
+            (Vec2::new(-3.0, 2.0), Vec2::new(4.0, 9.0)),
+        ].into_iter());
+        assert_eq!((lo, hi), (Vec2::new(-3.0, 0.0), Vec2::new(10.0, 9.0)));
+        assert_eq!(bounds_of(std::iter::empty()), (Vec2::ZERO, Vec2::ONE));
+        assert!(within(Vec2::new(1.0, 1.0), lo, hi));
+        assert!(!within(Vec2::new(11.0, 1.0), lo, hi));
+    }
+
+    #[test]
+    fn faction_indices_follow_the_data() {
+        assert_eq!(UiFaction::Rebel.list_index(), 0);
+        assert_eq!(UiFaction::Empire.list_index(), 1);
+        assert_eq!(UiFaction::Empire.mesh_alt(), 0);
+        assert_eq!(UiFaction::Rebel.mesh_alt(), 1);
+        assert_eq!(UiFaction::from_name(" REBEL "), UiFaction::Rebel);
+        assert_eq!(UiFaction::from_name("Hutts"), UiFaction::Underworld);
+    }
+}
 
 
 

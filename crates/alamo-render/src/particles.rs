@@ -94,6 +94,8 @@ pub struct AlamoParticles {
     /// The entity is already below an Alamo-space node (a model proxy), so no Z-up conversion
     /// is applied.
     pub in_model_space: bool,
+    /// Brightness and size multiplier (1 = as authored); engine exhausts follow [`EngineThrottle`].
+    pub intensity: f32,
 }
 
 impl AlamoParticles {
@@ -103,6 +105,7 @@ impl AlamoParticles {
             path: path.into(),
             enabled: true,
             in_model_space: false,
+            intensity: 1.0,
         }
     }
 
@@ -351,6 +354,7 @@ pub fn attach_proxy_particles(
             path: proxy.name.clone(),
             enabled,
             in_model_space: true,
+            intensity: 1.0,
         });
     }
 }
@@ -358,21 +362,26 @@ pub fn attach_proxy_particles(
 /// Camera data used to orient quads.
 #[derive(Resource, Default, Clone, Copy)]
 pub struct ParticleView {
-    rotation: Quat,
-    position: Vec3,
+    pub(crate) rotation: Quat,
+    pub(crate) position: Vec3,
+    /// Screen pixels covered by one world unit at distance 1 (perspective cameras).
+    pub(crate) px_per_unit: f32,
 }
 
 /// Captures the active camera.
 pub fn update_particle_view(
     mut view: ResMut<ParticleView>,
-    cameras: Query<(&Camera, &GlobalTransform), With<Camera3d>>,
+    cameras: Query<(&Camera, &GlobalTransform, &Projection), With<Camera3d>>,
 ) {
-    if let Some((_, gt)) = cameras.iter().find(|(c, _)| c.is_active) {
+    if let Some((cam, gt, proj)) = cameras.iter().find(|(c, _, _)| c.is_active) {
         view.rotation = gt.rotation();
         view.position = gt.translation();
+        view.px_per_unit = match (proj, cam.physical_target_size()) {
+            (Projection::Perspective(p), Some(size)) => size.y as f32 / (2.0 * (p.fov * 0.5).tan()),
+            _ => 0.0,
+        };
     }
 }
-
 /// Particle space is Y-up, Alamo model space Z-up: `(x, y, z) -> (x, -z, y)`.
 fn particle_to_alamo() -> Quat {
     Quat::from_rotation_x(std::f32::consts::FRAC_PI_2)
@@ -505,15 +514,36 @@ fn step_emitter(e: &Emitter, rt: &mut EmitterRuntime, cx: &StepCtx, budget: &mut
     }
 }
 
-fn build_quads(e: &Emitter, rt: &mut EmitterRuntime, to_world: &Affine3A, scale: f32) {
+fn build_quads(
+    e: &Emitter,
+    rt: &mut EmitterRuntime,
+    to_world: &Affine3A,
+    scale: f32,
+    intensity: f32,
+    cull: Option<(Vec3, f32)>,
+) {
+    let color_gain = if intensity < 1.0 {
+        0.25 + 0.75 * intensity.max(0.0)
+    } else {
+        intensity
+    };
+    let size_gain = if intensity < 1.0 {
+        0.7 + 0.3 * intensity.max(0.0)
+    } else {
+        1.0
+    };
     rt.quads.clear();
     let grid = e.atlas_grid.max(1);
     let cells = grid * grid;
     for p in &rt.particles {
         let t = (p.age / p.life).clamp(0.0, 1.0);
         let a = e.color[3].at(t);
-        let (r, g, b) = (e.color[0].at(t), e.color[1].at(t), e.color[2].at(t));
-        let size = e.size.at(t) * scale;
+        let (r, g, b) = (
+            e.color[0].at(t) * color_gain,
+            e.color[1].at(t) * color_gain,
+            e.color[2].at(t) * color_gain,
+        );
+        let size = e.size.at(t) * scale * size_gain;
         if a <= 0.001 || size <= 0.0 {
             continue;
         }
@@ -525,6 +555,11 @@ fn build_quads(e: &Emitter, rt: &mut EmitterRuntime, to_world: &Affine3A, scale:
         let _ = p.frame;
         // Frame tracks use mode 2: only the start value is the sprite; the end value is a
         // placeholder (usually 2 or 0).
+        if let Some((eye, px_per_unit)) = cull
+            && size * px_per_unit < (center - eye).length().max(1e-3)
+        {
+            continue;
+        }
         let cell = (e.frame.start.max(0.0) as u32).min(cells - 1);
         rt.quads.push(Quad {
             center,
@@ -541,6 +576,8 @@ fn build_quads(e: &Emitter, rt: &mut EmitterRuntime, to_world: &Affine3A, scale:
 #[allow(clippy::too_many_arguments)]
 pub fn simulate_particles(
     time: Res<Time>,
+    view: Res<ParticleView>,
+    lod: Res<crate::lod::LodSettings>,
     settings: Res<ParticleSettings>,
     mut stats: ResMut<ParticleStats>,
     mut systems: Query<(
@@ -551,6 +588,12 @@ pub fn simulate_particles(
     )>,
 ) {
     let started = std::time::Instant::now();
+    let cull = (lod.enabled && view.px_per_unit > 0.0).then(|| {
+        (
+            view.position,
+            view.px_per_unit / lod.particle_min_px.max(0.01),
+        )
+    });
     let dt = settings
         .fixed_step
         .unwrap_or_else(|| time.delta_secs().min(0.1));
@@ -596,7 +639,7 @@ pub fn simulate_particles(
                     },
                     &mut local_budget,
                 );
-                build_quads(e, rt, &to_world, scale);
+                build_quads(e, rt, &to_world, scale, spec.intensity, cull);
             }
         });
     live_total = systems.iter().map(|(_, _, _, i)| i.live()).sum();
@@ -792,6 +835,32 @@ fn empty_mesh() -> Mesh {
     mesh
 }
 
+/// Engine throttle of a ship (0 = idle, 1 = full thrust), set by game code from its speed.
+/// The `pe_*` engine particle systems of the model scale their brightness and size with it and
+/// switch off at zero.
+#[derive(Component, Debug, Clone, Copy)]
+pub struct EngineThrottle(pub f32);
+
+/// Applies [`EngineThrottle`] to the engine proxies of a model.
+pub fn apply_engine_throttle(
+    ships: Query<(&EngineThrottle, &crate::model::AlamoModelLoaded)>,
+    mut proxies: Query<&mut AlamoParticles>,
+) {
+    for (t, loaded) in &ships {
+        let v = t.0.clamp(0.0, 1.0);
+        for &e in &loaded.proxies {
+            let Ok(mut p) = proxies.get_mut(e) else {
+                continue;
+            };
+            let name = p.path.to_ascii_lowercase();
+            if name.starts_with("pe_") || name.starts_with("pte_") {
+                p.intensity = v;
+                p.enabled = v > 0.02;
+            }
+        }
+    }
+}
+
 /// Registers particle resources and systems.
 pub fn build(app: &mut App) {
     bevy::asset::embedded_asset!(app, "particle.wgsl");
@@ -802,12 +871,14 @@ pub fn build(app: &mut App) {
         .init_resource::<ParticleBatches>()
         .init_resource::<ExtraBatchGeometry>()
         .init_resource::<ParticleView>()
+        .init_resource::<crate::lod::LodSettings>()
         .add_systems(
             PostUpdate,
             (
                 attach_proxy_particles,
                 load_particles,
                 update_particle_view,
+                apply_engine_throttle,
                 simulate_particles,
                 update_particle_batches,
             )

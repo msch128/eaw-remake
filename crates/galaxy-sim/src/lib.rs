@@ -15,6 +15,7 @@
 pub mod ai;
 mod catalog;
 pub mod combat;
+mod api;
 pub mod production;
 pub mod rng;
 pub mod sim;
@@ -24,10 +25,10 @@ pub mod world;
 
 pub use sim::Sim;
 pub use state::{
-    Command, CommandError, CommandOk, Event, FactionState, Fleet, FleetLocation, Galaxy, Lane, PendingBattle, PlanetState,
+    Command, CommandError, CommandOk, Event, FactionState, ShipId, Fleet, FleetLocation, Galaxy, Lane, PendingBattle, PlanetState,
     ProductionItem, ProductionKind,
 };
 pub use world::{
-    BattleResolver, CombatStats, FactionId, FactionInfo, FleetId, PlanetId, PlanetInfo, RouteInfo, SimConfig, SimError, StarbaseTypeId,
+    BattleResolver, CombatStats, ObjectKind, FactionId, FactionInfo, FleetId, PlanetId, PlanetInfo, RouteInfo, SimConfig, SimError, StarbaseTypeId,
     StarbaseType, StructureType, StructureTypeId, UnitRole, UnitType, UnitTypeId, VictoryRules, Weapon, World,
 };

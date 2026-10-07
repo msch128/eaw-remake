@@ -252,10 +252,8 @@ impl Battle {
             rows[row_of(class_of(inst.0))].push(inst);
         }
         let toward_enemy = if has_structures { 1200.0 } else { 0.0 };
-        for (ri, row) in rows.iter().enumerate() {
-            if row.is_empty() {
-                continue;
-            }
+        // Rows are packed: a fleet of fighters only starts at the origin, not three rows ahead of it.
+        for (ri, row) in rows.iter().filter(|r| !r.is_empty()).enumerate() {
             let spacing: Vec<f32> = row
                 .iter()
                 .map(|&(s, _)| {
@@ -346,6 +344,7 @@ impl Battle {
             abilities: vec![AbilityState { active: 0.0, cooldown: 0.0, target: NONE }; def.abilities.len()],
             tractor_cut: 0.0,
             since_hit: 1.0e3,
+            shield_lock: 0.0,
             stun: 0.0,
             stun_speed_cut: 0.0,
             stun_rate_cut: 0.0,
@@ -802,6 +801,9 @@ impl Battle {
             let sd = dmg * cat.damage.multiplier(pd.damage_type, def.shield_armor);
             if sd <= s.shield {
                 s.shield -= sd;
+                if s.shield <= 0.0 {
+                    s.shield_lock = cat.depleted_shield_disable;
+                }
                 shield_hit = true;
                 if record {
                     self.events.push(Event::Hit { ship: id, attacker, projectile: proj, pos, kind: HitKind::Shield, damage: sd });
@@ -809,6 +811,7 @@ impl Battle {
             } else {
                 let overflow = (sd - s.shield) / sd;
                 s.shield = 0.0;
+                s.shield_lock = cat.depleted_shield_disable;
                 hull_part = dmg * overflow;
             }
         } else if s.shield <= 0.0 || !pd.shield_damage {
@@ -932,7 +935,8 @@ impl Battle {
                     s.stun_rate_cut = 0.0;
                 }
                 s.since_hit += dt;
-                if s.shield_gen_ok && def.shield > 0.0 && s.shield < def.shield && s.since_hit >= self.config.shield_regen_delay {
+                s.shield_lock = (s.shield_lock - dt).max(0.0);
+                if s.shield_gen_ok && def.shield > 0.0 && s.shield < def.shield && s.shield_lock <= 0.0 && s.since_hit >= self.config.shield_regen_delay {
                     let mult: f32 = def.abilities.iter().zip(&s.abilities).filter(|(_, st)| st.active > 0.0).map(|(a, _)| a.shield_regen_mult).product();
                     s.shield = (s.shield + def.shield_regen / cat.shield_interval * mult * dt).min(def.shield);
                 }
@@ -1123,7 +1127,7 @@ fn scan(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig) {
     };
     let me = snaps[s.id as usize];
     // Priority table: AI attack-move orders use the `<set>_Attack_Move` variant.
-    let set = if matches!(s.order, Order::AttackMove(_)) { def.priority_attack_move } else { def.priority }
+    let set = if cfg.attack_move_sets && matches!(s.order, Order::AttackMove(_)) { def.priority_attack_move } else { def.priority }
         .and_then(|i| cat.priority_sets.get(i as usize));
     let mut found: Vec<(f32, f32, u32)> = Vec::with_capacity(32);
     for (i, t) in snaps.iter().enumerate() {
@@ -1230,7 +1234,7 @@ fn mov(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, spawn: &
                     Goal::Point(t.pos, 0.0)
                 }
             } else {
-                let stand = if def.preferred_range > 0.0 { def.preferred_range + t.radius * 0.5 } else { 0.0 };
+                let stand = if def.preferred_range > 0.0 { def.preferred_range * cfg.engage_range_scale + t.radius * 0.5 } else { 0.0 };
                 if d > stand * 1.05 {
                     Goal::Point(t.pos, stand)
                 } else {
@@ -1388,7 +1392,7 @@ fn weapons(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, rng:
     let mut delay_mult = ability_product(def, s, |a| a.weapon_delay_mult) * rate_cut;
     // Hardpoint priorities of the ship's targeting set (AI attack-move sets name shield generators,
     // engines, hangars ... in order).
-    let hp_set = if matches!(s.order, Order::AttackMove(_)) { def.priority_attack_move } else { def.priority }
+    let hp_set = if cfg.attack_move_sets && matches!(s.order, Order::AttackMove(_)) { def.priority_attack_move } else { def.priority }
         .and_then(|i| cat.priority_sets.get(i as usize))
         .filter(|p| !p.hardpoints.is_empty());
     let salvo_active = def.abilities.iter().zip(&s.abilities).any(|(a, st)| a.salvo && st.active > 0.0);

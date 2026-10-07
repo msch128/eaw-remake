@@ -132,7 +132,7 @@ fn defense_strength(world: &World, galaxy: &Galaxy, planet: PlanetId, attacker: 
     let ps = &galaxy.planets[planet as usize];
     let mut parts: Vec<(Source, u32)> = Vec::new();
     if let Some(o) = ps.owner
-        && world.hostile(attacker, o)
+        && galaxy.hostile(world, attacker, o)
     {
         if let Some(sb) = ps.starbase {
             parts.push((Source::Starbase(sb), 1));
@@ -140,7 +140,7 @@ fn defense_strength(world: &World, galaxy: &Galaxy, planet: PlanetId, attacker: 
         }
         parts.extend(ps.structures.iter().filter(|&&s| world.structures[s as usize].combat.is_some()).map(|&s| (Source::Structure(s), 1)));
     }
-    for f in galaxy.fleets_at(planet).filter(|f| world.hostile(attacker, f.owner)) {
+    for f in galaxy.fleets_at(planet).filter(|f| galaxy.hostile(world, attacker, f.owner)) {
         parts.extend(f.units.iter().map(|(&u, &c)| (Source::Unit(u), c)));
     }
     world.strength(parts)
@@ -183,7 +183,7 @@ fn plan_military(world: &World, galaxy: &Galaxy, faction: FactionId, rng: &mut R
                 continue;
             }
             let owner = galaxy.planets[t as usize].owner;
-            if owner == Some(faction) || owner.is_some_and(|o| !world.hostile(faction, o)) {
+            if owner == Some(faction) || owner.is_some_and(|o| !galaxy.hostile(world, faction, o)) {
                 continue;
             }
             let hops_cost = dist[t as usize] as f32 / 100.0;

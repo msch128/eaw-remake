@@ -1,0 +1,434 @@
+//! User settings: window, graphics, audio and camera options, persisted as a small TOML file
+//! under `%APPDATA%\SpacePeace\settings.toml` (never inside the repository). Command line flags
+//! override the stored values for the current run.
+
+use std::{
+    path::PathBuf,
+    time::{Duration, Instant},
+};
+
+use alamo_audio::AudioBuses;
+use bevy::{
+    prelude::*,
+    window::{MonitorSelection, PresentMode, PrimaryWindow, WindowMode},
+};
+
+use crate::cli::Args;
+
+/// Selectable window resolutions (windowed mode).
+pub const RESOLUTIONS: [(u32, u32); 6] =
+    [(1280, 720), (1600, 900), (1920, 1080), (2560, 1440), (3200, 1800), (3840, 2160)];
+/// Selectable frame rate caps; 0 means unlimited.
+pub const FPS_CAPS: [u32; 6] = [0, 30, 60, 120, 144, 240];
+/// Selectable UI scales.
+pub const UI_SCALES: [f32; 6] = [0.75, 1.0, 1.25, 1.5, 1.75, 2.0];
+/// Selectable camera speed multipliers.
+pub const CAMERA_SPEEDS: [f32; 5] = [0.5, 0.75, 1.0, 1.5, 2.0];
+
+/// All user-configurable options.
+#[derive(Resource, Debug, Clone, PartialEq)]
+pub struct Settings {
+    /// Borderless fullscreen instead of a window.
+    pub borderless: bool,
+    /// Window size in windowed mode.
+    pub resolution: (u32, u32),
+    /// Vertical sync.
+    pub vsync: bool,
+    /// Frame rate cap, 0 = unlimited.
+    pub fps_cap: u32,
+    /// UI scale factor.
+    pub ui_scale: f32,
+    /// Master volume 0..1.
+    pub master: f32,
+    /// Music volume 0..1.
+    pub music: f32,
+    /// Sound effect volume 0..1.
+    pub sfx: f32,
+    /// Speech volume 0..1.
+    pub speech: f32,
+    /// Scroll the map when the cursor touches the screen edge.
+    pub edge_scroll: bool,
+    /// Camera pan speed multiplier.
+    pub camera_speed: f32,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            borderless: false,
+            resolution: (1600, 900),
+            vsync: true,
+            fps_cap: 0,
+            ui_scale: 1.0,
+            master: 0.5,
+            music: 0.6,
+            sfx: 1.0,
+            speech: 1.0,
+            edge_scroll: true,
+            camera_speed: 1.0,
+        }
+    }
+}
+
+/// One row of the options menu.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OptionKey {
+    /// Window or borderless fullscreen.
+    WindowMode,
+    /// Window resolution.
+    Resolution,
+    /// Vertical sync.
+    Vsync,
+    /// Frame rate cap.
+    FpsCap,
+    /// UI scale.
+    UiScale,
+    /// Master volume.
+    Master,
+    /// Music volume.
+    Music,
+    /// Effects volume.
+    Sfx,
+    /// Speech volume.
+    Speech,
+    /// Edge scrolling.
+    EdgeScroll,
+    /// Camera speed.
+    CameraSpeed,
+}
+
+impl OptionKey {
+    /// All rows in display order.
+    pub const ALL: [OptionKey; 11] = [
+        OptionKey::WindowMode,
+        OptionKey::Resolution,
+        OptionKey::Vsync,
+        OptionKey::FpsCap,
+        OptionKey::UiScale,
+        OptionKey::Master,
+        OptionKey::Music,
+        OptionKey::Sfx,
+        OptionKey::Speech,
+        OptionKey::EdgeScroll,
+        OptionKey::CameraSpeed,
+    ];
+
+    /// Row label.
+    pub fn label(self) -> &'static str {
+        match self {
+            OptionKey::WindowMode => "Window mode",
+            OptionKey::Resolution => "Resolution",
+            OptionKey::Vsync => "Vertical sync",
+            OptionKey::FpsCap => "FPS limit",
+            OptionKey::UiScale => "UI scale",
+            OptionKey::Master => "Master volume",
+            OptionKey::Music => "Music volume",
+            OptionKey::Sfx => "Effects volume",
+            OptionKey::Speech => "Speech volume",
+            OptionKey::EdgeScroll => "Edge scrolling",
+            OptionKey::CameraSpeed => "Camera speed",
+        }
+    }
+}
+
+/// Index of the entry of `list` nearest to `value`.
+fn nearest<T: Copy>(list: &[T], dist: impl Fn(T) -> f32) -> usize {
+    (0..list.len())
+        .min_by(|&a, &b| dist(list[a]).total_cmp(&dist(list[b])))
+        .unwrap_or(0)
+}
+
+/// Moves `index` by `dir` inside a list of `len` entries, wrapping around.
+fn cycle(index: usize, dir: i32, len: usize) -> usize {
+    (index as i32 + dir).rem_euclid(len as i32) as usize
+}
+
+fn step_volume(v: f32, dir: i32) -> f32 {
+    (((v * 10.0).round() + dir as f32).clamp(0.0, 10.0)) / 10.0
+}
+
+impl Settings {
+    /// Text shown for the current value of `key`.
+    pub fn value_text(&self, key: OptionKey) -> String {
+        let pct = |v: f32| format!("{:.0}%", v * 100.0);
+        let on = |b: bool| if b { "On" } else { "Off" }.to_owned();
+        match key {
+            OptionKey::WindowMode => if self.borderless { "Borderless" } else { "Windowed" }.into(),
+            OptionKey::Resolution => format!("{} x {}", self.resolution.0, self.resolution.1),
+            OptionKey::Vsync => on(self.vsync),
+            OptionKey::FpsCap => {
+                if self.fps_cap == 0 { "Unlimited".into() } else { self.fps_cap.to_string() }
+            }
+            OptionKey::UiScale => format!("{:.0}%", self.ui_scale * 100.0),
+            OptionKey::Master => pct(self.master),
+            OptionKey::Music => pct(self.music),
+            OptionKey::Sfx => pct(self.sfx),
+            OptionKey::Speech => pct(self.speech),
+            OptionKey::EdgeScroll => on(self.edge_scroll),
+            OptionKey::CameraSpeed => format!("{:.2}x", self.camera_speed),
+        }
+    }
+
+    /// Changes `key` one step forward (`dir > 0`) or backward.
+    pub fn step(&mut self, key: OptionKey, dir: i32) {
+        match key {
+            OptionKey::WindowMode => self.borderless = !self.borderless,
+            OptionKey::Resolution => {
+                let i = nearest(&RESOLUTIONS, |r| {
+                    (r.0 as f32 - self.resolution.0 as f32).abs() + (r.1 as f32 - self.resolution.1 as f32).abs()
+                });
+                self.resolution = RESOLUTIONS[cycle(i, dir, RESOLUTIONS.len())];
+            }
+            OptionKey::Vsync => self.vsync = !self.vsync,
+            OptionKey::FpsCap => {
+                let i = nearest(&FPS_CAPS, |c| (c as f32 - self.fps_cap as f32).abs());
+                self.fps_cap = FPS_CAPS[cycle(i, dir, FPS_CAPS.len())];
+            }
+            OptionKey::UiScale => {
+                let i = nearest(&UI_SCALES, |s| (s - self.ui_scale).abs());
+                self.ui_scale = UI_SCALES[cycle(i, dir, UI_SCALES.len())];
+            }
+            OptionKey::Master => self.master = step_volume(self.master, dir),
+            OptionKey::Music => self.music = step_volume(self.music, dir),
+            OptionKey::Sfx => self.sfx = step_volume(self.sfx, dir),
+            OptionKey::Speech => self.speech = step_volume(self.speech, dir),
+            OptionKey::EdgeScroll => self.edge_scroll = !self.edge_scroll,
+            OptionKey::CameraSpeed => {
+                let i = nearest(&CAMERA_SPEEDS, |s| (s - self.camera_speed).abs());
+                self.camera_speed = CAMERA_SPEEDS[cycle(i, dir, CAMERA_SPEEDS.len())];
+            }
+        }
+    }
+
+    /// Location of the settings file, `None` when `%APPDATA%` is not set.
+    pub fn path() -> Option<PathBuf> {
+        std::env::var_os("APPDATA").map(|a| PathBuf::from(a).join("SpacePeace").join("settings.toml"))
+    }
+
+    /// Loads the stored settings, falling back to defaults for a missing or unreadable file.
+    pub fn load() -> Self {
+        Self::path()
+            .and_then(|p| std::fs::read_to_string(p).ok())
+            .map(|s| Self::from_toml(&s))
+            .unwrap_or_default()
+    }
+
+    /// Writes the settings file (errors are logged, not fatal).
+    pub fn save(&self) {
+        let Some(path) = Self::path() else { return };
+        let result = path
+            .parent()
+            .map_or(Ok(()), std::fs::create_dir_all)
+            .and_then(|()| std::fs::write(&path, self.to_toml()));
+        if let Err(e) = result {
+            warn!("cannot save settings to {}: {e}", path.display());
+        }
+    }
+
+    /// Serialises to a flat TOML document.
+    pub fn to_toml(&self) -> String {
+        format!(
+            "# Space Peace settings\n\
+             window_mode = \"{}\"\n\
+             resolution = [{}, {}]\n\
+             vsync = {}\n\
+             fps_cap = {}\n\
+             ui_scale = {}\n\
+             master_volume = {}\n\
+             music_volume = {}\n\
+             sfx_volume = {}\n\
+             speech_volume = {}\n\
+             edge_scroll = {}\n\
+             camera_speed = {}\n",
+            if self.borderless { "borderless" } else { "windowed" },
+            self.resolution.0,
+            self.resolution.1,
+            self.vsync,
+            self.fps_cap,
+            self.ui_scale,
+            self.master,
+            self.music,
+            self.sfx,
+            self.speech,
+            self.edge_scroll,
+            self.camera_speed,
+        )
+    }
+
+    /// Parses a document written by [`Settings::to_toml`]; unknown or invalid entries keep the
+    /// default value.
+    pub fn from_toml(text: &str) -> Self {
+        let mut s = Self::default();
+        for line in text.lines() {
+            let line = line.split('#').next().unwrap_or("").trim();
+            let Some((key, value)) = line.split_once('=') else { continue };
+            let (key, value) = (key.trim(), value.trim());
+            let float = || value.parse::<f32>().ok();
+            let boolean = || value.parse::<bool>().ok();
+            match key {
+                "window_mode" => s.borderless = value.trim_matches('"') == "borderless",
+                "resolution" => {
+                    let nums: Vec<u32> = value
+                        .trim_matches(|c| c == '[' || c == ']')
+                        .split(',')
+                        .filter_map(|n| n.trim().parse().ok())
+                        .collect();
+                    if let [w, h] = nums[..]
+                        && w >= 640
+                        && h >= 480
+                    {
+                        s.resolution = (w, h);
+                    }
+                }
+                "vsync" => s.vsync = boolean().unwrap_or(s.vsync),
+                "fps_cap" => s.fps_cap = value.parse().unwrap_or(s.fps_cap),
+                "ui_scale" => s.ui_scale = float().unwrap_or(s.ui_scale).clamp(0.5, 3.0),
+                "master_volume" => s.master = float().unwrap_or(s.master).clamp(0.0, 1.0),
+                "music_volume" => s.music = float().unwrap_or(s.music).clamp(0.0, 1.0),
+                "sfx_volume" => s.sfx = float().unwrap_or(s.sfx).clamp(0.0, 1.0),
+                "speech_volume" => s.speech = float().unwrap_or(s.speech).clamp(0.0, 1.0),
+                "edge_scroll" => s.edge_scroll = boolean().unwrap_or(s.edge_scroll),
+                "camera_speed" => s.camera_speed = float().unwrap_or(s.camera_speed).clamp(0.1, 4.0),
+                _ => {}
+            }
+        }
+        s
+    }
+
+    /// Applies the command line flags on top of the stored settings.
+    pub fn with_cli(mut self, args: &Args) -> Self {
+        if args.no_vsync {
+            self.vsync = false;
+        }
+        if args.fullscreen {
+            self.borderless = true;
+        }
+        if let Some(v) = args.volume {
+            self.master = v;
+        }
+        self
+    }
+}
+
+/// Applies [`Settings`] to the window, UI, audio buses and frame pacing.
+pub struct SettingsPlugin;
+
+impl Plugin for SettingsPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_systems(
+            Update,
+            (apply_window, apply_ui_scale, apply_audio).run_if(resource_changed::<Settings>),
+        )
+        .add_systems(Last, limit_fps);
+    }
+}
+
+fn apply_window(settings: Res<Settings>, window: Option<Single<&mut Window, With<PrimaryWindow>>>) {
+    let Some(mut window) = window else { return };
+    let mode = if settings.borderless {
+        WindowMode::BorderlessFullscreen(MonitorSelection::Current)
+    } else {
+        WindowMode::Windowed
+    };
+    if window.mode != mode {
+        window.mode = mode;
+    }
+    let (w, h) = settings.resolution;
+    if !settings.borderless && (window.resolution.width() as u32, window.resolution.height() as u32) != (w, h) {
+        window.resolution.set(w as f32, h as f32);
+    }
+    let present = if settings.vsync { PresentMode::AutoVsync } else { PresentMode::AutoNoVsync };
+    if window.present_mode != present {
+        window.present_mode = present;
+    }
+}
+
+fn apply_ui_scale(settings: Res<Settings>, mut scale: ResMut<UiScale>) {
+    if scale.0 != settings.ui_scale {
+        scale.0 = settings.ui_scale;
+    }
+}
+
+fn apply_audio(settings: Res<Settings>, buses: Option<ResMut<AudioBuses>>) {
+    if let Some(mut b) = buses {
+        b.master = settings.master;
+        b.music = settings.music;
+        b.sfx = settings.sfx;
+        b.speech = settings.speech;
+    }
+}
+
+/// Sleeps at the end of the frame so the frame rate does not exceed the cap.
+fn limit_fps(settings: Res<Settings>, mut last: Local<Option<Instant>>) {
+    if settings.fps_cap > 0 {
+        let target = Duration::from_secs_f64(1.0 / f64::from(settings.fps_cap));
+        if let Some(prev) = *last {
+            let spent = prev.elapsed();
+            if spent < target {
+                let remaining = target - spent;
+                // Sleep most of the wait, spin for the last bit for accuracy.
+                if remaining > Duration::from_millis(2) {
+                    std::thread::sleep(remaining - Duration::from_millis(1));
+                }
+                while prev.elapsed() < target {
+                    std::hint::spin_loop();
+                }
+            }
+        }
+    }
+    *last = Some(Instant::now());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn toml_round_trip() {
+        let s = Settings {
+            borderless: true,
+            resolution: (2560, 1440),
+            vsync: false,
+            fps_cap: 144,
+            ui_scale: 1.5,
+            master: 0.3,
+            music: 0.8,
+            sfx: 0.9,
+            speech: 0.1,
+            edge_scroll: false,
+            camera_speed: 1.5,
+        };
+        assert_eq!(Settings::from_toml(&s.to_toml()), s);
+    }
+
+    #[test]
+    fn invalid_entries_keep_defaults() {
+        let s = Settings::from_toml("vsync = maybe\nui_scale = 99\nresolution = [1, 2]\nunknown = 3\n");
+        assert!(s.vsync);
+        assert_eq!(s.ui_scale, 3.0);
+        assert_eq!(s.resolution, Settings::default().resolution);
+    }
+
+    #[test]
+    fn steps_cycle_and_clamp() {
+        let mut s = Settings::default();
+        s.step(OptionKey::Master, 1);
+        assert_eq!(s.master, 0.6);
+        for _ in 0..20 {
+            s.step(OptionKey::Master, 1);
+        }
+        assert_eq!(s.master, 1.0);
+        s.step(OptionKey::FpsCap, -1);
+        assert_eq!(s.fps_cap, 240);
+        s.step(OptionKey::WindowMode, 1);
+        assert!(s.borderless);
+    }
+
+    #[test]
+    fn cli_overrides() {
+        let args = Args { no_vsync: true, volume: Some(0.2), ..Args::default() };
+        let s = Settings::default().with_cli(&args);
+        assert!(!s.vsync);
+        assert_eq!(s.master, 0.2);
+    }
+}

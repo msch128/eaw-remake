@@ -84,6 +84,8 @@ fn main() {
     let mut look = vec![0.0, 0.0, 0.0];
     let mut no_alpha = false;
     let mut hdr = false;
+    let (mut shadows, mut nolod) = (false, false);
+    let mut throttle: Option<f32> = None;
     let mut teams = 6usize;
     let mut fxn = 1usize;
     let mut mv: Vec<f32> = vec![0.0; 3];
@@ -117,6 +119,9 @@ fn main() {
             "--radius" => radius = it.next().unwrap().parse().unwrap_or(100.0),
             "--addalpha" => no_alpha = true,
             "--hdr" => hdr = true,
+            "--shadows" => shadows = true,
+            "--nolod" => nolod = true,
+            "--throttle" => throttle = it.next().unwrap().parse().ok(),
             "--teams" => teams = it.next().unwrap().parse().unwrap_or(6),
             "--fxn" => fxn = it.next().unwrap().parse().unwrap_or(1),
             "--move" => mv = parse_vec(it.next().unwrap()),
@@ -138,6 +143,14 @@ fn main() {
     }))
     .add_plugins(ScheduleRunnerPlugin::run_loop(Duration::from_millis(1)))
     .add_plugins(AlamoRenderPlugin::new(fs))
+    .insert_resource(alamo_render::AlamoRenderSettings {
+        shadows,
+        ..default()
+    })
+    .insert_resource(alamo_render::LodSettings {
+        enabled: !nolod,
+        ..default()
+    })
     .insert_resource(alamo_render::ParticleSettings {
         additive_alpha: no_alpha,
         ..default()
@@ -174,7 +187,11 @@ fn main() {
             spec = spec.with_lod(LodSelect::Level(l));
         }
         spec.bow_forward = bow;
-        root = Some(app.world_mut().spawn((spec, Transform::default())).id());
+        let mut r = app.world_mut().spawn((spec, Transform::default()));
+        if let Some(t) = throttle {
+            r.insert(alamo_render::EngineThrottle(t));
+        }
+        root = Some(r.id());
         for i in 0..many {
             let (gx, gz) = ((i % 15) as f32, (i / 15) as f32);
             let mut m = AlamoModel::new(model.clone()).with_team_color(Color::hsl(
@@ -202,14 +219,26 @@ fn main() {
         }
     }
     let hdr_camera = hdr;
+    let radius_for_shadows = 6000.0 + many as f32 * 150.0;
     {
         let mut commands = app.world_mut().commands();
-        spawn_sun(
-            &mut commands,
-            Vec3::new(sun[0], sun[1], sun[2]),
-            1.0,
-            Color::WHITE,
-        );
+        if shadows {
+            alamo_render::spawn_sun_shadowed(
+                &mut commands,
+                Vec3::new(sun[0], sun[1], sun[2]),
+                1.0,
+                Color::WHITE,
+                radius_for_shadows,
+                2,
+            );
+        } else {
+            spawn_sun(
+                &mut commands,
+                Vec3::new(sun[0], sun[1], sun[2]),
+                1.0,
+                Color::WHITE,
+            );
+        }
         let mut camera = commands.spawn((
             Camera3d::default(),
             Camera::default(),

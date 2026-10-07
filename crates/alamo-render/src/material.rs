@@ -44,6 +44,8 @@ pub const FLAG_VERTEX_COLOR: u32 = 8;
 pub const FLAG_ALPHA_FROM_BASE: u32 = 16;
 /// Invert the green channel of normal maps.
 pub const FLAG_FLIP_GREEN: u32 = 32;
+/// Receive directional shadow maps.
+pub const FLAG_SHADOWS: u32 = 128;
 /// Shield material that is only visible where it was hit (see `hits`).
 pub const FLAG_SHIELD_HITS: u32 = 64;
 

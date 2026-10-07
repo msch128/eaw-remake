@@ -107,6 +107,60 @@ pub struct StoryReward {
     pub faction: Option<String>,
 }
 
+/// A value crossing the script boundary for AI task forces and engine AI functions.
+#[derive(Debug, Clone, PartialEq)]
+pub enum HostValue {
+    /// `nil`.
+    Nil,
+    /// Boolean.
+    Bool(bool),
+    /// Number.
+    Num(f64),
+    /// String.
+    Str(String),
+    /// A game object (planet, unit, ...).
+    Object(ObjectId),
+    /// A player.
+    Player(PlayerId),
+    /// A game object type by name.
+    Type(String),
+    /// A Lua sequence.
+    List(Vec<HostValue>),
+    /// A command block (`IsFinished()` / `Result()`), see [`ScriptHost::block_status`].
+    Block(u64),
+    /// A task force.
+    TaskForce(u64),
+}
+
+/// Description of a task force a plan script declares in `TaskForce = { {"SpaceForce", "MinimumTotalSize = 3", ...} }`.
+#[derive(Debug, Clone)]
+pub struct TaskForceSpec {
+    /// Plan instance the task force belongs to (as given to [`crate::ScriptRuntime::spawn_plan`]).
+    pub plan: u64,
+    /// Global name the script uses (`SpaceForce`, `ReserveForce`, `StructureForce`, ...).
+    pub name: String,
+    /// The requirement strings after the name, as written.
+    pub requirements: Vec<String>,
+    /// Owning player.
+    pub player: PlayerId,
+    /// The plan's target, if it has one.
+    pub target: Option<ObjectId>,
+    /// Numeric globals the plan defined in `Definitions()` (`MinContrastScale`, `MaxUnitsOnGround`, ...),
+    /// plus `IgnoreTarget` as 0 / 1.
+    pub numbers: Vec<(String, f64)>,
+}
+
+/// A call into a plan script requested by the host (`SpaceForce_Production_Failed(tf, type)`, ...).
+#[derive(Debug, Clone)]
+pub struct PlanEvent {
+    /// Plan instance.
+    pub plan: u64,
+    /// Global function to call; missing functions are ignored.
+    pub function: String,
+    /// Arguments.
+    pub args: Vec<HostValue>,
+}
+
 /// Everything scripts can ask of the game. All methods have defaults.
 pub trait ScriptHost {
     /// Current game mode.
@@ -195,9 +249,32 @@ pub trait ScriptHost {
     /// Debug / script log line.
     fn log(&mut self, _script: &str, _text: &str) {}
     /// A story event shows a dialog (`Story_Dialog` file, chapter index); the host resolves the text.
-    fn story_dialog(&mut self, _dialog: &str, _chapter: i32, _event: &str, _faction: Option<&str>) {}
+    fn story_dialog(&mut self, _dialog: &str, _chapter: i32, _event: &str, _faction: Option<&str>) {
+    }
     /// Applies a story reward.
     fn story_reward(&mut self, _reward: &StoryReward) {}
+    /// Creates the task force a plan declared; returns its id.
+    fn create_taskforce(&mut self, _spec: &TaskForceSpec) -> Option<u64> {
+        None
+    }
+    /// A method call on a task force (`Produce_Force`, `Move_To`, `Release_Forces`, ...). `None` means the
+    /// method is not implemented (reported once, then `nil`).
+    fn taskforce_call(&mut self, _tf: u64, _method: &str, _args: &[HostValue]) -> Option<HostValue> {
+        None
+    }
+    /// State of a command block: `(finished, result)`.
+    fn block_status(&mut self, _block: u64) -> (bool, Option<bool>) {
+        (true, Some(false))
+    }
+    /// An engine AI function called as a global (`FindTarget`, `GiveDesireBonus`, `_ProduceObject`, ...).
+    /// `None` = not implemented.
+    fn ai_call(&mut self, _function: &str, _args: &[HostValue]) -> Option<HostValue> {
+        None
+    }
+    /// Callbacks for plan scripts that accumulated since the last call.
+    fn take_plan_events(&mut self) -> Vec<PlanEvent> {
+        Vec::new()
+    }
     /// Called once per unknown or unimplemented API function (first use only).
     fn unimplemented_api(&mut self, _name: &str) {}
 }

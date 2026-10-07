@@ -1,4 +1,4 @@
-//! Coordinate conversion between battle-sim space, map space and Bevy world space.
+﻿//! Coordinate conversion between battle-sim space, map space and Bevy world space.
 //!
 //! * battle-sim: X forward at yaw 0, Y left, Z up (right handed).
 //! * map (`.ted`): Z up; attackers sit at -Y facing +Y, defenders at +Y. The simulation places
@@ -9,7 +9,7 @@
 use bevy::prelude::*;
 
 /// Rotation about Z that turns sim space into map space (sim -X attackers -> map -Y attackers).
-pub const SIM_TO_MAP_YAW: f32 = std::f32::consts::FRAC_PI_2;
+pub const SIM_TO_MAP_YAW: f32 = 0.0;
 
 /// Map space (Z up) to Bevy world space.
 pub fn map_to_bevy(p: [f32; 3]) -> Vec3 {
@@ -84,16 +84,18 @@ mod tests {
 
     #[test]
     fn attackers_end_up_at_map_minus_y() {
-        // Sim -X (attackers) must land at map -Y, i.e. Bevy +Z (toward the default camera).
-        let v = sim_to_bevy(battle_sim::Vec3::new(-1000.0, 0.0, 0.0));
+        // Sim -Y (attackers) is map -Y, i.e. Bevy +Z (toward the default camera).
+        let v = sim_to_bevy(battle_sim::Vec3::new(0.0, -1000.0, 0.0));
         assert!(v.z > 900.0 && v.x.abs() < 1.0);
     }
 
     #[test]
-    fn heading_zero_faces_map_y() {
-        // Yaw 0 is sim +X, which is map +Y, i.e. Bevy -Z; the model bow (Bevy +Z before the
-        // rotation) must follow.
+    fn heading_follows_yaw() {
+        // Yaw 0 is +X; yaw 90 degrees is +Y, i.e. Bevy -Z.
         let bow = ship_rotation(0.0) * Vec3::Z;
+        assert!(bow.x > 0.99, "{bow:?}");
+        let bow = ship_rotation(std::f32::consts::FRAC_PI_2) * Vec3::Z;
         assert!(bow.z < -0.99, "{bow:?}");
     }
 }
+

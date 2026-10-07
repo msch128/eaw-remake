@@ -86,6 +86,11 @@ impl World {
 
 /// Resolves a battle between the given sides.
 pub fn resolve(world: &World, sides: &[SideInput], rng: &mut Rng) -> CombatResult {
+    resolve_allied(world, sides, rng, &Default::default())
+}
+
+/// Like [`resolve`], but factions in `allied` (sorted pairs) do not shoot at each other.
+pub fn resolve_allied(world: &World, sides: &[SideInput], rng: &mut Rng, allied: &std::collections::BTreeSet<(FactionId, FactionId)>) -> CombatResult {
     let dt = world.config.combat_round_seconds;
     // Expand into instances.
     let mut insts: Vec<Vec<Inst>> = sides
@@ -113,7 +118,10 @@ pub fn resolve(world: &World, sides: &[SideInput], rng: &mut Rng) -> CombatResul
         let mut acc: Vec<Vec<(f32, f32, f32)>> = insts.iter().map(|v| vec![(0.0, 0.0, 0.0); v.len()]).collect();
         let mut dealt = false;
         for &si in &alive {
-            let enemies: Vec<usize> = alive.iter().copied().filter(|&o| world.hostile(sides[si].faction, sides[o].faction)).collect();
+            let enemies: Vec<usize> = alive.iter().copied().filter(|&o| {
+                    let (a, b) = (sides[si].faction, sides[o].faction);
+                    world.hostile(a, b) && !allied.contains(&(a.min(b), a.max(b)))
+                }).collect();
             if enemies.is_empty() {
                 continue;
             }

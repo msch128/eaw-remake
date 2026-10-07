@@ -1,13 +1,14 @@
 ﻿//! Empire-at-War style galaxy camera: angled top-down orbit with smooth zoom and clamped panning.
 
 use crate::flow::{AppScreen, not_paused};
+use crate::settings::Settings;
 use bevy::{
     camera::{Hdr, ImageRenderTarget, RenderTarget},
     core_pipeline::tonemapping::Tonemapping,
     input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll, MouseScrollUnit},
     post_process::bloom::Bloom,
     prelude::*,
-    window::{PrimaryWindow, WindowMode},
+    window::PrimaryWindow,
 };
 
 /// Camera setup and control.
@@ -122,6 +123,7 @@ fn control_camera(
     motion: Res<AccumulatedMouseMotion>,
     scroll: Res<AccumulatedMouseScroll>,
     mut bounds: ResMut<CameraBounds>,
+    settings: Res<Settings>,
     window: Option<Single<&Window, With<PrimaryWindow>>>,
     mut cam: Single<(&mut GalaxyCamera, &Projection)>,
 ) {
@@ -172,14 +174,11 @@ fn control_camera(
         dir.x -= 1.0;
     }
 
-    // Screen edge scrolling (only in fullscreen, so windowed use stays comfortable).
+    // Screen edge scrolling (can be switched off in the options).
     let window_height = window.as_ref().map_or(1080.0, |w| w.height());
     if let Some(window) = &window
         && window.focused
-        && matches!(
-            window.mode,
-            WindowMode::BorderlessFullscreen(_) | WindowMode::Fullscreen(..)
-        )
+        && settings.edge_scroll
         && let Some(p) = window.cursor_position()
     {
         if p.x <= EDGE_PIXELS {
@@ -198,7 +197,7 @@ fn control_camera(
     } else {
         1.0
     };
-    pan += (right * dir.x + forward * dir.y) * KEY_PAN_SPEED * cam.distance * dt * speed;
+    pan += (right * dir.x + forward * dir.y) * KEY_PAN_SPEED * settings.camera_speed * cam.distance * dt * speed;
 
     // Right / middle mouse drag: grab the map. World units per pixel from the projection.
     if (buttons.pressed(MouseButton::Right) || buttons.pressed(MouseButton::Middle))

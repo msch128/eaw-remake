@@ -13,6 +13,8 @@
 pub mod components;
 pub mod data;
 pub mod faction;
+pub mod panels;
+pub mod tactical;
 pub mod shell;
 pub mod textures;
 pub mod widgets;
@@ -29,7 +31,19 @@ pub use data::{
     QueueEntry, SelectionEntry,
 };
 pub use faction::UiFaction;
-pub use widgets::{CommandBarMode, CommandBarSpec, EawButton, EawCommandBar, spawn_command_bar};
+pub use panels::{
+    DialogSpec, EawDialogResult, EawMinimapClicked, EawSlotDropped, MinimapData, MinimapDot,
+    MinimapKind, PanelData, PanelSlot, fleet_slot_name, spawn_dialog,
+};
+pub use tactical::{
+    AbilityDef, AbilityState, EawAbilityClicked, EawHardpointClicked, EawSelectionClicked,
+    HardpointMarker, RetreatState, ShipOverlay, TacticalData, TacticalUnit, ability_icon,
+    spawn_unit_panel, unit_abilities, hardpoint_reticle, bar_class,
+};
+pub use widgets::{
+    CommandBarMode, CommandBarSpec, EawButton, EawCommandBar, EawPanel, ShellAnchor, ShellSpec,
+    spawn_command_bar, spawn_shell,
+};
 
 /// How design pixels (1366x768 reference) map to screen pixels.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -131,8 +145,19 @@ impl Plugin for EawUiPlugin {
             warn!("string table not loaded: {e}");
             TextTable::default()
         });
-        app.insert_resource(db)
-            .insert_resource(textures::UiTextures::new(self.fs.clone()))
+        let textures = textures::UiTextures::new(self.fs.clone());
+        // Decode the 64 MB mega texture off the main thread.
+        let slot = textures.library().mega_slot();
+        let fs = self.fs.clone();
+        let task = bevy::tasks::AsyncComputeTaskPool::get_or_init(bevy::tasks::TaskPool::default)
+            .spawn(async move {
+                let _ = slot.set(textures::decode_mega_texture(&fs));
+            });
+        app.insert_resource(MegaTextureTask(Some(task)))
+            .init_resource::<PendingBars>()
+            .add_message::<UiTexturesLoaded>()
+            .insert_resource(db)
+            .insert_resource(textures)
             .insert_resource(EawUiAssets {
                 fs: self.fs.clone(),
                 text,
@@ -141,17 +166,40 @@ impl Plugin for EawUiPlugin {
             .insert_resource(self.settings.clone())
             .init_resource::<CommandBarData>()
             .init_resource::<ForcedTooltip>()
+            .init_resource::<PanelData>()
+            .init_resource::<TacticalData>()
+            .add_message::<EawAbilityClicked>()
+            .add_message::<EawSelectionClicked>()
+            .add_message::<EawHardpointClicked>()
+            .init_resource::<MinimapData>()
+            .init_resource::<panels::DragState>()
+            .add_message::<EawSlotDropped>()
+            .add_message::<EawMinimapClicked>()
+            .add_message::<EawDialogResult>()
             .add_message::<EawButtonClicked>()
-            .add_systems(Startup, widgets::spawn_tooltip)
+            .add_systems(Startup, (widgets::spawn_tooltip, tactical::spawn_overlay_layer))
             .add_systems(
                 Update,
                 (
+                    poll_textures,
                     widgets::ui_scale,
+                    tactical::tactical_sync,
+                    tactical::tactical_buttons,
+                    tactical::button_labels,
+                    tactical::tactical_clicks,
+                    tactical::ship_overlays,
+                    tactical::hardpoint_markers,
+                    tactical::unit_panel,
                     widgets::button_clicks,
                     widgets::button_visuals,
                     widgets::bound_fields,
                     widgets::slots,
                     widgets::status_bars,
+                    widgets::panel_texts,
+                    panels::minimap_marks,
+                    panels::minimap_clicks,
+                    panels::slot_drag,
+                    panels::dialog_buttons,
                     widgets::tooltip,
                 )
                     .chain(),
@@ -159,22 +207,64 @@ impl Plugin for EawUiPlugin {
     }
 }
 
-/// Convenience for spawning bars from systems.
-pub trait EawUiCommandsExt {
-    /// Queues [`spawn_command_bar`]; returns the (reserved) root entity of the bar's marker
-    /// node, which receives [`EawCommandBar`] once the command is applied.
-    fn spawn_eaw_command_bar(&mut self, spec: CommandBarSpec);
-}
+/// Sent once the mega texture finished decoding; textures packed into it are available from now on.
+#[derive(Message, Debug, Clone, Copy)]
+pub struct UiTexturesLoaded;
 
-impl EawUiCommandsExt for Commands<'_, '_> {
-    fn spawn_eaw_command_bar(&mut self, spec: CommandBarSpec) {
-        self.queue(move |world: &mut World| {
+/// Keeps the background decode task alive.
+#[derive(Resource)]
+struct MegaTextureTask(Option<bevy::tasks::Task<()>>);
+
+/// Bars requested before the textures were ready; spawned by [`poll_textures`].
+#[derive(Resource, Default)]
+struct PendingBars(Vec<CommandBarSpec>);
+
+fn poll_textures(
+    mut task: ResMut<MegaTextureTask>,
+    textures: Res<textures::UiTextures>,
+    mut loaded: MessageWriter<UiTexturesLoaded>,
+    mut commands: Commands,
+    mut pending: ResMut<PendingBars>,
+) {
+    if task.0.is_none() || !textures.library().is_ready() {
+        return;
+    }
+    task.0 = None;
+    loaded.write(UiTexturesLoaded);
+    for spec in pending.0.drain(..) {
+        commands.queue(move |world: &mut World| {
             if spawn_command_bar(world, spec).is_none() {
                 warn!("command bar could not be spawned (missing resources or shell model)");
             }
         });
     }
 }
+
+/// Convenience for spawning bars from systems.
+pub trait EawUiCommandsExt {
+    /// Queues [`spawn_command_bar`]; if the textures are still decoding the bar is spawned
+    /// as soon as [`UiTexturesLoaded`] fires. The root receives [`EawCommandBar`].
+    fn spawn_eaw_command_bar(&mut self, spec: CommandBarSpec);
+}
+
+impl EawUiCommandsExt for Commands<'_, '_> {
+    fn spawn_eaw_command_bar(&mut self, spec: CommandBarSpec) {
+        self.queue(move |world: &mut World| {
+            let ready = world
+                .get_resource::<textures::UiTextures>()
+                .is_some_and(|t| t.library().is_ready());
+            if !ready {
+                world.resource_mut::<PendingBars>().0.push(spec);
+            } else if spawn_command_bar(world, spec).is_none() {
+                warn!("command bar could not be spawned (missing resources or shell model)");
+            }
+        });
+    }
+}
+
+
+
+
 
 
 

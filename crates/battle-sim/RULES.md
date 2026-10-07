@@ -1,4 +1,4 @@
-﻿# Tactical space battle rules used by `battle-sim`
+# Tactical space battle rules used by `battle-sim`
 
 Everything is derived from the Remake 4.0 data (`Data/Xml`) plus the `.alo` models for hardpoint
 positions. Where the engine (closed source) defines a rule that is not visible in the data, the value
@@ -8,8 +8,8 @@ is an **estimate** and marked as such; estimates live in `BattleConfig` or in `d
 
 * Fixed step `dt` = 1/30 s. Battle space: X forward at yaw 0, Y left, Z up; ships move in the XY plane.
 * XML speeds (`Max_Speed`, projectile `Max_Speed`) are per frame in the data and multiplied by
-  `Catalog::speed_scale` = 20 to get units per second (estimate; gives Star Destroyer 60 u/s, laser bolts 700 u/s,
-  turbolasers 900 u/s). `Max_Rate_Of_Turn` is used as radians per second. Acceleration times by size class are estimates
+  `Catalog::speed_scale` = 30 (the 30 Hz logic tick; per-frame to per-second) to get units per second (gives Star Destroyer 90 u/s, laser bolts ~1000 u/s,
+  turbolasers 1350 u/s). `Max_Rate_Of_Turn` is used as radians per second. Acceleration times by size class are estimates
   (fighter 1.5 s, corvette 4 s, frigate 6 s, capital 10 s, super 16 s to reach full speed).
 * Model space (`.alo`) is Z-up with the ship's bow along -Y; it maps to battle space with `(x, y, z) -> (-y, x, z)`.
   Verified with the Star Destroyer: the bow turbolaser `HP_ISD_1_New_TL_05` ends up ahead (+X) and the shield
@@ -19,7 +19,7 @@ is an **estimate** and marked as such; estimates live in `BattleConfig` or in `d
 
 | Rule | Data |
 |---|---|
-| Hull `Tactical_Health`, shield `Shield_Points`; `Shield_Refresh_Rate` is gained once per `ShieldRechargeIntervalInSecs` (2 s) as a continuous `rate/2` per second, only after `shield_regen_delay` (2 s, estimate) without taking damage | unit XML (`Units/Space/*.xml`), star bases `Buildings/Space/GC/**`, structures |
+| Hull `Tactical_Health`, shield `Shield_Points`; `Shield_Refresh_Rate` is gained once per `ShieldRechargeIntervalInSecs` (2 s) as a continuous `rate/2` per second. `BattleConfig::shield_regen_delay` (default 0 = regenerate even under fire) can pause it after a hit; see section 8 for why 0 is the default | unit XML (`Units/Space/*.xml`), star bases `Buildings/Space/GC/**`, structures |
 | `Armor_Type` / `Shield_Armor_Type` and the 673-entry `Damage_To_Armor_Mod` matrix scale hull and shield damage | `Xml/Gameconstants.xml` |
 | Hardpoint position = `Fire_Bone_A` (else `Attachment_Bone`) in the ship `.alo`. Fixed weapons fire along that bone's local +X axis. **Turrets** (`Is_Turret`, `Model_To_Attach`) take their rest direction from the barrel of the attached turret model: `FP_01` minus `Barrel` bone in `Art/Models/<Model_To_Attach>`, rotated by the mount bone (the mount axes alone are authored arbitrarily: mirrored turret pairs point opposite ways) | `Units/Space/Hardpoints/*.xml`, `Art/Models/*.ALO` via `alamo-model` |
 | Arc = larger of the fire cone (`Fire_Cone_Width`/`Height`, full angles in degrees) and the turret extents (`Turret_Rotate/Elevate_Extent_Degrees`), measured in the mount frame (forward = rest direction, up = bone Z). A mount whose arc cannot reach the battle plane at all is re-centered on the ship's bow | hardpoint XML |
@@ -56,9 +56,9 @@ Ion stun slows the target and its fire rate for `Projectile_Ion_Stun_Duration`.
 * Every 0.4 s a ship scans enemies and keeps a candidate list sorted by `Targeting_Priority_Set` weight (lower first, then
   distance). The sets come from `Xml/TARGETINGPRIORITYSETFILES.XML` (`SpaceUnitTargetingPriorities.xml`): `Attack_Priorities`
   (class -> weight, `Golan` for Golan platforms), `Category_Exclusions`, `Hard_Point_Priorities`. A ship uses its own
-  `Targeting_Priority_Set` (e.g. `Capital`) and, under AI `AttackMove` orders, the `<set>_Attack_Move` variant, which
-  also excludes frigates/capitals for fighters and corvettes and lists the hardpoints to snipe (shield generator,
-  engines, hangar, weapons). Classes missing from a set are only opportunity targets (lowest priority).
+  `Targeting_Priority_Set` (e.g. `Capital`). The `<set>_Attack_Move` variants (category exclusions and hardpoint sniping
+  order: shield generator, engines, hangar, weapons) exist in the data but the Remake scripts only assign such sets to ground
+  task forces, so `BattleConfig::attack_move_sets` (default off) enables them for AI attack-move orders. Classes missing from a set are only opportunity targets (lowest priority).
 * Each weapon fires at the first candidate that is in range, inside its arc and allowed. Heavy guns (damage >= 150) and
   shield-only weapons never fire at fighters or bombers.
 * Large ships close to the range that puts 80% of their weapon damage in reach (x0.95) and hold there, turning to the
@@ -107,3 +107,25 @@ Per step: snapshot of positions and a uniform grid (500 u cells, ship bounding b
 then rayon-parallel target scans, movement, weapon updates (fire requests) and projectile flight/collision. Hit
 application, upkeep and spawning are sequential and in index order. Randomness comes from per-entity generators seeded by
 `(seed, tick, id)`, so the result is identical with or without threads (tested).
+
+## 8. Balance notes (duels, `cargo run --release -p battle-sim --example battle_duel`)
+
+The outcome of capital duels hinges on one mechanic the data cannot settle: whether shields recharge while under
+fire. `Shield_Refresh_Rate` is gained once per 2 s (`ShieldRechargeIntervalInSecs`); the Remake comments say the regen was
+boosted 2.5x deliberately. MC-80 (shield 30000, regen 600/2 s = 300/s, hull 20000, no shield-generator hardpoint) versus
+Star Destroyer (shield 15000, regen 150/s, hull 40000, shield generator 1500 hp):
+
+| regen while hit | ISD vs MC-80 | 2 v 2 | 5 v 5 | 10 v 10 |
+|---|---|---|---|---|
+| continuous (default; matches "an MC-80 with shields up often beats an ISD") | MC-80 wins (800 s) | MC-80, 2:0 | draw, 1:2 left | ISD wins, 4 of 10 left |
+| paused 2 s after a hit | ISD wins (199 s) | ISD 2:0 | ISD 4:0 | ISD 6:0 |
+
+A single ISD deals about 290 effective shield DPS to an MC-80 (ideal 827; ion cannons only fire at frigates and larger,
+many guns are out of arc or range) against 300/s regeneration, so it cannot break the MC-80 shield alone; the MC-80
+(about 210 DPS) does break the ISD shield (150/s regen). Focus fire of several ships flips the result, so large fleets favour the
+Empire. Hardpoint sniping (shield generators) is not used by default; with `attack_move_sets` on, MC-80 fleets snipe the ISD
+shield generator and win every size.
+
+### Time units and depleted shields (audit)
+
+All XML `*_Seconds` fields are real seconds; `Max_Speed` (ships and projectiles) is per frame and is multiplied by 30 (the 30 Hz logic tick). A shield drained to zero stays offline for `Depleted_Shield_Disable_Time` (4 s, from Gameconstants) before regeneration resumes; this is what makes continuously regenerating shields breakable and shortens the 1v1 ISD vs MC-80 duel from ~800 s to ~270 s. Squadron-only fleets start at the side origin (rows are packed), not 2100 units ahead of it. Energy (`Energy_Capacity`) is not modelled; neither the ISD nor the MC-80 uses it.

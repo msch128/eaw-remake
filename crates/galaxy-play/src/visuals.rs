@@ -1,4 +1,4 @@
-//! Fleets on the galactic map: the flagship's model parked next to the planet or moving along its
+﻿//! Fleets on the galactic map: the flagship's model parked next to the planet or moving along its
 //! hyperspace lane with a streak, owner-coloured rings, selection highlight and count labels.
 
 use std::collections::{BTreeMap, HashMap};
@@ -6,9 +6,9 @@ use std::f32::consts::{FRAC_PI_2, TAU};
 
 use alamo_render::{AlamoFs, AlamoModel, AlamoModelLoaded};
 use bevy::prelude::*;
-use galaxy_sim::{FactionId, FleetId, PlanetId, UnitTypeId};
+use galaxy_sim::{FactionId, FleetId, PlanetId};
 
-use crate::catalog::PlayCatalog;
+use crate::catalog::{FleetModelStyle, PlayCatalog};
 use crate::geometry::{FleetPlace, GalaxyLayout, fleet_place, flagship};
 use crate::state::{GameClock, PlayerFaction, PlayerSelection, SimState};
 
@@ -19,8 +19,8 @@ pub struct FleetVisual {
     pub id: FleetId,
     /// Owning faction.
     pub owner: FactionId,
-    /// Model currently shown.
-    pub flagship: Option<UnitTypeId>,
+    /// Model file currently shown.
+    pub model: Option<String>,
     /// Where the fleet is drawn, in world space (read by picking).
     pub heading: Vec3,
 }
@@ -53,10 +53,12 @@ pub fn faction_color(world: &galaxy_sim::World, faction: FactionId) -> Color {
     Color::srgb_u8(c[0], c[1], c[2])
 }
 
-fn spawn_model(commands: &mut Commands, assets: &FleetAssets, mats: &mut Assets<StandardMaterial>, fs: bool, model: Option<&str>, team: Color, parent: Entity) {
+fn spawn_model(commands: &mut Commands, assets: &FleetAssets, mats: &mut Assets<StandardMaterial>, fs: bool, model: Option<&str>, bow: bool, team: Color, parent: Entity) {
     match (model, fs) {
         (Some(m), true) => {
-            commands.spawn((AlamoModel::new(m).with_team_color(team).with_bow_forward(), Transform::default(), FleetModel, ChildOf(parent)));
+            let mut spec = AlamoModel::new(m).with_team_color(team);
+            spec.bow_forward = bow;
+            commands.spawn((spec, Transform::default(), FleetModel, ChildOf(parent)));
         }
         _ => {
             let mat = mats.add(StandardMaterial { base_color: team, emissive: team.to_linear() * 0.6, ..default() });
@@ -83,6 +85,7 @@ pub fn sync_fleets(
     time: Res<Time>,
     assets: Res<FleetAssets>,
     alamo: Option<Res<AlamoFs>>,
+    cfg: Res<crate::state::PlayConfig>,
     mut mats: ResMut<Assets<StandardMaterial>>,
     mut entities: ResMut<FleetEntities>,
     mut fleets: Query<(&mut FleetVisual, &mut Transform, &Children)>,
@@ -125,6 +128,8 @@ pub fn sync_fleets(
 
     for f in g.fleets.values() {
         let flag = flagship(world, f);
+        let model = catalog.fleet_model(cfg.fleet_model_style, f.units.keys().copied(), flag).map(str::to_owned);
+        let bow = cfg.fleet_model_style == FleetModelStyle::Flagship;
         let team = faction_color(world, f.owner);
         let place = fleet_place(world, f, extra);
         let (pos, heading) = match place {
@@ -148,22 +153,22 @@ pub fn sync_fleets(
                     t.translation = tf.translation;
                     t.rotation = tf.rotation;
                     v.heading = heading;
-                    if v.flagship != flag {
-                        v.flagship = flag;
+                    if v.model != model {
+                        v.model = model.clone();
                         for &c in children {
                             if models.contains(c) {
                                 commands.entity(c).despawn();
                             }
                         }
-                        spawn_model(&mut commands, &assets, &mut mats, alamo.is_some(), flag.and_then(|u| catalog.unit_model(u)), team, e);
+                        spawn_model(&mut commands, &assets, &mut mats, alamo.is_some(), model.as_deref(), bow, team, e);
                     }
                 }
             }
             None => {
                 let root = commands
-                    .spawn((tf, Visibility::default(), FleetVisual { id: f.id, owner: f.owner, flagship: flag, heading }))
+                    .spawn((tf, Visibility::default(), FleetVisual { id: f.id, owner: f.owner, model: model.clone(), heading }))
                     .id();
-                spawn_model(&mut commands, &assets, &mut mats, alamo.is_some(), flag.and_then(|u| catalog.unit_model(u)), team, root);
+                spawn_model(&mut commands, &assets, &mut mats, alamo.is_some(), model.as_deref(), bow, team, root);
                 entities.0.insert(f.id, root);
                 commands.spawn((
                     Text::new(""),
@@ -265,3 +270,4 @@ pub fn update_fleet_labels(
         }
     }
 }
+

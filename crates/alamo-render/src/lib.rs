@@ -7,11 +7,15 @@
 //!
 //! See [`AlamoModel`] for spawning, [`spawn_sun`] for the lighting convention and
 //! [`material::AlamoMaterial`] for the shader emulation.
+pub mod animation;
+pub mod hardpoints;
 mod lighting;
+pub mod lod;
 pub mod material;
 pub mod model;
 pub mod particles;
 pub mod projectiles;
+pub mod sequences;
 pub mod texture;
 pub mod xmldata;
 
@@ -21,19 +25,24 @@ use alamo_fs::GameFs;
 use bevy::asset::embedded_asset;
 use bevy::prelude::*;
 
-pub use lighting::{SunLight, spawn_sun};
+pub use animation::{AlamoAnimation, AnimationIndex, AnimationSettings, TurretAim};
+pub use hardpoints::{AimTurrets, HardpointDestroyed};
+pub use lighting::{SunLight, spawn_sun, spawn_sun_shadowed};
+pub use lod::LodSettings;
 pub use model::{
-    AlamoBillboard, AlamoBone, AlamoFs, AlamoModel, AlamoModelLoaded, AlamoPart, AlamoProxy,
-    AlamoRenderSettings, LodSelect, ModelCache, ModelLoadFailed, ModelLoaded,
+    AlamoBillboard, AlamoBone, AlamoFs, AlamoHardpoint, AlamoModel, AlamoModelLoaded, AlamoPart,
+    AlamoProxy, AlamoRenderSettings, LodSelect, ModelCache, ModelLoadFailed, ModelLoaded,
 };
 pub use particles::{
-    AlamoParticles, ParticleInstance, ParticleSettings, ParticleStats, ParticlesLoaded,
+    AlamoParticles, EngineThrottle, ParticleInstance, ParticleSettings, ParticleStats,
+    ParticlesLoaded,
 };
 pub use projectiles::{
     AutoDespawn, ImpactKind, ProjectileImpact, ProjectileVisual, ShieldFlash, ShieldHit,
     SpawnParticleEffect,
 };
-pub use xmldata::{ParticleDef, ProjectileDef, XmlDefs};
+pub use sequences::{DeathSequence, HyperspaceArrival, HyperspaceArrived, PlayDeath};
+pub use xmldata::{HardpointDef, ParticleDef, ProjectileDef, UnitDef, XmlDefs};
 
 /// Registers the material, caches and systems.
 pub struct AlamoRenderPlugin {
@@ -64,6 +73,13 @@ impl Plugin for AlamoRenderPlugin {
                 ),
             );
         particles::build(app);
+        app.add_systems(
+            PostUpdate,
+            lod::cull_small_models.after(particles::update_particle_view),
+        );
         projectiles::build(app, &self.fs);
+        animation::build(app, &self.fs);
+        sequences::build(app);
+        hardpoints::build(app);
     }
 }

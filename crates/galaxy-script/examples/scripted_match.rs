@@ -18,9 +18,10 @@ fn main() {
     let weeks: u64 = args.first().and_then(|a| a.parse().ok()).unwrap_or(20);
     let campaign_name = args
         .get(1)
-        .filter(|a| a.as_str() != "freestore")
+        .filter(|a| !matches!(a.as_str(), "freestore" | "no-backoff"))
         .map_or("GC_Full_Web_Way_Rebel", String::as_str);
     let freestore = args.iter().any(|a| a == "freestore");
+    let no_backoff = args.iter().any(|a| a == "no-backoff");
 
     let install = GameInstall::detect().expect("game install not found");
     let fs: Arc<dyn FileSource> =
@@ -49,6 +50,9 @@ fn main() {
         },
     )
     .expect("cannot build simulation");
+    if no_backoff {
+        sim.runtime_mut().set_idle_backoff(0.0);
+    }
     sim.with_sim_mut(|s| s.set_ai_factions(0..s.world().factions.len() as u32));
     println!(
         "scripted sim built in {:?}; start errors: {:?}",
@@ -102,19 +106,33 @@ fn main() {
         worst
     );
 
-    let series: Vec<String> = per_week.iter().take(8).map(|w| format!("{:.1}", w.1)).collect();
+    let series: Vec<String> = per_week
+        .iter()
+        .take(8)
+        .map(|w| format!("{:.1}", w.1))
+        .collect();
     println!("script ms of the first weeks: {}", series.join(" "));
     let steady: Vec<f64> = per_week.iter().skip(1).map(|w| w.1).collect();
-    println!("steady-state scripts (weeks 2..): {:.2} ms/week", steady.iter().sum::<f64>() / steady.len().max(1) as f64);
+    println!(
+        "steady-state scripts (weeks 2..): {:.2} ms/week",
+        steady.iter().sum::<f64>() / steady.len().max(1) as f64
+    );
 
     for (name, d, n) in rt.profile() {
-        println!("  script {name:<40} {:>8.1} ms over {n} services", d.as_secs_f64() * 1000.0);
+        println!(
+            "  script {name:<40} {:>8.1} ms over {n} services",
+            d.as_secs_f64() * 1000.0
+        );
     }
 
     let mut sorted = steady.clone();
     sorted.sort_by(f64::total_cmp);
     if !sorted.is_empty() {
-        println!("median week {:.2} ms, fastest week {:.2} ms", sorted[sorted.len() / 2], sorted[0]);
+        println!(
+            "median week {:.2} ms, fastest week {:.2} ms",
+            sorted[sorted.len() / 2],
+            sorted[0]
+        );
     }
 
     println!("\nerrors ({}):", rt.errors().len());

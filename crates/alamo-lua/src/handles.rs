@@ -28,6 +28,10 @@ pub enum Kind {
     Plot,
     /// A story event of a plot (`plot.Get_Event`).
     PlotEvent,
+    /// An AI task force of a plan.
+    TaskForce,
+    /// A command block returned by task force commands.
+    Block,
 }
 
 /// An engine object reference.
@@ -53,23 +57,23 @@ pub struct HandleData {
 impl UserData for HandleData {
     fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
         methods.add_meta_function(MetaMethod::Index, |lua, (ud, key): (AnyUserData, Value)| {
-            let name = match &key {
-                Value::String(s) => s.to_string_lossy().to_string(),
-                _ => return Ok(Value::Nil),
-            };
+            if !matches!(key, Value::String(_)) {
+                return Ok(Value::Nil);
+            }
             // Bound methods are created once per handle and name (weak-keyed cache), because scripts call
             // `obj.Method()` in tight loops and creating a closure per access dominated their cost.
-            let cache: mlua::Table = match lua.named_registry_value::<Option<mlua::Table>>("method_cache")? {
-                Some(t) => t,
-                None => {
-                    let t = lua.create_table()?;
-                    let mt = lua.create_table()?;
-                    mt.set("__mode", "k")?;
-                    t.set_metatable(Some(mt))?;
-                    lua.set_named_registry_value("method_cache", t.clone())?;
-                    t
-                }
-            };
+            let cache: mlua::Table =
+                match lua.named_registry_value::<Option<mlua::Table>>("method_cache")? {
+                    Some(t) => t,
+                    None => {
+                        let t = lua.create_table()?;
+                        let mt = lua.create_table()?;
+                        mt.set("__mode", "k")?;
+                        t.set_metatable(Some(mt))?;
+                        lua.set_named_registry_value("method_cache", t.clone())?;
+                        t
+                    }
+                };
             let per_handle: mlua::Table = match cache.get::<Option<mlua::Table>>(ud.clone())? {
                 Some(t) => t,
                 None => {
@@ -81,8 +85,22 @@ impl UserData for HandleData {
             if let Some(f) = per_handle.get::<Option<mlua::Function>>(key.clone())? {
                 return Ok(Value::Function(f));
             }
+            let name = match &key {
+                Value::String(s) => s.to_string_lossy().to_string(),
+                _ => return Ok(Value::Nil),
+            };
             let this = ud.borrow::<HandleData>()?.clone();
+            // Players, objects and types count their calls per method name; other kinds count themselves.
+            let counted = matches!(this.handle.kind, Kind::Player | Kind::Object | Kind::Type);
+            let (counter, activity) = {
+                let mut s = this.shared.borrow_mut();
+                (s.method_counter(&name), s.activity.clone())
+            };
             let f = lua.create_function(move |lua, args: MultiValue| {
+                if counted {
+                    counter.set(counter.get() + 1);
+                    activity.set(activity.get() + 1);
+                }
                 let mut args: Vec<Value> = args.into_iter().collect();
                 // Drop an explicit `self` (colon syntax).
                 if let Some(Value::UserData(ud)) = args.first()

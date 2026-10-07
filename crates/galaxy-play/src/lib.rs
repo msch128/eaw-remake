@@ -1,4 +1,4 @@
-//! Makes the galactic conquest map playable: runs `galaxy-sim` on a worker thread, shows fleets
+﻿//! Makes the galactic conquest map playable: runs `galaxy-sim` on a worker thread, shows fleets
 //! on the map, handles selection and orders, planet build menus, notifications and battle
 //! prompts.
 //!
@@ -32,7 +32,7 @@ use std::sync::Mutex;
 use bevy::prelude::*;
 
 pub use build_menu::{Availability, BuildCategory, BuildMenu, BuildOption, BuildTarget, QueueEntry, build_command};
-pub use catalog::PlayCatalog;
+pub use catalog::{FleetModelStyle, PlayCatalog};
 pub use driver::{CommandResult, ResolveMode, SimDriver, Snapshot, Ticket};
 pub use geometry::{FleetPlace, GalaxyLayout, RoutePlan, galaxy_to_world};
 pub use input::{PlayHover, PlayUiBlock};
@@ -116,3 +116,4 @@ impl Plugin for GalaxyPlayPlugin {
             );
     }
 }
+

@@ -14,6 +14,7 @@ use bevy::{
 
 use crate::camera::{CameraBounds, GalaxyCamera};
 use crate::cli::Args;
+use crate::flow::AppScreen;
 use crate::galaxy_map::{Selection, galaxy_to_world};
 use crate::galaxy_view::GalaxyView;
 
@@ -47,6 +48,12 @@ struct OffscreenState {
     gpu_ms: HashMap<String, (f64, u32)>,
     capture_requested: bool,
     capture_time: Option<Instant>,
+    /// Frames spent on the galaxy map (the requested view is applied after a few).
+    galaxy_frames: u32,
+    /// First moment the loading screen was left.
+    ready_at: Option<Instant>,
+    /// Capture the loading screen itself.
+    loading_shot: bool,
 }
 
 /// Registers the offscreen target and the driver system on `app` (call before `run`).
@@ -69,6 +76,9 @@ pub fn configure(app: &mut App, args: &Args, path: PathBuf) {
             gpu_ms: HashMap::new(),
             capture_requested: false,
             capture_time: None,
+            galaxy_frames: 0,
+            ready_at: None,
+            loading_shot: args.screen.as_deref() == Some("loading"),
         })
         .add_systems(Last, drive);
 }
@@ -83,6 +93,7 @@ fn drive(
     diagnostics: Res<DiagnosticsStore>,
     mut selection: ResMut<Selection>,
     mut cam: Single<&mut GalaxyCamera>,
+    screen: Res<State<AppScreen>>,
     mut exit: MessageWriter<AppExit>,
 ) {
     let now = Instant::now();
@@ -90,8 +101,15 @@ fn drive(
     st.last = now;
     st.frame += 1;
     let frame = st.frame;
+    let screen = *screen.get();
+    if screen != AppScreen::Loading && st.ready_at.is_none() {
+        st.ready_at = Some(now);
+    }
+    if screen == AppScreen::Galaxy {
+        st.galaxy_frames += 1;
+    }
     // Apply the requested view once the camera has framed the galaxy.
-    if frame == 3 {
+    if st.galaxy_frames == 3 {
         if let Some(sel) = st.select.clone() {
             let idx = view.planets.iter().position(|p| {
                 p.id.eq_ignore_ascii_case(&sel) || p.display_name.eq_ignore_ascii_case(&sel)
@@ -133,10 +151,12 @@ fn drive(
     }
 
     // Wait for the asynchronous asset uploads (sky texture, meshes) as well as the frame count.
-    if frame >= st.frames
-        && now.duration_since(st.created).as_secs_f32() > 3.0
-        && !st.capture_requested
-    {
+    let settled = if st.loading_shot {
+        now.duration_since(st.created).as_secs_f32() > 3.0
+    } else {
+        st.ready_at.is_some_and(|t| now.duration_since(t).as_secs_f32() > 3.0)
+    };
+    if frame >= st.frames && settled && !st.capture_requested {
         st.capture_requested = true;
         st.capture_time = Some(now);
         let path = st.path.clone();

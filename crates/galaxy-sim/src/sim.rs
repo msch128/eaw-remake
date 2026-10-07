@@ -12,11 +12,11 @@ use crate::world::*;
 
 /// A running match: immutable [`World`] plus mutable [`Galaxy`] state.
 pub struct Sim {
-    world: Arc<World>,
-    galaxy: Galaxy,
-    ai: Vec<FactionId>,
-    tactical: Option<Arc<battle_sim::Catalog>>,
-    arenas: std::collections::HashMap<String, Arc<battle_sim::Arena>>,
+    pub(crate) world: Arc<World>,
+    pub(crate) galaxy: Galaxy,
+    pub(crate) ai: Vec<FactionId>,
+    pub(crate) tactical: Option<Arc<battle_sim::Catalog>>,
+    pub(crate) arenas: std::collections::HashMap<String, Arc<battle_sim::Arena>>,
 }
 
 impl Sim {
@@ -165,7 +165,10 @@ impl Sim {
                     (FleetLocation::AtPlanet(x), FleetLocation::AtPlanet(y)) if x == y => {}
                     _ => return Err(CommandError::WrongState),
                 }
+                g.sync_ships();
                 let b = g.fleets.remove(&from).expect("checked");
+                let moved = g.ships.remove(&from).unwrap_or_default();
+                g.ships.entry(into).or_default().extend(moved);
                 let a = g.fleets.get_mut(&into).expect("checked");
                 for (u, c) in b.units {
                     *a.units.entry(u).or_default() += c;
@@ -173,6 +176,7 @@ impl Sim {
                 Ok(CommandOk::Done)
             }
             Command::SplitFleet { faction, fleet, units } => {
+                g.sync_ships();
                 let f = g.fleets.get_mut(&fleet).filter(|f| f.owner == faction).ok_or(CommandError::Invalid)?;
                 let FleetLocation::AtPlanet(p) = f.location else { return Err(CommandError::WrongState) };
                 let mut taken = BTreeMap::new();
@@ -198,6 +202,18 @@ impl Sim {
                 }
                 let id = g.next_fleet_id;
                 g.next_fleet_id += 1;
+                let mut moved_ids = Vec::new();
+                for (u, c) in &taken {
+                    for _ in 0..*c {
+                        // The source fleet already lost the units; its id list still holds them.
+                        if let Some(list) = g.ships.get_mut(&fleet)
+                            && let Some(pos) = list.iter().rposition(|(_, t)| t == u)
+                        {
+                            moved_ids.push(list.remove(pos));
+                        }
+                    }
+                }
+                g.ships.insert(id, moved_ids);
                 g.fleets.insert(id, Fleet { id, owner: faction, units: taken, location: FleetLocation::AtPlanet(p), previous_planet: prev });
                 Ok(CommandOk::NewFleet(id))
             }
@@ -234,6 +250,7 @@ impl Sim {
             self.galaxy.tick_accum -= tick;
             self.tick(tick, &mut events);
         }
+        self.galaxy.sync_ships();
         events
     }
 
@@ -328,7 +345,9 @@ impl Sim {
                         let fs = &mut self.galaxy.factions[owner as usize];
                         *fs.built_lifetime.entry(u).or_default() += 1;
                         match &w.units[u as usize].role {
-                            UnitRole::Ship => add_units(&mut self.galaxy, owner, planet, u, 1),
+                            UnitRole::Ship => {
+                                add_units(&mut self.galaxy, owner, planet, u, 1);
+                            }
                             UnitRole::Research(target) => {
                                 fs.unlocked.insert(target.to_ascii_lowercase());
                             }
@@ -336,7 +355,10 @@ impl Sim {
                     }
                     ProductionKind::Structure(s) => self.galaxy.planets[pi].structures.push(s),
                     ProductionKind::Starbase(sb) => self.galaxy.planets[pi].starbase = Some(sb),
-                    ProductionKind::Tech(_) => self.galaxy.factions[owner as usize].tech += 1,
+                    ProductionKind::Tech(_) => {
+                        self.galaxy.factions[owner as usize].tech += 1;
+                        events.push(Event::TechAdvanced { faction: owner, level: self.galaxy.factions[owner as usize].tech });
+                    }
                 }
                 events.push(Event::ConstructionComplete { faction: owner, planet, kind: item.kind });
             }
@@ -417,7 +439,7 @@ impl Sim {
             {
                 factions.push(d);
             }
-            let hostile_pair = factions.iter().any(|&a| factions.iter().any(|&b| w.hostile(a, b)));
+            let hostile_pair = factions.iter().any(|&a| factions.iter().any(|&b| self.galaxy.hostile(w, a, b)));
             if !hostile_pair {
                 continue;
             }
@@ -535,9 +557,10 @@ impl Sim {
         let result = tactical
             .then(|| self.tactical.as_ref().and_then(|c| crate::tactical::run(w, c, &sides, seed, arena)))
             .flatten()
-            .unwrap_or_else(|| combat::resolve(w, &sides, &mut rng));
+            .unwrap_or_else(|| combat::resolve_allied(w, &sides, &mut rng, &self.galaxy.allied));
 
         // Apply fleet losses.
+        self.galaxy.sync_ships();
         let mut losses: BTreeMap<FactionId, u32> = BTreeMap::new();
         for (si, side) in sides.iter().enumerate() {
             let mut surviving: BTreeMap<(FleetId, UnitTypeId), u32> = BTreeMap::new();
@@ -555,6 +578,10 @@ impl Sim {
                     (Source::Unit(u), Some(fid)) => {
                         let left = surviving.get(&(fid, u)).copied().unwrap_or(0);
                         *losses.entry(side.faction).or_default() += m.count - left;
+                        if m.count > left {
+                            let ships = self.galaxy.take_ships(fid, u, m.count - left);
+                            events.push(Event::UnitsDestroyed { faction: side.faction, planet: p, unit: u, count: m.count - left, ships: ships.into_iter().map(|x| x.0).collect() });
+                        }
                         if let Some(f) = self.galaxy.fleets.get_mut(&fid) {
                             if left == 0 {
                                 f.units.remove(&u);
@@ -583,6 +610,13 @@ impl Sim {
         self.galaxy.fleets.retain(|_, f| !f.units.is_empty());
 
         let winner = result.winner.map(|i| sides[i].faction);
+        for (si, side) in sides.iter().enumerate() {
+            if result.winner == Some(si) {
+                events.push(Event::BattleWon { faction: side.faction, planet: p });
+            } else if result.survivors[si].is_empty() {
+                events.push(Event::BattleLost { faction: side.faction, planet: p });
+            }
+        }
         // Draw: every attacker fleet falls back.
         if winner.is_none() && result.survivors.iter().filter(|s| !s.is_empty()).count() > 1 {
             let owner = ps.owner;
@@ -623,7 +657,7 @@ impl Sim {
                 Some(v) if !battle_here && v.len() == 1 && Some(v[0]) != owner && w.real[p as usize] => {
                     let x = v[0];
                     let defended = self.galaxy.planets[p as usize].starbase.is_some();
-                    (!defended && owner.is_none_or(|o| w.hostile(x, o))).then_some(x)
+                    (!defended && owner.is_none_or(|o| self.galaxy.hostile(w, x, o))).then_some(x)
                 }
                 _ => None,
             };
@@ -632,14 +666,7 @@ impl Sim {
                 (Some(x), Some((c, t))) if c == x => {
                     let t = t + dt;
                     if t >= w.config.capture_delay_seconds {
-                        let old = ps.owner;
-                        ps.owner = Some(x);
-                        ps.starbase = None;
-                        ps.structures.clear();
-                        ps.queues = Default::default();
-                        ps.capture = None;
-                        events.push(Event::PlanetCaptured { planet: p, old_owner: old, new_owner: x });
-                        self.after_ownership_change(events);
+                        self.apply_owner_change(p, Some(x), false, events);
                     } else {
                         ps.capture = Some((x, t));
                     }
@@ -648,6 +675,28 @@ impl Sim {
                 (None, _) => ps.capture = None,
             }
         }
+    }
+
+    /// Changes a planet's owner with all capture side effects: the star base, queues and (unless
+    /// `keep_buildings`) structures are lost, the capture timer is reset, `PlanetCaptured` is emitted for
+    /// a new owner, and elimination / victory are re-checked.
+    pub(crate) fn apply_owner_change(&mut self, p: PlanetId, new: Option<FactionId>, keep_buildings: bool, events: &mut Vec<Event>) {
+        let ps = &mut self.galaxy.planets[p as usize];
+        let old = ps.owner;
+        ps.capture = None;
+        if old == new {
+            return;
+        }
+        ps.owner = new;
+        ps.queues = Default::default();
+        if !keep_buildings {
+            ps.starbase = None;
+            ps.structures.clear();
+        }
+        if let Some(x) = new {
+            events.push(Event::PlanetCaptured { planet: p, old_owner: old, new_owner: x });
+        }
+        self.after_ownership_change(events);
     }
 
     fn after_ownership_change(&mut self, events: &mut Vec<Event>) {
@@ -704,20 +753,21 @@ impl Sim {
 }
 
 /// Adds `count` units of type `u` to the faction's idle fleet at `planet` (creating one if needed).
-pub(crate) fn add_units(g: &mut Galaxy, owner: FactionId, planet: PlanetId, u: UnitTypeId, count: u32) {
+pub(crate) fn add_units(g: &mut Galaxy, owner: FactionId, planet: PlanetId, u: UnitTypeId, count: u32) -> FleetId {
     let existing = g
         .fleets
         .values_mut()
         .find(|f| f.owner == owner && f.location == FleetLocation::AtPlanet(planet));
     if let Some(f) = existing {
         *f.units.entry(u).or_default() += count;
-        return;
+        return f.id;
     }
     let id = g.next_fleet_id;
     g.next_fleet_id += 1;
     let mut units = BTreeMap::new();
     units.insert(u, count);
     g.fleets.insert(id, Fleet { id, owner, units, location: FleetLocation::AtPlanet(planet), previous_planet: planet });
+    id
 }
 
 fn start_move(w: &World, g: &mut Galaxy, fleet: FleetId, path: Vec<PlanetId>) {
@@ -758,12 +808,12 @@ impl World {
     pub fn blockades(&self, galaxy: &Galaxy, planet: PlanetId, owner: FactionId) -> bool {
         let ps = &galaxy.planets[planet as usize];
         if let Some(o) = ps.owner
-            && self.hostile(owner, o)
+            && galaxy.hostile(self, owner, o)
             && (ps.starbase.is_some() || ps.structures.iter().any(|&s| self.structures[s as usize].combat.is_some()))
         {
             return true;
         }
-        galaxy.fleets.values().any(|f| f.location == FleetLocation::AtPlanet(planet) && self.hostile(owner, f.owner))
+        galaxy.fleets.values().any(|f| f.location == FleetLocation::AtPlanet(planet) && galaxy.hostile(self, owner, f.owner))
     }
 
     /// Fastest lane path from `from` to `to` (inclusive), by travel time.

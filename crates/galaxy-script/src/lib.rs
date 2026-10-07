@@ -1,4 +1,4 @@
-﻿//! Empire at War Lua scripts running against [`galaxy_sim`].
+//! Empire at War Lua scripts running against [`galaxy_sim`].
 //!
 //! [`ScriptedSim`] steps the simulation and the script scheduler together:
 //!
@@ -12,13 +12,14 @@
 //!
 //! What galaxy-sim cannot express yet is listed in `NEEDS.md`.
 
+pub mod ai;
 pub mod host;
 
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use alamo_data::{Campaign, GameData, GameObjects};
 use alamo_fs::FileSource;
@@ -38,6 +39,8 @@ pub struct ScriptedConfig {
     pub script_step: f64,
     /// Faction controlled by the human; defaults to the campaign's `Starting_Active_Player`.
     pub human: Option<String>,
+    /// Run the Remake AI (galaxy-ai) for every AI faction of the campaign instead of galaxy-sim's built-in AI.
+    pub remake_ai: bool,
 }
 
 impl Default for ScriptedConfig {
@@ -47,6 +50,7 @@ impl Default for ScriptedConfig {
             freestore: false,
             script_step: 0.2,
             human: None,
+            remake_ai: false,
         }
     }
 }
@@ -67,6 +71,8 @@ pub struct Timing {
     pub sim: Duration,
     /// Time spent running scripts.
     pub scripts: Duration,
+    /// Time spent in the Remake AI's goal evaluation and task force commands (plan scripts count as scripts).
+    pub ai: Duration,
 }
 
 /// Simulation plus scripts.
@@ -79,6 +85,8 @@ pub struct ScriptedSim {
     pub timing: Timing,
     /// Errors of scripts that failed to start.
     pub start_errors: Vec<String>,
+    /// Plans that could not be started.
+    pub ai_errors: Vec<String>,
 }
 
 /// CPU cost of the calling thread, from the thread cycle counter (fine grained and unaffected by other
@@ -132,11 +140,12 @@ impl ScriptedSim {
             .clone()
             .or_else(|| campaign.starting_active_player.clone())
             .unwrap_or_default();
-        let human = world
-            .faction_index
-            .get(&human_name.to_ascii_lowercase())
-            .copied()
-            .unwrap_or(0);
+        let human = if human_name.eq_ignore_ascii_case("none") {
+            u32::MAX // nobody is human (all factions AI controlled)
+        } else {
+            world.faction_index.get(&human_name.to_ascii_lowercase()).copied().unwrap_or(0)
+        };
+        let fs_for_ai = fs.clone();
         let mut warnings = Vec::new();
         let objects = GameObjects::load(&*fs, &mut warnings);
         let inner = Rc::new(RefCell::new(Inner::new(
@@ -190,14 +199,42 @@ impl ScriptedSim {
                 }
             }
         }
-        Ok(ScriptedSim {
+        let mut sim = ScriptedSim {
             inner,
             runtime,
             script_step: config.script_step.max(0.01),
             script_clock: 0.0,
             timing: Timing::default(),
             start_errors,
-        })
+            ai_errors: Vec::new(),
+        };
+        if config.remake_ai {
+            sim.start_ai(&fs_for_ai, campaign);
+        }
+        Ok(sim)
+    }
+
+    /// Switches from galaxy-sim's built-in AI to the Remake AI for all AI factions of the campaign.
+    fn start_ai(&mut self, fs: &Arc<dyn FileSource>, campaign: &Campaign) {
+        let data = galaxy_ai::AiData::load(&**fs);
+        let plans = galaxy_ai::discover_plans(&**fs);
+        let mut engine = galaxy_ai::AiEngine::new(Arc::new(data), plans);
+        let (world, human) = {
+            let i = self.inner.borrow();
+            (i.world.clone(), i.human)
+        };
+        for (faction, ai_type) in galaxy_ai::campaign_ai_players(&**fs, campaign) {
+            let Some(&id) = world.faction_index.get(&faction.to_ascii_lowercase()) else { continue };
+            if id == human {
+                continue;
+            }
+            if let Err(e) = engine.add_player(id, &ai_type) {
+                self.start_errors.push(e);
+            }
+        }
+        let mut i = self.inner.borrow_mut();
+        i.sim.set_ai_factions(std::iter::empty());
+        i.ai = Some(engine);
     }
 
     /// Runs `f` with the simulation.
@@ -210,9 +247,19 @@ impl ScriptedSim {
         f(&mut self.inner.borrow_mut().sim)
     }
 
+    /// DebugMessage lines of scripts.
+    pub fn script_log(&self) -> Vec<String> {
+        self.inner.borrow().script_log.clone()
+    }
+
     /// Counters of script effects.
     pub fn host_stats(&self) -> HostStats {
         self.inner.borrow().stats.clone()
+    }
+
+    /// Mutable runtime access (for example `set_idle_backoff`).
+    pub fn runtime_mut(&mut self) -> &mut ScriptRuntime {
+        &mut self.runtime
     }
 
     /// The Lua runtime (statistics, errors, log).
@@ -234,12 +281,48 @@ impl ScriptedSim {
             self.script_clock -= self.script_step;
         }
         self.timing.scripts += thread_cpu_time() - t1;
+        let t2 = thread_cpu_time();
+        self.step_ai();
+        self.timing.ai += thread_cpu_time() - t2;
 
         let script_events = std::mem::take(&mut self.inner.borrow_mut().events);
         StepReport {
             sim_events,
             script_events,
         }
+    }
+
+    /// Goal evaluation, plan start and plan bookkeeping of the Remake AI.
+    fn step_ai(&mut self) {
+        let (requests, expired, now) = {
+            let mut g = self.inner.borrow_mut();
+            let Inner { sim, world, human, allies, ai, .. } = &mut *g;
+            let Some(ai) = ai.as_mut() else { return };
+            let mut adapter = ai::SimAdapter { sim, world: world.clone(), human: *human, allies };
+            let now = galaxy_ai::AiSim::time(&adapter);
+            let requests = ai.update(&mut adapter);
+            (requests, ai.take_expired(), now)
+        };
+        for r in requests {
+            let target = r.target.map(|p| ai::PLANET_OBJECT_TAG | u64::from(p));
+            if let Err(e) = self.runtime.spawn_plan(&r.script, r.plan, r.player, target) {
+                self.ai_errors.push(format!("{}: {e}", r.script));
+            }
+        }
+        for p in expired {
+            self.runtime.kill_plan(p);
+        }
+        let finished = self.runtime.take_finished_plans();
+        if let Some(ai) = self.inner.borrow_mut().ai.as_mut() {
+            for p in finished {
+                ai.plan_finished(p, now);
+            }
+        }
+    }
+
+    /// Statistics of the Remake AI (None when it is not enabled).
+    pub fn ai_stats(&self) -> Option<galaxy_ai::AiStats> {
+        self.inner.borrow().ai.as_ref().map(galaxy_ai::AiEngine::stats)
     }
 
     fn notify_story(&mut self, events: &[Event]) {
@@ -293,5 +376,3 @@ impl ScriptedSim {
             .collect()
     }
 }
-
-

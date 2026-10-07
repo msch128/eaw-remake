@@ -1,7 +1,8 @@
-﻿//! Balance diagnostics: controlled duels with per-ship damage channels, hardpoint usage, hit rates
+//! Balance diagnostics: controlled duels with per-ship damage channels, hardpoint usage, hit rates
 //! and a comparison with the ideal time-to-kill derived from the data.
 //!
-//! Usage: `cargo run --release -p battle-sim --example battle_duel -- [scenario filter]`
+//! Usage: `cargo run --release -p battle-sim --example battle_duel -- [scenario filter] [delay=SECONDS]`
+//! (`delay=0` = shields recharge continuously, default 2 = only after 2 s without damage).
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -33,14 +34,22 @@ struct SideStats {
     dmg_shield: f64,
     dmg_hull: f64,
     dmg_hardpoint: f64,
+    /// Damage dealt in 30 s buckets of battle time.
+    buckets: Vec<f64>,
     hp_fired: BTreeMap<(u32, u16), u64>,
+    /// Shots per hardpoint between 100 s and 200 s (steady state).
+    hp_window: BTreeMap<(u32, u16), u64>,
     shield_up_steps: BTreeMap<u32, u64>,
     alive_steps: BTreeMap<u32, u64>,
     death_time: BTreeMap<u32, f32>,
 }
 
 fn main() {
-    let filter = std::env::args().nth(1).unwrap_or_default().to_lowercase();
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let delay: f32 = args.iter().find_map(|a| a.strip_prefix("delay=")).and_then(|v| v.parse().ok()).unwrap_or(2.0);
+    let snipe = args.iter().any(|a| a == "snipe");
+    let range: f32 = args.iter().find_map(|a| a.strip_prefix("range=")).and_then(|v| v.parse().ok()).unwrap_or(1.0);
+    let filter = args.iter().find(|a| !a.starts_with("delay=") && !a.starts_with("range=") && *a != "snipe").cloned().unwrap_or_default().to_lowercase();
     let install = GameInstall::detect().expect("game install not found");
     let fs = GameFs::for_mod(&install, Some("1770851727")).expect("cannot open game files");
     let (data, _) = load_galaxy(&fs);
@@ -50,7 +59,7 @@ fn main() {
         if !filter.is_empty() && !title.to_lowercase().contains(&filter) {
             continue;
         }
-        duel(&cat, title, a, b);
+        duel(&cat, title, a, b, delay, snipe, range);
     }
 }
 
@@ -73,19 +82,37 @@ fn ideal(cat: &Catalog, attacker: ShipId, victim: ShipId) -> (f32, f32, f32) {
     (sd, hd, ttk)
 }
 
-fn duel(cat: &Arc<Catalog>, title: &str, a: Fleet, b: Fleet) {
+fn duel(cat: &Arc<Catalog>, title: &str, a: Fleet, b: Fleet, delay: f32, snipe: bool, range: f32) {
     let side = |name: &str, f: Fleet| SideSetup {
         name: name.into(),
         units: f.iter().map(|&(n, c)| UnitSetup { ship: cat.ship_id(n).unwrap_or_else(|| panic!("{n}")), count: c, tag: 0 }).collect(),
         structures: vec![],
         ai: true,
     };
-    let config = BattleConfig { half_size: 5000.0, ..BattleConfig::default() };
+    let config = BattleConfig { half_size: 5000.0, shield_regen_delay: delay, attack_move_sets: snipe, engage_range_scale: range, ..BattleConfig::default() };
     let mut battle = Battle::new(BattleSetup { catalog: cat.clone(), sides: vec![side("A", a), side("B", b)], config });
     let mut stats = [SideStats::default(), SideStats::default()];
     let mut first_contact = None;
+    let trace = std::env::var("TRACE").ok().and_then(|v| v.parse::<f32>().ok());
     for _ in 0..30 * 900 {
         let events: Vec<Event> = battle.step().to_vec();
+        if let Some(every) = trace
+            && (battle.time() / every).fract() < 1.0 / 30.0 / every
+        {
+            let live: Vec<_> = battle.ships.iter().filter(|s| s.alive).collect();
+            let c = |side: u8| {
+                let v: Vec<_> = live.iter().filter(|s| s.side == side).collect();
+                let n = v.len().max(1) as f32;
+                (v.len(), v.iter().map(|s| s.pos.x).sum::<f32>() / n, v.iter().map(|s| s.pos.y).sum::<f32>() / n, v.iter().map(|s| s.speed).sum::<f32>() / n)
+            };
+            for s in live.iter().filter(|s| s.target != u32::MAX && !matches!(cat.ship(s.def).class, TargetClass::Fighter | TargetClass::Bomber)).take(2) {
+                let t = &battle.ships[s.target as usize];
+                let rel = (t.pos.y - s.pos.y).atan2(t.pos.x - s.pos.x) - s.yaw;
+                let rel = rel.sin().atan2(rel.cos()).to_degrees();
+                println!("   {} -> bearing {:.0} deg dist {:.0} speed {:.0} shield {:.0}%", cat.ship(s.def).name, rel, t.pos.dist(s.pos), s.speed, s.shield / cat.ship(s.def).shield.max(1.0) * 100.0);
+            }
+            println!("t={:6.1} A n={} ({:.0},{:.0}) v={:.0} | B n={} ({:.0},{:.0}) v={:.0}", battle.time(), c(0).0, c(0).1, c(0).2, c(0).3, c(1).0, c(1).1, c(1).2, c(1).3);
+        }
         for e in &events {
             match e {
                 Event::ProjectileFired { ship, hardpoint, .. } => {
@@ -93,10 +120,18 @@ fn duel(cat: &Arc<Catalog>, title: &str, a: Fleet, b: Fleet) {
                     let st = &mut stats[s.side as usize];
                     st.fired += 1;
                     *st.hp_fired.entry((s.def, hardpoint.unwrap_or(u16::MAX))).or_default() += 1;
+                    if (100.0..200.0).contains(&battle.time()) {
+                        *st.hp_window.entry((s.def, hardpoint.unwrap_or(u16::MAX))).or_default() += 1;
+                    }
                 }
                 Event::Hit { attacker, kind, damage, .. } => {
                     let st = &mut stats[battle.ships[*attacker as usize].side as usize];
                     st.hits += 1;
+                    let bi = (battle.time() / 30.0) as usize;
+                    if st.buckets.len() <= bi {
+                        st.buckets.resize(bi + 1, 0.0);
+                    }
+                    st.buckets[bi] += *damage as f64;
                     match kind {
                         HitKind::Shield => st.dmg_shield += *damage as f64,
                         HitKind::Hull => st.dmg_hull += *damage as f64,
@@ -141,6 +176,7 @@ fn duel(cat: &Arc<Catalog>, title: &str, a: Fleet, b: Fleet) {
             st.dmg_hull,
             st.dmg_hardpoint
         );
+        println!("      DPS per 30 s: {:?}", st.buckets.iter().map(|b| (b / 30.0) as i32).collect::<Vec<_>>());
         let dur = (r.duration - t0).max(1.0) as f64;
         println!("      average dealt DPS over the fight: {:.0}", (st.dmg_shield + st.dmg_hull + st.dmg_hardpoint) / dur);
         for (id, alive) in &st.alive_steps {
@@ -164,6 +200,10 @@ fn duel(cat: &Arc<Catalog>, title: &str, a: Fleet, b: Fleet) {
             let (sd, hd, ttk) = ideal(cat, def, ev);
             let weapons: Vec<usize> = (0..d.hardpoints.len()).filter(|&i| d.hardpoints[i].kind == HpKind::Weapon).collect();
             let never: Vec<&str> = weapons.iter().filter(|&&i| !st.hp_fired.contains_key(&(def, i as u16))).map(|&i| d.hardpoints[i].name.as_str()).collect();
+            let total: f32 = d.bearing_dps.iter().cloned().fold(0.0, f32::max);
+            if total > 0.0 {
+                println!("      {} bearing share (every 15 deg from bow, % of max): {:?}", d.name, d.bearing_dps.iter().map(|b| (b / total * 100.0) as i32).collect::<Vec<_>>());
+            }
             println!(
                 "      {}: {} weapons, {} never fired{}; ideal DPS vs enemy shield {:.0} hull {:.0}, ideal TTK {:.0} s (all guns, no regen, no misses)",
                 d.name,
@@ -187,6 +227,20 @@ fn duel(cat: &Arc<Catalog>, title: &str, a: Fleet, b: Fleet) {
                 })
                 .collect();
             println!("        utilization: {}", util.join(" "));
+            if std::env::var("WINDOW").is_ok() && !matches!(d.class, TargetClass::Fighter | TargetClass::Bomber) {
+                let rows: Vec<String> = weapons
+                    .iter()
+                    .map(|&i| {
+                        let h = &d.hardpoints[i];
+                        let cycle = ((h.recharge_min + h.recharge_max) * 0.5 + (h.pulses - 1) as f32 * h.pulse_delay).max(0.2);
+                        let ideal = h.pulses as f32 / cycle * n_ships;
+                        let got = st.hp_window.get(&(def, i as u16)).copied().unwrap_or(0) as f32 / 100.0;
+                        let pd = &cat.projectiles[h.projectile.unwrap_or(0) as usize];
+                        format!("{} r{:.0} dmg{:.0} {:.2}/{:.2}/s arc{:.0}x{:.0}", h.name.trim_start_matches("HP_"), h.range, pd.damage, got, ideal, h.arc_yaw.to_degrees(), h.arc_pitch.to_degrees())
+                    })
+                    .collect();
+                println!("        window 100-200 s (got/ideal shots):\n          {}", rows.join("\n          "));
+            }
             let mut top: Vec<_> = weapons.iter().map(|&i| (st.hp_fired.get(&(def, i as u16)).copied().unwrap_or(0), i)).collect();
             top.sort_by(|a, b| b.cmp(a));
             let _ = n;

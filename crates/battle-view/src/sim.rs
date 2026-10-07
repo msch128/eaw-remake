@@ -6,7 +6,7 @@
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::mpsc::{Receiver, Sender, channel};
+use std::sync::mpsc::{Sender, channel};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -169,7 +169,7 @@ impl SimHandle {
     /// [`SimHandle::wait_for`].
     pub fn spawn(mut battle: Battle) -> Self {
         let shared = Arc::new(Shared::default());
-        let (tx, rx): (Sender<(u8, Command)>, Receiver<(u8, Command)>) = channel();
+        let (tx, rx) = channel::<(u8, Command)>();
         let dt = battle.config().dt;
         let worker = shared.clone();
         let join = std::thread::Builder::new()
@@ -290,5 +290,6 @@ impl Drop for SimHandle {
         }
     }
 }
+
 
 

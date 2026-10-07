@@ -9,7 +9,7 @@ fn main() {
     let install = GameInstall::detect().unwrap();
     let fs = Arc::new(GameFs::for_mod(&install, Some("1770851727")).unwrap());
     let lay = ShellLayout::load(&fs, &a[0]).unwrap();
-    let lib = TextureLibrary::new(fs);
+    let lib = TextureLibrary::new_blocking(fs);
     let faction = UiFaction::from_name(&a[2]);
     for art in lay.art_for(faction) {
         let (lo, hi) = art.bounds();
@@ -19,3 +19,4 @@ fn main() {
         std::fs::write(format!("{}/{}.png", a[1], art.name), encode_png(&img)).unwrap();
     }
 }
+

@@ -282,6 +282,7 @@ pub fn selection(
 }
 
 /// Right click orders and the stop key.
+#[allow(clippy::too_many_arguments)]
 pub fn orders(
     rt: Res<BattleRuntime>,
     settings: Res<BattleViewSettings>,
@@ -397,16 +398,16 @@ pub fn overlays(
             let o = center + up * (row * thick * 2.4);
             let a = o - right * half;
             let b = o + right * half;
+            let e = a + (b - a) * frac.clamp(0.0, 1.0);
+            let dark = Color::srgba(0.0, 0.0, 0.0, 0.85);
+            // Border lines, the empty part of the bar, then the filled part (never overlapping).
+            for k in [-2, 2] {
+                gizmos.line(a + up * (k as f32 * thick * 0.5), b + up * (k as f32 * thick * 0.5), dark);
+            }
             for k in -1..=1 {
                 let off = up * (k as f32 * thick * 0.5);
-                gizmos.line(a + off, b + off, Color::srgba(0.0, 0.0, 0.0, 0.8));
-            }
-            if frac > 0.0 {
-                let e = a + (b - a) * frac;
-                for k in -1..=1 {
-                    let off = up * (k as f32 * thick * 0.5);
-                    gizmos.line(a + off, e + off, fill);
-                }
+                gizmos.line(e + off, b + off, dark);
+                gizmos.line(a + off, e + off, fill);
             }
         };
         let hull_color = if s.hull > 0.5 {
@@ -514,5 +515,6 @@ pub fn overlays(
     }
     let _ = &rt;
 }
+
 
 

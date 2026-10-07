@@ -1,4 +1,4 @@
-//! Resources, messages and configuration shared by all systems of the plugin.
+﻿//! Resources, messages and configuration shared by all systems of the plugin.
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -31,6 +31,8 @@ pub struct PlayConfig {
     pub tactical_hook: bool,
     /// Fleet model size relative to the planet radius unit.
     pub fleet_icon_scale: f32,
+    /// Which model represents a fleet.
+    pub fleet_model_style: crate::catalog::FleetModelStyle,
     /// Let the AI play the human faction too (headless demos and tests).
     pub human_is_ai: bool,
     /// Real seconds a notification stays in the ticker.
@@ -48,6 +50,7 @@ impl Default for PlayConfig {
             pick_planets: true,
             tactical_hook: false,
             fleet_icon_scale: 0.5,
+            fleet_model_style: Default::default(),
             human_is_ai: false,
             notification_seconds: 12.0,
             ui_interval: 0.2,
@@ -350,3 +353,4 @@ pub struct PlayUiModel {
     /// Hint for the current drag, e.g. route and ETA.
     pub route_hint: Option<String>,
 }
+

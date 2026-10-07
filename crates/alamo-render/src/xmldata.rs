@@ -70,6 +70,56 @@ impl ParticleDef {
     }
 }
 
+/// Space unit fields needed for death sequences.
+#[derive(Debug, Clone, Default)]
+pub struct UnitDef {
+    /// Object name.
+    pub name: String,
+    /// `Space_Model_Name`.
+    pub model: Option<String>,
+    /// `Death_Clone`: the unit to swap in when this one dies (the damage-type prefix removed).
+    pub death_clone: Option<String>,
+    /// `Death_Explosions`: particle objects played while dying.
+    pub death_explosions: Vec<String>,
+    /// `HardPoints`: names of the hardpoints of this unit.
+    pub hardpoints: Vec<String>,
+}
+
+/// A `<HardPoint>`: a weapon, shield generator or art piece attached to a ship bone.
+#[derive(Debug, Clone, Default)]
+pub struct HardpointDef {
+    /// Object name, e.g. `HP_Allegiance_TL_01`.
+    pub name: String,
+    /// `Type` (`HARD_POINT_WEAPON_LASER`, ...).
+    pub kind: String,
+    /// `Model_To_Attach`: turret or art model placed on the bone (often empty).
+    pub model: Option<String>,
+    /// `Attachment_Bone` of the ship the model is attached to.
+    pub bone: String,
+    /// `Is_Destroyable`.
+    pub destroyable: bool,
+    /// `Health`.
+    pub health: f32,
+    /// `Death_Explosion_Particles`: particle object played when destroyed.
+    pub death_particles: Option<String>,
+    /// `Damage_Particles`: bone (with fire/smoke proxies) or particle object enabled on destruction.
+    pub damage_particles: Option<String>,
+    /// `Fire_Bone_A` and `Fire_Bone_B`: muzzle bones.
+    pub fire_bones: [Option<String>; 2],
+    /// `Is_Turret`.
+    pub is_turret: bool,
+    /// `Turret_Bone_Name`: the bone that yaws (default `Turret`).
+    pub turret_bone: Option<String>,
+    /// `Barrel_Bone_Name`: the bone that pitches (default `Barrel`).
+    pub barrel_bone: Option<String>,
+    /// `Turret_Rotate_Speed`: turn speed (radians per second as far as the data suggests).
+    pub rotate_speed: f32,
+    /// `Turret_Rotate_Extent_Degrees`: total yaw range; 360 means a full circle.
+    pub rotate_extent_deg: f32,
+    /// `Turret_Elevate_Extent_Degrees`: total pitch range above the horizontal.
+    pub elevate_extent_deg: f32,
+}
+
 /// All projectile and particle definitions.
 #[derive(Resource, Default, Debug)]
 pub struct XmlDefs {
@@ -77,6 +127,10 @@ pub struct XmlDefs {
     pub projectiles: HashMap<String, ProjectileDef>,
     /// Particle objects by lowercase name.
     pub particles: HashMap<String, ParticleDef>,
+    /// Space units by lowercase name.
+    pub units: HashMap<String, UnitDef>,
+    /// Hardpoints by lowercase name.
+    pub hardpoints: HashMap<String, HardpointDef>,
 }
 
 impl XmlDefs {
@@ -90,9 +144,21 @@ impl XmlDefs {
         self.particles.get(&name.trim().to_ascii_lowercase())
     }
 
+    /// Space unit by name (case-insensitive).
+    pub fn unit(&self, name: &str) -> Option<&UnitDef> {
+        self.units.get(&name.trim().to_ascii_lowercase())
+    }
+
+    /// Hardpoint by name (case-insensitive).
+    pub fn hardpoint(&self, name: &str) -> Option<&HardpointDef> {
+        self.hardpoints.get(&name.trim().to_ascii_lowercase())
+    }
+
     /// Scans every XML file below `XML/` of `fs`.
     pub fn load(fs: &GameFs) -> XmlDefs {
         let mut raw_proj: Vec<RawBlock> = Vec::new();
+        let mut raw_units: Vec<RawBlock> = Vec::new();
+        let mut raw_hp: Vec<RawBlock> = Vec::new();
         let mut defs = XmlDefs::default();
         for path in fs.list("XML") {
             if !path.ends_with(".XML") {
@@ -100,10 +166,18 @@ impl XmlDefs {
             }
             let Ok(bytes) = fs.read(&path) else { continue };
             let text = String::from_utf8_lossy(&bytes);
-            if !text.contains("<Projectile ") && !text.contains("<Particle ") {
+            if !text.contains("<Projectile ")
+                && !text.contains("<Particle ")
+                && !text.contains("<SpaceUnit ")
+                && !text.contains("<UniqueUnit ")
+                && !text.contains("<HardPoint ")
+            {
                 continue;
             }
             let text = strip_comments(&text);
+            raw_hp.extend(blocks(&text, "HardPoint"));
+            raw_units.extend(blocks(&text, "SpaceUnit"));
+            raw_units.extend(blocks(&text, "UniqueUnit"));
             raw_proj.extend(blocks(&text, "Projectile"));
             for b in blocks(&text, "Particle") {
                 let def = ParticleDef {
@@ -176,6 +250,103 @@ impl XmlDefs {
                     lifetime_detonation: text("Projectile_Lifetime_Detonation_Particle"),
                     ground_detonation: text("Projectile_Ground_Detonation_Particle"),
                     shield_absorb: text("Projectile_Absorbed_By_Shields_Particle"),
+                },
+            );
+        }
+        let unit_by_name: HashMap<String, usize> = raw_units
+            .iter()
+            .enumerate()
+            .map(|(i, b)| (b.name.to_ascii_lowercase(), i))
+            .collect();
+        for b in &raw_units {
+            let mut chain = vec![b];
+            let mut cur = b;
+            for _ in 0..8 {
+                let Some(base) = cur.get("Variant_Of_Existing_Type") else {
+                    break;
+                };
+                let Some(&i) = unit_by_name.get(&base.to_ascii_lowercase()) else {
+                    break;
+                };
+                cur = &raw_units[i];
+                chain.push(cur);
+            }
+            let get = |tag: &str| chain.iter().find_map(|c| c.get(tag));
+            let death_clone =
+                get("Death_Clone").map(|v| v.rsplit(',').next().unwrap_or("").trim().to_string());
+            defs.units.insert(
+                b.name.to_ascii_lowercase(),
+                UnitDef {
+                    name: b.name.clone(),
+                    model: get("Space_Model_Name"),
+                    death_clone: death_clone.filter(|c| !c.is_empty()),
+                    hardpoints: get("HardPoints")
+                        .map(|v| {
+                            v.split(|c: char| c == ',' || c.is_whitespace())
+                                .filter(|s| !s.is_empty())
+                                .map(str::to_string)
+                                .collect()
+                        })
+                        .unwrap_or_default(),
+                    death_explosions: get("Death_Explosions")
+                        .map(|v| {
+                            v.split(',')
+                                .map(|s| s.trim().to_string())
+                                .filter(|s| !s.is_empty())
+                                .collect()
+                        })
+                        .unwrap_or_default(),
+                },
+            );
+        }
+        let hp_by_name: HashMap<String, usize> = raw_hp
+            .iter()
+            .enumerate()
+            .map(|(i, b)| (b.name.to_ascii_lowercase(), i))
+            .collect();
+        for b in &raw_hp {
+            let mut chain = vec![b];
+            let mut cur = b;
+            for _ in 0..8 {
+                let Some(base) = cur.get("Variant_Of_Existing_Type") else {
+                    break;
+                };
+                let Some(&i) = hp_by_name.get(&base.to_ascii_lowercase()) else {
+                    break;
+                };
+                cur = &raw_hp[i];
+                chain.push(cur);
+            }
+            let get = |tag: &str| chain.iter().find_map(|c| c.get(tag));
+            let yes = |tag: &str| {
+                get(tag).is_some_and(|v| {
+                    v.eq_ignore_ascii_case("yes") || v.eq_ignore_ascii_case("true")
+                })
+            };
+            defs.hardpoints.insert(
+                b.name.to_ascii_lowercase(),
+                HardpointDef {
+                    name: b.name.clone(),
+                    kind: get("Type").unwrap_or_default(),
+                    model: get("Model_To_Attach"),
+                    bone: get("Attachment_Bone").unwrap_or_default(),
+                    destroyable: yes("Is_Destroyable"),
+                    health: get("Health").and_then(|v| v.parse().ok()).unwrap_or(0.0),
+                    death_particles: get("Death_Explosion_Particles"),
+                    damage_particles: get("Damage_Particles"),
+                    fire_bones: [get("Fire_Bone_A"), get("Fire_Bone_B")],
+                    is_turret: yes("Is_Turret"),
+                    turret_bone: get("Turret_Bone_Name"),
+                    barrel_bone: get("Barrel_Bone_Name"),
+                    rotate_speed: get("Turret_Rotate_Speed")
+                        .and_then(|v| v.parse().ok())
+                        .unwrap_or(0.0),
+                    rotate_extent_deg: get("Turret_Rotate_Extent_Degrees")
+                        .and_then(|v| v.parse().ok())
+                        .unwrap_or(360.0),
+                    elevate_extent_deg: get("Turret_Elevate_Extent_Degrees")
+                        .and_then(|v| v.parse().ok())
+                        .unwrap_or(90.0),
                 },
             );
         }

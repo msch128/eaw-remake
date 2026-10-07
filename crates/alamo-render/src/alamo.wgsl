@@ -10,6 +10,7 @@
 #import bevy_pbr::{
     forward_io::VertexOutput,
     mesh_view_bindings::{view, lights, globals},
+    shadows,
 }
 
 const KIND_LIT: u32 = 0u;
@@ -26,6 +27,7 @@ const FLAG_VERTEX_COLOR: u32 = 8u;
 const FLAG_ALPHA_FROM_BASE: u32 = 16u;
 const FLAG_FLIP_GREEN: u32 = 32u;
 const FLAG_SHIELD_HITS: u32 = 64u;
+const FLAG_SHADOWS: u32 = 128u;
 
 struct AlamoParams {
     diffuse: vec4<f32>,
@@ -212,9 +214,19 @@ fn fragment(in: VertexOutput, @builtin(front_facing) front: bool) -> @location(0
             spec_mask = 0.0;
         }
     }
-    let ndl = saturate(dot(n, L));
+    var shadow = 1.0;
+    if has(FLAG_SHADOWS) && lights.n_directional_lights > 0u {
+        let view_z = dot(vec4<f32>(
+            view.view_from_world[0].z,
+            view.view_from_world[1].z,
+            view.view_from_world[2].z,
+            view.view_from_world[3].z,
+        ), in.world_position);
+        shadow = shadows::fetch_directional_shadow(0u, in.world_position, N, view_z, in.position.xy);
+    }
+    let ndl = saturate(dot(n, L)) * shadow;
     let H = normalize(L + V);
-    let spec = mat.specular.rgb * spec_mask * pow(saturate(dot(n, H)), max(mat.shininess, 1.0)) * sun * step(0.0, dot(N, L));
+    let spec = mat.specular.rgb * spec_mask * pow(saturate(dot(n, H)), max(mat.shininess, 1.0)) * sun * step(0.0, dot(N, L)) * shadow;
     // Emissive is the self-illumination of the base texture.
     rgb = albedo * (amb + sun * ndl) + spec + mat.emissive.rgb * base.rgb;
     if mat.kind == KIND_ALPHA {

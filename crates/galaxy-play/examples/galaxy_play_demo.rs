@@ -1,4 +1,4 @@
-//! Headless demo of the playable galactic map.
+﻿//! Headless demo of the playable galactic map.
 //!
 //! ```text
 //! galaxy_play_demo --offscreen <out.png> [options]
@@ -98,8 +98,10 @@ struct Demo {
     target: Handle<Image>,
     /// Frame at which the capture phase started.
     settle_from: Option<u32>,
+    settle_started: Option<Instant>,
     frame: u32,
     scripted: bool,
+    noted_hold: bool,
     shot_requested: bool,
     started: Instant,
     max_work_micros: u64,
@@ -178,8 +180,10 @@ fn main() {
             args,
             target,
             settle_from: None,
+            settle_started: None,
             frame: 0,
             scripted: false,
+            noted_hold: false,
             shot_requested: false,
             started: Instant::now(),
             max_work_micros: 0,
@@ -224,11 +228,13 @@ fn setup(mut commands: Commands, demo: Res<Demo>, state: Res<SimState>, mut layo
     let extent = (hi - lo).max_element().max(layout.unit * 10.0);
     let (focus, dist) = match demo.focus {
         Some(p) => (layout.positions[p as usize], layout.unit * 22.0 * demo.args.zoom),
-        None => (Vec3::new(center.x, 0.0, center.z), extent * 1.15 * demo.args.zoom),
+        None => (Vec3::new(center.x, 0.0, center.z), extent * 1.5 * demo.args.zoom),
     };
     let rot = Quat::from_rotation_x(-58f32.to_radians());
     commands.spawn((
         Camera3d::default(),
+        IsDefaultUiCamera,
+        bevy::camera::Hdr,
         RenderTarget::Image(demo.target.clone().into()),
         Tonemapping::None,
         Projection::Perspective(PerspectiveProjection { fov: 40f32.to_radians(), near: 1.0, far: 20_000.0, ..default() }),
@@ -243,15 +249,14 @@ fn planets(
     mut gizmos: Gizmos,
     state: Res<SimState>,
     mut layout: ResMut<GalaxyLayout>,
-    mut tags: Query<(&mut PlanetTag, &mut AlamoModel)>,
-    loaded: Query<(&PlanetTag, &AlamoModelLoaded, &Transform), Added<AlamoModelLoaded>>,
+    mut q: ParamSet<(Query<(&mut PlanetTag, &mut AlamoModel)>, Query<(&PlanetTag, &AlamoModelLoaded, &Transform), Added<AlamoModelLoaded>>)>,
 ) {
     let world: &World = &state.world;
     let g = state.galaxy();
-    for (tag, m, tf) in &loaded {
+    for (tag, m, tf) in &q.p1() {
         layout.radii[tag.id as usize] = m.radius * tf.scale.x;
     }
-    for (mut tag, mut model) in &mut tags {
+    for (mut tag, mut model) in &mut q.p0() {
         let owner = g.planets[tag.id as usize].owner;
         if tag.owner != owner || (owner.is_none() && model.team_color == Color::WHITE) {
             tag.owner = owner;
@@ -319,7 +324,7 @@ fn drive(
     state: Res<SimState>,
     player: Res<PlayerFaction>,
     model: Res<PlayUiModel>,
-    models: Query<Has<AlamoModelLoaded>, With<AlamoModel>>,
+    models: Query<(Has<AlamoModelLoaded>, Has<alamo_render::model::AlamoLoadFailed>), With<AlamoModel>>,
     mut actions: MessageWriter<PlayAction>,
     mut exit: MessageWriter<AppExit>,
 ) {
@@ -337,14 +342,23 @@ fn drive(
         if let Some(h) = player.0 {
             script_orders(&state, h, &mut actions);
         }
-        // 20 weeks of galactic time per 50 ms frame: the worker is the bottleneck, not the frame rate.
-        actions.write(PlayAction::SetSpeedMultiplier(world.config.week_seconds * 20.0 / (FRAME_MS as f32 / 1000.0)));
+        // One galactic week per 50 ms frame: the worker is the bottleneck, not the frame rate.
+        if demo.args.weeks > 0 {
+            actions.write(PlayAction::SetSpeedMultiplier(world.config.week_seconds / (FRAME_MS as f32 / 1000.0)));
+        }
         return;
     }
 
-    let done_sim = state.current.week >= demo.args.weeks || g.winner.is_some() || (demo.args.stop_on_battle && model.battle.is_some());
+    let held = model.battle.is_some();
+    let stalled = demo.started.elapsed() > Duration::from_secs(40);
+    if held && !demo.args.stop_on_battle && demo.settle_from.is_none() && !demo.noted_hold {
+        demo.noted_hold = true;
+        println!("note: the game is held by a battle prompt at week {}", state.current.week);
+    }
+    let done_sim = state.current.week >= demo.args.weeks || g.winner.is_some() || held && (demo.args.stop_on_battle || stalled) || stalled;
     if demo.settle_from.is_none() && done_sim {
         demo.settle_from = Some(demo.frame);
+        demo.settle_started = Some(Instant::now());
         actions.write(PlayAction::SetSpeedMultiplier(0.0));
         println!(
             "simulated {} weeks ({:.0} galactic s) in {:.2?} wall time, {} snapshots, worst batch {:.1} ms",
@@ -357,8 +371,13 @@ fn drive(
         summary(&state);
     }
     let Some(from) = demo.settle_from else { return };
-    let all_loaded = models.iter().all(|l| l);
-    if !demo.shot_requested && demo.frame > from + 40 && (all_loaded || demo.frame > from + 600) {
+    let all_loaded = models.iter().all(|(l, f)| l || f);
+    if demo.frame == from + 40 {
+        println!("models: {} total, {} loaded, {} failed", models.iter().count(), models.iter().filter(|m| m.0).count(), models.iter().filter(|m| m.1).count());
+    }
+    // Pipelines compile asynchronously: give the renderer a few real seconds before the capture.
+    let waited = demo.settle_started.is_some_and(|s| s.elapsed() > Duration::from_secs(5));
+    if !demo.shot_requested && demo.frame > from + 40 && waited && all_loaded {
         demo.shot_requested = true;
         let out = demo.args.out.clone();
         commands.spawn(Screenshot::image(demo.target.clone())).observe(move |cap: On<ScreenshotCaptured>, mut exit: MessageWriter<AppExit>| {
@@ -375,7 +394,7 @@ fn drive(
             exit.write(AppExit::Success);
         });
     }
-    if demo.frame > from + 1500 {
+    if demo.settle_started.is_some_and(|s| s.elapsed() > Duration::from_secs(60)) {
         eprintln!("capture never arrived");
         exit.write(AppExit::error());
     }
@@ -408,10 +427,17 @@ fn script_orders(state: &SimState, human: u32, actions: &mut MessageWriter<PlayA
     let fleet = g.fleets.values().filter(|f| f.owner == human && f.planet().is_some()).max_by_key(|f| f.unit_count());
     if let Some(f) = fleet {
         let at = f.planet().expect("filtered");
-        let dest = world.adjacency[at as usize]
-            .iter()
-            .flat_map(|&(n, _)| world.adjacency[n as usize].iter().map(|&(m, _)| m))
-            .find(|&m| m != at && world.real[m as usize]);
+        // A quiet planet (own or unowned, no base) within a few lanes.
+        let quiet = |p: u32| {
+            let ps = &g.planets[p as usize];
+            world.real[p as usize] && ps.starbase.is_none() && ps.owner.is_none_or(|o| o == human) && g.fleets_at(p).all(|f| f.owner == human)
+        };
+        let dest = (0..world.planets.len() as u32)
+            .filter(|&p| p != at && quiet(p))
+            .filter_map(|p| Some((p, world.find_path(at, p)?.len())))
+            .filter(|&(_, hops)| (3..=5).contains(&hops))
+            .map(|(p, _)| p)
+            .next();
         if let Some(d) = dest {
             actions.write(PlayAction::SelectFleets(vec![f.id]));
             actions.write(PlayAction::MoveSelected(d));
@@ -431,3 +457,12 @@ fn summary(state: &SimState) {
         }
     }
 }
+
+
+
+
+
+
+
+
+

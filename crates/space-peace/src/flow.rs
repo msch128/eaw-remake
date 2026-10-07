@@ -1,4 +1,4 @@
-//! Application flow: screens (main menu, campaign selection, galaxy map), pause, campaign
+﻿//! Application flow: screens (main menu, campaign selection, galaxy map), pause, campaign
 //! start, music scenes and UI sounds.
 
 use alamo_audio::{MusicDirector, MusicScene, SfxCommands, plugin::AlamoAudio};
@@ -6,17 +6,23 @@ use bevy::prelude::*;
 
 use crate::galaxy_view::GalaxyView;
 use crate::game::{self, DEMO_CAMPAIGN, Game, StartupLog};
+use crate::options::OptionsOpen;
+use crate::settings::Settings;
 
 /// The screen the application is on.
 #[derive(States, Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum AppScreen {
-    /// Title screen.
+    /// Game data is loaded in the background.
     #[default]
+    Loading,
+    /// Title screen.
     MainMenu,
     /// Galaxy and faction selection.
     CampaignSelect,
     /// The galactic conquest map.
     Galaxy,
+    /// A tactical space battle started from the map; see `battle_seam`.
+    SpaceBattle,
 }
 
 /// True while the pause menu is open on the galaxy map.
@@ -76,8 +82,16 @@ fn escape_key(
     mut next: ResMut<NextState<AppScreen>>,
     mut paused: ResMut<Paused>,
     mut sound: MessageWriter<UiSound>,
+    mut options: ResMut<OptionsOpen>,
+    settings: Res<Settings>,
 ) {
     if !keys.just_pressed(KeyCode::Escape) {
+        return;
+    }
+    // Esc first closes the options overlay.
+    if options.0 {
+        crate::options::close(&mut options, &settings);
+        sound.write(UiSound(crate::menu::SFX_BACK));
         return;
     }
     match state.get() {
@@ -89,7 +103,7 @@ fn escape_key(
             next.set(AppScreen::MainMenu);
             sound.write(UiSound(crate::menu::SFX_BACK));
         }
-        AppScreen::MainMenu => {}
+        AppScreen::MainMenu | AppScreen::Loading | AppScreen::SpaceBattle => {}
     }
 }
 

@@ -51,6 +51,7 @@ struct Capture {
     warm: u32,
     frames: u32,
     cam_applied: bool,
+    auto: bool,
 }
 
 fn main() {
@@ -63,6 +64,7 @@ fn main() {
     let (mut speed, mut seed, mut msaa) = (1.0f32, 1u64, 4u32);
     let (mut cams, mut overlay, mut bloom, mut scale) = (Vec::<Vec<f32>>::new(), false, true, 1.0f32);
     let mut small = false;
+    let mut auto = false;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
@@ -79,6 +81,7 @@ fn main() {
             "--no-bloom" => bloom = false,
             "--scale" => scale = it.next().unwrap().parse().unwrap(),
             "--small" => small = true,
+            "--auto" => auto = true,
             other => eprintln!("ignoring argument {other}"),
         }
     }
@@ -90,7 +93,10 @@ fn main() {
     let fs = Arc::new(GameFs::for_mod(&install, Some("1770851727")).expect("game files"));
     let (data, _) = load_galaxy(&*fs);
     let map_path = format!("Art/Maps/{map}.TED");
-    let scene = SpaceScene::load(&*fs, &data, &map_path).expect("space map");
+    let mut scene = SpaceScene::load(&*fs, &data, &map_path).expect("space map");
+    if std::env::var("NOPROPS").is_ok() {
+        scene.props.clear();
+    }
     println!(
         "map {} bounds {:?}..{:?}, {} props, skydome {:?}, nebula {:?}",
         scene.name, scene.bounds_min, scene.bounds_max, scene.props.len(), scene.skydome, scene.nebula
@@ -136,9 +142,11 @@ fn main() {
         structures: vec![],
         ai: true,
     };
-    let half = scene.bounds_max.x.min(scene.bounds_max.y) * 0.95;
+    let arena = battle_sim::Arena::load(&data, &*fs, &format!("{map}.TED")).map(Arc::new);
+    let half = arena.as_ref().map_or(7000.0, |a| a.half_size());
     let config = BattleConfig {
         half_size: half,
+        arena,
         seed,
         ..BattleConfig::default()
     };
@@ -195,6 +203,7 @@ fn main() {
                 warm: 0,
                 frames: 0,
                 cam_applied: false,
+                auto,
             })
             .add_systems(Last, capture_driver);
         }
@@ -256,6 +265,19 @@ fn capture_driver(
         bc.min_distance = 100.0;
         cap.cam_applied = true;
     }
+    if cap.auto {
+        // Frame all living ships (a stand-in for the player scrolling to the action).
+        let n = ships.0.len().max(1) as f32;
+        let center = ships.0.values().map(|s| s.pos).sum::<Vec3>() / n;
+        let radius = ships
+            .0
+            .values()
+            .map(|s| (s.pos - center).length())
+            .fold(0.0f32, f32::max);
+        bc.snap = true;
+        bc.target_focus = center;
+        bc.target_distance = (radius * 1.7).clamp(1500.0, 16000.0);
+    }
     if cap.overlay {
         // Select the player's capital ships and hover the biggest enemy ship.
         let player = settings.player_side;
@@ -271,6 +293,9 @@ fn capture_driver(
             .values()
             .filter(|s| s.side != player)
             .max_by(|a, b| a.radius.total_cmp(&b.radius));
+        if let Some(t) = target {
+            println!("overlay target #{} hull {:.2} shield {:.2} radius {}", t.id, t.hull, t.shield, t.radius);
+        }
         if let Some(t) = target
             && let Ok(p) = camera.world_to_viewport(gt, t.pos)
         {
@@ -338,4 +363,8 @@ fn capture_driver(
             );
     }
 }
+
+
+
+
 

@@ -31,3 +31,39 @@ pub fn spawn_sun(commands: &mut Commands, direction: Vec3, intensity: f32, color
         ))
         .id()
 }
+
+/// Like [`spawn_sun`] but the sun casts cascaded shadow maps over `max_distance` world units
+/// (ships shadow each other and themselves). Pair with
+/// `AlamoRenderSettings { shadows: true, .. }`; every shadow-casting mesh is drawn once more per
+/// cascade, so keep `cascades` small (2 is a good start) in big battles.
+pub fn spawn_sun_shadowed(
+    commands: &mut Commands,
+    direction: Vec3,
+    intensity: f32,
+    color: Color,
+    max_distance: f32,
+    cascades: usize,
+) -> Entity {
+    let illuminance = intensity / Exposure::default().exposure();
+    commands
+        .spawn((
+            Name::new("sun"),
+            SunLight,
+            DirectionalLight {
+                color,
+                illuminance,
+                shadow_maps_enabled: true,
+                ..default()
+            },
+            bevy::light::CascadeShadowConfigBuilder {
+                num_cascades: cascades.max(1),
+                minimum_distance: 1.0,
+                maximum_distance: max_distance,
+                first_cascade_far_bound: max_distance / (cascades.max(1) as f32 * 3.0),
+                ..default()
+            }
+            .build(),
+            Transform::IDENTITY.looking_to(direction, Vec3::Y),
+        ))
+        .id()
+}

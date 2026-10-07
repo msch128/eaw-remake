@@ -11,17 +11,22 @@ use bevy::mesh::skinning::{SkinnedMesh, SkinnedMeshInverseBindposes};
 use bevy::mesh::{Indices, PrimitiveTopology, VertexAttributeValues};
 use bevy::prelude::*;
 
+use crate::animation::TurretAim;
 use crate::material::{
     AlamoMaterial, AlamoParams, FLAG_ALPHA_FROM_BASE, FLAG_COLORIZE, FLAG_NORMAL_MAP,
     FLAG_SPEC_FROM_BASE_ALPHA, FLAG_VERTEX_COLOR, ShaderKind,
 };
 use crate::texture::TextureCache;
+use crate::xmldata::XmlDefs;
 
 /// Global rendering options, read when materials are created.
 #[derive(Resource, Debug, Clone, Default)]
 pub struct AlamoRenderSettings {
     /// Invert the green channel of normal maps (DirectX vs OpenGL convention).
     pub flip_normal_green: bool,
+    /// Ships receive the sun's shadow maps (needs a shadow-casting sun, see
+    /// [`spawn_sun_shadowed`](crate::spawn_sun_shadowed)).
+    pub shadows: bool,
 }
 
 /// The game file system models and textures are read from.
@@ -58,9 +63,27 @@ pub struct AlamoModel {
     /// along Bevy's forward direction (-Z). Without it the plain Z-up to Y-up conversion is
     /// used and the bow points along +Z.
     pub bow_forward: bool,
+    /// XML name of the space unit (`Allegiance_Star_Destroyer`); when set, the unit's hardpoints
+    /// (turrets and art pieces named by `Model_To_Attach`) are attached to the ship's bones.
+    pub unit: Option<String>,
+    /// The model hangs below a bone of another model (a turret on a ship), so the Z-up to Y-up
+    /// conversion of the parent already applies and none is added.
+    pub attached: bool,
 }
 
 impl AlamoModel {
+    /// Attaches the hardpoints of the XML unit `name` (see [`AlamoModel::unit`]).
+    pub fn with_unit(mut self, name: impl Into<String>) -> Self {
+        self.unit = Some(name.into());
+        self
+    }
+
+    /// Marks the model as attached below a bone of another model.
+    pub fn attached_to_bone(mut self) -> Self {
+        self.attached = true;
+        self
+    }
+
     /// A model with white team color and default LOD.
     pub fn new(path: impl Into<String>) -> Self {
         Self {
@@ -68,6 +91,8 @@ impl AlamoModel {
             team_color: Color::WHITE,
             lod: LodSelect::default(),
             bow_forward: false,
+            unit: None,
+            attached: false,
         }
     }
 
@@ -99,10 +124,28 @@ pub struct AlamoModelLoaded {
     pub parts: Vec<Entity>,
     /// Proxy entities ([`AlamoProxy`]) in file order.
     pub proxies: Vec<Entity>,
+    /// The `alamo_axis` node every bone and mesh hangs below; hidden by distance culling.
+    pub axis: Entity,
+    /// Hardpoint entities ([`AlamoHardpoint`]) of the unit, empty without [`AlamoModel::unit`].
+    pub hardpoints: Vec<Entity>,
+    /// Bone entities by lowercase bone name.
+    pub bone_by_name: std::collections::HashMap<String, Entity>,
     /// Center of the visible geometry in the model root's space.
     pub center: Vec3,
     /// Radius of a sphere around `center` that contains the visible geometry.
     pub radius: f32,
+}
+
+/// A hardpoint of a ship: a named attachment (turret, shield generator, art piece) on a bone.
+#[derive(Component, Debug, Clone)]
+pub struct AlamoHardpoint {
+    /// Hardpoint name from the XML.
+    pub name: String,
+    /// Destroyed (hidden, with its damage effects on).
+    pub destroyed: bool,
+    /// The attached turret model root, if the hardpoint has a `Model_To_Attach`; it carries a
+    /// [`TurretAim`] that game code can enable and aim.
+    pub turret: Option<Entity>,
 }
 
 /// Skeleton bone of a spawned model.
@@ -110,6 +153,8 @@ pub struct AlamoModelLoaded {
 pub struct AlamoBone {
     /// Bone index in the skeleton.
     pub index: usize,
+    /// Rest-pose local transform from the model file.
+    pub rest: Transform,
 }
 
 /// Proxy (particle / hardpoint / light attachment point) of a spawned model; a child of its bone.
@@ -199,13 +244,19 @@ impl ModelCache {
 
 /// Resolves a model name to a game path.
 pub fn model_path(path: &str) -> String {
-    if path.contains('/') || path.contains('\\') {
+    let file = path.rsplit(['/', '\\']).next().unwrap_or(path);
+    // Some XML references omit the extension.
+    let path = if file.contains('.') {
         path.to_string()
+    } else {
+        format!("{path}.ALO")
+    };
+    if path.contains('/') || path.contains('\\') {
+        path
     } else {
         format!("Art/Models/{path}")
     }
 }
-
 /// Name of a mesh group: the mesh name without a trailing `_ALTn`.
 pub fn group_name(name: &str) -> String {
     let upper = name.to_ascii_uppercase();
@@ -495,6 +546,7 @@ pub struct LoaderParams<'w> {
     materials: ResMut<'w, Assets<AlamoMaterial>>,
     inverse_bindposes: ResMut<'w, Assets<SkinnedMeshInverseBindposes>>,
     settings: Res<'w, AlamoRenderSettings>,
+    defs: Res<'w, XmlDefs>,
 }
 
 fn load_model(p: &mut LoaderParams, key: &str) -> Result<Arc<CachedModel>, String> {
@@ -550,6 +602,9 @@ fn load_model(p: &mut LoaderParams, key: &str) -> Result<Arc<CachedModel>, Strin
             let mut material = material;
             if p.settings.flip_normal_green {
                 material.params.flags |= crate::material::FLAG_FLIP_GREEN;
+            }
+            if p.settings.shadows {
+                material.params.flags |= crate::material::FLAG_SHADOWS;
             }
             if material.base.is_none() && sub.material.texture("BaseTexture").is_some() {
                 material.base = Some(p.textures.fallback(&mut p.images));
@@ -654,7 +709,9 @@ pub fn spawn_models(
                 continue;
             }
         };
-        let axis_rot = if spec.bow_forward {
+        let axis_rot = if spec.attached {
+            Quat::IDENTITY
+        } else if spec.bow_forward {
             Quat::from_rotation_y(std::f32::consts::PI)
                 * Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2)
         } else {
@@ -680,7 +737,10 @@ pub fn spawn_models(
                 Name::new(b.name.clone()),
                 Visibility::Inherited,
                 Transform::from_matrix(mat4_from_34(&b.transform)),
-                AlamoBone { index: i },
+                AlamoBone {
+                    index: i,
+                    rest: Transform::from_matrix(mat4_from_34(&b.transform)),
+                },
                 ChildOf(parent),
             ));
             if !b.visible {
@@ -766,10 +826,67 @@ pub fn spawn_models(
             }
         }
         let (center, radius) = visible_bounds(&cached, &selected_meshes, axis_rot);
+        let mut hardpoint_entities = Vec::new();
+        if let Some(unit) = spec.unit.as_deref().and_then(|u| loader.defs.unit(u)) {
+            let bone_ids: HashMap<String, Entity> = model
+                .bones
+                .iter()
+                .zip(&bones)
+                .map(|(b, &e)| (b.name.to_ascii_lowercase(), e))
+                .collect();
+            for name in &unit.hardpoints {
+                let Some(def) = loader.defs.hardpoint(name) else {
+                    continue;
+                };
+                let Some(&bone) = bone_ids.get(&def.bone.to_ascii_lowercase()) else {
+                    continue;
+                };
+                let hp = commands
+                    .spawn((
+                        Name::new(def.name.clone()),
+                        AlamoHardpoint {
+                            name: def.name.clone(),
+                            destroyed: false,
+                            turret: None,
+                        },
+                        Transform::IDENTITY,
+                        Visibility::Inherited,
+                        ChildOf(bone),
+                    ))
+                    .id();
+                if let Some(path) = def.model.as_deref() {
+                    let turret = commands
+                        .spawn((
+                            AlamoModel::new(path)
+                                .with_team_color(spec.team_color)
+                                .with_lod(spec.lod)
+                                .attached_to_bone(),
+                            Transform::IDENTITY,
+                            TurretAim::from_hardpoint(def),
+                            ChildOf(hp),
+                        ))
+                        .id();
+                    commands.entity(hp).insert(AlamoHardpoint {
+                        name: def.name.clone(),
+                        destroyed: false,
+                        turret: Some(turret),
+                    });
+                }
+                hardpoint_entities.push(hp);
+            }
+        }
         commands.entity(root).insert(AlamoModelLoaded {
+            axis,
+            hardpoints: hardpoint_entities,
             bones: bones.clone(),
             parts,
             proxies: proxy_entities,
+            bone_by_name: model
+                .bones
+                .iter()
+                .zip(&bones)
+                .map(|(b, &e)| (b.name.to_ascii_lowercase(), e))
+                .collect(),
             center,
             radius,
         });

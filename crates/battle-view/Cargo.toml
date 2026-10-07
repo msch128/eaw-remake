@@ -5,6 +5,11 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+default = []
+# Chrome trace output for profiling (TRACE_CHROME=1).
+profile = ["bevy/trace_chrome"]
+
 [dependencies]
 bevy = { version = "=0.19.1", default-features = false, features = [
     "default_app", "std", "multi_threaded", "bevy_winit", "bevy_window", "default_font", "x11",
@@ -16,3 +21,4 @@ alamo-map = { path = "../alamo-map" }
 alamo-model = { path = "../alamo-model" }
 alamo-render = { path = "../alamo-render" }
 battle-sim = { path = "../battle-sim" }
+

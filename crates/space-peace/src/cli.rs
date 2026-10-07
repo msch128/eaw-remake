@@ -6,8 +6,10 @@ use std::path::PathBuf;
 /// Parsed command line options.
 #[derive(Resource, Debug, Clone)]
 pub struct Args {
-    /// Master music volume, linear 0..1 (`--music-volume <v>`).
-    pub music_volume: f32,
+    /// Master volume override, linear 0..1 (`--volume <v>`, alias `--music-volume`).
+    pub volume: Option<f32>,
+    /// Extra seconds the loading screen is held (`--loading-delay <s>`, for screenshots).
+    pub loading_delay: f32,
     /// Disable vertical sync (`--no-vsync`).
     pub no_vsync: bool,
     /// Start in borderless fullscreen (`--fullscreen`).
@@ -37,7 +39,8 @@ pub struct Args {
 impl Default for Args {
     fn default() -> Self {
         Self {
-            music_volume: 0.5,
+            volume: None,
+            loading_delay: 0.0,
             no_vsync: false,
             fullscreen: false,
             game_dir: None,
@@ -60,7 +63,8 @@ Space Peace: Not at War
 USAGE: space-peace [OPTIONS]
 
 OPTIONS:
-  --music-volume <0..1>  Master volume (default 0.5)
+  --volume <0..1>        Master volume (overrides the stored setting)
+  --loading-delay <s>    Hold the loading screen for this many extra seconds
   --game-dir <path>      Empire at War root (default: auto-detect / EAW_GAME_DIR)
   --mod <id>             Workshop mod id (default 1770851727)
   --campaign <name>      Galactic conquest campaign (default GC_Full_Web_Way_Rebel)
@@ -94,16 +98,17 @@ impl Args {
         let mut it = args.into_iter();
         while let Some(arg) = it.next() {
             match arg.as_str() {
-                "--music-volume" => {
-                    let v = it.next().ok_or("--music-volume needs a value")?;
-                    out.music_volume = v
-                        .parse::<f32>()
-                        .map_err(|e| format!("bad --music-volume: {e}"))?
-                        .clamp(0.0, 1.0);
+                "--volume" | "--music-volume" => {
+                    let v = it.next().ok_or("--volume needs a value")?;
+                    out.volume = Some(
+                        v.parse::<f32>().map_err(|e| format!("bad --volume: {e}"))?.clamp(0.0, 1.0),
+                    );
                 }
-                "--game-dir" => {
-                    out.game_dir = Some(it.next().ok_or("--game-dir needs a value")?.into())
+                "--loading-delay" => {
+                    let v = it.next().ok_or("--loading-delay needs a value")?;
+                    out.loading_delay = v.parse().map_err(|e| format!("bad --loading-delay: {e}"))?;
                 }
+                "--game-dir" => out.game_dir = Some(it.next().ok_or("--game-dir needs a value")?.into()),
                 "--mod" => out.mod_id = Some(it.next().ok_or("--mod needs a value")?),
                 "--campaign" => out.campaign = Some(it.next().ok_or("--campaign needs a value")?),
                 "--list-campaigns" => out.list_campaigns = true,
@@ -137,6 +142,15 @@ mod tests {
     fn parses_flags() {
         let a = Args::parse(["--campaign", "x", "--no-vsync"].map(String::from)).unwrap();
         assert_eq!(a.campaign.as_deref(), Some("x"));
+        let b = Args::parse(
+            ["--screen", "menu", "--offscreen", "o.png", "--frames", "5", "--volume", "0.3", "--loading-delay", "2", "--zoom", "0.5", "--select", "P", "--game-dir", "g", "--mod", "1", "--demo"]
+                .map(String::from),
+        )
+        .unwrap();
+        assert_eq!(b.screen.as_deref(), Some("menu"));
+        assert_eq!(b.frames, 5);
+        assert_eq!(b.volume, Some(0.3));
+        assert!(b.demo && b.offscreen.is_some() && b.game_dir.is_some() && b.mod_id.is_some());
         assert!(a.no_vsync);
         assert!(Args::parse(["--bogus".to_string()]).is_err());
     }

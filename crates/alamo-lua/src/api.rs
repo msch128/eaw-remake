@@ -1,4 +1,4 @@
-﻿//! Engine API bindings: global functions, namespaces and handle methods.
+//! Engine API bindings: global functions, namespaces and handle methods.
 //!
 //! Implemented calls talk to the [`ScriptHost`]. Cinematic / camera / UI / audio calls are accepted and
 //! ignored (counted in the hit statistics). Every other API name found in the scripts is bound to a stub
@@ -10,7 +10,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use alamo_fs::FileSource;
-use mlua::{Function, Lua, MultiValue, Thread, Value};
+use mlua::{Function, Lua, MultiValue, Table, Thread, Value};
 
 use crate::handles::{self, Handle, HandleData, Kind};
 use crate::host::{GameMode, ObjectFilter, ObjectId, PlayerId, ScriptHost, SpawnAt};
@@ -75,16 +75,21 @@ pub struct Shared {
     /// Call counts per API name (implemented, ignored and stubbed).
     pub api_hits: BTreeMap<String, usize>,
     /// Call counts of handle methods by name (without the leading colon).
-    pub method_hits: HashMap<String, usize>,
+    pub method_hits: HashMap<String, Rc<std::cell::Cell<usize>>>,
     /// Per-function counters (see ast_counter); one entry per bound function and script instance.
-    /// Engine-call counter that polling scripts do not move (see ScriptRuntime::set_idle_backoff).
+    /// Engine-call counter that polling scripts do not move (see `ScriptRuntime::set_idle_backoff`).
     pub activity: Rc<std::cell::Cell<u64>>,
     /// Set when story flags changed: idle scripts must be serviced again.
     pub wake: bool,
+    /// Events queued for plan scripts (GetEvent): function name and arguments, per script instance.
+    pub event_queues: HashMap<usize, std::collections::VecDeque<(String, Vec<crate::host::HostValue>)>>,
+    /// Arguments of the event GetEvent returned last, per script instance.
+    pub event_params: HashMap<usize, Vec<crate::host::HostValue>>,
+    /// Per-function counters (see `fast_counter`); one entry per bound function and script instance.
     pub fast_hits: Vec<(String, Rc<std::cell::Cell<usize>>)>,
     /// Methods already reported as unimplemented.
     pub method_logged: HashSet<String>,
-    /// Cache for Type numeric lookups by (type id, kind).
+    /// Cache for `Type` numeric lookups by (type id, kind).
     pub type_cache: HashMap<(u64, u8), Option<f32>>,
     /// Lower-cased player names by id.
     pub player_names: HashMap<PlayerId, String>,
@@ -120,7 +125,7 @@ impl Shared {
         (self.types.len() - 1) as u64
     }
 
-    fn next_random(&mut self) -> u64 {
+    pub(crate) fn next_random(&mut self) -> u64 {
         let mut x = self.rng;
         x ^= x << 13;
         x ^= x >> 7;
@@ -133,7 +138,8 @@ impl Shared {
     /// (read by `Check_Story_Flag`), all non-graph rewards go to the host.
     pub fn apply_rewards(&mut self, f: &crate::story::Fired) {
         if let Some((dialog, chapter)) = &f.dialog {
-            self.host.story_dialog(dialog, *chapter, &f.event, f.faction.as_deref());
+            self.host
+                .story_dialog(dialog, *chapter, &f.event, f.faction.as_deref());
         }
         for r in &f.host_rewards {
             if r.kind == "TRIGGER_AI" {
@@ -166,6 +172,16 @@ impl Shared {
         }
     }
 
+    /// The call counter of a handle method (created on first use; one per method name).
+    pub(crate) fn method_counter(&mut self, name: &str) -> Rc<std::cell::Cell<usize>> {
+        if let Some(c) = self.method_hits.get(name) {
+            return c.clone();
+        }
+        let c = Rc::new(std::cell::Cell::new(0));
+        self.method_hits.insert(name.to_string(), c.clone());
+        c
+    }
+
     pub(crate) fn push_log(&mut self, line: String) {
         if self.log.len() < 5000 {
             self.log.push(line);
@@ -173,9 +189,9 @@ impl Shared {
     }
 }
 
-type Sh = Rc<RefCell<Shared>>;
+pub(crate) type Sh = Rc<RefCell<Shared>>;
 
-fn hit(sh: &Sh, name: &str) {
+pub(crate) fn hit(sh: &Sh, name: &str) {
     let mut s = sh.borrow_mut();
     s.activity.set(s.activity.get() + 1);
     // Look up first: inserting needs an owned key, existing entries must not allocate.
@@ -190,24 +206,14 @@ fn hit(sh: &Sh, name: &str) {
 /// lookup per call for the hot engine functions.
 fn fast_counter(sh: &Sh, name: &str) -> Rc<std::cell::Cell<usize>> {
     let c = Rc::new(std::cell::Cell::new(0));
-    sh.borrow_mut().fast_hits.push((name.to_string(), c.clone()));
+    sh.borrow_mut()
+        .fast_hits
+        .push((name.to_string(), c.clone()));
     c
-}
-
-/// Counts a method call (`:Name`) without allocating on the hot path.
-fn hit_method(sh: &Sh, name: &str) {
-    let mut s = sh.borrow_mut();
-    s.activity.set(s.activity.get() + 1);
-    if let Some(c) = s.method_hits.get_mut(name) {
-        *c += 1;
-    } else {
-        s.method_hits.insert(name.to_string(), 1);
-    }
 }
 
 /// Reports an unimplemented method (first use is logged; later calls only count).
 fn unknown_method(sh: &Sh, name: &str) {
-    hit_method(sh, name);
     let mut s = sh.borrow_mut();
     if !s.method_logged.contains(name) {
         s.method_logged.insert(name.to_string());
@@ -218,7 +224,7 @@ fn unknown_method(sh: &Sh, name: &str) {
     }
 }
 
-fn unknown(sh: &Sh, name: &str) {
+pub(crate) fn unknown(sh: &Sh, name: &str) {
     let mut s = sh.borrow_mut();
     s.activity.set(s.activity.get() + 1);
     if let Some(c) = s.api_hits.get_mut(name) {
@@ -287,7 +293,7 @@ fn is_noop(name: &str) -> bool {
     PARTS.iter().any(|p| name.contains(p))
 }
 
-fn handle_value(lua: &Lua, sh: &Sh, script: usize, kind: Kind, id: u64) -> mlua::Result<Value> {
+pub(crate) fn handle_value(lua: &Lua, sh: &Sh, script: usize, kind: Kind, id: u64) -> mlua::Result<Value> {
     handles::make(
         lua,
         HandleData {
@@ -316,7 +322,7 @@ fn to_string(v: &Value) -> Option<String> {
     }
 }
 
-fn as_handle(v: &Value) -> Option<HandleData> {
+pub(crate) fn as_handle(v: &Value) -> Option<HandleData> {
     match v {
         Value::UserData(ud) => ud.borrow::<HandleData>().ok().map(|h| h.clone()),
         _ => None,
@@ -371,6 +377,8 @@ pub(crate) fn handle_to_string(h: &HandleData) -> String {
             .unwrap_or_default(),
         Kind::Plot => format!("Plot({})", h.handle.id),
         Kind::PlotEvent => format!("PlotEvent({})", h.handle.id),
+        Kind::TaskForce => format!("TaskForce({})", h.handle.id),
+        Kind::Block => format!("Block({})", h.handle.id),
     }
 }
 
@@ -390,6 +398,8 @@ pub(crate) fn call_method(
             hit(sh, &format!("Script.{name}"));
             Ok(Value::Boolean(false))
         }
+        Kind::TaskForce => crate::ai_api::call_taskforce(lua, h, name, &args),
+        Kind::Block => crate::ai_api::call_block(lua, h, name),
         Kind::Plot => {
             hit(sh, &format!("Plot.{name}"));
             match name {
@@ -434,50 +444,46 @@ pub(crate) fn call_method(
             hit(sh, &format!("Thread.{name}"));
             Ok(Value::Nil)
         }
-        Kind::Type => {
-            hit_method(sh, name);
-            match name {
-                "Get_Name" => Ok(Value::String(
-                    lua.create_string(
-                        sh.borrow()
-                            .types
-                            .get(id as usize)
-                            .cloned()
-                            .unwrap_or_default(),
-                    )?,
-                )),
-                "Is_Valid" => Ok(Value::Boolean(true)),
-                "Get_Combat_Rating" | "Get_Build_Cost" | "Get_Score_Cost_Credits" => {
-                    let key = match name {
-                        "Get_Combat_Rating" => "combat_rating",
-                        "Get_Build_Cost" => "build_cost",
-                        _ => "score_cost",
-                    };
-                    let ck = (id, name.len() as u8);
-                    let cached = sh.borrow().type_cache.get(&ck).copied();
-                    let v = match cached {
-                        Some(v) => v,
-                        None => {
-                            let mut s = sh.borrow_mut();
-                            let tn = s.types.get(id as usize).cloned().unwrap_or_default();
-                            let v = s.host.type_number(&tn, key);
-                            s.type_cache.insert(ck, v);
-                            v
-                        }
-                    };
-                    Ok(Value::Number(f64::from(v.unwrap_or(0.0))))
-                }
-                _ => {
-                    if !is_noop(name) {
-                        unknown_method(sh, name);
+        Kind::Type => match name {
+            "Get_Name" => Ok(Value::String(
+                lua.create_string(
+                    sh.borrow()
+                        .types
+                        .get(id as usize)
+                        .cloned()
+                        .unwrap_or_default(),
+                )?,
+            )),
+            "Is_Valid" => Ok(Value::Boolean(true)),
+            "Get_Combat_Rating" | "Get_Build_Cost" | "Get_Score_Cost_Credits" => {
+                let key = match name {
+                    "Get_Combat_Rating" => "combat_rating",
+                    "Get_Build_Cost" => "build_cost",
+                    _ => "score_cost",
+                };
+                let ck = (id, name.len() as u8);
+                let cached = sh.borrow().type_cache.get(&ck).copied();
+                let v = match cached {
+                    Some(v) => v,
+                    None => {
+                        let mut s = sh.borrow_mut();
+                        let tn = s.types.get(id as usize).cloned().unwrap_or_default();
+                        let v = s.host.type_number(&tn, key);
+                        s.type_cache.insert(ck, v);
+                        v
                     }
-                    Ok(Value::Nil)
-                }
+                };
+                Ok(Value::Number(f64::from(v.unwrap_or(0.0))))
             }
-        }
+            _ => {
+                if !is_noop(name) {
+                    unknown_method(sh, name);
+                }
+                Ok(Value::Nil)
+            }
+        },
         Kind::Player => {
             let pid = id as PlayerId;
-            hit_method(sh, name);
             let info = sh.borrow().host.player(pid);
             match name {
                 "Is_Valid" => Ok(Value::Boolean(info.is_some())),
@@ -532,7 +538,6 @@ pub(crate) fn call_method(
             }
         }
         Kind::Object => {
-            hit_method(sh, name);
             let info = sh.borrow().host.object(id);
             if name == "Is_Valid" {
                 return Ok(Value::Boolean(info.is_some()));
@@ -760,7 +765,11 @@ pub fn install(lua: &Lua, sh: &Sh, script: usize) -> mlua::Result<()> {
         ($sh:ident, $name:expr, |$lua:ident, $args:ident| $body:block) => {{
             let shc = sh.clone();
             let counter = fast_counter(sh, $name);
-            let activity = if matches!($name, "GetThreadID" | "Check_Story_Flag") { None } else { Some(sh.borrow().activity.clone()) };
+            let activity = if matches!($name, "GetThreadID" | "Check_Story_Flag") {
+                None
+            } else {
+                Some(sh.borrow().activity.clone())
+            };
             let f = lua.create_function(move |$lua, $args: MultiValue| -> mlua::Result<Value> {
                 let $args: Vec<Value> = $args.into_iter().collect();
                 counter.set(counter.get() + 1);
@@ -1144,6 +1153,139 @@ pub fn install(lua: &Lua, sh: &Sh, script: usize) -> mlua::Result<()> {
         }
     });
 
+    // ---- weighted random lists ------------------------------------------------------------------
+    // `DiscreteDistribution.Create()` / `WeightedTypeList.Create()`: native, because the spawn scripts
+    // sample them hundreds of thousands of times.
+    for class in ["DiscreteDistribution", "WeightedTypeList"] {
+        let ns = lua.create_table()?;
+        let shc = sh.clone();
+        ns.set(
+            "Create",
+            lua.create_function(move |lua, _: MultiValue| -> mlua::Result<Table> {
+                hit(&shc, "WeightedList.Create");
+                let items: Rc<RefCell<(Vec<Value>, Vec<f64>)>> =
+                    Rc::new(RefCell::new((Vec::new(), Vec::new())));
+                let obj = lua.create_table()?;
+                let list = items.clone();
+                obj.set(
+                    "Insert",
+                    lua.create_function(move |_, args: MultiValue| {
+                        // `list.Insert(item, weight)` or `list:Insert(item, weight)`.
+                        let mut a: Vec<Value> = args.into_iter().collect();
+                        if a.len() >= 3
+                            || matches!(a.first(), Some(Value::Table(_)))
+                                && a.len() == 2
+                                && to_f64(&a[1]).is_none()
+                        {
+                            a.remove(0);
+                        }
+                        let mut it = a.into_iter();
+                        let Some(item) = it.next() else { return Ok(()) };
+                        let weight = it.next().as_ref().and_then(to_f64).unwrap_or(1.0);
+                        let mut l = list.borrow_mut();
+                        let total = l.1.last().copied().unwrap_or(0.0) + weight;
+                        l.0.push(item);
+                        l.1.push(total);
+                        Ok(())
+                    })?,
+                )?;
+                let list = items.clone();
+                let shr = shc.clone();
+                obj.set(
+                    "Sample",
+                    lua.create_function(move |_, _: MultiValue| -> mlua::Result<Value> {
+                        let l = list.borrow();
+                        let Some(&total) = l.1.last() else {
+                            return Ok(Value::Nil);
+                        };
+                        if total <= 0.0 {
+                            return Ok(Value::Nil);
+                        }
+                        let r = (shr.borrow_mut().next_random() >> 11) as f64 / (1u64 << 53) as f64
+                            * total;
+                        let idx = l.1.partition_point(|&c| c < r).min(l.0.len() - 1);
+                        Ok(l.0[idx].clone())
+                    })?,
+                )?;
+                let list = items.clone();
+                obj.set(
+                    "Size",
+                    lua.create_function(move |_, _: MultiValue| Ok(list.borrow().0.len()))?,
+                )?;
+                let list = items.clone();
+                obj.set(
+                    "Clear",
+                    lua.create_function(move |_, _: MultiValue| {
+                        let mut l = list.borrow_mut();
+                        l.0.clear();
+                        l.1.clear();
+                        Ok(())
+                    })?,
+                )?;
+                obj.set("Parse", lua.create_function(|_, _: MultiValue| Ok(()))?)?;
+                Ok(obj)
+            })?,
+        )?;
+        g.set(class, ns)?;
+    }
+
+    def!(sh, "DumpCallStack", |lua, args| {
+        let _ = args;
+        Ok(Value::String(lua.create_string("<call stack not available>")?))
+    });
+
+    // ---- GetEvent: callbacks the host queued for a plan, run by the script's own `PumpEvents` ----------
+    {
+        let ge = lua.create_table()?;
+        let mt = lua.create_table()?;
+        let shc = sh.clone();
+        mt.set(
+            "__call",
+            lua.create_function(move |lua, _: MultiValue| -> mlua::Result<Value> {
+                loop {
+                    let next = {
+                        let mut s = shc.borrow_mut();
+                        let ev = s.event_queues.get_mut(&script).and_then(|q| q.pop_front());
+                        if let Some((_, args)) = &ev {
+                            s.event_params.insert(script, args.clone());
+                        }
+                        ev
+                    };
+                    let Some((function, _)) = next else { return Ok(Value::Nil) };
+                    if let Value::Function(f) = lua.globals().get::<Value>(function.as_str())? {
+                        hit(&shc, "GetEvent");
+                        return Ok(Value::Function(f));
+                    }
+                }
+            })?,
+        )?;
+        ge.set_metatable(Some(mt))?;
+        let shc = sh.clone();
+        ge.set(
+            "Params",
+            lua.create_function(move |lua, _: MultiValue| -> mlua::Result<Value> {
+                let params = shc.borrow().event_params.get(&script).cloned().unwrap_or_default();
+                if params.is_empty() {
+                    return Ok(Value::Nil);
+                }
+                let t = lua.create_table()?;
+                for (i, p) in params.into_iter().enumerate() {
+                    t.set(i + 1, crate::ai_api::from_host(lua, &shc, script, p)?)?;
+                }
+                Ok(Value::Table(t))
+            })?,
+        )?;
+        let shc = sh.clone();
+        ge.set(
+            "Reset",
+            lua.create_function(move |_, _: MultiValue| {
+                shc.borrow_mut().event_queues.remove(&script);
+                Ok(())
+            })?,
+        )?;
+        g.set("GetEvent", ge)?;
+    }
+
     // ---- story ----------------------------------------------------------------------------------
     def!(sh, "Story_Event", |lua, args| {
         let _ = lua;
@@ -1200,6 +1342,7 @@ pub fn install(lua: &Lua, sh: &Sh, script: usize) -> mlua::Result<()> {
             }
         }
     });
+    crate::ai_api::install(lua, sh, script)?;
     Ok(())
 }
 
@@ -1226,47 +1369,6 @@ ThreadValue = setmetatable({}, { __call = function(_, key) return tv()[key] end 
 ThreadValue.Get = function(key) return tv()[key] end
 ThreadValue.Set = function(key, value) tv()[key] = value end
 ThreadValue.Reset = function() thread_values[GetThreadID()] = nil end
-GetEvent = setmetatable({}, { __call = function() return nil end })
-GetEvent.Reset = function() end
-GetEvent.Params = function() return nil end
--- Weighted random lists (engine classes DiscreteDistribution / WeightedTypeList).
-local function weighted_list()
-  local items, total = {}, 0
-  local obj = {}
-  local function strip_self(self_or_x, ...)
-    if self_or_x == obj then return ... end
-    return self_or_x, ...
-  end
-  local cumulative = {}   -- running weight sums, so Sample is a binary search
-  obj.Insert = function(...)
-    local item, weight = strip_self(...)
-    weight = tonumber(weight) or 1
-    table.insert(items, item)
-    total = total + weight
-    table.insert(cumulative, total)
-  end
-  obj.Sample = function()
-    local n = table.getn(items)
-    if n == 0 or total <= 0 then return nil end
-    local r = GameRandom.Get_Float() * total
-    local lo, hi = 1, n
-    while lo < hi do
-      local mid = math.floor((lo + hi) / 2)
-      if cumulative[mid] < r then lo = mid + 1 else hi = mid end
-    end
-    return items[lo]
-  end
-  obj.Size = function() return table.getn(items) end
-  obj.Clear = function() items = {}; cumulative = {}; total = 0 end
-  obj.Parse = function() end
-  return obj
-end
-DiscreteDistribution = { Create = weighted_list }
-WeightedTypeList = { Create = weighted_list }
+
+
 "#;
-
-
-
-
-
-

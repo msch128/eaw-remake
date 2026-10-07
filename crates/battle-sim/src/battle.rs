@@ -33,6 +33,12 @@ pub struct BattleConfig {
     pub reinforce_delay: f32,
     /// Use rayon for per-entity work.
     pub parallel: bool,
+    /// Use the `<set>_Attack_Move` targeting sets (category exclusions and hardpoint sniping) for ships
+    /// on `AttackMove` orders. The Remake scripts only assign those sets to ground task forces, so the
+    /// default is off and space ships use their own `Targeting_Priority_Set`.
+    pub attack_move_sets: bool,
+    /// Scales the standoff distance ships keep from their target (1.0 = range holding 80% of their damage).
+    pub engage_range_scale: f32,
     /// Shields only recharge after this many seconds without taking damage (0 = recharge continuously).
     /// Estimate: the data only gives `ShieldRechargeIntervalInSecs`, not whether combat pauses it.
     pub shield_regen_delay: f32,
@@ -53,7 +59,9 @@ impl Default for BattleConfig {
             unit_cap: 150,
             reinforce_delay: 5.0,
             parallel: true,
-            shield_regen_delay: 2.0,
+            shield_regen_delay: 0.0,
+            attack_move_sets: false,
+            engage_range_scale: 1.0,
             arena: None,
         }
     }
@@ -424,6 +432,8 @@ pub struct Ship {
     pub abilities: Vec<AbilityState>,
     /// Seconds since the ship last took damage.
     pub since_hit: f32,
+    /// Seconds left before a depleted shield may regenerate again (`Depleted_Shield_Disable_Time`).
+    pub shield_lock: f32,
     /// Tractor beam speed reduction currently applied to this ship (0..1).
     pub tractor_cut: f32,
     /// Ion stun seconds left.

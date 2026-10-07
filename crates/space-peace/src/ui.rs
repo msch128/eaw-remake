@@ -3,11 +3,12 @@
 use bevy::{
     diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin},
     prelude::*,
-    window::{MonitorSelection, PrimaryWindow, WindowMode},
+    window::PrimaryWindow,
 };
 
 use crate::galaxy_map::{Hover, Selection};
 use crate::flow::AppScreen;
+use crate::settings::Settings;
 use crate::galaxy_view::GalaxyView;
 
 /// Heads-up display and window hotkeys.
@@ -18,7 +19,14 @@ impl Plugin for UiPlugin {
         app.add_plugins(FrameTimeDiagnosticsPlugin::default())
             .add_systems(Startup, spawn_fps)
             .add_systems(OnEnter(AppScreen::Galaxy), spawn_hud)
-            .add_systems(OnExit(AppScreen::Galaxy), despawn_hud)
+            .add_systems(
+                OnTransition { exited: AppScreen::Galaxy, entered: AppScreen::MainMenu },
+                despawn_hud,
+            )
+            .add_systems(
+                OnTransition { exited: AppScreen::Galaxy, entered: AppScreen::CampaignSelect },
+                despawn_hud,
+            )
             .add_systems(Update, (toggle_fullscreen, toggle_fps, update_fps))
             .add_systems(
                 Update,
@@ -107,7 +115,11 @@ fn spawn_fps(mut commands: Commands) {
     ));
 }
 
-fn spawn_hud(mut commands: Commands) {
+fn spawn_hud(mut commands: Commands, existing: Query<(), With<HudEntity>>) {
+    // Coming back from a tactical battle the HUD is still there.
+    if !existing.is_empty() {
+        return;
+    }
     // Controls hint, bottom right.
     commands.spawn((
         HudEntity,
@@ -365,17 +377,11 @@ fn update_fps(
     }
 }
 
-/// F11 or Alt+Enter toggles borderless fullscreen.
-fn toggle_fullscreen(
-    keys: Res<ButtonInput<KeyCode>>,
-    mut window: Single<&mut Window, With<PrimaryWindow>>,
-) {
+/// F11 or Alt+Enter toggles borderless fullscreen (applied by the settings plugin).
+fn toggle_fullscreen(keys: Res<ButtonInput<KeyCode>>, mut settings: ResMut<Settings>) {
     let alt_enter = keys.just_pressed(KeyCode::Enter)
         && keys.any_pressed([KeyCode::AltLeft, KeyCode::AltRight]);
     if keys.just_pressed(KeyCode::F11) || alt_enter {
-        window.mode = match window.mode {
-            WindowMode::Windowed => WindowMode::BorderlessFullscreen(MonitorSelection::Current),
-            _ => WindowMode::Windowed,
-        };
+        settings.borderless = !settings.borderless;
     }
 }

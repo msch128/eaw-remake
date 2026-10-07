@@ -1,4 +1,4 @@
-//! Simple built-in Bevy UI for the galactic game.
+﻿//! Simple built-in Bevy UI for the galactic game.
 //!
 //! This is a placeholder look behind a clean seam: it only reads [`PlayUiModel`] and sends
 //! [`PlayAction`]s. A different UI (the `eaw-ui` crate) replaces it by not adding
@@ -77,7 +77,7 @@ enum Dynamic {
 
 fn panel(position: Node) -> impl Bundle {
     (
-        Node { padding: UiRect::all(Val::Px(10.0)), border: UiRect::all(Val::Px(1.0)), flex_direction: FlexDirection::Column, row_gap: Val::Px(3.0), ..position },
+        Node { padding: UiRect::all(Val::Px(10.0)), border: UiRect::all(Val::Px(1.0)), row_gap: Val::Px(3.0), ..position },
         BackgroundColor(PANEL_BG),
         BorderColor::all(PANEL_BORDER),
         PlayUiBlock,
@@ -87,14 +87,14 @@ fn panel(position: Node) -> impl Bundle {
 fn spawn_panels(mut commands: Commands) {
     let abs = Node { position_type: PositionType::Absolute, ..default() };
     commands.spawn((panel(Node { top: Val::Px(8.0), left: Val::Px(8.0), flex_direction: FlexDirection::Row, column_gap: Val::Px(18.0), align_items: AlignItems::Center, ..abs.clone() }), TopBar));
-    commands.spawn((panel(Node { top: Val::Px(60.0), right: Val::Px(8.0), width: Val::Px(360.0), ..abs.clone() }), PlanetPanel, Visibility::Hidden));
-    commands.spawn((panel(Node { bottom: Val::Px(40.0), left: Val::Percent(30.0), width: Val::Percent(40.0), ..abs.clone() }), FleetPanel, Visibility::Hidden));
+    commands.spawn((panel(Node { top: Val::Px(60.0), right: Val::Px(8.0), width: Val::Px(360.0), flex_direction: FlexDirection::Column, ..abs.clone() }), PlanetPanel, Visibility::Hidden));
+    commands.spawn((panel(Node { bottom: Val::Px(40.0), left: Val::Percent(30.0), width: Val::Percent(40.0), flex_direction: FlexDirection::Column, ..abs.clone() }), FleetPanel, Visibility::Hidden));
     commands.spawn((
         Node { top: Val::Px(70.0), left: Val::Px(8.0), width: Val::Px(420.0), flex_direction: FlexDirection::Column, row_gap: Val::Px(2.0), ..abs.clone() },
         Ticker,
     ));
     commands.spawn((
-        panel(Node { top: Val::Percent(30.0), left: Val::Percent(35.0), width: Val::Percent(30.0), row_gap: Val::Px(8.0), ..abs.clone() }),
+        panel(Node { top: Val::Percent(30.0), left: Val::Percent(35.0), width: Val::Percent(30.0), row_gap: Val::Px(8.0), flex_direction: FlexDirection::Column, ..abs.clone() }),
         GlobalZIndex(20),
         BattlePanel,
         Visibility::Hidden,
@@ -434,3 +434,4 @@ fn refresh_battle(model: Res<PlayUiModel>, mut ui: ResMut<UiState>, panel: Singl
         });
     });
 }
+

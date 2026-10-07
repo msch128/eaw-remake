@@ -11,8 +11,9 @@ use std::time::Duration;
 use alamo_fs::{GameFs, GameInstall};
 use alamo_model::image::{Rgba8, encode_png};
 use alamo_render::{
-    AlamoModel, AlamoModelLoaded, AlamoRenderPlugin, ImpactKind, ParticleStats, ProjectileImpact,
-    ProjectileVisual, ShieldHit, SpawnParticleEffect, XmlDefs, spawn_sun,
+    AimTurrets, AlamoHardpoint, AlamoModel, AlamoModelLoaded, AlamoRenderPlugin,
+    HardpointDestroyed, ImpactKind, ParticleStats, ProjectileImpact, ProjectileVisual, ShieldHit,
+    SpawnParticleEffect, XmlDefs, spawn_sun,
 };
 use bevy::app::ScheduleRunnerPlugin;
 use bevy::camera::RenderTarget;
@@ -41,6 +42,8 @@ struct Scene {
     rng: u32,
     hull_phase: bool,
     exploded: bool,
+    units: bool,
+    destroyed: bool,
     cam: Vec<f32>,
     look: Vec3,
 }
@@ -73,6 +76,7 @@ fn main() {
     let mut out = None;
     let (mut times, mut cam, mut size) = (vec![4.0f32], vec![0.0, 0.12, 1.0], vec![1280.0, 720.0]);
     let (mut rate, mut look) = (6.0f32, vec![0.0, 0.0, 0.0]);
+    let mut units = false;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
@@ -87,6 +91,7 @@ fn main() {
                     .collect()
             }
             "--rate" => rate = it.next().unwrap().parse().unwrap(),
+            "--units" => units = true,
             "--look" => look = parse_vec(it.next().unwrap()),
             _ => out = Some(a.clone()),
         }
@@ -129,10 +134,24 @@ fn main() {
     let target = app.world_mut().resource_mut::<Assets<Image>>().add(image);
 
     // Bow along +X for the Star Destroyer, along -X for Home One.
+    let isd_spec = if units {
+        AlamoModel::new("EMPIRE_ALLEGIANCE_STAR_DESTROYER.ALO")
+            .with_bow_forward()
+            .with_unit("Allegiance_Star_Destroyer")
+    } else {
+        AlamoModel::new("EMPIRE_IMPERIAL_STAR_DESTROYER.ALO").with_bow_forward()
+    };
+    let mc_spec = if units {
+        AlamoModel::new("REBEL_MON_CALAMARI_MC_80.ALO")
+            .with_bow_forward()
+            .with_unit("MC-80_Star_Cruiser")
+    } else {
+        AlamoModel::new("REBEL_MON_CALAMARI_HOME_ONE.ALO").with_bow_forward()
+    };
     let isd = app
         .world_mut()
         .spawn((
-            AlamoModel::new("EMPIRE_IMPERIAL_STAR_DESTROYER.ALO").with_bow_forward(),
+            isd_spec,
             Transform::from_xyz(-1000.0, 0.0, 0.0)
                 .with_rotation(Quat::from_rotation_y(-std::f32::consts::FRAC_PI_2)),
         ))
@@ -140,9 +159,7 @@ fn main() {
     let mc = app
         .world_mut()
         .spawn((
-            AlamoModel::new("REBEL_MON_CALAMARI_HOME_ONE.ALO")
-                .with_bow_forward()
-                .with_team_color(Color::srgb(0.9, 0.2, 0.2)),
+            mc_spec.with_team_color(Color::srgb(0.9, 0.2, 0.2)),
             Transform::from_xyz(1150.0, 0.0, 0.0)
                 .with_rotation(Quat::from_rotation_y(std::f32::consts::FRAC_PI_2)),
         ))
@@ -182,6 +199,8 @@ fn main() {
         rng: 0x1234_5678,
         hull_phase: false,
         exploded: false,
+        units,
+        destroyed: false,
         cam,
         look: Vec3::new(look[0], look[1], look[2]),
     });
@@ -195,6 +214,7 @@ fn script(
     time: Res<Time>,
     roots: Query<(&AlamoModelLoaded, &GlobalTransform)>,
     mut strategy: ResMut<TimeUpdateStrategy>,
+    hardpoints: Query<&AlamoHardpoint>,
 ) {
     let (Ok((li, gi)), Ok((lm, gm))) = (roots.get(sc.isd), roots.get(sc.mc)) else {
         return;
@@ -212,6 +232,39 @@ fn script(
     sc.frame += 1;
     let (ci, ri) = (gi.transform_point(li.center), li.radius);
     let (cm, rm) = (gm.transform_point(lm.center), lm.radius);
+    if sc.units {
+        // Turrets of both ships track the other ship.
+        commands.trigger(AimTurrets {
+            model: sc.isd,
+            target: cm,
+        });
+        commands.trigger(AimTurrets {
+            model: sc.mc,
+            target: ci,
+        });
+        if t > 4.0 && !sc.destroyed {
+            sc.destroyed = true;
+            for (loaded, ship) in [(li, sc.isd), (lm, sc.mc)] {
+                let names: Vec<String> = loaded
+                    .hardpoints
+                    .iter()
+                    .filter_map(|&h| hardpoints.get(h).ok())
+                    .filter(|h| h.turret.is_some())
+                    .map(|h| h.name.clone())
+                    .collect();
+                println!(
+                    "{} turret hardpoints on a ship; destroying a few",
+                    names.len()
+                );
+                for n in names.iter().step_by((names.len() / 3).max(1)).take(3) {
+                    commands.trigger(HardpointDestroyed {
+                        model: ship,
+                        hardpoint: n.clone(),
+                    });
+                }
+            }
+        }
+    }
     let hull_phase = t > 5.0;
     sc.hull_phase = hull_phase;
     sc.spawn_acc += sc.rate * time.delta_secs();

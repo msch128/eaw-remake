@@ -73,7 +73,14 @@ impl Plot {
                     .child_text("story_dialog")
                     .map(|d| d.trim().to_string())
                     .filter(|d| !d.is_empty())
-                    .map(|d| (d, e.child_text("story_chapter").and_then(|c| c.trim().parse().ok()).unwrap_or(0))),
+                    .map(|d| {
+                        (
+                            d,
+                            e.child_text("story_chapter")
+                                .and_then(|c| c.trim().parse().ok())
+                                .unwrap_or(0),
+                        )
+                    }),
             };
             for c in &e.children {
                 let text = c.text_trimmed().to_string();
@@ -150,6 +157,10 @@ pub struct Fired {
 #[derive(Default)]
 pub struct StoryEngine {
     plots: Vec<Running>,
+    /// Something changed that tick must re-evaluate (a plot was added, an event fired or was reset).
+    dirty: bool,
+    /// Earliest time an active STORY_ELAPSED event becomes due.
+    next_due: f64,
 }
 
 impl StoryEngine {
@@ -162,6 +173,7 @@ impl StoryEngine {
             .enumerate()
             .map(|(i, e)| (e.name.to_ascii_lowercase(), i))
             .collect();
+        self.dirty = true;
         self.plots.push(Running {
             plot,
             script,
@@ -190,6 +202,10 @@ impl StoryEngine {
     /// Advances time: activates events whose prerequisites fired and fires elapsed ones. Chain reactions
     /// (events firing others) resolve within the call.
     pub fn tick(&mut self, now: f64) -> Vec<Fired> {
+        // Nothing can happen between state changes and the next elapsed-timer deadline.
+        if !self.dirty && now < self.next_due {
+            return Vec::new();
+        }
         let mut out = Vec::new();
         loop {
             let before = out.len();
@@ -200,7 +216,33 @@ impl StoryEngine {
                 break;
             }
         }
+        self.dirty = false;
+        self.next_due = self.compute_next_due();
         out
+    }
+
+    fn compute_next_due(&self) -> f64 {
+        let mut due = f64::INFINITY;
+        for r in &self.plots {
+            for (ei, ev) in r.plot.events.iter().enumerate() {
+                if let State::Active(since) = r.states[ei]
+                    && ev.kind == "STORY_ELAPSED"
+                {
+                    let secs: f64 = ev
+                        .params
+                        .first()
+                        .and_then(|p| p.parse().ok())
+                        .unwrap_or(0.0);
+                    let base = if ev.prereqs.is_empty() {
+                        r.started
+                    } else {
+                        since
+                    };
+                    due = due.min(base + secs);
+                }
+            }
+        }
+        due
     }
 
     /// Notifies the story of something that happened (`Story_Event("X")` from Lua, or the host reporting
@@ -278,6 +320,7 @@ impl StoryEngine {
         // Perpetual events re-arm immediately (so they can fire again on the next notification).
         let rearm = self.plots[pi].plot.events[ei].perpetual
             && self.plots[pi].plot.events[ei].kind != "STORY_ELAPSED";
+        self.dirty = true;
         self.plots[pi].states[ei] = if rearm {
             State::Active(now)
         } else {
@@ -392,6 +435,7 @@ impl StoryEngine {
 
     /// Resets a plot by index.
     pub fn reset_plot_index(&mut self, plot: usize, now: f64) {
+        self.dirty = true;
         if let Some(r) = self.plots.get_mut(plot) {
             r.started = now;
             r.states.fill(State::Inactive);
@@ -401,6 +445,7 @@ impl StoryEngine {
 
     /// Resets the plot with this file name (all events inactive) or all plots if the name is empty.
     pub fn reset_plot(&mut self, file: &str, now: f64) {
+        self.dirty = true;
         for r in &mut self.plots {
             if file.is_empty() || r.plot.file.eq_ignore_ascii_case(file) {
                 r.started = now;
