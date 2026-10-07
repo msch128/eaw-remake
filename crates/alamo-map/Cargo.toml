@@ -1,0 +1,12 @@
+﻿[package]
+name = "alamo-map"
+description = "Parser for Alamo engine (Empire at War) .ted map files, focused on space tactical maps."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+alamo-fs = { path = "../alamo-fs" }
+
+[dev-dependencies]
+alamo-data = { path = "../alamo-data" }

@@ -1,0 +1,15 @@
+﻿[package]
+name = "eaw-ui"
+description = "The original Empire at War user interface (command bars, buttons, bars) rebuilt in Bevy UI from the game's own data and textures."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+bevy = { version = "=0.19.1", default-features = false, features = [
+    "default_app", "std", "multi_threaded", "bevy_window",
+    "ui_bevy_render", "default_font",
+] }
+alamo-fs = { path = "../alamo-fs" }
+alamo-data = { path = "../alamo-data" }
+alamo-model = { path = "../alamo-model" }

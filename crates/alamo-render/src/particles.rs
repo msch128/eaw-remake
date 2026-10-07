@@ -1,0 +1,845 @@
+//! Particle systems: CPU simulation, one dynamic quad mesh per (texture, blend mode) batch.
+//!
+//! Every [`AlamoParticles`] entity owns a set of emitter runtimes simulated in parallel. After the
+//! simulation each live particle is a camera-facing quad; all quads of the same texture and blend
+//! mode (from every instance in the scene) are written into a single dynamic mesh, so the number
+//! of draw calls is the number of distinct texture/blend pairs, independent of the particle count.
+//! Alpha-blended batches are sorted back to front, additive batches are not.
+//!
+//! Emitter-local space is **Y-up** (inferred from engine exhausts and damage fires, which only
+//! line up with their proxy bones if particle Y maps to the bone's Z axis). Systems attached to
+//! model proxies map it onto the bone frame (`(x, y, z) -> (x, -z, y)`) and inherit the model's
+//! Z-up to Y-up conversion; standalone systems use their Bevy transform directly (see
+//! [`AlamoParticles::in_model_space`]).
+
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use alamo_fs::FileSource;
+use alamo_model::ParticleSystem;
+use alamo_model::particle::{BlendMode, Emitter};
+use bevy::asset::RenderAssetUsages;
+use bevy::camera::visibility::NoFrustumCulling;
+use bevy::math::Affine3A;
+use bevy::mesh::{Indices, PrimitiveTopology};
+use bevy::pbr::{Material, MaterialPlugin};
+use bevy::prelude::*;
+use bevy::render::render_resource::AsBindGroup;
+use bevy::shader::ShaderRef;
+
+use crate::model::{AlamoFs, AlamoProxy};
+use crate::texture::TextureCache;
+
+/// Path of the embedded particle shader.
+pub const PARTICLE_SHADER_PATH: &str = "embedded://alamo_render/particle.wgsl";
+
+/// Global particle options.
+#[derive(Resource, Debug, Clone)]
+pub struct ParticleSettings {
+    /// Name prefixes of proxy particle systems that start enabled (see [`starts_enabled`]).
+    pub always_on_prefixes: Vec<String>,
+    /// Spawn particle systems for model proxies that name an existing particle file.
+    pub auto_attach: bool,
+    /// Multiplier on spawn rates (quality knob).
+    pub density: f32,
+    /// Upper bound for the total number of live particles; spawning stops beyond it.
+    pub max_total: usize,
+    /// Brightness multiplier for projectile bolts (the `Color` of bolt models is 0.5 and meant for
+    /// an HDR pipeline with bloom).
+    pub bolt_gain: f32,
+    /// Scale additive particles by their alpha track. Off by default: additive emitters fade through\n    /// their color tracks and a third of them have a low alpha peak that would make them nearly invisible.
+    pub additive_alpha: bool,
+    /// Fixed simulation step in seconds; `None` uses the frame time (clamped to 0.1 s).
+    pub fixed_step: Option<f32>,
+}
+
+impl Default for ParticleSettings {
+    fn default() -> Self {
+        Self {
+            auto_attach: true,
+            always_on_prefixes: vec!["pe_".into(), "pte_".into()],
+            density: 1.0,
+            max_total: 200_000,
+            additive_alpha: false,
+            bolt_gain: 4.0,
+            fixed_step: None,
+        }
+    }
+}
+
+/// Statistics of the last frame, for diagnostics and tests.
+#[derive(Resource, Debug, Default, Clone)]
+pub struct ParticleStats {
+    /// Live particles.
+    pub live: usize,
+    /// Draw batches with at least one particle.
+    pub batches: usize,
+    /// Systems simulated.
+    pub systems: usize,
+    /// Milliseconds spent in simulation plus mesh building.
+    pub cpu_ms: f32,
+}
+
+/// Plays a particle system (`Art/Models/<path>`). Insert it on an entity with a transform;
+/// its [`Transform`] is a normal Bevy transform unless [`in_model_space`](Self::in_model_space)
+/// is set.
+#[derive(Component, Debug, Clone)]
+#[require(Transform, Visibility)]
+pub struct AlamoParticles {
+    /// File name or full path of the particle `.alo`.
+    pub path: String,
+    /// New particles are only emitted while enabled; existing ones finish their life.
+    /// Switching from false to true restarts the emitters.
+    pub enabled: bool,
+    /// The entity is already below an Alamo-space node (a model proxy), so no Z-up conversion
+    /// is applied.
+    pub in_model_space: bool,
+}
+
+impl AlamoParticles {
+    /// An enabled standalone particle system.
+    pub fn new(path: impl Into<String>) -> Self {
+        Self {
+            path: path.into(),
+            enabled: true,
+            in_model_space: false,
+        }
+    }
+
+    /// Starts disabled.
+    pub fn disabled(mut self) -> Self {
+        self.enabled = false;
+        self
+    }
+}
+
+/// Triggered on the entity once its particle system has been loaded.
+#[derive(EntityEvent, Debug)]
+pub struct ParticlesLoaded {
+    /// The [`AlamoParticles`] entity.
+    pub entity: Entity,
+}
+
+/// Particle quad material: texture times vertex color; additive or alpha blended.
+#[derive(Asset, TypePath, AsBindGroup, Debug, Clone)]
+pub struct ParticleMaterial {
+    /// Sprite atlas.
+    #[texture(0)]
+    #[sampler(1)]
+    pub texture: Option<Handle<Image>>,
+    /// 0 alpha blending, 1 additive scaled by alpha, 2 additive ignoring alpha.
+    #[uniform(2)]
+    pub additive: u32,
+}
+
+impl Material for ParticleMaterial {
+    fn fragment_shader() -> ShaderRef {
+        PARTICLE_SHADER_PATH.into()
+    }
+
+    fn alpha_mode(&self) -> AlphaMode {
+        if self.additive != 0 {
+            AlphaMode::Add
+        } else {
+            AlphaMode::Blend
+        }
+    }
+
+    fn enable_shadows() -> bool {
+        false
+    }
+
+    fn enable_prepass() -> bool {
+        false
+    }
+}
+
+#[derive(Clone, Copy)]
+struct Particle {
+    pos: Vec3,
+    vel: Vec3,
+    age: f32,
+    life: f32,
+    frame: u32,
+    rot: f32,
+    spin: f32,
+}
+
+/// One camera-facing quad ready to be written into a batch mesh.
+#[derive(Clone, Copy)]
+struct Quad {
+    center: Vec3,
+    size: f32,
+    rot: f32,
+    color: [f32; 4],
+    cell: u32,
+    grid: u32,
+}
+
+struct EmitterRuntime {
+    particles: Vec<Particle>,
+    time: f32,
+    spawn_acc: f32,
+    burst_spawned: u32,
+    cycles_done: u32,
+    rng: u64,
+    quads: Vec<Quad>,
+}
+
+impl EmitterRuntime {
+    fn new(seed: u64) -> Self {
+        Self {
+            particles: Vec::new(),
+            time: 0.0,
+            spawn_acc: 0.0,
+            burst_spawned: 0,
+            cycles_done: 0,
+            rng: seed | 1,
+            quads: Vec::new(),
+        }
+    }
+
+    fn restart(&mut self) {
+        self.time = 0.0;
+        self.spawn_acc = 0.0;
+        self.burst_spawned = 0;
+        self.cycles_done = 0;
+    }
+
+    fn rand(&mut self) -> f32 {
+        // xorshift64*
+        self.rng ^= self.rng >> 12;
+        self.rng ^= self.rng << 25;
+        self.rng ^= self.rng >> 27;
+        let v = self.rng.wrapping_mul(0x2545_F491_4F6C_DD1D);
+        ((v >> 40) as f32) / (1u64 << 24) as f32
+    }
+
+    fn range(&mut self, lo: f32, hi: f32) -> f32 {
+        lo + (hi - lo) * self.rand()
+    }
+}
+
+/// Runtime state of a spawned particle system.
+#[derive(Component)]
+pub struct ParticleInstance {
+    system: Arc<ParticleSystem>,
+    emitters: Vec<EmitterRuntime>,
+    was_enabled: bool,
+}
+
+impl ParticleInstance {
+    /// Number of live particles.
+    pub fn live(&self) -> usize {
+        self.emitters.iter().map(|e| e.particles.len()).sum()
+    }
+
+    /// The parsed system.
+    pub fn system(&self) -> &ParticleSystem {
+        &self.system
+    }
+}
+
+/// Cache of parsed particle systems.
+#[derive(Resource, Default)]
+pub struct ParticleCache {
+    systems: HashMap<String, Option<Arc<ParticleSystem>>>,
+}
+
+/// Resolves a particle name to a game path (adds the directory and `.alo` when missing).
+pub fn particle_path(name: &str) -> String {
+    let mut n = name.to_string();
+    if !n.to_ascii_lowercase().ends_with(".alo") {
+        n.push_str(".alo");
+    }
+    if n.contains('/') || n.contains('\\') {
+        n
+    } else {
+        format!("Art/Models/{n}")
+    }
+}
+
+/// True if a proxy particle system should run from the start: engine exhausts (`pe_`, `pte_`).
+/// Everything else (damage fire `pf_`/`pi_`, impacts and explosions `p_`, projectiles `pd_`/`pp_`)
+/// is driven by game events, so [`attach_proxy_particles`] spawns it disabled; the game enables it
+/// through [`AlamoParticles::enabled`].
+pub fn starts_enabled(name: &str, prefixes: &[String]) -> bool {
+    let n = name.to_ascii_lowercase();
+    prefixes.iter().any(|p| n.starts_with(p.as_str()))
+}
+
+impl ParticleCache {
+    fn get(&mut self, fs: &AlamoFs, path: &str) -> Option<Arc<ParticleSystem>> {
+        let key = path.to_ascii_lowercase();
+        self.systems
+            .entry(key)
+            .or_insert_with(|| {
+                let data = fs.0.read(path).ok()?;
+                match ParticleSystem::parse(&data) {
+                    Ok(s) => Some(Arc::new(s)),
+                    Err(e) => {
+                        warn!("particle system {path}: {e}");
+                        None
+                    }
+                }
+            })
+            .clone()
+    }
+
+    /// True if `path` exists and parses.
+    pub fn exists(&mut self, fs: &AlamoFs, path: &str) -> bool {
+        self.get(fs, path).is_some()
+    }
+}
+
+/// Creates the runtime for newly added [`AlamoParticles`].
+pub fn load_particles(
+    mut commands: Commands,
+    fs: Res<AlamoFs>,
+    mut cache: ResMut<ParticleCache>,
+    new: Query<(Entity, &AlamoParticles), Without<ParticleInstance>>,
+) {
+    for (entity, spec) in &new {
+        let path = particle_path(&spec.path);
+        let Some(system) = cache.get(&fs, &path) else {
+            error!("cannot load particle system {path}");
+            commands.entity(entity).insert(ParticleInstance {
+                system: Arc::new(ParticleSystem::default()),
+                emitters: Vec::new(),
+                was_enabled: false,
+            });
+            continue;
+        };
+        let emitters = (0..system.emitters.len())
+            .map(|i| {
+                EmitterRuntime::new(
+                    (entity.to_bits() ^ ((i as u64 + 1) << 32)).wrapping_mul(0x9E37_79B9_7F4A_7C15),
+                )
+            })
+            .collect();
+        commands.entity(entity).insert(ParticleInstance {
+            system,
+            emitters,
+            was_enabled: false,
+        });
+        commands.trigger(ParticlesLoaded { entity });
+    }
+}
+
+type ProxyFilterItem = (Entity, &'static AlamoProxy, &'static Visibility);
+type ProxyFilter = (Added<AlamoProxy>, Without<AlamoParticles>);
+
+/// Starts particle systems on model proxies whose name resolves to a particle file.
+pub fn attach_proxy_particles(
+    mut commands: Commands,
+    settings: Res<ParticleSettings>,
+    fs: Res<AlamoFs>,
+    mut cache: ResMut<ParticleCache>,
+    proxies: Query<ProxyFilterItem, ProxyFilter>,
+) {
+    if !settings.auto_attach {
+        return;
+    }
+    for (entity, proxy, vis) in &proxies {
+        let path = particle_path(&proxy.name);
+        if !cache.exists(&fs, &path) {
+            continue;
+        }
+        let enabled =
+            *vis != Visibility::Hidden && starts_enabled(&proxy.name, &settings.always_on_prefixes);
+        commands.entity(entity).insert(AlamoParticles {
+            path: proxy.name.clone(),
+            enabled,
+            in_model_space: true,
+        });
+    }
+}
+
+/// Camera data used to orient quads.
+#[derive(Resource, Default, Clone, Copy)]
+pub struct ParticleView {
+    rotation: Quat,
+    position: Vec3,
+}
+
+/// Captures the active camera.
+pub fn update_particle_view(
+    mut view: ResMut<ParticleView>,
+    cameras: Query<(&Camera, &GlobalTransform), With<Camera3d>>,
+) {
+    if let Some((_, gt)) = cameras.iter().find(|(c, _)| c.is_active) {
+        view.rotation = gt.rotation();
+        view.position = gt.translation();
+    }
+}
+
+/// Particle space is Y-up, Alamo model space Z-up: `(x, y, z) -> (x, -z, y)`.
+fn particle_to_alamo() -> Quat {
+    Quat::from_rotation_x(std::f32::consts::FRAC_PI_2)
+}
+
+fn sample_box(rt: &mut EmitterRuntime, min: [f32; 3], max: [f32; 3]) -> Vec3 {
+    Vec3::new(
+        rt.range(min[0].min(max[0]), min[0].max(max[0])),
+        rt.range(min[1].min(max[1]), min[1].max(max[1])),
+        rt.range(min[2].min(max[2]), min[2].max(max[2])),
+    )
+}
+
+fn spawn_particle(e: &Emitter, rt: &mut EmitterRuntime, to_world: &Affine3A, scale: f32) {
+    let local_pos = sample_box(rt, e.position.min, e.position.max);
+    let local_vel = sample_box(rt, e.velocity.min, e.velocity.max);
+    let (pos, vel) = if e.world_space {
+        (
+            to_world.transform_point3(local_pos),
+            to_world.transform_vector3(local_vel),
+        )
+    } else {
+        (local_pos, local_vel)
+    };
+    let rot = if matches!(e.blend, BlendMode::Alpha) {
+        rt.range(0.0, std::f32::consts::TAU)
+    } else {
+        0.0
+    };
+    let sign = if rt.rand() < 0.5 { -1.0 } else { 1.0 };
+    let spin = e.spin.at(rt.rand()).to_radians() * sign;
+    let frame = 0;
+    let _ = scale;
+    rt.particles.push(Particle {
+        pos,
+        vel,
+        age: 0.0,
+        life: e.lifetime,
+        frame,
+        rot,
+        spin,
+    });
+}
+
+/// Per-instance parameters of one simulation step.
+struct StepCtx<'a> {
+    dt: f32,
+    enabled: bool,
+    to_world: &'a Affine3A,
+    scale: f32,
+    density: f32,
+}
+
+fn step_emitter(e: &Emitter, rt: &mut EmitterRuntime, cx: &StepCtx, budget: &mut usize) {
+    let StepCtx {
+        dt,
+        enabled,
+        to_world,
+        scale,
+        density,
+    } = *cx;
+    // Age and move.
+    let acc = Vec3::from(e.acceleration);
+    for p in &mut rt.particles {
+        p.age += dt;
+        p.vel += acc * dt;
+        p.pos += p.vel * dt;
+        p.rot += p.spin * dt;
+    }
+    rt.particles.retain(|p| p.age < p.life);
+
+    if !enabled || matches!(e.blend, BlendMode::Mesh | BlendMode::Light) {
+        return;
+    }
+    rt.time += dt;
+    if rt.time < e.initial_delay {
+        return;
+    }
+    let cap = if e.max_particles > 0 {
+        e.max_particles as usize
+    } else {
+        usize::MAX
+    };
+    let forever = e.loop_count == 0 || e.loop_count == u32::MAX;
+    if e.loop_count == 0 {
+        // Continuous.
+        let rate = if e.spawn_rate > 0.0 {
+            e.spawn_rate
+        } else if e.spawn_interval > 0.0 {
+            1.0 / e.spawn_interval
+        } else {
+            0.0
+        } * density;
+        rt.spawn_acc += rate * dt;
+        while rt.spawn_acc >= 1.0 {
+            rt.spawn_acc -= 1.0;
+            if rt.particles.len() < cap && *budget > 0 {
+                spawn_particle(e, rt, to_world, scale);
+                *budget -= 1;
+            }
+        }
+    } else {
+        // Burst: `cap` particles spaced `interval` apart, repeated `loop_count` times.
+        let count = e.max_particles.max(1);
+        let spacing = if e.spawn_interval > 0.0 {
+            e.spawn_interval.min(e.lifetime / count as f32)
+        } else {
+            0.0
+        };
+        if forever || rt.cycles_done < e.loop_count {
+            let t = rt.time - e.initial_delay;
+            let due = if spacing <= 0.0 {
+                count
+            } else {
+                ((t / spacing) as u32 + 1).min(count)
+            };
+            while rt.burst_spawned < due {
+                if *budget > 0 {
+                    spawn_particle(e, rt, to_world, scale);
+                    *budget -= 1;
+                }
+                rt.burst_spawned += 1;
+            }
+            if rt.burst_spawned >= count && t > e.lifetime {
+                rt.cycles_done += 1;
+                rt.burst_spawned = 0;
+                rt.time = e.initial_delay;
+            }
+        }
+    }
+}
+
+fn build_quads(e: &Emitter, rt: &mut EmitterRuntime, to_world: &Affine3A, scale: f32) {
+    rt.quads.clear();
+    let grid = e.atlas_grid.max(1);
+    let cells = grid * grid;
+    for p in &rt.particles {
+        let t = (p.age / p.life).clamp(0.0, 1.0);
+        let a = e.color[3].at(t);
+        let (r, g, b) = (e.color[0].at(t), e.color[1].at(t), e.color[2].at(t));
+        let size = e.size.at(t) * scale;
+        if a <= 0.001 || size <= 0.0 {
+            continue;
+        }
+        let center = if e.world_space {
+            p.pos
+        } else {
+            to_world.transform_point3(p.pos)
+        };
+        let _ = p.frame;
+        // Frame tracks use mode 2: only the start value is the sprite; the end value is a
+        // placeholder (usually 2 or 0).
+        let cell = (e.frame.start.max(0.0) as u32).min(cells - 1);
+        rt.quads.push(Quad {
+            center,
+            size,
+            rot: p.rot,
+            color: [r, g, b, a],
+            cell,
+            grid,
+        });
+    }
+}
+
+/// Advances all particle systems.
+#[allow(clippy::too_many_arguments)]
+pub fn simulate_particles(
+    time: Res<Time>,
+    settings: Res<ParticleSettings>,
+    mut stats: ResMut<ParticleStats>,
+    mut systems: Query<(
+        &AlamoParticles,
+        &GlobalTransform,
+        Option<&InheritedVisibility>,
+        &mut ParticleInstance,
+    )>,
+) {
+    let started = std::time::Instant::now();
+    let dt = settings
+        .fixed_step
+        .unwrap_or_else(|| time.delta_secs().min(0.1));
+    let mut live_total: usize = systems.iter().map(|(_, _, _, i)| i.live()).sum();
+    let budget_total = settings.max_total.saturating_sub(live_total);
+    let mut budget = budget_total;
+    // Spawn budget is shared sequentially, the heavy per-emitter work is cheap enough serially;
+    // `par_iter` splits it per instance with an even budget share.
+    let n = systems.iter().count().max(1);
+    let share = budget_total / n + 1;
+    let _ = &mut budget;
+    systems
+        .par_iter_mut()
+        .for_each(|(spec, gt, vis, mut inst)| {
+            let inst = &mut *inst;
+            let visible = vis.is_none_or(|v| v.get());
+            let enabled = spec.enabled && visible;
+            if enabled && !inst.was_enabled {
+                for rt in &mut inst.emitters {
+                    rt.restart();
+                }
+            }
+            inst.was_enabled = enabled;
+            let mut to_world = gt.affine();
+            let mut scale = to_world.matrix3.x_axis.length();
+            if spec.in_model_space {
+                // Particle space is Y-up; below a model it is mapped onto the bone's Z-up frame.
+                to_world *= Affine3A::from_quat(particle_to_alamo());
+            }
+            scale = scale.max(1e-6);
+            let mut local_budget = share;
+            let sys = inst.system.clone();
+            for (e, rt) in sys.emitters.iter().zip(inst.emitters.iter_mut()) {
+                step_emitter(
+                    e,
+                    rt,
+                    &StepCtx {
+                        dt,
+                        enabled,
+                        to_world: &to_world,
+                        scale,
+                        density: settings.density,
+                    },
+                    &mut local_budget,
+                );
+                build_quads(e, rt, &to_world, scale);
+            }
+        });
+    live_total = systems.iter().map(|(_, _, _, i)| i.live()).sum();
+    stats.live = live_total;
+    stats.systems = systems.iter().count();
+    stats.cpu_ms = started.elapsed().as_secs_f32() * 1000.0;
+}
+
+/// Heat-haze emitters distort the background in the original engine; they are not drawn.
+fn is_distortion(e: &Emitter) -> bool {
+    e.texture.to_ascii_lowercase().contains("heat")
+}
+
+type BatchKey = (String, u32);
+
+struct Batch {
+    entity: Entity,
+    mesh: Handle<Mesh>,
+}
+
+/// Vertex data of extra geometry (projectile bolts) that is merged into the batch of the same
+/// texture and blend mode every frame.
+#[derive(Default)]
+pub struct MeshBuf {
+    /// Positions (world space).
+    pub pos: Vec<[f32; 3]>,
+    /// UVs.
+    pub uv: Vec<[f32; 2]>,
+    /// Vertex colors.
+    pub col: Vec<[f32; 4]>,
+    /// Triangle indices into this buffer.
+    pub idx: Vec<u32>,
+}
+
+/// Extra batch geometry for the current frame, keyed by lowercase texture name and blend mode
+/// (0 alpha, 1 additive with alpha, 2 additive). Cleared and refilled by the projectile systems.
+#[derive(Resource, Default)]
+pub struct ExtraBatchGeometry {
+    pub(crate) buffers: HashMap<(String, u32), MeshBuf>,
+}
+
+/// Dynamic quad meshes, one per (texture, additive) pair.
+#[derive(Resource, Default)]
+pub struct ParticleBatches {
+    batches: HashMap<BatchKey, Batch>,
+}
+
+/// Collects all quads into the batch meshes.
+#[allow(clippy::too_many_arguments)]
+pub fn update_particle_batches(
+    mut commands: Commands,
+    fs: Res<AlamoFs>,
+    settings: Res<ParticleSettings>,
+    view: Res<ParticleView>,
+    mut textures: ResMut<TextureCache>,
+    mut images: ResMut<Assets<Image>>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<ParticleMaterial>>,
+    mut batches: ResMut<ParticleBatches>,
+    mut stats: ResMut<ParticleStats>,
+    mut extra: ResMut<ExtraBatchGeometry>,
+    systems: Query<&ParticleInstance>,
+    mut visibility: Query<&mut Visibility>,
+) {
+    let started = std::time::Instant::now();
+    let mut gathered: HashMap<BatchKey, Vec<Quad>> = HashMap::new();
+    let mut extra_bufs = std::mem::take(&mut extra.buffers);
+    for k in extra_bufs.keys() {
+        gathered.entry(k.clone()).or_default();
+    }
+    for inst in &systems {
+        for (e, rt) in inst.system.emitters.iter().zip(&inst.emitters) {
+            if rt.quads.is_empty() {
+                continue;
+            }
+            if is_distortion(e) || matches!(e.blend, BlendMode::Light | BlendMode::Mesh) {
+                continue;
+            }
+            let mode = match e.blend {
+                BlendMode::Alpha => 0,
+                _ if settings.additive_alpha => 1,
+                _ => 2,
+            };
+            gathered
+                .entry((e.texture.to_ascii_lowercase(), mode))
+                .or_default()
+                .extend_from_slice(&rt.quads);
+        }
+    }
+    let right = view.rotation * Vec3::X;
+    let up = view.rotation * Vec3::Y;
+    let mut active = 0;
+    for (key, batch) in &mut batches.batches {
+        if !gathered.contains_key(key)
+            && let Ok(mut v) = visibility.get_mut(batch.entity)
+        {
+            *v = Visibility::Hidden;
+        }
+    }
+    for (key, mut quads) in gathered {
+        let bolts = extra_bufs.remove(&key);
+        if !batches.batches.contains_key(&key) {
+            let texture = textures.get(&fs.0, &mut images, &key.0);
+            let material = materials.add(ParticleMaterial {
+                texture,
+                additive: key.1,
+            });
+            let mesh = meshes.add(empty_mesh());
+            let entity = commands
+                .spawn((
+                    Name::new(format!("particles {}", key.0)),
+                    Mesh3d(mesh.clone()),
+                    MeshMaterial3d(material),
+                    Transform::IDENTITY,
+                    NoFrustumCulling,
+                ))
+                .id();
+            batches.batches.insert(key.clone(), Batch { entity, mesh });
+        }
+        let batch = batches.batches.get_mut(&key).expect("batch exists");
+        if key.1 == 0 {
+            // Alpha blended: far to near.
+            quads.sort_by(|a, b| {
+                let da = (a.center - view.position).length_squared();
+                let db = (b.center - view.position).length_squared();
+                db.total_cmp(&da)
+            });
+        }
+        let n = quads.len();
+        active += 1;
+        let mut pos = Vec::with_capacity(n * 4);
+        let mut uv = Vec::with_capacity(n * 4);
+        let mut col = Vec::with_capacity(n * 4);
+        let mut idx = Vec::with_capacity(n * 6);
+        for (i, q) in quads.iter().enumerate() {
+            let h = q.size * 0.5;
+            let (s, c) = q.rot.sin_cos();
+            let ax = (right * c + up * s) * h;
+            let ay = (up * c - right * s) * h;
+            for (dx, dy) in [(-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)] {
+                pos.push((q.center + ax * dx + ay * dy).to_array());
+            }
+            let cell = q.cell % (q.grid * q.grid);
+            let g = q.grid as f32;
+            let (cx, cy) = ((cell % q.grid) as f32, (cell / q.grid) as f32);
+            let (u0, v0, u1, v1) = (cx / g, cy / g, (cx + 1.0) / g, (cy + 1.0) / g);
+            uv.extend([[u0, v1], [u1, v1], [u0, v0], [u1, v0]]);
+            col.extend([q.color; 4]);
+            let b = (i * 4) as u32;
+            idx.extend([b, b + 1, b + 2, b + 2, b + 1, b + 3]);
+        }
+        if let Some(b) = bolts {
+            let base = pos.len() as u32;
+            pos.extend(b.pos);
+            uv.extend(b.uv);
+            col.extend(b.col);
+            idx.extend(b.idx.iter().map(|i| i + base));
+        }
+        if pos.is_empty() {
+            if let Ok(mut v) = visibility.get_mut(batch.entity) {
+                *v = Visibility::Hidden;
+            }
+            continue;
+        }
+        let mut mesh = Mesh::new(
+            PrimitiveTopology::TriangleList,
+            RenderAssetUsages::default(),
+        );
+        mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, pos);
+        mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uv);
+        mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, col);
+        mesh.insert_indices(Indices::U32(idx));
+        if let Some(mut m) = meshes.get_mut(&batch.mesh) {
+            *m = mesh;
+        }
+        if let Ok(mut v) = visibility.get_mut(batch.entity) {
+            *v = Visibility::Visible;
+        }
+    }
+    stats.batches = active;
+    stats.cpu_ms += started.elapsed().as_secs_f32() * 1000.0;
+}
+
+fn empty_mesh() -> Mesh {
+    let mut mesh = Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::default(),
+    );
+    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, vec![[0.0f32; 3]; 3]);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, vec![[0.0f32; 2]; 3]);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, vec![[0.0f32; 4]; 3]);
+    mesh.insert_indices(Indices::U32(vec![0, 1, 2]));
+    mesh
+}
+
+/// Registers particle resources and systems.
+pub fn build(app: &mut App) {
+    bevy::asset::embedded_asset!(app, "particle.wgsl");
+    app.add_plugins(MaterialPlugin::<ParticleMaterial>::default())
+        .init_resource::<ParticleSettings>()
+        .init_resource::<ParticleStats>()
+        .init_resource::<ParticleCache>()
+        .init_resource::<ParticleBatches>()
+        .init_resource::<ExtraBatchGeometry>()
+        .init_resource::<ParticleView>()
+        .add_systems(
+            PostUpdate,
+            (
+                attach_proxy_particles,
+                load_particles,
+                update_particle_view,
+                simulate_particles,
+                update_particle_batches,
+            )
+                .chain()
+                .after(bevy::transform::TransformSystems::Propagate),
+        );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn paths_and_event_effects() {
+        assert_eq!(
+            particle_path("P_Smoke_Big00"),
+            "Art/Models/P_Smoke_Big00.alo"
+        );
+        assert_eq!(particle_path("pf_small_w.alo"), "Art/Models/pf_small_w.alo");
+        let pre = vec!["pe_".to_string()];
+        assert!(!starts_enabled("P_Ship_Fire_Small_Explosion", &pre));
+        assert!(starts_enabled("pe_imperial_star_destroyer_large", &pre));
+    }
+
+    #[test]
+    fn rng_is_in_range() {
+        let mut rt = EmitterRuntime::new(42);
+        for _ in 0..1000 {
+            let v = rt.rand();
+            assert!((0.0..1.0).contains(&v));
+        }
+        let v = rt.range(2.0, 3.0);
+        assert!((2.0..=3.0).contains(&v));
+    }
+}

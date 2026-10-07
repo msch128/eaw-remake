@@ -1,0 +1,23 @@
+﻿[package]
+name = "galaxy-play"
+description = "Playable galactic conquest layer: threaded galaxy-sim driver, fleets on the map, build menus, notifications."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+bevy = { version = "=0.19.1", default-features = false, features = [
+    "default_app", "std", "multi_threaded", "bevy_window", "default_font",
+    "3d_bevy_render", "ui_bevy_render",
+] }
+alamo-data = { path = "../alamo-data" }
+alamo-render = { path = "../alamo-render" }
+galaxy-sim = { path = "../galaxy-sim" }
+
+[dev-dependencies]
+alamo-fs = { path = "../alamo-fs" }
+alamo-model = { path = "../alamo-model" }
+
+[[example]]
+name = "galaxy_play_demo"
+path = "examples/galaxy_play_demo.rs"

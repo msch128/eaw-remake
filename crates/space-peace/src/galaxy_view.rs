@@ -1,4 +1,4 @@
-//! Decoupled view model of the galactic conquest map.
+﻿//! Decoupled view model of the galactic conquest map.
 //!
 //! The renderer, camera, UI and picking code only ever read a [`GalaxyView`]. Real game data
 //! (parsed from the Empire at War XML by `alamo-data`) is mapped into these plain types, so the
@@ -15,6 +15,42 @@ pub struct GalaxyView {
     pub routes: Vec<RouteView>,
     /// Factions; [`PlanetView::owner`] indexes into this vector.
     pub factions: Vec<FactionView>,
+    /// Trade route line styles; [`RouteView::style`] indexes into this vector.
+    pub route_styles: Vec<RouteStyleView>,
+    /// The human player's faction (index into [`GalaxyView::factions`]), if known.
+    pub player_faction: Option<usize>,
+    /// Decorative objects that are part of the galaxy scene (galaxy disc art, nebulae, logos).
+    pub props: Vec<PropView>,
+    /// Galactic map lighting.
+    pub light: GalaxyLight,
+}
+
+/// A decorative (non-selectable) model placed on the galaxy map.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PropView {
+    /// Object name from the data, e.g. `Galaxy_Core_Art_Model_Web_Way`.
+    pub id: String,
+    /// Model file name, e.g. `w_galaxy00.alo`.
+    pub model: String,
+    /// Position in EaW galactic coordinates (see [`PlanetView::position`]).
+    pub position: Vec3,
+    /// Uniform model scale (`Scale_Factor`).
+    pub scale: f32,
+}
+
+/// Lighting of the galactic map (the single sun shared by all planets).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GalaxyLight {
+    /// Light angle in degrees as in `Gameconstants.xml` (`Galactic_Zoom_Out_Light_Angle`).
+    pub angle_deg: Vec3,
+    /// Light strength, 1.0 is full white (`Galactic_Zoom_Light_Level`).
+    pub level: f32,
+}
+
+impl Default for GalaxyLight {
+    fn default() -> Self {
+        Self { angle_deg: Vec3::new(0.0, 60.0, -30.0), level: 0.75 }
+    }
 }
 
 /// One planet on the galactic map.
@@ -31,10 +67,22 @@ pub struct PlanetView {
     pub owner: Option<usize>,
     /// Credits income per turn shown in the info panel.
     pub income: i32,
-    /// Visual radius multiplier relative to a "normal" planet (`1.0`).
+    /// Visual radius multiplier relative to a "normal" planet (`1.0`); used for placeholders.
     pub size: f32,
+    /// Galactic model file name (`Galactic_Model_Name`), `None` for demo data.
+    pub model: Option<String>,
+    /// Model scale (`Scale_Factor`); the model's own radius times this is the world radius.
+    pub model_scale: f32,
     /// Placeholder surface colour (linear-ish sRGB, 0..1) until the real `.alo` models are loaded.
     pub surface_color: [f32; 3],
+    /// Number of space structure (starbase) slots, `Max_Space_Base`.
+    pub max_space_base: i32,
+    /// Extra special structure slots in space.
+    pub special_slots: i32,
+    /// Planet ability as `(name, description)` in English, if the planet has one.
+    pub ability: Option<(String, String)>,
+    /// Display names of the structures/forces the campaign places here at the start.
+    pub starting_forces: Vec<String>,
 }
 
 /// A trade route / hyperspace lane between two planets.
@@ -44,6 +92,32 @@ pub struct RouteView {
     pub a: usize,
     /// Index into [`GalaxyView::planets`].
     pub b: usize,
+    /// Index into [`GalaxyView::route_styles`].
+    pub style: usize,
+}
+
+/// Visual settings of a trade route line for one relation to the player.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LineStyleView {
+    /// RGBA (sRGB, 0..1) when zoomed far out.
+    pub color_far: [f32; 4],
+    /// RGBA (sRGB, 0..1) when zoomed in close.
+    pub color_near: [f32; 4],
+    /// Line width in the game's units (`Width`, typically 0.5 to 6).
+    pub width: f32,
+}
+
+/// A named trade route line style (`TradeRouteLine`) with one look per relation.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RouteStyleView {
+    /// Style name, e.g. `Web_Way_Main`.
+    pub name: String,
+    /// Route controlled by the player (`Ally` settings).
+    pub own: LineStyleView,
+    /// Route controlled by an enemy (`Enemy` settings).
+    pub enemy: LineStyleView,
+    /// Neutral or contested route (`Neutral` settings).
+    pub neutral: LineStyleView,
 }
 
 /// A playable faction.
@@ -53,6 +127,16 @@ pub struct FactionView {
     pub name: String,
     /// Faction colour in sRGB, each channel 0..1.
     pub color: [f32; 3],
+    /// Credits the faction has (the campaign's starting credits until a game state exists).
+    pub credits: i64,
+}
+
+impl RouteStyleView {
+    /// Dark teal line used when no style data is available.
+    pub fn fallback() -> Self {
+        let line = LineStyleView { color_far: [0.05, 0.12, 0.15, 1.0], color_near: [0.05, 0.12, 0.15, 1.0], width: 1.0 };
+        Self { name: "Default".into(), own: line, enemy: line, neutral: line }
+    }
 }
 
 impl GalaxyView {
@@ -87,14 +171,17 @@ impl GalaxyView {
             FactionView {
                 name: "Galactic Empire".into(),
                 color: [0.30, 0.85, 0.45],
+                credits: 40_000,
             },
             FactionView {
                 name: "Rebel Alliance".into(),
                 color: [1.00, 0.28, 0.22],
+                credits: 15_000,
             },
             FactionView {
                 name: "Underworld".into(),
                 color: [1.00, 0.72, 0.15],
+                credits: 20_000,
             },
         ];
 
@@ -153,7 +240,13 @@ impl GalaxyView {
                     owner,
                     income,
                     size,
+                    model: None,
+                    model_scale: 1.0,
                     surface_color: surface,
+                    max_space_base: 3,
+                    special_slots: 6,
+                    ability: None,
+                    starting_forces: Vec::new(),
                 },
             )
             .collect();
@@ -186,6 +279,7 @@ impl GalaxyView {
                 Some(RouteView {
                     a: find(a)?,
                     b: find(b)?,
+                    style: 0,
                 })
             })
             .collect();
@@ -194,6 +288,10 @@ impl GalaxyView {
             planets,
             routes,
             factions,
+            route_styles: vec![RouteStyleView::fallback()],
+            player_faction: Some(1),
+            props: Vec::new(),
+            light: GalaxyLight::default(),
         }
     }
 }

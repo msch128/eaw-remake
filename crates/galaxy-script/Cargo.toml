@@ -1,0 +1,12 @@
+﻿[package]
+name = "galaxy-script"
+description = "Runs Empire at War Lua story/scoring scripts against galaxy-sim: a ScriptHost implementation and a combined stepper."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+alamo-fs = { path = "../alamo-fs" }
+alamo-data = { path = "../alamo-data" }
+alamo-lua = { path = "../alamo-lua" }
+galaxy-sim = { path = "../galaxy-sim" }

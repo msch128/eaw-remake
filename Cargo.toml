@@ -2,9 +2,19 @@
 resolver = "3"
 members = [
     "crates/alamo-fs",
+    "crates/alamo-map",
+    "crates/alamo-lua",
+    "crates/galaxy-script",
+    "crates/alamo-audio",
     "crates/alamo-data",
+    "crates/galaxy-sim",
+    "crates/battle-sim",
     "crates/alamo-model",
+    "crates/alamo-render",
+    "crates/battle-view",
     "crates/space-peace",
+    "crates/galaxy-play",
+    "crates/eaw-ui",
 ]
 
 [workspace.package]
@@ -22,5 +32,13 @@ opt-level = 3
 [profile.release]
 lto = "thin"
 codegen-units = 1
+
+
+
+
+
+
+
+
 
 

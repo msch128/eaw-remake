@@ -1,0 +1,13 @@
+﻿[package]
+name = "battle-sim"
+description = "Headless deterministic tactical space battle simulation for Empire at War: Forces of Corruption data."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+alamo-data = { path = "../alamo-data" }
+alamo-fs = { path = "../alamo-fs" }
+alamo-model = { path = "../alamo-model" }
+alamo-map = { path = "../alamo-map" }
+rayon = "1"

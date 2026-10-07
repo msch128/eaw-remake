@@ -1,4 +1,4 @@
-//! HUD: planet info panel, FPS counter, controls hint and fullscreen toggling.
+﻿//! HUD: planet info panel, FPS counter, controls hint and fullscreen toggling.
 
 use bevy::{
     diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin},
@@ -6,7 +6,8 @@ use bevy::{
     window::{MonitorSelection, PrimaryWindow, WindowMode},
 };
 
-use crate::galaxy_map::Selection;
+use crate::galaxy_map::{Hover, Selection};
+use crate::flow::AppScreen;
 use crate::galaxy_view::GalaxyView;
 
 /// Heads-up display and window hotkeys.
@@ -15,16 +16,30 @@ pub struct UiPlugin;
 impl Plugin for UiPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(FrameTimeDiagnosticsPlugin::default())
-            .add_systems(Startup, spawn_hud)
+            .add_systems(Startup, spawn_fps)
+            .add_systems(OnEnter(AppScreen::Galaxy), spawn_hud)
+            .add_systems(OnExit(AppScreen::Galaxy), despawn_hud)
+            .add_systems(Update, (toggle_fullscreen, toggle_fps, update_fps))
             .add_systems(
                 Update,
-                (toggle_fullscreen, toggle_fps, update_fps, update_info_panel),
+                (update_info_panel, update_faction_bar, update_tooltip)
+                    .run_if(in_state(AppScreen::Galaxy)),
             );
     }
 }
 
 #[derive(Component)]
 struct FpsText;
+
+/// Marks the galaxy HUD (info panel, faction bar, tooltip, hint); removed when leaving the map.
+#[derive(Component)]
+struct HudEntity;
+
+fn despawn_hud(mut commands: Commands, hud: Query<Entity, With<HudEntity>>) {
+    for e in &hud {
+        commands.entity(e).despawn();
+    }
+}
 
 #[derive(Component)]
 struct InfoPanel;
@@ -35,12 +50,44 @@ enum InfoLine {
     Name,
     Owner,
     Income,
+    Slots,
+    Ability,
+    Forces,
+}
+
+/// Which field of the top faction bar a text entity shows.
+#[derive(Component, Clone, Copy, PartialEq, Eq)]
+enum BarField {
+    Faction,
+    Credits,
+    Planets,
+}
+
+/// Mouse-follow tooltip root.
+#[derive(Component)]
+struct Tooltip;
+
+/// Text of the tooltip.
+#[derive(Component)]
+struct TooltipText;
+
+/// Formats an integer with thousands separators (`15000` -> `15,000`).
+fn thousands(n: i64) -> String {
+    let s = n.abs().to_string();
+    let mut out = String::new();
+    for (i, c) in s.chars().enumerate() {
+        if i > 0 && (s.len() - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    if n < 0 { format!("-{out}") } else { out }
 }
 
 const PANEL_BG: Color = Color::srgba(0.02, 0.05, 0.10, 0.82);
 const PANEL_BORDER: Color = Color::srgba(0.35, 0.65, 1.0, 0.8);
 
-fn spawn_hud(mut commands: Commands) {
+fn spawn_fps(mut commands: Commands) {
     // FPS counter, top right (F3).
     commands.spawn((
         Text::new("FPS --"),
@@ -56,11 +103,15 @@ fn spawn_hud(mut commands: Commands) {
             ..default()
         },
         FpsText,
+        GlobalZIndex(30),
     ));
+}
 
+fn spawn_hud(mut commands: Commands) {
     // Controls hint, bottom right.
     commands.spawn((
-        Text::new("LMB select | RMB/MMB drag or WASD pan | Wheel zoom | F3 fps | F11 fullscreen | N next track"),
+        HudEntity,
+        Text::new("LMB select | RMB/MMB drag or WASD pan | Wheel zoom | Esc menu | F3 fps | F11 fullscreen"),
         TextFont { font_size: FontSize::Px(12.0), ..default() },
         TextColor(Color::srgba(0.7, 0.8, 0.9, 0.55)),
         Node { position_type: PositionType::Absolute, bottom: Val::Px(8.0), right: Val::Px(12.0), ..default() },
@@ -83,40 +134,92 @@ fn spawn_hud(mut commands: Commands) {
             BackgroundColor(PANEL_BG),
             BorderColor::all(PANEL_BORDER),
             Visibility::Hidden,
+            HudEntity,
             InfoPanel,
         ))
         .with_children(|p| {
-            p.spawn((
-                Text::new(""),
-                TextFont {
-                    font_size: FontSize::Px(22.0),
+            let line = |p: &mut ChildSpawnerCommands, which: InfoLine, size: f32, color: Color| {
+                p.spawn((
+                    Text::new(""),
+                    TextFont { font_size: FontSize::Px(size), ..default() },
+                    TextColor(color),
+                    which,
+                ));
+            };
+            line(p, InfoLine::Name, 22.0, Color::WHITE);
+            line(p, InfoLine::Owner, 15.0, Color::WHITE);
+            line(p, InfoLine::Income, 15.0, Color::srgb(1.0, 0.9, 0.5));
+            line(p, InfoLine::Slots, 14.0, Color::srgb(0.75, 0.85, 1.0));
+            line(p, InfoLine::Ability, 14.0, Color::srgb(0.6, 1.0, 0.8));
+            line(p, InfoLine::Forces, 13.0, Color::srgb(0.8, 0.82, 0.86));
+        });
+
+    // Faction overview bar, top centre.
+    commands
+        .spawn((
+            HudEntity,
+            Node {
+                position_type: PositionType::Absolute,
+                top: Val::Px(8.0),
+                width: Val::Percent(100.0),
+                justify_content: JustifyContent::Center,
+                ..default()
+            },
+        ))
+        .with_children(|root| {
+            root.spawn((
+                Node {
+                    padding: UiRect::axes(Val::Px(18.0), Val::Px(6.0)),
+                    border: UiRect::all(Val::Px(1.0)),
+                    column_gap: Val::Px(26.0),
                     ..default()
                 },
+                BackgroundColor(PANEL_BG),
+                BorderColor::all(PANEL_BORDER),
+            ))
+            .with_children(|bar| {
+                for (field, color) in [
+                    (BarField::Faction, Color::WHITE),
+                    (BarField::Credits, Color::srgb(1.0, 0.9, 0.5)),
+                    (BarField::Planets, Color::srgb(0.75, 0.85, 1.0)),
+                ] {
+                    bar.spawn((
+                        Text::new(""),
+                        TextFont { font_size: FontSize::Px(17.0), ..default() },
+                        TextColor(color),
+                        field,
+                    ));
+                }
+            });
+        });
+
+    // Hover tooltip (name, owner, income) following the cursor.
+    commands
+        .spawn((
+            Node {
+                position_type: PositionType::Absolute,
+                padding: UiRect::all(Val::Px(8.0)),
+                border: UiRect::all(Val::Px(1.0)),
+                ..default()
+            },
+            BackgroundColor(PANEL_BG),
+            BorderColor::all(PANEL_BORDER),
+            Visibility::Hidden,
+            GlobalZIndex(10),
+            HudEntity,
+            Tooltip,
+        ))
+        .with_children(|t| {
+            t.spawn((
+                Text::new(""),
+                TextFont { font_size: FontSize::Px(14.0), ..default() },
                 TextColor(Color::WHITE),
-                InfoLine::Name,
-            ));
-            p.spawn((
-                Text::new(""),
-                TextFont {
-                    font_size: FontSize::Px(15.0),
-                    ..default()
-                },
-                TextColor(Color::WHITE),
-                InfoLine::Owner,
-            ));
-            p.spawn((
-                Text::new(""),
-                TextFont {
-                    font_size: FontSize::Px(15.0),
-                    ..default()
-                },
-                TextColor(Color::srgb(1.0, 0.9, 0.5)),
-                InfoLine::Income,
+                TooltipText,
             ));
         });
 }
-
-/// Fills the info panel from the selected planet.
+/// Fills the info panel from the selected planet: owner, income, structure slots, ability and
+/// the forces the campaign starts with there.
 fn update_info_panel(
     selection: Res<Selection>,
     view: Res<GalaxyView>,
@@ -145,11 +248,90 @@ fn update_info_panel(
                     color.0 = Color::srgb(0.7, 0.75, 0.8);
                 }
             },
-            InfoLine::Income => text.0 = format!("Income: {} credits", p.income),
+            InfoLine::Income => text.0 = format!("Income: {} credits", thousands(i64::from(p.income))),
+            InfoLine::Slots => {
+                text.0 = format!(
+                    "Space structures: {} slots (+{} special)",
+                    p.max_space_base, p.special_slots
+                );
+            }
+            InfoLine::Ability => {
+                text.0 = match &p.ability {
+                    Some((name, desc)) if desc.is_empty() => format!("Ability: {name}"),
+                    Some((name, desc)) => format!("Ability: {name}\n{desc}"),
+                    None => String::new(),
+                };
+            }
+            InfoLine::Forces => {
+                const SHOWN: usize = 8;
+                text.0 = if p.starting_forces.is_empty() {
+                    String::new()
+                } else {
+                    let mut s = String::from("Starting forces:");
+                    for f in p.starting_forces.iter().take(SHOWN) {
+                        s.push_str("\n  ");
+                        s.push_str(f);
+                    }
+                    if p.starting_forces.len() > SHOWN {
+                        s.push_str(&format!("\n  +{} more", p.starting_forces.len() - SHOWN));
+                    }
+                    s
+                };
+            }
         }
     }
 }
 
+/// Fills the top bar with the human faction, its credits and owned planet count.
+fn update_faction_bar(
+    view: Res<GalaxyView>,
+    mut fields: Query<(&BarField, &mut Text, &mut TextColor)>,
+) {
+    if !view.is_changed() {
+        return;
+    }
+    let faction = view.player_faction.and_then(|f| view.factions.get(f));
+    let owned = view
+        .planets
+        .iter()
+        .filter(|p| p.owner.is_some() && p.owner == view.player_faction)
+        .count();
+    for (field, mut text, mut color) in &mut fields {
+        match (field, faction) {
+            (BarField::Faction, Some(f)) => {
+                text.0 = f.name.clone();
+                color.0 = Color::srgb(f.color[0], f.color[1], f.color[2]);
+            }
+            (BarField::Faction, None) => text.0 = "Spectator".into(),
+            (BarField::Credits, Some(f)) => text.0 = format!("Credits {}", thousands(f.credits)),
+            (BarField::Planets, Some(_)) => text.0 = format!("Planets {owned} / {}", view.planets.len()),
+            (BarField::Planets, None) => text.0 = format!("Planets {}", view.planets.len()),
+            (BarField::Credits, None) => text.0.clear(),
+        }
+    }
+}
+
+/// Shows name, owner and income of the hovered planet next to the cursor.
+fn update_tooltip(
+    hover: Res<Hover>,
+    view: Res<GalaxyView>,
+    window: Option<Single<&Window, With<PrimaryWindow>>>,
+    mut root: Single<(&mut Node, &mut Visibility), With<Tooltip>>,
+    mut text: Single<&mut Text, With<TooltipText>>,
+) {
+    let (node, vis) = &mut *root;
+    let cursor = window.and_then(|w| w.cursor_position());
+    match (hover.0.and_then(|i| view.planets.get(i).map(|p| (i, p))), cursor) {
+        (Some((i, p)), Some(c)) => {
+            let owner = view.owner_of(i).map_or("Neutral", |f| f.name.as_str());
+            text.0 = format!("{}\nOwner: {owner}\nIncome: {}", p.display_name, thousands(i64::from(p.income)));
+            node.left = Val::Px(c.x + 18.0);
+            node.top = Val::Px(c.y + 18.0);
+            **vis = Visibility::Inherited;
+        }
+        _ => **vis = Visibility::Hidden,
+    }
+}
 fn toggle_fps(keys: Res<ButtonInput<KeyCode>>, mut fps: Single<&mut Visibility, With<FpsText>>) {
     if keys.just_pressed(KeyCode::F3) {
         **fps = if **fps == Visibility::Hidden {

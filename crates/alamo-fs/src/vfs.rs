@@ -21,6 +21,12 @@
 //!    higher root overrides those of lower roots. **This ordering is an educated guess**, not
 //!    verified against the engine.
 //!
+//! 4. The audio archives `Audio/SFX/sfx2d_english.meg`, `sfx2d_non_localized.meg` and `sfx3d_non_localized.meg`.
+//!    The engine's sound system mounts these itself, so they are missing from every `megafiles.xml` (and a
+//!    mod's list that replaces the base one never mentions them). They are mounted from *each* root that
+//!    has them (not first-found) and belong to that root's group, below its listed MEGs; other
+//!    `sfx2d_<language>.meg` files are skipped. Their entries do not overlap other archives.
+//!
 //! Between stacks, every file of a higher stack (loose or in a MEG) beats every file of a lower stack.
 
 use std::collections::HashMap;
@@ -31,6 +37,13 @@ use crate::{FileSource, GameInstall, LooseDir, MegArchive, normalize};
 
 /// Archives the engine loads from every root in addition to `megafiles.xml`, lowest priority first.
 const PATCH_MEGS: [&str; 3] = ["Patch.meg", "Patch2.meg", "64Patch.meg"];
+
+/// Audio archives the engine's sound system mounts itself (they are never in megafiles.xml), English only.
+const AUDIO_MEGS: [&str; 3] = [
+    "Audio/SFX/sfx2d_english.meg",
+    "Audio/SFX/sfx2d_non_localized.meg",
+    "Audio/SFX/sfx3d_non_localized.meg",
+];
 
 #[derive(Debug, Clone, Copy)]
 enum Source {
@@ -163,6 +176,11 @@ fn stack_meg_paths(layers: &[LooseDir]) -> Vec<PathBuf> {
     }
     let mut paths: Vec<PathBuf> = Vec::new();
     for (i, layer) in layers.iter().enumerate().rev() {
+        for audio in AUDIO_MEGS {
+            if let Some(p) = layer.real_path(audio) {
+                paths.push(p.to_path_buf());
+            }
+        }
         paths.extend(
             listed
                 .iter()

@@ -1,0 +1,123 @@
+﻿# Galactic conquest rules used by `galaxy-sim`
+
+Source of truth: the Remake 4.0 data (`Data/Xml`, `Data/Scripts` of workshop item 1770851727) and
+the base game files layered below it. Where the data does not define a rule (the engine is
+closed source) the value is an **estimate** and is marked as such; every estimate lives in
+`SimConfig` so it can be tuned.
+
+Paths below are relative to the mod's `Data` folder.
+
+## 1. Time
+
+* There are no "weeks" in the data. The simulation defines one week as `SimConfig::week_seconds`
+  = 60 s (estimate, chosen so that a Star Destroyer, `Build_Time_Seconds` 70, takes about a week).
+  Income is quoted per week but accrues continuously every tick (`tick_seconds` = 1 s).
+* `Xml/Gameconstants.xml` has `Object_Max_Speed_Multiplier_Galactic` (5.0), `Fleet_Maintenance_Update_Delay_Seconds`,
+  `Space_Retreat_Allowed_Countdown_Seconds` (60) and `Space_Capture_Allowed_Countdown_Seconds` (1), which are
+  tactical-mode values and not used by the galactic layer here.
+
+## 2. Economy
+
+| Rule | Source | Implementation |
+|---|---|---|
+| Planet income = `Planet_Credit_Value` | `Xml/Planets_WW.xml` (e.g. Coruscant_WW 607) | per week per owned planet |
+| Structures and star bases change planet income through `Planet_Income_Bonus_Ability` (`Absolute_Income_Modifier`, `Percentage_Income_Modifier`) | e.g. `Buildings/Space/GC/Shipyard_*.xml` (upkeep -35), `Buildings/Ground/GC/**/Mining_*.xml` (+25) | `World::planet_income`: `base * (1 + sum(pct)) + sum(abs)` |
+| Ships cost upkeep through the same ability (Star Destroyer -800) | `Units/Space/Units_Space_Empire_Star_Destroyer_Imperial.xml` | summed over all ships of a faction, applied to faction income |
+| Faction multiplier `Credits_Accumulation_Factor` | `Xml/FACTIONS.XML` (Rebel 0.95) | multiplies the faction's total income |
+| Credit cap `Credit_Cap_Per_Planet` = 400000 per owned planet | `Xml/Gameconstants.xml` | enforced every tick |
+| `Political_Income_Curve` 0,0 1,1 5,1 and `Income_Redistribution` 0.6 | `Xml/Gameconstants.xml` | **ignored** (political control is always 1 for owned planets) |
+| `Income_Stream_Ability` on mines | `Buildings/Ground/GC/**/Mining_Facility*.xml` | **ignored**: its comment says it only exists in tactical modes, not in the campaign |
+| Starting credits, tech levels, home planets | `Xml/Campaigns_Imperial_Web_Way_*.xml` | `FactionInfo` |
+| Black market, corruption, trade route `Credit_Gain_Factor` / `Political_Control_Gain` | `Xml/TradeRoutes_Web_Way.xml` | the Web Way lanes all have both at 0, so they only matter as hyperspace lanes |
+
+Population: units have `Population_Value`; the cap is
+`SimConfig::base_population_cap` (estimate, 40) plus, for every owned planet, the planet's
+`Additional_Population_Capacity`, its star base's `Additional_Population_Capacity` and structure capacities.
+
+## 3. Production
+
+* Three lanes per planet, one item built at a time per lane: ships and research items (lane 0), structures
+  (lane 1), star base and tech upgrades (lane 2). Cost is paid when queued (the real game charges progressively; estimate).
+* Time = `Build_Time_Seconds * build_time_scale`. `Production_Speed_Mod_Base_Vs_Tech_*` are all 1.0 in the Remake, so no
+  speed-up from star base level.
+* A ship may be queued when all of these hold (`World::check_build_unit`):
+  `Affiliation` contains the faction, `Tech_Level` <= faction tech, `Required_Star_Base_Level` <= the planet's base level,
+  every `Required_Special_Structures` entry is present (a structure also satisfies the requirement of any object in its
+  `Variant_Of_Existing_Type` ancestry), `Required_Planets`, not `Build_Initially_Locked` unless unlocked,
+  `Build_Limit_Current_Per_Player` / `Build_Limit_Lifetime_Per_Player`, population, credits.
+  Objects with `Tech_Level` >= 90 (story-unlockable, terrain-specific templates) are never offered.
+* `Build_Initially_Locked` objects are unlocked by research items: completing `Research_<Name>`
+  (see `Research/Units/_Default_Base.xml`, mirrored by `Scripts/Library/libResearchFunctions.lua`) unlocks `<Name>`.
+* Structures (`SpecialStructure`): slot limits come from the planet's `Special_Structures_Space` (orbital) and
+  `Special_Structures_Land` (ground); `Build_Max_Instances_Per_Planet`; `Required_Star_Base_Level` (shipyards need level 2).
+  Terrain-specific variants (`*_Urban`, `*_Barren`) are not filtered by planet terrain (gap).
+* Star base levels are the chain `Prev_Level_Base` / `Next_Level_Base` (`Buildings/Space/GC/<Faction>/Colonies.xml`). Minor
+  factions define their levels as unlinked objects (`Minor_Starbase_X`, `_2`, `_3`) which are chained by name and level.
+* Tech levels: `*_Level_N_Tech_Upgrade` upgrade objects (`Upgrades/Vanilla*.xml`, flag `Tactical_Build_Increments_Tech_Level`,
+  cost `Tactical_Build_Cost_Campaign`). Factions without such objects (minors) get generic upgrades costing 3000 x level (estimate).
+* Newly built ships join the idle fleet of that faction at the planet, or create one.
+
+## 4. Movement
+
+* Lanes are the campaign's `Trade_Routes` between real planets (`Xml/TradeRoutes_Web_Way.xml`: `Point_A`, `Point_B`,
+  `HS_Speed_Factor` 1-3 for capillary/inter/main lanes). Length is the Euclidean distance of `Galactic_Position` x/y.
+* Fleet speed = slowest ship's `Hyperspace_Speed` (clamped 0.1-1.5) x lane `HS_Speed_Factor` x `galactic_speed_scale`
+  (6.0, estimate) map units per second. Paths minimise travel time (Dijkstra). A fleet that passes a planet holding hostile
+  fleets or a hostile star base is stopped there (blockade).
+* `Retreat` sends a fleet back to the planet it came from; a fleet in hyperspace turns around.
+
+## 5. Battles
+
+* A battle is triggered when two hostile parties share a planet. Parties are the factions with fleets in orbit plus the
+  owner of the planet if it has a star base or armed structures. All factions are hostile to each other (every faction's
+  `Enemies` list in `Xml/FACTIONS.XML` / `Xml/Factions_Minors.xml` names the others).
+* `Event::BattlePending` is emitted; with `auto_resolve_battles` the sim resolves it immediately, otherwise the app
+  calls `resolve_battle_auto` (or runs a tactical battle and applies its own result).
+* Auto-resolve (`combat.rs`) is a placeholder: every ship, star base, armed structure and star base garrison squadron
+  (`Starting_Spawned_Units_Tech_0`) is a combatant with shield and hull from `Shield_Points` / `Tactical_Health`, and
+  weapons aggregated per damage type from `HardPoint` (`Fire_Pulse_Count`, `Fire_Min/Max_Recharge_Seconds`,
+  `Fire_Pulse_Delay_Seconds`) and `Projectile` (`Projectile_Damage`, `Damage_Type`, `Projectile_Does_*_Damage`). The
+  damage-type versus armor-type matrix (`Damage_To_Armor_Mod`, 673 entries in `Xml/Gameconstants.xml`) scales hits against shield
+  armor and hull armor. Hardpoint health, ranges, cones and speeds are not simulated. Rounds are 4 s; a fight
+  with no damage dealt, or exceeding 600 rounds, is a draw and attackers retreat.
+
+## 6. Planet capture without ground combat
+
+The data contradicts itself on ground troops (the mod still ships `GroundCompany` objects and starting
+`Trooper_*_Regiment` forces), so the rule is derived from how the Remake's own AI conquers planets:
+
+* `Scripts/Ai/Conquer_Enemy_Space.lua` (category `GC_Conquer_Enemy_Space`) and `Conquer_Unrestricted_Space.lua` (category `GC_Annex_Neutral_Space`, `MainForce_Original_Target_Owner_Changed`) send a **space-only task force** (`SpaceForce`,
+  categories `Fighter|Bomber|Corvette|Frigate|Capital`) to a target planet, call `Move_To`, and succeed when
+  `EvaluatePerception("Planet_Has_Friendly_Space_Force_In_Orbit")` is true. The task then handles
+  `SpaceForce_Original_Target_Owner_Changed`, i.e. the engine changes the planet's owner as a consequence of space control
+  alone; no transport or ground unit is requested.
+* Rule implemented: a planet changes owner after a single hostile faction has been the only party in orbit for
+  `capture_delay_seconds` (5 s, estimate; the 1 s `Space_Capture_Allowed_Countdown_Seconds` is the tactical value) and
+  the owner no longer has a star base. Consequently attackers must first destroy the star base, armed structures,
+  garrison and defending fleets (a battle). Unowned planets are captured by any fleet arriving.
+* On capture the star base, all structures and the build queues are removed (the real game destroys buildings too; some
+  could survive in reality).
+* Not modelled: `Planet_Surface_Accessible`, ground defenders, siege/bombardment (`Scripts/GameObject/ObjectScript_Bombardment*.lua`),
+  planet shields, story scripts that flip owners (`Xml/SANDBOX_EVENT_PLANET_OWNERSHIP_FLIP.XML`).
+* **Uncertainty:** I could not verify this against a running game; if the real engine requires a landing, `capture()` in
+  `sim.rs` is the single place to change.
+
+## 7. Starting state
+
+* Planet owner: `GameData::campaign_planet_owners` (the faction that places a star base or structure there, see
+  `alamo-data`); star base, structures and fleets come from the campaign's `Starting_Forces`. Ground units and heroes are ignored.
+* Neutral planets (no starting structure) start unowned and undefended.
+
+## 8. Victory and elimination
+
+* `Human_Victory_Conditions`: `Galactic_Control_Named_Planets` (planets in `Human_Victory_Planet_Names`) and/or
+  `Galactic_All_Planets_Controlled`, for the campaign's `Starting_Active_Player`. `AI_Victory_Conditions` apply to every other faction.
+* A faction with no planets and no fleets is eliminated. The last non-eliminated faction wins.
+* Victory can be switched off with `SimConfig::victory_enabled = false` (the headless example's `novictory`).
+
+## 9. AI stub (`ai.rs`)
+
+Every `ai_interval_seconds` (10 s) each AI faction, planned in parallel threads from an immutable snapshot and applied in
+faction order: buys tech, builds/upgrades star bases, builds structures that unlock many ships (shipyards) or pay back, queues the
+best durability x damage per credit ship, merges idle fleets per planet, and sends a fleet at the best-valued reachable enemy or
+neutral planet whose defense (Lanchester estimate `sqrt(durability x dps)`) it exceeds by 1.5x.

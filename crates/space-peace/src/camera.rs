@@ -1,7 +1,8 @@
-//! Empire-at-War style galaxy camera: angled top-down orbit with smooth zoom and clamped panning.
+﻿//! Empire-at-War style galaxy camera: angled top-down orbit with smooth zoom and clamped panning.
 
+use crate::flow::{AppScreen, not_paused};
 use bevy::{
-    camera::Hdr,
+    camera::{Hdr, ImageRenderTarget, RenderTarget},
     core_pipeline::tonemapping::Tonemapping,
     input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll, MouseScrollUnit},
     post_process::bloom::Bloom,
@@ -16,7 +17,12 @@ impl Plugin for CameraPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<CameraBounds>()
             .add_systems(Startup, spawn_camera)
-            .add_systems(Update, (control_camera, apply_camera).chain());
+            .add_systems(
+                Update,
+                (control_camera.run_if(not_paused), apply_camera)
+                    .chain()
+                    .run_if(in_state(AppScreen::Galaxy)),
+            );
     }
 }
 
@@ -73,13 +79,15 @@ const PAN_SMOOTH: f32 = 14.0;
 const KEY_PAN_SPEED: f32 = 1.1;
 const EDGE_PIXELS: f32 = 3.0;
 
-fn spawn_camera(mut commands: Commands) {
-    commands.spawn((
+fn spawn_camera(mut commands: Commands, offscreen: Option<Res<crate::offscreen::OffscreenTarget>>) {
+    let mut camera = commands.spawn((
         Camera3d::default(),
+        IsDefaultUiCamera,
         Hdr,
-        Tonemapping::TonyMcMapface,
+        // The Alamo shaders already output display-referred colour: no tonemapping.
+        Tonemapping::None,
         Bloom {
-            intensity: 0.22,
+            intensity: 0.12,
             ..Bloom::NATURAL
         },
         Projection::Perspective(PerspectiveProjection {
@@ -98,6 +106,12 @@ fn spawn_camera(mut commands: Commands) {
         },
         Transform::default(),
     ));
+    if let Some(target) = offscreen {
+        camera.insert(RenderTarget::Image(ImageRenderTarget {
+            handle: target.image.clone(),
+            scale_factor: target.scale_factor,
+        }));
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -108,7 +122,7 @@ fn control_camera(
     motion: Res<AccumulatedMouseMotion>,
     scroll: Res<AccumulatedMouseScroll>,
     mut bounds: ResMut<CameraBounds>,
-    window: Single<&Window, With<PrimaryWindow>>,
+    window: Option<Single<&Window, With<PrimaryWindow>>>,
     mut cam: Single<(&mut GalaxyCamera, &Projection)>,
 ) {
     let dt = time.delta_secs();
@@ -159,7 +173,9 @@ fn control_camera(
     }
 
     // Screen edge scrolling (only in fullscreen, so windowed use stays comfortable).
-    if window.focused
+    let window_height = window.as_ref().map_or(1080.0, |w| w.height());
+    if let Some(window) = &window
+        && window.focused
         && matches!(
             window.mode,
             WindowMode::BorderlessFullscreen(_) | WindowMode::Fullscreen(..)
@@ -192,7 +208,7 @@ fn control_camera(
             Projection::Perspective(p) => p.fov,
             _ => 40f32.to_radians(),
         };
-        let world_per_px = 2.0 * cam.distance * (fov * 0.5).tan() / window.height().max(1.0);
+        let world_per_px = 2.0 * cam.distance * (fov * 0.5).tan() / window_height.max(1.0);
         // Dragging down moves the map down, i.e. the camera moves "up" the screen.
         pan += (-right * motion.delta.x + forward * motion.delta.y) * world_per_px
             / cam.pitch.sin().max(0.3);

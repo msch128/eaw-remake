@@ -14,9 +14,11 @@ pub struct Rgba8 {
     pub pixels: Vec<u8>,
 }
 
-/// Decodes a DDS or TGA file, detected by content.
+/// Decodes a DDS, PNG or TGA file, detected by content.
 pub fn decode_texture(data: &[u8]) -> Result<Rgba8> {
-    if data.starts_with(b"DDS ") {
+    if crate::png::is_png(data) {
+        crate::png::decode_png(data)
+    } else if data.starts_with(b"DDS ") {
         decode_dds(data)
     } else {
         decode_tga(data)

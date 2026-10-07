@@ -1,0 +1,271 @@
+﻿//! Build requirement checks, economy and population bookkeeping.
+
+use crate::state::*;
+use crate::world::*;
+
+impl World {
+    /// True if the planet has a structure that is, or inherits from, structure type `req`.
+    pub fn has_structure(&self, ps: &PlanetState, req: StructureTypeId) -> bool {
+        ps.structures.iter().any(|&s| s == req || self.structures[s as usize].ancestors.contains(&req))
+    }
+
+    /// Star base level of a planet (0 = none).
+    pub fn starbase_level(&self, galaxy: &Galaxy, planet: PlanetId) -> i32 {
+        galaxy.planets[planet as usize].starbase.map_or(0, |s| self.starbases[s as usize].level)
+    }
+
+    fn queued<'a>(&self, galaxy: &'a Galaxy, faction: FactionId) -> impl Iterator<Item = &'a ProductionItem> {
+        galaxy
+            .planets
+            .iter()
+            .filter(move |p| p.owner == Some(faction))
+            .flat_map(|p| p.queues.iter().flat_map(|q| q.iter()))
+    }
+
+    /// Population currently reserved by queued units.
+    fn queued_population(&self, galaxy: &Galaxy, faction: FactionId) -> i32 {
+        self.queued(galaxy, faction)
+            .filter_map(|i| match i.kind {
+                ProductionKind::Unit(u) => Some(self.units[u as usize].population),
+                _ => None,
+            })
+            .sum()
+    }
+
+    /// Checks whether `faction` could queue `unit` on `planet` right now.
+    pub fn check_build_unit(&self, galaxy: &Galaxy, faction: FactionId, planet: PlanetId, unit: UnitTypeId) -> Result<(), CommandError> {
+        let fs = galaxy.factions.get(faction as usize).ok_or(CommandError::Invalid)?;
+        let ps = galaxy.planets.get(planet as usize).ok_or(CommandError::Invalid)?;
+        let ut = self.units.get(unit as usize).ok_or(CommandError::Invalid)?;
+        if fs.eliminated {
+            return Err(CommandError::Eliminated);
+        }
+        if ps.owner != Some(faction) {
+            return Err(CommandError::NotOwner);
+        }
+        if self.buildable_units[faction as usize].binary_search(&unit).is_err() {
+            return Err(CommandError::NotAvailable);
+        }
+        if ps.queues[Lane::Units as usize].len() >= self.config.max_queue_len {
+            return Err(CommandError::NoSlot);
+        }
+        if ut.tech > fs.tech {
+            return Err(CommandError::RequirementsNotMet(format!("tech level {}", ut.tech)));
+        }
+        if ut.locked && !fs.unlocked.contains(&ut.name.to_ascii_lowercase()) {
+            return Err(CommandError::RequirementsNotMet("locked".into()));
+        }
+        if self.starbase_level(galaxy, planet) < ut.req_starbase {
+            return Err(CommandError::RequirementsNotMet(format!("star base level {}", ut.req_starbase)));
+        }
+        for r in &ut.req_structures {
+            if !self.has_structure(ps, *r) {
+                return Err(CommandError::RequirementsNotMet(self.structures[*r as usize].name.clone()));
+            }
+        }
+        if !ut.req_planets.is_empty() && !ut.req_planets.contains(&planet) {
+            return Err(CommandError::RequirementsNotMet("planet".into()));
+        }
+        if ut.limit_current.is_some() || ut.limit_lifetime.is_some() {
+            let alive: u32 = galaxy.fleets.values().filter(|f| f.owner == faction).map(|f| f.units.get(&unit).copied().unwrap_or(0)).sum();
+            let queued = self
+                .queued(galaxy, faction)
+                .filter(|i| i.kind == ProductionKind::Unit(unit))
+                .count() as u32;
+            if let Some(l) = ut.limit_current
+                && alive + queued >= l.max(0) as u32
+            {
+                return Err(CommandError::BuildLimit);
+            }
+            if let Some(l) = ut.limit_lifetime
+                && fs.built_lifetime.get(&unit).copied().unwrap_or(0) + queued >= l.max(0) as u32
+            {
+                return Err(CommandError::BuildLimit);
+            }
+        }
+        if let UnitRole::Research(target) = &ut.role
+            && fs.unlocked.contains(&target.to_ascii_lowercase())
+        {
+            return Err(CommandError::BuildLimit);
+        }
+        if ut.population > 0 && fs.population_used + self.queued_population(galaxy, faction) + ut.population > fs.population_cap {
+            return Err(CommandError::PopulationCap);
+        }
+        if fs.credits < ut.cost as f64 {
+            return Err(CommandError::InsufficientCredits);
+        }
+        Ok(())
+    }
+
+    /// Checks whether `faction` could queue `structure` on `planet` right now.
+    pub fn check_build_structure(
+        &self,
+        galaxy: &Galaxy,
+        faction: FactionId,
+        planet: PlanetId,
+        structure: StructureTypeId,
+    ) -> Result<(), CommandError> {
+        let fs = galaxy.factions.get(faction as usize).ok_or(CommandError::Invalid)?;
+        let ps = galaxy.planets.get(planet as usize).ok_or(CommandError::Invalid)?;
+        let st = self.structures.get(structure as usize).ok_or(CommandError::Invalid)?;
+        if fs.eliminated {
+            return Err(CommandError::Eliminated);
+        }
+        if ps.owner != Some(faction) {
+            return Err(CommandError::NotOwner);
+        }
+        if self.buildable_structures[faction as usize].binary_search(&structure).is_err() {
+            return Err(CommandError::NotAvailable);
+        }
+        if ps.queues[Lane::Structures as usize].len() >= self.config.max_queue_len {
+            return Err(CommandError::NoSlot);
+        }
+        if st.tech > fs.tech {
+            return Err(CommandError::RequirementsNotMet(format!("tech level {}", st.tech)));
+        }
+        if st.locked && !fs.unlocked.contains(&st.name.to_ascii_lowercase()) {
+            return Err(CommandError::RequirementsNotMet("locked".into()));
+        }
+        if self.starbase_level(galaxy, planet) < st.req_starbase {
+            return Err(CommandError::RequirementsNotMet(format!("star base level {}", st.req_starbase)));
+        }
+        for r in &st.req_structures {
+            if !self.has_structure(ps, *r) {
+                return Err(CommandError::RequirementsNotMet(self.structures[*r as usize].name.clone()));
+            }
+        }
+        let queued_same = ps.queues[Lane::Structures as usize].iter().filter(|i| i.kind == ProductionKind::Structure(structure)).count();
+        let existing_same = ps.structures.iter().filter(|&&s| s == structure).count();
+        if (queued_same + existing_same) as i32 >= st.max_per_planet {
+            return Err(CommandError::NoSlot);
+        }
+        let used = |orbital: bool| -> i32 {
+            ps.structures.iter().filter(|&&s| self.structures[s as usize].orbital == orbital).count() as i32
+                + ps.queues[Lane::Structures as usize]
+                    .iter()
+                    .filter(|i| matches!(i.kind, ProductionKind::Structure(s) if self.structures[s as usize].orbital == orbital))
+                    .count() as i32
+        };
+        let slots = if st.orbital { self.planets[planet as usize].space_slots } else { self.planets[planet as usize].ground_slots };
+        if used(st.orbital) >= slots {
+            return Err(CommandError::NoSlot);
+        }
+        if fs.credits < st.cost as f64 {
+            return Err(CommandError::InsufficientCredits);
+        }
+        Ok(())
+    }
+
+    /// Star base type that the next star base order on this planet would build.
+    pub fn next_starbase(&self, galaxy: &Galaxy, faction: FactionId, planet: PlanetId) -> Option<StarbaseTypeId> {
+        match galaxy.planets[planet as usize].starbase {
+            None => self.first_starbase[faction as usize],
+            Some(cur) => self.starbases[cur as usize].next,
+        }
+    }
+
+    /// Checks whether the star base can be built/upgraded.
+    pub fn check_upgrade_starbase(&self, galaxy: &Galaxy, faction: FactionId, planet: PlanetId) -> Result<StarbaseTypeId, CommandError> {
+        let fs = galaxy.factions.get(faction as usize).ok_or(CommandError::Invalid)?;
+        let ps = galaxy.planets.get(planet as usize).ok_or(CommandError::Invalid)?;
+        if fs.eliminated {
+            return Err(CommandError::Eliminated);
+        }
+        if ps.owner != Some(faction) {
+            return Err(CommandError::NotOwner);
+        }
+        if !ps.queues[Lane::Base as usize].is_empty() {
+            return Err(CommandError::NoSlot);
+        }
+        let next = self.next_starbase(galaxy, faction, planet).ok_or(CommandError::NotAvailable)?;
+        let sb = &self.starbases[next as usize];
+        if sb.tech > fs.tech {
+            return Err(CommandError::RequirementsNotMet(format!("tech level {}", sb.tech)));
+        }
+        if fs.credits < sb.cost as f64 {
+            return Err(CommandError::InsufficientCredits);
+        }
+        Ok(next)
+    }
+
+    /// Checks whether the next tech level can be bought at this planet.
+    pub fn check_upgrade_tech(&self, galaxy: &Galaxy, faction: FactionId, planet: PlanetId) -> Result<usize, CommandError> {
+        let fs = galaxy.factions.get(faction as usize).ok_or(CommandError::Invalid)?;
+        let ps = galaxy.planets.get(planet as usize).ok_or(CommandError::Invalid)?;
+        let info = &self.factions[faction as usize];
+        if fs.eliminated {
+            return Err(CommandError::Eliminated);
+        }
+        if ps.owner != Some(faction) {
+            return Err(CommandError::NotOwner);
+        }
+        if !ps.queues[Lane::Base as usize].is_empty() {
+            return Err(CommandError::NoSlot);
+        }
+        if galaxy.planets.iter().any(|p| p.owner == Some(faction) && p.queues[Lane::Base as usize].iter().any(|i| matches!(i.kind, ProductionKind::Tech(_)))) {
+            return Err(CommandError::NoSlot);
+        }
+        let idx = (fs.tech - info.start_tech).max(0) as usize;
+        if fs.tech >= info.max_tech || idx >= info.tech_upgrades.len() {
+            return Err(CommandError::NotAvailable);
+        }
+        if self.starbase_level(galaxy, planet) < 1 {
+            return Err(CommandError::RequirementsNotMet("star base".into()));
+        }
+        if fs.credits < info.tech_upgrades[idx].cost as f64 {
+            return Err(CommandError::InsufficientCredits);
+        }
+        Ok(idx)
+    }
+
+    /// Weekly income of one planet for its owner (before the faction accumulation factor).
+    pub fn planet_income(&self, galaxy: &Galaxy, planet: PlanetId) -> f32 {
+        let ps = &galaxy.planets[planet as usize];
+        let base = self.planets[planet as usize].credit_value;
+        let (mut pct, mut abs) = (0.0f32, 0.0f32);
+        for &s in &ps.structures {
+            let st = &self.structures[s as usize];
+            pct += st.income_pct;
+            abs += st.income_abs;
+        }
+        if let Some(sb) = ps.starbase {
+            let sb = &self.starbases[sb as usize];
+            pct += sb.income_pct;
+            abs += sb.income_abs;
+        }
+        base * (1.0 + pct) + abs
+    }
+
+    /// Recomputes income, population use and capacity of every faction.
+    pub(crate) fn refresh_economy(&self, galaxy: &mut Galaxy) {
+        let n = self.factions.len();
+        let mut income = vec![0.0f64; n];
+        let mut cap = vec![self.config.base_population_cap; n];
+        let mut owned = vec![0u32; n];
+        for (i, ps) in galaxy.planets.iter().enumerate() {
+            let Some(o) = ps.owner else { continue };
+            let o = o as usize;
+            owned[o] += 1;
+            income[o] += self.planet_income(galaxy, i as PlanetId) as f64;
+            cap[o] += self.planets[i].population_capacity;
+            if let Some(sb) = ps.starbase {
+                cap[o] += self.starbases[sb as usize].population_capacity;
+            }
+            cap[o] += ps.structures.iter().map(|&s| self.structures[s as usize].population_capacity).sum::<i32>();
+        }
+        let mut used = vec![0i32; n];
+        for f in galaxy.fleets.values() {
+            for (&u, &c) in &f.units {
+                let ut = &self.units[u as usize];
+                income[f.owner as usize] += (ut.upkeep * c as f32) as f64;
+                used[f.owner as usize] += ut.population * c as i32;
+            }
+        }
+        for (i, fs) in galaxy.factions.iter_mut().enumerate() {
+            fs.income_per_week = income[i] * self.factions[i].credits_factor as f64;
+            fs.population_cap = cap[i];
+            fs.population_used = used[i];
+            fs.planets_owned = owned[i];
+        }
+    }
+}

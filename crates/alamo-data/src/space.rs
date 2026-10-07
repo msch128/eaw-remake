@@ -1,4 +1,4 @@
-//! Typed views of the object definitions that matter for galactic conquest and space combat:
+﻿//! Typed views of the object definitions that matter for galactic conquest and space combat:
 //! ships and squadrons, hardpoints, projectiles, star bases and planetary structures.
 //!
 //! All views are built from an inheritance-resolved [`Resolved`] object, so values inherited via
@@ -94,6 +94,8 @@ pub struct UnitAbility {
     pub expiration_seconds: Option<f32>,
     /// `GUI_Activated_Ability_Name`: the named sub-ability this button triggers.
     pub activated_ability: Option<String>,
+    /// All `Mod_Multiplier` entries as `(UPPERCASE name, value)`, e.g. `("SPEED_MULTIPLIER", 2.0)`.
+    pub mod_multipliers: Vec<(String, f32)>,
     /// Raw child tags.
     pub fields: HashMap<String, String>,
 }
@@ -137,6 +139,14 @@ fn parse_unit_abilities(r: &Resolved) -> Vec<UnitAbility> {
                     .get("gui_activated_ability_name")
                     .filter(|s| !s.is_empty())
                     .cloned(),
+                mod_multipliers: a
+                    .children_named("mod_multiplier")
+                    .filter_map(|m| {
+                        let t = split_list(m.text_trimmed());
+                        let value = t.get(1)?.trim_end_matches(['f', 'F']).parse().ok()?;
+                        Some((t.first()?.to_ascii_uppercase(), value))
+                    })
+                    .collect(),
                 fields: f,
             }
         })

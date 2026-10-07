@@ -1,0 +1,267 @@
+//! Fleets on the galactic map: the flagship's model parked next to the planet or moving along its
+//! hyperspace lane with a streak, owner-coloured rings, selection highlight and count labels.
+
+use std::collections::{BTreeMap, HashMap};
+use std::f32::consts::{FRAC_PI_2, TAU};
+
+use alamo_render::{AlamoFs, AlamoModel, AlamoModelLoaded};
+use bevy::prelude::*;
+use galaxy_sim::{FactionId, FleetId, PlanetId, UnitTypeId};
+
+use crate::catalog::PlayCatalog;
+use crate::geometry::{FleetPlace, GalaxyLayout, fleet_place, flagship};
+use crate::state::{GameClock, PlayerFaction, PlayerSelection, SimState};
+
+/// Root entity of a fleet on the map.
+#[derive(Component, Debug)]
+pub struct FleetVisual {
+    /// Simulation id.
+    pub id: FleetId,
+    /// Owning faction.
+    pub owner: FactionId,
+    /// Model currently shown.
+    pub flagship: Option<UnitTypeId>,
+    /// Where the fleet is drawn, in world space (read by picking).
+    pub heading: Vec3,
+}
+
+/// The model child of a [`FleetVisual`].
+#[derive(Component)]
+pub struct FleetModel;
+
+/// Screen-space ship count label of a fleet.
+#[derive(Component)]
+pub struct FleetLabel(pub FleetId);
+
+/// Fleet id to entity.
+#[derive(Resource, Default)]
+pub struct FleetEntities(pub HashMap<FleetId, Entity>);
+
+/// Shared placeholder meshes for fleets whose model is unknown.
+#[derive(Resource)]
+pub struct FleetAssets {
+    cone: Handle<Mesh>,
+}
+
+pub(crate) fn setup_assets(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>) {
+    commands.insert_resource(FleetAssets { cone: meshes.add(Cone::new(0.5, 1.4)) });
+}
+
+/// sRGB triple of a faction.
+pub fn faction_color(world: &galaxy_sim::World, faction: FactionId) -> Color {
+    let c = world.factions[faction as usize].color;
+    Color::srgb_u8(c[0], c[1], c[2])
+}
+
+fn spawn_model(commands: &mut Commands, assets: &FleetAssets, mats: &mut Assets<StandardMaterial>, fs: bool, model: Option<&str>, team: Color, parent: Entity) {
+    match (model, fs) {
+        (Some(m), true) => {
+            commands.spawn((AlamoModel::new(m).with_team_color(team).with_bow_forward(), Transform::default(), FleetModel, ChildOf(parent)));
+        }
+        _ => {
+            let mat = mats.add(StandardMaterial { base_color: team, emissive: team.to_linear() * 0.6, ..default() });
+            // The cone's tip points along +Y; lay it down so the tip faces -Z.
+            commands.spawn((
+                Mesh3d(assets.cone.clone()),
+                MeshMaterial3d(mat),
+                Transform::from_rotation(Quat::from_rotation_x(-FRAC_PI_2)),
+                FleetModel,
+                ChildOf(parent),
+            ));
+        }
+    }
+}
+
+/// Spawns, updates and removes fleet entities to match the latest snapshot and moves them.
+#[allow(clippy::too_many_arguments)]
+pub fn sync_fleets(
+    mut commands: Commands,
+    state: Res<SimState>,
+    layout: Res<GalaxyLayout>,
+    catalog: Res<PlayCatalog>,
+    clock: Res<GameClock>,
+    time: Res<Time>,
+    assets: Res<FleetAssets>,
+    alamo: Option<Res<AlamoFs>>,
+    mut mats: ResMut<Assets<StandardMaterial>>,
+    mut entities: ResMut<FleetEntities>,
+    mut fleets: Query<(&mut FleetVisual, &mut Transform, &Children)>,
+    models: Query<Entity, With<FleetModel>>,
+    labels: Query<(Entity, &FleetLabel)>,
+) {
+    let world = &state.world;
+    let g = state.galaxy();
+    let now = time.elapsed_secs_f64();
+    let rate = if state.current.human_battles.is_empty() { clock.rate() } else { 0.0 };
+    let extra = state.extrapolation(now, rate);
+    let t = time.elapsed_secs();
+
+    // Removed fleets.
+    entities.0.retain(|id, e| {
+        if g.fleets.contains_key(id) {
+            true
+        } else {
+            commands.entity(*e).despawn();
+            false
+        }
+    });
+    for (e, l) in &labels {
+        if !g.fleets.contains_key(&l.0) {
+            commands.entity(e).despawn();
+        }
+    }
+
+    // Orbit slots: fleets parked at the same planet share a ring.
+    let mut parked: BTreeMap<PlanetId, Vec<FleetId>> = BTreeMap::new();
+    for f in g.fleets.values() {
+        if let Some(p) = f.planet() {
+            parked.entry(p).or_default().push(f.id);
+        }
+    }
+    let slot_of = |p: PlanetId, id: FleetId| -> (usize, usize) {
+        let v = &parked[&p];
+        (v.iter().position(|&x| x == id).unwrap_or(0), v.len())
+    };
+
+    for f in g.fleets.values() {
+        let flag = flagship(world, f);
+        let team = faction_color(world, f.owner);
+        let place = fleet_place(world, f, extra);
+        let (pos, heading) = match place {
+            FleetPlace::Orbit(p) => {
+                let (i, n) = slot_of(p, f.id);
+                let phase = p as f32 * 0.9 + i as f32 * TAU / n as f32 + t * 0.06;
+                let r = layout.orbit_radius(p);
+                let c = layout.positions[p as usize];
+                let pos = c + Vec3::new(phase.cos() * r, layout.unit * 0.25, phase.sin() * r);
+                (pos, Vec3::new(-phase.sin(), 0.0, phase.cos()))
+            }
+            FleetPlace::Lane { from, to, t, .. } => {
+                let (a, b) = (layout.positions[from as usize], layout.positions[to as usize]);
+                (a.lerp(b, t) + Vec3::Y * layout.unit * 0.25, (b - a).normalize_or_zero())
+            }
+        };
+        let tf = Transform::from_translation(pos).looking_to(if heading == Vec3::ZERO { Vec3::NEG_Z } else { heading }, Vec3::Y);
+        match entities.0.get(&f.id) {
+            Some(&e) => {
+                if let Ok((mut v, mut t, children)) = fleets.get_mut(e) {
+                    t.translation = tf.translation;
+                    t.rotation = tf.rotation;
+                    v.heading = heading;
+                    if v.flagship != flag {
+                        v.flagship = flag;
+                        for &c in children {
+                            if models.contains(c) {
+                                commands.entity(c).despawn();
+                            }
+                        }
+                        spawn_model(&mut commands, &assets, &mut mats, alamo.is_some(), flag.and_then(|u| catalog.unit_model(u)), team, e);
+                    }
+                }
+            }
+            None => {
+                let root = commands
+                    .spawn((tf, Visibility::default(), FleetVisual { id: f.id, owner: f.owner, flagship: flag, heading }))
+                    .id();
+                spawn_model(&mut commands, &assets, &mut mats, alamo.is_some(), flag.and_then(|u| catalog.unit_model(u)), team, root);
+                entities.0.insert(f.id, root);
+                commands.spawn((
+                    Text::new(""),
+                    TextFont { font_size: FontSize::Px(13.0), ..default() },
+                    TextColor(team),
+                    TextShadow { offset: Vec2::splat(1.5), color: Color::srgba(0.0, 0.0, 0.0, 0.9) },
+                    Node { position_type: PositionType::Absolute, ..default() },
+                    Visibility::Hidden,
+                    FleetLabel(f.id),
+                ));
+            }
+        }
+    }
+}
+
+/// Scales freshly loaded fleet models to the icon size and centers them.
+pub fn fit_fleet_models(
+    layout: Res<GalaxyLayout>,
+    cfg: Res<crate::state::PlayConfig>,
+    mut loaded: Query<(&AlamoModelLoaded, &mut Transform), (With<FleetModel>, Added<AlamoModelLoaded>)>,
+) {
+    for (m, mut tf) in &mut loaded {
+        let target = layout.unit * cfg.fleet_icon_scale;
+        let s = if m.radius > 0.0 { target / m.radius } else { 1.0 };
+        tf.scale = Vec3::splat(s);
+        tf.translation = -m.center * s;
+    }
+}
+
+/// Owner rings, selection highlight and hyperspace streaks.
+#[allow(clippy::too_many_arguments)]
+pub fn draw_fleet_markers(
+    mut gizmos: Gizmos,
+    state: Res<SimState>,
+    layout: Res<GalaxyLayout>,
+    selection: Res<PlayerSelection>,
+    player: Res<PlayerFaction>,
+    cfg: Res<crate::state::PlayConfig>,
+    time: Res<Time>,
+    fleets: Query<(&FleetVisual, &Transform)>,
+) {
+    let world = &state.world;
+    let g = state.galaxy();
+    let ring = layout.unit * cfg.fleet_icon_scale * 1.5;
+    let flat = Quat::from_rotation_x(-FRAC_PI_2);
+    let pulse = 1.0 + 0.08 * (time.elapsed_secs() * 4.0).sin();
+    for (v, tf) in &fleets {
+        let Some(f) = g.fleets.get(&v.id) else { continue };
+        let team = faction_color(world, v.owner);
+        let base = tf.translation;
+        let center = Vec3::new(base.x, base.y - layout.unit * 0.1, base.z);
+        gizmos.circle(Isometry3d::new(center, flat), ring, team);
+        if selection.fleets.contains(&v.id) {
+            gizmos.circle(Isometry3d::new(center, flat), ring * 1.35 * pulse, Color::WHITE);
+            gizmos.circle(Isometry3d::new(center, flat), ring * 1.5 * pulse, Color::srgb(0.6, 0.9, 1.0));
+        } else if player.0 == Some(v.owner) {
+            gizmos.circle(Isometry3d::new(center, flat), ring * 1.12, team.with_alpha(0.5));
+        }
+        if let galaxy_sim::FleetLocation::Moving { .. } = f.location {
+            // Hyperspace streak trailing behind the ship.
+            let tail = base - v.heading * layout.unit * 5.0;
+            let linear = team.to_linear();
+            let bright = Color::LinearRgba(LinearRgba::new(linear.red * 3.0 + 0.4, linear.green * 3.0 + 0.4, linear.blue * 3.0 + 0.4, 1.0));
+            gizmos.line_gradient(tail, base, Color::BLACK, bright);
+            gizmos.line_gradient(tail + Vec3::Y * 0.01, base + Vec3::Y * 0.01, Color::BLACK, Color::WHITE.with_alpha(0.8));
+        }
+    }
+}
+
+/// Positions the ship count labels in screen space.
+pub fn update_fleet_labels(
+    state: Res<SimState>,
+    camera: Query<(&Camera, &GlobalTransform), With<Camera3d>>,
+    entities: Res<FleetEntities>,
+    transforms: Query<&Transform, With<FleetVisual>>,
+    layout: Res<GalaxyLayout>,
+    mut labels: Query<(&FleetLabel, &mut Text, &mut Node, &mut Visibility)>,
+) {
+    let Some((camera, cam_tf)) = camera.iter().next() else { return };
+    let g = state.galaxy();
+    for (label, mut text, mut node, mut vis) in &mut labels {
+        let (Some(f), Some(&e)) = (g.fleets.get(&label.0), entities.0.get(&label.0)) else {
+            *vis = Visibility::Hidden;
+            continue;
+        };
+        let Ok(tf) = transforms.get(e) else { continue };
+        let n = f.unit_count();
+        let s = if n > 1 { format!("{n}") } else { String::new() };
+        if text.0 != s {
+            text.0 = s;
+        }
+        match camera.world_to_viewport(cam_tf, tf.translation - Vec3::new(0.0, 0.0, -layout.unit * 0.9)) {
+            Ok(p) if n > 1 => {
+                node.left = Val::Px(p.x + 6.0);
+                node.top = Val::Px(p.y);
+                *vis = Visibility::Inherited;
+            }
+            _ => *vis = Visibility::Hidden,
+        }
+    }
+}

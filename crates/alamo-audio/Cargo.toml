@@ -1,0 +1,22 @@
+﻿[package]
+name = "alamo-audio"
+description = "Empire at War audio: SFX / speech / music event data and a Bevy plugin that plays them with EaW-like rules."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[features]
+default = ["bevy"]
+# The Bevy plugin. Disable for the pure data / decoding part (fast to build and test).
+bevy = ["dep:bevy"]
+
+[dependencies]
+alamo-fs = { path = "../alamo-fs" }
+alamo-data = { path = "../alamo-data" }
+rand = "0.9"
+bevy = { version = "=0.19.1", default-features = false, features = [
+    "default_app", "std", "multi_threaded", "bevy_audio", "mp3", "wav",
+], optional = true }
+
+[dev-dependencies]
+mp3-duration = "0.1"

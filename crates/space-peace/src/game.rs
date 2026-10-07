@@ -1,4 +1,4 @@
-//! Loading of the real game data and mapping it onto the renderer's [`GalaxyView`].
+﻿//! Loading of the real game data and mapping it onto the renderer's [`GalaxyView`].
 
 use std::{sync::Arc, time::Instant};
 
@@ -7,8 +7,9 @@ use alamo_fs::{GameFs, GameInstall};
 use bevy::prelude::{Resource, Vec3, info, warn};
 
 use crate::cli::Args;
-use crate::galaxy_view::{FactionView, GalaxyView, PlanetView, RouteView};
-use crate::music::GameMusicSource;
+use crate::galaxy_view::{
+    FactionView, GalaxyLight, GalaxyView, LineStyleView, PlanetView, PropView, RouteStyleView, RouteView,
+};
 
 /// Workshop id of "Empire at War Remake 4.0".
 pub const DEFAULT_MOD_ID: &str = "1770851727";
@@ -31,24 +32,36 @@ impl StartupLog {
     }
 }
 
-/// Startup system that emits the recorded [`StartupLog`] through the real logger.
-pub fn replay_startup_log(log: bevy::prelude::Res<StartupLog>) {
-    for (is_warn, msg) in &log.0 {
-        if *is_warn {
-            warn!("{msg}");
-        } else {
-            info!("{msg}");
+impl StartupLog {
+    /// Writes the recorded lines through the (now available) logger.
+    pub fn emit(&self) {
+        for (is_warn, msg) in &self.0 {
+            if *is_warn {
+                warn!("{msg}");
+            } else {
+                info!("{msg}");
+            }
         }
     }
 }
 
-/// Everything loaded from the installed game.
-pub struct LoadedGame {
-    /// The galaxy to render.
-    pub view: GalaxyView,
-    /// Music source for the galactic map, if any galactic tracks were found.
-    pub music: Option<GameMusicSource>,
+/// Startup system that emits the recorded [`StartupLog`] through the real logger.
+pub fn replay_startup_log(log: bevy::prelude::Res<StartupLog>) {
+    log.emit();
 }
+
+/// Game files and parsed galaxy data, shared by all screens.
+#[derive(Clone)]
+pub struct GameAssets {
+    /// Layered file system (mod over FoC over EaW), used to load models and sounds.
+    pub fs: Arc<GameFs>,
+    /// Campaigns, planets, routes, factions and the English string table.
+    pub data: Arc<GameData>,
+}
+
+/// The installed game, or `None` when only the demo galaxy is available.
+#[derive(Resource, Clone, Default)]
+pub struct Game(pub Option<GameAssets>);
 
 /// Opens the game file system and loads the galaxy data (blocking).
 fn open(args: &Args, log: &mut StartupLog) -> Result<(GameInstall, Arc<GameFs>, GameData), String> {
@@ -77,36 +90,119 @@ fn open(args: &Args, log: &mut StartupLog) -> Result<(GameInstall, Arc<GameFs>, 
     Ok((install, fs, data))
 }
 
+/// Locates and loads the game (blocking).
+pub fn load_assets(args: &Args, log: &mut StartupLog) -> Result<GameAssets, String> {
+    let (_, fs, data) = open(args, log)?;
+    Ok(GameAssets { fs, data: Arc::new(data) })
+}
+
 /// Prints all galaxy campaigns with their planet counts (for `--list-campaigns`).
 pub fn list_campaigns(args: &Args) -> Result<(), String> {
-    let (_, _, data) = open(args, &mut StartupLog::default())?;
-    for c in data.campaigns.iter().filter(|c| c.has_galaxy()) {
-        let planets = data
-            .campaign_planets(c)
-            .iter()
-            .filter(|p| p.is_real_planet())
-            .count();
-        println!(
-            "{:<40} {planets:>4} planets  {:>4} routes",
-            c.name,
-            c.trade_routes.len()
-        );
+    let assets = load_assets(args, &mut StartupLog::default())?;
+    for c in campaign_entries(&assets.data) {
+        println!("{:<40} {:>4} planets  {}  [{}]", c.name, c.planets, c.title, c.group_title);
     }
     Ok(())
 }
 
-/// Loads the game and builds the view of the requested campaign.
-pub fn load(args: &Args, log: &mut StartupLog) -> Result<LoadedGame, String> {
+/// A playable galactic conquest campaign as shown in the campaign selection.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CampaignEntry {
+    /// Campaign name (key for [`build_campaign`]).
+    pub name: String,
+    /// Localised title of the campaign (falls back to the name).
+    pub title: String,
+    /// Group key: campaigns with the same group differ only in the human faction.
+    pub group: String,
+    /// Display name of the group, e.g. `Full` or `Standard Casual`.
+    pub group_title: String,
+    /// Human faction of the campaign (`Rebel`, `Empire`, `Underworld`).
+    pub faction: String,
+    /// Number of planets on the map.
+    pub planets: usize,
+}
+
+/// Name used by the built-in demo galaxy when no game is installed.
+pub const DEMO_CAMPAIGN: &str = "__demo__";
+
+/// Entry for the built-in demo galaxy.
+pub fn demo_entry() -> CampaignEntry {
+    CampaignEntry {
+        name: DEMO_CAMPAIGN.into(),
+        title: "Demo galaxy".into(),
+        group: "demo".into(),
+        group_title: "Demo".into(),
+        faction: "Rebel".into(),
+        planets: GalaxyView::demo().planets.len(),
+    }
+}
+
+/// Lists the campaigns with a galaxy and a human player, grouped by map size.
+///
+/// Observer campaigns (`OBS`, AI versus AI) are left out. The group is the campaign name without
+/// the faction token; entries are ordered by planet count, then name, with Rebel, Empire and
+/// Underworld variants in that order inside a group.
+pub fn campaign_entries(data: &GameData) -> Vec<CampaignEntry> {
+    let faction_of = |token: &str| match token.to_ascii_lowercase().as_str() {
+        "rebel" | "rebels" => Some("Rebel"),
+        "imperial" | "empire" => Some("Empire"),
+        "underworld" => Some("Underworld"),
+        _ => None,
+    };
+    let mut out = Vec::new();
+    for c in data.campaigns.iter().filter(|c| c.has_galaxy()) {
+        let tokens: Vec<&str> = c.name.split('_').collect();
+        if tokens.iter().any(|t| t.eq_ignore_ascii_case("obs")) {
+            continue;
+        }
+        let Some(pos) = tokens.iter().position(|t| faction_of(t).is_some()) else { continue };
+        let faction = faction_of(tokens[pos]).expect("checked").to_owned();
+        let rest: Vec<&str> = tokens
+            .iter()
+            .enumerate()
+            .filter(|&(i, t)| {
+                i != pos && !["gc", "web", "way"].iter().any(|k| t.eq_ignore_ascii_case(k))
+            })
+            .map(|(_, t)| *t)
+            .collect();
+        let planets = data.campaign_planets(c).iter().filter(|p| is_map_planet(p)).count();
+        let title = c.text_id.as_deref().and_then(|id| data.text(id)).filter(|t| !t.is_empty());
+        out.push(CampaignEntry {
+            name: c.name.clone(),
+            title: title.unwrap_or(&c.name).to_owned(),
+            group: c.name.replace(tokens[pos], "{faction}"),
+            group_title: rest.join(" "),
+            faction,
+            planets,
+        });
+    }
+    let rank = |f: &str| match f {
+        "Rebel" => 0,
+        "Empire" => 1,
+        _ => 2,
+    };
+    out.sort_by(|a, b| {
+        (a.planets, a.group_title.split(' ').count(), &a.group, rank(&a.faction))
+            .cmp(&(b.planets, b.group_title.split(' ').count(), &b.group, rank(&b.faction)))
+    });
+    out
+}
+
+/// Builds the galaxy of campaign `name`; also returns its human faction (e.g. `Rebel`).
+pub fn build_campaign(
+    assets: &GameAssets,
+    name: &str,
+    log: &mut StartupLog,
+) -> Result<(GalaxyView, Option<String>), String> {
     let started = Instant::now();
-    let (_, fs, data) = open(args, log)?;
-    let name = args.campaign.as_deref().unwrap_or(DEFAULT_CAMPAIGN);
+    let data = &*assets.data;
     let campaign = data
         .campaign(name)
         .filter(|c| c.has_galaxy())
         .ok_or_else(|| {
             format!("campaign `{name}` not found or has no galaxy (see --list-campaigns)")
         })?;
-    let (view, notes) = build_view(&data, campaign);
+    let (view, notes) = build_view(data, campaign);
     for n in &notes {
         log.warn(format!("galaxy: {n}"));
     }
@@ -133,18 +229,78 @@ pub fn load(args: &Args, log: &mut StartupLog) -> Result<LoadedGame, String> {
             "galaxy: {conflicts} planets have conflicting starting structures (first faction wins)"
         ));
     }
-    let music =
-        GameMusicSource::galactic(fs.clone(), campaign.starting_active_player.as_deref(), log);
     log.info(format!(
-        "game: campaign {} | {} planets, {} routes, {} factions | {} music tracks | total load {:.2?}",
+        "game: campaign {} | {} planets, {} routes, {} factions | built in {:.2?}",
         campaign.name,
         view.planets.len(),
         view.routes.len(),
         view.factions.len(),
-        music.as_ref().map_or(0, GameMusicSource::len),
         started.elapsed()
     ));
-    Ok(LoadedGame { view, music })
+    Ok((view, campaign.starting_active_player.clone()))
+}
+/// Human readable name for a game object type: string table when known, else a prettified id.
+fn object_display_name(data: &GameData, object: &str) -> String {
+    let up = object.to_ascii_uppercase();
+    for key in [format!("TEXT_UNIT_{up}"), format!("TEXT_STRUCTURE_{up}"), format!("TEXT_{up}"), up] {
+        if let Some(t) = data.text(&key).filter(|t| !t.is_empty()) {
+            return t.to_owned();
+        }
+    }
+    object.replace('_', " ")
+}
+
+/// English planet ability `(name, description)`; `None` for planets without one (`NA`).
+fn planet_ability(data: &GameData, p: &Planet) -> Option<(String, String)> {
+    let name = p.ability_name.as_deref().filter(|n| !n.eq_ignore_ascii_case("na"))?;
+    let name = data.text(name).filter(|t| !t.is_empty())?;
+    let desc = p.ability_description.as_deref().and_then(|d| data.text(d)).unwrap_or("");
+    Some((name.to_owned(), desc.to_owned()))
+}
+
+fn line_style(s: &alamo_data::LineSettings) -> LineStyleView {
+    let c = |v: Option<[u8; 4]>| v.map_or([0.05, 0.12, 0.15, 1.0], |c| c.map(|x| x as f32 / 255.0));
+    LineStyleView { color_far: c(s.color_zoomed_out), color_near: c(s.color_zoomed_in), width: s.width }
+}
+
+/// Maps a `TradeRouteLine` to the view style (`Ally` = own, `Enemy`, `Neutral`).
+fn route_style(line: &alamo_data::TradeRouteLine) -> RouteStyleView {
+    let find = |rel: &str| line.settings.iter().find(|s| s.relation.eq_ignore_ascii_case(rel)).map(line_style);
+    let neutral = find("Neutral").unwrap_or(RouteStyleView::fallback().neutral);
+    RouteStyleView {
+        name: line.name.clone(),
+        own: find("Ally").unwrap_or(neutral),
+        enemy: find("Enemy").unwrap_or(neutral),
+        neutral,
+    }
+}
+
+/// Models that are intentionally invisible placeholders.
+fn is_invisible_model(model: &str) -> bool {
+    model.to_ascii_lowercase().contains("invisible")
+}
+
+/// True for planets that appear on the map. Faction "dummy" planets (invisible model, no name)
+/// only hold starting forces and ownership and are stacked in one corner of the galaxy.
+fn is_map_planet(p: &Planet) -> bool {
+    p.is_real_planet()
+        && !p.galactic_model.as_deref().is_some_and(is_invisible_model)
+        && !p.name.to_ascii_lowercase().contains("dummy")
+}
+
+/// Sun settings from `Gameconstants.xml` (galactic zoom-out light angle and level).
+fn galaxy_light(data: &GameData) -> GalaxyLight {
+    let mut light = GalaxyLight::default();
+    if let Some(a) = data.game_constants.get("galactic_zoom_out_light_angle") {
+        let v = alamo_data::xml::parse_floats(a);
+        if let [x, y, z, ..] = v[..] {
+            light.angle_deg = Vec3::new(x, y, z);
+        }
+    }
+    if let Some(l) = data.game_constants.get("galactic_zoom_light_level").and_then(|s| s.trim().parse().ok()) {
+        light.level = l;
+    }
+    light
 }
 
 /// Placeholder surface colour for a terrain type.
@@ -228,6 +384,7 @@ pub fn build_view(data: &GameData, campaign: &Campaign) -> (GalaxyView, Vec<Stri
                 c[1] as f32 / 255.0,
                 c[2] as f32 / 255.0,
             ],
+            credits: cf.starting_credits.unwrap_or(0),
         });
         faction_names.push(&cf.name);
     }
@@ -264,11 +421,22 @@ pub fn build_view(data: &GameData, campaign: &Campaign) -> (GalaxyView, Vec<Stri
     let mut scales: Vec<f32> = data
         .campaign_planets(campaign)
         .iter()
-        .filter(|p| p.is_real_planet() && p.scale_factor > 0.0)
+        .filter(|p| is_map_planet(p) && p.scale_factor > 0.0)
         .map(|p| p.scale_factor)
         .collect();
     scales.sort_by(f32::total_cmp);
     let median_scale = scales.get(scales.len() / 2).copied().unwrap_or(1.0);
+
+    // Starting forces per planet, shown in the info panel.
+    let mut forces = std::collections::HashMap::<String, Vec<(String, usize)>>::new();
+    for sf in &campaign.starting_forces {
+        let list = forces.entry(sf.planet.to_ascii_lowercase()).or_default();
+        let name = object_display_name(data, &sf.object);
+        match list.iter_mut().find(|(n, _)| *n == name) {
+            Some((_, count)) => *count += 1,
+            None => list.push((name, 1)),
+        }
+    }
 
     // Planets.
     let mut planets = Vec::new();
@@ -276,7 +444,7 @@ pub fn build_view(data: &GameData, campaign: &Campaign) -> (GalaxyView, Vec<Stri
     for p in data
         .campaign_planets(campaign)
         .into_iter()
-        .filter(|p| p.is_real_planet())
+        .filter(|p| is_map_planet(p))
     {
         let key = p.name.to_ascii_lowercase();
         if index.contains_key(&key) {
@@ -295,17 +463,58 @@ pub fn build_view(data: &GameData, campaign: &Campaign) -> (GalaxyView, Vec<Stri
             owner: owners.get(&key).copied(),
             income: p.credit_value,
             size: size.clamp(0.6, 1.6),
+            model: p.galactic_model.clone(),
+            model_scale: if p.scale_factor > 0.0 { p.scale_factor } else { 1.0 },
             surface_color: terrain_color(p),
+            max_space_base: p.max_space_base,
+            special_slots: p.special_structures_space,
+            ability: planet_ability(data, p),
+            starting_forces: forces
+                .remove(&key)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|(n, c)| if c > 1 { format!("{n} x{c}") } else { n })
+                .collect(),
         });
     }
 
-    // Routes.
+    // Decorative objects: every other location with a visible model (galaxy disc art, nebulae,
+    // faction logos, far-away background planets).
+    let props: Vec<PropView> = data
+        .campaign_planets(campaign)
+        .into_iter()
+        .filter(|p| !is_map_planet(p) && !p.is_real_planet())
+        .filter_map(|p| {
+            let model = p.galactic_model.clone().filter(|m| !is_invisible_model(m))?;
+            Some(PropView {
+                id: p.name.clone(),
+                model,
+                position: Vec3::from(p.position),
+                scale: if p.scale_factor > 0.0 { p.scale_factor } else { 1.0 },
+            })
+        })
+        .collect();
+
+    // Route styles (TRADEROUTELINES.XML) and routes.
+    let mut route_styles: Vec<RouteStyleView> = data.trade_route_lines.iter().map(route_style).collect();
+    let default_style = route_styles.iter().position(|s| s.name.eq_ignore_ascii_case("default"));
+    if route_styles.is_empty() {
+        route_styles.push(RouteStyleView::fallback());
+    }
+    let default_style = default_style.unwrap_or(0);
     let mut routes = Vec::new();
     let mut unresolved = 0;
     for r in data.campaign_trade_routes(campaign) {
         let find = |n: &str| index.get(&n.trim().to_ascii_lowercase()).copied();
         match (find(&r.point_a), find(&r.point_b)) {
-            (Some(a), Some(b)) if a != b => routes.push(RouteView { a, b }),
+            (Some(a), Some(b)) if a != b => {
+                let style = r
+                    .visible_line_name
+                    .as_deref()
+                    .and_then(|n| route_styles.iter().position(|s| s.name.eq_ignore_ascii_case(n)))
+                    .unwrap_or(default_style);
+                routes.push(RouteView { a, b, style });
+            }
             _ => {
                 unresolved += 1;
                 if unresolved <= 5 {
@@ -326,6 +535,13 @@ pub fn build_view(data: &GameData, campaign: &Campaign) -> (GalaxyView, Vec<Stri
             planets,
             routes,
             factions,
+            route_styles,
+            player_faction: campaign
+                .starting_active_player
+                .as_deref()
+                .and_then(|h| faction_names.iter().position(|n| n.eq_ignore_ascii_case(h))),
+            props,
+            light: galaxy_light(data),
         },
         notes,
     )
@@ -363,6 +579,15 @@ mod tests {
                 .all(|p| p.owner.is_none_or(|o| o < view.factions.len()))
         );
         assert!(view.planets.iter().any(|p| p.owner.is_some()));
+        assert!(view.player_faction.is_some(), "human faction resolved");
+        assert!(view.planets.iter().all(|p| !p.id.to_ascii_lowercase().contains("dummy")), "dummy planets filtered");
+        assert!(view.planets.iter().all(|p| p.model.is_some() && p.model_scale > 0.0));
+        assert!(view.props.iter().any(|p| p.model.eq_ignore_ascii_case("w_galaxy00.alo")), "galaxy art prop");
+        assert!(!view.route_styles.is_empty());
+        assert!(view.routes.iter().all(|r| r.style < view.route_styles.len()));
+        assert!(view.planets.iter().any(|p| p.ability.is_some()), "some planet has an ability text");
+        assert!(view.planets.iter().any(|p| !p.starting_forces.is_empty()));
+        assert!(view.factions.iter().any(|f| f.credits > 0));
         let exact = data.campaign_planet_owners(campaign);
         assert!(!exact.is_empty());
         // Every exactly-owned planet in the view carries the owner the data layer reports.
@@ -398,7 +623,7 @@ mod tests {
         let raw: Vec<f32> = data
             .campaign_planets(campaign)
             .iter()
-            .filter(|p| p.is_real_planet())
+            .filter(|p| is_map_planet(p))
             .map(|p| p.scale_factor)
             .collect();
         eprintln!(
@@ -411,29 +636,39 @@ mod tests {
             view.factions.iter().map(|f| &f.name).collect::<Vec<_>>()
         );
     }
-
-    /// End-to-end load incl. the galactic playlist; skipped without an install.
     #[test]
-    fn loads_game_with_music() {
+    fn lists_campaigns_by_group() {
         let args = Args::default();
-        let mut log = StartupLog::default();
-        let Ok(game) = load(&args, &mut log) else {
+        let Ok(assets) = load_assets(&args, &mut StartupLog::default()) else {
             eprintln!("skipped: no game install");
             return;
         };
-        for (_, line) in &log.0 {
-            eprintln!("{line}");
+        let entries = campaign_entries(&assets.data);
+        for e in &entries {
+            eprintln!("{:<42} {:<10} {:<22} {:>4} {}", e.name, e.faction, e.group_title, e.planets, e.title);
         }
-        let mut music = game.music.expect("galactic playlist");
-        assert!(music.len() > 5);
-        let track = crate::music::MusicSource::next_track(&mut music).expect("track");
-        eprintln!(
-            "first track {} {:?} {} bytes",
-            track.name,
-            track.duration,
-            track.bytes.len()
-        );
-        assert!(track.name.to_ascii_uppercase().starts_with("GC_"));
-        assert!(track.duration.is_some());
+        assert!(entries.iter().any(|e| e.name == DEFAULT_CAMPAIGN && e.faction == "Rebel"));
+        assert!(entries.iter().all(|e| !e.name.to_ascii_lowercase().contains("obs")));
+        // Every group offers the Rebel, Empire and Underworld variants.
+        let full: Vec<_> = entries.iter().filter(|e| e.group_title == "Full").map(|e| e.faction.as_str()).collect();
+        assert_eq!(full, ["Rebel", "Empire", "Underworld"]);
+    }
+
+    #[test]
+    fn builds_default_campaign_and_music_events_exist() {
+        let args = Args::default();
+        let mut log = StartupLog::default();
+        let Ok(assets) = load_assets(&args, &mut log) else {
+            eprintln!("skipped: no game install");
+            return;
+        };
+        let (view, faction) = build_campaign(&assets, DEFAULT_CAMPAIGN, &mut log).expect("campaign");
+        assert_eq!(view.planets.len(), 145);
+        assert_eq!(faction.as_deref(), Some("Rebel"));
+        // The music director needs a galactic playlist for the faction and a main menu theme.
+        let mut w = Vec::new();
+        let music = alamo_audio::MusicLibrary::load(assets.fs.as_ref(), &mut w);
+        assert!(music.get("Galactic_Map_Rebel_Music_Event").is_some());
+        assert!(music.get("Main_Menu_Music_Event").is_some());
     }
 }
