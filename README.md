@@ -1,38 +1,39 @@
 # Space Peace: Not at War
 
-Eine schlanke, moderne Engine in Rust, die **Star Wars: Empire at War – Forces of Corruption** mit der Mod
-**Empire at War Remake 4.0** (Galaxie-Eroberung, Wirtschaft, Raumschlachten – kein Bodenkampf) spielbar macht:
-flüssig, in 4K, auf allen CPU-Kernen.
+A lightweight, modern Rust engine that plays **Star Wars: Empire at War – Forces of Corruption** with the
+**Empire at War Remake 4.0** mod (galactic conquest, economy, space battles – no ground combat):
+smooth, in 4K, on all CPU cores.
 
-> **Keine Spieldateien in diesem Repository.** Die Engine liest Modelle, Texturen, Musik und Daten zur Laufzeit
-> aus deiner eigenen, gekauften Installation (Steam: *Star Wars Empire at War: Gold Pack*) und der abonnierten
-> Workshop-Mod. Es werden keine Assets weitergegeben.
+> **No game files in this repository.** The engine reads models, textures, music and data at runtime from
+> your own purchased installation (Steam: *Star Wars Empire at War: Gold Pack*) and the subscribed Workshop mod.
+> No assets are redistributed.
 
-## Voraussetzungen
+## Requirements
 
 - Windows 10/11 (x64)
-- *Star Wars Empire at War: Gold Pack* über Steam
-- Workshop-Mod *Empire at War Remake* (ID `1770851727`) abonniert
+- *Star Wars Empire at War: Gold Pack* on Steam
+- Workshop mod *Empire at War Remake* (ID `1770851727`) subscribed
 
-## Bauen
+## Building
 
-Doppelklick auf **`build.bat`**. Das Skript installiert bei Bedarf Rust und die MSVC Build Tools (einmalig,
-Admin-Bestätigung nötig) und baut das Spiel. Alternativ:
+Double-click **`build.bat`**. It installs Rust and the MSVC Build Tools if missing (one-time, needs admin
+confirmation) and builds the game. Alternatively:
 
 ```powershell
-.\build.ps1          # Release
-.\build.ps1 -Debug   # Debug
+.\build.ps1          # release
+.\build.ps1 -Debug   # debug
 ```
 
-Es gibt bewusst keine vorgebauten Binaries und keine CI – jeder baut lokal.
+There are intentionally no prebuilt binaries and no CI – everyone builds locally.
 
-## Aufbau
+## Layout
 
-| Crate | Aufgabe |
+| Crate | Purpose |
 |---|---|
-| `crates/alamo-fs` | MEG-Archive, geschichtetes Dateisystem (Mod → FoC → EaW), Erkennung der Installation |
-| `crates/alamo-data` | Spieldaten: XML (Galaxie, Planeten, Handelsrouten, Fraktionen), `.dat`-Texte |
+| `crates/alamo-fs` | MEG archives, layered file system (mod → FoC → EaW), install detection |
+| `crates/alamo-data` | Game data: XML (galaxy, planets, trade routes, factions), `.dat` string tables |
+| `crates/space-peace` | The game (Bevy) |
 
 ## Status
 
-Frühe Entwicklung. Erster Meilenstein: Galaxiekarte von Remake 4.0 mit Original-Musik.
+Early development. First milestone: the Remake 4.0 galaxy map with the original music.

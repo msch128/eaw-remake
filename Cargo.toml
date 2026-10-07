@@ -1,8 +1,9 @@
-[workspace]
+﻿[workspace]
 resolver = "3"
 members = [
     "crates/alamo-fs",
     "crates/alamo-data",
+    "crates/space-peace",
 ]
 
 [workspace.package]
@@ -20,3 +21,4 @@ opt-level = 3
 [profile.release]
 lto = "thin"
 codegen-units = 1
+

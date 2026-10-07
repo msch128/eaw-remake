@@ -1,0 +1,48 @@
+//! Space Peace: Not at War - Empire at War galactic conquest shell.
+
+mod camera;
+mod cli;
+mod galaxy_map;
+mod galaxy_view;
+mod music;
+mod ui;
+
+use bevy::{
+    prelude::*,
+    window::{MonitorSelection, PresentMode, WindowMode},
+};
+
+use camera::CameraPlugin;
+use cli::Args;
+use galaxy_map::GalaxyMapPlugin;
+use galaxy_view::GalaxyView;
+use music::MusicPlugin;
+use ui::UiPlugin;
+
+fn main() {
+    let args = Args::from_env();
+
+    let present_mode = if args.no_vsync { PresentMode::AutoNoVsync } else { PresentMode::AutoVsync };
+    let mode = if args.fullscreen {
+        WindowMode::BorderlessFullscreen(MonitorSelection::Primary)
+    } else {
+        WindowMode::Windowed
+    };
+
+    App::new()
+        .add_plugins(DefaultPlugins.set(WindowPlugin {
+            primary_window: Some(Window {
+                title: "Space Peace: Not at War".into(),
+                present_mode,
+                mode,
+                resolution: (1600, 900).into(),
+                ..default()
+            }),
+            ..default()
+        }))
+        .insert_resource(args)
+        // Demo data until the real galaxy is mapped into `GalaxyView`.
+        .insert_resource(GalaxyView::demo())
+        .add_plugins((CameraPlugin, GalaxyMapPlugin, MusicPlugin, UiPlugin))
+        .run();
+}

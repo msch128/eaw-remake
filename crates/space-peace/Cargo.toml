@@ -1,0 +1,29 @@
+﻿[package]
+name = "space-peace"
+description = "Space Peace: Not at War - lightweight Empire at War engine shell"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "space-peace"
+path = "src/main.rs"
+
+[features]
+default = []
+# Fast iteration builds: dynamic linking of Bevy (not for release).
+dev = ["bevy/dynamic_linking"]
+
+[dependencies]
+bevy = { version = "=0.19.1", default-features = false, features = [
+    # app / platform (no gilrs, wayland, webgl, clipboard, sysinfo)
+    "default_app", "std", "multi_threaded", "bevy_winit", "bevy_window", "default_font", "x11",
+    # rendering: 3D PBR + HDR/bloom + gizmos + UI
+    "3d_bevy_render", "ui_bevy_render",
+    # audio: mp3 only
+    "bevy_audio", "mp3",
+] }
+mp3-duration = "0.1"
+rand = "0.9"
+

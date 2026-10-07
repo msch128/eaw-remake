@@ -1,7 +1,7 @@
-# Space Peace: Not at War - Build-Skript
-# Richtet bei Bedarf Rust und die MSVC Build Tools ein und baut das Spiel lokal.
-#   .\build.ps1            -> Release-Build
-#   .\build.ps1 -Debug     -> Debug-Build
+# Space Peace: Not at War - build script
+# Installs Rust and the MSVC Build Tools if missing, then builds the game locally.
+#   .\build.ps1            -> release build
+#   .\build.ps1 -Debug     -> debug build
 param([switch]$Debug)
 
 $ErrorActionPreference = 'Stop'
@@ -13,17 +13,17 @@ function Have($cmd) { [bool](Get-Command $cmd -ErrorAction SilentlyContinue) }
 $cargoBin = Join-Path $env:USERPROFILE '.cargo\bin'
 if (-not (Have cargo) -and (Test-Path "$cargoBin\cargo.exe")) { $env:PATH = "$cargoBin;$env:PATH" }
 if (-not (Have cargo)) {
-    Write-Host 'Rust fehlt - installiere rustup ...' -ForegroundColor Yellow
+    Write-Host 'Rust not found - installing rustup ...' -ForegroundColor Yellow
     winget install --id Rustlang.Rustup -e --silent --accept-package-agreements --accept-source-agreements
     $env:PATH = "$cargoBin;$env:PATH"
     rustup default stable
 }
 
-# 2. MSVC Linker (Visual Studio Build Tools mit C++-Workload)
+# 2. MSVC linker (Visual Studio Build Tools with the C++ workload)
 $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
 $hasMsvc = (Test-Path $vswhere) -and (& $vswhere -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath)
 if (-not $hasMsvc) {
-    Write-Host 'MSVC Build Tools fehlen - installiere (Admin-Bestaetigung noetig) ...' -ForegroundColor Yellow
+    Write-Host 'MSVC Build Tools not found - installing (admin confirmation required) ...' -ForegroundColor Yellow
     winget install --id Microsoft.VisualStudio.BuildTools -e --silent --accept-package-agreements --accept-source-agreements `
         --override '--quiet --wait --norestart --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended'
 }
@@ -32,7 +32,7 @@ if (-not $hasMsvc) {
 $cargoArgs = @('build')
 if (-not $Debug) { $cargoArgs += '--release' }
 cargo @cargoArgs
-if ($LASTEXITCODE -ne 0) { Write-Host 'Build fehlgeschlagen.' -ForegroundColor Red; exit $LASTEXITCODE }
+if ($LASTEXITCODE -ne 0) { Write-Host 'Build failed.' -ForegroundColor Red; exit $LASTEXITCODE }
 
 $profileDir = if ($Debug) { 'debug' } else { 'release' }
-Write-Host "Fertig. Ausgabe: $PSScriptRoot\target\$profileDir" -ForegroundColor Green
+Write-Host "Done. Output: $PSScriptRoot\target\$profileDir" -ForegroundColor Green
