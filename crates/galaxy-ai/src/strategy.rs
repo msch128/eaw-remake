@@ -13,7 +13,7 @@ use crate::perception::Snapshot;
 use crate::sim::{PlanetId, PlayerId};
 
 /// Character of a faction's AI; 1.0 is the default for every value.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Personality {
     /// Weight of the attack-friendly terms (value, flank, pocket) and lowers the force margin asked before attacking.
     pub aggression: f64,

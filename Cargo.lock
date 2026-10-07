@@ -2542,6 +2542,7 @@ dependencies = [
  "alamo-data",
  "alamo-fs",
  "alamo-lua",
+ "serde",
 ]
 
 [[package]]
@@ -2565,6 +2566,8 @@ dependencies = [
  "alamo-lua",
  "galaxy-ai",
  "galaxy-sim",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -2574,6 +2577,7 @@ dependencies = [
  "alamo-data",
  "alamo-fs",
  "battle-sim",
+ "serde",
 ]
 
 [[package]]

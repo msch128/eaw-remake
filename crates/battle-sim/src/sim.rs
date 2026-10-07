@@ -124,6 +124,20 @@ fn target_priority(attacker: TargetClass, target: TargetClass) -> u8 {
 
 impl Battle {
     /// `(damage dealt, health, shield)` multipliers of a side (1.0 without an entry).
+    /// Applies carried-over damage to a freshly spawned single ship.
+    fn apply_start_health(&mut self, id: u32, side: u8, tag: u32, def: ShipId) {
+        let n = self.start_health_used.entry((side, tag, def)).or_default();
+        let k = *n;
+        *n += 1;
+        let entry = self.config.start_health.iter().find(|h| h.side == side && h.tag == tag && h.ship == def);
+        if let Some((hull, shield)) = entry.and_then(|h| h.health.get(k)).copied() {
+            let d = self.catalog.ship(def);
+            let s = &mut self.ships[id as usize];
+            s.hull = (hull.clamp(0.0, 1.0) * d.hull).max(1.0);
+            s.shield = shield.clamp(0.0, 1.0) * d.shield;
+        }
+    }
+
     fn side_mult(&self, side: u8) -> (f32, f32, f32) {
         self.config.side_mults.get(side as usize).map_or((1.0, 1.0, 1.0), |m| (m.damage.max(0.01), m.health.max(0.01), m.shield.max(0.01)))
     }
@@ -167,6 +181,7 @@ impl Battle {
             projectiles: Vec::new(),
             squads: Vec::new(),
             groups: Vec::new(),
+            start_health_used: std::collections::HashMap::new(),
             pending: Vec::new(),
             events: Vec::new(),
             tick: 0,
@@ -219,6 +234,7 @@ impl Battle {
             self.groups.push(Group { side, tag: NO_TAG, ship: sid, members: vec![id] });
             self.ships[id as usize].group = g;
             self.ships[id as usize].order = Order::Idle;
+            self.apply_start_health(id, side, NO_TAG, sid);
         }
 
         // Fleet instances, spread round-robin over the start areas.
@@ -295,6 +311,7 @@ impl Battle {
                     self.pop_used[side as usize] += def.population;
                 } else {
                     let id = self.spawn_ship(sid, side, pos, yaw, group, NONE, Vec3::ZERO);
+                    self.apply_start_health(id, side, tag, sid);
                     self.groups[group as usize].members.push(id);
                     self.ships[id as usize].order = if def.is_static { Order::Idle } else { order };
                     self.pop_used[side as usize] += def.population;

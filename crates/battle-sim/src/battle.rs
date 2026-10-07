@@ -46,6 +46,8 @@ pub struct BattleConfig {
     pub arena: Option<std::sync::Arc<crate::arena::Arena>>,
     /// Difficulty multipliers per side (index = side); missing entries mean 1.0.
     pub side_mults: Vec<SideMult>,
+    /// Damage carried over from earlier battles: ships of the group start with this share of hull and shield.
+    pub start_health: Vec<StartHealth>,
 }
 
 impl Default for BattleConfig {
@@ -66,6 +68,7 @@ impl Default for BattleConfig {
             engage_range_scale: 1.0,
             arena: None,
             side_mults: Vec::new(),
+            start_health: Vec::new(),
         }
     }
 }
@@ -314,7 +317,7 @@ pub enum Event {
 }
 
 /// Survivors of one setup group.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct GroupResult {
     /// Side.
     pub side: u8,
@@ -328,6 +331,9 @@ pub struct GroupResult {
     pub survived: u32,
     /// Units that left the battle by retreating (subset of `survived`).
     pub retreated: u32,
+    /// `(hull, shield)` as a fraction of the maximum for every surviving ship of the group (single ships only, not squadrons),
+    /// healthiest first.
+    pub health: Vec<(f32, f32)>,
 }
 
 /// Outcome of a battle.
@@ -510,6 +516,7 @@ pub struct Battle {
     pub projectiles: Vec<Projectile>,
     pub(crate) squads: Vec<Vec<u32>>,
     pub(crate) groups: Vec<Group>,
+    pub(crate) start_health_used: std::collections::HashMap<(u8, u32, ShipId), usize>,
     pub(crate) pending: Vec<Reinforcement>,
     pub(crate) events: Vec<Event>,
     pub(crate) tick: u64,
@@ -601,17 +608,44 @@ impl Battle {
             } else {
                 (total, ok, ret)
             };
+            let health: Vec<(f32, f32)> = if def.is_squadron {
+                Vec::new()
+            } else {
+                g.members
+                    .iter()
+                    .map(|&m| &self.ships[m as usize])
+                    .filter(|s| s.alive)
+                    .map(|s| ((s.hull / def.hull.max(1.0)).clamp(0.0, 1.0), if def.shield > 0.0 { (s.shield / def.shield).clamp(0.0, 1.0) } else { 1.0 }))
+                    .collect()
+            };
             match groups.iter_mut().find(|x: &&mut GroupResult| x.side == g.side && x.tag == g.tag && x.ship == g.ship) {
                 Some(e) => {
                     e.total += t;
                     e.survived += s;
                     e.retreated += r;
+                    e.health.extend(health.iter().copied());
                 }
-                None => groups.push(GroupResult { side: g.side, tag: g.tag, ship: g.ship, total: t, survived: s, retreated: r }),
+                None => groups.push(GroupResult { side: g.side, tag: g.tag, ship: g.ship, total: t, survived: s, retreated: r, health: health.clone() }),
             }
+        }
+        for g in &mut groups {
+            g.health.sort_by(|a, b| b.0.total_cmp(&a.0).then(b.1.total_cmp(&a.1)));
         }
         BattleResult { winner: self.winner, duration: self.time, groups }
     }
+}
+
+/// Starting health of the single ships of one setup group (`UnitSetup`) or of a structure group (`tag` = `NO_TAG`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct StartHealth {
+    /// Side.
+    pub side: u8,
+    /// Fleet tag of the group.
+    pub tag: u32,
+    /// Definition.
+    pub ship: ShipId,
+    /// `(hull, shield)` fractions, one per ship in spawn order; ships beyond the list start at full health.
+    pub health: Vec<(f32, f32)>,
 }
 
 /// Damage, hull and shield multipliers of one side (`DifficultyAdjustments.xml`). Damage dealt by the side is scaled

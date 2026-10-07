@@ -262,6 +262,7 @@ impl Sim {
 
         // Economy.
         w.refresh_economy(&mut self.galaxy);
+        self.repair(dt);
         for fs in self.galaxy.factions.iter_mut() {
             if fs.eliminated {
                 continue;
@@ -569,10 +570,13 @@ impl Sim {
         let seed = rng.next_u64();
         if tactical && let Some(catalog) = self.tactical.clone() {
             let arena = w.planets[p as usize].space_map.as_ref().and_then(|m| self.arenas.get(&m.to_ascii_lowercase())).cloned();
-            let request = crate::tactical::TacticalRequest::from_sides(w, &battle, &sides, seed, &self.galaxy.factions.iter().map(|f| f.difficulty).collect::<Vec<_>>());
+            self.galaxy.sync_ships();
+            let request = crate::tactical::TacticalRequest::from_sides(w, &battle, &sides, seed, &self.galaxy);
             if let Some(result) = crate::tactical::run_headless(&request, &catalog, arena) {
                 let (sides, combat) = request.combat_result(&result);
-                return Some(self.apply_combat(&battle, &sides, combat));
+                let events = self.apply_combat(&battle, &sides, combat);
+                self.apply_health(&request, &result);
+                return Some(events);
             }
         }
         let result = combat::resolve_allied(w, &sides, &mut rng, &self.galaxy.allied, &self.galaxy.factions.iter().map(|f| f.difficulty).collect::<Vec<_>>());

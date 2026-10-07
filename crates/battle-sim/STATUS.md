@@ -20,3 +20,7 @@ Deterministic, rayon-parallel space-battle simulation (fixed dt 1/30). Rules and
 - Ships hold one standoff range and bring only one broadside to bear; no orbiting or facing optimisation.
 - Energy and `Depleted_Shield_Regen_Cap` are not modelled; acceleration times by size class are estimates.
 - The 30 Hz speed scale is an assumption; check against in-game ship speeds.
+
+## Difficulty and carried damage (new)
+`BattleConfig::side_mults` (damage dealt, hull and shield multipliers per side) and `BattleConfig::start_health` (ships start with a share of hull/shield);
+`GroupResult::health` reports the survivors' hull/shield fractions of single ships (not squadrons) so galaxy-sim can keep the damage.

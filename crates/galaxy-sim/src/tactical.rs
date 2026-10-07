@@ -11,7 +11,7 @@ use battle_sim::{Arena, Battle, BattleConfig, BattleResult, BattleSetup, Catalog
 
 use crate::combat::{CombatResult, Member, SideInput, Source};
 use crate::sim::Sim;
-use crate::state::{Event, PendingBattle};
+use crate::state::{Event, FleetLocation, Galaxy, PendingBattle, ShipId, UnitHealth};
 use crate::world::{FactionId, FleetId, PlanetId, World};
 
 /// What a [`TacticalGroup`] is made of.
@@ -41,6 +41,9 @@ pub struct TacticalGroup {
     /// Health fraction at the start (0..1). The galactic layer keeps no damage between battles, so this is
     /// always 1.0 today; a tactical front end may scale hull and shield by it.
     pub health: f32,
+    /// Hull and shield of every ship of the group (units: `count` entries in the order battle-sim spawns them; the star base: one entry).
+    /// Empty = everything undamaged.
+    pub unit_health: Vec<UnitHealth>,
 }
 
 /// All forces of one faction in a tactical battle.
@@ -85,7 +88,7 @@ pub struct TacticalRequest {
 }
 
 /// Outcome of a tactical battle, shaped like [`TacticalRequest::sides`] (`[side][group]`).
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, Clone, PartialEq, Default, serde::Serialize, serde::Deserialize)]
 pub struct TacticalResult {
     /// Winning side index; `None` for a draw or mutual destruction.
     pub winner: Option<usize>,
@@ -95,6 +98,8 @@ pub struct TacticalResult {
     pub retreated: Vec<Vec<u32>>,
     /// Battle time in seconds.
     pub duration: f32,
+    /// Hull and shield of the survivors per side and group (healthiest first); empty = report nothing (everything counts as undamaged).
+    pub health: Vec<Vec<Vec<UnitHealth>>>,
 }
 
 /// Why a tactical result could not be applied.
@@ -119,8 +124,8 @@ impl std::error::Error for TacticalError {}
 
 impl TacticalRequest {
     /// Orders `sides` for battle (defender last) and drops garrison squadrons, which the star base definition launches itself.
-    pub(crate) fn from_sides(world: &World, battle: &PendingBattle, sides: &[SideInput], seed: u64, difficulty: &[crate::state::Difficulty]) -> Self {
-        let world_diff = |f: FactionId| difficulty.get(f as usize).copied().unwrap_or_default();
+    pub(crate) fn from_sides(world: &World, battle: &PendingBattle, sides: &[SideInput], seed: u64, galaxy: &Galaxy) -> Self {
+        let world_diff = |f: FactionId| galaxy.factions.get(f as usize).map(|s| s.difficulty).unwrap_or_default();
         let has_structs = |s: &SideInput| s.members.iter().any(|m| matches!(m.source, Source::Starbase(_) | Source::Structure(_)));
         let mut order: Vec<usize> = (0..sides.len()).collect();
         if sides.len() == 2 && has_structs(&sides[0]) && !has_structs(&sides[1]) {
@@ -145,7 +150,17 @@ impl TacticalRequest {
                             Source::Structure(s) => (GroupKind::Structure, s, world.structures[s as usize].name.clone()),
                             Source::Garrison(_) => return None,
                         };
-                        Some(TacticalGroup { kind, type_id, name, count: m.count, fleet: m.fleet, health: 1.0 })
+                        let unit_health = match (kind, m.fleet) {
+                            (GroupKind::Unit, Some(fleet)) => {
+                                let ships: Vec<_> = galaxy.ships.get(&fleet).into_iter().flatten().filter(|(_, t)| *t == type_id).take(m.count as usize).collect();
+                                let list: Vec<UnitHealth> = ships.iter().map(|(s, _)| galaxy.damage.get(s).copied().unwrap_or(UnitHealth::FULL)).collect();
+                                if list.iter().all(UnitHealth::is_full) { Vec::new() } else { list }
+                            }
+                            (GroupKind::Starbase, _) => galaxy.planets[battle.planet as usize].base_health.filter(|h| !h.is_full()).into_iter().collect(),
+                            _ => Vec::new(),
+                        };
+                        let health = if unit_health.is_empty() { 1.0 } else { unit_health.iter().map(|h| h.hull).sum::<f32>() / unit_health.len() as f32 };
+                        Some(TacticalGroup { kind, type_id, name, count: m.count, fleet: m.fleet, health, unit_health })
                     })
                     .collect();
                 TacticalSide {
@@ -181,7 +196,7 @@ impl TacticalRequest {
     /// Builds the `battle-sim` setup. Fleet groups carry their group index as the tag; side `i` of the request is
     /// battle side `i`. Returns `None` if a unit has no definition in `catalog`. `ai` selects the sides the built-in
     /// AI commands (a front end passes `false` for the human side).
-    pub fn battle_setup(&self, catalog: &Arc<Catalog>, config: BattleConfig, ai: impl Fn(usize) -> bool) -> Option<BattleSetup> {
+    pub fn battle_setup(&self, catalog: &Arc<Catalog>, mut config: BattleConfig, ai: impl Fn(usize) -> bool) -> Option<BattleSetup> {
         let mut sides = Vec::new();
         for (si, side) in self.sides.iter().enumerate() {
             let mut units = Vec::new();
@@ -195,6 +210,15 @@ impl TacticalRequest {
                 }
             }
             sides.push(SideSetup { name: side.faction_name.clone(), units, structures, ai: ai(si) });
+            for (gi, g) in side.groups.iter().enumerate() {
+                if g.unit_health.is_empty() {
+                    continue;
+                }
+                let tag = if g.kind == GroupKind::Unit { gi as u32 } else { NO_TAG };
+                if let Some(ship) = catalog.ship_id(&g.name) {
+                    config.start_health.push(battle_sim::StartHealth { side: si as u8, tag, ship, health: g.unit_health.iter().map(|h| (h.hull, h.shield)).collect() });
+                }
+            }
         }
         Some(BattleSetup { catalog: catalog.clone(), sides, config })
     }
@@ -203,24 +227,31 @@ impl TacticalRequest {
     pub fn result_from(&self, catalog: &Catalog, result: &BattleResult) -> Option<TacticalResult> {
         let mut survived = Vec::new();
         let mut retreated = Vec::new();
+        let mut health = Vec::new();
         for (si, side) in self.sides.iter().enumerate() {
-            let (mut s_row, mut r_row) = (Vec::new(), Vec::new());
+            let (mut s_row, mut r_row, mut h_row) = (Vec::new(), Vec::new(), Vec::new());
             for (gi, g) in side.groups.iter().enumerate() {
                 let ship = catalog.ship_id(&g.name)?;
                 let tag = if g.kind == GroupKind::Unit { gi as u32 } else { NO_TAG };
                 let (mut s, mut r) = (0, 0);
+                let mut hl: Vec<UnitHealth> = Vec::new();
                 for gr in result.groups.iter().filter(|x| x.side as usize == si && x.tag == tag && x.ship == ship) {
                     s += gr.survived;
                     r += gr.retreated;
+                    hl.extend(gr.health.iter().map(|&(hull, shield)| UnitHealth { hull, shield }));
                 }
+                hl.sort_by(|a, b| b.hull.total_cmp(&a.hull).then(b.shield.total_cmp(&a.shield)));
+                hl.truncate(g.count as usize);
+                h_row.push(hl);
                 s = s.min(if g.kind == GroupKind::Starbase { 1 } else { g.count });
                 s_row.push(s);
                 r_row.push(r.min(s));
             }
             survived.push(s_row);
             retreated.push(r_row);
+            health.push(h_row);
         }
-        Some(TacticalResult { winner: result.winner.map(|w| w as usize), survived, retreated, duration: result.duration })
+        Some(TacticalResult { winner: result.winner.map(|w| w as usize), survived, retreated, duration: result.duration, health })
     }
 
     /// Combatants of the request, as the galaxy layer sees them.
@@ -300,7 +331,8 @@ impl Sim {
         let battle = self.galaxy.battles.iter().find(|b| b.id == battle_id)?.clone();
         let sides = self.battle_sides(&battle);
         let seed = self.battle_rng(battle_id).next_u64();
-        let request = TacticalRequest::from_sides(&self.world, &battle, &sides, seed, &self.galaxy.factions.iter().map(|f| f.difficulty).collect::<Vec<_>>());
+        self.galaxy.sync_ships();
+        let request = TacticalRequest::from_sides(&self.world, &battle, &sides, seed, &self.galaxy);
         self.tactical_requests.insert(battle_id, request.clone());
         Some(request)
     }
@@ -319,11 +351,89 @@ impl Sim {
         let battle = self.galaxy.battles.remove(pos);
         self.tactical_requests.remove(&battle_id);
         let (sides, combat) = request.combat_result(result);
-        Ok(self.apply_combat(&battle, &sides, combat))
+        let events = self.apply_combat(&battle, &sides, combat);
+        self.apply_health(&request, result);
+        Ok(events)
     }
 
     /// Abandons a tactical setup without a result (the battle stays pending, e.g. to auto-resolve it instead).
     pub fn cancel_tactical(&mut self, battle_id: u32) {
         self.tactical_requests.remove(&battle_id);
+    }
+}
+
+impl Sim {
+    /// Writes the survivors' hull and shield of a tactical result into the galaxy (ships by id, the star base on the planet).
+    pub(crate) fn apply_health(&mut self, request: &TacticalRequest, result: &TacticalResult) {
+        let planet = request.planet as usize;
+        for (si, side) in request.sides.iter().enumerate() {
+            for (gi, g) in side.groups.iter().enumerate() {
+                let list = result.health.get(si).and_then(|r| r.get(gi)).cloned().unwrap_or_default();
+                let survived = result.survived.get(si).and_then(|r| r.get(gi)).copied().unwrap_or(0) as usize;
+                match (g.kind, g.fleet) {
+                    (GroupKind::Unit, Some(fleet)) if survived > 0 => {
+                        let ships: Vec<ShipId> = self.galaxy.ships.get(&fleet).into_iter().flatten().filter(|(_, t)| *t == g.type_id).map(|(s, _)| *s).take(survived).collect();
+                        for (k, ship) in ships.into_iter().enumerate() {
+                            // Pad with full health if the report is shorter than the survivors.
+                            let h = list.get(k).copied().unwrap_or(UnitHealth::FULL);
+                            if h.is_full() {
+                                self.galaxy.damage.remove(&ship);
+                            } else {
+                                self.galaxy.damage.insert(ship, h);
+                            }
+                        }
+                    }
+                    (GroupKind::Starbase, _) if survived > 0 => {
+                        self.galaxy.planets[planet].base_health = list.first().copied().filter(|h| !h.is_full());
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    /// Repairs damaged ships and star bases at the owner's planets (estimate, see `SimConfig::repair_*`).
+    pub(crate) fn repair(&mut self, dt: f32) {
+        let world = self.world.clone();
+        let cfg = &world.config;
+        let weeks = dt / cfg.week_seconds;
+        let (base, per_level, shield_factor) = (cfg.repair_base_per_week, cfg.repair_per_starbase_level_per_week, cfg.repair_shield_factor);
+        let rate = |g: &Galaxy, p: usize| -> f32 { base + per_level * g.planets[p].starbase.map_or(0, |sb| world.starbases[sb as usize].level.max(0)) as f32 };
+        if !self.galaxy.damage.is_empty() {
+            let mut heal: Vec<(ShipId, f32)> = Vec::new();
+            for f in self.galaxy.fleets.values() {
+                if let FleetLocation::AtPlanet(p) = f.location
+                    && self.galaxy.planets[p as usize].owner == Some(f.owner)
+                {
+                    let r = rate(&self.galaxy, p as usize) * weeks;
+                    for (s, _) in self.galaxy.ships.get(&f.id).into_iter().flatten() {
+                        if self.galaxy.damage.contains_key(s) {
+                            heal.push((*s, r));
+                        }
+                    }
+                }
+            }
+            for (s, r) in heal {
+                if let Some(h) = self.galaxy.damage.get_mut(&s) {
+                    h.hull = (h.hull + r).min(1.0);
+                    h.shield = (h.shield + r * shield_factor).min(1.0);
+                    if h.is_full() {
+                        self.galaxy.damage.remove(&s);
+                    }
+                }
+            }
+        }
+        for p in 0..self.galaxy.planets.len() {
+            if self.galaxy.planets[p].base_health.is_some() && self.galaxy.planets[p].owner.is_some() {
+                let r = rate(&self.galaxy, p) * weeks;
+                if let Some(h) = &mut self.galaxy.planets[p].base_health {
+                    h.hull = (h.hull + r).min(1.0);
+                    h.shield = (h.shield + r * shield_factor).min(1.0);
+                    if h.is_full() {
+                        self.galaxy.planets[p].base_health = None;
+                    }
+                }
+            }
+        }
     }
 }

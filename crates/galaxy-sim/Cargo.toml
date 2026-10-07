@@ -6,6 +6,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+serde = { version = "1", features = ["derive"] }
 alamo-data = { path = "../alamo-data" }
 battle-sim = { path = "../battle-sim" }
 

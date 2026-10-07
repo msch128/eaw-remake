@@ -109,6 +109,27 @@ pub struct PlanetState {
     pub queues: [VecDeque<ProductionItem>; 3],
     /// Faction currently holding orbit uncontested and seconds accumulated.
     pub capture: Option<(FactionId, f32)>,
+    /// Damage the star base carries over from battles (`None` = undamaged).
+    pub base_health: Option<UnitHealth>,
+}
+
+/// Hull and shield of a ship or star base as a fraction of the maximum (1.0 = undamaged).
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct UnitHealth {
+    /// Hull fraction.
+    pub hull: f32,
+    /// Shield fraction.
+    pub shield: f32,
+}
+
+impl UnitHealth {
+    /// Undamaged.
+    pub const FULL: UnitHealth = UnitHealth { hull: 1.0, shield: 1.0 };
+
+    /// True if nothing is missing.
+    pub fn is_full(&self) -> bool {
+        self.hull >= 0.999 && self.shield >= 0.999
+    }
 }
 
 /// Dynamic state of a faction.
@@ -171,6 +192,8 @@ pub struct Galaxy {
     pub allied: std::collections::BTreeSet<(FactionId, FactionId)>,
     /// Stable per-ship ids of every fleet, kept in sync with `Fleet::units` (see [`crate::Sim::ships_of`]).
     pub ships: BTreeMap<FleetId, Vec<(ShipId, UnitTypeId)>>,
+    /// Damage carried between battles per ship (absent = undamaged); repaired over time at owned planets.
+    pub damage: BTreeMap<ShipId, UnitHealth>,
     pub(crate) next_ship_id: u64,
     pub(crate) next_fleet_id: FleetId,
     pub(crate) next_battle_id: u32,
@@ -181,7 +204,7 @@ pub struct Galaxy {
 }
 
 /// Instructions from the UI or AI. All commands are validated; invalid ones return a [`CommandError`].
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum Command {
     /// Queue a ship/squadron/research item on a planet.
     BuildUnit {
@@ -394,6 +417,7 @@ impl Galaxy {
             winner: None,
             allied: Default::default(),
             ships: BTreeMap::new(),
+            damage: BTreeMap::new(),
             next_ship_id: 1,
             next_fleet_id: 1,
             next_battle_id: 1,
@@ -425,6 +449,10 @@ impl Galaxy {
                     self.next_ship_id += 1;
                 }
             }
+        }
+        if !self.damage.is_empty() {
+            let alive: std::collections::BTreeSet<ShipId> = self.ships.values().flatten().map(|(s, _)| *s).collect();
+            self.damage.retain(|s, _| alive.contains(s));
         }
     }
 
@@ -483,6 +511,9 @@ impl Galaxy {
             id.hash(&mut h);
             fl.owner.hash(&mut h);
             fl.units.iter().collect::<Vec<_>>().hash(&mut h);
+            for (s, hp) in self.damage.iter().filter(|(s, _)| self.ships.get(id).is_some_and(|l| l.iter().any(|(x, _)| x == *s))) {
+                (s, hp.hull.to_bits(), hp.shield.to_bits()).hash(&mut h);
+            }
             match &fl.location {
                 FleetLocation::AtPlanet(p) => (0u8, *p).hash(&mut h),
                 FleetLocation::Moving { to, progress, .. } => (1u8, *to, progress.to_bits()).hash(&mut h),

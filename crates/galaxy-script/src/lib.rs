@@ -14,6 +14,7 @@
 
 pub mod ai;
 pub mod host;
+mod save;
 
 use std::cell::RefCell;
 use std::collections::BTreeMap;
@@ -28,9 +29,10 @@ use galaxy_sim::{Event, ProductionKind, Sim, SimConfig, SimError};
 use galaxy_ai::{AiTier, Personality};
 
 pub use host::{HostStats, Inner, ScriptEvent, SimHost};
+pub use save::{Checkpoint, SAVE_VERSION, SaveError, SaveFile, SaveHeader};
 
 /// Options of a scripted match.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ScriptedConfig {
     /// Run `GameScoring`.
     pub game_scoring: bool,
@@ -40,9 +42,9 @@ pub struct ScriptedConfig {
     pub script_step: f64,
     /// Faction controlled by the human; defaults to the campaign's `Starting_Active_Player`.
     pub human: Option<String>,
-    /// Run the Remake AI (galaxy-ai) for every AI faction of the campaign instead of galaxy-sim's built-in AI.
+    /// Run the Remake AI (galaxy-ai, default) for every AI faction of the campaign instead of galaxy-sim's built-in AI (which snowballs: about 500 captures in 30 weeks).
     pub remake_ai: bool,
-    /// Difficulty of the AI factions (credits, build times, battle multipliers, contrast, goal sleep); `None` = no multipliers.
+    /// Difficulty of the AI factions (credits, build times, battle multipliers, contrast, goal sleep); `None` = no multipliers. Default `Normal`.
     pub difficulty: Option<DifficultyTier>,
     /// Strategic layer of the Remake AI (influence maps, utility scoring, pincers, honest information); see `galaxy-ai/STRATEGY.md`.
     pub strategy: bool,
@@ -52,7 +54,7 @@ pub struct ScriptedConfig {
 
 /// Difficulty tiers. `Easy`, `Normal` and `Hard` read `Xml/DifficultyAdjustments.xml` (`<Tier>_Default` for the major
 /// factions, `<Tier>_Minor` for minor ones). `Brutal` and `Fair` are our own estimates, not part of the mod data.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum DifficultyTier {
     /// `Easy_*`.
     Easy,
@@ -79,8 +81,8 @@ impl Default for ScriptedConfig {
             freestore: false,
             script_step: 0.2,
             human: None,
-            remake_ai: false,
-            difficulty: None,
+            remake_ai: true,
+            difficulty: Some(DifficultyTier::Normal),
             strategy: true,
             personalities: default_personalities(),
         }
@@ -119,6 +121,7 @@ pub struct ScriptedSim {
     pub start_errors: Vec<String>,
     /// Plans that could not be started.
     pub ai_errors: Vec<String>,
+    journal: save::Journal,
 }
 
 /// CPU cost of the calling thread, from the thread cycle counter (fine grained and unaffected by other
@@ -165,6 +168,8 @@ impl ScriptedSim {
         sim_config: SimConfig,
         config: ScriptedConfig,
     ) -> Result<ScriptedSim, SimError> {
+        let header_sim_config = sim_config.clone();
+        let header_config = config.clone();
         let sim = Sim::new(&data, campaign, sim_config)?;
         let world = sim.world().clone();
         let human_name = config
@@ -239,6 +244,7 @@ impl ScriptedSim {
             timing: Timing::default(),
             start_errors,
             ai_errors: Vec::new(),
+            journal: save::Journal { header: save::header(&campaign.name, &header_sim_config, &header_config, [world.planets.len(), world.units.len(), world.factions.len()]), entries: Vec::new(), tainted: std::cell::Cell::new(false) },
         };
         if config.remake_ai {
             sim.start_ai(&fs_for_ai, campaign, &config);
@@ -318,7 +324,9 @@ impl ScriptedSim {
     }
 
     /// Runs `f` with the simulation for commands.
+    /// The change is *not* journaled: afterwards [`ScriptedSim::save`] refuses (use the journaled methods in `save.rs` instead).
     pub fn with_sim_mut<R>(&self, f: impl FnOnce(&mut Sim) -> R) -> R {
+        self.journal.tainted.set(true);
         f(&mut self.inner.borrow_mut().sim)
     }
 
@@ -344,6 +352,7 @@ impl ScriptedSim {
 
     /// Advances simulation and scripts by `dt` game seconds.
     pub fn step(&mut self, dt: f32) -> StepReport {
+        self.journal.step(dt);
         let t0 = thread_cpu_time();
         let sim_events = {
             let mut g = self.inner.borrow_mut();

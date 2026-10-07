@@ -31,3 +31,11 @@ Headless, deterministic, `Send` Galactic Conquest simulation. Rules: `RULES.md`.
 - `run_headless(&request, &catalog, arena)` plays a request without rendering; `resolve_battle_tactical` now uses the same request path.
   Helpers for front ends: `TacticalRequest::{battle_config, battle_setup, result_from}`.
 - Tests: `tests/tactical.rs` (full round trip incl. capture, star base defence, retreat fallback, bad results rejected).
+
+## Persistent damage (new)
+- `Galaxy::damage: BTreeMap<ShipId, UnitHealth>` (hull/shield fractions, absent = undamaged) and `PlanetState::base_health` carry damage between battles. `TacticalGroup::unit_health`
+  feeds it into the battle (`BattleConfig::start_health`), `TacticalResult::health` (survivors, healthiest first) writes it back (`apply_tactical_result` and the headless tactical resolver).
+  Repair (`Sim::repair`, every tick): ships and star bases at a planet their faction owns regain `repair_base_per_week` (5%) + `repair_per_starbase_level_per_week` (10% per level)
+  of their hull per week, shields 4x faster. These three numbers are **estimates**: the data only has tactical repair (`Repair_Amount_Per_Frame` of repair hardpoints), nothing galactic.
+  Not persisted: hardpoint damage (repaired), squadron fighters, structures, statistical auto-resolve results (they only remove units).
+- `Command`, `SimConfig`, `TacticalResult` are serde-serialisable (used by the galaxy-script save journal).

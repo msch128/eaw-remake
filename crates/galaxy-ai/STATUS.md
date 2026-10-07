@@ -57,3 +57,9 @@ The Remake's galactic AI on top of an abstract `AiSim` (implemented for galaxy-s
   once `Sim::set_faction_difficulty` is called for them (done by `ScriptedSim` when a tier is configured; the built-in stub AI does not use tiers).
 - Known limits: the pincer only triggers when the single-force requirement lies between 50% and 90% of the player's strength; fog applies to the
   strategy layer and force sizing, not to the original equations; weights are estimates.
+
+## App-side needs (save/load, defaults)
+- Remake AI + strategy + Normal difficulty are the default of `galaxy_script::ScriptedConfig`; the menu should offer `DifficultyTier` (Easy/Normal/Hard from the mod, Brutal/Fair marked custom)
+  and an option "classic AI" (`remake_ai: false, difficulty: None`).
+- Save/load and the journaled input methods: see `galaxy-script/STATUS.md` (route every command through `ScriptedSim`, never through `with_sim_mut`).
+- Persistent damage: the tactical front end passes `TacticalResult::health` through unchanged; the HUD can read `Galaxy::damage` / `PlanetState::base_health` (fractions) for fleet panels.

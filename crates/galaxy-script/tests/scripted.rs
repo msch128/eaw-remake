@@ -25,7 +25,7 @@ fn build() -> Option<ScriptedSim> {
             victory_enabled: false,
             ..SimConfig::default()
         },
-        ScriptedConfig::default(),
+        ScriptedConfig { remake_ai: false, difficulty: None, ..ScriptedConfig::default() },
     )
     .ok()?;
     sim.with_sim_mut(|s| s.set_ai_factions(0..s.world().factions.len() as u32));

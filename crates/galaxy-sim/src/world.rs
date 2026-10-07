@@ -22,7 +22,7 @@ pub type FleetId = u32;
 
 /// Tunable simulation constants. Defaults follow the Remake data where the data defines them and
 /// are documented estimates elsewhere (see RULES.md).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SimConfig {
     /// Seed for all pseudo random decisions (AI tie breaks, combat target selection).
     pub seed: u64,
@@ -57,10 +57,16 @@ pub struct SimConfig {
     pub resolver: BattleResolver,
     /// Longest tactical battle in simulated seconds before it is declared a draw.
     pub tactical_max_seconds: f32,
+    /// Estimate: share of hull restored per week at an owned planet without a star base (the data has no galactic repair rule).
+    pub repair_base_per_week: f32,
+    /// Estimate: extra share per week and star base level.
+    pub repair_per_starbase_level_per_week: f32,
+    /// Estimate: shields are restored this many times faster than hulls.
+    pub repair_shield_factor: f32,
 }
 
 /// Algorithm used to settle battles.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum BattleResolver {
     /// Fast statistical rounds (`combat.rs`).
     #[default]
@@ -89,6 +95,9 @@ impl Default for SimConfig {
             victory_enabled: true,
             resolver: BattleResolver::Statistical,
             tactical_max_seconds: 900.0,
+            repair_base_per_week: 0.05,
+            repair_per_starbase_level_per_week: 0.10,
+            repair_shield_factor: 4.0,
         }
     }
 }

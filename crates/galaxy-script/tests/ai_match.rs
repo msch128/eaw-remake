@@ -83,10 +83,11 @@ fn remake_ai_builds_moves_and_attacks() {
 }
 
 #[test]
-fn built_in_ai_stays_the_default() {
+fn remake_ai_is_the_default_and_the_stub_stays_available() {
     let Some(sim) = build(false) else { return };
-    assert!(sim.ai_stats().is_none());
-    assert!(!ScriptedConfig::default().remake_ai);
+    assert!(sim.ai_stats().is_none(), "the stub is available with remake_ai: false");
+    let d = ScriptedConfig::default();
+    assert!(d.remake_ai && d.strategy && d.difficulty == Some(galaxy_script::DifficultyTier::Normal));
 }
 
 struct RunStats {
