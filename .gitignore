@@ -24,7 +24,7 @@ rustc-ice-*.txt
 #.idea/
 
 # --- Space Peace ---
-# Niemals Spieldateien/Assets einchecken: die Engine liest sie aus der eigenen installierten Kopie.
+# Never commit game files or assets: the engine reads them from the user's own install.
 *.meg
 *.alo
 *.ala

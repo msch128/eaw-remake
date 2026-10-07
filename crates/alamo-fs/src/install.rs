@@ -114,12 +114,12 @@ mod tests {
 
     #[test]
     fn parses_libraryfolders() {
-        let vdf = "\"libraryfolders\"\n{\n\t\"0\"\n\t{\n\t\t\"path\"\t\t\"C:\\\\Program Files (x86)\\\\Steam\"\n\t\t\"label\"\t\t\"\"\n\t}\n\t\"1\"\n\t{\n\t\t\"path\"\t\t\"F:\\\\SteamLibrary\"\n\t}\n}\n";
+        let vdf = "\"libraryfolders\"\n{\n\t\"0\"\n\t{\n\t\t\"path\"\t\t\"C:\\\\Program Files (x86)\\\\Steam\"\n\t\t\"label\"\t\t\"\"\n\t}\n\t\"1\"\n\t{\n\t\t\"path\"\t\t\"D:\\\\SteamLibrary\"\n\t}\n}\n";
         assert_eq!(
             library_paths(vdf),
             vec![
                 PathBuf::from(r"C:\Program Files (x86)\Steam"),
-                PathBuf::from(r"F:\SteamLibrary")
+                PathBuf::from(r"D:\SteamLibrary")
             ]
         );
     }
