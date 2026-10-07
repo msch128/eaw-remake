@@ -21,4 +21,7 @@ alamo-map = { path = "../alamo-map" }
 alamo-model = { path = "../alamo-model" }
 alamo-render = { path = "../alamo-render" }
 battle-sim = { path = "../battle-sim" }
+galaxy-sim = { path = "../galaxy-sim" }
+alamo-audio = { path = "../alamo-audio" }
+eaw-ui = { path = "../eaw-ui" }
 

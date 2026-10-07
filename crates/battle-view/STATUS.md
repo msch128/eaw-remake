@@ -32,14 +32,12 @@ Without `--offscreen` it opens a window. Other flags: `--map`, `--cam yaw,pitch,
 `TRACE_CHROME=trace.json` writes a Chrome trace.
 
 ## Known gaps / bugs
-- Alamo shader uses only the first directional light: map fill lights are stored, not rendered
-  (needs alamo-render shader change).
 - No Death_Clone animation; death particle files run ~30 s.
 - CPU-bound: ~5 ms (Coruscant) to ~9 ms (Kuat, 41 heavy props) per frame at 4K release, measured while
   another game ran. Props are not merged or culled by distance.
 - Demo `--auto` camera zooms to max distance in the new large arena; `PROPS`/`NOPROPS` env switches
   in the demo are debug leftovers.
-- No move-destination lines, sounds or muzzle flashes. Pointer/box select untested with a real mouse.
+- No move-destination lines or muzzle flashes; sound hooks exist but were never heard in a live run. Pointer/box select untested with a real mouse.
 - Impact particles are one entity each (alamo-render `AutoDespawn`, default 10 s); capped by
   `max_effects`.
 
@@ -48,8 +46,51 @@ Without `--offscreen` it opens a window. Other flags: `--map`, `--cam yaw,pitch,
 2. Merge or LOD static props; check Bevy extraction cost (transform propagation, batching).
 3. Death-clone models or shorter death effects; engine glow tied to speed.
 4. Shield bubble visibility from sim state; hull-damage smoke below 50% health.
-5. Integrate with the GC launch path (build `BattleSetup` from fleets, `Arena::load`).
+5. Live-test the round trip in the app (see "Integration for space-peace"); reinforcements in the request.
 
 ## Open questions
-- Should fill lights be supported in the Alamo shader?
+
 - Is the huge Kuat prop clutter (Executor etc. under the plane) wanted in battles?
+
+## Galaxy <-> tactical loop (new)
+- `BattleSession::from_request(&GameData, &dyn FileSource, &TacticalRequest, player: Option<FactionId>)` builds catalog,
+  arena, `.ted` scene (`Art/Maps/<request.map>`), visuals and team colours from a `galaxy_sim::TacticalRequest`.
+  The player's side gets no built-in AI (units idle until ordered); `None` = AI plays all sides.
+- `BattleRuntime::outcome() -> Option<TacticalResult>`: available once the sim reports the battle over (one side
+  destroyed or retreated, or the time limit); survivors/retreated per request group.
+- Message `BattleFinished { battle_id, result }` is written once when the displayed picture reaches the end.
+- `Snapshot::result` carries the final `BattleResult`; `ShipSnap::abilities` carries (active, cooldown) per ability.
+- `tactical_ui::TacticalUiPlugin` (needs `eaw_ui::EawUiPlugin::new(fs).with_game_data(data)`): spawns the EaW space tactical
+  bar with each battle, fills `TacticalData` (selection grouped per unit type with hull/shield, ability buttons with cooldown/active,
+  retreat countdown/ready, population) and turns clicks into commands (`b_retreat` -> `Command::Retreat`, ability button ->
+  `UseAbility` for the focused group, selection slot -> sub-select, shift removes). Not wired: reinforcement buttons, eaw-ui
+  world-space overlays (gizmo bars stay), `Hardpoint` markers.
+- `audio` module: `PlaySfx` messages for weapon fire (`Fire_SFXEvent`), non-shield hits (`Projectile_SFXEvent_Detonate`), ship death
+  (`Death_Explosion_SFXEvent`), hardpoint destroyed, ability activation, unit select/move/attack responses (`SFXEvent_Select/_Move/_Attack`),
+  budgeted per frame (24 total, 2 per event name). Silent without `AlamoAudioPlugin` (the view registers the message queue itself);
+  `BattleViewSettings::audio = false` switches the hooks off; `BattleAudioStats` counts what was sent. `MusicDirector` (if present) gets
+  `MusicScene::Space(player faction)` and an intensity from the share of ships still alive.
+- Map fill lights: `scene.lights[1..3]` are spawned as shadowless directional lights; `alamo.wgsl::fill_light` adds their diffuse term
+  (directional lights after the first; the sun stays the first one).
+- Example `tactical_roundtrip --offscreen out.png [--at 25] [--speed 30] [--ui]`: pending battle in galaxy-sim -> `tactical_setup` ->
+  `from_request` -> AI vs AI at 30x -> `BattleFinished` -> `apply_tactical_result`, prints the new galaxy state.
+
+## Integration for space-peace
+Add `battle-view`, `galaxy-sim` (already there through galaxy-play) and `eaw-ui` to the app; add `AlamoRenderPlugin`, `BattleViewPlugin`,
+`TacticalUiPlugin` and `EawUiPlugin` once at startup (they are idle without a `BattleSession`).
+
+1. On `PlayEvent::OpenTacticalBattle(PendingBattle)` (sim thread or wherever the `Sim` lives): `let req = sim.tactical_setup(battle.id)?;`
+   and hand `req` (plain data, `Clone + Send`) to the app thread. Pause the galaxy clock for that battle.
+2. App thread, entering `AppScreen::SpaceBattle`: hide the galaxy scene/camera, then
+   `commands.insert_resource(BattleSession::from_request(&data, &*game_fs, &req, Some(player_faction_id))?)`.
+   Optional: `BattleViewSettings { audio: true, ui_scale, msaa_samples, .. }` and `EawUiSettings::camera = None` (the UI uses the default camera).
+   Tip: building the catalog takes a moment (only the units in the request are loaded); do it on a worker thread if the loading stall matters.
+3. Each frame in `SpaceBattle`: `MessageReader<BattleFinished>`; on a message send `f.battle_id`/`f.result` (it is `Clone + Send`) to the sim
+   side and call `sim.apply_tactical_result(f.battle_id, &f.result)` -> `Result<Vec<Event>, TacticalError>` (events: `UnitsDestroyed`,
+   `BattleWon/Lost`, `BattleResolved`; planet capture follows from the normal capture rule on the next `step`). Forward the events like any
+   other sim events.
+4. Leaving the screen: `commands.remove_resource::<BattleSession>()` (despawns scene, camera, bar, worker thread) and show the galaxy again.
+   Watch for the `BattleRuntime` resource to disappear before showing the galaxy camera. If the player quits the battle early, call
+   `sim.cancel_tactical(id)` and then `resolve_battle_auto(id)`, or let the battle run with `BattleViewSettings::speed`.
+5. Auto-resolve is unchanged: `Sim::resolve_battle_auto` / `resolve_battle_tactical` still work (the latter now goes through the same request
+   path as the front end).

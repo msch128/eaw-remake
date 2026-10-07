@@ -41,6 +41,8 @@ pub struct ShipSnap {
     pub shield: f32,
     /// Hardpoint states (empty for fighters).
     pub hps: Vec<HpSnap>,
+    /// Ability state per ability of the definition: (seconds of effect left, seconds until usable).
+    pub abilities: Vec<(f32, f32)>,
 }
 
 /// One projectile at the end of a step.
@@ -71,6 +73,8 @@ pub struct Snapshot {
     pub over: bool,
     /// Winning side, if any.
     pub winner: Option<u8>,
+    /// Final result with survivors per group, once the battle is over.
+    pub result: Option<battle_sim::BattleResult>,
     /// Living ships per side (fighters included).
     pub alive: Vec<u32>,
     /// Wall-clock milliseconds the worker needed for the step.
@@ -88,6 +92,7 @@ impl Snapshot {
 }
 
 fn snapshot(battle: &Battle, events: Vec<Event>, step_ms: f32) -> Snapshot {
+    let result = battle.is_over().then(|| battle.result());
     let mut alive = vec![0u32; battle.side_count()];
     let ships: Vec<ShipSnap> = battle
         .ships
@@ -113,6 +118,7 @@ fn snapshot(battle: &Battle, events: Vec<Event>, step_ms: f32) -> Snapshot {
                         health: h.health,
                     })
                     .collect(),
+                abilities: s.abilities.iter().map(|a| (a.active, a.cooldown)).collect(),
             }
         })
         .collect();
@@ -131,7 +137,8 @@ fn snapshot(battle: &Battle, events: Vec<Event>, step_ms: f32) -> Snapshot {
             .collect(),
         events,
         over: battle.is_over(),
-        winner: if battle.is_over() { battle.result().winner } else { None },
+        winner: result.as_ref().and_then(|r| r.winner),
+        result,
         alive,
         step_ms,
     }

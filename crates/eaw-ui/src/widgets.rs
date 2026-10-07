@@ -1029,6 +1029,8 @@ pub(crate) fn slots(
     for (e, slot, pname, mut node, mut st, mut vis, mut button) in &mut slots {
         button.tooltip_literal = match slot.kind {
             SlotKind::Ability => data.abilities.get(slot.index).map(|a| a.tooltip.clone()),
+            SlotKind::Pad => data.pads.get(slot.index).map(|p| p.tooltip.clone()).filter(|t| !t.is_empty()),
+            SlotKind::Queue => data.queue.get(slot.index).map(|q| q.tooltip.clone()).filter(|t| !t.is_empty()),
             _ => None,
         };
         // (icon, progress, label, disabled, selected)
@@ -1225,10 +1227,9 @@ pub(crate) fn tooltip(
         return;
     };
     let text = b
-        .tooltips
-        .iter()
-        .find_map(|k| assets.text.get(k).filter(|t| !t.is_empty()))
-        .or(b.tooltip_literal.as_deref())
+        .tooltip_literal
+        .as_deref()
+        .or_else(|| b.tooltips.iter().find_map(|k| assets.text.get(k).filter(|t| !t.is_empty())))
         .unwrap_or("");
     if text.is_empty() {
         node.display = Display::None;

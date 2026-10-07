@@ -203,6 +203,23 @@ pub fn spawn_scene(commands: &mut Commands, scene: &SpaceScene, sky_radius: f32)
         Color::srgb(sun.color.x, sun.color.y, sun.color.z),
     );
     commands.entity(sun_entity).insert(BattleEntity);
+    // The map's two fill lights are plain directional lights after the sun; the Alamo shader adds their diffuse term.
+    for (i, fill) in scene.lights.iter().enumerate().skip(1) {
+        if fill.color.max_element() < 0.02 {
+            continue;
+        }
+        commands.spawn((
+            Name::new(format!("fill light {i}")),
+            BattleEntity,
+            DirectionalLight {
+                color: Color::srgb(fill.color.x, fill.color.y, fill.color.z),
+                illuminance: 1.0 / exposure,
+                shadow_maps_enabled: false,
+                ..default()
+            },
+            Transform::IDENTITY.looking_to(fill.direction, Vec3::Y),
+        ));
+    }
     let sky_rot = |deg: [f32; 3]| map_object_rotation(deg);
     if let Some(sky) = &scene.skydome {
         commands.spawn((

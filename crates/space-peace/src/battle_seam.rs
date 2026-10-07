@@ -138,13 +138,20 @@ fn finish_battle(mut results: MessageReader<BattleFinished>, mut next: ResMut<Ne
 }
 
 /// The galaxy scene stays alive during a battle but is not drawn.
-fn hide_galaxy(mut scene: Query<&mut Visibility, With<GalaxyEntity>>) {
+#[allow(clippy::type_complexity)]
+fn hide_galaxy(
+    mut scene: Query<&mut Visibility, Or<(With<GalaxyEntity>, With<galaxy_play::FleetVisual>, With<galaxy_play::visuals::FleetLabel>)>>,
+) {
     for mut v in &mut scene {
         *v = Visibility::Hidden;
     }
 }
 
-fn show_galaxy(mut scene: Query<&mut Visibility, With<GalaxyEntity>>, mut selection: ResMut<Selection>) {
+#[allow(clippy::type_complexity)]
+fn show_galaxy(
+    mut scene: Query<&mut Visibility, Or<(With<GalaxyEntity>, With<galaxy_play::FleetVisual>, With<galaxy_play::visuals::FleetLabel>)>>,
+    mut selection: ResMut<Selection>,
+) {
     for mut v in &mut scene {
         *v = Visibility::Inherited;
     }

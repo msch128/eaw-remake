@@ -17,6 +17,7 @@ pub struct Sim {
     pub(crate) ai: Vec<FactionId>,
     pub(crate) tactical: Option<Arc<battle_sim::Catalog>>,
     pub(crate) arenas: std::collections::HashMap<String, Arc<battle_sim::Arena>>,
+    pub(crate) tactical_requests: BTreeMap<u32, crate::tactical::TacticalRequest>,
 }
 
 impl Sim {
@@ -52,7 +53,7 @@ impl Sim {
                 add_units(&mut galaxy, f, p, u, 1);
             }
         }
-        let mut sim = Sim { world, galaxy, ai: Vec::new(), tactical: None, arenas: std::collections::HashMap::new() };
+        let mut sim = Sim { world, galaxy, ai: Vec::new(), tactical: None, arenas: std::collections::HashMap::new(), tactical_requests: BTreeMap::new() };
         sim.world.clone().refresh_economy(&mut sim.galaxy);
         Ok(sim)
     }
@@ -510,16 +511,11 @@ impl Sim {
         v
     }
 
-    fn resolve_inner(&mut self, id: u32, tactical: bool) -> Option<Vec<Event>> {
-        let pos = self.galaxy.battles.iter().position(|b| b.id == id)?;
-        let battle = self.galaxy.battles.remove(pos);
-        let world = self.world.clone();
-        let w = &*world;
+    /// The combatants of a pending battle, one side per faction.
+    pub(crate) fn battle_sides(&self, battle: &PendingBattle) -> Vec<SideInput> {
+        let w = &*self.world;
         let p = battle.planet;
-        let mut events = Vec::new();
-
-        // Sides, one per faction.
-        let ps = self.galaxy.planets[p as usize].clone();
+        let ps = &self.galaxy.planets[p as usize];
         let mut sides: Vec<SideInput> = Vec::new();
         for &fac in &battle.factions {
             let mut members = Vec::new();
@@ -551,13 +547,45 @@ impl Sim {
             }
             sides.push(SideInput { faction: fac, members });
         }
-        let mut rng = self.galaxy.rng.fork(0xBA77_1E00 ^ id as u64);
+        sides
+    }
+
+    /// Deterministic seed of a battle (also used for the statistical resolver).
+    pub(crate) fn battle_rng(&self, id: u32) -> crate::rng::Rng {
+        self.galaxy.rng.clone().fork(0xBA77_1E00 ^ id as u64)
+    }
+
+    fn resolve_inner(&mut self, id: u32, tactical: bool) -> Option<Vec<Event>> {
+        let pos = self.galaxy.battles.iter().position(|b| b.id == id)?;
+        let battle = self.galaxy.battles.remove(pos);
+        self.tactical_requests.remove(&id);
+        let world = self.world.clone();
+        let w = &*world;
+        let p = battle.planet;
+
+        let sides = self.battle_sides(&battle);
+        let mut rng = self.battle_rng(id);
         let seed = rng.next_u64();
-        let arena = w.planets[p as usize].space_map.as_ref().and_then(|m| self.arenas.get(&m.to_ascii_lowercase())).cloned();
-        let result = tactical
-            .then(|| self.tactical.as_ref().and_then(|c| crate::tactical::run(w, c, &sides, seed, arena)))
-            .flatten()
-            .unwrap_or_else(|| combat::resolve_allied(w, &sides, &mut rng, &self.galaxy.allied));
+        if tactical && let Some(catalog) = self.tactical.clone() {
+            let arena = w.planets[p as usize].space_map.as_ref().and_then(|m| self.arenas.get(&m.to_ascii_lowercase())).cloned();
+            let request = crate::tactical::TacticalRequest::from_sides(w, &battle, &sides, seed);
+            if let Some(result) = crate::tactical::run_headless(&request, &catalog, arena) {
+                let (sides, combat) = request.combat_result(&result);
+                return Some(self.apply_combat(&battle, &sides, combat));
+            }
+        }
+        let result = combat::resolve_allied(w, &sides, &mut rng, &self.galaxy.allied);
+        Some(self.apply_combat(&battle, &sides, result))
+    }
+
+    /// Applies a combat result (statistical or tactical) to the galaxy: losses, destroyed star base and
+    /// structures, retreats, events.
+    pub(crate) fn apply_combat(&mut self, battle: &PendingBattle, sides: &[SideInput], result: combat::CombatResult) -> Vec<Event> {
+        let world = self.world.clone();
+        let w = &*world;
+        let (id, p) = (battle.id, battle.planet);
+        let mut events = Vec::new();
+        let ps = self.galaxy.planets[p as usize].clone();
 
         // Apply fleet losses.
         self.galaxy.sync_ships();
@@ -618,24 +646,42 @@ impl Sim {
             }
         }
         // Draw: every attacker fleet falls back.
+        let mut retreating: Vec<FleetId> = Vec::new();
         if winner.is_none() && result.survivors.iter().filter(|s| !s.is_empty()).count() > 1 {
             let owner = ps.owner;
-            let retreating: Vec<FleetId> = self
-                .galaxy
-                .fleets
-                .values()
-                .filter(|f| f.location == FleetLocation::AtPlanet(p) && Some(f.owner) != owner && f.previous_planet != p)
-                .map(|f| f.id)
-                .collect();
-            for fid in retreating {
-                let f = &self.galaxy.fleets[&fid];
-                if let Some(path) = w.find_path(p, f.previous_planet) {
-                    start_move(w, &mut self.galaxy, fid, path);
-                }
+            retreating.extend(
+                self.galaxy
+                    .fleets
+                    .values()
+                    .filter(|f| f.location == FleetLocation::AtPlanet(p) && Some(f.owner) != owner && f.previous_planet != p)
+                    .map(|f| f.id),
+            );
+        }
+        // Ships of a side that left the battle by retreating (and lost it) fall back too.
+        retreating.extend(result.retreated.iter().copied().filter(|fid| winner.is_some_and(|wf| self.galaxy.fleets.get(fid).is_some_and(|f| f.owner != wf))));
+        retreating.sort_unstable();
+        retreating.dedup();
+        for fid in retreating {
+            let Some(f) = self.galaxy.fleets.get(&fid) else { continue };
+            if f.location != FleetLocation::AtPlanet(p) {
+                continue;
+            }
+            // Back where it came from; a fleet without a way back (it was built here) goes to a friendly neighbour.
+            let target = if f.previous_planet != p {
+                Some(f.previous_planet)
+            } else {
+                let owner = f.owner;
+                w.routes
+                    .iter()
+                    .filter_map(|r| if r.a == p { Some(r.b) } else if r.b == p { Some(r.a) } else { None })
+                    .find(|&n| self.galaxy.planets[n as usize].owner == Some(owner))
+            };
+            if let Some(path) = target.and_then(|t| w.find_path(p, t)) {
+                start_move(w, &mut self.galaxy, fid, path);
             }
         }
         events.push(Event::BattleResolved { id, planet: p, winner, losses: losses.into_iter().collect() });
-        Some(events)
+        events
     }
 
     fn capture(&mut self, dt: f32, events: &mut Vec<Event>) {

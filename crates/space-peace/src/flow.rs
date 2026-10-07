@@ -29,6 +29,11 @@ pub enum AppScreen {
 #[derive(Resource, Default, Debug)]
 pub struct Paused(pub bool);
 
+/// Run condition: the mouse is not over the command bar (or otherwise claimed by `galaxy-play`).
+pub fn cursor_free(blocked: Res<galaxy_play::PlayCursorBlocked>) -> bool {
+    !blocked.0
+}
+
 /// Run condition: the game is not paused.
 pub fn not_paused(paused: Res<Paused>) -> bool {
     !paused.0

@@ -93,6 +93,18 @@ fn ambient_color() -> vec3<f32> {
     return lights.ambient_color.rgb * view.exposure;
 }
 
+// Diffuse contribution of the fill lights: the directional lights after the sun (the map's second and third
+// light). They cast no shadows and have no specular.
+fn fill_light(n: vec3<f32>) -> vec3<f32> {
+    var sum = vec3<f32>(0.0);
+    let count = min(lights.n_directional_lights, 3u);
+    for (var i = 1u; i < count; i = i + 1u) {
+        let l = lights.directional_lights[i];
+        sum += l.color.rgb * view.exposure * saturate(dot(n, normalize(l.direction_to_light)));
+    }
+    return sum;
+}
+
 @fragment
 fn fragment(in: VertexOutput, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
     let uv = in.uv + mat.uv_offset.xy + mat.uv_offset.zw * globals.time;
@@ -178,7 +190,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) front: bool) -> @location(0
         let wrap = 0.0;
         let ndl = saturate(dot(n, L));
         let cdl = saturate(dot(ncloud, L));
-        let surf = base.rgb * mat.diffuse.rgb * (amb + sun * ndl);
+        let surf = base.rgb * mat.diffuse.rgb * (amb + sun * ndl + fill_light(n));
         let H = normalize(L + V);
         let spec = mat.specular.rgb * spec_mask * pow(saturate(dot(n, H)), max(mat.shininess, 8.0)) * sun * step(0.0, dot(N, L));
         var col = surf + spec;
@@ -228,7 +240,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) front: bool) -> @location(0
     let H = normalize(L + V);
     let spec = mat.specular.rgb * spec_mask * pow(saturate(dot(n, H)), max(mat.shininess, 1.0)) * sun * step(0.0, dot(N, L)) * shadow;
     // Emissive is the self-illumination of the base texture.
-    rgb = albedo * (amb + sun * ndl) + spec + mat.emissive.rgb * base.rgb;
+    rgb = albedo * (amb + sun * ndl + fill_light(n)) + spec + mat.emissive.rgb * base.rgb;
     if mat.kind == KIND_ALPHA {
         alpha = mat.diffuse.a;
         if has(FLAG_ALPHA_FROM_BASE) {

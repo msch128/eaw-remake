@@ -21,6 +21,26 @@ pub struct Selection {
     pub enemy: Option<u32>,
 }
 
+/// Kind of order the player gave (for unit responses).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OrderKind {
+    /// Move.
+    Move,
+    /// Attack or attack-move.
+    Attack,
+    /// Stop.
+    Stop,
+}
+
+/// The player gave an order; `lead` is the first ordered ship.
+#[derive(Message, Debug, Clone, Copy)]
+pub struct OrderIssued {
+    /// What was ordered.
+    pub kind: OrderKind,
+    /// First ordered ship.
+    pub lead: u32,
+}
+
 /// Control groups (Ctrl + digit stores, digit recalls).
 #[derive(Resource, Default, Debug, Clone)]
 pub struct ControlGroups(pub [Vec<u32>; 10]);
@@ -292,6 +312,7 @@ pub fn orders(
     sel: Res<Selection>,
     hover: Res<Hover>,
     mut markers: ResMut<OrderMarkers>,
+    mut issued: MessageWriter<OrderIssued>,
 ) {
     let player = settings.player_side;
     let mine: Vec<u32> = sel
@@ -308,8 +329,10 @@ pub fn orders(
     if mine.is_empty() {
         return;
     }
+    let lead = mine[0];
     if keys.just_pressed(KeyCode::KeyS) && !keys.pressed(KeyCode::ControlLeft) {
         rt.sim.command(player, Command::Stop { ships: mine.clone() });
+        issued.write(OrderIssued { kind: OrderKind::Stop, lead });
     }
     if !pointer.right_pressed {
         return;
@@ -323,6 +346,7 @@ pub fn orders(
                 hardpoint: hp,
             },
         );
+        issued.write(OrderIssued { kind: OrderKind::Attack, lead });
         if let Some(s) = ships.0.get(&target) {
             markers.0.push((s.pos, 1.0, Color::srgb(1.0, 0.25, 0.2)));
         }
@@ -331,6 +355,7 @@ pub fn orders(
         .filter(|id| ships.0.get(id).is_some_and(|s| s.side != player))
     {
         rt.sim.command(player, Command::Attack { ships: mine, target });
+        issued.write(OrderIssued { kind: OrderKind::Attack, lead });
         if let Some(s) = ships.0.get(&target) {
             markers.0.push((s.pos, 1.0, Color::srgb(1.0, 0.25, 0.2)));
         }
@@ -338,8 +363,10 @@ pub fn orders(
         let to = bevy_to_sim(g);
         if pointer.shift {
             rt.sim.command(player, Command::AttackMove { ships: mine, to });
+            issued.write(OrderIssued { kind: OrderKind::Attack, lead });
         } else {
             rt.sim.command(player, Command::Move { ships: mine, to });
+            issued.write(OrderIssued { kind: OrderKind::Move, lead });
         }
         markers.0.push((g, 1.2, Color::srgb(0.3, 1.0, 0.4)));
     }

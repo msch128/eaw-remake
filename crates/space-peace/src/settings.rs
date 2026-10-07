@@ -317,7 +317,7 @@ impl Plugin for SettingsPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(
             Update,
-            (apply_window, apply_ui_scale, apply_audio).run_if(resource_changed::<Settings>),
+            (apply_window, apply_ui_scale.run_if(not(resource_exists::<eaw_ui::EawUiSettings>)), apply_audio).run_if(resource_changed::<Settings>),
         )
         .add_systems(Last, limit_fps);
     }

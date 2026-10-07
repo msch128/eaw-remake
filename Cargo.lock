@@ -387,6 +387,7 @@ dependencies = [
 name = "battle-view"
 version = "0.1.0"
 dependencies = [
+ "alamo-audio",
  "alamo-data",
  "alamo-fs",
  "alamo-map",
@@ -394,6 +395,8 @@ dependencies = [
  "alamo-render",
  "battle-sim",
  "bevy",
+ "eaw-ui",
+ "galaxy-sim",
 ]
 
 [[package]]
@@ -4572,6 +4575,9 @@ dependencies = [
  "alamo-fs",
  "alamo-render",
  "bevy",
+ "eaw-ui",
+ "galaxy-play",
+ "galaxy-sim",
  "rand 0.9.5",
 ]
 

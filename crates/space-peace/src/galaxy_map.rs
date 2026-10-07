@@ -17,7 +17,7 @@ use bevy::{
 use rand::{Rng, SeedableRng, rngs::SmallRng};
 
 use crate::camera::{CameraBounds, GalaxyCamera};
-use crate::flow::{AppScreen, UiSound, not_paused};
+use crate::flow::{AppScreen, UiSound, cursor_free, not_paused};
 use crate::galaxy_view::{GalaxyView, LineStyleView, PropView};
 use crate::planet_visual::{
     NEUTRAL, PlanetRadii, PlanetVisualAssets, PlanetVisualPlugin, rgb, spawn_planet_visual,
@@ -34,6 +34,7 @@ impl Plugin for GalaxyMapPlugin {
         app.add_plugins(PlanetVisualPlugin)
             .init_resource::<Selection>()
             .init_resource::<Hover>()
+            .init_resource::<ReservedBottom>()
             .init_resource::<MapScale>()
             .init_gizmo_group::<RouteWide>()
             .init_gizmo_group::<RouteMid>()
@@ -63,7 +64,7 @@ impl Plugin for GalaxyMapPlugin {
             .add_systems(
                 Update,
                 (
-                    (update_hover, pick_planet).chain().run_if(not_paused),
+                    (update_hover, pick_planet).chain().run_if(not_paused.and_then(cursor_free)),
                     update_labels,
                     draw_rings,
                     draw_routes,
@@ -94,6 +95,10 @@ struct SelectGizmos;
 /// The game's route colours are very dark additive teal (around 13, 31, 38) meant to sit on top
 /// of the original galaxy backdrop art; this brightens them so they read on plain black space.
 const ROUTE_GLOW: f32 = 5.0;
+
+/// Bottom strip of the viewport (logical pixels) covered by the command bar; labels avoid it.
+#[derive(Resource, Default, Debug)]
+pub struct ReservedBottom(pub f32);
 
 /// Currently selected planet (index into [`GalaxyView::planets`]).
 #[derive(Resource, Default, Debug)]
@@ -485,6 +490,8 @@ fn update_labels(
     selection: Res<Selection>,
     hover: Res<Hover>,
     bounds: Res<CameraBounds>,
+    ui_scale: Res<UiScale>,
+    reserved: Res<ReservedBottom>,
     camera: Single<(&Camera, &GlobalTransform, &GalaxyCamera)>,
     mut labels: Query<(&PlanetLabel, &mut Node, &mut Visibility, &ComputedNode, &mut TextFont)>,
     mut slots: Local<Vec<Option<LabelSlot>>>,
@@ -497,12 +504,15 @@ fn update_labels(
     // Labels grow when zoomed in and shrink when zoomed out (whole pixel steps only).
     let zoom_out = zoom_fraction(&bounds, orbit.distance);
     let font_px = (22.0 + (13.0 - 22.0) * smoothstep(0.0, 0.6, zoom_out)).round();
+    // UI coordinates are multiplied by the UI scale; the layout below works in viewport pixels.
+    let us = ui_scale.0.max(0.1);
+    let font_node_px = (font_px / us).round().max(1.0);
     slots.clear();
     slots.resize(view.planets.len(), None);
 
     for (label, _, _, computed, mut font) in &mut labels {
-        if font.font_size != FontSize::Px(font_px) {
-            font.font_size = FontSize::Px(font_px);
+        if font.font_size != FontSize::Px(font_node_px) {
+            font.font_size = FontSize::Px(font_node_px);
         }
         let planet = &view.planets[label.0];
         let radius = radii.0[label.0];
@@ -510,7 +520,7 @@ fn update_labels(
         let Ok(p) = camera.world_to_viewport(cam_tf, below) else {
             continue;
         };
-        let measured = computed.size() * computed.inverse_scale_factor();
+        let measured = computed.size() * computed.inverse_scale_factor() * us;
         let size = if measured.x > 1.0 {
             measured
         } else {
@@ -559,7 +569,7 @@ fn update_labels(
     for i in order {
         let s = slots[i].expect("filtered above");
         let (lo, hi) = (s.pos - Vec2::splat(MARGIN), s.pos + s.size + Vec2::splat(MARGIN));
-        let on_screen = lo.x >= 0.0 && lo.y >= 0.0 && hi.x <= viewport.x && hi.y <= viewport.y;
+        let on_screen = lo.x >= 0.0 && lo.y >= 0.0 && hi.x <= viewport.x && hi.y <= viewport.y - reserved.0;
         let overlaps = placed
             .iter()
             .any(|&(plo, phi)| lo.x < phi.x && hi.x > plo.x && lo.y < phi.y && hi.y > plo.y);
@@ -581,8 +591,8 @@ fn update_labels(
     for (label, mut node, mut vis, _, _) in &mut labels {
         match slots[label.0] {
             Some(s) if visible[label.0] => {
-                node.left = Val::Px(s.pos.x);
-                node.top = Val::Px(s.pos.y);
+                node.left = Val::Px(s.pos.x / us);
+                node.top = Val::Px(s.pos.y / us);
                 *vis = Visibility::Inherited;
             }
             _ => *vis = Visibility::Hidden,

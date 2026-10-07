@@ -153,7 +153,7 @@ fn main() {
         .map(|(i, p)| {
             let d = data.planet(&p.name)?;
             let m = d.galactic_model.clone().filter(|m| !m.to_ascii_lowercase().contains("invisible"))?;
-            (world.real[i] && !p.name.to_ascii_lowercase().contains("dummy")).then(|| (m, if d.scale_factor > 0.0 { d.scale_factor } else { 1.0 }))
+            (world.real[i] && !p.name.to_ascii_lowercase().contains("dummy")).then_some((m, if d.scale_factor > 0.0 { d.scale_factor } else { 1.0 }))
         })
         .collect();
     let focus = args.focus.as_ref().and_then(|f| {
@@ -245,6 +245,7 @@ fn setup(mut commands: Commands, demo: Res<Demo>, state: Res<SimState>, mut layo
 
 /// Planet colours, radii, lanes and owner rings.
 #[allow(clippy::too_many_arguments)]
+#[allow(clippy::type_complexity)]
 fn planets(
     mut gizmos: Gizmos,
     state: Res<SimState>,

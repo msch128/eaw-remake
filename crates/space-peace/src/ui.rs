@@ -50,7 +50,7 @@ fn despawn_hud(mut commands: Commands, hud: Query<Entity, With<HudEntity>>) {
 }
 
 #[derive(Component)]
-struct InfoPanel;
+pub struct InfoPanel;
 
 /// Which line of the info panel a text entity shows.
 #[derive(Component, Clone, Copy, PartialEq, Eq)]

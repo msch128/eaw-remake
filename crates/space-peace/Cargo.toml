@@ -29,4 +29,7 @@ alamo-data = { path = "../alamo-data" }
 alamo-render = { path = "../alamo-render" }
 alamo-audio = { path = "../alamo-audio" }
 rand = "0.9"
+galaxy-sim = { path = "../galaxy-sim" }
+galaxy-play = { path = "../galaxy-play" }
+eaw-ui = { path = "../eaw-ui" }
 

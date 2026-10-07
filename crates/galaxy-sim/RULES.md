@@ -121,3 +121,9 @@ Every `ai_interval_seconds` (10 s) each AI faction, planned in parallel threads 
 faction order: buys tech, builds/upgrades star bases, builds structures that unlock many ships (shipyards) or pay back, queues the
 best durability x damage per credit ship, merges idle fleets per planet, and sends a fleet at the best-valued reachable enemy or
 neutral planet whose defense (Lanchester estimate `sqrt(durability x dps)`) it exceeds by 1.5x.
+
+## 7. Tactical results
+A tactical battle (front end or `run_headless`) reports survivors per group; losses, the star base and structures are applied exactly like the
+statistical result. Units that left the battle by `Retreat` count as survivors and, when their side did not win (or the battle was a draw and they
+attack), their fleets fall back along the lane they came from (estimate: no attrition, `Space_Retreat_Attrition_Factor` is 0 in the data). Damage is
+not carried over between battles (surviving ships are repaired), also an estimate.

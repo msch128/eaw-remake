@@ -16,6 +16,27 @@ pub struct HpVisual {
     pub damage_bone: Option<String>,
     /// Particle object played when the hardpoint blows up (`Death_Explosion_Particles`).
     pub death_effect: Option<String>,
+    /// SFX event played when the hardpoint fires (`Fire_SFXEvent`).
+    pub fire_sfx: Option<String>,
+}
+
+/// Sound events of a unit type (names of `SFXEvents.xml` entries).
+#[derive(Debug, Clone, Default)]
+pub struct UnitSfx {
+    /// `SFXEvent_Select`.
+    pub select: Option<String>,
+    /// `SFXEvent_Move`.
+    pub mv: Option<String>,
+    /// `SFXEvent_Attack`.
+    pub attack: Option<String>,
+    /// `Death_Explosion_SFXEvent`.
+    pub death: Option<String>,
+    /// `SFXEvent_Hardpoint_Destroyed`.
+    pub hardpoint_destroyed: Option<String>,
+    /// `SFXEvent_GUI_Unit_Ability_Activated`.
+    pub ability: Option<String>,
+    /// `SFXEvent_Fire` (fighters, which have no hardpoints).
+    pub fire: Option<String>,
 }
 
 /// Visual description of one ship definition.
@@ -29,6 +50,8 @@ pub struct ShipVisual {
     pub death_effects: Vec<String>,
     /// One entry per simulation hardpoint.
     pub hardpoints: Vec<HpVisual>,
+    /// Sound events of the unit (`SFXEvent_Select`, `_Move`, `_Attack`, `Death_Explosion_SFXEvent`).
+    pub sfx: UnitSfx,
 }
 
 /// Visual data for every ship definition of a [`Catalog`], plus the team colour per side.
@@ -38,6 +61,8 @@ pub struct VisualCatalog {
     pub ships: Vec<ShipVisual>,
     /// Team colour per side index.
     pub team_colors: Vec<Color>,
+    /// `Projectile_SFXEvent_Detonate` per projectile definition.
+    pub proj_detonate: Vec<Option<String>>,
 }
 
 impl VisualCatalog {
@@ -72,17 +97,44 @@ impl VisualCatalog {
                         bone: hd.attachment_bone.clone().filter(|b| !b.is_empty()),
                         damage_bone: field("damage_particles"),
                         death_effect: field("death_explosion_particles"),
+                        fire_sfx: field("fire_sfxevent"),
                     }
                 })
                 .collect();
+            let sfx = |k: &str| {
+                r.as_ref()
+                    .and_then(|r| r.get(k))
+                    .map(|v| v.trim().to_string())
+                    .filter(|v| !v.is_empty())
+            };
+            let unit_sfx = UnitSfx {
+                select: sfx("sfxevent_select"),
+                mv: sfx("sfxevent_move"),
+                attack: sfx("sfxevent_attack"),
+                death: sfx("death_explosion_sfxevent"),
+                hardpoint_destroyed: sfx("sfxevent_hardpoint_destroyed"),
+                ability: sfx("sfxevent_gui_unit_ability_activated"),
+                fire: sfx("sfxevent_fire"),
+            };
             ships.push(ShipVisual {
                 model: def.model.clone(),
                 scale,
                 death_effects,
                 hardpoints,
+                sfx: unit_sfx,
             });
         }
-        Self { ships, team_colors }
+        let proj_detonate = catalog
+            .projectiles
+            .iter()
+            .map(|p| {
+                data.objects
+                    .resolve(&p.name)
+                    .and_then(|r| r.get("projectile_sfxevent_detonate").map(|v| v.trim().to_string()))
+                    .filter(|v| !v.is_empty())
+            })
+            .collect();
+        Self { ships, team_colors, proj_detonate }
     }
 
     /// Visual data of a ship definition.

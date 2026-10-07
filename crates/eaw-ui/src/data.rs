@@ -29,6 +29,8 @@ pub struct QueueEntry {
     pub progress: f32,
     /// Number of queued items of this kind (shown when above 1).
     pub count: u32,
+    /// Tooltip text (empty keeps the slot's engine text).
+    pub tooltip: String,
 }
 
 /// One build pad (`b_create_NN`): a unit or structure that can be produced.
@@ -42,6 +44,8 @@ pub struct BuildPadEntry {
     pub disabled: bool,
     /// Production in progress for this item (shows the build overlay).
     pub building: bool,
+    /// Tooltip text (empty keeps the slot's engine text).
+    pub tooltip: String,
 }
 
 /// One slot of the tactical selection (`s_select_NN` with `s_health_NN` / `s_shield_NN`).

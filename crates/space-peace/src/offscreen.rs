@@ -91,6 +91,7 @@ fn drive(
     view: Res<GalaxyView>,
     bounds: Res<CameraBounds>,
     diagnostics: Res<DiagnosticsStore>,
+    hold: Res<crate::play::ScriptHold>,
     mut selection: ResMut<Selection>,
     mut cam: Single<&mut GalaxyCamera>,
     screen: Res<State<AppScreen>>,
@@ -154,7 +155,7 @@ fn drive(
     let settled = if st.loading_shot {
         now.duration_since(st.created).as_secs_f32() > 3.0
     } else {
-        st.ready_at.is_some_and(|t| now.duration_since(t).as_secs_f32() > 3.0)
+        st.ready_at.is_some_and(|t| now.duration_since(t).as_secs_f32() > 3.0) && hold.settled()
     };
     if frame >= st.frames && settled && !st.capture_requested {
         st.capture_requested = true;

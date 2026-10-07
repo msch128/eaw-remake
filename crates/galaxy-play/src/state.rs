@@ -135,6 +135,8 @@ pub struct GameClock {
     pub speeds: Vec<f32>,
     /// Arbitrary multiplier replacing the levels (demos); `Some(0.0)` pauses.
     pub override_multiplier: Option<f32>,
+    /// The host holds time (pause menu, tactical battle screen); wins over every speed setting.
+    pub hold: bool,
     /// Galactic seconds waiting to be sent to the worker.
     pub pending: f32,
 }
@@ -143,11 +145,14 @@ impl GameClock {
     /// Clock from the config.
     pub fn new(cfg: &PlayConfig) -> Self {
         let level = cfg.initial_speed_level.min(cfg.speeds.len());
-        Self { level, resume_level: level.max(1), speeds: cfg.speeds.clone(), override_multiplier: None, pending: 0.0 }
+        Self { level, resume_level: level.max(1), speeds: cfg.speeds.clone(), override_multiplier: None, hold: false, pending: 0.0 }
     }
 
     /// Galactic seconds per real second right now, ignoring forced pauses.
     pub fn rate(&self) -> f32 {
+        if self.hold {
+            return 0.0;
+        }
         match self.override_multiplier {
             Some(m) => m,
             None if self.level == 0 => 0.0,

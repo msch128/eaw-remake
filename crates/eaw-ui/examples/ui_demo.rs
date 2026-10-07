@@ -180,6 +180,7 @@ fn sample_data(game: &alamo_data::GameData, faction: UiFaction) -> CommandBarDat
                 icon: pick(i * 3),
                 progress: if i == 0 { 0.6 } else { 0.0 },
                 count: if i == 1 { 3 } else { 1 },
+                tooltip: String::new(),
             })
             .collect(),
         pads: (0..16)
@@ -188,6 +189,7 @@ fn sample_data(game: &alamo_data::GameData, faction: UiFaction) -> CommandBarDat
                 price: Some(150 + 25 * i as u32),
                 disabled: i % 5 == 4,
                 building: false,
+                tooltip: String::new(),
             })
             .collect(),
         selection: (0..6)

@@ -25,6 +25,11 @@ pub struct PlayHover {
     pub planet: Option<PlanetId>,
 }
 
+/// Set by the host while the cursor is over its own UI or the map is not active; the plugin then
+/// ignores the mouse.
+#[derive(Resource, Default, Debug, Clone, Copy)]
+pub struct PlayCursorBlocked(pub bool);
+
 /// The press that started a drag.
 #[derive(Debug, Clone, Copy)]
 struct Press {
@@ -127,6 +132,7 @@ pub fn handle_mouse(
     cfg: Res<PlayConfig>,
     camera: Query<(&Camera, &GlobalTransform), With<Camera3d>>,
     blockers: Query<&Interaction, With<PlayUiBlock>>,
+    blocked: Res<PlayCursorBlocked>,
     state: Res<SimState>,
     player: Res<PlayerFaction>,
     selection: Res<PlayerSelection>,
@@ -138,11 +144,19 @@ pub fn handle_mouse(
 ) {
     let Some(cursor) = window.and_then(|w| w.cursor_position()) else { return };
     let Some((camera, cam_tf)) = camera.iter().next() else { return };
-    let over_ui = blockers.iter().any(|i| *i != Interaction::None);
+    let over_ui = blocked.0 || blockers.iter().any(|i| *i != Interaction::None);
     let shift = keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]);
     let g = state.galaxy();
     let mine = |id: FleetId| g.fleets.get(&id).is_some_and(|f| player.0 == Some(f.owner));
 
+    if blocked.0 {
+        drag.left = None;
+        drag.right = None;
+        drag.dragging = false;
+        drag.box_rect = None;
+        drag.preview = None;
+        return;
+    }
     if buttons.just_pressed(MouseButton::Left) && !over_ui {
         drag.left = Some(Press { pos: cursor, fleet: hover.fleet, shift });
         drag.dragging = false;
@@ -219,7 +233,7 @@ pub fn handle_mouse(
                     }
                 }
             }
-        } else if press.fleet.is_some_and(&mine) {
+        } else if press.fleet.is_some_and(mine) {
             if let Some(to) = hover.planet {
                 actions.write(PlayAction::MoveSelected(to));
             }

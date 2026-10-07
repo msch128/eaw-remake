@@ -28,3 +28,7 @@ Bevy 0.19.1 plugin that spawns original EaW models with an EaW-style look. Depen
 - No animation blending; light emitters (type 4) not used as lights; hardpoints without models are bare bones.
 - Asset loading is synchronous (one frame stall on big models); skinned meshes not batched across instances.
 - Run `cargo clippy -p alamo-render --all-targets`; tests: `cargo test -p alamo-render`.
+
+## Fill lights
+`alamo.wgsl` adds the diffuse term of every directional light after the first (up to 2 fills, no shadows/specular) via `fill_light(n)`; the sun stays
+the first directional light. `battle-view` spawns the map's fill lights from the `.ted` lights 2 and 3. Not yet checked against the real game look.

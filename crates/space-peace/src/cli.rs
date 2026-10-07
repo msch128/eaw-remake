@@ -34,6 +34,18 @@ pub struct Args {
     pub select: Option<String>,
     /// Offscreen only: camera zoom from 0 (closest) to 1 (farthest) (`--zoom <f>`).
     pub zoom: Option<f32>,
+    /// Offscreen only: advance the galaxy by this many weeks before the capture (`--weeks <n>`).
+    pub weeks: Option<u32>,
+    /// Offscreen only: queue the first available build option containing this text at the
+    /// selected planet (`--build <text>`).
+    pub build: Option<String>,
+    /// Offscreen only: send the player's fleets parked at the selected planet to this planet
+    /// (`--move <planet>`).
+    pub move_to: Option<String>,
+    /// Offscreen only: stop advancing when a battle waits for the player (`--stop-on-battle`).
+    pub stop_on_battle: bool,
+    /// Offscreen only: click this button of the battle dialog once it opens (`--battle-choice fight|auto`).
+    pub battle_choice: Option<String>,
 }
 
 impl Default for Args {
@@ -53,6 +65,11 @@ impl Default for Args {
             screen: None,
             select: None,
             zoom: None,
+            weeks: None,
+            build: None,
+            move_to: None,
+            stop_on_battle: false,
+            battle_choice: None,
         }
     }
 }
@@ -75,6 +92,11 @@ OPTIONS:
   --screen <name>        Start screen: menu, campaigns or galaxy
   --select <planet>      Offscreen: select and frame a planet (id or name)
   --zoom <0..1>          Offscreen: camera zoom, 0 closest, 1 farthest
+  --weeks <n>            Offscreen: advance n galactic weeks before the capture
+  --build <text>         Offscreen: queue the first build option matching text at the selected planet
+  --move <planet>        Offscreen: send the fleets at the selected planet to another planet
+  --stop-on-battle       Offscreen: stop advancing as soon as a battle waits for a decision
+  --battle-choice <c>    Offscreen: click fight or auto in the battle dialog when it opens
   --no-vsync             Disable vertical sync
   --fullscreen           Start in borderless fullscreen
   -h, --help             Show this help
@@ -123,6 +145,20 @@ impl Args {
                 "--zoom" => {
                     let v = it.next().ok_or("--zoom needs a value")?;
                     out.zoom = Some(v.parse().map_err(|e| format!("bad --zoom: {e}"))?);
+                }
+                "--weeks" => {
+                    let v = it.next().ok_or("--weeks needs a value")?;
+                    out.weeks = Some(v.parse().map_err(|e| format!("bad --weeks: {e}"))?);
+                }
+                "--build" => out.build = Some(it.next().ok_or("--build needs a value")?),
+                "--move" => out.move_to = Some(it.next().ok_or("--move needs a value")?),
+                "--stop-on-battle" => out.stop_on_battle = true,
+                "--battle-choice" => {
+                    let v = it.next().ok_or("--battle-choice needs fight or auto")?;
+                    if v != "fight" && v != "auto" {
+                        return Err(format!("bad --battle-choice `{v}` (fight or auto)"));
+                    }
+                    out.battle_choice = Some(v);
                 }
                 "--no-vsync" => out.no_vsync = true,
                 "--fullscreen" => out.fullscreen = true,

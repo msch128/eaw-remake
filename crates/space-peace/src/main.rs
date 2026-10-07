@@ -12,6 +12,8 @@ mod menu;
 mod offscreen;
 mod options;
 mod planet_visual;
+mod play;
+mod play_ui;
 mod settings;
 mod ui;
 
@@ -39,6 +41,8 @@ use game::{Game, StartupLog};
 use loading::{AfterLoading, GameFiles, InitialCampaign, LoadDelay, LoadingPlugin};
 use menu::MenuPlugin;
 use options::OptionsPlugin;
+use play::PlayGluePlugin;
+use play_ui::PlayUiPlugin;
 use settings::{Settings, SettingsPlugin};
 use ui::UiPlugin;
 
@@ -122,6 +126,7 @@ fn main() {
     }
     if let Some(fs) = &fs {
         app.add_plugins(AlamoRenderPlugin::new(fs.clone()));
+        app.add_plugins(eaw_ui::EawUiPlugin::new(fs.clone()));
         if offscreen.is_none() {
             app.add_plugins(AlamoAudioPlugin::new(fs.clone() as Arc<dyn FileSource>));
         }
@@ -149,6 +154,8 @@ fn main() {
             CameraPlugin,
             GalaxyMapPlugin,
             UiPlugin,
+            PlayGluePlugin,
+            PlayUiPlugin,
         ))
         .run();
 }

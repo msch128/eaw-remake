@@ -51,6 +51,8 @@ pub struct CombatResult {
     pub winner: Option<usize>,
     /// Rounds fought.
     pub rounds: u32,
+    /// Fleets that left the battle by retreating (tactical battles only).
+    pub retreated: Vec<FleetId>,
 }
 
 struct Inst {
@@ -197,5 +199,5 @@ pub fn resolve_allied(world: &World, sides: &[SideInput], rng: &mut Rng, allied:
         .collect();
     let alive: Vec<usize> = (0..survivors.len()).filter(|&i| !survivors[i].is_empty()).collect();
     let winner = (alive.len() == 1 && rounds < world.config.combat_max_rounds).then(|| alive[0]);
-    CombatResult { survivors, winner, rounds }
+    CombatResult { survivors, winner, rounds, retreated: Vec::new() }
 }

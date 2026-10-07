@@ -14,6 +14,7 @@
 //! * Input: [`camera::BattleCamera`] (wheel zoom, WASD / edge pan, Q E / middle drag rotate) and
 //!   [`control`] (click and box select, right click move / attack / attack hardpoint).
 
+pub mod audio;
 pub mod camera;
 pub mod control;
 pub mod convert;
@@ -21,12 +22,17 @@ mod effects;
 pub mod scene;
 pub mod ships;
 pub mod sim;
+pub mod tactical_ui;
 pub mod visuals;
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use battle_sim::{Battle, BattleSetup, Catalog, Command, Event};
+use alamo_audio::PlaySfx;
+use alamo_data::GameData;
+use alamo_fs::FileSource;
+use battle_sim::{Battle, BattleConfig, BattleSetup, Catalog, Command, Event};
+use galaxy_sim::{FactionId, TacticalRequest, TacticalResult};
 use bevy::camera::{Hdr, ImageRenderTarget, RenderTarget};
 use bevy::core_pipeline::tonemapping::Tonemapping;
 use bevy::gizmos::config::{DefaultGizmoConfigGroup, GizmoConfigStore};
@@ -78,6 +84,8 @@ pub struct BattleViewSettings {
     pub fov_degrees: f32,
     /// Camera distance when the battle starts.
     pub start_distance: f32,
+    /// Send sound requests ([`audio`]); nothing is audible without `AlamoAudioPlugin`.
+    pub audio: bool,
 }
 
 impl Default for BattleViewSettings {
@@ -98,6 +106,7 @@ impl Default for BattleViewSettings {
             sky_radius: 90_000.0,
             fov_degrees: 45.0,
             start_distance: 4500.0,
+            audio: true,
         }
     }
 }
@@ -108,6 +117,9 @@ pub struct BattleSession {
     setup: Option<BattleSetup>,
     visuals: Arc<VisualCatalog>,
     scene: SpaceScene,
+    request: Option<Arc<TacticalRequest>>,
+    player_side: Option<u8>,
+    player_faction: Option<String>,
 }
 
 impl BattleSession {
@@ -117,8 +129,69 @@ impl BattleSession {
             setup: Some(setup),
             visuals: Arc::new(visuals),
             scene,
+            request: None,
+            player_side: None,
+            player_faction: None,
         }
     }
+
+    /// Builds the battle of a galactic [`TacticalRequest`] (`Sim::tactical_setup`) on the planet's real
+    /// space map: unit catalog, arena, scene, visuals. The side of `player` is controlled by the player (its
+    /// ships stay idle until ordered); every other side is run by the built-in AI. `None` lets the AI play all
+    /// sides (spectate). Reports back through [`BattleRuntime::outcome`] and the [`BattleFinished`] message.
+    pub fn from_request(
+        data: &GameData,
+        fs: &dyn FileSource,
+        request: &TacticalRequest,
+        player: Option<FactionId>,
+    ) -> Result<Self, String> {
+        let map = request
+            .map
+            .as_deref()
+            .ok_or_else(|| format!("planet {} has no space map", request.planet_name))?;
+        let scene = SpaceScene::load(fs, data, &format!("Art/Maps/{map}"))?;
+        let names: Vec<&str> = request.sides.iter().flat_map(|s| s.groups.iter().map(|g| g.name.as_str())).collect();
+        let catalog = Arc::new(Catalog::build(data, Some(fs), &names));
+        let arena = battle_sim::Arena::load(data, fs, map).map(Arc::new);
+        let player_side = player.and_then(|p| request.sides.iter().position(|s| s.faction == p)).map(|i| i as u8);
+        let config = BattleConfig { record_events: true, ..request.battle_config(arena) };
+        let setup = request
+            .battle_setup(&catalog, config, |i| Some(i as u8) != player_side)
+            .ok_or_else(|| "a unit of the battle has no definition".to_string())?;
+        let colors = request
+            .sides
+            .iter()
+            .map(|s| {
+                data.faction(&s.faction_name)
+                    .and_then(|f| f.color)
+                    .map_or(Color::WHITE, |c| Color::srgb_u8(c[0], c[1], c[2]))
+            })
+            .collect();
+        let visuals = VisualCatalog::build(data, &catalog, colors);
+        Ok(Self {
+            setup: Some(setup),
+            visuals: Arc::new(visuals),
+            scene,
+            request: Some(Arc::new(request.clone())),
+            player_side,
+            player_faction: player_side.map(|i| request.sides[i as usize].faction_name.clone()),
+        })
+    }
+
+    /// The galactic request this battle was built from, if any.
+    pub fn request(&self) -> Option<&TacticalRequest> {
+        self.request.as_deref()
+    }
+}
+
+/// The battle is over and the displayed picture reached its end. Written once per battle when the session
+/// came from [`BattleSession::from_request`]; apply `result` with `Sim::apply_tactical_result(battle_id, &result)`.
+#[derive(Message, Debug, Clone, PartialEq)]
+pub struct BattleFinished {
+    /// Pending battle id of the galaxy sim.
+    pub battle_id: u32,
+    /// Survivors and winner.
+    pub result: TacticalResult,
 }
 
 /// Live numbers of the running battle.
@@ -163,12 +236,32 @@ pub struct BattleRuntime {
     pub entities: HashMap<u32, Entity>,
     /// Ships that are exploding.
     pub dying: HashSet<u32>,
+    /// Galactic request of the battle, if it came from [`BattleSession::from_request`].
+    pub request: Option<Arc<TacticalRequest>>,
+    /// Faction name of the player's side, if any.
+    pub player_faction: Option<String>,
+    /// Living ships per side at the start.
+    pub start_alive: Vec<u32>,
+    /// Seconds before the retreat command becomes available.
+    pub retreat_countdown: f32,
+    /// Population cap per side.
+    pub unit_cap: i32,
     /// Current speed multiplier.
     speed: f32,
     framed: bool,
+    reported: bool,
 }
 
 impl BattleRuntime {
+    /// The result for the galaxy once the battle is over (all of one side destroyed or retreated, or the time
+    /// limit hit): survivors per request group, retreated units, winner. `None` while it is still running or
+    /// when the battle did not come from a [`TacticalRequest`].
+    pub fn outcome(&self) -> Option<TacticalResult> {
+        let request = self.request.as_ref()?;
+        let snap = self.sim.latest()?;
+        request.result_from(&self.catalog, snap.result.as_ref()?)
+    }
+
     /// Speed multiplier of the battle clock (0 while paused).
     pub fn speed_factor(&self) -> f32 {
         self.speed
@@ -195,7 +288,14 @@ impl Plugin for BattleViewPlugin {
             .init_resource::<OrderMarkers>()
             .init_resource::<control::Drag>()
             .init_resource::<effects::BoltPools>()
-            .add_systems(
+            .init_resource::<audio::BattleAudioStats>()
+            .add_message::<control::OrderIssued>()
+            .add_message::<BattleFinished>();
+        // Sound requests need a message queue even when no audio plugin consumes them.
+        if !app.world().contains_resource::<Messages<PlaySfx>>() {
+            app.add_message::<PlaySfx>();
+        }
+        app.add_systems(
                 Update,
                 (
                     start_battle.run_if(resource_added::<BattleSession>),
@@ -213,6 +313,9 @@ impl Plugin for BattleViewPlugin {
                         control::selection,
                         control::orders,
                         control::overlays,
+                        audio::battle_audio,
+                        audio::battle_music,
+                        report_outcome,
                     )
                         .chain()
                         .run_if(resource_exists::<BattleRuntime>),
@@ -225,14 +328,19 @@ impl Plugin for BattleViewPlugin {
 fn start_battle(
     mut commands: Commands,
     mut session: ResMut<BattleSession>,
-    settings: Res<BattleViewSettings>,
+    mut settings: ResMut<BattleViewSettings>,
     mut gizmo_config: ResMut<GizmoConfigStore>,
 ) {
     let Some(setup) = session.setup.take() else {
         return;
     };
+    if let Some(side) = session.player_side {
+        settings.player_side = side;
+    }
     let catalog = setup.catalog.clone();
     let battle = Battle::new(setup);
+    let start_alive: Vec<u32> = (0..battle.side_count()).map(|s| battle.alive_count(s as u8) as u32).collect();
+    let (retreat_countdown, unit_cap) = (battle.config().retreat_countdown, battle.config().unit_cap);
     let dt = battle.config().dt;
     let sim = SimHandle::spawn(battle);
     sim.request(2);
@@ -297,9 +405,27 @@ fn start_battle(
         fresh_events: Vec::new(),
         entities: HashMap::new(),
         dying: HashSet::new(),
+        request: session.request.clone(),
+        player_faction: session.player_faction.clone(),
+        start_alive,
+        retreat_countdown,
+        unit_cap,
         speed: 1.0,
         framed: false,
+        reported: false,
     });
+}
+
+/// Writes [`BattleFinished`] once the displayed picture reached the end of a battle that came from a request.
+fn report_outcome(mut rt: ResMut<BattleRuntime>, status: Res<BattleStatus>, mut out: MessageWriter<BattleFinished>) {
+    if rt.reported || !status.over {
+        return;
+    }
+    let (Some(request), Some(result)) = (rt.request.clone(), rt.outcome()) else {
+        return;
+    };
+    rt.reported = true;
+    out.write(BattleFinished { battle_id: request.battle_id, result });
 }
 
 fn stop_battle(

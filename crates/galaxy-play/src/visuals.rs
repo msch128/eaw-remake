@@ -53,6 +53,7 @@ pub fn faction_color(world: &galaxy_sim::World, faction: FactionId) -> Color {
     Color::srgb_u8(c[0], c[1], c[2])
 }
 
+#[allow(clippy::too_many_arguments)]
 fn spawn_model(commands: &mut Commands, assets: &FleetAssets, mats: &mut Assets<StandardMaterial>, fs: bool, model: Option<&str>, bow: bool, team: Color, parent: Entity) {
     match (model, fs) {
         (Some(m), true) => {
@@ -185,6 +186,7 @@ pub fn sync_fleets(
 }
 
 /// Scales freshly loaded fleet models to the icon size and centers them.
+#[allow(clippy::type_complexity)]
 pub fn fit_fleet_models(
     layout: Res<GalaxyLayout>,
     cfg: Res<crate::state::PlayConfig>,

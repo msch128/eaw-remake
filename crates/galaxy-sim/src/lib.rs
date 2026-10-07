@@ -19,7 +19,7 @@ mod api;
 pub mod production;
 pub mod rng;
 pub mod sim;
-mod tactical;
+pub mod tactical;
 pub mod state;
 pub mod world;
 
@@ -32,3 +32,4 @@ pub use world::{
     BattleResolver, CombatStats, ObjectKind, FactionId, FactionInfo, FleetId, PlanetId, PlanetInfo, RouteInfo, SimConfig, SimError, StarbaseTypeId,
     StarbaseType, StructureType, StructureTypeId, UnitRole, UnitType, UnitTypeId, VictoryRules, Weapon, World,
 };
+pub use tactical::{GroupKind, TacticalError, TacticalGroup, TacticalRequest, TacticalResult, TacticalSide, run_headless};
