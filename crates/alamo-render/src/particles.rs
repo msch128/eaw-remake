@@ -395,11 +395,19 @@ fn sample_box(rt: &mut EmitterRuntime, min: [f32; 3], max: [f32; 3]) -> Vec3 {
     )
 }
 
-/// Light emitters (type 4) are dynamic lights, not sprites, and are neither simulated nor drawn.
-/// (Small ones such as `light_explosion_*` may be coronas; drawing them was tried and showed no
-/// visible change in the impact test, so the old behaviour stays.)
+/// Light emitters (type 4) whose size is a light radius of hundreds of units or more are dynamic
+/// lights and are not drawn as sprites (drawn as sprites they wash out the screen); smaller ones
+/// (`light_explosion_*`, muzzle halos, 13..160 units) are corona sprites drawn additively. Inferred.
+const MAX_CORONA_SIZE: f32 = 3000.0;
+
 fn is_light_volume(e: &Emitter) -> bool {
     matches!(e.blend, BlendMode::Light)
+        && e.size
+            .keys
+            .iter()
+            .map(|k| k.1)
+            .fold(e.size.start.max(e.size.end), f32::max)
+            > MAX_CORONA_SIZE
 }
 
 /// Random point of an emitter position shape. Kind 3 is an ellipsoid volume and kind 4 an
@@ -779,6 +787,7 @@ pub fn update_particle_batches(
             }
             let mode = match e.blend {
                 BlendMode::Alpha => 0,
+                BlendMode::Light => 1,
                 _ if settings.additive_alpha => 1,
                 _ => 2,
             };

@@ -68,3 +68,8 @@ the first directional light. `battle-view` spawns the map's fill lights from the
 - Capital explosion (`target/vis/ex7_t*.png`): now an expanding spray of sparks with a small orange cloud in the middle, still not the dense fireball. Turbolaser
   impact (`p_damage_turbolaser_miss_large_green`, `ps_turbolaser`): grey smoke puffs only; its flash is made of type-4 light emitters that are not drawn.
   ISD engines from the stern (`render_scene EMPIRE_IMPERIAL_STAR_DESTROYER.ALO --bow --cam 0,0,1.6 --throttle 1`): nozzle cores glow blue, the 47-unit halo particles are hardly visible.
+- Type-4 emitters (1,162, `particle_lights` survey): 835 are `light_*` on P_PARTICLE_LIGHT, but 190 are `smoke`/`fire`/`explosion`/`muzzle`/`projectile` on explosion sprite
+  sheets, so type 4 is a sprite blend variant, not only dynamic lights. They are now drawn as additive sprites scaled by their alpha (SRCALPHA/ONE, mode 1) so the dim
+  `light_*` glows stay subtle; emitters larger than 3000 units (`MAX_CORONA_SIZE`, about 235 of them) stay undrawn (they washed the screen out). `showcase death` (ISD death,
+  `target/vis/death_t01000.png`) shows dense fireballs and smoke with no wash; `P_Explosion_Capital` has no type-4 emitters and is simply not the effect ship deaths use.
+- Blender-ALAMO-Plugin and AlamoEngine-Tools/PetroglyphTools are MIT licensed but contain no particle format code (checked on their GitHub front pages only).
