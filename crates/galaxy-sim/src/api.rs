@@ -97,12 +97,14 @@ impl Sim {
     pub fn add_credits(&mut self, faction: FactionId, amount: f64) {
         let cap_per_planet = self.world.config.credit_cap_per_planet;
         if let Some(fs) = self.galaxy.factions.get_mut(faction as usize) {
+            let before = fs.credits;
             fs.credits += amount;
             let cap = cap_per_planet * fs.planets_owned as f64;
             if amount > 0.0 && fs.planets_owned > 0 && fs.credits > cap {
                 fs.credits = cap.max(fs.credits - amount);
             }
             fs.credits = fs.credits.max(0.0);
+            fs.stats.credits_earned += (fs.credits - before).max(0.0);
         }
     }
 

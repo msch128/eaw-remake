@@ -94,6 +94,7 @@ impl Sim {
                 world.check_build_unit(g, faction, planet, unit)?;
                 let (cost, secs) = world.unit_cost(g, faction, planet, unit);
                 g.factions[faction as usize].credits -= f64::from(cost);
+                g.factions[faction as usize].stats.credits_spent += f64::from(cost);
                 let t = secs * world.config.build_time_scale * g.factions[faction as usize].difficulty.build_time;
                 g.planets[planet as usize].queues[Lane::Units as usize].push_back(ProductionItem {
                     kind: ProductionKind::Unit(unit),
@@ -107,6 +108,7 @@ impl Sim {
                 world.check_build_structure(g, faction, planet, structure)?;
                 let st = &world.structures[structure as usize];
                 g.factions[faction as usize].credits -= st.cost as f64;
+                g.factions[faction as usize].stats.credits_spent += f64::from(st.cost);
                 let t = st.build_time * world.config.build_time_scale * g.factions[faction as usize].difficulty.build_time;
                 g.planets[planet as usize].queues[Lane::Structures as usize].push_back(ProductionItem {
                     kind: ProductionKind::Structure(structure),
@@ -120,6 +122,7 @@ impl Sim {
                 let next = world.check_upgrade_starbase(g, faction, planet)?;
                 let sb = &world.starbases[next as usize];
                 g.factions[faction as usize].credits -= sb.cost as f64;
+                g.factions[faction as usize].stats.credits_spent += f64::from(sb.cost);
                 let t = sb.build_time * world.config.build_time_scale * g.factions[faction as usize].difficulty.build_time;
                 g.planets[planet as usize].queues[Lane::Base as usize].push_back(ProductionItem {
                     kind: ProductionKind::Starbase(next),
@@ -133,6 +136,7 @@ impl Sim {
                 let idx = world.check_upgrade_tech(g, faction, planet)?;
                 let up = &world.factions[faction as usize].tech_upgrades[idx];
                 g.factions[faction as usize].credits -= up.cost as f64;
+                g.factions[faction as usize].stats.credits_spent += f64::from(up.cost);
                 let t = up.time * world.config.build_time_scale * g.factions[faction as usize].difficulty.build_time;
                 g.planets[planet as usize].queues[Lane::Base as usize].push_back(ProductionItem {
                     kind: ProductionKind::Tech(idx),
@@ -273,6 +277,7 @@ impl Sim {
                 let unspent = if item.total > 0.0 { (item.remaining / item.total).clamp(0.0, 1.0) } else { 1.0 };
                 let refund = f64::from(item.cost) * f64::from(unspent) * f64::from(world.config.cancel_refund);
                 g.factions[faction as usize].credits += refund;
+                g.factions[faction as usize].stats.credits_spent -= refund;
                 Ok(CommandOk::Refunded(refund))
             }
             Command::Retreat { faction, fleet } => {
@@ -326,11 +331,13 @@ impl Sim {
             }
             let cap = w.config.credit_cap_per_planet * fs.planets_owned as f64;
             let income = if fs.income_per_week > 0.0 { fs.income_per_week * f64::from(fs.difficulty.credit) } else { fs.income_per_week };
+            let before = fs.credits;
             fs.credits += income * dt as f64 / w.config.week_seconds as f64;
             if fs.planets_owned > 0 && fs.credits > cap {
                 fs.credits = cap;
             }
             fs.credits = fs.credits.max(0.0);
+            fs.stats.credits_earned += (fs.credits - before).max(0.0);
         }
 
         self.produce(dt, events);
@@ -419,6 +426,12 @@ impl Sim {
                         self.galaxy.factions[owner as usize].tech += 1;
                         events.push(Event::TechAdvanced { faction: owner, level: self.galaxy.factions[owner as usize].tech });
                     }
+                }
+                let st = &mut self.galaxy.factions[owner as usize].stats;
+                match item.kind {
+                    ProductionKind::Unit(_) => st.ships_built += 1,
+                    ProductionKind::Structure(_) | ProductionKind::Starbase(_) => st.structures_built += 1,
+                    ProductionKind::Tech(_) => {}
                 }
                 events.push(Event::ConstructionComplete { faction: owner, planet, kind: item.kind });
             }
@@ -674,6 +687,7 @@ impl Sim {
                         *losses.entry(side.faction).or_default() += m.count - left;
                         if m.count > left {
                             let ships = self.galaxy.take_ships(fid, u, m.count - left);
+                            self.galaxy.factions[side.faction as usize].stats.ships_lost += m.count - left;
                             events.push(Event::UnitsDestroyed { faction: side.faction, planet: p, unit: u, count: m.count - left, ships: ships.into_iter().map(|x| x.0).collect() });
                             if w.units[u as usize].hero {
                                 events.push(Event::HeroDestroyed { faction: side.faction, planet: p, unit: u });
@@ -709,8 +723,10 @@ impl Sim {
         let winner = result.winner.map(|i| sides[i].faction);
         for (si, side) in sides.iter().enumerate() {
             if result.winner == Some(si) {
+                self.galaxy.factions[side.faction as usize].stats.battles_won += 1;
                 events.push(Event::BattleWon { faction: side.faction, planet: p });
             } else if result.survivors[si].is_empty() {
+                self.galaxy.factions[side.faction as usize].stats.battles_lost += 1;
                 events.push(Event::BattleLost { faction: side.faction, planet: p });
             }
         }
@@ -798,6 +814,7 @@ impl Sim {
         let bonus = f64::from(self.world.planets[p as usize].capture_bonus) * f64::from(self.world.config.capture_bonus_scale);
         if bonus > 0.0 && self.galaxy.rewarded.insert((p, faction)) {
             self.galaxy.factions[faction as usize].credits += bonus;
+            self.galaxy.factions[faction as usize].stats.credits_earned += bonus;
             events.push(Event::CaptureBonus { faction, planet: p, credits: bonus });
         }
     }
@@ -813,6 +830,13 @@ impl Sim {
             return;
         }
         ps.owner = new;
+        if let Some(o) = old {
+            self.galaxy.factions[o as usize].stats.planets_lost += 1;
+        }
+        if let Some(x) = new {
+            self.galaxy.factions[x as usize].stats.planets_captured += 1;
+        }
+        let ps = &mut self.galaxy.planets[p as usize];
         ps.queues = Default::default();
         if !keep_buildings {
             ps.starbase = None;

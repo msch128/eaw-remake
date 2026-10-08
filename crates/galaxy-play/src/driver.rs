@@ -222,6 +222,11 @@ pub struct Snapshot {
 }
 
 impl Snapshot {
+    /// Statistics of a faction so far (battles, ships, planets, credits), rebuilt by a save replay.
+    pub fn stats(&self, faction: galaxy_sim::FactionId) -> galaxy_sim::FactionStats {
+        self.galaxy.factions.get(faction as usize).map(|f| f.stats).unwrap_or_default()
+    }
+
     /// Starting-state placeholder shown while the worker sets the game up.
     pub fn placeholder(galaxy: Galaxy) -> Snapshot {
         Snapshot {

@@ -25,7 +25,7 @@ pub mod world;
 
 pub use sim::Sim;
 pub use state::{
-    Command, CommandError, CommandOk, Event, FactionState, ShipId, Fleet, FleetLocation, Galaxy, Lane, PendingBattle, PlanetState,
+    Command, CommandError, CommandOk, Event, FactionState, FactionStats, ShipId, Fleet, FleetLocation, Galaxy, Lane, PendingBattle, PlanetState,
     ProductionItem, ProductionKind, Difficulty,
 };
 pub use world::{

@@ -133,3 +133,41 @@ fn a_superweapon_destroys_a_planet_once_per_cooldown() {
     // ... and a wreck cannot be destroyed again.
     assert_eq!(sim.apply(Command::DestroyPlanet { faction: empire, planet: rebel_planet }), Err(CommandError::WrongState));
 }
+
+#[test]
+fn statistics_count_captures_battles_ships_and_credits() {
+    let Some(data) = load() else { return };
+    let campaign = data.campaign("GC_Full_Web_Way_Rebel").unwrap();
+    let mut sim = Sim::new(&data, campaign, SimConfig { auto_resolve_battles: true, victory_enabled: false, ..SimConfig::default() }).unwrap();
+    let w = sim.world().clone();
+    let (empire, rebel) = (w.faction_id("Empire").unwrap(), w.faction_id("Rebel").unwrap());
+    assert!(sim.galaxy().factions.iter().all(|f| f.stats == FactionStats::default()), "a new game starts at zero");
+    let target = (0..w.planets.len() as u32).find(|&p| w.real[p as usize] && w.planets[p as usize].capture_bonus > 0.0 && sim.galaxy().planets[p as usize].owner.is_none() && sim.galaxy().fleets_at(p).next().is_none()).unwrap();
+    let sd = w.unit_id("Star_Destroyer").unwrap();
+    sim.spawn_units(empire, target, sd, 1);
+    sim.step(10.0);
+    let e = sim.galaxy().factions[empire as usize].stats;
+    assert_eq!(e.planets_captured, 1);
+    assert!(e.credits_earned >= f64::from(w.planets[target as usize].capture_bonus));
+    // A battle: the winner and the loser are counted.
+    let other = (0..w.planets.len() as u32).find(|&p| p != target && w.real[p as usize] && sim.galaxy().planets[p as usize].owner.is_none() && sim.galaxy().fleets_at(p).next().is_none()).unwrap();
+    sim.spawn_units(empire, other, sd, 4);
+    sim.spawn_units(rebel, other, w.unit_id("Nebulon_B_Frigate").unwrap(), 1);
+    sim.step(3.0);
+    let (e, r) = (sim.galaxy().factions[empire as usize].stats, sim.galaxy().factions[rebel as usize].stats);
+    assert_eq!((e.battles_won, r.battles_lost, r.ships_lost), (1, 1, 1), "{e:?} {r:?}");
+    // Production: paid on queueing, a ship built on completion.
+    let home = w.factions[empire as usize].home.unwrap();
+    let before = sim.galaxy().factions[empire as usize].stats;
+    sim.add_credits(empire, 1_000_000.0);
+    let tie = w.unit_id("TIE_Fighter_Squadron").or_else(|| w.unit_id("Star_Destroyer")).unwrap();
+    if sim.apply(Command::BuildUnit { faction: empire, planet: home, unit: tie }).is_ok() {
+        sim.step(w.units[tie as usize].build_time * w.config.build_time_scale * 1.5 + 5.0);
+        let after = sim.galaxy().factions[empire as usize].stats;
+        assert!(after.credits_spent > before.credits_spent && after.ships_built == before.ships_built + 1, "{after:?}");
+    }
+    // The counters are part of the state hash.
+    let h = sim.galaxy().state_hash();
+    sim.galaxy_mut().factions[empire as usize].stats.battles_won += 1;
+    assert_ne!(h, sim.galaxy().state_hash());
+}

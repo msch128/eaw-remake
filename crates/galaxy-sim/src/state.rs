@@ -159,6 +159,31 @@ pub struct FactionState {
     pub difficulty: Difficulty,
     /// Game time (seconds) at which the faction's superweapons are ready again.
     pub superweapon_ready_at: f64,
+    /// Running totals for the end-of-game screen.
+    pub stats: FactionStats,
+}
+
+/// Per-faction statistics, part of the state hash (so a save replay rebuilds them).
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct FactionStats {
+    /// Battles the faction won.
+    pub battles_won: u32,
+    /// Battles the faction lost (wiped out).
+    pub battles_lost: u32,
+    /// Ships and squadrons finished by production.
+    pub ships_built: u32,
+    /// Ships and squadrons destroyed in battles.
+    pub ships_lost: u32,
+    /// Structures and star base levels finished.
+    pub structures_built: u32,
+    /// Planets taken from someone else or from the neutrals (capture completed).
+    pub planets_captured: u32,
+    /// Planets that left the faction's hands.
+    pub planets_lost: u32,
+    /// Credits gained: positive net income, bonuses, script rewards.
+    pub credits_earned: f64,
+    /// Credits paid for production (net of refunds).
+    pub credits_spent: f64,
 }
 
 /// A battle waiting to be resolved (by a tactical battle or auto-resolve).
@@ -565,6 +590,9 @@ impl Galaxy {
             f.tech.hash(&mut h);
             f.eliminated.hash(&mut h);
             f.superweapon_ready_at.to_bits().hash(&mut h);
+            let s = &f.stats;
+            (s.battles_won, s.battles_lost, s.ships_built, s.ships_lost, s.structures_built, s.planets_captured, s.planets_lost).hash(&mut h);
+            (s.credits_earned.to_bits(), s.credits_spent.to_bits()).hash(&mut h);
         }
         for (id, fl) in &self.fleets {
             id.hash(&mut h);
