@@ -587,7 +587,8 @@ fn select_granted(
     let Some(uid) = state.world.unit_id(unit.split(',').next().unwrap_or(unit).trim()) else { return };
     let found = state.galaxy().fleets.values().find(|f| f.owner == me && f.units.get(&uid).is_some_and(|n| *n > 0) && f.planet().is_some());
     if let Some(f) = found {
-        actions.write(PlayAction::SelectPlanet(f.planet()));
+        // Fleet only, like a click on a fleet icon: the bar shows the fleet.
+        actions.write(PlayAction::SelectPlanet(None));
         actions.write(PlayAction::SelectFleets(vec![f.id]));
     }
 }

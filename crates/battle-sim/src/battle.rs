@@ -531,6 +531,8 @@ pub struct Ship {
     pub(crate) scan_in: f32,
     /// Game time until which each side (the first four) still sees this ship (fog of war).
     pub(crate) seen_until: [f32; 4],
+    /// Seconds until each of the first two `ShipDef::heals` pulses.
+    pub(crate) heal_in: [f32; 2],
 }
 
 /// A projectile in flight.

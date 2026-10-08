@@ -195,6 +195,8 @@ fn sample_data(game: &alamo_data::GameData, faction: UiFaction) -> CommandBarDat
                 tooltip: String::new(),
                 upkeep: if i == 2 { -5.0 } else if i == 3 { 5.0 } else { 0.0 },
                 level: if i == 5 { 2 } else { 0 },
+                locked: i == 7,
+                label: String::new(),
             })
             .collect(),
         selection: (0..6)

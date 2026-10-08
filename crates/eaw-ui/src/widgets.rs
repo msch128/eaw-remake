@@ -951,11 +951,16 @@ pub(crate) fn button_clicks(
     keys: Res<ButtonInput<KeyCode>>,
     mut q: Query<(Entity, &mut EawButton, &Interaction, &mut EawButtonState)>,
     mut out: MessageWriter<EawButtonClicked>,
+    mut locked: MessageWriter<crate::data::EawLockedClicked>,
 ) {
     let shift = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
     for (entity, mut b, i, mut st) in &mut q {
         if st.disabled {
-            b.armed = false;
+            // A press on a greyed-out button is reported once so that the application can say why.
+            if *i == Interaction::Pressed && !b.armed {
+                locked.write(crate::data::EawLockedClicked { name: b.name.clone() });
+            }
+            b.armed = *i == Interaction::Pressed;
             continue;
         }
         match *i {
@@ -1113,7 +1118,7 @@ pub(crate) fn slots(
                 (
                     p.icon.clone(),
                     if p.building { 1.0 } else { 0.0 },
-                    p.price.map(|v| v.to_string()).unwrap_or_default(),
+                    if p.label.is_empty() { p.price.map(|v| v.to_string()).unwrap_or_default() } else { p.label.clone() },
                     p.disabled,
                     false,
                 )
@@ -1136,9 +1141,9 @@ pub(crate) fn slots(
                 (a.icon.clone(), 1.0 - a.ready, String::new(), a.disabled, a.active)
             }),
         };
-        let (upkeep, level) = match slot.kind {
-            SlotKind::Pad => data.pads.get(slot.index).map_or((0.0, 0), |p| (p.upkeep, p.level)),
-            _ => (0.0, 0),
+        let (upkeep, level, locked) = match slot.kind {
+            SlotKind::Pad => data.pads.get(slot.index).map_or((0.0, 0, false), |p| (p.upkeep, p.level, p.locked)),
+            _ => (0.0, 0, false),
         };
         let Some((icon, progress, label, disabled, selected)) = content else {
             node.display = Display::None;
@@ -1159,7 +1164,9 @@ pub(crate) fn slots(
                         match tex.get(&mut images, &icon) {
                             Some(t) => {
                                 img.image = t.handle;
-                                img.color = if disabled {
+                                img.color = if locked {
+                                    Color::srgba(0.22, 0.22, 0.25, 1.0)
+                                } else if disabled {
                                     Color::srgba(0.45, 0.45, 0.45, 1.0)
                                 } else {
                                     Color::WHITE

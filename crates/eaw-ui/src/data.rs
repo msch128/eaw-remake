@@ -20,6 +20,13 @@ pub struct EawButtonClicked {
     pub shift: bool,
 }
 
+/// A greyed-out (disabled) button was pressed: the application can say why it is locked.
+#[derive(Message, Debug, Clone, PartialEq, Eq)]
+pub struct EawLockedClicked {
+    /// Lower-cased component name.
+    pub name: String,
+}
+
 /// One entry of the production queue (`queue00..09` galactic, `tqueue00..09` tactical).
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct QueueEntry {
@@ -50,6 +57,10 @@ pub struct BuildPadEntry {
     pub upkeep: f32,
     /// Starbase level (1..) shown as a roman numeral; 0 shows none.
     pub level: u8,
+    /// A requirement is missing (star base level, structure ...): drawn dark with the required level.
+    pub locked: bool,
+    /// Text under the icon instead of the price (fleet unit counts).
+    pub label: String,
 }
 
 /// One slot of the tactical selection (`s_select_NN` with `s_health_NN` / `s_shield_NN`).

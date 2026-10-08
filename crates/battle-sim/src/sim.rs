@@ -382,6 +382,7 @@ impl Battle {
             candidates: Vec::new(),
             scan_in: rng.range(0.0, self.config.retarget_interval),
             seen_until: [0.0; 4],
+            heal_in: [0.0; 2],
         });
         id
     }
@@ -1237,6 +1238,55 @@ impl Battle {
             }
         }
         self.run_carriers(dt);
+        self.run_healing(dt);
+    }
+
+    /// `Force_Healing_Ability` pulses: self repair and repair auras.
+    fn run_healing(&mut self, dt: f32) {
+        let cat = self.catalog.clone();
+        let mut pulses: Vec<(usize, usize)> = Vec::new();
+        for (i, s) in self.ships.iter_mut().enumerate() {
+            if !s.alive || s.retreated {
+                continue;
+            }
+            for (k, h) in cat.ship(s.def).heals.iter().take(2).enumerate() {
+                s.heal_in[k] -= dt;
+                if s.heal_in[k] <= 0.0 {
+                    s.heal_in[k] = h.interval;
+                    pulses.push((i, k));
+                }
+            }
+        }
+        for (i, k) in pulses {
+            let h = &cat.ship(self.ships[i].def).heals[k];
+            let (pos, side) = (self.ships[i].pos, self.ships[i].side);
+            let mut targets: Vec<usize> = if h.range <= 0.0 {
+                vec![i]
+            } else {
+                (0..self.ships.len())
+                    .filter(|&j| {
+                        let o = &self.ships[j];
+                        let od = cat.ship(o.def);
+                        o.alive && !o.retreated && o.side == side && o.pos.dist(pos) <= h.range && (h.classes == 0 || h.classes & od.class.bit() != 0)
+                    })
+                    .collect()
+            };
+            if h.single {
+                let hurt = |j: &usize| {
+                    let o = &self.ships[*j];
+                    o.hull / cat.ship(o.def).hull.max(1.0)
+                };
+                targets.sort_by(|a, b| hurt(a).total_cmp(&hurt(b)));
+                targets.truncate(1);
+            }
+            for j in targets {
+                let max = cat.ship(self.ships[j].def).hull;
+                let o = &mut self.ships[j];
+                if max > 0.0 && o.hull < max {
+                    o.hull = (o.hull + h.amount + h.percent * max).min(max);
+                }
+            }
+        }
     }
 
     /// Squadron replacement from hangars and stations.

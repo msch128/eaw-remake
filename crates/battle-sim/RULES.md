@@ -158,3 +158,14 @@ Source: `XML/AI/GoalFunctions/Remake_SpaceCombat.xml`, `PerceptualEquations/Rema
 * **Formations:** each fleet unit remembers its lateral position in the start line (`Ship::lane`, +-1500 max). Under attack-move orders, while the enemy is more than 2500 units away, the aim point is shifted sideways by that lane, so the fleet advances line abreast; broadside arcs still come from the bearing logic (section 4). While no enemy is within twice the weapon range a big ship does not outrun slower friendly big ships within 2500 units (cohesion, never below 40% of its own speed).
   Test: 3 fast + 3 slow frigates are 25 units apart in depth after 25 s (2450 without cohesion) and still 1400 units wide.
 * **Ability rules** (section 9) now have a unit test (`ai_uses_speed_shield_and_damage_abilities_by_their_numbers`).
+
+## 7. Positional reinforcements, fog of war, more abilities (see ABILITIES.md)
+
+* `Command::ReinforceAt { ship, count, pos }`: allowed when `pos` is inside the battle area, within `BattleConfig::reinforce_zone` (2000) of one of the side's living ships or structures and farther than that from
+  every enemy (the 2000 comes from the Remake AI equations `Target_Is_Near_Friendly_Unit` / `Target_Is_Not_Close_To_Enemy_Units`; the engine's own zone is not in the data, so it is an estimate); errors
+  `OutsideBattleArea`, `NotNearOwnForces`, `TooCloseToEnemy`. `Battle::reinforcement_zone_check(side, pos)` is the same test for an overlay (green / red). The ships arrive after `reinforce_delay` (5 s) at free space
+  (nothing within `reinforce_clearance` = `Space_Reinforcement_Collision_Check_Distance` 150; they move out in rings when the spot is taken), facing the nearest enemy. `Reinforce` without a position still uses the side's point.
+* Fog of war (`BattleConfig::fog_of_war`, default on): a ship sees `Space_FOW_Reveal_Range` (`ShipDef::sensor_range`, 1250 where missing); an enemy it saw stays visible for `fog_linger` = `SpaceFOWRegrowTime` 15 s.
+  Targeting (`scan`) only considers visible enemies, so idle and attack-moving ships no longer know where the enemy is; the AI respects it because it uses the same scan. `Battle::is_visible_to(side, ship)` for the renderer.
+  Stealthed ships (`STEALTH`) are seen only within `stealth_detection` (500, estimate); `FOW_REVEAL_PING` reveals an area for 5 s (estimate).
+* Also: `LASER_DEFENSE`, `Force_Healing_Ability`.

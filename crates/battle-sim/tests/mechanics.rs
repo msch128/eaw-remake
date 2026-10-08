@@ -327,6 +327,27 @@ fn stealth_and_reveal_pings_change_what_is_seen() {
 }
 
 #[test]
+fn healing_abilities_repair_the_ship_or_friends_in_range() {
+    let mut medic = ship("medic", 10000.0, 0.0, vec![]);
+    medic.heals.push(battle_sim::HealDef { range: 0.0, amount: 4.0, percent: 0.01, interval: 2.0, single: false, classes: 0 });
+    let mut tender = ship("tender", 1000.0, 0.0, vec![]);
+    tender.heals.push(battle_sim::HealDef { range: 5000.0, amount: 100.0, percent: 0.0, interval: 1.0, single: true, classes: 0 });
+    let cat = Catalog::from_defs(vec![medic, tender], vec![laser()]);
+    let mut b = Battle::new(setup(cat, "medic", "tender", 1, 1, cfg()));
+    let (m, t) = (b.ships.iter().find(|s| s.side == 0).unwrap().id, b.ships.iter().find(|s| s.side == 1).unwrap().id);
+    b.ships[m as usize].hull = 5000.0;
+    b.ships[t as usize].hull = 100.0;
+    for _ in 0..30 * 10 {
+        b.step();
+    }
+    // 10 s: 5 pulses of 4 + 1 % of 10000 = 104 each.
+    let healed = b.ships[m as usize].hull - 5000.0;
+    assert!((healed - 520.0).abs() < 110.0, "self repair about 520 hull in 10 s: {healed}");
+    // The tender heals itself (range covers it) 100 per second, capped at its hull.
+    assert!(b.ships[t as usize].hull > 900.0, "{}", b.ships[t as usize].hull);
+}
+
+#[test]
 fn carriers_launch_and_replace_squadrons() {
     let mut fighter = ship("fighter", 20.0, 0.0, vec![]);
     fighter.class = TargetClass::Fighter;

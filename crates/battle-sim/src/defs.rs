@@ -209,6 +209,23 @@ pub struct AbilityDef {
     pub reveal_radius: f32,
 }
 
+/// A `Force_Healing_Ability` with `Space_Automatic` activation (astromech self repair, repair droids, station repair).
+#[derive(Debug, Clone, Default)]
+pub struct HealDef {
+    /// `Heal_Range`: 0 = the ship itself, otherwise friendly ships within this distance.
+    pub range: f32,
+    /// `Heal_Amount` hull points per pulse.
+    pub amount: f32,
+    /// `Heal_Percent`: fraction of the maximum hull per pulse.
+    pub percent: f32,
+    /// `Heal_Interval_In_Secs`.
+    pub interval: f32,
+    /// `Single_Target_Heal`: only the most damaged ship in range.
+    pub single: bool,
+    /// Bit mask of healed classes (`Applicable_Unit_Categories`; 0 = any).
+    pub classes: u16,
+}
+
 /// Parameters of a tractor beam ability.
 #[derive(Debug, Clone, Default)]
 pub struct TractorDef {
@@ -229,6 +246,8 @@ pub struct ShipDef {
     pub text_id: Option<String>,
     /// Target class.
     pub class: TargetClass,
+    /// Automatic healing abilities (`Force_Healing_Ability`).
+    pub heals: Vec<HealDef>,
     /// `Space_FOW_Reveal_Range`: how far this ship sees (fog of war); 1250 where the data gives none.
     pub sensor_range: f32,
     /// True for stations and structures (never move).
@@ -979,9 +998,30 @@ impl Catalog {
         }
         .filter(|&r| r > 0.0)
         .unwrap_or(1250.0);
+        let heals: Vec<HealDef> = match src {
+            Source::Unit(u) => u
+                .sub_abilities
+                .iter()
+                .filter(|a| a.kind.eq_ignore_ascii_case("Force_Healing_Ability") && a.fields.get("activation_style").is_some_and(|v| v.trim().eq_ignore_ascii_case("Space_Automatic")))
+                .map(|a| {
+                    let num = |k: &str| a.fields.get(k).and_then(|v| v.trim().parse::<f32>().ok()).unwrap_or(0.0);
+                    HealDef {
+                        range: num("heal_range"),
+                        amount: num("heal_amount"),
+                        percent: num("heal_percent"),
+                        interval: num("heal_interval_in_secs").max(0.5),
+                        single: a.fields.get("single_target_heal").is_some_and(|v| alamo_data::xml::parse_bool(v)),
+                        classes: a.fields.get("applicable_unit_categories").map_or(0, |v| alamo_data::xml::split_list(v).iter().filter_map(|t| TargetClass::from_token(t)).fold(0u16, |m, c| m | c.bit())),
+                    }
+                })
+                .filter(|h| h.amount > 0.0 || h.percent > 0.0)
+                .collect(),
+            _ => Vec::new(),
+        };
         ShipDef {
             name,
             text_id,
+            heals,
             sensor_range,
             class,
             is_static,
@@ -1191,11 +1231,16 @@ fn ability_defs(u: &SpaceUnitDef) -> Vec<AbilityDef> {
         .iter()
         .filter(|a| {
             a.expiration_seconds.unwrap_or(0.0) > 0.0
-                || ["FULL_SALVO", "TRACTOR_BEAM", "MISSILE_SHIELD", "INTERDICT", "STEALTH", "FOW_REVEAL_PING"].iter().any(|k| a.kind.eq_ignore_ascii_case(k))
+                || ["FULL_SALVO", "TRACTOR_BEAM", "MISSILE_SHIELD", "INTERDICT", "STEALTH", "FOW_REVEAL_PING", "LASER_DEFENSE"].iter().any(|k| a.kind.eq_ignore_ascii_case(k))
         })
         .map(|a| {
             let toggle = a.expiration_seconds.unwrap_or(0.0) <= 0.0 && ["MISSILE_SHIELD", "INTERDICT", "STEALTH"].iter().any(|k| a.kind.eq_ignore_ascii_case(k));
             let ping = a.kind.eq_ignore_ascii_case("FOW_REVEAL_PING");
+            // `LASER_DEFENSE` (point defence turrets) shoots down missiles, rockets and torpedoes inside `Effective_Radius` for `Defense_Duration_In_Secs` of the linked ability.
+            let laser = a.kind.eq_ignore_ascii_case("LASER_DEFENSE");
+            let defence_secs = laser.then(|| {
+                a.activated_ability.as_ref().and_then(|n| u.sub_abilities.iter().find(|s| s.name.eq_ignore_ascii_case(n))).and_then(|s| s.fields.get("defense_duration_in_secs")).and_then(|v| v.trim().parse::<f32>().ok()).unwrap_or(30.0)
+            });
             let m = |k: &str| a.mod_multipliers.iter().find(|(n, _)| n == k).map(|&(_, v)| v);
             AbilityDef {
                 kind: a.kind.clone(),
@@ -1205,13 +1250,13 @@ fn ability_defs(u: &SpaceUnitDef) -> Vec<AbilityDef> {
                 take_damage_mult: m("TAKE_DAMAGE_MULTIPLIER").unwrap_or(1.0),
                 recharge: a.recharge_seconds.unwrap_or(30.0),
                 // A reveal ping has no expiration in the data: it shows the area for 5 s (estimate).
-                duration: if toggle { f32::MAX / 4.0 } else if ping { a.expiration_seconds.filter(|&x| x > 0.0).unwrap_or(5.0) } else { a.expiration_seconds.unwrap_or(12.0) },
+                duration: if toggle { f32::MAX / 4.0 } else if ping { a.expiration_seconds.filter(|&x| x > 0.0).unwrap_or(5.0) } else if let Some(secs) = defence_secs { secs } else { a.expiration_seconds.unwrap_or(12.0) },
                 stealth: a.kind.eq_ignore_ascii_case("STEALTH"),
                 reveal_radius: if ping { a.fields.get("effective_radius").and_then(|v| v.parse().ok()).unwrap_or(1000.0) } else { 0.0 },
                 interdict: a.kind.eq_ignore_ascii_case("INTERDICT"),
                 toggle,
                 salvo: a.kind.eq_ignore_ascii_case("FULL_SALVO"),
-                missile_radius: if a.kind.eq_ignore_ascii_case("MISSILE_SHIELD") { a.fields.get("effective_radius").and_then(|v| v.parse().ok()).unwrap_or(750.0) } else { 0.0 },
+                missile_radius: if a.kind.eq_ignore_ascii_case("MISSILE_SHIELD") || laser { a.fields.get("effective_radius").and_then(|v| v.parse().ok()).unwrap_or(750.0) } else { 0.0 },
                 disable_movement: a.fields.get("disable_movement").is_some_and(|v| alamo_data::xml::parse_bool(v)),
                 tractor: a.kind.eq_ignore_ascii_case("TRACTOR_BEAM").then(|| {
                     let sub = a.activated_ability.as_ref().and_then(|n| u.sub_abilities.iter().find(|s| s.name.eq_ignore_ascii_case(n)));

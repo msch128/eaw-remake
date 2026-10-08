@@ -105,7 +105,7 @@ impl Plugin for PlayUiPlugin {
                     .chain()
                     .run_if(resource_exists::<PlayBridge>.and_then(resource_exists::<SimState>)),
             )
-            .add_systems(Update, (declutter_top, hero_bar).chain().run_if(resource_exists::<PlayBridge>.and_then(resource_exists::<SimState>)))
+            .add_systems(Update, (declutter_top, hero_bar, locked_clicks).chain().run_if(resource_exists::<PlayBridge>.and_then(resource_exists::<SimState>)))
             .add_systems(Update, show_battle_summary.run_if(in_state(AppScreen::Galaxy)).run_if(resource_exists::<crate::battle_play::BattleSummary>))
             .add_systems(
                 Update,
@@ -276,7 +276,9 @@ fn feed_bar(
         space_tab: bar.space_tab,
         ..default()
     };
-    if let Some(p) = selection.planet {
+    // With only a fleet selected the panel shows the planet it orbits.
+    let focus = selection.planet.or_else(|| selection.fleets.first().and_then(|id| state.galaxy().fleets.get(id)).and_then(|f| f.planet()));
+    if let Some(p) = focus {
         next.planet_name = state.world.planets[p as usize].display_name.clone();
         next.planet_owner = state.galaxy().planets[p as usize].owner.map(|o| UiFaction::from_name(&state.world.factions[o as usize].name));
         let owner = state.galaxy().planets[p as usize].owner;
@@ -317,9 +319,29 @@ fn feed_bar(
                 building: menu.queue.iter().any(|q| q.target == o.target),
                 tooltip: pad_tooltip(o, week, &state, game),
                 upkeep: pad_upkeep(&state, o.target),
-                level: pad_level(&state, o.target),
+                level: pad_level(&state, o.target).max(required_level(&o.availability)),
+                locked: matches!(o.availability, galaxy_play::Availability::Requires(_)),
+                label: String::new(),
             });
             bar.pads.push(o.target);
+        }
+    }
+    if model.planet.is_none() && !selection.fleets.is_empty() {
+        // A selected fleet shows its units in the bar (icon and count), like the original's fleet view.
+        let mut units: std::collections::BTreeMap<u32, u32> = Default::default();
+        for f in selection.fleets.iter().filter_map(|id| state.galaxy().fleets.get(id)) {
+            for (&u, &c) in &f.units {
+                *units.entry(u).or_default() += c;
+            }
+        }
+        for (u, c) in units.into_iter().take(MAX_PADS) {
+            next.pads.push(BuildPadEntry {
+                icon: icon_for(&state, game, BuildTarget::Unit(u)),
+                price: None,
+                label: if c > 1 { format!("x{c}") } else { String::new() },
+                tooltip: format!("{c}x {}", state.world.units[u as usize].name.replace('_', " ")),
+                ..default()
+            });
         }
     }
     let level = (next.month_progress * 10.0).round() / 10.0;
@@ -434,9 +456,8 @@ fn spawn_hud(mut commands: Commands, existing: Query<(), With<PlayHud>>) {
             border: UiRect::all(Val::Px(1.0)),
             ..abs
         },
-        crate::ui::SkinPanel,
-        BackgroundColor(Color::srgba(0.02, 0.05, 0.10, 0.8)),
-        BorderColor::all(Color::srgba(0.35, 0.65, 1.0, 0.7)),
+        BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.87)),
+        BorderColor::all(Color::srgb(0.0, 0.76, 0.99)),
         Visibility::Hidden,
         FleetText,
         GalaxyEntity,
@@ -463,7 +484,7 @@ fn refresh_ticker(mut commands: Commands, model: Res<PlayUiModel>, ticker: Singl
     commands.entity(*ticker).insert(BackgroundColor(backing));
     commands.entity(*ticker).despawn_children();
     for n in model.notifications.iter().rev().take(6) {
-        commands.spawn((text_bundle(&n.text, 15.0, kind_color(n.kind)), ChildOf(*ticker)));
+        commands.spawn((text_bundle(&n.text, 13.0, kind_color(n.kind)), ChildOf(*ticker)));
     }
 }
 
@@ -492,18 +513,11 @@ fn refresh_texts(
     }
     color.0 = c;
     let week = state.world.config.week_seconds;
+    // The selected fleet's units are in the bar; this box only carries the route and arrival time of moving fleets.
     let lines: Vec<String> = model
         .fleets
         .iter()
-        .map(|f| {
-            let ships = f.ships.iter().map(|(n, c)| format!("{c}x {n}")).collect::<Vec<_>>().join(", ");
-            let place = match (&f.at, &f.heading) {
-                (Some(p), _) => format!("at {p}"),
-                (_, Some((d, eta))) => format!("to {d}, ETA {}", format_duration(*eta, week)),
-                _ => String::new(),
-            };
-            format!("{}{} ships ({ships}) {place}", if f.mine { "" } else { "Enemy: " }, f.count)
-        })
+        .filter_map(|f| f.heading.as_ref().map(|(d, eta)| format!("To {d}: arrival in {}", format_duration(*eta, week))))
         .collect();
     let mut s = lines.join("\n");
     if let Some(h) = &model.route_hint {
@@ -898,10 +912,11 @@ fn fleet_tooltip(
     view: Res<crate::galaxy_view::GalaxyView>,
     window: Option<Single<&Window, With<PrimaryWindow>>>,
     scale: Res<UiScale>,
-    mut tip: Single<(&mut Node, &mut Text, &mut Visibility), With<FleetTip>>,
+    mut tip: Single<(&mut Node, &mut Text, &mut Visibility, &ComputedNode), With<FleetTip>>,
 ) {
-    let (node, text, vis) = &mut *tip;
-    let cursor = window.and_then(|w| w.cursor_position());
+    let (node, text, vis, own) = &mut *tip;
+    let cursor = window.as_ref().and_then(|w| w.cursor_position());
+    let screen = window.as_ref().map(|w| (w.size(), w.scale_factor()));
     let fleet = hover.fleet.and_then(|id| state.galaxy().fleets.get(&id));
     let planet = hover.planet.and_then(|p| bridge.sim_to_planet.get(p as usize).copied().flatten()).and_then(|i| view.planets.get(i).map(|pv| (i, pv)));
     let (Some(cursor), Some(s)) = (cursor, fleet.map(|f| fleet_text(f, &state, &catalog)).or_else(|| planet.map(|(i, pv)| planet_text(i, pv, &view)))) else {
@@ -913,8 +928,12 @@ fn fleet_tooltip(
     if text.0 != s {
         text.0 = s;
     }
-    node.left = Val::Px((cursor.x + 16.0) / scale.0);
-    node.top = Val::Px((cursor.y + 18.0) / scale.0);
+    let mut at = cursor + Vec2::new(16.0, 18.0);
+    if let Some((size, sf)) = screen {
+        at = eaw_ui::clamp_to_screen(at, cursor, own.size() / sf, size);
+    }
+    node.left = Val::Px(at.x / scale.0);
+    node.top = Val::Px(at.y / scale.0);
     **vis = Visibility::Inherited;
 }
 
@@ -1456,19 +1475,13 @@ fn expire_explosions(mut commands: Commands, time: Res<Time>, mut q: Query<(Enti
 /// speed read-out makes room for the battle banner.
 fn declutter_top(
     bar: Query<(), With<EawCommandBar>>,
-    dialog: Res<BattleDialogState>,
-    paused: Res<crate::flow::Paused>,
-    mut top: Query<&mut Visibility, (With<crate::ui::TopBar>, Without<SpeedText>)>,
-    mut speed: Query<&mut Visibility, (With<SpeedText>, Without<crate::ui::TopBar>)>,
+    mut hidden: Query<&mut Visibility, Or<(With<crate::ui::TopBar>, With<SpeedText>, With<crate::ui::HintText>)>>,
 ) {
+    // The EaW bar carries credits, month, speed buttons and the planet; the generic read-outs and the key hint go away.
     if !bar.is_empty() {
-        for mut v in &mut top {
+        for mut v in &mut hidden {
             v.set_if_neq(Visibility::Hidden);
         }
-    }
-    let want = if dialog.open.is_some() || paused.0 { Visibility::Hidden } else { Visibility::Inherited };
-    for mut v in &mut speed {
-        v.set_if_neq(want);
     }
 }
 
@@ -1560,5 +1573,35 @@ mod tests {
     fn capitalize_first_letter() {
         assert_eq!(capitalize("requires tech"), "Requires tech");
         assert_eq!(capitalize(""), "");
+    }
+}
+
+/// Star base level named by a missing requirement ("star base level 2"), 0 if it names something else.
+fn required_level(a: &galaxy_play::Availability) -> u8 {
+    match a {
+        galaxy_play::Availability::Requires(r) => r
+            .to_ascii_lowercase()
+            .strip_prefix("star base level ")
+            .and_then(|n| n.trim().parse::<u8>().ok())
+            .unwrap_or(0),
+        _ => 0,
+    }
+}
+
+/// A press on a greyed-out build pad: say why in the toast and play the refusal sound.
+fn locked_clicks(
+    mut clicks: MessageReader<eaw_ui::EawLockedClicked>,
+    model: Res<PlayUiModel>,
+    bar: Res<BarState>,
+    mut toast: ResMut<Toast>,
+    mut sound: MessageWriter<crate::flow::UiSound>,
+) {
+    for c in clicks.read() {
+        let Some(index) = c.name.strip_prefix("b_create_").and_then(|n| n.parse::<usize>().ok()) else { continue };
+        let (Some(target), Some(menu)) = (bar.pads.get(index), model.planet.as_ref()) else { continue };
+        let Some(o) = menu.options.iter().find(|o| o.target == *target) else { continue };
+        toast.0 = format!("{}: {}", o.name, capitalize(&o.availability.reason()));
+        toast.1 = 3.5;
+        sound.write(crate::flow::UiSound(crate::menu::SFX_BACK));
     }
 }

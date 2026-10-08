@@ -168,3 +168,12 @@ fn missile_shield_and_interdiction() {
     }
     assert!(intercepted > 0, "missiles fired at the Dominator are shot down");
 }
+
+#[test]
+fn laser_defense_becomes_a_missile_defence_ability() {
+    let Some((data, fs)) = load() else { return };
+    let cat = Catalog::build(&data, Some(&fs), &["Demagolka"]);
+    let id = cat.ship_id("Demagolka").expect("a ship with LASER_DEFENSE");
+    let a = cat.ship(id).abilities.iter().find(|a| a.kind.eq_ignore_ascii_case("LASER_DEFENSE")).expect("the ability");
+    assert!((a.missile_radius - 750.0).abs() < 1.0 && (a.duration - 30.0).abs() < 1.0 && !a.toggle && !a.disable_movement, "{a:?}");
+}

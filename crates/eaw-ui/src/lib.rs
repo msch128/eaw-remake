@@ -27,7 +27,7 @@ use bevy::prelude::*;
 
 pub use components::{CommandBarComponent, CommandBarDb, ComponentKind};
 pub use data::{
-    AbilityEntry, BuildPadEntry, CommandBarData, EawButtonClicked, EawButtonState, ForcedTooltip,
+    AbilityEntry, BuildPadEntry, CommandBarData, EawButtonClicked, EawButtonState, EawLockedClicked, ForcedTooltip,
     QueueEntry, SelectionEntry,
 };
 pub use faction::UiFaction;
@@ -178,6 +178,7 @@ impl Plugin for EawUiPlugin {
             .add_message::<EawMinimapClicked>()
             .add_message::<EawDialogResult>()
             .add_message::<EawButtonClicked>()
+            .add_message::<EawLockedClicked>()
             .add_systems(Startup, (widgets::spawn_tooltip, tactical::spawn_overlay_layer))
             .add_systems(
                 Update,
