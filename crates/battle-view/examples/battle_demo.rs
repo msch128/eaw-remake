@@ -126,6 +126,7 @@ fn main() {
             println!("prop {} {} scale {} pos {:?} backdrop {}", p.name, p.model, p.scale, p.position, p.backdrop);
         }
     }
+    let scene_rocks: Vec<Vec3> = scene.props.iter().filter(|p| !p.backdrop).map(|p| p.position).collect();
     // Fleets.
     let empire: &[(&str, u32)] = if small {
         &[("Star_Destroyer", 1), ("TIE_Fighter_Squadron", 2)]
@@ -258,13 +259,19 @@ fn main() {
     if gpu_profile {
         app.add_plugins(battle_view::gpu_profile::GpuProfilePlugin);
     }
-    app.insert_resource(ClearColor(Color::BLACK))
+    let rocks: Vec<Vec3> = scene_rocks;
+    app.insert_resource(DemoRocks(rocks))
+        .insert_resource(ClearColor(Color::BLACK))
         .insert_resource(settings)
         .add_plugins(AlamoRenderPlugin::new(fs.clone()))
         .add_plugins(BattleViewPlugin)
         .insert_resource(BattleSession::new(setup, visuals, scene));
     app.run();
 }
+
+/// Positions of the map's rocks and other props (for `SP_DEMO_MOVE`).
+#[derive(Resource)]
+struct DemoRocks(Vec<Vec3>);
 
 /// Applies the camera pose, selects ships for the overlay test, takes screenshots and measures
 /// frame times.
@@ -283,6 +290,8 @@ fn capture_driver(
     cam: Option<Single<(&mut BattleCamera, &Camera, &GlobalTransform)>>,
     mesh_entities: Query<&ViewVisibility, With<Mesh3d>>,
     mut reinforced: Local<bool>,
+    mut moved: Local<bool>,
+    rocks: Res<DemoRocks>,
 ) {
     let now = Instant::now();
     let dt = now.duration_since(cap.last).as_secs_f64() * 1000.0;
@@ -300,6 +309,26 @@ fn capture_driver(
     {
         rt.command(0, battle_sim::Command::Reinforce { ship: s.def, count: 3 });
         *reinforced = true;
+    }
+    if !*moved
+        && std::env::var_os("SP_DEMO_MOVE").is_some()
+        && let Some(cur) = rt.cur.as_ref()
+        && cur.time >= 2.0
+    {
+        // Send the player's capital ships through the nearest rock to see the move line bend around it.
+        let player = settings.player_side;
+        let own: Vec<_> = ships.0.values().filter(|s| s.side == player && rt.catalog.ship(s.def).radius > 200.0).collect();
+        if !own.is_empty() {
+            let c = own.iter().map(|s| s.pos).sum::<Vec3>() / own.len() as f32;
+            let rock = rocks.0.iter().copied().filter(|r| r.distance(c) > 1500.0).min_by(|a, b| a.distance(c).total_cmp(&b.distance(c)));
+            if let Some(r) = rock {
+                let dest = c + (r - c) * 2.0;
+                println!("demo move: fleet {c:?} rock {r:?} destination {dest:?}");
+                let ids: Vec<u32> = own.iter().map(|s| s.id).collect();
+                rt.command(player, battle_sim::Command::Move { ships: ids, to: battle_view::convert::bevy_to_sim(dest) });
+            }
+            *moved = true;
+        }
     }
     if status.tick == 0 || ships.0.is_empty() {
         return;

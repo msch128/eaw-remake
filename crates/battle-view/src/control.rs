@@ -744,11 +744,26 @@ pub fn overlays(
             continue;
         }
         drawn.push((s.pos, dest));
-        const SEGMENTS: usize = 16;
-        for k in 0..SEGMENTS {
-            let (t0, t1) = (k as f32 / SEGMENTS as f32, (k + 1) as f32 / SEGMENTS as f32);
-            let (a, b) = (s.pos.lerp(dest, t0), s.pos.lerp(dest, t1));
-            gizmos.line_gradient(a, b, base.with_alpha(0.9 * (1.0 - t0 * 0.8)), base.with_alpha(0.9 * (1.0 - t1 * 0.8)));
+        // Along the planned path (it bends around rocks and hulls); a straight line when the sim gives none.
+        let mut points: Vec<Vec3> = Vec::with_capacity(s.path.len() + 1);
+        points.push(s.pos);
+        if matches!(s.order, battle_sim::Order::Attack(_)) || s.path.is_empty() {
+            points.push(dest);
+        } else {
+            points.extend(s.path.iter().copied());
+        }
+        let total: f32 = points.windows(2).map(|w| w[0].distance(w[1])).sum::<f32>().max(1.0);
+        let mut done = 0.0;
+        for w in points.windows(2) {
+            let len = w[0].distance(w[1]);
+            // Split long legs so that the fade is smooth.
+            let pieces = (len / (total / 16.0)).ceil().max(1.0) as usize;
+            for k in 0..pieces {
+                let (u0, u1) = (k as f32 / pieces as f32, (k + 1) as f32 / pieces as f32);
+                let (t0, t1) = ((done + len * u0) / total, (done + len * u1) / total);
+                gizmos.line_gradient(w[0].lerp(w[1], u0), w[0].lerp(w[1], u1), base.with_alpha(0.9 * (1.0 - t0 * 0.8)), base.with_alpha(0.9 * (1.0 - t1 * 0.8)));
+            }
+            done += len;
         }
         if !matches!(s.order, battle_sim::Order::Attack(_)) {
             match rings.iter_mut().find(|(p, ..)| p.distance(dest) < 30.0) {
