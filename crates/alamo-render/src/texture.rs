@@ -225,15 +225,16 @@ impl TextureCache {
             return;
         }
         if image.is_none() {
+            warn!("texture {name}: missing or undecodable, using the neutral fallback");
             self.missing.push(name.to_string());
         }
         self.by_name.insert(key, image.map(|i| images.add(i)));
     }
 
-    /// Magenta-ish placeholder used for textures that cannot be loaded.
+    /// Neutral black placeholder for textures that cannot be loaded (never a loud colour in the game; the miss is logged).
     pub fn fallback(&mut self, images: &mut Assets<Image>) -> Handle<Image> {
         self.fallback
-            .get_or_insert_with(|| images.add(solid([255, 0, 255, 255])))
+            .get_or_insert_with(|| images.add(solid([0, 0, 0, 255])))
             .clone()
     }
 

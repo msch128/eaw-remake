@@ -83,6 +83,22 @@ foreach ($s in $scenarios) {
     # Battle scenarios save their mid-battle shot as <name>_battle.png; every other scenario must write its picture.
     $shot = if ($name -like 'battle-fight*' -or $name -like 'battle-reinforce*') { Join-Path $Out "${name}_battle.png" } else { $png }
     if (-not $windowed -and -not (Test-Path $shot)) { $problems += 'no picture' }
+    # A missing texture must never reach the screen as a loud colour: it is logged and replaced by black.
+    if ($text -match 'texture [^
+]*: missing or undecodable') { $problems += 'missing texture (see log)' }
+    if (-not $windowed -and (Test-Path $shot)) {
+        Add-Type -AssemblyName System.Drawing
+        $bmp = [System.Drawing.Bitmap]::FromFile($shot)
+        $hits = 0; $n = 0
+        for ($y = 0; $y -lt $bmp.Height; $y += [math]::Max(1, [int]($bmp.Height / 80))) {
+            for ($x = 0; $x -lt $bmp.Width; $x += [math]::Max(1, [int]($bmp.Width / 140))) {
+                $c = $bmp.GetPixel($x, $y); $n++
+                if ($c.R -gt 235 -and $c.G -lt 30 -and $c.B -gt 235) { $hits++ }
+            }
+        }
+        $bmp.Dispose()
+        if ($hits -gt $n * 0.01) { $problems += "magenta picture ($hits of $n samples)" }
+    }
     if ($s[2] -and $text -notmatch $s[2]) { $problems += "missing '$($s[2])'" }
     $rows += [pscustomobject]@{ Scenario = $name; Result = $(if ($problems) { 'FAIL' } else { 'ok' }); Seconds = [math]::Round($sw.Elapsed.TotalSeconds); Notes = ($problems -join ', ') }
 }

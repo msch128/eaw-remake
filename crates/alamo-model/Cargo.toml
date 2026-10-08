@@ -7,3 +7,4 @@ license.workspace = true
 
 [dependencies]
 alamo-fs = { path = "../alamo-fs" }
+jpeg-decoder = { version = "0.3", default-features = false }

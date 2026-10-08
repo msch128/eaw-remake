@@ -16,7 +16,9 @@ pub struct Rgba8 {
 
 /// Decodes a DDS, PNG or TGA file, detected by content.
 pub fn decode_texture(data: &[u8]) -> Result<Rgba8> {
-    if crate::png::is_png(data) {
+    if data.starts_with(&[0xff, 0xd8, 0xff]) {
+        decode_jpeg(data)
+    } else if crate::png::is_png(data) {
         crate::png::decode_png(data)
     } else if data.starts_with(b"DDS ") {
         decode_dds(data)
@@ -348,4 +350,20 @@ mod tests {
         assert_eq!(&png[1..4], b"PNG");
         assert!(png.ends_with(&[0xae, 0x42, 0x60, 0x82]));
     }
+}
+
+/// Decodes a JPEG (the Remake ships a few skydome textures as `.jpg`).
+fn decode_jpeg(data: &[u8]) -> Result<Rgba8> {
+    let mut dec = jpeg_decoder::Decoder::new(data);
+    let px = dec.decode().map_err(|e| Error::Invalid(format!("jpeg: {e}")))?;
+    let info = dec.info().ok_or(Error::Truncated("jpeg header"))?;
+    let (w, h) = (info.width as usize, info.height as usize);
+    let mut pixels = Vec::with_capacity(w * h * 4);
+    match info.pixel_format {
+        jpeg_decoder::PixelFormat::RGB24 => px.chunks_exact(3).for_each(|c| pixels.extend([c[0], c[1], c[2], 255])),
+        jpeg_decoder::PixelFormat::L8 => px.iter().for_each(|&l| pixels.extend([l, l, l, 255])),
+        jpeg_decoder::PixelFormat::L16 => px.chunks_exact(2).for_each(|c| pixels.extend([c[0], c[0], c[0], 255])),
+        jpeg_decoder::PixelFormat::CMYK32 => return Err(Error::Invalid("jpeg: CMYK not supported".into())),
+    }
+    Ok(Rgba8 { width: w, height: h, pixels })
 }
