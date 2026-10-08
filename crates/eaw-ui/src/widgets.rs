@@ -1446,6 +1446,14 @@ pub(crate) fn tooltip(
         Ok(w) if !forced_hit => clamp_to_screen(anchor, w.cursor_position().unwrap_or(anchor), own.size() / w.scale_factor(), w.size()),
         _ => anchor,
     };
+    // Build pad and queue tooltips sit fixed above the left of the bar, like the original.
+    let anchor = match window.single() {
+        Ok(w) if !forced_hit && (b.name.starts_with("b_create") || b.name.starts_with("queue")) => {
+            let h = own.size().y / w.scale_factor();
+            Vec2::new(16.0 * scale.0, (w.height() - 345.0 * scale.0 - h).max(0.0))
+        }
+        _ => anchor,
+    };
     // Bevy positions logical px; UiScale is applied to Val::Px so undo it.
     node.left = Val::Px(anchor.x / scale.0);
     node.top = Val::Px(anchor.y / scale.0);

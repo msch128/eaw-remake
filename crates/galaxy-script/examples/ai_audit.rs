@@ -108,6 +108,13 @@ fn main() {
         for e in sim.step(1.0).sim_events {
             let Event::WeekEnded { week: w } = e else { continue };
             week = w;
+            if week % 5 == 0 {
+                sim.with_sim(|s| {
+                    let g = s.galaxy();
+                    let line: Vec<String> = majors.iter().map(|&f| format!("{} {:.0}c pop {}/{} planets {} q{}", &names[f][..3], g.factions[f].credits, g.factions[f].population_used, g.factions[f].population_cap, g.factions[f].planets_owned, g.planets.iter().filter(|p| p.owner == Some(f as u32)).map(|p| p.queues.iter().map(|q| q.len()).sum::<usize>()).sum::<usize>())).collect();
+                    println!("week {week}: {}", line.join(" | "));
+                });
+            }
             sim.with_sim(|s| {
                 let (w, g) = (s.world(), s.galaxy());
                 for &f in &majors {
@@ -183,6 +190,9 @@ fn main() {
                 top.iter().map(|x| x.1).sum::<u32>(),
                 top.iter().take(5).collect::<Vec<_>>()
             );
+            let queued: usize = owned.iter().map(|&p| g.planets[p].queues.iter().map(|q| q.len()).sum::<usize>()).sum();
+            let fs = &g.factions[f];
+            println!("{:11} pop {}/{}, tech {}, income {:.0}/wk, queued items {queued}, ships built {} lost {}, structures built {}, battles won {} lost {}", "", fs.population_used, fs.population_cap, fs.tech, fs.income_per_week, fs.stats.ships_built, fs.stats.ships_lost, fs.stats.structures_built, fs.stats.battles_won, fs.stats.battles_lost);
             println!(
                 "{:11} per planet-week: ships border {:.1} / interior {:.1} / choke {:.1}; defence structures border {:.2} / interior {:.2} / choke {:.2}; star base level border {:.2} / interior {:.2} / choke {:.2}; planet share border {:.0}% choke {:.0}%",
                 "",
@@ -200,6 +210,26 @@ fn main() {
             );
         }
     });
+    if let Some(st) = sim.ai_stats() {
+        for (pi, name) in names.iter().enumerate().filter(|(i, _)| majors.contains(i)) {
+            let mut v: Vec<(String, u32, u32, u32)> = st
+                .plans_started
+                .iter()
+                .filter(|((p, _), _)| *p as usize == pi)
+                .map(|((_, goal), n)| (goal.clone(), *n, st.plans_succeeded.get(&(pi as u32, goal.clone())).copied().unwrap_or(0), st.plans_failed.get(&(pi as u32, goal.clone())).copied().unwrap_or(0)))
+                .collect();
+            v.sort_by(|a, b| b.1.cmp(&a.1));
+            println!("{name} plans (goal, started, ok, failed): {:?}", v.iter().take(14).collect::<Vec<_>>());
+        }
+        println!("task forces: {:?}", st.taskforces);
+    }
+    if let Some(mem) = sim.ai_memory() {
+        for (pi, name) in names.iter().enumerate().filter(|(i, _)| majors.contains(i)) {
+            let frac: Vec<String> = mem.brains.iter().filter(|b| b.player as usize == pi).flat_map(|b| b.fractions.iter().map(|(c, f)| format!("{c} {:.0}%", f * 100.0))).collect();
+            let acc: Vec<String> = mem.task_forces.accounts.iter().filter(|a| a.0 as usize == pi).map(|a| format!("{} {:.0}", a.1, a.2)).collect();
+            println!("{name} budget shares [{}]; unspent earmarked per category [{}]", frac.join(", "), acc.join(", "));
+        }
+    }
     let total: u32 = lane_use.values().sum();
     let lane_share = |f: i32| routes.iter().filter(|&&r| (r * 100.0) as i32 == f).count() as f64 / routes.len() as f64;
     println!("fleet-weeks in hyperspace by lane speed (x100): {lane_use:?} of {total}");

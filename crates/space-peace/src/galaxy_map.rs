@@ -490,7 +490,7 @@ fn spawn_galaxy(
             Emblem(i),
             GalaxyEntity,
         ));
-        commands.spawn((
+        let label = commands.spawn((
             Text::new(planet.display_name.to_uppercase()),
             TextFont {
                 font: FontSource::Family("Bahnschrift".into()),
@@ -511,7 +511,16 @@ fn spawn_galaxy(
             Visibility::Hidden,
             PlanetLabel(i),
             GalaxyEntity,
-        ));
+        )).id();
+        if planet.income > 0 {
+            // Small income number after the name, like the original ("+90").
+            commands.spawn((
+                TextSpan::new(format!(" +{}", planet.income)),
+                TextFont { font: FontSource::Family("Bahnschrift".into()), font_size: FontSize::Px(9.0), ..default() },
+                TextColor(Color::srgb(0.6, 0.85, 1.0)),
+                ChildOf(label),
+            ));
+        }
     }
 
     // Decorative models: galaxy disc art, nebulae, faction logos, background planets.
@@ -780,7 +789,7 @@ fn draw_rings(
         let r = radii.0[i] * NOTCH_RADIUS * pulse;
         // Own planets get the green ring, everything else the cool cyan of the original.
         let owner = view.planets[i].owner;
-        let color = if owner.is_some() && owner == view.player_faction { rgb(relation_color(&view, view.player_faction)) } else { rgb([0.1, 0.75, 1.0]) };
+        let color = if owner.is_some() { rgb(relation_color(&view, owner)) } else { rgb([0.1, 0.75, 1.0]) };
         let l = color.to_linear();
         let bright = Color::LinearRgba(LinearRgba::new(l.red * 1.3 + 0.1, l.green * 1.3 + 0.1, l.blue * 1.3 + 0.1, 1.0));
         select.circle(Isometry3d::new(pos, flat), r, bright).resolution(96);
@@ -854,7 +863,7 @@ fn place_notch_fill(
                     && let Some(mut m) = materials.get_mut(&mat.0)
                 {
                     let owner = view.planets[i].owner;
-                    let c = if owner.is_some() && owner == view.player_faction { rgb(relation_color(&view, view.player_faction)) } else { rgb([0.1, 0.75, 1.0]) };
+                    let c = if owner.is_some() { rgb(relation_color(&view, owner)) } else { rgb([0.1, 0.75, 1.0]) };
                     m.base_color = c.with_alpha(0.38);
                     *last = Some(i);
                 }
@@ -1335,7 +1344,7 @@ fn territory_segments(view: &GalaxyView, radii: &PlanetRadii, selected: Option<u
     let p = &view.planets[i];
     let c = galaxy_to_world(p.position);
     let r = radii.0[i] * TERRITORY_RADIUS;
-    let own = p.owner.is_some() && p.owner == view.player_faction;
+    let own = p.owner.is_some();
     let l = rgb(if own { relation_color(view, p.owner) } else { [0.1, 0.75, 1.0] }).to_linear();
     let color = Color::LinearRgba(LinearRgba::new(l.red, l.green, l.blue, 0.9));
     let a = |k: usize| k as f32 / SAMPLES as f32 * std::f32::consts::TAU;

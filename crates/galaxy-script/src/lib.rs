@@ -491,6 +491,11 @@ impl ScriptedSim {
         self.inner.borrow().ai.as_ref().map(galaxy_ai::AiEngine::stats)
     }
 
+    /// What the Remake AI remembers (budgets, accounts, goal timers); `None` when it is not enabled.
+    pub fn ai_memory(&self) -> Option<galaxy_ai::AiMemory> {
+        self.inner.borrow().ai.as_ref().map(galaxy_ai::AiEngine::memory)
+    }
+
     /// Goals the Remake AI of a faction is working on: `(goal, target planet, seconds running)`.
     pub fn ai_active_goals(&self, player: u32) -> Vec<(String, Option<u32>, f64)> {
         let i = self.inner.borrow();
