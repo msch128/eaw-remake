@@ -223,6 +223,7 @@ impl Plugin for MenuPlugin {
             .add_systems(OnEnter(AppScreen::MainMenu), (spawn_main_menu, spawn_backdrop))
             .add_systems(OnEnter(AppScreen::CampaignSelect), (spawn_campaign_menu, spawn_backdrop))
             .add_systems(OnEnter(AppScreen::Galaxy), despawn_backdrop)
+            .add_systems(OnEnter(AppScreen::Galaxy), sync_pause_menu)
             .add_systems(OnExit(AppScreen::MainMenu), despawn_screen_menu)
             .add_systems(OnExit(AppScreen::CampaignSelect), despawn_screen_menu)
             .add_systems(OnExit(AppScreen::Galaxy), despawn_pause_menu)

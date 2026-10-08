@@ -67,6 +67,7 @@ impl Plugin for PlayUiPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<BarState>()
             .init_resource::<BattleDialogState>()
+            .init_resource::<MoveMarkers>()
             .add_systems(PreUpdate, drive_ui_scale.run_if(resource_exists::<EawUiSettings>))
             .add_systems(
                 Update,
@@ -78,6 +79,8 @@ impl Plugin for PlayUiPlugin {
                     minimap_pan.run_if(in_state(AppScreen::Galaxy)),
                     bar_clicks,
                     loading_overlay,
+                    collect_move_markers,
+                    draw_move_markers,
                     refresh_ticker,
                     refresh_texts,
                     battle_dialog,
@@ -645,5 +648,38 @@ fn loading_overlay(
     }
     for mut n in &mut fill {
         n.width = Val::Percent(fraction * 100.0);
+    }
+}
+
+/// Destination rings of recent move orders (planet and age in seconds).
+#[derive(Resource, Default)]
+struct MoveMarkers(Vec<(galaxy_sim::PlanetId, f32)>);
+
+const MARKER_SECONDS: f32 = 1.6;
+
+/// A move order of the player leaves a pulsing ring on the destination planet.
+fn collect_move_markers(mut actions: MessageReader<PlayAction>, selection: Res<PlayerSelection>, mut markers: ResMut<MoveMarkers>) {
+    for a in actions.read() {
+        if let PlayAction::MoveSelected(to) = a
+            && !selection.fleets.is_empty()
+        {
+            markers.0.push((*to, 0.0));
+        }
+    }
+}
+
+fn draw_move_markers(time: Res<Time>, layout: Res<galaxy_play::GalaxyLayout>, mut markers: ResMut<MoveMarkers>, mut gizmos: Gizmos) {
+    let dt = time.delta_secs();
+    for m in &mut markers.0 {
+        m.1 += dt;
+    }
+    markers.0.retain(|m| m.1 < MARKER_SECONDS);
+    for &(planet, age) in &markers.0 {
+        let t = age / MARKER_SECONDS;
+        let c = layout.positions[planet as usize];
+        let r = layout.radii[planet as usize] * (1.3 + 1.2 * t);
+        let color = Color::srgba(0.4, 1.0, 0.6, 1.0 - t);
+        gizmos.circle(Isometry3d::new(c, Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2)), r, color);
+        gizmos.circle(Isometry3d::new(c, Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2)), r * 0.7, color);
     }
 }

@@ -50,6 +50,10 @@ pub struct Args {
     pub battle_auto: bool,
     /// Offscreen only: reach the map the way a player does, main menu -> campaign list -> campaign (`--via-menu`).
     pub via_menu: bool,
+    /// Offscreen only: open the save or load slot list on the map (`--slots save|load`).
+    pub slots: Option<String>,
+    /// Offscreen only: press this slot of the open list (`--slot-click N`).
+    pub slot_click: Option<u8>,
     /// AI difficulty of a new game: easy, normal, hard, brutal or fair (`--difficulty`).
     pub difficulty: Option<String>,
     /// Use galaxy-sim's built-in AI instead of the Remake AI (`--classic-ai`).
@@ -88,6 +92,8 @@ impl Default for Args {
             battle_choice: None,
             battle_auto: false,
             via_menu: false,
+            slots: None,
+            slot_click: None,
             difficulty: None,
             classic_ai: false,
             save_to: None,
@@ -187,6 +193,8 @@ impl Args {
                 "--stop-on-battle" => out.stop_on_battle = true,
                 "--battle-auto" => out.battle_auto = true,
                 "--via-menu" => out.via_menu = true,
+                "--slots" => out.slots = Some(it.next().ok_or("--slots needs save or load")?),
+                "--slot-click" => out.slot_click = Some(it.next().ok_or("--slot-click needs a number")?.parse().map_err(|e| format!("bad --slot-click: {e}"))?),
                 "--difficulty" => out.difficulty = Some(it.next().ok_or("--difficulty needs a value")?.to_lowercase()),
                 "--classic-ai" => out.classic_ai = true,
                 "--save-to" => out.save_to = Some(it.next().ok_or("--save-to needs a value")?.into()),

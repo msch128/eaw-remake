@@ -69,6 +69,7 @@ impl Plugin for PlayGluePlugin {
                     hold_clock,
                     galaxy_audio.run_if(resource_exists::<alamo_audio::plugin::AlamoAudio>),
                     via_menu,
+                    scripted_slots,
                     (sync_selection, sync_view, sync_radii, cursor_blocked, forward_battles, finish_battles, run_script)
                         .chain()
                         .run_if(resource_exists::<PlayBridge>),
@@ -487,4 +488,31 @@ fn galaxy_audio(
             _ => {}
         }
     }
+}
+
+/// Offscreen `--slots save|load [--slot-click N]`: opens the slot list on the map and presses a slot.
+fn scripted_slots(
+    args: Res<Args>,
+    screen: Res<State<AppScreen>>,
+    state: Option<Res<SimState>>,
+    mut slots: ResMut<crate::newgame::SlotScreen>,
+    mut chosen: MessageWriter<crate::newgame::SlotChosen>,
+    mut frames: Local<u32>,
+) {
+    use crate::newgame::{SlotChosen, SlotMode};
+    let (Some(mode), true) = (args.slots.as_deref(), args.offscreen.is_some()) else { return };
+    if *screen.get() != AppScreen::Galaxy || state.is_none_or(|s| s.current.loading) {
+        return;
+    }
+    *frames += 1;
+    let mode = if mode == "load" { SlotMode::Load } else { SlotMode::Save };
+    if *frames == 30 {
+        slots.0 = Some(mode);
+    }
+    if *frames == 120 {
+        if let Some(n) = args.slot_click {
+            chosen.write(SlotChosen(mode, n));
+        }
+    }
+    let _ = SlotChosen(mode, 0);
 }
