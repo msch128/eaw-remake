@@ -9,6 +9,7 @@ mod galaxy_map;
 mod galaxy_view;
 mod game;
 mod loading;
+mod logfile;
 mod menu;
 mod newgame;
 mod offscreen;
@@ -118,7 +119,7 @@ fn main() {
         .add_plugins(RenderDiagnosticsPlugin);
         offscreen::configure(&mut app, &args, path.clone());
     } else {
-        app.add_plugins(DefaultPlugins.set(WindowPlugin {
+        app.add_plugins(DefaultPlugins.set(bevy::log::LogPlugin { custom_layer: logfile::file_layer, ..default() }).set(WindowPlugin {
             primary_window: Some(Window {
                 title: "Space Peace: Not at War".into(),
                 present_mode,

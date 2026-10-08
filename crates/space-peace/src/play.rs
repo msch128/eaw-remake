@@ -509,10 +509,10 @@ fn scripted_slots(
     if *frames == 30 {
         slots.0 = Some(mode);
     }
-    if *frames == 120 {
-        if let Some(n) = args.slot_click {
-            chosen.write(SlotChosen(mode, n));
-        }
+    if *frames == 120
+        && let Some(n) = args.slot_click
+    {
+        chosen.write(SlotChosen(mode, n));
     }
     let _ = SlotChosen(mode, 0);
 }

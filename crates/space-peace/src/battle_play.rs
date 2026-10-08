@@ -49,6 +49,8 @@ struct BattleHint;
 struct BattleShot {
     frames: u32,
     taken: bool,
+    /// Frame of the attack order of `--battle-orders` (the capture follows a few frames later).
+    orders_at: Option<u32>,
 }
 
 /// Wires the battle screen to `battle-view`.
@@ -65,7 +67,7 @@ impl Plugin for BattlePlayPlugin {
             .add_systems(OnExit(AppScreen::SpaceBattle), end_session)
             .add_systems(
                 Update,
-                (finish_battle_view, abort_key, battle_ui_camera, battle_shot, battle_header)
+                (finish_battle_view, abort_key, battle_ui_camera, battle_shot, battle_header, battle_orders)
                     .run_if(in_state(AppScreen::SpaceBattle).and_then(resource_exists::<PendingTactical>)),
             );
     }
@@ -197,7 +199,8 @@ fn battle_shot(
     shot.frames += 1;
     let at = args.battle_seconds.unwrap_or(12.0);
     // Models and textures load asynchronously: wait a couple of hundred frames.
-    if shot.taken || status.tick == 0 || status.time < at || shot.frames < 200 {
+    let ready = if args.battle_orders { shot.orders_at.is_some_and(|f| shot.frames >= f + 12) } else { status.time >= at && shot.frames >= 200 };
+    if shot.taken || status.tick == 0 || !ready {
         return;
     }
     shot.taken = true;
@@ -262,5 +265,60 @@ fn battle_header(pending: Res<PendingTactical>, state: Option<Res<galaxy_play::S
         data.planet_name = name;
         data.planet_owner = None;
         data.planet_income = 0;
+    }
+}
+
+/// Offscreen `--battle-orders`: selects the player ships, orders a move and then an attack through the
+/// synthetic pointer, so selection rings, bars and order markers can be checked in a capture.
+#[allow(clippy::too_many_arguments)]
+fn battle_orders(
+    args: Res<Args>,
+    status: Res<BattleStatus>,
+    ships: Res<battle_view::RenderedShips>,
+    settings: Res<BattleViewSettings>,
+    mut sel: ResMut<battle_view::Selection>,
+    mut pointer: ResMut<battle_view::Pointer>,
+    camera: Single<(&Camera, &GlobalTransform), With<BattleCamera>>,
+    mut frames: Local<u32>,
+    mut shot: ResMut<BattleShot>,
+) {
+    if !args.battle_orders || status.tick == 0 || ships.0.is_empty() {
+        return;
+    }
+    *frames += 1;
+    let (cam, gt) = *camera;
+    let player = settings.player_side;
+    pointer.right_pressed = false;
+    match *frames {
+        120 => {
+            sel.ships = ships.0.iter().filter(|(_, s)| s.side == player).map(|(id, _)| *id).collect();
+            sel.ships.sort_unstable();
+        }
+        140 => {
+            // Move to the middle of the screen.
+            pointer.cursor = cam.logical_viewport_size().map(|s| s * 0.5);
+            pointer.right_pressed = true;
+        }
+        175 => {
+            if shot.orders_at.is_none() {
+                shot.orders_at = Some(shot.frames);
+            }
+        }
+        160 => {
+            // Attack the enemy ship that is nearest to the middle of the screen.
+            let middle = cam.logical_viewport_size().map_or(Vec2::ZERO, |s| s * 0.5);
+            let target = ships
+                .0
+                .values()
+                .filter(|s| s.side != player)
+                .filter_map(|s| cam.world_to_viewport(gt, s.pos).ok().map(|p| (p, p.distance(middle))))
+                .min_by(|a, b| a.1.total_cmp(&b.1));
+            if let Some((p, _)) = target {
+                pointer.cursor = Some(p);
+                pointer.right_pressed = true;
+                shot.orders_at = Some(shot.frames);
+            }
+        }
+        _ => {}
     }
 }

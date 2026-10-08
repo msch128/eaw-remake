@@ -82,7 +82,7 @@ impl Plugin for PlayUiPlugin {
                     collect_move_markers,
                     draw_move_markers,
                     refresh_ticker,
-                    refresh_texts,
+                    refresh_texts.run_if(in_state(AppScreen::Galaxy)),
                     battle_dialog,
                     scripted_battle_click,
                     battle_dialog_result,
@@ -312,7 +312,17 @@ fn spawn_hud(mut commands: Commands, existing: Query<(), With<PlayHud>>) {
     commands.spawn((
         PlayHud,
         text_bundle("", 15.0, Color::srgb(0.75, 1.0, 0.85)),
-        Node { bottom: Val::Px(296.0), left: Val::Px(40.0), max_width: Val::Px(620.0), ..abs },
+        Node {
+            bottom: Val::Px(296.0),
+            left: Val::Px(40.0),
+            max_width: Val::Px(620.0),
+            padding: UiRect::axes(Val::Px(10.0), Val::Px(6.0)),
+            border: UiRect::all(Val::Px(1.0)),
+            ..abs
+        },
+        BackgroundColor(Color::srgba(0.02, 0.05, 0.10, 0.8)),
+        BorderColor::all(Color::srgba(0.35, 0.65, 1.0, 0.7)),
+        Visibility::Hidden,
         FleetText,
         GalaxyEntity,
     ));
@@ -345,7 +355,7 @@ fn refresh_texts(
     model: Res<PlayUiModel>,
     state: Res<SimState>,
     mut speed: Single<(&mut Text, &mut TextColor), (With<SpeedText>, Without<FleetText>)>,
-    mut fleets: Single<&mut Text, (With<FleetText>, Without<SpeedText>)>,
+    mut fleets: Single<(&mut Text, &mut Visibility), (With<FleetText>, Without<SpeedText>)>,
 ) {
     if !model.is_changed() {
         return;
@@ -385,8 +395,13 @@ fn refresh_texts(
         }
         s.push_str(h);
     }
-    if fleets.0 != s {
-        fleets.0 = s;
+    let (ftext, fvis) = &mut *fleets;
+    let want = if s.is_empty() { Visibility::Hidden } else { Visibility::Inherited };
+    if **fvis != want {
+        **fvis = want;
+    }
+    if ftext.0 != s {
+        ftext.0 = s;
     }
 }
 

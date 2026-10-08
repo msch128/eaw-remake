@@ -48,6 +48,8 @@ pub struct Args {
     pub battle_choice: Option<String>,
     /// Offscreen only: the AI plays both sides of a tactical battle (`--battle-auto`).
     pub battle_auto: bool,
+    /// Offscreen only: select the player ships and give a move and an attack order (`--battle-orders`).
+    pub battle_orders: bool,
     /// Offscreen only: reach the map the way a player does, main menu -> campaign list -> campaign (`--via-menu`).
     pub via_menu: bool,
     /// Offscreen only: open the save or load slot list on the map (`--slots save|load`).
@@ -91,6 +93,7 @@ impl Default for Args {
             stop_on_battle: false,
             battle_choice: None,
             battle_auto: false,
+            battle_orders: false,
             via_menu: false,
             slots: None,
             slot_click: None,
@@ -192,6 +195,7 @@ impl Args {
                 "--move" => out.move_to = Some(it.next().ok_or("--move needs a value")?),
                 "--stop-on-battle" => out.stop_on_battle = true,
                 "--battle-auto" => out.battle_auto = true,
+                "--battle-orders" => out.battle_orders = true,
                 "--via-menu" => out.via_menu = true,
                 "--slots" => out.slots = Some(it.next().ok_or("--slots needs save or load")?),
                 "--slot-click" => out.slot_click = Some(it.next().ok_or("--slot-click needs a number")?.parse().map_err(|e| format!("bad --slot-click: {e}"))?),
