@@ -61,6 +61,8 @@ enum Step {
     PageUpRotates,
     /// Shift + 1 presses the first ability button of the selected unit (vacuous when the unit has none).
     AbilityHotkey,
+    /// Click the first own ship that has an ability with autocast (scenario `--grant-unit X4`); vacuous without one.
+    SelectAutocastUnit,
     /// Right click on an ability button that supports autocast flips it (vacuous when the selected unit has none).
     AutocastToggle,
     /// Esc: cancels the armed order first, then opens the (pausing) menu, then closes it.
@@ -78,7 +80,7 @@ enum EscCheck {
     Paused(bool),
 }
 
-const STEPS: [Step; 28] = [
+const STEPS: [Step; 29] = [
     Step::SelectShip,
     Step::RightClickGround,
     Step::MoveLineVisible,
@@ -95,6 +97,7 @@ const STEPS: [Step; 28] = [
     Step::Button("c_button02", Check::Armed(ArmedKind::Move)),
     Step::ArmedGroundClick,
     Step::AbilityHotkey,
+    Step::SelectAutocastUnit,
     Step::AutocastToggle,
     Step::Button("c_button01", Check::Armed(ArmedKind::AttackMove)),
     Step::Escape(EscCheck::ArmedCleared),
@@ -407,6 +410,37 @@ fn drive(
             }
             _ => {}
         },
+        Step::SelectAutocastUnit => {
+            let pick = ships
+                .0
+                .values()
+                .filter(|s| s.side == player && rt.catalog.ship(s.def).abilities.iter().any(|d| d.supports_autofire))
+                .min_by_key(|s| s.id);
+            match t {
+                0 => match (pick, cams.single_mut()) {
+                    (Some(s), Ok(mut c)) => {
+                        st.cam_saved = Some((c.focus, c.distance));
+                        let at = Vec3::new(s.pos.x, c.target_focus.y, s.pos.z);
+                        c.focus = at;
+                        c.target_focus = at;
+                        c.distance = 2500.0;
+                        c.target_distance = 2500.0;
+                        st.hp_ship = Some(s.id);
+                    }
+                    _ => verdict = Some(("select-autocast-unit (no own ship with an autocast ability)".into(), true)),
+                },
+                8 => match st.hp_ship.and_then(|id| ships.0.get(&id)).and_then(|s| cam.world_to_viewport(gt, s.pos).ok()) {
+                    Some(p) => act = Some(Act::Move(p)),
+                    None => verdict = Some(("select-autocast-unit: ship not on screen".into(), false)),
+                },
+                9 | 10 => act = click_at(t - 8, Vec2::ZERO, MouseButton::Left),
+                16 => {
+                    let ok = st.hp_ship.is_some_and(|id| sel.ships.contains(&id));
+                    verdict = Some(("select-autocast-unit".into(), ok));
+                }
+                _ => {}
+            }
+        }
         Step::AutocastToggle => {
             // The first selected ship and an ability of it that supports autocast, with the bar button that shows it.
             let found = sel.ships.first().and_then(|&id| {
@@ -430,6 +464,12 @@ fn drive(
                 }
                 (1 | 2, _) => act = click_at(t, Vec2::ZERO, MouseButton::Right),
                 (30, _) => {
+                    if let (Some((f, d)), Ok(mut c)) = (st.cam_saved.take(), cams.single_mut()) {
+                        c.focus = f;
+                        c.target_focus = f;
+                        c.distance = d;
+                        c.target_distance = d;
+                    }
                     let ok = st.autocast.is_some_and(|(id, i, before)| rt.cur.as_ref().and_then(|c| c.ship(id)).is_some_and(|s| s.autocast.get(i).copied() == Some(!before)));
                     verdict = Some(("autocast-toggle".into(), ok));
                 }
