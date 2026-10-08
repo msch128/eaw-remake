@@ -240,20 +240,18 @@ fn handle_slot_chosen(
     }
 }
 
-fn report_events(mut events: MessageReader<PlayEvent>, mut end: ResMut<crate::play_ui::EndState>) {
+fn report_events(mut events: MessageReader<PlayEvent>) {
     for e in events.read() {
         match e {
             PlayEvent::SaveFinished { path, result } => match result {
                 Ok(()) => {
                     info!("saves: wrote {}", path.display());
-                    let _ = std::fs::write(crate::play_ui::GameStats::sidecar(path), end.stats.to_text());
                 }
                 Err(e) => warn!("saves: cannot write {}: {e}", path.display()),
             },
             PlayEvent::LoadFinished { path, result } => match result {
                 Ok(week) => {
                     info!("saves: loaded {} (week {week})", path.display());
-                    end.stats = std::fs::read_to_string(crate::play_ui::GameStats::sidecar(path)).ok().and_then(|t| crate::play_ui::GameStats::from_text(&t)).unwrap_or_default();
                 }
                 Err(e) => warn!("saves: cannot load {}: {e}", path.display()),
             },

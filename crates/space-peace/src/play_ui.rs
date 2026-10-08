@@ -75,6 +75,7 @@ impl Plugin for PlayUiPlugin {
         app.init_resource::<BarState>()
             .init_resource::<BattleDialogState>()
             .init_resource::<MoveMarkers>()
+            .init_resource::<SuperweaponAsk>()
             .init_resource::<Toast>()
             .init_resource::<EndState>()
             .add_systems(PreUpdate, drive_ui_scale.run_if(resource_exists::<EawUiSettings>))
@@ -107,7 +108,7 @@ impl Plugin for PlayUiPlugin {
             .add_systems(Update, show_battle_summary.run_if(in_state(AppScreen::Galaxy)).run_if(resource_exists::<crate::battle_play::BattleSummary>))
             .add_systems(
                 Update,
-                (track_game_end, force_end_script, show_end_dialog, end_dialog_result)
+                (track_game_end, force_end_script, show_end_dialog, end_dialog_result, superweapon_button, superweapon_dialog)
                     .chain()
                     .run_if(resource_exists::<PlayBridge>.and_then(resource_exists::<SimState>)),
             )
@@ -553,6 +554,7 @@ fn fix_fleet_label_scale(scale: Res<UiScale>, mut labels: Query<&mut Node, With<
 }
 
 /// Tells the label layout where the planet panel is.
+#[allow(clippy::type_complexity)]
 fn publish_panel_rect(
     panels: Query<(&ComputedNode, &UiGlobalTransform, &InheritedVisibility), (Or<(With<crate::ui::SkinPanel>, With<Ticker>)>, Without<crate::ui::Tooltip>)>,
     ui_scale: Res<UiScale>,
@@ -586,12 +588,14 @@ fn move_info_panel(mut panel: Single<&mut Node, With<InfoPanel>>, mut hint: Quer
     }
 }
 
+#[allow(clippy::type_complexity)]
 fn hide_play_ui(mut bar: Query<&mut Visibility, Or<(With<EawCommandBar>, With<BarBacking>)>>) {
     for mut v in &mut bar {
         *v = Visibility::Hidden;
     }
 }
 
+#[allow(clippy::type_complexity)]
 fn show_play_ui(mut bar: Query<&mut Visibility, Or<(With<EawCommandBar>, With<BarBacking>)>>) {
     for mut v in &mut bar {
         *v = Visibility::Inherited;
@@ -904,41 +908,9 @@ fn scripted_clicks(
     }
 }
 
-/// What the player did in this game (counted from the simulation events; a loaded save starts again at zero).
-#[derive(Debug, Default, Clone, PartialEq)]
-pub(crate) struct GameStats {
-    battles_won: u32,
-    battles_lost: u32,
-    ships_built: u32,
-    ships_lost: u32,
-}
-
-impl GameStats {
-    /// One line stored next to a save file (`slotN.stats`): the sim does not count these, a replay does not report them.
-    pub(crate) fn to_text(&self) -> String {
-        format!("v1 {} {} {} {}\n", self.battles_won, self.battles_lost, self.ships_built, self.ships_lost)
-    }
-
-    /// Reads [`GameStats::to_text`].
-    pub(crate) fn from_text(text: &str) -> Option<Self> {
-        let mut it = text.split_whitespace();
-        if it.next()? != "v1" {
-            return None;
-        }
-        let mut n = || it.next()?.parse::<u32>().ok();
-        Some(Self { battles_won: n()?, battles_lost: n()?, ships_built: n()?, ships_lost: n()? })
-    }
-
-    /// Side file of a save.
-    pub(crate) fn sidecar(save: &std::path::Path) -> std::path::PathBuf {
-        save.with_extension("stats")
-    }
-}
-
 /// The campaign result and its dialog.
 #[derive(Resource, Default)]
 pub(crate) struct EndState {
-    pub(crate) stats: GameStats,
     /// `Some(true)` victory, `Some(false)` defeat, waiting for the dialog.
     pending: Option<bool>,
     /// The dialog entity once shown.
@@ -957,10 +929,6 @@ fn track_game_end(mut events: MessageReader<galaxy_play::PlayEvent>, player: Res
     for e in events.read() {
         let galaxy_play::PlayEvent::Sim(ev) = e else { continue };
         match ev {
-            Event::BattleWon { faction, .. } if *faction == me => end.stats.battles_won += 1,
-            Event::BattleLost { faction, .. } if *faction == me => end.stats.battles_lost += 1,
-            Event::UnitsDestroyed { faction, count, .. } if *faction == me => end.stats.ships_lost += count,
-            Event::ConstructionComplete { faction, kind: galaxy_sim::ProductionKind::Unit(_), .. } if *faction == me => end.stats.ships_built += 1,
             Event::Victory { faction } if !end.announced => {
                 end.pending = Some(*faction == me);
                 end.announced = true;
@@ -975,6 +943,7 @@ fn track_game_end(mut events: MessageReader<galaxy_play::PlayEvent>, player: Res
 }
 
 /// Offscreen `--force-end win|lose`: injects the event that ends the campaign.
+#[allow(clippy::too_many_arguments)]
 fn force_end_script(
     args: Res<crate::cli::Args>,
     player: Res<PlayerFaction>,
@@ -1023,7 +992,10 @@ fn show_end_dialog(world: &mut World) {
             world.resource::<crate::galaxy_view::GalaxyView>().planets.len(),
         )
     };
-    let stats = world.resource::<EndState>().stats.clone();
+    let stats = {
+        let state = world.resource::<SimState>();
+        world.resource::<PlayerFaction>().0.map(|h| state.current.stats(h)).unwrap_or_default()
+    };
     let name = world.resource::<crate::flow::CurrentCampaign>().faction.clone().unwrap_or_else(|| "Rebel".into());
     let text = format!(
         "Weeks played: {weeks}\nPlanets held: {planets} of {total}\nBattles won: {}   lost: {}\nShips built: {}   lost: {}\nCredits: {}",
@@ -1084,22 +1056,8 @@ fn end_dialog_result(
 
 /// A new game starts with fresh statistics.
 fn reset_end_state(mut end: ResMut<EndState>) {
-    if end.announced || end.dialog.is_some() || end.pending.is_some() || end.stats != GameStats::default() {
+    if end.announced || end.dialog.is_some() || end.pending.is_some() {
         *end = EndState::default();
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::GameStats;
-
-    #[test]
-    fn stats_sidecar_round_trips() {
-        let s = GameStats { battles_won: 3, battles_lost: 1, ships_built: 12, ships_lost: 7 };
-        assert_eq!(GameStats::from_text(&s.to_text()), Some(s));
-        assert_eq!(GameStats::from_text("v2 1 2 3 4"), None);
-        assert_eq!(GameStats::from_text("v1 1 2"), None);
-        assert_eq!(GameStats::sidecar(std::path::Path::new("saves/slot1.json")), std::path::PathBuf::from("saves/slot1.stats"));
     }
 }
 
@@ -1158,6 +1116,7 @@ fn live_info_panel(
 }
 
 /// A new game starts looking at the player's richest planet (the capital) instead of the whole galaxy.
+#[allow(clippy::too_many_arguments)]
 fn focus_start(
     args: Res<crate::cli::Args>,
     view: Res<crate::galaxy_view::GalaxyView>,
@@ -1209,5 +1168,124 @@ fn show_battle_summary(world: &mut World) {
     let spec = DialogSpec { title: s.title.clone(), text: s.text.clone(), portrait: None, faction, buttons: vec!["OK".into()] };
     if spawn_dialog(world, &spec).is_none() {
         world.insert_resource(s);
+    }
+}
+
+/// The "fire superweapon" button and its confirmation dialog.
+#[derive(Component)]
+struct SuperweaponButton;
+/// Text of the button.
+#[derive(Component)]
+struct SuperweaponLabel;
+
+/// Pending confirmation: the dialog entity and the planet it is about.
+#[derive(Resource, Default)]
+struct SuperweaponAsk(Option<(Entity, galaxy_sim::PlanetId)>);
+
+/// Planet the selected fleets can fire at right now (armed fleet in orbit, planet destroyable, weapon ready).
+fn superweapon_target(state: &SimState, player: &PlayerFaction, selection: &PlayerSelection) -> Option<(galaxy_sim::PlanetId, bool)> {
+    let me = player.0?;
+    let g = state.galaxy();
+    for id in &selection.fleets {
+        let f = g.fleets.get(id).filter(|f| f.owner == me)?;
+        let p = f.planet()?;
+        let armed = f.units.iter().any(|(&u, &n)| n > 0 && state.world.units[u as usize].planet_destroyer);
+        let ps = &g.planets[p as usize];
+        if armed && state.world.planets[p as usize].destroyable && !ps.destroyed && ps.owner != Some(me) {
+            let ready = g.time >= g.factions[me as usize].superweapon_ready_at;
+            return Some((p, ready));
+        }
+    }
+    None
+}
+
+#[allow(clippy::too_many_arguments)]
+fn superweapon_button(
+    mut commands: Commands,
+    state: Res<SimState>,
+    player: Res<PlayerFaction>,
+    selection: Res<PlayerSelection>,
+    existing: Query<Entity, With<SuperweaponButton>>,
+    mut label: Query<&mut Text, With<SuperweaponLabel>>,
+    interaction: Query<(&Interaction, &SuperweaponButton), Changed<Interaction>>,
+    ask: Res<SuperweaponAsk>,
+    assets: Option<Res<EawUiAssets>>,
+    mut dialog: Local<Option<(galaxy_sim::PlanetId, bool)>>,
+) {
+    let target = superweapon_target(&state, &player, &selection);
+    match (target, existing.iter().next()) {
+        (Some((p, ready)), None) => {
+            let name = state.world.planets[p as usize].display_name.clone();
+            let text = if ready { format!("Fire superweapon at {name}") } else { "Superweapon recharging".to_owned() };
+            commands
+                .spawn((
+                    SuperweaponButton,
+                    Button,
+                    PlayHud,
+                    GalaxyEntity,
+                    Node {
+                        position_type: PositionType::Absolute,
+                        bottom: Val::Px(250.0),
+                        left: Val::Px(40.0),
+                        padding: UiRect::axes(Val::Px(14.0), Val::Px(8.0)),
+                        border: UiRect::all(Val::Px(1.0)),
+                        ..default()
+                    },
+                    BackgroundColor(Color::srgba(0.35, 0.05, 0.04, 0.95)),
+                    BorderColor::all(Color::srgb(1.0, 0.45, 0.3)),
+                ))
+                .with_children(|b| {
+                    b.spawn((text_bundle(&text, 18.0, Color::WHITE), SuperweaponLabel));
+                });
+            *dialog = Some((p, ready));
+        }
+        (Some((p, ready)), Some(_)) => {
+            let name = state.world.planets[p as usize].display_name.clone();
+            let text = if ready { format!("Fire superweapon at {name}") } else { "Superweapon recharging".to_owned() };
+            for mut t in &mut label {
+                if t.0 != text {
+                    t.0 = text.clone();
+                }
+            }
+            *dialog = Some((p, ready));
+        }
+        (None, Some(e)) => {
+            commands.entity(e).despawn();
+            *dialog = None;
+        }
+        (None, None) => {}
+    }
+    if interaction.iter().any(|(i, _)| *i == Interaction::Pressed)
+        && let Some((p, true)) = *dialog
+        && ask.0.is_none()
+        && assets.is_some()
+    {
+        let faction = ui_faction(&state, &player);
+        let name = state.world.planets[p as usize].display_name.clone();
+        commands.queue(move |world: &mut World| {
+            let spec = DialogSpec {
+                title: "Superweapon".into(),
+                text: format!("Destroy {name}?\nThe planet and every ship of other factions in orbit will be lost. This cannot be undone."),
+                portrait: None,
+                faction,
+                buttons: vec!["Fire".into(), "Cancel".into()],
+            };
+            if let Some(e) = spawn_dialog(world, &spec) {
+                world.resource_mut::<SuperweaponAsk>().0 = Some((e, p));
+            }
+        });
+    }
+}
+
+fn superweapon_dialog(mut results: MessageReader<EawDialogResult>, mut ask: ResMut<SuperweaponAsk>, mut actions: MessageWriter<PlayAction>) {
+    for r in results.read() {
+        let Some((e, p)) = ask.0 else { continue };
+        if r.dialog != e {
+            continue;
+        }
+        ask.0 = None;
+        if r.button == 0 {
+            actions.write(PlayAction::DestroyPlanet(p));
+        }
     }
 }

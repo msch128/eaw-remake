@@ -67,6 +67,7 @@ impl Plugin for PlayGluePlugin {
                 Update,
                 (
                     hold_clock,
+                    sync_destroyed.run_if(resource_exists::<PlayBridge>),
                     galaxy_audio.run_if(resource_exists::<alamo_audio::plugin::AlamoAudio>),
                     via_menu,
                     scripted_slots,
@@ -162,6 +163,7 @@ fn faction_by_object(data: &alamo_data::GameData, object: &str, view: &GalaxyVie
 }
 
 /// Stops the simulation when the map is left for the menus.
+#[allow(clippy::type_complexity)]
 fn end_play(mut commands: Commands, bars: Query<Entity, Or<(With<EawCommandBar>, With<crate::play_ui::BarBacking>)>>) {
     for e in &bars {
         commands.entity(e).despawn();
@@ -518,4 +520,32 @@ fn scripted_slots(
         chosen.write(SlotChosen(mode, n));
     }
     let _ = SlotChosen(mode, 0);
+}
+
+/// Destroyed planets of the simulation (and `--force-wreck` in offscreen tests) become wrecks on the map.
+fn sync_destroyed(
+    state: Option<Res<SimState>>,
+    bridge: Option<Res<PlayBridge>>,
+    args: Res<Args>,
+    view: Res<GalaxyView>,
+    mut destroyed: ResMut<crate::galaxy_map::DestroyedPlanets>,
+) {
+    let mut list: Vec<usize> = Vec::new();
+    if let (Some(state), Some(bridge)) = (state, bridge) {
+        for (s, v) in bridge.sim_to_planet.iter().enumerate() {
+            if let Some(v) = v
+                && state.galaxy().planets[s].destroyed
+            {
+                list.push(*v);
+            }
+        }
+    }
+    if let Some(name) = args.force_wreck.as_deref()
+        && let Some(i) = view.planets.iter().position(|p| p.id.eq_ignore_ascii_case(name) || p.display_name.eq_ignore_ascii_case(name))
+    {
+        list.push(i);
+    }
+    if destroyed.0 != list {
+        destroyed.0 = list;
+    }
 }

@@ -36,6 +36,8 @@ impl Plugin for GalaxyMapPlugin {
             .init_resource::<Hover>()
             .init_resource::<ReservedBottom>()
             .init_resource::<PanelRect>()
+            .init_resource::<Wrecks>()
+            .init_resource::<DestroyedPlanets>()
             .init_resource::<MapScale>()
             .init_gizmo_group::<RouteWide>()
             .init_gizmo_group::<RouteMid>()
@@ -70,6 +72,7 @@ impl Plugin for GalaxyMapPlugin {
                     draw_rings,
                     draw_routes,
                     log_props,
+                    sync_wrecks,
                     fade_galaxy_disc,
                 )
                     .run_if(in_state(AppScreen::Galaxy)),
@@ -116,6 +119,46 @@ pub struct Hover(pub Option<usize>);
 /// Marks everything spawned for the galaxy map; removed when leaving the screen.
 #[derive(Component, Clone)]
 pub struct GalaxyEntity;
+
+/// Planets drawn as wrecks (index into the view) with the entity of the wreck model.
+#[derive(Resource, Default, Debug)]
+pub struct Wrecks(pub std::collections::HashMap<usize, Entity>);
+
+/// Destroyed planets (superweapon) lose their sphere and show the asteroid remnant of the galactic map.
+#[allow(clippy::too_many_arguments)]
+fn sync_wrecks(
+    mut commands: Commands,
+    mut wrecks: ResMut<Wrecks>,
+    view: Res<GalaxyView>,
+    destroyed: Res<DestroyedPlanets>,
+    mut visuals: Query<(&crate::planet_visual::PlanetVisual, &mut Visibility)>,
+    alamo: Option<Res<AlamoFs>>,
+    alive: Query<(), With<GalaxyEntity>>,
+) {
+    wrecks.0.retain(|_, e| alive.contains(*e));
+    for &i in &destroyed.0 {
+        if wrecks.0.contains_key(&i) {
+            continue;
+        }
+        let Some(p) = view.planets.get(i) else { continue };
+        for (pv, mut vis) in &mut visuals {
+            if pv.0 == i {
+                *vis = Visibility::Hidden;
+            }
+        }
+        let pos = galaxy_to_world(p.position);
+        let e = if alamo.is_some() {
+            commands.spawn((AlamoModel::new("W_Planet_Asteroids.alo"), Transform::from_translation(pos).with_scale(Vec3::splat(p.model_scale.max(0.1))), GalaxyEntity)).id()
+        } else {
+            commands.spawn((Transform::from_translation(pos), Visibility::default(), GalaxyEntity)).id()
+        };
+        wrecks.0.insert(i, e);
+    }
+}
+
+/// Planets (view indices) that were destroyed; filled from the simulation or by `--force-wreck`.
+#[derive(Resource, Default, Debug, PartialEq)]
+pub struct DestroyedPlanets(pub Vec<usize>);
 
 /// Removes the galaxy scene and clears selection state.
 fn despawn_galaxy(

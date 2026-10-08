@@ -175,6 +175,7 @@ fn battle_ui_camera(mut commands: Commands, cams: Query<Entity, Added<BattleCame
 }
 
 /// The battle reached its end: the result goes into the simulation and the map comes back.
+#[allow(clippy::too_many_arguments)]
 fn finish_battle_view(
     mut finished: MessageReader<battle_view::BattleFinished>,
     mut actions: MessageWriter<PlayAction>,
