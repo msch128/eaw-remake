@@ -159,6 +159,8 @@ pub struct PlanetInfo {
     pub surface_accessible: bool,
     /// `Planet_Capture_Bonus_Reward`: credits for the faction that conquers the planet.
     pub capture_bonus: f32,
+    /// `Planet_Is_Mining_Colony`: income structures with `Additional_Multiplier_On_Mining_Colonies` pay more here.
+    pub mining_colony: bool,
     /// `Max_Space_Base`: highest star base level the planet can get (3 on most planets, 1 on small ones; 0 = not given, no limit).
     pub max_space_base: i32,
     /// `Planet_Is_Destroyable_By_TSW` (a superweapon may destroy it). Planets without the tag count as destroyable (estimate).
@@ -369,6 +371,12 @@ pub struct StructureType {
     pub income_abs: f32,
     /// Fractional income change of the planet's base income.
     pub income_pct: f32,
+    /// Extra fractional income on a mining colony (`Percentage_Income_Modifier` x `Additional_Multiplier_On_Mining_Colonies`).
+    pub income_pct_mining: f32,
+    /// Extra absolute income on a mining colony.
+    pub income_abs_mining: f32,
+    /// `Planet_Income_Gambling_Ability` (Underworld cantinas): income that swings between a loss and a win.
+    pub gamble: Option<IncomeGamble>,
     /// Population capacity granted.
     pub population_capacity: i32,
     /// True if it occupies an orbital slot, false for a ground slot.
@@ -383,6 +391,20 @@ pub struct StructureType {
     pub combat: Option<CombatStats>,
     /// `Reduce_Production_*_Ability` entries that apply to builds at the planet it stands on.
     pub prod_mods: Vec<ProductionMod>,
+}
+
+/// `Planet_Income_Gambling_Ability`: every `interval` seconds the planet's income changes by `max` (with probability `chance`) or `min` times its base value.
+/// The data gives the numbers, not the exact rule (estimate: the modifier is applied like `Percentage_Income_Modifier` until the next evaluation).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct IncomeGamble {
+    /// `Evaluation_Interval_In_Secs`.
+    pub interval: f32,
+    /// `Min_Income_Modifier` (a loss, negative).
+    pub min: f32,
+    /// `Max_Income_Modifier`.
+    pub max: f32,
+    /// `Chance_To_Win`.
+    pub chance: f32,
 }
 
 /// One `Reduce_Production_Price_Ability` or `Reduce_Production_Time_Ability`.
@@ -629,6 +651,7 @@ impl World {
                 credit_value: p.credit_value as f32,
                 space_slots: p.special_structures_space,
                 max_space_base: p.max_space_base,
+                mining_colony: p.fields.get("planet_is_mining_colony").is_some_and(|v| alamo_data::xml::parse_bool(v)),
                 ground_slots: p.special_structures_land,
                 population_capacity: pop,
                 space_map: p.space_tactical_map.clone(),

@@ -195,6 +195,12 @@ impl World {
                 ancestors: Vec::new(),
                 income_abs: def.income_modifiers.iter().map(|m| m.absolute).sum(),
                 income_pct: def.income_modifiers.iter().map(|m| m.percentage).sum(),
+                income_pct_mining: def.income_modifiers.iter().map(|m| m.percentage * m.mining_colony_multiplier.unwrap_or(0.0)).sum(),
+                income_abs_mining: def.income_modifiers.iter().map(|m| m.absolute * m.mining_colony_multiplier.unwrap_or(0.0)).sum(),
+                gamble: def.sub_abilities.iter().find(|a| a.kind.eq_ignore_ascii_case("planet_income_gambling_ability")).map(|a| {
+                    let num = |k: &str| a.fields.get(k).and_then(|v| v.trim().parse::<f32>().ok());
+                    IncomeGamble { interval: num("evaluation_interval_in_secs").unwrap_or(30.0).max(1.0), min: num("min_income_modifier").unwrap_or(0.0), max: num("max_income_modifier").unwrap_or(0.0), chance: num("chance_to_win").unwrap_or(0.5).clamp(0.0, 1.0) }
+                }),
                 population_capacity: def.population_capacity,
                 orbital,
                 max_per_planet: def.max_instances_per_planet.unwrap_or(1).max(1),

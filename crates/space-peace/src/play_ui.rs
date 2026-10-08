@@ -620,7 +620,7 @@ fn battle_dialog_result(
     }
     let (Some(&button), Some((id, e))) = (pressed.first(), dialog.open) else { return };
     info!("play: battle dialog button {button} pressed for battle {id}");
-    commands.entity(e).despawn();
+    commands.entity(e).try_despawn();
     dialog.open = None;
     dialog.decided = Some(id);
     let choice = if button == 0 { BattleChoice::Fight } else { BattleChoice::AutoResolve };

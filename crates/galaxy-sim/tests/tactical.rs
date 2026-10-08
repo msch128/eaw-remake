@@ -185,7 +185,9 @@ fn damage_persists_between_battles_and_is_repaired_at_owned_planets() {
     assert!(hp.iter().any(|h| h.hull < 0.999 || h.shield < 0.999), "winners of a real fight are damaged: {hp:?}");
     sim.apply_tactical_result(battle.id, &result).unwrap();
     let ships = sim.ships_of(ef);
-    assert!(sim.galaxy().damage.keys().all(|s| ships.iter().any(|(x, _)| x == s)));
+    let all_ships: Vec<ShipId> = sim.galaxy().ships.values().flat_map(|v| v.iter().map(|x| x.0)).collect();
+    assert!(sim.galaxy().damage.keys().all(|s| all_ships.contains(s)), "damage only for ships that still exist");
+    assert!(ships.iter().any(|(s, _)| sim.galaxy().damage.contains_key(s)), "the winner carries damage");
     assert!(!sim.galaxy().damage.is_empty());
     let missing = |s: &Sim| s.galaxy().damage.values().map(|h| 1.0 - h.hull).sum::<f32>();
     let before = missing(&sim);

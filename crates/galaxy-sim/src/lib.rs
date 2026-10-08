@@ -28,7 +28,7 @@ pub use state::{
     Command, CommandError, CommandOk, Event, FactionState, FactionStats, ShipId, Fleet, FleetLocation, Galaxy, Lane, PendingBattle, PlanetState,
     ProductionItem, ProductionKind, Difficulty,
 };
-pub use world::{
+pub use world::{IncomeGamble, 
     BattleResolver, CombatStats, ObjectKind, FactionId, FactionInfo, FleetId, PlanetId, PlanetInfo, RouteInfo, SimConfig, SimError, StarbaseTypeId,
     StarbaseType, StructureType, StructureTypeId, UnitRole, UnitType, UnitTypeId, VictoryRules, Weapon, World,
 };

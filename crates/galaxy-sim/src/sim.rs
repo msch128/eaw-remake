@@ -312,6 +312,8 @@ impl Sim {
             self.tick(tick, &mut events);
         }
         self.galaxy.sync_ships();
+        // The cached income and population are current at the end of every step (structures and ships finished since the last refresh count).
+        self.world.clone().refresh_economy(&mut self.galaxy);
         events
     }
 
@@ -338,6 +340,7 @@ impl Sim {
             fs.stats.credits_earned += (fs.credits - before).max(0.0);
         }
 
+        self.gamble_income();
         self.produce(dt, events);
         self.move_fleets(dt, events);
         self.detect_battles(events);
@@ -487,6 +490,26 @@ impl Sim {
     }
 
     /// Finds planets where hostile parties meet and starts (or resolves) a battle there.
+    /// Evaluates the gambling structures (`Planet_Income_Gambling_Ability`) whose time has come.
+    fn gamble_income(&mut self) {
+        let world = self.world.clone();
+        let now = self.galaxy.time;
+        for p in 0..self.galaxy.planets.len() {
+            let Some(g) = self.galaxy.planets[p].structures.iter().find_map(|&s| world.structures[s as usize].gamble) else {
+                if self.galaxy.planets[p].gamble != 0.0 {
+                    self.galaxy.planets[p].gamble = 0.0;
+                }
+                continue;
+            };
+            if now >= self.galaxy.planets[p].gamble_at {
+                let win = self.galaxy.rng.unit() < g.chance;
+                let ps = &mut self.galaxy.planets[p];
+                ps.gamble = if win { g.max } else { g.min };
+                ps.gamble_at = now + f64::from(g.interval);
+            }
+        }
+    }
+
     fn detect_battles(&mut self, events: &mut Vec<Event>) {
         let world = self.world.clone();
         let w = &*world;

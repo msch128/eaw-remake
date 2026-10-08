@@ -113,6 +113,10 @@ pub struct PlanetState {
     pub base_health: Option<UnitHealth>,
     /// Destroyed by a superweapon: an asteroid field that nobody can own or build on.
     pub destroyed: bool,
+    /// Current income swing of a gambling structure (a fraction of the planet's base income; see `IncomeGamble`).
+    pub gamble: f32,
+    /// Game time of the next gambling evaluation.
+    pub gamble_at: f64,
 }
 
 /// Hull and shield of a ship or star base as a fraction of the maximum (1.0 = undamaged).
@@ -590,6 +594,7 @@ impl Galaxy {
             p.starbase.hash(&mut h);
             p.structures.hash(&mut h);
             p.destroyed.hash(&mut h);
+            p.gamble.to_bits().hash(&mut h);
             for q in &p.queues {
                 for it in q {
                     it.remaining.to_bits().hash(&mut h);

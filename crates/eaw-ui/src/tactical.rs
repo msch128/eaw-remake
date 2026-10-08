@@ -631,8 +631,8 @@ pub(crate) fn ship_overlays(
                 right: if right { Val::Px(0.0) } else { Val::Auto },
                 top: if bottom { Val::Auto } else { Val::Px(0.0) },
                 bottom: if bottom { Val::Px(0.0) } else { Val::Auto },
-                width: Val::Px(8.0),
-                height: Val::Px(8.0),
+                width: Val::Px(7.0),
+                height: Val::Px(7.0),
                 border: UiRect {
                     left: if right { Val::ZERO } else { Val::Px(2.0) },
                     right: if right { Val::Px(2.0) } else { Val::ZERO },

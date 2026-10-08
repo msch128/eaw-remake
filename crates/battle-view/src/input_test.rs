@@ -33,6 +33,9 @@ struct TestState {
     orders: u32,
     clicked_button: Option<String>,
     button_name: Option<String>,
+    probe: Option<Entity>,
+    probe_hover: bool,
+    probe_press: bool,
     results: Vec<(&'static str, bool)>,
     done: bool,
 }
@@ -71,9 +74,10 @@ fn drive(
         Res<bevy::ui::UiStack>,
         Query<(Entity, &Interaction)>,
         Query<(&Camera, &bevy::camera::RenderTarget)>,
+        Commands,
     ),
 ) {
-    let (block, pointer, hover, names, all_nodes, battle_cam, mouse, ui_stack, interactions, cams) = diag;
+    let (block, pointer, hover, names, all_nodes, battle_cam, mouse, ui_stack, interactions, cams, mut diag_commands) = diag;
     st.orders += orders.read().count() as u32;
     for c in clicks.read() {
         st.clicked_button = Some(c.name.clone());
@@ -146,15 +150,57 @@ fn drive(
             }
             _ => {}
         },
-        // 3: click a command bar button: it fires and the selection survives.
+        // 2.5: control experiment, a plain Button node of our own must get Hovered/Pressed from the same events.
         2 => {
+            if t == 0 {
+                let mut e = diag_commands.spawn((
+                    Name::new("input-test probe"),
+                    Button,
+                    Node { position_type: PositionType::Absolute, left: Val::Percent(40.0), top: Val::Percent(4.0), width: Val::Percent(10.0), height: Val::Percent(5.0), ..default() },
+                    BackgroundColor(Color::srgba(1.0, 0.0, 0.0, 0.3)),
+                    GlobalZIndex(100),
+                ));
+                if let Some(cam) = battle_cam.iter().next() {
+                    e.insert(UiTargetCamera(cam));
+                }
+                st.probe = Some(e.id());
+            }
+            let state = st.probe.and_then(|e| interactions.get(e).ok().map(|(_, i)| *i));
+            match t {
+                1 => act = Some(Act::Move(Vec2::new(vp.x * 0.45, vp.y * 0.065))),
+                3 => {
+                    info!("input-test:   probe button after move: {state:?}");
+                    st.probe_hover = state == Some(Interaction::Hovered);
+                }
+                4 => act = Some(Act::Down(MouseButton::Left)),
+                5 => {
+                    info!("input-test:   probe button after press: {state:?}");
+                    st.probe_press = state == Some(Interaction::Pressed);
+                    act = Some(Act::Up(MouseButton::Left));
+                }
+                8 => {
+                    if let Some(e) = st.probe.take() {
+                        diag_commands.entity(e).despawn();
+                    }
+                    let ok = st.probe_hover && st.probe_press;
+                    finish_phase(&mut st, "plain-button-hover-press", ok);
+                }
+                _ => {}
+            }
+        }
+        // 3: click a command bar button: it fires and the selection survives.
+        3 => {
             let target = bar
                 .iter()
                 .filter(|(b, st, n, _, v, _)| {
                     !st.disabled && v.get() && n.size().x > 4.0 && n.size().y > 4.0 && b.name.starts_with("b_") && !b.name.contains("retreat") && !b.name.contains("reinforce")
                 })
-                .min_by(|a, b| a.0.name.cmp(&b.0.name))
+                .min_by_key(|(b, ..)| (b.name.contains("camera"), !(b.name.contains("stop") || b.name.contains("move") || b.name.contains("attack")), b.name.clone()))
                 .map(|(b, _, n, g, _, _)| (b.name.clone(), g.translation * n.inverse_scale_factor()));
+            if t == 0 {
+                let all: Vec<String> = bar.iter().filter(|r| r.4.get() && r.2.size().x > 4.0).map(|r| format!("{}({}x{} dis {})", r.0.name, r.2.size().x, r.2.size().y, r.1.disabled)).collect();
+                info!("input-test:   visible bar buttons: {all:?}");
+            }
             if t <= 5 {
                     let active: Vec<String> = interactions.iter().filter(|(_, i)| **i != Interaction::None).map(|(e, i)| format!("{:?}={i:?}", names.get(e).ok().map(|n| n.as_str().to_string()))).collect();
                     let btn = bar.iter().find(|r| Some(&r.0.name) == st.button_name.as_ref()).map(|r| r.5.clone());
@@ -162,6 +208,21 @@ fn drive(
                         "input-test:   probe t={t} cursor_phys {:?} pressed {} just_pressed {} just_released {} active interactions {:?} button {:?}",
                         window.1.physical_cursor_position(), mouse.pressed(MouseButton::Left), mouse.just_pressed(MouseButton::Left), mouse.just_released(MouseButton::Left), active, btn
                     );
+                    if t == 3 {
+                        let cur = window.1.physical_cursor_position().unwrap_or_default();
+                        let mut hit: Vec<(usize, String)> = Vec::new();
+                        for (e, n, g, v, _img, inter, _bg, fp, cam, _z) in &all_nodes {
+                            if n.size().x > 0.0 && n.contains_point(*g, cur) {
+                                let pos = ui_stack.uinodes.iter().position(|x| *x == e);
+                                hit.push((pos.unwrap_or(usize::MAX), format!("{:?} vis {} focus {:?} inter {:?} cam {:?}", names.get(e).ok().map(|n| n.as_str().to_string()), v.get(), fp, inter, cam.get())));
+                            }
+                        }
+                        hit.sort_by(|a, b| b.0.cmp(&a.0));
+                        for (pos, d) in hit {
+                            info!("input-test:   stack {pos}: {d}");
+                        }
+                        info!("input-test:   partitions {}", ui_stack.partition.len());
+                    }
                     if t == 0 {
                         let cs: Vec<String> = cams.iter().map(|(c, r)| format!("active {} order {} viewport {:?} target {:?}", c.is_active, c.order, c.physical_viewport_rect(), r)).collect();
                         info!("input-test:   cameras {:?}; ui stack nodes {}", cs, ui_stack.uinodes.len());
@@ -184,7 +245,7 @@ fn drive(
             }
         }
         // 4: a click on the bar's selection area does not deselect.
-        3 => match t {
+        4 => match t {
             0 => act = Some(Act::Move(Vec2::new(vp.x * 0.7, vp.y * 0.96))),
             1 => act = Some(Act::Down(MouseButton::Left)),
             2 => act = Some(Act::Up(MouseButton::Left)),
@@ -195,7 +256,7 @@ fn drive(
             _ => {}
         },
         // 5: a left click on open space deselects.
-        4 => match t {
+        5 => match t {
             0 => act = Some(Act::Move(Vec2::new(vp.x * 0.5, vp.y * 0.12))),
             1 => act = Some(Act::Down(MouseButton::Left)),
             2 => act = Some(Act::Up(MouseButton::Left)),

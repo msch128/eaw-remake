@@ -264,11 +264,16 @@ impl World {
     pub fn planet_income(&self, galaxy: &Galaxy, planet: PlanetId) -> f32 {
         let ps = &galaxy.planets[planet as usize];
         let base = self.planets[planet as usize].credit_value;
-        let (mut pct, mut abs) = (0.0f32, 0.0f32);
+        let (mut pct, mut abs) = (ps.gamble, 0.0f32);
+        let mining = self.planets[planet as usize].mining_colony;
         for &s in &ps.structures {
             let st = &self.structures[s as usize];
             pct += st.income_pct;
             abs += st.income_abs;
+            if mining {
+                pct += st.income_pct_mining;
+                abs += st.income_abs_mining;
+            }
         }
         if let Some(sb) = ps.starbase {
             let sb = &self.starbases[sb as usize];
