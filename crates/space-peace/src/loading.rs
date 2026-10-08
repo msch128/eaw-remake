@@ -105,8 +105,12 @@ fn start_loading(
     after: Res<AfterLoading>,
     mut next: ResMut<NextState<AppScreen>>,
     mut progress: ResMut<Progress>,
+    mut images: ResMut<Assets<Image>>,
 ) {
     spawn_ui(&mut commands);
+    if let Some(fs) = files.0.as_ref() {
+        spawn_art(&mut commands, fs, &mut images);
+    }
     let Some(fs) = files.0.clone() else {
         // No game installed: nothing to load, the demo galaxy is used.
         progress.fraction = 1.0;
@@ -290,6 +294,32 @@ fn on_model_failed(
     }
 }
 
+/// One of the game's own space loading screens (`Art/Textures/LoadScreens`) behind the progress bar.
+fn spawn_art(commands: &mut Commands, fs: &GameFs, images: &mut Assets<Image>) {
+    use alamo_fs::FileSource;
+    use bevy::asset::RenderAssetUsages;
+    use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
+    let n = 1 + std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.subsec_nanos() as usize) % 8;
+    let name = format!("Art/Textures/LoadScreens/AAA_NEW_SPACE_{n}.PNG");
+    let Some(rgba) = fs.read(&name).ok().and_then(|b| alamo_model::image::decode_texture(&b).ok()) else {
+        warn!("loading art {name} not available");
+        return;
+    };
+    let image = Image::new(
+        Extent3d { width: rgba.width as u32, height: rgba.height as u32, depth_or_array_layers: 1 },
+        TextureDimension::D2,
+        rgba.pixels,
+        TextureFormat::Rgba8UnormSrgb,
+        RenderAssetUsages::RENDER_WORLD,
+    );
+    commands.spawn((
+        Node { position_type: PositionType::Absolute, width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() },
+        ImageNode::new(images.add(image)).with_mode(NodeImageMode::Stretch),
+        GlobalZIndex(19),
+        LoadingUi,
+    ));
+}
+
 fn spawn_ui(commands: &mut Commands) {
     commands
         .spawn((
@@ -298,9 +328,10 @@ fn spawn_ui(commands: &mut Commands) {
                 width: Val::Percent(100.0),
                 height: Val::Percent(100.0),
                 flex_direction: FlexDirection::Column,
-                justify_content: JustifyContent::Center,
+                justify_content: JustifyContent::FlexEnd,
                 align_items: AlignItems::Center,
                 row_gap: Val::Px(16.0),
+                padding: UiRect::bottom(Val::Px(90.0)),
                 ..default()
             },
             GlobalZIndex(20),
