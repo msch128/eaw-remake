@@ -108,12 +108,14 @@ pub struct Tuning {
     pub efficiency: [f32; 4],
     /// Crowding: a side with more than `crowd.0` ships deals its damage scaled by `(crowd.0 / ships) ^ crowd.1` (big swarms get in each other's way; `crowd.1` 0 = off).
     pub crowd: (f32, f32),
+    /// Ships beyond the faction's population cap wait in a reserve and arrive in waves as losses make room.
+    pub waves: bool,
 }
 
 impl Tuning {
     /// The values of the world's config.
     pub fn of(world: &World) -> Self {
-        Self { focus: world.config.combat_focus, base_factor: world.config.combat_base_factor, efficiency: world.config.combat_efficiency, crowd: world.config.combat_crowd }
+        Self { focus: world.config.combat_focus, base_factor: world.config.combat_base_factor, efficiency: world.config.combat_efficiency, crowd: world.config.combat_crowd, waves: world.config.combat_waves }
     }
 }
 
@@ -155,9 +157,52 @@ pub fn resolve_tuned(world: &World, sides: &[SideInput], rng: &mut Rng, allied: 
         })
         .collect();
 
+    // Population cap: ships beyond the faction's `Space_Tactical_Unit_Cap` wait in a reserve and are called in as losses make room (they arrive after
+    // the reinforcement delay), like in the tactical battle. Ships of the reserve that are never called survive with their fleet.
+    let unit_pop = |src: Source| match src {
+        Source::Unit(u) => world.units[u as usize].population.max(0),
+        _ => 0,
+    };
+    let caps: Vec<i32> = sides.iter().map(|s| world.factions[s.faction as usize].space_unit_cap).collect();
+    let mut reserve: Vec<std::collections::VecDeque<Inst>> = (0..insts.len()).map(|_| Default::default()).collect();
+    let mut arriving: Vec<Vec<(u32, Inst)>> = (0..insts.len()).map(|_| Vec::new()).collect();
+    if tuning.waves {
+        for (si, side) in insts.iter_mut().enumerate() {
+            let mut used = 0;
+            let all = std::mem::take(side);
+            for inst in all {
+                let pop = unit_pop(inst.src);
+                if pop == 0 || used + pop <= caps[si] {
+                    used += pop;
+                    side.push(inst);
+                } else {
+                    reserve[si].push_back(inst);
+                }
+            }
+        }
+    }
+    let delay_rounds = (5.0 / dt).ceil() as u32;
+
     let mut rounds = 0;
     while rounds < world.config.combat_max_rounds {
-        let alive: Vec<usize> = (0..insts.len()).filter(|&i| !insts[i].is_empty()).collect();
+        if tuning.waves {
+            for si in 0..insts.len() {
+                let (now, later): (Vec<_>, Vec<_>) = std::mem::take(&mut arriving[si]).into_iter().partition(|(at, _)| *at <= rounds);
+                arriving[si] = later;
+                insts[si].extend(now.into_iter().map(|(_, i)| i));
+                let mut used: i32 = insts[si].iter().chain(arriving[si].iter().map(|(_, i)| i)).map(|i| unit_pop(i.src)).sum();
+                while let Some(front) = reserve[si].front() {
+                    let pop = unit_pop(front.src);
+                    if used + pop > caps[si] {
+                        break;
+                    }
+                    used += pop;
+                    let inst = reserve[si].pop_front().expect("front exists");
+                    arriving[si].push((rounds + delay_rounds, inst));
+                }
+            }
+        }
+        let alive: Vec<usize> = (0..insts.len()).filter(|&i| !insts[i].is_empty() || !arriving[i].is_empty() || !reserve[i].is_empty()).collect();
         if alive.len() <= 1 {
             break;
         }
@@ -168,7 +213,7 @@ pub fn resolve_tuned(world: &World, sides: &[SideInput], rng: &mut Rng, allied: 
         for &si in &alive {
             let enemies: Vec<usize> = alive.iter().copied().filter(|&o| {
                     let (a, b) = (sides[si].faction, sides[o].faction);
-                    world.hostile(a, b) && !allied.contains(&(a.min(b), a.max(b)))
+                    !insts[o].is_empty() && world.hostile(a, b) && !allied.contains(&(a.min(b), a.max(b)))
                 }).collect();
             if enemies.is_empty() {
                 continue;
@@ -207,7 +252,7 @@ pub fn resolve_tuned(world: &World, sides: &[SideInput], rng: &mut Rng, allied: 
                 }
             }
         }
-        if !dealt {
+        if !dealt && arriving.iter().all(|a| a.is_empty()) && reserve.iter().all(|r| r.is_empty()) {
             break;
         }
         for (si, side) in insts.iter_mut().enumerate() {
@@ -242,7 +287,7 @@ pub fn resolve_tuned(world: &World, sides: &[SideInput], rng: &mut Rng, allied: 
         .enumerate()
         .map(|(si, side)| {
             let mut counts = vec![0u32; sides[si].members.len()];
-            for i in side {
+            for i in side.iter().chain(arriving[si].iter().map(|(_, i)| i)).chain(reserve[si].iter()) {
                 counts[i.member] += 1;
             }
             sides[si]

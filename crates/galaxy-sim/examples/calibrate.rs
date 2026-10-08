@@ -87,15 +87,17 @@ fn main() {
     let scenarios = args.first().copied().unwrap_or(48);
     let tac_seeds = args.get(1).copied().unwrap_or(3);
     let auto_seeds = args.get(2).copied().unwrap_or(40);
+    let tac_seeds_big = args.get(4).copied().unwrap_or(tac_seeds);
     let env = |k: &str| std::env::var(k).ok().and_then(|v| v.parse::<f32>().ok());
     // Defaults are the configured values; BASE, EF, EC, EFR, FOCUS override them for sweeps (`OLD=1` = the formula before calibration).
     let c0 = SimConfig::default();
-    let mut tuning = galaxy_sim::combat::Tuning { focus: c0.combat_focus, base_factor: c0.combat_base_factor, efficiency: c0.combat_efficiency, crowd: c0.combat_crowd };
+    let mut tuning = galaxy_sim::combat::Tuning { focus: c0.combat_focus, base_factor: c0.combat_base_factor, efficiency: c0.combat_efficiency, crowd: c0.combat_crowd, waves: c0.combat_waves };
     if std::env::var("OLD").is_ok() {
-        tuning = galaxy_sim::combat::Tuning { focus: 1, base_factor: 1.0, efficiency: [1.0; 4], crowd: (25.0, 0.0) };
+        tuning = galaxy_sim::combat::Tuning { focus: 1, base_factor: 1.0, efficiency: [1.0; 4], crowd: (25.0, 0.0), waves: false };
     }
     tuning.focus = env("FOCUS").map_or(tuning.focus, |v| v as u32);
     tuning.base_factor = env("BASE").unwrap_or(tuning.base_factor);
+    tuning.waves = env("WAVES").map_or(tuning.waves, |v| v > 0.0);
     tuning.crowd = (env("CK").unwrap_or(tuning.crowd.0), env("CG").unwrap_or(tuning.crowd.1));
     tuning.efficiency = [env("EF").unwrap_or(tuning.efficiency[0]), env("EC").unwrap_or(tuning.efficiency[1]), env("EFR").unwrap_or(tuning.efficiency[2]), tuning.efficiency[3]];
     let mut rng = Rng::new(args.get(3).copied().unwrap_or(1) as u64);
@@ -125,7 +127,8 @@ fn main() {
         .expect("an open planet");
 
     // Tactical results are slow: they are cached by scenario in `target/calibrate_cache.txt`.
-    let cache_path = std::path::Path::new("target/calibrate_cache.txt");
+    let cache_file = std::env::var("CACHE").unwrap_or_else(|_| "target/calibrate_cache.txt".into());
+    let cache_path = std::path::Path::new(&cache_file);
     let mut cache: std::collections::HashMap<String, Row> = std::fs::read_to_string(cache_path)
         .unwrap_or_default()
         .lines()
@@ -153,7 +156,7 @@ fn main() {
             skipped += 1;
             continue;
         }
-        let scale = [2.0f32, 5.0, 10.0, 20.0, 40.0][rng.below(5) as usize];
+        let scale = if std::env::var("BIGONLY").is_ok() { [20.0f32, 30.0, 40.0, 60.0][rng.below(4) as usize] } else { [2.0f32, 5.0, 10.0, 20.0, 40.0][rng.below(5) as usize] };
         let compose = |f: FactionId, rng: &mut Rng| -> Vec<(UnitTypeId, f32)> {
             let p = pool(f);
             (0..1 + rng.below(4)).map(|_| (p[rng.below(p.len() as u64) as usize], 0.3 + rng.unit())).collect()
@@ -162,6 +165,7 @@ fn main() {
         let strength = |c: &[(UnitTypeId, f32)], k: f32| w.strength(c.iter().map(|&(u, x)| (Source::Unit(u), (x * k).max(0.0).round() as u32)));
         // Scale side A to ~`scale` ships on average, then side D to a random fraction of A's strength (0.6..1.6) counting the star base on defense.
         let per = ca.iter().map(|(_, x)| x).sum::<f32>().max(0.1);
+        if std::env::var("DBG").is_ok() { eprintln!("scale {scale} ca {ca:?} per {per}"); }
         let ka = scale / per;
         let counts_a: Vec<(UnitTypeId, u32)> = ca.iter().map(|&(u, x)| (u, (x * ka).round().max(1.0) as u32)).collect();
         let want = strength(&ca, ka) * (0.6 + rng.unit());
@@ -178,10 +182,8 @@ fn main() {
         let g = sim.galaxy_mut();
         g.fleets.clear();
         g.battles.clear();
-        let mut id = 1;
-        for (owner, counts) in [(d, &counts_d), (a, &counts_a)] {
+        for (id, (owner, counts)) in (1..).zip([(d, &counts_d), (a, &counts_a)]) {
             g.fleets.insert(id, Fleet { id, owner, units: counts.iter().copied().collect(), location: FleetLocation::AtPlanet(planet), previous_planet: planet });
-            id += 1;
         }
         g.planets[planet as usize].owner = if defended { Some(d) } else { None };
         let battle = sim.step(1.0).into_iter().find_map(|e| if let Event::BattlePending(b) = e { Some(b) } else { None });
@@ -196,7 +198,21 @@ fn main() {
         // Tactical.
         let side_of = |f: FactionId| req.sides.iter().position(|s| s.faction == f).unwrap();
         let (sa, sd) = (side_of(a), side_of(d));
-        let alive = |r: &TacticalResult, s: usize| -> u32 { req.sides[s].groups.iter().zip(&r.survived[s]).filter(|(g, _)| g.kind == GroupKind::Unit).map(|(_, n)| *n).sum() };
+        // Alive = deployed survivors + reserve never called + called reserve that survived.
+        let alive = |r: &TacticalResult, s: usize| -> u32 {
+            let deployed: u32 = req.sides[s].groups.iter().zip(&r.survived[s]).filter(|(g, _)| g.kind == GroupKind::Unit).map(|(_, n)| *n).sum();
+            let reserve: u32 = req.sides[s]
+                .reserve
+                .iter()
+                .enumerate()
+                .map(|(ri, g)| {
+                    let called = r.reserve_called.get(s).and_then(|v| v.get(ri)).copied().unwrap_or(0).min(g.count);
+                    g.count - called + r.reserve_survived.get(s).and_then(|v| v.get(ri)).copied().unwrap_or(0).min(called)
+                })
+                .sum();
+            deployed + reserve
+        };
+        let tac_seeds = if ships_a + ships_d >= 40 { tac_seeds_big } else { tac_seeds };
         let mut srng = Rng::new(0x5EED ^ (sc as u64) << 20);
         let key = format!("{planet}|{defended}|{tac_seeds}|{a}:{counts_a:?}|{d}:{counts_d:?}");
         let mut tac = cache.get(&key).copied().unwrap_or_default();
@@ -225,6 +241,7 @@ fn main() {
                 let _ = writeln!(f, "{key}	{}	{}	{}	{}	{}", tac.att_win, tac.loss_att, tac.loss_def, tac.loser_survived, tac.decisive);
             }
         }
+        if std::env::var("DBG").is_ok() { eprintln!("tactical done"); }
         // Auto-resolve.
         let mut auto = Row::default();
         for s in 0..auto_seeds {

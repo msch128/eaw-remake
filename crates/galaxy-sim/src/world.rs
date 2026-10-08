@@ -65,6 +65,8 @@ pub struct SimConfig {
     pub combat_escape: f32,
     /// Estimate (calibrated against the tactical simulation): (ships, exponent) of the damage reduction of very large fleets in the statistical resolver, see `combat::Tuning::crowd`.
     pub combat_crowd: (f32, f32),
+    /// The statistical resolver respects `Space_Tactical_Unit_Cap` like the tactical battle: ships over the cap arrive in waves (a rule from the data, not an estimate).
+    pub combat_waves: bool,
     /// How battles are resolved by [`crate::Sim::resolve_battle`] and by automatic resolution.
     pub resolver: BattleResolver,
     /// Longest tactical battle in simulated seconds before it is declared a draw.
@@ -118,8 +120,9 @@ impl Default for SimConfig {
             combat_focus: 1,
             combat_base_factor: 0.15,
             combat_efficiency: [0.5, 0.5, 1.0, 1.0],
-            combat_escape: 0.12,
+            combat_escape: 0.2,
             combat_crowd: (25.0, 0.0),
+            combat_waves: true,
             resolver: BattleResolver::Statistical,
             tactical_max_seconds: 900.0,
             tactical_resolver_max_ships: 16,

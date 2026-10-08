@@ -416,10 +416,30 @@ impl TacticalRequest {
 /// Plays the battle of `request` to the end without rendering (all sides AI controlled). Returns `None` if a
 /// unit has no definition in `catalog`.
 pub fn run_headless(request: &TacticalRequest, catalog: &Arc<Catalog>, arena: Option<Arc<Arena>>) -> Option<TacticalResult> {
-    let config = BattleConfig { record_events: false, unit_cap: i32::MAX / 2, ..request.battle_config(arena) };
-    let max_steps = (request.max_seconds / config.dt) as u64 + 1;
-    let mut battle = Battle::new(request.battle_setup_with(catalog, config, |_| true, true)?);
-    battle.run_to_end(max_steps);
+    let config = BattleConfig { record_events: false, ..request.battle_config(arena) };
+    let (max_steps, cap) = ((request.max_seconds / config.dt) as u64 + 1, config.unit_cap);
+    let check_every = (1.0 / config.dt).round().max(1.0) as u64;
+    let mut battle = Battle::new(request.battle_setup_with(catalog, config, |_| true, false)?);
+    // The reserve (units that did not fit under the population cap) is called in as losses make room, like a player would.
+    let mut waiting: Vec<Vec<(battle_sim::ShipId, u32)>> = request.sides.iter().map(|s| s.reserve.iter().filter_map(|g| catalog.ship_id(&g.name).map(|id| (id, g.count))).collect()).collect();
+    let mut steps = 0;
+    while !battle.is_over() && steps < max_steps {
+        battle.step();
+        steps += 1;
+        if steps % check_every != 0 {
+            continue;
+        }
+        for (si, pool) in waiting.iter_mut().enumerate() {
+            for (ship, left) in pool.iter_mut().filter(|(_, n)| *n > 0) {
+                let pop = catalog.ship(*ship).population.max(0);
+                let room = cap - battle.pop_in_play(si as u8);
+                let n = if pop == 0 { *left } else { ((room.max(0) / pop) as u32).min(*left) };
+                if n > 0 && battle.command(si as u8, battle_sim::Command::Reinforce { ship: *ship, count: n }).is_ok() {
+                    *left -= n;
+                }
+            }
+        }
+    }
     request.result_from(catalog, &battle.result())
 }
 

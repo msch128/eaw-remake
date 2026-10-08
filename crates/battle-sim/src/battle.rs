@@ -551,7 +551,6 @@ pub struct Battle {
     pub(crate) winner: Option<u8>,
     pub(crate) spawn_pos: Vec<Vec3>,
     pub(crate) side_places: Vec<Vec<(Vec3, f32)>>,
-    pub(crate) pop_used: Vec<i32>,
     /// Events caused by commands; they are reported with the next step (a step starts with a clean event list).
     pub(crate) cmd_events: Vec<Event>,
     pub(crate) retreat_ordered: Vec<bool>,

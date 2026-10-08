@@ -198,6 +198,28 @@ fn reinforcements_respect_unit_cap() {
 }
 
 #[test]
+fn losses_make_room_under_the_unit_cap() {
+    // Two "weak" ships (5 population each) under a cap of 12: a third does not fit until one has died.
+    let cat = Catalog::from_defs(vec![ship("weak", 50.0, 0.0, vec![]), ship("gunner", 1.0e6, 0.0, vec![gun("g", 0.0)])], vec![laser()]);
+    let mut c = cfg();
+    c.unit_cap = 12;
+    let mut b = Battle::new(setup(cat, "weak", "gunner", 2, 1, c));
+    let weak = b.catalog().ship_id("weak").unwrap();
+    assert_eq!(b.pop_in_play(0), 10);
+    assert_eq!(b.command(0, Command::Reinforce { ship: weak, count: 1 }), Err(CommandError::UnitCap));
+    for _ in 0..3000 {
+        b.step();
+        if b.pop_in_play(0) <= 5 || b.is_over() {
+            break;
+        }
+    }
+    assert_eq!(b.pop_in_play(0), 5, "one weak ship died, one is left");
+    let r = b.command(0, Command::Reinforce { ship: weak, count: 1 });
+    assert!(r.is_ok(), "the dead ship's population is free again: {r:?}");
+    assert_eq!(b.pop_in_play(0), 10, "the arrival on its way counts");
+}
+
+#[test]
 fn carriers_launch_and_replace_squadrons() {
     let mut fighter = ship("fighter", 20.0, 0.0, vec![]);
     fighter.class = TargetClass::Fighter;

@@ -176,7 +176,6 @@ impl Battle {
         let mut b = Battle {
             grid_cells: Vec::new(),
             catalog,
-            pop_used: vec![0; sides.len()],
             cmd_events: Vec::new(),
             retreat_ordered: vec![false; sides.len()],
             sides,
@@ -311,14 +310,12 @@ impl Battle {
                             self.ships[id as usize].order = order;
                         }
                     }
-                    self.pop_used[side as usize] += def.population;
                 } else {
                     let id = self.spawn_ship(sid, side, pos, yaw, group, NONE, Vec3::ZERO);
                     self.ships[id as usize].lane = local.y.clamp(-1500.0, 1500.0);
                     self.apply_start_health(id, side, tag, sid);
                     self.groups[group as usize].members.push(id);
                     self.ships[id as usize].order = if def.is_static { Order::Idle } else { order };
-                    self.pop_used[side as usize] += def.population;
                 }
             }
         }
@@ -434,6 +431,19 @@ impl Battle {
         ids
     }
 
+    /// Population of everything of `side` that is alive (or on its way) now, counted per unit (a squadron once while any of its fighters lives).
+    /// The unit cap applies to this number, so losses make room for reinforcements.
+    pub fn pop_in_play(&self, side: u8) -> i32 {
+        let mut pop = 0;
+        for g in self.groups.iter().filter(|g| g.side == side) {
+            let def = self.catalog.ship(g.ship);
+            let per: u32 = if def.is_squadron { def.members.iter().map(|&(_, c)| c).sum::<u32>().max(1) } else { 1 };
+            let alive = g.members.iter().filter(|&&m| self.ships[m as usize].alive && !self.ships[m as usize].retreated).count() as u32;
+            pop += def.population * alive.div_ceil(per) as i32;
+        }
+        pop + self.pending.iter().filter(|r| r.side == side).map(|r| self.catalog.ship(r.ship).population * r.count as i32).sum::<i32>()
+    }
+
     /// Validates and executes a command for `side`.
     pub fn command(&mut self, side: u8, cmd: Command) -> Result<(), CommandError> {
         if self.over {
@@ -525,13 +535,12 @@ impl Battle {
             }
             Command::Reinforce { ship, count } => {
                 let pop = self.catalog.ship(ship).population * count as i32;
-                if self.pop_used[side as usize] + pop > self.config.unit_cap {
+                if self.pop_in_play(side) + pop > self.config.unit_cap {
                     if self.config.record_events {
                         self.cmd_events.push(Event::ReinforcementsRefused { side, ship, count });
                     }
                     return Err(CommandError::UnitCap);
                 }
-                self.pop_used[side as usize] += pop;
                 if self.config.record_events {
                     self.cmd_events.push(Event::ReinforcementsCalled { side, ship, count });
                 }

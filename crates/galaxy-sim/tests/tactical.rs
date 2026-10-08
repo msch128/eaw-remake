@@ -254,9 +254,11 @@ fn units_beyond_the_population_cap_wait_in_a_reserve_that_can_be_called_in() {
     assert!(b.command(es as u8, battle_sim::Command::Reinforce { ship, count: 8 }).is_err(), "no room above the cap");
     drop(b);
 
-    // Headless: the reserve is deployed, and everything that survives goes back into the fleet.
+    // Headless: the reserve is called in only as losses make room under the cap, and everything that survives goes back into the fleet.
     let result = run_headless(&req, &catalog, None).unwrap();
-    assert_eq!(result.reserve_called[es].iter().sum::<u32>(), reserve, "headless battles deploy the reserve at once");
+    let called = result.reserve_called[es].iter().sum::<u32>();
+    let lost = deployed.saturating_sub(result.survived[es].iter().sum::<u32>());
+    assert!(called <= lost + 1 && called <= reserve, "called {called} of {reserve} with {lost} lost");
     assert_eq!(result.winner, Some(es));
     sim.apply_tactical_result(battle.id, &result).unwrap();
     let left = sim.galaxy().fleets.get(&ef).map_or(0, |f| f.unit_count());
