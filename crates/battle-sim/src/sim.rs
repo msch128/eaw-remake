@@ -184,6 +184,7 @@ impl Battle {
             retreat_ordered: vec![false; sides.len()],
             reveals: Vec::new(),
             zones: Vec::new(),
+            lasers: Vec::new(),
             search: vec![(0, 0.0); sides.len()],
             sides,
             ships: Vec::new(),
@@ -606,8 +607,26 @@ impl Battle {
                 if !own(self, &[ship]) {
                     return Err(CommandError::InvalidShip);
                 }
+                // Super laser: the enemy ship nearest to the chosen point (within 600 units) is the target.
+                let laser = self.catalog.ship(self.ships[ship as usize].def).abilities.get(ability as usize).and_then(|a| a.super_laser.clone());
+                let mut shot = None;
+                if let Some(l) = &laser {
+                    let cat = self.catalog.clone();
+                    shot = self
+                        .ships
+                        .iter()
+                        .filter(|o| o.alive && !o.retreated && o.side != side && (l.classes == 0 || l.classes & cat.ship(o.def).class.bit() != 0) && o.pos.dist(pos) <= 600.0 + cat.ship(o.def).radius)
+                        .min_by(|a, b| a.pos.dist(pos).total_cmp(&b.pos.dist(pos)).then(a.id.cmp(&b.id)))
+                        .map(|o| o.id);
+                    if shot.is_none() {
+                        return Err(CommandError::AbilityUnavailable);
+                    }
+                }
                 if !self.activate_ability(ship, ability as usize) {
                     return Err(CommandError::AbilityUnavailable);
+                }
+                if let (Some(l), Some(t)) = (&laser, shot) {
+                    self.lasers.push((ship, t, self.time + l.delay));
                 }
                 let d = self.catalog.ship(self.ships[ship as usize].def);
                 if let Some(a) = d.abilities.get(ability as usize)
@@ -1337,8 +1356,33 @@ impl Battle {
         self.run_carriers(dt);
         self.run_healing(dt);
         self.run_zones(dt);
+        self.run_lasers();
         if self.tick.is_multiple_of(30) {
             self.run_bonuses();
+        }
+    }
+
+    /// `SUPER_LASER` shots that reach their firing time destroy the target if the shooter still lives.
+    fn run_lasers(&mut self) {
+        if self.lasers.is_empty() {
+            return;
+        }
+        let now = self.time;
+        let due: Vec<(u32, u32, f32)> = self.lasers.iter().copied().filter(|l| l.2 <= now).collect();
+        self.lasers.retain(|l| l.2 > now);
+        for (shooter, target, _) in due {
+            if !self.ships[shooter as usize].alive {
+                continue;
+            }
+            let t = &mut self.ships[target as usize];
+            if t.alive {
+                t.alive = false;
+                t.hull = 0.0;
+                let pos = t.pos;
+                if self.config.record_events {
+                    self.events.push(Event::ShipDestroyed { ship: target, pos });
+                }
+            }
         }
     }
 

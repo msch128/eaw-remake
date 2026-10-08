@@ -198,6 +198,9 @@ pub struct AbilityDef {
     pub rocket: bool,
     /// `SENSOR_JAMMING` (flares): while active, enemy homing missiles aimed at this ship lose their lock and fly straight on.
     pub jam: bool,
+    /// `SUPER_LASER`: aimed with `Command::UseAbilityAt`; the chosen ship is destroyed outright after the charge time (estimate: the data
+    /// gives `Damage_Per_Frame` 10, which cannot be what kills a capital ship in one shot in the game).
+    pub super_laser: Option<SuperLaserDef>,
     /// `BUZZ_DROIDS` that damages enemies in an area (estimate: the area lasts `duration`, 20 s where the data gives no expiration; the
     /// `Own_Damage_Per_Second` of 1 and the repair-drone variants are not modelled).
     pub zone: Option<ZoneDef>,
@@ -279,6 +282,15 @@ pub struct ZoneDef {
     pub enemy_dps: f32,
     /// `Activation_Max_Range`: how far from the ship the area may be placed.
     pub max_range: f32,
+}
+
+/// `SUPER_LASER` (Death Star): a shot at one chosen ship.
+#[derive(Debug, Clone, Default)]
+pub struct SuperLaserDef {
+    /// `Fire_Frame` / 30: seconds between the order and the shot.
+    pub delay: f32,
+    /// Bit mask of ships it may be aimed at (`Applicable_Unit_Categories`; 0 = any).
+    pub classes: u16,
 }
 
 /// Parameters of a tractor beam ability.
@@ -1332,7 +1344,7 @@ fn ability_defs(u: &SpaceUnitDef) -> Vec<AbilityDef> {
         .iter()
         .filter(|a| {
             a.expiration_seconds.unwrap_or(0.0) > 0.0
-                || ["FULL_SALVO", "TRACTOR_BEAM", "MISSILE_SHIELD", "INTERDICT", "STEALTH", "FOW_REVEAL_PING", "LASER_DEFENSE", "ROCKET_ATTACK", "SWAP_WEAPONS", "SENSOR_JAMMING", "BUZZ_DROIDS"].iter().any(|k| a.kind.eq_ignore_ascii_case(k))
+                || ["FULL_SALVO", "TRACTOR_BEAM", "MISSILE_SHIELD", "INTERDICT", "STEALTH", "FOW_REVEAL_PING", "LASER_DEFENSE", "ROCKET_ATTACK", "SWAP_WEAPONS", "SENSOR_JAMMING", "BUZZ_DROIDS", "SUPER_LASER"].iter().any(|k| a.kind.eq_ignore_ascii_case(k))
         })
         .map(|a| {
             let toggle = a.expiration_seconds.unwrap_or(0.0) <= 0.0 && ["MISSILE_SHIELD", "INTERDICT", "STEALTH"].iter().any(|k| a.kind.eq_ignore_ascii_case(k));
@@ -1358,6 +1370,14 @@ fn ability_defs(u: &SpaceUnitDef) -> Vec<AbilityDef> {
                 toggle,
                 salvo: a.kind.eq_ignore_ascii_case("FULL_SALVO"),
                 jam: a.kind.eq_ignore_ascii_case("SENSOR_JAMMING"),
+                super_laser: a.kind.eq_ignore_ascii_case("SUPER_LASER").then(|| {
+                    let sub = a.activated_ability.as_ref().and_then(|n| u.sub_abilities.iter().find(|s| s.name.eq_ignore_ascii_case(n)));
+                    let f = |k: &str| sub.and_then(|s| s.fields.get(k)).cloned().unwrap_or_default();
+                    SuperLaserDef {
+                        delay: f("fire_frame").trim().parse::<f32>().unwrap_or(50.0) / 30.0,
+                        classes: alamo_data::xml::split_list(&f("applicable_unit_categories")).iter().filter_map(|t| TargetClass::from_token(t)).fold(0u16, |m, c| m | c.bit()),
+                    }
+                }),
                 zone: a.kind.eq_ignore_ascii_case("BUZZ_DROIDS").then(|| {
                     let sub = a.activated_ability.as_ref().and_then(|n| u.sub_abilities.iter().find(|s| s.name.eq_ignore_ascii_case(n)));
                     let f = |k: &str| sub.and_then(|s| s.fields.get(k)).and_then(|v| v.trim().parse::<f32>().ok()).unwrap_or(0.0);

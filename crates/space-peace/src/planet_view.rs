@@ -120,7 +120,7 @@ fn view_scene(
         Transform::from_translation(ORIGIN).looking_to(Vec3::new(-0.5, -0.25, -0.8), Vec3::Y),
     ));
     if let Some(model) = &p.1.model {
-        commands.spawn((ViewEntity, AlamoModel::new(model.clone()), FitModel { radius: 13.0, spin: 0.01 }, Transform::from_translation(ORIGIN + Vec3::new(-17.5, -1.0, -15.0))));
+        commands.spawn((ViewEntity, AlamoModel::new(model.clone()), FitModel { radius: 24.0, spin: 0.01 }, Transform::from_translation(ORIGIN + Vec3::new(-15.8, -1.0, -15.0))));
     }
     // Station: the model of the planet's star base level.
     if let (Some(sim), Some(cat)) = (sim, catalog)

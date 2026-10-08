@@ -623,6 +623,8 @@ pub struct Battle {
     /// Areas revealed to a side for a while: `(side, centre, radius, until)`.
     pub(crate) reveals: Vec<(u8, Vec3, f32, f32)>,
     /// Damaging areas (`BUZZ_DROIDS`): owner side, centre, radius, enemy damage per second, end time.
+    /// Super laser shots on their way: shooter, target, firing time.
+    pub(crate) lasers: Vec<(u32, u32, f32)>,
     pub(crate) zones: Vec<(u8, Vec3, f32, f32, f32)>,
     /// Per side: `(search point index, time it was set)` of the AI search for hidden enemies.
     pub(crate) search: Vec<(u32, f32)>,

@@ -258,7 +258,7 @@ fn fix_star_dome(
                         material: h.0.clone(),
                         base: m.params.diffuse,
                         // Reference look: orbit lines at full strength, the core glow dimmed to a maroon haze, no grid.
-                        strength: match name.as_str() { "grid" => 0.0, "core" => 0.55, _ => 1.0 },
+                        strength: match name.as_str() { "grid" => 0.0, "core" => 0.32, _ => 1.8 },
                     });
                 }
             }
@@ -488,7 +488,7 @@ fn spawn_galaxy(
             {
                 commands.spawn((
                     ImageNode::default().with_color(Color::NONE),
-                    Node { position_type: PositionType::Absolute, width: Val::Px(18.0), height: Val::Px(18.0), ..default() },
+                    Node { position_type: PositionType::Absolute, width: Val::Px(10.0), height: Val::Px(10.0), ..default() },
                     Visibility::Hidden,
                     Emblem(i),
                     GalaxyEntity,
@@ -710,7 +710,7 @@ fn update_labels(
     for (e, mut node, mut vis) in &mut emblems {
         match slots.get(e.planet_index()).copied().flatten() {
             Some(s) if visible[e.planet_index()] => {
-                node.left = Val::Px((s.pos.x - 22.0 * us) / us);
+                node.left = Val::Px((s.pos.x - 14.0 * us) / us);
                 node.top = Val::Px((s.pos.y - font_px * 0.4) / us);
                 *vis = Visibility::Inherited;
             }
@@ -755,9 +755,9 @@ fn draw_rings(
     mut territory: Local<(u64, Vec<(Vec3, Vec3, Color)>)>,
 ) {
     let flat = Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2);
-    let owners_hash = view.planets.iter().enumerate().fold(0u64, |h, (i, p)| h.wrapping_mul(1_000_003).wrapping_add(p.owner.map_or(0, |o| o as u64 + 1) + i as u64));
-    if territory.0 != owners_hash || territory.1.is_empty() {
-        territory.1 = territory_segments(&view, &radii);
+    let owners_hash = view.planets.iter().enumerate().fold(selection.0.map_or(0, |s| s as u64 + 7), |h, (i, p)| h.wrapping_mul(1_000_003).wrapping_add(p.owner.map_or(0, |o| o as u64 + 1) + i as u64));
+    if territory.0 != owners_hash {
+        territory.1 = territory_segments(&view, &radii, selection.0);
         territory.0 = owners_hash;
     }
     for (a, b, c) in territory.1.iter() {
@@ -1326,34 +1326,20 @@ fn fill_emblems(
 
 /// Territory outline: the union boundary of discs around the planets of each faction, sampled as
 /// dashes (only the parts of a circle that no other disc of the same faction covers).
-fn territory_segments(view: &GalaxyView, radii: &PlanetRadii) -> Vec<(Vec3, Vec3, Color)> {
+fn territory_segments(view: &GalaxyView, radii: &PlanetRadii, selected: Option<usize>) -> Vec<(Vec3, Vec3, Color)> {
+    // Like the original: one dashed ring, around the selected planet's sector, in the colour of its relation.
     const SAMPLES: usize = 240;
     const DASH: usize = 6;
-    let owned: Vec<(usize, Vec3, f32, usize)> = view
-        .planets
-        .iter()
-        .enumerate()
-        .filter_map(|(i, p)| Some((i, galaxy_to_world(p.position), radii.0[i] * TERRITORY_RADIUS, p.owner.filter(|o| Some(*o) == view.player_faction)?)))
-        .collect();
-    let mut out = Vec::new();
-    for &(i, c, r, owner) in &owned {
-        let l = rgb(relation_color(view, Some(owner))).to_linear();
-        let color = Color::LinearRgba(LinearRgba::new(l.red, l.green, l.blue, 0.85));
-        for k in 0..SAMPLES {
-            if (k / DASH) % 2 == 1 {
-                continue;
-            }
-            let a = |k: usize| k as f32 / SAMPLES as f32 * std::f32::consts::TAU;
-            let pt = |k: usize| c + Vec3::new(a(k).cos() * r, 0.0, a(k).sin() * r);
-            let (p0, p1) = (pt(k), pt(k + 1));
-            let mid = (p0 + p1) * 0.5;
-            let covered = owned.iter().any(|&(j, c2, r2, o2)| j != i && o2 == owner && (mid - c2).length() < r2);
-            if !covered {
-                out.push((p0, p1, color));
-            }
-        }
-    }
-    out
+    let Some(i) = selected.filter(|&i| i < view.planets.len()) else { return Vec::new() };
+    let p = &view.planets[i];
+    let c = galaxy_to_world(p.position);
+    let r = radii.0[i] * TERRITORY_RADIUS;
+    let own = p.owner.is_some() && p.owner == view.player_faction;
+    let l = rgb(if own { relation_color(view, p.owner) } else { [0.1, 0.75, 1.0] }).to_linear();
+    let color = Color::LinearRgba(LinearRgba::new(l.red, l.green, l.blue, 0.9));
+    let a = |k: usize| k as f32 / SAMPLES as f32 * std::f32::consts::TAU;
+    let pt = |k: usize| c + Vec3::new(a(k).cos() * r, 0.0, a(k).sin() * r);
+    (0..SAMPLES).filter(|k| (k / DASH) % 2 == 0).map(|k| (pt(k), pt(k + 1), color)).collect()
 }
 
 /// Radius of a planet's territory disc in planet radii.

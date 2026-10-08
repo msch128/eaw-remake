@@ -15,17 +15,16 @@ Counts are `Unit_Ability` entries in `Units/Space/*.xml`, `SPACEUNITS*.XML`, `NA
 | `Force_Healing_Ability` (`Space_Automatic`) | 64 | `HealDef`: hull `Heal_Amount` + `Heal_Percent` of max per `Heal_Interval_In_Secs`, on the ship or on friends in `Heal_Range` (single target = most damaged) |
 | `Combat_Bonus_Ability` (`Space_Automatic`) | 50 | `BonusDef`: while the ship lives, friendly ships of `Applicable_Unit_Categories` get `Damage_Bonus_Percentage` (damage dealt), `Health_Bonus_Percentage` / `Shield_Bonus_Percentage` / `Defense_Bonus_Percentage` (damage taken divided by 1 + bonus), `Fire_Range_Bonus_Percentage` (hardpoint reach) and `Movement_Speed_Bonus_Percentage`. The data has no radius, so the aura covers the whole side (estimate). Per `Stacking_Category` the strongest bonus applies, categories add up; negative values (Gorgon -40% shields) are maluses. Refreshed once per second |
 | `Redirect_Blaster_Ability` (not `Initially_Enabled` = No) | 50 | `RedirectDef`: a direct shot hitting the ship inside `Reaction_Arc_In_Degrees` is destroyed with `Block_Chance`, or sent back with `Redirect_Chance` (estimate: its damage is dealt to the shooter instead of re-aiming the bolt). Abilities that start disabled are enabled by story or upgrades and are skipped |
-
+| `ROCKET_ATTACK`, `SWAP_WEAPONS` | 21, 1 | recharge, alternate icon only | for the duration (10 s where the data gives none) missile, rocket and torpedo hardpoints reload at 0.4x delay (`ROCKET_RELOAD_MULT`, estimate); lasers are unchanged. `Command::UseAbility` |
+| `SENSOR_JAMMING` | 13 | `Expiration_Seconds` 15 | while active, enemy homing missiles aimed at the ship lose their lock and fly on straight (the 75 `Effective_Radius` is not used). `Command::UseAbility` |
+| `BUZZ_DROIDS` + `Buzz_Droids_Ability` | 15 | `Damage_Radius`, `Enemy_Damage_Per_Second`, `Activation_Max_Range` | only variants that hurt enemies (Eclipse lightning storm: 5000 radius, 250 dps): an area placed at the chosen point (`Command::UseAbilityAt`, clamped to max range; without a point it sits on the ship) that damages enemy ships inside, shield first, for the ability duration (20 s where the data has none, estimate). `Own_Damage_Per_Second` 1 and the repair-drone / jamming-pod variants (no enemy damage) have no effect |
+| `SUPER_LASER` + `Super_Laser_Ability` | 5 + 6 | `Fire_Frame` 50, `Damage_Per_Frame` 10, categories Capital / Frigate / SpaceStructure | `Command::UseAbilityAt` on a point: the nearest enemy ship of those categories within 600 units is destroyed outright after `Fire_Frame`/30 s (estimate; the 10 damage per frame cannot be the one-shot kill). Fails with `AbilityUnavailable` if no valid ship is there. The galactic planet shot is in galaxy-sim |
 
 ## Not implemented
 | Type / sub-ability | Uses | What the data says | Effect that is missing |
 |---|---|---|---|
 | `HUNT` | 78 | no parameters | stance toggle: the aggressive stance already hunts; no separate state |
-| `ROCKET_ATTACK`, `SWAP_WEAPONS` | 21, 1 | recharge, alternate icon/name | switch to the missile-boat weapon set (weapons by `Fire_Bonus`/hardpoint group) |
-| `BUZZ_DROIDS` | 15 | `GUI_Activated_Ability_Name` -> `Buzz_Droids_Ability` | droids attach to an enemy ship and drain hull / disable hardpoints |
-| `SENSOR_JAMMING` | 13 | `Expiration_Seconds` 15, `Effective_Radius` 75, flares | enemy missiles lose their lock inside the radius |
-| `REPLENISH_WINGMEN` | 10 | `Active_By_Default` | squadron members of the ship respawn (carriers replace whole squadrons already) |
-| `SUPER_LASER` + `Super_Laser_Ability` | 5 + 6 | Death Star | tactical planet-killer shot (galactic destruction exists in galaxy-sim) |
+| `REPLENISH_WINGMEN` | 10 | only in the unused `_BU` backup files | nothing: no loaded unit has it |
 | `HARMONIC_BOMB`, `CLUSTER_BOMB`, `BLAST`, `STICKY_BOMB`, `ENERGY_WEAPON` | 5, 3, 3, 2, 3 | bomb / beam sub-abilities | area damage, beam attacks, bombs that stick to a target |
 | `LURE`, `WEAKEN_ENEMY`, `SHIELD_FLARE`, `FORCE_CONFUSE`, `CORRUPT_SYSTEMS`, `CONCENTRATE_FIRE` | 4, 1, 1, 1, 1, 1 | hero / special abilities | taunt, damage debuff, shield burst, confusion, hardpoint disabling, focus fire |
 | `TARGETED_REPAIR`, `TARGETED_INVULNERABILITY`, `TARGETED_HACK` | 1 each | targeted hero abilities | repair, invulnerability and hack a chosen ship |

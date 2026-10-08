@@ -443,7 +443,7 @@ fn spawn_hud(mut commands: Commands, existing: Query<(), With<PlayHud>>) {
     ));
     commands.spawn((
         PlayHud,
-        text_bundle("", 15.0, Color::srgb(0.75, 1.0, 0.85)),
+        (text_bundle("", 11.5, Color::srgb(0.9, 0.95, 1.0)), TextLayout::no_wrap()),
         Node {
             bottom: Val::Px(296.0),
             left: Val::Px(40.0),

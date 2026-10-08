@@ -188,3 +188,17 @@ fn combat_bonus_and_redirect_abilities_are_read_from_the_data() {
     let dragon = cat.ship(cat.ship_id("Dragon").expect("dragon"));
     assert!(!viscount.redirects.is_empty() || !dragon.redirects.is_empty(), "an enabled blaster redirect is parsed");
 }
+
+#[test]
+fn super_laser_storm_rocket_and_jamming_abilities_are_read_from_the_data() {
+    let Some((data, fs)) = load() else { return };
+    let cat = Catalog::build(&data, Some(&fs), &["Death_Star_II", "Eclipse_Star_Dreadnought_P4", "MissileBoat"]);
+    let ds = cat.ship(cat.ship_id("Death_Star_II").expect("death star"));
+    let laser = ds.abilities.iter().find_map(|a| a.super_laser.as_ref()).expect("super laser");
+    assert!(laser.delay > 1.0 && laser.delay < 3.0 && laser.classes != 0, "{laser:?}");
+    let eclipse = cat.ship(cat.ship_id("Eclipse_Star_Dreadnought_P4").expect("eclipse"));
+    let storm = eclipse.abilities.iter().find_map(|a| a.zone.as_ref()).unwrap_or_else(|| panic!("lightning storm: {:?}", eclipse.abilities.iter().map(|a| a.kind.clone()).collect::<Vec<_>>()));
+    assert!((storm.enemy_dps - 250.0).abs() < 1.0 && (storm.radius - 5000.0).abs() < 1.0, "{storm:?}");
+    let boat = cat.ship(cat.ship_id("MissileBoat").expect("missile boat"));
+    assert!(boat.abilities.iter().any(|a| a.rocket));
+}

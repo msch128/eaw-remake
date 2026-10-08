@@ -629,3 +629,25 @@ fn buzz_droid_storm_damages_enemies_in_the_area_over_time() {
     assert!((total - 1000.0).abs() < 120.0, "the storm ends after 10 s: {total}");
     assert_eq!(b.ships[c as usize].hull, 1.0e6, "the caster is not hurt");
 }
+
+#[test]
+fn super_laser_destroys_the_chosen_ship_after_charging() {
+    let mut station = ship("deathstar", 1.0e9, 0.0, vec![]);
+    station.abilities.push(AbilityDef { kind: "SUPER_LASER".into(), super_laser: Some(SuperLaserDef { delay: 1.5, classes: TargetClass::Frigate.bit() }), duration: 25.0, recharge: 45.0, speed_mult: 1.0, shield_regen_mult: 1.0, weapon_delay_mult: 1.0, take_damage_mult: 1.0, ..Default::default() });
+    let victim = ship("victim", 1.0e6, 1.0e5, vec![]);
+    let cat = Catalog::from_defs(vec![station, victim], vec![laser()]);
+    let mut b = Battle::new(setup(cat, "deathstar", "victim", 1, 1, cfg()));
+    let (c, v) = (b.ships.iter().find(|s| s.side == 0).unwrap().id, b.ships.iter().find(|s| s.side == 1).unwrap().id);
+    // Aiming at empty space fails; aiming at the ship works and takes the charge time.
+    assert!(b.command(0, Command::UseAbilityAt { ship: c, ability: 0, pos: Vec3::new(0.0, 1.0e6, 0.0) }).is_err());
+    let at = b.ships[v as usize].pos;
+    b.command(0, Command::UseAbilityAt { ship: c, ability: 0, pos: at }).unwrap();
+    for _ in 0..30 {
+        b.step();
+    }
+    assert!(b.ships[v as usize].alive, "still charging after 1 s");
+    for _ in 0..30 {
+        b.step();
+    }
+    assert!(!b.ships[v as usize].alive, "destroyed after the charge time");
+}
