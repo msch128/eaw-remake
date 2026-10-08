@@ -288,6 +288,15 @@ pub enum PlayAction {
         /// Position in the queue (0 = in production).
         index: u32,
     },
+    /// Debug: grant `count` ships of the named unit to the player at `planet` (needs `SimConfig::debug_commands`; journaled, so saves keep working).
+    DebugGrant {
+        /// Unit object name, e.g. `Star_Destroyer`.
+        unit_name: String,
+        /// Planet.
+        planet: PlanetId,
+        /// Number of ships (1..=50).
+        count: u32,
+    },
     /// Fire the superweapon (Death Star, Galaxy Gun) of the player's fleet orbiting `planet`; answered by a `PlanetDestroyed` notification.
     /// Whether a planet can be fired at: `PlanetInfo::destroyable` and an armed fleet in orbit (`UnitType::planet_destroyer`).
     DestroyPlanet(PlanetId),

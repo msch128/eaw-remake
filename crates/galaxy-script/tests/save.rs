@@ -99,3 +99,26 @@ fn bad_or_unsafe_saves_are_rejected() {
     sim.with_sim_mut(|s| s.add_credits(0, 1.0));
     assert!(matches!(sim.to_save(), Err(SaveError::UnjournaledChanges)));
 }
+
+#[test]
+fn debug_grant_is_gated_and_survives_a_save() {
+    let Some(c) = ctx() else { return };
+    let campaign = c.data.campaign("GC_Full_Web_Way_Rebel").unwrap().clone();
+    let cfg = |debug| SimConfig { victory_enabled: false, seed: 5, debug_commands: debug, ..SimConfig::default() };
+    let sc = ScriptedConfig { game_scoring: false, remake_ai: false, difficulty: None, human: Some("Rebel".into()), ..ScriptedConfig::default() };
+    let w = |s: &ScriptedSim| s.with_sim(|x| x.world().clone());
+    let mut off = ScriptedSim::new(c.fs.clone(), c.data.clone(), &campaign, cfg(false), sc.clone()).unwrap();
+    let world = w(&off);
+    let (rebel, home, unit) = (world.faction_id("Rebel").unwrap(), world.factions[world.faction_id("Rebel").unwrap() as usize].home.unwrap(), world.unit_id("MC-80_Star_Cruiser").unwrap());
+    assert!(off.apply(Command::DebugGrant { faction: rebel, planet: home, unit, count: 2 }).is_err(), "off by default");
+    let mut sim = ScriptedSim::new(c.fs.clone(), c.data.clone(), &campaign, cfg(true), sc).unwrap();
+    let count = |s: &ScriptedSim| s.with_sim(|x| x.galaxy().fleets.values().filter(|f| f.owner == rebel).map(|f| f.units.get(&unit).copied().unwrap_or(0)).sum::<u32>());
+    let before = count(&sim);
+    sim.apply(Command::DebugGrant { faction: rebel, planet: home, unit, count: 2 }).expect("granted");
+    weeks(&mut sim, 1);
+    assert_eq!(count(&sim), before + 2);
+    let path = std::env::temp_dir().join("space_peace_test_debug_grant.json");
+    sim.save(&path).expect("save");
+    let loaded = ScriptedSim::load(&path, c.fs.clone(), c.data.clone()).expect("load");
+    assert_eq!(count(&loaded), before + 2, "the replay repeats the grant");
+}

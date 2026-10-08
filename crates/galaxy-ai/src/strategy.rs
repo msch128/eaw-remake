@@ -29,6 +29,32 @@ impl Default for Personality {
     }
 }
 
+/// How a faction opens a match (estimates): the first `StrategyConfig::opening_seconds` bend its personality, fading back to the base values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub enum Opening {
+    /// No bias.
+    #[default]
+    Balanced,
+    /// Grab neutral planets first: more expansion, less aggression.
+    Expand,
+    /// Build up and defend: more caution, less aggression and expansion.
+    Turtle,
+    /// Strike early at weak targets: more aggression, less caution.
+    Raid,
+}
+
+impl Opening {
+    /// Multipliers (aggression, expansion, caution) at full strength.
+    pub fn multipliers(self) -> (f64, f64, f64) {
+        match self {
+            Opening::Balanced => (1.0, 1.0, 1.0),
+            Opening::Expand => (0.8, 1.45, 1.0),
+            Opening::Turtle => (0.75, 0.85, 1.35),
+            Opening::Raid => (1.35, 0.9, 0.8),
+        }
+    }
+}
+
 /// Difficulty as seen by the AI (the economic multipliers live in `galaxy-sim`).
 #[derive(Debug, Clone, PartialEq)]
 pub struct AiTier {
@@ -59,11 +85,15 @@ pub struct StrategyConfig {
     pub default_personality: Personality,
     /// Personalities by player.
     pub personalities: HashMap<PlayerId, Personality>,
+    /// Opening of a player (default `Balanced`).
+    pub openings: HashMap<PlayerId, Opening>,
+    /// Game seconds an opening lasts (it fades out linearly; estimate: 12 weeks).
+    pub opening_seconds: f64,
 }
 
 impl Default for StrategyConfig {
     fn default() -> Self {
-        Self { enabled: true, vision_hops: 1, default_personality: Personality::default(), personalities: HashMap::new() }
+        Self { enabled: true, vision_hops: 1, default_personality: Personality::default(), personalities: HashMap::new(), openings: HashMap::new(), opening_seconds: 720.0 }
     }
 }
 
@@ -110,6 +140,16 @@ impl Strategy {
     /// Personality of a player.
     pub fn personality(&self, p: PlayerId) -> Personality {
         self.config.personalities.get(&p).copied().unwrap_or(self.config.default_personality)
+    }
+
+    /// Personality of a player at game time `time`: the base values bent by the opening, which fades out over `opening_seconds`.
+    pub fn personality_at(&self, p: PlayerId, time: f64) -> Personality {
+        let base = self.personality(p);
+        let opening = self.config.openings.get(&p).copied().unwrap_or_default();
+        let k = (1.0 - time / self.config.opening_seconds.max(1.0)).clamp(0.0, 1.0);
+        let (a, e, c) = opening.multipliers();
+        let mix = |m: f64| 1.0 + (m - 1.0) * k;
+        Personality { aggression: base.aggression * mix(a), expansion: base.expansion * mix(e), caution: base.caution * mix(c) }
     }
 
     /// Tier of a player.
@@ -160,8 +200,8 @@ impl Strategy {
         // Strength per player and planet (fleets + fixed defenses of the owner).
         let mut strength = vec![vec![0.0f64; n]; players];
         self.total = vec![0.0; players];
-        for pl in 0..n {
-            for &(p, s) in &snap.strength[pl] {
+        for (pl, row) in snap.strength.iter().enumerate().take(n) {
+            for &(p, s) in row {
                 strength[p as usize][pl] += s;
             }
             if let Some(o) = snap.owner[pl] {
@@ -170,9 +210,8 @@ impl Strategy {
         }
         // Influence maps.
         self.influence = vec![vec![0.0; n]; players];
-        for p in 0..players {
-            for q in 0..n {
-                let s = strength[p][q];
+        for (p, row) in strength.iter().enumerate() {
+            for (q, &s) in row.iter().enumerate().take(n) {
                 if s <= 0.0 {
                     continue;
                 }
@@ -257,7 +296,7 @@ impl Strategy {
         if !self.config.enabled || self.influence.is_empty() {
             return 1.0;
         }
-        let pers = self.personality(me);
+        let pers = self.personality_at(me, snap.time);
         let t = target as usize;
         let owner = snap.owner[t];
         let value = Self::value(snap, t);

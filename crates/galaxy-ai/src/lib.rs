@@ -10,7 +10,7 @@ pub mod strategy;
 pub mod taskforce;
 
 pub use data::{AiData, AiPlayerDef, AiTemplate, GoalDef, campaign_ai_players};
-pub use strategy::{AiTier, Personality, Phase, Strategy, StrategyConfig};
+pub use strategy::{AiTier, Opening, Personality, Phase, Strategy, StrategyConfig};
 pub use engine::{AiEngine, AiStats, PlanRequest, discover_plans};
 pub use equation::{EquationContext, EquationSet, EvalStats, Expr, ParamValue, Params};
 pub use sim::{AiSim, FleetId, FleetView, PlanetId, PlayerId, QueueView, Refused, StructureInfo, UnitInfo};

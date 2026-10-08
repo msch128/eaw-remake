@@ -529,9 +529,11 @@ fn sync_destroyed(
     args: Res<Args>,
     view: Res<GalaxyView>,
     mut destroyed: ResMut<crate::galaxy_map::DestroyedPlanets>,
+    mut out: MessageWriter<PlayEvent>,
+    mut frames: Local<u32>,
 ) {
     let mut list: Vec<usize> = Vec::new();
-    if let (Some(state), Some(bridge)) = (state, bridge) {
+    if let (Some(state), Some(bridge)) = (state, bridge.as_ref()) {
         for (s, v) in bridge.sim_to_planet.iter().enumerate() {
             if let Some(v) = v
                 && state.galaxy().planets[s].destroyed
@@ -544,6 +546,16 @@ fn sync_destroyed(
         && let Some(i) = view.planets.iter().position(|p| p.id.eq_ignore_ascii_case(name) || p.display_name.eq_ignore_ascii_case(name))
     {
         list.push(i);
+    }
+    // `--force-wreck` also plays the explosion once, as the simulation event would.
+    if args.force_wreck.is_some() && args.offscreen.is_some() {
+        *frames += 1;
+        if *frames == 150
+            && let (Some(b), Some(i)) = (bridge.as_ref(), list.last())
+            && let Some(Some(s)) = b.planet_to_sim.get(*i)
+        {
+            out.write(PlayEvent::Sim(galaxy_sim::Event::PlanetDestroyed { planet: *s, by: 0, owner: None, ships_lost: 0 }));
+        }
     }
     if destroyed.0 != list {
         destroyed.0 = list;

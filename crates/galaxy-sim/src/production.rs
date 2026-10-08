@@ -307,3 +307,61 @@ impl World {
         }
     }
 }
+
+/// Why a superweapon cannot fire (see [`World::can_destroy_planet`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DestroyRefusal {
+    /// Unknown faction, fleet or planet, or an eliminated faction.
+    Invalid,
+    /// The fleet holds no unit with a `Planet_Destruction_Ability`.
+    NoSuperweapon,
+    /// The fleet is not orbiting the planet (or is not the faction's).
+    NotInOrbit,
+    /// The faction's superweapons are still recharging.
+    Recharging,
+    /// `Planet_Is_Destroyable_By_TSW` is No, or the location is not a real planet.
+    Protected,
+    /// Already an asteroid field.
+    AlreadyDestroyed,
+    /// The planet belongs to the firer or an ally.
+    Friendly,
+}
+
+impl From<DestroyRefusal> for CommandError {
+    fn from(r: DestroyRefusal) -> Self {
+        match r {
+            DestroyRefusal::Invalid => CommandError::Invalid,
+            DestroyRefusal::NoSuperweapon | DestroyRefusal::NotInOrbit => CommandError::NotAvailable,
+            _ => CommandError::WrongState,
+        }
+    }
+}
+
+impl World {
+    /// Whether `fleet` of `faction` may fire its superweapon at `planet` right now. The UI uses this to enable the button; `Command::DestroyPlanet` checks the same.
+    pub fn can_destroy_planet(&self, galaxy: &Galaxy, faction: FactionId, fleet: FleetId, planet: PlanetId) -> Result<(), DestroyRefusal> {
+        let fs = galaxy.factions.get(faction as usize).filter(|f| !f.eliminated).ok_or(DestroyRefusal::Invalid)?;
+        let info = self.planets.get(planet as usize).ok_or(DestroyRefusal::Invalid)?;
+        let f = galaxy.fleets.get(&fleet).filter(|f| f.owner == faction).ok_or(DestroyRefusal::NotInOrbit)?;
+        if f.location != FleetLocation::AtPlanet(planet) {
+            return Err(DestroyRefusal::NotInOrbit);
+        }
+        if !f.units.iter().any(|(&u, &n)| n > 0 && self.units[u as usize].planet_destroyer) {
+            return Err(DestroyRefusal::NoSuperweapon);
+        }
+        let ps = &galaxy.planets[planet as usize];
+        if ps.destroyed {
+            return Err(DestroyRefusal::AlreadyDestroyed);
+        }
+        if !self.real[planet as usize] || !info.destroyable {
+            return Err(DestroyRefusal::Protected);
+        }
+        if ps.owner.is_some_and(|o| o == faction || !galaxy.hostile(self, faction, o)) {
+            return Err(DestroyRefusal::Friendly);
+        }
+        if galaxy.time < fs.superweapon_ready_at {
+            return Err(DestroyRefusal::Recharging);
+        }
+        Ok(())
+    }
+}

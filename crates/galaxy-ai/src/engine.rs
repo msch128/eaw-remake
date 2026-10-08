@@ -337,7 +337,7 @@ impl AiEngine {
             self.strategy_at = snap.time;
             self.stats.strategy_nanos += t_s.elapsed().as_nanos();
             for b in &self.brains {
-                let (p, t) = (self.strategy.personality(b.player), self.strategy.tier(b.player));
+                let (p, t) = (self.strategy.personality_at(b.player, snap.time), self.strategy.tier(b.player));
                 self.task_forces.set_sizing(b.player, t.contrast * (p.caution / p.aggression.max(0.1)).sqrt());
                 let believed: Vec<f64> = (0..snap.owner.len() as u32).map(|pl| self.strategy.believed_hostile_strength(&snap, b.player, pl)).collect();
                 self.task_forces.set_believed(b.player, believed);
@@ -568,10 +568,10 @@ impl AiEngine {
                 }
                 _ => 1,
             };
-            if copies > 1 {
-                if let Some(tp) = target {
-                    self.task_forces.set_split(player, tp, copies);
-                }
+            if copies > 1
+                && let Some(tp) = target
+            {
+                self.task_forces.set_split(player, tp, copies);
             }
             for _ in 0..copies {
                 let script = scripts[(self.next_plan as usize) % scripts.len()].clone();
@@ -599,9 +599,7 @@ impl AiEngine {
     /// `EvaluatePerception(name, player, target)`.
     pub fn evaluate_perception(&mut self, sim: &dyn AiSim, name: &str, player: PlayerId, target: Option<u64>) -> Option<f64> {
         let key = name.to_ascii_lowercase();
-        if self.data.equations.get(&key).is_none() {
-            return None;
-        }
+        self.data.equations.get(&key)?;
         let target = target.and_then(|o| sim.object_planet(o));
         let idx = self.brains.iter().position(|b| b.player == player);
         let view = idx.map(|i| self.view(i)).unwrap_or_default();

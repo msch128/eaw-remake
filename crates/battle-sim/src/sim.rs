@@ -1081,9 +1081,8 @@ impl Battle {
                     } else if !a.toggle && a.speed_mult > 1.05 && (matches!(s.order, Order::Retreat) || (s.target != NONE && matches!(s.order, Order::AttackMove(_) | Order::Move(_)) && self.ships[s.target as usize].pos.dist(s.pos) > def.max_weapon_range * 2.0)) {
                         // Speed abilities: flee, or close a large gap while on the move.
                         auto_use.push(k);
-                    } else if !a.toggle && a.shield_regen_mult > 1.05 && def.shield > 0.0 && s.shield < 0.5 * def.shield && s.since_hit < 3.0 {
-                        auto_use.push(k);
-                    } else if !a.toggle && a.take_damage_mult < 0.95 && s.hull < 0.6 * def.hull && s.since_hit < 3.0 {
+                    } else if !a.toggle && s.since_hit < 3.0 && ((a.shield_regen_mult > 1.05 && def.shield > 0.0 && s.shield < 0.5 * def.shield) || (a.take_damage_mult < 0.95 && s.hull < 0.6 * def.hull)) {
+                        // Shield and damage-reduction abilities: when hurt and under fire.
                         auto_use.push(k);
                     } else if a.missile_radius > 0.0 {
                         let incoming = self
@@ -1295,7 +1294,6 @@ fn align_to_target(s: &mut Ship, def: &ShipDef, tpos: Vec3, dt: f32) {
 }
 
 /// Movement controller.
-#[allow(clippy::too_many_arguments)]
 #[allow(clippy::too_many_arguments)]
 fn mov(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, spawn: &[Vec3], leaders: &[u32], obstacles: &[crate::arena::Obstacle], big: &[u32], rng: &mut Rng) {
     let def = cat.ship(s.def);

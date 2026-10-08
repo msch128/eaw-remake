@@ -309,13 +309,13 @@ fn spawn_ui(commands: &mut Commands) {
         .with_children(|root| {
             root.spawn((
                 Text::new("SPACE PEACE"),
-                TextFont { font_size: FontSize::Px(54.0), ..default() },
+                TextFont { font: FontSource::Family("Bahnschrift".into()), font_size: FontSize::Px(54.0), ..default() },
                 TextColor(Color::srgb(0.85, 0.93, 1.0)),
                 TextShadow { offset: Vec2::splat(2.0), color: Color::srgba(0.0, 0.1, 0.3, 0.9) },
             ));
             root.spawn((
                 Text::new("Loading"),
-                TextFont { font_size: FontSize::Px(22.0), ..default() },
+                TextFont { font: FontSource::Family("Bahnschrift".into()), font_size: FontSize::Px(22.0), ..default() },
                 TextColor(Color::srgb(0.75, 0.86, 1.0)),
                 TextShadow { offset: Vec2::splat(1.5), color: Color::srgba(0.0, 0.0, 0.1, 0.95) },
                 StatusText,

@@ -672,7 +672,7 @@ impl TaskForces {
     fn start_produce(&mut self, sim: &mut dyn AiSim, snap: &Snapshot, rng: &mut u64, tf_id: u64, block: u64, stage_arg: Option<PlanetId>, now: f64) {
         let Some(t) = self.forces.get(&tf_id) else { return self.finish(block, false) };
         match t.kind {
-            ForceKind::Ground => return self.finish(block, true),
+            ForceKind::Ground => self.finish(block, true),
             ForceKind::Structure => {
                 let planet = t.target.or(stage_arg).or_else(|| self.choose_stage(snap, t));
                 let Some(planet) = planet else { return self.finish(block, false) };
@@ -736,9 +736,8 @@ impl TaskForces {
                     }
                 }
                 Job::Move { block, tf, to, started, issued, retries } => {
-                    match self.tick_move(sim, block, tf, to, started, issued, retries, now) {
-                        Some(j) => keep.push(j),
-                        None => {}
+                    if let Some(j) = self.tick_move(sim, block, tf, to, started, issued, retries, now) {
+                        keep.push(j);
                     }
                 }
                 Job::Rally { block, tf, to, started } => {
@@ -914,14 +913,14 @@ impl TaskForces {
                     best = Some((*pl, *fid, *cnt));
                 }
             }
-            if let Some((pl, _, _)) = best {
-                if self.claim_unit(sim, player, j.tf, pl, &unit, j.stage) {
-                    self.stats.free_store_claims += 1;
-                    if let Some(e) = free.get_mut(&(pl, key)) {
-                        e.1 -= 1;
-                    }
-                    continue;
+            if let Some((pl, _, _)) = best
+                && self.claim_unit(sim, player, j.tf, pl, &unit, j.stage)
+            {
+                self.stats.free_store_claims += 1;
+                if let Some(e) = free.get_mut(&(pl, key)) {
+                    e.1 -= 1;
                 }
+                continue;
             }
             // Queue it at the nearest planet that accepts it.
             let mut planets: Vec<PlanetId> = snap.owned[player as usize].clone();

@@ -39,3 +39,9 @@ The AI reads `Galactic_AI_Contrast_Multiplier` (force margin) and `Galactic_AI_G
 of the interval; the unit is an estimate). Tiers (`galaxy_script::DifficultyTier`): Easy/Normal/Hard = mod data (`*_Default`, `*_Minor` for minor
 factions); **Brutal** (estimate): Hard with credits x4 and full map knowledge; **Fair** (estimate): no multipliers at all, Normal contrast, fog.
 Personalities (aggression, expansion, caution; default 1) per faction; defaults in `galaxy_script::default_personalities` are estimates.
+
+## Match variety and heroes
+`galaxy_script::ScriptedConfig::variety` (default 0.5, 0 = the old fixed behaviour) draws per AI faction from the match seed: each personality value jittered by up to +-40 % x variety
+(clamped 0.5..1.8) and an `Opening` (balanced / expand / turtle / raid, weights per faction, estimates). The opening multiplies the personality and fades out linearly over
+`StrategyConfig::opening_seconds` (720 s = 12 weeks) via `Strategy::personality_at`. `ScriptedSim::ai_character(faction)` shows the result. Heroes: the Remake plans carry `DenyHeroAttach`
+and the only `Hero`-category galactic goal is `Remove_Corruption`, so the AI keeps heroes at home; with discounts counted galaxy-wide (galaxy-sim RULES.md) that is also the safe place for them. Nothing added.

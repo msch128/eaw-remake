@@ -107,7 +107,7 @@ fn small_button(parent: &mut ChildSpawnerCommands, text: &str, action: OptionBut
         .with_children(|b| {
             b.spawn((
                 Text::new(text),
-                TextFont { font_size: FontSize::Px(18.0), ..default() },
+                TextFont { font: FontSource::Family("Bahnschrift".into()), font_size: FontSize::Px(18.0), ..default() },
                 TextColor(Color::WHITE),
             ));
         });
@@ -145,7 +145,7 @@ fn spawn_overlay(commands: &mut Commands, settings: &Settings) {
             .with_children(|panel| {
                 panel.spawn((
                     Text::new("Options"),
-                    TextFont { font_size: FontSize::Px(34.0), ..default() },
+                    TextFont { font: FontSource::Family("Bahnschrift".into()), font_size: FontSize::Px(34.0), ..default() },
                     TextColor(Color::srgb(0.85, 0.93, 1.0)),
                 ));
                 for key in OptionKey::ALL {
@@ -161,7 +161,7 @@ fn spawn_overlay(commands: &mut Commands, settings: &Settings) {
                             row.spawn((
                                 Node { width: Val::Px(200.0), align_self: AlignSelf::Center, ..default() },
                                 Text::new(key.label()),
-                                TextFont { font_size: FontSize::Px(18.0), ..default() },
+                                TextFont { font: FontSource::Family("Bahnschrift".into()), font_size: FontSize::Px(18.0), ..default() },
                                 TextColor(Color::srgb(0.75, 0.85, 0.95)),
                             ));
                             small_button(row, "<", OptionButton::Step(key, -1), 34.0);
@@ -173,7 +173,7 @@ fn spawn_overlay(commands: &mut Commands, settings: &Settings) {
                                     ..default()
                                 },
                                 Text::new(settings.value_text(key)),
-                                TextFont { font_size: FontSize::Px(18.0), ..default() },
+                                TextFont { font: FontSource::Family("Bahnschrift".into()), font_size: FontSize::Px(18.0), ..default() },
                                 TextColor(Color::WHITE),
                             ));
                             small_button(row, ">", OptionButton::Step(key, 1), 34.0);

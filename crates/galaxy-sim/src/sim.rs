@@ -146,27 +146,25 @@ impl Sim {
                 });
                 Ok(CommandOk::Done)
             }
-            Command::DestroyPlanet { faction, planet } => {
-                let fs = g.factions.get(faction as usize).ok_or(CommandError::Invalid)?;
-                if fs.eliminated {
-                    return Err(CommandError::Eliminated);
-                }
-                let info = world.planets.get(planet as usize).ok_or(CommandError::Invalid)?;
-                let ps = &g.planets[planet as usize];
-                if !world.real[planet as usize] || !info.destroyable || ps.destroyed || g.time < fs.superweapon_ready_at {
-                    return Err(CommandError::WrongState);
-                }
-                if let Some(o) = ps.owner
-                    && (o == faction || !g.hostile(&world, faction, o))
-                {
-                    return Err(CommandError::WrongState);
-                }
-                let armed = g.fleets.values().any(|f| {
-                    f.owner == faction && f.location == FleetLocation::AtPlanet(planet) && f.units.iter().any(|(&u, &n)| n > 0 && world.units[u as usize].planet_destroyer)
-                });
-                if !armed {
+            Command::DebugGrant { faction, planet, unit, count } => {
+                if !world.config.debug_commands {
                     return Err(CommandError::NotAvailable);
                 }
+                if g.factions.get(faction as usize).is_none_or(|f| f.eliminated) || planet as usize >= world.planets.len() || unit as usize >= world.units.len() {
+                    return Err(CommandError::Invalid);
+                }
+                let id = self.spawn_units(faction, planet, unit, count.clamp(1, 50));
+                Ok(CommandOk::NewFleet(id))
+            }
+            Command::DestroyPlanet { faction, planet } => {
+                let fleet = g
+                    .fleets
+                    .values()
+                    .find(|f| f.owner == faction && f.location == FleetLocation::AtPlanet(planet) && f.units.iter().any(|(&u, &n)| n > 0 && world.units[u as usize].planet_destroyer))
+                    .map(|f| f.id)
+                    .ok_or(CommandError::NotAvailable)?;
+                world.can_destroy_planet(g, faction, fleet, planet).map_err(CommandError::from)?;
+                let ps = &g.planets[planet as usize];
                 g.factions[faction as usize].superweapon_ready_at = g.time + f64::from(world.config.superweapon_cooldown_seconds);
                 let owner = ps.owner;
                 // Everyone else's ships in orbit die with the planet.

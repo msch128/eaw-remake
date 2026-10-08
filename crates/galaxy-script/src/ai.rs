@@ -290,6 +290,6 @@ impl AiSim for SimAdapter<'_> {
         PLANET_OBJECT_TAG | u64::from(pl)
     }
     fn object_planet(&self, object: u64) -> Option<PlanetId> {
-        (object >> 56 == 1).then(|| (object & 0xFFFF_FFFF) as u32)
+        (object >> 56 == 1).then_some((object & 0xFFFF_FFFF) as u32)
     }
 }

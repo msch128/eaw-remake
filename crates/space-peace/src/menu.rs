@@ -364,14 +364,14 @@ pub fn spawn_menu(commands: &mut Commands, spec: &MenuSpec, marker: impl Compone
         .with_children(|root| {
             root.spawn((
                 Text::new(spec.title.clone()),
-                TextFont { font_size: FontSize::Px(54.0), ..default() },
+                TextFont { font: FontSource::Family("Bahnschrift".into()), font_size: FontSize::Px(54.0), ..default() },
                 TextColor(Color::srgb(0.85, 0.93, 1.0)),
                 TextShadow { offset: Vec2::splat(2.0), color: Color::srgba(0.0, 0.1, 0.3, 0.9) },
             ));
             if !spec.subtitle.is_empty() {
                 root.spawn((
                     Text::new(spec.subtitle.clone()),
-                    TextFont { font_size: FontSize::Px(22.0), ..default() },
+                    TextFont { font: FontSource::Family("Bahnschrift".into()), font_size: FontSize::Px(22.0), ..default() },
                     TextColor(Color::srgb(0.75, 0.86, 1.0)),
                     TextShadow { offset: Vec2::splat(1.5), color: Color::srgba(0.0, 0.0, 0.1, 0.95) },
                 ));
@@ -422,14 +422,14 @@ fn spawn_column(parent: &mut ChildSpawnerCommands, column: &MenuColumn) {
             if !column.heading.is_empty() {
                 col.spawn((
                     Text::new(column.heading.clone()),
-                    TextFont { font_size: FontSize::Px(26.0), ..default() },
+                    TextFont { font: FontSource::Family("Bahnschrift".into()), font_size: FontSize::Px(26.0), ..default() },
                     TextColor(Color::WHITE),
                 ));
             }
             if !column.subheading.is_empty() {
                 col.spawn((
                     Text::new(column.subheading.clone()),
-                    TextFont { font_size: FontSize::Px(15.0), ..default() },
+                    TextFont { font: FontSource::Family("Bahnschrift".into()), font_size: FontSize::Px(15.0), ..default() },
                     TextColor(Color::srgb(0.6, 0.72, 0.85)),
                 ));
             }
@@ -458,7 +458,7 @@ fn spawn_button(parent: &mut ChildSpawnerCommands, item: &MenuItem) {
         .with_children(|b| {
             b.spawn((
                 Text::new(item.label.clone()),
-                TextFont { font_size: FontSize::Px(20.0), ..default() },
+                TextFont { font: FontSource::Family("Bahnschrift".into()), font_size: FontSize::Px(20.0), ..default() },
                 TextColor(label_color),
             ));
         });

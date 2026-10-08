@@ -235,12 +235,12 @@ fn run(o: &Opts, fs: &Arc<dyn FileSource>, data: &Arc<alamo_data::GameData>) -> 
 
         // ---- the player bot -----------------------------------------------------------------------------
         if let Some(h) = human
-            && week % 2 == 0
+            && week.is_multiple_of(2)
         {
             bot(&mut d, &last, &world, &names, h);
         }
 
-        if week != reported && week % o.save_every == 0 {
+        if week != reported && week.is_multiple_of(o.save_every) {
             d.save(&save_path);
             d.wait_idle();
             let size = std::fs::metadata(&save_path).map(|m| m.len()).unwrap_or(0);
@@ -252,7 +252,7 @@ fn run(o: &Opts, fs: &Arc<dyn FileSource>, data: &Arc<alamo_data::GameData>) -> 
         }
         let first_time = week != reported;
         reported = week;
-        if first_time && week % 20 == 0 {
+        if first_time && week.is_multiple_of(20) {
             let total: Vec<String> = g.factions.iter().enumerate().filter(|(_, f)| f.planets_owned > 0).map(|(i, f)| format!("{}:{}p/{}k/pop{}of{}/T{}", &world.factions[i].name[..world.factions[i].name.len().min(4)], f.planets_owned, (f.credits / 1000.0) as i64, f.population_used, f.population_cap, f.tech)).collect();
             println!("  week {week}: {}", total.join(" "));
         }
@@ -294,10 +294,11 @@ fn run(o: &Opts, fs: &Arc<dyn FileSource>, data: &Arc<alamo_data::GameData>) -> 
 fn bot(d: &mut SimDriver, s: &Snapshot, w: &Arc<galaxy_sim::World>, names: &PlayCatalog, h: u32) {
     let g = &s.galaxy;
     // Tech: every 8 weeks the bot buys the next level at its best planet (the AI factions follow through the story scripts).
-    if s.week % 8 == 0 && g.factions[h as usize].tech < w.factions[h as usize].max_tech {
-        if let Some((pl, _)) = g.planets.iter().enumerate().filter(|(_, p)| p.owner == Some(h)).max_by_key(|(_, p)| p.starbase.map_or(0, |sb| w.starbases[sb as usize].level)) {
-            d.send_command(Command::UpgradeTech { faction: h, planet: pl as u32 });
-        }
+    if s.week.is_multiple_of(8)
+        && g.factions[h as usize].tech < w.factions[h as usize].max_tech
+        && let Some((pl, _)) = g.planets.iter().enumerate().filter(|(_, p)| p.owner == Some(h)).max_by_key(|(_, p)| p.starbase.map_or(0, |sb| w.starbases[sb as usize].level))
+    {
+        d.send_command(Command::UpgradeTech { faction: h, planet: pl as u32 });
     }
     // Build: at every owned planet that offers units, queue the dearest affordable one (the sim refuses when the queue is full).
     let credits = g.factions[h as usize].credits as f32;

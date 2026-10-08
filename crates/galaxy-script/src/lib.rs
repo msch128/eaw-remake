@@ -50,6 +50,56 @@ pub struct ScriptedConfig {
     pub strategy: bool,
     /// Personality per faction name (lower case); factions without an entry use `default_personality`.
     pub personalities: std::collections::HashMap<String, Personality>,
+    /// Match variety, 0 = every game identical (the defaults above), 1 = strong variation: per AI faction the personality values are
+    /// jittered by up to +-40 % x `variety` and an opening (expand / turtle / raid / balanced, weighted by faction) is drawn, both from the
+    /// match seed (`SimConfig::seed`), so a seed replays exactly.
+    #[serde(default = "default_variety")]
+    pub variety: f64,
+}
+
+fn default_variety() -> f64 {
+    0.5
+}
+
+/// Opening weights per faction name (balanced, expand, turtle, raid); estimates.
+fn opening_weights(faction: &str) -> [u32; 4] {
+    match faction {
+        "empire" => [3, 2, 1, 3],
+        "rebel" => [3, 3, 2, 2],
+        "underworld" => [2, 2, 2, 3],
+        _ => [3, 2, 2, 2],
+    }
+}
+
+/// Draws the personality jitter and the opening of a faction from the match seed (splitmix64, so it needs no RNG state and does not depend on faction order).
+pub fn draw_character(seed: u64, faction: &str, base: Personality, variety: f64) -> (Personality, galaxy_ai::Opening) {
+    if variety <= 0.0 {
+        return (base, galaxy_ai::Opening::Balanced);
+    }
+    let mut x = seed ^ 0x9E37_79B9_7F4A_7C15;
+    for b in faction.to_ascii_lowercase().bytes() {
+        x = (x ^ u64::from(b)).wrapping_mul(0x0100_0000_01B3);
+    }
+    let mut next = move || {
+        x = x.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut z = x;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        (z ^ (z >> 31)) as f64 / u64::MAX as f64
+    };
+    let mut jitter = |v: f64| (v * (1.0 + 0.4 * variety * (next() * 2.0 - 1.0))).clamp(0.5, 1.8);
+    let p = Personality { aggression: jitter(base.aggression), expansion: jitter(base.expansion), caution: jitter(base.caution) };
+    let w = opening_weights(&faction.to_ascii_lowercase());
+    let mut pick = (next() * f64::from(w.iter().sum::<u32>())) as u32;
+    let mut idx = 0;
+    for (i, &wi) in w.iter().enumerate() {
+        if pick < wi {
+            idx = i;
+            break;
+        }
+        pick -= wi;
+    }
+    (p, [galaxy_ai::Opening::Balanced, galaxy_ai::Opening::Expand, galaxy_ai::Opening::Turtle, galaxy_ai::Opening::Raid][idx])
 }
 
 /// Difficulty tiers. `Easy`, `Normal` and `Hard` read `Xml/DifficultyAdjustments.xml` (`<Tier>_Default` for the major
@@ -85,6 +135,7 @@ impl Default for ScriptedConfig {
             difficulty: Some(DifficultyTier::Normal),
             strategy: true,
             personalities: default_personalities(),
+            variety: default_variety(),
         }
     }
 }
@@ -290,10 +341,12 @@ impl ScriptedSim {
             for (id, f) in world.factions.iter().enumerate() {
                 let id = id as u32;
                 let passive = ["neutral", "pirates", "hostile"].iter().any(|n| f.name.eq_ignore_ascii_case(n));
-                if id != human && !added.contains(&id) && !passive {
-                    if let Err(e) = engine.add_player(id, &ai_type) {
-                        self.start_errors.push(e);
-                    }
+                if id != human
+                    && !added.contains(&id)
+                    && !passive
+                    && let Err(e) = engine.add_player(id, &ai_type)
+                {
+                    self.start_errors.push(e);
                 }
             }
         }
@@ -305,15 +358,17 @@ impl ScriptedSim {
             .filter_map(|(f, _)| world.faction_index.get(&f.to_ascii_lowercase()).copied())
             .collect();
         let mut i = self.inner.borrow_mut();
+        let seed = i.sim.world().config.seed;
         engine.strategy.config.enabled = config.strategy;
         for (id, f) in world.factions.iter().enumerate() {
             let id = id as u32;
             if id == human || ["neutral", "hostile"].iter().any(|n| f.name.eq_ignore_ascii_case(n)) {
                 continue;
             }
-            if let Some(pers) = config.personalities.get(&f.name.to_ascii_lowercase()) {
-                engine.strategy.config.personalities.insert(id, *pers);
-            }
+            let base = config.personalities.get(&f.name.to_ascii_lowercase()).copied().unwrap_or_default();
+            let (pers, opening) = draw_character(seed, &f.name, base, config.variety);
+            engine.strategy.config.personalities.insert(id, pers);
+            engine.strategy.config.openings.insert(id, opening);
             if let Some(tier) = config.difficulty {
                 let (diff, ai_tier) = tier_settings(&table, tier, minor.contains(&id));
                 i.sim.set_faction_difficulty(id, diff);
@@ -359,6 +414,15 @@ impl ScriptedSim {
     /// The Lua runtime (statistics, errors, log).
     pub fn runtime(&self) -> &ScriptRuntime {
         &self.runtime
+    }
+
+    /// Personality (after the seeded variation) and opening of an AI faction; `None` for the human, neutral factions or without the Remake AI.
+    pub fn ai_character(&self, faction: &str) -> Option<(Personality, galaxy_ai::Opening)> {
+        let i = self.inner.borrow();
+        let id = i.world.faction_index.get(&faction.to_ascii_lowercase()).copied()?;
+        let ai = i.ai.as_ref()?;
+        let cfg = &ai.strategy.config;
+        Some((*cfg.personalities.get(&id)?, cfg.openings.get(&id).copied().unwrap_or_default()))
     }
 
     /// Advances simulation and scripts by `dt` game seconds.

@@ -269,6 +269,18 @@ pub enum Command {
         /// Planet.
         planet: PlanetId,
     },
+    /// Debug: put `count` ships of `unit` into the faction's fleet orbiting `planet` for free (population, cost and requirements ignored).
+    /// Refused unless `SimConfig::debug_commands` is set. Journaled like every command, so saves replay it.
+    DebugGrant {
+        /// Receiving faction.
+        faction: FactionId,
+        /// Planet to appear at.
+        planet: PlanetId,
+        /// Unit type.
+        unit: UnitTypeId,
+        /// Number of ships.
+        count: u32,
+    },
     /// Fire a superweapon (a unit with `Planet_Destruction_Ability`, e.g. the Death Star) of a fleet in orbit at the planet it orbits.
     DestroyPlanet {
         /// Issuing faction.

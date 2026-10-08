@@ -53,6 +53,8 @@ pub struct SimConfig {
     pub max_queue_len: usize,
     /// Evaluate victory conditions (and end the game when one is met).
     pub victory_enabled: bool,
+    /// Allow `Command::DebugGrant` (offscreen tests and debugging only; off by default).
+    pub debug_commands: bool,
     /// How battles are resolved by [`crate::Sim::resolve_battle`] and by automatic resolution.
     pub resolver: BattleResolver,
     /// Longest tactical battle in simulated seconds before it is declared a draw.
@@ -102,6 +104,7 @@ impl Default for SimConfig {
             base_population_cap: 40,
             max_queue_len: 8,
             victory_enabled: true,
+            debug_commands: false,
             resolver: BattleResolver::Statistical,
             tactical_max_seconds: 900.0,
             tactical_resolver_max_ships: 16,

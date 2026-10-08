@@ -138,6 +138,11 @@ pub fn handle_actions(
                     state.driver.send_command(Command::CancelProduction { faction: h, planet: *planet, lane: *lane, index: *index });
                 }
             }
+            PlayAction::DebugGrant { unit_name, planet, count } => {
+                if let (Some(h), Some(unit)) = (player.0, state.world.unit_id(unit_name)) {
+                    state.driver.send_command(Command::DebugGrant { faction: h, planet: *planet, unit, count: *count });
+                }
+            }
             PlayAction::DestroyPlanet(planet) => {
                 if let Some(h) = player.0 {
                     state.driver.send_command(Command::DestroyPlanet { faction: h, planet: *planet });

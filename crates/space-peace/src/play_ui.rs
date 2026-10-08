@@ -108,7 +108,7 @@ impl Plugin for PlayUiPlugin {
             .add_systems(Update, show_battle_summary.run_if(in_state(AppScreen::Galaxy)).run_if(resource_exists::<crate::battle_play::BattleSummary>))
             .add_systems(
                 Update,
-                (track_game_end, force_end_script, show_end_dialog, end_dialog_result, superweapon_button, superweapon_dialog)
+                (track_game_end, force_end_script, show_end_dialog, end_dialog_result, superweapon_button, superweapon_dialog, explode_on_destroy, expire_explosions)
                     .chain()
                     .run_if(resource_exists::<PlayBridge>.and_then(resource_exists::<SimState>)),
             )
@@ -1304,8 +1304,21 @@ fn explode_on_destroy(
         info!("play: planet {planet} destroyed");
         if alamo.is_some() {
             let pos = layout.positions[*planet as usize];
-            let scale = layout.radii[*planet as usize].max(1.0);
-            commands.spawn((alamo_render::AlamoParticles::new("P_Planet_Explode_Galactic.alo"), Transform::from_translation(pos).with_scale(Vec3::splat(scale)), GalaxyEntity));
+            let scale = (layout.radii[*planet as usize] * 0.12).max(0.2);
+            commands.spawn((alamo_render::AlamoParticles::new("P_Planet_Explode_Galactic.alo"), Transform::from_translation(pos).with_scale(Vec3::splat(scale)), GalaxyEntity, ExplosionLife(8.0)));
+        }
+    }
+}
+
+/// Seconds a planet explosion stays before it is removed.
+#[derive(Component)]
+struct ExplosionLife(f32);
+
+fn expire_explosions(mut commands: Commands, time: Res<Time>, mut q: Query<(Entity, &mut ExplosionLife)>) {
+    for (e, mut life) in &mut q {
+        life.0 -= time.delta_secs();
+        if life.0 <= 0.0 {
+            commands.entity(e).despawn();
         }
     }
 }

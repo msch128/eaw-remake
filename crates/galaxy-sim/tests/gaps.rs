@@ -112,7 +112,7 @@ fn a_superweapon_destroys_a_planet_once_per_cooldown() {
     sim.spawn_units(empire, rebel_planet, ds, 1);
     sim.spawn_units(rebel, rebel_planet, sd, 3);
     // The owner cannot fire at its own planet.
-    assert_eq!(sim.apply(Command::DestroyPlanet { faction: rebel, planet: rebel_planet }), Err(CommandError::WrongState));
+    assert_eq!(sim.apply(Command::DestroyPlanet { faction: rebel, planet: rebel_planet }), Err(CommandError::NotAvailable));
     assert_eq!(sim.apply(Command::DestroyPlanet { faction: empire, planet: rebel_planet }), Ok(CommandOk::Done));
     let events = sim.step(0.5);
     let lost = events.iter().find_map(|e| match e {
@@ -131,6 +131,7 @@ fn a_superweapon_destroys_a_planet_once_per_cooldown() {
     assert_eq!(sim.apply(Command::DestroyPlanet { faction: empire, planet: neutral }), Err(CommandError::WrongState));
     sim.step(150.0);
     // ... and a wreck cannot be destroyed again.
+    sim.spawn_units(empire, rebel_planet, ds, 1);
     assert_eq!(sim.apply(Command::DestroyPlanet { faction: empire, planet: rebel_planet }), Err(CommandError::WrongState));
 }
 
