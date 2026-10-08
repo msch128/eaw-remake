@@ -36,7 +36,7 @@ impl Plugin for TacticalUiPlugin {
             Update,
             (
                 control::ui_block.after(control::read_pointer).before(control::selection).run_if(resource_exists::<BattleRuntime>),
-                (crate::hud::spawn_hud, crate::hud::advisor, crate::hud::heroes, crate::hud::objectives_visibility, crate::hud::unit_tooltip, fix_tooltips).chain().run_if(resource_exists::<BattleRuntime>),
+                (crate::hud::spawn_hud, crate::hud::advisor, crate::hud::heroes, crate::hud::objectives_visibility, crate::hud::hero_billboards, crate::hud::unit_tooltip, fix_tooltips).chain().run_if(resource_exists::<BattleRuntime>),
                 check_teardown,
                 crate::hud::remove_hud.run_if(resource_removed::<BattleRuntime>.or_eager(resource_removed::<crate::BattleSession>)),
                 init_reinforce.run_if(resource_added::<BattleRuntime>),
@@ -677,6 +677,10 @@ fn sync_overlays(
             enemy,
             name,
             always: false,
+            // Fighters and other small units are marked by their little icon box.
+            icon: (first.squad != u32::MAX || half < 24.0)
+                .then(|| assets.as_ref().and_then(|a| a.game.as_ref()).and_then(|g| eaw_ui::unit_icon(g, &def.name)))
+                .flatten(),
         });
     }
     // Hardpoint reticles with their health on the hovered ship, the selected enemy or a lone selected ship. They are clickable

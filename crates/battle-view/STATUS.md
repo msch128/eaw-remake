@@ -187,3 +187,13 @@ Add `battle-view`, `galaxy-sim` (already there through galaxy-play) and `eaw-ui`
   `BattleConfig::reinforce_zone`), a left click sends `Command::ReinforceAt` (Shift = whole stack). Scripted offscreen runs (`synthetic_pointer`) place automatically.
   Targeted abilities (`reveal_radius > 0`, FOW_REVEAL_PING) arm a target click -> `UseAbilityAt`. Unit tooltip (name, hull, shield) after 0.35 s of hovering.
 - Not done: ability hotkeys (the data has none; digits are control groups), autocast toggles, unit description text in the tooltip (key not found yet), waypoint paths.
+
+## Tactical round 3 (2026-10-08): video reference alignment
+- **Camera (user spec):** hold the middle button: left / right rotates (yaw), up / down tilts (pitch, limits 0.55..1.30 rad are estimates); Page Up / Page Down rotate, Q / E too; wheel zooms.
+  Covered by `input_test` (`middle-drag-rotates-and-tilts`, `page-up-rotates`; 20 checks in all).
+- **Overlay look (video frames v0700/v0710):** squadrons and other small units are marked by a little icon box (`ShipOverlay::icon`, the unit's `Icon_Name`) with two bars under it; capitals and stations
+  keep corner brackets and carry the bars above (shield above hull). Hardpoint reticles show health; hovering one shows "<Text_ID of the hardpoint> - <projectile damage> DMG - <health>%".
+- **Unit panel:** hovering a ship (0.35 s) shows the cyan glass panel above R2 (icon, name, `Encyclopedia_Unit_Class`, first `Encyclopedia_Text` string, hull / shield); the advisor bubble hides meanwhile.
+  The "No AI / Destination" lines of the video are not reproduced (the snapshot has no order state).
+- **Heroes:** portraits top right with orange rings (white when selected), plus a small face box floating next to each hero ship (`HeroBillboard`).
+- Seen in the offscreen render: the integrator's galaxy planet tooltip ("The Yavin System ...") stays on screen during the battle.

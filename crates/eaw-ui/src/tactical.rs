@@ -202,6 +202,9 @@ pub struct ShipOverlay {
     /// Shown with bars only (no brackets) even when neither selected nor hovered: own units in the
     /// real game keep a health line under them.
     pub always: bool,
+    /// Texture name of the unit icon: small units (fighters) are marked by a little icon box instead of brackets,
+    /// like in the real game.
+    pub icon: Option<String>,
 }
 
 /// A hardpoint marker on a hovered capital ship.
@@ -404,10 +407,12 @@ pub struct ShipOverlayNode {
     /// Ship id from [`ShipOverlay::id`].
     pub id: u64,
     health_img: Entity,
+    health_bar: Entity,
     shield_bg: Entity,
     shield_clip: Entity,
     shield_img: Entity,
     label: Entity,
+    icon: Entity,
     brackets: [Entity; 4],
     /// Bar texture set: 0 small, 1 medium, 2 large.
     class: usize,
@@ -650,13 +655,34 @@ pub(crate) fn ship_overlays(
                     .spawn((corner(r, b), BorderColor::all(accent), FocusPolicy::Pass, ChildOf(id)))
                     .id();
             }
+            let icon = commands
+                .spawn((
+                    Node {
+                        position_type: PositionType::Absolute,
+                        left: Val::Px(0.0),
+                        top: Val::Px(0.0),
+                        width: Val::Percent(100.0),
+                        height: Val::Percent(100.0),
+                        border: UiRect::all(Val::Px(1.0)),
+                        display: Display::None,
+                        ..default()
+                    },
+                    ImageNode::default(),
+                    BorderColor::all(accent),
+                    BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.45)),
+                    FocusPolicy::Pass,
+                    ChildOf(id),
+                ))
+                .id();
             commands.entity(id).insert(ShipOverlayNode {
                 id: o.id,
                 health_img,
+                health_bar,
                 shield_bg,
                 shield_clip,
                 shield_img,
                 label,
+                icon,
                 brackets,
                 class,
             });
@@ -664,9 +690,12 @@ pub(crate) fn ship_overlays(
             continue; // positioned next frame, once its parts exist
         };
         let Ok(parts) = nodes.get(e) else { continue };
+        // Small units get an icon box (24 design px) instead of brackets; big ones keep brackets and carry the bars above.
+        let icon_mode = o.icon.is_some();
+        let (half, w) = if icon_mode { (12.0 * s, 24.0 * s) } else { (o.half_size, w) };
         if let Ok((mut node, ..)) = styles.get_mut(e) {
-            node.left = px(o.screen_pos.x - o.half_size, s);
-            node.top = px(o.screen_pos.y - o.half_size, s);
+            node.left = px(o.screen_pos.x - half, s);
+            node.top = px(o.screen_pos.y - half, s);
             node.width = px(w, s);
             node.height = px(w, s);
             node.display = if o.selected || o.hovered || o.enemy || o.always {
@@ -674,6 +703,29 @@ pub(crate) fn ship_overlays(
             } else {
                 Display::None
             };
+        }
+        let above = !icon_mode && o.half_size >= 40.0;
+        for (bar, below, over) in [(parts.health_bar, 8.0, 4.0), (parts.shield_bg, 4.0, 8.0)] {
+            if let Ok((mut n, ..)) = styles.get_mut(bar) {
+                if above {
+                    n.bottom = Val::Auto;
+                    n.top = Val::Px(-over);
+                } else {
+                    n.top = Val::Auto;
+                    n.bottom = Val::Px(-below);
+                }
+            }
+        }
+        if let Ok((mut n, img, bc, _)) = styles.get_mut(parts.icon) {
+            n.display = if icon_mode { Display::Flex } else { Display::None };
+            if let (Some(mut img), Some(name)) = (img, o.icon.as_deref())
+                && let Some(t) = textures.get(&mut images, name)
+            {
+                img.image = t.handle;
+            }
+            if let Some(mut bc) = bc {
+                *bc = BorderColor::all(accent);
+            }
         }
         let set = bar_set(&mut sets, &mut textures, &mut images, parts.class);
         if let Ok((_, Some(mut img), ..)) = styles.get_mut(parts.health_img) {
@@ -698,7 +750,7 @@ pub(crate) fn ship_overlays(
             }
         }
         commands.entity(parts.label).try_insert(TextColor(accent));
-        let brackets = if o.selected || o.hovered || o.enemy { accent } else { Color::NONE };
+        let brackets = if !icon_mode && (o.selected || o.hovered || o.enemy) { accent } else { Color::NONE };
         for b in parts.brackets {
             if let Ok((_, _, Some(mut bc), _)) = styles.get_mut(b) {
                 *bc = BorderColor::all(brackets);

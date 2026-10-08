@@ -44,6 +44,10 @@ pub(crate) struct HeroPortrait(u32);
 #[derive(Component)]
 pub(crate) struct HeroHealth(u32);
 
+/// A hero's face floating next to its ship in the battle (a little portrait box, like the real game).
+#[derive(Component)]
+pub(crate) struct HeroBillboard(u32);
+
 /// Row that holds the hero portraits.
 #[derive(Component)]
 pub(crate) struct HeroRow;
@@ -69,9 +73,22 @@ pub struct HudState {
     pub objectives: bool,
 }
 
-/// The tooltip of the unit under the cursor.
+/// The panel of the unit under the cursor and its parts.
 #[derive(Component)]
-pub(crate) struct UnitTooltip;
+pub(crate) struct UnitPanel;
+#[derive(Component)]
+pub(crate) struct UnitPanelIcon;
+#[derive(Component)]
+pub(crate) struct UnitPanelName;
+#[derive(Component)]
+pub(crate) struct UnitPanelClass;
+#[derive(Component)]
+pub(crate) struct UnitPanelDesc;
+#[derive(Component)]
+pub(crate) struct UnitPanelStats;
+/// Tooltip of the hardpoint reticle under the cursor.
+#[derive(Component)]
+pub(crate) struct HardpointTip;
 
 /// Seconds the cursor rests on a ship before its tooltip shows (estimate).
 const TOOLTIP_DELAY: f32 = 0.35;
@@ -198,23 +215,54 @@ pub fn spawn_hud(
         ChildOf(boxed),
     ));
 
-    // Unit tooltip (name, hull and shield), follows the cursor.
+    // Unit panel: the real game shows this cyan glass panel above R2 for the unit under the cursor (icon, name, class, description).
+    let mut panel = commands.spawn((
+        TacticalHud,
+        UnitPanel,
+        Name::new("unit panel"),
+        Node {
+            position_type: PositionType::Absolute,
+            left: Val::Px(17.0),
+            bottom: Val::Px(309.0),
+            width: Val::Px(423.0),
+            flex_direction: FlexDirection::Column,
+            row_gap: Val::Px(3.0),
+            padding: UiRect::axes(Val::Px(8.0), Val::Px(6.0)),
+            border: UiRect::all(Val::Px(2.0)),
+            display: Display::None,
+            ..default()
+        },
+        BackgroundColor(Color::srgba(0.06, 0.3, 0.34, 0.6)),
+        BorderColor::all(Color::srgb(0.3, 0.85, 0.95)),
+        GlobalZIndex(75),
+        bevy::ui::FocusPolicy::Pass,
+    ));
+    target(&mut panel);
+    let panel = panel.id();
+    let head = commands.spawn((Node { column_gap: Val::Px(8.0), align_items: AlignItems::Center, ..default() }, ChildOf(panel))).id();
+    commands.spawn((UnitPanelIcon, Node { width: Val::Px(40.0), height: Val::Px(34.0), ..default() }, ImageNode::default(), ChildOf(head)));
+    commands.spawn((UnitPanelName, Text::new(""), font(&ui, 14.0), TextColor(Color::srgb(0.88, 0.95, 1.0)), ChildOf(head)));
+    commands.spawn((UnitPanelClass, Text::new(""), font(&ui, 11.0), TextColor(Color::srgb(0.9, 0.95, 1.0)), ChildOf(panel)));
+    commands.spawn((UnitPanelDesc, Text::new(""), font(&ui, 11.0), TextColor(Color::srgb(0.9, 0.95, 1.0)), ChildOf(panel)));
+    commands.spawn((UnitPanelStats, Text::new(""), font(&ui, 11.0), TextColor(Color::srgb(0.3, 1.0, 0.4)), ChildOf(panel)));
+
+    // Hardpoint tooltip ("Quad Turbo Laser Battery - 120 DMG - 100%"), follows the cursor.
     let mut tip = commands.spawn((
         TacticalHud,
-        UnitTooltip,
-        Name::new("unit tooltip"),
+        HardpointTip,
+        Name::new("hardpoint tip"),
         Text::new(""),
         font(&ui, 11.0),
-        TextColor(Color::srgb(0.9, 0.95, 1.0)),
+        TextColor(Color::srgb(0.9, 1.0, 0.95)),
         Node {
             position_type: PositionType::Absolute,
             display: Display::None,
-            padding: UiRect::axes(Val::Px(6.0), Val::Px(4.0)),
+            padding: UiRect::axes(Val::Px(6.0), Val::Px(3.0)),
             border: UiRect::all(Val::Px(1.0)),
             ..default()
         },
-        BackgroundColor(Color::srgba(0.03, 0.08, 0.14, 0.9)),
-        BorderColor::all(Color::srgb(0.27, 0.6, 0.85)),
+        BackgroundColor(Color::srgba(0.03, 0.12, 0.14, 0.92)),
+        BorderColor::all(Color::srgb(0.3, 0.85, 0.95)),
         GlobalZIndex(80),
         bevy::ui::FocusPolicy::Pass,
     ));
@@ -237,8 +285,8 @@ pub fn spawn_hud(
     target(&mut row);
 }
 
-/// Name, hull and shield of the ship under the cursor.
-#[allow(clippy::too_many_arguments)]
+/// The unit panel (icon, name, class, description, hull and shield) for the ship under the cursor and the hardpoint tooltip for a reticle.
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub(crate) fn unit_tooltip(
     time: Res<Time>,
     hover: Res<crate::control::Hover>,
@@ -247,11 +295,23 @@ pub(crate) fn unit_tooltip(
     rt: Res<BattleRuntime>,
     ships: Res<RenderedShips>,
     assets: Option<Res<EawUiAssets>>,
+    textures: Option<ResMut<UiTextures>>,
+    mut images: ResMut<Assets<Image>>,
     scale: Res<UiScale>,
+    overlays: Res<eaw_ui::TacticalOverlays>,
     mut state: ResMut<HudState>,
-    mut tip: Query<(&mut Node, &mut Text), With<UnitTooltip>>,
+    mut panel: Query<&mut Node, (With<UnitPanel>, Without<HardpointTip>)>,
+    mut tip: Query<(&mut Node, &mut Text), (With<HardpointTip>, Without<UnitPanel>)>,
+    mut parts: ParamSet<(
+        Query<&mut ImageNode, With<UnitPanelIcon>>,
+        Query<&mut Text, (With<UnitPanelName>, Without<HardpointTip>)>,
+        Query<&mut Text, (With<UnitPanelClass>, Without<HardpointTip>)>,
+        Query<&mut Text, (With<UnitPanelDesc>, Without<HardpointTip>)>,
+        Query<&mut Text, (With<UnitPanelStats>, Without<HardpointTip>)>,
+    )>,
+    mut bubble: Query<&mut Visibility, With<AdvisorBubble>>,
 ) {
-    let Ok((mut node, mut text)) = tip.single_mut() else { return };
+    let (Ok(mut panel), Ok((mut tip_node, mut tip_text))) = (panel.single_mut(), tip.single_mut()) else { return };
     let now = time.elapsed_secs();
     let hovered = hover.ship.filter(|_| !block.0);
     match (hovered, state.hover_since) {
@@ -259,28 +319,119 @@ pub(crate) fn unit_tooltip(
         (Some(id), _) => state.hover_since = Some((id, now)),
         (None, _) => state.hover_since = None,
     }
+    let Some(cursor) = pointer.cursor else {
+        if panel.display != Display::None {
+            panel.display = Display::None;
+        }
+        if tip_node.display != Display::None {
+            tip_node.display = Display::None;
+        }
+        return;
+    };
+    let game = assets.as_ref().and_then(|a| a.game.clone());
+
+    // A hardpoint reticle under the cursor wins.
+    let near = overlays
+        .hardpoints
+        .iter()
+        .map(|h| (h, h.screen_pos.distance(cursor)))
+        .filter(|(_, d)| *d < 16.0 * scale.0)
+        .min_by(|a, b| a.1.total_cmp(&b.1));
+    if let (Some((marker, _)), false) = (near, block.0) {
+        let parsed = marker.id.split_once(':').and_then(|(a, b)| Some((a.parse::<u32>().ok()?, b.parse::<usize>().ok()?)));
+        if let Some((sid, hp)) = parsed
+            && let Some(s) = ships.0.get(&sid)
+            && let Some(hdef) = rt.catalog.ship(s.def).hardpoints.get(hp)
+        {
+            let name = game
+                .as_ref()
+                .and_then(|g| g.objects.resolve(&hdef.name).and_then(|r| r.get("text_id").map(str::to_string)))
+                .and_then(|k| assets.as_ref().and_then(|a| a.text.get(k.trim()).map(str::to_string)))
+                .unwrap_or_else(|| hdef.name.replace('_', " "));
+            let dmg = hdef.projectile.and_then(|p| rt.catalog.projectiles.get(p as usize)).map(|p| p.damage);
+            let mut msg = name;
+            if let Some(d) = dmg {
+                msg.push_str(&format!(" - {d:.0} DMG"));
+            }
+            msg.push_str(&format!(" - {:.0}%", marker.health * 100.0));
+            if tip_text.0 != msg {
+                tip_text.0 = msg;
+            }
+            tip_node.display = Display::Flex;
+            tip_node.left = Val::Px((cursor.x + 16.0) / scale.0);
+            tip_node.top = Val::Px((cursor.y + 18.0) / scale.0);
+            if panel.display != Display::None {
+                panel.display = Display::None;
+            }
+            return;
+        }
+    }
+    if tip_node.display != Display::None {
+        tip_node.display = Display::None;
+    }
+
     let show = state.hover_since.filter(|(_, at)| now - at >= TOOLTIP_DELAY);
-    let (Some((id, _)), Some(cursor), Some(s)) = (show, pointer.cursor, show.and_then(|(id, _)| ships.0.get(&id))) else {
-        if node.display != Display::None {
-            node.display = Display::None;
+    let Some(s) = show.and_then(|(id, _)| ships.0.get(&id)) else {
+        if panel.display != Display::None {
+            panel.display = Display::None;
+        }
+        for mut v in &mut bubble {
+            if *v == Visibility::Hidden {
+                *v = Visibility::Inherited;
+            }
         }
         return;
     };
     let def = rt.catalog.ship(s.def);
-    let name = def.text_id.as_deref().and_then(|k| assets.as_ref().and_then(|a| a.text.get(k))).filter(|t| !t.is_empty()).unwrap_or(&def.name);
-    let mut msg = format!("{name}
-Hull {:.0} / {:.0}", s.hull * def.hull, def.hull);
+    let text = |key: &str| assets.as_ref().and_then(|a| a.text.get(key)).filter(|t| !t.is_empty()).map(str::to_string);
+    let obj = game.as_ref().and_then(|g| g.objects.resolve(&def.name));
+    let name = def.text_id.as_deref().and_then(text).unwrap_or_else(|| def.name.replace('_', " "));
+    let class = obj
+        .as_ref()
+        .and_then(|r| r.get("encyclopedia_unit_class"))
+        .and_then(|k| text(k.trim()))
+        .map(|c| format!("Class: {c}"))
+        .unwrap_or_default();
+    let desc = obj
+        .as_ref()
+        .and_then(|r| r.get("encyclopedia_text"))
+        .and_then(|v| v.split_whitespace().next().and_then(text))
+        .unwrap_or_default();
+    let mut stats = format!("Hull {:.0} / {:.0}", s.hull * def.hull, def.hull);
     if def.shield > 0.0 {
-        msg.push_str(&format!("
-Shield {:.0} / {:.0}", s.shield * def.shield, def.shield));
+        stats.push_str(&format!("   Shield {:.0} / {:.0}", s.shield * def.shield, def.shield));
     }
-    let _ = id;
-    if text.0 != msg {
-        text.0 = msg;
+    if let Ok(mut t) = parts.p1().single_mut()
+        && t.0 != name.to_uppercase()
+    {
+        t.0 = name.to_uppercase();
     }
-    node.display = Display::Flex;
-    node.left = Val::Px((cursor.x + 16.0) / scale.0);
-    node.top = Val::Px((cursor.y + 18.0) / scale.0);
+    if let Ok(mut t) = parts.p2().single_mut()
+        && t.0 != class
+    {
+        t.0 = class;
+    }
+    if let Ok(mut t) = parts.p3().single_mut()
+        && t.0 != desc
+    {
+        t.0 = desc;
+    }
+    if let Ok(mut t) = parts.p4().single_mut()
+        && t.0 != stats
+    {
+        t.0 = stats;
+    }
+    if let (Some(g), Some(mut tex)) = (game.as_ref(), textures)
+        && let Some(icon) = eaw_ui::unit_icon(g, &def.name)
+        && let Some(t) = tex.get(&mut images, &icon)
+        && let Ok(mut img) = parts.p0().single_mut()
+    {
+        img.image = t.handle;
+    }
+    panel.display = Display::Flex;
+    for mut v in &mut bubble {
+        *v = Visibility::Hidden;
+    }
 }
 
 /// Shows the hints one after the other.
@@ -344,6 +495,8 @@ pub(crate) fn heroes(
     time: Res<Time>,
     mut focus: MessageWriter<FocusCamera>,
     mut selection: ResMut<Selection>,
+    ui: Res<EawUiSettings>,
+    old_billboards: Query<Entity, With<HeroBillboard>>,
 ) {
     let (Some(assets), Some(mut textures), Ok((row, kids))) = (assets, textures, row.single()) else { return };
     let Some(game) = assets.game.clone() else { return };
@@ -362,6 +515,9 @@ pub(crate) fn heroes(
         for k in kids.into_iter().flatten() {
             commands.entity(*k).try_despawn();
         }
+        for e in &old_billboards {
+            commands.entity(e).try_despawn();
+        }
         for (id, name) in &now {
             let icon = unit_icon(&game, name).and_then(|n| textures.get(&mut images, &n)).map(|t| t.handle);
             let portrait = commands
@@ -376,11 +532,32 @@ pub(crate) fn heroes(
                         border_radius: BorderRadius::MAX,
                         ..default()
                     },
-                    BorderColor::all(Color::srgb(0.3, 0.9, 0.4)),
+                    BorderColor::all(Color::srgb(0.95, 0.6, 0.3)),
                     BackgroundColor(Color::srgba(0.0, 0.05, 0.1, 0.8)),
                     ChildOf(row),
                 ))
                 .id();
+            if let Some(h) = icon.clone() {
+                let mut b = commands.spawn((
+                    TacticalHud,
+                    HeroBillboard(*id),
+                    Node {
+                        position_type: PositionType::Absolute,
+                        width: Val::Px(24.0),
+                        height: Val::Px(24.0),
+                        border: UiRect::all(Val::Px(1.0)),
+                        display: Display::None,
+                        ..default()
+                    },
+                    ImageNode::new(h),
+                    BorderColor::all(Color::srgb(0.85, 0.95, 0.9)),
+                    GlobalZIndex(40),
+                    bevy::ui::FocusPolicy::Pass,
+                ));
+                if let Some(cam) = ui.camera {
+                    b.insert(UiTargetCamera(cam));
+                }
+            }
             if let Some(h) = icon {
                 commands.spawn((
                     Node { width: Val::Percent(100.0), height: Val::Percent(100.0), border_radius: BorderRadius::MAX, ..default() },
@@ -408,7 +585,7 @@ pub(crate) fn heroes(
     let t = time.elapsed_secs();
     for (p, interaction, mut border) in &mut portraits {
         let selected = selection.ships.contains(&p.0);
-        *border = BorderColor::all(if selected { Color::srgb(1.0, 0.6, 0.25) } else { Color::srgb(0.3, 0.9, 0.4) });
+        *border = BorderColor::all(if selected { Color::WHITE } else { Color::srgb(0.95, 0.6, 0.3) });
         if *interaction == Interaction::Pressed {
             let double = state.last_click.is_some_and(|(id, at)| id == p.0 && t - at < 0.4);
             selection.ships = vec![p.0];
@@ -432,6 +609,28 @@ pub(crate) fn objectives_visibility(state: Res<HudState>, mut boxes: Query<&mut 
         let want = if state.objectives { Display::Flex } else { Display::None };
         if n.display != want {
             n.display = want;
+        }
+    }
+}
+
+/// Keeps the hero faces next to their ships.
+pub(crate) fn hero_billboards(
+    ships: Res<RenderedShips>,
+    scale: Res<UiScale>,
+    camera: Single<(&Camera, &GlobalTransform), With<crate::camera::BattleCamera>>,
+    mut boards: Query<(&HeroBillboard, &mut Node)>,
+) {
+    let (cam, gt) = *camera;
+    let vp = cam.logical_viewport_size().unwrap_or(Vec2::new(1920.0, 1080.0));
+    for (b, mut node) in &mut boards {
+        let shown = ships.0.get(&b.0).and_then(|s| cam.world_to_viewport(gt, s.pos + Vec3::Y * s.radius * 0.5).ok()).filter(|p| p.x > 0.0 && p.y > 0.0 && p.x < vp.x && p.y < vp.y);
+        match shown {
+            Some(p) => {
+                node.display = Display::Flex;
+                node.left = Val::Px((p.x + 10.0 * scale.0) / scale.0);
+                node.top = Val::Px((p.y - 30.0 * scale.0) / scale.0);
+            }
+            None => node.display = Display::None,
         }
     }
 }
