@@ -151,3 +151,10 @@ Source: `XML/AI/GoalFunctions/Remake_SpaceCombat.xml`, `PerceptualEquations/Rema
   attack-move sets (off by default, see section 4), squadron launch and replacement from carriers/stations (section 3), defenders guarding their station, attackers attack-moving.
 * **Not implemented:** Flank/Escort/Bombing-run goals as separate behaviours (bombers use their priority sets), AI-called reinforcements (`Command::Reinforce` needs a reinforcement pool
   from the galaxy), the Death Star, stealth/cloak (`Try_Ability STEALTH`), and formation keeping for capital ships.
+
+### 9b. Bombing runs, intercept, formations (new; all numbers are estimates, the data has no AI values for them)
+* **Bombing run:** a `Bomber` that reaches a frigate-or-larger target (ships and stations) flies straight on for 3-5 s (turn at most +-0.15 rad/s) before turning back for the next pass; against small targets and for fighters the old 1-2.5 s random break-away stays. Test: a bomber makes repeated passes on a static capital.
+* **Intercept:** a `Fighter` with a carrier prefers (weight x0.3 within its priority set) enemy bombers that come within 3500 units of that carrier. **Escort** is the existing carrier/squadron-leader following; bombers get no extra escort behaviour. The intercept rule has no dedicated test.
+* **Formations:** each fleet unit remembers its lateral position in the start line (`Ship::lane`, +-1500 max). Under attack-move orders, while the enemy is more than 2500 units away, the aim point is shifted sideways by that lane, so the fleet advances line abreast; broadside arcs still come from the bearing logic (section 4). While no enemy is within twice the weapon range a big ship does not outrun slower friendly big ships within 2500 units (cohesion, never below 40% of its own speed).
+  Test: 3 fast + 3 slow frigates are 25 units apart in depth after 25 s (2450 without cohesion) and still 1400 units wide.
+* **Ability rules** (section 9) now have a unit test (`ai_uses_speed_shield_and_damage_abilities_by_their_numbers`).

@@ -30,3 +30,4 @@ Deterministic, rayon-parallel space-battle simulation (fixed dt 1/30). Rules and
 - Tests `tests/tactical_ai.rs` (real data): outgunned AI retreats (and does not when forbidden), even fights are fought out, no ship stacking, real-map duels are decided and deterministic (threads included),
   defenders with a station do not flee. The ability rules have no dedicated test.
 - Known gaps: strength estimate for the retreat rule is ours; retreat orders at age 120 s often come too late to save slow ships; AI never calls reinforcements; no flank/escort goals.
+- Added bombing runs, fighter intercept near carriers, line-abreast advance with cohesion and a test for the ability rules (RULES.md 9b). Intercept is untested; flank/escort goals, AI reinforcements and stealth remain open.

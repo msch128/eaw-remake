@@ -463,6 +463,8 @@ pub struct Ship {
     pub phase: f32,
     /// Fighter break-away heading change.
     pub phase_turn: f32,
+    /// Sideways position in the fleet line (battle units, from the fleet axis); under attack-move orders the ship keeps this offset so the fleet advances line abreast.
+    pub lane: f32,
     /// Nearby enemies sorted by priority and distance.
     pub candidates: Vec<u32>,
     pub(crate) scan_in: f32,

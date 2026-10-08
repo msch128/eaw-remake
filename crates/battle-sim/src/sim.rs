@@ -313,6 +313,7 @@ impl Battle {
                     self.pop_used[side as usize] += def.population;
                 } else {
                     let id = self.spawn_ship(sid, side, pos, yaw, group, NONE, Vec3::ZERO);
+                    self.ships[id as usize].lane = local.y.clamp(-1500.0, 1500.0);
                     self.apply_start_health(id, side, tag, sid);
                     self.groups[group as usize].members.push(id);
                     self.ships[id as usize].order = if def.is_static { Order::Idle } else { order };
@@ -376,6 +377,7 @@ impl Battle {
             engine_factor: 1.0,
             phase: 0.0,
             phase_turn: 0.0,
+            lane: 0.0,
             candidates: Vec::new(),
             scan_in: rng.range(0.0, self.config.retarget_interval),
         });
@@ -1229,6 +1231,8 @@ fn scan(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig) {
             }
             None => f32::from(target_priority(me.class, t.class)),
         };
+        // Intercept: fighters near their carrier go for enemy bombers that come within 3500 units of it (estimate; the priority sets already rank bombers).
+        let weight = if me.class == TargetClass::Fighter && t.class == TargetClass::Bomber && s.carrier != NONE && snaps[s.carrier as usize].alive && snaps[s.carrier as usize].pos.dist(t.pos) < 3500.0 { weight * 0.3 } else { weight };
         // Finish off weak ships in reach first (AotR_Focus_Weak_Unit: health below 0.33; the factor 0.5 on the weight is an estimate).
         let weight = if t.health < 0.33 && !matches!(t.class, TargetClass::Fighter | TargetClass::Bomber) && d <= def.max_weapon_range * 1.1 { weight * 0.5 } else { weight };
         found.push((weight, d, i as u32));
@@ -1312,8 +1316,14 @@ fn mov(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, spawn: &
                 if s.phase > 0.0 {
                     Goal::Free(s.yaw + s.phase_turn * dt)
                 } else if d < 70.0 + t.radius * 0.5 {
-                    s.phase = rng.range(1.0, 2.5);
-                    s.phase_turn = rng.range(-0.8, 0.8);
+                    if def.class == TargetClass::Bomber && (t.class as u8 >= TargetClass::Frigate as u8) {
+                        // Bombing run: fly through, then straight away for a few seconds before the next pass (estimate: 3-5 s, almost no turn).
+                        s.phase = rng.range(3.0, 5.0);
+                        s.phase_turn = rng.range(-0.15, 0.15);
+                    } else {
+                        s.phase = rng.range(1.0, 2.5);
+                        s.phase_turn = rng.range(-0.8, 0.8);
+                    }
                     Goal::Free(s.yaw)
                 } else {
                     Goal::Point(t.pos, 0.0)
@@ -1321,14 +1331,29 @@ fn mov(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, spawn: &
             } else {
                 let stand = if def.preferred_range > 0.0 { def.preferred_range * cfg.engage_range_scale + t.radius * 0.5 } else { 0.0 };
                 if d > stand * 1.05 {
-                    Goal::Point(t.pos, stand)
+                    // Line abreast while the enemy is still far away (attack-move only).
+                    let mut q = t.pos;
+                    if s.lane != 0.0 && matches!(s.order, Order::AttackMove(_)) && d > 2500.0 {
+                        let to = t.pos - s.pos;
+                        q = t.pos + Vec3::new(-to.y, to.x, 0.0) * (s.lane / d);
+                    }
+                    Goal::Point(q, stand)
                 } else {
                     face = Some(t.pos);
                     Goal::Hold
                 }
             }
         }
-        Order::AttackMove(p) => Goal::Point(p, def.radius.max(100.0)),
+        Order::AttackMove(p) => {
+            // Advance line abreast: keep the lane offset perpendicular to the line of advance until close to the goal.
+            let mut q = p;
+            let to = p - s.pos;
+            let dist = to.len();
+            if s.lane != 0.0 && !fighter && dist > 2500.0 {
+                q = p + Vec3::new(-to.y, to.x, 0.0) * (s.lane / dist);
+            }
+            Goal::Point(q, def.radius.max(100.0))
+        }
         Order::Guard(p) => {
             if let Some(t) = target
                 && t.pos.dist(s.pos) < def.max_weapon_range * 1.1
@@ -1355,6 +1380,17 @@ fn mov(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, spawn: &
         }
     };
 
+    // Cohesion: while advancing without a target a big ship does not outrun the slower ones around it (within 2500 units).
+    let max_speed = if target.is_none_or(|t| t.pos.dist(s.pos) > (def.max_weapon_range * 2.0).max(1500.0)) && matches!(s.order, Order::AttackMove(_)) && !fighter {
+        let me = snaps[s.id as usize];
+        big.iter()
+            .filter(|&&j| j != s.id && snaps[j as usize].side == s.side && snaps[j as usize].pos.dist(me.pos) < 2500.0)
+            .map(|&j| cat.ship(snaps[j as usize].def).max_speed)
+            .fold(max_speed, f32::min)
+            .max(max_speed * 0.4)
+    } else {
+        max_speed
+    };
     match goal {
         Goal::Free(yaw) => {
             let rate = def.turn_rate;

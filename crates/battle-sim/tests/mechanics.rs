@@ -219,3 +219,115 @@ fn carriers_launch_and_replace_squadrons() {
     assert_eq!(b.ships.iter().filter(|s| s.def == 0).count(), 4);
 }
 
+
+fn mobile(name: &str, class: TargetClass, speed: f32, hull: f32, hps: Vec<HpDef>) -> ShipDef {
+    ShipDef { class, is_static: false, max_speed: speed, accel: speed, turn_rate: 1.5, max_weapon_range: 500.0, targeting_range: 600.0, preferred_range: 300.0, ..ship(name, hull, 0.0, hps) }
+}
+
+fn one_side(cat: &Arc<Catalog>, name: &str, count: u32, ai: bool) -> SideSetup {
+    SideSetup { name: name.into(), units: vec![UnitSetup { ship: cat.ship_id(name).unwrap(), count, tag: 1 }], structures: vec![], ai }
+}
+
+fn activated(b: &mut Battle, steps: usize, ship: u32) -> bool {
+    for _ in 0..steps {
+        if b.step().iter().any(|e| matches!(e, Event::AbilityActivated { ship: s, .. } if *s == ship)) {
+            return true;
+        }
+    }
+    false
+}
+
+#[test]
+fn ai_uses_speed_shield_and_damage_abilities_by_their_numbers() {
+    let speed = AbilityDef { kind: "SPRINT".into(), speed_mult: 2.0, recharge: 20.0, duration: 6.0, ..AbilityDef::default() };
+    let regen = AbilityDef { kind: "SHIELD_BOOST".into(), shield_regen_mult: 3.0, recharge: 20.0, duration: 6.0, ..AbilityDef::default() };
+    let tough = AbilityDef { kind: "BRACE".into(), take_damage_mult: 0.5, recharge: 20.0, duration: 6.0, ..AbilityDef::default() };
+    let mut runner = mobile("runner", TargetClass::Frigate, 100.0, 5000.0, vec![]);
+    runner.abilities = vec![speed];
+    let mut shielded = mobile("shielded", TargetClass::Frigate, 100.0, 50000.0, vec![]);
+    shielded.shield = 3000.0;
+    shielded.shield_regen = 10.0;
+    shielded.abilities = vec![regen];
+    let mut brace = mobile("brace", TargetClass::Frigate, 100.0, 4000.0, vec![]);
+    brace.abilities = vec![tough];
+    let mut gunner = mobile("gunner", TargetClass::Frigate, 100.0, 1.0e7, vec![gun("g", 0.0)]);
+    gunner.is_static = true;
+    let cat = Arc::new(Catalog::from_defs(vec![runner, shielded, brace, gunner], vec![laser()]));
+    let config = BattleConfig { half_size: 6000.0, retreat_countdown: 0.0, ..BattleConfig::default() };
+
+    // 1. Speed: a retreating ship sprints.
+    let mut b = Battle::new(BattleSetup { catalog: cat.clone(), sides: vec![one_side(&cat, "runner", 1, true), one_side(&cat, "gunner", 1, true)], config: config.clone() });
+    b.command(0, Command::Retreat).expect("retreat");
+    assert!(activated(&mut b, 150, 0), "a fleeing ship uses its speed ability");
+
+    // 2. Shield regeneration: when the shield is below half and under fire; 3. damage reduction: when the hull is low and under fire.
+    for (name, hp_ok) in [("shielded", true), ("brace", true)] {
+        let mut b = Battle::new(BattleSetup { catalog: cat.clone(), sides: vec![one_side(&cat, name, 1, true), one_side(&cat, "gunner", 1, true)], config: config.clone() });
+        let mut used = false;
+        let mut first_use_state = None;
+        for _ in 0..30 * 40 {
+            if b.step().iter().any(|e| matches!(e, Event::AbilityActivated { ship: 0, .. })) {
+                used = true;
+                first_use_state = Some((b.ships[0].hull, b.ships[0].shield));
+                break;
+            }
+            if b.is_over() {
+                break;
+            }
+        }
+        assert!(used && hp_ok, "{name}: the ability should be used under fire");
+        let (hull, shield) = first_use_state.unwrap();
+        match name {
+            "shielded" => assert!(shield < 1500.0, "regen ability only with a weak shield (shield {shield})"),
+            _ => assert!(hull < 0.6 * 4000.0, "damage reduction only with a low hull (hull {hull})"),
+        }
+    }
+}
+
+#[test]
+fn fleets_advance_line_abreast_and_stay_together() {
+    let fast = mobile("fast", TargetClass::Frigate, 200.0, 5000.0, vec![]);
+    let slow = mobile("slow", TargetClass::Frigate, 100.0, 5000.0, vec![]);
+    let target = ship("dummy", 1.0e7, 0.0, vec![]);
+    let cat = Arc::new(Catalog::from_defs(vec![fast, slow, target], vec![laser()]));
+    let side0 = SideSetup { name: "a".into(), units: vec![UnitSetup { ship: 0, count: 3, tag: 1 }, UnitSetup { ship: 1, count: 3, tag: 1 }], structures: vec![], ai: true };
+    let mut b = Battle::new(BattleSetup { catalog: cat.clone(), sides: vec![side0, one_side(&cat, "dummy", 1, true)], config: BattleConfig { half_size: 20000.0, record_events: false, ..BattleConfig::default() } });
+    for _ in 0..30 * 25 {
+        b.step();
+    }
+    let mine: Vec<_> = b.ships.iter().filter(|s| s.side == 0).collect();
+    let (min_x, max_x) = mine.iter().fold((f32::MAX, f32::MIN), |a, s| (a.0.min(s.pos.x), a.1.max(s.pos.x)));
+    let (min_y, max_y) = mine.iter().fold((f32::MAX, f32::MIN), |a, s| (a.0.min(s.pos.y), a.1.max(s.pos.y)));
+    println!("after 25 s: depth spread {:.0}, lateral spread {:.0}", max_x - min_x, max_y - min_y);
+    // Without cohesion the 200 u/s ships would be 2500 units ahead of the 100 u/s ones.
+    assert!(max_x - min_x < 900.0, "ships keep together: depth spread {}", max_x - min_x);
+    assert!(max_y - min_y > 300.0, "the line stays spread out: lateral spread {}", max_y - min_y);
+}
+
+#[test]
+fn bombers_make_straight_bombing_runs_on_big_ships() {
+    let bomber = mobile("bomber", TargetClass::Bomber, 400.0, 100.0, vec![]);
+    let target = ship("capital", 1.0e7, 0.0, vec![]);
+    let cat = Arc::new(Catalog::from_defs(vec![bomber, target], vec![laser()]));
+    let mut b = Battle::new(BattleSetup { catalog: cat.clone(), sides: vec![one_side(&cat, "bomber", 1, true), one_side(&cat, "capital", 1, true)], config: BattleConfig { half_size: 12000.0, record_events: false, ..BattleConfig::default() } });
+    let tpos = b.ships[1].pos;
+    let (mut passes, mut max_after_pass, mut near) = (0, 0.0f32, false);
+    for _ in 0..30 * 60 {
+        b.step();
+        let d = b.ships[0].pos.dist(tpos);
+        if d < 120.0 {
+            if !near {
+                passes += 1;
+            }
+            near = true;
+            max_after_pass = 0.0;
+        } else if near {
+            max_after_pass = max_after_pass.max(d);
+            if d > 1000.0 {
+                near = false;
+            }
+        }
+    }
+    println!("bomber passes in 60 s: {passes}");
+    assert!(passes >= 2, "the bomber comes back for more passes: {passes}");
+}
