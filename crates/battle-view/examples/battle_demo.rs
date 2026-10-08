@@ -269,6 +269,7 @@ fn capture_driver(
     mut pointer: ResMut<Pointer>,
     hover: Res<Hover>,
     cam: Option<Single<(&mut BattleCamera, &Camera, &GlobalTransform)>>,
+    mesh_entities: Query<&ViewVisibility, With<Mesh3d>>,
 ) {
     let now = Instant::now();
     let dt = now.duration_since(cap.last).as_secs_f64() * 1000.0;
@@ -361,8 +362,10 @@ fn capture_driver(
         cap.pending += 1;
         cap.skip = 4;
         println!(
-            "capture t={:.1}s tick {} alive {:?} step {:.2} ms; {} particles in {} batches ({:.2} ms cpu)",
-            status.time, status.tick, status.alive, status.step_ms, stats.live, stats.batches, stats.cpu_ms
+            "capture t={:.1}s tick {} alive {:?} step {:.2} ms; {} particles in {} batches ({:.2} ms cpu); {} mesh entities, {} visible",
+            status.time, status.tick, status.alive, status.step_ms, stats.live, stats.batches, stats.cpu_ms,
+            mesh_entities.iter().count(),
+            mesh_entities.iter().filter(|v| v.get()).count()
         );
         commands
             .spawn(Screenshot::image(cap.target.clone()))

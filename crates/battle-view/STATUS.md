@@ -115,3 +115,10 @@ Add `battle-view`, `galaxy-sim` (already there through galaxy-play) and `eaw-ui`
 - `battle_demo` now prints sim step statistics (`sim step over N ticks`). 4K, ~290 ships, three runs: step mean 0.44-0.59 ms, p50 0.38-0.41, p99 1.1-1.9; one outlier of ~40 ms in two of the
   runs (coincides with the screenshot readback). `battle_bench` (headless, 1254 ships incl. fighters): 0.45 ms/step parallel, 1.73 ms sequential. The wall frame mean is 7.7-8.2 ms, so the render
   thread (main-thread systems, extraction, draw submission), not the sim, is the CPU cost; the GPU is ~1.8 ms (see GPU profiling). Next candidate: a Chrome trace of the render-side systems.
+
+## Render-side CPU trace (4K, ~290 ships, steady state after the first 8 s)
+- Chrome trace (`--features profile`, `TRACE_CHROME=...`, ~2.5 GB for 30 s; aggregate with grep + awk on the `system: name=` spans) with tracing overhead, per frame: render world `run_render_schedule` 8.4 ms
+  (`render_system` 3.6, of which `camera_driver` 2.7 but its passes only ~0.6; `write_binned_instance_buffers` 1.1; `allocate_and_free_meshes` 1.0 (our per-frame particle/bolt batch meshes); `submit_pending_command_buffers` 0.8;
+  `prepare_preprocess_bind_groups` 0.7). Main world is small: `propagate_parent_transforms` 0.29, `simulate_particles` 0.22, `animate_models` 0.16, `update_particle_batches` 0.15, `update_ships` 0.13, everything else < 0.12 ms.
+- Scene scaling: `battle_demo --small` (1214 mesh entities, ~650 visible) 7.3 ms vs 8.4 ms for the full battle (2728 entities, ~850-1150 visible): the 290 ships add only ~1 ms; ~6.5 ms is a floor of the offscreen
+  harness (1 ms `ScheduleRunnerPlugin` wait, Bevy render-graph/submit overhead, MSAA/HDR 4K target) that does not scale with resolution (960x540 is not faster). No game-side hotspot to optimize; the windowed app does not have the 1 ms wait.
