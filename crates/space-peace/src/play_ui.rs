@@ -1666,10 +1666,10 @@ fn spawn_planet_panel(mut commands: Commands, existing: Query<(), With<PlanetPan
             Node {
                 position_type: PositionType::Absolute,
                 left: Val::Px(20.0),
-                top: Val::Px(140.0),
+                top: Val::Percent(13.5),
                 width: Val::Px(420.0),
                 min_height: Val::Px(150.0),
-                max_height: Val::Px(440.0),
+                max_height: Val::Percent(46.0),
                 padding: UiRect::all(Val::Px(8.0)),
                 border: UiRect::all(Val::Px(1.5)),
                 flex_direction: FlexDirection::Column,
@@ -1684,10 +1684,10 @@ fn spawn_planet_panel(mut commands: Commands, existing: Query<(), With<PlanetPan
         .with_children(|p| {
             p.spawn(Node { align_items: AlignItems::Center, column_gap: Val::Px(8.0), margin: UiRect::bottom(Val::Px(8.0)), ..default() }).with_children(|r| {
                 r.spawn((ImageNode::default().with_color(Color::NONE), Node { width: Val::Px(18.0), height: Val::Px(18.0), ..default() }, PanelEmblem));
-                r.spawn((Text::new(""), font(13.0), TextColor(Color::srgb(0.9, 0.95, 1.0)), bevy::text::LetterSpacing::Rem(0.12), Node { flex_grow: 1.0, ..default() }, PlanetPanelText::Title));
+                r.spawn((Text::new(""), font(13.0), TextColor(Color::srgb(0.9, 0.95, 1.0)), bevy::text::LetterSpacing::Rem(0.12), Node { flex_grow: 1.0, justify_content: JustifyContent::Center, ..default() }, TextLayout::justify(Justify::Center), PlanetPanelText::Title));
                 r.spawn((Text::new(""), font(12.0), TextColor(Color::srgb(0.3, 1.0, 0.4)), PlanetPanelText::Income));
             });
-            p.spawn((Text::new(""), font(11.5), TextColor(Color::srgb(0.93, 0.96, 0.98)), PlanetPanelText::Body));
+            p.spawn((Text::new(""), font(11.0), TextColor(Color::srgb(0.93, 0.96, 0.98)), PlanetPanelText::Body));
             for (row, pip) in pips.iter().enumerate() {
                 p.spawn(Node { column_gap: Val::Px(4.0), margin: UiRect::top(Val::Px(8.0)), ..default() }).with_children(|r| {
                     for index in 0..8 {
@@ -1791,9 +1791,9 @@ fn place_planet_panel(
     let want_left = if in_view { Val::Percent(66.0) } else { Val::Px(20.0) };
     if node.left != want_left {
         node.left = want_left;
-        node.top = if in_view { Val::Percent(34.0) } else { Val::Px(140.0) };
+        node.top = if in_view { Val::Percent(34.0) } else { Val::Percent(13.5) };
         node.width = if in_view { Val::Percent(30.0) } else { Val::Px(420.0) };
-        node.max_height = if in_view { Val::Percent(52.0) } else { Val::Px(440.0) };
+        node.max_height = if in_view { Val::Percent(52.0) } else { Val::Percent(46.0) };
         node.border = if in_view { UiRect::ZERO } else { UiRect::all(Val::Px(1.5)) };
         bg.0 = if in_view { Color::NONE } else { Color::srgba(0.13, 0.27, 0.31, 0.88) };
         **border = if in_view { BorderColor::all(Color::NONE) } else { BorderColor::all(Color::srgb(0.0, 0.76, 0.99)) };

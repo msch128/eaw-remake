@@ -277,10 +277,15 @@ pub fn draw_fleet_markers(
             let linear = team.to_linear();
             let bright = Color::LinearRgba(LinearRgba::new(linear.red * 3.0 + 0.4, linear.green * 3.0 + 0.4, linear.blue * 3.0 + 0.4, 1.0));
             // Chevron markers along the lane behind the ship, as in the original.
-            let side = Vec3::Y.cross(v.heading).normalize_or_zero();
+            // Along the lane (from the hop's start planet to its end), not the ship's own heading.
+            let lane = match &f.location {
+                galaxy_sim::FleetLocation::Moving { from, to, .. } => (layout.positions[*to as usize] - layout.positions[*from as usize]).normalize_or_zero(),
+                _ => v.heading,
+            };
+            let side = Vec3::Y.cross(lane).normalize_or_zero();
             for k in 1..=3 {
-                let tip = base - v.heading * layout.unit * (1.2 + 1.3 * k as f32);
-                let back = tip - v.heading * layout.unit * 0.8;
+                let tip = base - lane * layout.unit * (1.2 + 1.3 * k as f32);
+                let back = tip - lane * layout.unit * 0.8;
                 let w = layout.unit * 0.55;
                 // Filled arrowhead: lines from the tip across the base.
                 for j in 0..=8 {

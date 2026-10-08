@@ -48,7 +48,7 @@ impl Plugin for GalaxyMapPlugin {
                 brightness: 2.0,
                 ..default()
             })
-            .add_systems(Update, (update_pip_colors, scripted_hover.after(update_hover)).run_if(in_state(AppScreen::Galaxy)))
+            .add_systems(Update, (update_pip_colors, place_sector_fill, scripted_hover.after(update_hover)).run_if(in_state(AppScreen::Galaxy)))
             .add_systems(Startup, setup_scene)
             .add_systems(OnEnter(AppScreen::Galaxy), spawn_galaxy)
             .add_systems(
@@ -533,6 +533,16 @@ fn spawn_galaxy(
     if NEBULA_PLANE {
         spawn_nebula_plane(&mut commands, &view, &mut meshes, &mut materials, &mut images);
     }
+    commands.spawn((
+        Name::new("sector fill"),
+        Mesh3d(meshes.add(Circle::new(1.0).mesh().resolution(96))),
+        MeshMaterial3d(materials.add(StandardMaterial { base_color: Color::srgba(0.9, 0.1, 0.1, 0.08), unlit: true, alpha_mode: AlphaMode::Blend, cull_mode: None, depth_bias: -500.0, ..default() })),
+        Transform::from_rotation(Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2)),
+        Visibility::Hidden,
+        bevy::camera::visibility::NoFrustumCulling,
+        SectorFill,
+        GalaxyEntity,
+    ));
     commands.spawn((
         Name::new("selection ring fill"),
         Mesh3d(meshes.add(notch_mesh())),
@@ -1483,5 +1493,29 @@ fn update_pip_colors(view: Res<GalaxyView>, mut pips: Query<(&PipIcon, &mut Imag
 fn scripted_hover(args: Res<crate::cli::Args>, selection: Res<Selection>, mut hover: ResMut<Hover>) {
     if args.hover_selected && hover.0 != selection.0 {
         hover.0 = selection.0;
+    }
+}
+
+/// Translucent red fill over the sector of a selected enemy planet (v0540).
+#[derive(Component)]
+struct SectorFill;
+
+fn place_sector_fill(
+    view: Res<GalaxyView>,
+    radii: Res<PlanetRadii>,
+    selection: Res<Selection>,
+    mut fill: Single<(&mut Transform, &mut Visibility), With<SectorFill>>,
+) {
+    let (tf, vis) = &mut *fill;
+    let enemy = selection.0.filter(|&i| i < view.planets.len()).filter(|&i| view.planets[i].owner.is_some_and(|o| Some(o) != view.player_faction));
+    match enemy {
+        Some(i) => {
+            tf.translation = galaxy_to_world(view.planets[i].position) - Vec3::Y * 0.5;
+            tf.scale = Vec3::splat(radii.0[i] * TERRITORY_RADIUS);
+            vis.set_if_neq(Visibility::Inherited);
+        }
+        None => {
+            vis.set_if_neq(Visibility::Hidden);
+        }
     }
 }
