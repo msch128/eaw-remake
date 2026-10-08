@@ -13,3 +13,6 @@ alamo-data = { path = "../alamo-data" }
 alamo-lua = { path = "../alamo-lua" }
 galaxy-ai = { path = "../galaxy-ai" }
 galaxy-sim = { path = "../galaxy-sim" }
+
+[dev-dependencies]
+battle-sim = { path = "../battle-sim" }

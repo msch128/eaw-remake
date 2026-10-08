@@ -682,7 +682,7 @@ impl World {
             });
         }
         for (i, f) in factions.iter_mut().enumerate() {
-            let def = data.faction(&f.name).expect("faction exists");
+            let Some(def) = data.faction(&f.name) else { continue };
             f.enemies = def
                 .enemies
                 .iter()

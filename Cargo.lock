@@ -2566,6 +2566,7 @@ dependencies = [
  "alamo-data",
  "alamo-fs",
  "alamo-lua",
+ "battle-sim",
  "galaxy-ai",
  "galaxy-sim",
  "serde",
