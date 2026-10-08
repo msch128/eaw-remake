@@ -67,6 +67,7 @@ impl Plugin for PlayGluePlugin {
                 Update,
                 (
                     hold_clock,
+                    select_granted.run_if(resource_exists::<PlayBridge>),
                     sync_destroyed.run_if(resource_exists::<PlayBridge>),
                     galaxy_audio.run_if(resource_exists::<alamo_audio::plugin::AlamoAudio>),
                     via_menu,
@@ -100,6 +101,7 @@ fn begin_play(
     let config = PlayConfig {
         pick_planets: false,
         tactical_hook: true,
+        sim: galaxy_sim::SimConfig { debug_commands: args.grant_unit.is_some(), ..default() },
         // Scripted scenarios start paused and drive time themselves.
         initial_speed_level: if args.weeks.is_some() { 0 } else { 1 },
         difficulty: Some(options.difficulty),
@@ -323,7 +325,7 @@ fn run_script(
         hold.active = true;
         return;
     }
-    let scripted = args.weeks.is_some() || args.build.is_some() || args.move_to.is_some();
+    let scripted = args.weeks.is_some() || args.build.is_some() || args.move_to.is_some() || args.grant_unit.is_some();
     if !scripted {
         if hold.active {
             hold.active = false;
@@ -367,6 +369,10 @@ fn run_script(
                 }
                 return;
             };
+            if let (Some(unit), Some(at)) = (args.grant_unit.as_deref(), args.at.as_deref().and_then(find).and_then(|i| bridge.planet_to_sim[i])) {
+                info!("script: granting {unit} at {}", world.planets[at as usize].display_name);
+                actions.write(PlayAction::DebugGrant { unit_name: unit.to_owned(), planet: at, count: 1 });
+            }
             if let Some(text) = &args.build {
                 let g = state.galaxy();
                 let menu = BuildMenu::for_planet(&world, g, &catalog, h, planet);
@@ -559,5 +565,25 @@ fn sync_destroyed(
     }
     if destroyed.0 != list {
         destroyed.0 = list;
+    }
+}
+
+/// Offscreen `--grant-unit`: once the granted fleet exists it is selected together with its planet.
+fn select_granted(
+    args: Res<Args>,
+    state: Option<Res<SimState>>,
+    player: Res<PlayerFaction>,
+    selection: Res<PlayerSelection>,
+    mut actions: MessageWriter<PlayAction>,
+) {
+    let (Some(unit), Some(state), Some(me)) = (args.grant_unit.as_deref(), state, player.0) else { return };
+    if !selection.fleets.is_empty() || state.current.loading {
+        return;
+    }
+    let Some(uid) = state.world.unit_id(unit) else { return };
+    let found = state.galaxy().fleets.values().find(|f| f.owner == me && f.units.get(&uid).is_some_and(|n| *n > 0) && f.planet().is_some());
+    if let Some(f) = found {
+        actions.write(PlayAction::SelectPlanet(f.planet()));
+        actions.write(PlayAction::SelectFleets(vec![f.id]));
     }
 }

@@ -52,6 +52,12 @@ pub struct Args {
     pub battle_orders: bool,
     /// Offscreen only: reach the map the way a player does, main menu -> campaign list -> campaign (`--via-menu`).
     pub via_menu: bool,
+    /// Offscreen only: grant the player this unit type at `--at` (needs the debug commands; `--grant-unit Death_Star`).
+    pub grant_unit: Option<String>,
+    /// Planet of `--grant-unit`.
+    pub at: Option<String>,
+    /// Offscreen only: press the superweapon button (`ask`) and confirm the dialog (`confirm`).
+    pub fire: Option<String>,
     /// Offscreen only: show this planet as destroyed (`--force-wreck <planet>`).
     pub force_wreck: Option<String>,
     /// Offscreen only: pretend the campaign ended for the player (`--force-end win|lose`).
@@ -107,6 +113,9 @@ impl Default for Args {
             battle_auto: false,
             battle_orders: false,
             via_menu: false,
+            grant_unit: None,
+            at: None,
+            fire: None,
             force_wreck: None,
             force_end: None,
             battle_low_cap: false,
@@ -150,6 +159,8 @@ OPTIONS:
   --battle-choice <c>    Offscreen: click fight or auto in the battle dialog when it opens
   --battle-auto           Offscreen: the AI plays both sides of a tactical battle
   --via-menu            Offscreen: start from the main menu and click through to the campaign
+  --grant-unit <u> --at <p>  Offscreen: give the player a unit at a planet (debug)
+  --fire <ask|confirm>   Offscreen: press the superweapon button / also confirm the dialog
   --force-wreck <planet> Offscreen: draw this planet as a destroyed wreck
   --force-end <win|lose> Offscreen: end the campaign for the player to check the end screen
   --click <names>        Offscreen: click command bar buttons on the map (comma separated)
@@ -219,6 +230,9 @@ impl Args {
                 "--battle-auto" => out.battle_auto = true,
                 "--battle-orders" => out.battle_orders = true,
                 "--via-menu" => out.via_menu = true,
+                "--grant-unit" => out.grant_unit = Some(it.next().ok_or("--grant-unit needs a unit")?),
+                "--at" => out.at = Some(it.next().ok_or("--at needs a planet")?),
+                "--fire" => out.fire = Some(it.next().ok_or("--fire needs ask or confirm")?),
                 "--force-wreck" => out.force_wreck = Some(it.next().ok_or("--force-wreck needs a planet")?),
                 "--force-end" => out.force_end = Some(it.next().ok_or("--force-end needs win or lose")?),
                 "--battle-low-cap" => out.battle_low_cap = true,

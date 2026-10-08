@@ -1183,19 +1183,15 @@ struct SuperweaponLabel;
 struct SuperweaponAsk(Option<(Entity, galaxy_sim::PlanetId)>);
 
 /// Planet the selected fleets can fire at right now (armed fleet in orbit, planet destroyable, weapon ready).
-fn superweapon_target(state: &SimState, player: &PlayerFaction, selection: &PlayerSelection) -> Option<(galaxy_sim::PlanetId, bool)> {
+fn superweapon_target(state: &SimState, player: &PlayerFaction, selection: &PlayerSelection) -> Option<(galaxy_sim::PlanetId, Result<(), galaxy_sim::DestroyRefusal>)> {
     let me = player.0?;
     let g = state.galaxy();
     for id in &selection.fleets {
-        let f = g.fleets.get(id).filter(|f| f.owner == me)?;
-        let p = f.planet()?;
-        let armed = f.units.iter().any(|(&u, &n)| n > 0 && state.world.units[u as usize].planet_destroyer);
-        let ps = &g.planets[p as usize];
-        // Same predicate as the simulation: not yours, not an ally, destroyable, not already destroyed.
-        let foe = ps.owner.is_none_or(|o| o != me && g.hostile(&state.world, me, o));
-        if armed && state.world.planets[p as usize].destroyable && !ps.destroyed && foe {
-            let ready = g.time >= g.factions[me as usize].superweapon_ready_at;
-            return Some((p, ready));
+        let Some(p) = g.fleets.get(id).filter(|f| f.owner == me).and_then(|f| f.planet()) else { continue };
+        match state.world.can_destroy_planet(g, me, *id, p) {
+            Ok(()) => return Some((p, Ok(()))),
+            Err(e @ galaxy_sim::DestroyRefusal::Recharging) => return Some((p, Err(e))),
+            Err(_) => {}
         }
     }
     None
@@ -1213,12 +1209,15 @@ fn superweapon_button(
     ask: Res<SuperweaponAsk>,
     assets: Option<Res<EawUiAssets>>,
     mut dialog: Local<Option<(galaxy_sim::PlanetId, bool)>>,
+    mut auto_frames: Local<u32>,
+    args: Res<crate::cli::Args>,
 ) {
     let target = superweapon_target(&state, &player, &selection);
+    *auto_frames += u32::from(target.is_some());
     match (target, existing.iter().next()) {
-        (Some((p, ready)), None) => {
+        (Some((p, res)), None) => {
             let name = state.world.planets[p as usize].display_name.clone();
-            let text = if ready { format!("Fire superweapon at {name}") } else { "Superweapon recharging".to_owned() };
+            let text = if res.is_ok() { format!("Fire superweapon at {name}") } else { "Superweapon recharging".to_owned() };
             commands
                 .spawn((
                     SuperweaponButton,
@@ -1227,7 +1226,7 @@ fn superweapon_button(
                     GalaxyEntity,
                     Node {
                         position_type: PositionType::Absolute,
-                        bottom: Val::Px(250.0),
+                        bottom: Val::Px(390.0),
                         left: Val::Px(40.0),
                         padding: UiRect::axes(Val::Px(14.0), Val::Px(8.0)),
                         border: UiRect::all(Val::Px(1.0)),
@@ -1239,17 +1238,17 @@ fn superweapon_button(
                 .with_children(|b| {
                     b.spawn((text_bundle(&text, 18.0, Color::WHITE), SuperweaponLabel));
                 });
-            *dialog = Some((p, ready));
+            *dialog = Some((p, res.is_ok()));
         }
-        (Some((p, ready)), Some(_)) => {
+        (Some((p, res)), Some(_)) => {
             let name = state.world.planets[p as usize].display_name.clone();
-            let text = if ready { format!("Fire superweapon at {name}") } else { "Superweapon recharging".to_owned() };
+            let text = if res.is_ok() { format!("Fire superweapon at {name}") } else { "Superweapon recharging".to_owned() };
             for mut t in &mut label {
                 if t.0 != text {
                     t.0 = text.clone();
                 }
             }
-            *dialog = Some((p, ready));
+            *dialog = Some((p, res.is_ok()));
         }
         (None, Some(e)) => {
             commands.entity(e).despawn();
@@ -1257,7 +1256,8 @@ fn superweapon_button(
         }
         (None, None) => {}
     }
-    if interaction.iter().any(|(i, _)| *i == Interaction::Pressed)
+    let scripted_press = args.offscreen.is_some() && args.fire.is_some() && *auto_frames == 60;
+    if (interaction.iter().any(|(i, _)| *i == Interaction::Pressed) || scripted_press)
         && let Some((p, true)) = *dialog
         && ask.0.is_none()
         && assets.is_some()
@@ -1279,7 +1279,26 @@ fn superweapon_button(
     }
 }
 
-fn superweapon_dialog(mut results: MessageReader<EawDialogResult>, mut ask: ResMut<SuperweaponAsk>, mut actions: MessageWriter<PlayAction>) {
+fn superweapon_dialog(
+    mut results: MessageReader<EawDialogResult>,
+    mut ask: ResMut<SuperweaponAsk>,
+    mut actions: MessageWriter<PlayAction>,
+    args: Res<crate::cli::Args>,
+    mut waited: Local<u32>,
+    mut commands: Commands,
+) {
+    // Offscreen `--fire confirm`: press "Fire" in the dialog after a short wait, like a click.
+    if args.offscreen.is_some() && args.fire.as_deref() == Some("confirm") && let Some((e, p)) = ask.0 {
+        *waited += 1;
+        if *waited == 90 {
+            info!("script: clicking `Fire` in the superweapon dialog");
+            actions.write(PlayAction::DestroyPlanet(p));
+            // The simulation reports the destruction with its next step: let time run.
+            actions.write(PlayAction::SetSpeedLevel(1));
+            commands.entity(e).despawn();
+            ask.0 = None;
+        }
+    }
     for r in results.read() {
         let Some((e, p)) = ask.0 else { continue };
         if r.dialog != e {
