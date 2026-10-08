@@ -86,6 +86,32 @@ impl ShipCategory {
     }
 }
 
+/// The fighters a carrier or station launches at one tech level.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct SpawnedUnits {
+    /// The N of `..._Tech_N` (0 to 4).
+    pub tech: u8,
+    /// `Starting_Spawned_Units_Tech_N` as `(squadron/unit, count)`: launched when the battle starts.
+    pub starting: Vec<(String, u32)>,
+    /// `Reserve_Spawned_Units_Tech_N`: replacements for destroyed squadrons.
+    pub reserve: Vec<(String, u32)>,
+}
+
+/// The entry that applies to an owner of tech level `tech`: the highest level at or below it, else the lowest one the object has.
+pub fn spawned_for_tech(list: &[SpawnedUnits], tech: u8) -> Option<&SpawnedUnits> {
+    list.iter().filter(|s| s.tech <= tech).max_by_key(|s| s.tech).or_else(|| list.iter().min_by_key(|s| s.tech))
+}
+
+fn parse_spawned_by_tech(r: &Resolved) -> Vec<SpawnedUnits> {
+    (0..=4u8)
+        .filter_map(|n| {
+            let get = |what: &str| -> Vec<(String, u32)> { r.get_all(&format!("{what}_spawned_units_tech_{n}")).into_iter().filter_map(name_count).collect() };
+            let (starting, reserve) = (get("starting"), get("reserve"));
+            (!starting.is_empty() || !reserve.is_empty()).then_some(SpawnedUnits { tech: n, starting, reserve })
+        })
+        .collect()
+}
+
 /// An entry of `Unit_Abilities_Data` (active ability bar button such as `FULL_SALVO`).
 #[derive(Debug, Clone, Default)]
 pub struct UnitAbility {
@@ -305,6 +331,8 @@ pub struct SpaceUnitDef {
     pub squadron_offsets: Vec<[f32; 3]>,
     /// `Max_Squad_Size`.
     pub max_squad_size: Option<i32>,
+    /// `Starting_Spawned_Units_Tech_N` / `Reserve_Spawned_Units_Tech_N` for every tech level N the object has entries for.
+    pub spawned_by_tech: Vec<SpawnedUnits>,
     /// `Starting_Spawned_Units_Tech_0` as `(squadron/unit, count)`.
     pub starting_spawned_units: Vec<(String, u32)>,
     /// `Reserve_Spawned_Units_Tech_0` as `(squadron/unit, count)`.
@@ -409,6 +437,7 @@ impl SpaceUnitDef {
                 })
                 .collect(),
             max_squad_size: r.num("max_squad_size"),
+            spawned_by_tech: parse_spawned_by_tech(r),
             starting_spawned_units: r
                 .get_all("starting_spawned_units_tech_0")
                 .into_iter()
@@ -718,6 +747,8 @@ pub struct StarBaseDef {
     pub fow_reveal_range: f32,
     /// `Reinforcement_Prevention_Radius`.
     pub reinforcement_prevention_radius: f32,
+    /// `Starting_Spawned_Units_Tech_N` / `Reserve_Spawned_Units_Tech_N` for every tech level N the base has entries for.
+    pub spawned_by_tech: Vec<SpawnedUnits>,
     /// `Starting_Spawned_Units_Tech_0`: fighter garrison at battle start.
     pub starting_spawned_units: Vec<(String, u32)>,
     /// `Reserve_Spawned_Units_Tech_0`: replacement garrison.
@@ -769,6 +800,7 @@ impl StarBaseDef {
             ai_combat_power: f32_or("ai_combat_power"),
             fow_reveal_range: f32_or("space_fow_reveal_range"),
             reinforcement_prevention_radius: f32_or("reinforcement_prevention_radius"),
+            spawned_by_tech: parse_spawned_by_tech(r),
             starting_spawned_units: r
                 .get_all("starting_spawned_units_tech_0")
                 .into_iter()

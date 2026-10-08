@@ -788,3 +788,79 @@ fn autocast_lets_a_player_ship_use_an_ability_like_the_ai() {
     let id = b.ships.iter().find(|s| s.side == 0).unwrap().id;
     assert!(b.command(0, Command::SetAutocast { ship: id, ability: 1, on: true }).is_err());
 }
+
+fn hangar_defs() -> (ShipDef, ShipDef) {
+    let mut fighter = ship("fighter", 20.0, 0.0, vec![]);
+    fighter.class = TargetClass::Fighter;
+    fighter.is_static = false;
+    fighter.max_speed = 100.0;
+    fighter.accel = 100.0;
+    fighter.turn_rate = 2.0;
+    fighter.radius = 10.0;
+    let squad = ShipDef { name: "squad".into(), is_squadron: true, members: vec![(0, 2)], class: TargetClass::Fighter, ..ShipDef::default() };
+    (fighter, squad)
+}
+
+fn bay(x: f32) -> HpDef {
+    HpDef { kind: HpKind::FighterBay, health: 100.0, offset: Vec3::new(x, 0.0, 0.0), ..HpDef::default() }
+}
+
+#[test]
+fn carriers_launch_what_their_owners_tech_level_allows() {
+    let (fighter, squad) = hangar_defs();
+    let mut carrier = ship("carrier", 1.0e6, 0.0, vec![bay(0.0)]);
+    // Tech 0: one squadron and one in reserve; tech 2: three and two (the data has `..._Tech_N` entries per level).
+    carrier.spawned_by_tech = vec![(0, vec![(1, 1)], vec![(1, 1)]), (2, vec![(1, 3)], vec![(1, 2)])];
+    let dummy = ship("dummy", 1.0e6, 0.0, vec![]);
+    let launched = |tech: Option<u8>| {
+        let cat = Catalog::from_defs(vec![fighter.clone(), squad.clone(), carrier.clone(), dummy.clone()], vec![laser()]);
+        let config = BattleConfig { side_tech: tech.map(|t| vec![t, 0]).unwrap_or_default(), ..cfg() };
+        let b = Battle::new(setup(cat, "carrier", "dummy", 1, 1, config));
+        let c = b.ships.iter().find(|s| s.side == 0).unwrap();
+        (b.ships.iter().filter(|s| s.def == 0).count() / 2, c.reserve.iter().map(|r| r.1).sum::<u32>())
+    };
+    assert_eq!(launched(None), (1, 1), "no tech given = level 0");
+    assert_eq!(launched(Some(1)), (1, 1), "the highest level at or below the owner's");
+    assert_eq!(launched(Some(2)), (3, 2));
+    assert_eq!(launched(Some(4)), (3, 2));
+}
+
+#[test]
+fn squadrons_leave_through_a_working_hangar_and_nothing_launches_without_one() {
+    let (fighter, squad) = hangar_defs();
+    let mut carrier = ship("carrier", 1.0e6, 0.0, vec![bay(-300.0), bay(300.0)]);
+    carrier.carried = vec![(1, 1)];
+    carrier.reserve = vec![(1, 3)];
+    carrier.spawn_delay = 1.0;
+    let dummy = ship("dummy", 1.0e6, 0.0, vec![]);
+    let cat = Catalog::from_defs(vec![fighter, squad, carrier, dummy], vec![laser()]);
+    let mut b = Battle::new(setup(cat, "carrier", "dummy", 1, 1, cfg()));
+    let c = b.ships.iter().find(|s| s.side == 0).unwrap().id;
+    let kill_squadron = |b: &mut Battle| {
+        for s in b.ships.iter_mut().filter(|s| s.def == 0 && s.side == 0) {
+            s.alive = false;
+        }
+    };
+    // First bay destroyed: the replacement leaves from the second one (the carrier faces +X, the bays are at its local +-X).
+    b.ships[c as usize].hps[0].alive = false;
+    kill_squadron(&mut b);
+    for _ in 0..30 * 3 {
+        b.step();
+    }
+    let cpos = b.ships[c as usize].pos;
+    let yaw = b.ships[c as usize].yaw;
+    let want = cpos + Vec3::new(300.0, 0.0, 0.0).rotate_yaw(yaw);
+    let fresh: Vec<&Ship> = b.ships.iter().filter(|s| s.def == 0 && s.alive).collect();
+    assert_eq!(fresh.len(), 2, "the squadron was replaced");
+    assert!(fresh.iter().all(|s| s.pos.dist(want) < 320.0), "launched at the working bay: {:?} vs {want:?}", fresh.iter().map(|s| s.pos).collect::<Vec<_>>());
+    // The reserve is visible and shrinks by one.
+    assert_eq!(b.ships[c as usize].reserve.iter().map(|r| r.1).sum::<u32>(), 2);
+    // Every hangar destroyed: no more launches, the reserve stays.
+    b.ships[c as usize].hps[1].alive = false;
+    kill_squadron(&mut b);
+    for _ in 0..30 * 10 {
+        b.step();
+    }
+    assert_eq!(b.ships.iter().filter(|s| s.def == 0 && s.alive).count(), 0, "no hangar, no launch");
+    assert_eq!(b.ships[c as usize].reserve.iter().map(|r| r.1).sum::<u32>(), 2);
+}

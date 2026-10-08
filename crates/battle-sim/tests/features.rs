@@ -223,3 +223,13 @@ fn autocast_support_and_default_come_from_the_data() {
     let isd = cat.ship(cat.ship_id("Star_Destroyer").unwrap());
     assert!(isd.abilities.iter().any(|a| !a.supports_autofire), "abilities without `Supports_Autofire` cannot");
 }
+
+#[test]
+fn carriers_with_only_higher_tech_entries_still_launch() {
+    let Some((data, fs)) = load() else { return };
+    // `Secutor_Empire` lists its fighters under `Starting_Spawned_Units_Tech_1` only; they used to be dropped (only Tech_0 was read).
+    let cat = Catalog::build(&data, Some(&fs), &["Secutor_Empire"]);
+    let d = cat.ship(cat.ship_id("Secutor_Empire").unwrap());
+    assert!(!d.spawned_by_tech.is_empty() && d.spawned_by_tech.iter().all(|t| t.0 >= 1), "{:?}", d.spawned_by_tech.iter().map(|t| t.0).collect::<Vec<_>>());
+    assert!(!d.carried.is_empty() && !d.reserve.is_empty(), "the lowest level the unit has is used when the owner is below it");
+}

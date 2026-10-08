@@ -427,7 +427,7 @@ impl Battle {
             formation,
             carrier: NONE,
             slots: Vec::new(),
-            reserve: def.reserve.clone(),
+            reserve: self.spawned_for(def, side).1,
             abilities: def.abilities.iter().map(|a| AbilityState { active: 0.0, cooldown: 0.0, target: NONE, autocast: a.supports_autofire && a.autocast_default }).collect(),
             tractor_cut: 0.0,
             path: Vec::new(),
@@ -453,11 +453,22 @@ impl Battle {
         id
     }
 
+    /// The squadrons a carrier launches at the start and holds in reserve, for the tech level of its side: the highest level the data has
+    /// at or below it, else the lowest. Definitions without per-level entries use the same lists at every level.
+    fn spawned_for(&self, def: &ShipDef, side: u8) -> (Squadrons, Squadrons) {
+        if def.spawned_by_tech.is_empty() {
+            return (def.carried.clone(), def.reserve.clone());
+        }
+        let tech = self.config.side_tech.get(side as usize).copied().unwrap_or(0);
+        let pick = def.spawned_by_tech.iter().filter(|t| t.0 <= tech).max_by_key(|t| t.0).or_else(|| def.spawned_by_tech.iter().min_by_key(|t| t.0));
+        pick.map_or((Vec::new(), Vec::new()), |t| (t.1.clone(), t.2.clone()))
+    }
+
     /// Launches the squadrons carried by ships and stations at the start of the battle.
     fn launch_initial(&mut self) {
-        let carriers: Vec<u32> = self.ships.iter().filter(|s| !self.catalog.ship(s.def).carried.is_empty()).map(|s| s.id).collect();
+        let carriers: Vec<u32> = self.ships.iter().filter(|s| !self.spawned_for(self.catalog.ship(s.def), s.side).0.is_empty()).map(|s| s.id).collect();
         for c in carriers {
-            let carried = self.catalog.ship(self.ships[c as usize].def).carried.clone();
+            let carried = self.spawned_for(self.catalog.ship(self.ships[c as usize].def), self.ships[c as usize].side).0;
             for (sq_def, count) in carried {
                 for _ in 0..count {
                     let members = self.launch_squadron(c, sq_def);
@@ -472,7 +483,15 @@ impl Battle {
         let cat = self.catalog.clone();
         let c = &self.ships[carrier as usize];
         let (side, cpos, cyaw, cdef) = (c.side, c.pos, c.yaw, cat.ship(c.def));
-        let bay = cdef.hardpoints.iter().find(|h| h.kind == HpKind::FighterBay).map_or(Vec3::ZERO, |h| h.offset);
+        // Squadrons leave through a hangar that still works (the first one that does; a carrier without hangar hardpoints launches from its centre).
+        let bay = cdef
+            .hardpoints
+            .iter()
+            .enumerate()
+            .filter(|(_, h)| h.kind == HpKind::FighterBay)
+            .find(|(i, _)| c.hps.get(*i).is_none_or(|s| s.alive))
+            .or_else(|| cdef.hardpoints.iter().enumerate().find(|(_, h)| h.kind == HpKind::FighterBay))
+            .map_or(Vec3::ZERO, |(_, h)| h.offset);
         let spread = cdef.radius * 0.8;
         let mut rng = Rng::for_entity(self.config.seed, self.tick, carrier, 0x1A0C + self.ships.len() as u64);
         let base = cpos + (bay + rng.in_ball() * spread).rotate_yaw(cyaw);
@@ -2448,3 +2467,6 @@ fn search_point(n: u32, enemy_start: Vec3, half: f32) -> Vec3 {
 
 /// Seconds between replans of a moving big ship's path (also replanned when its destination moves).
 const PATH_REPLAN_SECS: f32 = 0.5;
+
+/// Squadron definitions with counts.
+type Squadrons = Vec<(ShipId, u32)>;

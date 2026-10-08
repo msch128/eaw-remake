@@ -26,5 +26,6 @@ pub use space::{
     DirectWeapon, HardpointDef, IncomeModifier, ProjectileDef, ShipCategory, SpaceUnitDef,
     StarBaseDef, StructureDef, SubAbility, TurretDef, UnitAbility,
 };
+pub use space::{SpawnedUnits, spawned_for_tech};
 pub use text::{TextError, TextTable};
 pub use xml::{Element, Warning};

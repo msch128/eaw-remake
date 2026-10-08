@@ -17,6 +17,8 @@ pub const NONE: u32 = u32::MAX;
 pub struct BattleConfig {
     /// Fixed time step in seconds (default 1/30).
     pub dt: f32,
+    /// Tech level of each side's owner (`Starting_` / `Reserve_Spawned_Units_Tech_N` pick the level they launch); missing = 0.
+    pub side_tech: Vec<u8>,
     /// Big ships plan paths around rocks and stations and steer around hulls, fighters keep out of hulls (default on; off = the old
     /// behaviour of only being pushed out of overlaps, kept for comparisons).
     pub navigation: bool,
@@ -74,6 +76,7 @@ impl Default for BattleConfig {
         Self {
             dt: 1.0 / 30.0,
             navigation: true,
+            side_tech: Vec::new(),
             half_size: 10_000.0,
             seed: 1,
             record_events: true,

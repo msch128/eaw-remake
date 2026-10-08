@@ -51,6 +51,8 @@ pub struct TacticalGroup {
 pub struct TacticalSide {
     /// Faction id.
     pub faction: FactionId,
+    /// Tech level of the faction (0 to 4): selects the `..._Spawned_Units_Tech_N` entries its carriers launch.
+    pub tech: u8,
     /// Faction name, e.g. `Empire`.
     pub faction_name: String,
     /// True for the owner of the planet whose defenses take part.
@@ -206,6 +208,7 @@ impl TacticalRequest {
                     reserve,
                     unit_cap: cap,
                     faction: side.faction,
+                    tech: galaxy.factions.get(side.faction as usize).map_or(0, |f| f.tech.clamp(0, 4) as u8),
                     faction_name: world.factions[side.faction as usize].name.clone(),
                     defender: battle.defender == Some(side.faction),
                     damage_mult: world_diff(side.faction).damage,
@@ -234,7 +237,8 @@ impl TacticalRequest {
         let side_mults = self.sides.iter().map(|s| battle_sim::SideMult { damage: s.damage_mult, health: s.health_mult, shield: s.shield_mult }).collect();
         let retreat_allowed = self.sides.iter().map(|s| s.may_retreat).collect();
         let unit_cap = self.sides.iter().map(|s| s.unit_cap).max().unwrap_or(150);
-        BattleConfig { seed: self.seed, max_time: self.max_seconds, half_size, arena, side_mults, retreat_allowed, unit_cap, ..BattleConfig::default() }
+        let side_tech = self.sides.iter().map(|s| s.tech).collect();
+        BattleConfig { side_tech, seed: self.seed, max_time: self.max_seconds, half_size, arena, side_mults, retreat_allowed, unit_cap, ..BattleConfig::default() }
     }
 
     /// Builds the `battle-sim` setup. Fleet groups carry their group index as the tag; side `i` of the request is

@@ -52,6 +52,8 @@ pub struct ShipSnap {
     pub hps: Vec<HpSnap>,
     /// Ability state per ability of the definition: (seconds of effect left, seconds until usable).
     pub abilities: Vec<(f32, f32)>,
+    /// Squadrons a carrier or station still holds in reserve (replacements for destroyed ones); 0 for everything else.
+    pub reserve_squadrons: u32,
     /// Automatic use per ability (same order as `abilities`): the button shows the autocast state.
     pub autocast: Vec<bool>,
 }
@@ -135,6 +137,7 @@ fn snapshot(battle: &Battle, events: Vec<Event>, step_ms: f32) -> Snapshot {
                     .collect(),
                 abilities: s.abilities.iter().map(|a| (a.active, a.cooldown)).collect(),
                 autocast: s.abilities.iter().map(|a| a.autocast).collect(),
+                reserve_squadrons: s.reserve.iter().map(|r| r.1).sum(),
             }
         })
         .collect();

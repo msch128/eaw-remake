@@ -342,6 +342,9 @@ pub struct TractorDef {
     pub classes: u16,
 }
 
+/// Squadrons at one owner tech level: `(tech, launched at the start, in reserve)`.
+pub type SpawnedAt = (u8, Vec<(ShipId, u32)>, Vec<(ShipId, u32)>);
+
 /// A ship, fighter, station or structure.
 #[derive(Debug, Clone, Default)]
 pub struct ShipDef {
@@ -393,7 +396,10 @@ pub struct ShipDef {
     pub members: Vec<(ShipId, u32)>,
     /// Squadron formation offsets in battle space.
     pub offsets: Vec<Vec3>,
-    /// Squadrons launched at battle start (carriers, stations).
+    /// The squadrons launched and held in reserve per tech level of the owner (`Starting_` / `Reserve_Spawned_Units_Tech_N`): `(tech, carried,
+    /// reserve)`. Empty for hand-made definitions, which use `carried` and `reserve` at every tech level.
+    pub spawned_by_tech: Vec<SpawnedAt>,
+    /// Squadrons launched at battle start (carriers, stations) at tech level 0 (or the lowest level the data has).
     pub carried: Vec<(ShipId, u32)>,
     /// Replacement squadrons.
     pub reserve: Vec<(ShipId, u32)>,
@@ -703,10 +709,9 @@ impl Source {
                 .squadron_units
                 .iter()
                 .cloned()
-                .chain(u.starting_spawned_units.iter().map(|x| x.0.clone()))
-                .chain(u.reserve_spawned_units.iter().map(|x| x.0.clone()))
+                .chain(u.spawned_by_tech.iter().flat_map(|t| t.starting.iter().chain(&t.reserve).map(|x| x.0.clone())))
                 .collect(),
-            Source::Base(b) => b.starting_spawned_units.iter().chain(&b.reserve_spawned_units).map(|x| x.0.clone()).collect(),
+            Source::Base(b) => b.spawned_by_tech.iter().flat_map(|t| t.starting.iter().chain(&t.reserve).map(|x| x.0.clone())).collect(),
             Source::Structure(_) => Vec::new(),
         }
     }
@@ -1070,6 +1075,13 @@ impl Catalog {
                 .filter_map(|(n, c)| self.ship_index.get(&n.to_ascii_lowercase()).map(|&id| (id, *c)))
                 .collect()
         };
+        let spawned_lists = match src {
+            Source::Unit(u) => &u.spawned_by_tech[..],
+            Source::Base(b) => &b.spawned_by_tech[..],
+            Source::Structure(_) => &[][..],
+        };
+        let spawned_by_tech: Vec<SpawnedAt> = spawned_lists.iter().map(|t| (t.tech, resolve(&t.starting), resolve(&t.reserve))).collect();
+        let at_tech0 = alamo_data::spawned_for_tech(spawned_lists, 0);
         let (members, offsets, carried, reserve, spawn_delay, abilities) = match src {
             Source::Unit(u) => {
                 let mut members: Vec<(ShipId, u32)> = Vec::new();
@@ -1083,11 +1095,11 @@ impl Catalog {
                 }
                 let offsets = u.squadron_offsets.iter().map(|o| Vec3::from_array(*o)).collect();
                 let delay = u.fields.get("spawned_squadron_delay_seconds").and_then(|v| v.parse().ok()).unwrap_or(2.0);
-                (members, offsets, resolve(&u.starting_spawned_units), resolve(&u.reserve_spawned_units), delay, ability_defs(u))
+                (members, offsets, at_tech0.map(|t| resolve(&t.starting)).unwrap_or_default(), at_tech0.map(|t| resolve(&t.reserve)).unwrap_or_default(), delay, ability_defs(u))
             }
             Source::Base(b) => {
                 let delay = b.fields.get("spawned_squadron_delay_seconds").and_then(|v| v.parse().ok()).unwrap_or(2.0);
-                (Vec::new(), Vec::new(), resolve(&b.starting_spawned_units), resolve(&b.reserve_spawned_units), delay, Vec::new())
+                (Vec::new(), Vec::new(), at_tech0.map(|t| resolve(&t.starting)).unwrap_or_default(), at_tech0.map(|t| resolve(&t.reserve)).unwrap_or_default(), delay, Vec::new())
             }
             Source::Structure(_) => (Vec::new(), Vec::new(), Vec::new(), Vec::new(), 2.0, Vec::new()),
         };
@@ -1209,6 +1221,7 @@ impl Catalog {
             direct,
             members,
             offsets,
+            spawned_by_tech,
             carried,
             reserve,
             spawn_delay,
