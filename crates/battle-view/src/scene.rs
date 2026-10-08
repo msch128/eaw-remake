@@ -112,7 +112,7 @@ impl SpaceScene {
                 direction: -to_light,
                 // The TED scalar weighs the light, relative to 0.5 (full strength: the original shaders double the stored value).
                 // Low scalars (asteroid fields at 0.05-0.2) made maps unplayably dark with a linear weight, so the weight is
-                // a square root of the ratio, kept within 0.5..1.4 while a zero scalar still switches the light off. Only the sun
+                // a square root of the ratio, kept within 0.3..1.4 while a zero scalar still switches the light off. Only the sun
                 // uses it: the fill lights stay linear so tinted fills (Coruscant) do not grow.
                 // `SP_LIGHT_MODE=old` restores the linear weight (2 x scalar), `=raw` ignores the scalar.
                 color: Vec3::from(l.color) * if i == 0 { light_gain(l.scalar) } else { l.scalar * 2.0 },
@@ -230,7 +230,8 @@ pub fn spawn_scene(commands: &mut Commands, scene: &SpaceScene, sky_radius: f32,
             Name::new(format!("fill light {i}")),
             BattleEntity,
             DirectionalLight {
-                color: Color::srgb(fill.color.x, fill.color.y, fill.color.z),
+                // Raw value as well (see the sun): Bevy converts an sRGB colour to linear before the shader sees it.
+                color: Color::LinearRgba(LinearRgba::rgb(fill.color.x, fill.color.y, fill.color.z)),
                 illuminance: 1.0 / exposure,
                 shadow_maps_enabled: false,
                 ..default()
@@ -285,7 +286,7 @@ fn light_gain(scalar: f32) -> f32 {
         Ok("old") => scalar * 2.0,
         Ok("raw") => 1.0,
         _ if scalar <= 0.0 => 0.0,
-        _ => (scalar / 0.5).sqrt().clamp(0.5, 1.4),
+        _ => (scalar / 0.5).sqrt().clamp(0.3, 1.4),
     }
 }
 
