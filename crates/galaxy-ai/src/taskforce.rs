@@ -247,6 +247,11 @@ impl TaskForces {
         }
     }
 
+    /// Money of `player` that is earmarked for plans and not spent yet.
+    pub fn earmarked(&self, player: PlayerId) -> f64 {
+        self.accounts.iter().filter(|((p, _), _)| *p == player).map(|(_, v)| *v).sum()
+    }
+
     /// What a plan may still spend; `None` = unlimited (category without a budget).
     fn allowance(&self, player: PlayerId, plan: u64) -> Option<f64> {
         let cat = self.plan_category.get(&plan)?;

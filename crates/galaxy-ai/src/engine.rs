@@ -420,6 +420,10 @@ impl AiEngine {
             Some(t) if snap.weeks > 0.0 => snap.net_income[me] * (now - t) / (snap.time / snap.weeks),
             Some(_) => 0.0,
         };
+        // Windfalls (capture bonuses, rewards, the treasury of a loaded game) are not income: whatever the treasury holds beyond the
+        // earmarked money and `AI_RESERVE_WEEKS` of income is budgeted too, so the AI does not sit on a growing hoard (estimate).
+        let surplus = (snap.credits[me] - self.task_forces.earmarked(player) - amount - AI_RESERVE_WEEKS * snap.net_income[me].max(0.0)).max(0.0);
+        let amount = amount + surplus;
         self.brains[i].last_fund = Some(now);
         self.task_forces.fund(player, &fractions, amount);
         let view = self.view(i);
@@ -903,3 +907,6 @@ impl AiEngine {
         warnings
     }
 }
+
+/// Weeks of income the AI keeps unbudgeted in its treasury; everything above is earmarked for plans (estimate, the data has no rule).
+const AI_RESERVE_WEEKS: f64 = 4.0;

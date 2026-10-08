@@ -192,7 +192,7 @@ fn main() {
             );
             let queued: usize = owned.iter().map(|&p| g.planets[p].queues.iter().map(|q| q.len()).sum::<usize>()).sum();
             let fs = &g.factions[f];
-            println!("{:11} pop {}/{}, tech {}, income {:.0}/wk, queued items {queued}, ships built {} lost {}, structures built {}, battles won {} lost {}", "", fs.population_used, fs.population_cap, fs.tech, fs.income_per_week, fs.stats.ships_built, fs.stats.ships_lost, fs.stats.structures_built, fs.stats.battles_won, fs.stats.battles_lost);
+            println!("{:11} pop {}/{}, tech {}, income {:.0}/wk, queued items {queued}, ships built {} lost {}, structures built {}, battles won {} lost {}, credits earned {:.0} spent {:.0} ({:.0}%)", "", fs.population_used, fs.population_cap, fs.tech, fs.income_per_week, fs.stats.ships_built, fs.stats.ships_lost, fs.stats.structures_built, fs.stats.battles_won, fs.stats.battles_lost, fs.stats.credits_earned, fs.stats.credits_spent, 100.0 * fs.stats.credits_spent / fs.stats.credits_earned.max(1.0));
             println!(
                 "{:11} per planet-week: ships border {:.1} / interior {:.1} / choke {:.1}; defence structures border {:.2} / interior {:.2} / choke {:.2}; star base level border {:.2} / interior {:.2} / choke {:.2}; planet share border {:.0}% choke {:.0}%",
                 "",
@@ -219,7 +219,7 @@ fn main() {
                 .map(|((_, goal), n)| (goal.clone(), *n, st.plans_succeeded.get(&(pi as u32, goal.clone())).copied().unwrap_or(0), st.plans_failed.get(&(pi as u32, goal.clone())).copied().unwrap_or(0)))
                 .collect();
             v.sort_by(|a, b| b.1.cmp(&a.1));
-            println!("{name} plans (goal, started, ok, failed): {:?}", v.iter().take(14).collect::<Vec<_>>());
+            println!("{name} plans (goal, started, ok, failed): {:?}", v.iter().take(80).collect::<Vec<_>>());
         }
         println!("task forces: {:?}", st.taskforces);
     }

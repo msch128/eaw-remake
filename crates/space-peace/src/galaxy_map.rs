@@ -803,7 +803,7 @@ fn draw_rings(
 }
 
 /// Radius of the notched selection ring in planet radii (about 10 in the reference).
-const NOTCH_RADIUS: f32 = 4.1;
+const NOTCH_RADIUS: f32 = 2.9;
 const NOTCH_SEGMENTS: usize = 360;
 
 /// Outer contour of the notched ring in units of the inner radius.

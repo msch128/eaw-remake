@@ -79,7 +79,7 @@ fn sync_stations(
                 commands.spawn((
                     Mesh3d(meshes.add(Circle::new(1.0).mesh().resolution(48))),
                     MeshMaterial3d(mats.add(StandardMaterial {
-                        base_color: Color::LinearRgba(LinearRgba::new(lin.red * 0.12, lin.green * 0.12, lin.blue * 0.05, 0.88)),
+                        base_color: Color::LinearRgba(LinearRgba::new(lin.red * 0.02, lin.green * 0.07, lin.blue * 0.02, 0.92)),
                         unlit: true,
                         depth_bias: 400.0,
                         alpha_mode: AlphaMode::Blend,
@@ -89,7 +89,7 @@ fn sync_stations(
                     // The disc stays flat: it is a sibling of the turning root, not a child.
                     Transform::from_translation(pos - Vec3::Y * layout.unit * 0.12)
                         .with_rotation(Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2))
-                        .with_scale(Vec3::splat(layout.unit * 0.7)),
+                        .with_scale(Vec3::splat(layout.unit * 0.5)),
                     StationDisc(root),
                 ));
                 if let Some(m) = model {

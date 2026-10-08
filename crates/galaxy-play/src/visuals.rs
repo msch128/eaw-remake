@@ -191,14 +191,14 @@ pub fn sync_fleets(
                 commands.spawn((
                     Mesh3d(assets.disc.clone()),
                     MeshMaterial3d(mats.add(StandardMaterial {
-                        base_color: Color::LinearRgba(LinearRgba::new(tl.red * 0.02, tl.green * 0.16, tl.blue * 0.04, 0.9)),
+                        base_color: Color::LinearRgba(LinearRgba::new(tl.red * 0.01, tl.green * 0.06, tl.blue * 0.02, 0.92)),
                         unlit: true,
                         depth_bias: 400.0,
                         alpha_mode: AlphaMode::Blend,
                         cull_mode: None,
                         ..default()
                     })),
-                    Transform::from_xyz(0.0, -layout.unit * 0.12, 0.0).with_rotation(Quat::from_rotation_x(-FRAC_PI_2)).with_scale(Vec3::splat(layout.unit * 0.95)),
+                    Transform::from_xyz(0.0, -layout.unit * 0.12, 0.0).with_rotation(Quat::from_rotation_x(-FRAC_PI_2)).with_scale(Vec3::splat(layout.unit * 0.6)),
                     ChildOf(root),
                 ));
                 entities.0.insert(f.id, root);
@@ -224,10 +224,11 @@ pub fn fit_fleet_models(
     mut loaded: Query<(&AlamoModelLoaded, &mut Transform), (With<FleetModel>, Added<AlamoModelLoaded>)>,
 ) {
     for (m, mut tf) in &mut loaded {
-        let target = layout.unit * cfg.fleet_icon_scale;
+        // Clearly larger than the base disc and floating above it, like the original.
+        let target = layout.unit * cfg.fleet_icon_scale * 1.9;
         let s = if m.radius > 0.0 { target / m.radius } else { 1.0 };
         tf.scale = Vec3::splat(s);
-        tf.translation = -m.center * s;
+        tf.translation = -m.center * s + Vec3::Y * layout.unit * 0.9;
     }
 }
 
