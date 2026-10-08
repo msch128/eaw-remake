@@ -290,6 +290,8 @@ fn feed_bar(
                 disabled: !o.availability.is_available(),
                 building: menu.queue.iter().any(|q| q.target == o.target),
                 tooltip: pad_tooltip(o, week),
+                upkeep: pad_upkeep(&state, o.target),
+                level: pad_level(&state, o.target),
             });
             bar.pads.push(o.target);
         }
@@ -1475,5 +1477,21 @@ fn hero_bar(world: &mut World, mut shown: Local<Option<Vec<String>>>) {
     if let Some(root) = eaw_ui::spawn_shell(world, &spec) {
         world.entity_mut(root).insert(HeroBar);
         *shown = Some(heroes);
+    }
+}
+
+/// Income change per week of a unit while it exists (negative = upkeep).
+fn pad_upkeep(state: &SimState, target: BuildTarget) -> f32 {
+    match target {
+        BuildTarget::Unit(u) => state.world.units[u as usize].upkeep,
+        _ => 0.0,
+    }
+}
+
+/// Starbase level of an upgrade pad.
+fn pad_level(state: &SimState, target: BuildTarget) -> u8 {
+    match target {
+        BuildTarget::Starbase(s) => state.world.starbases[s as usize].level.clamp(0, 5) as u8,
+        _ => 0,
     }
 }

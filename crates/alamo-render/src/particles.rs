@@ -1004,6 +1004,7 @@ pub fn build(app: &mut App) {
     if std::env::var_os("SP_ASSET_LOG").is_some() {
         app.add_systems(Update, log_asset_counts);
     }
+    app.add_systems(Update, collect_font_atlases);
     app.add_plugins(MaterialPlugin::<ParticleMaterial>::default())
         .init_resource::<ParticleSettings>()
         .init_resource::<ParticleStats>()
@@ -1064,7 +1065,10 @@ pub fn log_asset_counts(
     part_mats: Res<Assets<ParticleMaterial>>,
     buffers: Res<Assets<ShaderBuffer>>,
     atlases: Res<bevy::text::FontAtlasSet>,
+    time: Res<Time<Real>>,
+    mut ft: Local<Vec<f32>>,
 ) {
+    ft.push(time.delta_secs() * 1000.0);
     if frames.0 % 300 != 0 {
         return;
     }
@@ -1080,7 +1084,11 @@ pub fn log_asset_counts(
     by_size.sort_by(|a, b| a.0.cmp(&b.0));
     info!("assetlog font atlases: keys={} atlases={} top(size,count)={:?}", atlases.len(), atlas_count, &by_size[..by_size.len().min(60)]);
     let (rss, peak) = process_memory_mb();
-    info!("assetlog rss={rss} MB (peak {peak} MB)");
+    ft.sort_by(|a, b| a.total_cmp(b));
+    let p99 = ft.get(((ft.len() as f32 * 0.99) as usize).min(ft.len().saturating_sub(1))).copied().unwrap_or(0.0);
+    let mean = ft.iter().sum::<f32>() / ft.len().max(1) as f32;
+    info!("assetlog rss={rss} MB (peak {peak} MB) frame_ms mean={mean:.1} p99={p99:.1} max={:.1}", ft.last().copied().unwrap_or(0.0));
+    ft.clear();
     info!("assetlog top cpu-image sizes (w,h,mips)=count: {:?}", &top[..top.len().min(4)]);
     let img_none = images.iter().filter(|(_, i)| i.data.is_none()).count();
     let img_gpu: usize = images
@@ -1127,4 +1135,28 @@ fn process_memory_mb() -> (usize, usize) {
         }
     }
     (0, 0)
+}
+
+/// Bevy keys font atlases by the font blob id, and system fonts get new blob ids whenever the font
+/// source cache reloads them, so every relayout can add a fresh 512x512 atlas (1 MB of CPU data
+/// each, never freed). Above a cap the atlas set is cleared and all text is re-queued, which
+/// rasterizes only the glyphs in use again and lets the old atlas images drop.
+pub fn collect_font_atlases(
+    frames: Res<bevy::diagnostic::FrameCount>,
+    mut atlases: ResMut<bevy::text::FontAtlasSet>,
+    mut fonts: Query<&mut TextFont>,
+) {
+    const MAX_ATLASES: usize = 64;
+    if frames.0 % 120 != 0 {
+        return;
+    }
+    let count: usize = atlases.values().map(|v| v.len()).sum();
+    if count <= MAX_ATLASES {
+        return;
+    }
+    atlases.clear();
+    for mut f in &mut fonts {
+        f.set_changed();
+    }
+    info!("font atlas set had {count} atlases; cleared and re-queued all text");
 }

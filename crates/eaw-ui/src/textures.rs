@@ -245,9 +245,6 @@ impl UiTextures {
 
 /// Uploads an RGBA image as a filtered, clamped sRGB UI texture.
 pub fn upload(images: &mut Assets<Image>, rgba: Rgba8) -> UiTexture {
-    if std::env::var_os("SP_ASSET_LOG").is_some() {
-        info!("assetlog upload {}x{}", rgba.width, rgba.height);
-    }
     let size = UVec2::new(rgba.width as u32, rgba.height as u32);
     let mut image = Image::new(
         Extent3d {

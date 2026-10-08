@@ -484,7 +484,8 @@ fn sync_overlays(
         }
         let edge = cam.world_to_viewport(gt, s.pos + right * s.radius).map_or(8.0, |e| (e - c).length());
         let def = rt.catalog.ship(s.def);
-        let name = (selected || hovered).then(|| {
+        // Names float above hovered ships and a lone selected ship, not above every ship of a big selection.
+        let name = (hovered || (selected && sel.ships.len() + usize::from(sel.enemy.is_some()) <= 1)).then(|| {
             def.text_id
                 .as_deref()
                 .and_then(|k| assets.as_ref().and_then(|a| a.text.get(k)))
@@ -494,7 +495,7 @@ fn sync_overlays(
         next.ships.push(ShipOverlay {
             id: u64::from(id),
             screen_pos: c,
-            half_size: edge.clamp(8.0, 220.0),
+            half_size: edge.clamp(11.0, 220.0),
             health: s.hull,
             shield: (def.shield > 0.0 && !always).then_some(s.shield),
             selected,

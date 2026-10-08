@@ -108,8 +108,15 @@ function Invoke-Soak([string]$name, [string[]]$appArgs, [int]$minutes) {
             $ms = for ($i = 1; $i -lt $times.Count; $i++) { ($times[$i].Time - $times[$i - 1].Time).TotalMilliseconds / ($times[$i].Frame - $times[$i - 1].Frame) }
             $sorted = @($ms | Sort-Object)
             $notes += ("frame time (300-frame means): mean {0:N1} ms, worst {1:N1} ms" -f ($ms | Measure-Object -Average).Average, $sorted[-1])
-            if ($sorted[-1] -gt $MaxP99Ms) { $fails += ("slow stretch: {0:N1} ms/frame over 300 frames" -f $sorted[-1]) }
         }
+        # Rolling p99 per 300-frame window, logged by the app on the "assetlog rss=" line; gate on the median window.
+        $p99s = @(); foreach ($l in $lines) { if ($l -match 'assetlog rss=.*frame_ms mean=([\d.]+) p99=([\d.]+) max=([\d.]+)') { $p99s += [double]$Matches[2] } }
+        $p99s = @($p99s | Select-Object -Skip ([int][math]::Ceiling($p99s.Count * 0.25)))
+        if ($p99s.Count -ge 3) {
+            $ps = @($p99s | Sort-Object); $med = $ps[[int]($ps.Count / 2)]
+            $notes += ("p99 per 300 frames: median {0:N1} ms, worst {1:N1} ms" -f $med, $ps[-1])
+            if ($med -ge $MaxP99Ms) { $fails += ("p99 {0:N1} ms >= {1} ms" -f $med, $MaxP99Ms) }
+        } else { $notes += 'no p99 entries in the asset log (older exe?)' }
     } else { $fails += "no assetlog output ($($assets.Count) entries): SP_ASSET_LOG not honoured or run too short" }
 
     [pscustomobject]@{

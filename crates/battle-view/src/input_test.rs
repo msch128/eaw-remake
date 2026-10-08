@@ -60,9 +60,15 @@ fn drive(
     mut clicks: MessageReader<EawButtonClicked>,
     bar: Query<(&EawButton, &eaw_ui::EawButtonState, &ComputedNode, &UiGlobalTransform, &InheritedVisibility)>,
     mut exit: MessageWriter<AppExit>,
-    diag: (Res<crate::control::UiBlock>, Res<crate::control::Pointer>, Res<crate::control::Hover>, Query<&Name>),
+    diag: (
+        Res<crate::control::UiBlock>,
+        Res<crate::control::Pointer>,
+        Res<crate::control::Hover>,
+        Query<&Name>,
+        Query<(Entity, &ComputedNode, &UiGlobalTransform, &InheritedVisibility, Has<ImageNode>, Has<Interaction>, Option<&BackgroundColor>)>,
+    ),
 ) {
-    let (block, pointer, hover, names) = diag;
+    let (block, pointer, hover, names, all_nodes) = diag;
     st.orders += orders.read().count() as u32;
     for c in clicks.read() {
         st.clicked_button = Some(c.name.clone());
@@ -89,6 +95,13 @@ fn drive(
         if !ok {
             let by = block.1.and_then(|e| names.get(e).ok()).map(|n| n.to_string());
             info!("input-test:   cursor {:?} blocked {} by {:?} hover {:?} selection {:?}", pointer.cursor, block.0, by, hover.ship, sel.ships.len());
+            if let Some(c) = pointer.cursor {
+                for (e, n, g, v, img, inter, bg) in &all_nodes {
+                    if n.size().x > 0.0 && n.contains_point(*g, c / n.inverse_scale_factor()) {
+                        info!("input-test:     node {:?} vis {} image {} interaction {} bg {:?} size {:?}", names.get(e).ok(), v.get(), img, inter, bg.map(|b| b.0.alpha()), n.size());
+                    }
+                }
+            }
         }
         st.results.push((name, ok));
         st.phase += 1;

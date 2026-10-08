@@ -204,7 +204,8 @@ impl Plugin for EawUiPlugin {
                     widgets::tooltip,
                 )
                     .chain(),
-            );
+            )
+            .add_systems(Update, widgets::segment_bars);
     }
 }
 

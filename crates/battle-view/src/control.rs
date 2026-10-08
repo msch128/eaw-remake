@@ -130,20 +130,11 @@ pub fn ui_block(
     nodes: Query<(Entity, &ComputedNode, &UiGlobalTransform, &InheritedVisibility, Has<ImageNode>, Option<&BackgroundColor>, Option<&Interaction>)>,
     parents: Query<&ChildOf>,
     overlay_roots: Query<(), With<eaw_ui::TacticalOverlayRoot>>,
-    panels: Query<(Entity, &ComputedNode, &UiGlobalTransform, &InheritedVisibility), Or<(With<eaw_ui::EawPanel>, With<eaw_ui::EawCommandBar>)>>,
 ) {
     let mut hit = false;
     let mut by = None;
     if let Some(cursor) = pointer.cursor {
-        // Whole command bar and shell panels (their empty areas count, like in the game).
-        for (e, node, gt, vis) in &panels {
-            if vis.get() && node.size().x > 0.0 && node.contains_point(*gt, cursor / node.inverse_scale_factor().max(1e-4)) {
-                hit = true;
-                by = Some(e);
-                break;
-            }
-        }
-        for (e, node, gt, vis, image, bg, interaction) in nodes.iter().filter(|_| !hit) {
+        for (e, node, gt, vis, image, bg, interaction) in &nodes {
             if !vis.get() || node.size().x <= 0.0 || node.size().y <= 0.0 {
                 continue;
             }

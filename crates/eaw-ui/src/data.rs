@@ -46,6 +46,10 @@ pub struct BuildPadEntry {
     pub building: bool,
     /// Tooltip text (empty keeps the slot's engine text).
     pub tooltip: String,
+    /// Income change per week while the unit exists (negative = upkeep); shows a red or green marker.
+    pub upkeep: f32,
+    /// Starbase level (1..) shown as a roman numeral; 0 shows none.
+    pub level: u8,
 }
 
 /// One slot of the tactical selection (`s_select_NN` with `s_health_NN` / `s_shield_NN`).

@@ -100,6 +100,12 @@ pub enum SlotPart {
     Icon,
     Progress,
     Label,
+    /// Credit icon of an upkeep marker (red: costs credits per week, green: earns them).
+    UpkeepIcon,
+    /// The "+" next to the upkeep icon.
+    UpkeepPlus,
+    /// Roman level numeral (starbase levels).
+    Level,
 }
 
 /// Text label of a button (`b_retreat` countdown, `b_reinforcement` points); holds the button name.
@@ -393,18 +399,12 @@ pub fn spawn_shell(world: &mut World, spec: &ShellSpec) -> Option<Entity> {
         if !within(item.center, lo - Vec2::splat(MARGIN), hi + Vec2::splat(MARGIN)) {
             continue;
         }
-        // The month bar's bone has no component of its own; it uses the small health bar art.
-        let def = b.db.get(&item.name).cloned().or_else(|| {
-            if !item.name.eq_ignore_ascii_case("fight_bar_g") {
-                return None;
-            }
-            let mut d = b.db.get("g_credit_bar").cloned()?;
-            d.name = "fight_bar_g".to_string();
-            d.bar_texture = (0..=10).map(|i| format!("i_bar_health_small{i}.tga")).collect();
-            d.bar_overlay = d.bar_texture.clone();
-            Some(d)
-        });
-        let Some(def) = def else {
+        // The month bar's bone has no component and the data has no segment art: draw the segments.
+        if item.name.eq_ignore_ascii_case("fight_bar_g") {
+            b.spawn_segment_bar(item.center - lo, item.size);
+            continue;
+        }
+        let Some(def) = b.db.get(&item.name).cloned() else {
             continue;
         };
         b.spawn_component(&def, item.center - lo, item.size);
@@ -702,6 +702,12 @@ impl Builder<'_> {
             let color = def.text_color.map_or(Color::WHITE, rgba);
             let t = self.text_layer(holder, size, def, "", def.text_offset, color);
             self.world.entity_mut(t).insert(BoundField(field));
+            if matches!(field, Field::Credits | Field::Income | Field::MonthIncome)
+                && let Some(tx) = self.tex("i_icon_credit.tga")
+            {
+                let sz = tx.size.as_vec2() * 0.8;
+                self.layer(holder, size, &tx, sz, Vec2::new(-size.x * 0.5 + sz.x * 0.5 + 2.0, 0.0), Color::WHITE);
+            }
             if let Some(icon) = def.icon.first().cloned()
                 && let Some(tx) = self.tex(&icon)
             {
@@ -906,6 +912,31 @@ impl Builder<'_> {
                 .map_or(Color::srgb(0.85, 0.9, 1.0), rgba);
             let l = self.text_layer(button, size, def, "", label_off, color);
             self.world.entity_mut(l).insert(SlotPart::Label);
+            if s.kind == SlotKind::Pad {
+                // Upkeep marker (top left) and level numeral (top right) of build pads.
+                if let Some(t) = self.tex("i_icon_credit.tga") {
+                    let e = self.world.spawn((
+                        SlotPart::UpkeepIcon,
+                        ImageNode::new(t.handle.clone()),
+                        Node {
+                            position_type: PositionType::Absolute,
+                            left: Val::Px(size.x * 0.5 - 4.0),
+                            top: Val::Px(-2.0),
+                            width: Val::Px(13.0),
+                            height: Val::Px(13.0),
+                            display: Display::None,
+                            ..default()
+                        },
+                        FocusPolicy::Pass,
+                        ChildOf(button),
+                    ));
+                    let _ = e;
+                }
+                let p = self.text_layer(button, size, def, "", Vec2::new(-size.x * 0.5 + 2.0, size.y * 0.5 - 2.0), Color::srgb(1.0, 0.25, 0.2));
+                self.world.entity_mut(p).insert(SlotPart::UpkeepPlus);
+                let l = self.text_layer(button, size, def, "", Vec2::new(size.x * 0.42, size.y * 0.5 - 2.0), Color::srgb(0.9, 0.93, 0.98));
+                self.world.entity_mut(l).insert(SlotPart::Level);
+            }
             let _ = s;
         }
     }
@@ -1015,12 +1046,16 @@ pub(crate) fn bound_fields(
     }
 }
 
+/// Numbers like the original bar: plain up to four digits, dot-grouped from five ("4634", "40.000").
 fn group_digits(v: i64) -> String {
     let s = v.abs().to_string();
+    if s.len() <= 4 {
+        return v.to_string();
+    }
     let mut out = String::new();
     for (i, c) in s.chars().enumerate() {
         if i > 0 && (s.len() - i).is_multiple_of(3) {
-            out.push(',');
+            out.push('.');
         }
         out.push(c);
     }
@@ -1101,6 +1136,10 @@ pub(crate) fn slots(
                 (a.icon.clone(), 1.0 - a.ready, String::new(), a.disabled, a.active)
             }),
         };
+        let (upkeep, level) = match slot.kind {
+            SlotKind::Pad => data.pads.get(slot.index).map_or((0.0, 0), |p| (p.upkeep, p.level)),
+            _ => (0.0, 0),
+        };
         let Some((icon, progress, label, disabled, selected)) = content else {
             node.display = Display::None;
             *vis = Visibility::Hidden;
@@ -1139,6 +1178,22 @@ pub(crate) fn slots(
                 SlotPart::Label => {
                     if let Some(mut t) = text {
                         t.0 = label.clone();
+                    }
+                }
+                SlotPart::UpkeepIcon => {
+                    n.display = if upkeep.abs() > 0.5 { Display::Flex } else { Display::None };
+                    if let Some(mut img) = img {
+                        img.color = if upkeep < 0.0 { Color::srgb(1.0, 0.3, 0.25) } else { Color::srgb(0.4, 1.0, 0.45) };
+                    }
+                }
+                SlotPart::UpkeepPlus => {
+                    if let Some(mut t) = text {
+                        t.0 = if upkeep.abs() > 0.5 { "+".to_owned() } else { String::new() };
+                    }
+                }
+                SlotPart::Level => {
+                    if let Some(mut t) = text {
+                        t.0 = roman(level);
                     }
                 }
             }
@@ -1181,13 +1236,65 @@ pub(crate) fn status_bars(
                 let list = if layer.fill { &tex.fill } else { &tex.frame };
                 if let Some(h) = list.get(level).or_else(|| list.last()) {
                     img.image = h.clone();
-                    if pname.is_some_and(|n| n.0 == "fight_bar_g") {
-                        // The month bar is always green (the health art shifts to yellow when full).
-                        img.color = Color::srgb(0.3, 1.0, 0.45);
-                    }
                 }
             }
         }
+    }
+}
+
+/// Segments of the month progress bar (`PanelData::bars["fight_bar_g"]`).
+#[derive(Component, Debug, Clone, Copy)]
+pub struct BarSegment {
+    index: usize,
+    count: usize,
+}
+
+const SEGMENTS: usize = 10;
+
+impl Builder<'_> {
+    fn spawn_segment_bar(&mut self, center: Vec2, size: Vec2) {
+        let holder = self
+            .world
+            .spawn((
+                Name::new("fight_bar_g"),
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: Val::Px(center.x - size.x * 0.5),
+                    top: Val::Px(self.root_h - center.y - size.y * 0.5),
+                    width: Val::Px(size.x),
+                    height: Val::Px(size.y),
+                    column_gap: Val::Px(1.5),
+                    padding: UiRect::axes(Val::Px(1.0), Val::Px(3.0)),
+                    ..default()
+                },
+                FocusPolicy::Pass,
+                ChildOf(self.root),
+            ))
+            .id();
+        for index in 0..SEGMENTS {
+            self.world.spawn((
+                BarSegment { index, count: SEGMENTS },
+                Node { flex_grow: 1.0, ..default() },
+                BackgroundColor(SEGMENT_OFF),
+                FocusPolicy::Pass,
+                ChildOf(holder),
+            ));
+        }
+    }
+}
+
+const SEGMENT_ON: Color = Color::srgb(0.25, 0.95, 0.3);
+const SEGMENT_OFF: Color = Color::srgba(0.1, 0.3, 0.12, 0.8);
+
+/// Lights the month bar's segments.
+pub(crate) fn segment_bars(panel: Res<PanelData>, fresh: Query<(), Added<BarSegment>>, mut segments: Query<(&BarSegment, &mut BackgroundColor)>) {
+    if !panel.is_changed() && fresh.is_empty() {
+        return;
+    }
+    let frac = panel.bars.get("fight_bar_g").copied().unwrap_or(0.0);
+    for (s, mut bg) in &mut segments {
+        let lit = (s.index as f32 + 0.5) / s.count as f32 <= frac + 1e-3;
+        bg.0 = if lit { SEGMENT_ON } else { SEGMENT_OFF };
     }
 }
 
@@ -1350,8 +1457,9 @@ mod tests {
     fn digits_are_grouped() {
         assert_eq!(group_digits(0), "0");
         assert_eq!(group_digits(999), "999");
-        assert_eq!(group_digits(12_450), "12,450");
-        assert_eq!(group_digits(-1_234_567), "-1,234,567");
+        assert_eq!(group_digits(4634), "4634");
+        assert_eq!(group_digits(12_450), "12.450");
+        assert_eq!(group_digits(-1_234_567), "-1.234.567");
     }
 
     #[test]
@@ -1390,3 +1498,8 @@ mod tests {
 
 
 
+
+/// Roman numeral of a small level ("" for 0).
+fn roman(level: u8) -> String {
+    ["", "I", "II", "III", "IV", "V"].get(level as usize).copied().unwrap_or("").to_owned()
+}
