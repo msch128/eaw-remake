@@ -190,6 +190,15 @@ pub struct MinimapData {
     pub background: Option<Color>,
 }
 
+/// Fog of war on the tactical minimap: when `enabled`, the map is drawn dark except inside the `reveal` discs (world position, radius).
+#[derive(Resource, Debug, Clone, Default, PartialEq)]
+pub struct MinimapFog {
+    /// Draw the fog.
+    pub enabled: bool,
+    /// Areas the player currently sees.
+    pub reveal: Vec<(Vec2, f32)>,
+}
+
 /// The minimap click target of a command bar.
 #[derive(Component, Debug, Clone, Copy)]
 pub struct MinimapSurface {
@@ -225,12 +234,13 @@ pub fn minimap_to_world(bounds: (Vec2, Vec2), n: Vec2) -> Vec2 {
 /// Rebuilds the dots and the camera frustum when the data changes.
 pub(crate) fn minimap_marks(
     data: Res<MinimapData>,
+    fog: Res<MinimapFog>,
     fresh: Query<(), Added<MinimapSurface>>,
     surfaces: Query<(Entity, &MinimapSurface, Option<&Children>)>,
     marks: Query<(), With<MinimapMark>>,
     mut commands: Commands,
 ) {
-    if !data.is_changed() && fresh.is_empty() {
+    if !data.is_changed() && !fog.is_changed() && fresh.is_empty() {
         return;
     }
     let Some(bounds) = data.bounds else { return };
@@ -241,13 +251,38 @@ pub(crate) fn minimap_marks(
             }
         }
         if let Some(bg) = data.background {
+            // Fog: the whole map is dark, the discs of the player's sensors show the normal tint.
+            let base = if fog.enabled { bg.to_linear().with_alpha(1.0).to_vec3() * 0.3 } else { bg.to_linear().to_vec3() };
+            let base = Color::linear_rgba(base.x, base.y, base.z, bg.alpha());
             commands.spawn((
                 MinimapMark,
                 Node { position_type: PositionType::Absolute, width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() },
-                BackgroundColor(bg),
+                BackgroundColor(base),
                 FocusPolicy::Pass,
                 ChildOf(e),
             ));
+            if fog.enabled {
+                let size = (bounds.1 - bounds.0).max(Vec2::splat(1e-6));
+                for (pos, radius) in &fog.reveal {
+                    let n = world_to_minimap(bounds, *pos);
+                    let (rw, rh) = (radius / size.x * 100.0, radius / size.y * 100.0);
+                    commands.spawn((
+                        MinimapMark,
+                        Node {
+                            position_type: PositionType::Absolute,
+                            left: Val::Percent(n.x * 100.0 - rw),
+                            bottom: Val::Percent(n.y * 100.0 - rh),
+                            width: Val::Percent(rw * 2.0),
+                            height: Val::Percent(rh * 2.0),
+                            border_radius: BorderRadius::MAX,
+                            ..default()
+                        },
+                        BackgroundColor(bg),
+                        FocusPolicy::Pass,
+                        ChildOf(e),
+                    ));
+                }
+            }
         }
         let dot = |commands: &mut Commands, d: &MinimapDot, size: f32| {
             let n = world_to_minimap(bounds, d.pos);

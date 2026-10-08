@@ -217,7 +217,7 @@ fn project_ships(
 ) -> Vec<Projected> {
     let right = gt.right();
     let mut out = Vec::with_capacity(ships.0.len());
-    for (&id, s) in &ships.0 {
+    for (&id, s) in ships.0.iter().filter(|(_, s)| s.visible) {
         let Ok(c) = camera.world_to_viewport(gt, s.pos) else {
             continue;
         };
@@ -540,7 +540,7 @@ fn enemy_at(ships: &RenderedShips, player: u8, ground: Vec3) -> Option<u32> {
     ships
         .0
         .values()
-        .filter(|s| s.side != player)
+        .filter(|s| s.side != player && s.visible)
         .map(|s| (s.id, Vec2::new(s.pos.x - ground.x, s.pos.z - ground.z).length() / (s.radius * ENEMY_CLICK_RADIUS).max(1.0)))
         .filter(|(_, d)| *d <= 1.0)
         .min_by(|a, b| a.1.total_cmp(&b.1))

@@ -41,6 +41,8 @@ pub struct ShipSnap {
     pub shield: f32,
     /// Squadron index for fighters, `u32::MAX` otherwise.
     pub squad: u32,
+    /// Bit s set = side s sees this ship (fog of war; everything is seen without it).
+    pub seen_by: u8,
     /// Hardpoint states (empty for fighters).
     pub hps: Vec<HpSnap>,
     /// Ability state per ability of the definition: (seconds of effect left, seconds until usable).
@@ -113,6 +115,7 @@ fn snapshot(battle: &Battle, events: Vec<Event>, step_ms: f32) -> Snapshot {
                 hull: s.hull,
                 shield: s.shield,
                 squad: s.squad,
+                seen_by: (0..battle.side_count().min(8)).filter(|&side| battle.is_visible_to(side as u8, s.id)).fold(0u8, |m, side| m | (1 << side)),
                 hps: s
                     .hps
                     .iter()

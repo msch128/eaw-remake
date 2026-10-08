@@ -242,7 +242,7 @@ fn control_camera(
     cam.focus += delta * pan_k;
 }
 
-fn apply_camera(bounds: Res<CameraBounds>, mut q: Query<(&GalaxyCamera, &mut Transform)>) {
+pub(crate) fn apply_camera(bounds: Res<CameraBounds>, mut q: Query<(&GalaxyCamera, &mut Transform)>) {
     for (cam, mut t) in &mut q {
         // Zooming in tilts the view slightly flatter, like the original game.
         let zoom_t = ((cam.distance - bounds.min_distance)

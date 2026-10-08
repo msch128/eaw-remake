@@ -35,6 +35,7 @@ pub use panels::{
     BANNER_AUTO, BANNER_BEGIN, BannerSide, BattleBannerSpec, DialogSpec, EawDialogResult, EawMinimapClicked, EawSlotDropped, MinimapData, MinimapDot,
     MinimapKind, PanelData, PanelSlot, fleet_slot_name, spawn_battle_banner, spawn_dialog,
 };
+pub use panels::MinimapFog;
 pub use tactical::{TacticalOverlayRoot, 
     AbilityDef, AbilityState, EawAbilityClicked, EawHardpointClicked, EawSelectionClicked,
     HardpointMarker, RetreatState, ShipOverlay, TacticalData, TacticalOverlays, TacticalUnit, ability_icon,
@@ -169,6 +170,7 @@ impl Plugin for EawUiPlugin {
             .init_resource::<PanelData>()
             .init_resource::<TacticalData>()
             .init_resource::<TacticalOverlays>()
+            .init_resource::<panels::MinimapFog>()
             .add_message::<EawAbilityClicked>()
             .add_message::<EawSelectionClicked>()
             .add_message::<EawHardpointClicked>()

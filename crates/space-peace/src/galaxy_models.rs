@@ -79,8 +79,9 @@ fn sync_stations(
                 commands.spawn((
                     Mesh3d(meshes.add(Circle::new(1.0).mesh().resolution(48))),
                     MeshMaterial3d(mats.add(StandardMaterial {
-                        base_color: Color::LinearRgba(LinearRgba::new(lin.red * 0.2, lin.green * 0.2, lin.blue * 0.2, 0.75)),
+                        base_color: Color::LinearRgba(LinearRgba::new(lin.red * 0.12, lin.green * 0.12, lin.blue * 0.05, 0.88)),
                         unlit: true,
+                        depth_bias: 1.0e6,
                         alpha_mode: AlphaMode::Blend,
                         cull_mode: None,
                         ..default()

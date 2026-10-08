@@ -97,7 +97,10 @@ fn spawn_bar(mut commands: Commands, session: Res<crate::BattleSession>) {
     commands.insert_resource(TacticalBarSpawned);
 }
 
-fn remove_bar(mut commands: Commands, bars: Query<Entity, With<EawCommandBar>>, mut tac: ResMut<TacticalData>, mut overlays: ResMut<TacticalOverlays>) {
+fn remove_bar(mut commands: Commands, bars: Query<Entity, With<EawCommandBar>>, mut tac: ResMut<TacticalData>, mut overlays: ResMut<TacticalOverlays>, mut fog: ResMut<eaw_ui::MinimapFog>) {
+    if fog.enabled {
+        *fog = eaw_ui::MinimapFog::default();
+    }
     // The overlay layer outlives the battle: emptying its data lets eaw-ui despawn every ship bar and reticle.
     if !overlays.ships.is_empty() || !overlays.hardpoints.is_empty() {
         *overlays = TacticalOverlays::default();
@@ -265,6 +268,9 @@ fn sync_minimap(
     ships: Res<RenderedShips>,
     camera: Single<(&Camera, &BattleCamera, &Projection)>,
     mut data: ResMut<MinimapData>,
+    mut fog: ResMut<eaw_ui::MinimapFog>,
+    sel: Res<Selection>,
+    settings: Res<BattleViewSettings>,
     mut since: Local<f32>,
 ) {
     *since += time.delta_secs();
@@ -278,8 +284,23 @@ fn sync_minimap(
     let units = ships
         .0
         .values()
-        .map(|s| MinimapDot { pos: flip(s.pos), color: rt.visuals.team_color(s.side), selected: false })
+        .filter(|s| s.visible)
+        .map(|s| MinimapDot { pos: flip(s.pos), color: rt.visuals.team_color(s.side), selected: sel.ships.contains(&s.id) })
         .collect();
+    // Fog of war: the sensor discs (`Space_FOW_Reveal_Range`) of the player's ships, one per grid cell of a quarter radius.
+    let mut cells: std::collections::BTreeMap<(i32, i32, i32), (Vec2, f32)> = Default::default();
+    if rt.fog_of_war {
+        for s in ships.0.values().filter(|s| s.side == settings.player_side) {
+            let r = rt.catalog.ship(s.def).sensor_range;
+            let p = flip(s.pos);
+            let q = (r * 0.25).max(1.0);
+            cells.entry(((p.x / q).round() as i32, (p.y / q).round() as i32, (r / 100.0) as i32)).or_insert((p, r));
+        }
+    }
+    let next_fog = eaw_ui::MinimapFog { enabled: rt.fog_of_war, reveal: cells.into_values().collect() };
+    if *fog != next_fog {
+        *fog = next_fog;
+    }
     let fov = match projection {
         Projection::Perspective(p) => p.fov,
         _ => 0.8,
@@ -532,7 +553,7 @@ fn sync_overlays(
     let mut next = TacticalOverlays::default();
     // One overlay per unit: a squadron is one unit, so its fighters share a single bracket and bar pair.
     let mut groups: BTreeMap<u64, Vec<u32>> = BTreeMap::new();
-    for (&id, s) in &ships.0 {
+    for (&id, s) in ships.0.iter().filter(|(_, s)| s.visible) {
         let relevant = sel.ships.contains(&id) || sel.enemy == Some(id) || hover.ship == Some(id);
         if s.squad == u32::MAX && !relevant {
             continue;

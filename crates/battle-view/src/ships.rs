@@ -35,6 +35,8 @@ pub struct ShipView {
     bank: f32,
     /// Radius of the visible geometry in world units (0 until the model has loaded).
     visual_radius: f32,
+    /// The model is shown (enemy ships hide in the fog of war).
+    shown: bool,
 }
 
 /// A destroyed ship that keeps drifting while it burns and blows up.
@@ -73,6 +75,8 @@ pub struct ShipRender {
     pub shield: f32,
     /// Squadron index of a fighter (`u32::MAX` for other ships).
     pub squad: u32,
+    /// The player's side sees this ship (false for enemies in the fog of war).
+    pub visible: bool,
     /// Hardpoint alive flags.
     pub hp_alive: Vec<bool>,
     /// Hardpoint health fractions 0..1.
@@ -268,6 +272,7 @@ pub fn update_ships(
                             last_yaw: yaw,
                             bank: 0.0,
                             visual_radius: 0.0,
+                            shown: true,
                         },
                     ))
                     .id();
@@ -309,6 +314,7 @@ pub fn update_ships(
         } else {
             0.0
         };
+        let visible = s.side == settings.player_side || (s.seen_by >> settings.player_side.min(7)) & 1 == 1;
         let hp_alive: Vec<bool> = s.hps.iter().map(|h| h.alive).collect();
         let hp_health: Vec<f32> = s
             .hps
@@ -339,6 +345,10 @@ pub fn update_ships(
                 d / 0.016
             };
             view.last_yaw = yaw;
+            if view.shown != visible {
+                view.shown = visible;
+                commands.entity(entity).insert(if visible { Visibility::Inherited } else { Visibility::Hidden });
+            }
             let max_bank = if fast { 0.9 } else { 0.25 };
             let want = (yaw_rate * if fast { 0.5 } else { 1.2 }).clamp(-max_bank, max_bank);
             view.bank += (want - view.bank) * 0.08;
@@ -379,6 +389,7 @@ pub fn update_ships(
                 hull: hull_frac,
                 shield: shield_frac,
                 squad: s.squad,
+                visible,
                 hp_alive,
                 hp_health,
             },

@@ -966,6 +966,8 @@ fn spawn_lanes(
         unlit: true,
         alpha_mode: AlphaMode::Add,
         cull_mode: None,
+        // Transparent objects sort by the distance of their centre: this one is huge, so push it to the very back.
+        depth_bias: -1.0e6,
         ..default()
     });
     let mut classes: [Vec<usize>; 3] = Default::default();
