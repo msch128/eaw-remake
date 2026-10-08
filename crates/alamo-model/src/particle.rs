@@ -96,8 +96,8 @@ impl ColorTrack {
     }
 }
 
-/// A float curve (size, spin) between a start and end value.
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
+/// A float curve (size, atlas frame, spin) over a particle's life.
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct FloatTrack {
     /// Value at birth.
     pub start: f32,
@@ -105,12 +105,25 @@ pub struct FloatTrack {
     pub end: f32,
     /// Mode word of the track header (0, 1 or 2; meaning unknown).
     pub mode: u32,
+    /// `(time fraction, value)` knots between start and end, sorted by time (the key payload is
+    /// `f32 value, f32 time`, like the color keys but with a float value).
+    pub keys: Vec<(f32, f32)>,
 }
 
 impl FloatTrack {
-    /// Linear value at life fraction `t`.
+    /// Piecewise linear value at life fraction `t` through the knots.
     pub fn at(&self, t: f32) -> f32 {
-        self.start + (self.end - self.start) * t.clamp(0.0, 1.0)
+        let t = t.clamp(0.0, 1.0);
+        let (mut pt, mut pv) = (0.0, self.start);
+        for &(kt, kv) in &self.keys {
+            if t <= kt {
+                let span = (kt - pt).max(1e-6);
+                return pv + (kv - pv) * ((t - pt) / span);
+            }
+            (pt, pv) = (kt, kv);
+        }
+        let span = (1.0 - pt).max(1e-6);
+        pv + (self.end - pv) * ((t - pt) / span)
     }
 }
 
@@ -249,7 +262,7 @@ fn track_header(d: &[u8]) -> (bool, f32, f32, u32) {
 
 fn parse_tracks(c: &Chunk) -> Result<([ColorTrack; 4], [FloatTrack; 3])> {
     let mut color: [ColorTrack; 4] = Default::default();
-    let mut floats = [FloatTrack::default(); 3];
+    let mut floats: [FloatTrack; 3] = Default::default();
     let mut index = 0usize;
     let mut header: Option<(bool, f32, f32, u32)> = None;
     for ch in c.children() {
@@ -276,7 +289,21 @@ fn parse_tracks(c: &Chunk) -> Result<([ColorTrack; 4], [FloatTrack; 3])> {
                         keys,
                     };
                 } else if index < 7 {
-                    floats[index - 4] = FloatTrack { start, end, mode };
+                    let mut keys: Vec<(f32, f32)> = minis(ch.data)
+                        .filter(|(id, p)| *id == 5 && p.len() == 8)
+                        .map(|(_, p)| {
+                            let v = f32::from_le_bytes([p[0], p[1], p[2], p[3]]);
+                            let t = f32::from_le_bytes([p[4], p[5], p[6], p[7]]);
+                            (t, v)
+                        })
+                        .collect();
+                    keys.sort_by(|a, b| a.0.total_cmp(&b.0));
+                    floats[index - 4] = FloatTrack {
+                        start,
+                        end,
+                        mode,
+                        keys,
+                    };
                 }
                 index += 1;
             }
@@ -368,9 +395,9 @@ fn parse_emitter(c: &Chunk) -> Result<Emitter> {
         velocity: shapes[1],
         extra: shapes[2],
         color,
-        size: floats[0],
-        frame: floats[1],
-        spin: floats[2],
+        size: floats[0].clone(),
+        frame: floats[1].clone(),
+        spin: floats[2].clone(),
         links,
         props,
     };

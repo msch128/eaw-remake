@@ -397,7 +397,18 @@ fn sample_box(rt: &mut EmitterRuntime, min: [f32; 3], max: [f32; 3]) -> Vec3 {
 
 fn spawn_particle(e: &Emitter, rt: &mut EmitterRuntime, to_world: &Affine3A, scale: f32) {
     let local_pos = sample_box(rt, e.position.min, e.position.max);
-    let local_vel = sample_box(rt, e.velocity.min, e.velocity.max);
+    let mut local_vel = sample_box(rt, e.velocity.min, e.velocity.max);
+    // `speed` (property 0x09) is a radial speed away from the emitter origin; negative values pull the
+    // particles inward (`inwardsucking` has -350, explosion fire +135). Inferred from names and magnitudes.
+    if e.speed != 0.0 {
+        let dir = if local_pos.length() > 1e-3 {
+            local_pos.normalize()
+        } else {
+            let d = Vec3::new(rt.range(-1.0, 1.0), rt.range(-1.0, 1.0), rt.range(-1.0, 1.0));
+            if d.length() > 1e-3 { d.normalize() } else { Vec3::Y }
+        };
+        local_vel += dir * e.speed;
+    }
     let (pos, vel) = if e.world_space {
         (
             to_world.transform_point3(local_pos),
@@ -560,7 +571,14 @@ fn build_quads(
         {
             continue;
         }
-        let cell = (e.frame.start.max(0.0) as u32).min(cells - 1);
+        // End values 0 and 2 are the editor default (4882 + 2430 of 8200 emitters); other end values
+        // (16, 49, 64, ... = sheet sizes) are real flipbook animations over the particle life (Inferred).
+        let frame = if e.frame.end > 2.0 && e.frame.end > e.frame.start {
+            e.frame.at(t)
+        } else {
+            e.frame.start
+        };
+        let cell = (frame.max(0.0) as u32).min(cells - 1);
         rt.quads.push(Quad {
             center,
             size,
