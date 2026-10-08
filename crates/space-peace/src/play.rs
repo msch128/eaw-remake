@@ -15,7 +15,7 @@ use galaxy_sim::{FleetLocation, PlanetId};
 
 use crate::battle_seam::{BattleFinished, BattleOutcome, BattleRequest, OpenBattle};
 use crate::cli::Args;
-use crate::flow::{AppScreen, CurrentCampaign, Paused};
+use crate::flow::{AppScreen, CurrentCampaign, Paused, StartCampaign};
 use crate::galaxy_map::Selection;
 use crate::galaxy_view::GalaxyView;
 use crate::game::{DEMO_CAMPAIGN, Game};
@@ -67,6 +67,7 @@ impl Plugin for PlayGluePlugin {
                 Update,
                 (
                     hold_clock,
+                    via_menu,
                     (sync_selection, sync_view, sync_radii, cursor_blocked, forward_battles, finish_battles, run_script)
                         .chain()
                         .run_if(resource_exists::<PlayBridge>),
@@ -393,4 +394,21 @@ fn run_script(
 /// research) or structures.
 pub fn is_structure(menu_target: BuildTarget) -> bool {
     matches!(menu_target, BuildTarget::Structure(_))
+}
+
+/// Offscreen `--via-menu`: walks main menu -> campaign list -> campaign like a player (the clicks
+/// themselves are the `StartCampaign` message the campaign buttons send).
+fn via_menu(args: Res<Args>, screen: Res<State<AppScreen>>, mut next: ResMut<NextState<AppScreen>>, mut start: MessageWriter<StartCampaign>, mut sent: Local<u32>) {
+    if !args.via_menu || args.offscreen.is_none() {
+        return;
+    }
+    *sent += 1;
+    match screen.get() {
+        AppScreen::MainMenu if *sent > 20 => next.set(AppScreen::CampaignSelect),
+        AppScreen::CampaignSelect if *sent > 40 => {
+            start.write(StartCampaign(args.campaign.clone().unwrap_or_else(|| "GC_Full_Web_Way_Rebel".into())));
+            *sent = 0;
+        }
+        _ => {}
+    }
 }

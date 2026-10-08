@@ -64,7 +64,7 @@ impl Plugin for BattlePlayPlugin {
             .add_systems(OnExit(AppScreen::SpaceBattle), end_session)
             .add_systems(
                 Update,
-                (finish_battle_view, abort_key, battle_ui_camera, battle_shot)
+                (finish_battle_view, abort_key, battle_ui_camera, battle_shot, battle_header)
                     .run_if(in_state(AppScreen::SpaceBattle).and_then(resource_exists::<PendingTactical>)),
             );
     }
@@ -176,20 +176,10 @@ fn battle_shot(
     status: Res<BattleStatus>,
     target: Option<Res<OffscreenTarget>>,
     ships: Res<battle_view::RenderedShips>,
-    mut cam: Option<Single<&mut BattleCamera>>,
     mut shot: ResMut<BattleShot>,
 ) {
     let (Some(out), Some(target)) = (args.offscreen.as_ref(), target) else { return };
     shot.frames += 1;
-    // Headless there is no player to look around: frame the whole fight.
-    if let Some(cam) = cam.as_mut().filter(|_| !ships.0.is_empty() && shot.frames.is_multiple_of(60)) {
-        let n = ships.0.len() as f32;
-        let center = ships.0.values().map(|s| s.pos).sum::<Vec3>() / n;
-        let radius = ships.0.values().map(|s| (s.pos - center).length()).fold(0.0f32, f32::max);
-        cam.snap = true;
-        cam.target_focus = center;
-        cam.target_distance = (radius * 1.7).clamp(1500.0, 16000.0);
-    }
     let at = args.battle_seconds.unwrap_or(12.0);
     // Models and textures load asynchronously: wait a couple of hundred frames.
     if shot.taken || status.tick == 0 || status.time < at || shot.frames < 200 {
@@ -199,7 +189,7 @@ fn battle_shot(
     let mut path = out.clone();
     let stem = path.file_stem().map_or_else(|| "out".into(), |s| s.to_string_lossy().into_owned());
     path.set_file_name(format!("{stem}_battle.png"));
-    info!("battle: capture at t={:.1}s alive {:?} rendered {} camera {:?} -> {}", status.time, status.alive, ships.0.len(), cam.as_ref().map(|c| (c.focus, c.distance)), path.display());
+    info!("battle: capture at t={:.1}s alive {:?} rendered {} -> {}", status.time, status.alive, ships.0.len(), path.display());
     commands
         .spawn(Screenshot(RenderTarget::Image(ImageRenderTarget { handle: target.image.clone(), scale_factor: target.scale_factor })))
         .observe(save_to_disk(path));
@@ -246,4 +236,16 @@ fn end_session(
     *shot = BattleShot::default();
     hold.waiting_battle = false;
     hold.done_at = Some(std::time::Instant::now());
+}
+
+/// Header of the tactical bar: the planet the battle is at (the bar shares `CommandBarData` with the
+/// galactic bar).
+fn battle_header(pending: Res<PendingTactical>, state: Option<Res<galaxy_play::SimState>>, data: Option<ResMut<eaw_ui::CommandBarData>>) {
+    let (Some(state), Some(mut data)) = (state, data) else { return };
+    let name = state.world.planets[pending.0.planet as usize].display_name.clone();
+    if data.planet_name != name {
+        data.planet_name = name;
+        data.planet_owner = None;
+        data.planet_income = 0;
+    }
 }

@@ -77,6 +77,7 @@ fn main() {
 
     // Screen shown once loading is done: the menu, unless a campaign (or a screen) was requested.
     let after = match args.screen.as_deref() {
+        _ if args.via_menu => AppScreen::MainMenu,
         Some("campaigns") => AppScreen::CampaignSelect,
         Some("galaxy" | "pause") => AppScreen::Galaxy,
         Some("menu" | "loading" | "options") => AppScreen::MainMenu,

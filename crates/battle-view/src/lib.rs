@@ -105,7 +105,7 @@ impl Default for BattleViewSettings {
             ui_scale: 1.0,
             sky_radius: 90_000.0,
             fov_degrees: 45.0,
-            start_distance: 4500.0,
+            start_distance: 2000.0,
             audio: true,
         }
     }
@@ -344,6 +344,8 @@ fn start_battle(
     let dt = battle.config().dt;
     let sim = SimHandle::spawn(battle);
     sim.request(2);
+    let l = &session.scene.lights;
+    info!("battle scene lights: sun dir {:?} color {:?}, fill colors {:?} {:?}, ambient {:?}", l[0].direction, l[0].color, l[1].color, l[2].color, session.scene.ambient);
     let sky = settings.sky_radius;
     scene::spawn_scene(&mut commands, &session.scene, sky);
 

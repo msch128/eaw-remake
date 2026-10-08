@@ -75,7 +75,7 @@ impl Plugin for PlayUiPlugin {
                     spawn_hud,
                     feed_bar.run_if(in_state(AppScreen::Galaxy)),
                     feed_minimap.run_if(resource_exists::<MinimapData>.and_then(in_state(AppScreen::Galaxy))),
-                    minimap_pan,
+                    minimap_pan.run_if(in_state(AppScreen::Galaxy)),
                     bar_clicks,
                     refresh_ticker,
                     refresh_texts,
@@ -443,11 +443,10 @@ fn battle_dialog_result(mut results: MessageReader<EawDialogResult>, mut dialog:
 }
 
 /// With a command bar in the bottom left corner the planet details move to the right edge.
-fn move_info_panel(mut panel: Single<&mut Node, With<InfoPanel>>, mut done: Local<bool>) {
-    if *done {
+fn move_info_panel(mut panel: Single<&mut Node, With<InfoPanel>>) {
+    if panel.right == Val::Px(16.0) {
         return;
     }
-    *done = true;
     panel.left = Val::Auto;
     panel.bottom = Val::Auto;
     panel.right = Val::Px(16.0);

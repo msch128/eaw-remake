@@ -13,9 +13,11 @@ use battle_sim::Command;
 use bevy::prelude::*;
 use eaw_ui::textures::UiTextures;
 use eaw_ui::{
-    AbilityState, CommandBarMode, CommandBarSpec, EawAbilityClicked, EawButtonClicked, EawCommandBar, EawSelectionClicked, EawUiAssets,
-    EawUiCommandsExt, RetreatState, TacticalData, TacticalUnit, UiFaction,
+    AbilityState, CommandBarMode, CommandBarSpec, EawAbilityClicked, EawButtonClicked, EawCommandBar, EawMinimapClicked, EawSelectionClicked,
+    EawUiAssets, EawUiCommandsExt, MinimapData, MinimapDot, RetreatState, TacticalData, TacticalUnit, UiFaction,
 };
+
+use crate::camera::BattleCamera;
 
 use crate::control::Selection;
 use crate::ships::RenderedShips;
@@ -31,7 +33,7 @@ impl Plugin for TacticalUiPlugin {
             (
                 spawn_bar.run_if(resource_added::<BattleRuntime>),
                 remove_bar.run_if(resource_removed::<BattleRuntime>),
-                (sync_data, handle_clicks).chain().run_if(resource_exists::<BattleRuntime>),
+                (sync_data, handle_clicks, sync_minimap, minimap_pan).chain().run_if(resource_exists::<BattleRuntime>),
             )
                 .chain(),
         );
@@ -58,6 +60,7 @@ fn remove_bar(mut commands: Commands, bars: Query<Entity, With<EawCommandBar>>, 
 }
 
 /// Fills [`TacticalData`] from the selection and the displayed step.
+#[allow(clippy::too_many_arguments)]
 fn sync_data(
     rt: Res<BattleRuntime>,
     sel: Res<Selection>,
@@ -137,6 +140,7 @@ fn sync_data(
 }
 
 /// Turns clicks on the bar into selection changes and commands.
+#[allow(clippy::too_many_arguments)]
 fn handle_clicks(
     rt: Res<BattleRuntime>,
     settings: Res<BattleViewSettings>,
@@ -171,5 +175,50 @@ fn handle_clicks(
             sel.ships = group.clone();
             tac.focus = c.index;
         }
+    }
+}
+
+/// The tactical minimap: map bounds, every ship in its side's colour and the camera's view.
+/// Minimap coordinates are map space, x right and y up (Bevy `-z`).
+fn sync_minimap(
+    time: Res<Time>,
+    rt: Res<BattleRuntime>,
+    ships: Res<RenderedShips>,
+    camera: Single<(&Camera, &BattleCamera, &Projection)>,
+    mut data: ResMut<MinimapData>,
+    mut since: Local<f32>,
+) {
+    *since += time.delta_secs();
+    if *since < 0.1 && data.bounds.is_some() {
+        return;
+    }
+    *since = 0.0;
+    let (cam, orbit, projection) = *camera;
+    let flip = |p: Vec3| Vec2::new(p.x, -p.z);
+    let bounds = (Vec2::new(orbit.bounds_min.x, -orbit.bounds_max.y), Vec2::new(orbit.bounds_max.x, -orbit.bounds_min.y));
+    let units = ships
+        .0
+        .values()
+        .map(|s| MinimapDot { pos: flip(s.pos), color: rt.visuals.team_color(s.side), selected: false })
+        .collect();
+    let fov = match projection {
+        Projection::Perspective(p) => p.fov,
+        _ => 0.8,
+    };
+    let aspect = cam.logical_viewport_size().map_or(1.78, |s| s.x / s.y.max(1.0));
+    let half_h = orbit.distance * (fov * 0.5).tan() / orbit.pitch.sin().max(0.3);
+    let center = flip(orbit.focus);
+    let half = Vec2::new(half_h * aspect, half_h);
+    let next = MinimapData { bounds: Some(bounds), planets: Vec::new(), units, camera: Some((center - half, center + half)) };
+    if *data != next {
+        *data = next;
+    }
+}
+
+/// Click or drag on the minimap moves the battle camera.
+fn minimap_pan(mut clicks: MessageReader<EawMinimapClicked>, mut camera: Single<&mut BattleCamera>) {
+    if let Some(c) = clicks.read().last() {
+        let y = camera.target_focus.y;
+        camera.target_focus = Vec3::new(c.world.x, y, -c.world.y);
     }
 }
