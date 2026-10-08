@@ -294,17 +294,24 @@ fn on_model_failed(
     }
 }
 
-/// One of the game's own space loading screens (`Art/Textures/LoadScreens`) behind the progress bar.
-fn spawn_art(commands: &mut Commands, fs: &GameFs, images: &mut Assets<Image>) {
+/// A random loading screen of the game (`Art/Textures/LoadScreens`), of `faction` (`Rebel`, `Empire`, `Underworld`) when it has some.
+pub fn load_art(fs: &GameFs, faction: Option<&str>, images: &mut Assets<Image>) -> Option<Handle<Image>> {
     use alamo_fs::FileSource;
     use bevy::asset::RenderAssetUsages;
     use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
-    let n = 1 + std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.subsec_nanos() as usize) % 8;
-    let name = format!("Art/Textures/LoadScreens/AAA_NEW_SPACE_{n}.PNG");
-    let Some(rgba) = fs.read(&name).ok().and_then(|b| alamo_model::image::decode_texture(&b).ok()) else {
-        warn!("loading art {name} not available");
-        return;
+    let seed = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.subsec_nanos() as usize);
+    let prefix = match faction.map(str::to_ascii_lowercase).as_deref() {
+        Some("rebel") => Some("SPACE_REBEL"),
+        Some("empire") => Some("SPACE_EMPIRE"),
+        Some("underworld") => Some("SPACE_UNDERWORLD"),
+        _ => None,
     };
+    let mut candidates: Vec<String> = Vec::new();
+    if let Some(p) = prefix {
+        candidates.extend((0..30).map(|i| format!("Art/Textures/LoadScreens/{p}_{}.PNG", 1 + (seed + i) % 30)));
+    }
+    candidates.extend((0..8).map(|i| format!("Art/Textures/LoadScreens/AAA_NEW_SPACE_{}.PNG", 1 + (seed + i) % 8)));
+    let rgba = candidates.iter().find_map(|n| fs.read(n).ok().and_then(|b| alamo_model::image::decode_texture(&b).ok()))?;
     let image = Image::new(
         Extent3d { width: rgba.width as u32, height: rgba.height as u32, depth_or_array_layers: 1 },
         TextureDimension::D2,
@@ -312,9 +319,18 @@ fn spawn_art(commands: &mut Commands, fs: &GameFs, images: &mut Assets<Image>) {
         TextureFormat::Rgba8UnormSrgb,
         RenderAssetUsages::RENDER_WORLD,
     );
+    Some(images.add(image))
+}
+
+/// The loading screen art behind the progress bar.
+fn spawn_art(commands: &mut Commands, fs: &GameFs, images: &mut Assets<Image>) {
+    let Some(handle) = load_art(fs, None, images) else {
+        warn!("loading art not available");
+        return;
+    };
     commands.spawn((
         Node { position_type: PositionType::Absolute, width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() },
-        ImageNode::new(images.add(image)).with_mode(NodeImageMode::Stretch),
+        ImageNode::new(handle).with_mode(NodeImageMode::Stretch),
         GlobalZIndex(19),
         LoadingUi,
     ));

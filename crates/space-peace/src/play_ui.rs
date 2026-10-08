@@ -700,12 +700,16 @@ struct LoadText;
 #[derive(Component)]
 struct LoadFill;
 
+#[allow(clippy::too_many_arguments)]
 fn loading_overlay(
     mut commands: Commands,
     state: Res<SimState>,
     overlay: Query<Entity, With<LoadOverlay>>,
     mut text: Query<&mut Text, With<LoadText>>,
     mut fill: Query<&mut Node, With<LoadFill>>,
+    game: Res<crate::game::Game>,
+    mut images: ResMut<Assets<Image>>,
+    campaign: Res<crate::flow::CurrentCampaign>,
 ) {
     let progress = state.driver.load_progress();
     let busy = state.current.loading || progress.is_some();
@@ -720,6 +724,7 @@ fn loading_overlay(
         None => ("Preparing galaxy...".to_owned(), 0.05),
     };
     if overlay.is_empty() {
+        let art = game.0.as_ref().and_then(|g| crate::loading::load_art(&g.fs, campaign.faction.as_deref(), &mut images));
         commands
             .spawn((
                 LoadOverlay,
@@ -733,12 +738,18 @@ fn loading_overlay(
                     row_gap: Val::Px(14.0),
                     ..default()
                 },
-                BackgroundColor(Color::srgba(0.0, 0.0, 0.03, 0.75)),
+                BackgroundColor(if art.is_some() { Color::BLACK } else { Color::srgba(0.0, 0.0, 0.03, 0.75) }),
                 GlobalZIndex(40),
                 Interaction::default(),
                 bevy::ui::FocusPolicy::Block,
             ))
             .with_children(|root| {
+                if let Some(h) = art.clone() {
+                    root.spawn((
+                        Node { position_type: PositionType::Absolute, width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() },
+                        ImageNode::new(h).with_mode(NodeImageMode::Stretch),
+                    ));
+                }
                 root.spawn((text_bundle(&label, 26.0, Color::srgb(0.85, 0.93, 1.0)), LoadText));
                 root.spawn((
                     Node { width: Val::Px(420.0), height: Val::Px(12.0), border: UiRect::all(Val::Px(1.0)), ..default() },

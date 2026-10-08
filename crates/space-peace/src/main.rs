@@ -11,6 +11,7 @@ mod game;
 mod loading;
 mod logfile;
 mod menu;
+mod menu_scene;
 mod newgame;
 mod offscreen;
 mod options;
@@ -159,6 +160,7 @@ fn main() {
             FlowPlugin,
             LoadingPlugin,
             MenuPlugin,
+            menu_scene::MenuScenePlugin,
             NewGamePlugin,
             OptionsPlugin,
             SettingsPlugin,

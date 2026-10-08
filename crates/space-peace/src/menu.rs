@@ -235,7 +235,7 @@ impl Plugin for MenuPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Campaigns>()
             .add_message::<MenuClicked>()
-            .add_systems(OnEnter(AppScreen::MainMenu), (spawn_main_menu, spawn_backdrop))
+            .add_systems(OnEnter(AppScreen::MainMenu), (spawn_main_menu, spawn_backdrop_unless_scene))
             .add_systems(OnEnter(AppScreen::CampaignSelect), (spawn_campaign_menu, spawn_backdrop))
             .add_systems(OnEnter(AppScreen::Galaxy), despawn_backdrop)
             .add_systems(OnEnter(AppScreen::Galaxy), sync_pause_menu)
@@ -261,7 +261,7 @@ impl Plugin for MenuPlugin {
     }
 }
 
-fn spawn_main_menu(mut commands: Commands, problem: Res<StartupProblem>) {
+pub(crate) fn spawn_main_menu(mut commands: Commands, problem: Res<StartupProblem>) {
     match &problem.0 {
         Some(m) => spawn_menu(&mut commands, &problem_spec(m), ScreenMenu),
         None => spawn_menu(&mut commands, &main_menu_spec(), ScreenMenu),
@@ -275,6 +275,14 @@ fn spawn_campaign_menu(mut commands: Commands, campaigns: Res<Campaigns>, option
 /// Marks the 3D scene behind the menus: the galaxy art with its star dome.
 #[derive(Component, Clone)]
 pub struct MenuBackdrop;
+
+/// The galaxy art stays away while the title scene runs (it is spawned right after this system on the main menu).
+fn spawn_backdrop_unless_scene(commands: Commands, game: Res<Game>, existing: Query<(), With<MenuBackdrop>>) {
+    if game.0.is_some() {
+        return;
+    }
+    spawn_backdrop(commands, game, existing);
+}
 
 /// Spawns the galaxy art behind the menus (once; it stays while moving between menu screens).
 fn spawn_backdrop(
@@ -304,7 +312,10 @@ fn despawn_backdrop(mut commands: Commands, backdrop: Query<Entity, With<MenuBac
 }
 
 /// Slowly orbits the camera around the galaxy while a menu is shown.
-fn backdrop_camera(time: Res<Time>, mut camera: Single<&mut Transform, With<GalaxyCamera>>) {
+fn backdrop_camera(time: Res<Time>, scene: Option<Res<crate::menu_scene::MenuSceneInfo>>, mut camera: Single<&mut Transform, With<GalaxyCamera>>) {
+    if scene.is_some() {
+        return;
+    }
     let angle = time.elapsed_secs() * 0.03;
     let eye = Quat::from_rotation_y(angle) * Vec3::new(0.0, 1000.0, 1250.0);
     **camera = Transform::from_translation(eye).looking_at(Vec3::new(0.0, 0.0, 0.0), Vec3::Y);
