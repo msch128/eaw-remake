@@ -679,7 +679,7 @@ fn scripted_battle_click(
     mut commands: Commands,
 ) {
     let (Some(choice), Some((_, e))) = (args.battle_choice.as_deref(), dialog.open) else { return };
-    if args.offscreen.is_none() || hold.active {
+    if !args.scripted() || hold.active {
         return;
     }
     let button = usize::from(choice != "fight");
@@ -899,7 +899,7 @@ fn scripted_clicks(
     mut galaxy_frames: Local<u32>,
     mut battle_frames: Local<u32>,
 ) {
-    if args.offscreen.is_none() {
+    if !args.scripted() {
         return;
     }
     let (list, frames) = match screen.get() {
@@ -966,7 +966,7 @@ fn force_end_script(
     mut commands: Commands,
     mut frames: Local<u32>,
 ) {
-    let (Some(mode), Some(me), true) = (args.force_end.as_deref(), player.0, args.offscreen.is_some()) else { return };
+    let (Some(mode), Some(me), true) = (args.force_end.as_deref(), player.0, args.scripted()) else { return };
     let win = mode.starts_with("win");
     if hold.active || state.current.loading {
         return;
@@ -1142,7 +1142,7 @@ fn focus_start(
     if *done == game || state.current.loading {
         return;
     }
-    if args.offscreen.is_some() && (args.select.is_some() || args.zoom.is_some()) {
+    if args.scripted() && (args.select.is_some() || args.zoom.is_some()) {
         *done = game;
         return;
     }
@@ -1267,7 +1267,7 @@ fn superweapon_button(
         }
         (None, None) => {}
     }
-    let scripted_press = args.offscreen.is_some() && args.fire.is_some() && *auto_frames == 60;
+    let scripted_press = args.scripted() && args.fire.is_some() && *auto_frames == 60;
     if (interaction.iter().any(|(i, _)| *i == Interaction::Pressed) || scripted_press)
         && let Some((p, true)) = *dialog
         && ask.0.is_none()
@@ -1299,7 +1299,7 @@ fn superweapon_dialog(
     mut commands: Commands,
 ) {
     // Offscreen `--fire confirm`: press "Fire" in the dialog after a short wait, like a click.
-    if args.offscreen.is_some() && args.fire.as_deref() == Some("confirm") && let Some((e, p)) = ask.0 {
+    if args.scripted() && args.fire.as_deref() == Some("confirm") && let Some((e, p)) = ask.0 {
         *waited += 1;
         if *waited == 90 {
             info!("script: clicking `Fire` in the superweapon dialog");

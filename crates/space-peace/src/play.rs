@@ -316,7 +316,7 @@ fn run_script(
     mut actions: MessageWriter<PlayAction>,
     screen: Res<State<AppScreen>>,
 ) {
-    if args.offscreen.is_none() || script.phase >= 3 || *screen.get() != AppScreen::Galaxy {
+    if !args.scripted() || script.phase >= 3 || *screen.get() != AppScreen::Galaxy {
         return;
     }
     let (Some(mut state), Some(catalog), Some(player)) = (state, catalog, player) else { return };
@@ -443,7 +443,7 @@ pub fn is_structure(menu_target: BuildTarget) -> bool {
 /// Offscreen `--via-menu`: walks main menu -> campaign list -> campaign like a player (the clicks
 /// themselves are the `StartCampaign` message the campaign buttons send).
 fn via_menu(args: Res<Args>, screen: Res<State<AppScreen>>, mut next: ResMut<NextState<AppScreen>>, mut start: MessageWriter<StartCampaign>, mut sent: Local<u32>) {
-    if !args.via_menu || args.offscreen.is_none() {
+    if !args.via_menu || !args.scripted() {
         return;
     }
     *sent += 1;
@@ -511,7 +511,7 @@ fn scripted_slots(
     mut frames: Local<u32>,
 ) {
     use crate::newgame::{SlotChosen, SlotMode};
-    let (Some(mode), true) = (args.slots.as_deref(), args.offscreen.is_some()) else { return };
+    let (Some(mode), true) = (args.slots.as_deref(), args.scripted()) else { return };
     if *screen.get() != AppScreen::Galaxy || state.is_none_or(|s| s.current.loading) {
         return;
     }
@@ -554,7 +554,7 @@ fn sync_destroyed(
         list.push(i);
     }
     // `--force-wreck` also plays the explosion once, as the simulation event would.
-    if args.force_wreck.is_some() && args.offscreen.is_some() {
+    if args.force_wreck.is_some() && args.scripted() {
         *frames += 1;
         if *frames == 150
             && let (Some(b), Some(i)) = (bridge.as_ref(), list.last())

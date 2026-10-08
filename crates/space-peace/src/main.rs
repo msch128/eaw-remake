@@ -144,8 +144,8 @@ fn main() {
             app.add_plugins(AlamoAudioPlugin::new(fs.clone() as Arc<dyn FileSource>));
         }
     }
-    if args.hidden && offscreen.is_none() {
-        let frames = args.frames;
+    if (args.hidden || args.exit_after.is_some()) && offscreen.is_none() {
+        let frames = args.exit_after.unwrap_or(args.frames);
         app.add_systems(Last, move |mut n: Local<u32>, mut exit: MessageWriter<bevy::app::AppExit>| {
             *n += 1;
             if *n >= frames {

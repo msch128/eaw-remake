@@ -243,7 +243,7 @@ fn begin_session(world: &mut World) {
             let _ = tx.send((result, req.battle_id, req.planet_name.clone(), started.elapsed()));
         })
         .expect("spawn battle setup thread");
-    world.insert_resource(SessionBuild { rx: std::sync::Mutex::new(rx), msaa, bloom, shadows, density, target, speed: args.battle_speed });
+    world.insert_resource(SessionBuild { rx: std::sync::Mutex::new(rx), msaa, bloom, shadows, density, target, speed: args.battle_speed, scripted_pointer: args.battle_orders });
 }
 
 /// Longest frame time seen while a battle loads (seconds).
@@ -261,6 +261,8 @@ struct SessionBuild {
     density: f32,
     target: Option<(Handle<Image>, f32)>,
     speed: Option<f32>,
+    /// `--battle-orders` in a windowed run: the script, not the mouse, writes the pointer.
+    scripted_pointer: bool,
 }
 
 /// Starts the battle when the worker is done.
@@ -271,6 +273,7 @@ fn poll_session_build(world: &mut World) {
     let build = world.remove_resource::<SessionBuild>().expect("present");
     let (msaa, bloom, shadows, density, target) = (build.msaa, build.bloom, build.shadows, build.density, build.target);
     let args_speed = build.speed;
+    let scripted_pointer = build.scripted_pointer;
     match result {
         Ok(session) => {
             info!("battle: session for {planet} built in {took:.2?} (off the main thread)");
@@ -288,7 +291,10 @@ fn poll_session_build(world: &mut World) {
                     settings.synthetic_pointer = true;
                     settings.audio = false;
                 }
-                None => settings.audio = true,
+                None => {
+                    settings.audio = true;
+                    settings.synthetic_pointer = scripted_pointer;
+                }
             }
             world.insert_resource(session);
         }

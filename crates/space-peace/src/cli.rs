@@ -54,6 +54,8 @@ pub struct Args {
     pub via_menu: bool,
     /// Open the real window but keep it invisible, run `--frames` frames and exit (`--hidden`; with `--volume 0`): checks the windowed plugin set.
     pub hidden: bool,
+    /// Quit after this many frames (`--exit-after <n>`, for short windowed test runs).
+    pub exit_after: Option<u32>,
     /// Offscreen only: grant the player this unit type at `--at` (needs the debug commands; `--grant-unit Death_Star`).
     pub grant_unit: Option<String>,
     /// Planet of `--grant-unit`.
@@ -116,6 +118,7 @@ impl Default for Args {
             battle_orders: false,
             via_menu: false,
             hidden: false,
+            exit_after: None,
             grant_unit: None,
             at: None,
             fire: None,
@@ -163,6 +166,7 @@ OPTIONS:
   --battle-auto           Offscreen: the AI plays both sides of a tactical battle
   --via-menu            Offscreen: start from the main menu and click through to the campaign
   --hidden              Real but invisible window, run --frames frames and exit (smoke test of the windowed setup)
+  --exit-after <n>      Quit after n frames (short windowed test runs)
   --grant-unit <u> --at <p>  Offscreen: give the player a unit at a planet (debug)
   --fire <ask|confirm>   Offscreen: press the superweapon button / also confirm the dialog
   --force-wreck <planet> Offscreen: draw this planet as a destroyed wreck
@@ -181,6 +185,11 @@ OPTIONS:
 ";
 
 impl Args {
+    /// True for scripted test runs (offscreen, hidden window, or a timed windowed run): the scenario flags apply.
+    pub fn scripted(&self) -> bool {
+        self.offscreen.is_some() || self.hidden || self.exit_after.is_some()
+    }
+
     /// Parses `std::env::args()`; prints usage and exits on `--help` or invalid input.
     pub fn from_env() -> Self {
         match Self::parse(std::env::args().skip(1)) {
@@ -235,6 +244,7 @@ impl Args {
                 "--battle-orders" => out.battle_orders = true,
                 "--via-menu" => out.via_menu = true,
                 "--hidden" => out.hidden = true,
+                "--exit-after" => out.exit_after = Some(it.next().ok_or("--exit-after needs a number")?.parse().map_err(|e| format!("bad --exit-after: {e}"))?),
                 "--grant-unit" => out.grant_unit = Some(it.next().ok_or("--grant-unit needs a unit")?),
                 "--at" => out.at = Some(it.next().ok_or("--at needs a planet")?),
                 "--fire" => out.fire = Some(it.next().ok_or("--fire needs ask or confirm")?),

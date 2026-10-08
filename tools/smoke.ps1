@@ -41,6 +41,7 @@ $scenarios = @(
     # The real windowed plugin set (audio, window systems) with an invisible window and zero volume; no picture is made.
     @('windowed-menu',       @('--hidden', '--volume', '0', '--frames', '400'), 'install'),
     @('windowed-galaxy',     @('--hidden', '--volume', '0', '--campaign', $camp, '--frames', '700'), 'human faction'),
+    @('windowed-battle',     @('--hidden', '--no-vsync', '--exit-after', '9000', '--volume', '0', '--campaign', $camp, '--select', $yavin, '--weeks', '8', '--move', 'Hoth', '--battle-choice', 'fight', '--battle-auto', '--battle-speed', '30'), 'battle: over'),
     @('battle-reinforce',    @('--campaign', $camp, '--select', $yavin, '--weeks', '8', '--move', 'Hoth', '--battle-choice', 'fight', '--battle-reserve', '3', '--battle-click', 'b_reinforcement,r_0000', '--battle-speed', '30', '--frames', '5'), 'simulation accepted')
 )
 
