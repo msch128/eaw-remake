@@ -41,3 +41,8 @@ the first directional light. `battle-view` spawns the map's fill lights from the
   The same ISD is clean in `render_scene`/`battle` (also with `--shadows`), so the speckle comes from the battle-view setup (camera, scale, lights),
   not from the Alamo shader. Not yet identified.
 - Not done: 4K frame-time comparison, sun glare/lens flare, engine-glow tuning (the X-wing glow is present, the Acclamator shows none without bloom).
+- Lit and planet paths now saturate the summed light (ambient + sun + fills) per channel before the albedo, like EaW's LDR renderer. On the Kuat
+  map the renders are visually unchanged: the hull is bright because of its albedo, not because of overexposed light. The hull "speckle" in battle
+  renders is the hull texture's own grain (finer at 4K); no bug found (near plane, MSAA, bloom, spec, normal map, stacked ships all ruled out).
+- `battle_demo` frame-time stats now skip the frames after a screenshot (the 4K readback stall was the old 187 ms max). 4K, ~290 ships: mean 7.2 ms,
+  p99 9.5 ms, max 57 ms (one remaining hitch, not located: probably a first-use asset/effect load mid-battle).

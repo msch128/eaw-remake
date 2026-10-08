@@ -49,6 +49,8 @@ struct Capture {
     last: Instant,
     wall_start: Instant,
     warm: u32,
+    /// Frames to leave out of the statistics after a screenshot (the readback stalls the frame).
+    skip: u32,
     frames: u32,
     cam_applied: bool,
     auto: bool,
@@ -201,6 +203,7 @@ fn main() {
                 last: Instant::now(),
                 wall_start: Instant::now(),
                 warm: 0,
+                skip: 0,
                 frames: 0,
                 cam_applied: false,
                 auto,
@@ -307,7 +310,9 @@ fn capture_driver(
 
     // Frame time statistics start once the first step has been reached.
     cap.warm += 1;
-    if cap.warm > 40 {
+    if cap.skip > 0 {
+        cap.skip -= 1;
+    } else if cap.warm > 40 {
         cap.frame_ms.push(dt);
     }
     if cap.next < cap.times.len() && status.time >= cap.times[cap.next] && cap.warm > 30 {
@@ -319,6 +324,7 @@ fn capture_driver(
         };
         cap.next += 1;
         cap.pending += 1;
+        cap.skip = 4;
         println!(
             "capture t={:.1}s tick {} alive {:?} step {:.2} ms; {} particles in {} batches ({:.2} ms cpu)",
             status.time, status.tick, status.alive, status.step_ms, stats.live, stats.batches, stats.cpu_ms
@@ -348,7 +354,7 @@ fn capture_driver(
                             let pct = |p: f64| ms[((ms.len() - 1) as f64 * p) as usize];
                             let mean = ms.iter().sum::<f64>() / ms.len() as f64;
                             println!(
-                                "frame time over {} frames at {w}x{h}: mean {mean:.2} ms, p50 {:.2}, p95 {:.2}, p99 {:.2}, max {:.2}",
+                                "frame time over {} frames at {w}x{h}: mean {mean:.2} ms, p50 {:.2}, p95 {:.2}, p99 {:.2}, max {:.2} (excluding screenshot frames)",
                                 ms.len(),
                                 pct(0.5),
                                 pct(0.95),

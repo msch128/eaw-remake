@@ -105,6 +105,12 @@ fn fill_light(n: vec3<f32>) -> vec3<f32> {
     return sum;
 }
 
+// EaW is an LDR renderer: the summed diffuse light (ambient + every light) saturates per channel before
+// the albedo is applied; specular and emissive are added afterwards.
+fn saturate3(c: vec3<f32>) -> vec3<f32> {
+    return clamp(c, vec3<f32>(0.0), vec3<f32>(1.0));
+}
+
 // Specular antialiasing (screen-space normal variance, Tokuyoshi/Kaplanyan): widens the Blinn-Phong lobe
 // where the shading normal changes quickly between pixels, so bumpy hulls and terrain do not sparkle.
 fn filtered_shininess(n: vec3<f32>, shininess: f32) -> f32 {
@@ -198,7 +204,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) front: bool) -> @location(0
         let wrap = 0.0;
         let ndl = saturate(dot(n, L));
         let cdl = saturate(dot(ncloud, L));
-        let surf = base.rgb * mat.diffuse.rgb * (amb + sun * ndl + fill_light(n));
+        let surf = base.rgb * mat.diffuse.rgb * saturate3(amb + sun * ndl + fill_light(n));
         let H = normalize(L + V);
         let spec = mat.specular.rgb * spec_mask * pow(saturate(dot(n, H)), filtered_shininess(n, max(mat.shininess, 8.0))) * sun * step(0.0, dot(N, L));
         var col = surf + spec;
@@ -248,7 +254,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) front: bool) -> @location(0
     let H = normalize(L + V);
     let spec = mat.specular.rgb * spec_mask * pow(saturate(dot(n, H)), filtered_shininess(n, max(mat.shininess, 1.0))) * sun * step(0.0, dot(N, L)) * shadow;
     // Emissive is the self-illumination of the base texture.
-    rgb = albedo * (amb + sun * ndl + fill_light(n)) + spec + mat.emissive.rgb * base.rgb;
+    rgb = albedo * saturate3(amb + sun * ndl + fill_light(n)) + spec + mat.emissive.rgb * base.rgb;
     if mat.kind == KIND_ALPHA {
         alpha = mat.diffuse.a;
         if has(FLAG_ALPHA_FROM_BASE) {
