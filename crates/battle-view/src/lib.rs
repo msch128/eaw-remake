@@ -18,6 +18,7 @@ pub mod audio;
 pub mod camera;
 pub mod control;
 pub mod convert;
+pub mod gpu_profile;
 mod effects;
 pub mod scene;
 pub mod ships;

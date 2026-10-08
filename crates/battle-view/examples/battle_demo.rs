@@ -66,6 +66,7 @@ fn main() {
     let (mut speed, mut seed, mut msaa) = (1.0f32, 1u64, 4u32);
     let (mut cams, mut overlay, mut bloom, mut scale) = (Vec::<Vec<f32>>::new(), false, true, 1.0f32);
     let mut small = false;
+    let mut gpu_profile = false;
     let (mut shadows, mut quality) = (false, None::<battle_view::QualityPreset>);
     let mut auto = false;
     let mut it = args.iter();
@@ -83,6 +84,7 @@ fn main() {
             "--overlay" => overlay = true,
             "--no-bloom" => bloom = false,
             "--shadows" => shadows = true,
+            "--gpu-profile" => gpu_profile = true,
             "--quality" => quality = Some(match it.next().unwrap().as_str() {
                 "low" => battle_view::QualityPreset::Low,
                 "medium" => battle_view::QualityPreset::Medium,
@@ -189,11 +191,16 @@ fn main() {
     }
     match &offscreen {
         Some(out) => {
-            app.add_plugins(DefaultPlugins.set(WindowPlugin {
+            let mut plugins = DefaultPlugins.set(WindowPlugin {
                 primary_window: None,
                 exit_condition: ExitCondition::DontExit,
                 ..default()
-            }))
+            });
+            if gpu_profile {
+                plugins = plugins.set(battle_view::gpu_profile::timestamp_render_plugin());
+                app.add_plugins(battle_view::gpu_profile::GpuProfilePlugin);
+            }
+            app.add_plugins(plugins)
             .add_plugins(ScheduleRunnerPlugin::run_loop(Duration::from_millis(1)))
             .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_millis(STEP_MS)));
             let (w, h) = (size[0] as u32, size[1] as u32);
@@ -351,7 +358,8 @@ fn capture_driver(
             .observe(
                 move |cap_ev: On<ScreenshotCaptured>,
                       mut exit: MessageWriter<AppExit>,
-                      mut cap: ResMut<Capture>| {
+                      mut cap: ResMut<Capture>,
+                      prof: Option<Res<battle_view::gpu_profile::GpuProfile>>| {
                     let img = &cap_ev.image;
                     let (w, h) = (img.width() as usize, img.height() as usize);
                     let mut px = img.data.clone().unwrap_or_default();
@@ -378,6 +386,9 @@ fn capture_driver(
                                 pct(0.99),
                                 ms[ms.len() - 1]
                             );
+                        }
+                        if let Some(p) = prof {
+                            print!("{}", p.summary());
                         }
                         println!("wall time {:.1} s", cap.wall_start.elapsed().as_secs_f32());
                         exit.write(AppExit::Success);
