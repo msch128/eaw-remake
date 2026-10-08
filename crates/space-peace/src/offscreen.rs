@@ -138,7 +138,7 @@ fn drive(
     if frame == st.warmup {
         st.started = Some(now);
     }
-    if frame > st.warmup && !st.capture_requested && hold.settled() && !matches!(screen, AppScreen::Loading | AppScreen::SpaceBattle) {
+    if frame > st.warmup && !st.capture_requested && hold.settled() && (st.loading_shot || screen != AppScreen::Loading) && screen != AppScreen::SpaceBattle {
         st.frame_ms.push(dt);
         for (path, d) in diagnostics.iter().map(|d| (d.path().to_string(), d)) {
             if path.ends_with("elapsed_gpu")
