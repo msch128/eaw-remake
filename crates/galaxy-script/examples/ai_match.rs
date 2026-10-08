@@ -124,6 +124,12 @@ fn main() {
     let un = sim.unimplemented_calls();
     println!("unimplemented API: {un:?}");
 
+    if let Ok(name) = std::env::var("AI_ACTIVE") {
+        let id = sim.with_sim(|s| s.world().faction_id(&name)).expect("faction");
+        for (g, t, secs) in sim.ai_active_goals(id) {
+            println!("  active {g} target {t:?} for {secs:.0} s");
+        }
+    }
     if let Ok(filter) = std::env::var("AI_LOG") {
         for l in sim.script_log().iter().filter(|l| l.contains(&filter)).take(200000) {
             println!("  log: {l}");

@@ -21,6 +21,9 @@ use crate::equation::{EvalCache, EvalStats, Params};
 use crate::perception::{PerceptionCtx, PlayerBrainView, Snapshot};
 use crate::sim::{AiSim, PlanetId, PlayerId};
 use crate::strategy::Strategy;
+
+/// How long a plan may run relative to its goal's `Time_Limit x Build_Time_Delay_Tolerance` before the engine kills it (the data only gives the limit; the factor is an estimate).
+const PLAN_LIMIT_FACTOR: f64 = 4.0;
 use crate::taskforce::{TaskForceStats, TaskForces};
 
 /// A plan the host should start.
@@ -340,14 +343,16 @@ impl AiEngine {
                 self.task_forces.set_believed(b.player, believed);
             }
         }
-        // Tech upgrades. The Remake AI has no galactic tech plan we can run (its tech goal is the Empire's Death Star chain), so without this every faction stayed
-        // on tech level 1 forever. Estimate: every 4 weeks a faction with money to spare (three times the price of the planet's upgrade is not known, so: more than
-        // 20000 credits) tries the next level at its best planet, but level L only from week 10 x L on.
+        // Tech upgrades. In the Remake data the AI has no galactic research plan: `Story/Tech_Levels_*.xml` slave the AI factions' tech level to the one a player
+        // reaches (`STORY_TECH_LEVEL` events -> `SET_TECH_LEVEL` rewards, run by galaxy-script), the Empire's own chain needs land-base research buildings that do not
+        // exist in the space-only game. So with a human player the AI follows the human through the story scripts. Only in games without any human (AI vs AI,
+        // spectating) nothing would ever advance, so there this fallback (an **estimate**) applies: every 4 weeks a faction with more than 20000 credits tries
+        // the next level at its best planet, level L only from week 10 x L on.
         let week_seconds = if snap.weeks > 0.0 { snap.time / snap.weeks } else { 60.0 };
         for bi in 0..self.brains.len() {
             let (player, next) = (self.brains[bi].player, self.brains[bi].next_tech);
             let me = player as usize;
-            if now < next || sim.is_eliminated(player) || snap.human.get(me).copied().unwrap_or(false) {
+            if now < next || sim.is_eliminated(player) || snap.human.iter().any(|h| *h) {
                 continue;
             }
             self.brains[bi].next_tech = now + 4.0 * week_seconds;
@@ -528,7 +533,7 @@ impl AiEngine {
             }
             let (goal, category, limit) = {
                 let g = &self.brains[i].goals[gi];
-                (g.def.name.clone(), g.def.category.clone(), f64::from(g.def.time_limit.max(60.0) * g.def.build_time_delay_tolerance.max(1.0)) * 4.0)
+                (g.def.name.clone(), g.def.category.clone(), f64::from(g.def.time_limit.max(60.0) * g.def.build_time_delay_tolerance.max(1.0)) * PLAN_LIMIT_FACTOR)
             };
             let b = &self.brains[i];
             if b.active.iter().any(|a| a.goal.eq_ignore_ascii_case(&goal) && a.target == target) {

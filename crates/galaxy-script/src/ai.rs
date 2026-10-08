@@ -211,7 +211,7 @@ impl AiSim for SimAdapter<'_> {
         }
         match self.sim.apply(Command::SplitFleet { faction: p, fleet, units: list }).map_err(refuse)? {
             CommandOk::NewFleet(f) => Ok(f),
-            CommandOk::Done => Err(Refused::Invalid),
+            _ => Err(Refused::Invalid),
         }
     }
     fn merge_fleets(&mut self, p: PlayerId, into: u32, from: u32) -> Result<(), Refused> {

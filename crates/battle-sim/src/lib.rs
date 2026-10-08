@@ -33,7 +33,7 @@ mod sim;
 
 pub use battle::{
     AbilityState, Battle, BattleConfig, SideMult, StartHealth, BattleResult, BattleSetup, Command, CommandError, Event, GroupResult, HitKind, HpState,
-    NONE, NO_TAG, Order, Projectile, Ship, SideSetup, SquadSlot, Stance, UnitSetup,
+    NONE, NO_TAG, REINFORCE_TAG, Order, Projectile, Ship, SideSetup, SquadSlot, Stance, UnitSetup,
 };
 pub use defs::{
     AbilityDef, Catalog, DamageMatrix, DirectWeaponDef, HpDef, HpKind, PrioritySet, ProjDef, ProjId, ShipDef, ShipId, TargetClass,

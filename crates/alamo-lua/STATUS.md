@@ -25,3 +25,4 @@ Lua runtime for Empire at War scripts. The engine uses Lua 5.0; this embeds vend
 Every plan script runs in its own Lua state. Ended scripts kept theirs (about 350 KB each, one per AI plan: 20 MB per game week, 2.2 GB after 100 weeks) and every bound function registered a new call counter per instance.
 Now an ended script drops its Lua state (`Instance::lua` is an `Option`, released in `sweep_finished_plans`, which `update` runs first) and call counters are shared per function name (`Shared::fast_hits` is a map).
 Soak: 340 MB flat over 100 weeks.
+- Story: `*_Auto` `STORY_TRIGGER` events with prerequisites (the tech-level followers) fire when activated (they are never triggered by name in the data); everything else keeps the "triggered by name" semantics.

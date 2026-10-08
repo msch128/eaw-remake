@@ -279,6 +279,15 @@ pub enum PlayAction {
     CancelTactical(u32),
     /// Remove a notification.
     DismissNotification(u64),
+    /// Cancel a production queue entry of the player's planet; the unspent credits come back (`SimConfig::cancel_refund`).
+    CancelProduction {
+        /// Planet.
+        planet: PlanetId,
+        /// Queue.
+        lane: galaxy_sim::Lane,
+        /// Position in the queue (0 = in production).
+        index: u32,
+    },
     /// Write a save file (needs [`PlayInit::scripted`]); answered by [`PlayEvent::SaveFinished`].
     Save(std::path::PathBuf),
     /// Replace the running game with a save of the same game; answered by [`PlayEvent::LoadFinished`]. Progress: `SimState::driver.load_progress()`.

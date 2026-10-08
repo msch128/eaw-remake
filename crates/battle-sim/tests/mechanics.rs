@@ -191,6 +191,10 @@ fn reinforcements_respect_unit_cap() {
     }
     assert!(arrived);
     assert_eq!(b.ships.iter().filter(|s| s.side == 0).count(), 2);
+    // Reinforcements are reported in the results under REINFORCE_TAG.
+    let r = b.result();
+    let g = r.groups.iter().find(|g| g.side == 0 && g.tag == REINFORCE_TAG).expect("reinforcement group");
+    assert_eq!((g.total, g.survived), (1, 1));
 }
 
 #[test]

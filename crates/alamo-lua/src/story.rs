@@ -8,7 +8,7 @@
 //! others are handed to the host.
 //!
 //! **Semantics are reconstructed**, not verified against the engine: in particular `STORY_TRIGGER` events
-//! fire only when another event triggers them by name, and several `Prereq` tags mean "all of them".
+//! fire only when another event triggers them by name (exception: `*_Auto` events with prerequisites fire when activated), and several `Prereq` tags mean "all of them".
 
 use std::collections::HashMap;
 
@@ -300,7 +300,9 @@ impl StoryEngine {
                     };
                     now - base >= secs
                 }
-                "STORY_TRIGGER" => r.triggered[ei],
+                // `*_Auto` events (the tech-level followers of `Research/Story/Tech_Levels_*.xml`) are STORY_TRIGGERs with prerequisites that nothing
+                // triggers by name; they fire as soon as their prerequisites have (inferred from the naming, not verified against the engine).
+                "STORY_TRIGGER" => r.triggered[ei] || (!ev.prereqs.is_empty() && ev.name.to_ascii_lowercase().ends_with("_auto")),
                 _ => notify.is_some_and(|(kinds, param)| {
                     (kinds.is_empty() || kinds.iter().any(|k| k.eq_ignore_ascii_case(&ev.kind)))
                         && (ev.name.eq_ignore_ascii_case(param)

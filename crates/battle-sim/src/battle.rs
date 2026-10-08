@@ -7,6 +7,8 @@ use crate::math::Vec3;
 
 /// Tag value for units without a fleet (structures, stations).
 pub const NO_TAG: u32 = u32::MAX;
+/// Tag of the results groups of reinforcements (`Command::Reinforce`).
+pub const REINFORCE_TAG: u32 = u32::MAX - 1;
 /// "No entity" marker for projectile targets.
 pub const NONE: u32 = u32::MAX;
 

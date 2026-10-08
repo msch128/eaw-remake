@@ -40,3 +40,11 @@ Headless, deterministic, `Send` Galactic Conquest simulation. Rules: `RULES.md`.
   Not persisted: hardpoint damage (repaired), squadron fighters, structures, statistical auto-resolve results (they only remove units).
 - `Command`, `SimConfig`, `TacticalResult` are serde-serialisable (used by the galaxy-script save journal).
 - `TacticalSide::may_retreat` (faction holds more than one planet and is not Pirates) feeds `BattleConfig::retreat_allowed`, so the battle AI may retreat only where the Remake rules allow it.
+
+## Reinforcement pool and production cancel (new)
+- `TacticalSide::{reserve, unit_cap}`: units of the fleets beyond the faction's `Space_Tactical_Unit_Cap` (`FactionInfo::space_unit_cap`, 150 if the data has none; population per unit from the unit data, fleet order, a group is split where the cap falls)
+  wait in `reserve` instead of `groups`. The battle config carries the cap (`BattleConfig::unit_cap`). A front end calls them in with `battle_sim::Command::Reinforce { ship, count }` (arrive after `reinforce_delay`, only if the cap allows);
+  `battle_setup_with(.., deploy_reserve = true)` deploys them at once (what `run_headless` and the tactical resolver do). `TacticalResult::{reserve_called, reserve_survived}` (`[side][reserve index]`) report what was called and what lived; uncalled units never leave their fleets,
+  called ones count as losses unless they survived. battle-sim reports reinforcements as results groups with `REINFORCE_TAG`, matched to reserve groups by ship type.
+- `Command::CancelProduction { faction, planet, lane, index }` -> `CommandOk::Refunded(credits)`: removes a queue entry (0 = the one being built). The refund is cost x unspent share of the build time x `SimConfig::cancel_refund` (1.0). **Estimate**: the data has no refund rule; costs are paid when queued, the real game charges while it builds.
+  Others' planets are refused (`NotOwner`), bad index `Invalid`. `PlayAction::CancelProduction { planet, lane, index }` in galaxy-play.

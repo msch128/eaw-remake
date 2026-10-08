@@ -933,7 +933,7 @@ impl TaskForces {
             if !affordable {
                 no_credits = true;
             }
-            for pl in planets.into_iter().take(6) {
+            for pl in planets.into_iter().take(40) {
                 if !affordable {
                     break;
                 }

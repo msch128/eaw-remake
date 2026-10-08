@@ -761,18 +761,24 @@ impl Battle {
             for k in 0..r.count {
                 let mut rng = Rng::for_entity(self.config.seed, self.tick, k, 0x7E1F + r.ship as u64);
                 let pos = origin + rng.in_ball() * 800.0;
+                // Reinforcements are results groups too (tag `REINFORCE_TAG`), so the galaxy learns which of them survived.
+                let group = self.groups.len() as u32;
+                self.groups.push(Group { side: r.side, tag: REINFORCE_TAG, ship: r.ship, members: Vec::new() });
                 if def.is_squadron {
                     let squad = self.squads.len() as u32;
                     self.squads.push(Vec::new());
                     for (idx, &(m, c)) in def.members.iter().enumerate() {
                         for _ in 0..c {
-                            let id = self.spawn_ship(m, r.side, pos + Vec3::new(-20.0 * idx as f32, 25.0 * (idx % 2) as f32, 0.0), yaw, NONE, squad, Vec3::ZERO);
+                            let id = self.spawn_ship(m, r.side, pos + Vec3::new(-20.0 * idx as f32, 25.0 * (idx % 2) as f32, 0.0), yaw, group, squad, Vec3::ZERO);
                             self.squads[squad as usize].push(id);
+                            self.groups[group as usize].members.push(id);
                             ids.push(id);
                         }
                     }
                 } else {
-                    ids.push(self.spawn_ship(r.ship, r.side, pos, yaw, NONE, NONE, Vec3::ZERO));
+                    let id = self.spawn_ship(r.ship, r.side, pos, yaw, group, NONE, Vec3::ZERO);
+                    self.groups[group as usize].members.push(id);
+                    ids.push(id);
                 }
             }
             for &i in &ids {

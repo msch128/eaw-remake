@@ -86,7 +86,7 @@ pub struct ProductionItem {
 }
 
 /// Production lane of a planet; each lane builds one item at a time.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Lane {
     /// Ships, squadrons, research.
     Units = 0,
@@ -266,6 +266,18 @@ pub enum Command {
         units: Vec<(UnitTypeId, u32)>,
     },
     /// Send a fleet back to the planet it came from.
+    /// Remove an entry from a planet's production queue and refund it (`SimConfig::cancel_refund`).
+    CancelProduction {
+        /// Issuing faction.
+        faction: FactionId,
+        /// Planet.
+        planet: PlanetId,
+        /// Queue.
+        lane: Lane,
+        /// Position in the queue (0 = the item being built).
+        index: u32,
+    },
+    /// Send a fleet back where it came from.
     Retreat {
         /// Issuing faction.
         faction: FactionId,
@@ -308,6 +320,8 @@ pub enum CommandOk {
     Done,
     /// A new fleet was created.
     NewFleet(FleetId),
+    /// A production entry was cancelled; the credits returned.
+    Refunded(f64),
 }
 
 /// Something that happened during a step.

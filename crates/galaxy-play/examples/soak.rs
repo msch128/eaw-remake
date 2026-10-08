@@ -293,6 +293,12 @@ fn run(o: &Opts, fs: &Arc<dyn FileSource>, data: &Arc<alamo_data::GameData>) -> 
 /// A deliberately simple player: spend money on ships, gather, attack weak neighbours.
 fn bot(d: &mut SimDriver, s: &Snapshot, w: &Arc<galaxy_sim::World>, names: &PlayCatalog, h: u32) {
     let g = &s.galaxy;
+    // Tech: every 8 weeks the bot buys the next level at its best planet (the AI factions follow through the story scripts).
+    if s.week % 8 == 0 && g.factions[h as usize].tech < w.factions[h as usize].max_tech {
+        if let Some((pl, _)) = g.planets.iter().enumerate().filter(|(_, p)| p.owner == Some(h)).max_by_key(|(_, p)| p.starbase.map_or(0, |sb| w.starbases[sb as usize].level)) {
+            d.send_command(Command::UpgradeTech { faction: h, planet: pl as u32 });
+        }
+    }
     // Build: at every owned planet that offers units, queue the dearest affordable one (the sim refuses when the queue is full).
     let credits = g.factions[h as usize].credits as f32;
     let mut budget = credits;

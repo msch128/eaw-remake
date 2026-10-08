@@ -66,6 +66,8 @@ pub struct SimConfig {
     pub repair_per_starbase_level_per_week: f32,
     /// Estimate: shields are restored this many times faster than hulls.
     pub repair_shield_factor: f32,
+    /// Estimate: share of the unspent production cost returned when a queue entry is cancelled (1.0 = all of it; the data has no refund rule).
+    pub cancel_refund: f32,
 }
 
 /// Algorithm used to settle battles.
@@ -102,6 +104,7 @@ impl Default for SimConfig {
             repair_base_per_week: 0.05,
             repair_per_starbase_level_per_week: 0.10,
             repair_shield_factor: 4.0,
+            cancel_refund: 1.0,
         }
     }
 }
@@ -163,6 +166,8 @@ pub struct FactionInfo {
     pub max_tech: i32,
     /// Home planet.
     pub home: Option<PlanetId>,
+    /// `Space_Tactical_Unit_Cap`: population a side may have in a space battle (units beyond it wait in the reinforcement pool); 150 if the data has none.
+    pub space_unit_cap: i32,
     /// Tech upgrade chain: `tech_upgrades[n]` raises tech from `start_tech + n` to `+ 1`.
     pub tech_upgrades: Vec<TechUpgrade>,
 }
@@ -597,6 +602,7 @@ impl World {
                 max_tech: cf.max_tech_level.unwrap_or(5),
                 home: cf.home_location.as_ref().and_then(|h| planet_index.get(&key(h)).copied()),
                 tech_upgrades: Vec::new(),
+                space_unit_cap: if def.space_unit_cap > 0 { def.space_unit_cap } else { 150 },
             });
         }
         for (i, f) in factions.iter_mut().enumerate() {

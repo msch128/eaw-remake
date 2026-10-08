@@ -218,6 +218,19 @@ impl Sim {
                 g.fleets.insert(id, Fleet { id, owner: faction, units: taken, location: FleetLocation::AtPlanet(p), previous_planet: prev });
                 Ok(CommandOk::NewFleet(id))
             }
+            Command::CancelProduction { faction, planet, lane, index } => {
+                let ps = g.planets.get_mut(planet as usize).ok_or(CommandError::Invalid)?;
+                if ps.owner != Some(faction) {
+                    return Err(CommandError::NotOwner);
+                }
+                let q = &mut ps.queues[lane as usize];
+                let item = q.remove(index as usize).ok_or(CommandError::Invalid)?;
+                // Cost is paid when queued; the unspent share of the build time comes back (estimate x `cancel_refund`: the real game charges while it builds).
+                let unspent = if item.total > 0.0 { (item.remaining / item.total).clamp(0.0, 1.0) } else { 1.0 };
+                let refund = f64::from(item.cost) * f64::from(unspent) * f64::from(world.config.cancel_refund);
+                g.factions[faction as usize].credits += refund;
+                Ok(CommandOk::Refunded(refund))
+            }
             Command::Retreat { faction, fleet } => {
                 let f = g.fleets.get_mut(&fleet).filter(|f| f.owner == faction).ok_or(CommandError::Invalid)?;
                 match f.location.clone() {

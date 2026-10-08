@@ -65,3 +65,11 @@ The Remake's galactic AI on top of an abstract `AiSim` (implemented for galaxy-s
 - Persistent damage: the tactical front end passes `TacticalResult::health` through unchanged; the HUD can read `Galaxy::damage` / `PlanetState::base_health` (fractions) for fleet panels.
 - Soak findings fixed: factions never advanced their tech level (the Remake AI has no galactic tech plan we run; now `AiEngine` queues the next level every 4 weeks for a faction with > 20000 credits, level L from week 10 x L on: an **estimate**; `AiStats::tech_upgrades`), `plan_category` and `reserved` entries are pruned.
   Open: the AI floats millions of credits late in the game (build plans refused by every planet / limited throughput), see galaxy-play/STATUS.md.
+
+## Tech and hoarding: root causes (soak follow-up)
+- **Tech:** the Remake has no galactic AI research plan. `Research/Story/Tech_Levels_*.xml` make the AI factions follow the tech level a player reaches: `STORY_TECH_LEVEL` events (`Rebel_Tech_2` ...) and `*_Auto` `STORY_TRIGGER` events with `SET_TECH_LEVEL`
+  rewards for the other factions. Our story engine never fired the `*_Auto` events (it treated STORY_TRIGGER as "only when triggered by name"); fixed in `alamo-lua/story.rs` (`*_Auto` events with prerequisites fire when activated; inferred from the naming).
+  With a human player the AIs now follow the human's tech (T1 -> T4 in the soak). The `AiEngine` tech heuristic (estimate) now runs only in games without any human.
+- **Hoarding:** not a missing API. The AI spends 60-70% of its income (Fair tier: 250-560k credits at week 100 instead of 1-2M; the Normal/Hard credit multipliers of the data double/triple it). Spending is gated by the data's own desires: `Need_To_Build_Units_Space_GC` is
+  `LowImportance (2) x Is_Player_Economically_Rich x shipyard`, loses to conquest goals for plan slots, and one plan builds 1-3 ships. Changes made: ships are queued at up to 40 planets (was 6, so units buildable only farther away were refused),
+  `PLAN_LIMIT_FACTOR` named. Tried and rejected: shortening plan lifetime (no effect). Leave the rest to the data.

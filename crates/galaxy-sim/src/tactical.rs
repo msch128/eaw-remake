@@ -65,6 +65,12 @@ pub struct TacticalSide {
     pub shield_mult: f32,
     /// Groups; indices are used by [`TacticalResult`].
     pub groups: Vec<TacticalGroup>,
+    /// Reinforcement pool: units of the fleets at the planet that did not fit under the space population cap (`Space_Tactical_Unit_Cap` of the faction).
+    /// A front end may call them in during the battle with `battle_sim::Command::Reinforce` (they arrive after the reinforcement delay and only if
+    /// the cap allows); units never called stay in their fleets.
+    pub reserve: Vec<TacticalGroup>,
+    /// Population cap of this side in the battle.
+    pub unit_cap: i32,
 }
 
 /// Everything a tactical front end needs to build a space battle.
@@ -102,6 +108,10 @@ pub struct TacticalResult {
     pub duration: f32,
     /// Hull and shield of the survivors per side and group (healthiest first); empty = report nothing (everything counts as undamaged).
     pub health: Vec<Vec<Vec<UnitHealth>>>,
+    /// Per side and reserve group: how many units were called in (empty = none were).
+    pub reserve_called: Vec<Vec<u32>>,
+    /// Per side and reserve group: how many of the called units survived (only meaningful where `reserve_called` is above 0).
+    pub reserve_survived: Vec<Vec<u32>>,
 }
 
 /// Why a tactical result could not be applied.
@@ -123,6 +133,31 @@ impl std::fmt::Display for TacticalError {
 }
 
 impl std::error::Error for TacticalError {}
+
+/// Units that fit under the population cap are deployed (in fleet order, a group is split where the cap falls), the rest goes to the reserve.
+fn split_reserve(world: &World, groups: Vec<TacticalGroup>, cap: i32) -> (Vec<TacticalGroup>, Vec<TacticalGroup>) {
+    let (mut deployed, mut reserve, mut used) = (Vec::new(), Vec::new(), 0i32);
+    for mut g in groups {
+        if g.kind != GroupKind::Unit {
+            deployed.push(g);
+            continue;
+        }
+        let pop = world.units[g.type_id as usize].population.max(0);
+        let fit = if pop == 0 { g.count } else { ((cap - used).max(0) / pop) as u32 }.min(g.count);
+        used += pop * fit as i32;
+        if fit < g.count {
+            let mut rest = g.clone();
+            rest.count = g.count - fit;
+            rest.unit_health = if g.unit_health.is_empty() { Vec::new() } else { g.unit_health.split_off((fit as usize).min(g.unit_health.len())) };
+            reserve.push(rest);
+            g.count = fit;
+        }
+        if g.count > 0 {
+            deployed.push(g);
+        }
+    }
+    (deployed, reserve)
+}
 
 impl TacticalRequest {
     /// Orders `sides` for battle (defender last) and drops garrison squadrons, which the star base definition launches itself.
@@ -165,7 +200,11 @@ impl TacticalRequest {
                         Some(TacticalGroup { kind, type_id, name, count: m.count, fleet: m.fleet, health, unit_health })
                     })
                     .collect();
+                let cap = world.factions[side.faction as usize].space_unit_cap;
+                let (groups, reserve) = split_reserve(world, groups, cap);
                 TacticalSide {
+                    reserve,
+                    unit_cap: cap,
                     faction: side.faction,
                     faction_name: world.factions[side.faction as usize].name.clone(),
                     defender: battle.defender == Some(side.faction),
@@ -194,13 +233,20 @@ impl TacticalRequest {
         let half_size = arena.as_ref().map_or(BattleConfig::default().half_size, |a| a.half_size());
         let side_mults = self.sides.iter().map(|s| battle_sim::SideMult { damage: s.damage_mult, health: s.health_mult, shield: s.shield_mult }).collect();
         let retreat_allowed = self.sides.iter().map(|s| s.may_retreat).collect();
-        BattleConfig { seed: self.seed, max_time: self.max_seconds, half_size, arena, side_mults, retreat_allowed, ..BattleConfig::default() }
+        let unit_cap = self.sides.iter().map(|s| s.unit_cap).max().unwrap_or(150);
+        BattleConfig { seed: self.seed, max_time: self.max_seconds, half_size, arena, side_mults, retreat_allowed, unit_cap, ..BattleConfig::default() }
     }
 
     /// Builds the `battle-sim` setup. Fleet groups carry their group index as the tag; side `i` of the request is
     /// battle side `i`. Returns `None` if a unit has no definition in `catalog`. `ai` selects the sides the built-in
     /// AI commands (a front end passes `false` for the human side).
-    pub fn battle_setup(&self, catalog: &Arc<Catalog>, mut config: BattleConfig, ai: impl Fn(usize) -> bool) -> Option<BattleSetup> {
+    pub fn battle_setup(&self, catalog: &Arc<Catalog>, config: BattleConfig, ai: impl Fn(usize) -> bool) -> Option<BattleSetup> {
+        self.battle_setup_with(catalog, config, ai, false)
+    }
+
+    /// Like [`TacticalRequest::battle_setup`]; with `deploy_reserve` the reinforcement pool is deployed from the start (tag = `groups.len() + reserve index`)
+    /// instead of waiting for `Command::Reinforce` (headless battles, where the population cap does not apply).
+    pub fn battle_setup_with(&self, catalog: &Arc<Catalog>, mut config: BattleConfig, ai: impl Fn(usize) -> bool, deploy_reserve: bool) -> Option<BattleSetup> {
         let mut sides = Vec::new();
         for (si, side) in self.sides.iter().enumerate() {
             let mut units = Vec::new();
@@ -211,6 +257,11 @@ impl TacticalRequest {
                     GroupKind::Unit => units.push(UnitSetup { ship, count: g.count, tag: gi as u32 }),
                     GroupKind::Starbase => structures.push(ship),
                     GroupKind::Structure => structures.extend(std::iter::repeat_n(ship, g.count as usize)),
+                }
+            }
+            if deploy_reserve {
+                for (ri, g) in side.reserve.iter().enumerate() {
+                    units.push(UnitSetup { ship: catalog.ship_id(&g.name)?, count: g.count, tag: (side.groups.len() + ri) as u32 });
                 }
             }
             sides.push(SideSetup { name: side.faction_name.clone(), units, structures, ai: ai(si) });
@@ -232,8 +283,41 @@ impl TacticalRequest {
         let mut survived = Vec::new();
         let mut retreated = Vec::new();
         let mut health = Vec::new();
+        let (mut res_called, mut res_survived) = (Vec::new(), Vec::new());
         for (si, side) in self.sides.iter().enumerate() {
             let (mut s_row, mut r_row, mut h_row) = (Vec::new(), Vec::new(), Vec::new());
+            // Reserve groups: deployed ones (headless) carry tag groups.len() + index; called-in reinforcements report under REINFORCE_TAG by ship type.
+            let (mut c_row, mut v_row) = (Vec::new(), Vec::new());
+            let mut pool: Vec<(battle_sim::ShipId, u32, u32)> = result.groups.iter().filter(|x| x.side as usize == si && x.tag == battle_sim::REINFORCE_TAG).map(|x| (x.ship, x.total, x.survived)).collect();
+            for (ri, g) in side.reserve.iter().enumerate() {
+                let Some(ship) = catalog.ship_id(&g.name) else {
+                    c_row.push(0);
+                    v_row.push(0);
+                    continue;
+                };
+                let tag = (side.groups.len() + ri) as u32;
+                let (mut called, mut alive) = (0, 0);
+                for gr in result.groups.iter().filter(|x| x.side as usize == si && x.tag == tag && x.ship == ship) {
+                    called += gr.total;
+                    alive += gr.survived;
+                }
+                // Called-in reinforcements of this ship type are handed out to the reserve groups in order.
+                let mut want = g.count.saturating_sub(called);
+                for p in pool.iter_mut().filter(|p| p.0 == ship) {
+                    let take = p.1.min(want);
+                    let surv = p.2.min(take);
+                    called += take;
+                    alive += surv;
+                    p.1 -= take;
+                    p.2 -= surv;
+                    want -= take;
+                }
+                let called = called.min(g.count);
+                c_row.push(called);
+                v_row.push(alive.min(called));
+            }
+            res_called.push(c_row);
+            res_survived.push(v_row);
             for (gi, g) in side.groups.iter().enumerate() {
                 let ship = catalog.ship_id(&g.name)?;
                 let tag = if g.kind == GroupKind::Unit { gi as u32 } else { NO_TAG };
@@ -255,51 +339,66 @@ impl TacticalRequest {
             retreated.push(r_row);
             health.push(h_row);
         }
-        Some(TacticalResult { winner: result.winner.map(|w| w as usize), survived, retreated, duration: result.duration, health })
+        Some(TacticalResult { winner: result.winner.map(|w| w as usize), survived, retreated, duration: result.duration, health, reserve_called: res_called, reserve_survived: res_survived })
     }
 
-    /// Combatants of the request, as the galaxy layer sees them.
-    fn side_inputs(&self) -> Vec<SideInput> {
-        self.sides
-            .iter()
-            .map(|s| SideInput {
-                faction: s.faction,
-                members: s
-                    .groups
-                    .iter()
-                    .map(|g| Member {
-                        source: match g.kind {
-                            GroupKind::Unit => Source::Unit(g.type_id),
-                            GroupKind::Starbase => Source::Starbase(g.type_id),
-                            GroupKind::Structure => Source::Structure(g.type_id),
-                        },
-                        fleet: g.fleet,
-                        count: g.count,
-                    })
-                    .collect(),
-            })
-            .collect()
+    /// Total units per `(source, fleet)` of a side including its reserve, in first-seen order (a group split by the cap is one member again).
+    fn merged_members(&self, si: usize) -> Vec<(Source, Option<FleetId>, u32)> {
+        let mut out: Vec<(Source, Option<FleetId>, u32)> = Vec::new();
+        for g in self.sides[si].groups.iter().chain(&self.sides[si].reserve) {
+            let source = match g.kind {
+                GroupKind::Unit => Source::Unit(g.type_id),
+                GroupKind::Starbase => Source::Starbase(g.type_id),
+                GroupKind::Structure => Source::Structure(g.type_id),
+            };
+            match out.iter_mut().find(|m| m.0 == source && m.1 == g.fleet) {
+                Some(m) => m.2 += g.count,
+                None => out.push((source, g.fleet, g.count)),
+            }
+        }
+        out
     }
 
-    /// The request's sides and a result expressed as a [`CombatResult`].
+    /// The request's sides and a result expressed as a [`CombatResult`]. Deployed groups and the reserve of one `(unit type, fleet)` are one
+    /// member again: its survivors are the deployed survivors plus the reserve units never called plus the called ones that survived.
     pub(crate) fn combat_result(&self, result: &TacticalResult) -> (Vec<SideInput>, CombatResult) {
-        let sides = self.side_inputs();
-        let mut survivors = vec![Vec::new(); sides.len()];
+        let mut sides = Vec::new();
+        let mut survivors = vec![Vec::new(); self.sides.len()];
         let mut retreated: Vec<FleetId> = Vec::new();
-        for (si, side) in sides.iter().enumerate() {
+        for (si, side) in self.sides.iter().enumerate() {
+            let members = self.merged_members(si);
+            let mut alive: Vec<u32> = vec![0; members.len()];
             let mut fleet_gone: Vec<(FleetId, bool)> = Vec::new();
-            for (gi, m) in side.members.iter().enumerate() {
-                let left = result.survived.get(si).and_then(|r| r.get(gi)).copied().unwrap_or(0).min(m.count);
-                if left == 0 {
-                    continue;
-                }
-                survivors[si].push(Member { count: left, ..*m });
-                if let Some(f) = m.fleet {
+            let find = |g: &TacticalGroup| {
+                let source = match g.kind {
+                    GroupKind::Unit => Source::Unit(g.type_id),
+                    GroupKind::Starbase => Source::Starbase(g.type_id),
+                    GroupKind::Structure => Source::Structure(g.type_id),
+                };
+                members.iter().position(|m| m.0 == source && m.1 == g.fleet).expect("member exists")
+            };
+            for (gi, g) in side.groups.iter().enumerate() {
+                let left = result.survived.get(si).and_then(|r| r.get(gi)).copied().unwrap_or(0).min(g.count);
+                alive[find(g)] += left;
+                if left > 0
+                    && let Some(f) = g.fleet
+                {
                     let gone = result.retreated.get(si).and_then(|r| r.get(gi)).copied().unwrap_or(0) >= left;
                     match fleet_gone.iter_mut().find(|x| x.0 == f) {
                         Some(x) => x.1 &= gone,
                         None => fleet_gone.push((f, gone)),
                     }
+                }
+            }
+            for (ri, g) in side.reserve.iter().enumerate() {
+                let called = result.reserve_called.get(si).and_then(|r| r.get(ri)).copied().unwrap_or(0).min(g.count);
+                let alive_called = result.reserve_survived.get(si).and_then(|r| r.get(ri)).copied().unwrap_or(0).min(called);
+                alive[find(g)] += g.count - called + alive_called;
+            }
+            sides.push(SideInput { faction: side.faction, members: members.iter().map(|&(source, fleet, count)| Member { source, fleet, count }).collect() });
+            for (m, left) in sides[si].members.iter().zip(alive) {
+                if left > 0 {
+                    survivors[si].push(Member { count: left.min(m.count), ..*m });
                 }
             }
             retreated.extend(fleet_gone.into_iter().filter(|x| x.1).map(|x| x.0));
@@ -319,7 +418,7 @@ impl TacticalRequest {
 pub fn run_headless(request: &TacticalRequest, catalog: &Arc<Catalog>, arena: Option<Arc<Arena>>) -> Option<TacticalResult> {
     let config = BattleConfig { record_events: false, unit_cap: i32::MAX / 2, ..request.battle_config(arena) };
     let max_steps = (request.max_seconds / config.dt) as u64 + 1;
-    let mut battle = Battle::new(request.battle_setup(catalog, config, |_| true)?);
+    let mut battle = Battle::new(request.battle_setup_with(catalog, config, |_| true, true)?);
     battle.run_to_end(max_steps);
     request.result_from(catalog, &battle.result())
 }

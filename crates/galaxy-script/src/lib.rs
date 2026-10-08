@@ -425,6 +425,13 @@ impl ScriptedSim {
         self.inner.borrow().ai.as_ref().map(galaxy_ai::AiEngine::stats)
     }
 
+    /// Goals the Remake AI of a faction is working on: `(goal, target planet, seconds running)`.
+    pub fn ai_active_goals(&self, player: u32) -> Vec<(String, Option<u32>, f64)> {
+        let i = self.inner.borrow();
+        let now = i.sim.galaxy().time;
+        i.ai.as_ref().map(|a| a.active_goals(player, now)).unwrap_or_default()
+    }
+
     fn notify_story(&mut self, events: &[Event]) {
         // Collect first: notifications call back into the host, which borrows the shared state.
         let mut notes: Vec<(&'static str, String)> = Vec::new();

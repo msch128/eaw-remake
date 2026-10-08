@@ -220,3 +220,75 @@ fn damage_persists_between_battles_and_is_repaired_at_owned_planets() {
         }
     }
 }
+
+#[test]
+fn units_beyond_the_population_cap_wait_in_a_reserve_that_can_be_called_in() {
+    let Some(ctx) = load() else { return };
+    let mut sim = new_sim(&ctx);
+    let w = sim.world().clone();
+    let (empire, rebel) = (w.faction_id("Empire").unwrap(), w.faction_id("Rebel").unwrap());
+    let target = empty_planet(&sim);
+    let isd = w.unit_id("Star_Destroyer").unwrap();
+    let pop = w.units[isd as usize].population;
+    let cap = w.factions[empire as usize].space_unit_cap;
+    let n = (cap / pop.max(1)) as u32 + 8;
+    let ef = add_fleet(&mut sim, empire, isd, n, target, target);
+    add_fleet(&mut sim, rebel, w.unit_id("Nebulon_B_Frigate").unwrap(), 1, target, target);
+    let battle = pending(&mut sim);
+    let req = sim.tactical_setup(battle.id).unwrap();
+    let es = req.sides.iter().position(|s| s.faction == empire).unwrap();
+    let side = &req.sides[es];
+    let deployed: u32 = side.groups.iter().map(|g| g.count).sum();
+    let reserve: u32 = side.reserve.iter().map(|g| g.count).sum();
+    println!("cap {cap}, pop {pop}: {deployed} deployed, {reserve} in reserve");
+    assert_eq!(deployed + reserve, n);
+    assert!(reserve >= 8 && deployed as i32 * pop <= cap);
+    assert_eq!(side.unit_cap, cap);
+
+    // Interactive: the front end calls the reserve in; a battle that ends with them alive reports them.
+    let catalog = catalog_for(&ctx, &req);
+    let setup = req.battle_setup(&catalog, req.battle_config(None), |_| true).unwrap();
+    let mut b = battle_sim::Battle::new(setup);
+    let ship = catalog.ship_id(&side.reserve[0].name).unwrap();
+    // Over the cap the sim refuses; once the deployed fleet has shrunk there is room. Here the request simply is not allowed to exceed it.
+    assert!(b.command(es as u8, battle_sim::Command::Reinforce { ship, count: 8 }).is_err(), "no room above the cap");
+    drop(b);
+
+    // Headless: the reserve is deployed, and everything that survives goes back into the fleet.
+    let result = run_headless(&req, &catalog, None).unwrap();
+    assert_eq!(result.reserve_called[es].iter().sum::<u32>(), reserve, "headless battles deploy the reserve at once");
+    assert_eq!(result.winner, Some(es));
+    sim.apply_tactical_result(battle.id, &result).unwrap();
+    let left = sim.galaxy().fleets.get(&ef).map_or(0, |f| f.unit_count());
+    assert!(left + 2 >= n, "the winner keeps (nearly) all ships: {left}/{n}");
+}
+
+#[test]
+fn cancelling_production_refunds_the_unspent_cost() {
+    let Some(ctx) = load() else { return };
+    let mut sim = new_sim(&ctx);
+    let w = sim.world().clone();
+    let empire = w.faction_id("Empire").unwrap();
+    let home = w.planet_id("Coruscant_WW").unwrap();
+    let unit = *w.buildable_units[empire as usize].iter().find(|&&u| w.check_build_unit(sim.galaxy(), empire, home, u).is_ok() && w.units[u as usize].build_time > 5.0).expect("something Coruscant can build");
+    let credits = |s: &Sim| s.galaxy().factions[empire as usize].credits;
+    let start = credits(&sim);
+    sim.apply(Command::BuildUnit { faction: empire, planet: home, unit }).unwrap();
+    sim.apply(Command::BuildUnit { faction: empire, planet: home, unit }).unwrap();
+    let cost = f64::from(w.units[unit as usize].cost);
+    assert!((start - credits(&sim) - 2.0 * cost).abs() < 1.0);
+    // The second entry has not started: full refund.
+    let r = sim.apply(Command::CancelProduction { faction: empire, planet: home, lane: Lane::Units, index: 1 });
+    assert_eq!(r, Ok(CommandOk::Refunded(cost)));
+    // Let the first one run for a while: partial refund of the rest.
+    sim.step(w.units[unit as usize].build_time * w.config.build_time_scale * 0.5);
+    let before = credits(&sim);
+    let Ok(CommandOk::Refunded(back)) = sim.apply(Command::CancelProduction { faction: empire, planet: home, lane: Lane::Units, index: 0 }) else { panic!("refund") };
+    assert!(back > 0.3 * cost && back < 0.7 * cost, "about half is back: {back} of {cost}");
+    assert!((credits(&sim) - before - back).abs() < 1e-6);
+    assert!(sim.galaxy().planets[home as usize].queues[Lane::Units as usize].is_empty());
+    // Others' planets and bad indices are refused.
+    assert_eq!(sim.apply(Command::CancelProduction { faction: empire, planet: home, lane: Lane::Units, index: 5 }), Err(CommandError::Invalid));
+    let rebel = w.faction_id("Rebel").unwrap();
+    assert_eq!(sim.apply(Command::CancelProduction { faction: rebel, planet: home, lane: Lane::Units, index: 0 }), Err(CommandError::NotOwner));
+}
