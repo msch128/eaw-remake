@@ -55,6 +55,16 @@ pub struct SimConfig {
     pub victory_enabled: bool,
     /// Allow `Command::DebugGrant` (offscreen tests and debugging only; off by default).
     pub debug_commands: bool,
+    /// Estimate (calibrated against the tactical simulation, `examples/calibrate.rs`): how many random enemies a weapon compares before firing at the weakest. 1 = spread at random.
+    pub combat_focus: u32,
+    /// Estimate (calibrated against the tactical simulation): multiplier on hull, shield and damage of star bases, structures and garrison squadrons in the statistical resolver.
+    pub combat_base_factor: f32,
+    /// Estimate (calibrated against the tactical simulation): damage efficiency of fighters/bombers, corvettes, frigates and capital ships in the statistical resolver.
+    pub combat_efficiency: [f32; 4],
+    /// Estimate (measured on the tactical simulation, `examples/calibrate.rs`): share of the ships of a losing fleet that escape the statistical resolver by retreating.
+    pub combat_escape: f32,
+    /// Estimate (calibrated against the tactical simulation): (ships, exponent) of the damage reduction of very large fleets in the statistical resolver, see `combat::Tuning::crowd`.
+    pub combat_crowd: (f32, f32),
     /// How battles are resolved by [`crate::Sim::resolve_battle`] and by automatic resolution.
     pub resolver: BattleResolver,
     /// Longest tactical battle in simulated seconds before it is declared a draw.
@@ -105,6 +115,11 @@ impl Default for SimConfig {
             max_queue_len: 8,
             victory_enabled: true,
             debug_commands: false,
+            combat_focus: 1,
+            combat_base_factor: 0.15,
+            combat_efficiency: [0.5, 0.5, 1.0, 1.0],
+            combat_escape: 0.12,
+            combat_crowd: (25.0, 0.0),
             resolver: BattleResolver::Statistical,
             tactical_max_seconds: 900.0,
             tactical_resolver_max_ships: 16,

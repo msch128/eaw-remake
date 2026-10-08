@@ -533,6 +533,27 @@ impl Sim {
         }
     }
 
+
+    /// What the statistical auto-resolve would make of pending battle `id` with a given `seed`, without changing anything (calibration and UI estimates).
+    /// Per side: faction, ships at the start and ships alive at the end (star base, structures and garrison squadrons are not counted), plus the winner.
+    pub fn preview_auto_resolve(&self, id: u32, seed: u64) -> Option<AutoPreview> {
+        self.preview_auto_resolve_with(id, seed, combat::Tuning::of(&self.world))
+    }
+
+    /// [`Sim::preview_auto_resolve`] with explicit tuning (calibration).
+    pub fn preview_auto_resolve_with(&self, id: u32, seed: u64, tuning: combat::Tuning) -> Option<AutoPreview> {
+        let battle = self.galaxy.battles.iter().find(|b| b.id == id)?;
+        let sides = self.battle_sides(battle);
+        let mut rng = crate::rng::Rng::new(seed);
+        let mut result = combat::resolve_tuned(&self.world, &sides, &mut rng, &self.galaxy.allied, &self.galaxy.factions.iter().map(|f| f.difficulty).collect::<Vec<_>>(), tuning);
+        self.apply_escape(&sides, &mut result);
+        let ships = |ms: &[Member]| ms.iter().filter(|m| matches!(m.source, Source::Unit(_))).map(|m| m.count).sum::<u32>();
+        Some(AutoPreview {
+            sides: sides.iter().enumerate().map(|(i, s)| (s.faction, ships(&s.members), ships(&result.survivors[i]))).collect(),
+            winner: result.winner.map(|i| sides[i].faction),
+        })
+    }
+
     /// Resolves a pending battle with the statistical auto-resolve and applies the result.
     /// Returns `None` if the battle id is unknown.
     pub fn resolve_battle_auto(&mut self, id: u32) -> Option<Vec<Event>> {
@@ -651,8 +672,35 @@ impl Sim {
                 return Some(events);
             }
         }
-        let result = combat::resolve_allied(w, &sides, &mut rng, &self.galaxy.allied, &self.galaxy.factions.iter().map(|f| f.difficulty).collect::<Vec<_>>());
+        let mut result = combat::resolve_allied(w, &sides, &mut rng, &self.galaxy.allied, &self.galaxy.factions.iter().map(|f| f.difficulty).collect::<Vec<_>>());
+        self.apply_escape(&sides, &mut result);
         Some(self.apply_combat(&battle, &sides, result))
+    }
+
+    /// The statistical resolver kills every ship of the losing side; the tactical battles let the loser's AI retreat with part of its fleet. Gives each
+    /// losing side that may retreat (owns more than one planet, not Pirates) `SimConfig::combat_escape` of every fleet unit back as retreaters.
+    pub(crate) fn apply_escape(&self, sides: &[SideInput], result: &mut combat::CombatResult) {
+        let Some(win) = result.winner else { return };
+        let share = self.world.config.combat_escape;
+        for (si, side) in sides.iter().enumerate() {
+            let may = si != win && self.galaxy.factions[side.faction as usize].planets_owned > 1 && !self.world.factions[side.faction as usize].name.eq_ignore_ascii_case("pirates");
+            if !may || share <= 0.0 {
+                continue;
+            }
+            for m in side.members.iter().filter(|m| matches!(m.source, Source::Unit(_))) {
+                let kept = (m.count as f32 * share).round() as u32;
+                if let (true, Some(fid)) = (kept > 0, m.fleet) {
+                    let survivors = &mut result.survivors[si];
+                    match survivors.iter_mut().find(|x| x.source == m.source && x.fleet == m.fleet) {
+                        Some(x) => x.count = x.count.max(kept),
+                        None => survivors.push(Member { count: kept, ..*m }),
+                    }
+                    if !result.retreated.contains(&fid) {
+                        result.retreated.push(fid);
+                    }
+                }
+            }
+        }
     }
 
     /// Applies a combat result (statistical or tactical) to the galaxy: losses, destroyed star base and
@@ -723,7 +771,7 @@ impl Sim {
             if result.winner == Some(si) {
                 self.galaxy.factions[side.faction as usize].stats.battles_won += 1;
                 events.push(Event::BattleWon { faction: side.faction, planet: p });
-            } else if result.survivors[si].is_empty() {
+            } else if result.winner.is_some() || result.survivors[si].is_empty() {
                 self.galaxy.factions[side.faction as usize].stats.battles_lost += 1;
                 events.push(Event::BattleLost { faction: side.faction, planet: p });
             }
@@ -1003,4 +1051,13 @@ impl World {
         }
         (dist, prev)
     }
+}
+
+/// Result of [`Sim::preview_auto_resolve`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct AutoPreview {
+    /// `(faction, ships at the start, ships alive at the end)` per side.
+    pub sides: Vec<(FactionId, u32, u32)>,
+    /// Winning faction, `None` for a draw.
+    pub winner: Option<FactionId>,
 }

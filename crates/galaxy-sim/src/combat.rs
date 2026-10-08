@@ -94,6 +94,49 @@ pub fn resolve(world: &World, sides: &[SideInput], rng: &mut Rng) -> CombatResul
 /// Like [`resolve`], but factions in `allied` (sorted pairs) do not shoot at each other.
 /// `mults` are the difficulty multipliers by faction id (empty = all neutral).
 pub fn resolve_allied(world: &World, sides: &[SideInput], rng: &mut Rng, allied: &std::collections::BTreeSet<(FactionId, FactionId)>, mults: &[crate::state::Difficulty]) -> CombatResult {
+    resolve_tuned(world, sides, rng, allied, mults, Tuning::of(world))
+}
+
+/// The calibration knobs of the statistical resolver (`SimConfig::combat_focus`, `combat_base_factor`; see `examples/calibrate.rs`).
+#[derive(Debug, Clone, Copy)]
+pub struct Tuning {
+    /// Every weapon looks at this many random enemies and fires at the weakest (1 = pure random spread).
+    pub focus: u32,
+    /// Multiplier on hull, shield and damage of star bases, structures and their garrison squadrons.
+    pub base_factor: f32,
+    /// Damage efficiency of fighters and bombers, corvettes, frigates, capital and super capital ships (small craft lose time closing in and miss).
+    pub efficiency: [f32; 4],
+    /// Crowding: a side with more than `crowd.0` ships deals its damage scaled by `(crowd.0 / ships) ^ crowd.1` (big swarms get in each other's way; `crowd.1` 0 = off).
+    pub crowd: (f32, f32),
+}
+
+impl Tuning {
+    /// The values of the world's config.
+    pub fn of(world: &World) -> Self {
+        Self { focus: world.config.combat_focus, base_factor: world.config.combat_base_factor, efficiency: world.config.combat_efficiency, crowd: world.config.combat_crowd }
+    }
+}
+
+/// [`resolve_allied`] with explicit [`Tuning`].
+pub fn resolve_tuned(world: &World, sides: &[SideInput], rng: &mut Rng, allied: &std::collections::BTreeSet<(FactionId, FactionId)>, mults: &[crate::state::Difficulty], tuning: Tuning) -> CombatResult {
+    let focus = tuning.focus;
+    let base = |src: Source| if matches!(src, Source::Unit(_)) { 1.0 } else { tuning.base_factor };
+    let crowd: Vec<f32> = sides
+        .iter()
+        .map(|s| {
+            let n: u32 = s.members.iter().filter(|m| matches!(m.source, Source::Unit(_))).map(|m| m.count).sum();
+            if tuning.crowd.1 > 0.0 && n as f32 > tuning.crowd.0 { (tuning.crowd.0 / n as f32).powf(tuning.crowd.1) } else { 1.0 }
+        })
+        .collect();
+    let eff = |src: Source| match src {
+        Source::Unit(u) | Source::Garrison(u) => match world.units[u as usize].category {
+            alamo_data::ShipCategory::Fighter | alamo_data::ShipCategory::Bomber => tuning.efficiency[0],
+            alamo_data::ShipCategory::Corvette | alamo_data::ShipCategory::Transport => tuning.efficiency[1],
+            alamo_data::ShipCategory::Frigate => tuning.efficiency[2],
+            _ => tuning.efficiency[3],
+        },
+        _ => 1.0,
+    };
     let mult = |f: FactionId| mults.get(f as usize).copied().unwrap_or_default();
     let dt = world.config.combat_round_seconds;
     // Expand into instances.
@@ -105,7 +148,7 @@ pub fn resolve_allied(world: &World, sides: &[SideInput], rng: &mut Rng, allied:
                 let Some(st) = world.stats_of(m.source) else { continue };
                 for _ in 0..m.count {
                     let dm = mult(s.faction);
-                    v.push(Inst { member: mi, src: m.source, hull: st.hull.max(1.0) * dm.health, shield: st.shield * dm.shield, max_shield: st.shield * dm.shield });
+                    v.push(Inst { member: mi, src: m.source, hull: st.hull.max(1.0) * dm.health * base(m.source), shield: st.shield * dm.shield * base(m.source), max_shield: st.shield * dm.shield * base(m.source) });
                 }
             }
             v
@@ -130,13 +173,23 @@ pub fn resolve_allied(world: &World, sides: &[SideInput], rng: &mut Rng, allied:
             if enemies.is_empty() {
                 continue;
             }
-            let dmg_mult = mult(sides[si].faction).damage;
+            let dmg_mult0 = mult(sides[si].faction).damage;
             for a in 0..insts[si].len() {
                 let Some(att) = world.stats_of(insts[si][a].src) else { continue };
+                let dmg_mult = dmg_mult0 * base(insts[si][a].src) * eff(insts[si][a].src) * crowd[si];
                 for w in &att.weapons {
                     dealt = true;
                     let ts = enemies[rng.below(enemies.len() as u64) as usize];
-                    let ti = rng.below(insts[ts].len() as u64) as usize;
+                    let mut ti = rng.below(insts[ts].len() as u64) as usize;
+                    if focus > 1 {
+                        let left = |i: usize| insts[ts][i].hull + insts[ts][i].shield - (acc[ts][i].0 + acc[ts][i].1 + acc[ts][i].2);
+                        for _ in 1..focus {
+                            let c = rng.below(insts[ts].len() as u64) as usize;
+                            if left(c) < left(ti) {
+                                ti = c;
+                            }
+                        }
+                    }
                     let tstats = world.stats_of(insts[ts][ti].src).expect("target has stats");
                     let sm = world.damage.multiplier(w.damage_type, tstats.shield_armor);
                     let hm = world.damage.multiplier(w.damage_type, tstats.armor);

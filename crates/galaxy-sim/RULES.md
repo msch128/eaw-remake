@@ -138,3 +138,12 @@ tactical battles get them as `TacticalSide::{damage,health,shield}_mult` and `Ba
 * Hero respawn is the Remake's story chain (destroy -> 300 s -> SPAWN_HERO); nothing else in the sim respawns heroes.
 * Production discount: per `Stacking_Category` the strongest ability, categories multiply (estimate); a hero's/ship's discount applies galaxy-wide while any fleet of the owner holds it (estimate); a structure's discount applies at its own planet. Time floor 1 % of the list time.
 * Capture bonus: `Planet_Capture_Bonus_Reward` x `SimConfig::capture_bonus_scale` (default 1.0, estimate) once per planet and faction, when the capture completes.
+
+## Auto-resolve calibration (estimates, `examples/calibrate.rs`)
+
+The statistical resolver was compared with `run_headless` on random near-even battles (2-40+ ships a side, half at a star base, tactical 3 seeds, auto 40 seeds each).
+Tactical results are cached in `target/calibrate_cache.txt`; `OLD=1` reverts to the uncalibrated formula, `BASE/EF/EC/EFR/FOCUS/CK/CG` override single knobs.
+Calibrated knobs (all in `SimConfig`, named estimates): `combat_base_factor` 0.15 (star base, structures, garrison: hull, shield and damage; the tactical bases were far weaker than their raw numbers),
+`combat_efficiency` [0.5 fighters/bombers, 0.5 corvettes, 1 frigates, 1 capitals] (small craft lose time closing in), `combat_escape` 0.12 (share of a losing fleet that retreats alive when its faction
+owns more than one planet; the tactical AI does this, the old resolver killed everything). Tried and left off: `combat_focus` (focus fire, no gain), `combat_crowd` (damage cut for huge fleets, no gain).
+With 3 tactical seeds per scenario the comparison has a noise floor of about 0.2 in win share, so winner agreement above ~85 % cannot be demonstrated.

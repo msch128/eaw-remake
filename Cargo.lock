@@ -4579,6 +4579,7 @@ dependencies = [
  "alamo-audio",
  "alamo-data",
  "alamo-fs",
+ "alamo-model",
  "alamo-render",
  "battle-view",
  "bevy",
