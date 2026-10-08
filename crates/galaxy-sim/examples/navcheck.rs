@@ -57,10 +57,15 @@ fn main() {
         ];
         let config = BattleConfig { arena: Some(arena.clone()), seed, navigation, record_events: false, ..BattleConfig::default() };
         let mut b = Battle::new(BattleSetup { catalog: cat.clone(), sides, config });
+        if std::env::var("TRACE_START").is_ok() {
+            for sh in b.ships.iter().filter(|x| x.side == 0 && !matches!(cat.ship(x.def).class, TargetClass::Fighter | TargetClass::Bomber)) {
+                println!("  start {} at ({:.0}, {:.0}) radius {:.0}", cat.ship(sh.def).name, sh.pos.x, sh.pos.y, cat.ship(sh.def).radius);
+            }
+        }
         let (mut overlap_ticks, mut worst_overlap, mut in_rock_ticks, mut path_rock, mut paths, mut max_fighter_in_hull) = (0u32, 0.0f32, 0u32, 0u32, 0u32, 0u32);
         let steps = (seconds * 30.0) as u32;
         for tick in 0..steps {
-            let early = tick < 150;
+            let early = false;
             b.step();
             if b.is_over() {
                 break;
@@ -73,7 +78,7 @@ fn main() {
             };
             let mut overlapping = false;
             for (i, a) in mobile.iter().enumerate() {
-                for o in big.iter().filter(|o| o.id != a.id) {
+                for o in big.iter().filter(|o| o.id != a.id && a.carrier != o.id && o.carrier != a.id) {
                     if cat.ship(o.def).is_static || o.id > a.id {
                         let min = (radius(a) + radius(o)) * 0.6;
                         let d = a.pos.dist(o.pos);

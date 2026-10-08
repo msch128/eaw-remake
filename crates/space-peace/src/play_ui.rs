@@ -1727,10 +1727,9 @@ fn spawn_planet_panel(mut commands: Commands, existing: Query<(), With<PlanetPan
 
 #[allow(clippy::too_many_arguments)]
 fn update_planet_panel(
+    hover: Res<crate::galaxy_map::Hover>,
     screen: Res<State<AppScreen>>,
     pv: Res<crate::planet_view::PlanetViewState>,
-    selection: Res<PlayerSelection>,
-    bridge: Res<PlayBridge>,
     view: Res<crate::galaxy_view::GalaxyView>,
     textures: Option<ResMut<eaw_ui::textures::UiTextures>>,
     mut images: ResMut<Assets<Image>>,
@@ -1740,7 +1739,7 @@ fn update_planet_panel(
     mut pips: Query<(&PanelPip, &mut Node)>,
 ) {
     // In the planet view the viewed planet counts even when only a fleet is selected.
-    let planet = if pv.active { pv.planet } else { selection.planet.and_then(|p| bridge.sim_to_planet.get(p as usize).copied().flatten()) }.and_then(|i| view.planets.get(i));
+    let planet = if pv.active { pv.planet } else { hover.0 }.and_then(|i| view.planets.get(i));
     if *screen.get() == AppScreen::SpaceBattle {
         panel.set_if_neq(Visibility::Hidden);
         return;

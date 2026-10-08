@@ -327,7 +327,7 @@ impl Default for MapScale {
 
 /// World-space radius of a planet sphere.
 pub fn planet_radius(scale: &MapScale, size: f32) -> f32 {
-    scale.unit * size * 0.8
+    scale.unit * size * 0.5
 }
 
 /// Median distance from a planet to its nearest neighbour (galaxy plane), a robust density measure.
@@ -805,7 +805,7 @@ fn draw_rings(
 }
 
 /// Radius of the notched selection ring in planet radii (about 10 in the reference).
-const NOTCH_RADIUS: f32 = 5.5;
+const NOTCH_RADIUS: f32 = 8.0;
 const NOTCH_SEGMENTS: usize = 360;
 
 /// Outer contour of the notched ring in units of the inner radius.
@@ -918,7 +918,7 @@ struct LaneState {
 
 /// Half widths of the ribbons in planet radii (`MapScale::unit`), by data width class. The reference
 /// shows wide soft light-blue beams of about 0.7 planet radii, thinner inter lanes and hair lines.
-const LANE_HALF_WIDTH: [f32; 3] = [0.34, 0.14, 0.05];
+const LANE_HALF_WIDTH: [f32; 3] = [0.16, 0.07, 0.03];
 /// Peak brightness (linear) of the beams.
 const LANE_PEAK: [f32; 3] = [0.42, 0.34, 0.26];
 
@@ -1355,7 +1355,7 @@ fn territory_segments(view: &GalaxyView, radii: &PlanetRadii, selected: Option<u
 }
 
 /// Radius of a planet's territory disc in planet radii.
-const TERRITORY_RADIUS: f32 = 11.0;
+const TERRITORY_RADIUS: f32 = 17.6;
 
 /// Gizmo group of the thick dashed faction territory outline.
 #[derive(Default, Reflect, GizmoConfigGroup)]

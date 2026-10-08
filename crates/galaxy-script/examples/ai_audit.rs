@@ -253,6 +253,9 @@ fn main() {
             v.sort_by_key(|x| std::cmp::Reverse(x.1));
             println!("{name} plans (goal, started, ok, failed): {:?}", v.iter().take(80).collect::<Vec<_>>());
         }
+        for (goal, t) in st.plan_timing.iter().filter(|(g, _)| g.contains("Conquer") || g.contains("Build_Units")) {
+            println!("plan timing {goal}: {} plans, mean {:.0} s, {} near their limit, {} failed ({} within 30 s)", t.plans, t.seconds / f64::from(t.plans.max(1)), t.near_limit, t.failed, t.failed_fast);
+        }
         println!("goals without a plan script: {:?}", st.goals_without_plan);
         println!("task forces: {:?}", st.taskforces);
     }

@@ -37,6 +37,8 @@ struct Snap {
     seen_by: u8,
     /// `SENSOR_JAMMING` active: homing missiles cannot hold a lock on it.
     jammed: bool,
+    /// Ship that carries this one (`NONE` = none): carried ships dock with it and do not keep out of its hull.
+    carrier: u32,
 }
 
 /// Uniform grid of ship ids for projectile collision.
@@ -206,6 +208,7 @@ impl Battle {
         for si in 0..b.sides.len() {
             b.place_side(si as u8);
         }
+        b.relax_spawn();
         b.launch_initial();
         b.check_over();
         // Rocks and stations do not move: one distance field serves the whole battle.
@@ -275,6 +278,46 @@ impl Battle {
                 other => other,
             };
             self.place_fleet(side, mine, o, y, order, has_structures);
+        }
+    }
+
+    /// Start areas of a map can lie closer together than the ships placed on them: pushes overlapping big ships apart before the first
+    /// tick (stations stay where they are), so no battle starts with hulls inside each other.
+    fn relax_spawn(&mut self) {
+        let cat = self.catalog.clone();
+        let radius = |d: &ShipDef| if d.class as u8 >= TargetClass::Frigate as u8 { d.radius * 0.75 } else { d.radius };
+        let hulls: Vec<usize> = (0..self.ships.len()).filter(|&i| !matches!(cat.ship(self.ships[i].def).class, TargetClass::Fighter | TargetClass::Bomber)).collect();
+        for _ in 0..80 {
+            let mut moved = false;
+            for (a, &i) in hulls.iter().enumerate() {
+                for &j in &hulls[a + 1..] {
+                    let (di, dj) = (cat.ship(self.ships[i].def), cat.ship(self.ships[j].def));
+                    if di.is_static && dj.is_static {
+                        continue;
+                    }
+                    let min = (radius(di) + radius(dj)) * 0.9;
+                    let (dx, dy) = (self.ships[i].pos.x - self.ships[j].pos.x, self.ships[i].pos.y - self.ships[j].pos.y);
+                    let d = (dx * dx + dy * dy).sqrt();
+                    if d >= min {
+                        continue;
+                    }
+                    let (ux, uy) = if d > 1e-3 { (dx / d, dy / d) } else { (1.0, 0.0) };
+                    let push = min - d;
+                    let (wi, wj) = match (di.is_static, dj.is_static) {
+                        (true, _) => (0.0, 1.0),
+                        (_, true) => (1.0, 0.0),
+                        _ => (0.5, 0.5),
+                    };
+                    self.ships[i].pos.x += ux * push * wi;
+                    self.ships[i].pos.y += uy * push * wi;
+                    self.ships[j].pos.x -= ux * push * wj;
+                    self.ships[j].pos.y -= uy * push * wj;
+                    moved = true;
+                }
+            }
+            if !moved {
+                break;
+            }
         }
     }
 
@@ -823,6 +866,7 @@ impl Battle {
                     alive: s.alive && !s.retreated,
                     golan: d.golan,
                     hp_alive: s.hps.iter().take(64).enumerate().fold(0u64, |m, (i, h)| m | (u64::from(h.alive) << i)),
+                    carrier: s.carrier,
                     jammed: d.abilities.iter().zip(&s.abilities).any(|(a, st)| a.jam && st.active > 0.0),
                     health: ((s.hull.max(0.0) + s.shield.max(0.0)) / (d.hull.max(1.0) + d.shield)).clamp(0.0, 1.0),
                     // Stations and structures are known from the start (the map shows them); only mobile ships hide in the fog.
@@ -1957,7 +2001,7 @@ fn mov(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, spawn: &
                 }
                 let heading = (s.yaw.cos(), s.yaw.sin());
                 let lookahead = (s.speed * 4.0).max(def.radius * 2.0);
-                let hulls = nav.hulls.iter().filter(|&&j| j != s.id && j != s.target).map(|&j| crate::nav::Blocker { pos: snaps[j as usize].pos, radius: snaps[j as usize].radius });
+                let hulls = nav.hulls.iter().filter(|&&j| j != s.id && j != s.target && j != s.carrier && snaps[j as usize].carrier != s.id).map(|&j| crate::nav::Blocker { pos: snaps[j as usize].pos, radius: snaps[j as usize].radius });
                 let st = if cfg.navigation {
                     crate::nav::steer_around(s.pos, heading, snaps[s.id as usize].radius, lookahead, hulls)
                 } else {
@@ -2016,6 +2060,9 @@ fn mov(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, spawn: &
                 continue;
             }
             let o = &snaps[j as usize];
+            if j == s.carrier || o.carrier == s.id {
+                continue;
+            }
             let fixed = cat.ship(o.def).is_static;
             let min = (me.radius + o.radius) * 0.85;
             let (dx, dy) = (s.pos.x - o.pos.x, s.pos.y - o.pos.y);

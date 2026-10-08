@@ -119,18 +119,15 @@ fn fleet_battle(data: &alamo_data::GameData, fs: &GameFs, map: &str, seed: u64) 
     let config = BattleConfig { arena: Some(arena.clone()), seed, record_events: false, ..BattleConfig::default() };
     let mut b = Battle::new(BattleSetup { catalog: cat.clone(), sides, config });
     let (mut worst, mut in_rock) = (f32::MAX, 0u32);
-    for tick in 0..30 * 240 {
+    for _ in 0..30 * 240 {
         b.step();
-        if tick < 150 {
-            continue; // the opening formation is packed and untangles in the first seconds
-        }
         let radius = |s: &Ship| {
             let d = cat.ship(s.def);
             if d.class as u8 >= TargetClass::Frigate as u8 { d.radius * 0.75 } else { d.radius }
         };
         let big: Vec<&Ship> = b.ships.iter().filter(|s| s.alive && !s.retreated && !cat.ship(s.def).is_static && !matches!(cat.ship(s.def).class, TargetClass::Fighter | TargetClass::Bomber)).collect();
         for (i, a) in big.iter().enumerate() {
-            for o in &big[i + 1..] {
+            for o in big[i + 1..].iter().filter(|o| a.carrier != o.id && o.carrier != a.id) {
                 worst = worst.min(a.pos.dist(o.pos) / ((radius(a) + radius(o)) * 0.85));
             }
             in_rock += arena.obstacles.iter().filter(|r| a.pos.dist(r.pos) < r.radius * 0.9).count() as u32;

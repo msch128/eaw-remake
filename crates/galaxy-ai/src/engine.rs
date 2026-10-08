@@ -107,12 +107,29 @@ pub struct AiStats {
     pub strategy_nanos: u128,
     /// Tech upgrades the AI queued.
     pub tech_upgrades: u32,
+    /// Per goal: finished plans, total seconds they ran, plans that ran into 90% of their limit, plans that failed after less than 30 s.
+    pub plan_timing: BTreeMap<String, PlanTiming>,
     /// Nanoseconds spent building perception snapshots.
     pub snapshot_nanos: u128,
     /// Unknown variables / missing equations aggregated over all evaluations.
     pub eval: EvalStats,
     /// Task force statistics.
     pub taskforces: TaskForceStats,
+}
+
+/// Running time statistics of the plans of one goal.
+#[derive(Debug, Default, Clone, Copy, PartialEq)]
+pub struct PlanTiming {
+    /// Finished plans.
+    pub plans: u32,
+    /// Seconds they ran in total.
+    pub seconds: f64,
+    /// Plans that ran for at least 90% of the time the engine allows them.
+    pub near_limit: u32,
+    /// Plans that failed within 30 seconds.
+    pub failed_fast: u32,
+    /// Plans that failed.
+    pub failed: u32,
 }
 
 /// The AI for all AI-controlled factions of a match.
@@ -290,6 +307,12 @@ impl AiEngine {
                     (false, true, true) => self.interval * 2.0,
                     (false, true, false) => limit.max(60.0),
                 };
+                let t = self.stats.plan_timing.entry(a.goal.clone()).or_default();
+                t.plans += 1;
+                t.seconds += now - a.started;
+                t.near_limit += u32::from(now - a.started >= 0.9 * a.limit);
+                t.failed += u32::from(failed);
+                t.failed_fast += u32::from(failed && now - a.started < 30.0);
                 if failed {
                     *self.stats.plans_failed.entry(key).or_default() += 1;
                 } else {
