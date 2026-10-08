@@ -524,7 +524,11 @@ fn spawn_galaxy(
         spawn_props(&mut commands, &view.props, GalaxyEntity);
     }
     spawn_lanes(&mut commands, &view, &scale, &mut meshes, &mut materials, &mut images);
-    spawn_nebula_plane(&mut commands, &view, &mut meshes, &mut materials, &mut images);
+    // The Remake video shows plain black space outside the galaxy core (maroon only over the core, which the disc art
+    // provides), so the extra plane stays off.
+    if NEBULA_PLANE {
+        spawn_nebula_plane(&mut commands, &view, &mut meshes, &mut materials, &mut images);
+    }
     commands.spawn((
         Name::new("selection ring fill"),
         Mesh3d(meshes.add(notch_mesh())),
@@ -1393,6 +1397,8 @@ fn pip_image(space: bool) -> Image {
     img.sampler = bevy::image::ImageSampler::linear();
     img
 }
+
+const NEBULA_PLANE: bool = false;
 
 /// The original lays a dense maroon nebula over the whole picture (not only over the galaxy disc art): a huge flat,
 /// unlit, additive plane under the map with a soft radial falloff and cloudy variation.

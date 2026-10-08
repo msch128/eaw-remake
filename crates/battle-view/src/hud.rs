@@ -61,11 +61,20 @@ pub struct HudState {
     /// Result cache of "is this unit a named hero".
     hero_cache: HashMap<String, bool>,
     last_click: Option<(u32, f32)>,
+    /// Ship under the cursor and since when (the tooltip waits a moment).
+    hover_since: Option<(u32, f32)>,
     /// The droid button was pressed: show the next hint now.
     pub show_now: bool,
     /// The objectives box is shown (`b_story_arc_t` toggles it).
     pub objectives: bool,
 }
+
+/// The tooltip of the unit under the cursor.
+#[derive(Component)]
+pub(crate) struct UnitTooltip;
+
+/// Seconds the cursor rests on a ship before its tooltip shows (estimate).
+const TOOLTIP_DELAY: f32 = 0.35;
 
 /// The mission objectives box.
 #[derive(Component)]
@@ -189,6 +198,28 @@ pub fn spawn_hud(
         ChildOf(boxed),
     ));
 
+    // Unit tooltip (name, hull and shield), follows the cursor.
+    let mut tip = commands.spawn((
+        TacticalHud,
+        UnitTooltip,
+        Name::new("unit tooltip"),
+        Text::new(""),
+        font(&ui, 11.0),
+        TextColor(Color::srgb(0.9, 0.95, 1.0)),
+        Node {
+            position_type: PositionType::Absolute,
+            display: Display::None,
+            padding: UiRect::axes(Val::Px(6.0), Val::Px(4.0)),
+            border: UiRect::all(Val::Px(1.0)),
+            ..default()
+        },
+        BackgroundColor(Color::srgba(0.03, 0.08, 0.14, 0.9)),
+        BorderColor::all(Color::srgb(0.27, 0.6, 0.85)),
+        GlobalZIndex(80),
+        bevy::ui::FocusPolicy::Pass,
+    ));
+    target(&mut tip);
+
     // Hero portraits, top right.
     let mut row = commands.spawn((
         TacticalHud,
@@ -204,6 +235,52 @@ pub fn spawn_hud(
         GlobalZIndex(60),
     ));
     target(&mut row);
+}
+
+/// Name, hull and shield of the ship under the cursor.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn unit_tooltip(
+    time: Res<Time>,
+    hover: Res<crate::control::Hover>,
+    pointer: Res<crate::control::Pointer>,
+    block: Res<crate::control::UiBlock>,
+    rt: Res<BattleRuntime>,
+    ships: Res<RenderedShips>,
+    assets: Option<Res<EawUiAssets>>,
+    scale: Res<UiScale>,
+    mut state: ResMut<HudState>,
+    mut tip: Query<(&mut Node, &mut Text), With<UnitTooltip>>,
+) {
+    let Ok((mut node, mut text)) = tip.single_mut() else { return };
+    let now = time.elapsed_secs();
+    let hovered = hover.ship.filter(|_| !block.0);
+    match (hovered, state.hover_since) {
+        (Some(id), Some((cur, _))) if id == cur => {}
+        (Some(id), _) => state.hover_since = Some((id, now)),
+        (None, _) => state.hover_since = None,
+    }
+    let show = state.hover_since.filter(|(_, at)| now - at >= TOOLTIP_DELAY);
+    let (Some((id, _)), Some(cursor), Some(s)) = (show, pointer.cursor, show.and_then(|(id, _)| ships.0.get(&id))) else {
+        if node.display != Display::None {
+            node.display = Display::None;
+        }
+        return;
+    };
+    let def = rt.catalog.ship(s.def);
+    let name = def.text_id.as_deref().and_then(|k| assets.as_ref().and_then(|a| a.text.get(k))).filter(|t| !t.is_empty()).unwrap_or(&def.name);
+    let mut msg = format!("{name}
+Hull {:.0} / {:.0}", s.hull * def.hull, def.hull);
+    if def.shield > 0.0 {
+        msg.push_str(&format!("
+Shield {:.0} / {:.0}", s.shield * def.shield, def.shield));
+    }
+    let _ = id;
+    if text.0 != msg {
+        text.0 = msg;
+    }
+    node.display = Display::Flex;
+    node.left = Val::Px((cursor.x + 16.0) / scale.0);
+    node.top = Val::Px((cursor.y + 18.0) / scale.0);
 }
 
 /// Shows the hints one after the other.

@@ -37,6 +37,8 @@ enum Check {
     /// A new order was issued and the selection survived.
     Order,
     Armed(ArmedKind),
+    /// The reinforcement window is open.
+    ReinforceWindow,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -48,11 +50,13 @@ enum Step {
     Button(&'static str, Check),
     /// Left click on open ground after a command button armed an order.
     ArmedGroundClick,
+    /// Click on the map to call in the picked reserve unit (needs `--battle-reserve`).
+    PlaceReinforcement,
     BarAreaKeepsSelection,
     EmptyClickDeselects,
 }
 
-const STEPS: [Step; 15] = [
+const STEPS: [Step; 18] = [
     Step::SelectShip,
     Step::RightClickGround,
     Step::RightClickEnemyRim,
@@ -66,6 +70,9 @@ const STEPS: [Step; 15] = [
     Step::Button("c_button04", Check::Order),
     Step::Button("c_button02", Check::Armed(ArmedKind::Move)),
     Step::ArmedGroundClick,
+    Step::Button("b_reinforcement", Check::ReinforceWindow),
+    Step::Button("r_0000", Check::Armed(ArmedKind::Reinforce)),
+    Step::PlaceReinforcement,
     Step::BarAreaKeepsSelection,
     Step::EmptyClickDeselects,
 ];
@@ -83,6 +90,8 @@ struct TestState {
     clicked: Vec<String>,
     probe_hover: bool,
     probe_press: bool,
+    place_world: Option<Vec3>,
+    reserve_before: u32,
     results: Vec<(String, bool)>,
     done: bool,
 }
@@ -119,9 +128,10 @@ fn drive(
         Commands,
         Res<ActionCam>,
         Res<ArmedOrder>,
+        Res<crate::tactical_ui::ReinforceUi>,
     ),
 ) {
-    let (block, pointer, hover, names, all_nodes, interactions, mut commands, action, armed) = extra;
+    let (block, pointer, hover, names, all_nodes, interactions, mut commands, action, armed, reinforce) = extra;
     let (cam_entity, cam, gt) = *camera;
     let sf = cam.target_scaling_factor().unwrap_or(1.0);
     for o in orders.read() {
@@ -261,6 +271,7 @@ fn drive(
                         Check::BattleCam(on) => action.active == on,
                         Check::Order => st.orders > st.orders_at_start,
                         Check::Armed(k) => armed.0 == Some(k),
+                        Check::ReinforceWindow => reinforce.root.is_some(),
                     };
                     let ok = st.clicked.iter().any(|c| c == name) && effect && !sel.ships.is_empty();
                     if !ok {
@@ -281,6 +292,41 @@ fn drive(
             }
             _ => {}
         },
+        Step::PlaceReinforcement => {
+            let reserve = |r: &crate::tactical_ui::ReinforceUi| r.rows.iter().map(|x| x.2).sum::<u32>();
+            match t {
+                0 => {
+                    st.reserve_before = reserve(&reinforce);
+                    // A spot next to one of the player's ships that the zone rule accepts.
+                    let own = ships.0.values().filter(|s| s.side == player && !rt.catalog.ship(s.def).is_static).min_by_key(|s| s.id);
+                    let spot = own.and_then(|o| {
+                        [(300.0, 0.0), (-300.0, 0.0), (0.0, 300.0), (0.0, -300.0), (600.0, 0.0), (-600.0, 0.0), (0.0, 600.0), (0.0, -600.0)]
+                            .iter()
+                            .map(|(dx, dz)| o.pos + Vec3::new(*dx, 0.0, *dz))
+                            .find(|p| crate::tactical_ui::zone_check(&rt, player, crate::convert::bevy_to_sim(*p)).is_ok())
+                    });
+                    st.place_world = spot;
+                    if spot.is_none() {
+                        verdict = Some(("place-reinforcement (no valid spot found)".into(), false));
+                    }
+                }
+                3 => {
+                    if let Some(p) = st.place_world.and_then(|w| cam.world_to_viewport(gt, w).ok()) {
+                        act = Some(Act::Move(p));
+                    }
+                }
+                4 | 5 => act = click_at(t - 3, Vec2::ZERO, MouseButton::Left),
+                90 => {
+                    let after = reserve(&reinforce);
+                    let ok = st.reserve_before > after && armed.0.is_none();
+                    if !ok {
+                        info!("input-test:   reserve {} -> {after}, armed {:?}, spot {:?}", st.reserve_before, armed.0, st.place_world);
+                    }
+                    verdict = Some(("place-reinforcement".into(), ok));
+                }
+                _ => {}
+            }
+        }
         Step::BarAreaKeepsSelection => match t {
             0 => act = click_at(0, Vec2::new(vp.x * 0.7, vp.y * 0.96), MouseButton::Left),
             1 | 2 => act = click_at(t, Vec2::ZERO, MouseButton::Left),

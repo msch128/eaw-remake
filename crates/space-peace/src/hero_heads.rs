@@ -5,7 +5,7 @@
 use std::collections::HashMap;
 
 use bevy::prelude::*;
-use galaxy_play::{FleetEntities, GalaxyLayout, PlayCatalog, PlayerFaction, SimState};
+use galaxy_play::{GalaxyLayout, PlayCatalog, PlayerFaction, SimState};
 
 /// Draws the heroes.
 pub struct HeroHeadsPlugin;
@@ -44,24 +44,23 @@ fn update_hero_heads(
     catalog: Res<PlayCatalog>,
     layout: Res<GalaxyLayout>,
     player: Res<PlayerFaction>,
-    entities: Option<Res<FleetEntities>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut mats: ResMut<Assets<StandardMaterial>>,
     mut images: ResMut<Assets<Image>>,
     textures: Option<ResMut<eaw_ui::textures::UiTextures>>,
     cameras: Query<&GlobalTransform, With<Camera3d>>,
-    transforms: Query<&GlobalTransform, With<galaxy_play::FleetVisual>>,
-    mut roots: Query<&mut Transform, (With<HeroRoot>, Without<galaxy_play::FleetVisual>)>,
+    mut roots: Query<&mut Transform, With<HeroRoot>>,
 ) {
-    let Some(entities) = entities else { return };
     let mut textures = textures;
     let cam_rot = cameras.iter().next().map(|c| c.rotation());
     let g = state.galaxy();
     let fake = std::env::var_os("SP_HERO_FAKE").is_some();
     let mut alive: Vec<(u32, u32)> = Vec::new();
+    let mut per_planet: HashMap<u32, usize> = HashMap::new();
     for f in g.fleets.values() {
-        let Some(&e) = entities.0.get(&f.id) else { continue };
-        let Ok(tf) = transforms.get(e) else { continue };
+        let Some(p) = f.planet() else { continue };
+        let n_here = per_planet.entry(p).or_insert(0usize);
+        let base = layout.positions[p as usize];
         let heroes: Vec<u32> = f
             .units
             .iter()
@@ -74,7 +73,13 @@ fn update_hero_heads(
             alive.push(key);
             // Left and right of the fleet base, further out for more heroes.
             let side = if k % 2 == 0 { 1.0 } else { -1.0 };
-            let pos = tf.translation() + Vec3::new(side * layout.unit * 1.5 * (1.0 + (k / 2) as f32), 0.0, 0.0);
+            let _ = (side, k);
+            // Heroes stand right of the fleet slots above the planet, then on the left, lower each time.
+            let slot = *n_here;
+            *n_here += 1;
+            let a = if slot % 2 == 0 { -1.45 + 0.3 * (slot / 2) as f32 } else { -1.7 - 0.3 * (slot / 2) as f32 - 0.4 };
+            let r = layout.orbit_radius(p) * 1.05;
+            let pos = base + Vec3::new(a.cos() * r, layout.unit * 0.25, a.sin() * r);
             if let Some(&root) = heads.0.get(&key) {
                 if let Ok(mut t) = roots.get_mut(root) {
                     t.translation = pos;
@@ -101,11 +106,11 @@ fn update_hero_heads(
                 })),
                 Transform::from_xyz(0.0, -layout.unit * 0.12, 0.0)
                     .with_rotation(Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2))
-                    .with_scale(Vec3::splat(layout.unit * 0.8)),
+                    .with_scale(Vec3::splat(layout.unit * 0.55)),
                 ChildOf(root),
             ));
             // Upright cut-out portrait standing on the disc, facing the camera.
-            let h = layout.unit * 1.1;
+            let h = layout.unit * 0.8;
             commands.spawn((
                 Mesh3d(meshes.add(Rectangle::new(h, h))),
                 MeshMaterial3d(mats.add(StandardMaterial {

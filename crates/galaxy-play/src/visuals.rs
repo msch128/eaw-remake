@@ -193,7 +193,7 @@ pub fn sync_fleets(
                     MeshMaterial3d(mats.add(StandardMaterial {
                         base_color: Color::LinearRgba(LinearRgba::new(tl.red * 0.02, tl.green * 0.16, tl.blue * 0.04, 0.9)),
                         unlit: true,
-                        depth_bias: 1.0e6,
+                        depth_bias: 400.0,
                         alpha_mode: AlphaMode::Blend,
                         cull_mode: None,
                         ..default()

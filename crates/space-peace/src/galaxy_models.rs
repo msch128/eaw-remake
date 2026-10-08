@@ -81,7 +81,7 @@ fn sync_stations(
                     MeshMaterial3d(mats.add(StandardMaterial {
                         base_color: Color::LinearRgba(LinearRgba::new(lin.red * 0.12, lin.green * 0.12, lin.blue * 0.05, 0.88)),
                         unlit: true,
-                        depth_bias: 1.0e6,
+                        depth_bias: 400.0,
                         alpha_mode: AlphaMode::Blend,
                         cull_mode: None,
                         ..default()

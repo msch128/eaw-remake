@@ -36,14 +36,14 @@ impl Plugin for TacticalUiPlugin {
             Update,
             (
                 control::ui_block.after(control::read_pointer).before(control::selection).run_if(resource_exists::<BattleRuntime>),
-                (crate::hud::spawn_hud, crate::hud::advisor, crate::hud::heroes, crate::hud::objectives_visibility, fix_tooltips).chain().run_if(resource_exists::<BattleRuntime>),
+                (crate::hud::spawn_hud, crate::hud::advisor, crate::hud::heroes, crate::hud::objectives_visibility, crate::hud::unit_tooltip, fix_tooltips).chain().run_if(resource_exists::<BattleRuntime>),
                 check_teardown,
                 crate::hud::remove_hud.run_if(resource_removed::<BattleRuntime>.or_eager(resource_removed::<crate::BattleSession>)),
                 init_reinforce.run_if(resource_added::<BattleRuntime>),
                 spawn_bar.run_if(resource_exists::<crate::BattleSession>.and_then(not(resource_exists::<TacticalBarSpawned>))),
                 remove_reinforce.run_if(resource_removed::<BattleRuntime>),
                 remove_bar.run_if(resource_removed::<BattleRuntime>.or_eager(resource_removed::<crate::BattleSession>)),
-                (sync_data, sync_overlays, handle_clicks, hardpoint_clicks, reinforce_clicks, reinforce_events, reinforce_panel, sync_minimap, minimap_pan).chain().run_if(resource_exists::<BattleRuntime>),
+                (sync_data, sync_overlays, handle_clicks, ability_at, hardpoint_clicks, reinforce_clicks, reinforce_place, reinforce_events, reinforce_panel, sync_minimap, minimap_pan).chain().run_if(resource_exists::<BattleRuntime>),
             )
                 .chain(),
         );
@@ -55,6 +55,8 @@ impl Plugin for TacticalUiPlugin {
 pub struct TacticalUiState {
     /// Ships per slot.
     pub groups: Vec<Vec<u32>>,
+    /// A targeted ability waits for a click on the map: the ships of the slot and the ability type.
+    pub pending_ability: Option<(Vec<u32>, String)>,
 }
 
 /// Counts frames after a battle ended, then checks that no battle UI is left (a leftover would draw over the galaxy).
@@ -97,7 +99,12 @@ fn spawn_bar(mut commands: Commands, session: Res<crate::BattleSession>) {
     commands.insert_resource(TacticalBarSpawned);
 }
 
-fn remove_bar(mut commands: Commands, bars: Query<Entity, With<EawCommandBar>>, mut tac: ResMut<TacticalData>, mut overlays: ResMut<TacticalOverlays>, mut fog: ResMut<eaw_ui::MinimapFog>) {
+fn remove_bar(mut commands: Commands, bars: Query<Entity, With<EawCommandBar>>, mut tac: ResMut<TacticalData>, mut overlays: ResMut<TacticalOverlays>, mut fog: ResMut<eaw_ui::MinimapFog>, mut armed: ResMut<control::ArmedOrder>, mut action: ResMut<crate::camera::ActionCam>, mut sel: ResMut<Selection>, mut settings: ResMut<BattleViewSettings>) {
+    // Nothing of this battle may leak into the next one (or into the galaxy).
+    armed.0 = None;
+    *action = crate::camera::ActionCam::default();
+    *sel = Selection::default();
+    settings.paused = false;
     if fog.enabled {
         *fog = eaw_ui::MinimapFog::default();
     }
@@ -197,7 +204,7 @@ fn sync_data(
 fn handle_clicks(
     rt: Res<BattleRuntime>,
     mut settings: ResMut<BattleViewSettings>,
-    state: Res<TacticalUiState>,
+    mut state: ResMut<TacticalUiState>,
     mut sel: ResMut<Selection>,
     mut tac: ResMut<TacticalData>,
     mut buttons: MessageReader<EawButtonClicked>,
@@ -241,6 +248,15 @@ fn handle_clicks(
     }
     for a in abilities.read() {
         let Some(group) = tac.selection.get(tac.focus).and_then(|_| state.groups.get(tac.focus)) else { continue };
+        // Targeted abilities (reveal ping): the next click on the map is the target.
+        let targeted = group.first().and_then(|&id| rt.cur.as_ref().and_then(|c| c.ship(id))).is_some_and(|s| {
+            rt.catalog.ship(s.def).abilities.iter().any(|d| d.kind.eq_ignore_ascii_case(&a.ability) && d.reveal_radius > 0.0)
+        });
+        if targeted {
+            state.pending_ability = Some((group.clone(), a.ability.clone()));
+            armed.0 = Some(control::ArmedKind::AbilityAt);
+            continue;
+        }
         for &id in group {
             let Some(s) = rt.cur.as_ref().and_then(|c| c.ship(id)) else { continue };
             let defs = &rt.catalog.ship(s.def).abilities;
@@ -334,6 +350,10 @@ pub struct ReinforceUi {
     pub rows: Vec<(String, u32, u32)>,
     /// The refusal message on screen and the seconds it stays.
     notice: Option<(Entity, f32)>,
+    /// Row being placed (a click on the map calls it in) and whether the whole stack comes (Shift).
+    placing: Option<(usize, bool)>,
+    /// The cursor label while placing.
+    label: Option<Entity>,
 }
 
 /// Reads the reserve of the player's side from the request.
@@ -356,6 +376,10 @@ fn remove_reinforce(mut commands: Commands, mut ui: ResMut<ReinforceUi>, mut pan
         commands.entity(e).try_despawn();
     }
     ui.rows.clear();
+    ui.placing = None;
+    if let Some(e) = ui.label.take() {
+        commands.entity(e).try_despawn();
+    }
     panel.slots.retain(|k, _| !k.starts_with("r_"));
     panel.texts.remove("r_pop_text");
 }
@@ -372,9 +396,9 @@ fn reserve_slot(name: &str) -> Option<usize> {
 
 /// Opens and closes the window, and calls units in.
 fn reinforce_clicks(
+    mut armed: ResMut<control::ArmedOrder>,
     mut clicks: MessageReader<EawButtonClicked>,
     rt: Res<BattleRuntime>,
-    settings: Res<BattleViewSettings>,
     mut ui: ResMut<ReinforceUi>,
     mut commands: Commands,
 ) {
@@ -404,10 +428,10 @@ fn reinforce_clicks(
                 if ui.root.is_none() {
                     continue;
                 }
-                if let Some(row) = ui.rows.get_mut(idx).filter(|r| r.2 > 0) {
-                    let count = if c.shift { row.2 } else { 1 };
-                    // The count drops when the simulation reports the call (`ReinforcementsCalled`).
-                    rt.command(settings.player_side, Command::Reinforce { ship: row.1, count });
+                // The unit is picked here; the click on the map (see `reinforce_place`) calls it in.
+                if ui.rows.get(idx).is_some_and(|r| r.2 > 0) {
+                    ui.placing = Some((idx, c.shift));
+                    armed.0 = Some(control::ArmedKind::Reinforce);
                 }
             }
         }
@@ -513,6 +537,49 @@ fn fix_tooltips(mut buttons: Query<&mut eaw_ui::EawButton>) {
 Follows the selected unit; you can rotate around it".to_string());
         }
     }
+}
+
+/// Completes a targeted ability: the click on the map sends `UseAbilityAt` for the first ship of the slot that has it ready.
+#[allow(clippy::too_many_arguments)]
+fn ability_at(
+    mut state: ResMut<TacticalUiState>,
+    mut armed: ResMut<control::ArmedOrder>,
+    rt: Res<BattleRuntime>,
+    settings: Res<BattleViewSettings>,
+    hover: Res<Hover>,
+    pointer: Res<control::Pointer>,
+    block: Res<control::UiBlock>,
+    mut gizmos: Gizmos,
+) {
+    if armed.0 != Some(control::ArmedKind::AbilityAt) {
+        state.pending_ability = None;
+        return;
+    }
+    let Some((group, kind)) = state.pending_ability.clone() else {
+        armed.0 = None;
+        return;
+    };
+    let Some(ground) = hover.ground.filter(|_| !block.0) else { return };
+    let radius = group
+        .first()
+        .and_then(|&id| rt.cur.as_ref().and_then(|c| c.ship(id)))
+        .and_then(|s| rt.catalog.ship(s.def).abilities.iter().find(|d| d.kind.eq_ignore_ascii_case(&kind)).map(|d| d.reveal_radius))
+        .unwrap_or(500.0);
+    gizmos.circle(Isometry3d::new(ground, Quat::from_rotation_x(std::f32::consts::FRAC_PI_2)), radius, Color::srgb(0.4, 0.8, 1.0)).resolution(48);
+    if !pointer.left_released {
+        return;
+    }
+    let pos = crate::convert::bevy_to_sim(ground);
+    for &id in &group {
+        let Some(s) = rt.cur.as_ref().and_then(|c| c.ship(id)) else { continue };
+        let Some(i) = rt.catalog.ship(s.def).abilities.iter().position(|d| d.kind.eq_ignore_ascii_case(&kind)) else { continue };
+        if s.abilities.get(i).is_some_and(|a| a.1 <= 0.0) {
+            rt.command(settings.player_side, Command::UseAbilityAt { ship: id, ability: i as u16, pos });
+            break;
+        }
+    }
+    state.pending_ability = None;
+    armed.0 = None;
 }
 
 /// Reticle kind of a hardpoint (`I_HARD_POINT_RETICLE_<KIND>`).
@@ -653,6 +720,140 @@ fn hardpoint_clicks(
         let enemy = ships.0.get(&target).is_some_and(|s| s.side != settings.player_side);
         if enemy && !mine.is_empty() {
             rt.command(settings.player_side, Command::AttackHardpoint { ships: mine, target, hardpoint: hp });
+        }
+    }
+}
+
+/// Why a reinforcement position is refused (the sim answers with these `CommandError`s; this is the same rule evaluated on the
+/// displayed snapshot so that the cursor can show it before the click): inside the battle area, within `reinforce_zone` of an own ship
+/// or structure, farther than `reinforce_zone` from every enemy.
+pub(crate) fn zone_check(rt: &BattleRuntime, side: u8, pos: battle_sim::Vec3) -> Result<(), &'static str> {
+    let Some(cur) = rt.cur.as_ref() else { return Err("Not ready") };
+    let half = rt.arena_half - 300.0;
+    if pos.x.abs() > half || pos.y.abs() > half {
+        return Err("Outside the battle area");
+    }
+    let (mut near_own, mut nearest_enemy) = (false, f32::MAX);
+    for s in &cur.ships {
+        let d = s.pos.dist(pos);
+        if s.side == side {
+            near_own |= d <= rt.reinforce_zone;
+        } else {
+            nearest_enemy = nearest_enemy.min(d);
+        }
+    }
+    if nearest_enemy <= rt.reinforce_zone {
+        return Err("Too close to the enemy");
+    }
+    if !near_own {
+        return Err("Must be near your own ships or structures");
+    }
+    Ok(())
+}
+
+/// Reinforcement placement: after a click on a reserve slot the cursor shows where the wave may arrive (green ring, red when the position is
+/// refused, with the reason); a left click there calls the unit in (hyperspace arrival after the reinforcement delay), Right click / Esc cancels.
+#[allow(clippy::too_many_arguments)]
+fn reinforce_place(
+    mut ui: ResMut<ReinforceUi>,
+    mut armed: ResMut<control::ArmedOrder>,
+    rt: Res<BattleRuntime>,
+    settings: Res<BattleViewSettings>,
+    hover: Res<Hover>,
+    pointer: Res<control::Pointer>,
+    block: Res<control::UiBlock>,
+    assets: Option<Res<EawUiAssets>>,
+    scale: Res<UiScale>,
+    mut labels: Query<(&mut Node, &mut Text, &mut TextColor)>,
+    mut commands: Commands,
+    mut gizmos: Gizmos,
+    ships: Res<RenderedShips>,
+) {
+    let placing = ui.placing.filter(|_| armed.0 == Some(control::ArmedKind::Reinforce));
+    let Some((idx, all)) = placing else {
+        ui.placing = None;
+        if let Some(e) = ui.label.take() {
+            commands.entity(e).try_despawn();
+        }
+        return;
+    };
+    let Some(row) = ui.rows.get(idx).cloned() else {
+        armed.0 = None;
+        return;
+    };
+    let player = settings.player_side;
+    let label = match ui.label {
+        Some(e) => e,
+        None => {
+            let e = commands
+                .spawn((
+                    crate::BattleEntity,
+                    Text::new(""),
+                    TextFont { font_size: FontSize::Px(12.0), ..default() },
+                    TextColor(Color::WHITE),
+                    TextShadow { offset: Vec2::splat(1.0), color: Color::BLACK },
+                    Node { position_type: PositionType::Absolute, display: Display::None, ..default() },
+                    GlobalZIndex(70),
+                    bevy::ui::FocusPolicy::Pass,
+                ))
+                .id();
+            ui.label = Some(e);
+            e
+        }
+    };
+    if settings.synthetic_pointer {
+        // Scripted offscreen runs have no mouse: the wave goes to the first spot next to an own ship that the zone rule accepts.
+        let spot = ships.0.values().filter(|s| s.side == player && !rt.catalog.ship(s.def).is_static).min_by_key(|s| s.id).and_then(|o| {
+            [(300.0, 0.0), (-300.0, 0.0), (0.0, 300.0), (0.0, -300.0), (600.0, 0.0), (-600.0, 0.0), (0.0, 600.0), (0.0, -600.0)]
+                .iter()
+                .map(|(dx, dz)| crate::convert::bevy_to_sim(o.pos + Vec3::new(*dx, 0.0, *dz)))
+                .find(|p| zone_check(&rt, player, *p).is_ok())
+        });
+        if let Some(pos) = spot {
+            rt.command(player, Command::ReinforceAt { ship: row.1, count: if all { row.2 } else { 1 }, pos });
+            info!("reinforcements: placing {} at {pos:?} (scripted)", row.0);
+            armed.0 = None;
+        }
+        return;
+    }
+    let (Some(ground), Some(cursor)) = (hover.ground, pointer.cursor) else { return };
+    if block.0 {
+        if let Ok((mut n, ..)) = labels.get_mut(label) {
+            n.display = Display::None;
+        }
+        return;
+    }
+    let sim_pos = crate::convert::bevy_to_sim(ground);
+    let verdict = zone_check(&rt, player, sim_pos);
+    let ok = verdict.is_ok();
+    let colour = if ok { Color::srgb(0.3, 1.0, 0.4) } else { Color::srgb(1.0, 0.35, 0.3) };
+    gizmos.circle(Isometry3d::new(ground, Quat::from_rotation_x(std::f32::consts::FRAC_PI_2)), rt.reinforce_clearance.max(60.0), colour).resolution(48);
+    let name = assets
+        .and_then(|a| {
+            let def = rt.catalog.ship(row.1);
+            def.text_id.as_deref().and_then(|k| a.text.get(k)).filter(|t| !t.is_empty()).map(str::to_string)
+        })
+        .unwrap_or_else(|| row.0.clone());
+    if let Ok((mut node, mut text, mut tc)) = labels.get_mut(label) {
+        node.display = Display::Flex;
+        node.left = Val::Px((cursor.x + 18.0) / scale.0);
+        node.top = Val::Px((cursor.y + 14.0) / scale.0);
+        let msg = match verdict {
+            Ok(()) => format!("{name}: click to call in{}", if all { " (all)" } else { "" }),
+            Err(why) => format!("{name}: {why}"),
+        };
+        if text.0 != msg {
+            text.0 = msg;
+        }
+        tc.0 = colour;
+    }
+    if pointer.left_released {
+        if ok {
+            let count = if all { row.2 } else { 1 };
+            // The count drops when the simulation reports the call (`ReinforcementsCalled`).
+            rt.command(player, Command::ReinforceAt { ship: row.1, count, pos: sim_pos });
+            info!("reinforcements: placing {count} x {} at {sim_pos:?}", row.0);
+            armed.0 = None;
         }
     }
 }

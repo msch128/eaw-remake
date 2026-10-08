@@ -44,6 +44,10 @@ pub enum ArmedKind {
     AttackMove,
     /// Move to the clicked point.
     Move,
+    /// Place a reinforcement wave (handled by `tactical_ui::reinforce_place`).
+    Reinforce,
+    /// Pick the target point of a targeted ability (handled by `tactical_ui::ability_at`).
+    AbilityAt,
 }
 
 /// Ask the camera to centre on the selection (double click on a selected ship, space bar, hero portrait).
@@ -441,17 +445,12 @@ pub fn orders(
     if keys.just_pressed(KeyCode::Escape) {
         armed.0 = None;
     }
-    let mine: Vec<u32> = sel
-        .ships
-        .iter()
-        .copied()
-        .filter(|id| {
-            ships
-                .0
-                .get(id)
-                .is_some_and(|s| s.side == player && !rt.catalog.ship(s.def).is_static)
-        })
-        .collect();
+    // A command button arms an order for the next left click; a right click cancels it (also without a selection).
+    if pointer.right_pressed && armed.0.is_some() {
+        armed.0 = None;
+        return;
+    }
+    let mine = selected_mobile(&rt, &ships, &sel, player);
     if mine.is_empty() {
         return;
     }
@@ -459,11 +458,6 @@ pub fn orders(
     if keys.just_pressed(KeyCode::KeyS) && !keys.pressed(KeyCode::ControlLeft) {
         rt.sim.command(player, Command::Stop { ships: mine.clone() });
         issued.write(OrderIssued { kind: OrderKind::Stop, lead });
-    }
-    // A command button arms an order for the next left click; a right click cancels it.
-    if pointer.right_pressed && armed.0.is_some() {
-        armed.0 = None;
-        return;
     }
     let armed_click = armed.0.filter(|_| pointer.left_released && !block.0);
     if armed_click.is_none() && (!pointer.right_pressed || block.0) {
@@ -487,6 +481,7 @@ pub fn orders(
             mark_enemy(&mut markers, target);
             armed.0 = None;
         }
+        Some(ArmedKind::Reinforce | ArmedKind::AbilityAt) => {}
         Some(kind) => {
             let Some(g) = hover.ground else { return };
             let to = bevy_to_sim(g);

@@ -74,6 +74,13 @@ pub struct GalaxyCamera {
     pub pitch: f32,
 }
 
+/// Radians of turn per pixel of middle-button drag.
+const ROTATE_PER_PIXEL: f32 = 0.005;
+/// Tilt limits of the galaxy view.
+const MIN_PITCH: f32 = 0.35;
+const MAX_PITCH: f32 = 1.45;
+/// Page Up / Page Down turn speed in radians per second.
+const PAGE_TURN_SPEED: f32 = 1.2;
 const ZOOM_STEP: f32 = 0.88;
 const ZOOM_SMOOTH: f32 = 12.0;
 const PAN_SMOOTH: f32 = 14.0;
@@ -210,10 +217,17 @@ fn control_camera(
     };
     pan += (right * dir.x + forward * dir.y) * KEY_PAN_SPEED * settings.camera_speed * cam.distance * dt * speed;
 
-    // Right / middle mouse drag: grab the map. World units per pixel from the projection.
-    if (buttons.pressed(MouseButton::Right) || buttons.pressed(MouseButton::Middle))
-        && motion.delta != Vec2::ZERO
-    {
+    // Middle mouse drag turns the view like the original: sideways = yaw around the focus, up/down = tilt.
+    if buttons.pressed(MouseButton::Middle) && motion.delta != Vec2::ZERO {
+        cam.yaw += motion.delta.x * ROTATE_PER_PIXEL;
+        cam.pitch = (cam.pitch + motion.delta.y * ROTATE_PER_PIXEL).clamp(MIN_PITCH, MAX_PITCH);
+    }
+    // Page Up / Page Down turn the view.
+    let turn = f32::from(u8::from(keys.pressed(KeyCode::PageUp))) - f32::from(u8::from(keys.pressed(KeyCode::PageDown)));
+    cam.yaw += turn * PAGE_TURN_SPEED * dt;
+
+    // Right mouse drag: grab the map. World units per pixel from the projection.
+    if buttons.pressed(MouseButton::Right) && motion.delta != Vec2::ZERO {
         let fov = match projection {
             Projection::Perspective(p) => p.fov,
             _ => 40f32.to_radians(),
