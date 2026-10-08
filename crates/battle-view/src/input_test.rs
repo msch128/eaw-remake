@@ -61,6 +61,8 @@ enum Step {
     PageUpRotates,
     /// Shift + 1 presses the first ability button of the selected unit (vacuous when the unit has none).
     AbilityHotkey,
+    /// Right click on an ability button that supports autocast flips it (vacuous when the selected unit has none).
+    AutocastToggle,
     /// Esc: cancels the armed order first, then opens the (pausing) menu, then closes it.
     Escape(EscCheck),
     /// After a move order the selected ship shows a line to its destination and a ring there.
@@ -76,7 +78,7 @@ enum EscCheck {
     Paused(bool),
 }
 
-const STEPS: [Step; 27] = [
+const STEPS: [Step; 28] = [
     Step::SelectShip,
     Step::RightClickGround,
     Step::MoveLineVisible,
@@ -93,6 +95,7 @@ const STEPS: [Step; 27] = [
     Step::Button("c_button02", Check::Armed(ArmedKind::Move)),
     Step::ArmedGroundClick,
     Step::AbilityHotkey,
+    Step::AutocastToggle,
     Step::Button("c_button01", Check::Armed(ArmedKind::AttackMove)),
     Step::Escape(EscCheck::ArmedCleared),
     Step::Escape(EscCheck::Paused(true)),
@@ -123,6 +126,7 @@ struct TestState {
     /// Camera yaw / pitch at the start and after the horizontal part of a drag.
     ability_clicks: u32,
     hp_marker: Option<Vec2>,
+    autocast: Option<(u32, usize, bool)>,
     hp_ship: Option<u32>,
     cam_saved: Option<(Vec3, f32)>,
     cam0: (f32, f32),
@@ -403,6 +407,35 @@ fn drive(
             }
             _ => {}
         },
+        Step::AutocastToggle => {
+            // The first selected ship and an ability of it that supports autocast, with the bar button that shows it.
+            let found = sel.ships.first().and_then(|&id| {
+                let s = rt.cur.as_ref()?.ship(id)?;
+                let defs = &rt.catalog.ship(s.def).abilities;
+                let unit = tactical.selection.get(tactical.focus)?;
+                unit.abilities.iter().enumerate().find_map(|(k, a)| {
+                    let i = defs.iter().position(|d| d.kind.eq_ignore_ascii_case(&a.def.kind) && d.supports_autofire)?;
+                    Some((id, i, k, s.autocast.get(i).copied().unwrap_or(false)))
+                })
+            });
+            match (t, found) {
+                (0, None) => verdict = Some(("autocast-toggle (selected unit has no autocast ability)".into(), true)),
+                (0, Some((id, i, k, on))) => {
+                    st.autocast = Some((id, i, on));
+                    let name = format!("special_button_{k:02}");
+                    match bar.iter().find(|r| r.0.name == name && r.4.get()) {
+                        Some(r) => act = Some(Act::Move(r.3.translation / sf)),
+                        None => verdict = Some(("autocast-toggle: ability button not visible".into(), false)),
+                    }
+                }
+                (1 | 2, _) => act = click_at(t, Vec2::ZERO, MouseButton::Right),
+                (30, _) => {
+                    let ok = st.autocast.is_some_and(|(id, i, before)| rt.cur.as_ref().and_then(|c| c.ship(id)).is_some_and(|s| s.autocast.get(i).copied() == Some(!before)));
+                    verdict = Some(("autocast-toggle".into(), ok));
+                }
+                _ => {}
+            }
+        }
         Step::HardpointTooltip => {
             let (overlays, tips) = (&hp_overlays, &hp_tips);
             match t {

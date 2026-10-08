@@ -44,7 +44,7 @@ impl Plugin for TacticalUiPlugin {
                 spawn_bar.run_if(resource_exists::<crate::BattleSession>.and_then(not(resource_exists::<TacticalBarSpawned>))),
                 remove_reinforce.run_if(resource_removed::<BattleRuntime>),
                 remove_bar.run_if(resource_removed::<BattleRuntime>.or_eager(resource_removed::<crate::BattleSession>)),
-                (sync_data, sync_overlays, handle_clicks, ability_keys, ability_at, hardpoint_clicks, reinforce_clicks, reinforce_place, reinforce_events, reinforce_panel, sync_minimap, minimap_pan).chain().run_if(resource_exists::<BattleRuntime>),
+                (sync_data, sync_overlays, handle_clicks, ability_keys, autocast_toggle, autocast_rings, ability_at, hardpoint_clicks, reinforce_clicks, reinforce_place, reinforce_events, reinforce_panel, sync_minimap, minimap_pan).chain().run_if(resource_exists::<BattleRuntime>),
             )
                 .chain(),
         );
@@ -695,6 +695,103 @@ fn ability_keys(
             && let Some(a) = unit.abilities.get(k).filter(|a| !a.disabled)
         {
             clicks.write(EawAbilityClicked { unit_type: unit.name.clone(), ability: a.def.kind.clone() });
+        }
+    }
+}
+
+/// Ring on an ability button whose autocast is on.
+#[derive(Component)]
+struct AutocastRing;
+
+/// The ability of the focused unit behind `special_button_NN`: (ship slot group, kind of the ability).
+fn button_ability(name: &str, tac: &TacticalData, state: &TacticalUiState) -> Option<(Vec<u32>, String)> {
+    let k: usize = name.strip_prefix("special_button_")?.parse().ok()?;
+    let unit = tac.selection.get(tac.focus)?;
+    let kind = unit.abilities.get(k)?.def.kind.clone();
+    Some((state.groups.get(tac.focus)?.clone(), kind))
+}
+
+/// Right click on an ability button turns its autocast on or off for every ship of the slot (only abilities that support it).
+#[allow(clippy::too_many_arguments)]
+fn autocast_toggle(
+    pointer: Res<control::Pointer>,
+    tac: Res<TacticalData>,
+    state: Res<TacticalUiState>,
+    rt: Res<BattleRuntime>,
+    settings: Res<BattleViewSettings>,
+    camera: Single<&Camera, With<BattleCamera>>,
+    buttons: Query<(&eaw_ui::EawButton, &ComputedNode, &UiGlobalTransform, &InheritedVisibility)>,
+) {
+    let (true, Some(cursor)) = (pointer.right_pressed, pointer.cursor) else { return };
+    let sf = camera.target_scaling_factor().unwrap_or(1.0);
+    let Some(name) = buttons
+        .iter()
+        .find(|(b, n, g, v)| v.get() && b.name.starts_with("special_button_") && n.contains_point(**g, cursor * sf))
+        .map(|(b, ..)| b.name.clone())
+    else {
+        return;
+    };
+    let Some((group, kind)) = button_ability(&name, &tac, &state) else { return };
+    let Some(cur) = rt.cur.as_ref() else { return };
+    // The new state follows the first ship of the slot so that a mixed slot ends up uniform.
+    let mut target: Option<bool> = None;
+    for &id in &group {
+        let Some(s) = cur.ship(id) else { continue };
+        let defs = &rt.catalog.ship(s.def).abilities;
+        let Some(i) = defs.iter().position(|d| d.kind.eq_ignore_ascii_case(&kind)) else { continue };
+        if !defs[i].supports_autofire {
+            continue;
+        }
+        let on = *target.get_or_insert(!s.autocast.get(i).copied().unwrap_or(false));
+        rt.command(settings.player_side, Command::SetAutocast { ship: id, ability: i as u16, on });
+    }
+}
+
+/// Keeps a ring on every ability button whose autocast is on (first ship of the focused slot).
+fn autocast_rings(
+    tac: Res<TacticalData>,
+    state: Res<TacticalUiState>,
+    rt: Res<BattleRuntime>,
+    buttons: Query<(Entity, &eaw_ui::EawButton, Option<&Children>)>,
+    rings: Query<(), With<AutocastRing>>,
+    mut commands: Commands,
+) {
+    for (e, b, kids) in &buttons {
+        if !b.name.starts_with("special_button_") {
+            continue;
+        }
+        let on = button_ability(&b.name, &tac, &state).is_some_and(|(group, kind)| {
+            group.first().and_then(|&id| rt.cur.as_ref().and_then(|c| c.ship(id))).is_some_and(|s| {
+                let defs = &rt.catalog.ship(s.def).abilities;
+                defs.iter().position(|d| d.kind.eq_ignore_ascii_case(&kind)).is_some_and(|i| defs[i].supports_autofire && s.autocast.get(i).copied().unwrap_or(false))
+            })
+        });
+        let existing: Vec<Entity> = kids.into_iter().flatten().copied().filter(|k| rings.contains(*k)).collect();
+        match (on, existing.is_empty()) {
+            (true, true) => {
+                commands.spawn((
+                    AutocastRing,
+                    Node {
+                        position_type: PositionType::Absolute,
+                        left: Val::Px(-2.0),
+                        top: Val::Px(-2.0),
+                        width: Val::Percent(100.0),
+                        height: Val::Percent(100.0),
+                        border: UiRect::all(Val::Px(2.0)),
+                        border_radius: BorderRadius::MAX,
+                        ..default()
+                    },
+                    BorderColor::all(Color::srgb(1.0, 0.85, 0.3)),
+                    bevy::ui::FocusPolicy::Pass,
+                    ChildOf(e),
+                ));
+            }
+            (false, false) => {
+                for k in existing {
+                    commands.entity(k).try_despawn();
+                }
+            }
+            _ => {}
         }
     }
 }
