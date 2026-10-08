@@ -250,6 +250,10 @@ pub struct BattleRuntime {
     speed: f32,
     framed: bool,
     reported: bool,
+    /// Map objects for the minimap: position (map x, -z), size and whether it is a backdrop object.
+    pub(crate) minimap_props: Vec<(Vec2, f32)>,
+    /// Dark tint of the tactical minimap derived from the map lights.
+    pub(crate) minimap_tint: Color,
 }
 
 impl BattleRuntime {
@@ -415,6 +419,11 @@ fn start_battle(
         speed: 1.0,
         framed: false,
         reported: false,
+        minimap_props: session.scene.props.iter().filter(|p| !p.backdrop).map(|p| (Vec2::new(p.position.x, -p.position.z), p.scale)).collect(),
+        minimap_tint: {
+            let t = session.scene.ambient * 3.0 + session.scene.lights[0].color * 0.06;
+            Color::srgb(t.x.clamp(0.02, 0.35), t.y.clamp(0.02, 0.35), t.z.clamp(0.03, 0.4))
+        },
     });
 }
 

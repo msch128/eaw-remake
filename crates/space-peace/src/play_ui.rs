@@ -80,6 +80,7 @@ impl Plugin for PlayUiPlugin {
                     bar_clicks,
                     loading_overlay,
                     collect_move_markers,
+                    fleet_tooltip.run_if(in_state(AppScreen::Galaxy)),
                     draw_move_markers,
                     refresh_ticker,
                     refresh_texts.run_if(in_state(AppScreen::Galaxy)),
@@ -307,6 +308,22 @@ fn spawn_hud(mut commands: Commands, existing: Query<(), With<PlayHud>>) {
         text_bundle("", 20.0, Color::srgb(0.9, 0.95, 1.0)),
         Node { top: Val::Px(52.0), left: Val::Percent(45.0), ..abs.clone() },
         SpeedText,
+        GalaxyEntity,
+    ));
+    commands.spawn((
+        PlayHud,
+        FleetTip,
+        text_bundle("", 14.0, Color::srgb(0.9, 0.95, 1.0)),
+        Node {
+            position_type: PositionType::Absolute,
+            padding: UiRect::axes(Val::Px(8.0), Val::Px(5.0)),
+            border: UiRect::all(Val::Px(1.0)),
+            ..default()
+        },
+        BackgroundColor(Color::srgba(0.02, 0.05, 0.10, 0.92)),
+        BorderColor::all(Color::srgba(0.35, 0.65, 1.0, 0.8)),
+        GlobalZIndex(30),
+        Visibility::Hidden,
         GalaxyEntity,
     ));
     commands.spawn((
@@ -557,7 +574,7 @@ fn feed_minimap(
     let half_h = orbit.distance * (fov * 0.5).tan() / orbit.pitch.sin().max(0.3);
     let center = galaxy(orbit.focus);
     let half = Vec2::new(half_h * aspect, half_h);
-    let next = MinimapData { bounds: Some((lo - margin, hi + margin)), planets, units, camera: Some((center - half, center + half)) };
+    let next = MinimapData { bounds: Some((lo - margin, hi + margin)), planets, units, camera: Some((center - half, center + half)), background: None };
     if *data != next {
         *data = next;
     }
@@ -697,4 +714,46 @@ fn draw_move_markers(time: Res<Time>, layout: Res<galaxy_play::GalaxyLayout>, mu
         gizmos.circle(Isometry3d::new(c, Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2)), r, color);
         gizmos.circle(Isometry3d::new(c, Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2)), r * 0.7, color);
     }
+}
+
+/// Mouse-follow tooltip of the fleet under the cursor.
+#[derive(Component)]
+struct FleetTip;
+
+fn fleet_tooltip(
+    hover: Res<galaxy_play::PlayHover>,
+    state: Res<SimState>,
+    catalog: Res<galaxy_play::PlayCatalog>,
+    window: Option<Single<&Window, With<PrimaryWindow>>>,
+    scale: Res<UiScale>,
+    mut tip: Single<(&mut Node, &mut Text, &mut Visibility), With<FleetTip>>,
+) {
+    let (node, text, vis) = &mut *tip;
+    let cursor = window.and_then(|w| w.cursor_position());
+    let fleet = hover.fleet.and_then(|id| state.galaxy().fleets.get(&id));
+    let (Some(cursor), Some(f)) = (cursor, fleet) else {
+        if **vis != Visibility::Hidden {
+            **vis = Visibility::Hidden;
+        }
+        return;
+    };
+    let mut lines = vec![format!("{} fleet - {} ships", catalog.faction(f.owner), f.unit_count())];
+    for (&u, &c) in f.units.iter().take(8) {
+        lines.push(format!("  {c}x {}", catalog.unit(u)));
+    }
+    if f.units.len() > 8 {
+        lines.push(format!("  +{} more types", f.units.len() - 8));
+    }
+    let place = match &f.location {
+        galaxy_sim::FleetLocation::AtPlanet(p) => format!("in orbit of {}", state.world.planets[*p as usize].display_name),
+        galaxy_sim::FleetLocation::Moving { to, .. } => format!("heading to {}", state.world.planets[*to as usize].display_name),
+    };
+    lines.push(place);
+    let s = lines.join("\n");
+    if text.0 != s {
+        text.0 = s;
+    }
+    node.left = Val::Px((cursor.x + 16.0) / scale.0);
+    node.top = Val::Px((cursor.y + 18.0) / scale.0);
+    **vis = Visibility::Inherited;
 }

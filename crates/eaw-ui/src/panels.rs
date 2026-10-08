@@ -186,6 +186,8 @@ pub struct MinimapData {
     pub units: Vec<MinimapDot>,
     /// The camera's view rectangle in world coordinates: `(min, max)`.
     pub camera: Option<(Vec2, Vec2)>,
+    /// Fill drawn behind the marks (covers the picture of the bar art, e.g. a tint for a tactical map).
+    pub background: Option<Color>,
 }
 
 /// The minimap click target of a command bar.
@@ -237,6 +239,15 @@ pub(crate) fn minimap_marks(
             if marks.contains(*k) {
                 commands.entity(*k).despawn();
             }
+        }
+        if let Some(bg) = data.background {
+            commands.spawn((
+                MinimapMark,
+                Node { position_type: PositionType::Absolute, width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() },
+                BackgroundColor(bg),
+                FocusPolicy::Pass,
+                ChildOf(e),
+            ));
         }
         let dot = |commands: &mut Commands, d: &MinimapDot, size: f32| {
             let n = world_to_minimap(bounds, d.pos);

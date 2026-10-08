@@ -209,7 +209,8 @@ fn sync_minimap(
     let half_h = orbit.distance * (fov * 0.5).tan() / orbit.pitch.sin().max(0.3);
     let center = flip(orbit.focus);
     let half = Vec2::new(half_h * aspect, half_h);
-    let next = MinimapData { bounds: Some(bounds), planets: Vec::new(), units, camera: Some((center - half, center + half)) };
+    let planets = rt.minimap_props.iter().map(|(pos, _)| MinimapDot { pos: *pos, color: Color::srgb(0.55, 0.5, 0.45), selected: false }).collect();
+    let next = MinimapData { bounds: Some(bounds), planets, units, camera: Some((center - half, center + half)), background: Some(rt.minimap_tint) };
     if *data != next {
         *data = next;
     }
