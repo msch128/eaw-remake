@@ -155,6 +155,7 @@ fn spawn_hud(mut commands: Commands, existing: Query<(), With<HudEntity>>) {
             SkinPanel,
             BackgroundColor(PANEL_BG),
             BorderColor::all(PANEL_BORDER),
+            GlobalZIndex(6),
             Visibility::Hidden,
             HudEntity,
             InfoPanel,

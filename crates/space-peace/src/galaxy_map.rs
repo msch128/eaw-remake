@@ -35,6 +35,7 @@ impl Plugin for GalaxyMapPlugin {
             .init_resource::<Selection>()
             .init_resource::<Hover>()
             .init_resource::<ReservedBottom>()
+            .init_resource::<PanelRect>()
             .init_resource::<MapScale>()
             .init_gizmo_group::<RouteWide>()
             .init_gizmo_group::<RouteMid>()
@@ -99,6 +100,10 @@ const ROUTE_GLOW: f32 = 8.0;
 /// Bottom strip of the viewport (logical pixels) covered by the command bar; labels avoid it.
 #[derive(Resource, Default, Debug)]
 pub struct ReservedBottom(pub f32);
+
+/// Screen rectangle (logical viewport pixels) of the planet info panel; name plates avoid it.
+#[derive(Resource, Default, Debug)]
+pub struct PanelRect(pub Option<(Vec2, Vec2)>);
 
 /// Currently selected planet (index into [`GalaxyView::planets`]).
 #[derive(Resource, Default, Debug)]
@@ -493,6 +498,7 @@ fn update_labels(
     bounds: Res<CameraBounds>,
     ui_scale: Res<UiScale>,
     reserved: Res<ReservedBottom>,
+    panel: Res<PanelRect>,
     camera: Single<(&Camera, &GlobalTransform, &GalaxyCamera)>,
     mut labels: Query<(&PlanetLabel, &mut Node, &mut Visibility, &ComputedNode, &mut TextFont)>,
     mut slots: Local<Vec<Option<LabelSlot>>>,
@@ -582,8 +588,9 @@ fn update_labels(
                 })
         });
         // The selected planet always keeps its label.
+        let behind_panel = panel.0.is_some_and(|(plo, phi)| lo.x < phi.x && hi.x > plo.x && lo.y < phi.y && hi.y > plo.y);
         let selected = selection.0 == Some(i);
-        if selected || (on_screen && !overlaps && (!on_planet || slots[i].is_some_and(|s| s.score >= 1.0e6))) {
+        if selected || (on_screen && !behind_panel && !overlaps && (!on_planet || slots[i].is_some_and(|s| s.score >= 1.0e6))) {
             placed.push((lo, hi));
             visible[i] = true;
         }

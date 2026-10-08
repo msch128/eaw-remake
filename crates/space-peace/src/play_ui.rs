@@ -109,7 +109,7 @@ impl Plugin for PlayUiPlugin {
                     .chain()
                     .run_if(resource_exists::<PlayBridge>.and_then(resource_exists::<SimState>)),
             )
-            .add_systems(Update, (live_info_panel.after(crate::ui::update_info_panel), focus_start.run_if(in_state(AppScreen::Galaxy))).run_if(resource_exists::<SimState>))
+            .add_systems(Update, (live_info_panel.after(crate::ui::update_info_panel), publish_panel_rect, focus_start.run_if(in_state(AppScreen::Galaxy))).run_if(resource_exists::<SimState>))
             .add_systems(Update, fix_fleet_label_scale.after(galaxy_play::PlaySet::Visuals).run_if(resource_exists::<SimState>))
             .add_systems(OnEnter(AppScreen::SpaceBattle), hide_play_ui)
             .add_systems(OnExit(AppScreen::SpaceBattle), show_play_ui)
@@ -544,6 +544,27 @@ fn fix_fleet_label_scale(scale: Res<UiScale>, mut labels: Query<&mut Node, With<
         if let Val::Px(y) = n.top {
             n.top = Val::Px(y / scale.0);
         }
+    }
+}
+
+/// Tells the label layout where the planet panel is.
+fn publish_panel_rect(
+    panel: Single<(&ComputedNode, &UiGlobalTransform, &Visibility), With<InfoPanel>>,
+    window: Option<Single<&Window, With<PrimaryWindow>>>,
+    offscreen: Option<Res<OffscreenTarget>>,
+    ui_scale: Res<UiScale>,
+    mut rect: ResMut<crate::galaxy_map::PanelRect>,
+) {
+    let (node, tf, vis) = *panel;
+    let sf = node.inverse_scale_factor() * ui_scale.0.max(0.1);
+    let _ = (window, offscreen);
+    let next = (*vis != Visibility::Hidden).then(|| {
+        let c = tf.translation * sf;
+        let half = node.size() * sf * 0.5;
+        (c - half, c + half)
+    });
+    if rect.0 != next {
+        rect.0 = next;
     }
 }
 
