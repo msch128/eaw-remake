@@ -350,12 +350,7 @@ fn screen_scale(
     mut scale: ResMut<UiScale>,
     eaw: Option<ResMut<eaw_ui::EawUiSettings>>,
 ) {
-    let height = match (&window, &offscreen) {
-        (Some(w), _) => w.height(),
-        (None, Some(t)) => crate::offscreen::size().1 as f32 / t.scale_factor,
-        _ => 768.0,
-    };
-    let v = height / 768.0 * settings.ui_scale;
+    let v = crate::play_ui::design_scale(window.as_deref().map(|w| w.size()), offscreen.as_deref()) * settings.ui_scale;
     match eaw {
         Some(mut e) => {
             if e.scale != eaw_ui::UiScaleMode::Fixed(v) {

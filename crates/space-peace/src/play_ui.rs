@@ -131,12 +131,8 @@ fn drive_ui_scale(
     mut reserved: ResMut<crate::galaxy_map::ReservedBottom>,
     mut eaw: ResMut<EawUiSettings>,
 ) {
-    let height = match (&window, &offscreen) {
-        (Some(w), _) => w.height(),
-        (None, Some(t)) => crate::offscreen::size().1 as f32 / t.scale_factor,
-        _ => 768.0,
-    };
-    let v = if bar.is_empty() { settings.ui_scale } else { height / 768.0 * settings.ui_scale };
+    let design = design_scale(window.as_deref().map(|w| w.size()), offscreen.as_deref());
+    let v = if bar.is_empty() { settings.ui_scale } else { design * settings.ui_scale };
     let strip = if bar.is_empty() { 0.0 } else { 290.0 * v };
     if reserved.0 != strip {
         reserved.0 = strip;
@@ -646,7 +642,7 @@ fn fix_fleet_label_scale(scale: Res<UiScale>, mut labels: Query<&mut Node, With<
 /// Tells the label layout where the planet panel is.
 #[allow(clippy::type_complexity)]
 fn publish_panel_rect(
-    panels: Query<(&ComputedNode, &UiGlobalTransform, &InheritedVisibility), (Or<(With<crate::ui::SkinPanel>, With<Ticker>)>, Without<crate::ui::Tooltip>)>,
+    panels: Query<(&ComputedNode, &UiGlobalTransform, &InheritedVisibility), (Or<(With<crate::ui::SkinPanel>, With<Ticker>, With<eaw_ui::EawPanel>)>, Without<crate::ui::Tooltip>)>,
     ui_scale: Res<UiScale>,
     mut rect: ResMut<crate::galaxy_map::PanelRect>,
 ) {
@@ -1535,7 +1531,7 @@ fn hero_bar(world: &mut World, mut shown: Local<Option<Vec<String>>>) {
     spec.anchor = eaw_ui::ShellAnchor::TopRight;
     spec.offset = Vec2::new(0.0, -2.0);
     if let Some(root) = eaw_ui::spawn_shell(world, &spec) {
-        world.entity_mut(root).insert(HeroBar);
+        world.entity_mut(root).insert((HeroBar, GlobalZIndex(8)));
         *shown = Some(heroes);
     }
 }
@@ -1615,4 +1611,18 @@ mod tests {
         assert_eq!(capitalize("requires tech"), "Requires tech");
         assert_eq!(capitalize(""), "");
     }
+}
+
+/// The UI is designed for 1366x768 and scales with the screen height, but never wider than the screen
+/// allows: on 16:10 or 4:3 screens the width decides, so the bar and its build pads stay on screen.
+pub(crate) fn design_scale(window: Option<Vec2>, offscreen: Option<&OffscreenTarget>) -> f32 {
+    let size = match (window, offscreen) {
+        (Some(s), _) => s,
+        (None, Some(t)) => {
+            let (w, h) = crate::offscreen::size();
+            Vec2::new(w as f32, h as f32) / t.scale_factor
+        }
+        _ => Vec2::new(1366.0, 768.0),
+    };
+    (size.y / 768.0).min(size.x / 1366.0)
 }

@@ -253,6 +253,7 @@ impl BattleSession {
     /// Model files of the battle (ships, sky, nebula, props) for [`alamo_render::ModelPreloader::request`].
     pub fn asset_paths(&self) -> Vec<String> {
         let mut v: Vec<String> = self.visuals.ships.iter().filter_map(|s| s.model.clone()).collect();
+        v.extend(self.visuals.ships.iter().filter_map(|s| s.death_clone_model.clone()));
         v.extend(self.scene.skydome.clone());
         v.extend(self.scene.nebula.clone());
         v.extend(self.scene.props.iter().map(|p| p.model.clone()));
@@ -266,6 +267,10 @@ impl BattleSession {
         for s in &self.visuals.ships {
             particles.extend(s.death_effects.iter().cloned());
             particles.extend(s.hardpoints.iter().filter_map(|h| h.death_effect.clone()));
+        }
+        // Fallback death explosions by ship size and the finales of the death sequence.
+        for n in ["Large_Explosion_Space_Empire_pd_medium_3_150", "Large_Explosion_Space_Empire_pd_medium_3_300", "Large_Explosion_Space_Empire_pd_medium_3_750", "Huge_Explosion_Space", "Large_Explosion_Space", "Medium_Explosion_Space"] {
+            particles.push(n.to_string());
         }
         use battle_sim::TargetClass::*;
         for class in [Fighter, Transport, Frigate, Capital, Super] {

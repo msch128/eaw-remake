@@ -46,7 +46,9 @@ fn update_hero_heads(
     camera: Query<(&Camera, &GlobalTransform), With<Camera3d>>,
     transforms: Query<&GlobalTransform, With<galaxy_play::FleetVisual>>,
     mut nodes: Query<(&mut Node, &mut Visibility), With<HeroHead>>,
+    mut rects: ResMut<crate::galaxy_map::PanelRect>,
 ) {
+    let mut taken: Vec<(Vec2, Vec2)> = Vec::new();
     let (Some(entities), Some(layout), Some(mut textures)) = (entities, layout, textures) else { return };
     let Some((camera, cam_tf)) = camera.iter().next() else { return };
     let us = ui_scale.0.max(0.1);
@@ -76,6 +78,7 @@ fn update_hero_heads(
             let side = if k % 2 == 0 { -1.0 } else { 1.0 };
             let step = (k / 2) as f32 + 1.0;
             let (x, y) = (p0.x + side * size * 1.35 * step - size * 0.5, p0.y - size * 0.9);
+            taken.push((Vec2::new(x, y), Vec2::new(x + size, y + size)));
             if let Some(&node) = heads.0.get(&key) {
                 if let Ok((mut n, mut vis)) = nodes.get_mut(node) {
                     n.left = Val::Px(x / us);
@@ -109,6 +112,9 @@ fn update_hero_heads(
                 .id();
             heads.0.insert(key, root);
         }
+    }
+    if rects.1 != taken {
+        rects.1 = taken;
     }
     heads.0.retain(|key, e| {
         if alive.contains(key) {

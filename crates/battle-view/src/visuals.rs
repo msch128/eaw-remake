@@ -48,6 +48,8 @@ pub struct ShipVisual {
     pub scale: f32,
     /// Particle objects played when the unit dies (fighters, `Death_Explosions`).
     pub death_effects: Vec<String>,
+    /// Model of the `Death_Clone` object (the hull in pieces) and its animation model stem, for preloading.
+    pub death_clone_model: Option<String>,
     /// One entry per simulation hardpoint.
     pub hardpoints: Vec<HpVisual>,
     /// Sound events of the unit (`SFXEvent_Select`, `_Move`, `_Attack`, `Death_Explosion_SFXEvent`).
@@ -80,6 +82,13 @@ impl VisualCatalog {
                 .as_ref()
                 .map(|r| r.list("death_explosions"))
                 .unwrap_or_default();
+            let death_clone_model = r
+                .as_ref()
+                .map(|r| r.list("death_clone"))
+                .unwrap_or_default()
+                .iter()
+                .find_map(|c| data.objects.resolve(c).and_then(|c| c.string("space_model_name")))
+                .filter(|m| !m.is_empty());
             let hardpoints = def
                 .hardpoints
                 .iter()
@@ -120,6 +129,7 @@ impl VisualCatalog {
                 model: def.model.clone(),
                 scale,
                 death_effects,
+                death_clone_model,
                 hardpoints,
                 sfx: unit_sfx,
             });

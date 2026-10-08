@@ -92,9 +92,9 @@ struct SelectGizmos;
 #[derive(Resource, Default, Debug)]
 pub struct ReservedBottom(pub f32);
 
-/// Screen rectangle (logical viewport pixels) of the planet info panel; name plates avoid it.
+/// Screen rectangles (viewport pixels) the name plates avoid: `.0` the HUD panels, `.1` the hero portraits next to fleets.
 #[derive(Resource, Default, Debug)]
-pub struct PanelRect(pub Vec<(Vec2, Vec2)>);
+pub struct PanelRect(pub Vec<(Vec2, Vec2)>, pub Vec<(Vec2, Vec2)>);
 
 /// Currently selected planet (index into [`GalaxyView::planets`]).
 #[derive(Resource, Default, Debug)]
@@ -675,7 +675,7 @@ fn update_labels(
                 })
         });
         // The selected planet always keeps its label.
-        let behind_panel = panel.0.iter().any(|(plo, phi)| lo.x < phi.x && hi.x > plo.x && lo.y < phi.y && hi.y > plo.y);
+        let behind_panel = panel.0.iter().chain(panel.1.iter()).any(|(plo, phi)| lo.x < phi.x && hi.x > plo.x && lo.y < phi.y && hi.y > plo.y);
         let selected = selection.0 == Some(i);
         if selected || (on_screen && !behind_panel && !overlaps && (!on_planet || slots[i].is_some_and(|s| s.score >= 1.0e6))) {
             placed.push((lo, hi));

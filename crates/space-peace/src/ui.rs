@@ -109,7 +109,7 @@ const PANEL_BG: Color = Color::srgba(0.02, 0.05, 0.10, 0.82);
 const PANEL_BORDER: Color = Color::srgba(0.35, 0.65, 1.0, 0.8);
 
 fn spawn_fps(mut commands: Commands) {
-    // FPS counter, top right (F3).
+    // FPS counter, top left like the original (F3); the hero bar owns the top right.
     commands.spawn((
         Text::new("FPS --"),
         TextFont {
@@ -119,8 +119,8 @@ fn spawn_fps(mut commands: Commands) {
         TextColor(Color::srgb(0.6, 1.0, 0.6)),
         Node {
             position_type: PositionType::Absolute,
-            top: Val::Px(8.0),
-            right: Val::Px(12.0),
+            top: Val::Px(4.0),
+            left: Val::Px(8.0),
             ..default()
         },
         FpsText,

@@ -253,9 +253,9 @@ pub fn on_play_death(
     });
     // Ship size selects the explosion variant (`..._150` / `_300` / `_750` = ship length).
     let length = loaded.radius * 2.0;
-    let variant = if length < 250.0 {
+    let variant = if length < 300.0 {
         150
-    } else if length < 500.0 {
+    } else if length < 1000.0 {
         300
     } else {
         750
@@ -266,7 +266,6 @@ pub fn on_play_death(
     if explosions.is_empty() && defs.particle(&fallback).is_some() {
         explosions.push(fallback);
     }
-    info!("death sequence: unit {:?} length {length:.0} explosions {explosions:?}", ev.unit);
     let finale_names: [&str; 2] = if length > 3000.0 {
         ["Huge_Explosion_Space", "Large_Explosion_Space"]
     } else {

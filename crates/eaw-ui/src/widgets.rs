@@ -1460,7 +1460,7 @@ pub(crate) fn ui_scale(
     let v = match settings.scale {
         crate::UiScaleMode::Fixed(v) => v,
         crate::UiScaleMode::Auto => match window.single() {
-            Ok(w) => w.height() / crate::shell::REFERENCE_HEIGHT,
+            Ok(w) => (w.height() / crate::shell::REFERENCE_HEIGHT).min(w.width() / (crate::shell::REFERENCE_HEIGHT * 16.0 / 9.0)),
             Err(_) => return,
         },
     };
