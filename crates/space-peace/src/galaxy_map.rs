@@ -648,8 +648,10 @@ fn update_labels(
 
     // The label colour follows the owner (a captured planet turns green).
     for (label, _, _, _, _, mut color) in &mut labels {
-        let c = rgb(relation_color(&view, view.planets[label.0].owner));
-        color.set_if_neq(TextColor(c));
+        // Brighter when zoomed in, softer when zoomed out.
+        let k = 0.72 + 0.28 * (1.0 - zoom_out.min(1.0));
+        let c = rgb(relation_color(&view, view.planets[label.0].owner)).to_srgba();
+        color.set_if_neq(TextColor(Color::srgb((c.red * k).min(1.0), (c.green * k).min(1.0), (c.blue * k).min(1.0))));
     }
 
     // Greedy placement in priority order.

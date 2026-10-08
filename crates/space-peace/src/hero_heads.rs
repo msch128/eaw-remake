@@ -14,7 +14,7 @@ impl Plugin for HeroHeadsPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<HeroHeads>().add_systems(
             Update,
-            (update_hero_heads, face_camera)
+            (update_hero_heads, face_camera, hide_in_planet_view)
                 .chain()
                 .after(galaxy_play::PlaySet::Visuals)
                 .run_if(resource_exists::<SimState>)
@@ -143,5 +143,15 @@ fn face_camera(cameras: Query<&GlobalTransform, With<Camera3d>>, mut q: Query<(&
     for (mut t, parent) in &mut q {
         let parent_rot = parents.get(parent.parent()).map_or(Quat::IDENTITY, |p| p.rotation());
         t.rotation = parent_rot.inverse() * cam.rotation();
+    }
+}
+
+/// Hides the hero portraits while the planet view is open.
+fn hide_in_planet_view(state: Res<crate::planet_view::PlanetViewState>, mut q: Query<&mut Visibility, With<HeroRoot>>) {
+    let want = if state.active || state.blend > 0.0 { Visibility::Hidden } else { Visibility::Inherited };
+    for mut v in &mut q {
+        if *v != want {
+            *v = want;
+        }
     }
 }

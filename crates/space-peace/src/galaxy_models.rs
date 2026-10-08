@@ -14,7 +14,7 @@ impl Plugin for GalaxyModelsPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Stations>().add_systems(
             Update,
-            (sync_stations, fit_stations)
+            (sync_stations, fit_stations, hide_in_planet_view)
                 .chain()
                 .after(galaxy_play::PlaySet::Visuals)
                 .run_if(resource_exists::<SimState>)
@@ -126,6 +126,19 @@ fn fit_stations(
     for (e, d) in &discs {
         if !roots.contains(d.0) {
             commands.entity(e).despawn();
+        }
+    }
+}
+
+/// Hides the map stations while the planet view is open (they would show through into its scene).
+fn hide_in_planet_view(
+    state: Res<crate::planet_view::PlanetViewState>,
+    mut q: Query<&mut Visibility, Or<(With<Station>, With<StationDisc>)>>,
+) {
+    let want = if state.active || state.blend > 0.0 { Visibility::Hidden } else { Visibility::Inherited };
+    for mut v in &mut q {
+        if *v != want {
+            *v = want;
         }
     }
 }
