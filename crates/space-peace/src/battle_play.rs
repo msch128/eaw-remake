@@ -365,7 +365,20 @@ pub struct BattleSummary {
 }
 
 /// F10 gives the fight up; the sim settles the battle with its auto-resolve.
-fn abort_key(keys: Res<ButtonInput<KeyCode>>, pending: Res<PendingTactical>, mut done: MessageWriter<BattleFinished>) {
+fn abort_key(
+    keys: Res<ButtonInput<KeyCode>>,
+    pending: Res<PendingTactical>,
+    args: Res<Args>,
+    status: Res<BattleStatus>,
+    mut done: MessageWriter<BattleFinished>,
+    mut fired: Local<bool>,
+) {
+    // `--battle-abort-after <s>` scripts the F10 press for test runs.
+    let scripted = !*fired && status.tick > 0 && args.battle_abort_after.is_some_and(|s| status.time >= s);
+    if scripted {
+        *fired = true;
+        done.write(BattleFinished { id: pending.0.battle_id, outcome: BattleOutcome::Aborted });
+    }
     if keys.just_pressed(KeyCode::F10) {
         done.write(BattleFinished { id: pending.0.battle_id, outcome: BattleOutcome::Aborted });
     }

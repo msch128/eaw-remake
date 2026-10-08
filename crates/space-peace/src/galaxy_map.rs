@@ -326,7 +326,7 @@ impl Default for MapScale {
 
 /// World-space radius of a planet sphere.
 pub fn planet_radius(scale: &MapScale, size: f32) -> f32 {
-    scale.unit * size
+    scale.unit * size * 0.8
 }
 
 /// Median distance from a planet to its nearest neighbour (galaxy plane), a robust density measure.
@@ -500,8 +500,10 @@ fn spawn_galaxy(
             TextFont {
                 font: FontSource::Family("Bahnschrift".into()),
                 font_size: FontSize::Px(14.0),
+                weight: FontWeight::LIGHT,
                 ..default()
             },
+            bevy::text::LetterSpacing::Rem(0.14),
             TextColor(rgb(label_c)),
             TextShadow {
                 offset: Vec2::splat(1.5),
@@ -583,7 +585,7 @@ fn update_labels(
     reserved: Res<ReservedBottom>,
     panel: Res<PanelRect>,
     camera: Single<(&Camera, &GlobalTransform, &GalaxyCamera)>,
-    mut labels: Query<(&PlanetLabel, &mut Node, &mut Visibility, &ComputedNode, &mut TextFont), Without<PipRow>>,
+    mut labels: Query<(&PlanetLabel, &mut Node, &mut Visibility, &ComputedNode, &mut TextFont, &mut TextColor), Without<PipRow>>,
     mut pip_rows: Query<(&PipRow, &mut Node, &mut Visibility), Without<PlanetLabel>>,
     mut emblems: Query<(&Emblem, &mut Node, &mut Visibility), (Without<PlanetLabel>, Without<PipRow>, Without<PipIcon>)>,
     mut pip_icons: Query<&mut Node, (With<PipIcon>, Without<PlanetLabel>, Without<PipRow>)>,
@@ -597,14 +599,14 @@ fn update_labels(
     };
     // Labels grow when zoomed in and shrink when zoomed out (whole pixel steps only).
     let zoom_out = zoom_fraction(&bounds, orbit.distance);
-    let font_px = (21.0 + (11.0 - 21.0) * smoothstep(0.0, 0.7, zoom_out)).round();
+    let font_px = (15.0 + (9.0 - 15.0) * smoothstep(0.0, 0.7, zoom_out)).round();
     // UI coordinates are multiplied by the UI scale; the layout below works in viewport pixels.
     let us = ui_scale.0.max(0.1);
     let font_node_px = (font_px / us).round().max(1.0);
     slots.clear();
     slots.resize(view.planets.len(), None);
 
-    for (label, _, _, computed, mut font) in &mut labels {
+    for (label, _, _, computed, mut font, _) in &mut labels {
         if font.font_size != FontSize::Px(font_node_px) {
             font.font_size = FontSize::Px(font_node_px);
         }
@@ -634,6 +636,12 @@ fn update_labels(
             size: size + Vec2::new(0.0, font_px * 1.1),
             score,
         });
+    }
+
+    // The label colour follows the owner (a captured planet turns green).
+    for (label, _, _, _, _, mut color) in &mut labels {
+        let c = rgb(relation_color(&view, view.planets[label.0].owner));
+        color.set_if_neq(TextColor(c));
     }
 
     // Greedy placement in priority order.
@@ -684,7 +692,7 @@ fn update_labels(
         }
     }
 
-    for (label, mut node, mut vis, _, _) in &mut labels {
+    for (label, mut node, mut vis, _, _, _) in &mut labels {
         match slots[label.0] {
             Some(s) if visible[label.0] => {
                 node.left = Val::Px(s.pos.x / us);
@@ -718,7 +726,7 @@ fn update_labels(
     }
     for (row, mut node, mut vis) in &mut pip_rows {
         match slots.get(row.planet).copied().flatten() {
-            Some(s) if visible[row.planet] => {
+            Some(s) if visible[row.planet] && (selection.0 == Some(row.planet) || zoom_out < 0.3) => {
                 let width = row.count as f32 * (pip_w + 1.0);
                 node.left = Val::Px((s.pos.x + (s.size.x - width) * 0.5) / us);
                 node.top = Val::Px((s.pos.y + font_px * 1.15 + row.row as f32 * (pip_h + 2.0)) / us);
@@ -897,9 +905,9 @@ struct LaneState {
 
 /// Half widths of the ribbons in planet radii (`MapScale::unit`), by data width class. The reference
 /// shows wide soft light-blue beams of about 0.7 planet radii, thinner inter lanes and hair lines.
-const LANE_HALF_WIDTH: [f32; 3] = [0.2, 0.09, 0.04];
+const LANE_HALF_WIDTH: [f32; 3] = [0.34, 0.14, 0.05];
 /// Peak brightness (linear) of the beams.
-const LANE_PEAK: [f32; 3] = [0.34, 0.30, 0.26];
+const LANE_PEAK: [f32; 3] = [0.42, 0.34, 0.26];
 
 fn lane_class(width: f32) -> usize {
     if width >= 4.0 {
@@ -919,7 +927,7 @@ fn lane_texture() -> Image {
     let mut px = Vec::with_capacity((w * h * 4) as usize);
     for y in 0..h {
         let v = (y as f32 + 0.5) / h as f32;
-        let along = 0.6 + 0.4 * (std::f32::consts::PI * v).sin();
+        let along = 0.12 + 0.88 * (std::f32::consts::PI * v).sin().powf(0.6);
         for x in 0..w {
             let u = ((x as f32 + 0.5) / w as f32 - 0.5) * 2.0;
             // Bright core with soft shoulders.

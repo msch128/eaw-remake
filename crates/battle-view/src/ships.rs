@@ -71,6 +71,8 @@ pub struct ShipRender {
     pub hull: f32,
     /// Shield fraction 0..1 (0 for ships without shields).
     pub shield: f32,
+    /// Squadron index of a fighter (`u32::MAX` for other ships).
+    pub squad: u32,
     /// Hardpoint alive flags.
     pub hp_alive: Vec<bool>,
 }
@@ -368,6 +370,7 @@ pub fn update_ships(
                 radius,
                 hull: hull_frac,
                 shield: shield_frac,
+                squad: s.squad,
                 hp_alive,
             },
         );
@@ -386,7 +389,7 @@ pub fn update_ships(
             continue;
         };
         if !rt.dying.contains(&id) {
-            commands.entity(e).despawn();
+            commands.entity(e).try_despawn();
         }
     }
     let _ = &settings;
@@ -460,7 +463,7 @@ pub fn ship_events(
                         position: sim_to_bevy(*pos),
                         normal: Vec3::Y,
                     });
-                    commands.entity(e).despawn();
+                    commands.entity(e).try_despawn();
                     rt.entities.remove(ship);
                     continue;
                 }
@@ -555,7 +558,7 @@ pub fn update_dying(
                 position: tf.translation,
                 normal: Vec3::Y,
             });
-            commands.entity(e).despawn();
+            commands.entity(e).try_despawn();
             rt.dying.remove(&view.id);
         }
     }
@@ -618,7 +621,7 @@ pub fn update_arrival_flashes(
         }
         let t = (now - f.at) / 0.6;
         if t >= 1.0 {
-            commands.entity(e).despawn();
+            commands.entity(e).try_despawn();
             continue;
         }
         *vis = Visibility::Inherited;
@@ -638,7 +641,7 @@ pub fn remove_after(mut commands: Commands, time: Res<Time>, mut q: Query<(Entit
     for (e, mut r) in &mut q {
         r.0 -= time.delta_secs();
         if r.0 <= 0.0 {
-            commands.entity(e).despawn();
+            commands.entity(e).try_despawn();
         }
     }
 }

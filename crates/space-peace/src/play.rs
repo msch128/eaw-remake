@@ -282,13 +282,24 @@ fn forward_battles(mut commands: Commands, mut events: MessageReader<PlayEvent>,
 
 /// A battle left without a result is abandoned: the sim auto-resolves it. Real results are
 /// applied by `battle_play`.
-fn finish_battles(mut finished: MessageReader<BattleFinished>, mut actions: MessageWriter<PlayAction>, runtime: Option<Res<battle_view::BattleRuntime>>) {
+fn finish_battles(
+    mut finished: MessageReader<BattleFinished>,
+    mut actions: MessageWriter<PlayAction>,
+    runtime: Option<Res<battle_view::BattleRuntime>>,
+    pending: Option<Res<crate::battle_play::PendingTactical>>,
+) {
     for f in finished.read() {
         if f.outcome == BattleOutcome::Aborted {
             // Losses so far count: the sim auto-resolves from what is left of the fleets. Without a running
             // fight (it never started) the full forces are resolved.
             match runtime.as_ref().and_then(|r| r.partial_outcome()) {
-                Some(partial) => actions.write(PlayAction::AbandonTactical { id: f.id, partial: Box::new(partial) }),
+                Some(partial) => {
+                    if let Some(p) = pending.as_ref() {
+                        let lost: Vec<u32> = p.0.sides.iter().zip(&partial.survived).map(|(s, alive)| s.groups.iter().zip(alive).map(|(g, a)| g.count.saturating_sub(*a)).sum()).collect();
+                        info!("play: battle {}: abandoned at t={:.0}s, units lost per side {:?}", f.id, partial.duration, lost);
+                    }
+                    actions.write(PlayAction::AbandonTactical { id: f.id, partial: Box::new(partial) })
+                }
                 None => actions.write(PlayAction::CancelTactical(f.id)),
             };
         }

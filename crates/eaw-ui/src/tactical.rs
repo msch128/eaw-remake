@@ -517,7 +517,7 @@ pub(crate) fn ship_overlays(
     existing.retain(|id, e| {
         let keep = live.contains(id);
         if !keep {
-            commands.entity(*e).despawn();
+            commands.entity(*e).try_despawn();
         }
         keep
     });
@@ -697,7 +697,7 @@ pub(crate) fn ship_overlays(
                 t.0 = name;
             }
         }
-        commands.entity(parts.label).insert(TextColor(accent));
+        commands.entity(parts.label).try_insert(TextColor(accent));
         let brackets = if o.selected || o.hovered || o.enemy { accent } else { Color::NONE };
         for b in parts.brackets {
             if let Ok((_, _, Some(mut bc), _)) = styles.get_mut(b) {
@@ -741,7 +741,7 @@ pub(crate) fn hardpoint_markers(
     existing.retain(|id, e| {
         let keep = tac.hardpoints.iter().any(|h| &h.id == id);
         if !keep {
-            commands.entity(*e).despawn();
+            commands.entity(*e).try_despawn();
         }
         keep
     });
@@ -801,7 +801,7 @@ pub(crate) fn hardpoint_markers(
                         ChildOf(root),
                     ))
                     .id();
-                commands.entity(fill).insert(ChildOf(e));
+                commands.entity(fill).try_insert(ChildOf(e));
                 existing.insert(h.id.clone(), e);
             }
             Some(&e) => {

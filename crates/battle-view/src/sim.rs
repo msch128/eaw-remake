@@ -39,6 +39,8 @@ pub struct ShipSnap {
     pub hull: f32,
     /// Shield points.
     pub shield: f32,
+    /// Squadron index for fighters, `u32::MAX` otherwise.
+    pub squad: u32,
     /// Hardpoint states (empty for fighters).
     pub hps: Vec<HpSnap>,
     /// Ability state per ability of the definition: (seconds of effect left, seconds until usable).
@@ -110,6 +112,7 @@ fn snapshot(battle: &Battle, events: Vec<Event>, step_ms: f32) -> Snapshot {
                 yaw: s.yaw,
                 hull: s.hull,
                 shield: s.shield,
+                squad: s.squad,
                 hps: s
                     .hps
                     .iter()

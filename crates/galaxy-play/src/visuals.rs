@@ -280,6 +280,9 @@ pub fn draw_fleet_markers(
     }
 }
 
+/// The original shows no ship numbers on the map; flip to draw them again.
+const SHOW_COUNTS: bool = false;
+
 /// Positions the ship count labels in screen space.
 pub fn update_fleet_labels(
     state: Res<SimState>,
@@ -303,7 +306,8 @@ pub fn update_fleet_labels(
             text.0 = s;
         }
         match camera.world_to_viewport(cam_tf, tf.translation - Vec3::new(0.0, 0.0, -layout.unit * 0.9)) {
-            Ok(p) if n > 1 => {
+            // The count lives in the tooltip; the map shows no numbers on the fleet discs.
+            Ok(p) if n > 1 && SHOW_COUNTS => {
                 node.left = Val::Px(p.x + 6.0);
                 node.top = Val::Px(p.y);
                 *vis = Visibility::Inherited;

@@ -22,7 +22,7 @@ use crate::camera::BattleCamera;
 
 use crate::control::{self, Hover, OverlaysActive, Selection};
 use crate::visuals::is_markable;
-use crate::ships::RenderedShips;
+use crate::ships::{RenderedShips, ShipRender};
 use crate::{BattleRuntime, BattleStatus, BattleViewSettings};
 
 /// Adds the tactical command bar to battles.
@@ -37,6 +37,7 @@ impl Plugin for TacticalUiPlugin {
             (
                 control::ui_block.after(control::read_pointer).before(control::selection).run_if(resource_exists::<BattleRuntime>),
                 (crate::hud::spawn_hud, crate::hud::advisor, crate::hud::heroes).chain().run_if(resource_exists::<BattleRuntime>),
+                check_teardown,
                 crate::hud::remove_hud.run_if(resource_removed::<BattleRuntime>.or_eager(resource_removed::<crate::BattleSession>)),
                 init_reinforce.run_if(resource_added::<BattleRuntime>),
                 spawn_bar.run_if(resource_exists::<crate::BattleSession>.and_then(not(resource_exists::<TacticalBarSpawned>))),
@@ -56,6 +57,34 @@ pub struct TacticalUiState {
     pub groups: Vec<Vec<u32>>,
 }
 
+/// Counts frames after a battle ended, then checks that no battle UI is left (a leftover would draw over the galaxy).
+#[derive(Resource)]
+struct TeardownCheck(u32);
+
+fn check_teardown(
+    mut commands: Commands,
+    check: Option<ResMut<TeardownCheck>>,
+    runtime: Option<Res<BattleRuntime>>,
+    leftovers: Query<(), Or<(With<eaw_ui::tactical::ShipOverlayNode>, With<eaw_ui::tactical::HardpointNode>, With<crate::hud::TacticalHud>, With<EawCommandBar>)>>,
+) {
+    let Some(mut check) = check else { return };
+    if runtime.is_some() {
+        // A new battle started in the meantime.
+        commands.remove_resource::<TeardownCheck>();
+        return;
+    }
+    check.0 = check.0.saturating_sub(1);
+    if check.0 == 0 {
+        commands.remove_resource::<TeardownCheck>();
+        let n = leftovers.iter().count();
+        if n > 0 {
+            error!("tactical: {n} battle UI entities left after the battle ended");
+        } else {
+            info!("tactical: battle UI cleaned up");
+        }
+    }
+}
+
 /// Marks that the bar of the current battle was spawned.
 #[derive(Resource)]
 struct TacticalBarSpawned;
@@ -68,9 +97,14 @@ fn spawn_bar(mut commands: Commands, session: Res<crate::BattleSession>) {
     commands.insert_resource(TacticalBarSpawned);
 }
 
-fn remove_bar(mut commands: Commands, bars: Query<Entity, With<EawCommandBar>>, mut tac: ResMut<TacticalData>) {
+fn remove_bar(mut commands: Commands, bars: Query<Entity, With<EawCommandBar>>, mut tac: ResMut<TacticalData>, mut overlays: ResMut<TacticalOverlays>) {
+    // The overlay layer outlives the battle: emptying its data lets eaw-ui despawn every ship bar and reticle.
+    if !overlays.ships.is_empty() || !overlays.hardpoints.is_empty() {
+        *overlays = TacticalOverlays::default();
+    }
+    commands.insert_resource(TeardownCheck(8));
     for e in &bars {
-        commands.entity(e).despawn();
+        commands.entity(e).try_despawn();
     }
     tac.active = false;
     commands.remove_resource::<TacticalBarSpawned>();
@@ -159,18 +193,47 @@ fn sync_data(
 #[allow(clippy::too_many_arguments)]
 fn handle_clicks(
     rt: Res<BattleRuntime>,
-    settings: Res<BattleViewSettings>,
+    mut settings: ResMut<BattleViewSettings>,
     state: Res<TacticalUiState>,
     mut sel: ResMut<Selection>,
     mut tac: ResMut<TacticalData>,
     mut buttons: MessageReader<EawButtonClicked>,
     mut abilities: MessageReader<EawAbilityClicked>,
     mut slots: MessageReader<EawSelectionClicked>,
+    ships: Res<RenderedShips>,
+    mut armed: ResMut<control::ArmedOrder>,
+    mut action: ResMut<crate::camera::ActionCam>,
+    mut hud: ResMut<crate::hud::HudState>,
+    mut issued: MessageWriter<control::OrderIssued>,
 ) {
     let player = settings.player_side;
     for b in buttons.read() {
-        if b.name == "b_retreat" {
-            rt.command(player, Command::Retreat);
+        let mine = || control::selected_mobile(&rt, &ships, &sel, player);
+        match b.name.as_str() {
+            "b_retreat" => rt.command(player, Command::Retreat),
+            "b_play_pause_t" => settings.paused = !settings.paused,
+            // 1x <-> 2x (the engine's list of speeds is not in the data; the galaxy bar uses the same toggle idea).
+            "b_fast_forward_t" => settings.speed = if settings.speed > 1.5 { 1.0 } else { 2.0 },
+            "b_camera_t" => action.request = true,
+            "b_droid_help_tactical" => hud.show_now = true,
+            "b_story_arc_t" => hud.objectives = !hud.objectives,
+            "c_button00" => armed.0 = (armed.0 != Some(control::ArmedKind::Attack)).then_some(control::ArmedKind::Attack),
+            "c_button01" => armed.0 = (armed.0 != Some(control::ArmedKind::AttackMove)).then_some(control::ArmedKind::AttackMove),
+            // Waypoint mode (c_button03) needs path orders in the sim; until then it acts as a plain move.
+            "c_button02" | "c_button03" => armed.0 = (armed.0 != Some(control::ArmedKind::Move)).then_some(control::ArmedKind::Move),
+            "c_button04" | "c_button05" => {
+                let ships_ordered = mine();
+                if let Some(&lead) = ships_ordered.first() {
+                    armed.0 = None;
+                    if b.name == "c_button05" {
+                        // Guard: hold the place and shoot what comes in range.
+                        rt.command(player, Command::SetStance { ships: ships_ordered.clone(), stance: battle_sim::Stance::Defensive });
+                    }
+                    rt.command(player, Command::Stop { ships: ships_ordered });
+                    issued.write(control::OrderIssued { kind: control::OrderKind::Stop, lead });
+                }
+            }
+            _ => {}
         }
     }
     for a in abilities.read() {
@@ -269,7 +332,7 @@ fn init_reinforce(rt: Res<BattleRuntime>, settings: Res<BattleViewSettings>, mut
 
 fn remove_reinforce(mut commands: Commands, mut ui: ResMut<ReinforceUi>, mut panel: ResMut<PanelData>) {
     if let Some(e) = ui.root.take() {
-        commands.entity(e).despawn();
+        commands.entity(e).try_despawn();
     }
     ui.rows.clear();
     panel.slots.retain(|k, _| !k.starts_with("r_"));
@@ -298,7 +361,7 @@ fn reinforce_clicks(
         match c.name.as_str() {
             "b_reinforcement" | "r_close" => {
                 if let Some(e) = ui.root.take() {
-                    commands.entity(e).despawn();
+                    commands.entity(e).try_despawn();
                 } else if c.name == "b_reinforcement" && !ui.rows.is_empty() {
                     info!("reinforcements: opening the window ({} unit types in the reserve)", ui.rows.len());
                     let faction = UiFaction::from_name(rt.player_faction.as_deref().unwrap_or("Empire"));
@@ -393,7 +456,7 @@ fn reinforce_events(
             Event::ReinforcementsRefused { side, .. } if *side == settings.player_side => {
                 info!("reinforcements: call refused by the simulation (unit cap)");
                 if let Some((e, _)) = ui.notice.take() {
-                    commands.entity(e).despawn();
+                    commands.entity(e).try_despawn();
                 }
                 let e = commands
                     .spawn((
@@ -413,7 +476,7 @@ fn reinforce_events(
     if let Some((e, left)) = ui.notice {
         let left = left - time.delta_secs();
         if left <= 0.0 {
-            commands.entity(e).despawn();
+            commands.entity(e).try_despawn();
             ui.notice = None;
         } else {
             ui.notice = Some((e, left));
@@ -438,9 +501,6 @@ fn hardpoint_id(ship: u32, hp: usize) -> String {
     format!("{ship}:{hp}")
 }
 
-/// Most own ships that get an always-on health line (the rest only when selected or hovered).
-const MAX_BAR_ONLY: usize = 200;
-
 /// Feeds eaw-ui's world-space overlays: selection brackets, health/shield lines under own ships (always), the
 /// hovered or selected enemy and the hardpoint reticles of the targeted enemy.
 #[allow(clippy::too_many_arguments)]
@@ -460,32 +520,46 @@ fn sync_overlays(
     let right = gt.right();
     let margin = 120.0;
     let mut next = TacticalOverlays::default();
-    let mut bar_only = 0;
-    let mut ids: Vec<u32> = ships.0.keys().copied().collect();
-    ids.sort_unstable();
-    for id in ids {
-        let s = &ships.0[&id];
-        let enemy = s.side != player;
-        let selected = sel.ships.contains(&id) || sel.enemy == Some(id);
-        let hovered = hover.ship == Some(id);
-        if enemy && !selected && !hovered {
+    // One overlay per unit: a squadron is one unit, so its fighters share a single bracket and bar pair.
+    let mut groups: BTreeMap<u64, Vec<u32>> = BTreeMap::new();
+    for (&id, s) in &ships.0 {
+        let relevant = sel.ships.contains(&id) || sel.enemy == Some(id) || hover.ship == Some(id);
+        if s.squad == u32::MAX && !relevant {
             continue;
         }
-        let always = !enemy && !selected && !hovered;
-        if always {
-            if bar_only >= MAX_BAR_ONLY {
-                continue;
-            }
-            bar_only += 1;
-        }
-        let Ok(c) = cam.world_to_viewport(gt, s.pos) else { continue };
-        if c.x < -margin || c.y < -margin || c.x > vp.x + margin || c.y > vp.y + margin {
+        let key = if s.squad == u32::MAX { u64::from(id) } else { (1 << 40) | (u64::from(s.side) << 32) | u64::from(s.squad) };
+        groups.entry(key).or_default().push(id);
+    }
+    for (key, members) in groups {
+        let selected = members.iter().any(|id| sel.ships.contains(id) || sel.enemy == Some(*id));
+        let hovered = members.iter().any(|id| hover.ship == Some(*id));
+        if !selected && !hovered {
             continue;
         }
-        let edge = cam.world_to_viewport(gt, s.pos + right * s.radius).map_or(8.0, |e| (e - c).length());
-        let def = rt.catalog.ship(s.def);
-        // Names float above hovered ships and a lone selected ship, not above every ship of a big selection.
-        let name = (hovered || (selected && sel.ships.len() + usize::from(sel.enemy.is_some()) <= 1)).then(|| {
+        let first = &ships.0[&members[0]];
+        let enemy = first.side != player;
+        let pts: Vec<(Vec2, f32)> = members
+            .iter()
+            .filter_map(|id| {
+                let s = &ships.0[id];
+                let c = cam.world_to_viewport(gt, s.pos).ok()?;
+                let edge = cam.world_to_viewport(gt, s.pos + right * s.radius).map_or(8.0, |e| (e - c).length());
+                Some((c, edge))
+            })
+            .collect();
+        if pts.is_empty() {
+            continue;
+        }
+        let n = pts.len() as f32;
+        let centre = pts.iter().map(|p| p.0).sum::<Vec2>() / n;
+        if centre.x < -margin || centre.y < -margin || centre.x > vp.x + margin || centre.y > vp.y + margin {
+            continue;
+        }
+        let half = pts.iter().map(|(c, e)| (*c - centre).length() + e).fold(0.0f32, f32::max);
+        let live: Vec<&ShipRender> = members.iter().map(|id| &ships.0[id]).collect();
+        let def = rt.catalog.ship(first.def);
+        let single = members.len() == 1;
+        let name = (hovered || (selected && single && sel.ships.len() + usize::from(sel.enemy.is_some()) <= 1)).then(|| {
             def.text_id
                 .as_deref()
                 .and_then(|k| assets.as_ref().and_then(|a| a.text.get(k)))
@@ -493,16 +567,16 @@ fn sync_overlays(
                 .map_or_else(|| def.name.clone(), str::to_string)
         });
         next.ships.push(ShipOverlay {
-            id: u64::from(id),
-            screen_pos: c,
-            half_size: edge.clamp(11.0, 220.0),
-            health: s.hull,
-            shield: (def.shield > 0.0 && !always).then_some(s.shield),
+            id: key,
+            screen_pos: centre,
+            half_size: half.clamp(11.0, 220.0),
+            health: live.iter().map(|s| s.hull).sum::<f32>() / n,
+            shield: (def.shield > 0.0).then(|| live.iter().map(|s| s.shield).sum::<f32>() / n),
             selected,
             hovered,
             enemy,
             name,
-            always,
+            always: false,
         });
     }
     // Hardpoint reticles on the enemy under the cursor (or the selected one) while own ships are selected.

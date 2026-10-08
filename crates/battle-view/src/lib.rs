@@ -402,6 +402,8 @@ impl Plugin for BattleViewPlugin {
             .init_resource::<OrderMarkers>()
             .init_resource::<control::Drag>()
             .init_resource::<control::UiBlock>()
+            .init_resource::<control::ArmedOrder>()
+            .init_resource::<camera::ActionCam>()
             .add_message::<control::FocusCamera>()
             .init_resource::<effects::BoltPools>()
             .init_resource::<audio::BattleAudioStats>()
@@ -427,6 +429,7 @@ impl Plugin for BattleViewPlugin {
                         effects::update_projectiles,
                         camera::camera_input,
                         camera::focus_camera,
+                        camera::action_cam,
                         camera::apply_camera,
                         camera::sky_follow,
                         control::selection,
@@ -601,7 +604,7 @@ fn stop_battle(
         s.spawn_budget = None;
     }
     for e in &all {
-        commands.entity(e).despawn();
+        commands.entity(e).try_despawn();
     }
     ships.0.clear();
     *pools = effects::BoltPools::default();

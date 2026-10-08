@@ -148,9 +148,19 @@ impl SpaceScene {
             let Some(model) = r.string("space_model_name") else {
                 continue;
             };
-            if !exists(&model) {
+            // `w_planet_sphere_<x>.alo` backdrops were never shipped: use the matching `w_planet_<x>_low_light` model.
+            let model = if exists(&model) {
+                model
+            } else if let Some(x) = model.to_ascii_lowercase().strip_prefix("w_planet_sphere_").and_then(|s| s.strip_suffix(".alo")) {
+                let x = x.replace("eraidu", "eriadu");
+                let cand = [format!("w_planet_{x}_low_light.alo"), format!("w_planet_{x}.alo")].into_iter().find(|c| exists(c));
+                match cand {
+                    Some(c) => c,
+                    None => continue,
+                }
+            } else {
                 continue;
-            }
+            };
             let scale = r
                 .num::<f32>("scale_factor")
                 .filter(|s| *s > 0.0)

@@ -196,6 +196,69 @@ pub fn camera_input(
     }
 }
 
+/// The "battle cam" (`b_camera_t`, tooltip `TEXT_MOVIE_MODE`): the camera follows the selected unit (or the player's fleet) at a
+/// fixed distance and slowly circles it. The game's own text says "Selecting a Unit and hitting C will make it the focus of
+/// BattleCam. You can rotate around it at a fixed distance in this mode" (`TEXT_NEW_INTRO_MISC_9`).
+#[derive(Resource, Default, Debug, Clone, Copy)]
+pub struct ActionCam {
+    /// The battle cam is on.
+    pub active: bool,
+    /// The followed ship; the whole fleet when `None`.
+    pub focus: Option<u32>,
+    /// A button asked to toggle it.
+    pub request: bool,
+}
+
+/// Seconds of a full turn of the battle cam (estimate).
+const ACTION_CAM_TURN_SECONDS: f32 = 60.0;
+/// Pitch of the battle cam in radians (estimate).
+const ACTION_CAM_PITCH: f32 = 0.55;
+
+/// Runs the battle cam: C or the camera button toggles it, any scroll key or the space bar ends it.
+pub fn action_cam(
+    time: Res<Time>,
+    keys: Res<ButtonInput<KeyCode>>,
+    settings: Res<crate::BattleViewSettings>,
+    sel: Res<Selection>,
+    ships: Res<RenderedShips>,
+    mut action: ResMut<ActionCam>,
+    mut cam: Single<&mut BattleCamera>,
+) {
+    let toggle = std::mem::take(&mut action.request) || keys.just_pressed(KeyCode::KeyC);
+    if toggle {
+        action.active = !action.active;
+        action.focus = sel.ships.iter().copied().find(|id| ships.0.contains_key(id));
+    }
+    if !action.active {
+        return;
+    }
+    let moving = [KeyCode::KeyW, KeyCode::KeyA, KeyCode::KeyD, KeyCode::ArrowUp, KeyCode::ArrowDown, KeyCode::ArrowLeft, KeyCode::ArrowRight, KeyCode::Space]
+        .iter()
+        .any(|k| keys.pressed(*k));
+    if moving {
+        action.active = false;
+        return;
+    }
+    let (centre, distance) = match action.focus.and_then(|id| ships.0.get(&id)) {
+        Some(s) => (s.pos, (s.radius * 4.5).max(cam.min_distance)),
+        None => {
+            let own: Vec<&crate::ships::ShipRender> = ships.0.values().filter(|s| s.side == settings.player_side).collect();
+            if own.is_empty() {
+                action.active = false;
+                return;
+            }
+            let c = own.iter().map(|s| s.pos).sum::<Vec3>() / own.len() as f32;
+            let spread = own.iter().map(|s| (s.pos - c).length()).fold(0.0f32, f32::max);
+            (c, (spread * 2.2).max(cam.min_distance * 2.0))
+        }
+    };
+    let dt = time.delta_secs().min(0.1);
+    cam.target_focus = Vec3::new(centre.x, cam.target_focus.y, centre.z);
+    cam.target_distance = distance.clamp(cam.min_distance, cam.max_distance);
+    cam.target_yaw += std::f32::consts::TAU / ACTION_CAM_TURN_SECONDS * dt;
+    cam.pitch += (ACTION_CAM_PITCH - cam.pitch) * (1.0 - (-2.0 * dt).exp());
+}
+
 /// Centres the camera on the selected ships (space bar or a [`FocusCamera`] request).
 pub fn focus_camera(
     keys: Res<ButtonInput<KeyCode>>,

@@ -61,7 +61,15 @@ pub struct HudState {
     /// Result cache of "is this unit a named hero".
     hero_cache: HashMap<String, bool>,
     last_click: Option<(u32, f32)>,
+    /// The droid button was pressed: show the next hint now.
+    pub show_now: bool,
+    /// The objectives box is shown (`b_story_arc_t` toggles it).
+    pub objectives: bool,
 }
+
+/// The mission objectives box.
+#[derive(Component)]
+pub(crate) struct ObjectivesBox;
 
 fn font(settings: &EawUiSettings, size: f32) -> TextFont {
     match &settings.font_family {
@@ -109,6 +117,7 @@ pub fn spawn_hud(
         return;
     }
     state.spawned = true;
+    state.objectives = true;
     state.heroes.clear();
     state.next_hint = 0;
     state.hint_at = None;
@@ -154,6 +163,7 @@ pub fn spawn_hud(
     let body = assets.text.get(&key).or_else(|| assets.text.get("TEXT_TACTICAL_PRIMARY_SPACE_DEFEND")).unwrap_or("").to_string();
     let mut boxed = commands.spawn((
         TacticalHud,
+        ObjectivesBox,
         Name::new("mission objectives"),
         Node {
             position_type: PositionType::Absolute,
@@ -211,10 +221,11 @@ pub(crate) fn advisor(
         return;
     }
     let now = status.time;
-    let due = match state.hint_at {
-        None => now >= FIRST_HINT_AT,
-        Some(at) => now >= at + HINT_EVERY,
-    };
+    let due = std::mem::take(&mut state.show_now)
+        || match state.hint_at {
+            None => now >= FIRST_HINT_AT,
+            Some(at) => now >= at + HINT_EVERY,
+        };
     if due {
         let faction = UiFaction::from_name(rt.player_faction.as_deref().unwrap_or("Empire"));
         let n = HINTS[state.next_hint % HINTS.len()];
@@ -272,7 +283,7 @@ pub(crate) fn heroes(
     now.sort();
     if now != state.heroes {
         for k in kids.into_iter().flatten() {
-            commands.entity(*k).despawn();
+            commands.entity(*k).try_despawn();
         }
         for (id, name) in &now {
             let icon = unit_icon(&game, name).and_then(|n| textures.get(&mut images, &n)).map(|t| t.handle);
@@ -338,10 +349,20 @@ pub(crate) fn heroes(
     }
 }
 
+/// Shows or hides the objectives box.
+pub(crate) fn objectives_visibility(state: Res<HudState>, mut boxes: Query<&mut Node, With<ObjectivesBox>>) {
+    for mut n in &mut boxes {
+        let want = if state.objectives { Display::Flex } else { Display::None };
+        if n.display != want {
+            n.display = want;
+        }
+    }
+}
+
 /// Removes the HUD with the battle.
 pub fn remove_hud(mut commands: Commands, hud: Query<Entity, With<TacticalHud>>, mut state: ResMut<HudState>) {
     for e in &hud {
-        commands.entity(e).despawn();
+        commands.entity(e).try_despawn();
     }
     *state = HudState::default();
 }

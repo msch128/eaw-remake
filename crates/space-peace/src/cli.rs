@@ -90,6 +90,8 @@ pub struct Args {
     pub battle_speed: Option<f32>,
     /// Offscreen only: battle time of the mid-battle capture (`--battle-seconds <s>`).
     pub battle_seconds: Option<f32>,
+    /// Abandon the tactical battle (as F10 does) once its clock reaches this many seconds (`--battle-abort-after <s>`).
+    pub battle_abort_after: Option<f32>,
     /// Offscreen only: render target size in pixels (`--size 1920x1080`, default 3840x2160).
     pub size: Option<(u32, u32)>,
 }
@@ -138,6 +140,7 @@ impl Default for Args {
             load_from: None,
             battle_speed: None,
             battle_seconds: None,
+            battle_abort_after: None,
             size: None,
         }
     }
@@ -182,6 +185,7 @@ OPTIONS:
   --load-from <file>     Start from a save file
   --battle-speed <x>     Tactical battle speed multiplier
   --battle-seconds <s>   Offscreen: battle time of the mid-battle capture (default 12)
+  --battle-abort-after <s>  Abandon the tactical battle after s battle seconds (like F10)
   --size <WxH>          Offscreen: render target size (default 3840x2160)
   --no-vsync             Disable vertical sync
   --fullscreen           Start in borderless fullscreen
@@ -276,6 +280,10 @@ impl Args {
                 "--battle-seconds" => {
                     let v = it.next().ok_or("--battle-seconds needs a value")?;
                     out.battle_seconds = Some(v.parse().map_err(|e| format!("bad --battle-seconds: {e}"))?);
+                }
+                "--battle-abort-after" => {
+                    let v = it.next().ok_or("--battle-abort-after needs a value")?;
+                    out.battle_abort_after = Some(v.parse().map_err(|e| format!("bad --battle-abort-after: {e}"))?);
                 }
                 "--battle-choice" => {
                     let v = it.next().ok_or("--battle-choice needs fight or auto")?;

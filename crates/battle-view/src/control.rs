@@ -31,6 +31,21 @@ pub struct UiBlock(pub bool, pub Option<Entity>);
 #[derive(Resource, Default, Debug, Clone, Copy)]
 pub struct OverlaysActive;
 
+/// What the next left click does after one of the command buttons was pressed (`c_button00..02`); a right click or Esc cancels.
+#[derive(Resource, Default, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ArmedOrder(pub Option<ArmedKind>);
+
+/// The armed command.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArmedKind {
+    /// Attack the enemy that is clicked.
+    Attack,
+    /// Attack-move to the clicked point.
+    AttackMove,
+    /// Move to the clicked point.
+    Move,
+}
+
 /// Ask the camera to centre on the selection (double click on a selected ship, space bar, hero portrait).
 #[derive(Message, Debug, Clone, Copy)]
 pub struct FocusCamera;
@@ -207,7 +222,7 @@ fn project_ships(
             continue;
         };
         let edge = camera
-            .world_to_viewport(gt, s.pos + right * s.radius * 0.8)
+            .world_to_viewport(gt, s.pos + right * s.radius)
             .map_or(8.0, |e| (e - c).length());
         out.push(Projected {
             id,
@@ -252,6 +267,7 @@ pub fn selection(
     time: Res<Time>,
     mut last_click: Local<(f32, Option<u32>)>,
     mut focus: MessageWriter<FocusCamera>,
+    armed: Res<ArmedOrder>,
 ) {
     let (cam, gt) = *camera;
     let player = settings.player_side;
@@ -340,7 +356,11 @@ pub fn selection(
     }
 
     // Click / drag selection.
-    if pointer.left_pressed && !block.0 {
+    if armed.0.is_some() {
+        // The next click is an order, not a selection.
+        drag.start = None;
+    }
+    if pointer.left_pressed && !block.0 && armed.0.is_none() {
         drag.start = Some(cursor);
     }
     if pointer.left_released
@@ -415,8 +435,12 @@ pub fn orders(
     mut markers: ResMut<OrderMarkers>,
     mut issued: MessageWriter<OrderIssued>,
     block: Res<UiBlock>,
+    mut armed: ResMut<ArmedOrder>,
 ) {
     let player = settings.player_side;
+    if keys.just_pressed(KeyCode::Escape) {
+        armed.0 = None;
+    }
     let mine: Vec<u32> = sel
         .ships
         .iter()
@@ -436,43 +460,95 @@ pub fn orders(
         rt.sim.command(player, Command::Stop { ships: mine.clone() });
         issued.write(OrderIssued { kind: OrderKind::Stop, lead });
     }
-    if !pointer.right_pressed || block.0 {
+    // A command button arms an order for the next left click; a right click cancels it.
+    if pointer.right_pressed && armed.0.is_some() {
+        armed.0 = None;
         return;
     }
-    if let Some((target, hp)) = hover.hardpoint {
-        rt.sim.command(
-            player,
-            Command::AttackHardpoint {
-                ships: mine,
-                target,
-                hardpoint: hp,
-            },
-        );
-        issued.write(OrderIssued { kind: OrderKind::Attack, lead });
+    let armed_click = armed.0.filter(|_| pointer.left_released && !block.0);
+    if armed_click.is_none() && (!pointer.right_pressed || block.0) {
+        return;
+    }
+    // Any enemy under the cursor, also when the click is on the outer part of a big model (station, capital ship).
+    let enemy_target = hover.ship.filter(|id| ships.0.get(id).is_some_and(|s| s.side != player)).or_else(|| {
+        let g = hover.ground?;
+        enemy_at(&ships, player, g)
+    });
+    let mark_enemy = |markers: &mut OrderMarkers, target: u32| {
         if let Some(s) = ships.0.get(&target) {
             markers.0.push((s.pos, 1.0, Color::srgb(1.0, 0.25, 0.2)));
         }
-    } else if let Some(target) = hover
-        .ship
-        .filter(|id| ships.0.get(id).is_some_and(|s| s.side != player))
-    {
-        rt.sim.command(player, Command::Attack { ships: mine, target });
-        issued.write(OrderIssued { kind: OrderKind::Attack, lead });
-        if let Some(s) = ships.0.get(&target) {
-            markers.0.push((s.pos, 1.0, Color::srgb(1.0, 0.25, 0.2)));
-        }
-    } else if let Some(g) = hover.ground {
-        let to = bevy_to_sim(g);
-        if pointer.shift {
-            rt.sim.command(player, Command::AttackMove { ships: mine, to });
+    };
+    match armed_click {
+        Some(ArmedKind::Attack) => {
+            let Some(target) = enemy_target else { return };
+            rt.sim.command(player, Command::Attack { ships: mine, target });
             issued.write(OrderIssued { kind: OrderKind::Attack, lead });
-        } else {
-            rt.sim.command(player, Command::Move { ships: mine, to });
-            issued.write(OrderIssued { kind: OrderKind::Move, lead });
+            mark_enemy(&mut markers, target);
+            armed.0 = None;
         }
-        markers.0.push((g, 1.2, Color::srgb(0.3, 1.0, 0.4)));
+        Some(kind) => {
+            let Some(g) = hover.ground else { return };
+            let to = bevy_to_sim(g);
+            if kind == ArmedKind::AttackMove {
+                rt.sim.command(player, Command::AttackMove { ships: mine, to });
+                issued.write(OrderIssued { kind: OrderKind::Attack, lead });
+            } else {
+                rt.sim.command(player, Command::Move { ships: mine, to });
+                issued.write(OrderIssued { kind: OrderKind::Move, lead });
+            }
+            markers.0.push((g, 1.2, Color::srgb(0.3, 1.0, 0.4)));
+            armed.0 = None;
+        }
+        None => {
+            // Right click: an enemy of any kind (ship, station, hardpoint) is attacked, open space is a move.
+            if let Some((target, hp)) = hover.hardpoint {
+                rt.sim.command(player, Command::AttackHardpoint { ships: mine, target, hardpoint: hp });
+                issued.write(OrderIssued { kind: OrderKind::Attack, lead });
+                mark_enemy(&mut markers, target);
+            } else if let Some(target) = enemy_target {
+                rt.sim.command(player, Command::Attack { ships: mine, target });
+                issued.write(OrderIssued { kind: OrderKind::Attack, lead });
+                mark_enemy(&mut markers, target);
+            } else if let Some(g) = hover.ground {
+                let to = bevy_to_sim(g);
+                if pointer.shift {
+                    rt.sim.command(player, Command::AttackMove { ships: mine, to });
+                    issued.write(OrderIssued { kind: OrderKind::Attack, lead });
+                } else {
+                    rt.sim.command(player, Command::Move { ships: mine, to });
+                    issued.write(OrderIssued { kind: OrderKind::Move, lead });
+                }
+                markers.0.push((g, 1.2, Color::srgb(0.3, 1.0, 0.4)));
+            }
+        }
     }
 }
+
+/// The selected ships of the player that can move (structures cannot).
+pub fn selected_mobile(rt: &BattleRuntime, ships: &RenderedShips, sel: &Selection, player: u8) -> Vec<u32> {
+    sel.ships
+        .iter()
+        .copied()
+        .filter(|id| ships.0.get(id).is_some_and(|s| s.side == player && !rt.catalog.ship(s.def).is_static))
+        .collect()
+}
+
+/// The enemy whose footprint on the battle plane contains `ground` (closest centre wins). Big models are only
+/// picked on a sphere around their centre on screen, so a click on a station's rim would otherwise be a move order.
+fn enemy_at(ships: &RenderedShips, player: u8, ground: Vec3) -> Option<u32> {
+    ships
+        .0
+        .values()
+        .filter(|s| s.side != player)
+        .map(|s| (s.id, Vec2::new(s.pos.x - ground.x, s.pos.z - ground.z).length() / (s.radius * ENEMY_CLICK_RADIUS).max(1.0)))
+        .filter(|(_, d)| *d <= 1.0)
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|(id, _)| id)
+}
+
+/// How far beyond the model radius a click still counts as a click on the enemy (estimate).
+const ENEMY_CLICK_RADIUS: f32 = 1.3;
 
 fn hp_color(kind: HpKind) -> Color {
     match kind {
