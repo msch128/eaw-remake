@@ -352,12 +352,15 @@ fn run_script(
         1 => {
             // The selection reaches the simulation through `sync_selection` one frame later.
             let Some(h) = player.0 else {
+                script.goal = args.weeks.unwrap_or(0) as f32 * world.config.week_seconds;
                 script.phase = 2;
                 return;
             };
             let Some(planet) = selection.planet else {
                 if script.frames > 30 {
                     warn!("script: no planet selected, skipping orders");
+                    // `--weeks` alone must still fast-forward.
+                    script.goal = args.weeks.unwrap_or(0) as f32 * world.config.week_seconds;
                     script.phase = 2;
                 }
                 return;
