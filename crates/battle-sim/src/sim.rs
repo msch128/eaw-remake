@@ -1375,7 +1375,7 @@ impl Battle {
             let enemies: Vec<u32> = self
                 .ships
                 .iter()
-                .filter(|o| o.alive && !o.retreated && o.side != side && !cat.ship(o.def).is_static && self.is_visible_to(side, o.id))
+                .filter(|o| o.alive && !o.retreated && o.side != side && self.is_visible_to(side, o.id))
                 .map(|o| o.id)
                 .collect();
             for s in self.ships.iter().filter(|s| s.alive && !s.retreated && s.side == side && s.stance != Stance::HoldFire) {
@@ -1416,7 +1416,7 @@ impl Battle {
                         if let Some(e) = target {
                             uses.push((side, s.id, k, Some(self.ships[e as usize].pos)));
                         }
-                    } else if a.reveal_radius > 0.0 && self.config.fog_of_war && enemies.is_empty() {
+                    } else if a.reveal_radius > 0.0 && self.config.fog_of_war && !enemies.iter().any(|&e| !cat.ship(self.ships[e as usize].def).is_static) {
                         let (idx, _) = self.search[side as usize];
                         let enemy = self.spawn_pos[(side as usize + 1) % self.sides.len()];
                         uses.push((side, s.id, k, Some(search_point(idx + 1, enemy, self.config.half_size))));

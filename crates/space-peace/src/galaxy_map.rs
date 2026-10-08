@@ -481,20 +481,14 @@ fn spawn_galaxy(
                     }
                 });
         }
-        // Faction emblem beside owned planets.
-        if let Some(o) = planet.owner
-            && view.factions.get(o).is_some_and(|f| f.icon.is_some())
-        {
-            {
-                commands.spawn((
-                    ImageNode::default().with_color(Color::NONE),
-                    Node { position_type: PositionType::Absolute, width: Val::Px(10.0), height: Val::Px(10.0), ..default() },
-                    Visibility::Hidden,
-                    Emblem(i),
-                    GalaxyEntity,
-                ));
-            }
-        }
+        // Faction emblem beside owned planets (every planet gets one; it follows the owner and hides without one).
+        commands.spawn((
+            ImageNode::default().with_color(Color::NONE),
+            Node { position_type: PositionType::Absolute, width: Val::Px(10.0), height: Val::Px(10.0), ..default() },
+            Visibility::Hidden,
+            Emblem(i),
+            GalaxyEntity,
+        ));
         commands.spawn((
             Text::new(planet.display_name.to_uppercase()),
             TextFont {
@@ -1312,14 +1306,19 @@ fn fill_emblems(
 ) {
     let Some(mut textures) = textures else { return };
     for (e, mut node) in &mut emblems {
-        if node.color != Color::NONE {
-            continue;
-        }
         let Some(planet) = view.planets.get(e.0) else { continue };
-        let Some(name) = planet.owner.and_then(|o| view.factions.get(o)).and_then(|f| f.icon.clone()) else { continue };
+        let icon = planet.owner.and_then(|o| view.factions.get(o)).and_then(|f| f.icon.clone());
+        let Some(name) = icon else {
+            if node.color != Color::NONE { node.color = Color::NONE; }
+            continue;
+        };
+        // The emblem follows ownership changes (capture): texture and colour are refreshed every frame.
         if let Some(t) = textures.get(&mut images, &name) {
-            node.image = t.handle;
-            node.color = rgb(relation_color(&view, planet.owner));
+            if node.image != t.handle {
+                node.image = t.handle;
+            }
+            let want = rgb(relation_color(&view, planet.owner));
+            if node.color != want { node.color = want; }
         }
     }
 }

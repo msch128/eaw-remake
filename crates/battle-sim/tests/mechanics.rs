@@ -301,7 +301,9 @@ fn stealth_and_reveal_pings_change_what_is_seen() {
     watcher.sensor_range = 4000.0;
     watcher.abilities.push(battle_sim::AbilityDef { kind: "FOW_REVEAL_PING".into(), reveal_radius: 1000.0, duration: 5.0, recharge: 60.0, speed_mult: 1.0, shield_regen_mult: 1.0, weapon_delay_mult: 1.0, take_damage_mult: 1.0, ..Default::default() });
     let cat = Catalog::from_defs(vec![ghost, watcher], vec![laser()]);
-    let mut b = Battle::new(setup(cat, "ghost", "watcher", 1, 1, cfg()));
+    let mut su = setup(cat, "ghost", "watcher", 1, 1, cfg());
+    su.sides[1].ai = false; // the AI would ping on its own; this test aims the ping by hand
+    let mut b = Battle::new(su);
     let (g, w) = (b.ships.iter().find(|s| s.side == 0).unwrap().id, b.ships.iter().find(|s| s.side == 1).unwrap().id);
     // 3000 apart: inside the 4000 sensor range, outside the 500 stealth detection once stealth is on.
     let wp = b.ships[w as usize].pos;
@@ -670,6 +672,7 @@ fn the_ai_uses_each_new_ability_in_a_suitable_scenario() {
     missile.name = "missile".into();
     missile.category = "missile".into();
     let mut boat = ship("boat", 1.0e6, 0.0, vec![gun("g", 0.0)]);
+    boat.max_weapon_range = 6000.0;
     boat.abilities.push(AbilityDef { rocket: true, ..ability("ROCKET_ATTACK") });
     let mut b = Battle::new(setup(Catalog::from_defs(vec![boat, dummy()], vec![missile.clone()]), "boat", "dummy", 1, 1, cfg()));
     for _ in 0..30 * 4 {
@@ -693,7 +696,7 @@ fn the_ai_uses_each_new_ability_in_a_suitable_scenario() {
 
     // Storm on a cluster of three, super laser on a frigate, reveal ping into the fog.
     let mut caster = ship("caster", 1.0e6, 0.0, vec![]);
-    caster.abilities.push(AbilityDef { zone: Some(ZoneDef { radius: 800.0, enemy_dps: 100.0, max_range: 50000.0 }), ..ability("BUZZ_DROIDS") });
+    caster.abilities.push(AbilityDef { zone: Some(ZoneDef { radius: 5000.0, enemy_dps: 100.0, max_range: 50000.0 }), ..ability("BUZZ_DROIDS") });
     let mut b = Battle::new(setup(Catalog::from_defs(vec![caster, dummy()], vec![laser()]), "caster", "dummy", 1, 3, cfg()));
     for _ in 0..30 * 2 {
         b.step();
