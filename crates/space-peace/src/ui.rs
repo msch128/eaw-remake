@@ -43,6 +43,10 @@ struct FpsText;
 #[derive(Component)]
 pub(crate) struct HudEntity;
 
+/// The controls hint text.
+#[derive(Component)]
+pub(crate) struct HintText;
+
 fn despawn_hud(mut commands: Commands, hud: Query<Entity, With<HudEntity>>) {
     for e in &hud {
         commands.entity(e).despawn();
@@ -122,6 +126,7 @@ fn spawn_hud(mut commands: Commands, existing: Query<(), With<HudEntity>>) {
     }
     // Controls hint, bottom right.
     commands.spawn((
+        HintText,
         HudEntity,
         Text::new("LMB select | RMB/MMB drag or WASD pan | Wheel zoom | Esc menu | F3 fps | F11 fullscreen"),
         TextFont { font_size: FontSize::Px(12.0), ..default() },

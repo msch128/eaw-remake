@@ -67,6 +67,7 @@ impl Plugin for PlayGluePlugin {
                 Update,
                 (
                     hold_clock,
+                    galaxy_audio.run_if(resource_exists::<alamo_audio::plugin::AlamoAudio>),
                     via_menu,
                     (sync_selection, sync_view, sync_radii, cursor_blocked, forward_battles, finish_battles, run_script)
                         .chain()
@@ -78,6 +79,7 @@ impl Plugin for PlayGluePlugin {
 }
 
 /// Builds the simulation for the shown campaign (once per campaign) and starts it.
+#[allow(clippy::too_many_arguments)]
 fn begin_play(
     mut commands: Commands,
     game: Res<Game>,
@@ -440,5 +442,49 @@ fn via_menu(args: Res<Args>, screen: Res<State<AppScreen>>, mut next: ResMut<Nex
             *sent = 0;
         }
         _ => {}
+    }
+}
+
+/// Advisor and unit-report speech for the player's events (silent without the audio plugin).
+fn galaxy_audio(
+    mut events: MessageReader<PlayEvent>,
+    state: Option<Res<SimState>>,
+    player: Res<PlayerFaction>,
+    current: Res<CurrentCampaign>,
+    mut out: MessageWriter<alamo_audio::plugin::GalaxyAudio>,
+) {
+    use alamo_audio::GalaxyEvent as G;
+    use galaxy_sim::{Event, ProductionKind};
+    let (Some(state), Some(me)) = (state, player.0) else { return };
+    let faction = current.faction.clone().unwrap_or_else(|| "Rebel".to_owned());
+    let mut say = |event: G| {
+        out.write(alamo_audio::plugin::GalaxyAudio { faction: faction.clone(), event });
+    };
+    for e in events.read() {
+        let PlayEvent::Sim(ev) = e else { continue };
+        match ev {
+            Event::ConstructionComplete { faction, kind, .. } if *faction == me => say(match kind {
+                ProductionKind::Tech(_) => G::TechLevelGained,
+                ProductionKind::Unit(u) if matches!(state.world.units[*u as usize].role, galaxy_sim::UnitRole::Research(_)) => G::ResearchComplete,
+                ProductionKind::Unit(_) => G::UnitBuilt,
+                _ => G::StructureBuilt,
+            }),
+            Event::PlanetCaptured { old_owner, new_owner, .. } if *new_owner == me => {
+                let _ = old_owner;
+                say(G::PlanetCaptured);
+            }
+            Event::PlanetCaptured { old_owner, .. } if *old_owner == Some(me) => say(G::PlanetLost),
+            Event::FleetArrived { fleet, .. } => {
+                let mine_parked = state.galaxy().fleets.get(fleet).is_some_and(|f| f.owner == me && f.planet().is_some());
+                if mine_parked {
+                    say(G::FleetArrived);
+                }
+            }
+            Event::BattlePending(b) if b.factions.contains(&me) => say(G::BattlePending),
+            Event::BattleResolved { losses, .. } if losses.iter().any(|(f, _)| *f == me) => say(G::BattleEnded),
+            Event::TechAdvanced { faction, .. } if *faction == me => say(G::TechLevelGained),
+            Event::FactionEliminated { faction } if *faction == me => say(G::Defeated),
+            _ => {}
+        }
     }
 }

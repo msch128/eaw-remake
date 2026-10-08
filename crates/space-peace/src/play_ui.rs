@@ -88,6 +88,7 @@ impl Plugin for PlayUiPlugin {
                     .chain()
                     .run_if(resource_exists::<PlayBridge>.and_then(resource_exists::<SimState>)),
             )
+            .add_systems(Update, fix_fleet_label_scale.after(galaxy_play::PlaySet::Visuals).run_if(resource_exists::<SimState>))
             .add_systems(OnEnter(AppScreen::SpaceBattle), hide_play_ui)
             .add_systems(OnExit(AppScreen::SpaceBattle), show_play_ui)
             .add_systems(Update, reset_on_stop.run_if(not(resource_exists::<SimState>)));
@@ -444,7 +445,22 @@ fn battle_dialog_result(mut results: MessageReader<EawDialogResult>, mut dialog:
 }
 
 /// With a command bar in the bottom left corner the planet details move to the right edge.
-fn move_info_panel(mut panel: Single<&mut Node, With<InfoPanel>>) {
+/// galaxy-play places its fleet count labels in viewport pixels; UI nodes are multiplied by the UI scale.
+fn fix_fleet_label_scale(scale: Res<UiScale>, mut labels: Query<&mut Node, With<galaxy_play::visuals::FleetLabel>>) {
+    if (scale.0 - 1.0).abs() < 1e-3 {
+        return;
+    }
+    for mut n in &mut labels {
+        if let Val::Px(x) = n.left {
+            n.left = Val::Px(x / scale.0);
+        }
+        if let Val::Px(y) = n.top {
+            n.top = Val::Px(y / scale.0);
+        }
+    }
+}
+
+fn move_info_panel(mut panel: Single<&mut Node, With<InfoPanel>>, mut hint: Query<&mut Node, (With<crate::ui::HintText>, Without<InfoPanel>)>) {
     if panel.right == Val::Px(16.0) {
         return;
     }
@@ -452,6 +468,9 @@ fn move_info_panel(mut panel: Single<&mut Node, With<InfoPanel>>) {
     panel.bottom = Val::Auto;
     panel.right = Val::Px(16.0);
     panel.top = Val::Px(52.0);
+    for mut h in &mut hint {
+        h.bottom = Val::Px(130.0);
+    }
 }
 
 fn hide_play_ui(mut bar: Query<&mut Visibility, With<EawCommandBar>>) {

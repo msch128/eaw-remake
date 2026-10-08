@@ -9,6 +9,7 @@
 use alamo_render::SunLight;
 use battle_view::{BattleCamera, BattleEntity, BattleSession, BattleStatus, BattleViewSettings};
 use bevy::camera::{ImageRenderTarget, RenderTarget};
+use alamo_audio::{MusicDirector, MusicScene};
 use bevy::light::GlobalAmbientLight;
 use bevy::prelude::*;
 use bevy::render::view::screenshot::{Screenshot, save_to_disk};
@@ -80,7 +81,11 @@ fn suspend_galaxy_look(
     mut cameras: Query<(Entity, &mut Camera), With<GalaxyCamera>>,
     mut suns: Query<(Entity, &mut DirectionalLight), (With<SunLight>, Without<BattleEntity>)>,
     mut hud: Query<(Entity, &mut Visibility), (Or<(With<HudEntity>, With<Skybox>)>, Without<SunLight>)>,
+    music: Option<ResMut<MusicDirector>>,
 ) {
+    if let Some(mut m) = music {
+        m.set_scene(MusicScene::BattleLoading);
+    }
     saved.ambient = ambient.map(|a| a.clone());
     for (e, mut cam) in &mut cameras {
         cam.is_active = false;
@@ -153,8 +158,18 @@ fn finish_battle_view(
     mut finished: MessageReader<battle_view::BattleFinished>,
     mut actions: MessageWriter<PlayAction>,
     mut done: MessageWriter<BattleFinished>,
+    music: Option<ResMut<MusicDirector>>,
+    pending: Res<PendingTactical>,
+    player: Res<PlayerFaction>,
+    campaign: Res<crate::flow::CurrentCampaign>,
 ) {
+    let mut music = music;
     for f in finished.read() {
+        if let Some(m) = music.as_mut() {
+            let win = f.result.winner.and_then(|w| pending.0.sides.get(w)).is_some_and(|s| Some(s.faction) == player.0);
+            let faction = campaign.faction.clone().unwrap_or_else(|| "Rebel".to_owned());
+            m.set_scene(MusicScene::Result { faction, win, tactical: true });
+        }
         info!("battle: over after {:.0} s, winner side {:?}, survivors {:?}", f.result.duration, f.result.winner, f.result.survived);
         let outcome = f.result.winner.map_or(BattleOutcome::Draw, BattleOutcome::Victory);
         actions.write(PlayAction::ApplyTactical { id: f.battle_id, result: Box::new(f.result.clone()) });
