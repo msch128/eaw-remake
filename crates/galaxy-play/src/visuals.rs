@@ -282,7 +282,12 @@ pub fn draw_fleet_markers(
                 let tip = base - v.heading * layout.unit * (1.2 + 1.3 * k as f32);
                 let back = tip - v.heading * layout.unit * 0.8;
                 let w = layout.unit * 0.55;
-                gizmos.linestrip([back + side * w, tip, back - side * w], team.with_alpha(1.0));
+                // Filled arrowhead: lines from the tip across the base.
+                for j in 0..=8 {
+                    let t = j as f32 / 8.0 * 2.0 - 1.0;
+                    gizmos.line(tip, back + side * w * t, team.with_alpha(0.9));
+                }
+                gizmos.line(back + side * w, back - side * w, team.with_alpha(1.0));
             }
             gizmos.line_gradient(tail, base, Color::BLACK, bright);
             gizmos.line_gradient(tail + Vec3::Y * 0.01, base + Vec3::Y * 0.01, Color::BLACK, Color::WHITE.with_alpha(0.8));

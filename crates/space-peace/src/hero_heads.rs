@@ -98,13 +98,23 @@ fn update_hero_heads(
             commands.spawn((
                 Mesh3d(meshes.add(Circle::new(1.0).mesh().resolution(48))),
                 MeshMaterial3d(mats.add(StandardMaterial {
-                    base_color: Color::LinearRgba(LinearRgba::new(lin.red * 0.2, lin.green * 0.2, lin.blue * 0.2, 0.75)),
+                    base_color: Color::LinearRgba(LinearRgba::new(lin.red * 0.03, lin.green * 0.06, lin.blue * 0.03, 0.92)),
                     unlit: true,
+                    depth_bias: 400.0,
                     alpha_mode: AlphaMode::Blend,
                     cull_mode: None,
                     ..default()
                 })),
                 Transform::from_xyz(0.0, -layout.unit * 0.12, 0.0)
+                    .with_rotation(Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2))
+                    .with_scale(Vec3::splat(layout.unit * 0.55)),
+                ChildOf(root),
+            ));
+            // Bright rim around the dark disc.
+            commands.spawn((
+                Mesh3d(meshes.add(Annulus::new(0.9, 1.0).mesh().resolution(48))),
+                MeshMaterial3d(mats.add(StandardMaterial { base_color: col, emissive: lin * 2.0, unlit: true, depth_bias: 401.0, cull_mode: None, ..default() })),
+                Transform::from_xyz(0.0, -layout.unit * 0.11, 0.0)
                     .with_rotation(Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2))
                     .with_scale(Vec3::splat(layout.unit * 0.55)),
                 ChildOf(root),

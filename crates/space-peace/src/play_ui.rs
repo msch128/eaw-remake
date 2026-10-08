@@ -1604,7 +1604,8 @@ pub(crate) fn design_scale(window: Option<Vec2>, offscreen: Option<&OffscreenTar
         }
         _ => Vec2::new(1366.0, 768.0),
     };
-    (size.y / 768.0).min(size.x / 1366.0)
+    // The bar's frame ends at design x=1360: scale by the width so it runs flush to the right edge (up to 1.2 % taller than the height fit).
+    (size.x / 1360.0).min(size.y / 768.0 * 1.012)
 }
 #[cfg(test)]
 mod tests {
