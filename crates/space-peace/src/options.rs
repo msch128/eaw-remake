@@ -23,7 +23,7 @@ enum OptionButton {
     Done,
 }
 
-const PANEL_BG: Color = Color::srgba(0.02, 0.05, 0.10, 0.94);
+const PANEL_BG: Color = Color::srgba(0.02, 0.05, 0.10, 1.0);
 const PANEL_BORDER: Color = Color::srgba(0.35, 0.65, 1.0, 0.8);
 const BUTTON_IDLE: Color = Color::srgba(0.06, 0.12, 0.2, 0.9);
 const BUTTON_HOVER: Color = Color::srgba(0.15, 0.32, 0.5, 0.95);
