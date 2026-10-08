@@ -196,6 +196,10 @@ pub struct AbilityDef {
     /// `ROCKET_ATTACK` / `SWAP_WEAPONS` (missile boats): for `duration` seconds the missile, rocket and torpedo hardpoints reload
     /// at `ROCKET_RELOAD_MULT` of their normal delay (estimate: the data names the ability but gives no numbers).
     pub rocket: bool,
+    /// `Supports_Autofire`: the player may set the ability to automatic use.
+    pub supports_autofire: bool,
+    /// `Active_By_Default`: automatic use starts on.
+    pub autocast_default: bool,
     /// `SENSOR_JAMMING` (flares): while active, enemy homing missiles aimed at this ship lose their lock and fly straight on.
     pub jam: bool,
     /// `SUPER_LASER`: aimed with `Command::UseAbilityAt`; the chosen ship is destroyed outright after the charge time (estimate: the data
@@ -1420,6 +1424,8 @@ fn ability_defs(u: &SpaceUnitDef) -> Vec<AbilityDef> {
                 interdict: a.kind.eq_ignore_ascii_case("INTERDICT"),
                 toggle,
                 salvo: a.kind.eq_ignore_ascii_case("FULL_SALVO"),
+                supports_autofire: a.fields.get("supports_autofire").is_some_and(|v| alamo_data::xml::parse_bool(v)),
+                autocast_default: a.fields.get("active_by_default").is_some_and(|v| alamo_data::xml::parse_bool(v)),
                 jam: a.kind.eq_ignore_ascii_case("SENSOR_JAMMING"),
                 super_laser: a.kind.eq_ignore_ascii_case("SUPER_LASER").then(|| {
                     let sub = a.activated_ability.as_ref().and_then(|n| u.sub_abilities.iter().find(|s| s.name.eq_ignore_ascii_case(n)));

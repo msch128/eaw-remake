@@ -52,6 +52,8 @@ pub struct ShipSnap {
     pub hps: Vec<HpSnap>,
     /// Ability state per ability of the definition: (seconds of effect left, seconds until usable).
     pub abilities: Vec<(f32, f32)>,
+    /// Automatic use per ability (same order as `abilities`): the button shows the autocast state.
+    pub autocast: Vec<bool>,
 }
 
 /// One projectile at the end of a step.
@@ -132,6 +134,7 @@ fn snapshot(battle: &Battle, events: Vec<Event>, step_ms: f32) -> Snapshot {
                     })
                     .collect(),
                 abilities: s.abilities.iter().map(|a| (a.active, a.cooldown)).collect(),
+                autocast: s.abilities.iter().map(|a| a.autocast).collect(),
             }
         })
         .collect();

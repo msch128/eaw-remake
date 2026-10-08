@@ -172,6 +172,15 @@ pub enum Command {
         /// Destination.
         to: Vec3,
     },
+    /// Turns the automatic use of an ability on or off (only abilities with `AbilityDef::supports_autofire`).
+    SetAutocast {
+        /// Ship.
+        ship: u32,
+        /// Index in the ship definition's abilities.
+        ability: u16,
+        /// New state.
+        on: bool,
+    },
     /// Attack-move ships to a point.
     AttackMove {
         /// Ships.
@@ -425,6 +434,9 @@ pub struct AbilityState {
     pub cooldown: f32,
     /// Target of a targeted ability (tractor beam); `NONE` when unused.
     pub target: u32,
+    /// Automatic use: the ship uses the ability like the AI does (set with `Command::SetAutocast`; starts on for abilities with
+    /// `Active_By_Default`). Ships of AI sides use every ability automatically whatever this says.
+    pub autocast: bool,
 }
 
 /// Hardpoint runtime state.

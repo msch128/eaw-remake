@@ -428,7 +428,7 @@ impl Battle {
             carrier: NONE,
             slots: Vec::new(),
             reserve: def.reserve.clone(),
-            abilities: vec![AbilityState { active: 0.0, cooldown: 0.0, target: NONE }; def.abilities.len()],
+            abilities: def.abilities.iter().map(|a| AbilityState { active: 0.0, cooldown: 0.0, target: NONE, autocast: a.supports_autofire && a.autocast_default }).collect(),
             tractor_cut: 0.0,
             path: Vec::new(),
             path_goal: Vec3::ZERO,
@@ -696,6 +696,16 @@ impl Battle {
                     self.reveals.retain(|r| r.3 > self.time);
                     self.reveals.push((side, pos, a.reveal_radius, self.time + a.duration));
                 }
+            }
+            Command::SetAutocast { ship, ability, on } => {
+                if !own(self, &[ship]) {
+                    return Err(CommandError::InvalidShip);
+                }
+                let d = self.catalog.ship(self.ships[ship as usize].def);
+                if !d.abilities.get(ability as usize).is_some_and(|a| a.supports_autofire) {
+                    return Err(CommandError::AbilityUnavailable);
+                }
+                self.ships[ship as usize].abilities[ability as usize].autocast = on;
             }
             Command::UseAbility { ship, ability } => {
                 if !own(self, &[ship]) {
@@ -1376,7 +1386,8 @@ impl Battle {
             }
             // AI sides use weapon abilities when they have something to shoot at.
             let s = &self.ships[i];
-            if self.sides[s.side as usize].ai && s.target != NONE && s.stance != Stance::HoldFire && (tick + i as u64).is_multiple_of(15) {
+            let ai_side = self.sides[s.side as usize].ai;
+            if (ai_side || s.abilities.iter().any(|a| a.autocast)) && s.target != NONE && s.stance != Stance::HoldFire && (tick + i as u64).is_multiple_of(15) {
                 let t = &self.ships[s.target as usize];
                 let dist = t.pos.dist(s.pos);
                 for (k, a) in def.abilities.iter().enumerate() {
@@ -1385,15 +1396,18 @@ impl Battle {
                     if a.rocket && (cat.ship(t.def).class as u8) < TargetClass::Frigate as u8 {
                         continue;
                     }
-                    if boosts_weapons && s.abilities[k].cooldown <= 0.0 && s.abilities[k].active <= 0.0 && dist < def.max_weapon_range {
+                    if boosts_weapons && (ai_side || s.abilities[k].autocast) && s.abilities[k].cooldown <= 0.0 && s.abilities[k].active <= 0.0 && dist < def.max_weapon_range {
                         auto_use.push(k);
                         break;
                     }
                 }
             }
-            if self.sides[self.ships[i].side as usize].ai && (tick + i as u64).is_multiple_of(15) {
+            if (ai_side || self.ships[i].abilities.iter().any(|a| a.autocast)) && (tick + i as u64).is_multiple_of(15) {
                 let s = &self.ships[i];
                 for (k, a) in def.abilities.iter().enumerate() {
+                    if !(ai_side || s.abilities[k].autocast) {
+                        continue;
+                    }
                     let ready = s.abilities[k].cooldown <= 0.0 && s.abilities[k].active <= 0.0;
                     if a.toggle && a.missile_radius > 0.0 && s.abilities[k].active > 0.0 {
                         // Switch the shield off again when no enemy missiles are near.
@@ -1456,7 +1470,8 @@ impl Battle {
         let cat = self.catalog.clone();
         let mut uses: Vec<(u8, u32, u16, Option<Vec3>)> = Vec::new();
         for side in 0..self.sides.len().min(4) as u8 {
-            if !self.sides[side as usize].ai {
+            let ai_side = self.sides[side as usize].ai;
+            if !ai_side && !self.ships.iter().any(|s| s.side == side && s.alive && s.abilities.iter().any(|a| a.autocast)) {
                 continue;
             }
             let enemies: Vec<u32> = self
@@ -1469,7 +1484,7 @@ impl Battle {
                 let def = cat.ship(s.def);
                 for (k, a) in def.abilities.iter().enumerate() {
                     let st = &s.abilities[k];
-                    if st.cooldown > 0.0 || st.active > 0.0 {
+                    if st.cooldown > 0.0 || st.active > 0.0 || !(ai_side || st.autocast) {
                         continue;
                     }
                     let k = k as u16;

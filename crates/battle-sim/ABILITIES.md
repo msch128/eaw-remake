@@ -32,3 +32,6 @@ Counts are `Unit_Ability` entries in `Units/Space/*.xml`, `SPACEUNITS*.XML`, `NA
 | `CAPTURE_VEHICLE`, `AREA_EFFECT_STUN`, `AREA_EFFECT_CONVERT` | 1 each | ground abilities | not space |
 
 Galactic abilities (`Planet_Income_Bonus_Ability`, `Galactic_Stealth_Ability`, `System_Spy_Ability`, `Planet_Destruction_Ability`, `Reduce_Production_*`) belong to galaxy-sim.
+
+## Automatic use (autocast)
+`Unit_Ability` has `Supports_Autofire` (89 of 96 entries say True; tractor beam, laser defense, sensor jamming, defend, rocket attack ...) and `Active_By_Default`. `AbilityDef::supports_autofire` / `autocast_default` read them; `AbilityState::autocast` starts as `supports_autofire && autocast_default` (the 11 `Active_By_Default` entries are all in the unused `_BU` files, so every ability starts off). `Command::SetAutocast { ship, ability, on }` switches it (refused for abilities without `Supports_Autofire`). A player ship with autocast on uses that ability with the same rules as an AI ship (the checks in the per-ship loop and in `ai_special_abilities`); ships of AI sides use all abilities as before. `battle-view` exposes it as `ShipSnap::autocast` (same order as `abilities`).

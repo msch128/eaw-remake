@@ -212,3 +212,14 @@ fn projectile_combat_mods_are_read_from_the_data() {
     assert_eq!(m.kind, ModKind::Health);
     assert!((m.value + 0.25).abs() < 1e-4 && (m.duration - 14.0).abs() < 1e-4 && m.classes != 0, "{m:?}");
 }
+
+#[test]
+fn autocast_support_and_default_come_from_the_data() {
+    let Some((data, fs)) = load() else { return };
+    let cat = Catalog::build(&data, Some(&fs), &["Gorgon_Star_Destroyer_II", "Star_Destroyer"]);
+    let gorgon = cat.ship(cat.ship_id("Gorgon_Star_Destroyer_II").unwrap());
+    let tractor = gorgon.abilities.iter().find(|a| a.tractor.is_some()).expect("tractor beam");
+    assert!(tractor.supports_autofire && !tractor.autocast_default, "the tractor beam can be set to automatic and starts off");
+    let isd = cat.ship(cat.ship_id("Star_Destroyer").unwrap());
+    assert!(isd.abilities.iter().any(|a| !a.supports_autofire), "abilities without `Supports_Autofire` cannot");
+}

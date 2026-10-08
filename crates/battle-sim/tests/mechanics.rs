@@ -754,3 +754,37 @@ fn projectile_combat_mods_weaken_the_ships_hit_for_a_while() {
     assert!(weak1 > plain1 * 1.5, "defense -50% doubles the damage taken: {plain1} -> {weak1}");
     assert!((weak2 - plain2).abs() < plain2 * 0.35, "the debuff wore off: {plain2} vs {weak2}");
 }
+
+#[test]
+fn autocast_lets_a_player_ship_use_an_ability_like_the_ai() {
+    let mut missile = laser();
+    missile.name = "missile".into();
+    missile.category = "missile".into();
+    let mut boat = ship("boat", 1.0e6, 0.0, vec![gun("g", 0.0)]);
+    boat.max_weapon_range = 6000.0;
+    boat.abilities.push(AbilityDef { rocket: true, supports_autofire: true, ..ability("ROCKET_ATTACK") });
+    boat.abilities.push(AbilityDef { supports_autofire: false, ..ability("TURBO") });
+    let run = |autocast: Option<bool>| {
+        let cat = Catalog::from_defs(vec![boat.clone(), ship("dummy", 1.0e7, 0.0, vec![])], vec![missile.clone()]);
+        let mut su = setup(cat, "boat", "dummy", 1, 1, cfg());
+        su.sides[0].ai = false; // a player side
+        let mut b = Battle::new(su);
+        let id = b.ships.iter().find(|s| s.side == 0).unwrap().id;
+        if let Some(on) = autocast {
+            b.command(0, Command::SetAutocast { ship: id, ability: 0, on }).unwrap();
+        }
+        for _ in 0..30 * 4 {
+            b.step();
+        }
+        let s = &b.ships[id as usize];
+        (s.abilities[0].active > 0.0 || s.abilities[0].cooldown > 0.0, s.abilities[0].autocast)
+    };
+    assert_eq!(run(None), (false, false), "a player ship does not use abilities on its own");
+    assert_eq!(run(Some(true)), (true, true), "with autocast on it fires the ability like the AI");
+    assert_eq!(run(Some(false)), (false, false));
+    // An ability that does not support automatic use refuses the command.
+    let cat = Catalog::from_defs(vec![boat.clone(), ship("dummy", 1.0e7, 0.0, vec![])], vec![missile]);
+    let mut b = Battle::new(setup(cat, "boat", "dummy", 1, 1, cfg()));
+    let id = b.ships.iter().find(|s| s.side == 0).unwrap().id;
+    assert!(b.command(0, Command::SetAutocast { ship: id, ability: 1, on: true }).is_err());
+}
