@@ -42,7 +42,8 @@ async model preloading for battles.
 - Battle speed scale 30. Dummy planets filtered (145 real planets in the Full GC).
 - Default AI = Remake AI + strategy layer, difficulty Normal. Easy/Normal/Hard from `DIFFICULTYADJUSTMENTS.XML`;
   Brutal and Fair are our own tiers (estimates). Classic stub AI optional (it snowballs).
-- Save = deterministic input journal replayed on load (Lua coroutines can't be serialised). Load ~0.2 s per game week.
+- Save = real state snapshot (user decision): sim state, story engine, Lua script globals, AI memory. Lua coroutines
+  restart idle with restored globals; continuation is not bit-identical (galaxy-sim part is). Load ~0.6 s flat.
 - AI-vs-AI battles use auto-resolve (tactical resolver ~0.7 s per battle is too slow); player battles may be tactical.
 - All invented numbers are named estimates in the RULES.md / STATUS.md of their crate.
 
