@@ -9,6 +9,7 @@ use crate::camera::GalaxyCamera;
 use crate::flow::{AppScreen, Paused, StartCampaign, UiSound};
 use crate::galaxy_map::spawn_props;
 use crate::game::{self, CampaignEntry, DEFAULT_CAMPAIGN, Game, GameAssets, StartupLog};
+use crate::newgame::{MenuRefresh, NewGameOptions, SlotChosen, SlotMode, SlotScreen};
 use crate::options::OptionsOpen;
 
 /// SFX event played when the cursor enters a button.
@@ -39,6 +40,16 @@ pub enum MenuAction {
     Quit,
     /// Leave the (placeholder) tactical battle screen.
     EndBattle,
+    /// Next AI difficulty tier of a new game.
+    CycleDifficulty,
+    /// Switch between the Remake AI and the classic AI.
+    ToggleClassicAi,
+    /// Open the save or load slot list.
+    OpenSlots(SlotMode),
+    /// A slot button.
+    Slot(SlotMode, u8),
+    /// Close the slot list.
+    CloseSlots,
 }
 
 /// One button.
@@ -110,6 +121,7 @@ pub fn main_menu_spec() -> MenuSpec {
         columns: vec![MenuColumn {
             items: vec![
                 MenuItem::new("Galactic Conquest", MenuAction::OpenCampaigns),
+                MenuItem::new("Load Game", MenuAction::OpenSlots(SlotMode::Load)),
                 MenuItem::new("Options", MenuAction::Options),
                 MenuItem::new("Quit", MenuAction::Quit),
             ],
@@ -120,7 +132,7 @@ pub fn main_menu_spec() -> MenuSpec {
 }
 
 /// The campaign selection: one column per map size, one button per human faction.
-pub fn campaign_spec(campaigns: &[CampaignEntry]) -> MenuSpec {
+pub fn campaign_spec(campaigns: &[CampaignEntry], options: &NewGameOptions) -> MenuSpec {
     let mut columns: Vec<MenuColumn> = Vec::new();
     let mut groups: Vec<&str> = Vec::new();
     for c in campaigns {
@@ -146,7 +158,11 @@ pub fn campaign_spec(campaigns: &[CampaignEntry]) -> MenuSpec {
         title: "Galactic Conquest".into(),
         subtitle: "Choose a galaxy and your side".into(),
         columns,
-        footer: vec![MenuItem::new("Back", MenuAction::MainMenu)],
+        footer: vec![
+            MenuItem::new(options.difficulty_label(), MenuAction::CycleDifficulty),
+            MenuItem::new(options.classic_label(), MenuAction::ToggleClassicAi),
+            MenuItem::new("Back", MenuAction::MainMenu),
+        ],
         ..default()
     }
 }
@@ -158,6 +174,8 @@ pub fn pause_spec() -> MenuSpec {
         columns: vec![MenuColumn {
             items: vec![
                 MenuItem::new("Resume", MenuAction::Resume),
+                MenuItem::new("Save Game", MenuAction::OpenSlots(SlotMode::Save)),
+                MenuItem::new("Load Game", MenuAction::OpenSlots(SlotMode::Load)),
                 MenuItem::new("Options", MenuAction::Options),
                 MenuItem::new("Main Menu", MenuAction::MainMenu),
                 MenuItem::new("Quit", MenuAction::Quit),
@@ -220,6 +238,7 @@ impl Plugin for MenuPlugin {
                         .run_if(in_state(AppScreen::Galaxy)),
                     button_interaction,
                     apply_clicks,
+                    refresh_campaign_menu,
                 )
                     .chain(),
             );
@@ -230,8 +249,8 @@ fn spawn_main_menu(mut commands: Commands) {
     spawn_menu(&mut commands, &main_menu_spec(), ScreenMenu);
 }
 
-fn spawn_campaign_menu(mut commands: Commands, campaigns: Res<Campaigns>) {
-    spawn_menu(&mut commands, &campaign_spec(&campaigns.0), ScreenMenu);
+fn spawn_campaign_menu(mut commands: Commands, campaigns: Res<Campaigns>, options: Res<NewGameOptions>) {
+    spawn_menu(&mut commands, &campaign_spec(&campaigns.0, &options), ScreenMenu);
 }
 
 /// Marks the 3D scene behind the menus: the galaxy art with its star dome.
@@ -462,6 +481,10 @@ fn apply_clicks(
     mut options: ResMut<OptionsOpen>,
     mut start: MessageWriter<StartCampaign>,
     mut exit: MessageWriter<AppExit>,
+    mut newgame: ResMut<NewGameOptions>,
+    mut slots: ResMut<SlotScreen>,
+    mut chosen: MessageWriter<SlotChosen>,
+    mut refresh: MessageWriter<MenuRefresh>,
 ) {
     for MenuClicked(action) in clicks.read() {
         match action {
@@ -481,11 +504,42 @@ fn apply_clicks(
                     outcome: crate::battle_seam::BattleOutcome::Aborted,
                 });
             }
+            MenuAction::CycleDifficulty => {
+                newgame.cycle();
+                refresh.write(MenuRefresh);
+            }
+            MenuAction::ToggleClassicAi => {
+                newgame.classic_ai = !newgame.classic_ai;
+                refresh.write(MenuRefresh);
+            }
+            MenuAction::OpenSlots(mode) => slots.0 = Some(*mode),
+            MenuAction::Slot(mode, n) => {
+                chosen.write(SlotChosen(*mode, *n));
+            }
+            MenuAction::CloseSlots => slots.0 = None,
             MenuAction::Quit => {
                 exit.write(AppExit::Success);
             }
         }
     }
+}
+
+/// Rebuilds the campaign list when its option buttons changed their labels.
+fn refresh_campaign_menu(
+    mut refresh: MessageReader<MenuRefresh>,
+    mut commands: Commands,
+    screen: Res<State<AppScreen>>,
+    menus: Query<Entity, With<ScreenMenu>>,
+    campaigns: Res<Campaigns>,
+    options: Res<NewGameOptions>,
+) {
+    if refresh.read().last().is_none() || *screen.get() != AppScreen::CampaignSelect {
+        return;
+    }
+    for e in &menus {
+        commands.entity(e).despawn();
+    }
+    spawn_menu(&mut commands, &campaign_spec(&campaigns.0, &options), ScreenMenu);
 }
 
 #[cfg(test)]
@@ -509,11 +563,11 @@ mod tests {
             entry("a_rebel", "A", "Rebel"),
             entry("a_empire", "A", "Empire"),
             entry("b_rebel", "B", "Rebel"),
-        ]);
+        ], &NewGameOptions::default());
         assert_eq!(spec.columns.len(), 2);
         assert_eq!(spec.columns[0].items.len(), 2);
         assert_eq!(spec.columns[0].items[1].label, "Galactic Empire");
         assert_eq!(spec.columns[1].items[0].action, MenuAction::Campaign("b_rebel".into()));
-        assert_eq!(spec.footer.len(), 1);
+        assert_eq!(spec.footer.len(), 3);
     }
 }

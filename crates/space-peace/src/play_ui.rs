@@ -77,6 +77,7 @@ impl Plugin for PlayUiPlugin {
                     feed_minimap.run_if(resource_exists::<MinimapData>.and_then(in_state(AppScreen::Galaxy))),
                     minimap_pan.run_if(in_state(AppScreen::Galaxy)),
                     bar_clicks,
+                    loading_overlay,
                     refresh_ticker,
                     refresh_texts,
                     battle_dialog,
@@ -551,4 +552,79 @@ fn scripted_battle_click(
     commands.entity(e).despawn();
     // The next system (battle_dialog_result) reads the message and clears `open`.
     let _ = &mut dialog;
+}
+
+/// Full-screen "Preparing galaxy" / "Loading save" overlay with a progress bar.
+#[derive(Component)]
+struct LoadOverlay;
+/// Text line of the overlay.
+#[derive(Component)]
+struct LoadText;
+/// Fill of the overlay bar.
+#[derive(Component)]
+struct LoadFill;
+
+fn loading_overlay(
+    mut commands: Commands,
+    state: Res<SimState>,
+    overlay: Query<Entity, With<LoadOverlay>>,
+    mut text: Query<&mut Text, With<LoadText>>,
+    mut fill: Query<&mut Node, With<LoadFill>>,
+) {
+    let progress = state.driver.load_progress();
+    let busy = state.current.loading || progress.is_some();
+    if !busy {
+        for e in &overlay {
+            commands.entity(e).despawn();
+        }
+        return;
+    }
+    let (label, fraction) = match progress {
+        Some(p) => (format!("Loading save - week {} ({:.0}%)", p.week + 1, p.fraction() * 100.0), p.fraction()),
+        None => ("Preparing galaxy...".to_owned(), 0.05),
+    };
+    if overlay.is_empty() {
+        commands
+            .spawn((
+                LoadOverlay,
+                Node {
+                    position_type: PositionType::Absolute,
+                    width: Val::Percent(100.0),
+                    height: Val::Percent(100.0),
+                    flex_direction: FlexDirection::Column,
+                    justify_content: JustifyContent::Center,
+                    align_items: AlignItems::Center,
+                    row_gap: Val::Px(14.0),
+                    ..default()
+                },
+                BackgroundColor(Color::srgba(0.0, 0.0, 0.03, 0.75)),
+                GlobalZIndex(40),
+                Interaction::default(),
+                bevy::ui::FocusPolicy::Block,
+            ))
+            .with_children(|root| {
+                root.spawn((text_bundle(&label, 26.0, Color::srgb(0.85, 0.93, 1.0)), LoadText));
+                root.spawn((
+                    Node { width: Val::Px(420.0), height: Val::Px(12.0), border: UiRect::all(Val::Px(1.0)), ..default() },
+                    BorderColor::all(Color::srgba(0.35, 0.65, 1.0, 0.8)),
+                    BackgroundColor(Color::srgba(0.02, 0.05, 0.10, 0.9)),
+                ))
+                .with_children(|bar| {
+                    bar.spawn((
+                        Node { width: Val::Percent(fraction * 100.0), height: Val::Percent(100.0), ..default() },
+                        BackgroundColor(Color::srgb(0.35, 0.65, 1.0)),
+                        LoadFill,
+                    ));
+                });
+            });
+        return;
+    }
+    for mut t in &mut text {
+        if t.0 != label {
+            t.0 = label.clone();
+        }
+    }
+    for mut n in &mut fill {
+        n.width = Val::Percent(fraction * 100.0);
+    }
 }

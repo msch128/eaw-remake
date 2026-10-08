@@ -31,6 +31,7 @@ alamo-audio = { path = "../alamo-audio" }
 rand = "0.9"
 galaxy-sim = { path = "../galaxy-sim" }
 galaxy-play = { path = "../galaxy-play" }
+galaxy-script = { path = "../galaxy-script" }
 eaw-ui = { path = "../eaw-ui" }
 battle-view = { path = "../battle-view" }
 

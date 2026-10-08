@@ -10,6 +10,7 @@ mod galaxy_view;
 mod game;
 mod loading;
 mod menu;
+mod newgame;
 mod offscreen;
 mod options;
 mod planet_visual;
@@ -42,6 +43,7 @@ use galaxy_view::GalaxyView;
 use game::{Game, StartupLog};
 use loading::{AfterLoading, GameFiles, InitialCampaign, LoadDelay, LoadingPlugin};
 use menu::MenuPlugin;
+use newgame::NewGamePlugin;
 use options::OptionsPlugin;
 use play::PlayGluePlugin;
 use play_ui::PlayUiPlugin;
@@ -143,6 +145,7 @@ fn main() {
         .insert_resource(flow::Paused(args.screen.as_deref() == Some("pause")))
         .insert_resource(options::OptionsOpen(args.screen.as_deref() == Some("options")))
         .insert_resource(settings)
+        .insert_resource(newgame::NewGameOptions::from_args(&args))
         .insert_resource(args)
         .insert_resource(log)
         .insert_resource(Game(None))
@@ -152,6 +155,7 @@ fn main() {
             FlowPlugin,
             LoadingPlugin,
             MenuPlugin,
+            NewGamePlugin,
             OptionsPlugin,
             SettingsPlugin,
             BattleSeamPlugin,

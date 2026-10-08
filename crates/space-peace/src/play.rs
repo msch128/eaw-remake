@@ -85,6 +85,8 @@ fn begin_play(
     view: Res<GalaxyView>,
     bridge: Option<Res<PlayBridge>>,
     args: Res<Args>,
+    options: Res<crate::newgame::NewGameOptions>,
+    pending_load: Option<Res<crate::newgame::PendingLoad>>,
 ) {
     let (Some(name), Some(assets)) = (current.name.clone(), game.0.as_ref()) else { return };
     if name == DEMO_CAMPAIGN || bridge.is_some_and(|b| b.campaign == name) {
@@ -96,10 +98,20 @@ fn begin_play(
         tactical_hook: true,
         // Scripted scenarios start paused and drive time themselves.
         initial_speed_level: if args.weeks.is_some() { 0 } else { 1 },
+        difficulty: Some(options.difficulty),
+        classic_ai: options.classic_ai,
         ..default()
     };
+    let data = assets.data.clone();
+    let fs: std::sync::Arc<dyn alamo_fs::FileSource> = assets.fs.clone();
+    // A save chosen in the load menu (or `--load-from`) is replayed; otherwise a new scripted game starts.
+    let load = pending_load.map(|p| p.0.clone()).or_else(|| args.load_from.clone());
     let started = Instant::now();
-    let init = match PlayInit::from_data(&assets.data, campaign, config) {
+    let built = match &load {
+        Some(path) => PlayInit::from_save(path.clone(), data.clone(), fs, config),
+        None => PlayInit::scripted(data.clone(), fs, campaign, config).map_err(|e| e.to_string()),
+    };
+    let init = match built {
         Ok(init) => init,
         Err(e) => {
             error!("cannot start the galactic simulation for `{name}`: {e}");
@@ -130,6 +142,7 @@ fn begin_play(
     }
     let bridge = PlayBridge { campaign: name, planet_to_sim, sim_to_planet, faction_to_view };
     let data = assets.data.clone();
+    commands.remove_resource::<crate::newgame::PendingLoad>();
     commands.queue(move |world: &mut World| {
         galaxy_play::start_play(world, init);
         if let Some(mut ui) = world.get_resource_mut::<EawUiAssets>() {
@@ -233,12 +246,14 @@ fn cursor_blocked(
     bar: Query<(&ComputedNode, &UiGlobalTransform), With<EawCommandBar>>,
     screen: Res<State<AppScreen>>,
     paused: Res<Paused>,
+    state: Option<Res<SimState>>,
     mut blocked: ResMut<PlayCursorBlocked>,
 ) {
     let over_bar = window
         .and_then(|w| w.physical_cursor_position())
         .is_some_and(|c| bar.iter().any(|(node, tf)| node.contains_point(*tf, c)));
-    let value = over_bar || paused.0 || *screen.get() != AppScreen::Galaxy;
+    let loading = state.is_some_and(|s| s.current.loading);
+    let value = over_bar || loading || paused.0 || *screen.get() != AppScreen::Galaxy;
     if blocked.0 != value {
         blocked.0 = value;
     }
@@ -298,8 +313,20 @@ fn run_script(
         return;
     }
     let (Some(mut state), Some(catalog), Some(player)) = (state, catalog, player) else { return };
+    // The worker still prepares the galaxy or replays a save: nothing to order yet.
+    if state.current.loading || state.driver.load_progress().is_some() {
+        hold.active = true;
+        return;
+    }
     let scripted = args.weeks.is_some() || args.build.is_some() || args.move_to.is_some();
     if !scripted {
+        if hold.active {
+            hold.active = false;
+            hold.done_at = Some(Instant::now());
+        }
+        if let Some(path) = &args.save_to {
+            actions.write(PlayAction::Save(path.clone()));
+        }
         script.phase = 3;
         return;
     }
@@ -374,6 +401,9 @@ fn run_script(
                     script.phase = 3;
                     hold.active = false;
                     hold.done_at = Some(Instant::now());
+                    if let Some(path) = &args.save_to {
+                        actions.write(PlayAction::Save(path.clone()));
+                    }
                     info!("script: done at week {} (credits {:.0})", state.current.week, player.0.map_or(0.0, |h| state.galaxy().factions[h as usize].credits));
                 }
                 return;

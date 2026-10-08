@@ -4583,6 +4583,7 @@ dependencies = [
  "bevy",
  "eaw-ui",
  "galaxy-play",
+ "galaxy-script",
  "galaxy-sim",
  "rand 0.9.5",
 ]

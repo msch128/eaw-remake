@@ -50,6 +50,14 @@ pub struct Args {
     pub battle_auto: bool,
     /// Offscreen only: reach the map the way a player does, main menu -> campaign list -> campaign (`--via-menu`).
     pub via_menu: bool,
+    /// AI difficulty of a new game: easy, normal, hard, brutal or fair (`--difficulty`).
+    pub difficulty: Option<String>,
+    /// Use galaxy-sim's built-in AI instead of the Remake AI (`--classic-ai`).
+    pub classic_ai: bool,
+    /// Offscreen only: save the game here once the scenario finished (`--save-to <file>`).
+    pub save_to: Option<PathBuf>,
+    /// Start by loading this save (`--load-from <file>`).
+    pub load_from: Option<PathBuf>,
     /// Tactical battle speed multiplier (`--battle-speed <x>`).
     pub battle_speed: Option<f32>,
     /// Offscreen only: battle time of the mid-battle capture (`--battle-seconds <s>`).
@@ -80,6 +88,10 @@ impl Default for Args {
             battle_choice: None,
             battle_auto: false,
             via_menu: false,
+            difficulty: None,
+            classic_ai: false,
+            save_to: None,
+            load_from: None,
             battle_speed: None,
             battle_seconds: None,
         }
@@ -111,6 +123,10 @@ OPTIONS:
   --battle-choice <c>    Offscreen: click fight or auto in the battle dialog when it opens
   --battle-auto           Offscreen: the AI plays both sides of a tactical battle
   --via-menu            Offscreen: start from the main menu and click through to the campaign
+  --difficulty <d>      AI difficulty of a new game: easy, normal, hard, brutal, fair
+  --classic-ai           Use the built-in classic AI instead of the Remake AI
+  --save-to <file>       Offscreen: save the game after the scenario
+  --load-from <file>     Start from a save file
   --battle-speed <x>     Tactical battle speed multiplier
   --battle-seconds <s>   Offscreen: battle time of the mid-battle capture (default 12)
   --no-vsync             Disable vertical sync
@@ -171,6 +187,10 @@ impl Args {
                 "--stop-on-battle" => out.stop_on_battle = true,
                 "--battle-auto" => out.battle_auto = true,
                 "--via-menu" => out.via_menu = true,
+                "--difficulty" => out.difficulty = Some(it.next().ok_or("--difficulty needs a value")?.to_lowercase()),
+                "--classic-ai" => out.classic_ai = true,
+                "--save-to" => out.save_to = Some(it.next().ok_or("--save-to needs a value")?.into()),
+                "--load-from" => out.load_from = Some(it.next().ok_or("--load-from needs a value")?.into()),
                 "--battle-speed" => {
                     let v = it.next().ok_or("--battle-speed needs a value")?;
                     out.battle_speed = Some(v.parse().map_err(|e| format!("bad --battle-speed: {e}"))?);
