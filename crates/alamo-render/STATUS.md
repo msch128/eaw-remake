@@ -73,3 +73,8 @@ the first directional light. `battle-view` spawns the map's fill lights from the
   `light_*` glows stay subtle; emitters larger than 3000 units (`MAX_CORONA_SIZE`, about 235 of them) stay undrawn (they washed the screen out). `showcase death` (ISD death,
   `target/vis/death_t01000.png`) shows dense fireballs and smoke with no wash; `P_Explosion_Capital` has no type-4 emitters and is simply not the effect ship deaths use.
 - Blender-ALAMO-Plugin and AlamoEngine-Tools/PetroglyphTools are MIT licensed but contain no particle format code (checked on their GitHub front pages only).
+- Particle batches no longer rebuild a `Mesh` asset every frame. Each (texture, blend) batch has a fixed draw mesh of `cap_idx` dummy vertices (rebuilt only when the capacity doubles) and two storage buffers
+  (`ParticleMaterial::indices` with a live-count header, `::verts` with 3 `vec4` per vertex: world position, uv, color) that are rewritten in place (`ShaderBuffer` with unchanged size -> `write_buffer`, no mesh allocator work).
+  `particle.wgsl` has a vertex stage that reads them (indices past the live count give degenerate triangles). Gotcha: a non-indexed draw's `vertex_index` includes the mesh's first vertex in the shared mesh slab,
+  so the shader subtracts `mesh[instance_index].first_vertex_index`. Bolts keep their arbitrary indices. Measured with the Chrome trace: `allocate_and_free_meshes` 1123 us -> 4 us per frame.
+  Visual check: death-explosion scene mean abs diff 0.2/255 (0.13% of sampled pixels > 24), bolts scene 0.007, capital explosion 0.2 (`target/vis/death_before_t01000.png` vs `death_after5_t01000.png`).

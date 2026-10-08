@@ -21,10 +21,11 @@ use alamo_model::particle::{BlendMode, Emitter};
 use bevy::asset::RenderAssetUsages;
 use bevy::camera::visibility::NoFrustumCulling;
 use bevy::math::Affine3A;
-use bevy::mesh::{Indices, PrimitiveTopology};
+use bevy::mesh::PrimitiveTopology;
 use bevy::pbr::{Material, MaterialPlugin};
 use bevy::prelude::*;
 use bevy::render::render_resource::AsBindGroup;
+use bevy::render::storage::ShaderBuffer;
 use bevy::shader::ShaderRef;
 
 use crate::model::{AlamoFs, AlamoProxy};
@@ -133,9 +134,19 @@ pub struct ParticleMaterial {
     /// 0 alpha blending, 1 additive scaled by alpha, 2 additive ignoring alpha.
     #[uniform(2)]
     pub additive: u32,
+    /// Header `[live index count]` followed by the triangle indices of the batch (see `update_particle_batches`).
+    #[storage(3, read_only)]
+    pub indices: Handle<ShaderBuffer>,
+    /// Three `vec4` per vertex: position, uv, color. World space, written every frame in place.
+    #[storage(4, read_only)]
+    pub verts: Handle<ShaderBuffer>,
 }
 
 impl Material for ParticleMaterial {
+    fn vertex_shader() -> ShaderRef {
+        PARTICLE_SHADER_PATH.into()
+    }
+
     fn fragment_shader() -> ShaderRef {
         PARTICLE_SHADER_PATH.into()
     }
@@ -725,7 +736,15 @@ type BatchKey = (String, u32);
 struct Batch {
     entity: Entity,
     mesh: Handle<Mesh>,
+    indices: Handle<ShaderBuffer>,
+    verts: Handle<ShaderBuffer>,
+    material: Handle<ParticleMaterial>,
+    /// Capacity in indices (also the vertex count of the dummy draw mesh) and in vertices.
+    cap_idx: usize,
+    cap_vert: usize,
 }
+
+const INITIAL_IDX_CAPACITY: usize = 6 * 1024;
 
 /// Vertex data of extra geometry (projectile bolts) that is merged into the batch of the same
 /// texture and blend mode every frame.
@@ -765,6 +784,7 @@ pub fn update_particle_batches(
     mut images: ResMut<Assets<Image>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ParticleMaterial>>,
+    mut buffers: ResMut<Assets<ShaderBuffer>>,
     mut batches: ResMut<ParticleBatches>,
     mut stats: ResMut<ParticleStats>,
     mut extra: ResMut<ExtraBatchGeometry>,
@@ -811,21 +831,30 @@ pub fn update_particle_batches(
         let bolts = extra_bufs.remove(&key);
         if !batches.batches.contains_key(&key) {
             let texture = textures.get(&fs.0, &mut images, &key.0);
+            let cap_idx = INITIAL_IDX_CAPACITY;
+            let cap_vert = cap_idx / 6 * 4;
+            let indices = buffers.add(ShaderBuffer::new(&vec![0u8; (cap_idx + 1) * 4], RenderAssetUsages::default()));
+            let verts = buffers.add(ShaderBuffer::new(&vec![0u8; cap_vert * 48], RenderAssetUsages::default()));
             let material = materials.add(ParticleMaterial {
                 texture,
                 additive: key.1,
+                indices: indices.clone(),
+                verts: verts.clone(),
             });
-            let mesh = meshes.add(empty_mesh());
+            let mesh = meshes.add(draw_mesh(cap_idx));
             let entity = commands
                 .spawn((
                     Name::new(format!("particles {}", key.0)),
                     Mesh3d(mesh.clone()),
-                    MeshMaterial3d(material),
+                    MeshMaterial3d(material.clone()),
                     Transform::IDENTITY,
                     NoFrustumCulling,
                 ))
                 .id();
-            batches.batches.insert(key.clone(), Batch { entity, mesh });
+            batches.batches.insert(
+                key.clone(),
+                Batch { entity, mesh, indices, verts, material, cap_idx, cap_vert },
+            );
         }
         let batch = batches.batches.get_mut(&key).expect("batch exists");
         if key.1 == 0 {
@@ -872,16 +901,53 @@ pub fn update_particle_batches(
             }
             continue;
         }
-        let mut mesh = Mesh::new(
-            PrimitiveTopology::TriangleList,
-            RenderAssetUsages::default(),
-        );
-        mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, pos);
-        mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uv);
-        mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, col);
-        mesh.insert_indices(Indices::U32(idx));
-        if let Some(mut m) = meshes.get_mut(&batch.mesh) {
-            *m = mesh;
+        // Grow geometrically (never shrink); a larger draw mesh and new buffers are rare events.
+        if idx.len() > batch.cap_idx || pos.len() > batch.cap_vert {
+            while batch.cap_idx < idx.len() {
+                batch.cap_idx *= 2;
+            }
+            while batch.cap_vert < pos.len() {
+                batch.cap_vert *= 2;
+            }
+            if let Some(mut m) = meshes.get_mut(&batch.mesh) {
+                *m = draw_mesh(batch.cap_idx);
+            }
+            // New buffer assets of the new size; assigning them marks the material changed so its bind
+            // group is rebuilt around them.
+            batch.indices = buffers.add(ShaderBuffer::new(
+                &vec![0u8; (batch.cap_idx + 1) * 4],
+                RenderAssetUsages::default(),
+            ));
+            batch.verts = buffers.add(ShaderBuffer::new(
+                &vec![0u8; batch.cap_vert * 48],
+                RenderAssetUsages::default(),
+            ));
+            if let Some(mut m) = materials.get_mut(&batch.material) {
+                m.indices = batch.indices.clone();
+                m.verts = batch.verts.clone();
+            }
+        }
+        // Rewrite both storage buffers in place (same size: Bevy uses `write_buffer`, no allocation).
+        let mut ib = Vec::with_capacity((batch.cap_idx + 1) * 4);
+        ib.extend_from_slice(&(idx.len() as u32).to_le_bytes());
+        for i in &idx {
+            ib.extend_from_slice(&i.to_le_bytes());
+        }
+        ib.resize((batch.cap_idx + 1) * 4, 0);
+        let mut vb = Vec::with_capacity(batch.cap_vert * 48);
+        for i in 0..pos.len() {
+            for f in pos[i].iter().chain(&[0.0]).chain(&uv[i]).chain(&[0.0, 0.0]).chain(&col[i]) {
+                vb.extend_from_slice(&f.to_le_bytes());
+            }
+        }
+        vb.resize(batch.cap_vert * 48, 0);
+        if let Some(mut b) = buffers.get_mut(&batch.indices) {
+            b.data = Some(ib);
+            b.buffer_description.size = ((batch.cap_idx + 1) * 4) as u64;
+        }
+        if let Some(mut b) = buffers.get_mut(&batch.verts) {
+            b.data = Some(vb);
+            b.buffer_description.size = (batch.cap_vert * 48) as u64;
         }
         if let Ok(mut v) = visibility.get_mut(batch.entity) {
             *v = Visibility::Visible;
@@ -891,15 +957,13 @@ pub fn update_particle_batches(
     stats.cpu_ms += started.elapsed().as_secs_f32() * 1000.0;
 }
 
-fn empty_mesh() -> Mesh {
-    let mut mesh = Mesh::new(
-        PrimitiveTopology::TriangleList,
-        RenderAssetUsages::default(),
-    );
-    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, vec![[0.0f32; 3]; 3]);
-    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, vec![[0.0f32; 2]; 3]);
-    mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, vec![[0.0f32; 4]; 3]);
-    mesh.insert_indices(Indices::U32(vec![0, 1, 2]));
+/// Draw mesh of a batch: `cap_idx` dummy vertices. The vertex shader ignores their data and reads the
+/// batch's storage buffers instead, so this mesh only changes when the capacity grows.
+fn draw_mesh(cap_idx: usize) -> Mesh {
+    let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default());
+    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, vec![[0.0f32; 3]; cap_idx]);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, vec![[0.0f32; 2]; cap_idx]);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, vec![[1.0f32; 4]; cap_idx]);
     mesh
 }
 
