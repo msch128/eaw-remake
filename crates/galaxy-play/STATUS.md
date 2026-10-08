@@ -67,3 +67,17 @@ Mini Empire/Fair 60 twice (identical final state), Full GC Rebel 110 with tactic
 Findings fixed: Lua VM leak (below), tech never advanced, AI task force bookkeeping leaks. Open: the AI hoards credits (Empire 2.4M at week 100 with population far below the cap),
 classic AI snowballs (879 captures in 100 weeks), `BattleResolver::Tactical` for AI battles costs ~0.7 s per battle (12 s per game week with 18 battles) so it is only for the player's battles
 (`SimConfig::tactical_resolver_max_ships`, default 16, limits it).
+
+## Playing a minor faction ("Advanced..." on the campaign screen)
+Backend: `PlayConfig::player_faction: Option<String>` (also `SimConfig::player_faction`) names any faction of the chosen campaign; `PlayInit::scripted` then makes it the human (`world.victory.active_player`,
+`SimDriver::human()`), no AI plays it, the three majors and the other minors are AI (a campaign's own player slot, `SandboxHuman`, plays with its normal AI type), the story plots of the majors
+run as in AI-vs-AI games, and the save remembers the choice (`PlayInit::from_save` needs nothing). Tests: `galaxy-script/tests/minors.rs` (Hapan and CIS: 20 weeks, 0 script errors, build and move work,
+the AI majors still research) and `galaxy-play/tests/scripted.rs::a_minor_faction_can_be_the_player_and_survives_a_save`.
+What the data gives a minor (Full galaxy): CIS 3 planets / 5 ships / 15000 credits, Hapan 2 planets / 2 ships / 20000 credits; 4 tech upgrades each (tech 1 of 5), so research works; very few build options
+at the start (Hapan: 1 ship type at Hapes, CIS: 6), because minors have no shipyard chain like the majors. Victory uses the campaign's *human* conditions (the named planets Etti IV, Endor, Hapes, ... for the Full
+galaxy), which a minor can hardly reach; defeat is `Event::FactionEliminated` as for everybody. No faction-specific story plot, hero timers or intro dialog exists for minors.
+Integrator needs:
+ * Campaign screen "Advanced...": list `data.campaign_opponents(campaign)` plus the campaign's own player (`campaign.starting_active_player`); `data.faction(name)` has `text_id` (name), `color`, `icon_name`.
+   Only the factions in the chosen campaign work; `flagged_playable_without_campaign()` lists the `Is_Playable` factions that are in no campaign (not offered).
+ * Skin fallback: `eaw-ui` has skins for Rebel, Empire and Underworld only; use the Rebel (or the campaign player's) skin for a minor and tint with `Faction::color`.
+ * Pass the choice as `PlayConfig::player_faction` before `PlayInit::scripted`; the HUD should read the human from `SimDriver::human()` / the snapshot, not from `campaign.starting_active_player`.

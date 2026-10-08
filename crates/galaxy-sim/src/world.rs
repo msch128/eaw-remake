@@ -55,6 +55,9 @@ pub struct SimConfig {
     pub victory_enabled: bool,
     /// Allow `Command::DebugGrant` (offscreen tests and debugging only; off by default).
     pub debug_commands: bool,
+    /// The faction the human plays when it is not the campaign's `Starting_Active_Player` (any faction of the campaign, a minor one for example): its
+    /// human victory conditions apply to it. `None` or a name the campaign does not have = the campaign's own player.
+    pub player_faction: Option<String>,
     /// Estimate (calibrated against the tactical simulation, `examples/calibrate.rs`): how many random enemies a weapon compares before firing at the weakest. 1 = spread at random.
     pub combat_focus: u32,
     /// Estimate (calibrated against the tactical simulation): multiplier on hull, shield and damage of star bases, structures and garrison squadrons in the statistical resolver.
@@ -117,6 +120,7 @@ impl Default for SimConfig {
             max_queue_len: 8,
             victory_enabled: true,
             debug_commands: false,
+            player_faction: None,
             combat_focus: 1,
             combat_base_factor: 0.15,
             combat_efficiency: [0.5, 0.5, 1.0, 1.0],
