@@ -17,12 +17,12 @@ use bevy::render::settings::{RenderCreation, WgpuFeatures, WgpuSettings};
 /// A `RenderPlugin` that asks for the timestamp query features (ignored by adapters without them).
 pub fn timestamp_render_plugin() -> RenderPlugin {
     RenderPlugin {
-        render_creation: RenderCreation::Automatic(WgpuSettings {
+        render_creation: RenderCreation::Automatic(Box::new(WgpuSettings {
             features: WgpuFeatures::TIMESTAMP_QUERY
                 | WgpuFeatures::TIMESTAMP_QUERY_INSIDE_ENCODERS
                 | WgpuFeatures::TIMESTAMP_QUERY_INSIDE_PASSES,
             ..default()
-        }),
+        })),
         ..default()
     }
 }
@@ -83,6 +83,9 @@ pub struct GpuProfilePlugin;
 
 impl Plugin for GpuProfilePlugin {
     fn build(&self, app: &mut App) {
+        if !app.is_plugin_added::<bevy::diagnostic::DiagnosticsPlugin>() {
+            app.add_plugins(bevy::diagnostic::DiagnosticsPlugin);
+        }
         app.add_plugins(RenderDiagnosticsPlugin)
             .init_resource::<GpuProfile>()
             .add_systems(Last, collect);

@@ -198,7 +198,6 @@ fn main() {
             });
             if gpu_profile {
                 plugins = plugins.set(battle_view::gpu_profile::timestamp_render_plugin());
-                app.add_plugins(battle_view::gpu_profile::GpuProfilePlugin);
             }
             app.add_plugins(plugins)
             .add_plugins(ScheduleRunnerPlugin::run_loop(Duration::from_millis(1)))
@@ -238,6 +237,9 @@ fn main() {
                 ..default()
             }));
         }
+    }
+    if gpu_profile {
+        app.add_plugins(battle_view::gpu_profile::GpuProfilePlugin);
     }
     app.insert_resource(ClearColor(Color::BLACK))
         .insert_resource(settings)
