@@ -50,7 +50,9 @@ pub fn battle_audio(
     defs.extend(cur.ships.iter().map(|s| (s.id, s.def)));
     let mut per_name: HashMap<String, u32> = HashMap::new();
     let mut budget = PER_FRAME;
-    let mut send = |name: &str, pos: Option<Vec3>, stats: &mut BattleAudioStats, out: &mut MessageWriter<PlaySfx>| {
+    let mut send = |names: &str, pos: Option<Vec3>, stats: &mut BattleAudioStats, out: &mut MessageWriter<PlaySfx>| {
+      // Some tags hold a comma separated list of events (`HARD_POINT_WEAPON_LASER, Unit_Lost_...`): play each.
+      for name in names.split(',').map(str::trim).filter(|n| !n.is_empty() && !n.starts_with("HARD_POINT_")) {
         if budget == 0 {
             return;
         }
@@ -69,6 +71,7 @@ pub fn battle_audio(
             stats.recent.remove(0);
         }
         stats.recent.push(name.to_string());
+      }
     };
 
     for ev in &rt.fresh_events {

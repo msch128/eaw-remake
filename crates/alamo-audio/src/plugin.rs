@@ -216,6 +216,9 @@ fn process_file_requests(
     mut commands: Commands,
 ) {
     for req in reader.read() {
+        if audio_log() {
+            info!("audio file {}", req.name);
+        }
         let Some((handle, _)) = audio.sample(&req.name, settings.cache_budget_bytes, &mut assets) else {
             warn!("audio file not found: {}", req.name);
             continue;
@@ -518,8 +521,14 @@ fn process_sfx_requests(
     for (req, cont) in requests {
         let key = req.event.to_ascii_lowercase();
         let Some(ev) = audio.sfx.get(&req.event).cloned() else {
+            if audio_log() {
+                warn!("audio sfx UNKNOWN event `{}`", req.event);
+            }
             continue;
         };
+        if audio_log() && cont.is_none() {
+            info!("audio sfx {} (at {:?})", req.event, req.position.map(|p| p.round()));
+        }
         if ev.is_preset {
             continue;
         }
@@ -952,6 +961,9 @@ fn music_system(
     let changed = wanted != director.current;
     if changed {
         director.current = wanted.clone();
+        if audio_log() {
+            info!("audio music scene {:?} -> event {:?}", director.planner.scene(), wanted);
+        }
         director.queue.clear();
         director.oneshot_done = false;
         let fade_out = wanted
@@ -1037,4 +1049,10 @@ fn update_music_gain(
             s.set_volume(Volume::Linear(t.volume * t.fade * buses.gain(Bus::Music)));
         }
     }
+}
+
+/// `SP_AUDIO_LOG=1` logs every sound request (SFX, files, music scene changes) for audits.
+fn audio_log() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("SP_AUDIO_LOG").is_some())
 }

@@ -120,7 +120,8 @@ impl VisualCatalog {
                 select: sfx("sfxevent_select"),
                 mv: sfx("sfxevent_move"),
                 attack: sfx("sfxevent_attack"),
-                death: sfx("death_explosion_sfxevent"),
+                // `Death_SFXEvent_Start_Die` is the common tag (375 unit files); `Death_Explosion_SFXEvent` the older one.
+                death: sfx("death_sfxevent_start_die").or_else(|| sfx("death_explosion_sfxevent")),
                 hardpoint_destroyed: sfx("sfxevent_hardpoint_destroyed"),
                 ability: sfx("sfxevent_gui_unit_ability_activated"),
                 fire: sfx("sfxevent_fire"),

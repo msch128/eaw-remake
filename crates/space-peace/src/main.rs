@@ -10,6 +10,7 @@ mod cli;
 mod flow;
 mod galaxy_map;
 mod hero_heads;
+mod ui_sounds;
 mod planet_view;
 mod galaxy_models;
 mod input_test;
@@ -177,6 +178,7 @@ fn main() {
         .add_systems(Startup, game::replay_startup_log)
         .add_plugins(input_test::plugin)
         .add_plugins(hero_heads::HeroHeadsPlugin)
+        .add_plugins(ui_sounds::UiSoundsPlugin)
         .add_plugins(planet_view::PlanetViewPlugin)
         .add_plugins(galaxy_models::GalaxyModelsPlugin)
         .add_plugins((

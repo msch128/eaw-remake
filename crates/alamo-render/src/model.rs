@@ -637,7 +637,9 @@ fn load_model(p: &mut LoaderParams, key: &str) -> Result<Arc<CachedModel>, Strin
                 material.params.flags |= crate::material::FLAG_SHADOWS;
             }
             if material.base.is_none() && sub.material.texture("BaseTexture").is_some() {
-                material.base = Some(p.textures.fallback(&mut p.images));
+                // Additive shaders (sky, glows) get black, lit surfaces a neutral grey so a hull never turns black.
+                let additive = sub.material.shader.to_ascii_lowercase().contains("additive");
+                material.base = Some(p.textures.fallback(&mut p.images, additive));
             }
             let handle = p.meshes.add(build_mesh(sub));
             parts.push(CachedPart {

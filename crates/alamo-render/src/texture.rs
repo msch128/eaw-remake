@@ -186,6 +186,7 @@ pub fn solid(rgba: [u8; 4]) -> Image {
 pub struct TextureCache {
     by_name: HashMap<String, Option<Handle<Image>>>,
     fallback: Option<Handle<Image>>,
+    fallback_grey: Option<Handle<Image>>,
     /// Names that could not be loaded (for diagnostics).
     pub missing: Vec<String>,
 }
@@ -230,12 +231,11 @@ impl TextureCache {
         }
         self.by_name.insert(key, image.map(|i| images.add(i)));
     }
-
-    /// Neutral black placeholder for textures that cannot be loaded (never a loud colour in the game; the miss is logged).
-    pub fn fallback(&mut self, images: &mut Assets<Image>) -> Handle<Image> {
-        self.fallback
-            .get_or_insert_with(|| images.add(solid([0, 0, 0, 255])))
-            .clone()
+    /// Neutral placeholder for textures that cannot be loaded: black for additive (sky, glow) shaders, mid grey
+    /// otherwise, never a loud colour (the miss is logged).
+    pub fn fallback(&mut self, images: &mut Assets<Image>, black: bool) -> Handle<Image> {
+        let slot = if black { &mut self.fallback } else { &mut self.fallback_grey };
+        slot.get_or_insert_with(|| images.add(solid(if black { [0, 0, 0, 255] } else { [128, 128, 128, 255] }))).clone()
     }
 
     /// Number of distinct textures requested so far.
