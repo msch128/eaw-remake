@@ -129,9 +129,12 @@ pub fn ui_block(
     mut block: ResMut<UiBlock>,
     nodes: Query<(Entity, &ComputedNode, &UiGlobalTransform, &InheritedVisibility, Option<&ImageNode>, Option<&BackgroundColor>, Option<&Interaction>)>,
     images: Res<Assets<Image>>,
+    camera: Single<&Camera, With<BattleCamera>>,
     parents: Query<&ChildOf>,
     overlay_roots: Query<(), With<eaw_ui::TacticalOverlayRoot>>,
 ) {
+    // Node transforms are in physical pixels of the camera target (UI scale only changes node sizes).
+    let target_scale = camera.target_scaling_factor().unwrap_or(1.0);
     let mut hit = false;
     let mut by = None;
     if let Some(cursor) = pointer.cursor {
@@ -140,7 +143,7 @@ pub fn ui_block(
                 continue;
             }
             let visual = image.is_some() || interaction.is_some() || bg.is_some_and(|b| b.0.alpha() > 0.01);
-            let point = cursor / node.inverse_scale_factor().max(1e-4);
+            let point = cursor * target_scale;
             if !visual || !node.contains_point(*gt, point) {
                 continue;
             }

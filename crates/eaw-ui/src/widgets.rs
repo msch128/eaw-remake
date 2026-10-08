@@ -387,10 +387,13 @@ pub fn spawn_shell(world: &mut World, spec: &ShellSpec) -> Option<Entity> {
     // Components in draw order (z, then base layer). Components far outside the art belong to
     // other panels (e.g. the ground filters below the galactic bar).
     let mut items: Vec<_> = layout.order.iter().filter_map(|n| layout.item(n)).collect();
+    // The droid's rectangle overlaps the pause / fast-forward buttons: it is built first so that they stay on top of it
+    // (the press goes to the topmost button only).
+    let z = |name: &str, z: f32| if name.to_lowercase().starts_with("b_droid_help") { f32::MIN } else { z };
     items.sort_by(|a, c| {
         let la = b.db.get(&a.name).map_or(0, |d| d.base_layer);
         let lc = b.db.get(&c.name).map_or(0, |d| d.base_layer);
-        a.z.total_cmp(&c.z).then(la.cmp(&lc))
+        z(&a.name, a.z).total_cmp(&z(&c.name, c.z)).then(la.cmp(&lc))
     });
     for item in items {
         if is_ground_component(&item.name.to_lowercase()) {
@@ -446,7 +449,7 @@ impl Builder<'_> {
     fn credit_icon(&mut self) -> Option<UiTexture> {
         let mut raw = self.textures.library().load("i_icon_credit.tga")?;
         // The symbol is drawn in the colour channels (yellow on black); it becomes the alpha of a white image.
-        for px in raw.pixels.chunks_exact_mut(4) {
+        for px in raw.pixels.as_chunks_mut::<4>().0 {
             let lum = px[0].max(px[1]).max(px[2]);
             px[3] = (u16::from(lum) * u16::from(px[3]) / 255) as u8;
             px[..3].fill(255);
@@ -939,10 +942,10 @@ impl Builder<'_> {
             };
             // Prices and counts are white in the original whatever the component says, and larger than the default.
             let l = self.text_layer(button, size, def, "", label_off, Color::srgb(0.93, 0.95, 0.98));
-            if let Some(mut font) = self.world.entity_mut(l).get_mut::<TextFont>() {
-                if let FontSize::Px(px) = font.font_size {
-                    font.font_size = FontSize::Px(px * 1.25);
-                }
+            if let Some(mut font) = self.world.entity_mut(l).get_mut::<TextFont>()
+                && let FontSize::Px(px) = font.font_size
+            {
+                font.font_size = FontSize::Px(px * 1.25);
             }
             self.world.entity_mut(l).insert(SlotPart::Label);
             if s.kind == SlotKind::Pad {

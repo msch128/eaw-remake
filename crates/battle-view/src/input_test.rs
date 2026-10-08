@@ -77,6 +77,7 @@ fn drive(
         Commands,
     ),
 ) {
+    let sf = camera.0.target_scaling_factor().unwrap_or(1.0);
     let (block, pointer, hover, names, all_nodes, battle_cam, mouse, ui_stack, interactions, cams, mut diag_commands) = diag;
     st.orders += orders.read().count() as u32;
     for c in clicks.read() {
@@ -107,7 +108,7 @@ fn drive(
             if let Some(c) = pointer.cursor {
                 info!("input-test:   battle camera {:?}", battle_cam.iter().collect::<Vec<_>>());
                 for (e, n, g, v, img, inter, bg, fp, cam, z) in &all_nodes {
-                    if n.size().x > 0.0 && n.contains_point(*g, c / n.inverse_scale_factor()) {
+                    if n.size().x > 0.0 && n.contains_point(*g, c * sf) {
                         info!("input-test:     node {:?} vis {} image {} interaction {:?} focus {:?} z {:?} camera {:?} bg {:?} size {:?}", names.get(e).ok().map(|n| n.as_str().to_string()), v.get(), img, inter, fp, z.map(|z| z.0), cam.get(), bg.map(|b| b.0.alpha()), n.size());
                     }
                 }
@@ -190,13 +191,23 @@ fn drive(
         }
         // 3: click a command bar button: it fires and the selection survives.
         3 => {
+            // Buttons whose centre is covered by another button are skipped (their click would go to the other one).
+            let centres: Vec<(String, Vec2, Vec2)> = bar.iter().filter(|r| r.4.get() && r.2.size().x > 4.0).map(|r| (r.0.name.clone(), r.3.translation, r.2.size())).collect();
+            let covered = |name: &str, c: Vec2| {
+                centres.iter().any(|(o, oc, os)| o != name && (c.x - oc.x).abs() < os.x * 0.5 && (c.y - oc.y).abs() < os.y * 0.5)
+            };
+            if t == 0 {
+                let overlaps: Vec<String> = centres.iter().filter(|(n, c, _)| covered(n, *c)).map(|(n, ..)| n.clone()).collect();
+                info!("input-test:   bar buttons whose centre lies under another button: {overlaps:?}");
+            }
             let target = bar
                 .iter()
+                .filter(|(b, _, n, g, v, _)| v.get() && n.size().x > 4.0 && !covered(&b.name, g.translation))
                 .filter(|(b, st, n, _, v, _)| {
                     !st.disabled && v.get() && n.size().x > 4.0 && n.size().y > 4.0 && b.name.starts_with("b_") && !b.name.contains("droid") && !b.name.contains("retreat") && !b.name.contains("reinforce")
                 })
                 .min_by_key(|(b, ..)| (b.name.contains("camera") || b.name.contains("droid"), !(b.name.contains("stop") || b.name.contains("move") || b.name.contains("attack")), b.name.clone()))
-                .map(|(b, _, n, g, _, _)| (b.name.clone(), g.translation * n.inverse_scale_factor()));
+                .map(|(b, _, _, g, _, _)| (b.name.clone(), g.translation / sf));
             if t == 0 {
                 let all: Vec<String> = bar.iter().filter(|r| r.4.get() && r.2.size().x > 4.0).map(|r| format!("{}({}x{} dis {})", r.0.name, r.2.size().x, r.2.size().y, r.1.disabled)).collect();
                 info!("input-test:   visible bar buttons: {all:?}");

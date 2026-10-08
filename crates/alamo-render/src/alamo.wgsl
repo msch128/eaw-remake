@@ -100,7 +100,10 @@ fn fill_light(n: vec3<f32>) -> vec3<f32> {
     let count = min(lights.n_directional_lights, 3u);
     for (var i = 1u; i < count; i = i + 1u) {
         let l = lights.directional_lights[i];
-        sum += l.color.rgb * view.exposure * saturate(dot(n, normalize(l.direction_to_light)));
+        // The original bakes the fill lights into spherical harmonics, a smooth wrap-around term: use a
+        // half-wrapped cosine so surfaces turned away from the light keep a little of it.
+        let c = dot(n, normalize(l.direction_to_light));
+        sum += l.color.rgb * view.exposure * saturate((c + 0.5) / 1.5);
     }
     return sum;
 }

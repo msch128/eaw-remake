@@ -201,6 +201,7 @@ pub fn update_ships(
     mut touch: ModelTouch,
     mut views: Query<(&mut ShipView, &mut Transform), Without<Dying>>,
     arrivals: Query<&HyperspaceArrival>,
+    mut flash_spots: Local<Vec<Vec3>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
@@ -211,6 +212,7 @@ pub fn update_ships(
     let visuals = rt.visuals.clone();
     let catalog = rt.catalog.clone();
     let mut present: HashSet<u32> = HashSet::with_capacity(cur.ships.len());
+    flash_spots.clear();
     rendered.0.clear();
     for s in &cur.ships {
         let def = catalog.ship(s.def);
@@ -258,7 +260,14 @@ pub fn update_ships(
                 let lead = if std::env::var_os("SP_FORCE_ARRIVAL").is_some() { 4.0 } else { 0.0 };
                 if cur.time > 2.0 || lead > 0.0 {
                     commands.entity(e).insert(HyperspaceArrival { start: cur.time + lead });
-                    let radius = (def.radius * vis.scale.max(1.0)).max(40.0);
+                    let fighter = matches!(def.class, TargetClass::Fighter | TargetClass::Bomber);
+                    // One flash per squadron: a fighter arriving next to another fighter that already got one shares it.
+                    let shared = fighter && flash_spots.iter().any(|p| p.distance(pos) < 900.0);
+                    if fighter && !shared {
+                        flash_spots.push(pos);
+                    }
+                    let radius = if fighter { 220.0 } else { (def.radius * vis.scale.max(1.0)).max(40.0) };
+                    if !shared {
                     commands.spawn((
                         Name::new("hyperspace flash"),
                         BattleEntity,
@@ -273,6 +282,7 @@ pub fn update_ships(
                         Visibility::Hidden,
                         ArrivalFlash { at: cur.time + lead + ARRIVAL_SECONDS * 0.85, radius: radius * 0.45 },
                     ));
+                    }
                 }
                 rt.entities.insert(s.id, e);
                 e
