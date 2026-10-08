@@ -239,3 +239,21 @@ fn the_snapshot_gives_the_fog_of_war_of_a_faction() {
     assert!(sight.fleets.len() < total, "some fleets are in the fog: {} of {total}", sight.fleets.len());
     assert!(snap.galaxy.fleets.values().filter(|f| f.owner == rebel).all(|f| sight.fleets.get(&f.id) == Some(&galaxy_sim::Sight::Detailed)));
 }
+
+#[test]
+fn route_plans_to_the_fleets_own_planet_and_a_neighbour_do_not_panic() {
+    // A route preview while hovering the selected fleet's own planet once panicked (empty slice range).
+    let Some(data) = load() else { return };
+    let sim = new_sim(&data, 1);
+    let w = sim.world().clone();
+    let g = sim.galaxy();
+    let rebel = w.faction_id("Rebel").unwrap();
+    let home = g.owned_planets(rebel).next().expect("a rebel planet");
+    let own = galaxy_play::geometry::plan_route(&w, g, rebel, 1.0, home, home).expect("path to itself");
+    assert_eq!(own.path, vec![home]);
+    assert!(own.blockades.is_empty());
+    let next = w.adjacency[home as usize].first().expect("a neighbour").0;
+    let hop = galaxy_play::geometry::plan_route(&w, g, rebel, 1.0, home, next).expect("one hop");
+    assert_eq!(hop.path.len(), 2);
+    assert!(hop.blockades.is_empty());
+}

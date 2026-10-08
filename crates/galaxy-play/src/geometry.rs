@@ -169,7 +169,9 @@ pub fn plan_route(world: &World, galaxy: &Galaxy, owner: u32, speed: f32, from: 
         let r = &world.routes[world.route_between(w[0], w[1])? as usize];
         eta += r.length / (speed * r.hs_factor).max(1e-3);
     }
-    let blockades = path[1..path.len().saturating_sub(1)].iter().copied().filter(|&p| world.blockades(galaxy, p, owner)).collect();
+    // Intermediate planets only; a one-planet path (hovering the fleet's own planet) has none.
+    let inner = if path.len() > 2 { &path[1..path.len() - 1] } else { &[][..] };
+    let blockades = inner.iter().copied().filter(|&p| world.blockades(galaxy, p, owner)).collect();
     Some(RoutePlan { path, eta_seconds: eta, blockades })
 }
 
