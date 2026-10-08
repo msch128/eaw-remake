@@ -466,7 +466,8 @@ fn fleets_advance_line_abreast_and_stay_together() {
 
 #[test]
 fn bombers_make_straight_bombing_runs_on_big_ships() {
-    let bomber = mobile("bomber", TargetClass::Bomber, 400.0, 100.0, vec![]);
+    let mut bomber = mobile("bomber", TargetClass::Bomber, 400.0, 100.0, vec![]);
+    bomber.radius = 10.0; // a real fighter; the hull keep-out of big ships scales with it
     let target = ship("capital", 1.0e7, 0.0, vec![]);
     let cat = Arc::new(Catalog::from_defs(vec![bomber, target], vec![laser()]));
     let mut b = Battle::new(BattleSetup { catalog: cat.clone(), sides: vec![one_side(&cat, "bomber", 1, true), one_side(&cat, "capital", 1, true)], config: BattleConfig { half_size: 12000.0, record_events: false, ..BattleConfig::default() } });

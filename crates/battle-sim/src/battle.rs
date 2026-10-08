@@ -17,6 +17,9 @@ pub const NONE: u32 = u32::MAX;
 pub struct BattleConfig {
     /// Fixed time step in seconds (default 1/30).
     pub dt: f32,
+    /// Big ships plan paths around rocks and stations and steer around hulls, fighters keep out of hulls (default on; off = the old
+    /// behaviour of only being pushed out of overlaps, kept for comparisons).
+    pub navigation: bool,
     /// Half size of the square battle area.
     pub half_size: f32,
     /// RNG seed.
@@ -70,6 +73,7 @@ impl Default for BattleConfig {
     fn default() -> Self {
         Self {
             dt: 1.0 / 30.0,
+            navigation: true,
             half_size: 10_000.0,
             seed: 1,
             record_events: true,
@@ -510,6 +514,11 @@ pub struct Ship {
     pub shield_lock: f32,
     /// Tractor beam speed reduction currently applied to this ship (0..1).
     pub tractor_cut: f32,
+    /// Planned route of a big ship that is going somewhere: the waypoints still ahead, the last one being the destination. Empty when the
+    /// ship is not moving to a place or the straight line is clear.
+    pub path: Vec<Vec3>,
+    pub(crate) path_goal: Vec3,
+    pub(crate) path_age: f32,
     /// Ion stun seconds left.
     pub stun: f32,
     /// Ion speed reduction fraction while stunned.
@@ -628,6 +637,8 @@ pub struct Battle {
     /// Super laser shots on their way: shooter, target, firing time.
     pub(crate) lasers: Vec<(u32, u32, f32)>,
     pub(crate) zones: Vec<(u8, Vec3, f32, f32, f32)>,
+    /// Distance field of rocks and stations for path planning (`None` without navigation or obstacles).
+    pub(crate) nav_grid: Option<crate::nav::NavGrid>,
     /// Per side: `(search point index, time it was set)` of the AI search for hidden enemies.
     pub(crate) search: Vec<(u32, f32)>,
 }

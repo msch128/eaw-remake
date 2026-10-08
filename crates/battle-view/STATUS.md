@@ -206,3 +206,9 @@ Add `battle-view`, `galaxy-sim` (already there through galaxy-play) and `eaw-ui`
 - Hotkeys: Shift + 1..6 press the ability buttons of the focused unit (the data has none; plain digits stay control groups). Autocast toggles are not implemented (no state for it in battle-sim).
 - Tests: `ability-hotkey` in `input_test` only runs for real when the selected unit has an ability (it is vacuous in the Hoth smoke scenario); the targeting cursor has no automated test yet.
 - Esc (host decision, `space-peace::battle_play::battle_menu`): cancels an armed order / targeting first; with nothing armed it opens the Resume / Retreat menu, which pauses the battle clock while open (the player's own pause is restored on close). `control::orders` no longer reads Esc. `input_test` steps `escape ArmedCleared / Paused(true) / Paused(false)` (25 checks).
+
+## Tactical round 5: move lines
+- `ShipSnap::order` / `ShipRender::order` (sim `Order`) feed `control::overlays`: every selected ship of the player, and every ship ordered in the last 3 s (`RecentOrders`), draws a thin line to its destination
+  (Move / Guard green, AttackMove yellow, Attack red to the target), fading along its length (`line_gradient`, 16 segments), plus a double ring at the destination (30 px radius at any zoom, one per destination).
+  A squadron shows one line (its first fighter). The line is straight until battle-sim exposes the planned path (`Ship::path_*` exist but are not in the snapshot yet): then replace the `s.pos -> dest` segment by the waypoints.
+- `control::MoveLines` records what was drawn; `input_test` step `move-line-and-ring` (26 checks) right-clicks the ground and expects a line and a ring.

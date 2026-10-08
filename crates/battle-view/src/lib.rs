@@ -408,6 +408,8 @@ impl Plugin for BattleViewPlugin {
             .init_resource::<Pointer>()
             .init_resource::<Hover>()
             .init_resource::<OrderMarkers>()
+            .init_resource::<control::RecentOrders>()
+            .init_resource::<control::MoveLines>()
             .init_resource::<control::Drag>()
             .init_resource::<control::UiBlock>()
             .init_resource::<control::ArmedOrder>()

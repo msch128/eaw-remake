@@ -185,6 +185,7 @@ impl Battle {
             reveals: Vec::new(),
             zones: Vec::new(),
             lasers: Vec::new(),
+            nav_grid: None,
             search: vec![(0, 0.0); sides.len()],
             sides,
             ships: Vec::new(),
@@ -207,6 +208,18 @@ impl Battle {
         }
         b.launch_initial();
         b.check_over();
+        // Rocks and stations do not move: one distance field serves the whole battle.
+        if b.config.navigation {
+            let cat = b.catalog.clone();
+            let blockers: Vec<crate::nav::Blocker> = b
+                .config
+                .arena
+                .iter()
+                .flat_map(|a| a.obstacles.iter().map(|o| crate::nav::Blocker { pos: o.pos, radius: o.radius }))
+                .chain(b.ships.iter().filter(|s| cat.ship(s.def).is_static).map(|s| crate::nav::Blocker { pos: s.pos, radius: cat.ship(s.def).radius * 0.75 * 0.9 }))
+                .collect();
+            b.nav_grid = crate::nav::NavGrid::build(b.config.half_size, 250.0, &blockers);
+        }
         b
     }
 
@@ -374,6 +387,9 @@ impl Battle {
             reserve: def.reserve.clone(),
             abilities: vec![AbilityState { active: 0.0, cooldown: 0.0, target: NONE }; def.abilities.len()],
             tractor_cut: 0.0,
+            path: Vec::new(),
+            path_goal: Vec3::ZERO,
+            path_age: 1.0e9,
             since_hit: 1.0e3,
             shield_lock: 0.0,
             stun: 0.0,
@@ -829,6 +845,8 @@ impl Battle {
         let obstacles: &[crate::arena::Obstacle] = arena.as_ref().map_or(&[], |a| a.obstacles.as_slice());
         // Mobile ships that keep each other apart (fighters and stations excluded).
         let big: Vec<u32> = self.ships.iter().filter(|s| s.alive && !s.retreated && !cat.ship(s.def).is_static && !matches!(cat.ship(s.def).class, TargetClass::Fighter | TargetClass::Bomber)).map(|s| s.id).collect();
+        // Hulls that block big ships: every big ship and station (the last two lists are used for steering and for keeping fighters out of hulls).
+        let hulls: Vec<u32> = if cfg.navigation { self.ships.iter().filter(|s| s.alive && !s.retreated && !matches!(cat.ship(s.def).class, TargetClass::Fighter | TargetClass::Bomber)).map(|s| s.id).collect() } else { big.clone() };
         let squad_leaders: Vec<u32> = self
             .squads
             .iter()
@@ -841,7 +859,7 @@ impl Battle {
                 }
                 scan(s, &snaps, &cat, &cfg);
                 let mut rng = Rng::for_entity(cfg.seed, tick, s.id, 0x30FE);
-                mov(s, &snaps, &cat, &cfg, &spawn, &squad_leaders, obstacles, &big, &mut rng);
+                mov(s, &snaps, &cat, &cfg, &spawn, &squad_leaders, obstacles, &big, &Nav { grid: self.nav_grid.as_ref(), hulls: &hulls }, &mut rng);
             };
             if par && self.ships.len() > 16 {
                 self.ships.par_iter_mut().for_each(work);
@@ -1779,7 +1797,16 @@ fn align_to_target(s: &mut Ship, def: &ShipDef, tpos: Vec3, dt: f32) {
 
 /// Movement controller.
 #[allow(clippy::too_many_arguments)]
-fn mov(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, spawn: &[Vec3], leaders: &[u32], obstacles: &[crate::arena::Obstacle], big: &[u32], rng: &mut Rng) {
+/// What a big ship navigates around.
+struct Nav<'a> {
+    /// Distance field of rocks and stations a path goes around.
+    grid: Option<&'a crate::nav::NavGrid>,
+    /// All big ships and stations (ids), for local steering and for keeping fighters out of hulls.
+    hulls: &'a [u32],
+}
+
+#[allow(clippy::too_many_arguments)]
+fn mov(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, spawn: &[Vec3], leaders: &[u32], obstacles: &[crate::arena::Obstacle], big: &[u32], nav: &Nav, rng: &mut Rng) {
     let def = cat.ship(s.def);
     if def.is_static {
         return;
@@ -1888,6 +1915,9 @@ fn mov(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, spawn: &
     } else {
         max_speed
     };
+    if !matches!(goal, Goal::Point(..)) {
+        s.path.clear();
+    }
     match goal {
         Goal::Free(yaw) => {
             let rate = def.turn_rate;
@@ -1899,18 +1929,57 @@ fn mov(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, spawn: &
             }
         }
         Goal::Point(p, stop) => {
+            // A place inside a rock is approached to the rock's edge.
+            let p = match nav.grid {
+                Some(g) if !fighter && target.is_none_or(|t| t.pos.dist(p) > 1.0) => g.free_point(p, def.radius * 0.75 + 40.0),
+                _ => p,
+            };
             let to = p - s.pos;
             let dist = to.len();
-            let desired = to.y.atan2(to.x);
+            // Big ships follow a planned path around rocks and stations and steer around the hulls ahead of them.
+            let mut aim = p;
+            let mut slow = 1.0;
+            let mut avoid = (0.0f32, 0.0f32);
+            if !fighter {
+                s.path_age += dt;
+                if s.path_age >= PATH_REPLAN_SECS || s.path_goal.dist(p) > 300.0 || s.path.is_empty() {
+                    s.path = nav.grid.map_or_else(|| vec![p], |g| g.plan(s.pos, p, def.radius * 0.75 + 40.0));
+                    s.path_goal = p;
+                    s.path_age = 0.0;
+                } else if let Some(last) = s.path.last_mut() {
+                    *last = p;
+                }
+                while s.path.len() > 1 && s.path[0].dist(s.pos) < def.radius.max(120.0) {
+                    s.path.remove(0);
+                }
+                if s.path.len() > 1 {
+                    aim = s.path[0];
+                }
+                let heading = (s.yaw.cos(), s.yaw.sin());
+                let lookahead = (s.speed * 4.0).max(def.radius * 2.0);
+                let hulls = nav.hulls.iter().filter(|&&j| j != s.id && j != s.target).map(|&j| crate::nav::Blocker { pos: snaps[j as usize].pos, radius: snaps[j as usize].radius });
+                let st = if cfg.navigation {
+                    crate::nav::steer_around(s.pos, heading, snaps[s.id as usize].radius, lookahead, hulls)
+                } else {
+                    crate::nav::Steer { avoid: (0.0, 0.0), slow: 1.0 }
+                };
+                avoid = st.avoid;
+                slow = st.slow;
+            } else {
+                s.path.clear();
+            }
+            let to_aim = aim - s.pos;
+            let unit = to_aim.normalized();
+            let desired = (unit.y + avoid.1).atan2(unit.x + avoid.0);
             let err = turn_towards(s, desired, def.turn_rate, dt);
             let braking = s.speed * s.speed / (2.0 * def.accel.max(1.0));
-            let mut want = max_speed;
+            let mut want = max_speed * slow;
             if err > 1.2 {
                 want *= 0.35;
             } else if err > 0.5 {
                 want *= 0.7;
             }
-            if dist <= stop + braking * 0.8 && !fighter {
+            if dist <= stop + braking * 0.8 && !fighter && aim == p {
                 want = 0.0;
             }
             s.speed += (want - s.speed).clamp(-def.accel * dt * 1.5, def.accel * dt);
@@ -1942,20 +2011,40 @@ fn mov(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, spawn: &
     if !fighter {
         let me = snaps[s.id as usize];
         let cap = def.max_speed.max(60.0) * dt;
-        for &j in big {
+        for &j in nav.hulls {
             if j == s.id {
                 continue;
             }
             let o = &snaps[j as usize];
+            let fixed = cat.ship(o.def).is_static;
             let min = (me.radius + o.radius) * 0.85;
             let (dx, dy) = (s.pos.x - o.pos.x, s.pos.y - o.pos.y);
             if dx.abs() < min && dy.abs() < min {
                 let d = (dx * dx + dy * dy).sqrt();
                 if d < min {
                     let (ux, uy) = if d > 1e-3 { (dx / d, dy / d) } else { (1.0 - 2.0 * f32::from(s.id as u8 & 1), 0.0) };
-                    let push = ((min - d) * 0.5).min(cap);
+                    let push = ((min - d) * if fixed { 1.0 } else { 0.5 }).min(cap);
                     s.pos.x += ux * push;
                     s.pos.y += uy * push;
+                }
+            }
+        }
+    }
+    // Fighters fly almost anywhere but not through a hull (their own carrier excepted, they dock there).
+    if fighter && cfg.navigation {
+        for &j in nav.hulls {
+            if j == s.carrier {
+                continue;
+            }
+            let o = &snaps[j as usize];
+            let min = o.radius * 0.45 + def.radius;
+            let (dx, dy) = (s.pos.x - o.pos.x, s.pos.y - o.pos.y);
+            if dx.abs() < min && dy.abs() < min {
+                let d = (dx * dx + dy * dy).sqrt();
+                if d < min {
+                    let (ux, uy) = if d > 1e-3 { (dx / d, dy / d) } else { (1.0, 0.0) };
+                    s.pos.x += ux * (min - d);
+                    s.pos.y += uy * (min - d);
                 }
             }
         }
@@ -2294,3 +2383,6 @@ fn search_point(n: u32, enemy_start: Vec3, half: f32) -> Vec3 {
         _ => Vec3::new(half * 0.5, -half * 0.5, 0.0),
     }
 }
+
+/// Seconds between replans of a moving big ship's path (also replanned when its destination moves).
+const PATH_REPLAN_SECS: f32 = 0.5;

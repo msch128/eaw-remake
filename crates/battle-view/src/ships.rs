@@ -77,6 +77,8 @@ pub struct ShipRender {
     pub squad: u32,
     /// The player's side sees this ship (false for enemies in the fog of war).
     pub visible: bool,
+    /// Current order (sim space).
+    pub order: battle_sim::Order,
     /// Hardpoint alive flags.
     pub hp_alive: Vec<bool>,
     /// Hardpoint health fractions 0..1.
@@ -390,6 +392,7 @@ pub fn update_ships(
                 shield: shield_frac,
                 squad: s.squad,
                 visible,
+                order: s.order,
                 hp_alive,
                 hp_health,
             },

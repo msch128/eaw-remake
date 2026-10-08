@@ -63,6 +63,10 @@ enum Step {
     AbilityHotkey,
     /// Esc: cancels the armed order first, then opens the (pausing) menu, then closes it.
     Escape(EscCheck),
+    /// After a move order the selected ship shows a line to its destination and a ring there.
+    MoveLineVisible,
+    /// Hover a ship, then one of its hardpoint reticles: the weapon tooltip must show.
+    HardpointTooltip,
 }
 
 /// What an Esc press must have caused.
@@ -72,9 +76,11 @@ enum EscCheck {
     Paused(bool),
 }
 
-const STEPS: [Step; 25] = [
+const STEPS: [Step; 27] = [
     Step::SelectShip,
     Step::RightClickGround,
+    Step::MoveLineVisible,
+    Step::HardpointTooltip,
     Step::RightClickEnemyRim,
     Step::PlainButton,
     Step::Button("b_fast_forward_t", Check::SpeedIs(2.0)),
@@ -116,6 +122,7 @@ struct TestState {
     place_world: Option<Vec3>,
     /// Camera yaw / pitch at the start and after the horizontal part of a drag.
     ability_clicks: u32,
+    hp_marker: Option<Vec2>,
     cam0: (f32, f32),
     cam1: (f32, f32),
     reserve_before: u32,
@@ -148,6 +155,7 @@ fn drive(
     mut clicks: MessageReader<EawButtonClicked>,
     bar: Query<(&EawButton, &EawButtonState, &ComputedNode, &UiGlobalTransform, &InheritedVisibility)>,
     mut exit: MessageWriter<AppExit>,
+    hp_ui: (Res<eaw_ui::TacticalOverlays>, Query<&Node, With<crate::hud::HardpointTip>>),
     extra: (
         Res<UiBlock>,
         Res<Pointer>,
@@ -164,9 +172,10 @@ fn drive(
         MessageWriter<KeyboardInput>,
         Res<eaw_ui::TacticalData>,
         MessageReader<eaw_ui::EawAbilityClicked>,
+        Res<crate::control::MoveLines>,
     ),
 ) {
-    let (block, pointer, hover, names, all_nodes, interactions, mut commands, action, armed, reinforce, cams, mut motion, mut keyboard, tactical, mut ability_clicks) = extra;
+    let (block, pointer, hover, names, all_nodes, interactions, mut commands, action, armed, reinforce, cams, mut motion, mut keyboard, tactical, mut ability_clicks, move_lines) = extra;
     st.ability_clicks += ability_clicks.read().count() as u32;
     let cam_pose = cams.single().map(|c| (c.target_yaw, c.pitch)).unwrap_or_default();
     let (cam_entity, cam, gt) = *camera;
@@ -392,6 +401,52 @@ fn drive(
             }
             _ => {}
         },
+        Step::HardpointTooltip => {
+            let (overlays, tips) = hp_ui;
+            match t {
+                0 => {
+                    // The biggest ship on screen that has hardpoints a reticle can mark.
+                    let pick = ships
+                        .0
+                        .values()
+                        .filter(|s| s.visible && rt.catalog.ship(s.def).hardpoints.iter().any(|h| h.destroyable && crate::visuals::is_markable(h.kind)))
+                        .filter_map(|s| cam.world_to_viewport(gt, s.pos).ok().map(|p| (s.radius, p)))
+                        .filter(|(_, p)| p.x > vp.x * 0.1 && p.x < vp.x * 0.9 && p.y > vp.y * 0.1 && p.y < vp.y * 0.78)
+                        .max_by(|a, b| a.0.total_cmp(&b.0));
+                    match pick {
+                        Some((_, p)) => act = Some(Act::Move(p)),
+                        None => {
+                            info!("input-test:   {} ships, {} with markable hardpoints", ships.0.len(), ships.0.values().filter(|s| rt.catalog.ship(s.def).hardpoints.iter().any(|h| h.destroyable && crate::visuals::is_markable(h.kind))).count());
+                            verdict = Some(("hardpoint-tooltip (no ship with hardpoints on screen)".into(), false));
+                        }
+                    }
+                }
+                10 => {
+                    st.hp_marker = overlays.hardpoints.first().map(|h| h.screen_pos);
+                    match st.hp_marker {
+                        Some(p) => act = Some(Act::Move(p)),
+                        None => verdict = Some(("hardpoint-tooltip: no reticle appeared while hovering the ship".into(), false)),
+                    }
+                }
+                30 => {
+                    let shown = tips.iter().any(|n| n.display != Display::None);
+                    if !shown {
+                        info!("input-test:   reticle at {:?}, cursor {:?}, markers {}", st.hp_marker, pointer.cursor, overlays.hardpoints.len());
+                    }
+                    verdict = Some(("hardpoint-tooltip".into(), shown));
+                }
+                _ => {}
+            }
+        }
+        Step::MoveLineVisible => {
+            // The order reaches the sim with its next step, so give it a moment.
+            if t >= 5 && !move_lines.lines.is_empty() && !move_lines.rings.is_empty() {
+                verdict = Some(("move-line-and-ring".into(), true));
+            } else if t >= 120 {
+                info!("input-test:   move lines {:?}", *move_lines);
+                verdict = Some(("move-line-and-ring".into(), false));
+            }
+        }
         Step::Escape(check) => match t {
             0 => act = Some(Act::KeyDown(KeyCode::Escape, Key::Escape)),
             1 => act = Some(Act::KeyUp(KeyCode::Escape, Key::Escape)),

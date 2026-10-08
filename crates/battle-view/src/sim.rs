@@ -43,6 +43,11 @@ pub struct ShipSnap {
     pub squad: u32,
     /// Bit s set = side s sees this ship (fog of war; everything is seen without it).
     pub seen_by: u8,
+    /// Current order (destination of the move line).
+    pub order: battle_sim::Order,
+    /// Planned route of a big ship on the move: the waypoints still ahead in sim space, the last being the destination. Empty when the
+    /// ship is not going to a place. Draw the move line from the ship through these points.
+    pub path: Vec<Vec3>,
     /// Hardpoint states (empty for fighters).
     pub hps: Vec<HpSnap>,
     /// Ability state per ability of the definition: (seconds of effect left, seconds until usable).
@@ -115,6 +120,8 @@ fn snapshot(battle: &Battle, events: Vec<Event>, step_ms: f32) -> Snapshot {
                 hull: s.hull,
                 shield: s.shield,
                 squad: s.squad,
+                order: s.order,
+                path: s.path.clone(),
                 seen_by: (0..battle.side_count().min(8)).filter(|&side| battle.is_visible_to(side as u8, s.id)).fold(0u8, |m, side| m | (1 << side)),
                 hps: s
                     .hps

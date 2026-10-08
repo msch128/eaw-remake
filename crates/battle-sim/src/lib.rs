@@ -28,6 +28,7 @@ mod arena;
 mod battle;
 mod defs;
 mod math;
+pub mod nav;
 mod rng;
 mod sim;
 

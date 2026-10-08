@@ -116,6 +116,22 @@ pub struct Drag {
 /// Two clicks on the same ship within this time count as a double click. Estimate (the engine value is not in the data).
 const DOUBLE_CLICK_SECONDS: f32 = 0.4;
 
+/// Ships that were ordered lately and the seconds their move line stays up (selected ships always show theirs).
+#[derive(Resource, Default)]
+pub struct RecentOrders(pub std::collections::HashMap<u32, f32>);
+
+/// What the move lines drew this frame (for tests): line start / end per ship and the destination rings.
+#[derive(Resource, Default, Debug, Clone)]
+pub struct MoveLines {
+    /// Ship position and destination (Bevy space).
+    pub lines: Vec<(Vec3, Vec3)>,
+    /// Ring centres.
+    pub rings: Vec<Vec3>,
+}
+
+/// Seconds the move line of an ordered ship stays up after the order when it is not selected (estimate).
+const ORDER_LINE_SECONDS: f32 = 3.0;
+
 /// Marker flashes where orders were given.
 #[derive(Resource, Default)]
 pub struct OrderMarkers(Vec<(Vec3, f32, Color)>);
@@ -441,6 +457,7 @@ pub fn orders(
     mut issued: MessageWriter<OrderIssued>,
     block: Res<UiBlock>,
     mut armed: ResMut<ArmedOrder>,
+    mut recent: ResMut<RecentOrders>,
 ) {
     let player = settings.player_side;
     // Esc is handled by the host (space-peace battle_menu): it cancels an armed order first and only opens the menu when none is armed.
@@ -461,6 +478,10 @@ pub fn orders(
     let armed_click = armed.0.filter(|_| pointer.left_released && !block.0);
     if armed_click.is_none() && (!pointer.right_pressed || block.0) {
         return;
+    }
+    // Every ship that gets an order shows its move line for a moment (the order reaches the sim next step, the line follows it).
+    for &id in &mine {
+        recent.0.insert(id, ORDER_LINE_SECONDS + 0.3);
     }
     // Any enemy under the cursor, also when the click is on the outer part of a big model (station, capital ship).
     let enemy_target = hover.ship.filter(|id| ships.0.get(id).is_some_and(|s| s.side != player)).or_else(|| {
@@ -570,6 +591,8 @@ pub fn overlays(
     camera: Single<(&Camera, &GlobalTransform, &Projection), With<BattleCamera>>,
     mut gizmos: Gizmos,
     eaw_overlays: Option<Res<OverlaysActive>>,
+    mut recent: ResMut<RecentOrders>,
+    mut move_lines: ResMut<MoveLines>,
 ) {
     let gizmo_marks = eaw_overlays.is_none();
     let (cam, gt, projection) = *camera;
@@ -681,6 +704,53 @@ pub fn overlays(
                 }
             }
         }
+    }
+
+    // Move lines: from every selected or just ordered ship of the player to its destination (a straight line until the sim exposes
+    // the planned path), fading out towards the end, with a ring at the destination.
+    let dt_lines = time.delta_secs();
+    recent.0.retain(|_, t| {
+        *t -= dt_lines;
+        *t > 0.0
+    });
+    let mut listed: Vec<u32> = sel.ships.clone();
+    listed.extend(recent.0.keys().copied().filter(|id| !sel.ships.contains(id)));
+    let mut rings: Vec<(Vec3, Color)> = Vec::new();
+    let mut drawn: Vec<(Vec3, Vec3)> = Vec::new();
+    for id in listed {
+        let Some(s) = ships.0.get(&id).filter(|s| s.side == player && s.visible) else { continue };
+        // Ships only (corvettes, frigates, capitals): fighters and bombers show no line.
+        if s.squad != u32::MAX || matches!(rt.catalog.ship(s.def).class, battle_sim::TargetClass::Fighter | battle_sim::TargetClass::Bomber) {
+            continue;
+        }
+        let (dest, base) = match s.order {
+            battle_sim::Order::Move(d) | battle_sim::Order::Guard(d) => (crate::convert::sim_to_bevy(d), Color::srgb(0.35, 1.0, 0.4)),
+            battle_sim::Order::AttackMove(d) => (crate::convert::sim_to_bevy(d), Color::srgb(0.95, 0.9, 0.3)),
+            battle_sim::Order::Attack(t) => match ships.0.get(&t) {
+                Some(target) => (target.pos, Color::srgb(1.0, 0.35, 0.3)),
+                None => continue,
+            },
+            _ => continue,
+        };
+        if (dest - s.pos).length() < s.radius.max(40.0) {
+            continue;
+        }
+        drawn.push((s.pos, dest));
+        const SEGMENTS: usize = 16;
+        for k in 0..SEGMENTS {
+            let (t0, t1) = (k as f32 / SEGMENTS as f32, (k + 1) as f32 / SEGMENTS as f32);
+            let (a, b) = (s.pos.lerp(dest, t0), s.pos.lerp(dest, t1));
+            gizmos.line_gradient(a, b, base.with_alpha(0.9 * (1.0 - t0 * 0.8)), base.with_alpha(0.9 * (1.0 - t1 * 0.8)));
+        }
+        if !matches!(s.order, battle_sim::Order::Attack(_)) && !rings.iter().any(|(p, _)| p.distance(dest) < 30.0) {
+            rings.push((dest, base));
+        }
+    }
+    *move_lines = MoveLines { lines: drawn, rings: rings.iter().map(|r| r.0).collect() };
+    for (p, c) in rings {
+        let r = wpp(p) * 30.0 * scale;
+        gizmos.circle(Isometry3d::new(p, flat), r, c.with_alpha(0.9)).resolution(48);
+        gizmos.circle(Isometry3d::new(p, flat), r * 0.82, c.with_alpha(0.35)).resolution(48);
     }
 
     // Order flashes.
