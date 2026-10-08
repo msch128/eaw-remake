@@ -105,7 +105,7 @@ impl Plugin for PlayUiPlugin {
                     .chain()
                     .run_if(resource_exists::<PlayBridge>.and_then(resource_exists::<SimState>)),
             )
-            .add_systems(Update, (declutter_top, hero_bar, locked_clicks, spawn_planet_panel, update_planet_panel).chain().run_if(resource_exists::<PlayBridge>.and_then(resource_exists::<SimState>)))
+            .add_systems(Update, (declutter_top, hero_bar, locked_clicks, spawn_planet_panel, update_planet_panel, place_planet_panel, planet_view_ui).chain().run_if(resource_exists::<PlayBridge>.and_then(resource_exists::<SimState>)))
             .add_systems(Update, show_battle_summary.run_if(in_state(AppScreen::Galaxy)).run_if(resource_exists::<crate::battle_play::BattleSummary>))
             .add_systems(
                 Update,
@@ -1697,5 +1697,90 @@ fn update_planet_panel(
         if t.0 != s {
             t.0 = s;
         }
+    }
+}
+
+/// The planet view's orbit boxes: the original fleet organizer shell (`I_Galactic_Organize_New`: three framed boxes with
+/// unit and hero icons and xN counts) across the top, filled with the forces in orbit of the planet. The description panel
+/// ([`PlanetPanel`]) moves to the right side while the view is open.
+#[derive(Component)]
+struct OrbitBoxes;
+
+#[allow(clippy::too_many_arguments)]
+fn planet_view_ui(world: &mut World, mut last_key: Local<Option<(usize, u64)>>) {
+    let (active, blend, planet) = {
+        let s = world.resource::<crate::planet_view::PlanetViewState>();
+        (s.active, s.blend, s.planet)
+    };
+    let existing: Vec<Entity> = world.query_filtered::<Entity, With<OrbitBoxes>>().iter(world).collect();
+    if !active {
+        for e in existing {
+            world.entity_mut(e).despawn();
+        }
+        *last_key = None;
+        return;
+    }
+    let (Some(view_index), true) = (planet, blend > 0.8) else { return };
+    if world.get_resource::<EawUiAssets>().is_none() {
+        return;
+    }
+    // Forces in orbit, grouped by relation: box 1 the player's, box 2 others at war with the player, box 3 the rest.
+    let Some(sim_planet) = world.resource::<PlayBridge>().planet_to_sim.get(view_index).copied().flatten() else { return };
+    let faction = {
+        let state = world.resource::<SimState>();
+        ui_faction(state, world.resource::<PlayerFaction>())
+    };
+    let me = world.resource::<PlayerFaction>().0;
+    let mut boxes: [std::collections::BTreeMap<String, u32>; 3] = Default::default();
+    {
+        let state = world.resource::<SimState>();
+        for f in state.galaxy().fleets.values().filter(|f| f.planet() == Some(sim_planet)) {
+            let b = match me {
+                Some(m) if f.owner == m => 0,
+                Some(m) if state.galaxy().hostile(&state.world, m, f.owner) => 1,
+                _ => 2,
+            };
+            for (&u, &c) in &f.units {
+                *boxes[b].entry(state.world.units[u as usize].name.clone()).or_default() += c;
+            }
+        }
+    }
+    let key = (view_index, boxes.iter().flat_map(|b| b.iter()).fold(0u64, |h, (n, c)| h.wrapping_mul(31).wrapping_add(n.len() as u64 * 1000 + u64::from(*c))));
+    if *last_key == Some(key) && !existing.is_empty() {
+        return;
+    }
+    for e in existing {
+        world.entity_mut(e).despawn();
+    }
+    *last_key = Some(key);
+    let game = world.resource::<EawUiAssets>().game.clone();
+    {
+        let mut data = world.resource_mut::<eaw_ui::PanelData>();
+        data.slots.retain(|k, _| !(k.starts_with("q1_") || k.starts_with("q2_") || k.starts_with("q3_")));
+        for (b, units) in boxes.iter().enumerate() {
+            for (k, (name, count)) in units.iter().take(35).enumerate() {
+                let icon = game.as_ref().and_then(|g| eaw_ui::unit_icon(g, name)).unwrap_or_default();
+                data.set_slot(
+                    &eaw_ui::fleet_slot_name(b as u32 + 1, k as u32 / 7, k as u32 % 7),
+                    eaw_ui::PanelSlot { icon, label: if *count > 1 { format!("x{count}") } else { String::new() }, ..default() },
+                );
+            }
+        }
+    }
+    let mut spec = eaw_ui::ShellSpec::new("I_Galactic_Organize_New.ALO", faction);
+    spec.anchor = eaw_ui::ShellAnchor::TopCenter;
+    spec.offset = Vec2::new(0.0, -20.0);
+    if let Some(root) = eaw_ui::spawn_shell(world, &spec) {
+        world.entity_mut(root).insert((OrbitBoxes, GlobalZIndex(9)));
+    }
+}
+
+/// Description panel placement: left in the galaxy view, right side under the orbit boxes in the planet view.
+fn place_planet_panel(state: Res<crate::planet_view::PlanetViewState>, mut panel: Single<&mut Node, With<PlanetPanel>>) {
+    let (left, top, max_h) = if state.active && state.blend > 0.5 { (Val::Percent(65.0), Val::Percent(38.0), Val::Px(420.0)) } else { (Val::Px(20.0), Val::Px(140.0), Val::Px(310.0)) };
+    if panel.left != left {
+        panel.left = left;
+        panel.top = top;
+        panel.max_height = max_h;
     }
 }

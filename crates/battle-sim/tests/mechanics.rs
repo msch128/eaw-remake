@@ -651,3 +651,70 @@ fn super_laser_destroys_the_chosen_ship_after_charging() {
     }
     assert!(!b.ships[v as usize].alive, "destroyed after the charge time");
 }
+
+fn ability(kind: &str) -> AbilityDef {
+    AbilityDef { kind: kind.into(), duration: 10.0, recharge: 60.0, speed_mult: 1.0, shield_regen_mult: 1.0, weapon_delay_mult: 1.0, take_damage_mult: 1.0, ..Default::default() }
+}
+
+/// True once ability 0 of the first ship of `side` was used (it is active or recharging).
+fn used(b: &Battle, side: u8) -> bool {
+    let s = b.ships.iter().find(|s| s.side == side).unwrap();
+    s.abilities[0].active > 0.0 || s.abilities[0].cooldown > 0.0
+}
+
+#[test]
+fn the_ai_uses_each_new_ability_in_a_suitable_scenario() {
+    let dummy = || ship("dummy", 1.0e7, 0.0, vec![]);
+    // Rocket attack: a missile boat with a frigate-sized enemy in range.
+    let mut missile = laser();
+    missile.name = "missile".into();
+    missile.category = "missile".into();
+    let mut boat = ship("boat", 1.0e6, 0.0, vec![gun("g", 0.0)]);
+    boat.abilities.push(AbilityDef { rocket: true, ..ability("ROCKET_ATTACK") });
+    let mut b = Battle::new(setup(Catalog::from_defs(vec![boat, dummy()], vec![missile.clone()]), "boat", "dummy", 1, 1, cfg()));
+    for _ in 0..30 * 4 {
+        b.step();
+    }
+    assert!(used(&b, 0), "rocket attack");
+
+    // Sensor jamming: a missile homes in on the ship.
+    let mut homing = missile.clone();
+    homing.turn_rate = 3.0;
+    let mut target = ship("target", 1.0e6, 0.0, vec![]);
+    target.abilities.push(AbilityDef { jam: true, ..ability("SENSOR_JAMMING") });
+    let mut b = Battle::new(setup(Catalog::from_defs(vec![dummy(), target], vec![homing]), "dummy", "target", 1, 1, cfg()));
+    let (s, t) = (b.ships.iter().find(|x| x.side == 0).unwrap().id, b.ships.iter().find(|x| x.side == 1).unwrap().id);
+    let tp = b.ships[t as usize].pos;
+    b.projectiles.push(Projectile { pos: tp + Vec3::new(0.0, 1500.0, 0.0), vel: Vec3::new(10.0, 0.0, 0.0), def: 0, side: 0, owner: s, target: t, aim_hp: u16::MAX, range_left: 9000.0 });
+    for _ in 0..30 {
+        b.step();
+    }
+    assert!(used(&b, 1), "sensor jamming");
+
+    // Storm on a cluster of three, super laser on a frigate, reveal ping into the fog.
+    let mut caster = ship("caster", 1.0e6, 0.0, vec![]);
+    caster.abilities.push(AbilityDef { zone: Some(ZoneDef { radius: 800.0, enemy_dps: 100.0, max_range: 50000.0 }), ..ability("BUZZ_DROIDS") });
+    let mut b = Battle::new(setup(Catalog::from_defs(vec![caster, dummy()], vec![laser()]), "caster", "dummy", 1, 3, cfg()));
+    for _ in 0..30 * 2 {
+        b.step();
+    }
+    assert!(used(&b, 0), "storm on a cluster");
+
+    let mut dstar = ship("dstar", 1.0e6, 0.0, vec![]);
+    dstar.abilities.push(AbilityDef { super_laser: Some(SuperLaserDef { delay: 1.0, classes: TargetClass::Frigate.bit() }), ..ability("SUPER_LASER") });
+    let mut b = Battle::new(setup(Catalog::from_defs(vec![dstar, dummy()], vec![laser()]), "dstar", "dummy", 1, 1, cfg()));
+    for _ in 0..30 * 3 {
+        b.step();
+    }
+    assert!(used(&b, 0), "super laser");
+    assert!(b.ships.iter().filter(|s| s.side == 1).all(|s| !s.alive), "and it hit");
+
+    let mut scout = ship("scout", 1.0e6, 0.0, vec![]);
+    scout.abilities.push(AbilityDef { reveal_radius: 1500.0, ..ability("FOW_REVEAL_PING") });
+    let fog = BattleConfig { fog_of_war: true, ..cfg() };
+    let mut b = Battle::new(setup(Catalog::from_defs(vec![scout, dummy()], vec![laser()]), "scout", "dummy", 1, 1, fog));
+    for _ in 0..30 * 3 {
+        b.step();
+    }
+    assert!(used(&b, 0), "reveal ping into the fog");
+}

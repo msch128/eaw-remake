@@ -489,14 +489,7 @@ impl Battle {
             }
             let next = idx + 1;
             let enemy = self.spawn_pos[(side as usize + 1) % self.sides.len()];
-            let point = match next % 6 {
-                0 => enemy,
-                1 => Vec3::ZERO,
-                2 => Vec3::new(half * 0.5, half * 0.5, 0.0),
-                3 => Vec3::new(-half * 0.5, half * 0.5, 0.0),
-                4 => Vec3::new(-half * 0.5, -half * 0.5, 0.0),
-                _ => Vec3::new(half * 0.5, -half * 0.5, 0.0),
-            };
+            let point = search_point(next, enemy, half);
             self.search[side as usize] = (next, time);
             for s in self.ships.iter_mut().filter(|s| s.alive && !s.retreated && s.side == side && s.target == NONE && matches!(s.order, Order::AttackMove(_))) {
                 s.order = Order::AttackMove(point);
@@ -1301,6 +1294,10 @@ impl Battle {
                 let dist = t.pos.dist(s.pos);
                 for (k, a) in def.abilities.iter().enumerate() {
                     let boosts_weapons = a.salvo || a.rocket || a.weapon_delay_mult < 0.99;
+                    // Rocket salvos are kept for frigates and bigger.
+                    if a.rocket && (cat.ship(t.def).class as u8) < TargetClass::Frigate as u8 {
+                        continue;
+                    }
                     if boosts_weapons && s.abilities[k].cooldown <= 0.0 && s.abilities[k].active <= 0.0 && dist < def.max_weapon_range {
                         auto_use.push(k);
                         break;
@@ -1354,11 +1351,84 @@ impl Battle {
             }
         }
         self.run_carriers(dt);
+        if self.tick.is_multiple_of(15) {
+            self.ai_special_abilities();
+        }
         self.run_healing(dt);
         self.run_zones(dt);
         self.run_lasers();
         if self.tick.is_multiple_of(30) {
             self.run_bonuses();
+        }
+    }
+
+    /// AI use of the abilities that need a place or a reason: sensor jamming against missiles homing on the ship, an area storm on the
+    /// densest group of enemies (three or more, or a capital ship), the super laser on the biggest visible enemy, and a reveal ping into
+    /// the fog where the side is searching.
+    fn ai_special_abilities(&mut self) {
+        let cat = self.catalog.clone();
+        let mut uses: Vec<(u8, u32, u16, Option<Vec3>)> = Vec::new();
+        for side in 0..self.sides.len().min(4) as u8 {
+            if !self.sides[side as usize].ai {
+                continue;
+            }
+            let enemies: Vec<u32> = self
+                .ships
+                .iter()
+                .filter(|o| o.alive && !o.retreated && o.side != side && !cat.ship(o.def).is_static && self.is_visible_to(side, o.id))
+                .map(|o| o.id)
+                .collect();
+            for s in self.ships.iter().filter(|s| s.alive && !s.retreated && s.side == side && s.stance != Stance::HoldFire) {
+                let def = cat.ship(s.def);
+                for (k, a) in def.abilities.iter().enumerate() {
+                    let st = &s.abilities[k];
+                    if st.cooldown > 0.0 || st.active > 0.0 {
+                        continue;
+                    }
+                    let k = k as u16;
+                    if a.jam {
+                        let homing = self.projectiles.iter().filter(|p| p.target == s.id && p.side != side && p.pos.dist(s.pos) < 2500.0).count();
+                        if homing > 0 {
+                            uses.push((side, s.id, k, None));
+                        }
+                    } else if let Some(z) = &a.zone {
+                        // The enemy whose surroundings hold the most enemies (a capital counts as three).
+                        let weight = |id: u32| if cat.ship(self.ships[id as usize].def).class as u8 >= TargetClass::Capital as u8 { 3 } else { 1 };
+                        let best = enemies
+                            .iter()
+                            .filter(|&&e| self.ships[e as usize].pos.dist(s.pos) <= z.max_range)
+                            .map(|&e| {
+                                let c = self.ships[e as usize].pos;
+                                (enemies.iter().filter(|&&o| self.ships[o as usize].pos.dist(c) <= z.radius).map(|&o| weight(o)).sum::<u32>(), e)
+                            })
+                            .max_by_key(|&(n, e)| (n, std::cmp::Reverse(e)));
+                        if let Some((n, e)) = best
+                            && n >= 3
+                        {
+                            uses.push((side, s.id, k, Some(self.ships[e as usize].pos)));
+                        }
+                    } else if let Some(l) = &a.super_laser {
+                        let target = enemies
+                            .iter()
+                            .copied()
+                            .filter(|&e| l.classes == 0 || l.classes & cat.ship(self.ships[e as usize].def).class.bit() != 0)
+                            .max_by(|&x, &y| cat.ship(self.ships[x as usize].def).hull.total_cmp(&cat.ship(self.ships[y as usize].def).hull).then(y.cmp(&x)));
+                        if let Some(e) = target {
+                            uses.push((side, s.id, k, Some(self.ships[e as usize].pos)));
+                        }
+                    } else if a.reveal_radius > 0.0 && self.config.fog_of_war && enemies.is_empty() {
+                        let (idx, _) = self.search[side as usize];
+                        let enemy = self.spawn_pos[(side as usize + 1) % self.sides.len()];
+                        uses.push((side, s.id, k, Some(search_point(idx + 1, enemy, self.config.half_size))));
+                    }
+                }
+            }
+        }
+        for (side, ship, ability, at) in uses {
+            let _ = match at {
+                Some(pos) => self.command(side, Command::UseAbilityAt { ship, ability, pos }),
+                None => self.command(side, Command::UseAbility { ship, ability }),
+            };
         }
     }
 
@@ -2187,3 +2257,15 @@ enum Deflect {
 
 /// Reload delay multiplier of missile weapons while `ROCKET_ATTACK` is active (estimate).
 const ROCKET_RELOAD_MULT: f32 = 0.4;
+
+/// The `n`-th place an AI side searches for hidden enemies: their start, the middle, then the four quarters.
+fn search_point(n: u32, enemy_start: Vec3, half: f32) -> Vec3 {
+    match n % 6 {
+        0 => enemy_start,
+        1 => Vec3::ZERO,
+        2 => Vec3::new(half * 0.5, half * 0.5, 0.0),
+        3 => Vec3::new(-half * 0.5, half * 0.5, 0.0),
+        4 => Vec3::new(-half * 0.5, -half * 0.5, 0.0),
+        _ => Vec3::new(half * 0.5, -half * 0.5, 0.0),
+    }
+}

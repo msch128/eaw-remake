@@ -1339,7 +1339,7 @@ fn territory_segments(view: &GalaxyView, radii: &PlanetRadii, selected: Option<u
     let color = Color::LinearRgba(LinearRgba::new(l.red, l.green, l.blue, 0.9));
     let a = |k: usize| k as f32 / SAMPLES as f32 * std::f32::consts::TAU;
     let pt = |k: usize| c + Vec3::new(a(k).cos() * r, 0.0, a(k).sin() * r);
-    (0..SAMPLES).filter(|k| (k / DASH) % 2 == 0).map(|k| (pt(k), pt(k + 1), color)).collect()
+    (0..SAMPLES).filter(|k| (k / DASH).is_multiple_of(2)).map(|k| (pt(k), pt(k + 1), color)).collect()
 }
 
 /// Radius of a planet's territory disc in planet radii.

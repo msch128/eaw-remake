@@ -67,7 +67,8 @@ fn check_teardown(
     mut commands: Commands,
     check: Option<ResMut<TeardownCheck>>,
     runtime: Option<Res<BattleRuntime>>,
-    leftovers: Query<(), Or<(With<eaw_ui::tactical::ShipOverlayNode>, With<eaw_ui::tactical::HardpointNode>, With<crate::hud::TacticalHud>, With<EawCommandBar>)>>,
+    leftovers: Query<(), Or<(With<eaw_ui::tactical::ShipOverlayNode>, With<eaw_ui::tactical::HardpointNode>, With<crate::hud::TacticalHud>)>>,
+    bars: Query<&EawCommandBar>,
 ) {
     let Some(mut check) = check else { return };
     if runtime.is_some() {
@@ -78,7 +79,8 @@ fn check_teardown(
     check.0 = check.0.saturating_sub(1);
     if check.0 == 0 {
         commands.remove_resource::<TeardownCheck>();
-        let n = leftovers.iter().count();
+        // The galactic command bar of the map screen is expected; a tactical bar is not.
+        let n = leftovers.iter().count() + bars.iter().filter(|b| b.mode == CommandBarMode::SpaceTactical).count();
         if n > 0 {
             error!("tactical: {n} battle UI entities left after the battle ended");
         } else {

@@ -69,7 +69,7 @@ fn update_hero_heads(
             .take(4)
             .collect();
         for (k, &u) in heroes.iter().enumerate() {
-            let key = (f.id as u32, u);
+            let key = (f.id, u);
             alive.push(key);
             // Left and right of the fleet base, further out for more heroes.
             let side = if k % 2 == 0 { 1.0 } else { -1.0 };
@@ -77,7 +77,7 @@ fn update_hero_heads(
             // Heroes stand right of the fleet slots above the planet, then on the left, lower each time.
             let slot = *n_here;
             *n_here += 1;
-            let a = if slot % 2 == 0 { -1.45 + 0.3 * (slot / 2) as f32 } else { -1.7 - 0.3 * (slot / 2) as f32 - 0.4 };
+            let a = if slot.is_multiple_of(2) { -1.45 + 0.3 * (slot / 2) as f32 } else { -1.7 - 0.3 * (slot / 2) as f32 - 0.4 };
             let r = layout.orbit_radius(p) * 1.05;
             let pos = base + Vec3::new(a.cos() * r, layout.unit * 0.25, a.sin() * r);
             if let Some(&root) = heads.0.get(&key) {
