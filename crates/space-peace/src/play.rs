@@ -510,6 +510,8 @@ fn galaxy_audio(
                 let mine_parked = state.galaxy().fleets.get(fleet).is_some_and(|f| f.owner == me && f.planet().is_some());
                 if mine_parked {
                     say(G::FleetArrived);
+                } else if state.galaxy().fleets.get(fleet).is_some_and(|f| f.owner != me && f.planet().is_some_and(|p| state.galaxy().planets[p as usize].owner == Some(me))) {
+                    say(G::EnemyFleet);
                 }
             }
             Event::BattlePending(b) if b.factions.contains(&me) => say(G::BattlePending),

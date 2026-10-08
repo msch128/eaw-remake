@@ -1,4 +1,4 @@
-//! Button sounds of the original UI: `Button_Press` on a press, `GUI_Highlight_Mouse_Over` when the pointer enters
+//! Button sounds of the command-bar buttons (menu and dialog buttons play their own `GUI_Common_Dialog_*` sounds): `Button_Press` on a press, `GUI_Highlight_Mouse_Over` when the pointer enters
 //! a button (event names from `SFXEvents*.xml`).
 
 use alamo_audio::plugin::PlaySfx;
@@ -13,7 +13,7 @@ impl Plugin for UiSoundsPlugin {
     }
 }
 
-fn button_sounds(changed: Query<&Interaction, (Changed<Interaction>, With<Button>)>, mut out: MessageWriter<PlaySfx>) {
+fn button_sounds(changed: Query<&Interaction, (Changed<Interaction>, With<eaw_ui::EawButton>)>, mut out: MessageWriter<PlaySfx>) {
     for i in &changed {
         let event = match i {
             Interaction::Pressed => "Button_Press",

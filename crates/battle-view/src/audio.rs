@@ -38,6 +38,7 @@ pub fn battle_audio(
     mut orders: MessageReader<OrderIssued>,
     mut out: MessageWriter<PlaySfx>,
     mut stats: ResMut<BattleAudioStats>,
+    mut voice: MessageWriter<alamo_audio::plugin::GalaxyAudio>,
     mut last_selection: Local<Vec<u32>>,
     mut defs: Local<HashMap<u32, battle_sim::ShipId>>,
 ) {
@@ -106,6 +107,11 @@ pub fn battle_audio(
                     && let Some(n) = visuals.ship(s.def).sfx.hardpoint_destroyed.as_deref()
                 {
                     send(n, Some(sim_to_bevy(s.pos)), &mut stats, &mut out);
+                }
+            }
+            Event::ReinforcementsCalled { side, .. } if *side == settings.player_side => {
+                if let Some(f) = &rt.player_faction {
+                    voice.write(alamo_audio::plugin::GalaxyAudio { faction: f.clone(), event: alamo_audio::GalaxyEvent::ReinforcementsEnRoute });
                 }
             }
             Event::AbilityActivated { ship, .. } => {

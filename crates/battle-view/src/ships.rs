@@ -79,6 +79,8 @@ pub struct ShipRender {
     pub visible: bool,
     /// Current order (sim space).
     pub order: battle_sim::Order,
+    /// Planned path ahead in Bevy space (waypoints, the last one is the destination); empty for fighters and idle ships.
+    pub path: Vec<Vec3>,
     /// Hardpoint alive flags.
     pub hp_alive: Vec<bool>,
     /// Hardpoint health fractions 0..1.
@@ -398,6 +400,7 @@ pub fn update_ships(
                 squad: s.squad,
                 visible,
                 order: s.order,
+                path: if s.squad == u32::MAX { s.path.iter().map(|p| sim_to_bevy(*p)).collect() } else { Vec::new() },
                 hp_alive,
                 hp_health,
             },

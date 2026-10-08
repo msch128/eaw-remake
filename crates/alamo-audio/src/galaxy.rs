@@ -39,11 +39,17 @@ pub enum GalaxyEvent {
     RetreatSucceeded,
     /// The player was defeated.
     Defeated,
+    /// The player ordered a retreat in a battle.
+    RetreatStarted,
+    /// A hostile fleet arrived at one of the player's planets.
+    EnemyFleet,
+    /// Reinforcements were called in a battle and are on their way.
+    ReinforcementsEnRoute,
 }
 
 impl GalaxyEvent {
     /// All events, for tests and menus.
-    pub const ALL: [GalaxyEvent; 15] = [
+    pub const ALL: [GalaxyEvent; 18] = [
         Self::UnitBuilt,
         Self::StructureBuilt,
         Self::PlanetCaptured,
@@ -59,6 +65,9 @@ impl GalaxyEvent {
         Self::CreditsGained,
         Self::RetreatSucceeded,
         Self::Defeated,
+        Self::RetreatStarted,
+        Self::EnemyFleet,
+        Self::ReinforcementsEnRoute,
     ];
 
     /// Event-name suffixes after the faction prefix, in order of preference.
@@ -79,6 +88,9 @@ impl GalaxyEvent {
             Self::CreditsGained => &["Credits_Gained"],
             Self::RetreatSucceeded => &["Retreat_Success_Space"],
             Self::Defeated => &["Defeated"],
+            Self::RetreatStarted => &["Retreat_Started_Space"],
+            Self::EnemyFleet => &["Enemy_Fleet_Approaching", "Enemy_Fleet"],
+            Self::ReinforcementsEnRoute => &["Reinforcements_En_Route"],
         }
     }
 }
