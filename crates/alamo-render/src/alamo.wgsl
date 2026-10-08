@@ -113,10 +113,16 @@ fn saturate3(c: vec3<f32>) -> vec3<f32> {
 
 // Specular antialiasing (screen-space normal variance, Tokuyoshi/Kaplanyan): widens the Blinn-Phong lobe
 // where the shading normal changes quickly between pixels, so bumpy hulls and terrain do not sparkle.
-fn filtered_shininess(n: vec3<f32>, shininess: f32) -> f32 {
-    let variance = 0.5 * (dot(dpdx(n), dpdx(n)) + dot(dpdy(n), dpdy(n)));
+fn filtered_shininess(n: vec3<f32>, shininess: f32, extra_variance: f32) -> f32 {
+    let variance = 0.5 * (dot(dpdx(n), dpdx(n)) + dot(dpdy(n), dpdy(n))) + extra_variance;
     let alpha2 = min(2.0 / (shininess + 2.0) + min(variance, 0.18), 1.0);
     return max(2.0 / alpha2 - 2.0, 1.0);
+}
+
+// Toksvig: a mip-filtered normal-map texel shorter than 1 means the normals under the pixel disagree.
+fn toksvig_variance(rgb: vec3<f32>) -> f32 {
+    let len = clamp(length(rgb * 2.0 - 1.0), 0.5, 1.0);
+    return (1.0 - len) / len;
 }
 
 @fragment
@@ -189,9 +195,13 @@ fn fragment(in: VertexOutput, @builtin(front_facing) front: bool) -> @location(0
         var n = N;
         var city_mask = 0.0;
         var spec_mask = base.a;
+        var tvar = 0.0;
         if has(FLAG_NORMAL_MAP) {
             let nm = textureSample(normal_tex, normal_samp, uv);
-            n = perturb(tbn, nm.rgb);
+            // Bump fades toward the geometric normal where the mip-filtered normals disagree (Toksvig length).
+            let flat_len = clamp(length(nm.rgb * 2.0 - 1.0), 0.0, 1.0);
+            n = normalize(mix(N, perturb(tbn, nm.rgb), flat_len * flat_len));
+            tvar = toksvig_variance(nm.rgb);
             city_mask = nm.a;
         }
         // Clouds scroll horizontally over the surface.
@@ -206,7 +216,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) front: bool) -> @location(0
         let cdl = saturate(dot(ncloud, L));
         let surf = base.rgb * mat.diffuse.rgb * saturate3(amb + sun * ndl + fill_light(n));
         let H = normalize(L + V);
-        let spec = mat.specular.rgb * spec_mask * pow(saturate(dot(n, H)), filtered_shininess(n, max(mat.shininess, 8.0))) * sun * step(0.0, dot(N, L));
+        let spec = mat.specular.rgb * spec_mask * pow(saturate(dot(n, H)), filtered_shininess(n, max(mat.shininess, 8.0), tvar)) * sun * step(0.0, dot(N, L));
         var col = surf + spec;
         // Cloud layer, shaded with its own normal map.
         let cloud_lit = vec3<f32>(1.0) * (amb + sun * cdl);
@@ -226,9 +236,11 @@ fn fragment(in: VertexOutput, @builtin(front_facing) front: bool) -> @location(0
     // KIND_LIT / KIND_ALPHA: bump or plain mapping, diffuse + specular from the sun.
     var n = N;
     var spec_mask = base.a;
+    var tvar = 0.0;
     if has(FLAG_NORMAL_MAP) {
         let nm = textureSample(normal_tex, normal_samp, uv);
         n = perturb(tbn, nm.rgb);
+        tvar = toksvig_variance(nm.rgb);
         if !has(FLAG_SPEC_FROM_BASE_ALPHA) {
             spec_mask = nm.a;
         }
@@ -252,7 +264,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) front: bool) -> @location(0
     }
     let ndl = saturate(dot(n, L)) * shadow;
     let H = normalize(L + V);
-    let spec = mat.specular.rgb * spec_mask * pow(saturate(dot(n, H)), filtered_shininess(n, max(mat.shininess, 1.0))) * sun * step(0.0, dot(N, L)) * shadow;
+    let spec = mat.specular.rgb * spec_mask * pow(saturate(dot(n, H)), filtered_shininess(n, max(mat.shininess, 1.0), tvar)) * sun * step(0.0, dot(N, L)) * shadow;
     // Emissive is the self-illumination of the base texture.
     rgb = albedo * saturate3(amb + sun * ndl + fill_light(n)) + spec + mat.emissive.rgb * base.rgb;
     if mat.kind == KIND_ALPHA {

@@ -46,3 +46,7 @@ the first directional light. `battle-view` spawns the map's fill lights from the
   renders is the hull texture's own grain (finer at 4K); no bug found (near plane, MSAA, bloom, spec, normal map, stacked ships all ruled out).
 - `battle_demo` frame-time stats now skip the frames after a screenshot (the 4K readback stall was the old 187 ms max). 4K, ~290 ships: mean 7.2 ms,
   p99 9.5 ms, max 57 ms (one remaining hitch, not located: probably a first-use asset/effect load mid-battle).
+- Toksvig normal-map filtering (`toksvig_variance`, bump flattened by the filtered normal length on planets) added next to the screen-space specular AA.
+  On the Kuat low-orbit view it changes nothing visible: the terrain normal map is magnified there (filtered length ~1), so the bright specks are the
+  texture's real detail, not aliasing. A distance-based bump fade was not added (no EaW reference for the scale).
+- Acclamator engine glow is not missing: `pe_acclamatorengines`/`_sml` render as cyan particle puffs behind the stern (seen from behind with `render_scene EV_ACCLAMATOR.ALO --cam 20,-10,1.8`); the earlier views showed the bow side.
