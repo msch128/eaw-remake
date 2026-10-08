@@ -211,16 +211,21 @@ fn fragment(in: VertexOutput, @builtin(front_facing) front: bool) -> @location(0
         let cuv = in.uv * vec2<f32>(1.0, 1.0) + vec2<f32>(globals.time * mat.cloud_scroll_rate, 0.0);
         let cloud = textureSample(cloud_tex, cloud_samp, cuv);
         let cn = textureSample(cloud_normal_tex, cloud_normal_samp, cuv);
-        let cloud_amount = saturate(cloud.a * select(cloud.r, 1.0, false));
+        // Crisp cloud patches over clear land (the faint haze of the raw alpha washed the terrain out).
+        let cloud_amount = smoothstep(0.2, 0.95, saturate(cloud.a));
         let ncloud = perturb(tbn, cn.rgb);
 
         let wrap = 0.0;
-        let ndl = saturate(dot(n, L));
-        let cdl = saturate(dot(ncloud, L));
+        // Planets are lit like the original's `Planet.fx`: a wrapped (half-Lambert) sun term, so a backdrop planet seen from
+        // above with a low sun still shows its whole day side as in the game.
+        let ndl = saturate(dot(n, L) * 0.5 + 0.5);
+        let cdl = saturate(dot(ncloud, L) * 0.5 + 0.5);
         let surf = base.rgb * mat.diffuse.rgb * saturate3(amb + sun * ndl + fill_light(n));
         let H = normalize(L + V);
         let spec = mat.specular.rgb * spec_mask * pow(saturate(dot(n, H)), filtered_shininess(n, max(mat.shininess, 8.0), tvar)) * sun * step(0.0, dot(N, L));
-        var col = surf + spec;
+        // The original renders land more saturated than the plain albedo product (video: vivid green on Byss).
+        let grey = dot(surf, vec3<f32>(0.299, 0.587, 0.114));
+        var col = mix(vec3<f32>(grey), surf, 1.35) * 1.08 + spec;
         // Cloud layer, shaded with its own normal map.
         let cloud_lit = vec3<f32>(1.0) * (amb + sun * cdl);
         col = mix(col, cloud_lit, cloud_amount * 0.9);

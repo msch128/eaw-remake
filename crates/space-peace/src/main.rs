@@ -21,6 +21,7 @@ mod logfile;
 mod menu;
 mod menu_scene;
 mod newgame;
+mod objectives;
 mod offscreen;
 mod options;
 mod planet_visual;

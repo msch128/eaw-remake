@@ -121,8 +121,10 @@ fn spawn_loading_art(mut commands: Commands, game: Res<Game>, pending: Res<Pendi
     if let Some(g) = game.0.as_ref() {
         let fs = g.fs.clone();
         let faction = campaign.faction.clone();
+        // Every planet has its own space loading screen (`Native_Icon_Name` in the planet data).
+        let own = g.data.planet(&pending.0.planet_name).and_then(|p| p.fields.get("native_icon_name").cloned()).filter(|n| n.to_ascii_lowercase().contains("space"));
         std::thread::spawn(move || {
-            let _ = tx.send(crate::loading::decode_art(&fs, faction.as_deref()));
+            let _ = tx.send(crate::loading::decode_art(&fs, faction.as_deref(), own.as_deref()));
         });
     }
     let font = |size: f32| TextFont { font: FontSource::Family("Bahnschrift".into()), font_size: FontSize::Px(size), ..default() };

@@ -1892,12 +1892,14 @@ fn planet_view_ui(world: &mut World, mut last_key: Local<Option<(usize, u64)>>) 
 }
 
 
-/// The "Active Story Objectives" window (the holocron button of the bar). The Remake's scripted objectives are not
-/// forwarded by the simulation yet, so it lists the campaign itself with its description as the advisor transmission.
+/// The "Active Story Objectives" window (the holocron button of the bar): the campaign's story chapters read from the
+/// data ([`crate::objectives`]) with the advisor transmission of the selected one underneath.
 #[derive(Resource, Default)]
 struct ObjectivesWindow {
     open: bool,
     completed_tab: bool,
+    list: Option<Vec<crate::objectives::Objective>>,
+    selected: usize,
 }
 #[derive(Component)]
 struct ObjectivesRoot;
@@ -1906,6 +1908,7 @@ enum ObjectivesClick {
     Active,
     Completed,
     Close,
+    Row(usize),
 }
 
 fn objectives_toggle(mut clicks: MessageReader<EawButtonClicked>, mut win: ResMut<ObjectivesWindow>) {
@@ -1926,7 +1929,7 @@ fn objectives_window(
     keys: Res<ButtonInput<KeyCode>>,
     game: Res<crate::game::Game>,
     campaign: Res<crate::flow::CurrentCampaign>,
-    mut last: Local<Option<(bool, bool)>>,
+    mut last: Local<Option<(bool, bool, usize)>>,
 ) {
     for (i, c) in &clicks {
         if *i == Interaction::Pressed {
@@ -1934,13 +1937,24 @@ fn objectives_window(
                 ObjectivesClick::Active => win.completed_tab = false,
                 ObjectivesClick::Completed => win.completed_tab = true,
                 ObjectivesClick::Close => win.open = false,
+                ObjectivesClick::Row(n) => win.selected = *n,
             }
         }
     }
     if keys.just_pressed(KeyCode::Escape) && win.open {
         win.open = false;
     }
-    let state = (win.open, win.completed_tab);
+    if win.open && win.list.is_none() {
+        let list = game
+            .0
+            .as_ref()
+            .zip(campaign.name.as_deref().zip(campaign.faction.as_deref()))
+            .map(|(g, (name, faction))| crate::objectives::load(&g.fs, &g.data, name, faction))
+            .unwrap_or_default();
+        win.list = Some(list);
+        win.selected = 0;
+    }
+    let state = (win.open, win.completed_tab, win.selected);
     if *last == Some(state) {
         return;
     }
@@ -1951,22 +1965,15 @@ fn objectives_window(
     if !win.open {
         return;
     }
-    let (title, text) = game
-        .0
-        .as_ref()
-        .and_then(|g| {
-            let c = g.data.campaign(campaign.name.as_deref()?)?;
-            let title = c.text_id.as_deref().and_then(|id| g.data.text(id)).unwrap_or(&c.name).to_owned();
-            let desc = c.description_id.as_deref().and_then(|id| g.data.text(id)).unwrap_or("").replace("\\n", "\n");
-            Some((title, desc))
-        })
-        .unwrap_or_else(|| ("Galactic Conquest".to_owned(), String::new()));
+    let list: Vec<crate::objectives::Objective> = if win.completed_tab { Vec::new() } else { win.list.clone().unwrap_or_default() };
+    let selected = win.selected.min(list.len().saturating_sub(1));
     let font = |size: f32| TextFont { font: FontSource::Family("Bahnschrift".into()), font_size: FontSize::Px(size), ..default() };
+    let rgb = |c: [u8; 3]| Color::srgb_u8(c[0], c[1], c[2]);
     let blue = Color::srgb(0.32, 0.52, 0.93);
     commands
         .spawn((
             ObjectivesRoot,
-            Node { position_type: PositionType::Absolute, left: Val::Percent(17.5), top: Val::Percent(7.3), width: Val::Percent(65.5), height: Val::Percent(85.0), padding: UiRect::all(Val::Px(14.0)), border: UiRect::all(Val::Px(3.0)), flex_direction: FlexDirection::Column, row_gap: Val::Px(8.0), ..default() },
+            Node { position_type: PositionType::Absolute, left: Val::Percent(17.5), top: Val::Percent(7.3), width: Val::Percent(65.5), height: Val::Percent(85.0), padding: UiRect::all(Val::Px(14.0)), border: UiRect::all(Val::Px(3.0)), flex_direction: FlexDirection::Column, row_gap: Val::Px(8.0), overflow: Overflow::clip(), ..default() },
             BackgroundColor(Color::srgba(0.02, 0.03, 0.08, 0.96)),
             BorderColor::all(Color::srgb(0.45, 0.6, 0.95)),
             BoxShadow::new(Color::srgba(0.3, 0.5, 1.0, 0.5), Val::Px(0.0), Val::Px(0.0), Val::Px(4.0), Val::Px(20.0)),
@@ -1980,18 +1987,25 @@ fn objectives_window(
                         .with_child((Text::new(label), font(14.0), TextColor(Color::WHITE), bevy::text::LetterSpacing::Rem(0.1)));
                 }
             });
-            r.spawn((Node { height: Val::Percent(22.0), padding: UiRect::all(Val::Px(8.0)), flex_direction: FlexDirection::Column, ..default() }, BackgroundColor(Color::BLACK)))
+            r.spawn((Node { height: Val::Percent(22.0), padding: UiRect::all(Val::Px(4.0)), flex_direction: FlexDirection::Column, overflow: Overflow::clip(), ..default() }, BackgroundColor(Color::BLACK)))
                 .with_children(|l| {
-                    if !win.completed_tab {
-                        l.spawn((Node { padding: UiRect::horizontal(Val::Px(6.0)), ..default() }, BackgroundColor(Color::srgba(0.6, 0.6, 0.65, 0.9)))).with_child((Text::new(title.clone()), font(17.0), TextColor(Color::WHITE)));
+                    for (i, o) in list.iter().enumerate() {
+                        l.spawn((Button, ObjectivesClick::Row(i), Node { padding: UiRect::horizontal(Val::Px(6.0)), ..default() }, BackgroundColor(if i == selected { Color::srgba(0.6, 0.6, 0.65, 0.9) } else { Color::NONE })))
+                            .with_child((Text::new(o.title.clone()), font(17.0), TextColor(rgb(o.color))));
                     }
                 });
             r.spawn((Text::new("INCOMING TRANSMISSION FROM ADVISOR"), font(13.0), TextColor(blue), bevy::text::LetterSpacing::Rem(0.08)));
-            r.spawn((Node { flex_grow: 1.0, padding: UiRect::all(Val::Px(10.0)), overflow: Overflow::clip(), flex_direction: FlexDirection::Column, ..default() }, BackgroundColor(Color::BLACK)))
+            r.spawn((Node { flex_grow: 1.0, min_height: Val::Px(0.0), padding: UiRect::all(Val::Px(10.0)), overflow: Overflow::clip(), ..default() }, BackgroundColor(Color::BLACK)))
                 .with_children(|b| {
-                    if !win.completed_tab {
-                        b.spawn((Text::new(title.clone()), font(15.0), TextColor(Color::srgb(0.7, 1.0, 0.8))));
-                        b.spawn((Text::new(format!("\n{text}")), font(14.0), TextColor(Color::srgb(0.2, 1.0, 0.2))));
+                    if let Some(o) = list.get(selected) {
+                        let mut spans = o.text.iter();
+                        if let Some(first) = spans.next() {
+                            b.spawn((Text::new(first.text.clone()), font(14.0), TextColor(rgb(first.color)))).with_children(|t| {
+                                for s in spans {
+                                    t.spawn((TextSpan::new(s.text.clone()), font(14.0), TextColor(rgb(s.color))));
+                                }
+                            });
+                        }
                     }
                 });
             r.spawn(Node { justify_content: JustifyContent::SpaceBetween, align_items: AlignItems::Center, ..default() }).with_children(|f| {

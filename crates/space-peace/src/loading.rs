@@ -296,11 +296,12 @@ fn on_model_failed(
 
 /// A random loading screen of the game (`Art/Textures/LoadScreens`), of `faction` (`Rebel`, `Empire`, `Underworld`) when it has some.
 pub fn load_art(fs: &GameFs, faction: Option<&str>, images: &mut Assets<Image>) -> Option<Handle<Image>> {
-    decode_art(fs, faction).map(|image| images.add(image))
+    decode_art(fs, faction, None).map(|image| images.add(image))
 }
 
 /// Decodes a random loading screen to a CPU image (thread-safe: run it off the main thread).
-pub fn decode_art(fs: &GameFs, faction: Option<&str>) -> Option<Image> {
+/// `preferred` is a texture path of the game (`Loadscreens/Space_Rebel_17.png`) tried first, e.g. the planet's own loading screen.
+pub fn decode_art(fs: &GameFs, faction: Option<&str>, preferred: Option<&str>) -> Option<Image> {
     use alamo_fs::FileSource;
     use bevy::asset::RenderAssetUsages;
     use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
@@ -316,6 +317,9 @@ pub fn decode_art(fs: &GameFs, faction: Option<&str>) -> Option<Image> {
         candidates.extend((0..30).map(|i| format!("Art/Textures/LoadScreens/{p}_{}.PNG", 1 + (seed + i) % 30)));
     }
     candidates.extend((0..8).map(|i| format!("Art/Textures/LoadScreens/AAA_NEW_SPACE_{}.PNG", 1 + (seed + i) % 8)));
+    if let Some(p) = preferred {
+        candidates.insert(0, format!("Art/Textures/{p}"));
+    }
     let rgba = candidates.iter().find_map(|n| fs.read(n).ok().and_then(|b| alamo_model::image::decode_texture(&b).ok()))?;
     let image = Image::new(
         Extent3d { width: rgba.width as u32, height: rgba.height as u32, depth_or_array_layers: 1 },
