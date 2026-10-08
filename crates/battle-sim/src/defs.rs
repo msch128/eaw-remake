@@ -226,6 +226,42 @@ pub struct HealDef {
     pub classes: u16,
 }
 
+/// A `Combat_Bonus_Ability` with `Space_Automatic` activation: an aura that boosts the friendly ships of some classes
+/// (the data gives no radius, so it reaches the whole side). Percentages are fractions (0.25 = +25%).
+#[derive(Debug, Clone, Default)]
+pub struct BonusDef {
+    /// `Damage_Bonus_Percentage`: damage dealt.
+    pub damage: f32,
+    /// `Health_Bonus_Percentage`: hull damage taken is divided by `1 + health`.
+    pub health: f32,
+    /// `Shield_Bonus_Percentage`: shield damage taken is divided by `1 + shield` (negative = weaker shields).
+    pub shield: f32,
+    /// `Defense_Bonus_Percentage`: all damage taken is divided by `1 + defense`.
+    pub defense: f32,
+    /// `Fire_Range_Bonus_Percentage`: weapon reach.
+    pub range: f32,
+    /// `Movement_Speed_Bonus_Percentage`: top speed.
+    pub speed: f32,
+    /// Bit mask of boosted classes (`Applicable_Unit_Categories`; 0 = any).
+    pub classes: u16,
+    /// `Stacking_Category`: bonuses of one category do not add up, the strongest applies.
+    pub stacking: u8,
+}
+
+/// A `Redirect_Blaster_Ability` that is on from the start (lightsaber heroes, reflector shields): incoming shots are
+/// blocked or sent back at the shooter.
+#[derive(Debug, Clone, Default)]
+pub struct RedirectDef {
+    /// `Block_Chance`: the shot is destroyed.
+    pub block: f32,
+    /// `Redirect_Chance`: the shot hits its shooter instead (estimate: the shot is not re-aimed, its damage is dealt to the shooter).
+    pub redirect: f32,
+    /// Half of `Reaction_Arc_In_Degrees` in radians, around the ship's heading.
+    pub half_arc: f32,
+    /// Bit mask of shooter classes it reacts to (`Applicable_Unit_Categories`; 0 = any).
+    pub classes: u16,
+}
+
 /// Parameters of a tractor beam ability.
 #[derive(Debug, Clone, Default)]
 pub struct TractorDef {
@@ -248,6 +284,10 @@ pub struct ShipDef {
     pub class: TargetClass,
     /// Automatic healing abilities (`Force_Healing_Ability`).
     pub heals: Vec<HealDef>,
+    /// Shot blocking (`Redirect_Blaster_Ability`).
+    pub redirects: Vec<RedirectDef>,
+    /// Aura bonuses given to the friendly fleet (`Combat_Bonus_Ability`).
+    pub bonuses: Vec<BonusDef>,
     /// `Space_FOW_Reveal_Range`: how far this ship sees (fog of war); 1250 where the data gives none.
     pub sensor_range: f32,
     /// True for stations and structures (never move).
@@ -1018,10 +1058,52 @@ impl Catalog {
                 .collect(),
             _ => Vec::new(),
         };
+        let bonuses: Vec<BonusDef> = match src {
+            Source::Unit(u) => u
+                .sub_abilities
+                .iter()
+                .filter(|a| a.kind.eq_ignore_ascii_case("Combat_Bonus_Ability") && a.fields.get("activation_style").is_some_and(|v| v.trim().eq_ignore_ascii_case("Space_Automatic")))
+                .map(|a| {
+                    let num = |k: &str| a.fields.get(k).and_then(|v| v.trim().parse::<f32>().ok()).unwrap_or(0.0).clamp(-0.9, 10.0);
+                    BonusDef {
+                        damage: num("damage_bonus_percentage"),
+                        health: num("health_bonus_percentage"),
+                        shield: num("shield_bonus_percentage"),
+                        defense: num("defense_bonus_percentage"),
+                        range: num("fire_range_bonus_percentage"),
+                        speed: num("movement_speed_bonus_percentage"),
+                        classes: a.fields.get("applicable_unit_categories").map_or(0, |v| alamo_data::xml::split_list(v).iter().filter_map(|t| TargetClass::from_token(t)).fold(0u16, |m, c| m | c.bit())),
+                        stacking: num("stacking_category") as u8,
+                    }
+                })
+                .filter(|b| b.damage.abs() + b.health.abs() + b.shield.abs() + b.defense.abs() + b.range.abs() + b.speed.abs() > 0.0)
+                .collect(),
+            _ => Vec::new(),
+        };
+        let redirects: Vec<RedirectDef> = match src {
+            Source::Unit(u) => u
+                .sub_abilities
+                .iter()
+                .filter(|a| a.kind.eq_ignore_ascii_case("Redirect_Blaster_Ability") && !a.fields.get("initially_enabled").is_some_and(|v| !alamo_data::xml::parse_bool(v)))
+                .map(|a| {
+                    let num = |k: &str| a.fields.get(k).and_then(|v| v.trim().parse::<f32>().ok()).unwrap_or(0.0).clamp(0.0, 1.0);
+                    RedirectDef {
+                        block: num("block_chance"),
+                        redirect: num("redirect_chance"),
+                        half_arc: a.fields.get("reaction_arc_in_degrees").and_then(|v| v.trim().parse::<f32>().ok()).unwrap_or(360.0).clamp(0.0, 360.0).to_radians() / 2.0,
+                        classes: a.fields.get("applicable_unit_categories").map_or(0, |v| alamo_data::xml::split_list(v).iter().filter_map(|t| TargetClass::from_token(t)).fold(0u16, |m, c| m | c.bit())),
+                    }
+                })
+                .filter(|r| r.block + r.redirect > 0.0)
+                .collect(),
+            _ => Vec::new(),
+        };
         ShipDef {
             name,
             text_id,
             heals,
+            redirects,
+            bonuses,
             sensor_range,
             class,
             is_static,

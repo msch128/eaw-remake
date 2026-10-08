@@ -533,6 +533,24 @@ pub struct Ship {
     pub(crate) seen_until: [f32; 4],
     /// Seconds until each of the first two `ShipDef::heals` pulses.
     pub(crate) heal_in: [f32; 2],
+    /// Multipliers from friendly `Combat_Bonus_Ability` auras (refreshed once per second).
+    pub(crate) bonus: Bonus,
+}
+
+/// Multipliers a ship gets from friendly combat bonus auras; `1.0` = none.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct Bonus {
+    pub damage: f32,
+    pub taken_hull: f32,
+    pub taken_shield: f32,
+    pub range: f32,
+    pub speed: f32,
+}
+
+impl Default for Bonus {
+    fn default() -> Self {
+        Bonus { damage: 1.0, taken_hull: 1.0, taken_shield: 1.0, range: 1.0, speed: 1.0 }
+    }
 }
 
 /// A projectile in flight.

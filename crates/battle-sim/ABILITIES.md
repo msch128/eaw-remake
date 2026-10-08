@@ -13,6 +13,9 @@ Counts are `Unit_Ability` entries in `Units/Space/*.xml`, `SPACEUNITS*.XML`, `NA
 | `FOW_REVEAL_PING` | 10 | `Command::UseAbility[At]`: shows `Effective_Radius` around the ship or the chosen point for 5 s (estimate) |
 | `LASER_DEFENSE` + `Laser_Defense_Ability` | 18 + 19 | like the missile shield for `Defense_Duration_In_Secs` (30) in `Effective_Radius` (750), ship keeps moving |
 | `Force_Healing_Ability` (`Space_Automatic`) | 64 | `HealDef`: hull `Heal_Amount` + `Heal_Percent` of max per `Heal_Interval_In_Secs`, on the ship or on friends in `Heal_Range` (single target = most damaged) |
+| `Combat_Bonus_Ability` (`Space_Automatic`) | 50 | `BonusDef`: while the ship lives, friendly ships of `Applicable_Unit_Categories` get `Damage_Bonus_Percentage` (damage dealt), `Health_Bonus_Percentage` / `Shield_Bonus_Percentage` / `Defense_Bonus_Percentage` (damage taken divided by 1 + bonus), `Fire_Range_Bonus_Percentage` (hardpoint reach) and `Movement_Speed_Bonus_Percentage`. The data has no radius, so the aura covers the whole side (estimate). Per `Stacking_Category` the strongest bonus applies, categories add up; negative values (Gorgon -40% shields) are maluses. Refreshed once per second |
+| `Redirect_Blaster_Ability` (not `Initially_Enabled` = No) | 50 | `RedirectDef`: a direct shot hitting the ship inside `Reaction_Arc_In_Degrees` is destroyed with `Block_Chance`, or sent back with `Redirect_Chance` (estimate: its damage is dealt to the shooter instead of re-aiming the bolt). Abilities that start disabled are enabled by story or upgrades and are skipped |
+
 
 ## Not implemented
 | Type / sub-ability | Uses | What the data says | Effect that is missing |
@@ -26,8 +29,6 @@ Counts are `Unit_Ability` entries in `Units/Space/*.xml`, `SPACEUNITS*.XML`, `NA
 | `HARMONIC_BOMB`, `CLUSTER_BOMB`, `BLAST`, `STICKY_BOMB`, `ENERGY_WEAPON` | 5, 3, 3, 2, 3 | bomb / beam sub-abilities | area damage, beam attacks, bombs that stick to a target |
 | `LURE`, `WEAKEN_ENEMY`, `SHIELD_FLARE`, `FORCE_CONFUSE`, `CORRUPT_SYSTEMS`, `CONCENTRATE_FIRE` | 4, 1, 1, 1, 1, 1 | hero / special abilities | taunt, damage debuff, shield burst, confusion, hardpoint disabling, focus fire |
 | `TARGETED_REPAIR`, `TARGETED_INVULNERABILITY`, `TARGETED_HACK` | 1 each | targeted hero abilities | repair, invulnerability and hack a chosen ship |
-| `Combat_Bonus_Ability` | 50 | `Damage_Bonus_Percentage`, `Defense_Bonus_Percentage`, `Movement_Speed_Bonus_Percentage`, categories, `Stacking_Category` | aura bonuses to the fighter squads / ships of a hero |
-| `Redirect_Blaster_Ability` | 50 | `Redirect_Chance` / `Block_Chance` | lightsaber heroes reflect blaster shots |
 | `Retreat_Prevention_Ability`, `Bounty_On_Faction_Ability` | 2, 1 | | other than the interdictor |
 | `CAPTURE_VEHICLE`, `AREA_EFFECT_STUN`, `AREA_EFFECT_CONVERT` | 1 each | ground abilities | not space |
 

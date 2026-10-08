@@ -45,7 +45,7 @@ impl Plugin for GalaxyMapPlugin {
             .insert_resource(ClearColor(Color::BLACK))
             .insert_resource(GlobalAmbientLight {
                 color: Color::srgb(0.55, 0.62, 0.85),
-                brightness: 30.0,
+                brightness: 6.0,
                 ..default()
             })
             .add_systems(Startup, setup_scene)

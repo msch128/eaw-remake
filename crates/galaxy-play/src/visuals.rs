@@ -191,7 +191,7 @@ pub fn sync_fleets(
                 commands.spawn((
                     Mesh3d(assets.disc.clone()),
                     MeshMaterial3d(mats.add(StandardMaterial {
-                        base_color: Color::LinearRgba(LinearRgba::new(tl.red * 0.25, tl.green * 0.25, tl.blue * 0.25, 0.7)),
+                        base_color: Color::LinearRgba(LinearRgba::new(0.0, tl.green * 0.05, 0.0, 0.97)),
                         unlit: true,
                         alpha_mode: AlphaMode::Blend,
                         cull_mode: None,
@@ -262,7 +262,7 @@ pub fn draw_fleet_markers(
         let team = map_color(world, player.0, v.owner);
         let base = tf.translation;
         let center = Vec3::new(base.x, base.y - layout.unit * 0.1, base.z);
-        gizmos.circle(Isometry3d::new(center, flat), ring, team);
+        gizmos.circle(Isometry3d::new(center, flat), ring, team.with_alpha(1.0));
         if selection.fleets.contains(&v.id) {
             gizmos.circle(Isometry3d::new(center, flat), ring * 1.35 * pulse, Color::WHITE);
             gizmos.circle(Isometry3d::new(center, flat), ring * 1.5 * pulse, Color::srgb(0.6, 0.9, 1.0));

@@ -489,3 +489,63 @@ fn bombers_make_straight_bombing_runs_on_big_ships() {
     println!("bomber passes in 60 s: {passes}");
     assert!(passes >= 2, "the bomber comes back for more passes: {passes}");
 }
+
+fn duel_loss(attacker: ShipDef, target: ShipDef, seconds: u32) -> (f32, f32) {
+    let (a, t) = (attacker.name.clone(), target.name.clone());
+    let cat = Catalog::from_defs(vec![attacker, target], vec![laser()]);
+    let mut b = Battle::new(setup(cat, &a, &t, 1, 1, cfg()));
+    let (ai, ti) = (b.ships.iter().find(|s| s.side == 0).unwrap().id, b.ships.iter().find(|s| s.side == 1).unwrap().id);
+    let (ah, th) = (b.ships[ai as usize].hull, b.ships[ti as usize].hull);
+    for _ in 0..30 * seconds {
+        b.step();
+    }
+    (ah - b.ships[ai as usize].hull, th - b.ships[ti as usize].hull)
+}
+
+#[test]
+fn combat_bonus_auras_raise_damage_and_cut_damage_taken() {
+    let target = ship("dummy", 1.0e6, 0.0, vec![]);
+    let plain = ship("plain", 1.0e6, 0.0, vec![gun("g", 0.0)]);
+    let (_, base) = duel_loss(plain.clone(), target.clone(), 10);
+    assert!(base > 500.0, "{base}");
+    let mut boosted = plain.clone();
+    boosted.name = "boosted".into();
+    boosted.bonuses.push(BonusDef { damage: 0.5, classes: 0, stacking: 3, ..BonusDef::default() });
+    let (_, more) = duel_loss(boosted, target.clone(), 10);
+    // The aura starts after the first second: about +50 % over the rest.
+    assert!(more > base * 1.35 && more < base * 1.6, "base {base} boosted {more}");
+    // A defence bonus on the target halves what it takes; two bonuses of one stacking category do not add up.
+    let mut tough = target.clone();
+    tough.name = "tough".into();
+    tough.bonuses.push(BonusDef { defense: 1.0, classes: 0, stacking: 3, ..BonusDef::default() });
+    tough.bonuses.push(BonusDef { defense: 1.0, classes: 0, stacking: 3, ..BonusDef::default() });
+    let (_, less) = duel_loss(plain, tough, 10);
+    assert!(less < base * 0.6 && less > base * 0.4, "base {base} tough {less}");
+}
+
+#[test]
+fn redirect_blaster_blocks_or_reflects_shots() {
+    let gunner = ship("gunner", 1.0e6, 0.0, vec![gun("g", 0.0)]);
+    let plain = ship("plain", 1.0e6, 0.0, vec![]);
+    let (_, base) = duel_loss(gunner.clone(), plain.clone(), 10);
+    assert!(base > 500.0);
+    let mut blocker = plain.clone();
+    blocker.name = "blocker".into();
+    blocker.redirects.push(RedirectDef { block: 1.0, redirect: 0.0, half_arc: std::f32::consts::PI, classes: 0 });
+    let (_, blocked) = duel_loss(gunner.clone(), blocker, 10);
+    assert_eq!(blocked, 0.0, "everything blocked");
+    let mut mirror = plain.clone();
+    mirror.name = "mirror".into();
+    mirror.redirects.push(RedirectDef { block: 0.0, redirect: 1.0, half_arc: std::f32::consts::PI, classes: 0 });
+    let (hurt_shooter, reflected) = duel_loss(gunner.clone(), mirror, 10);
+    assert_eq!(reflected, 0.0);
+    assert!(hurt_shooter > base * 0.9, "the shooter takes its own shots: {hurt_shooter} vs {base}");
+    // A 15 % block chance blocks roughly 15 %.
+    let plain_again = plain.clone();
+    let mut partial = plain;
+    partial.name = "partial".into();
+    partial.redirects.push(RedirectDef { block: 0.15, redirect: 0.0, half_arc: std::f32::consts::PI, classes: 0 });
+    let (_, full) = duel_loss(gunner.clone(), plain_again, 20);
+    let (_, some) = duel_loss(gunner, partial, 20);
+    assert!(some > full * 0.7 && some < full * 0.95, "unblocked {full} partial {some}");
+}

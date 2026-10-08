@@ -24,6 +24,8 @@ pub struct PlayCatalog {
     pub structures: Vec<String>,
     /// Display name per star base level.
     pub starbases: Vec<String>,
+    /// `Galactic_Model_Name` per star base level (the small station drawn next to the planet).
+    pub starbase_models: Vec<Option<String>>,
     /// Display name per faction.
     pub factions: Vec<String>,
 }
@@ -56,6 +58,7 @@ impl PlayCatalog {
             structures: world.structures.iter().map(|s| prettify(&s.name)).collect(),
             starbases: world.starbases.iter().map(|s| prettify(&s.name)).collect(),
             factions: world.factions.iter().map(|f| prettify(&f.name)).collect(),
+            starbase_models: vec![None; world.starbases.len()],
         }
     }
 
@@ -88,6 +91,11 @@ impl PlayCatalog {
                 .starbases
                 .iter()
                 .map(|s| text(&data.objects.star_base(&s.name).and_then(|d| d.text_id), &s.name))
+                .collect(),
+            starbase_models: world
+                .starbases
+                .iter()
+                .map(|s| data.objects.resolve(&s.name).and_then(|r| r.string("galactic_model_name")).filter(|m| !m.trim().is_empty()))
                 .collect(),
             factions: world
                 .factions

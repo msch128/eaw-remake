@@ -384,6 +384,7 @@ impl Battle {
             scan_in: rng.range(0.0, self.config.retarget_interval),
             seen_until: [0.0; 4],
             heal_in: [0.0; 2],
+            bonus: Bonus::default(),
         });
         id
     }
@@ -977,10 +978,45 @@ impl Battle {
         }
     }
 
+    /// `Redirect_Blaster_Ability`: does ship `ship` block or reflect the shot `p`? Only direct shots from an enemy ship in the
+    /// reaction arc count; the roll is deterministic per tick, ship and shot.
+    fn redirect_roll(&self, ship: u32, p: &Projectile) -> Deflect {
+        let cat = &self.catalog;
+        let s = &self.ships[ship as usize];
+        let def = cat.ship(s.def);
+        if def.redirects.is_empty() {
+            return Deflect::None;
+        }
+        let Some(shooter) = self.ships.get(p.owner as usize).filter(|o| o.alive) else { return Deflect::None };
+        let class = cat.ship(shooter.def).class;
+        let speed = p.vel.len();
+        let incoming = if speed > 1.0 { (-p.vel.y).atan2(-p.vel.x) } else { s.yaw };
+        let off = crate::math::wrap_angle(incoming - s.yaw).abs();
+        let mut rng = Rng::for_entity(self.config.seed, self.tick, ship, 0xB10C0000 + p.owner as u64 * 31 + p.def as u64);
+        for r in def.redirects.iter().filter(|r| off <= r.half_arc && (r.classes == 0 || r.classes & class.bit() != 0)) {
+            let roll = rng.range(0.0, 1.0);
+            if roll < r.redirect {
+                return Deflect::Reflected;
+            }
+            if roll < r.redirect + r.block {
+                return Deflect::Blocked;
+            }
+        }
+        Deflect::None
+    }
+
     /// Applies a projectile hit (and its area damage) to ships.
     fn apply_hit(&mut self, p: &Projectile, ship: u32, pos: Vec3, snaps: &[Snap]) {
         let cat = self.catalog.clone();
         let pd = &cat.projectiles[p.def as usize];
+        match self.redirect_roll(ship, p) {
+            Deflect::Blocked => return,
+            Deflect::Reflected => {
+                self.damage_ship(p.owner, ship, pd, p.def, pd.damage, pos, NO_HP);
+                return;
+            }
+            Deflect::None => {}
+        }
         self.damage_ship(ship, p.owner, pd, p.def, pd.damage, pos, p.aim_hp);
         if pd.blast_range > 0.0 && pd.blast_damage > 0.0 {
             let mut near: Vec<(f32, u32)> = snaps
@@ -1003,6 +1039,7 @@ impl Battle {
         let cat = self.catalog.clone();
         let record = self.config.record_events;
         let (atk_damage, _, _) = self.side_mult(self.ships.get(attacker as usize).map_or(u8::MAX, |a| a.side));
+        let atk_damage = atk_damage * self.ships.get(attacker as usize).map_or(1.0, |a| a.bonus.damage);
         let (_, tgt_health, tgt_shield) = self.side_mult(self.ships[id as usize].side);
         let s = &mut self.ships[id as usize];
         if !s.alive {
@@ -1021,7 +1058,7 @@ impl Battle {
         let mut hull_part = 0.0;
         let mut shield_hit = false;
         if s.shield > 0.0 && pd.shield_damage {
-            let sd = dmg * cat.damage.multiplier(pd.damage_type, def.shield_armor) / tgt_shield;
+            let sd = dmg * cat.damage.multiplier(pd.damage_type, def.shield_armor) / tgt_shield * s.bonus.taken_shield;
             if sd <= s.shield {
                 s.shield -= sd;
                 if s.shield <= 0.0 {
@@ -1041,7 +1078,7 @@ impl Battle {
             hull_part = dmg;
         }
         if !shield_hit && pd.hull_damage && hull_part > 0.0 && (s.shield <= 0.0 || !pd.shield_damage) {
-            let h = hull_part * cat.damage.multiplier(pd.damage_type, def.armor) / tgt_health;
+            let h = hull_part * cat.damage.multiplier(pd.damage_type, def.armor) / tgt_health * s.bonus.taken_hull;
             s.hull -= h;
             // Hardpoint: the aimed one, else the destroyable hardpoint nearest to the impact.
             let local = (pos - s.pos).rotate_yaw(-s.yaw);
@@ -1280,6 +1317,42 @@ impl Battle {
         }
         self.run_carriers(dt);
         self.run_healing(dt);
+        if self.tick.is_multiple_of(30) {
+            self.run_bonuses();
+        }
+    }
+
+    /// `Combat_Bonus_Ability` auras: per side, the strongest bonus of each stacking category counts, categories add up.
+    fn run_bonuses(&mut self) {
+        let cat = self.catalog.clone();
+        if !self.ships.iter().any(|s| !cat.ship(s.def).bonuses.is_empty()) {
+            return;
+        }
+        // (side, stacking category) -> strongest source bonus per stat.
+        let mut best: std::collections::BTreeMap<(u8, u8), Vec<&BonusDef>> = std::collections::BTreeMap::new();
+        for s in self.ships.iter().filter(|s| s.alive && !s.retreated) {
+            for b in &cat.ship(s.def).bonuses {
+                best.entry((s.side, b.stacking)).or_default().push(b);
+            }
+        }
+        for s in self.ships.iter_mut() {
+            let class = cat.ship(s.def).class;
+            let (mut dmg, mut health, mut shield, mut defense, mut range, mut speed) = (0.0f32, 0.0f32, 0.0f32, 0.0f32, 0.0f32, 0.0f32);
+            for ((side, _), list) in &best {
+                if *side != s.side {
+                    continue;
+                }
+                let hit = list.iter().filter(|b| b.classes == 0 || b.classes & class.bit() != 0);
+                let max = |f: fn(&BonusDef) -> f32| hit.clone().map(|b| f(b)).fold(0.0f32, |m, v| if v.abs() > m.abs() { v } else { m });
+                dmg += max(|b| b.damage);
+                health += max(|b| b.health);
+                shield += max(|b| b.shield);
+                defense += max(|b| b.defense);
+                range += max(|b| b.range);
+                speed += max(|b| b.speed);
+            }
+            s.bonus = Bonus { damage: 1.0 + dmg, taken_hull: 1.0 / ((1.0 + health) * (1.0 + defense)), taken_shield: 1.0 / ((1.0 + shield) * (1.0 + defense)), range: 1.0 + range, speed: 1.0 + speed };
+        }
     }
 
     /// `Force_Healing_Ability` pulses: self repair and repair auras.
@@ -1530,7 +1603,7 @@ fn mov(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, spawn: &
     let dt = cfg.dt;
     let speed_mult = ability_product(def, s, |a| a.speed_mult) * (1.0 - s.stun_speed_cut) * (1.0 - s.tractor_cut) * s.engine_factor;
     let pinned = def.abilities.iter().zip(&s.abilities).any(|(a, st)| a.disable_movement && st.active > 0.0);
-    let max_speed = if pinned { 0.0 } else { def.max_speed * speed_mult };
+    let max_speed = if pinned { 0.0 } else { def.max_speed * speed_mult * s.bonus.speed };
     let target = (s.target != NONE && snaps[s.target as usize].alive).then(|| snaps[s.target as usize]);
     let fighter = matches!(def.class, TargetClass::Fighter | TargetClass::Bomber);
     let aggressive = s.stance == Stance::Aggressive;
@@ -1720,11 +1793,11 @@ fn mov(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, spawn: &
 
 /// Checks whether a hardpoint at `muzzle` could shoot at target `t`.
 #[allow(clippy::too_many_arguments)]
-fn can_fire(hp: &HpDef, ship_yaw: f32, muzzle: Vec3, t: &Snap, proj: &ProjDef) -> bool {
+fn can_fire(hp: &HpDef, ship_yaw: f32, range_mult: f32, muzzle: Vec3, t: &Snap, proj: &ProjDef) -> bool {
     let to = t.pos - muzzle;
     let dist = to.len();
     let reach = (dist - t.radius * 0.6).max(0.0);
-    if reach > hp.range || reach < hp.min_range {
+    if reach > hp.range * range_mult || reach < hp.min_range {
         return false;
     }
     if hp.allowed != 0 && hp.allowed & t.class.bit() == 0 {
@@ -1820,7 +1893,7 @@ fn weapons(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, rng:
                 st.pulses_left = 0;
             } else {
                 let t = &snaps[tgt as usize];
-                if can_fire(hp, s.yaw, muzzle, t, pd) {
+                if can_fire(hp, s.yaw, s.bonus.range, muzzle, t, pd) {
                     let tdef = cat.ship(t.def);
                     let aim_hp = if s.target_hp != NO_HP && tgt == s.target {
                         s.target_hp
@@ -1872,7 +1945,7 @@ fn weapons(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, rng:
         let mut chosen = NONE;
         for &c in &s.candidates {
             let t = &snaps[c as usize];
-            if t.alive && can_fire(hp, s.yaw, muzzle, t, pd) {
+            if t.alive && can_fire(hp, s.yaw, s.bonus.range, muzzle, t, pd) {
                 chosen = c;
                 break;
             }
@@ -2008,4 +2081,11 @@ fn fly(p: &mut Projectile, snaps: &[Snap], grid: &Grid, cat: &Catalog, env: &Fly
 /// Helper to build an `Arc<Catalog>` setup quickly.
 pub fn setup(catalog: Arc<Catalog>, sides: Vec<SideSetup>, config: BattleConfig) -> BattleSetup {
     BattleSetup { catalog, sides, config }
+}
+
+/// What a `Redirect_Blaster_Ability` did to a shot.
+enum Deflect {
+    None,
+    Blocked,
+    Reflected,
 }

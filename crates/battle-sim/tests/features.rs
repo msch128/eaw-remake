@@ -177,3 +177,14 @@ fn laser_defense_becomes_a_missile_defence_ability() {
     let a = cat.ship(id).abilities.iter().find(|a| a.kind.eq_ignore_ascii_case("LASER_DEFENSE")).expect("the ability");
     assert!((a.missile_radius - 750.0).abs() < 1.0 && (a.duration - 30.0).abs() < 1.0 && !a.toggle && !a.disable_movement, "{a:?}");
 }
+
+#[test]
+fn combat_bonus_and_redirect_abilities_are_read_from_the_data() {
+    let Some((data, fs)) = load() else { return };
+    let cat = Catalog::build(&data, Some(&fs), &["Gorgon_Star_Destroyer_II", "Viscount_Star_Defender_P1", "Dragon"]);
+    let tie = cat.ship(cat.ship_id("Gorgon_Star_Destroyer_II").expect("gorgon"));
+    assert!(tie.bonuses.iter().any(|b| (b.damage - 0.25).abs() < 1e-4 && (b.shield + 0.4).abs() < 1e-4 && b.stacking == 6), "{:?}", tie.bonuses);
+    let viscount = cat.ship(cat.ship_id("Viscount_Star_Defender_P1").expect("viscount"));
+    let dragon = cat.ship(cat.ship_id("Dragon").expect("dragon"));
+    assert!(!viscount.redirects.is_empty() || !dragon.redirects.is_empty(), "an enabled blaster redirect is parsed");
+}
