@@ -33,6 +33,12 @@ pub fn pump_snapshots(
     let Some(last) = snaps.last().cloned() else { return };
     for s in &snaps {
         for e in &s.script_events {
+            // A hero coming back (the Remake's respawn timers) is news for its owner.
+            if let galaxy_script::ScriptEvent::UnitSpawned { unit, planet, faction } = e
+                && player.0.is_some_and(|h| state.world.factions[h as usize].name.eq_ignore_ascii_case(faction))
+            {
+                notes.push(NotificationKind::Campaign, format!("{} has returned at {}.", crate::catalog::prettify(unit), planet), None, now);
+            }
             out.write(PlayEvent::Script(e.clone()));
         }
         for r in &s.saves {

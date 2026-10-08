@@ -31,11 +31,13 @@ struct BarState {
     space_tab: bool,
     /// What each visible pad orders.
     pads: Vec<BuildTarget>,
+    /// Queue slots: lane, position in the lane and the credits a cancel gives back.
+    queue: Vec<(galaxy_sim::Lane, u32, f32)>,
 }
 
 impl Default for BarState {
     fn default() -> Self {
-        Self { spawned: false, space_tab: true, pads: Vec::new() }
+        Self { spawned: false, space_tab: true, pads: Vec::new(), queue: Vec::new() }
     }
 }
 
@@ -68,6 +70,7 @@ impl Plugin for PlayUiPlugin {
         app.init_resource::<BarState>()
             .init_resource::<BattleDialogState>()
             .init_resource::<MoveMarkers>()
+            .init_resource::<Toast>()
             .add_systems(PreUpdate, drive_ui_scale.run_if(resource_exists::<EawUiSettings>))
             .add_systems(
                 Update,
@@ -81,6 +84,8 @@ impl Plugin for PlayUiPlugin {
                     loading_overlay,
                     skin_panels,
                     collect_move_markers,
+                    draw_toast.run_if(in_state(AppScreen::Galaxy)),
+                    scripted_clicks,
                     fleet_tooltip.run_if(in_state(AppScreen::Galaxy)),
                     draw_move_markers,
                     refresh_ticker,
@@ -226,15 +231,21 @@ fn feed_bar(
     }
     let week = state.world.config.week_seconds;
     let space_tab = bar.space_tab;
+    bar.queue.clear();
     bar.pads.clear();
     if let Some(menu) = &model.planet {
+        let mut per_lane: std::collections::BTreeMap<u8, u32> = Default::default();
         for q in &menu.queue {
+            let index = per_lane.entry(q.lane as u8).or_insert(0);
+            let refund = menu.options.iter().find(|o| o.target == q.target).map(|o| o.cost * (1.0 - q.progress) * state.world.config.cancel_refund);
+            let cancel = refund.map_or("Click to cancel".to_owned(), |r| format!("Click to cancel - refund {r:.0} credits"));
+            bar.queue.push((q.lane, *index, refund.unwrap_or(0.0)));
+            *index += 1;
             next.queue.push(QueueEntry {
                 icon: icon_for(&state, game, q.target),
                 progress: q.progress,
                 count: 1,
-                tooltip: format!("{}
-{} left", q.name, format_duration(q.remaining_seconds, week)),
+                tooltip: format!("{}\n{} left\n{cancel}", q.name, format_duration(q.remaining_seconds, week)),
             });
         }
         for o in menu.options.iter().filter(|o| is_structure(o.target) != space_tab).take(MAX_PADS) {
@@ -260,12 +271,21 @@ fn bar_clicks(
     selection: Res<PlayerSelection>,
     clock: Res<GameClock>,
     mut actions: MessageWriter<PlayAction>,
+    mut toast: ResMut<Toast>,
 ) {
     for c in clicks.read() {
         let name = c.name.as_str();
         if let Some(i) = name.strip_prefix("b_create_").and_then(|n| n.parse::<usize>().ok()) {
             if let (Some(planet), Some(&target)) = (selection.planet, bar.pads.get(i)) {
                 actions.write(PlayAction::Build { planet, target });
+            }
+            continue;
+        }
+        if let Some(i) = name.strip_prefix("queue").and_then(|n| n.parse::<usize>().ok()) {
+            if let (Some(planet), Some(&(lane, index, refund))) = (selection.planet, bar.queue.get(i)) {
+                actions.write(PlayAction::CancelProduction { planet, lane, index });
+                toast.0 = if refund > 0.0 { format!("Production cancelled - {refund:.0} credits refunded") } else { "Production cancelled".to_owned() };
+                toast.1 = 3.0;
             }
             continue;
         }
@@ -309,6 +329,14 @@ fn spawn_hud(mut commands: Commands, existing: Query<(), With<PlayHud>>) {
         text_bundle("", 20.0, Color::srgb(0.9, 0.95, 1.0)),
         Node { top: Val::Px(52.0), left: Val::Percent(45.0), ..abs.clone() },
         SpeedText,
+        GalaxyEntity,
+    ));
+    commands.spawn((
+        PlayHud,
+        ToastText,
+        text_bundle("", 18.0, Color::srgb(1.0, 0.9, 0.5)),
+        Node { top: Val::Px(84.0), left: Val::Percent(40.0), ..abs.clone() },
+        Visibility::Hidden,
         GalaxyEntity,
     ));
     commands.spawn((
@@ -775,6 +803,56 @@ fn skin_panels(
         let want = BorderColor::all(border);
         if *c != want {
             *c = want;
+        }
+    }
+}
+
+/// A short message under the speed read-out (order confirmations).
+#[derive(Resource, Default)]
+struct Toast(String, f32);
+/// The toast text.
+#[derive(Component)]
+struct ToastText;
+
+fn draw_toast(time: Res<Time>, mut toast: ResMut<Toast>, mut tip: Single<(&mut Text, &mut Visibility), With<ToastText>>) {
+    let (text, vis) = &mut *tip;
+    if toast.1 > 0.0 {
+        toast.1 -= time.delta_secs();
+        if text.0 != toast.0 {
+            text.0 = toast.0.clone();
+        }
+        **vis = Visibility::Inherited;
+    } else if **vis != Visibility::Hidden {
+        **vis = Visibility::Hidden;
+    }
+}
+
+/// Offscreen `--click` / `--battle-click`: presses command bar buttons by name so UI paths can be verified headless.
+fn scripted_clicks(
+    args: Res<crate::cli::Args>,
+    screen: Res<State<AppScreen>>,
+    state: Res<SimState>,
+    hold: Res<crate::play::ScriptHold>,
+    mut out: MessageWriter<EawButtonClicked>,
+    mut galaxy_frames: Local<u32>,
+    mut battle_frames: Local<u32>,
+) {
+    if args.offscreen.is_none() {
+        return;
+    }
+    let (list, frames) = match screen.get() {
+        AppScreen::Galaxy if !hold.active && !state.current.loading => (args.click.as_deref(), &mut *galaxy_frames),
+        AppScreen::SpaceBattle => (args.battle_click.as_deref(), &mut *battle_frames),
+        _ => return,
+    };
+    let Some(list) = list else { return };
+    *frames += 1;
+    // First click after 60 frames, then one every 40.
+    if *frames >= 60 && (*frames - 60) % 40 == 0 {
+        let n = ((*frames - 60) / 40) as usize;
+        if let Some(name) = list.split(',').nth(n) {
+            info!("script: clicking `{name}`");
+            out.write(EawButtonClicked { name: name.trim().to_lowercase(), entity: Entity::PLACEHOLDER, shift: false });
         }
     }
 }

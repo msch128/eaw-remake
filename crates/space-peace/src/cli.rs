@@ -52,6 +52,12 @@ pub struct Args {
     pub battle_orders: bool,
     /// Offscreen only: reach the map the way a player does, main menu -> campaign list -> campaign (`--via-menu`).
     pub via_menu: bool,
+    /// Offscreen only: deploy only the first N groups of the player side, the rest becomes the reinforcement reserve (`--battle-reserve N`).
+    pub battle_reserve: Option<usize>,
+    /// Offscreen only: click these command bar buttons on the map, 40 frames apart (`--click queue00,b_space_tab`).
+    pub click: Option<String>,
+    /// Offscreen only: click these buttons once the battle runs (`--battle-click b_reinforcement,r_0000`).
+    pub battle_click: Option<String>,
     /// Offscreen only: open the save or load slot list on the map (`--slots save|load`).
     pub slots: Option<String>,
     /// Offscreen only: press this slot of the open list (`--slot-click N`).
@@ -95,6 +101,9 @@ impl Default for Args {
             battle_auto: false,
             battle_orders: false,
             via_menu: false,
+            battle_reserve: None,
+            click: None,
+            battle_click: None,
             slots: None,
             slot_click: None,
             difficulty: None,
@@ -132,6 +141,8 @@ OPTIONS:
   --battle-choice <c>    Offscreen: click fight or auto in the battle dialog when it opens
   --battle-auto           Offscreen: the AI plays both sides of a tactical battle
   --via-menu            Offscreen: start from the main menu and click through to the campaign
+  --click <names>        Offscreen: click command bar buttons on the map (comma separated)
+  --battle-click <names> Offscreen: click buttons once the battle runs (comma separated)
   --difficulty <d>      AI difficulty of a new game: easy, normal, hard, brutal, fair
   --classic-ai           Use the built-in classic AI instead of the Remake AI
   --save-to <file>       Offscreen: save the game after the scenario
@@ -197,6 +208,9 @@ impl Args {
                 "--battle-auto" => out.battle_auto = true,
                 "--battle-orders" => out.battle_orders = true,
                 "--via-menu" => out.via_menu = true,
+                "--battle-reserve" => out.battle_reserve = Some(it.next().ok_or("--battle-reserve needs a number")?.parse().map_err(|e| format!("bad --battle-reserve: {e}"))?),
+                "--click" => out.click = Some(it.next().ok_or("--click needs button names")?),
+                "--battle-click" => out.battle_click = Some(it.next().ok_or("--battle-click needs button names")?),
                 "--slots" => out.slots = Some(it.next().ok_or("--slots needs save or load")?),
                 "--slot-click" => out.slot_click = Some(it.next().ok_or("--slot-click needs a number")?.parse().map_err(|e| format!("bad --slot-click: {e}"))?),
                 "--difficulty" => out.difficulty = Some(it.next().ok_or("--difficulty needs a value")?.to_lowercase()),

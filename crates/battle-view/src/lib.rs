@@ -150,7 +150,7 @@ impl BattleSession {
             .as_deref()
             .ok_or_else(|| format!("planet {} has no space map", request.planet_name))?;
         let scene = SpaceScene::load(fs, data, &format!("Art/Maps/{map}"))?;
-        let names: Vec<&str> = request.sides.iter().flat_map(|s| s.groups.iter().map(|g| g.name.as_str())).collect();
+        let names: Vec<&str> = request.sides.iter().flat_map(|s| s.groups.iter().chain(&s.reserve).map(|g| g.name.as_str())).collect();
         let catalog = Arc::new(Catalog::build(data, Some(fs), &names));
         let arena = battle_sim::Arena::load(data, fs, map).map(Arc::new);
         let player_side = player.and_then(|p| request.sides.iter().position(|s| s.faction == p)).map(|i| i as u8);

@@ -14,7 +14,8 @@ use bevy::prelude::*;
 use eaw_ui::textures::UiTextures;
 use eaw_ui::{
     AbilityState, CommandBarMode, CommandBarSpec, EawAbilityClicked, EawButtonClicked, EawCommandBar, EawMinimapClicked, EawSelectionClicked,
-    EawUiAssets, EawUiCommandsExt, MinimapData, MinimapDot, RetreatState, TacticalData, TacticalUnit, UiFaction,
+    EawUiAssets, EawUiCommandsExt, MinimapData, MinimapDot, PanelData, PanelSlot, RetreatState, ShellAnchor, ShellSpec, TacticalData,
+    TacticalUnit, UiFaction, spawn_shell,
 };
 
 use crate::camera::BattleCamera;
@@ -28,12 +29,14 @@ pub struct TacticalUiPlugin;
 
 impl Plugin for TacticalUiPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<TacticalUiState>().add_systems(
+        app.init_resource::<TacticalUiState>().init_resource::<ReinforceUi>().add_systems(
             Update,
             (
+                init_reinforce.run_if(resource_added::<BattleRuntime>),
                 spawn_bar.run_if(resource_added::<BattleRuntime>),
+                remove_reinforce.run_if(resource_removed::<BattleRuntime>),
                 remove_bar.run_if(resource_removed::<BattleRuntime>),
-                (sync_data, handle_clicks, sync_minimap, minimap_pan).chain().run_if(resource_exists::<BattleRuntime>),
+                (sync_data, handle_clicks, reinforce_clicks, reinforce_panel, sync_minimap, minimap_pan).chain().run_if(resource_exists::<BattleRuntime>),
             )
                 .chain(),
         );
@@ -67,6 +70,7 @@ fn sync_data(
     status: Res<BattleStatus>,
     settings: Res<BattleViewSettings>,
     ships: Res<RenderedShips>,
+    reinforce: Res<ReinforceUi>,
     assets: Option<Res<EawUiAssets>>,
     textures: Option<Res<UiTextures>>,
     mut tac: ResMut<TacticalData>,
@@ -127,7 +131,7 @@ fn sync_data(
         active: true,
         focus: tac.focus.min(selection.len().saturating_sub(1)),
         selection,
-        reinforcement_points: None,
+        reinforcement_points: (!reinforce.rows.is_empty()).then(|| reinforce.rows.iter().map(|r| r.2).sum()),
         pop: Some((status.alive.get(player as usize).copied().unwrap_or(0), rt.unit_cap.max(0) as u32)),
         retreat,
         overlays: Vec::new(),
@@ -221,5 +225,135 @@ fn minimap_pan(mut clicks: MessageReader<EawMinimapClicked>, mut camera: Single<
     if let Some(c) = clicks.read().last() {
         let y = camera.target_focus.y;
         camera.target_focus = Vec3::new(c.world.x, y, -c.world.y);
+    }
+}
+
+/// The reinforcement window (`b_reinforcement`): the units of the player's fleets at the planet that did not fit under the
+/// space population cap. A click on a slot calls one unit in (shift: all), it arrives after the reinforcement delay if the cap allows.
+#[derive(Resource, Default, Debug)]
+pub struct ReinforceUi {
+    /// Root of the open window.
+    pub root: Option<Entity>,
+    /// Reserve per unit type: object name, battle ship id, units not called in yet.
+    pub rows: Vec<(String, u32, u32)>,
+}
+
+/// Reads the reserve of the player's side from the request.
+fn init_reinforce(rt: Res<BattleRuntime>, settings: Res<BattleViewSettings>, mut ui: ResMut<ReinforceUi>) {
+    ui.root = None;
+    ui.rows.clear();
+    let Some(side) = rt.request.as_ref().and_then(|r| r.sides.get(settings.player_side as usize)) else { return };
+    for g in &side.reserve {
+        let Some(ship) = rt.catalog.ship_id(&g.name) else { continue };
+        match ui.rows.iter_mut().find(|r| r.1 == ship) {
+            Some(r) => r.2 += g.count,
+            None => ui.rows.push((g.name.clone(), ship, g.count)),
+        }
+    }
+    info!("reinforcements: {} reserve unit types, cap {}", ui.rows.len(), rt.unit_cap);
+}
+
+fn remove_reinforce(mut commands: Commands, mut ui: ResMut<ReinforceUi>, mut panel: ResMut<PanelData>) {
+    if let Some(e) = ui.root.take() {
+        commands.entity(e).despawn();
+    }
+    ui.rows.clear();
+    panel.slots.retain(|k, _| !k.starts_with("r_"));
+    panel.texts.remove("r_pop_text");
+}
+
+/// Slot name `r_RRCC` to the index in the row list (4 columns).
+fn reserve_slot(name: &str) -> Option<usize> {
+    let digits = name.strip_prefix("r_")?;
+    if digits.len() != 4 || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let (row, col): (usize, usize) = (digits[..2].parse().ok()?, digits[2..].parse().ok()?);
+    Some(row * 4 + col)
+}
+
+/// Opens and closes the window, and calls units in.
+fn reinforce_clicks(
+    mut clicks: MessageReader<EawButtonClicked>,
+    rt: Res<BattleRuntime>,
+    settings: Res<BattleViewSettings>,
+    mut ui: ResMut<ReinforceUi>,
+    mut commands: Commands,
+) {
+    for c in clicks.read() {
+        match c.name.as_str() {
+            "b_reinforcement" | "r_close" => {
+                if let Some(e) = ui.root.take() {
+                    commands.entity(e).despawn();
+                } else if c.name == "b_reinforcement" && !ui.rows.is_empty() {
+                    info!("reinforcements: opening the window ({} unit types in the reserve)", ui.rows.len());
+                    let faction = UiFaction::from_name(rt.player_faction.as_deref().unwrap_or("Empire"));
+                    // `reinforcement_window_ALTn` is the frame for n + 1 rows.
+                    let rows = ui.rows.len().div_ceil(4).clamp(1, 3);
+                    commands.queue(move |world: &mut World| {
+                        let mut spec = ShellSpec::new("I_Main_Reinforce.ALO", faction);
+                        spec.art_alt = Some(rows - 1);
+                        spec.anchor = ShellAnchor::TopLeft;
+                        spec.offset = Vec2::new(30.0, -60.0);
+                        if let Some(e) = spawn_shell(world, &spec) {
+                            world.resource_mut::<ReinforceUi>().root = Some(e);
+                        }
+                    });
+                }
+            }
+            name => {
+                let Some(idx) = reserve_slot(name) else { continue };
+                if ui.root.is_none() {
+                    continue;
+                }
+                if let Some(row) = ui.rows.get_mut(idx).filter(|r| r.2 > 0) {
+                    let count = if c.shift { row.2 } else { 1 };
+                    rt.command(settings.player_side, Command::Reinforce { ship: row.1, count });
+                    row.2 -= count;
+                }
+            }
+        }
+    }
+}
+
+/// Fills the window slots (icon, units left) and the population text.
+fn reinforce_panel(
+    ui: Res<ReinforceUi>,
+    rt: Res<BattleRuntime>,
+    status: Res<BattleStatus>,
+    settings: Res<BattleViewSettings>,
+    assets: Option<Res<EawUiAssets>>,
+    mut panel: ResMut<PanelData>,
+) {
+    if ui.root.is_none() {
+        return;
+    }
+    let game = assets.and_then(|a| a.game.clone());
+    for k in 0..12 {
+        let name = format!("r_{:02}{:02}", k / 4, k % 4);
+        match ui.rows.get(k) {
+            Some((object, _, left)) => {
+                let slot = PanelSlot {
+                    icon: game.as_deref().and_then(|g| eaw_ui::unit_icon(g, object)).unwrap_or_default(),
+                    label: left.to_string(),
+                    disabled: *left == 0,
+                    ..default()
+                };
+                if panel.slots.get(&name) != Some(&slot) {
+                    panel.set_slot(&name, slot);
+                }
+            }
+            None => {
+                if panel.slots.contains_key(&name) {
+                    panel.slots.remove(&name);
+                }
+            }
+        }
+    }
+    let alive = status.alive.get(settings.player_side as usize).copied().unwrap_or(0);
+    let cap = rt.request.as_ref().and_then(|r| r.sides.get(settings.player_side as usize)).map_or(0, |s| s.unit_cap);
+    let text = format!("{alive}/{cap}");
+    if panel.texts.get("r_pop_text") != Some(&text) {
+        panel.set_text("r_pop_text", text);
     }
 }

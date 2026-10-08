@@ -104,6 +104,8 @@ pub fn describe_event(
             };
             Some((NotificationKind::Construction, format!("{what} completed at {}.", planet(*p)), Some(*p)))
         }
+        Event::HeroDestroyed { faction, planet: p, unit } if me(*faction) => Some((NotificationKind::BattleResolved, format!("{} was lost at {}.", names.unit(*unit), planet(*p)), Some(*p))),
+        Event::CaptureBonus { faction, planet: p, credits } if me(*faction) => Some((NotificationKind::PlanetCaptured, format!("Capture bonus: {:.0} credits for {}.", credits, planet(*p)), Some(*p))),
         Event::BattlePending(b) if human.is_some_and(|h| b.factions.contains(&h)) => {
             Some((NotificationKind::BattlePending, format!("Battle at {}!", planet(b.planet)), Some(b.planet)))
         }

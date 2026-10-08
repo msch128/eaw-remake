@@ -114,12 +114,20 @@ fn suspend_galaxy_look(
 
 /// Builds the battle from the prepared request.
 fn begin_session(world: &mut World) {
-    let Some(req) = world.get_resource::<PendingTactical>().map(|p| (*p.0).clone()) else { return };
+    let Some(mut req) = world.get_resource::<PendingTactical>().map(|p| (*p.0).clone()) else { return };
     let args = world.resource::<Args>().clone();
     let player = world.get_resource::<PlayerFaction>().and_then(|p| p.0);
     let target = world.get_resource::<OffscreenTarget>().map(|t| (t.image.clone(), t.scale_factor));
     let (msaa, bloom) = world.get_resource::<crate::settings::Settings>().map_or((4, true), |s| (s.msaa, s.bloom));
     let Some(assets) = world.resource::<Game>().0.clone() else { return };
+    // Test scenario: pretend the planet cap is reached so the rest of the fleet waits in the reserve.
+    if let Some(keep) = args.battle_reserve
+        && let Some(side) = req.sides.iter_mut().find(|s| Some(s.faction) == player)
+    {
+        let rest = side.groups.split_off(keep.min(side.groups.len()));
+        side.reserve.extend(rest.into_iter().filter(|g| g.kind == galaxy_sim::GroupKind::Unit));
+        side.unit_cap = side.groups.iter().map(|g| g.count as i32).sum::<i32>().max(1);
+    }
     let started = std::time::Instant::now();
     // `--battle-auto` lets the AI play both sides (headless scenarios).
     let side_player = if args.battle_auto { None } else { player };
