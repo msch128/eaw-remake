@@ -62,7 +62,7 @@ pub struct InfoPanel;
 
 /// Which line of the info panel a text entity shows.
 #[derive(Component, Clone, Copy, PartialEq, Eq)]
-enum InfoLine {
+pub(crate) enum InfoLine {
     Name,
     Owner,
     Income,
@@ -244,7 +244,7 @@ fn spawn_hud(mut commands: Commands, existing: Query<(), With<HudEntity>>) {
 }
 /// Fills the info panel from the selected planet: owner, income, structure slots, ability and
 /// the forces the campaign starts with there.
-fn update_info_panel(
+pub(crate) fn update_info_panel(
     selection: Res<Selection>,
     view: Res<GalaxyView>,
     mut panel: Single<&mut Visibility, With<InfoPanel>>,

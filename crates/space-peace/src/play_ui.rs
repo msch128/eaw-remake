@@ -109,6 +109,7 @@ impl Plugin for PlayUiPlugin {
                     .chain()
                     .run_if(resource_exists::<PlayBridge>.and_then(resource_exists::<SimState>)),
             )
+            .add_systems(Update, (live_info_panel.after(crate::ui::update_info_panel), focus_start.run_if(in_state(AppScreen::Galaxy))).run_if(resource_exists::<SimState>))
             .add_systems(Update, fix_fleet_label_scale.after(galaxy_play::PlaySet::Visuals).run_if(resource_exists::<SimState>))
             .add_systems(OnEnter(AppScreen::SpaceBattle), hide_play_ui)
             .add_systems(OnExit(AppScreen::SpaceBattle), show_play_ui)
@@ -1020,6 +1021,16 @@ fn show_end_dialog(world: &mut World) {
         if let Some(mut music) = world.get_resource_mut::<alamo_audio::MusicDirector>() {
             music.set_scene(alamo_audio::MusicScene::Result { faction: name.clone(), win, tactical: false });
         }
+        if win && world.contains_resource::<alamo_audio::plugin::AlamoAudio>() {
+            // The announcer line of the faction (`<FACTION>_VICTORY_NN.WAV`), picked from the game state so a replay says the same.
+            let (upper, lines) = match name.to_ascii_lowercase().as_str() {
+                "rebel" => ("REBEL", 3),
+                "underworld" => ("UNDERWORLD", 3),
+                _ => ("EMPIRE", 8),
+            };
+            let n = (weeks + u64::from(planets)) % lines;
+            world.write_message(alamo_audio::PlayFile { name: format!("{upper}_VICTORY_{n:02}.WAV"), bus: alamo_audio::Bus::Speech });
+        }
         if !win && world.contains_resource::<alamo_audio::plugin::AlamoAudio>() {
             world.write_message(alamo_audio::plugin::GalaxyAudio { faction: name, event: alamo_audio::GalaxyEvent::Defeated });
         }
@@ -1063,5 +1074,97 @@ mod tests {
         assert_eq!(GameStats::from_text("v2 1 2 3 4"), None);
         assert_eq!(GameStats::from_text("v1 1 2"), None);
         assert_eq!(GameStats::sidecar(std::path::Path::new("saves/slot1.json")), std::path::PathBuf::from("saves/slot1.stats"));
+    }
+}
+
+/// While a game runs the planet info shows the live state (star base, structures, fleets in orbit), not the starting forces.
+fn live_info_panel(
+    selection: Res<PlayerSelection>,
+    model: Res<PlayUiModel>,
+    state: Res<SimState>,
+    catalog: Res<galaxy_play::PlayCatalog>,
+    mut lines: Query<(&crate::ui::InfoLine, &mut Text)>,
+) {
+    let Some(p) = selection.planet else { return };
+    let mut rows: Vec<String> = Vec::new();
+    let mut slots = None;
+    if let Some(menu) = model.planet.as_ref().filter(|m| m.planet == p) {
+        slots = Some(format!(
+            "Space slots {}/{}   Ground slots {}/{}",
+            menu.space_slots.0, menu.space_slots.1, menu.ground_slots.0, menu.ground_slots.1
+        ));
+        rows.push(match &menu.starbase_name {
+            Some(n) => format!("Star base: {n} (level {})", menu.starbase_level),
+            None => "Star base: none".to_owned(),
+        });
+        if !menu.structures.is_empty() {
+            rows.push("Structures:".to_owned());
+            rows.extend(menu.structures.iter().take(8).map(|s| format!("  {s}")));
+            if menu.structures.len() > 8 {
+                rows.push(format!("  +{} more", menu.structures.len() - 8));
+            }
+        }
+    }
+    let mut orbit: std::collections::BTreeMap<u32, u32> = Default::default();
+    for f in state.galaxy().fleets.values() {
+        if f.planet() == Some(p) {
+            *orbit.entry(f.owner).or_default() += f.unit_count();
+        }
+    }
+    if !orbit.is_empty() {
+        rows.push("In orbit:".to_owned());
+        rows.extend(orbit.iter().map(|(&o, &n)| format!("  {}: {n} ships", catalog.faction(o))));
+    }
+    let forces = rows.join("\n");
+    for (line, mut text) in &mut lines {
+        match line {
+            crate::ui::InfoLine::Forces if text.0 != forces => text.0 = forces.clone(),
+            crate::ui::InfoLine::Slots => {
+                if let Some(s) = &slots
+                    && text.0 != *s
+                {
+                    text.0 = s.clone();
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// A new game starts looking at the player's richest planet (the capital) instead of the whole galaxy.
+fn focus_start(
+    args: Res<crate::cli::Args>,
+    view: Res<crate::galaxy_view::GalaxyView>,
+    bounds: Res<crate::camera::CameraBounds>,
+    state: Res<SimState>,
+    mut cam: Single<&mut crate::camera::GalaxyCamera>,
+    mut selection: ResMut<crate::galaxy_map::Selection>,
+    mut done: Local<usize>,
+    mut frames: Local<u32>,
+) {
+    let game = std::sync::Arc::as_ptr(&state.world) as usize;
+    if *done == game || state.current.loading {
+        return;
+    }
+    if args.offscreen.is_some() && (args.select.is_some() || args.zoom.is_some()) {
+        *done = game;
+        return;
+    }
+    *frames += 1;
+    if *frames < 10 || bounds.dirty {
+        return;
+    }
+    *done = game;
+    *frames = 0;
+    let capital = view.planets.iter().enumerate().filter(|(_, p)| p.owner.is_some() && p.owner == view.player_faction).max_by_key(|(_, p)| p.income);
+    if let Some((i, p)) = capital {
+        // The build pads and the planet panel are the first thing a new player needs.
+        selection.0 = Some(i);
+        let w = crate::galaxy_map::galaxy_to_world(p.position);
+        cam.target_focus = Vec3::new(w.x, 0.0, w.z);
+        cam.focus = cam.target_focus;
+        let d = bounds.min_distance + (bounds.max_distance - bounds.min_distance) * 0.25;
+        cam.target_distance = d;
+        cam.distance = d;
     }
 }

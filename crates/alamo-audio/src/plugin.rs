@@ -198,6 +198,33 @@ pub struct PlaySfx {
     pub source: Option<Entity>,
 }
 
+/// Plays one audio file by name (resolved like SFX samples, e.g. `REBEL_VICTORY_00.WAV`) on a bus, without an SFX event.
+#[derive(Message, Debug, Clone)]
+pub struct PlayFile {
+    /// File name or path as the samples of SFX events are written.
+    pub name: String,
+    /// Volume group.
+    pub bus: Bus,
+}
+
+fn process_file_requests(
+    mut reader: MessageReader<PlayFile>,
+    mut audio: ResMut<AlamoAudio>,
+    mut assets: ResMut<Assets<AudioSource>>,
+    settings: Res<AudioSettings>,
+    buses: Res<AudioBuses>,
+    mut commands: Commands,
+) {
+    for req in reader.read() {
+        let Some((handle, _)) = audio.sample(&req.name, settings.cache_budget_bytes, &mut assets) else {
+            warn!("audio file not found: {}", req.name);
+            continue;
+        };
+        let pb = PlaybackSettings::ONCE.with_volume(Volume::Linear(buses.gain(req.bus)));
+        commands.spawn((AudioPlayer::<AudioSource>(handle), pb));
+    }
+}
+
 /// Convenience wrapper around [`PlaySfx`] messages.
 #[derive(bevy::ecs::system::SystemParam)]
 pub struct SfxCommands<'w> {
@@ -399,11 +426,13 @@ impl Plugin for AlamoAudioPlugin {
             .init_resource::<MusicDirector>()
             .add_message::<PlaySfx>()
             .add_message::<GalaxyAudio>()
+            .add_message::<PlayFile>()
             .add_systems(
                 Update,
                 (
                     galaxy_audio_system,
                     process_sfx_requests,
+                    process_file_requests,
                     update_voices,
                     music_system,
                     update_music_gain,
