@@ -110,8 +110,12 @@ impl SpaceScene {
             let to_light = map_to_bevy(l.direction_to_light());
             SceneLight {
                 direction: -to_light,
-                // The TED scalar weighs the light; 0.5 is full strength (the original shaders multiply the stored light by a constant 2, a ps_1_1 range trick). `SP_LIGHT_SCALARS=0` turns this off.
-                color: Vec3::from(l.color) * if std::env::var("SP_LIGHT_SCALARS").is_ok_and(|v| v == "0") { 1.0 } else { l.scalar * 2.0 },
+                // The TED scalar weighs the light, relative to 0.5 (full strength: the original shaders double the stored value).
+                // Low scalars (asteroid fields at 0.05-0.2) made maps unplayably dark with a linear weight, so the weight is
+                // a square root of the ratio, kept within 0.75..1.4 while a zero scalar still switches the light off. Only the sun
+                // uses it: the fill lights stay linear so tinted fills (Coruscant) do not grow.
+                // `SP_LIGHT_MODE=old` restores the linear weight (2 x scalar), `=raw` ignores the scalar.
+                color: Vec3::from(l.color) * if i == 0 { light_gain(l.scalar) } else { l.scalar * 2.0 },
             }
         };
         let exists = |model: &str| {
@@ -180,7 +184,7 @@ impl SpaceScene {
             bounds_min: Vec2::new(map.bounds.inner_min[0], map.bounds.inner_min[1]),
             bounds_max: Vec2::new(map.bounds.inner_max[0], map.bounds.inner_max[1]),
             lights: [light(0), light(1), light(2)],
-            ambient: Vec3::from(env.ambient),
+            ambient: ambient_floor(Vec3::from(env.ambient)),
             skydome: name_or(&env.skydome),
             skydome_rotation: env.skydome_rotation_deg,
             nebula: name_or(&env.nebula),
@@ -272,3 +276,18 @@ pub fn spawn_scene(commands: &mut Commands, scene: &SpaceScene, sky_radius: f32,
 }
 
 
+
+/// Brightness weight of a map light from its TED scalar (see [`SceneLight`]).
+fn light_gain(scalar: f32) -> f32 {
+    match std::env::var("SP_LIGHT_MODE").as_deref() {
+        Ok("old") => scalar * 2.0,
+        Ok("raw") => 1.0,
+        _ if scalar <= 0.0 => 0.0,
+        _ => (scalar / 0.5).sqrt().clamp(0.75, 1.4),
+    }
+}
+
+/// Keeps a faint ambient term on maps that define almost none, so unlit hulls and rocks stay readable.
+fn ambient_floor(a: Vec3) -> Vec3 {
+    if std::env::var("SP_LIGHT_MODE").is_ok() { a } else { a.max(Vec3::splat(0.05)) }
+}
