@@ -66,6 +66,7 @@ fn main() {
     let (mut speed, mut seed, mut msaa) = (1.0f32, 1u64, 4u32);
     let (mut cams, mut overlay, mut bloom, mut scale) = (Vec::<Vec<f32>>::new(), false, true, 1.0f32);
     let mut small = false;
+    let (mut shadows, mut quality) = (false, None::<battle_view::QualityPreset>);
     let mut auto = false;
     let mut it = args.iter();
     while let Some(a) = it.next() {
@@ -81,6 +82,12 @@ fn main() {
             "--cam" => cams.push(parse_vec(it.next().unwrap())),
             "--overlay" => overlay = true,
             "--no-bloom" => bloom = false,
+            "--shadows" => shadows = true,
+            "--quality" => quality = Some(match it.next().unwrap().as_str() {
+                "low" => battle_view::QualityPreset::Low,
+                "medium" => battle_view::QualityPreset::Medium,
+                _ => battle_view::QualityPreset::High,
+            }),
             "--scale" => scale = it.next().unwrap().parse().unwrap(),
             "--small" => small = true,
             "--auto" => auto = true,
@@ -174,8 +181,12 @@ fn main() {
         msaa_samples: msaa,
         bloom,
         ui_scale: scale,
+        shadows,
         ..default()
     };
+    if let Some(q) = quality {
+        settings.apply_quality(q);
+    }
     match &offscreen {
         Some(out) => {
             app.add_plugins(DefaultPlugins.set(WindowPlugin {

@@ -84,8 +84,65 @@ pub struct BattleViewSettings {
     pub fov_degrees: f32,
     /// Camera distance when the battle starts.
     pub start_distance: f32,
+    /// Cascaded sun shadows on ships (costs a depth pass per cascade).
+    pub shadows: bool,
+    /// Multiplier on particle spawn rates (see `alamo_render::ParticleSettings::density`).
+    pub particle_density: f32,
     /// Send sound requests ([`audio`]); nothing is audible without `AlamoAudioPlugin`.
     pub audio: bool,
+}
+
+/// Graphics quality presets shared with the options menu.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum QualityPreset {
+    /// No MSAA, no bloom, no shadows, thinned particles.
+    Low,
+    /// 2x MSAA, bloom, no shadows.
+    Medium,
+    /// 4x MSAA, bloom, sun shadows, full particle density.
+    #[default]
+    High,
+}
+
+impl QualityPreset {
+    /// Display name.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Low => "Low",
+            Self::Medium => "Medium",
+            Self::High => "High",
+        }
+    }
+
+    /// The next preset (wraps around).
+    pub fn next(self) -> Self {
+        match self {
+            Self::Low => Self::Medium,
+            Self::Medium => Self::High,
+            Self::High => Self::Low,
+        }
+    }
+
+    /// The previous preset (wraps around).
+    pub fn prev(self) -> Self {
+        self.next().next()
+    }
+
+    /// MSAA samples, bloom, shadows and particle density of the preset.
+    pub fn values(self) -> (u32, bool, bool, f32) {
+        match self {
+            Self::Low => (1, false, false, 0.5),
+            Self::Medium => (2, true, false, 0.75),
+            Self::High => (4, true, true, 1.0),
+        }
+    }
+}
+
+impl BattleViewSettings {
+    /// Applies a quality preset to MSAA, bloom, shadows and particle density.
+    pub fn apply_quality(&mut self, q: QualityPreset) {
+        (self.msaa_samples, self.bloom, self.shadows, self.particle_density) = q.values();
+    }
 }
 
 impl Default for BattleViewSettings {
@@ -106,6 +163,8 @@ impl Default for BattleViewSettings {
             sky_radius: 90_000.0,
             fov_degrees: 45.0,
             start_distance: 2000.0,
+            shadows: false,
+            particle_density: 1.0,
             audio: true,
         }
     }
@@ -334,6 +393,8 @@ fn start_battle(
     mut session: ResMut<BattleSession>,
     mut settings: ResMut<BattleViewSettings>,
     mut gizmo_config: ResMut<GizmoConfigStore>,
+    mut render_settings: ResMut<alamo_render::AlamoRenderSettings>,
+    particles: Option<ResMut<alamo_render::ParticleSettings>>,
 ) {
     let Some(setup) = session.setup.take() else {
         return;
@@ -351,7 +412,12 @@ fn start_battle(
     let l = &session.scene.lights;
     info!("battle scene lights: sun dir {:?} color {:?}, fill colors {:?} {:?}, ambient {:?}", l[0].direction, l[0].color, l[1].color, l[2].color, session.scene.ambient);
     let sky = settings.sky_radius;
-    scene::spawn_scene(&mut commands, &session.scene, sky);
+    // Models read the shadow flag when their materials are created, so set it before they spawn.
+    render_settings.shadows = settings.shadows;
+    if let Some(mut p) = particles {
+        p.density = settings.particle_density;
+    }
+    scene::spawn_scene(&mut commands, &session.scene, sky, settings.shadows);
 
     let (cfg, _) = gizmo_config.config_mut::<DefaultGizmoConfigGroup>();
     cfg.line.width = 2.0 * settings.ui_scale;

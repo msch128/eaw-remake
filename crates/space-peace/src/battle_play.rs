@@ -118,7 +118,7 @@ fn begin_session(world: &mut World) {
     let args = world.resource::<Args>().clone();
     let player = world.get_resource::<PlayerFaction>().and_then(|p| p.0);
     let target = world.get_resource::<OffscreenTarget>().map(|t| (t.image.clone(), t.scale_factor));
-    let (msaa, bloom) = world.get_resource::<crate::settings::Settings>().map_or((4, true), |s| (s.msaa, s.bloom));
+    let (msaa, bloom, shadows, density) = world.get_resource::<crate::settings::Settings>().map_or((4, true, true, 1.0), |s| (s.msaa, s.bloom, s.shadows, s.particle_density));
     let Some(assets) = world.resource::<Game>().0.clone() else { return };
     // Test scenario: pretend the planet cap is reached so the rest of the fleet waits in the reserve.
     if let Some(keep) = args.battle_reserve
@@ -127,6 +127,12 @@ fn begin_session(world: &mut World) {
         let rest = side.groups.split_off(keep.min(side.groups.len()));
         side.reserve.extend(rest.into_iter().filter(|g| g.kind == galaxy_sim::GroupKind::Unit));
         side.unit_cap = side.groups.iter().map(|g| g.count as i32).sum::<i32>().max(1);
+        if args.battle_low_cap {
+            let cap = side.unit_cap;
+            for s in &mut req.sides {
+                s.unit_cap = cap;
+            }
+        }
     }
     let started = std::time::Instant::now();
     // `--battle-auto` lets the AI play both sides (headless scenarios).
@@ -138,6 +144,8 @@ fn begin_session(world: &mut World) {
             settings.speed = args.battle_speed.unwrap_or(1.0);
             settings.msaa_samples = msaa;
             settings.bloom = bloom;
+            settings.shadows = shadows;
+            settings.particle_density = density;
             match target {
                 Some((image, scale)) => {
                     settings.render_target = Some(image);

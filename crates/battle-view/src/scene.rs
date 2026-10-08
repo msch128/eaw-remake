@@ -187,7 +187,7 @@ pub struct SkyFollow {
 }
 
 /// Spawns lights, ambient, sky and props.
-pub fn spawn_scene(commands: &mut Commands, scene: &SpaceScene, sky_radius: f32) {
+pub fn spawn_scene(commands: &mut Commands, scene: &SpaceScene, sky_radius: f32, shadows: bool) {
     let exposure = Exposure::default().exposure();
     commands.insert_resource(GlobalAmbientLight {
         // The Alamo shaders read the raw ambient value times the view exposure.
@@ -196,12 +196,13 @@ pub fn spawn_scene(commands: &mut Commands, scene: &SpaceScene, sky_radius: f32)
         ..default()
     });
     let sun = &scene.lights[0];
-    let sun_entity = spawn_sun(
-        commands,
-        sun.direction,
-        1.0,
-        Color::srgb(sun.color.x, sun.color.y, sun.color.z),
-    );
+    let sun_color = Color::srgb(sun.color.x, sun.color.y, sun.color.z);
+    let sun_entity = if shadows {
+        // Three cascades out to 8000 units: ships are 100..1600 long and the camera mostly looks from 1000..5000.
+        alamo_render::spawn_sun_shadowed(commands, sun.direction, 1.0, sun_color, 8000.0, 3)
+    } else {
+        spawn_sun(commands, sun.direction, 1.0, sun_color)
+    };
     commands.entity(sun_entity).insert(BattleEntity);
     // The map's two fill lights are plain directional lights after the sun; the Alamo shader adds their diffuse term.
     for (i, fill) in scene.lights.iter().enumerate().skip(1) {

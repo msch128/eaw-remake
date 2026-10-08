@@ -36,7 +36,7 @@ impl Plugin for TacticalUiPlugin {
                 spawn_bar.run_if(resource_added::<BattleRuntime>),
                 remove_reinforce.run_if(resource_removed::<BattleRuntime>),
                 remove_bar.run_if(resource_removed::<BattleRuntime>),
-                (sync_data, handle_clicks, reinforce_clicks, reinforce_panel, sync_minimap, minimap_pan).chain().run_if(resource_exists::<BattleRuntime>),
+                (sync_data, handle_clicks, reinforce_clicks, reinforce_events, reinforce_panel, sync_minimap, minimap_pan).chain().run_if(resource_exists::<BattleRuntime>),
             )
                 .chain(),
         );
@@ -236,6 +236,8 @@ pub struct ReinforceUi {
     pub root: Option<Entity>,
     /// Reserve per unit type: object name, battle ship id, units not called in yet.
     pub rows: Vec<(String, u32, u32)>,
+    /// The refusal message on screen and the seconds it stays.
+    notice: Option<(Entity, f32)>,
 }
 
 /// Reads the reserve of the player's side from the request.
@@ -308,8 +310,8 @@ fn reinforce_clicks(
                 }
                 if let Some(row) = ui.rows.get_mut(idx).filter(|r| r.2 > 0) {
                     let count = if c.shift { row.2 } else { 1 };
+                    // The count drops when the simulation reports the call (`ReinforcementsCalled`).
                     rt.command(settings.player_side, Command::Reinforce { ship: row.1, count });
-                    row.2 -= count;
                 }
             }
         }
@@ -355,5 +357,53 @@ fn reinforce_panel(
     let text = format!("{alive}/{cap}");
     if panel.texts.get("r_pop_text") != Some(&text) {
         panel.set_text("r_pop_text", text);
+    }
+}
+
+/// Follows the simulation: units leave the reserve when a call is accepted, a refusal shows a notice and plays a sound.
+fn reinforce_events(
+    time: Res<Time>,
+    rt: Res<BattleRuntime>,
+    settings: Res<BattleViewSettings>,
+    mut ui: ResMut<ReinforceUi>,
+    mut commands: Commands,
+    mut sfx: MessageWriter<alamo_audio::PlaySfx>,
+) {
+    use battle_sim::Event;
+    for ev in &rt.fresh_events {
+        match ev {
+            Event::ReinforcementsCalled { side, ship, count } if *side == settings.player_side => {
+                if let Some(row) = ui.rows.iter_mut().find(|r| r.1 == *ship) {
+                    row.2 = row.2.saturating_sub(*count);
+                }
+            }
+            Event::ReinforcementsRefused { side, .. } if *side == settings.player_side => {
+                info!("reinforcements: call refused by the simulation (unit cap)");
+                if let Some((e, _)) = ui.notice.take() {
+                    commands.entity(e).despawn();
+                }
+                let e = commands
+                    .spawn((
+                        crate::BattleEntity,
+                        Text::new("Cannot call in reinforcements: unit cap reached"),
+                        TextFont { font_size: FontSize::Px(20.0), ..default() },
+                        TextColor(Color::srgb(1.0, 0.6, 0.45)),
+                        Node { position_type: PositionType::Absolute, top: Val::Px(40.0), left: Val::Percent(35.0), ..default() },
+                    ))
+                    .id();
+                ui.notice = Some((e, 3.0));
+                sfx.write(alamo_audio::PlaySfx { event: "GUI_Cancel_SFX".to_string(), position: None, source: None });
+            }
+            _ => {}
+        }
+    }
+    if let Some((e, left)) = ui.notice {
+        let left = left - time.delta_secs();
+        if left <= 0.0 {
+            commands.entity(e).despawn();
+            ui.notice = None;
+        } else {
+            ui.notice = Some((e, left));
+        }
     }
 }

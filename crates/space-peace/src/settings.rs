@@ -56,6 +56,10 @@ pub struct Settings {
     pub msaa: u32,
     /// Bloom around bright lights.
     pub bloom: bool,
+    /// Cascaded sun shadows in space battles.
+    pub shadows: bool,
+    /// Particle spawn rate multiplier of the battle view.
+    pub particle_density: f32,
 }
 
 impl Default for Settings {
@@ -74,6 +78,8 @@ impl Default for Settings {
             camera_speed: 1.0,
             msaa: 4,
             bloom: true,
+            shadows: true,
+            particle_density: 1.0,
         }
     }
 }
@@ -107,11 +113,15 @@ pub enum OptionKey {
     Msaa,
     /// Bloom.
     Bloom,
+    /// Graphics quality preset (sets anti-aliasing, bloom, shadows and particle density).
+    Quality,
+    /// Sun shadows in battles.
+    Shadows,
 }
 
 impl OptionKey {
     /// All rows in display order.
-    pub const ALL: [OptionKey; 13] = [
+    pub const ALL: [OptionKey; 15] = [
         OptionKey::WindowMode,
         OptionKey::Resolution,
         OptionKey::Vsync,
@@ -125,6 +135,8 @@ impl OptionKey {
         OptionKey::CameraSpeed,
         OptionKey::Msaa,
         OptionKey::Bloom,
+        OptionKey::Quality,
+        OptionKey::Shadows,
     ];
 
     /// Row label.
@@ -143,6 +155,8 @@ impl OptionKey {
             OptionKey::CameraSpeed => "Camera speed",
             OptionKey::Msaa => "Anti-aliasing",
             OptionKey::Bloom => "Bloom",
+            OptionKey::Quality => "Graphics quality",
+            OptionKey::Shadows => "Shadows",
         }
     }
 }
@@ -184,6 +198,8 @@ impl Settings {
             OptionKey::CameraSpeed => format!("{:.2}x", self.camera_speed),
             OptionKey::Msaa => if self.msaa <= 1 { "Off".into() } else { format!("{}x", self.msaa) },
             OptionKey::Bloom => on(self.bloom),
+            OptionKey::Quality => self.quality().map_or("Custom", |q| q.label()).into(),
+            OptionKey::Shadows => on(self.shadows),
         }
     }
 
@@ -220,7 +236,30 @@ impl Settings {
                 self.msaa = MSAA_MODES[cycle(i, dir, MSAA_MODES.len())];
             }
             OptionKey::Bloom => self.bloom = !self.bloom,
+            OptionKey::Quality => {
+                let next = match self.quality() {
+                    Some(q) if dir >= 0 => q.next(),
+                    Some(q) => q.prev(),
+                    None => battle_view::QualityPreset::High,
+                };
+                self.apply_quality(next);
+            }
+            OptionKey::Shadows => self.shadows = !self.shadows,
         }
+    }
+
+    /// The graphics preset that matches the current MSAA / bloom / shadow / particle values, if any.
+    pub fn quality(&self) -> Option<battle_view::QualityPreset> {
+        use battle_view::QualityPreset::*;
+        [Low, Medium, High].into_iter().find(|q| {
+            let (msaa, bloom, shadows, density) = q.values();
+            self.msaa == msaa && self.bloom == bloom && self.shadows == shadows && (self.particle_density - density).abs() < 0.01
+        })
+    }
+
+    /// Applies a graphics preset.
+    pub fn apply_quality(&mut self, q: battle_view::QualityPreset) {
+        (self.msaa, self.bloom, self.shadows, self.particle_density) = q.values();
     }
 
     /// Location of the settings file, `None` when `%APPDATA%` is not set.
@@ -264,7 +303,10 @@ impl Settings {
              edge_scroll = {}\n\
              camera_speed = {}\n\
              msaa = {}\n\
-             bloom = {}\n",
+             bloom = {}
+\n             shadows = {}
+\n             particle_density = {}
+",
             if self.borderless { "borderless" } else { "windowed" },
             self.resolution.0,
             self.resolution.1,
@@ -279,6 +321,8 @@ impl Settings {
             self.camera_speed,
             self.msaa,
             self.bloom,
+            self.shadows,
+            self.particle_density,
         )
     }
 
@@ -318,6 +362,8 @@ impl Settings {
                 "camera_speed" => s.camera_speed = float().unwrap_or(s.camera_speed).clamp(0.1, 4.0),
                 "msaa" => s.msaa = value.parse().ok().filter(|m| MSAA_MODES.contains(m)).unwrap_or(s.msaa),
                 "bloom" => s.bloom = boolean().unwrap_or(s.bloom),
+                "shadows" => s.shadows = boolean().unwrap_or(s.shadows),
+                "particle_density" => s.particle_density = float().unwrap_or(s.particle_density).clamp(0.25, 1.0),
                 _ => {}
             }
         }
@@ -452,6 +498,8 @@ mod tests {
             camera_speed: 1.5,
             msaa: 2,
             bloom: false,
+            shadows: false,
+            particle_density: 0.5,
         };
         assert_eq!(Settings::from_toml(&s.to_toml()), s);
     }

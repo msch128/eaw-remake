@@ -94,3 +94,10 @@ Add `battle-view`, `galaxy-sim` (already there through galaxy-play) and `eaw-ui`
    `sim.cancel_tactical(id)` and then `resolve_battle_auto(id)`, or let the battle run with `BattleViewSettings::speed`.
 5. Auto-resolve is unchanged: `Sim::resolve_battle_auto` / `resolve_battle_tactical` still work (the latter now goes through the same request
    path as the front end).
+
+## Quality presets and shadows
+- `BattleViewSettings::{shadows, particle_density}` and `QualityPreset {Low, Medium, High}` (`apply_quality`): Low = no MSAA / bloom / shadows, 0.5 particles;
+  Medium = 2x MSAA, bloom, 0.75; High = 4x MSAA, bloom, 3-cascade sun shadows to 8000 units, full density. `start_battle` sets `AlamoRenderSettings::shadows`
+  and `ParticleSettings::density` before the models spawn; `spawn_scene` uses `spawn_sun_shadowed` when shadows are on. `battle_demo --shadows | --quality low|medium|high`.
+- space-peace `Settings`: `shadows`, `particle_density`, options rows "Graphics quality" (cycles the presets, "Custom" when the values match none) and "Shadows".
+- 4K, ~290 ships, `battle_demo --seed 7`: default 10.3 ms mean, `--shadows` 10.1, Low 8.6, High 10.1 (p99 12-14 ms). Shadows are visible (`target/vis/shadow_cmp.png`).

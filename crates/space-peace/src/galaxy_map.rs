@@ -566,7 +566,7 @@ fn update_labels(
         })
         .collect();
     let mut placed: Vec<(Vec2, Vec2)> = Vec::with_capacity(order.len());
-    const MARGIN: f32 = 1.0;
+    const MARGIN: f32 = 2.0;
     for i in order {
         let s = slots[i].expect("filtered above");
         let (lo, hi) = (s.pos - Vec2::splat(MARGIN), s.pos + s.size + Vec2::splat(MARGIN));
@@ -583,7 +583,7 @@ fn update_labels(
         });
         // The selected planet always keeps its label.
         let selected = selection.0 == Some(i);
-        if selected || (on_screen && !overlaps && (!on_planet || zoom_out > 0.25)) {
+        if selected || (on_screen && !overlaps && (!on_planet || slots[i].is_some_and(|s| s.score >= 1.0e6))) {
             placed.push((lo, hi));
             visible[i] = true;
         }
