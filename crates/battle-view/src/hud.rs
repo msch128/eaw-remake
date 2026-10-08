@@ -415,6 +415,11 @@ pub(crate) fn unit_tooltip(
     if def.shield > 0.0 {
         stats.push_str(&format!("   Shield {:.0} / {:.0}", s.shield * def.shield, def.shield));
     }
+    // Carriers and stations: squadrons still waiting in the hangars.
+    if let Some(n) = rt.cur.as_ref().and_then(|c| c.ship(s.id)).map(|ss| ss.reserve_squadrons).filter(|n| *n > 0) {
+        stats.push_str(&format!("
+Squadrons in reserve: {n}"));
+    }
     if let Ok(mut t) = parts.p1().single_mut()
         && t.0 != name.to_uppercase()
     {
