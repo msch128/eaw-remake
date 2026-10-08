@@ -31,6 +31,9 @@ if (-not $hasMsvc) {
 # 3. Build
 $cargoArgs = @('build')
 if (-not $Debug) { $cargoArgs += '--release' }
+# cargo reports progress on stderr; with 'Stop' Windows PowerShell 5.1 turns that into a terminating error
+# when the output is captured, so only the exit code decides here.
+$ErrorActionPreference = 'Continue'
 cargo @cargoArgs
 if ($LASTEXITCODE -ne 0) { Write-Host 'Build failed.' -ForegroundColor Red; exit $LASTEXITCODE }
 
