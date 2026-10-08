@@ -319,6 +319,20 @@ fn capture_driver(
         bc.min_distance = 100.0;
         cap.cam_applied = true;
     }
+    if std::env::var_os("SP_DEMO_CLOSE").is_some() {
+        // Close view of a damaged capital ship: one with a destroyed hardpoint, else the most worn shield.
+        let pick = ships
+            .0
+            .values()
+            .filter(|s| s.hp_alive.iter().any(|a| !a))
+            .max_by(|a, b| a.radius.total_cmp(&b.radius))
+            .or_else(|| ships.0.values().filter(|s| s.radius > 150.0).min_by(|a, b| a.shield.total_cmp(&b.shield)));
+        if let Some(s) = pick {
+            bc.snap = true;
+            bc.target_focus = s.pos;
+            bc.target_distance = (s.radius * 4.0).clamp(900.0, 3500.0);
+        }
+    }
     if std::env::var_os("SP_DEMO_FIGHT").is_some() {
         // Frame the line between the two fleets (a close view of the engagement).
         let centre = |side: u8| {

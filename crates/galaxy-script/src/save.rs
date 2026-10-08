@@ -167,6 +167,11 @@ impl ScriptedSim {
         self.inner.borrow_mut().sim.apply_tactical_result(battle_id, result)
     }
 
+    /// `Sim::abandon_tactical`.
+    pub fn abandon_tactical(&mut self, battle_id: u32, partial: &TacticalResult) -> Result<Vec<Event>, TacticalError> {
+        self.inner.borrow_mut().sim.abandon_tactical(battle_id, partial)
+    }
+
     /// `Sim::resolve_battle_auto`.
     pub fn resolve_battle_auto(&mut self, battle_id: u32) -> Option<Vec<Event>> {
         self.inner.borrow_mut().sim.resolve_battle_auto(battle_id)

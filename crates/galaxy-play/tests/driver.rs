@@ -204,3 +204,21 @@ fn all_ai_galaxy_runs_and_reports_weeks() {
 
 
 
+
+#[test]
+fn week_counter_continues_from_a_fast_forwarded_sim() {
+    let Some(data) = load() else { return };
+    let mut sim = new_sim(&data, 1);
+    let week_seconds = sim.world().config.week_seconds;
+    for _ in 0..8 * 60 {
+        sim.step(week_seconds / 60.0);
+    }
+    let start = sim.galaxy().week();
+    assert_eq!(start, 8);
+    let mut driver = SimDriver::spawn(sim, None);
+    let first = driver.wait_initial();
+    assert_eq!(first.week, 8, "the first snapshot shows the real week, not 0");
+    driver.advance(week_seconds * 2.0 + 1.0);
+    let last = driver.wait_idle().last().unwrap().clone();
+    assert_eq!(last.week, 10);
+}

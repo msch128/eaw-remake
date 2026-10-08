@@ -64,6 +64,13 @@ pub enum Request {
     },
     /// Abandon the tactical fight and auto-resolve the battle instead.
     CancelTactical(u32),
+    /// Abandon a half-fought tactical fight: its losses are applied, then the rest is auto-resolved.
+    AbandonTactical {
+        /// Battle id.
+        id: u32,
+        /// State of the fight when it was left.
+        partial: Box<TacticalResult>,
+    },
     /// Write a save file (scripted backend only); the answer arrives in [`Snapshot::saves`].
     Save(PathBuf),
     /// Replace the running game with a save of the same game (replays it; progress in [`SimDriver::load_progress`]); the answer arrives in [`Snapshot::loads`].
@@ -363,6 +370,12 @@ impl SimDriver {
         let _ = self.tx.send(Request::ApplyTactical { id, result: Box::new(result) });
     }
 
+    /// Abandons a half-fought tactical fight: the losses so far count, the rest is auto-resolved.
+    pub fn abandon_tactical(&mut self, id: u32, partial: TacticalResult) {
+        self.requests_sent += 1;
+        let _ = self.tx.send(Request::AbandonTactical { id, partial: Box::new(partial) });
+    }
+
     /// Abandons a tactical fight; the battle is auto-resolved.
     pub fn cancel_tactical(&mut self, id: u32) {
         self.requests_sent += 1;
@@ -484,6 +497,15 @@ impl Core {
         }
     }
 
+    fn abandon_tactical(&mut self, id: u32, partial: &TacticalResult) -> Vec<Event> {
+        let mut events = match self {
+            Core::Plain(s) => s.abandon_tactical(id, partial).unwrap_or_default(),
+            Core::Scripted(s) => s.abandon_tactical(id, partial).unwrap_or_default(),
+        };
+        events.extend(self.resolve_auto(id));
+        events
+    }
+
     fn cancel_tactical(&mut self, id: u32) {
         match self {
             Core::Plain(s) => s.cancel_tactical(id),
@@ -596,7 +618,6 @@ fn load_into(core: &mut Core, path: &std::path::Path, setup: Option<&ScriptSetup
 
 fn worker(sim: Sim, script: Option<ScriptSetup>, human: Option<FactionId>, progress: Arc<LoadState>, rx: Receiver<Request>, tx: Sender<Arc<Snapshot>>) {
     let mut seq = 0u64;
-    let mut week = 0u64;
     let mut advances_done = 0u64;
     let mut requests_done = 0u64;
     let mut first_loads = Vec::new();
@@ -604,21 +625,18 @@ fn worker(sim: Sim, script: Option<ScriptSetup>, human: Option<FactionId>, progr
         Some(setup) => build_scripted(sim, setup, human, &progress, &mut first_loads),
         None => Core::Plain(Box::new(sim)),
     };
-    if let Core::Scripted(s) = &core {
-        week = s.checkpoint().week;
-    }
     // The setup kept for in-game loads must not carry the save that started the game.
     let script = script.map(|mut s| {
         s.load = None;
         s
     });
-    let publish = |core: &Core, seq: &mut u64, week: u64, p: Published, counts: (u64, u64), micros: u64| {
+    let publish = |core: &Core, seq: &mut u64, p: Published, counts: (u64, u64), micros: u64| {
         let galaxy = core.galaxy();
         let snap = Snapshot {
             seq: *seq,
             time: galaxy.time,
+            week: galaxy.week(),
             galaxy,
-            week,
             events: p.events,
             results: p.results,
             human_battles: human_battles(core, human),
@@ -636,7 +654,7 @@ fn worker(sim: Sim, script: Option<ScriptSetup>, human: Option<FactionId>, progr
         tx.send(Arc::new(snap)).is_ok()
     };
     let first = Published { loads: first_loads, ..Published::default() };
-    if !publish(&core, &mut seq, week, first, (0, 0), 0) {
+    if !publish(&core, &mut seq, first, (0, 0), 0) {
         return;
     }
     loop {
@@ -667,6 +685,7 @@ fn worker(sim: Sim, script: Option<ScriptSetup>, human: Option<FactionId>, progr
                 }
                 Request::TacticalSetup(id) => p.tactical.extend(core.tactical_setup(*id)),
                 Request::ApplyTactical { id, result } => p.events.extend(core.apply_tactical(*id, result)),
+                Request::AbandonTactical { id, partial } => p.events.extend(core.abandon_tactical(*id, partial)),
                 Request::CancelTactical(id) => {
                     core.cancel_tactical(*id);
                     p.events.extend(core.resolve_auto(*id));
@@ -687,21 +706,13 @@ fn worker(sim: Sim, script: Option<ScriptSetup>, human: Option<FactionId>, progr
                 }
                 Request::Load(path) => {
                     let result = load_into(&mut core, path, script.as_ref(), &progress);
-                    if let Ok(w) = &result {
-                        week = *w;
-                    }
                     p.loads.push(LoadResult { path: path.clone(), result });
                 }
             }
             i += 1;
         }
-        for e in &p.events {
-            if let Event::WeekEnded { week: w } = e {
-                week = *w;
-            }
-        }
         let micros = started.elapsed().as_micros() as u64;
-        if !publish(&core, &mut seq, week, p, (advances_done, requests_done), micros) {
+        if !publish(&core, &mut seq, p, (advances_done, requests_done), micros) {
             return;
         }
     }

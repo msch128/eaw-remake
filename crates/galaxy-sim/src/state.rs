@@ -500,6 +500,11 @@ pub enum Event {
 }
 
 impl Galaxy {
+    /// Completed galactic weeks (the number of `WeekEnded` events so far); the UI shows `week() + 1`.
+    pub fn week(&self) -> u64 {
+        self.week
+    }
+
     pub(crate) fn new(world: &World, seed: u64) -> Self {
         Galaxy {
             time: 0.0,

@@ -487,6 +487,27 @@ impl Sim {
         Ok(events)
     }
 
+    /// Abandons a tactical battle that was only fought in part: the units lost and the hull and shield of the
+    /// survivors so far are written into the galaxy, the battle stays pending and the frozen request is dropped.
+    /// Resolving it afterwards (auto-resolve) starts from the forces that are left, not from the original ones.
+    /// Returns the `UnitsDestroyed` / `HeroDestroyed` events of the losses.
+    pub fn abandon_tactical(&mut self, battle_id: u32, partial: &TacticalResult) -> Result<Vec<Event>, TacticalError> {
+        if !self.galaxy.battles.iter().any(|b| b.id == battle_id) {
+            return Err(TacticalError::UnknownBattle);
+        }
+        let request = self.tactical_setup(battle_id).ok_or(TacticalError::UnknownBattle)?;
+        if !request.check_shape(partial) {
+            return Err(TacticalError::ShapeMismatch);
+        }
+        self.tactical_requests.remove(&battle_id);
+        let (sides, combat) = request.combat_result(partial);
+        let planet = request.planet;
+        self.galaxy.sync_ships();
+        let (events, _) = self.apply_losses(planet, &sides, &combat.survivors);
+        self.apply_health(&request, partial);
+        Ok(events)
+    }
+
     /// Abandons a tactical setup without a result (the battle stays pending, e.g. to auto-resolve it instead).
     pub fn cancel_tactical(&mut self, battle_id: u32) {
         self.tactical_requests.remove(&battle_id);

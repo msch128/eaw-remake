@@ -163,7 +163,7 @@ fn drive(
         3 => {
             let target = menu_button(&menu, &MenuAction::Slot(SlotMode::Save, 1));
             act = click(&mut st, target);
-            if t > 4 && t % 20 == 0 {
+            if t > 4 && t.is_multiple_of(20) {
                 let fresh = crate::newgame::slot_path(1)
                     .and_then(|f| std::fs::metadata(f).ok())
                     .and_then(|m| m.modified().ok())
@@ -190,7 +190,7 @@ fn drive(
         5 => {
             // Saving resumes the game: bring the pause menu back first.
             let target = if paused.0 { menu_button(&menu, &MenuAction::Options) } else { None };
-            if !paused.0 && t % 30 == 0 {
+            if !paused.0 && t.is_multiple_of(30) {
                 act = Some(Act::Key(KeyCode::Escape, Key::Escape));
             }
             if paused.0 {
@@ -236,7 +236,7 @@ fn drive(
                 return;
             }
             let target = if paused.0 { menu_button(&menu, &MenuAction::MainMenu) } else { None };
-            if !paused.0 && t % 30 == 0 {
+            if !paused.0 && t.is_multiple_of(30) {
                 act = Some(Act::Key(KeyCode::Escape, Key::Escape));
             }
             if paused.0 {

@@ -366,7 +366,7 @@ fn setup_scene(
     ) * Vec3::NEG_Z;
     if alamo.is_some() {
         // The Alamo shaders take a unit-less 0..1 sun strength.
-        spawn_sun(&mut commands, direction, view.light.level.clamp(0.3, 1.0), Color::WHITE);
+        spawn_sun(&mut commands, direction, view.light.level.clamp(0.3, 1.0) * 0.55, Color::WHITE);
     } else {
         commands.spawn((
             DirectionalLight {
@@ -409,7 +409,7 @@ fn setup_scene(
     // Route line widths in pixels per width tier.
     gizmo_store.config_mut::<RingGizmos>().0.line.width = 1.6;
     gizmo_store.config_mut::<SelectGizmos>().0.line.width = 2.6;
-    gizmo_store.config_mut::<TerritoryGizmos>().0.line.width = 6.0;
+    gizmo_store.config_mut::<TerritoryGizmos>().0.line.width = 9.0;
 }
 
 /// Spawns planets, labels and the selection ring from the [`GalaxyView`] resource.
@@ -444,6 +444,7 @@ fn spawn_galaxy(
     let scale = *scale;
 
     let assets = PlanetVisualAssets::new(&mut meshes, &mut materials);
+    let pip_images = [images.add(pip_image(false)), images.add(pip_image(true))];
     let use_models = alamo.is_some();
     // Radius estimates; models replace them with their real radius once loaded.
     let radii: Vec<f32> = view.planets.iter().map(|p| planet_radius(&scale, p.size)).collect();
@@ -458,7 +459,7 @@ fn spawn_galaxy(
         let owner = relation_color(&view, planet.owner);
         // The game prints the name in capitals in the full, saturated faction colour.
         let label_c = if planet.owner.is_some() { owner } else { [0.62, 0.62, 0.62] };
-        for (row, count) in [planet.max_ground_base, planet.special_slots].into_iter().enumerate() {
+        for (row, count) in [planet.max_ground_base, planet.max_space_base].into_iter().enumerate() {
             let count = count.clamp(0, 8) as usize;
             if count == 0 {
                 continue;
@@ -472,7 +473,11 @@ fn spawn_galaxy(
                 ))
                 .with_children(|p| {
                     for _ in 0..count {
-                        p.spawn((Node { width: Val::Px(6.0), height: Val::Px(8.0), ..default() }, BackgroundColor(rgb(label_c).with_alpha(0.85)), PipIcon { space: row == 1 }));
+                        p.spawn((
+                            ImageNode::new(pip_images[row].clone()).with_color(rgb(label_c).with_alpha(0.9)),
+                            Node { width: Val::Px(8.0), height: Val::Px(8.0), ..default() },
+                            PipIcon { space: row == 1 },
+                        ));
                     }
                 });
         }
@@ -701,8 +706,8 @@ fn update_labels(
     }
 
     // Structure slot pips: ground row, then space row, centred under the name.
-    let pip_h = (font_px * 0.5).round().max(4.0);
-    let pip_w = (pip_h * 0.75).round().max(3.0);
+    let pip_h = (font_px * 0.72).round().max(5.0);
+    let pip_w = pip_h;
     if (*last_font - font_px).abs() > 0.1 {
         *last_font = font_px;
         for mut n in &mut pip_icons {
@@ -783,8 +788,8 @@ fn notch_outer(theta: f32) -> f32 {
     let deg = theta.to_degrees().rem_euclid(360.0);
     let slot = (deg / 10.0) as u32;
     let within = deg % 10.0;
-    let tooth = if slot % 2 == 0 && within > 2.0 && within < 8.0 { 1.0 } else { 0.0 };
-    let big = if slot % 6 == 0 { 1.7 } else { 1.0 };
+    let tooth = if slot.is_multiple_of(2) && within > 2.0 && within < 8.0 { 1.0 } else { 0.0 };
+    let big = if slot.is_multiple_of(6) { 1.7 } else { 1.0 };
     1.06 + 0.035 * tooth * big
 }
 
@@ -1335,3 +1340,41 @@ const TERRITORY_RADIUS: f32 = 11.0;
 /// Gizmo group of the thick dashed faction territory outline.
 #[derive(Default, Reflect, GizmoConfigGroup)]
 struct TerritoryGizmos;
+
+/// Small white silhouettes for the slot pips under a planet name: a trooper (ground slots) and a turret tower
+/// (space slots), 16x16, tinted with the label colour.
+fn pip_image(space: bool) -> Image {
+    use bevy::asset::RenderAssetUsages;
+    use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
+    const N: i32 = 16;
+    let inside = |x: i32, y: i32| -> bool {
+        let (fx, fy) = (x as f32 + 0.5, y as f32 + 0.5);
+        if space {
+            // Stepped tower: wide base, narrower body, small cap with a barrel.
+            ((11.0..15.0).contains(&fy) && (fx - 8.0).abs() <= 6.5)
+                || ((6.5..11.0).contains(&fy) && (fx - 8.0).abs() <= 4.0)
+                || ((3.0..6.5).contains(&fy) && (fx - 8.0).abs() <= 2.5)
+                || ((1.0..3.0).contains(&fy) && (fx - 10.5).abs() <= 1.2)
+        } else {
+            // Trooper: round helmet, shoulders and torso, two legs.
+            ((fx - 8.0).powi(2) + (fy - 4.0).powi(2) <= 9.0)
+                || ((7.5..12.0).contains(&fy) && (fx - 8.0).abs() <= 5.5 - (fy - 7.5) * 0.35)
+                || ((12.0..15.5).contains(&fy) && ((fx - 5.8).abs() <= 1.5 || (fx - 10.2).abs() <= 1.5))
+        }
+    };
+    let mut px = Vec::with_capacity((N * N * 4) as usize);
+    for y in 0..N {
+        for x in 0..N {
+            px.extend_from_slice(&[255, 255, 255, if inside(x, y) { 255 } else { 0 }]);
+        }
+    }
+    let mut img = Image::new(
+        Extent3d { width: N as u32, height: N as u32, depth_or_array_layers: 1 },
+        TextureDimension::D2,
+        px,
+        TextureFormat::Rgba8UnormSrgb,
+        RenderAssetUsages::RENDER_WORLD,
+    );
+    img.sampler = bevy::image::ImageSampler::linear();
+    img
+}

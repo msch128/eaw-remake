@@ -275,6 +275,13 @@ pub enum PlayAction {
         /// Survivors and winner.
         result: Box<galaxy_sim::TacticalResult>,
     },
+    /// Abandon a half-fought tactical fight: the losses so far are applied, then the remaining forces are auto-resolved.
+    AbandonTactical {
+        /// Battle id.
+        id: u32,
+        /// State of the fight when it was left (survivors per group).
+        partial: Box<galaxy_sim::TacticalResult>,
+    },
     /// Abandon the tactical fight of a battle; it is auto-resolved.
     CancelTactical(u32),
     /// Remove a notification.

@@ -1556,26 +1556,6 @@ fn pad_level(state: &SimState, target: BuildTarget) -> u8 {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn planet_tooltip_lists_owner_income_and_slots() {
-        let view = crate::galaxy_view::GalaxyView::demo();
-        let text = planet_text(0, &view.planets[0], &view);
-        assert!(text.starts_with(&view.planets[0].display_name));
-        assert!(text.contains("Owner: "));
-        assert!(text.contains("Income: "));
-        assert!(text.contains("Space slots: "));
-    }
-
-    #[test]
-    fn capitalize_first_letter() {
-        assert_eq!(capitalize("requires tech"), "Requires tech");
-        assert_eq!(capitalize(""), "");
-    }
-}
 
 /// Star base level named by a missing requirement ("star base level 2"), 0 if it names something else.
 fn required_level(a: &galaxy_play::Availability) -> u8 {
@@ -1613,5 +1593,26 @@ fn relation_color(state: &SimState, me: Option<u32>, owner: Option<u32>) -> Colo
         (Some(m), Some(o)) if m == o => Color::srgb(0.2, 0.9, 0.25),
         (Some(m), Some(o)) if state.galaxy().hostile(&state.world, m, o) => Color::srgb(0.95, 0.15, 0.12),
         _ => Color::srgb(0.95, 0.55, 0.12),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn planet_tooltip_lists_owner_income_and_slots() {
+        let view = crate::galaxy_view::GalaxyView::demo();
+        let text = planet_text(0, &view.planets[0], &view);
+        assert!(text.starts_with(&view.planets[0].display_name));
+        assert!(text.contains("Owner: "));
+        assert!(text.contains("Income: "));
+        assert!(text.contains("Space slots: "));
+    }
+
+    #[test]
+    fn capitalize_first_letter() {
+        assert_eq!(capitalize("requires tech"), "Requires tech");
+        assert_eq!(capitalize(""), "");
     }
 }

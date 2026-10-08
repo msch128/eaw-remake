@@ -215,6 +215,7 @@ pub fn handle_actions(
                 }
             }
             PlayAction::ApplyTactical { id, result } => state.driver.apply_tactical(*id, (**result).clone()),
+            PlayAction::AbandonTactical { id, partial } => state.driver.abandon_tactical(*id, (**partial).clone()),
             PlayAction::CancelTactical(id) => state.driver.cancel_tactical(*id),
             PlayAction::ResolveBattle { id, choice } => {
                 let Some(b) = state.current.human_battles.iter().find(|b| b.id == *id).cloned() else { continue };

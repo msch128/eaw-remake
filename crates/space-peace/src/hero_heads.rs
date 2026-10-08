@@ -59,7 +59,7 @@ fn update_hero_heads(
             .units
             .iter()
             .filter(|&(&u, &n)| n > 0 && state.world.units.get(u as usize).is_some_and(|d| d.hero))
-            .map(|(&u, _)| u as u32)
+            .map(|(&u, _)| u)
             .collect();
         if heroes.is_empty() {
             continue;
@@ -71,7 +71,7 @@ fn update_hero_heads(
         // Portrait size follows the on-screen size of a fleet base.
         let size = ((p1 - p0).length() * 2.4).clamp(10.0, 130.0);
         for (k, &u) in heroes.iter().take(4).enumerate() {
-            let key = (f.id as u32, u);
+            let key = (f.id, u);
             alive.push(key);
             let side = if k % 2 == 0 { -1.0 } else { 1.0 };
             let step = (k / 2) as f32 + 1.0;

@@ -420,6 +420,7 @@ fn apply_hardpoint_death(
 /// Reacts to events of newly reached steps: ship deaths and hardpoint explosions.
 pub fn ship_events(
     mut commands: Commands,
+    defs: Option<Res<alamo_render::XmlDefs>>,
     mut rt: ResMut<BattleRuntime>,
     mut touch: ModelTouch,
     mut views: Query<&mut ShipView>,
@@ -449,6 +450,20 @@ pub fn ship_events(
                         normal: Vec3::Y,
                     });
                     commands.entity(e).despawn();
+                    rt.entities.remove(ship);
+                    continue;
+                }
+                // Ships with a `Death_Clone` in the data (the hull split into pieces with a `DIE` animation)
+                // play the original break-up: the clone replaces the ship, with the data's death explosions.
+                let has_clone = defs.as_ref().is_some_and(|d| {
+                    d.unit(&def.name)
+                        .and_then(|u| u.death_clone.as_deref())
+                        .and_then(|c| d.unit(c))
+                        .is_some_and(|c| c.model.is_some())
+                });
+                if has_clone {
+                    commands.trigger(alamo_render::PlayDeath { entity: e, unit: Some(def.name.clone()) });
+                    commands.entity(e).insert(RemoveAfter(0.2));
                     rt.entities.remove(ship);
                     continue;
                 }
@@ -599,6 +614,20 @@ pub fn update_arrival_flashes(
         tf.scale = Vec3::splat(f.radius * (0.4 + 1.6 * t.sqrt()));
         if let Some(mut m) = materials.get_mut(&mat.0) {
             m.base_color = Color::srgba(0.75, 0.88, 1.0, (1.0 - t) * (1.0 - t) * 0.55);
+        }
+    }
+}
+
+/// Despawns an entity after a short delay (the root of a ship that was replaced by its death clone).
+#[derive(Component)]
+pub struct RemoveAfter(f32);
+
+/// Counts down [`RemoveAfter`] and despawns.
+pub fn remove_after(mut commands: Commands, time: Res<Time>, mut q: Query<(Entity, &mut RemoveAfter)>) {
+    for (e, mut r) in &mut q {
+        r.0 -= time.delta_secs();
+        if r.0 <= 0.0 {
+            commands.entity(e).despawn();
         }
     }
 }

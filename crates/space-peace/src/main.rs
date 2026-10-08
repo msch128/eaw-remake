@@ -1,5 +1,7 @@
 ﻿//! Space Peace: Not at War - Empire at War galactic conquest shell.
 
+#![allow(clippy::type_complexity, clippy::too_many_arguments)]
+
 mod battle_play;
 mod battle_seam;
 mod campaign_select;

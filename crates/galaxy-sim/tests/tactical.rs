@@ -296,3 +296,30 @@ fn cancelling_production_refunds_the_unspent_cost() {
     let rebel = w.faction_id("Rebel").unwrap();
     assert_eq!(sim.apply(Command::CancelProduction { faction: rebel, planet: home, lane: Lane::Units, index: 0 }), Err(CommandError::NotOwner));
 }
+
+#[test]
+fn abandoning_a_half_fought_battle_keeps_the_losses() {
+    let Some(ctx) = load() else { return };
+    let mut sim = new_sim(&ctx);
+    let w = sim.world().clone();
+    let (empire, rebel) = (w.faction_id("Empire").unwrap(), w.faction_id("Rebel").unwrap());
+    let target = empty_planet(&sim);
+    let (isd, xw) = (w.unit_id("Star_Destroyer").unwrap(), w.unit_id("X-Wing_Squadron").unwrap());
+    add_fleet(&mut sim, empire, isd, 2, target, target);
+    let rf = add_fleet(&mut sim, rebel, xw, 6, target, neighbour(&w, target));
+    let battle = pending(&mut sim);
+    let req = sim.tactical_setup(battle.id).unwrap();
+    // The player lost four of six squadrons before leaving the fight.
+    let mut partial = TacticalResult { survived: req.sides.iter().map(|s| s.groups.iter().map(|g| g.count).collect()).collect(), retreated: req.sides.iter().map(|s| vec![0; s.groups.len()]).collect(), ..TacticalResult::default() };
+    let rs = req.sides.iter().position(|s| s.faction == rebel).unwrap();
+    let gi = req.sides[rs].groups.iter().position(|g| g.type_id == xw).unwrap();
+    partial.survived[rs][gi] = 2;
+    let events = sim.abandon_tactical(battle.id, &partial).expect("abandon");
+    assert!(events.iter().any(|e| matches!(e, Event::UnitsDestroyed { faction, count: 4, .. } if *faction == rebel)), "{events:?}");
+    assert_eq!(sim.galaxy().fleets[&rf].units[&xw], 2, "the losses are in the galaxy");
+    assert!(sim.galaxy().battles.iter().any(|b| b.id == battle.id), "the battle is still pending");
+    // Auto-resolving now starts from the two squadrons that are left.
+    let events = sim.resolve_battle_auto(battle.id).expect("resolved");
+    let lost: u32 = events.iter().filter_map(|e| if let Event::UnitsDestroyed { faction, count, .. } = e { (*faction == rebel).then_some(*count) } else { None }).sum();
+    assert!(lost <= 2, "only what was left can be lost, got {lost}");
+}

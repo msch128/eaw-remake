@@ -411,6 +411,7 @@ impl Plugin for BattleViewPlugin {
                         ships::update_ships,
                         ships::update_arrival_flashes,
                         ships::update_dying,
+                        ships::remove_after,
                         effects::update_projectiles,
                         camera::camera_input,
                         camera::focus_camera,
