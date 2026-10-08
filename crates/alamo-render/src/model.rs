@@ -27,6 +27,9 @@ pub struct AlamoRenderSettings {
     /// Ships receive the sun's shadow maps (needs a shadow-casting sun, see
     /// [`spawn_sun_shadowed`](crate::spawn_sun_shadowed)).
     pub shadows: bool,
+    /// Main-thread time per frame that `spawn_models` may spend; the rest of the new models is spawned
+    /// on the following frames (at least one model per frame). `None` spawns everything at once.
+    pub spawn_budget: Option<std::time::Duration>,
 }
 
 /// The game file system models and textures are read from.
@@ -727,10 +730,20 @@ pub fn spawn_models(
     new: Query<(Entity, &AlamoModel), Without<AlamoModelLoaded>>,
     failed: Query<(), With<AlamoLoadFailed>>,
 ) {
+    let started = std::time::Instant::now();
+    let budget = loader.settings.spawn_budget;
+    let mut spawned = 0u32;
     for (root, spec) in &new {
         if failed.contains(root) {
             continue;
         }
+        if let Some(b) = budget
+            && spawned > 0
+            && started.elapsed() >= b
+        {
+            break;
+        }
+        spawned += 1;
         let key = model_path(&spec.path);
         let cached = match load_model(&mut loader, &key) {
             Ok(c) => c,
@@ -926,6 +939,9 @@ pub fn spawn_models(
             radius,
         });
         commands.trigger(ModelLoaded { entity: root });
+    }
+    if spawned > 0 && started.elapsed().as_millis() >= 15 {
+        info!("spawn_models: {spawned} models in {:.1?}", started.elapsed());
     }
 }
 

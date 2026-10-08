@@ -257,6 +257,23 @@ impl BattleSession {
         v
     }
 
+    /// Particle objects (death effects of ships and hardpoints, the class explosions) and projectile names of
+    /// the battle, for [`alamo_render::ModelPreloader::request_particles`].
+    pub fn effect_names(&self) -> (Vec<String>, Vec<String>) {
+        let mut particles: Vec<String> = Vec::new();
+        for s in &self.visuals.ships {
+            particles.extend(s.death_effects.iter().cloned());
+            particles.extend(s.hardpoints.iter().filter_map(|h| h.death_effect.clone()));
+        }
+        use battle_sim::TargetClass::*;
+        for class in [Fighter, Transport, Frigate, Capital, Super] {
+            particles.push(visuals::ship_death_effect(class).to_string());
+        }
+        let catalog = self.built.as_ref().map(|b| &b.1).or(self.setup.as_ref().map(|s| &s.catalog));
+        let projectiles = catalog.map_or_else(Vec::new, |c| c.projectiles.iter().map(|p| p.name.clone()).collect());
+        (particles, projectiles)
+    }
+
     /// The galactic request this battle was built from, if any.
     pub fn request(&self) -> Option<&TacticalRequest> {
         self.request.as_deref()
@@ -418,16 +435,24 @@ fn start_battle(
     preloader: Option<Res<alamo_render::ModelPreloader>>,
     alamo_fs: Option<Res<alamo_render::AlamoFs>>,
     model_cache: Option<Res<alamo_render::ModelCache>>,
+    xml_defs: Option<Res<alamo_render::XmlDefs>>,
 ) {
     if session.built.is_none() && session.setup.is_none() {
         return;
     }
     // Load the battle's models and textures on worker threads first (a few frames) instead of stalling
     // the render thread for the length of the whole load on the frame the ships spawn.
-    if let (Some(pre), Some(fs), Some(cache)) = (&preloader, &alamo_fs, &model_cache) {
+    // `SP_NO_PRELOAD=1` disables the preload (A/B measurements).
+    if std::env::var_os("SP_NO_PRELOAD").is_none()
+        && let (Some(pre), Some(fs), Some(cache)) = (&preloader, &alamo_fs, &model_cache)
+    {
         if !session.preload_requested {
             session.preload_requested = true;
             pre.request(&fs.0, cache, session.asset_paths());
+            if let Some(defs) = &xml_defs {
+                let (particles, projectiles) = session.effect_names();
+                pre.request_particles(&fs.0, defs, particles, projectiles);
+            }
         }
         if !pre.is_idle() {
             return;

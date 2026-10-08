@@ -128,3 +128,10 @@ Add `battle-view`, `galaxy-sim` (already there through galaxy-play) and `eaw-ui`
   scene, so file reads, `.alo` parsing and texture decoding run on worker threads and the render thread only builds meshes. The system runs while the `BattleSession` resource exists (no longer only on the frame
   it is added); it does nothing once the battle has started. No app change needed: the loading screen just stays up a few frames longer. Hardpoint/turret models are not in the list and still load on first use.
 - `battle_demo` prints `longest of the first 400 frames`. Release, 1920x1080, demo battle: 107-118 ms (frame 2) before, 62 ms after; the remaining 62 ms is the demo's own `Battle::new` (the app builds the battle on a worker thread in `from_request`). A later 58-61 ms frame in one of three runs is the Executor's mesh build (18 ms) plus other spawns.
+- Preload now also covers the battle's particle textures: `BattleSession::effect_names()` (death effects of ships and hardpoints, the class explosions, the particle objects of every projectile in the catalog)
+  goes to `ModelPreloader::request_particles`. Hardpoint/turret models are not part of the list because battle-view does not spawn them as models (no `with_unit`); the log line `load_model` (>= 20 ms) shows
+  any model that still loads late.
+- Measured on the real app path (`space-peace --offscreen --screen galaxy --campaign GC_Mini_Web_Way_Rebel --weeks 250 --stop-on-battle --battle-choice fight`, the integrator's "longest frame while loading"):
+  release 71-125 ms with preload vs 191-232 ms without (`SP_NO_PRELOAD=1` switches it off); dev profile 144 ms vs 627 ms. Run-to-run noise on this shared machine is about +-30 ms.
+  Tried and dropped (no measurable change): a per-frame spawn budget for `spawn_models` (`AlamoRenderSettings::spawn_budget`, still available, default off) and `RenderAssetBytesPerFrame` (16 MiB). The remaining ~70-100 ms
+  frame is not in `start_battle` (it takes ~0.1 ms) nor in model loading; it is app-side (tactical UI / session start) and needs a Chrome trace of that frame.
