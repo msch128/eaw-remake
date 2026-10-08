@@ -196,6 +196,11 @@ pub struct AbilityDef {
     /// `ROCKET_ATTACK` / `SWAP_WEAPONS` (missile boats): for `duration` seconds the missile, rocket and torpedo hardpoints reload
     /// at `ROCKET_RELOAD_MULT` of their normal delay (estimate: the data names the ability but gives no numbers).
     pub rocket: bool,
+    /// `SENSOR_JAMMING` (flares): while active, enemy homing missiles aimed at this ship lose their lock and fly straight on.
+    pub jam: bool,
+    /// `BUZZ_DROIDS` that damages enemies in an area (estimate: the area lasts `duration`, 20 s where the data gives no expiration; the
+    /// `Own_Damage_Per_Second` of 1 and the repair-drone variants are not modelled).
+    pub zone: Option<ZoneDef>,
     /// `MISSILE_SHIELD`: radius in which enemy missiles and torpedoes are destroyed (0 = not a missile shield).
     pub missile_radius: f32,
     /// `Disable_Movement`: the ship cannot move while the ability is active.
@@ -263,6 +268,17 @@ pub struct RedirectDef {
     pub half_arc: f32,
     /// Bit mask of shooter classes it reacts to (`Applicable_Unit_Categories`; 0 = any).
     pub classes: u16,
+}
+
+/// `BUZZ_DROIDS` with a `Buzz_Droids_Ability` that hurts enemies (Eclipse lightning storm): a damaging area placed where the ability is used.
+#[derive(Debug, Clone, Default)]
+pub struct ZoneDef {
+    /// `Damage_Radius`.
+    pub radius: f32,
+    /// `Enemy_Damage_Per_Second`: hull damage per second to every enemy ship inside (shields absorb first).
+    pub enemy_dps: f32,
+    /// `Activation_Max_Range`: how far from the ship the area may be placed.
+    pub max_range: f32,
 }
 
 /// Parameters of a tractor beam ability.
@@ -1316,7 +1332,7 @@ fn ability_defs(u: &SpaceUnitDef) -> Vec<AbilityDef> {
         .iter()
         .filter(|a| {
             a.expiration_seconds.unwrap_or(0.0) > 0.0
-                || ["FULL_SALVO", "TRACTOR_BEAM", "MISSILE_SHIELD", "INTERDICT", "STEALTH", "FOW_REVEAL_PING", "LASER_DEFENSE", "ROCKET_ATTACK", "SWAP_WEAPONS"].iter().any(|k| a.kind.eq_ignore_ascii_case(k))
+                || ["FULL_SALVO", "TRACTOR_BEAM", "MISSILE_SHIELD", "INTERDICT", "STEALTH", "FOW_REVEAL_PING", "LASER_DEFENSE", "ROCKET_ATTACK", "SWAP_WEAPONS", "SENSOR_JAMMING", "BUZZ_DROIDS"].iter().any(|k| a.kind.eq_ignore_ascii_case(k))
         })
         .map(|a| {
             let toggle = a.expiration_seconds.unwrap_or(0.0) <= 0.0 && ["MISSILE_SHIELD", "INTERDICT", "STEALTH"].iter().any(|k| a.kind.eq_ignore_ascii_case(k));
@@ -1341,6 +1357,12 @@ fn ability_defs(u: &SpaceUnitDef) -> Vec<AbilityDef> {
                 interdict: a.kind.eq_ignore_ascii_case("INTERDICT"),
                 toggle,
                 salvo: a.kind.eq_ignore_ascii_case("FULL_SALVO"),
+                jam: a.kind.eq_ignore_ascii_case("SENSOR_JAMMING"),
+                zone: a.kind.eq_ignore_ascii_case("BUZZ_DROIDS").then(|| {
+                    let sub = a.activated_ability.as_ref().and_then(|n| u.sub_abilities.iter().find(|s| s.name.eq_ignore_ascii_case(n)));
+                    let f = |k: &str| sub.and_then(|s| s.fields.get(k)).and_then(|v| v.trim().parse::<f32>().ok()).unwrap_or(0.0);
+                    ZoneDef { radius: f("damage_radius"), enemy_dps: f("enemy_damage_per_second"), max_range: f("activation_max_range") }
+                }).filter(|z| z.radius > 0.0 && z.enemy_dps > 0.0),
                 rocket: a.kind.eq_ignore_ascii_case("ROCKET_ATTACK") || a.kind.eq_ignore_ascii_case("SWAP_WEAPONS"),
                 missile_radius: if a.kind.eq_ignore_ascii_case("MISSILE_SHIELD") || laser { a.fields.get("effective_radius").and_then(|v| v.parse().ok()).unwrap_or(750.0) } else { 0.0 },
                 disable_movement: a.fields.get("disable_movement").is_some_and(|v| alamo_data::xml::parse_bool(v)),

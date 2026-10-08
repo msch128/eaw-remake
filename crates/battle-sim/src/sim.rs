@@ -35,6 +35,8 @@ struct Snap {
     health: f32,
     /// Bit s set = side s sees this ship (fog of war).
     seen_by: u8,
+    /// `SENSOR_JAMMING` active: homing missiles cannot hold a lock on it.
+    jammed: bool,
 }
 
 /// Uniform grid of ship ids for projectile collision.
@@ -181,6 +183,7 @@ impl Battle {
             cmd_events: Vec::new(),
             retreat_ordered: vec![false; sides.len()],
             reveals: Vec::new(),
+            zones: Vec::new(),
             search: vec![(0, 0.0); sides.len()],
             sides,
             ships: Vec::new(),
@@ -607,6 +610,16 @@ impl Battle {
                     return Err(CommandError::AbilityUnavailable);
                 }
                 let d = self.catalog.ship(self.ships[ship as usize].def);
+                if let Some(a) = d.abilities.get(ability as usize)
+                    && let Some(z) = &a.zone
+                {
+                    let from = self.ships[ship as usize].pos;
+                    let to = pos - from;
+                    let at = if to.len() > z.max_range { from + to.normalized() * z.max_range } else { pos };
+                    if let Some(zone) = self.zones.last_mut() {
+                        zone.1 = at;
+                    }
+                }
                 if let Some(a) = d.abilities.get(ability as usize).filter(|a| a.reveal_radius > 0.0) {
                     self.reveals.retain(|r| r.3 > self.time);
                     self.reveals.push((side, pos, a.reveal_radius, self.time + a.duration));
@@ -717,6 +730,11 @@ impl Battle {
             self.reveals.retain(|r| r.3 > self.time);
             self.reveals.push((side, pos, a.reveal_radius, self.time + a.duration));
         }
+        if let Some(z) = &a.zone {
+            // Used without a place: the area around the ship itself (a point-targeted use adds its own area in `UseAbilityAt`).
+            let (side, pos) = (self.ships[ship as usize].side, self.ships[ship as usize].pos);
+            self.zones.push((side, pos, z.radius, z.enemy_dps, self.time + a.duration));
+        }
         if let Some(t) = &a.tractor {
             match self.tractor_target(ship, t) {
                 Some(x) => target = x,
@@ -776,6 +794,7 @@ impl Battle {
                     alive: s.alive && !s.retreated,
                     golan: d.golan,
                     hp_alive: s.hps.iter().take(64).enumerate().fold(0u64, |m, (i, h)| m | (u64::from(h.alive) << i)),
+                    jammed: d.abilities.iter().zip(&s.abilities).any(|(a, st)| a.jam && st.active > 0.0),
                     health: ((s.hull.max(0.0) + s.shield.max(0.0)) / (d.hull.max(1.0) + d.shield)).clamp(0.0, 1.0),
                     // Stations and structures are known from the start (the map shows them); only mobile ships hide in the fog.
                     seen_by: if fog && !d.is_static {
@@ -1317,8 +1336,34 @@ impl Battle {
         }
         self.run_carriers(dt);
         self.run_healing(dt);
+        self.run_zones(dt);
         if self.tick.is_multiple_of(30) {
             self.run_bonuses();
+        }
+    }
+
+    /// Damaging areas (`BUZZ_DROIDS`): enemy ships inside lose `dps` per second, shield first, then hull.
+    fn run_zones(&mut self, dt: f32) {
+        let now = self.time;
+        self.zones.retain(|z| z.4 > now);
+        if self.zones.is_empty() {
+            return;
+        }
+        let record = self.config.record_events;
+        for z in self.zones.clone() {
+            for s in self.ships.iter_mut().filter(|s| s.alive && !s.retreated && s.side != z.0 && s.pos.dist(z.1) <= z.2) {
+                let mut dmg = z.3 * dt * s.bonus.taken_hull;
+                let soak = dmg.min(s.shield.max(0.0));
+                s.shield -= soak;
+                dmg -= soak;
+                s.hull -= dmg;
+                if s.hull <= 0.0 {
+                    s.alive = false;
+                    if record {
+                        self.events.push(Event::ShipDestroyed { ship: s.id, pos: s.pos });
+                    }
+                }
+            }
         }
     }
 
@@ -2025,7 +2070,9 @@ fn fly(p: &mut Projectile, snaps: &[Snap], grid: &Grid, cat: &Catalog, env: &Fly
     }
     if pd.turn_rate > 0.0 && p.target != NONE {
         let t = &snaps[p.target as usize];
-        if t.alive {
+        if t.jammed {
+            p.target = NONE;
+        } else if t.alive {
             let want = (t.pos - p.pos).normalized();
             let cur = p.vel.normalized();
             let cosang = cur.dot(want).clamp(-1.0, 1.0);

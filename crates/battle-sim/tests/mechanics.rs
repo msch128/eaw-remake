@@ -549,3 +549,83 @@ fn redirect_blaster_blocks_or_reflects_shots() {
     let (_, some) = duel_loss(gunner, partial, 20);
     assert!(some > full * 0.7 && some < full * 0.95, "unblocked {full} partial {some}");
 }
+
+#[test]
+fn rocket_attack_speeds_up_missile_reloads_only() {
+    let mut missile = laser();
+    missile.name = "missile".into();
+    missile.category = "missile".into();
+    let target = ship("dummy", 1.0e7, 0.0, vec![]);
+    let run = |category_missile: bool, use_ability: bool| {
+        let mut boat = ship("boat", 1.0e6, 0.0, vec![gun("g", 0.0)]);
+        boat.abilities.push(AbilityDef { kind: "ROCKET_ATTACK".into(), rocket: true, duration: 10.0, recharge: 30.0, speed_mult: 1.0, shield_regen_mult: 1.0, weapon_delay_mult: 1.0, take_damage_mult: 1.0, ..Default::default() });
+        let proj = if category_missile { missile.clone() } else { laser() };
+        let cat = Catalog::from_defs(vec![boat, target.clone()], vec![proj]);
+        let mut b = Battle::new(setup(cat, "boat", "dummy", 1, 1, cfg()));
+        let id = b.ships.iter().find(|s| s.side == 0).unwrap().id;
+        if use_ability {
+            b.command(0, Command::UseAbility { ship: id, ability: 0 }).unwrap();
+        }
+        let mut shots = 0;
+        for _ in 0..30 * 8 {
+            shots += b.step().iter().filter(|e| matches!(e, Event::ProjectileFired { .. })).count();
+        }
+        shots
+    };
+    let (plain, rockets, lasers) = (run(true, false), run(true, true), run(false, true));
+    assert!(rockets as f32 > plain as f32 * 1.8, "missiles reload faster: {plain} -> {rockets}");
+    assert!((lasers as f32 - plain as f32).abs() <= 2.0, "lasers are unaffected: {plain} vs {lasers}");
+}
+
+#[test]
+fn sensor_jamming_breaks_missile_locks() {
+    let mut homing = laser();
+    homing.name = "homer".into();
+    homing.category = "missile".into();
+    homing.turn_rate = 6.0;
+    homing.speed = 500.0;
+    let run = |jam: bool| {
+        let mut target = ship("target", 1.0e7, 0.0, vec![]);
+        target.abilities.push(AbilityDef { kind: "SENSOR_JAMMING".into(), jam: true, duration: 15.0, recharge: 60.0, speed_mult: 1.0, shield_regen_mult: 1.0, weapon_delay_mult: 1.0, take_damage_mult: 1.0, ..Default::default() });
+        let shooter = ship("shooter", 1.0e6, 0.0, vec![]);
+        let cat = Catalog::from_defs(vec![shooter, target], vec![homing.clone()]);
+        let mut b = Battle::new(setup(cat, "shooter", "target", 1, 1, cfg()));
+        let (s, t) = (b.ships.iter().find(|x| x.side == 0).unwrap().id, b.ships.iter().find(|x| x.side == 1).unwrap().id);
+        if jam {
+            b.command(1, Command::UseAbility { ship: t, ability: 0 }).unwrap();
+        }
+        let tp = b.ships[t as usize].pos;
+        // A missile launched at right angles to the target, 1500 units off its line.
+        b.projectiles.push(Projectile { pos: tp + Vec3::new(0.0, 1500.0, 0.0), vel: Vec3::new(500.0, 0.0, 0.0), def: 0, side: 0, owner: s, target: t, aim_hp: u16::MAX, range_left: 9000.0 });
+        for _ in 0..30 * 6 {
+            b.step();
+        }
+        b.ships[t as usize].shield + b.ships[t as usize].hull
+    };
+    let hp = 1.0e7f32;
+    assert!(run(false) < hp, "an unjammed missile curves in and hits");
+    assert_eq!(run(true), hp, "a jammed missile flies on and misses");
+}
+
+#[test]
+fn buzz_droid_storm_damages_enemies_in_the_area_over_time() {
+    let mut caster = ship("caster", 1.0e6, 0.0, vec![]);
+    caster.abilities.push(AbilityDef { kind: "BUZZ_DROIDS".into(), zone: Some(ZoneDef { radius: 500.0, enemy_dps: 100.0, max_range: 5000.0 }), duration: 10.0, recharge: 75.0, speed_mult: 1.0, shield_regen_mult: 1.0, weapon_delay_mult: 1.0, take_damage_mult: 1.0, ..Default::default() });
+    let victim = ship("victim", 10000.0, 0.0, vec![]);
+    let cat = Catalog::from_defs(vec![caster, victim], vec![laser()]);
+    let mut b = Battle::new(setup(cat, "caster", "victim", 1, 1, cfg()));
+    let (c, v) = (b.ships.iter().find(|s| s.side == 0).unwrap().id, b.ships.iter().find(|s| s.side == 1).unwrap().id);
+    let at = b.ships[v as usize].pos;
+    b.command(0, Command::UseAbilityAt { ship: c, ability: 0, pos: at }).unwrap();
+    for _ in 0..30 * 5 {
+        b.step();
+    }
+    let lost = 10000.0 - b.ships[v as usize].hull;
+    assert!((lost - 500.0).abs() < 60.0, "5 s of 100 dps: {lost}");
+    for _ in 0..30 * 20 {
+        b.step();
+    }
+    let total = 10000.0 - b.ships[v as usize].hull;
+    assert!((total - 1000.0).abs() < 120.0, "the storm ends after 10 s: {total}");
+    assert_eq!(b.ships[c as usize].hull, 1.0e6, "the caster is not hurt");
+}

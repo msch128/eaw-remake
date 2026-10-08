@@ -498,6 +498,7 @@ pub fn build_view(data: &GameData, campaign: &Campaign) -> (GalaxyView, Vec<Stri
             surface_color: terrain_color(p),
             max_space_base: p.max_space_base,
             max_ground_base: p.max_ground_base,
+            terrain: p.terrain.clone(),
             info: planet_info(data, p),
             special_slots: p.special_structures_space,
             ability: planet_ability(data, p),
@@ -728,7 +729,7 @@ fn planet_info(data: &GameData, p: &alamo_data::Planet) -> Vec<String> {
         .description_ids
         .iter()
         .filter_map(|id| data.text(id))
-        .flat_map(|t| t.replace("\n", "\n").lines().map(str::to_owned).collect::<Vec<_>>())
+        .flat_map(|t| t.replace("\\n", "\n").lines().map(str::to_owned).collect::<Vec<_>>())
         .collect();
     let history = p
         .encyclopedia_text

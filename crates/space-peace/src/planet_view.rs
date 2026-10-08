@@ -86,6 +86,8 @@ fn view_scene(
     alamo: Option<Res<AlamoFs>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut mats: ResMut<Assets<StandardMaterial>>,
+    mut images: ResMut<Assets<Image>>,
+    mut textures: Option<ResMut<eaw_ui::textures::UiTextures>>,
     existing: Query<Entity, With<ViewEntity>>,
 ) {
     let target = if state.active { 1.0 } else { 0.0 };
@@ -127,7 +129,9 @@ fn view_scene(
     {
         commands.spawn((ViewEntity, AlamoModel::new(m.clone()), FitModel { radius: 1.3, spin: 0.15 }, Transform::from_translation(ORIGIN + Vec3::new(-3.4, -0.9, -9.0))));
     }
-    spawn_platform(&mut commands, &mut meshes, &mut mats, ORIGIN + Vec3::new(0.4, -1.5, -10.5));
+    if let Some(tex) = textures.as_mut().and_then(|t| t.get(&mut images, "i_galactic_organize_land.dds")) {
+        spawn_platform(&mut commands, &mut meshes, &mut mats, tex.handle, land_cell(p.1.terrain.as_deref()), ORIGIN + Vec3::new(0.6, -1.9, -10.0));
+    }
 }
 
 fn view_camera(state: Res<PlanetViewState>, mut cam: Single<&mut Transform, With<GalaxyCamera>>) {
@@ -153,28 +157,42 @@ fn fit_models(time: Res<Time>, mut models: Query<(&FitModel, &mut Transform, Opt
     }
 }
 
-/// Builds the tan base-layout platform of the video: a back slab with three rectangular slot frames and a lower
-/// front strip with six round slots (no original model for it was found, so it is made from primitives).
-fn spawn_platform(commands: &mut Commands, meshes: &mut Assets<Mesh>, mats: &mut Assets<StandardMaterial>, at: Vec3) {
-    let tan = mats.add(StandardMaterial { base_color: Color::srgb(0.62, 0.52, 0.34), perceptual_roughness: 0.8, ..default() });
-    let dark = mats.add(StandardMaterial { base_color: Color::srgb(0.48, 0.40, 0.26), perceptual_roughness: 0.9, ..default() });
-    let frame = mats.add(StandardMaterial { base_color: Color::srgb(0.95, 0.93, 0.85), emissive: LinearRgba::rgb(0.5, 0.5, 0.45), unlit: false, ..default() });
-    let root = commands.spawn((ViewEntity, Name::new("base layout"), Transform::from_translation(at).with_rotation(Quat::from_rotation_x(0.0)), Visibility::default())).id();
-    let mut part = |mesh: Mesh, mat: &Handle<StandardMaterial>, pos: Vec3| {
-        commands.spawn((Mesh3d(meshes.add(mesh)), MeshMaterial3d(mat.clone()), Transform::from_translation(pos), ChildOf(root)));
+/// Cell (column, row) of `i_galactic_organize_land.dds` for a terrain: the original draws the base layout as
+/// a pre-rendered platform per climate (2 columns x 4 rows, `land_art_ALT0..7` of `I_Galactic_Organize_New`).
+fn land_cell(terrain: Option<&str>) -> (u32, u32) {
+    let idx = match terrain.map(str::to_ascii_lowercase).as_deref() {
+        Some("desert") => 1,
+        Some("swamp") => 2,
+        Some("volcanic") => 3,
+        Some("arctic") => 4,
+        Some("forest") => 5,
+        Some("urban") => 6,
+        Some("barren") => 7,
+        _ => 0,
     };
-    // Back slab (x 5.6 wide, z 2.0 deep) and the lower front strip.
-    part(Cuboid::new(5.6, 0.12, 2.0).into(), &tan, Vec3::ZERO);
-    part(Cuboid::new(5.6, 0.08, 0.8).into(), &dark, Vec3::new(0.0, -0.1, 1.6));
-    // Three slot frames on the slab.
-    for k in 0..3 {
-        let cx = (k as f32 - 1.0) * 1.8;
-        for (w, d, dx, dz) in [(1.5, 0.05, 0.0, -0.8), (1.5, 0.05, 0.0, 0.8), (0.05, 1.65, -0.75, 0.0), (0.05, 1.65, 0.75, 0.0)] {
-            part(Cuboid::new(w, 0.04, d).into(), &frame, Vec3::new(cx + dx, 0.08, dz));
-        }
-    }
-    // Round slots on the front strip.
-    for k in 0..6 {
-        part(Cylinder::new(0.28, 0.02).into(), &tan, Vec3::new((k as f32 - 2.5) * 0.85, -0.04, 1.6));
-    }
+    (idx % 2, idx / 2)
+}
+
+/// The base-layout platform: the original art quad (terrain variant) facing the camera.
+fn spawn_platform(
+    commands: &mut Commands,
+    meshes: &mut Assets<Mesh>,
+    mats: &mut Assets<StandardMaterial>,
+    texture: Handle<Image>,
+    cell: (u32, u32),
+    at: Vec3,
+) {
+    let mat = mats.add(StandardMaterial {
+        base_color_texture: Some(texture),
+        unlit: true,
+        alpha_mode: AlphaMode::Blend,
+        cull_mode: None,
+        uv_transform: bevy::math::Affine2::from_scale_angle_translation(
+            Vec2::new(0.5, 0.25),
+            0.0,
+            Vec2::new(cell.0 as f32 * 0.5, cell.1 as f32 * 0.25),
+        ),
+        ..default()
+    });
+    commands.spawn((ViewEntity, Name::new("base layout"), Mesh3d(meshes.add(Rectangle::new(7.0, 3.5))), MeshMaterial3d(mat), Transform::from_translation(at)));
 }
