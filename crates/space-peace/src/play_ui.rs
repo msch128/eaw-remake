@@ -879,17 +879,39 @@ fn scripted_clicks(
 
 /// What the player did in this game (counted from the simulation events; a loaded save starts again at zero).
 #[derive(Debug, Default, Clone, PartialEq)]
-struct GameStats {
+pub(crate) struct GameStats {
     battles_won: u32,
     battles_lost: u32,
     ships_built: u32,
     ships_lost: u32,
 }
 
+impl GameStats {
+    /// One line stored next to a save file (`slotN.stats`): the sim does not count these, a replay does not report them.
+    pub(crate) fn to_text(&self) -> String {
+        format!("v1 {} {} {} {}\n", self.battles_won, self.battles_lost, self.ships_built, self.ships_lost)
+    }
+
+    /// Reads [`GameStats::to_text`].
+    pub(crate) fn from_text(text: &str) -> Option<Self> {
+        let mut it = text.split_whitespace();
+        if it.next()? != "v1" {
+            return None;
+        }
+        let mut n = || it.next()?.parse::<u32>().ok();
+        Some(Self { battles_won: n()?, battles_lost: n()?, ships_built: n()?, ships_lost: n()? })
+    }
+
+    /// Side file of a save.
+    pub(crate) fn sidecar(save: &std::path::Path) -> std::path::PathBuf {
+        save.with_extension("stats")
+    }
+}
+
 /// The campaign result and its dialog.
 #[derive(Resource, Default)]
-struct EndState {
-    stats: GameStats,
+pub(crate) struct EndState {
+    pub(crate) stats: GameStats,
     /// `Some(true)` victory, `Some(false)` defeat, waiting for the dialog.
     pending: Option<bool>,
     /// The dialog entity once shown.
@@ -932,16 +954,26 @@ fn force_end_script(
     state: Res<SimState>,
     hold: Res<crate::play::ScriptHold>,
     mut out: MessageWriter<galaxy_play::PlayEvent>,
+    end: Res<EndState>,
+    mut dialog_out: MessageWriter<EawDialogResult>,
+    mut commands: Commands,
     mut frames: Local<u32>,
 ) {
     let (Some(mode), Some(me), true) = (args.force_end.as_deref(), player.0, args.offscreen.is_some()) else { return };
+    let win = mode.starts_with("win");
     if hold.active || state.current.loading {
         return;
     }
     *frames += 1;
     if *frames == 90 {
-        let ev = if mode == "win" { galaxy_sim::Event::Victory { faction: me } } else { galaxy_sim::Event::FactionEliminated { faction: me } };
+        let ev = if win { galaxy_sim::Event::Victory { faction: me } } else { galaxy_sim::Event::FactionEliminated { faction: me } };
         out.write(galaxy_play::PlayEvent::Sim(ev));
+    }
+    // `win-menu` / `lose-menu`: press "Main Menu" in the dialog.
+    if *frames == 160 && mode.ends_with("menu") && let Some(d) = end.dialog {
+        info!("script: clicking `Main Menu` in the end dialog");
+        dialog_out.write(EawDialogResult { dialog: d, button: 0 });
+        commands.entity(d).despawn();
     }
 }
 
@@ -1017,5 +1049,19 @@ fn end_dialog_result(
 fn reset_end_state(mut end: ResMut<EndState>) {
     if end.announced || end.dialog.is_some() || end.pending.is_some() || end.stats != GameStats::default() {
         *end = EndState::default();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::GameStats;
+
+    #[test]
+    fn stats_sidecar_round_trips() {
+        let s = GameStats { battles_won: 3, battles_lost: 1, ships_built: 12, ships_lost: 7 };
+        assert_eq!(GameStats::from_text(&s.to_text()), Some(s));
+        assert_eq!(GameStats::from_text("v2 1 2 3 4"), None);
+        assert_eq!(GameStats::from_text("v1 1 2"), None);
+        assert_eq!(GameStats::sidecar(std::path::Path::new("saves/slot1.json")), std::path::PathBuf::from("saves/slot1.stats"));
     }
 }
