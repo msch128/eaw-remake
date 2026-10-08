@@ -1436,7 +1436,7 @@ fn spawn_nebula_plane(commands: &mut Commands, view: &GalaxyView, meshes: &mut A
     img.sampler = bevy::image::ImageSampler::linear();
     let tex = images.add(img);
     let material = materials.add(StandardMaterial {
-        base_color: Color::linear_rgb(0.34, 0.075, 0.095),
+        base_color: Color::linear_rgb(0.1, 0.02, 0.03),
         base_color_texture: Some(tex),
         unlit: true,
         alpha_mode: AlphaMode::Add,

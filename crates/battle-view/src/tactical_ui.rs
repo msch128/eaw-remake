@@ -36,7 +36,7 @@ impl Plugin for TacticalUiPlugin {
             Update,
             (
                 control::ui_block.after(control::read_pointer).before(control::selection).run_if(resource_exists::<BattleRuntime>),
-                (crate::hud::spawn_hud, crate::hud::advisor, crate::hud::heroes).chain().run_if(resource_exists::<BattleRuntime>),
+                (crate::hud::spawn_hud, crate::hud::advisor, crate::hud::heroes, crate::hud::objectives_visibility, fix_tooltips).chain().run_if(resource_exists::<BattleRuntime>),
                 check_teardown,
                 crate::hud::remove_hud.run_if(resource_removed::<BattleRuntime>.or_eager(resource_removed::<crate::BattleSession>)),
                 init_reinforce.run_if(resource_added::<BattleRuntime>),
@@ -484,6 +484,16 @@ fn reinforce_events(
     }
 }
 
+/// `TEXT_MOVIE_MODE` of the data reads `BATTLECAM "!`: the button gets a real sentence built from the game's own help text (`TEXT_NEW_INTRO_MISC_9`).
+fn fix_tooltips(mut buttons: Query<&mut eaw_ui::EawButton>) {
+    for mut b in &mut buttons {
+        if b.name == "b_camera_t" && b.tooltip_literal.is_none() {
+            b.tooltip_literal = Some("Battle camera (C)
+Follows the selected unit; you can rotate around it".to_string());
+        }
+    }
+}
+
 /// Reticle kind of a hardpoint (`I_HARD_POINT_RETICLE_<KIND>`).
 fn reticle_kind(kind: HpKind) -> &'static str {
     match kind {
@@ -579,23 +589,27 @@ fn sync_overlays(
             always: false,
         });
     }
-    // Hardpoint reticles on the enemy under the cursor (or the selected one) while own ships are selected.
-    let target = hover.ship.filter(|id| ships.0.get(id).is_some_and(|s| s.side != player)).or(sel.enemy);
-    if let Some(s) = target.and_then(|id| ships.0.get(&id)).filter(|_| !sel.ships.is_empty()) {
+    // Hardpoint reticles with their health on the hovered ship, the selected enemy or a lone selected ship. They are clickable
+    // (attack that hardpoint) when they belong to an enemy and own ships are selected.
+    let lone = (sel.ships.len() == 1).then(|| sel.ships[0]);
+    let target = hover.ship.or(sel.enemy).or(lone);
+    if let Some(s) = target.and_then(|id| ships.0.get(&id)) {
         let def = rt.catalog.ship(s.def);
+        let can_attack = s.side != player && !sel.ships.is_empty();
         for (i, h) in def.hardpoints.iter().enumerate() {
-            if !h.targetable || !h.destroyable || !is_markable(h.kind) || !s.hp_alive.get(i).copied().unwrap_or(false) {
+            if !h.destroyable || !is_markable(h.kind) {
                 continue;
             }
+            let alive = s.hp_alive.get(i).copied().unwrap_or(false);
             let Ok(p) = cam.world_to_viewport(gt, control::hardpoint_world(&rt, s, i)) else { continue };
             next.hardpoints.push(HardpointMarker {
                 id: hardpoint_id(s.id, i),
                 kind: reticle_kind(h.kind).to_string(),
                 tracked: hover.hardpoint == Some((s.id, i as u16)),
                 screen_pos: p,
-                health: 1.0,
-                targetable: true,
-                destroyed: false,
+                health: s.hp_health.get(i).copied().unwrap_or(1.0),
+                targetable: can_attack && h.targetable && alive,
+                destroyed: !alive,
             });
         }
     }
@@ -614,13 +628,9 @@ fn hardpoint_clicks(
 ) {
     for c in clicks.read() {
         let Some((target, hp)) = c.id.split_once(':').and_then(|(a, b)| Some((a.parse::<u32>().ok()?, b.parse::<u16>().ok()?))) else { continue };
-        let mine: Vec<u32> = sel
-            .ships
-            .iter()
-            .copied()
-            .filter(|id| ships.0.get(id).is_some_and(|s| s.side == settings.player_side && !rt.catalog.ship(s.def).is_static))
-            .collect();
-        if !mine.is_empty() {
+        let mine = control::selected_mobile(&rt, &ships, &sel, settings.player_side);
+        let enemy = ships.0.get(&target).is_some_and(|s| s.side != settings.player_side);
+        if enemy && !mine.is_empty() {
             rt.command(settings.player_side, Command::AttackHardpoint { ships: mine, target, hardpoint: hp });
         }
     }

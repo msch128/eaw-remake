@@ -75,6 +75,8 @@ pub struct ShipRender {
     pub squad: u32,
     /// Hardpoint alive flags.
     pub hp_alive: Vec<bool>,
+    /// Hardpoint health fractions 0..1.
+    pub hp_health: Vec<f32>,
 }
 
 /// All living ships by simulation id.
@@ -308,6 +310,12 @@ pub fn update_ships(
             0.0
         };
         let hp_alive: Vec<bool> = s.hps.iter().map(|h| h.alive).collect();
+        let hp_health: Vec<f32> = s
+            .hps
+            .iter()
+            .enumerate()
+            .map(|(i, h)| def.hardpoints.get(i).map_or(1.0, |d| if d.health > 0.0 { (h.health / d.health).clamp(0.0, 1.0) } else { 1.0 }))
+            .collect();
         let mut radius = def.radius;
         if let Ok((mut view, mut tf)) = views.get_mut(entity) {
             if view.visual_radius == 0.0
@@ -372,6 +380,7 @@ pub fn update_ships(
                 shield: shield_frac,
                 squad: s.squad,
                 hp_alive,
+                hp_health,
             },
         );
     }

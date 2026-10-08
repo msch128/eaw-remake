@@ -46,6 +46,8 @@ $scenarios = @(
     @('windowed-battle-input', @('--hidden', '--no-vsync', '--exit-after', '9000', '--volume', '0', '--campaign', $camp, '--select', $yavin, '--weeks', '8', '--move', 'Hoth', '--battle-choice', 'fight', '--battle-speed', '1'), 'input-test: [0-9]+ checks PASS'),
     # Real pointer path of the galaxy screens: battle banner, ESC menu (save, slots, options, load, main menu); see space-peace/src/input_test.rs.
     @('windowed-ui-pointer', @('--hidden', '--no-vsync', '--exit-after', '8000', '--volume', '0', '--campaign', $camp, '--select', $yavin, '--weeks', '8', '--move', 'Hoth'), 'ui-test: [0-9]+ checks PASS'),
+    # F10 equivalent (--battle-abort-after): the half-fought battle is abandoned and the galaxy keeps the losses so far (some side lost units).
+    @('windowed-battle-f10-abandon', @('--hidden', '--no-vsync', '--exit-after', '6000', '--volume', '0', '--campaign', $camp, '--select', $yavin, '--weeks', '8', '--move', 'Hoth', '--battle-choice', 'fight', '--battle-auto', '--battle-speed', '30', '--battle-abort-after', '25'), 'abandoned at t=\d+s, units lost per side \[[0-9, ]*[1-9]'),
     @('battle-reinforce',    @('--campaign', $camp, '--select', $yavin, '--weeks', '8', '--move', 'Hoth', '--battle-choice', 'fight', '--battle-reserve', '3', '--battle-click', 'b_reinforcement,r_0000', '--battle-speed', '30', '--frames', '5'), 'simulation accepted')
 )
 

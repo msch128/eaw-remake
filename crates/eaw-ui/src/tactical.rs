@@ -561,13 +561,13 @@ pub(crate) fn ship_overlays(
             };
             let img = |h: Option<Handle<Image>>| h.map_or_else(ImageNode::default, ImageNode::new);
             // Health bar: frame + discrete level texture.
-            let health_bar = commands.spawn((bar(5.0), FocusPolicy::Pass, ChildOf(id))).id();
+            let health_bar = commands.spawn((bar(8.0), FocusPolicy::Pass, ChildOf(id))).id();
             commands.spawn((full.clone(), img(set.frame.clone()), ChildOf(health_bar)));
             let health_img = commands
                 .spawn((full.clone(), img(set.health.last().cloned()), ChildOf(health_bar)))
                 .id();
             // Shield bar: frame + the full shield texture clipped to the fraction.
-            let shield_bg = commands.spawn((bar(8.0), FocusPolicy::Pass, ChildOf(id))).id();
+            let shield_bg = commands.spawn((bar(4.0), FocusPolicy::Pass, ChildOf(id))).id();
             commands.spawn((full.clone(), img(set.frame.clone()), ChildOf(shield_bg)));
             let shield_clip = commands
                 .spawn((

@@ -4,7 +4,6 @@
 
 use std::collections::HashMap;
 
-use alamo_render::{AlamoModel, AlamoModelLoaded};
 use bevy::prelude::*;
 use galaxy_play::{FleetEntities, GalaxyLayout, PlayCatalog, PlayerFaction, SimState};
 
@@ -15,7 +14,7 @@ impl Plugin for HeroHeadsPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<HeroHeads>().add_systems(
             Update,
-            (update_hero_heads, fit_heroes)
+            (update_hero_heads, face_camera)
                 .chain()
                 .after(galaxy_play::PlaySet::Visuals)
                 .run_if(resource_exists::<SimState>)
@@ -45,14 +44,18 @@ fn update_hero_heads(
     catalog: Res<PlayCatalog>,
     layout: Res<GalaxyLayout>,
     player: Res<PlayerFaction>,
-    time: Res<Time>,
     entities: Option<Res<FleetEntities>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut mats: ResMut<Assets<StandardMaterial>>,
+    mut images: ResMut<Assets<Image>>,
+    textures: Option<ResMut<eaw_ui::textures::UiTextures>>,
+    cameras: Query<&GlobalTransform, With<Camera3d>>,
     transforms: Query<&GlobalTransform, With<galaxy_play::FleetVisual>>,
     mut roots: Query<&mut Transform, (With<HeroRoot>, Without<galaxy_play::FleetVisual>)>,
 ) {
     let Some(entities) = entities else { return };
+    let mut textures = textures;
+    let cam_rot = cameras.iter().next().map(|c| c.rotation());
     let g = state.galaxy();
     let fake = std::env::var_os("SP_HERO_FAKE").is_some();
     let mut alive: Vec<(u32, u32)> = Vec::new();
@@ -63,7 +66,7 @@ fn update_hero_heads(
             .units
             .iter()
             .filter(|&(&u, &n)| n > 0 && (fake || state.world.units.get(u as usize).is_some_and(|d| d.hero)))
-            .map(|(&u, _)| u as u32)
+            .map(|(&u, _)| u)
             .take(4)
             .collect();
         for (k, &u) in heroes.iter().enumerate() {
@@ -75,17 +78,12 @@ fn update_hero_heads(
             if let Some(&root) = heads.0.get(&key) {
                 if let Ok(mut t) = roots.get_mut(root) {
                     t.translation = pos;
-                    t.rotation = Quat::from_rotation_y(time.elapsed_secs() * 0.4);
+                    t.rotation = Quat::IDENTITY;
                 }
                 continue;
             }
-            let model = catalog
-                .unit_land_models
-                .get(u as usize)
-                .cloned()
-                .flatten()
-                .or_else(|| catalog.unit_space_models.get(u as usize).cloned().flatten());
-            let Some(model) = model else { continue };
+            let Some(icon) = catalog.unit_icons.get(u as usize).cloned().flatten() else { continue };
+            let Some(tex) = textures.as_mut().and_then(|t| t.get(&mut images, &icon)) else { continue };
             let own = player.0 == Some(f.owner);
             let col = if own { Color::srgb(0.1, 0.9, 0.2) } else { Color::srgb(0.9, 0.2, 0.15) };
             let lin = col.to_linear();
@@ -103,10 +101,24 @@ fn update_hero_heads(
                 })),
                 Transform::from_xyz(0.0, -layout.unit * 0.12, 0.0)
                     .with_rotation(Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2))
-                    .with_scale(Vec3::splat(layout.unit * 0.7)),
+                    .with_scale(Vec3::splat(layout.unit * 0.8)),
                 ChildOf(root),
             ));
-            commands.spawn((AlamoModel::new(model).with_team_color(col), Transform::default(), HeroModel, ChildOf(root)));
+            // Upright cut-out portrait standing on the disc, facing the camera.
+            let h = layout.unit * 1.1;
+            commands.spawn((
+                Mesh3d(meshes.add(Rectangle::new(h, h))),
+                MeshMaterial3d(mats.add(StandardMaterial {
+                    base_color_texture: Some(tex.handle.clone()),
+                    unlit: true,
+                    alpha_mode: AlphaMode::Mask(0.5),
+                    cull_mode: None,
+                    ..default()
+                })),
+                Transform::from_xyz(0.0, h * 0.5, 0.0).with_rotation(cam_rot.unwrap_or(Quat::IDENTITY)),
+                ChildOf(root),
+                HeroModel,
+            ));
             heads.0.insert(key, root);
         }
     }
@@ -120,11 +132,11 @@ fn update_hero_heads(
     });
 }
 
-/// Scales freshly loaded hero models to a fixed size, centred on the disc.
-fn fit_heroes(layout: Res<GalaxyLayout>, mut loaded: Query<(&AlamoModelLoaded, &mut Transform), (With<HeroModel>, Added<AlamoModelLoaded>)>) {
-    for (m, mut tf) in &mut loaded {
-        let s = if m.radius > 0.0 { layout.unit * 0.6 / m.radius } else { 1.0 };
-        tf.scale = Vec3::splat(s);
-        tf.translation = -m.center * s;
+/// Turns the portraits to face the camera.
+fn face_camera(cameras: Query<&GlobalTransform, With<Camera3d>>, mut q: Query<(&mut Transform, &ChildOf), With<HeroModel>>, parents: Query<&GlobalTransform, With<HeroRoot>>) {
+    let Some(cam) = cameras.iter().next() else { return };
+    for (mut t, parent) in &mut q {
+        let parent_rot = parents.get(parent.parent()).map_or(Quat::IDENTITY, |p| p.rotation());
+        t.rotation = parent_rot.inverse() * cam.rotation();
     }
 }
