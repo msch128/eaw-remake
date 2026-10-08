@@ -360,9 +360,14 @@ pub struct BattleSummary {
 #[derive(Component)]
 struct BattleMenuRoot;
 
-/// Esc opens the battle menu (Resume / Retreat); Retreat gives the fight up like F10.
+/// Esc cancels an armed order / targeting first; with nothing armed it opens the battle menu (Resume / Retreat), which pauses the battle while it is
+/// open. Retreat gives the fight up like F10.
+#[allow(clippy::too_many_arguments)]
 fn battle_menu(
     keys: Res<ButtonInput<KeyCode>>,
+    mut armed: ResMut<battle_view::control::ArmedOrder>,
+    mut settings: ResMut<BattleViewSettings>,
+    mut paused_before: Local<Option<bool>>,
     mut menu: ResMut<crate::menu::BattleMenu>,
     pending: Res<PendingTactical>,
     existing: Query<Entity, With<BattleMenuRoot>>,
@@ -370,7 +375,18 @@ fn battle_menu(
     mut done: MessageWriter<BattleFinished>,
 ) {
     if keys.just_pressed(KeyCode::Escape) {
-        menu.open = !menu.open;
+        if armed.0.is_some() && !menu.open {
+            armed.0 = None;
+        } else {
+            menu.open = !menu.open;
+        }
+    }
+    // The battle clock stands still while the menu is open; the player's own pause is restored afterwards.
+    if menu.open && paused_before.is_none() {
+        *paused_before = Some(settings.paused);
+        settings.paused = true;
+    } else if !menu.open && let Some(before) = paused_before.take() {
+        settings.paused = before;
     }
     if menu.retreat {
         menu.retreat = false;

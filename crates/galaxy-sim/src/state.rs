@@ -301,6 +301,16 @@ pub enum Command {
         /// Destination planet.
         to: PlanetId,
     },
+    /// Like [`Command::MoveFleet`], but the route goes around systems that would stop the fleet (hostile star base or fleet) when there
+    /// is a way around. Used by the AI; the player's orders take the plain fastest route and run into blockades, as in the game.
+    MoveFleetAround {
+        /// Issuing faction.
+        faction: FactionId,
+        /// Fleet.
+        fleet: FleetId,
+        /// Destination planet.
+        to: PlanetId,
+    },
     /// Merge `from` into `into` (same owner, both in orbit of the same planet).
     MergeFleets {
         /// Issuing faction.

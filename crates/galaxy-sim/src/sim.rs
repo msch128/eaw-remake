@@ -89,6 +89,7 @@ impl Sim {
     pub fn apply(&mut self, cmd: Command) -> Result<CommandOk, CommandError> {
         let world = self.world.clone();
         let g = &mut self.galaxy;
+        let around = matches!(cmd, Command::MoveFleetAround { .. });
         match cmd {
             Command::BuildUnit { faction, planet, unit } => {
                 world.check_build_unit(g, faction, planet, unit)?;
@@ -186,7 +187,7 @@ impl Sim {
                 self.queued_events.extend(events);
                 Ok(CommandOk::Done)
             }
-            Command::MoveFleet { faction, fleet, to } => {
+            Command::MoveFleet { faction, fleet, to } | Command::MoveFleetAround { faction, fleet, to } => {
                 let f = g.fleets.get(&fleet).filter(|f| f.owner == faction).ok_or(CommandError::Invalid)?;
                 let FleetLocation::AtPlanet(from) = f.location else { return Err(CommandError::WrongState) };
                 if to as usize >= world.planets.len() {
@@ -198,10 +199,10 @@ impl Sim {
                 if g.battles.iter().any(|b| b.fleets.contains(&fleet)) {
                     return Err(CommandError::WrongState);
                 }
-                // Fleets go around systems that would stop them (hostile star base or fleet), when there is a way around.
+                // `MoveFleetAround` goes around systems that would stop the fleet, when there is a way around; `MoveFleet` takes the fastest route.
                 let path = {
                     let gal: &Galaxy = g;
-                    world.find_path_avoiding(from, to, |p| p != to && world.blockades(gal, p, faction))
+                    world.find_path_avoiding(from, to, |p| around && p != to && world.blockades(gal, p, faction))
                 }
                 .ok_or(CommandError::NoPath)?;
                 start_move(&world, g, fleet, path);

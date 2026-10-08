@@ -201,7 +201,7 @@ fn plan_military(world: &World, galaxy: &Galaxy, faction: FactionId, rng: &mut R
             }
         }
         if let Some((_, t)) = best {
-            cmds.push(Command::MoveFleet { faction, fleet: main.id, to: t });
+            cmds.push(Command::MoveFleetAround { faction, fleet: main.id, to: t });
         }
     }
 }

@@ -61,9 +61,18 @@ enum Step {
     PageUpRotates,
     /// Shift + 1 presses the first ability button of the selected unit (vacuous when the unit has none).
     AbilityHotkey,
+    /// Esc: cancels the armed order first, then opens the (pausing) menu, then closes it.
+    Escape(EscCheck),
 }
 
-const STEPS: [Step; 21] = [
+/// What an Esc press must have caused.
+#[derive(Clone, Copy, Debug)]
+enum EscCheck {
+    ArmedCleared,
+    Paused(bool),
+}
+
+const STEPS: [Step; 25] = [
     Step::SelectShip,
     Step::RightClickGround,
     Step::RightClickEnemyRim,
@@ -78,6 +87,10 @@ const STEPS: [Step; 21] = [
     Step::Button("c_button02", Check::Armed(ArmedKind::Move)),
     Step::ArmedGroundClick,
     Step::AbilityHotkey,
+    Step::Button("c_button01", Check::Armed(ArmedKind::AttackMove)),
+    Step::Escape(EscCheck::ArmedCleared),
+    Step::Escape(EscCheck::Paused(true)),
+    Step::Escape(EscCheck::Paused(false)),
     Step::Button("b_reinforcement", Check::ReinforceWindow),
     Step::Button("r_0000", Check::Armed(ArmedKind::Reinforce)),
     Step::PlaceReinforcement,
@@ -376,6 +389,18 @@ fn drive(
                     info!("input-test:   drag: start {:?}, after horizontal {:?}, end {:?}", st.cam0, st.cam1, cam_pose);
                 }
                 verdict = Some(("middle-drag-rotates-and-tilts".into(), yaw_only && tilt));
+            }
+            _ => {}
+        },
+        Step::Escape(check) => match t {
+            0 => act = Some(Act::KeyDown(KeyCode::Escape, Key::Escape)),
+            1 => act = Some(Act::KeyUp(KeyCode::Escape, Key::Escape)),
+            8 => {
+                let ok = match check {
+                    EscCheck::ArmedCleared => armed.0.is_none() && !settings.paused,
+                    EscCheck::Paused(p) => settings.paused == p && armed.0.is_none(),
+                };
+                verdict = Some((format!("escape {check:?}"), ok));
             }
             _ => {}
         },

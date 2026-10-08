@@ -201,7 +201,7 @@ impl AiSim for SimAdapter<'_> {
         Ok(0.0)
     }
     fn move_fleet(&mut self, p: PlayerId, fleet: u32, to: PlanetId) -> Result<(), Refused> {
-        self.sim.apply(Command::MoveFleet { faction: p, fleet, to }).map(|_| ()).map_err(refuse)
+        self.sim.apply(Command::MoveFleetAround { faction: p, fleet, to }).map(|_| ()).map_err(refuse)
     }
     fn split_fleet(&mut self, p: PlayerId, fleet: u32, units: &[(String, u32)]) -> Result<u32, Refused> {
         let mut list = Vec::new();
