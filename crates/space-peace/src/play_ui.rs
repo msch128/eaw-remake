@@ -1638,6 +1638,7 @@ enum PlanetPanelText {
     Title,
     Income,
     Body,
+    Population,
 }
 /// Owner emblem of the panel header.
 #[derive(Component)]
@@ -1683,6 +1684,7 @@ fn spawn_planet_panel(mut commands: Commands, existing: Query<(), With<PlanetPan
         ))
         .with_children(|p| {
             p.spawn(Node { align_items: AlignItems::Center, column_gap: Val::Px(8.0), margin: UiRect::bottom(Val::Px(8.0)), ..default() }).with_children(|r| {
+                r.spawn((Text::new(""), font(11.0), TextColor(Color::srgb(0.3, 1.0, 0.4)), PlanetPanelText::Population));
                 r.spawn((ImageNode::default().with_color(Color::NONE), Node { width: Val::Px(18.0), height: Val::Px(18.0), ..default() }, PanelEmblem));
                 r.spawn((Text::new(""), font(13.0), TextColor(Color::srgb(0.9, 0.95, 1.0)), bevy::text::LetterSpacing::Rem(0.12), Node { flex_grow: 1.0, justify_content: JustifyContent::Center, ..default() }, TextLayout::justify(Justify::Center), PlanetPanelText::Title));
                 r.spawn((Text::new(""), font(12.0), TextColor(Color::srgb(0.3, 1.0, 0.4)), PlanetPanelText::Income));
@@ -1753,6 +1755,7 @@ fn update_planet_panel(
         let s = match kind {
             PlanetPanelText::Title => p.display_name.to_uppercase(),
             PlanetPanelText::Income => format!("+{}", p.income),
+            PlanetPanelText::Population => if p.population_bonus > 0 { p.population_bonus.to_string() } else { String::new() },
             PlanetPanelText::Body => p.info.join("\n"),
         };
         if t.0 != s {

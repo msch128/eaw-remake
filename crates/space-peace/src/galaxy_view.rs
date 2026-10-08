@@ -89,6 +89,8 @@ pub struct PlanetView {
     pub starting_forces: Vec<String>,
     /// Description lines of the planet panel (system text, climate, population ... then the history), from the data.
     pub info: Vec<String>,
+    /// `Additional_Population_Capacity`: the green number of the original's planet panel.
+    pub population_bonus: i32,
 }
 
 /// A trade route / hyperspace lane between two planets.
@@ -261,6 +263,7 @@ impl GalaxyView {
                     ability: None,
                     starting_forces: Vec::new(),
                     info: Vec::new(),
+                    population_bonus: 0,
                 },
             )
             .collect();
