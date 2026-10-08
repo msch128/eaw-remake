@@ -395,8 +395,48 @@ fn sample_box(rt: &mut EmitterRuntime, min: [f32; 3], max: [f32; 3]) -> Vec3 {
     )
 }
 
+/// Light emitters (type 4) are dynamic lights, not sprites, and are neither simulated nor drawn.
+/// (Small ones such as `light_explosion_*` may be coronas; drawing them was tried and showed no
+/// visible change in the impact test, so the old behaviour stays.)
+fn is_light_volume(e: &Emitter) -> bool {
+    matches!(e.blend, BlendMode::Light)
+}
+
+/// Random point of an emitter position shape. Kind 3 is an ellipsoid volume and kind 4 an
+/// ellipsoid surface, both with the semi-axes in shape params 6..8 (they equal the min/max extents
+/// without the 0.8% padding; Inferred from `debre` 32.4 vs 32.67 and the `Ring` emitter name).
+/// Other kinds (0 point, 1 line, 2) use the min/max box.
+fn sample_position(rt: &mut EmitterRuntime, s: &alamo_model::particle::Shape) -> Vec3 {
+    if matches!(s.kind, 3 | 4) {
+        let axes = [s.params[6], s.params[7], s.params[8]];
+        let half = |i: usize| {
+            if axes[i].abs() > 1e-4 {
+                axes[i].abs()
+            } else {
+                (s.max[i] - s.min[i]).abs() * 0.5
+            }
+        };
+        let r = Vec3::new(half(0), half(1), half(2));
+        if r.max_element() > 0.0 {
+            let dir = loop {
+                let d = Vec3::new(
+                    rt.range(-1.0, 1.0),
+                    rt.range(-1.0, 1.0),
+                    rt.range(-1.0, 1.0),
+                );
+                let l = d.length();
+                if l > 1e-3 && l <= 1.0 {
+                    break if s.kind == 4 { d / l } else { d };
+                }
+            };
+            return dir * r;
+        }
+    }
+    sample_box(rt, s.min, s.max)
+}
+
 fn spawn_particle(e: &Emitter, rt: &mut EmitterRuntime, to_world: &Affine3A, scale: f32) {
-    let local_pos = sample_box(rt, e.position.min, e.position.max);
+    let local_pos = sample_position(rt, &e.position);
     let mut local_vel = sample_box(rt, e.velocity.min, e.velocity.max);
     // `speed` (property 0x09) is a radial speed away from the emitter origin; negative values pull the
     // particles inward (`inwardsucking` has -350, explosion fire +135). Inferred from names and magnitudes.
@@ -455,7 +495,8 @@ fn step_emitter(e: &Emitter, rt: &mut EmitterRuntime, cx: &StepCtx, budget: &mut
         density,
     } = *cx;
     // Age and move.
-    let acc = Vec3::from(e.acceleration);
+    // Property 0x0b: gravity along the emitter's up axis (values 0 .. -145, a few +34; Inferred, most emitters 0).
+    let acc = Vec3::from(e.acceleration) + Vec3::new(0.0, e.gravity, 0.0);
     for p in &mut rt.particles {
         p.age += dt;
         p.vel += acc * dt;
@@ -464,7 +505,7 @@ fn step_emitter(e: &Emitter, rt: &mut EmitterRuntime, cx: &StepCtx, budget: &mut
     }
     rt.particles.retain(|p| p.age < p.life);
 
-    if !enabled || matches!(e.blend, BlendMode::Mesh | BlendMode::Light) {
+    if !enabled || is_light_volume(e) || matches!(e.blend, BlendMode::Mesh) {
         return;
     }
     rt.time += dt;
@@ -733,7 +774,7 @@ pub fn update_particle_batches(
             if rt.quads.is_empty() {
                 continue;
             }
-            if is_distortion(e) || matches!(e.blend, BlendMode::Light | BlendMode::Mesh) {
+            if is_distortion(e) || is_light_volume(e) || matches!(e.blend, BlendMode::Mesh) {
                 continue;
             }
             let mode = match e.blend {

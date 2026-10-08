@@ -60,3 +60,11 @@ the first directional light. `battle-view` spawns the map's fill lights from the
   ends > 2 (16, 49 = sheet size, `explosion_frames_medium1` grid 4 frames 0->16) are flipbooks over the life and now animate.
   Still unknown: props 0x0b (-20..-100; drag or gravity), 0x12/0x13 (fractions), 0x17, 0x3c/0x3e/0x3f/0x40/0x42, shape kinds/params (positions are boxes, radial
   spawn shapes ignored), the exact additive blend factor. The capital explosion still lacks the dense central fireball (dim glow emitters, sparks dominate).
+- Web search for public format docs (Petroglyph/UaW particle editor readme, ModDB, swrebellion mirror of the UaW mod tools readme, Blender-ALAMO-Plugin
+  and AlamoEngine-Tools repositories) found only a high-level description (emitters + per-property plugins); no property ids, shapes or blend factors. Nothing was copied.
+- Added from corpus evidence: property 0x0b as gravity along the up axis (`Emitter::gravity`, mostly 0, otherwise -0.3..-145); position kinds 3 (ellipsoid volume) and
+  4 (ellipsoid surface) with semi-axes in shape params 6..8 (`debre` 32.4 vs 32.67 box extent) instead of filling the bounding cube.
+  Spawn model (`max` live particles refilled every `interval`) is unchanged; it matches the data well enough. Blend factors are still unknown.
+- Capital explosion (`target/vis/ex7_t*.png`): now an expanding spray of sparks with a small orange cloud in the middle, still not the dense fireball. Turbolaser
+  impact (`p_damage_turbolaser_miss_large_green`, `ps_turbolaser`): grey smoke puffs only; its flash is made of type-4 light emitters that are not drawn.
+  ISD engines from the stern (`render_scene EMPIRE_IMPERIAL_STAR_DESTROYER.ALO --bow --cam 0,0,1.6 --throttle 1`): nozzle cores glow blue, the 47-unit halo particles are hardly visible.

@@ -164,6 +164,8 @@ pub struct Emitter {
     pub speed: f32,
     /// Constant acceleration (`0x0a`). Inferred.
     pub acceleration: [f32; 3],
+    /// Property 0x0b: acceleration along the emitter up axis (mostly 0, otherwise -0.3 .. -145). Inferred (gravity).
+    pub gravity: f32,
     /// Spawn position distribution.
     pub position: Shape,
     /// Initial velocity distribution.
@@ -391,6 +393,7 @@ fn parse_emitter(c: &Chunk) -> Result<Emitter> {
         loop_count: 0,
         speed: 1.0,
         acceleration: [0.0; 3],
+        gravity: 0.0,
         position: shapes[0],
         velocity: shapes[1],
         extra: shapes[2],
@@ -432,6 +435,7 @@ fn parse_emitter(c: &Chunk) -> Result<Emitter> {
     e.max_particles = e.prop_u32(0x26).unwrap_or(0);
     e.loop_count = e.prop_u32(0x27).unwrap_or(0);
     e.spawn_rate = e.prop_u32(0x2a).unwrap_or(0) as f32;
+    e.gravity = e.prop_f32(0x0b).filter(|v| v.is_finite()).unwrap_or(0.0);
     e.speed = e.prop_f32(0x09).filter(|v| v.is_finite()).unwrap_or(0.0);
     if let Some(p) = e.props.get(&0x0a)
         && p.len() >= 12
