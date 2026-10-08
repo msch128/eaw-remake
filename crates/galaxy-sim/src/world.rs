@@ -336,6 +336,10 @@ pub struct UnitType {
     pub prod_mods: Vec<ProductionMod>,
     /// Has a `Planet_Destruction_Ability` (Death Star, Galaxy Gun).
     pub planet_destroyer: bool,
+    /// Has a `Galactic_Stealth_Ability`: fleets with the unit are hidden on the galaxy map from everyone who is not in the same system.
+    pub galactic_stealth: bool,
+    /// Has a `System_Spy_Ability`: the fleet learns everything about the planet it is at.
+    pub system_spy: bool,
     /// Income change per week while the unit exists (negative = upkeep).
     pub upkeep: f32,
     /// `AI_Combat_Power`.

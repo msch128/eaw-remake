@@ -222,3 +222,20 @@ fn week_counter_continues_from_a_fast_forwarded_sim() {
     let last = driver.wait_idle().last().unwrap().clone();
     assert_eq!(last.week, 10);
 }
+
+#[test]
+fn the_snapshot_gives_the_fog_of_war_of_a_faction() {
+    let Some(data) = load() else { return };
+    let sim = new_sim(&data, 1);
+    let w = sim.world().clone();
+    let rebel = w.faction_id("Rebel").unwrap();
+    let mut driver = SimDriver::spawn(sim, Some(rebel));
+    let snap = driver.wait_initial();
+    let sight = snap.sight(&w, rebel);
+    assert_eq!(sight.planets.len(), w.planets.len());
+    // Own planets are in full, and the human sees its own fleets but not every enemy fleet.
+    assert!(snap.galaxy.owned_planets(rebel).all(|p| sight.planets[p as usize] == galaxy_sim::Sight::Detailed));
+    let total = snap.galaxy.fleets.len();
+    assert!(sight.fleets.len() < total, "some fleets are in the fog: {} of {total}", sight.fleets.len());
+    assert!(snap.galaxy.fleets.values().filter(|f| f.owner == rebel).all(|f| sight.fleets.get(&f.id) == Some(&galaxy_sim::Sight::Detailed)));
+}

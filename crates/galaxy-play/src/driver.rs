@@ -228,7 +228,21 @@ pub struct Snapshot {
     pub diagnostics: Option<Diagnostics>,
 }
 
+/// What one faction sees of the galaxy (fog of war): per planet and per fleet.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SightView {
+    /// Per planet id: `Detailed` = full details, `Seen` = fleets drawn with unknown contents, `Hidden` = only the owner.
+    pub planets: Vec<galaxy_sim::Sight>,
+    /// Fleets that are drawn, with how much is known (`Detailed` = contents, `Seen` = "?"). A fleet that is missing is not drawn.
+    pub fleets: std::collections::BTreeMap<u32, galaxy_sim::Sight>,
+}
+
 impl Snapshot {
+    /// The fog of war for `viewer` (the human faction): compute it once per snapshot and use it for every marker, orbit box and tooltip.
+    pub fn sight(&self, world: &World, viewer: FactionId) -> SightView {
+        SightView { planets: self.galaxy.sight_map(world, viewer), fleets: self.galaxy.visible_fleets(world, viewer).into_iter().collect() }
+    }
+
     /// Statistics of a faction so far (battles, ships, planets, credits), rebuilt by a save replay.
     pub fn stats(&self, faction: galaxy_sim::FactionId) -> galaxy_sim::FactionStats {
         self.galaxy.factions.get(faction as usize).map(|f| f.stats).unwrap_or_default()

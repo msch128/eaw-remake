@@ -147,6 +147,8 @@ fn unit_from_def(def: &SpaceUnitDef, combat: CombatStats) -> UnitType {
         hero: yes("is_named_hero"),
         prod_mods: production_mods(&def.sub_abilities),
         planet_destroyer: def.sub_abilities.iter().any(|a| a.kind.eq_ignore_ascii_case("planet_destruction_ability")),
+        galactic_stealth: def.sub_abilities.iter().any(|a| a.kind.eq_ignore_ascii_case("galactic_stealth_ability")),
+        system_spy: def.sub_abilities.iter().any(|a| a.kind.eq_ignore_ascii_case("system_spy_ability")),
         upkeep: def.upkeep(),
         ai_power: def.ai_combat_power,
         buildable: def.build_cost > 0.0 && yes("build_tab_space_units") && !def.affiliation.is_empty(),

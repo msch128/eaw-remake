@@ -17,6 +17,7 @@ mod catalog;
 pub mod combat;
 mod api;
 pub mod production;
+mod sight;
 pub mod rng;
 pub mod sim;
 pub mod tactical;
@@ -33,4 +34,5 @@ pub use world::{IncomeGamble,
     StarbaseType, StructureType, StructureTypeId, UnitRole, UnitType, UnitTypeId, VictoryRules, Weapon, World,
 };
 pub use production::DestroyRefusal;
+pub use sight::Sight;
 pub use tactical::{GroupKind, TacticalError, TacticalGroup, TacticalRequest, TacticalResult, TacticalSide, run_headless};
