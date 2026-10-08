@@ -314,6 +314,12 @@ fn capture_driver(
         cap.skip -= 1;
     } else if cap.warm > 40 {
         cap.frame_ms.push(dt);
+        if dt > 20.0 {
+            println!(
+                "hitch {dt:.1} ms at t={:.2}s tick {} alive {:?} particles {} batches {} step {:.2} ms",
+                status.time, status.tick, status.alive, stats.live, stats.batches, status.step_ms
+            );
+        }
     }
     if cap.next < cap.times.len() && status.time >= cap.times[cap.next] && cap.warm > 30 {
         let t = cap.times[cap.next];
