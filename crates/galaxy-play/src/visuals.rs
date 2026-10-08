@@ -191,7 +191,7 @@ pub fn sync_fleets(
                 commands.spawn((
                     Mesh3d(assets.disc.clone()),
                     MeshMaterial3d(mats.add(StandardMaterial {
-                        base_color: Color::LinearRgba(LinearRgba::new(0.0, tl.green * 0.05, 0.0, 0.97)),
+                        base_color: Color::LinearRgba(LinearRgba::new(1.0, 0.0, 1.0, 1.0)),
                         unlit: true,
                         alpha_mode: AlphaMode::Blend,
                         cull_mode: None,
