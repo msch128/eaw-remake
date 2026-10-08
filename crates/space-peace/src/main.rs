@@ -104,6 +104,8 @@ fn main() {
     let present_mode = if settings.vsync { PresentMode::AutoVsync } else { PresentMode::AutoNoVsync };
 
     let mut app = App::new();
+    // A system whose parameter is missing must never take the whole game down: log it and carry on.
+    app.set_error_handler(bevy::ecs::error::warn);
     let offscreen = args.offscreen.clone();
     if let Some(path) = &offscreen {
         // Headless: no window, no winit event loop, no audio device; a schedule runner drives
@@ -125,6 +127,7 @@ fn main() {
         app.add_plugins(DefaultPlugins.set(bevy::log::LogPlugin { custom_layer: logfile::file_layer, ..default() }).set(WindowPlugin {
             primary_window: Some(Window {
                 title: "Space Peace: Not at War".into(),
+                visible: !args.hidden,
                 present_mode,
                 mode,
                 resolution: settings.resolution.into(),
@@ -140,6 +143,15 @@ fn main() {
         if offscreen.is_none() {
             app.add_plugins(AlamoAudioPlugin::new(fs.clone() as Arc<dyn FileSource>));
         }
+    }
+    if args.hidden && offscreen.is_none() {
+        let frames = args.frames;
+        app.add_systems(Last, move |mut n: Local<u32>, mut exit: MessageWriter<bevy::app::AppExit>| {
+            *n += 1;
+            if *n >= frames {
+                exit.write(bevy::app::AppExit::Success);
+            }
+        });
     }
     app.insert_state(AppScreen::Loading)
         .insert_resource(AfterLoading(after))

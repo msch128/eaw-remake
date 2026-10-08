@@ -38,6 +38,9 @@ $scenarios = @(
     @('superweapon',         @('--campaign', $camp, '--select', $yavin, '--zoom', '0.1', '--grant-unit', 'Death_Star', '--at', 'Arda', '--weeks', '0', '--fire', 'confirm', '--frames', '330'), 'destroyed'),
     @('battle-auto-resolve', @('--campaign', $camp, '--select', $yavin, '--weeks', '8', '--move', 'Hoth', '--battle-choice', 'auto', '--frames', '200'), 'clicking .Auto'),
     @('battle-fight-orders', @('--campaign', $camp, '--select', $yavin, '--weeks', '8', '--move', 'Hoth', '--battle-choice', 'fight', '--battle-orders', '--battle-speed', '30', '--frames', '5'), 'battle: over'),
+    # The real windowed plugin set (audio, window systems) with an invisible window and zero volume; no picture is made.
+    @('windowed-menu',       @('--hidden', '--volume', '0', '--frames', '400'), 'install'),
+    @('windowed-galaxy',     @('--hidden', '--volume', '0', '--campaign', $camp, '--frames', '700'), 'human faction'),
     @('battle-reinforce',    @('--campaign', $camp, '--select', $yavin, '--weeks', '8', '--move', 'Hoth', '--battle-choice', 'fight', '--battle-reserve', '3', '--battle-click', 'b_reinforcement,r_0000', '--battle-speed', '30', '--frames', '5'), 'simulation accepted')
 )
 
@@ -49,7 +52,9 @@ foreach ($s in $scenarios) {
     $log = Join-Path $Out "$name.log"
     Remove-Item $png, $log -ErrorAction SilentlyContinue
     # Start-Process joins the list with spaces: quote what has spaces (planet names, paths).
-    $args = (@('--offscreen', $png) + $s[1]) | ForEach-Object { if ($_ -match '\s') { "`"$_`"" } else { $_ } }
+    $windowed = $name -like 'windowed-*'
+    $base = if ($windowed) { @() } else { @('--offscreen', $png) }
+    $args = ($base + $s[1]) | ForEach-Object { if ($_ -match '\s') { "`"$_`"" } else { $_ } }
     $sw = [Diagnostics.Stopwatch]::StartNew()
     $p = Start-Process -FilePath $Exe -ArgumentList $args -NoNewWindow -PassThru -RedirectStandardOutput "$log.out" -RedirectStandardError "$log.err"
     $null = $p.Handle   # keeps the process handle so ExitCode is readable after WaitForExit
@@ -65,9 +70,10 @@ foreach ($s in $scenarios) {
     elseif ($p.ExitCode -ne 0) { $problems += "exit code $($p.ExitCode)" }
     if ($text -match 'panicked at') { $problems += 'panic' }
     if ($text -match '\bERROR\b') { $problems += 'ERROR in log' }
+    if ($text -match 'failed validation') { $problems += 'system parameter validation failed' }
     # Battle scenarios save their mid-battle shot as <name>_battle.png; every other scenario must write its picture.
     $shot = if ($name -like 'battle-fight*' -or $name -like 'battle-reinforce*') { Join-Path $Out "${name}_battle.png" } else { $png }
-    if (-not (Test-Path $shot)) { $problems += 'no picture' }
+    if (-not $windowed -and -not (Test-Path $shot)) { $problems += 'no picture' }
     if ($s[2] -and $text -notmatch $s[2]) { $problems += "missing '$($s[2])'" }
     $rows += [pscustomobject]@{ Scenario = $name; Result = $(if ($problems) { 'FAIL' } else { 'ok' }); Seconds = [math]::Round($sw.Elapsed.TotalSeconds); Notes = ($problems -join ', ') }
 }

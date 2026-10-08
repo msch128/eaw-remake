@@ -69,7 +69,7 @@ impl Plugin for PlayGluePlugin {
                     hold_clock,
                     select_granted.run_if(resource_exists::<PlayBridge>),
                     sync_destroyed.run_if(resource_exists::<PlayBridge>),
-                    galaxy_audio.run_if(resource_exists::<alamo_audio::plugin::AlamoAudio>),
+                    galaxy_audio.run_if(resource_exists::<alamo_audio::plugin::AlamoAudio>.and_then(resource_exists::<PlayerFaction>)),
                     via_menu,
                     scripted_slots,
                     (sync_selection, sync_view, sync_radii, cursor_blocked, forward_battles, finish_battles, run_script)

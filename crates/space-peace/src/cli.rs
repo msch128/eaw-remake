@@ -52,6 +52,8 @@ pub struct Args {
     pub battle_orders: bool,
     /// Offscreen only: reach the map the way a player does, main menu -> campaign list -> campaign (`--via-menu`).
     pub via_menu: bool,
+    /// Open the real window but keep it invisible, run `--frames` frames and exit (`--hidden`; with `--volume 0`): checks the windowed plugin set.
+    pub hidden: bool,
     /// Offscreen only: grant the player this unit type at `--at` (needs the debug commands; `--grant-unit Death_Star`).
     pub grant_unit: Option<String>,
     /// Planet of `--grant-unit`.
@@ -113,6 +115,7 @@ impl Default for Args {
             battle_auto: false,
             battle_orders: false,
             via_menu: false,
+            hidden: false,
             grant_unit: None,
             at: None,
             fire: None,
@@ -159,6 +162,7 @@ OPTIONS:
   --battle-choice <c>    Offscreen: click fight or auto in the battle dialog when it opens
   --battle-auto           Offscreen: the AI plays both sides of a tactical battle
   --via-menu            Offscreen: start from the main menu and click through to the campaign
+  --hidden              Real but invisible window, run --frames frames and exit (smoke test of the windowed setup)
   --grant-unit <u> --at <p>  Offscreen: give the player a unit at a planet (debug)
   --fire <ask|confirm>   Offscreen: press the superweapon button / also confirm the dialog
   --force-wreck <planet> Offscreen: draw this planet as a destroyed wreck
@@ -230,6 +234,7 @@ impl Args {
                 "--battle-auto" => out.battle_auto = true,
                 "--battle-orders" => out.battle_orders = true,
                 "--via-menu" => out.via_menu = true,
+                "--hidden" => out.hidden = true,
                 "--grant-unit" => out.grant_unit = Some(it.next().ok_or("--grant-unit needs a unit")?),
                 "--at" => out.at = Some(it.next().ok_or("--at needs a planet")?),
                 "--fire" => out.fire = Some(it.next().ok_or("--fire needs ask or confirm")?),

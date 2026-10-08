@@ -14,6 +14,8 @@ path = "src/main.rs"
 default = []
 # Fast iteration builds: dynamic linking of Bevy (not for release).
 dev = ["bevy/dynamic_linking"]
+# Readable system and parameter names in Bevy error messages.
+debug = ["bevy/debug"]
 
 [dependencies]
 bevy = { version = "=0.19.1", default-features = false, features = [
