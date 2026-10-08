@@ -31,3 +31,18 @@ fn all_remake_equations_parse() {
     assert_eq!(d.goal_function(&d.players["gc_empireai"].function_sets, "GC_Conquer_Enemy_Planet"), Some("Need_To_Conquer_Enemy_Planet"));
     assert!(d.templates.contains_key("empire_default"));
 }
+
+#[test]
+fn plan_scripts_serving_several_goals_are_found_under_each_goal() {
+    let Some(install) = GameInstall::detect() else { return };
+    if !install.mod_data("1770851727").is_dir() {
+        return;
+    }
+    let fs = GameFs::for_mod(&install, Some("1770851727")).unwrap();
+    let plans = galaxy_ai::discover_plans(&fs);
+    // UpgradeStarbasePlan.lua: Category = "Build_Starbase_Upgrade | Build_Initial_Starbase".
+    for goal in ["build_starbase_upgrade", "build_initial_starbase"] {
+        assert_eq!(plans.get(goal).map(Vec::as_slice), Some(&["UpgradeStarbasePlan".to_string()][..]), "{goal}");
+    }
+    assert!(plans.keys().all(|k| !k.contains('|')), "no combined keys left");
+}

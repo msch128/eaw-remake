@@ -206,3 +206,26 @@ fn remake_ai_with_strategy_is_deterministic() {
     let Some(a) = hash() else { return };
     assert_eq!(a, hash().unwrap(), "same seed must give the same match");
 }
+
+#[test]
+fn the_ai_spends_its_money_and_builds_star_bases() {
+    let Some(mut sim) = build(true) else { return };
+    let mut weeks = 0;
+    while weeks < 15 {
+        for e in sim.step(1.0).sim_events {
+            if let Event::WeekEnded { week } = e {
+                weeks = week;
+            }
+        }
+    }
+    sim.with_sim(|s| {
+        let (w, g) = (s.world(), s.galaxy());
+        for name in ["Rebel", "Empire", "Underworld"] {
+            let f = w.faction_id(name).unwrap() as usize;
+            let st = &g.factions[f].stats;
+            assert!(st.credits_spent > 0.6 * st.credits_earned, "{name} sits on its money: earned {:.0}, spent {:.0}", st.credits_earned, st.credits_spent);
+            let bases = g.planets.iter().filter(|p| p.owner == Some(f as u32) && p.starbase.is_some()).count();
+            assert!(bases >= 2, "{name} built {bases} star bases");
+        }
+    });
+}
