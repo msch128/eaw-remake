@@ -109,6 +109,8 @@ pub struct AiStats {
     pub tech_upgrades: u32,
     /// Per goal: finished plans, total seconds they ran, plans that ran into 90% of their limit, plans that failed after less than 30 s.
     pub plan_timing: BTreeMap<String, PlanTiming>,
+    /// Why plans failed within 30 s, per goal and cause (`refused: needs E_Shipyard_2 (Star_Destroyer)`, `deadline`, `other`).
+    pub fast_failures: BTreeMap<(String, String), u32>,
     /// Nanoseconds spent building perception snapshots.
     pub snapshot_nanos: u128,
     /// Unknown variables / missing equations aggregated over all evaluations.
@@ -313,6 +315,10 @@ impl AiEngine {
                 t.near_limit += u32::from(now - a.started >= 0.9 * a.limit);
                 t.failed += u32::from(failed);
                 t.failed_fast += u32::from(failed && now - a.started < 30.0);
+                let detail = self.task_forces.take_failure_detail(plan);
+                if failed && now - a.started < 30.0 {
+                    *self.stats.fast_failures.entry((a.goal.clone(), detail.unwrap_or_else(|| "other (not a production failure)".to_string()))).or_default() += 1;
+                }
                 if failed {
                     *self.stats.plans_failed.entry(key).or_default() += 1;
                 } else {

@@ -175,6 +175,14 @@ impl AiSim for SimAdapter<'_> {
         let &u = self.world.unit_index.get(&unit.to_ascii_lowercase()).ok_or(Refused::Invalid)?;
         self.world.check_build_unit(self.sim.galaxy(), p, pl, u).map_err(refuse)
     }
+    fn explain_build_unit(&self, p: PlayerId, pl: PlanetId, unit: &str) -> String {
+        let Some(&u) = self.world.unit_index.get(&unit.to_ascii_lowercase()) else { return "unknown unit".into() };
+        match self.world.check_build_unit(self.sim.galaxy(), p, pl, u) {
+            Ok(()) => "ok".into(),
+            Err(CommandError::RequirementsNotMet(what)) => format!("needs {what}"),
+            Err(e) => format!("{e:?}"),
+        }
+    }
     fn can_build_structure(&self, p: PlayerId, pl: PlanetId, structure: &str) -> Result<(), Refused> {
         let &s = self.world.structure_index.get(&structure.to_ascii_lowercase()).ok_or(Refused::Invalid)?;
         self.world.check_build_structure(self.sim.galaxy(), p, pl, s).map_err(refuse)

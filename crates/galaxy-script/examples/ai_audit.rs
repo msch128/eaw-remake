@@ -256,6 +256,11 @@ fn main() {
         for (goal, t) in st.plan_timing.iter().filter(|(g, _)| g.contains("Conquer") || g.contains("Build_Units")) {
             println!("plan timing {goal}: {} plans, mean {:.0} s, {} near their limit, {} failed ({} within 30 s)", t.plans, t.seconds / f64::from(t.plans.max(1)), t.near_limit, t.failed, t.failed_fast);
         }
+        let mut causes: Vec<_> = st.fast_failures.iter().filter(|((g, _), _)| g.contains("Conquer_Enemy_Planet")).collect();
+        causes.sort_by_key(|x| std::cmp::Reverse(*x.1));
+        for ((g, why), n) in causes.iter().take(14) {
+            println!("fast failure {g}: {n} x {why}");
+        }
         println!("goals without a plan script: {:?}", st.goals_without_plan);
         println!("task forces: {:?}", st.taskforces);
     }

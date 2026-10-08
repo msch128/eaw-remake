@@ -143,6 +143,10 @@ pub trait AiSim {
 
     /// Whether a ship could be queued at the planet, apart from the price (Err(NoCredits) means only the money is missing).
     fn can_build_unit(&self, p: PlayerId, pl: PlanetId, unit: &str) -> Result<(), Refused>;
+    /// Why the planet cannot take the ship, as a short phrase for diagnostics (`"ok"` when it can; empty when the host does not say).
+    fn explain_build_unit(&self, _p: PlayerId, _pl: PlanetId, _unit: &str) -> String {
+        String::new()
+    }
     /// The same for structures.
     fn can_build_structure(&self, p: PlayerId, pl: PlanetId, structure: &str) -> Result<(), Refused>;
     /// The same for the next star base level.

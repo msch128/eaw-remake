@@ -155,6 +155,8 @@ pub struct TaskForces {
     events: Vec<PlanEvent>,
     /// Money earmarked per `(player, goal category)`; see [`TaskForces::fund`].
     accounts: HashMap<(PlayerId, String), f64>,
+    /// Why the production of a plan failed, for the statistics (taken when the plan ends).
+    failure_detail: HashMap<u64, String>,
     plan_category: HashMap<u64, String>,
     /// Believed hostile strength per player and planet (set by the engine from the strategic layer; empty = use AI power).
     pub(crate) believed: HashMap<PlayerId, Vec<f64>>,
@@ -335,6 +337,11 @@ impl TaskForces {
     }
 
     /// Plans whose task forces reported `Set_Plan_Result(false)`.
+    /// The recorded cause of a plan's production failure, if any (removes it).
+    pub fn take_failure_detail(&mut self, plan: u64) -> Option<String> {
+        self.failure_detail.remove(&plan)
+    }
+
     pub fn plan_failed(&self, plan: u64) -> bool {
         self.forces.values().any(|t| t.plan == plan && t.result == Some(false))
     }
@@ -441,6 +448,10 @@ impl TaskForces {
             "Set_Plan_Result" => {
                 if let Some(t) = self.forces.get_mut(&tf_id) {
                     t.result = Some(matches!(args.first(), Some(HostValue::Bool(true))));
+                    if t.result == Some(false) {
+                        let plan = t.plan;
+                        self.failure_detail.entry(plan).or_insert_with(|| "plan script reported failure (force lost or target not held)".to_string());
+                    }
                 }
                 HostValue::Nil
             }
@@ -481,6 +492,9 @@ impl TaskForces {
                         if moved {
                             self.jobs.push(Job::Move { block, tf: tf_id, to, started: now, issued: now, retries: 0 });
                         } else {
+                            if let Some(t) = self.forces.get(&tf_id) {
+                                self.failure_detail.entry(t.plan).or_insert_with(|| "move order refused by the sim".to_string());
+                            }
                             self.finish(block, false);
                         }
                     }
@@ -724,12 +738,18 @@ impl TaskForces {
             }
             ForceKind::Units => {
                 let stage = stage_arg.or(t.stage).or_else(|| self.choose_stage(snap, t));
-                let Some(stage) = stage else { return self.finish(block, false) };
+                let Some(stage) = stage else {
+                    self.failure_detail.insert(t.plan, "no staging planet".to_string());
+                    return self.finish(block, false);
+                };
                 let wanted = self.compose(sim, snap, t, rng);
                 if let Some(t) = self.forces.get_mut(&tf_id) {
                     t.stage = Some(stage);
                 }
                 if wanted.is_empty() {
+                    if let Some(t) = self.forces.get(&tf_id) {
+                        self.failure_detail.insert(t.plan, "no ship to build (empty composition)".to_string());
+                    }
                     return self.finish(block, false);
                 }
                 self.jobs.push(Job::Units(UnitJob {
@@ -747,7 +767,11 @@ impl TaskForces {
 
     fn start_move(&mut self, sim: &mut dyn AiSim, tf_id: u64, to: PlanetId) -> bool {
         let Some(t) = self.forces.get_mut(&tf_id) else { return false };
-        let Some(fleet) = t.fleet else { return false };
+        let Some(fleet) = t.fleet else {
+            let plan = t.plan;
+            self.failure_detail.insert(plan, "force has no fleet at launch (nothing assembled)".to_string());
+            return false;
+        };
         let player = t.player;
         if sim.fleet(fleet).is_some_and(|f| f.at == Some(to)) {
             return true;
@@ -904,7 +928,8 @@ impl TaskForces {
         let plan = t.plan;
         let name = t.name.clone();
         let allow_free = t.reqs.allow_free_store;
-        let fail = |me: &mut Self, j: &UnitJob, unit: &str, why: &str| {
+        let fail = |me: &mut Self, j: &UnitJob, unit: &str, why: &str, detail: String| {
+            me.failure_detail.insert(plan, detail);
             me.stats.production_failures += 1;
             *me.stats.failure_reasons.entry(format!("{unit}: {why}")).or_default() += 1;
             if let Some(t) = me.forces.get_mut(&j.tf) {
@@ -915,7 +940,7 @@ impl TaskForces {
         };
         if now > j.deadline {
             let unit = j.wanted.first().cloned().unwrap_or_default();
-            fail(self, &j, &unit, "deadline");
+            fail(self, &j, &unit, "deadline", "deadline".to_string());
             return None;
         }
         // 1. Completed builds: claim the new ship.
@@ -940,10 +965,10 @@ impl TaskForces {
         }
         j.pending = still;
         // 2. Take wanted units from the free store, else queue them.
-        let mut remaining: Vec<String> = Vec::new();
-        let mut free = if allow_free { self.free_ships(sim, player, self.forces.get(&j.tf).and_then(|t| t.target)) } else { HashMap::new() };
         let dist = hop_distances(snap, j.stage);
         let safe = safe_from(snap, player, j.stage);
+        let mut remaining: Vec<String> = Vec::new();
+        let mut free = if allow_free { self.free_ships(sim, player, self.forces.get(&j.tf).and_then(|t| t.target)) } else { HashMap::new() };
         for unit in std::mem::take(&mut j.wanted) {
             let key = unit.to_ascii_lowercase();
             let mut best: Option<(PlanetId, FleetId, u32)> = None;
@@ -1007,7 +1032,15 @@ impl TaskForces {
                     if *n <= 3 {
                         remaining.push(unit);
                     } else {
-                        fail(self, &j, &unit, "refused by every planet");
+                        // Why every planet said no: the most common explanation over the player's planets.
+                        let mut why: HashMap<String, u32> = HashMap::new();
+                        for &pl in snap.owned[player as usize].iter().take(40) {
+                            *why.entry(sim.explain_build_unit(player, pl, &unit)).or_default() += 1;
+                        }
+                        let mut why: Vec<_> = why.into_iter().collect();
+                        why.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+                        let detail = format!("refused: {} ({})", why.iter().take(3).map(|w| format!("{} x{}", w.0, w.1)).collect::<Vec<_>>().join(", "), unit);
+                        fail(self, &j, &unit, "refused by every planet", detail);
                         return None;
                     }
                 }
