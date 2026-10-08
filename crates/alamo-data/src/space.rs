@@ -13,8 +13,11 @@ use crate::xml::{Element, split_list};
 fn field_map(r: &Resolved) -> HashMap<String, String> {
     let mut m = HashMap::new();
     for e in r.elements() {
-        m.entry(e.name.clone())
-            .or_insert_with(|| e.text_trimmed().to_string());
+        // The first value wins, unless it is an empty placeholder (`<Applicable_Unit_Categories />` before the real one).
+        let slot = m.entry(e.name.clone()).or_insert_with(String::new);
+        if slot.is_empty() {
+            *slot = e.text_trimmed().to_string();
+        }
     }
     m
 }

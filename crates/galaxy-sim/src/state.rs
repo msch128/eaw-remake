@@ -194,6 +194,8 @@ pub struct Galaxy {
     pub ships: BTreeMap<FleetId, Vec<(ShipId, UnitTypeId)>>,
     /// Damage carried between battles per ship (absent = undamaged); repaired over time at owned planets.
     pub damage: BTreeMap<ShipId, UnitHealth>,
+    /// `(planet, faction)` pairs that already received the planet's capture bonus.
+    pub rewarded: std::collections::BTreeSet<(PlanetId, FactionId)>,
     pub(crate) next_ship_id: u64,
     pub(crate) next_fleet_id: FleetId,
     pub(crate) next_battle_id: u32,
@@ -404,6 +406,24 @@ pub enum Event {
         /// Ship ids that were lost.
         ships: Vec<ShipId>,
     },
+    /// A hero unit was destroyed (also reported as `UnitsDestroyed`; the Remake's story timers respawn it, see `galaxy-script`).
+    HeroDestroyed {
+        /// Owner.
+        faction: FactionId,
+        /// Planet.
+        planet: PlanetId,
+        /// Hero unit type.
+        unit: UnitTypeId,
+    },
+    /// A conqueror received the planet's capture bonus.
+    CaptureBonus {
+        /// Conqueror.
+        faction: FactionId,
+        /// Planet.
+        planet: PlanetId,
+        /// Credits.
+        credits: f64,
+    },
     /// A faction lost its last planet and fleet.
     FactionEliminated {
         /// Faction.
@@ -432,6 +452,7 @@ impl Galaxy {
             allied: Default::default(),
             ships: BTreeMap::new(),
             damage: BTreeMap::new(),
+            rewarded: Default::default(),
             next_ship_id: 1,
             next_fleet_id: 1,
             next_battle_id: 1,

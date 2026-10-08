@@ -177,6 +177,7 @@ impl Battle {
             grid_cells: Vec::new(),
             catalog,
             pop_used: vec![0; sides.len()],
+            cmd_events: Vec::new(),
             retreat_ordered: vec![false; sides.len()],
             sides,
             ships: Vec::new(),
@@ -525,9 +526,15 @@ impl Battle {
             Command::Reinforce { ship, count } => {
                 let pop = self.catalog.ship(ship).population * count as i32;
                 if self.pop_used[side as usize] + pop > self.config.unit_cap {
+                    if self.config.record_events {
+                        self.cmd_events.push(Event::ReinforcementsRefused { side, ship, count });
+                    }
                     return Err(CommandError::UnitCap);
                 }
                 self.pop_used[side as usize] += pop;
+                if self.config.record_events {
+                    self.cmd_events.push(Event::ReinforcementsCalled { side, ship, count });
+                }
                 self.pending.push(Reinforcement { at: self.time + self.config.reinforce_delay, side, ship, count });
             }
         }
@@ -589,6 +596,8 @@ impl Battle {
     /// Advances the battle by one fixed time step and returns the events it produced.
     pub fn step(&mut self) -> &[Event] {
         self.events.clear();
+        let carried = std::mem::take(&mut self.cmd_events);
+        self.events.extend(carried);
         if self.over {
             return &self.events;
         }

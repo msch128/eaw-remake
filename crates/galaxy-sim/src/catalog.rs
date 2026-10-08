@@ -89,6 +89,37 @@ impl<'a> StatsBuilder<'a> {
     }
 }
 
+/// Collects the production discounts of an object's `Abilities`.
+fn production_mods(subs: &[alamo_data::SubAbility]) -> Vec<ProductionMod> {
+    let list = |s: Option<&String>| -> Vec<String> {
+        s.map(|v| v.split(|c: char| c == ',' || c == '|' || c.is_whitespace()).filter(|t| !t.is_empty()).map(str::to_ascii_lowercase).collect()).unwrap_or_default()
+    };
+    let num = |v: Option<&String>| v.and_then(|v| v.trim().parse::<f32>().ok()).unwrap_or(0.0);
+    let mut out = Vec::new();
+    for a in subs {
+        let (price, time) = match a.kind.to_ascii_lowercase().as_str() {
+            "reduce_production_price_ability" => (num(a.fields.get("price_reduction_percentage")), 0.0),
+            "reduce_production_time_ability" => (0.0, num(a.fields.get("time_reduction_percentage"))),
+            _ => continue,
+        };
+        let cats = list(a.fields.get("applicable_unit_categories"));
+        let m = ProductionMod {
+            name: a.name.clone(),
+            price,
+            time,
+            all: cats.iter().any(|c| c == "all"),
+            categories: cats.iter().map(|c| alamo_data::ShipCategory::from_mask(std::slice::from_ref(c))).filter(|c| *c != alamo_data::ShipCategory::Other).collect(),
+            types: list(a.fields.get("applicable_unit_types")),
+            excluded: list(a.fields.get("excluded_unit_types")),
+            stacking: a.fields.get("stacking_category").and_then(|v| v.trim().parse().ok()).unwrap_or(0),
+        };
+        if m.price != 0.0 || m.time != 0.0 {
+            out.push(m);
+        }
+    }
+    out
+}
+
 fn unit_from_def(def: &SpaceUnitDef, combat: CombatStats) -> UnitType {
     let role = match def.name.strip_prefix("Research_").or_else(|| def.name.strip_prefix("RESEARCH_")) {
         Some(target) if def.hardpoints.is_empty() && def.space_model.is_none() => UnitRole::Research(target.to_string()),
@@ -113,6 +144,8 @@ fn unit_from_def(def: &SpaceUnitDef, combat: CombatStats) -> UnitType {
         locked: def.build_initially_locked,
         limit_current: def.build_limit_current,
         limit_lifetime: def.build_limit_lifetime,
+        hero: yes("is_named_hero"),
+        prod_mods: production_mods(&def.sub_abilities),
         upkeep: def.upkeep(),
         ai_power: def.ai_combat_power,
         buildable: def.build_cost > 0.0 && yes("build_tab_space_units") && !def.affiliation.is_empty(),
@@ -169,6 +202,7 @@ impl World {
                     && !def.affiliation.is_empty()
                     && (yes("build_tab_space_station") || yes("build_tab_special_structures")),
                 combat,
+                prod_mods: production_mods(&def.sub_abilities),
             });
         }
         for i in 0..self.structures.len() {

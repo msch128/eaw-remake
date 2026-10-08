@@ -38,6 +38,8 @@ pub struct PlotEvent {
     pub rewards: Vec<Reward>,
     /// `Perpetual`: the event can fire again after firing.
     pub perpetual: bool,
+    /// `Branch` tag (`RESET_BRANCH`/`DISABLE_BRANCH` name it).
+    pub branch: Option<String>,
     /// `Story_Dialog` (name of a dialog text file such as `Dialog_Intro`) and `Story_Chapter`.
     pub dialog: Option<(String, i32)>,
 }
@@ -69,6 +71,7 @@ impl Plot {
                 prereqs: Vec::new(),
                 rewards: Vec::new(),
                 perpetual: e.child_text("perpetual").is_some_and(xml::parse_bool),
+                branch: e.child_text("branch").map(|b| b.trim().to_ascii_lowercase()).filter(|b| !b.is_empty()),
                 dialog: e
                     .child_text("story_dialog")
                     .map(|d| d.trim().to_string())
@@ -135,6 +138,8 @@ struct Running {
     states: Vec<State>,
     /// STORY_TRIGGER events that were triggered by name before they became active.
     triggered: Vec<bool>,
+    /// The event fired since its branch was last reset (a perpetual event stays `Active` but still satisfies prerequisites).
+    done: Vec<bool>,
     by_name: HashMap<String, usize>,
 }
 
@@ -181,6 +186,7 @@ impl StoryEngine {
             started: now,
             states: vec![State::Inactive; n],
             triggered: vec![false; n],
+            done: vec![false; n],
             by_name,
         });
     }
@@ -274,7 +280,7 @@ impl StoryEngine {
                     let ready = r.plot.events[ei].prereqs.iter().all(|p| {
                         r.by_name
                             .get(&p.to_ascii_lowercase())
-                            .is_some_and(|&i| r.states[i] == State::Fired)
+                            .is_some_and(|&i| r.states[i] == State::Fired || r.done[i])
                     });
                     if ready {
                         r.states[ei] = State::Active(now);
@@ -302,7 +308,15 @@ impl StoryEngine {
                 }
                 // `*_Auto` events (the tech-level followers of `Research/Story/Tech_Levels_*.xml`) are STORY_TRIGGERs with prerequisites that nothing
                 // triggers by name; they fire as soon as their prerequisites have (inferred from the naming, not verified against the engine).
-                "STORY_TRIGGER" => r.triggered[ei] || (!ev.prereqs.is_empty() && ev.name.to_ascii_lowercase().ends_with("_auto")),
+                // The bookkeeping events of the hero respawn chains (`Story_Sandbox_Hero_Timers_*.xml`: Completed, Reset) are STORY_TRIGGERs with prerequisites and only graph rewards that nothing
+                // triggers by name; they run as soon as their prerequisites have (inferred).
+                "STORY_TRIGGER" => {
+                    r.triggered[ei]
+                        || (!ev.prereqs.is_empty()
+                            && !r.done[ei]
+                            && (ev.name.to_ascii_lowercase().ends_with("_auto")
+                                || (!ev.rewards.is_empty() && ev.rewards.iter().all(|w| matches!(w.kind.as_str(), "RESET_BRANCH" | "REMOVE_STORY_GOAL")))))
+                }
                 _ => notify.is_some_and(|(kinds, param)| {
                     (kinds.is_empty() || kinds.iter().any(|k| k.eq_ignore_ascii_case(&ev.kind)))
                         && (ev.name.eq_ignore_ascii_case(param)
@@ -329,6 +343,7 @@ impl StoryEngine {
             State::Fired
         };
         self.plots[pi].triggered[ei] = false;
+        self.plots[pi].done[ei] = true;
         let rewards = self.plots[pi].plot.events[ei].rewards.clone();
         let mut host_rewards = Vec::new();
         for rw in rewards {
@@ -376,15 +391,25 @@ impl StoryEngine {
 
     fn reset_branch(&mut self, name: &str, now: f64) {
         for r in &mut self.plots {
-            if let Some(&root) = r.by_name.get(&name.to_ascii_lowercase()) {
-                for i in Self::branch(r, root) {
-                    if r.states[i] != State::Disabled {
-                        r.states[i] = State::Inactive;
-                        r.triggered[i] = false;
-                    }
-                }
-                let _ = now;
+            let lower = name.to_ascii_lowercase();
+            let mut set: Vec<usize> = (0..r.plot.events.len()).filter(|&i| r.plot.events[i].branch.as_deref() == Some(lower.as_str())).collect();
+            if let Some(&root) = r.by_name.get(&lower) {
+                set.push(root);
             }
+            // Everything downstream of a branch member (through prerequisites) restarts with it.
+            for i in set.clone() {
+                set.extend(Self::branch(r, i));
+            }
+            set.sort_unstable();
+            set.dedup();
+            for i in set {
+                if r.states[i] != State::Disabled {
+                    r.states[i] = State::Inactive;
+                    r.triggered[i] = false;
+                    r.done[i] = false;
+                }
+            }
+            let _ = now;
         }
     }
 
@@ -442,6 +467,7 @@ impl StoryEngine {
             r.started = now;
             r.states.fill(State::Inactive);
             r.triggered.fill(false);
+            r.done.fill(false);
         }
     }
 
@@ -453,6 +479,7 @@ impl StoryEngine {
                 r.started = now;
                 r.states.fill(State::Inactive);
                 r.triggered.fill(false);
+                r.done.fill(false);
             }
         }
     }
@@ -465,6 +492,28 @@ mod tests {
     fn plot(xml_text: &str) -> Plot {
         let mut w = Vec::new();
         Plot::parse("t.xml", xml_text.as_bytes(), &mut w).unwrap()
+    }
+
+    #[test]
+    fn hero_respawn_chain_runs_twice() {
+        let p = plot(
+            r#"<Story>
+            <Event Name="Death"><Event_Type>STORY_TACTICAL_DESTROY</Event_Type><Event_Param1>Hero</Event_Param1><Branch>B</Branch><Perpetual>True</Perpetual></Event>
+            <Event Name="Spawn"><Event_Type>STORY_ELAPSED</Event_Type><Event_Param1>300</Event_Param1><Reward_Type>SPAWN_HERO</Reward_Type><Reward_Param1>Hero</Reward_Param1><Prereq>Death</Prereq><Branch>B</Branch></Event>
+            <Event Name="Done"><Event_Type>STORY_TRIGGER</Event_Type><Reward_Type>REMOVE_STORY_GOAL</Reward_Type><Reward_Param1>T</Reward_Param1><Prereq>Spawn</Prereq><Perpetual>True</Perpetual></Event>
+            <Event Name="Reset"><Event_Type>STORY_TRIGGER</Event_Type><Reward_Type>RESET_BRANCH</Reward_Type><Reward_Param1>B</Reward_Param1><Prereq>Done</Prereq><Branch>B</Branch><Perpetual>true</Perpetual></Event>
+            </Story>"#,
+        );
+        let mut s = StoryEngine::default();
+        s.activate(p, 0, Some("Rebel".into()), 0.0);
+        assert!(s.tick(0.0).is_empty());
+        for round in 0..2 {
+            let t0 = f64::from(round) * 1000.0 + 10.0;
+            assert!(s.notify(&["STORY_TACTICAL_DESTROY"], "Hero", t0).iter().any(|f| f.event == "Death"), "round {round}");
+            assert!(s.tick(t0 + 299.0).is_empty());
+            let names: Vec<_> = s.tick(t0 + 301.0).into_iter().map(|f| f.event).collect();
+            assert_eq!(names, vec!["Spawn", "Done", "Reset"], "round {round}");
+        }
     }
 
     #[test]

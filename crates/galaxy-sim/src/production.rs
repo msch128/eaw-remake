@@ -33,6 +33,44 @@ impl World {
     }
 
     /// Checks whether `faction` could queue `unit` on `planet` right now.
+    /// Price and build time (unscaled seconds) of `unit` for `faction` at `planet` after the production discounts of
+    /// its heroes and ships anywhere (Mothma, taskforce cruisers) and of the planet's structures (Starforge).
+    /// Abilities in the same `Stacking_Category` do not add up, the strongest wins; categories multiply (estimate:
+    /// the data names the categories but not how they combine). Heroes count wherever they are (estimate).
+    pub fn unit_cost(&self, galaxy: &Galaxy, faction: FactionId, planet: PlanetId, unit: UnitTypeId) -> (f32, f32) {
+        use std::collections::BTreeMap;
+        let ut = &self.units[unit as usize];
+        let mut price: BTreeMap<i32, f32> = BTreeMap::new();
+        let mut time: BTreeMap<i32, f32> = BTreeMap::new();
+        let mut add = |mods: &[ProductionMod]| {
+            for m in mods.iter().filter(|m| m.applies(&ut.name, ut.category)) {
+                if m.price != 0.0 {
+                    let e = price.entry(m.stacking).or_insert(0.0);
+                    *e = e.max(m.price);
+                }
+                if m.time != 0.0 {
+                    let e = time.entry(m.stacking).or_insert(0.0);
+                    *e = e.max(m.time);
+                }
+            }
+        };
+        for f in galaxy.fleets.values().filter(|f| f.owner == faction) {
+            for (&u, &n) in &f.units {
+                if n > 0 {
+                    add(&self.units[u as usize].prod_mods);
+                }
+            }
+        }
+        let ps = &galaxy.planets[planet as usize];
+        if ps.owner == Some(faction) {
+            for &s in &ps.structures {
+                add(&self.structures[s as usize].prod_mods);
+            }
+        }
+        let apply = |base: f32, m: BTreeMap<i32, f32>, floor: f32| m.values().fold(base, |c, r| c * (1.0 - r.min(1.0))).max(base * floor);
+        (apply(ut.cost, price, 0.0), apply(ut.build_time, time, 0.01))
+    }
+
     pub fn check_build_unit(&self, galaxy: &Galaxy, faction: FactionId, planet: PlanetId, unit: UnitTypeId) -> Result<(), CommandError> {
         let fs = galaxy.factions.get(faction as usize).ok_or(CommandError::Invalid)?;
         let ps = galaxy.planets.get(planet as usize).ok_or(CommandError::Invalid)?;
@@ -91,7 +129,7 @@ impl World {
         if ut.population > 0 && fs.population_used + self.queued_population(galaxy, faction) + ut.population > fs.population_cap {
             return Err(CommandError::PopulationCap);
         }
-        if fs.credits < ut.cost as f64 {
+        if fs.credits < f64::from(self.unit_cost(galaxy, faction, planet, unit).0) {
             return Err(CommandError::InsufficientCredits);
         }
         Ok(())

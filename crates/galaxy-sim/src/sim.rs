@@ -90,14 +90,14 @@ impl Sim {
         match cmd {
             Command::BuildUnit { faction, planet, unit } => {
                 world.check_build_unit(g, faction, planet, unit)?;
-                let ut = &world.units[unit as usize];
-                g.factions[faction as usize].credits -= ut.cost as f64;
-                let t = ut.build_time * world.config.build_time_scale * g.factions[faction as usize].difficulty.build_time;
+                let (cost, secs) = world.unit_cost(g, faction, planet, unit);
+                g.factions[faction as usize].credits -= f64::from(cost);
+                let t = secs * world.config.build_time_scale * g.factions[faction as usize].difficulty.build_time;
                 g.planets[planet as usize].queues[Lane::Units as usize].push_back(ProductionItem {
                     kind: ProductionKind::Unit(unit),
                     remaining: t,
                     total: t,
-                    cost: ut.cost,
+                    cost,
                 });
                 Ok(CommandOk::Done)
             }
@@ -631,6 +631,9 @@ impl Sim {
                         if m.count > left {
                             let ships = self.galaxy.take_ships(fid, u, m.count - left);
                             events.push(Event::UnitsDestroyed { faction: side.faction, planet: p, unit: u, count: m.count - left, ships: ships.into_iter().map(|x| x.0).collect() });
+                            if w.units[u as usize].hero {
+                                events.push(Event::HeroDestroyed { faction: side.faction, planet: p, unit: u });
+                            }
                         }
                         if let Some(f) = self.galaxy.fleets.get_mut(&fid) {
                             if left == 0 {
@@ -735,6 +738,7 @@ impl Sim {
                     let t = t + dt;
                     if t >= w.config.capture_delay_seconds {
                         self.apply_owner_change(p, Some(x), false, events);
+                        self.grant_capture_bonus(p, x, events);
                     } else {
                         ps.capture = Some((x, t));
                     }
@@ -742,6 +746,15 @@ impl Sim {
                 (Some(x), _) => ps.capture = Some((x, dt)),
                 (None, _) => ps.capture = None,
             }
+        }
+    }
+
+    /// `Planet_Capture_Bonus_Reward` for a conqueror, once per planet and faction (estimate: the data has the amount only).
+    fn grant_capture_bonus(&mut self, p: PlanetId, faction: FactionId, events: &mut Vec<Event>) {
+        let bonus = f64::from(self.world.planets[p as usize].capture_bonus) * f64::from(self.world.config.capture_bonus_scale);
+        if bonus > 0.0 && self.galaxy.rewarded.insert((p, faction)) {
+            self.galaxy.factions[faction as usize].credits += bonus;
+            events.push(Event::CaptureBonus { faction, planet: p, credits: bonus });
         }
     }
 

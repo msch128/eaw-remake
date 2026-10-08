@@ -295,6 +295,8 @@ impl Inner {
                 }
                 true
             }
+            // Bookkeeping of the story UI (the "will return" goal entry); nothing to do headless.
+            "REMOVE_STORY_GOAL" | "STORY_GOAL_COMPLETED" => true,
             "REMOVE_UNIT" => {
                 let (Some(f), Some(&u)) = (
                     plot_faction,

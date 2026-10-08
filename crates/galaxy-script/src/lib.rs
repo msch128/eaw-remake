@@ -448,6 +448,8 @@ impl ScriptedSim {
                         notes.push(("STORY_CONQUER", short));
                         notes.push(("STORY_CONQUER", full));
                     }
+                    // The Remake's hero respawn and ship-phase plots wait for these (`Story_Sandbox_Hero_Timers_*.xml`: STORY_TACTICAL_DESTROY, then a 300 s timer, then SPAWN_HERO).
+                    Event::UnitsDestroyed { unit, .. } => notes.push(("STORY_TACTICAL_DESTROY", w.units[*unit as usize].name.clone())),
                     Event::ConstructionComplete { faction, kind, .. } => {
                         match kind {
                             ProductionKind::Unit(u) => {

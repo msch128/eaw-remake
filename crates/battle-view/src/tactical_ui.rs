@@ -373,6 +373,7 @@ fn reinforce_events(
     for ev in &rt.fresh_events {
         match ev {
             Event::ReinforcementsCalled { side, ship, count } if *side == settings.player_side => {
+                info!("reinforcements: simulation accepted {count} of ship {ship}");
                 if let Some(row) = ui.rows.iter_mut().find(|r| r.1 == *ship) {
                     row.2 = row.2.saturating_sub(*count);
                 }

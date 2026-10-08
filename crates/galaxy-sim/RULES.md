@@ -132,3 +132,9 @@ not carried over between battles (surviving ships are repaired), also an estimat
 `Sim::set_faction_difficulty(faction, Difficulty)` (from `alamo_data::DifficultyAdjustment`): positive income x `credit`, build times x `build_time`,
 and in battles damage dealt x `damage`, damage taken divided by `health` (hull) / `shield`. Statistical results use them in `combat::resolve_allied`;
 tactical battles get them as `TacticalSide::{damage,health,shield}_mult` and `BattleConfig::side_mults`. Default 1.0 for everyone.
+
+## Heroes, discounts, capture bonus (see GC-GAPS.md)
+
+* Hero respawn is the Remake's story chain (destroy -> 300 s -> SPAWN_HERO); nothing else in the sim respawns heroes.
+* Production discount: per `Stacking_Category` the strongest ability, categories multiply (estimate); a hero's/ship's discount applies galaxy-wide while any fleet of the owner holds it (estimate); a structure's discount applies at its own planet. Time floor 1 % of the list time.
+* Capture bonus: `Planet_Capture_Bonus_Reward` x `SimConfig::capture_bonus_scale` (default 1.0, estimate) once per planet and faction, when the capture completes.

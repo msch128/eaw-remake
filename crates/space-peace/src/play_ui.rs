@@ -164,7 +164,7 @@ fn spawn_bar(
     if backing.is_empty() {
         commands.spawn((
             BarBacking,
-            Node { position_type: PositionType::Absolute, left: Val::Px(0.0), bottom: Val::Px(0.0), width: Val::Px(1380.0), height: Val::Px(290.0), ..default() },
+            Node { position_type: PositionType::Absolute, left: Val::Px(0.0), bottom: Val::Px(0.0), width: Val::Px(1380.0), height: Val::Px(127.0), ..default() },
             BackgroundColor(Color::srgba(0.01, 0.015, 0.03, 0.9)),
         ));
     }

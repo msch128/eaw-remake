@@ -68,6 +68,8 @@ pub struct SimConfig {
     pub repair_shield_factor: f32,
     /// Estimate: share of the unspent production cost returned when a queue entry is cancelled (1.0 = all of it; the data has no refund rule).
     pub cancel_refund: f32,
+    /// Estimate: multiplier on `Planet_Capture_Bonus_Reward` (paid to a conqueror the first time it takes that planet; the data gives the amount, not the rule).
+    pub capture_bonus_scale: f32,
 }
 
 /// Algorithm used to settle battles.
@@ -105,6 +107,7 @@ impl Default for SimConfig {
             repair_per_starbase_level_per_week: 0.10,
             repair_shield_factor: 4.0,
             cancel_refund: 1.0,
+            capture_bonus_scale: 1.0,
         }
     }
 }
@@ -130,6 +133,8 @@ pub struct PlanetInfo {
     pub space_map: Option<String>,
     /// `Planet_Surface_Accessible`: ground forces could land.
     pub surface_accessible: bool,
+    /// `Planet_Capture_Bonus_Reward`: credits for the faction that conquers the planet.
+    pub capture_bonus: f32,
 }
 
 /// A hyperspace lane.
@@ -295,6 +300,10 @@ pub struct UnitType {
     pub limit_current: Option<i32>,
     /// Max ever built per faction.
     pub limit_lifetime: Option<i32>,
+    /// `Is_Named_Hero`: story respawn timers apply and its loss is reported.
+    pub hero: bool,
+    /// `Reduce_Production_*_Ability` entries that apply to the owner's builds while the unit exists.
+    pub prod_mods: Vec<ProductionMod>,
     /// Income change per week while the unit exists (negative = upkeep).
     pub upkeep: f32,
     /// `AI_Combat_Power`.
@@ -342,6 +351,43 @@ pub struct StructureType {
     pub buildable: bool,
     /// Combat numbers if the structure fights in space.
     pub combat: Option<CombatStats>,
+    /// `Reduce_Production_*_Ability` entries that apply to builds at the planet it stands on.
+    pub prod_mods: Vec<ProductionMod>,
+}
+
+/// One `Reduce_Production_Price_Ability` or `Reduce_Production_Time_Ability`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProductionMod {
+    /// Ability name.
+    pub name: String,
+    /// Fraction taken off the price (0.2 = 20 % cheaper).
+    pub price: f32,
+    /// Fraction taken off the build time.
+    pub time: f32,
+    /// `Applicable_Unit_Categories` is `All`.
+    pub all: bool,
+    /// Applicable size classes.
+    pub categories: Vec<alamo_data::ShipCategory>,
+    /// `Applicable_Unit_Types`, lower-cased (empty = no type filter).
+    pub types: Vec<String>,
+    /// `Excluded_Unit_Types`, lower-cased.
+    pub excluded: Vec<String>,
+    /// `Stacking_Category`: of several abilities in one category only the strongest counts.
+    pub stacking: i32,
+}
+
+impl ProductionMod {
+    /// True if the ability applies to a unit of this name and size class.
+    pub fn applies(&self, name: &str, category: alamo_data::ShipCategory) -> bool {
+        let lower = name.to_ascii_lowercase();
+        if self.excluded.contains(&lower) {
+            return false;
+        }
+        if self.types.contains(&lower) {
+            return true;
+        }
+        (self.all && self.types.is_empty()) || self.categories.contains(&category)
+    }
 }
 
 /// One level of the orbital star base.
@@ -556,6 +602,7 @@ impl World {
                 population_capacity: pop,
                 space_map: p.space_tactical_map.clone(),
                 surface_accessible: p.surface_accessible,
+                capture_bonus: p.fields.get("planet_capture_bonus_reward").and_then(|v| v.trim().parse().ok()).unwrap_or(0.0),
             });
         }
         if planets.is_empty() {

@@ -289,6 +289,24 @@ pub enum Event {
         /// New fighters.
         ships: Vec<u32>,
     },
+    /// Reinforcements were accepted and are on their way (arrive after the reinforcement delay).
+    ReinforcementsCalled {
+        /// Side.
+        side: u8,
+        /// Ship definition.
+        ship: ShipId,
+        /// Units.
+        count: u32,
+    },
+    /// A call for reinforcements was refused (unit cap).
+    ReinforcementsRefused {
+        /// Side.
+        side: u8,
+        /// Ship definition.
+        ship: ShipId,
+        /// Units.
+        count: u32,
+    },
     /// A reinforcement wave arrived.
     ReinforcementsArrived {
         /// Side.
@@ -534,6 +552,8 @@ pub struct Battle {
     pub(crate) spawn_pos: Vec<Vec3>,
     pub(crate) side_places: Vec<Vec<(Vec3, f32)>>,
     pub(crate) pop_used: Vec<i32>,
+    /// Events caused by commands; they are reported with the next step (a step starts with a clean event list).
+    pub(crate) cmd_events: Vec<Event>,
     pub(crate) retreat_ordered: Vec<bool>,
     pub(crate) grid_cells: Vec<Vec<u32>>,
 }
