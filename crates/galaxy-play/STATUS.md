@@ -29,7 +29,7 @@ Integration test path: `space-peace --offscreen out.png --campaign GC_Full_Web_W
 - Orders to fleets in hyperspace are refused (retreat first).
 
 ## Scripted backend, difficulty, save/load (new)
-The worker can run `galaxy_script::ScriptedSim` (Remake GC story scripts, Remake AI + strategy, difficulty, journaled save/load) instead of plain galaxy-sim. All input goes through
+The worker can run `galaxy_script::ScriptedSim` (Remake GC story scripts, Remake AI + strategy, difficulty, snapshot save/load) instead of plain galaxy-sim. Saves are state snapshots (load time does not depend on game length, see galaxy-script STATUS);
 the journaled methods, so a save is possible at any moment. `PlayInit::from_data` / `SimDriver::spawn` still give the old plain backend (no scripts, no save).
 - `PlayConfig::difficulty: Option<DifficultyTier>` (default `Some(Normal)`) and `PlayConfig::classic_ai: bool` (default false = Remake AI; true = galaxy-sim's built-in AI, no tiers).
 - `PlayInit::scripted(data: Arc<GameData>, fs: Arc<dyn FileSource>, &campaign, config)`: player = the campaign's active player, every other faction AI (`human_is_ai` = all AI).
@@ -53,7 +53,7 @@ the journaled methods, so a save is possible at any moment. `PlayInit::from_data
    A slot list can use `galaxy_script::SaveFile::read(path)` (cheap): `checkpoint.week`, `checkpoint.factions`, `header.campaign`, `header.config.difficulty`, `header.config.remake_ai`.
 4. Load from the main menu: `start_play(world, PlayInit::from_save(path, data, fs, PlayConfig::default())?)`, show a loading bar from `SimState.driver.load_progress()` (fraction + week) while it is `Some`
    or `current.loading`. Load from inside a game of the same campaign/player: `PlayAction::Load(path)` with the same bar, then handle `PlayEvent::LoadFinished` (on `Err` show the text).
-5. Battles keep working as before (`tactical_hook`, `TacticalReady`, `ApplyTactical`); they are journaled, so a save made while a battle is pending replays correctly. For tactical resolution of AI battles
+5. Battles keep working as before (`tactical_hook`, `TacticalReady`, `ApplyTactical`); a save made while a battle is pending restores it (the tactical set-up is rebuilt from the state). For tactical resolution of AI battles
    the catalog/arenas are runtime-only (see `galaxy-script/STATUS.md`); the worker uses the statistical resolver unless a catalog is installed through `ScriptedSim::with_sim_runtime`.
 6. Do not call `Sim` mutators from the app thread; everything goes through `PlayAction`.
 

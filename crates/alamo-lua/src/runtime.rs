@@ -27,6 +27,7 @@ use mlua::{Function, Lua, MultiValue, Table, Thread, ThreadStatus, Value};
 use crate::api::{self, NewThread, Shared};
 use crate::handles::{Handle, HandleData, Kind};
 use crate::host::{PlayerId, ScriptHost};
+use crate::persist::{LuaVal, RuntimeSnapshot, ScriptSnapshot};
 use crate::story::{Fired, Plot, StoryEngine};
 
 /// Value for a global handed to a new script instance.
@@ -71,6 +72,8 @@ struct Instance {
     plan: Option<u64>,
     /// The end of a plan has been reported through `take_finished_plans`.
     reported: bool,
+    /// Serialisable globals right after the script was set up (long-lived scripts only), the reference for what a save has to keep.
+    baseline: HashMap<String, LuaVal>,
 }
 
 /// Runs scripts against a [`ScriptHost`].
@@ -431,9 +434,13 @@ impl ScriptRuntime {
             Ok(threads)
         };
         let plan_id = plan.map(|p| p.0);
+        let mut baseline = HashMap::new();
         match setup() {
             Ok(threads) => {
                 let alive = !threads.is_empty();
+                if plan_id.is_none() {
+                    baseline = crate::persist::globals_of(&lua);
+                }
                 self.scripts.push(Instance {
                     lua: Some(lua),
                     threads,
@@ -442,6 +449,7 @@ impl ScriptRuntime {
                     alive,
                     plan: plan_id,
                     reported: false,
+                    baseline,
                 });
                 self.sweep_finished_plans();
                 Ok(id)
@@ -460,6 +468,7 @@ impl ScriptRuntime {
                     alive: false,
                     plan: plan_id,
                     reported: false,
+                    baseline,
                 });
                 self.sweep_finished_plans();
                 Err(msg)
@@ -526,6 +535,63 @@ impl ScriptRuntime {
             }
         }
         Ok(started)
+    }
+
+    /// Copies what a save has to keep (see [`crate::persist`]).
+    pub fn snapshot(&self) -> RuntimeSnapshot {
+        let sh = self.shared.borrow();
+        let mut global_values: Vec<(String, crate::api::GVal)> = sh.global_values.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+        global_values.sort_by(|a, b| a.0.cmp(&b.0));
+        let mut story_flags: Vec<String> = sh.story_flags.iter().cloned().collect();
+        story_flags.sort();
+        let mut scripts = Vec::new();
+        for (index, inst) in self.scripts.iter().enumerate() {
+            let (Some(lua), None, true) = (&inst.lua, inst.plan, inst.alive) else { continue };
+            let mut globals: Vec<(String, LuaVal)> = crate::persist::globals_of(lua).into_iter().filter(|(k, v)| inst.baseline.get(k) != Some(v)).collect();
+            if globals.is_empty() {
+                continue;
+            }
+            globals.sort_by(|a, b| a.0.cmp(&b.0));
+            scripts.push(ScriptSnapshot { index, name: sh.script_names[index].clone(), globals });
+        }
+        RuntimeSnapshot { time: sh.time, rng: sh.rng, global_values, story_flags, types: sh.types.clone(), story: sh.story.snapshot(), scripts }
+    }
+
+    /// Puts a snapshot into a runtime that was just set up like the saved one (same story plots and long-lived scripts, nothing serviced yet).
+    /// Returns warnings about parts that did not fit.
+    pub fn restore(&mut self, snap: &RuntimeSnapshot) -> Vec<String> {
+        let mut warnings = Vec::new();
+        {
+            let mut sh = self.shared.borrow_mut();
+            sh.time = snap.time;
+            sh.rng = snap.rng;
+            sh.global_values = snap.global_values.iter().cloned().collect();
+            sh.story_flags = snap.story_flags.iter().cloned().collect();
+            sh.types = snap.types.clone();
+            warnings.extend(sh.story.restore(&snap.story));
+        }
+        for s in &snap.scripts {
+            let name_ok = self.shared.borrow().script_names.get(s.index).is_some_and(|n| *n == s.name);
+            let Some(lua) = self.scripts.get(s.index).filter(|_| name_ok).and_then(|i| i.lua.clone()) else {
+                warnings.push(format!("script {} of the save is not running in this game", s.name));
+                continue;
+            };
+            for (k, v) in &s.globals {
+                match crate::persist::from_val(&lua, &self.shared, s.index, v) {
+                    Ok(val) => {
+                        if let Err(e) = lua.globals().set(k.as_str(), val) {
+                            warnings.push(format!("{}: global {k}: {e}", s.name));
+                        }
+                    }
+                    Err(e) => warnings.push(format!("{}: global {k}: {e}", s.name)),
+                }
+            }
+        }
+        let now = snap.time;
+        for inst in &mut self.scripts {
+            inst.next_service = inst.next_service.max(now);
+        }
+        warnings
     }
 
     /// Reports a story occurrence from the game (`STORY_CONQUER`, `STORY_CONSTRUCT`, ...).

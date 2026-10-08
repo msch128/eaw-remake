@@ -5,6 +5,7 @@ pub mod ai_api;
 pub mod api;
 pub mod handles;
 pub mod host;
+pub mod persist;
 pub mod runtime;
 pub mod scan;
 pub mod story;
@@ -13,4 +14,5 @@ pub use host::{HostValue, PlanEvent, TaskForceSpec,
     GameMode, MockHost, ObjectFilter, ObjectId, ObjectInfo, PlayerId, PlayerInfo, ScriptHost,
     SpawnAt, StoryReward,
 };
+pub use persist::{LuaVal, RuntimeSnapshot, ScriptSnapshot};
 pub use runtime::{ScriptError, ScriptRuntime, ScriptValue};

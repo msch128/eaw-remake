@@ -172,7 +172,10 @@ pub struct ScriptedSim {
     pub start_errors: Vec<String>,
     /// Plans that could not be started.
     pub ai_errors: Vec<String>,
-    journal: save::Journal,
+    /// Setup recorded in saves.
+    header: save::SaveHeader,
+    /// Parts of a loaded save that did not fit the game (changed mod data); empty for a new game.
+    pub load_warnings: Vec<String>,
 }
 
 /// CPU cost of the calling thread, from the thread cycle counter (fine grained and unaffected by other
@@ -224,7 +227,7 @@ impl ScriptedSim {
     }
 
     /// Wraps an already built simulation (`Sim` is `Send`, `ScriptedSim` is not: build the `Sim` anywhere and call this on the thread that
-    /// runs the match) and starts the story scripts. The sim must be fresh (journal and replay assume it starts at time 0).
+    /// runs the match) and starts the story scripts. The sim must be fresh (time 0).
     pub fn from_sim(sim: Sim, fs: Arc<dyn FileSource>, data: Arc<GameData>, campaign: &Campaign, config: ScriptedConfig) -> ScriptedSim {
         let header_sim_config = sim.world().config.clone();
         let header_config = config.clone();
@@ -301,7 +304,8 @@ impl ScriptedSim {
             timing: Timing::default(),
             start_errors,
             ai_errors: Vec::new(),
-            journal: save::Journal { header: save::header(&campaign.name, &header_sim_config, &header_config, [world.planets.len(), world.units.len(), world.factions.len()]), entries: Vec::new(), tainted: std::cell::Cell::new(false) },
+            header: save::header(&campaign.name, &header_sim_config, &header_config, &world),
+            load_warnings: Vec::new(),
         };
         if config.remake_ai {
             sim.start_ai(&fs_for_ai, campaign, &config);
@@ -385,14 +389,13 @@ impl ScriptedSim {
     }
 
     /// Runs `f` with the simulation for commands.
-    /// Runtime-only setup that is not part of the game state (tactical catalog and arenas): not journaled and does not block saving.
+    /// Runtime-only setup that is not part of the game state (tactical catalog and arenas).
     pub fn with_sim_runtime<R>(&self, f: impl FnOnce(&mut Sim) -> R) -> R {
         f(&mut self.inner.borrow_mut().sim)
     }
 
-    /// The change is *not* journaled: afterwards [`ScriptedSim::save`] refuses (use the journaled methods in `save.rs` instead).
+    /// Mutable access to the simulation (tests and tools; the next save contains the changes).
     pub fn with_sim_mut<R>(&self, f: impl FnOnce(&mut Sim) -> R) -> R {
-        self.journal.tainted.set(true);
         f(&mut self.inner.borrow_mut().sim)
     }
 
@@ -427,7 +430,6 @@ impl ScriptedSim {
 
     /// Advances simulation and scripts by `dt` game seconds.
     pub fn step(&mut self, dt: f32) -> StepReport {
-        self.journal.step(dt);
         let t0 = thread_cpu_time();
         let sim_events = {
             let mut g = self.inner.borrow_mut();

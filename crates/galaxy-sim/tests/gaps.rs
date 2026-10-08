@@ -172,3 +172,23 @@ fn statistics_count_captures_battles_ships_and_credits() {
     sim.galaxy_mut().factions[empire as usize].stats.battles_won += 1;
     assert_ne!(h, sim.galaxy().state_hash());
 }
+
+#[test]
+fn a_restored_sim_continues_exactly_like_the_original() {
+    let Some(data) = load() else { return };
+    let campaign = data.campaign("GC_Full_Web_Way_Rebel").unwrap();
+    let config = SimConfig { victory_enabled: false, seed: 3, ..SimConfig::default() };
+    let mut a = Sim::new(&data, campaign, config.clone()).unwrap();
+    a.set_ai_factions(0..a.world().factions.len() as u32);
+    a.step(60.0 * 12.0);
+    let snap = a.snapshot();
+    // Through JSON, as in a save file.
+    let snap: SimSnapshot = serde_json::from_str(&serde_json::to_string(&snap).unwrap()).unwrap();
+    let mut b = Sim::new(&data, campaign, config).unwrap();
+    b.restore(snap).expect("restore");
+    assert_eq!(a.galaxy(), b.galaxy());
+    a.step(60.0 * 8.0);
+    b.step(60.0 * 8.0);
+    assert_eq!(a.galaxy().state_hash(), b.galaxy().state_hash(), "the sim part of a save is exact");
+    assert_eq!(a.galaxy(), b.galaxy());
+}

@@ -1061,3 +1061,49 @@ pub struct AutoPreview {
     /// Winning faction, `None` for a draw.
     pub winner: Option<FactionId>,
 }
+
+/// The complete mutable state of a [`Sim`]: everything that is not derived from the game data (the [`World`] is rebuilt from the data and the
+/// campaign). Plain data, serialisable. Frozen tactical requests are not part of it (they are rebuilt from the state by `tactical_setup`), and
+/// events that were queued but not yet reported by `step` are dropped.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct SimSnapshot {
+    /// Planets, factions (credits, tech, unlocks, statistics, cooldowns), fleets, build queues, damage, battles, RNG, time.
+    pub galaxy: Galaxy,
+    /// Factions run by galaxy-sim's built-in AI.
+    pub ai: Vec<FactionId>,
+}
+
+impl Sim {
+    /// Copies the complete mutable state.
+    pub fn snapshot(&self) -> SimSnapshot {
+        SimSnapshot { galaxy: self.galaxy.clone(), ai: self.ai.clone() }
+    }
+
+    /// Replaces the mutable state with a snapshot taken from a sim built from the same data and campaign. Refuses a snapshot whose dimensions
+    /// (planets, factions) do not fit this world, or that refers to units, structures or star bases this world does not have.
+    pub fn restore(&mut self, snap: SimSnapshot) -> Result<(), String> {
+        let w = self.world.clone();
+        let g = &snap.galaxy;
+        if g.planets.len() != w.planets.len() || g.factions.len() != w.factions.len() {
+            return Err(format!("the save has {} planets and {} factions, the game data {} and {}", g.planets.len(), g.factions.len(), w.planets.len(), w.factions.len()));
+        }
+        let (units, structs, bases) = (w.units.len() as u32, w.structures.len() as u32, w.starbases.len() as u32);
+        let bad_kind = |k: &ProductionKind| match *k {
+            ProductionKind::Unit(u) => u >= units,
+            ProductionKind::Structure(s) => s >= structs,
+            ProductionKind::Starbase(b) => b >= bases,
+            ProductionKind::Tech(_) => false,
+        };
+        let bad = g.planets.iter().any(|p| p.structures.iter().any(|&s| s >= structs) || p.starbase.is_some_and(|b| b >= bases) || p.queues.iter().flatten().any(|i| bad_kind(&i.kind)))
+            || g.fleets.values().any(|f| f.units.keys().any(|&u| u >= units) || f.owner as usize >= w.factions.len() || f.planet().is_some_and(|p| p as usize >= w.planets.len()));
+        if bad {
+            return Err("the save refers to units or structures the game data does not have".into());
+        }
+        self.galaxy = snap.galaxy;
+        self.ai = snap.ai;
+        self.tactical_requests.clear();
+        self.queued_events.clear();
+        self.galaxy.sync_ships();
+        Ok(())
+    }
+}

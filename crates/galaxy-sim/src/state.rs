@@ -6,11 +6,11 @@ use crate::rng::Rng;
 use crate::world::*;
 
 /// Stable identity of one ship; survives fleet merges, splits and moves. Ids are never reused.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize)]
 pub struct ShipId(pub u64);
 
 /// Where a fleet is.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum FleetLocation {
     /// In orbit of a planet.
     AtPlanet(PlanetId),
@@ -30,7 +30,7 @@ pub enum FleetLocation {
 }
 
 /// A group of ships moving together.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Fleet {
     /// Unique id.
     pub id: FleetId,
@@ -60,7 +60,7 @@ impl Fleet {
 }
 
 /// What a production item builds.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum ProductionKind {
     /// A ship, squadron or research item.
     Unit(UnitTypeId),
@@ -73,7 +73,7 @@ pub enum ProductionKind {
 }
 
 /// One entry of a planet's build queue. Cost is paid when the item is queued.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ProductionItem {
     /// What is being built.
     pub kind: ProductionKind,
@@ -97,7 +97,7 @@ pub enum Lane {
 }
 
 /// Dynamic state of a planet.
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PlanetState {
     /// Owner; `None` = neutral/unowned.
     pub owner: Option<FactionId>,
@@ -135,7 +135,7 @@ impl UnitHealth {
 }
 
 /// Dynamic state of a faction.
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct FactionState {
     /// Current credits.
     pub credits: f64,
@@ -164,7 +164,7 @@ pub struct FactionState {
 }
 
 /// Per-faction statistics, part of the state hash (so a save replay rebuilds them).
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct FactionStats {
     /// Battles the faction won.
     pub battles_won: u32,
@@ -187,7 +187,7 @@ pub struct FactionStats {
 }
 
 /// A battle waiting to be resolved (by a tactical battle or auto-resolve).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PendingBattle {
     /// Unique id.
     pub id: u32,
@@ -202,7 +202,7 @@ pub struct PendingBattle {
 }
 
 /// The mutable part of a match.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Galaxy {
     /// Elapsed galactic time in seconds.
     pub time: f64,
@@ -624,7 +624,7 @@ impl Galaxy {
 
 /// Per-faction difficulty multipliers (`DifficultyAdjustments.xml`, see `alamo_data::DifficultyAdjustment`). Credits
 /// and build time act in the galaxy layer; damage, health and shield in battles (statistical and tactical).
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Difficulty {
     /// Multiplier on positive income.
     pub credit: f32,

@@ -31,6 +31,7 @@ const STUB_NAMESPACES: &[&str] = &[
 
 /// Value stored by `GlobalValue.Set`.
 #[derive(Debug, Clone, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize)]
 pub enum GVal {
     /// Number.
     Num(f64),

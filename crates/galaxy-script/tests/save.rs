@@ -40,41 +40,47 @@ fn ai_config() -> ScriptedConfig {
 }
 
 #[test]
-fn loaded_game_continues_identically() {
+fn loaded_game_equals_the_saved_state_and_plays_on() {
     let Some(c) = ctx() else { return };
     let mut sim = new_sim(&c, ai_config());
     weeks(&mut sim, 6);
-    // A player command in the middle (journaled); whether it is accepted does not matter, the replay must agree.
+    // A player command in the middle; whether it is accepted does not matter.
     let w = sim.with_sim(|s| s.world().clone());
     let empire = w.faction_id("Empire").unwrap();
-    let home = w.planet_id("Coruscant_WW").unwrap();
-    let unit = w.unit_id("TIE_Fighter_Squadron").unwrap();
-    let r1 = sim.apply(Command::BuildUnit { faction: empire, planet: home, unit });
-    weeks(&mut sim, 2);
+    let _ = sim.apply(Command::BuildUnit { faction: empire, planet: w.planet_id("Coruscant_WW").unwrap(), unit: w.unit_id("TIE_Fighter_Squadron").unwrap() });
+    weeks(&mut sim, 24);
     let path = std::env::temp_dir().join("space_peace_test_save.json");
     sim.save(&path).expect("save");
-    println!("save file: {} bytes at week {}", std::fs::metadata(&path).unwrap().len(), sim.checkpoint().week);
+    let size = std::fs::metadata(&path).unwrap().len();
 
-    // Original keeps going.
-    weeks(&mut sim, 5);
-    let original = (sim.checkpoint(), sim.ai_stats().unwrap().taskforces.ships_queued, sim.ai_stats().unwrap().plans_started.values().sum::<u32>());
-
-    // Loaded copy: same position after loading, same continuation after 5 more weeks.
     let t = std::time::Instant::now();
     let mut loaded = ScriptedSim::load(&path, c.fs.clone(), c.data.clone()).expect("load");
-    println!("load (replay of 8 weeks) took {:?}", t.elapsed());
-    assert_eq!(loaded.checkpoint().week, 8);
-    weeks(&mut loaded, 5);
-    let again = (loaded.checkpoint(), loaded.ai_stats().unwrap().taskforces.ships_queued, loaded.ai_stats().unwrap().plans_started.values().sum::<u32>());
-    assert_eq!(original, again, "a loaded game must continue exactly like the original (command result {r1:?})");
-    // Story/script state agrees as well.
-    assert_eq!(sim.script_log().len(), loaded.script_log().len());
+    println!("save {} KB, load took {:?}, warnings {:?}", size / 1024, t.elapsed(), loaded.load_warnings);
+    // The loaded state is the saved state.
+    let (a, b) = (sim.state(), loaded.state());
+    assert_eq!(a.sim, b.sim, "galaxy-sim state");
+    assert_eq!(a.runtime.story.plots, b.runtime.story.plots, "story plots");
+    assert_eq!(a.runtime.global_values, b.runtime.global_values, "global values");
+    assert_eq!(a.runtime.scripts, b.runtime.scripts, "script globals");
+    println!("saved: {} story plots, {} global values, {} scripts with changed globals ({} values)", a.runtime.story.plots.len(), a.runtime.global_values.len(), a.runtime.scripts.len(), a.runtime.scripts.iter().map(|s| s.globals.len()).sum::<usize>());
+    assert_eq!(a.ai.as_ref().map(|m| (m.brains.clone(), m.task_forces.clone(), m.strategy.clone())), b.ai.as_ref().map(|m| (m.brains.clone(), m.task_forces.clone(), m.strategy.clone())), "AI memory");
+    assert_eq!(sim.checkpoint(), loaded.checkpoint());
+    assert!(loaded.load_warnings.is_empty(), "{:?}", loaded.load_warnings);
+
+    // It plays on for 20 weeks without new errors; the original does too. (A continuation is not bit-identical: plans in flight are not saved.)
+    let errors_before = loaded.diagnostics().script_errors;
+    weeks(&mut loaded, 20);
+    weeks(&mut sim, 20);
+    assert_eq!(loaded.diagnostics().script_errors, errors_before, "{:?}", loaded.diagnostics().last_script_error);
+    let (cl, co) = (loaded.checkpoint(), sim.checkpoint());
+    assert_eq!(cl.week, co.week);
+    println!("continuation identical to the original: {} (loaded {:x}, original {:x})", cl.galaxy_hash == co.galaxy_hash, cl.galaxy_hash, co.galaxy_hash);
     // A loaded game can be saved again.
     loaded.save(&path).expect("resave");
 }
 
 #[test]
-fn bad_or_unsafe_saves_are_rejected() {
+fn bad_saves_are_rejected() {
     let Some(c) = ctx() else { return };
     let mut sim = new_sim(&c, ScriptedConfig { game_scoring: false, ..ai_config() });
     weeks(&mut sim, 2);
@@ -86,18 +92,39 @@ fn bad_or_unsafe_saves_are_rejected() {
 
     let mut bad = file.clone();
     bad.checkpoint.galaxy_hash ^= 1;
-    assert!(matches!(ScriptedSim::from_save(bad, c.fs.clone(), c.data.clone(), |_| {}), Err(SaveError::Diverged { .. })));
+    assert!(matches!(ScriptedSim::from_save(bad, c.fs.clone(), c.data.clone(), |_| {}), Err(SaveError::Corrupt { .. })));
 
     let mut bad = file.clone();
     bad.header.world[0] += 1;
     assert!(matches!(ScriptedSim::from_save(bad, c.fs.clone(), c.data.clone(), |_| {}), Err(SaveError::DataMismatch)));
 
+    let mut bad = file.clone();
+    bad.header.fingerprint ^= 1;
+    assert!(matches!(ScriptedSim::from_save(bad, c.fs.clone(), c.data.clone(), |_| {}), Err(SaveError::DataMismatch)));
+
+    // A state that does not fit the world is refused, not applied.
+    let mut bad = file.clone();
+    bad.state.sim.galaxy.planets.pop();
+    assert!(matches!(ScriptedSim::from_save(bad, c.fs.clone(), c.data.clone(), |_| {}), Err(SaveError::Setup(_))));
+
     file.header.campaign = "nope".into();
     assert!(matches!(ScriptedSim::from_save(file, c.fs.clone(), c.data.clone(), |_| {}), Err(SaveError::UnknownCampaign(_))));
+}
 
-    // Unjournaled changes make the game unsaveable.
-    sim.with_sim_mut(|s| s.add_credits(0, 1.0));
-    assert!(matches!(sim.to_save(), Err(SaveError::UnjournaledChanges)));
+/// Manual measurement: `cargo test --release -p galaxy-script --test save load_time -- --ignored --nocapture`.
+#[test]
+#[ignore]
+fn load_time_of_a_200_week_save() {
+    let Some(c) = ctx() else { return };
+    let mut sim = new_sim(&c, ai_config());
+    weeks(&mut sim, 200);
+    let path = std::env::temp_dir().join("space_peace_test_save200.json");
+    let t = std::time::Instant::now();
+    sim.save(&path).expect("save");
+    println!("save: {:?}, {} KB", t.elapsed(), std::fs::metadata(&path).unwrap().len() / 1024);
+    let t = std::time::Instant::now();
+    let loaded = ScriptedSim::load(&path, c.fs.clone(), c.data.clone()).expect("load");
+    println!("load of a week-{} save: {:?}", loaded.checkpoint().week, t.elapsed());
 }
 
 #[test]

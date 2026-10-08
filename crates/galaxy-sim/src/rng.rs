@@ -1,7 +1,7 @@
 //! Small deterministic pseudo random generator (SplitMix64).
 
 /// Deterministic RNG; the same seed always yields the same sequence on every platform.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Rng(u64);
 
 impl Rng {

@@ -1,63 +1,31 @@
-//! Save and load of a running game.
+//! Save and load of a running game: a *snapshot* of the actual state, so loading takes the same time however long the game has run.
 //!
-//! A [`ScriptedSim`] cannot serialise its live Lua coroutines (story plots, AI plan scripts), so a save is a *deterministic
-//! journal*: the match setup (campaign, `SimConfig`, `ScriptedConfig` with seed, difficulty, personalities) plus every external
-//! input in order (time steps, player commands, tactical results). Loading rebuilds the match and replays the journal; because
-//! galaxy-sim, the script runtime, the AI engine and the strategy layer are deterministic this reproduces the identical state,
-//! including Lua globals, task forces, AI and strategy memory and every RNG. The file also stores a checkpoint (state hash,
-//! time, per-faction summary) that is verified after the replay, so a changed mod or code version fails loudly instead of
-//! silently continuing a different game.
+//! A save file (JSON, `space-peace-save` format version 2) holds
+//! * a header: campaign, [`SimConfig`], [`ScriptedConfig`] (seed, difficulty, personalities, variety), counts and a fingerprint of the game data;
+//! * a checkpoint: state hash, time, week and a per-faction summary (readable without loading the game, for save lists);
+//! * the state: the complete galaxy-sim state ([`galaxy_sim::SimSnapshot`]: planets, queues, fleets, damage, statistics, RNG, cooldowns), the script runtime
+//!   ([`alamo_lua::RuntimeSnapshot`]: story plots with event states, counters and timers - hero respawn timers live there -, `GlobalValue` store, story flags,
+//!   the saved global variables of the long-lived scripts) and the Remake AI memory ([`galaxy_ai::AiMemory`]).
 //!
-//! Cost: loading re-simulates the game (about 0.1 s per game week with the Remake AI). Inputs given through
-//! [`ScriptedSim::with_sim_mut`] are not journaled; after using it, [`ScriptedSim::save`] refuses with
-//! [`SaveError::UnjournaledChanges`]. Use the journaled methods ([`ScriptedSim::apply`] and friends) instead.
+//! Loading builds the match as at the start (campaign, story scripts, AI players), then replaces the state. What a snapshot cannot hold: Lua coroutines
+//! (their locals and the point where they sleep) and with them the AI plans in flight. Long-lived scripts restart from the top of their main loop with
+//! their saved globals; an AI plan that was running is gone, its ships and queued items stay and the goals start new plans. Events that were produced but
+//! not yet reported by `step` and frozen tactical set-ups are not saved (a pending tactical battle is set up again from the state).
+//! A continuation from a loaded game is therefore *not* bit-identical to the game that was saved.
 
 use std::path::Path;
 use std::sync::Arc;
 
 use alamo_data::GameData;
 use alamo_fs::FileSource;
-use galaxy_sim::{Command, CommandError, CommandOk, Event, SimConfig, TacticalError, TacticalRequest, TacticalResult};
+use galaxy_sim::{Command, CommandError, CommandOk, Event, SimConfig, SimSnapshot, TacticalError, TacticalRequest, TacticalResult};
 use serde::{Deserialize, Serialize};
 
 use crate::{ScriptedConfig, ScriptedSim};
 
 /// Current file format version.
-pub const SAVE_VERSION: u32 = 1;
+pub const SAVE_VERSION: u32 = 2;
 const FORMAT: &str = "space-peace-save";
-
-/// One external input.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub enum Entry {
-    /// `n` steps of `dt` game seconds.
-    Steps {
-        /// Step length.
-        dt: f32,
-        /// How many.
-        n: u32,
-    },
-    /// A player or app command.
-    Command(Command),
-    /// Factions handed to the built-in AI.
-    AiFactions(Vec<u32>),
-    /// `Sim::tactical_setup`.
-    TacticalSetup(u32),
-    /// `Sim::apply_tactical_result`.
-    TacticalResult {
-        /// Battle id.
-        id: u32,
-        /// Result of the tactical battle.
-        result: TacticalResult,
-    },
-    /// `Sim::resolve_battle_auto`.
-    ResolveAuto(u32),
-    /// `Sim::cancel_tactical`.
-    CancelTactical(u32),
-    /// `Sim::resolve_battle` (resolver of the `SimConfig`).
-    Resolve(u32),
-    /// `Sim::resolve_battle_tactical`.
-    ResolveTactical(u32),
-}
 
 /// How the match was set up.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -70,9 +38,11 @@ pub struct SaveHeader {
     pub config: ScriptedConfig,
     /// Counts of planets, unit types and factions of the world, to detect a different mod version.
     pub world: [usize; 3],
+    /// Hash of the names of all planets, factions, units and structures of the world.
+    pub fingerprint: u64,
 }
 
-/// State at the time of saving, verified after loading, and a summary for save-game lists.
+/// State at the time of saving, checked after loading, and a summary for save-game lists.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Checkpoint {
     /// `Galaxy::state_hash`.
@@ -85,6 +55,21 @@ pub struct Checkpoint {
     pub factions: Vec<(String, u32, f64, u32)>,
 }
 
+/// The saved state of a match.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GameState {
+    /// galaxy-sim.
+    pub sim: SimSnapshot,
+    /// Story plots, global values and script globals.
+    pub runtime: alamo_lua::RuntimeSnapshot,
+    /// Time since the last script service step.
+    pub script_clock: f64,
+    /// Remake AI memory (`None` without it).
+    pub ai: Option<galaxy_ai::AiMemory>,
+    /// Alliances created by scripts.
+    pub allies: Vec<(u32, u32)>,
+}
+
 /// The file.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SaveFile {
@@ -94,10 +79,10 @@ pub struct SaveFile {
     pub version: u32,
     /// Setup.
     pub header: SaveHeader,
-    /// Inputs in order.
-    pub journal: Vec<Entry>,
-    /// Verification state.
+    /// Summary and integrity check.
     pub checkpoint: Checkpoint,
+    /// The state.
+    pub state: GameState,
 }
 
 /// Why saving or loading failed.
@@ -113,16 +98,14 @@ pub enum SaveError {
     UnknownCampaign(String),
     /// The loaded data differs from the data the save was made with.
     DataMismatch,
-    /// Replaying the journal did not reproduce the saved state (changed mod data or code).
-    Diverged {
+    /// The restored state does not match the checkpoint (a damaged file).
+    Corrupt {
         /// Checkpoint in the file.
         saved: Box<Checkpoint>,
-        /// State after the replay.
-        replayed: Box<Checkpoint>,
+        /// State after restoring.
+        restored: Box<Checkpoint>,
     },
-    /// `with_sim_mut` was used, those changes are not in the journal.
-    UnjournaledChanges,
-    /// The match could not be rebuilt.
+    /// The match could not be rebuilt or the state does not fit it.
     Setup(String),
 }
 
@@ -134,8 +117,7 @@ impl std::fmt::Display for SaveError {
             SaveError::Version(v) => write!(f, "save file version {v} is not supported (expected {SAVE_VERSION})"),
             SaveError::UnknownCampaign(c) => write!(f, "campaign {c} not found in the game data"),
             SaveError::DataMismatch => f.write_str("the game data differs from the data this save was made with"),
-            SaveError::Diverged { saved, replayed } => write!(f, "replay diverged: saved week {} hash {:x}, replayed week {} hash {:x}", saved.week, saved.galaxy_hash, replayed.week, replayed.galaxy_hash),
-            SaveError::UnjournaledChanges => f.write_str("the game was changed through with_sim_mut; use the journaled methods to make it saveable"),
+            SaveError::Corrupt { saved, restored } => write!(f, "the save is damaged: saved week {} hash {:x}, restored week {} hash {:x}", saved.week, saved.galaxy_hash, restored.week, restored.galaxy_hash),
             SaveError::Setup(e) => write!(f, "cannot rebuild the match: {e}"),
         }
     }
@@ -149,74 +131,59 @@ impl From<std::io::Error> for SaveError {
     }
 }
 
-/// Recorded inputs of a running match.
-#[derive(Debug, Clone)]
-pub(crate) struct Journal {
-    pub header: SaveHeader,
-    pub entries: Vec<Entry>,
-    /// Set by unjournaled mutation.
-    pub tainted: std::cell::Cell<bool>,
-}
-
-impl Journal {
-    pub fn step(&mut self, dt: f32) {
-        if let Some(Entry::Steps { dt: last, n }) = self.entries.last_mut()
-            && last.to_bits() == dt.to_bits()
-        {
-            *n += 1;
-            return;
+/// Builds the header of a new match.
+pub(crate) fn header(campaign: &str, sim_config: &SimConfig, config: &ScriptedConfig, world: &galaxy_sim::World) -> SaveHeader {
+    let mut h: u64 = 0xCBF2_9CE4_8422_2325;
+    let mut eat = |s: &str| {
+        for b in s.bytes().chain(std::iter::once(0)) {
+            h = (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01B3);
         }
-        self.entries.push(Entry::Steps { dt, n: 1 });
-    }
+    };
+    world.planets.iter().for_each(|p| eat(&p.name));
+    world.factions.iter().for_each(|f| eat(&f.name));
+    world.units.iter().for_each(|u| eat(&u.name));
+    world.structures.iter().for_each(|s| eat(&s.name));
+    SaveHeader { campaign: campaign.to_string(), sim_config: sim_config.clone(), config: config.clone(), world: [world.planets.len(), world.units.len(), world.factions.len()], fingerprint: h }
 }
 
 impl ScriptedSim {
-    /// Applies a command and records it for saving.
+    /// Applies a command.
     pub fn apply(&mut self, cmd: Command) -> Result<CommandOk, CommandError> {
-        self.journal.entries.push(Entry::Command(cmd.clone()));
         self.inner.borrow_mut().sim.apply(cmd)
     }
 
-    /// Gives factions to galaxy-sim's built-in AI (journaled).
+    /// Gives factions to galaxy-sim's built-in AI.
     pub fn set_ai_factions(&mut self, factions: impl IntoIterator<Item = u32>) {
-        let list: Vec<u32> = factions.into_iter().collect();
-        self.journal.entries.push(Entry::AiFactions(list.clone()));
-        self.inner.borrow_mut().sim.set_ai_factions(list);
+        self.inner.borrow_mut().sim.set_ai_factions(factions);
     }
 
-    /// `Sim::tactical_setup` (journaled).
+    /// `Sim::tactical_setup`.
     pub fn tactical_setup(&mut self, battle_id: u32) -> Option<TacticalRequest> {
-        self.journal.entries.push(Entry::TacticalSetup(battle_id));
         self.inner.borrow_mut().sim.tactical_setup(battle_id)
     }
 
-    /// `Sim::apply_tactical_result` (journaled).
+    /// `Sim::apply_tactical_result`.
     pub fn apply_tactical_result(&mut self, battle_id: u32, result: &TacticalResult) -> Result<Vec<Event>, TacticalError> {
-        self.journal.entries.push(Entry::TacticalResult { id: battle_id, result: result.clone() });
         self.inner.borrow_mut().sim.apply_tactical_result(battle_id, result)
     }
 
-    /// `Sim::resolve_battle_auto` (journaled).
+    /// `Sim::resolve_battle_auto`.
     pub fn resolve_battle_auto(&mut self, battle_id: u32) -> Option<Vec<Event>> {
-        self.journal.entries.push(Entry::ResolveAuto(battle_id));
         self.inner.borrow_mut().sim.resolve_battle_auto(battle_id)
     }
 
-    /// `Sim::resolve_battle` (journaled).
+    /// `Sim::resolve_battle`.
     pub fn resolve_battle(&mut self, battle_id: u32) -> Option<Vec<Event>> {
-        self.journal.entries.push(Entry::Resolve(battle_id));
         self.inner.borrow_mut().sim.resolve_battle(battle_id)
     }
 
-    /// `Sim::resolve_battle_tactical` (journaled).
+    /// `Sim::resolve_battle_tactical`.
     pub fn resolve_battle_tactical(&mut self, battle_id: u32) -> Option<Vec<Event>> {
-        self.journal.entries.push(Entry::ResolveTactical(battle_id));
         self.inner.borrow_mut().sim.resolve_battle_tactical(battle_id)
     }
 
-    /// `Sim::cancel_tactical` (journaled).
+    /// `Sim::cancel_tactical`.
     pub fn cancel_tactical(&mut self, battle_id: u32) {
-        self.journal.entries.push(Entry::CancelTactical(battle_id));
         self.inner.borrow_mut().sim.cancel_tactical(battle_id);
     }
 
@@ -234,12 +201,17 @@ impl ScriptedSim {
         })
     }
 
+    /// Copies the state that a save keeps.
+    pub fn state(&self) -> GameState {
+        let i = self.inner.borrow();
+        let mut allies: Vec<(u32, u32)> = i.allies.iter().copied().collect();
+        allies.sort_unstable();
+        GameState { sim: i.sim.snapshot(), runtime: self.runtime.snapshot(), script_clock: self.script_clock, ai: i.ai.as_ref().map(|a| a.memory()), allies }
+    }
+
     /// The save as a value.
     pub fn to_save(&self) -> Result<SaveFile, SaveError> {
-        if self.journal.tainted.get() {
-            return Err(SaveError::UnjournaledChanges);
-        }
-        Ok(SaveFile { format: FORMAT.into(), version: SAVE_VERSION, header: self.journal.header.clone(), journal: self.journal.entries.clone(), checkpoint: self.checkpoint() })
+        Ok(SaveFile { format: FORMAT.into(), version: SAVE_VERSION, header: self.header.clone(), checkpoint: self.checkpoint(), state: self.state() })
     }
 
     /// Writes the save to `path` (JSON).
@@ -250,13 +222,13 @@ impl ScriptedSim {
         Ok(())
     }
 
-    /// Reads and replays a save written by [`ScriptedSim::save`]. `fs` and `data` must be the game data the save was made with.
+    /// Reads a save written by [`ScriptedSim::save`]. `fs` and `data` must be the game data the save was made with.
     pub fn load(path: impl AsRef<Path>, fs: Arc<dyn FileSource>, data: Arc<GameData>) -> Result<ScriptedSim, SaveError> {
         Self::load_with(path, fs, data, |_| {})
     }
 
-    /// Like [`ScriptedSim::load`], with a hook that runs on the rebuilt match before the replay (for runtime-only setup such as
-    /// `with_sim_mut(|s| s.set_tactical_catalog(..))` when the match resolves battles tactically).
+    /// Like [`ScriptedSim::load`], with a hook that runs on the rebuilt match before the state is put in (for runtime-only setup such as
+    /// `with_sim_runtime(|s| s.set_tactical_catalog(..))` when the match resolves battles tactically).
     pub fn load_with(path: impl AsRef<Path>, fs: Arc<dyn FileSource>, data: Arc<GameData>, setup: impl FnOnce(&mut ScriptedSim)) -> Result<ScriptedSim, SaveError> {
         Self::from_save(SaveFile::read(path)?, fs, data, setup)
     }
@@ -266,97 +238,65 @@ impl ScriptedSim {
         Self::from_save_progress(file, fs, data, setup, &mut |_| {})
     }
 
-    /// Like [`ScriptedSim::from_save`], reporting how far the replay is (for a loading bar).
+    /// Like [`ScriptedSim::from_save`], reporting progress (a snapshot loads in one step; the callback sees `done == total == 1` at the end).
     pub fn from_save_progress(file: SaveFile, fs: Arc<dyn FileSource>, data: Arc<GameData>, setup: impl FnOnce(&mut ScriptedSim), progress: &mut dyn FnMut(LoadProgress)) -> Result<ScriptedSim, SaveError> {
-        let total = file.total_steps();
-        let mut done = 0u64;
         if file.format != FORMAT {
             return Err(SaveError::Format(format!("unexpected format {}", file.format)));
         }
         if file.version != SAVE_VERSION {
             return Err(SaveError::Version(file.version));
         }
+        let week = file.checkpoint.week;
+        progress(LoadProgress { done: 0, total: 1, week });
         let campaign = data.campaign(&file.header.campaign).ok_or_else(|| SaveError::UnknownCampaign(file.header.campaign.clone()))?.clone();
         let mut sim = ScriptedSim::new(fs, data, &campaign, file.header.sim_config.clone(), file.header.config.clone()).map_err(|e| SaveError::Setup(e.to_string()))?;
-        let w = sim.with_sim(|s| [s.world().planets.len(), s.world().units.len(), s.world().factions.len()]);
-        if w != file.header.world {
+        if sim.header.world != file.header.world || sim.header.fingerprint != file.header.fingerprint {
             return Err(SaveError::DataMismatch);
         }
         setup(&mut sim);
-        for e in &file.journal {
-            match e {
-                Entry::Steps { dt, n } => {
-                    for k in 0..*n {
-                        sim.step(*dt);
-                        done += 1;
-                        if k % 20 == 0 {
-                            progress(LoadProgress { done, total, week: sim.checkpoint_week() });
-                        }
-                    }
-                }
-                Entry::Command(c) => {
-                    let _ = sim.apply(c.clone());
-                }
-                Entry::AiFactions(f) => sim.set_ai_factions(f.iter().copied()),
-                Entry::TacticalSetup(id) => {
-                    sim.tactical_setup(*id);
-                }
-                Entry::TacticalResult { id, result } => {
-                    let _ = sim.apply_tactical_result(*id, result);
-                }
-                Entry::ResolveAuto(id) => {
-                    sim.resolve_battle_auto(*id);
-                }
-                Entry::CancelTactical(id) => sim.cancel_tactical(*id),
-                Entry::Resolve(id) => {
-                    sim.resolve_battle(*id);
-                }
-                Entry::ResolveTactical(id) => {
-                    sim.resolve_battle_tactical(*id);
-                }
+        let state = file.state;
+        {
+            let mut i = sim.inner.borrow_mut();
+            i.sim.restore(state.sim).map_err(SaveError::Setup)?;
+            i.allies = state.allies.iter().copied().collect();
+            i.pending_events.clear();
+            if let (Some(ai), Some(mem)) = (i.ai.as_mut(), state.ai.as_ref()) {
+                sim.load_warnings.extend(ai.restore_memory(mem));
             }
         }
-        progress(LoadProgress { done: total, total, week: sim.checkpoint_week() });
-        let replayed = sim.checkpoint();
-        if replayed.galaxy_hash != file.checkpoint.galaxy_hash || replayed.time.to_bits() != file.checkpoint.time.to_bits() {
-            return Err(SaveError::Diverged { saved: Box::new(file.checkpoint), replayed: Box::new(replayed) });
+        let warnings = sim.runtime.restore(&state.runtime);
+        sim.load_warnings.extend(warnings);
+        sim.script_clock = state.script_clock;
+        let restored = sim.checkpoint();
+        if restored.galaxy_hash != file.checkpoint.galaxy_hash || restored.time.to_bits() != file.checkpoint.time.to_bits() {
+            return Err(SaveError::Corrupt { saved: Box::new(file.checkpoint), restored: Box::new(restored) });
         }
+        progress(LoadProgress { done: 1, total: 1, week });
         Ok(sim)
     }
 }
 
-/// Builds the journal header of a new match.
-pub(crate) fn header(campaign: &str, sim_config: &SimConfig, config: &ScriptedConfig, world: [usize; 3]) -> SaveHeader {
-    SaveHeader { campaign: campaign.to_string(), sim_config: sim_config.clone(), config: config.clone(), world }
-}
-
-/// How far a replay has come.
+/// How far a load has come.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LoadProgress {
-    /// Steps replayed.
+    /// Steps done.
     pub done: u64,
-    /// Steps in the save.
+    /// Steps in total.
     pub total: u64,
-    /// Game week reached.
+    /// Game week of the save.
     pub week: u64,
 }
 
 impl SaveFile {
-    /// Reads a save file without replaying it (cheap: use it for slot lists, `checkpoint` has week and faction summary).
+    /// Reads a save file (cheap for save lists: `checkpoint` has week and faction summary).
     pub fn read(path: impl AsRef<Path>) -> Result<SaveFile, SaveError> {
         let text = std::fs::read_to_string(path)?;
         serde_json::from_str(&text).map_err(|e| SaveError::Format(e.to_string()))
     }
 
-    /// Number of simulation steps the journal replays.
+    /// Progress units of loading this save (1: a snapshot is restored in one go).
     pub fn total_steps(&self) -> u64 {
-        self.journal.iter().map(|e| if let Entry::Steps { n, .. } = e { u64::from(*n) } else { 0 }).sum()
-    }
-}
-
-impl ScriptedSim {
-    pub(crate) fn checkpoint_week(&self) -> u64 {
-        self.with_sim(|s| (s.galaxy().time / f64::from(s.world().config.week_seconds)) as u64)
+        1
     }
 }
 
@@ -371,14 +311,14 @@ pub struct Diagnostics {
     pub ai_errors: usize,
     /// Story scripts that failed to start.
     pub start_errors: usize,
-    /// Entries in the save journal.
+    /// Always 0 (the save is a snapshot, not a journal).
     pub journal_entries: usize,
-    /// Steps in the save journal.
+    /// Always 0.
     pub journal_steps: u64,
 }
 
 impl ScriptedSim {
-    /// Error counts and journal size.
+    /// Error counts.
     pub fn diagnostics(&self) -> Diagnostics {
         let errors = self.runtime().errors();
         Diagnostics {
@@ -386,8 +326,8 @@ impl ScriptedSim {
             last_script_error: errors.last().map(|e| format!("{}: {}", e.script, e.message)),
             ai_errors: self.ai_errors.len(),
             start_errors: self.start_errors.len(),
-            journal_entries: self.journal.entries.len(),
-            journal_steps: self.journal.entries.iter().map(|e| if let Entry::Steps { n, .. } = e { u64::from(*n) } else { 0 }).sum(),
+            journal_entries: 0,
+            journal_steps: 0,
         }
     }
 }

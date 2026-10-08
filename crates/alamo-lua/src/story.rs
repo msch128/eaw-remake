@@ -121,8 +121,9 @@ impl Plot {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-enum State {
+/// Progress of one story event.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+pub enum State {
     Inactive,
     Active(f64),
     Fired,
@@ -143,6 +144,73 @@ struct Running {
     /// Battles counted so far by `STORY_WIN_BATTLES` / `STORY_LOSE_BATTLES` events.
     battles: Vec<u32>,
     by_name: HashMap<String, usize>,
+}
+
+
+/// State of one running plot (the plot itself is re-read from the file).
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct PlotSnapshot {
+    /// Plot file (`Story_Sandbox_Hero_Timers_Rebel.xml`).
+    pub file: String,
+    /// Time the plot was activated.
+    pub started: f64,
+    /// Event states in file order.
+    pub states: Vec<State>,
+    /// Events triggered by name before they became active.
+    pub triggered: Vec<bool>,
+    /// Events that fired since their branch was last reset.
+    pub done: Vec<bool>,
+    /// Battle counters of the `STORY_WIN_BATTLES` / `STORY_LOSE_BATTLES` events.
+    pub battles: Vec<u32>,
+}
+
+/// State of the story engine: every plot's event states, counters and timers.
+#[derive(Debug, Clone, PartialEq, Default, serde::Serialize, serde::Deserialize)]
+pub struct StorySnapshot {
+    /// Plots in activation order.
+    pub plots: Vec<PlotSnapshot>,
+    /// Re-evaluate on the next tick.
+    pub dirty: bool,
+    /// Earliest due time of an elapsed event (`None` = none; JSON has no infinity).
+    pub next_due: Option<f64>,
+}
+
+impl StoryEngine {
+    /// Copies the dynamic state.
+    pub fn snapshot(&self) -> StorySnapshot {
+        StorySnapshot {
+            plots: self
+                .plots
+                .iter()
+                .map(|r| PlotSnapshot { file: r.plot.file.clone(), started: r.started, states: r.states.clone(), triggered: r.triggered.clone(), done: r.done.clone(), battles: r.battles.clone() })
+                .collect(),
+            dirty: self.dirty,
+            next_due: self.next_due.is_finite().then_some(self.next_due),
+        }
+    }
+
+    /// Applies a snapshot to the plots activated in the same order from the same files. Plots whose file or event count differ (a changed mod) keep their fresh state
+    /// and are reported in the returned warnings.
+    pub fn restore(&mut self, snap: &StorySnapshot) -> Vec<String> {
+        let mut warnings = Vec::new();
+        for (i, p) in snap.plots.iter().enumerate() {
+            let Some(r) = self.plots.get_mut(i).filter(|r| r.plot.file == p.file && r.states.len() == p.states.len()) else {
+                warnings.push(format!("story plot {} of the save does not match the loaded plots", p.file));
+                continue;
+            };
+            r.started = p.started;
+            r.states = p.states.clone();
+            r.triggered = p.triggered.clone();
+            r.done = p.done.clone();
+            r.battles = p.battles.clone();
+        }
+        if snap.plots.len() != self.plots.len() {
+            warnings.push(format!("the save has {} story plots, the game {}", snap.plots.len(), self.plots.len()));
+        }
+        self.dirty = true;
+        self.next_due = 0.0;
+        warnings
+    }
 }
 
 /// An event that fired: the runtime calls the script and hands the rewards to the host.

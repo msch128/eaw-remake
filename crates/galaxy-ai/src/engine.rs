@@ -806,3 +806,100 @@ fn reach_from_owned(snap: &Snapshot, player: PlayerId, max_hops: u32) -> Vec<u32
 pub fn no_params() -> Params {
     Params::default()
 }
+
+/// Per-player memory of the goal system.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct BrainMemory {
+    /// Player.
+    pub player: PlayerId,
+    /// Next goal evaluation.
+    pub next_eval: f64,
+    /// Earliest evaluation per goal (in the order of the player goal list).
+    pub goal_next: Vec<f64>,
+    /// `(goal, planet, value, until)` desire bonuses.
+    pub bonuses: Vec<(String, PlanetId, f64, f64)>,
+    /// Time money was last earmarked.
+    pub last_fund: Option<f64>,
+    /// Next tech consideration.
+    pub next_tech: f64,
+    /// Budget fractions per category.
+    pub fractions: Vec<(String, f64)>,
+    /// Finished plans (cooldowns and failure learning): `(goal, target, time, cooldown, failed)`.
+    pub failures: Vec<(String, Option<PlanetId>, f64, f64, bool)>,
+}
+
+/// What the AI keeps between turns and what a save stores: goal timers and learned failures, budgets, force sizing, reservations, the strategic layer memory.
+/// Not stored: plans in flight (their Lua coroutines cannot be saved) and the task forces they own. A loaded game starts with no plan running; the ships
+/// and queued items stay where they are and the goals pick them up again (ships on the free store are used first).
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct AiMemory {
+    /// Engine random generator.
+    pub rng: u64,
+    /// Next plan id.
+    pub next_plan: u64,
+    /// Time of the last strategy refresh (`None` = never).
+    pub strategy_at: Option<f64>,
+    /// Players.
+    pub brains: Vec<BrainMemory>,
+    /// Task force bookkeeping.
+    pub task_forces: crate::taskforce::TaskForceMemory,
+    /// Strategic layer.
+    pub strategy: crate::strategy::StrategyMemory,
+}
+
+impl AiEngine {
+    /// Copies the long-lived state.
+    pub fn memory(&self) -> AiMemory {
+        AiMemory {
+            rng: self.rng,
+            next_plan: self.next_plan,
+            strategy_at: (!self.strategy_at.is_nan()).then_some(self.strategy_at),
+            brains: self
+                .brains
+                .iter()
+                .map(|b| {
+                    let mut fractions: Vec<(String, f64)> = b.fractions.iter().map(|(k, v)| (k.clone(), *v)).collect();
+                    fractions.sort_by(|a, b| a.0.cmp(&b.0));
+                    BrainMemory {
+                        player: b.player,
+                        next_eval: b.next_eval,
+                        goal_next: b.goal_next.clone(),
+                        bonuses: b.bonuses.clone(),
+                        last_fund: b.last_fund,
+                        next_tech: b.next_tech,
+                        fractions,
+                        failures: b.failures.iter().map(|o| (o.goal.clone(), o.target, o.time, o.cooldown, o.failed)).collect(),
+                    }
+                })
+                .collect(),
+            task_forces: self.task_forces.snapshot(),
+            strategy: self.strategy.snapshot(),
+        }
+    }
+
+    /// Puts the memory into an engine set up like the saved one (same players); plans in flight are dropped. Returns warnings.
+    pub fn restore_memory(&mut self, m: &AiMemory) -> Vec<String> {
+        let mut warnings = Vec::new();
+        self.rng = m.rng;
+        self.next_plan = m.next_plan;
+        self.strategy_at = m.strategy_at.unwrap_or(f64::NAN);
+        for bm in &m.brains {
+            let Some(b) = self.brains.iter_mut().find(|b| b.player == bm.player) else {
+                warnings.push(format!("AI player {} of the save is not in this game", bm.player));
+                continue;
+            };
+            b.next_eval = bm.next_eval;
+            b.goal_next = bm.goal_next.clone();
+            b.bonuses = bm.bonuses.clone();
+            b.last_fund = bm.last_fund;
+            b.next_tech = bm.next_tech;
+            b.fractions = bm.fractions.iter().cloned().collect();
+            b.failures = bm.failures.iter().map(|(g, t, time, cooldown, failed)| Outcome { goal: g.clone(), target: *t, time: *time, cooldown: *cooldown, failed: *failed }).collect();
+            b.active.clear();
+        }
+        self.task_forces.restore(&m.task_forces);
+        self.strategy.restore(&m.strategy);
+        self.expired.clear();
+        warnings
+    }
+}

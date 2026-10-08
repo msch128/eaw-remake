@@ -12,3 +12,4 @@ battle-sim = { path = "../battle-sim" }
 
 [dev-dependencies]
 alamo-fs = { path = "../alamo-fs" }
+serde_json = { version = "1", features = ["float_roundtrip"] }

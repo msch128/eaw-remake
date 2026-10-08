@@ -414,3 +414,40 @@ impl Strategy {
         self.total.get(p as usize).copied().unwrap_or(0.0)
     }
 }
+
+/// What the strategic layer remembers between turns (the rest is recomputed from the world every few seconds).
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct StrategyMemory {
+    /// Last seen hostile strength per player and planet (`-1` = never seen; JSON has no NaN).
+    pub memory: Vec<Vec<f64>>,
+    /// Prior belief per planet.
+    pub prior: Vec<f64>,
+    /// Phase per player (1 = consolidate).
+    pub phase: Vec<u8>,
+    /// Consolidation lasts until this game time.
+    pub losing_until: Vec<f64>,
+    /// Planets owned at the last check: `(time, count)`.
+    pub owned_prev: Vec<(f64, u32)>,
+}
+
+impl Strategy {
+    /// Copies the memory.
+    pub fn snapshot(&self) -> StrategyMemory {
+        StrategyMemory {
+            memory: self.memory.iter().map(|row| row.iter().map(|&v| if v.is_nan() { -1.0 } else { v }).collect()).collect(),
+            prior: self.prior.clone(),
+            phase: self.phase.iter().map(|p| u8::from(*p == Phase::Consolidate)).collect(),
+            losing_until: self.losing_until.clone(),
+            owned_prev: self.owned_prev.clone(),
+        }
+    }
+
+    /// Puts the memory back; the influence maps are rebuilt by the next refresh.
+    pub fn restore(&mut self, m: &StrategyMemory) {
+        self.memory = m.memory.iter().map(|row| row.iter().map(|&v| if v < 0.0 { f64::NAN } else { v }).collect()).collect();
+        self.prior = m.prior.clone();
+        self.phase = m.phase.iter().map(|&p| if p == 1 { Phase::Consolidate } else { Phase::Expand }).collect();
+        self.losing_until = m.losing_until.clone();
+        self.owned_prev = m.owned_prev.clone();
+    }
+}

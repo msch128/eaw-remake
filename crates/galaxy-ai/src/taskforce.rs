@@ -1164,3 +1164,41 @@ fn job_tf(j: &Job) -> u64 {
         Job::Move { tf, .. } | Job::Invade { tf, .. } | Job::Rally { tf, .. } => *tf,
     }
 }
+
+/// The long-lived part of the task force bookkeeping: money earmarked per goal category, force sizing and fleets reserved for a target.
+/// Forces, jobs and their command blocks belong to plan scripts, which are not saved (a loaded game starts with none).
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct TaskForceMemory {
+    /// Money per `(player, category)`.
+    pub accounts: Vec<(PlayerId, String, f64)>,
+    /// Sizing factor per player.
+    pub sizing: Vec<(PlayerId, f64)>,
+    /// `(fleet, target planet, reserved until)`.
+    pub reserved: Vec<(FleetId, PlanetId, f64)>,
+    /// Task force clock.
+    pub clock: f64,
+}
+
+impl TaskForces {
+    /// Copies the long-lived bookkeeping.
+    pub fn snapshot(&self) -> TaskForceMemory {
+        let mut m = TaskForceMemory {
+            accounts: self.accounts.iter().map(|((p, c), v)| (*p, c.clone(), *v)).collect(),
+            sizing: self.sizing.iter().map(|(p, v)| (*p, *v)).collect(),
+            reserved: self.reserved.iter().map(|(f, (p, t))| (*f, *p, *t)).collect(),
+            clock: self.clock,
+        };
+        m.accounts.sort_by(|a, b| (a.0, &a.1).cmp(&(b.0, &b.1)));
+        m.sizing.sort_by_key(|x| x.0);
+        m.reserved.sort_by_key(|x| x.0);
+        m
+    }
+
+    /// Puts the bookkeeping back into a task force set without forces.
+    pub fn restore(&mut self, m: &TaskForceMemory) {
+        self.accounts = m.accounts.iter().map(|(p, c, v)| ((*p, c.clone()), *v)).collect();
+        self.sizing = m.sizing.iter().copied().collect();
+        self.reserved = m.reserved.iter().map(|&(f, p, t)| (f, (p, t))).collect();
+        self.clock = m.clock;
+    }
+}

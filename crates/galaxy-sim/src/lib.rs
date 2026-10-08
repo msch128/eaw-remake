@@ -23,7 +23,7 @@ pub mod tactical;
 pub mod state;
 pub mod world;
 
-pub use sim::{AutoPreview, Sim};
+pub use sim::{AutoPreview, Sim, SimSnapshot};
 pub use state::{
     Command, CommandError, CommandOk, Event, FactionState, FactionStats, ShipId, Fleet, FleetLocation, Galaxy, Lane, PendingBattle, PlanetState,
     ProductionItem, ProductionKind, Difficulty,

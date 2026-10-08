@@ -119,6 +119,7 @@ dependencies = [
  "alamo-data",
  "alamo-fs",
  "mlua",
+ "serde",
 ]
 
 [[package]]
@@ -2581,6 +2582,7 @@ dependencies = [
  "alamo-fs",
  "battle-sim",
  "serde",
+ "serde_json",
 ]
 
 [[package]]
