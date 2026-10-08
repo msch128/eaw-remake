@@ -77,7 +77,7 @@ the pause menu (same galaxy only). Saves live in `%APPDATA%\SpacePeace\saves\slo
 loading a long game takes a while (a progress bar shows the week reached).
 
 Options (title screen or pause menu): window mode, resolution, vsync, FPS limit, UI scale, volumes, edge scrolling, camera
-speed, graphics quality preset (anti-aliasing, bloom, shadows, particle density; also individually). Settings are saved.
+speed, anti-aliasing, bloom, shadows, and a graphics quality preset (which also sets particle density). Settings are saved.
 
 ## What to try
 
