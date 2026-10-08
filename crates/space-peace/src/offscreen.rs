@@ -138,7 +138,7 @@ fn drive(
     if frame == st.warmup {
         st.started = Some(now);
     }
-    if frame > st.warmup && !st.capture_requested {
+    if frame > st.warmup && !st.capture_requested && hold.settled() && screen == AppScreen::Galaxy {
         st.frame_ms.push(dt);
         for (path, d) in diagnostics.iter().map(|d| (d.path().to_string(), d)) {
             if path.ends_with("elapsed_gpu")
@@ -157,7 +157,7 @@ fn drive(
     } else {
         st.ready_at.is_some_and(|t| now.duration_since(t).as_secs_f32() > 3.0) && hold.settled()
     };
-    if frame >= st.frames && settled && !st.capture_requested {
+    if frame >= st.frames && st.frame_ms.len() as u32 >= st.frames / 2 && settled && !st.capture_requested {
         st.capture_requested = true;
         st.capture_time = Some(now);
         let path = st.path.clone();
