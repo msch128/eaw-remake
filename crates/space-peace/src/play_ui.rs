@@ -1687,11 +1687,11 @@ fn spawn_planet_panel(mut commands: Commands, existing: Query<(), With<PlanetPan
                 r.spawn((Text::new(""), font(12.0), TextColor(Color::srgb(0.3, 1.0, 0.4)), PlanetPanelText::Income));
             });
             p.spawn((Text::new(""), font(9.5), TextColor(Color::srgb(0.93, 0.96, 0.98)), PlanetPanelText::Body));
-            for row in 0..2 {
+            for (row, pip) in pips.iter().enumerate() {
                 p.spawn(Node { column_gap: Val::Px(4.0), margin: UiRect::top(Val::Px(8.0)), ..default() }).with_children(|r| {
                     for index in 0..8 {
                         r.spawn((
-                            ImageNode::new(pips[row].clone()).with_color(Color::srgb(0.75, 0.9, 1.0)),
+                            ImageNode::new(pip.clone()).with_color(Color::srgb(0.75, 0.9, 1.0)),
                             Node { width: Val::Px(14.0), height: Val::Px(14.0), display: Display::None, ..default() },
                             PanelPip { row, index },
                         ));
@@ -1726,6 +1726,7 @@ fn spawn_planet_panel(mut commands: Commands, existing: Query<(), With<PlanetPan
 
 #[allow(clippy::too_many_arguments)]
 fn update_planet_panel(
+    pv: Res<crate::planet_view::PlanetViewState>,
     selection: Res<PlayerSelection>,
     bridge: Res<PlayBridge>,
     view: Res<crate::galaxy_view::GalaxyView>,
@@ -1736,7 +1737,8 @@ fn update_planet_panel(
     mut emblem: Single<&mut ImageNode, With<PanelEmblem>>,
     mut pips: Query<(&PanelPip, &mut Node)>,
 ) {
-    let planet = selection.planet.and_then(|p| bridge.sim_to_planet.get(p as usize).copied().flatten()).and_then(|i| view.planets.get(i));
+    // In the planet view the viewed planet counts even when only a fleet is selected.
+    let planet = if pv.active { pv.planet } else { selection.planet.and_then(|p| bridge.sim_to_planet.get(p as usize).copied().flatten()) }.and_then(|i| view.planets.get(i));
     let Some(p) = planet.filter(|p| !p.info.is_empty()) else {
         panel.set_if_neq(Visibility::Hidden);
         return;
