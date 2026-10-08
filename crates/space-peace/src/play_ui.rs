@@ -1592,6 +1592,20 @@ fn relation_color(state: &SimState, me: Option<u32>, owner: Option<u32>) -> Colo
     }
 }
 
+
+/// The UI is designed for 1366x768 and scales with the screen height, but never wider than the screen
+/// allows: on 16:10 or 4:3 screens the width decides, so the bar and its build pads stay on screen.
+pub(crate) fn design_scale(window: Option<Vec2>, offscreen: Option<&OffscreenTarget>) -> f32 {
+    let size = match (window, offscreen) {
+        (Some(s), _) => s,
+        (None, Some(t)) => {
+            let (w, h) = crate::offscreen::size();
+            Vec2::new(w as f32, h as f32) / t.scale_factor
+        }
+        _ => Vec2::new(1366.0, 768.0),
+    };
+    (size.y / 768.0).min(size.x / 1366.0)
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1611,18 +1625,4 @@ mod tests {
         assert_eq!(capitalize("requires tech"), "Requires tech");
         assert_eq!(capitalize(""), "");
     }
-}
-
-/// The UI is designed for 1366x768 and scales with the screen height, but never wider than the screen
-/// allows: on 16:10 or 4:3 screens the width decides, so the bar and its build pads stay on screen.
-pub(crate) fn design_scale(window: Option<Vec2>, offscreen: Option<&OffscreenTarget>) -> f32 {
-    let size = match (window, offscreen) {
-        (Some(s), _) => s,
-        (None, Some(t)) => {
-            let (w, h) = crate::offscreen::size();
-            Vec2::new(w as f32, h as f32) / t.scale_factor
-        }
-        _ => Vec2::new(1366.0, 768.0),
-    };
-    (size.y / 768.0).min(size.x / 1366.0)
 }
