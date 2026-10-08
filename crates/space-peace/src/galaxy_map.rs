@@ -45,7 +45,7 @@ impl Plugin for GalaxyMapPlugin {
             .insert_resource(ClearColor(Color::BLACK))
             .insert_resource(GlobalAmbientLight {
                 color: Color::srgb(0.55, 0.62, 0.85),
-                brightness: 6.0,
+                brightness: 2.0,
                 ..default()
             })
             .add_systems(Update, update_pip_colors.run_if(in_state(AppScreen::Galaxy)))
@@ -607,7 +607,7 @@ fn update_labels(
     };
     // Labels grow when zoomed in and shrink when zoomed out (whole pixel steps only).
     let zoom_out = zoom_fraction(&bounds, orbit.distance);
-    let font_px = (15.0 + (9.0 - 15.0) * smoothstep(0.0, 0.7, zoom_out)).round();
+    let font_px = (21.0 + (9.0 - 21.0) * smoothstep(0.0, 0.7, zoom_out)).round();
     // UI coordinates are multiplied by the UI scale; the layout below works in viewport pixels.
     let us = ui_scale.0.max(0.1);
     let font_node_px = (font_px / us).round().max(1.0);
@@ -723,7 +723,7 @@ fn update_labels(
     }
 
     // Structure slot pips: ground row, then space row, centred under the name.
-    let pip_h = (font_px * 0.72).round().max(5.0);
+    let pip_h = (font_px * 0.95).round().max(6.0);
     let pip_w = pip_h;
     if (*last_font - font_px).abs() > 0.1 {
         *last_font = font_px;
@@ -803,7 +803,7 @@ fn draw_rings(
 }
 
 /// Radius of the notched selection ring in planet radii (about 10 in the reference).
-const NOTCH_RADIUS: f32 = 2.9;
+const NOTCH_RADIUS: f32 = 5.5;
 const NOTCH_SEGMENTS: usize = 360;
 
 /// Outer contour of the notched ring in units of the inner radius.

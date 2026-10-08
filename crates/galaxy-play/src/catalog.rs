@@ -37,9 +37,9 @@ pub struct PlayCatalog {
 pub enum FleetModelStyle {
     /// The game's own look: one generic fleet model (`w_planet_fleet.alo`), tinted in the owner's
     /// color, except fleets with a unit that overrides it (Death Star).
-    #[default]
     Generic,
-    /// The tactical model of the fleet's strongest ship, shrunk to icon size.
+    /// The tactical model of the fleet's strongest ship, shrunk to icon size (the default: an ISD reads as an ISD).
+    #[default]
     Flagship,
 }
 

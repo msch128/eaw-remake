@@ -221,6 +221,7 @@ fn main() {
             v.sort_by(|a, b| b.1.cmp(&a.1));
             println!("{name} plans (goal, started, ok, failed): {:?}", v.iter().take(80).collect::<Vec<_>>());
         }
+        println!("goals without a plan script: {:?}", st.goals_without_plan);
         println!("task forces: {:?}", st.taskforces);
     }
     if let Some(mem) = sim.ai_memory() {

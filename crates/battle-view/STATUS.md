@@ -171,3 +171,19 @@ Add `battle-view`, `galaxy-sim` (already there through galaxy-play) and `eaw-ui`
   `MouseButtonInput` and the window's cursor position before Bevy's input systems, so it exercises the real pipeline (`ButtonInput`, `ui_focus_system`, `read_pointer`):
   select ship, right-click order, plain `Button` control experiment, a command bar button click, bar area keeps the selection, empty click deselects. One line
   `input-test: N checks PASS|FAIL`; smoke scenario `windowed-battle-input`. Failures print the nodes under the cursor.
+
+## Tactical round 2 (2026-10-08, tactical agent)
+- **Overlays:** one bracket + bar pair per unit (a squadron is one unit: `ShipSnap::squad`), only for selected/hovered units (no always-on lines); shield bar sits above the hull bar.
+  Hardpoint reticles with health on the hovered ship, the selected enemy or a lone selected ship (clickable only on enemies with own ships selected).
+  Everything battle-scoped is cleared on exit (`remove_bar` empties `TacticalOverlays`, the HUD, fog, armed order, battle cam, selection, pause) and `check_teardown`
+  logs an ERROR (smoke fails) if tactical UI entities are left 8 frames later. All despawns in this area are `try_despawn`.
+- **Buttons (real input, covered by `input_test`):** `b_play_pause_t` pause, `b_fast_forward_t` 1x/2x, `b_camera_t` battle cam (C: follows the selected unit or the fleet, circles it;
+  tooltip rewritten because `TEXT_MOVIE_MODE` reads `BATTLECAM "!`), `c_button00..02` arm Attack / Attack-move / Move for the next left click (right click or Esc cancels),
+  `c_button04` stop, `c_button05` guard (stop + defensive stance), `b_droid_help_tactical` next hint, `b_story_arc_t` hides/shows the objectives. Waypoint mode (`c_button03`) acts as Move.
+- **Right click on an enemy = attack:** also on the outer part of big models (ground point within 1.3 x radius of an enemy footprint; picking radius is the full bounding sphere).
+- **Fog of war:** `ShipSnap::seen_by` (from `Battle::is_visible_to`) -> `ShipRender::visible`; unseen enemies are hidden, not pickable, not on the minimap; the minimap is dark outside the
+  sensor discs (`Space_FOW_Reveal_Range`) of own ships (`eaw_ui::MinimapFog`).
+- **Reinforcements:** a click on a reserve slot arms placement; the cursor shows a ring (green/red + reason, rule = `Battle::reinforcement_zone_check` evaluated on the snapshot with
+  `BattleConfig::reinforce_zone`), a left click sends `Command::ReinforceAt` (Shift = whole stack). Scripted offscreen runs (`synthetic_pointer`) place automatically.
+  Targeted abilities (`reveal_radius > 0`, FOW_REVEAL_PING) arm a target click -> `UseAbilityAt`. Unit tooltip (name, hull, shield) after 0.35 s of hovering.
+- Not done: ability hotkeys (the data has none; digits are control groups), autocast toggles, unit description text in the tooltip (key not found yet), waypoint paths.
