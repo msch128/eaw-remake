@@ -944,7 +944,6 @@ impl TaskForces {
         let mut free = if allow_free { self.free_ships(sim, player, self.forces.get(&j.tf).and_then(|t| t.target)) } else { HashMap::new() };
         let dist = hop_distances(snap, j.stage);
         let safe = safe_from(snap, player, j.stage);
-        let producible: HashSet<String> = sim.buildable_units(player).into_iter().map(|n| n.to_ascii_lowercase()).collect();
         for unit in std::mem::take(&mut j.wanted) {
             let key = unit.to_ascii_lowercase();
             let mut best: Option<(PlanetId, FleetId, u32)> = None;
@@ -964,18 +963,12 @@ impl TaskForces {
                 }
                 continue;
             }
-            // A ship the player cannot build at all (it came from a captured planet or an event and is gone now) is not replaced; the plan
-            // goes on with the rest of its force instead of failing on a unit no planet will ever accept.
-            if !producible.contains(&key) {
-                continue;
-            }
             // Queue it at the nearest planet that accepts it.
             let mut planets: Vec<PlanetId> = snap.owned[player as usize].clone();
             planets.retain(|&p| safe[p as usize]);
             planets.sort_by_key(|&p| dist[p as usize]);
             let mut queued = false;
             let mut no_credits = false;
-            let mut busy = false;
             let unit_cost = sim.unit_info(&unit).map_or(0.0, |u| u.cost);
             let affordable = self.allowance(player, plan).is_none_or(|a| a >= unit_cost);
             if !affordable {
@@ -1002,12 +995,11 @@ impl TaskForces {
                         break;
                     }
                     Err(Refused::Unavailable) => {}
-                    Err(Refused::Busy) => busy = true,
                     Err(Refused::Invalid) => break,
                 }
             }
             if !queued {
-                if no_credits || busy {
+                if no_credits {
                     remaining.push(unit);
                 } else {
                     let n = j.refused.entry(key).or_default();

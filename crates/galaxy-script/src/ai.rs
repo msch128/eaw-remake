@@ -31,7 +31,6 @@ fn refuse(e: CommandError) -> Refused {
     match e {
         CommandError::InsufficientCredits => Refused::NoCredits,
         CommandError::Invalid => Refused::Invalid,
-        CommandError::NoSlot | CommandError::PopulationCap => Refused::Busy,
         _ => Refused::Unavailable,
     }
 }
