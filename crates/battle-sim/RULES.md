@@ -93,7 +93,7 @@ Not implemented: stealth, sensor jamming, and every other ability type.
 * Retreat becomes available after `Space_Retreat_Allowed_Countdown_Seconds` (60 s). Retreating ships fly away from the centre and
   leave the battle area; they count as survivors. `Space_Retreat_Attrition_Factor` is 0 in the data.
 * A side loses when it has no ship other than fighters/bombers left (a fighter-only side loses when its fighters are gone).
-  The loser's remaining fighters are destroyed with it. Battles are a draw after `max_time` (30 min).
+  The loser's remaining fighters are destroyed with it. Battles are a draw after `max_time` (60 min: the data has no battle time limit, this only guards headless runs). Mobile ships climb or sink towards their target's height at half top speed (flight is otherwise planar, and launch-bay or spawn height offsets used to keep ships out of weapon range for ever).
 * Arena: `BattleConfig::arena` (`Arena::load(data, fs, "<map>.ted")` via the `alamo-map` crate) gives the playable bounds,
   `Attacker Entry Position` markers (attackers, at -Y), `Defending Forces Position` markers (defenders, at +Y), the
   `Space Station Position` (star base), structure marker spots (`Shipyard N Marker`, `Golan All-in-One Marker`, ...) and asteroids

@@ -154,3 +154,9 @@ With 3 tactical seeds per scenario the comparison has a noise floor of about 0.2
 The statistical resolver does the same (`SimConfig::combat_waves`, default on): the first ships up to the cap fight, the rest arrive 2 rounds after room appears; uncalled reserve survives.
 On 40+ ship battles (60 scenarios, 8 tactical seeds each, not used for fitting) winner agreement went from 76 % (no waves) to 93 %, mean |attacker win share difference| 0.36 -> 0.19, bias -0.23 -> +0.02.
 `combat_escape` is now 0.2 (loser keeps about 0.2 of its ships in tactical). Left over: tactical battles of 40+ ships time out as draws in 15-25 % of the runs; the statistical resolver never draws.
+
+### Battle time limit
+The data has no time limit for space battles; `tactical_max_seconds` (3600, was 900) and `battle_sim` `max_time` (3600, was 1800) only guard headless runs. The "draws" of 40+ ship battles were a mixture of
+(a) real attrition wars of reserve waves (a capital ship against 150 population of defenders takes many minutes) and (b) a battle-sim bug: flight is planar, so height offsets of reinforcements (random +-800) and launch bays
+never closed and fighters circled a target 650 units above them out of weapon range for ever. Mobile ships now climb towards their target's height and reinforcements spawn in the battle plane.
+With the 3600 s guard none of 40 sampled big battles ends as a draw; the agreement on the 40+ bucket (8 tactical seeds, 45 battles) is 75 / 85 / 94 % by sample, mean |difference| 0.16, bias +0.08 (auto slightly favours the attacker); loser survival 0.12 both ways (`combat_escape` back to 0.12).

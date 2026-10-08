@@ -220,7 +220,48 @@ fn main() {
         for s in 0..if cached { 0 } else { tac_seeds } {
             let mut r = req.clone();
             r.seed = srng.next_u64() ^ s as u64;
-            let Some(res) = run_headless(&r, &catalog, None) else { continue };
+            let trace = std::env::var("TRACE").ok().and_then(|v| v.parse::<usize>().ok()) == Some(sc);
+            let mut last = -1000.0f32;
+            let mut observer = |b: &battle_sim::Battle| {
+                if !trace || b.time() - last < 60.0 {
+                    return;
+                }
+                last = b.time();
+                eprintln!("t={:.0}", b.time());
+                for side in 0..req.sides.len() as u8 {
+                    let mine: Vec<_> = b.ships.iter().filter(|s| s.side == side && s.alive && !s.retreated).collect();
+                    let foes: Vec<_> = b.ships.iter().filter(|s| s.side != side && s.alive && !s.retreated).collect();
+                    let mut idle = 0;
+                    let mut nearest = f32::MAX;
+                    let mut moving = 0;
+                    for s in &mine {
+                        let d = foes.iter().map(|f| f.pos.dist(s.pos)).fold(f32::MAX, f32::min);
+                        nearest = nearest.min(d);
+                        if matches!(s.order, battle_sim::Order::Idle) { idle += 1; }
+                        if s.speed > 1.0 { moving += 1; }
+                    }
+                    let orders: std::collections::BTreeMap<String, u32> = mine.iter().fold(Default::default(), |mut m, s| { *m.entry(format!("{:?}", s.order).split('(').next().unwrap_or("").to_string()).or_default() += 1; m });
+                    eprintln!("    orders {orders:?}");
+                    let names: std::collections::BTreeMap<String, u32> = mine.iter().fold(Default::default(), |mut m, s| { *m.entry(catalog.ship(s.def).name.clone()).or_default() += 1; m });
+                    if mine.len() <= 16 {
+                        for s in mine.iter().take(3) {
+                            eprintln!("    {} pos {:?} hull {:.0} shield {:.0} order {:?} target {} speed {:.0} hps alive {}/{}", catalog.ship(s.def).name, s.pos, s.hull, s.shield, s.order, s.target, s.speed, s.hps.iter().filter(|h| h.alive).count(), s.hps.len());
+                            if let Some(t) = b.ships.get(s.target as usize) {
+                                eprintln!("      target {} side {} pos {:?} alive {} order {:?} speed {:.0} dist {:.0}", catalog.ship(t.def).name, t.side, t.pos, t.alive, t.order, t.speed, t.pos.dist(s.pos));
+                            }
+                        }
+                    }
+                    eprintln!("  side {side}: {} alive ({idle} idle, {moving} moving), nearest foe {nearest:.0}, pop {} {:?}", mine.len(), b.pop_in_play(side), names);
+                }
+            };
+            let Some(res) = galaxy_sim::tactical::run_headless_observed(&r, &catalog, None, &mut observer) else { continue };
+            if res.winner.is_none() && std::env::var("DRAWS").is_ok() {
+                eprintln!("DRAW sc {sc} after {:.0}s", res.duration);
+                for (si, side) in req.sides.iter().enumerate() {
+                    let left: Vec<String> = side.groups.iter().zip(&res.survived[si]).filter(|(_, n)| **n > 0).map(|(g, n)| format!("{n}/{} {}", g.count, g.name)).collect();
+                    eprintln!("   side {si} ({}): {} reserve groups {:?}", side.faction_name, left.join(", "), res.reserve_called[si]);
+                }
+            }
             tac.att_win += match res.winner {
                 Some(x) if x == sa => 1.0,
                 Some(_) => 0.0,

@@ -778,7 +778,8 @@ impl Battle {
             let mut ids = Vec::new();
             for k in 0..r.count {
                 let mut rng = Rng::for_entity(self.config.seed, self.tick, k, 0x7E1F + r.ship as u64);
-                let pos = origin + rng.in_ball() * 800.0;
+                let mut pos = origin + rng.in_ball() * 800.0;
+                pos.z = origin.z;
                 // Reinforcements are results groups too (tag `REINFORCE_TAG`), so the galaxy learns which of them survived.
                 let group = self.groups.len() as u32;
                 self.groups.push(Group { side: r.side, tag: REINFORCE_TAG, ship: r.ship, members: Vec::new() });
@@ -1456,6 +1457,13 @@ fn mov(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, spawn: &
     s.speed = s.speed.clamp(0.0, max_speed.max(0.0));
     let fwd = Vec3::from_yaw(s.yaw);
     s.pos += fwd * (s.speed * dt);
+    // Flight is planar (yaw only), so height differences from launch bays and spawn points would never close and ships could circle a target
+    // out of weapon range for ever: mobile ships climb or sink towards their target's height (or the battle plane) at half their top speed.
+    if !def.is_static {
+        let z_goal = target.map_or(0.0, |t| t.pos.z);
+        let step = def.max_speed * 0.5 * dt;
+        s.pos.z += (z_goal - s.pos.z).clamp(-step, step);
+    }
     // Separation: mobile big ships do not sit on top of each other (each pair is resolved by both, half each; estimate 0.85 of the radii).
     if !fighter {
         let me = snaps[s.id as usize];

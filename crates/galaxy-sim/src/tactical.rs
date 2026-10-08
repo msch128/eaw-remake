@@ -416,6 +416,11 @@ impl TacticalRequest {
 /// Plays the battle of `request` to the end without rendering (all sides AI controlled). Returns `None` if a
 /// unit has no definition in `catalog`.
 pub fn run_headless(request: &TacticalRequest, catalog: &Arc<Catalog>, arena: Option<Arc<Arena>>) -> Option<TacticalResult> {
+    run_headless_observed(request, catalog, arena, &mut |_| {})
+}
+
+/// [`run_headless`] that shows the running battle to `observer` every 10 battle seconds (diagnostics).
+pub fn run_headless_observed(request: &TacticalRequest, catalog: &Arc<Catalog>, arena: Option<Arc<Arena>>, observer: &mut dyn FnMut(&Battle)) -> Option<TacticalResult> {
     let config = BattleConfig { record_events: false, ..request.battle_config(arena) };
     let (max_steps, cap) = ((request.max_seconds / config.dt) as u64 + 1, config.unit_cap);
     let check_every = (1.0 / config.dt).round().max(1.0) as u64;
@@ -426,6 +431,9 @@ pub fn run_headless(request: &TacticalRequest, catalog: &Arc<Catalog>, arena: Op
     while !battle.is_over() && steps < max_steps {
         battle.step();
         steps += 1;
+        if steps % (check_every * 10) == 0 {
+            observer(&battle);
+        }
         if steps % check_every != 0 {
             continue;
         }

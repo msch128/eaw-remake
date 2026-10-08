@@ -62,7 +62,7 @@ impl Default for BattleConfig {
             half_size: 10_000.0,
             seed: 1,
             record_events: true,
-            max_time: 1800.0,
+            max_time: 3600.0,
             retreat_countdown: 60.0,
             retarget_interval: 0.4,
             unit_cap: 150,
