@@ -864,3 +864,25 @@ fn squadrons_leave_through_a_working_hangar_and_nothing_launches_without_one() {
     assert_eq!(b.ships.iter().filter(|s| s.def == 0 && s.alive).count(), 0, "no hangar, no launch");
     assert_eq!(b.ships[c as usize].reserve.iter().map(|r| r.1).sum::<u32>(), 2);
 }
+
+#[test]
+fn corrupt_systems_drains_the_shield_of_the_chosen_ship() {
+    let mut caster = ship("caster", 1.0e6, 0.0, vec![]);
+    caster.abilities.push(AbilityDef { corrupt: Some(CorruptDef { max_range: 50000.0, duration: 10.0, drain: 100.0, pick_radius: 200.0 }), duration: 10.0, recharge: 120.0, speed_mult: 1.0, shield_regen_mult: 1.0, weapon_delay_mult: 1.0, take_damage_mult: 1.0, kind: "CORRUPT_SYSTEMS".into(), ..Default::default() });
+    let victim = ship("victim", 1.0e6, 5000.0, vec![]);
+    let cat = Catalog::from_defs(vec![caster, victim], vec![laser()]);
+    let mut b = Battle::new(setup(cat, "caster", "victim", 1, 1, cfg()));
+    let (c, v) = (b.ships.iter().find(|s| s.side == 0).unwrap().id, b.ships.iter().find(|s| s.side == 1).unwrap().id);
+    assert!(b.command(0, Command::UseAbilityAt { ship: c, ability: 0, pos: Vec3::new(0.0, 1.0e6, 0.0) }).is_err(), "no ship there");
+    let at = b.ships[v as usize].pos;
+    b.command(0, Command::UseAbilityAt { ship: c, ability: 0, pos: at }).unwrap();
+    for _ in 0..30 * 5 {
+        b.step();
+    }
+    let s = b.ships[v as usize].shield;
+    assert!((5000.0 - s - 500.0).abs() < 80.0, "100 per second for 5 s: {s}");
+    for _ in 0..30 * 30 {
+        b.step();
+    }
+    assert!(b.ships[v as usize].shield > 3500.0, "the drain ended after 10 s and the shield starts to come back: {}", b.ships[v as usize].shield);
+}

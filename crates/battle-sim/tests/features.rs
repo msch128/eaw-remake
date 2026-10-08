@@ -245,3 +245,12 @@ fn the_star_destroyer_at_the_start_tech_brings_exactly_its_tech_0_wing() {
     let ven = cat.ship(cat.ship_id("Venator_Empire").unwrap());
     assert_eq!(ven.spawned_by_tech.iter().map(|t| t.0).collect::<Vec<_>>(), vec![1, 2]);
 }
+
+#[test]
+fn corrupt_systems_is_read_from_the_corellian_destroyer() {
+    let Some((data, fs)) = load() else { return };
+    let cat = Catalog::build(&data, Some(&fs), &["Corellian_Destroyer"]);
+    let chg = cat.ship(cat.ship_id("Corellian_Destroyer").expect("chg"));
+    let c = chg.abilities.iter().find_map(|a| a.corrupt.as_ref()).expect("corrupt systems");
+    assert!((c.drain - 100.0).abs() < 1e-3 && (c.duration - 30.0).abs() < 1e-3 && (c.max_range - 1000.0).abs() < 1e-3, "{c:?}");
+}

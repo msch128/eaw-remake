@@ -187,6 +187,7 @@ impl Battle {
             reveals: Vec::new(),
             zones: Vec::new(),
             lasers: Vec::new(),
+            drains: Vec::new(),
             nav_grid: None,
             search: vec![(0, 0.0); sides.len()],
             sides,
@@ -694,8 +695,27 @@ impl Battle {
                         return Err(CommandError::AbilityUnavailable);
                     }
                 }
+                // Corrupt systems: the enemy ship nearest to the chosen point, within the caster's range.
+                let corrupt = self.catalog.ship(self.ships[ship as usize].def).abilities.get(ability as usize).and_then(|a| a.corrupt.clone());
+                let mut drained = None;
+                if let Some(c) = &corrupt {
+                    let cat = self.catalog.clone();
+                    let from = self.ships[ship as usize].pos;
+                    drained = self
+                        .ships
+                        .iter()
+                        .filter(|o| o.alive && !o.retreated && o.side != side && o.pos.dist(from) <= c.max_range && o.pos.dist(pos) <= c.pick_radius + cat.ship(o.def).radius && cat.ship(o.def).shield > 0.0)
+                        .min_by(|a, b| a.pos.dist(pos).total_cmp(&b.pos.dist(pos)).then(a.id.cmp(&b.id)))
+                        .map(|o| o.id);
+                    if drained.is_none() {
+                        return Err(CommandError::AbilityUnavailable);
+                    }
+                }
                 if !self.activate_ability(ship, ability as usize) {
                     return Err(CommandError::AbilityUnavailable);
+                }
+                if let (Some(c), Some(t)) = (&corrupt, drained) {
+                    self.drains.push((t, c.drain, self.time + c.duration));
                 }
                 if let (Some(l), Some(t)) = (&laser, shot) {
                     self.lasers.push((ship, t, self.time + l.delay));
@@ -1477,6 +1497,7 @@ impl Battle {
         self.run_healing(dt);
         self.run_zones(dt);
         self.run_lasers();
+        self.run_drains(dt);
         if self.tick.is_multiple_of(30) {
             self.run_bonuses();
         }
@@ -1528,6 +1549,16 @@ impl Battle {
                         {
                             uses.push((side, s.id, k, Some(self.ships[e as usize].pos)));
                         }
+                    } else if let Some(c) = &a.corrupt {
+                        // The enemy with the most shield left inside the range.
+                        let target = enemies
+                            .iter()
+                            .copied()
+                            .filter(|&e| s.pos.dist(self.ships[e as usize].pos) <= c.max_range * 0.9 && self.ships[e as usize].shield > 0.0)
+                            .max_by(|&x, &y| self.ships[x as usize].shield.total_cmp(&self.ships[y as usize].shield).then(y.cmp(&x)));
+                        if let Some(e) = target {
+                            uses.push((side, s.id, k, Some(self.ships[e as usize].pos)));
+                        }
                     } else if let Some(l) = &a.super_laser {
                         let target = enemies
                             .iter()
@@ -1550,6 +1581,22 @@ impl Battle {
                 Some(pos) => self.command(side, Command::UseAbilityAt { ship, ability, pos }),
                 None => self.command(side, Command::UseAbility { ship, ability }),
             };
+        }
+    }
+
+    /// `CORRUPT_SYSTEMS`: the shield of a corrupted ship drains until the effect ends (a depleted shield stays down for the usual time).
+    fn run_drains(&mut self, dt: f32) {
+        let now = self.time;
+        self.drains.retain(|d| d.2 > now);
+        let shield_lock = self.catalog.depleted_shield_disable;
+        for &(t, rate, _) in &self.drains {
+            let s = &mut self.ships[t as usize];
+            if s.alive && s.shield > 0.0 {
+                s.shield = (s.shield - rate * dt).max(0.0);
+                if s.shield <= 0.0 {
+                    s.shield_lock = shield_lock;
+                }
+            }
         }
     }
 

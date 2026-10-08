@@ -10,6 +10,7 @@ Counts are `Unit_Ability` entries in `Units/Space/*.xml`, `SPACEUNITS*.XML`, `NA
 | `TRACTOR_BEAM` | 10 | slow the target, range and categories from `Tractor_Beam_Attack_Ability` |
 | `MISSILE_SHIELD`, `INTERDICT` | 1, 5 | toggles (destroy missiles in radius; block enemy retreat, pin the ship) |
 | `STEALTH` + `Stealth_Ability` | 17 + 10 | toggle (or timed); hidden from enemies unless within `BattleConfig::stealth_detection` (500, estimate) |
+| `CORRUPT_SYSTEMS` (Corellian Destroyer of the Rebels, IG-88 of the Underworld) | 2 | `Corrupt_Systems_Ability`: `Activation_Max_Range`, `Duration_In_Seconds`, `Shield_Drain_Per_Second`, `Inaccuracy_Radius` | `Command::UseAbilityAt` at an enemy ship with a shield, inside the range and the pick radius of the chosen point: its shield drains by the rate for the duration (a drained shield stays down the usual 4 s). The AI uses it on the enemy with the most shield in range |
 | `FOW_REVEAL_PING` | 10 | `Command::UseAbility[At]`: shows `Effective_Radius` around the ship or the chosen point for 5 s (estimate) |
 | `LASER_DEFENSE` + `Laser_Defense_Ability` | 18 + 19 | like the missile shield for `Defense_Duration_In_Secs` (30) in `Effective_Radius` (750), ship keeps moving |
 | `Force_Healing_Ability` (`Space_Automatic`) | 64 | `HealDef`: hull `Heal_Amount` + `Heal_Percent` of max per `Heal_Interval_In_Secs`, on the ship or on friends in `Heal_Range` (single target = most damaged) |

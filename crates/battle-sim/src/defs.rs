@@ -200,6 +200,8 @@ pub struct AbilityDef {
     pub supports_autofire: bool,
     /// `Active_By_Default`: automatic use starts on.
     pub autocast_default: bool,
+    /// `CORRUPT_SYSTEMS`: aimed with `Command::UseAbilityAt` at an enemy ship within `max_range`; its shield drains for the duration.
+    pub corrupt: Option<CorruptDef>,
     /// `SENSOR_JAMMING` (flares): while active, enemy homing missiles aimed at this ship lose their lock and fly straight on.
     pub jam: bool,
     /// `SUPER_LASER`: aimed with `Command::UseAbilityAt`; the chosen ship is destroyed outright after the charge time (estimate: the data
@@ -329,6 +331,19 @@ pub struct CombatMod {
     pub duration: f32,
     /// Bit mask of affected classes (`Projectile_Combat_Mod_Category_Mask`; 0 = any).
     pub classes: u16,
+}
+
+/// `CORRUPT_SYSTEMS` (IG-88 and the CHG): drains the shields of one enemy ship for a while.
+#[derive(Debug, Clone, Default)]
+pub struct CorruptDef {
+    /// `Activation_Max_Range` from the caster.
+    pub max_range: f32,
+    /// `Duration_In_Seconds`.
+    pub duration: f32,
+    /// `Shield_Drain_Per_Second`.
+    pub drain: f32,
+    /// `Inaccuracy_Radius`: how far from the target ship the chosen point may be.
+    pub pick_radius: f32,
 }
 
 /// Parameters of a tractor beam ability.
@@ -1412,7 +1427,7 @@ fn ability_defs(u: &SpaceUnitDef) -> Vec<AbilityDef> {
         .iter()
         .filter(|a| {
             a.expiration_seconds.unwrap_or(0.0) > 0.0
-                || ["FULL_SALVO", "TRACTOR_BEAM", "MISSILE_SHIELD", "INTERDICT", "STEALTH", "FOW_REVEAL_PING", "LASER_DEFENSE", "ROCKET_ATTACK", "SWAP_WEAPONS", "SENSOR_JAMMING", "BUZZ_DROIDS", "SUPER_LASER"].iter().any(|k| a.kind.eq_ignore_ascii_case(k))
+                || ["FULL_SALVO", "TRACTOR_BEAM", "MISSILE_SHIELD", "INTERDICT", "STEALTH", "FOW_REVEAL_PING", "LASER_DEFENSE", "ROCKET_ATTACK", "SWAP_WEAPONS", "SENSOR_JAMMING", "BUZZ_DROIDS", "SUPER_LASER", "CORRUPT_SYSTEMS"].iter().any(|k| a.kind.eq_ignore_ascii_case(k))
         })
         .map(|a| {
             let toggle = a.expiration_seconds.unwrap_or(0.0) <= 0.0 && ["MISSILE_SHIELD", "INTERDICT", "STEALTH"].iter().any(|k| a.kind.eq_ignore_ascii_case(k));
@@ -1431,7 +1446,7 @@ fn ability_defs(u: &SpaceUnitDef) -> Vec<AbilityDef> {
                 take_damage_mult: m("TAKE_DAMAGE_MULTIPLIER").unwrap_or(1.0),
                 recharge: a.recharge_seconds.unwrap_or(30.0),
                 // A reveal ping has no expiration in the data: it shows the area for 5 s (estimate).
-                duration: if toggle { f32::MAX / 4.0 } else if ping { a.expiration_seconds.filter(|&x| x > 0.0).unwrap_or(5.0) } else if let Some(secs) = defence_secs { secs } else { a.expiration_seconds.unwrap_or(12.0) },
+                duration: if toggle { f32::MAX / 4.0 } else if ping { a.expiration_seconds.filter(|&x| x > 0.0).unwrap_or(5.0) } else if let Some(secs) = defence_secs { secs } else if a.kind.eq_ignore_ascii_case("CORRUPT_SYSTEMS") { a.activated_ability.as_ref().and_then(|n| u.sub_abilities.iter().find(|s| s.name.eq_ignore_ascii_case(n))).and_then(|s| s.fields.get("duration_in_seconds")).and_then(|v| v.trim().parse().ok()).unwrap_or(30.0) } else { a.expiration_seconds.unwrap_or(12.0) },
                 stealth: a.kind.eq_ignore_ascii_case("STEALTH"),
                 reveal_radius: if ping { a.fields.get("effective_radius").and_then(|v| v.parse().ok()).unwrap_or(1000.0) } else { 0.0 },
                 interdict: a.kind.eq_ignore_ascii_case("INTERDICT"),
@@ -1439,6 +1454,11 @@ fn ability_defs(u: &SpaceUnitDef) -> Vec<AbilityDef> {
                 salvo: a.kind.eq_ignore_ascii_case("FULL_SALVO"),
                 supports_autofire: a.fields.get("supports_autofire").is_some_and(|v| alamo_data::xml::parse_bool(v)),
                 autocast_default: a.fields.get("active_by_default").is_some_and(|v| alamo_data::xml::parse_bool(v)),
+                corrupt: a.kind.eq_ignore_ascii_case("CORRUPT_SYSTEMS").then(|| {
+                    let sub = a.activated_ability.as_ref().and_then(|n| u.sub_abilities.iter().find(|s| s.name.eq_ignore_ascii_case(n)));
+                    let f = |k: &str, d: f32| sub.and_then(|s| s.fields.get(k)).and_then(|v| v.trim().parse::<f32>().ok()).unwrap_or(d);
+                    CorruptDef { max_range: f("activation_max_range", 1000.0), duration: f("duration_in_seconds", 30.0), drain: f("shield_drain_per_second", 100.0), pick_radius: f("inaccuracy_radius", 100.0) }
+                }),
                 jam: a.kind.eq_ignore_ascii_case("SENSOR_JAMMING"),
                 super_laser: a.kind.eq_ignore_ascii_case("SUPER_LASER").then(|| {
                     let sub = a.activated_ability.as_ref().and_then(|n| u.sub_abilities.iter().find(|s| s.name.eq_ignore_ascii_case(n)));

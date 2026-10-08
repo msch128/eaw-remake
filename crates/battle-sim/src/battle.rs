@@ -651,6 +651,8 @@ pub struct Battle {
     /// Damaging areas (`BUZZ_DROIDS`): owner side, centre, radius, enemy damage per second, end time.
     /// Super laser shots on their way: shooter, target, firing time.
     pub(crate) lasers: Vec<(u32, u32, f32)>,
+    /// Shield drains (`CORRUPT_SYSTEMS`): target, shield points per second, end time.
+    pub(crate) drains: Vec<(u32, f32, f32)>,
     pub(crate) zones: Vec<(u8, Vec3, f32, f32, f32)>,
     /// Distance field of rocks and stations for path planning (`None` without navigation or obstacles).
     pub(crate) nav_grid: Option<crate::nav::NavGrid>,
