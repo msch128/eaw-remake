@@ -146,6 +146,7 @@ fn unit_from_def(def: &SpaceUnitDef, combat: CombatStats) -> UnitType {
         limit_lifetime: def.build_limit_lifetime,
         hero: yes("is_named_hero"),
         prod_mods: production_mods(&def.sub_abilities),
+        planet_destroyer: def.sub_abilities.iter().any(|a| a.kind.eq_ignore_ascii_case("planet_destruction_ability")),
         upkeep: def.upkeep(),
         ai_power: def.ai_combat_power,
         buildable: def.build_cost > 0.0 && yes("build_tab_space_units") && !def.affiliation.is_empty(),

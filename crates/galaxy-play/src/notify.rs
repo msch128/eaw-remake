@@ -105,6 +105,11 @@ pub fn describe_event(
             Some((NotificationKind::Construction, format!("{what} completed at {}.", planet(*p)), Some(*p)))
         }
         Event::HeroDestroyed { faction, planet: p, unit } if me(*faction) => Some((NotificationKind::BattleResolved, format!("{} was lost at {}.", names.unit(*unit), planet(*p)), Some(*p))),
+        Event::PlanetDestroyed { planet: p, by, owner, ships_lost } => {
+            let who = if me(*by) { "Your superweapon destroyed".to_owned() } else { format!("{} destroyed", names.faction(*by)) };
+            let note = if owner.is_some_and(me) { " (your planet)" } else { "" };
+            Some((NotificationKind::PlanetCaptured, format!("{who} {}{note}; {ships_lost} ships lost.", planet(*p)), Some(*p)))
+        }
         Event::CaptureBonus { faction, planet: p, credits } if me(*faction) => Some((NotificationKind::PlanetCaptured, format!("Capture bonus: {:.0} credits for {}.", credits, planet(*p)), Some(*p))),
         Event::BattlePending(b) if human.is_some_and(|h| b.factions.contains(&h)) => {
             Some((NotificationKind::BattlePending, format!("Battle at {}!", planet(b.planet)), Some(b.planet)))

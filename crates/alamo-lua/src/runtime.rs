@@ -535,6 +535,14 @@ impl ScriptRuntime {
         self.dispatch(fired);
     }
 
+    /// Reports a finished space battle of `faction` (`STORY_WIN_BATTLES` / `STORY_LOSE_BATTLES`).
+    pub fn story_battle(&mut self, won: bool, faction: &str) {
+        let now = self.time();
+        let kind = if won { "STORY_WIN_BATTLES" } else { "STORY_LOSE_BATTLES" };
+        let fired = self.shared.borrow_mut().story.notify_battle(kind, faction, now);
+        self.dispatch(fired);
+    }
+
     /// Advances game time by `dt` seconds: story timers, script services.
     pub fn update(&mut self, dt: f64) {
         self.sweep_finished_plans();

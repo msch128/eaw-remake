@@ -83,3 +83,13 @@ value remains). **Next best candidate** (small: owner None, structures cleared, 
 * The `INTERVENTION_*.XML` random events (pirate ambush, smuggler, revolt, refugee escort, ...) are not part of the Web Way plot list that
   the campaigns load, so they are not triggered.
 * Notifications: galaxy-play describes construction, battles, captures, hero loss/return and the capture bonus.
+
+## Update: superweapons and battle story events
+
+* **Planet destruction** (done): `Command::DestroyPlanet` for a fleet holding a unit with `Planet_Destruction_Ability` (Death_Star, Death_Star_II, Galaxy_Gun_*),
+  at a planet that is not the firer's own/allied, `Planet_Is_Destroyable_By_TSW` not `No` (planets without the tag count as destroyable: estimate),
+  not already destroyed. Effects: planet neutral, buildings and queues gone, `PlanetState::destroyed` (nobody can capture it), all other ships in orbit lost,
+  `Event::PlanetDestroyed`. The weapon is not consumed; it recharges `SimConfig::superweapon_cooldown_seconds` (120 s = 2 weeks, estimate). Death Star II costs
+  1,000,000 and needs tech 5 / star base 3 in the data. AI: the Remake's galactic `Use_Death_Star` goal is commented out in `GC_Invade_Planets.xml`
+  (only the tactical `Fire_Death_Star` exists), so the galactic use is player-only (`PlayAction::DestroyPlanet`). The tactical super laser is not modelled.
+* **STORY_WIN_BATTLES / STORY_LOSE_BATTLES** (done): counted per plot faction for space battles (`FILTER_FRIENDLY_ONLY`, `Event_Param1` = number needed), fed from `BattleWon`/`BattleLost`.

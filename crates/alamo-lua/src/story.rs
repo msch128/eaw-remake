@@ -140,6 +140,8 @@ struct Running {
     triggered: Vec<bool>,
     /// The event fired since its branch was last reset (a perpetual event stays `Active` but still satisfies prerequisites).
     done: Vec<bool>,
+    /// Battles counted so far by `STORY_WIN_BATTLES` / `STORY_LOSE_BATTLES` events.
+    battles: Vec<u32>,
     by_name: HashMap<String, usize>,
 }
 
@@ -187,6 +189,7 @@ impl StoryEngine {
             states: vec![State::Inactive; n],
             triggered: vec![false; n],
             done: vec![false; n],
+            battles: vec![0; n],
             by_name,
         });
     }
@@ -264,6 +267,30 @@ impl StoryEngine {
         out
     }
 
+    /// Reports a finished battle of `faction` (`kind` is `STORY_WIN_BATTLES` or `STORY_LOSE_BATTLES`). Events with `FILTER_FRIENDLY_ONLY`
+    /// count the battles of the plot's own faction; `Event_Param1` is the number needed, `Event_Param2` the mode (only `SPACE` counts here).
+    pub fn notify_battle(&mut self, kind: &str, faction: &str, now: f64) -> Vec<Fired> {
+        let mut out = Vec::new();
+        for pi in 0..self.plots.len() {
+            let r = &mut self.plots[pi];
+            if !r.faction.as_deref().is_some_and(|f| f.eq_ignore_ascii_case(faction)) {
+                continue;
+            }
+            for ei in 0..r.plot.events.len() {
+                let ev = &r.plot.events[ei];
+                if ev.kind == kind && matches!(r.states[ei], State::Active(_)) && ev.params.get(1).is_none_or(|m| m.eq_ignore_ascii_case("space") || m.is_empty()) {
+                    r.battles[ei] += 1;
+                }
+            }
+            let _ = pi;
+        }
+        for pi in 0..self.plots.len() {
+            self.update_plot(pi, now, Some((&[kind], "{0}battle")), &mut out);
+        }
+        out.extend(self.tick(now));
+        out
+    }
+
     fn update_plot(
         &mut self,
         pi: usize,
@@ -317,6 +344,10 @@ impl StoryEngine {
                             && (ev.name.to_ascii_lowercase().ends_with("_auto")
                                 || (!ev.rewards.is_empty() && ev.rewards.iter().all(|w| matches!(w.kind.as_str(), "RESET_BRANCH" | "REMOVE_STORY_GOAL")))))
                 }
+                "STORY_WIN_BATTLES" | "STORY_LOSE_BATTLES" => {
+                    let need: u32 = ev.params.first().and_then(|p| p.parse().ok()).unwrap_or(1);
+                    notify.is_some_and(|(_, param)| param == "{0}battle") && r.battles[ei] >= need.max(1)
+                }
                 _ => notify.is_some_and(|(kinds, param)| {
                     (kinds.is_empty() || kinds.iter().any(|k| k.eq_ignore_ascii_case(&ev.kind)))
                         && (ev.name.eq_ignore_ascii_case(param)
@@ -344,6 +375,7 @@ impl StoryEngine {
         };
         self.plots[pi].triggered[ei] = false;
         self.plots[pi].done[ei] = true;
+        self.plots[pi].battles[ei] = 0;
         let rewards = self.plots[pi].plot.events[ei].rewards.clone();
         let mut host_rewards = Vec::new();
         for rw in rewards {
@@ -407,6 +439,7 @@ impl StoryEngine {
                     r.states[i] = State::Inactive;
                     r.triggered[i] = false;
                     r.done[i] = false;
+                    r.battles[i] = 0;
                 }
             }
             let _ = now;
@@ -514,6 +547,25 @@ mod tests {
             let names: Vec<_> = s.tick(t0 + 301.0).into_iter().map(|f| f.event).collect();
             assert_eq!(names, vec!["Spawn", "Done", "Reset"], "round {round}");
         }
+    }
+
+    #[test]
+    fn battle_events_count_the_plot_factions_space_battles() {
+        let p = plot(
+            r#"<Story>
+            <Event Name="Won"><Event_Type>STORY_WIN_BATTLES</Event_Type><Event_Param1>2</Event_Param1><Event_Param2>SPACE</Event_Param2><Event_Param3>FILTER_FRIENDLY_ONLY</Event_Param3><Perpetual>true</Perpetual></Event>
+            </Story>"#,
+        );
+        let mut s = StoryEngine::default();
+        s.activate(p, 0, Some("Rebel".into()), 0.0);
+        s.tick(0.0);
+        assert!(s.notify_battle("STORY_WIN_BATTLES", "Empire", 1.0).is_empty(), "not our battle");
+        assert!(s.notify_battle("STORY_LOSE_BATTLES", "Rebel", 2.0).is_empty(), "a defeat");
+        assert!(s.notify_battle("STORY_WIN_BATTLES", "Rebel", 3.0).is_empty(), "one of two");
+        assert_eq!(s.notify_battle("STORY_WIN_BATTLES", "Rebel", 4.0).len(), 1);
+        assert!(s.notify_battle("STORY_WIN_BATTLES", "Empire", 5.0).is_empty(), "the counter starts again");
+        assert!(s.notify_battle("STORY_WIN_BATTLES", "Rebel", 6.0).is_empty());
+        assert_eq!(s.notify_battle("STORY_WIN_BATTLES", "Rebel", 7.0).len(), 1);
     }
 
     #[test]

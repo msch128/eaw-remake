@@ -70,6 +70,8 @@ pub struct SimConfig {
     pub cancel_refund: f32,
     /// Estimate: multiplier on `Planet_Capture_Bonus_Reward` (paid to a conqueror the first time it takes that planet; the data gives the amount, not the rule).
     pub capture_bonus_scale: f32,
+    /// Estimate: seconds a faction's superweapons need to recharge after destroying a planet (the data has no galactic cooldown).
+    pub superweapon_cooldown_seconds: f32,
 }
 
 /// Algorithm used to settle battles.
@@ -108,6 +110,7 @@ impl Default for SimConfig {
             repair_shield_factor: 4.0,
             cancel_refund: 1.0,
             capture_bonus_scale: 1.0,
+            superweapon_cooldown_seconds: 120.0,
         }
     }
 }
@@ -135,6 +138,8 @@ pub struct PlanetInfo {
     pub surface_accessible: bool,
     /// `Planet_Capture_Bonus_Reward`: credits for the faction that conquers the planet.
     pub capture_bonus: f32,
+    /// `Planet_Is_Destroyable_By_TSW` (a superweapon may destroy it). Planets without the tag count as destroyable (estimate).
+    pub destroyable: bool,
 }
 
 /// A hyperspace lane.
@@ -304,6 +309,8 @@ pub struct UnitType {
     pub hero: bool,
     /// `Reduce_Production_*_Ability` entries that apply to the owner's builds while the unit exists.
     pub prod_mods: Vec<ProductionMod>,
+    /// Has a `Planet_Destruction_Ability` (Death Star, Galaxy Gun).
+    pub planet_destroyer: bool,
     /// Income change per week while the unit exists (negative = upkeep).
     pub upkeep: f32,
     /// `AI_Combat_Power`.
@@ -603,6 +610,7 @@ impl World {
                 space_map: p.space_tactical_map.clone(),
                 surface_accessible: p.surface_accessible,
                 capture_bonus: p.fields.get("planet_capture_bonus_reward").and_then(|v| v.trim().parse().ok()).unwrap_or(0.0),
+                destroyable: p.fields.get("planet_is_destroyable_by_tsw").is_none_or(|v| alamo_data::xml::parse_bool(v)),
             });
         }
         if planets.is_empty() {

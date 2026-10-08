@@ -91,3 +91,45 @@ fn hero_and_structure_discounts_follow_the_ability_data() {
     let (c3, _) = sim.world().unit_cost(sim.galaxy(), rebel, other, mc80);
     assert!((c3 - c).abs() < 0.5, "a Starforge elsewhere does not help");
 }
+
+#[test]
+fn a_superweapon_destroys_a_planet_once_per_cooldown() {
+    let Some(data) = load() else { return };
+    let campaign = data.campaign("GC_Full_Web_Way_Rebel").unwrap();
+    let mut sim = Sim::new(&data, campaign, SimConfig { victory_enabled: false, ..SimConfig::default() }).unwrap();
+    let w = sim.world().clone();
+    let (empire, rebel) = (w.faction_id("Empire").unwrap(), w.faction_id("Rebel").unwrap());
+    let ds = w.unit_id("Death_Star_II").expect("Death Star II");
+    assert!(w.units[ds as usize].planet_destroyer);
+    let sd = w.unit_id("Star_Destroyer").unwrap();
+    assert!(!w.units[sd as usize].planet_destroyer);
+    let ok: Vec<u32> = (0..w.planets.len() as u32).filter(|&p| w.real[p as usize] && w.planets[p as usize].destroyable).collect();
+    assert!(ok.len() < (0..w.planets.len()).filter(|&p| w.real[p]).count(), "some planets are protected by the data");
+    let rebel_planet = ok.iter().copied().find(|&p| sim.galaxy().planets[p as usize].owner == Some(rebel)).expect("a destroyable rebel planet");
+    let neutral = ok.iter().copied().find(|&p| sim.galaxy().planets[p as usize].owner.is_none() && p != rebel_planet).unwrap();
+    // Without a superweapon in orbit the command is refused.
+    assert_eq!(sim.apply(Command::DestroyPlanet { faction: empire, planet: rebel_planet }), Err(CommandError::NotAvailable));
+    sim.spawn_units(empire, rebel_planet, ds, 1);
+    sim.spawn_units(rebel, rebel_planet, sd, 3);
+    // The owner cannot fire at its own planet.
+    assert_eq!(sim.apply(Command::DestroyPlanet { faction: rebel, planet: rebel_planet }), Err(CommandError::WrongState));
+    assert_eq!(sim.apply(Command::DestroyPlanet { faction: empire, planet: rebel_planet }), Ok(CommandOk::Done));
+    let events = sim.step(0.5);
+    let lost = events.iter().find_map(|e| match e {
+        Event::PlanetDestroyed { planet, by, owner, ships_lost } if *planet == rebel_planet && *by == empire && *owner == Some(rebel) => Some(*ships_lost),
+        _ => None,
+    });
+    assert!(lost.is_some_and(|n| n >= 3), "{events:?}");
+    let ps = &sim.galaxy().planets[rebel_planet as usize];
+    assert!(ps.destroyed && ps.owner.is_none() && ps.structures.is_empty() && ps.starbase.is_none());
+    assert!(sim.galaxy().fleets_at(rebel_planet).all(|f| f.owner == empire), "only the Death Star remains");
+    // Nobody can take the wreck, and the weapon needs to recharge.
+    sim.spawn_units(rebel, rebel_planet, sd, 1);
+    sim.step(30.0);
+    assert!(sim.galaxy().planets[rebel_planet as usize].owner.is_none());
+    sim.spawn_units(empire, neutral, ds, 1);
+    assert_eq!(sim.apply(Command::DestroyPlanet { faction: empire, planet: neutral }), Err(CommandError::WrongState));
+    sim.step(150.0);
+    // ... and a wreck cannot be destroyed again.
+    assert_eq!(sim.apply(Command::DestroyPlanet { faction: empire, planet: rebel_planet }), Err(CommandError::WrongState));
+}

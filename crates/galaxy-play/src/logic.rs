@@ -138,6 +138,11 @@ pub fn handle_actions(
                     state.driver.send_command(Command::CancelProduction { faction: h, planet: *planet, lane: *lane, index: *index });
                 }
             }
+            PlayAction::DestroyPlanet(planet) => {
+                if let Some(h) = player.0 {
+                    state.driver.send_command(Command::DestroyPlanet { faction: h, planet: *planet });
+                }
+            }
             PlayAction::Save(path) => state.driver.save(path.clone()),
             PlayAction::Load(path) => state.driver.load(path.clone()),
             PlayAction::SelectPlanet(p) => selection.planet = *p,

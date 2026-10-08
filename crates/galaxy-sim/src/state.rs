@@ -111,6 +111,8 @@ pub struct PlanetState {
     pub capture: Option<(FactionId, f32)>,
     /// Damage the star base carries over from battles (`None` = undamaged).
     pub base_health: Option<UnitHealth>,
+    /// Destroyed by a superweapon: an asteroid field that nobody can own or build on.
+    pub destroyed: bool,
 }
 
 /// Hull and shield of a ship or star base as a fraction of the maximum (1.0 = undamaged).
@@ -155,6 +157,8 @@ pub struct FactionState {
     pub planets_owned: u32,
     /// Difficulty multipliers of this faction (neutral 1.0 unless set with [`crate::Sim::set_faction_difficulty`]).
     pub difficulty: Difficulty,
+    /// Game time (seconds) at which the faction's superweapons are ready again.
+    pub superweapon_ready_at: f64,
 }
 
 /// A battle waiting to be resolved (by a tactical battle or auto-resolve).
@@ -238,6 +242,13 @@ pub enum Command {
         /// Issuing faction.
         faction: FactionId,
         /// Planet.
+        planet: PlanetId,
+    },
+    /// Fire a superweapon (a unit with `Planet_Destruction_Ability`, e.g. the Death Star) of a fleet in orbit at the planet it orbits.
+    DestroyPlanet {
+        /// Issuing faction.
+        faction: FactionId,
+        /// Planet in whose orbit the superweapon is.
         planet: PlanetId,
     },
     /// Send a fleet to a planet along hyperspace lanes.
@@ -424,6 +435,17 @@ pub enum Event {
         /// Credits.
         credits: f64,
     },
+    /// A superweapon destroyed a planet (it is an asteroid field now; the ships of everyone else in orbit are lost).
+    PlanetDestroyed {
+        /// Planet.
+        planet: PlanetId,
+        /// Faction that fired.
+        by: FactionId,
+        /// Previous owner.
+        owner: Option<FactionId>,
+        /// Ships lost in orbit.
+        ships_lost: u32,
+    },
     /// A faction lost its last planet and fleet.
     FactionEliminated {
         /// Faction.
@@ -530,6 +552,7 @@ impl Galaxy {
             p.owner.hash(&mut h);
             p.starbase.hash(&mut h);
             p.structures.hash(&mut h);
+            p.destroyed.hash(&mut h);
             for q in &p.queues {
                 for it in q {
                     it.remaining.to_bits().hash(&mut h);
@@ -541,6 +564,7 @@ impl Galaxy {
             f.credits.to_bits().hash(&mut h);
             f.tech.hash(&mut h);
             f.eliminated.hash(&mut h);
+            f.superweapon_ready_at.to_bits().hash(&mut h);
         }
         for (id, fl) in &self.fleets {
             id.hash(&mut h);

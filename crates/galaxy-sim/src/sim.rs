@@ -18,6 +18,8 @@ pub struct Sim {
     pub(crate) tactical: Option<Arc<battle_sim::Catalog>>,
     pub(crate) arenas: std::collections::HashMap<String, Arc<battle_sim::Arena>>,
     pub(crate) tactical_requests: BTreeMap<u32, crate::tactical::TacticalRequest>,
+    /// Events produced by commands, delivered by the next [`Sim::step`].
+    pub(crate) queued_events: Vec<Event>,
 }
 
 impl Sim {
@@ -53,7 +55,7 @@ impl Sim {
                 add_units(&mut galaxy, f, p, u, 1);
             }
         }
-        let mut sim = Sim { world, galaxy, ai: Vec::new(), tactical: None, arenas: std::collections::HashMap::new(), tactical_requests: BTreeMap::new() };
+        let mut sim = Sim { world, galaxy, ai: Vec::new(), tactical: None, arenas: std::collections::HashMap::new(), tactical_requests: BTreeMap::new(), queued_events: Vec::new() };
         sim.world.clone().refresh_economy(&mut sim.galaxy);
         Ok(sim)
     }
@@ -138,6 +140,48 @@ impl Sim {
                     total: t,
                     cost: up.cost,
                 });
+                Ok(CommandOk::Done)
+            }
+            Command::DestroyPlanet { faction, planet } => {
+                let fs = g.factions.get(faction as usize).ok_or(CommandError::Invalid)?;
+                if fs.eliminated {
+                    return Err(CommandError::Eliminated);
+                }
+                let info = world.planets.get(planet as usize).ok_or(CommandError::Invalid)?;
+                let ps = &g.planets[planet as usize];
+                if !world.real[planet as usize] || !info.destroyable || ps.destroyed || g.time < fs.superweapon_ready_at {
+                    return Err(CommandError::WrongState);
+                }
+                if let Some(o) = ps.owner
+                    && (o == faction || !g.hostile(&world, faction, o))
+                {
+                    return Err(CommandError::WrongState);
+                }
+                let armed = g.fleets.values().any(|f| {
+                    f.owner == faction && f.location == FleetLocation::AtPlanet(planet) && f.units.iter().any(|(&u, &n)| n > 0 && world.units[u as usize].planet_destroyer)
+                });
+                if !armed {
+                    return Err(CommandError::NotAvailable);
+                }
+                g.factions[faction as usize].superweapon_ready_at = g.time + f64::from(world.config.superweapon_cooldown_seconds);
+                let owner = ps.owner;
+                // Everyone else's ships in orbit die with the planet.
+                let doomed: Vec<FleetId> = g.fleets.iter().filter(|(_, f)| f.owner != faction && f.location == FleetLocation::AtPlanet(planet)).map(|(&id, _)| id).collect();
+                let mut ships_lost = 0;
+                for id in doomed {
+                    if let Some(f) = g.fleets.remove(&id) {
+                        ships_lost += f.units.values().sum::<u32>();
+                    }
+                }
+                g.battles.retain(|b| b.planet != planet);
+                g.sync_ships();
+                let mut events = Vec::new();
+                self.apply_owner_change(planet, None, false, &mut events);
+                let ps = &mut self.galaxy.planets[planet as usize];
+                ps.destroyed = true;
+                ps.base_health = None;
+                events.push(Event::PlanetDestroyed { planet, by: faction, owner, ships_lost });
+                self.queued_events.extend(events);
                 Ok(CommandOk::Done)
             }
             Command::MoveFleet { faction, fleet, to } => {
@@ -257,7 +301,7 @@ impl Sim {
 
     /// Advances the simulation by `dt` seconds (in internal ticks) and returns what happened.
     pub fn step(&mut self, dt: f32) -> Vec<Event> {
-        let mut events = Vec::new();
+        let mut events = std::mem::take(&mut self.queued_events);
         self.galaxy.tick_accum += dt;
         let tick = self.world.config.tick_seconds;
         while self.galaxy.tick_accum >= tick && self.galaxy.winner.is_none() {
@@ -723,7 +767,7 @@ impl Sim {
         }
         for p in 0..self.galaxy.planets.len() as PlanetId {
             let owner = self.galaxy.planets[p as usize].owner;
-            let battle_here = self.galaxy.battles.iter().any(|b| b.planet == p);
+            let battle_here = self.galaxy.battles.iter().any(|b| b.planet == p) || self.galaxy.planets[p as usize].destroyed;
             let occupier = match present.get(&p) {
                 Some(v) if !battle_here && v.len() == 1 && Some(v[0]) != owner && w.real[p as usize] => {
                     let x = v[0];

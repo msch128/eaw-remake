@@ -435,6 +435,7 @@ impl ScriptedSim {
     fn notify_story(&mut self, events: &[Event]) {
         // Collect first: notifications call back into the host, which borrows the shared state.
         let mut notes: Vec<(&'static str, String)> = Vec::new();
+        let mut battles: Vec<(bool, String)> = Vec::new();
         {
             let s = self.inner.borrow();
             let w = &s.world;
@@ -448,6 +449,8 @@ impl ScriptedSim {
                         notes.push(("STORY_CONQUER", short));
                         notes.push(("STORY_CONQUER", full));
                     }
+                    Event::BattleWon { faction, .. } => battles.push((true, w.factions[*faction as usize].name.clone())),
+                    Event::BattleLost { faction, .. } => battles.push((false, w.factions[*faction as usize].name.clone())),
                     // The Remake's hero respawn and ship-phase plots wait for these (`Story_Sandbox_Hero_Timers_*.xml`: STORY_TACTICAL_DESTROY, then a 300 s timer, then SPAWN_HERO).
                     Event::UnitsDestroyed { unit, .. } => notes.push(("STORY_TACTICAL_DESTROY", w.units[*unit as usize].name.clone())),
                     Event::ConstructionComplete { faction, kind, .. } => {
@@ -471,6 +474,9 @@ impl ScriptedSim {
         }
         for (kind, param) in notes {
             self.runtime.story_notify(kind, &param);
+        }
+        for (won, faction) in battles {
+            self.runtime.story_battle(won, &faction);
         }
     }
 

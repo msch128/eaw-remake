@@ -288,6 +288,9 @@ pub enum PlayAction {
         /// Position in the queue (0 = in production).
         index: u32,
     },
+    /// Fire the superweapon (Death Star, Galaxy Gun) of the player's fleet orbiting `planet`; answered by a `PlanetDestroyed` notification.
+    /// Whether a planet can be fired at: `PlanetInfo::destroyable` and an armed fleet in orbit (`UnitType::planet_destroyer`).
+    DestroyPlanet(PlanetId),
     /// Write a save file (needs [`PlayInit::scripted`]); answered by [`PlayEvent::SaveFinished`].
     Save(std::path::PathBuf),
     /// Replace the running game with a save of the same game; answered by [`PlayEvent::LoadFinished`]. Progress: `SimState::driver.load_progress()`.
