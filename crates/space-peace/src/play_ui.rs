@@ -20,6 +20,10 @@ use crate::play::{PlayBridge, is_structure};
 use crate::settings::Settings;
 use crate::ui::InfoPanel;
 
+/// Dark plate behind the command bar (the original art is very transparent on the right).
+#[derive(Component)]
+pub(crate) struct BarBacking;
+
 /// Pads the galactic bar can show (`b_create_00..39`).
 const MAX_PADS: usize = 40;
 
@@ -138,6 +142,7 @@ fn ui_faction(state: &SimState, player: &PlayerFaction) -> UiFaction {
 #[allow(clippy::too_many_arguments)]
 fn spawn_bar(
     mut commands: Commands,
+    backing: Query<(), With<BarBacking>>,
     mut bar: ResMut<BarState>,
     state: Res<SimState>,
     player: Res<PlayerFaction>,
@@ -156,6 +161,13 @@ fn spawn_bar(
     }
     bar.spawned = true;
     *last_spawn = *frame;
+    if backing.is_empty() {
+        commands.spawn((
+            BarBacking,
+            Node { position_type: PositionType::Absolute, left: Val::Px(0.0), bottom: Val::Px(0.0), width: Val::Px(1380.0), height: Val::Px(290.0), ..default() },
+            BackgroundColor(Color::srgba(0.01, 0.015, 0.03, 0.9)),
+        ));
+    }
     commands.spawn_eaw_command_bar(CommandBarSpec { mode: CommandBarMode::Galactic, faction: ui_faction(&state, &player) });
 }
 
@@ -307,7 +319,7 @@ fn bar_clicks(
 fn text_bundle(s: &str, size: f32, color: Color) -> impl Bundle {
     (
         Text::new(s),
-        TextFont { font_size: FontSize::Px(size), ..default() },
+        TextFont { font: FontSource::Family("Bahnschrift".into()), font_size: FontSize::Px(size), ..default() },
         TextColor(color),
         TextShadow { offset: Vec2::splat(1.5), color: Color::srgba(0.0, 0.0, 0.0, 0.9) },
     )
@@ -539,13 +551,13 @@ fn move_info_panel(mut panel: Single<&mut Node, With<InfoPanel>>, mut hint: Quer
     }
 }
 
-fn hide_play_ui(mut bar: Query<&mut Visibility, With<EawCommandBar>>) {
+fn hide_play_ui(mut bar: Query<&mut Visibility, Or<(With<EawCommandBar>, With<BarBacking>)>>) {
     for mut v in &mut bar {
         *v = Visibility::Hidden;
     }
 }
 
-fn show_play_ui(mut bar: Query<&mut Visibility, With<EawCommandBar>>) {
+fn show_play_ui(mut bar: Query<&mut Visibility, Or<(With<EawCommandBar>, With<BarBacking>)>>) {
     for mut v in &mut bar {
         *v = Visibility::Inherited;
     }

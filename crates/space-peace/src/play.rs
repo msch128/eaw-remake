@@ -162,7 +162,7 @@ fn faction_by_object(data: &alamo_data::GameData, object: &str, view: &GalaxyVie
 }
 
 /// Stops the simulation when the map is left for the menus.
-fn end_play(mut commands: Commands, bars: Query<Entity, With<EawCommandBar>>) {
+fn end_play(mut commands: Commands, bars: Query<Entity, Or<(With<EawCommandBar>, With<crate::play_ui::BarBacking>)>>) {
     for e in &bars {
         commands.entity(e).despawn();
     }

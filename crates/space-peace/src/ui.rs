@@ -133,7 +133,7 @@ fn spawn_hud(mut commands: Commands, existing: Query<(), With<HudEntity>>) {
         HintText,
         HudEntity,
         Text::new("LMB select | RMB/MMB drag or WASD pan | Wheel zoom | Esc menu | F3 fps | F11 fullscreen"),
-        TextFont { font_size: FontSize::Px(12.0), ..default() },
+        TextFont { font: FontSource::Family("Bahnschrift".into()), font_size: FontSize::Px(12.0), ..default() },
         TextColor(Color::srgba(0.7, 0.8, 0.9, 0.55)),
         Node { position_type: PositionType::Absolute, bottom: Val::Px(8.0), right: Val::Px(12.0), ..default() },
     ));

@@ -504,7 +504,7 @@ fn update_labels(
     };
     // Labels grow when zoomed in and shrink when zoomed out (whole pixel steps only).
     let zoom_out = zoom_fraction(&bounds, orbit.distance);
-    let font_px = (22.0 + (13.0 - 22.0) * smoothstep(0.0, 0.6, zoom_out)).round();
+    let font_px = (21.0 + (11.0 - 21.0) * smoothstep(0.0, 0.7, zoom_out)).round();
     // UI coordinates are multiplied by the UI scale; the layout below works in viewport pixels.
     let us = ui_scale.0.max(0.1);
     let font_node_px = (font_px / us).round().max(1.0);
@@ -566,7 +566,7 @@ fn update_labels(
         })
         .collect();
     let mut placed: Vec<(Vec2, Vec2)> = Vec::with_capacity(order.len());
-    const MARGIN: f32 = 4.0;
+    const MARGIN: f32 = 1.0;
     for i in order {
         let s = slots[i].expect("filtered above");
         let (lo, hi) = (s.pos - Vec2::splat(MARGIN), s.pos + s.size + Vec2::splat(MARGIN));
@@ -583,7 +583,7 @@ fn update_labels(
         });
         // The selected planet always keeps its label.
         let selected = selection.0 == Some(i);
-        if selected || (on_screen && !overlaps && !on_planet) {
+        if selected || (on_screen && !overlaps && (!on_planet || zoom_out > 0.25)) {
             placed.push((lo, hi));
             visible[i] = true;
         }

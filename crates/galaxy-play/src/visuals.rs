@@ -173,7 +173,7 @@ pub fn sync_fleets(
                 entities.0.insert(f.id, root);
                 commands.spawn((
                     Text::new(""),
-                    TextFont { font_size: FontSize::Px(13.0), ..default() },
+                    TextFont { font: FontSource::Family("Bahnschrift".into()), font_size: FontSize::Px(13.0), ..default() },
                     TextColor(team),
                     TextShadow { offset: Vec2::splat(1.5), color: Color::srgba(0.0, 0.0, 0.0, 0.9) },
                     Node { position_type: PositionType::Absolute, ..default() },
