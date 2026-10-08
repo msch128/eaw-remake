@@ -69,7 +69,7 @@ fn update_hero_heads(
             continue;
         };
         // Portrait size follows the on-screen size of a fleet base.
-        let size = ((p1 - p0).length() * 2.1).clamp(18.0, 70.0);
+        let size = ((p1 - p0).length() * 2.4).clamp(10.0, 130.0);
         for (k, &u) in heroes.iter().take(4).enumerate() {
             let key = (f.id as u32, u);
             alive.push(key);

@@ -157,6 +157,10 @@ struct ScreenMenu;
 #[derive(Component)]
 struct PauseMenu;
 
+/// Marks a menu button drawn over the original panel art (transparent, highlight on hover).
+#[derive(Component)]
+struct PanelBar;
+
 /// A clickable menu button.
 #[derive(Component)]
 pub(crate) struct MenuButton(pub(crate) MenuAction);
@@ -204,11 +208,78 @@ impl Plugin for MenuPlugin {
     }
 }
 
-pub(crate) fn spawn_main_menu(mut commands: Commands, problem: Res<StartupProblem>) {
+pub(crate) fn spawn_main_menu(mut commands: Commands, problem: Res<StartupProblem>, textures: Option<ResMut<eaw_ui::textures::UiTextures>>, mut images: ResMut<Assets<Image>>) {
     match &problem.0 {
-        Some(m) => spawn_menu(&mut commands, &problem_spec(m), ScreenMenu),
-        None => spawn_menu(&mut commands, &main_menu_spec(), ScreenMenu),
-    };
+        Some(m) => {
+            spawn_menu(&mut commands, &problem_spec(m), ScreenMenu);
+        }
+        None => spawn_main(&mut commands, &main_menu_spec(), textures.map(ResMut::into_inner), &mut images),
+    }
+}
+
+/// The original main menu: the hex panel of `menuback_overlay_panel_4button` at the right screen edge, one hit area per
+/// blue bar. The art is read from the install at run time; the title is our own (the original logo plate is not used).
+/// Rectangles are texture pixels `(left, top, width, height)` of the four bars in the 512x1024 image.
+const PANEL_BARS: [(f32, f32, f32, f32); 4] = [(240.0, 338.0, 234.0, 40.0), (222.0, 382.0, 236.0, 40.0), (205.0, 426.0, 235.0, 40.0), (206.0, 470.0, 238.0, 40.0)];
+/// Panel texture to design pixels (the screen is 768 design px high, the texture 1024).
+const PANEL_SCALE: f32 = 0.75;
+
+fn spawn_original_main_menu(commands: &mut Commands, spec: &MenuSpec, panel: Handle<Image>) -> Entity {
+    let items: Vec<&MenuItem> = spec.columns.iter().flat_map(|c| c.items.iter()).take(PANEL_BARS.len()).collect();
+    let font = |size: f32| TextFont { font: FontSource::Family("Bahnschrift".into()), font_size: FontSize::Px(size), ..default() };
+    commands
+        .spawn((
+            ScreenMenu,
+            Node { position_type: PositionType::Absolute, width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() },
+            GlobalZIndex(20),
+        ))
+        .with_children(|root| {
+            // Our own title, upper left.
+            root.spawn(Node { position_type: PositionType::Absolute, left: Val::Px(48.0), top: Val::Px(44.0), flex_direction: FlexDirection::Column, ..default() })
+                .with_children(|t| {
+                    t.spawn((Text::new(spec.title.to_uppercase()), font(40.0), TextColor(Color::srgb(0.95, 0.96, 0.98)), TextShadow { offset: Vec2::splat(2.0), color: Color::srgba(0.0, 0.0, 0.1, 0.9) }));
+                    t.spawn((Text::new(spec.subtitle.to_uppercase()), font(18.0), TextColor(Color::srgb(0.55, 0.72, 1.0)), TextShadow { offset: Vec2::splat(1.5), color: Color::srgba(0.0, 0.0, 0.1, 0.9) }));
+                });
+            root.spawn((
+                ImageNode::new(panel),
+                Node { position_type: PositionType::Absolute, right: Val::Px(0.0), top: Val::Px(0.0), width: Val::Px(512.0 * PANEL_SCALE), height: Val::Px(1024.0 * PANEL_SCALE), ..default() },
+            ))
+            .with_children(|p| {
+                for (item, (x, y, w, h)) in items.iter().zip(PANEL_BARS) {
+                    p.spawn((
+                        Button,
+                        MenuButton(item.action.clone()),
+                        PanelBar,
+                        Node {
+                            position_type: PositionType::Absolute,
+                            left: Val::Px(x * PANEL_SCALE),
+                            top: Val::Px(y * PANEL_SCALE),
+                            width: Val::Px(w * PANEL_SCALE),
+                            height: Val::Px(h * PANEL_SCALE),
+                            justify_content: JustifyContent::Center,
+                            align_items: AlignItems::Center,
+                            ..default()
+                        },
+                        BackgroundColor(Color::NONE),
+                        children![(Text::new(item.label.to_uppercase()), font(15.0), TextColor(Color::WHITE), TextShadow { offset: Vec2::splat(1.0), color: Color::srgba(0.0, 0.05, 0.2, 0.9) })],
+                    ));
+                }
+            });
+        })
+        .id()
+}
+
+/// The main menu in the original's panel when its art can be loaded, else the plain menu.
+fn spawn_main(commands: &mut Commands, spec: &MenuSpec, textures: Option<&mut eaw_ui::textures::UiTextures>, images: &mut Assets<Image>) {
+    let panel = textures.and_then(|t| t.get(images, "menuback_overlay_panel_4button.dds")).map(|t| t.handle);
+    match panel {
+        Some(handle) if spec.columns.iter().map(|c| c.items.len()).sum::<usize>() <= PANEL_BARS.len() => {
+            spawn_original_main_menu(commands, spec, handle);
+        }
+        _ => {
+            spawn_menu(commands, spec, ScreenMenu);
+        }
+    }
 }
 
 
@@ -428,24 +499,29 @@ fn spawn_button(parent: &mut ChildSpawnerCommands, item: &MenuItem) {
 /// Hover / press feedback, sounds and click messages.
 fn button_interaction(
     mut buttons: Query<
-        (&Interaction, &MenuButton, &mut BackgroundColor),
+        (&Interaction, &MenuButton, &mut BackgroundColor, Has<PanelBar>),
         Changed<Interaction>,
     >,
     mut clicks: MessageWriter<MenuClicked>,
     mut sounds: MessageWriter<UiSound>,
 ) {
-    for (interaction, button, mut bg) in &mut buttons {
+    for (interaction, button, mut bg, on_panel) in &mut buttons {
+        let (idle, hover, pressed) = if on_panel {
+            (Color::NONE, Color::srgba(1.0, 1.0, 1.0, 0.16), Color::srgba(1.0, 1.0, 1.0, 0.3))
+        } else {
+            (BUTTON_IDLE, BUTTON_HOVER, BUTTON_PRESSED)
+        };
         match interaction {
             Interaction::Pressed => {
-                bg.0 = BUTTON_PRESSED;
+                bg.0 = pressed;
                 sounds.write(UiSound(SFX_CLICK));
                 clicks.write(MenuClicked(button.0.clone()));
             }
             Interaction::Hovered => {
-                bg.0 = BUTTON_HOVER;
+                bg.0 = hover;
                 sounds.write(UiSound(SFX_HOVER));
             }
-            Interaction::None => bg.0 = BUTTON_IDLE,
+            Interaction::None => bg.0 = idle,
         }
     }
 }
@@ -503,20 +579,20 @@ fn refresh_campaign_menu(
     screen: Res<State<AppScreen>>,
     menus: Query<Entity, With<ScreenMenu>>,
     problem: Res<StartupProblem>,
+    textures: Option<ResMut<eaw_ui::textures::UiTextures>>,
+    mut images: ResMut<Assets<Image>>,
 ) {
-    if refresh.read().last().is_none() {
+    if refresh.read().last().is_none() || *screen.get() != AppScreen::MainMenu {
         return;
     }
-    let spec = match *screen.get() {
-        AppScreen::MainMenu => match &problem.0 {
-            Some(m) => problem_spec(m),
-            None => main_menu_spec(),
-        },
-        _ => return,
-    };
     for e in &menus {
         commands.entity(e).despawn();
     }
-    spawn_menu(&mut commands, &spec, ScreenMenu);
+    match &problem.0 {
+        Some(m) => {
+            spawn_menu(&mut commands, &problem_spec(m), ScreenMenu);
+        }
+        None => spawn_main(&mut commands, &main_menu_spec(), textures.map(ResMut::into_inner), &mut images),
+    }
 }
 

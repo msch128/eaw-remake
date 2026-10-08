@@ -67,9 +67,13 @@ fn drive(
         Query<&Name>,
         Query<(Entity, &ComputedNode, &UiGlobalTransform, &InheritedVisibility, Has<ImageNode>, Option<&Interaction>, Option<&BackgroundColor>, Option<&bevy::ui::FocusPolicy>, &ComputedUiTargetCamera, Option<&GlobalZIndex>)>,
         Query<Entity, With<BattleCamera>>,
+        Res<ButtonInput<MouseButton>>,
+        Res<bevy::ui::UiStack>,
+        Query<(Entity, &Interaction)>,
+        Query<(&Camera, &bevy::camera::RenderTarget)>,
     ),
 ) {
-    let (block, pointer, hover, names, all_nodes, battle_cam) = diag;
+    let (block, pointer, hover, names, all_nodes, battle_cam, mouse, ui_stack, interactions, cams) = diag;
     st.orders += orders.read().count() as u32;
     for c in clicks.read() {
         st.clicked_button = Some(c.name.clone());
@@ -151,6 +155,18 @@ fn drive(
                 })
                 .min_by(|a, b| a.0.name.cmp(&b.0.name))
                 .map(|(b, _, n, g, _, _)| (b.name.clone(), g.translation * n.inverse_scale_factor()));
+            if t <= 5 {
+                    let active: Vec<String> = interactions.iter().filter(|(_, i)| **i != Interaction::None).map(|(e, i)| format!("{:?}={i:?}", names.get(e).ok().map(|n| n.as_str().to_string()))).collect();
+                    let btn = bar.iter().find(|r| Some(&r.0.name) == st.button_name.as_ref()).map(|r| r.5.clone());
+                    info!(
+                        "input-test:   probe t={t} cursor_phys {:?} pressed {} just_pressed {} just_released {} active interactions {:?} button {:?}",
+                        window.1.physical_cursor_position(), mouse.pressed(MouseButton::Left), mouse.just_pressed(MouseButton::Left), mouse.just_released(MouseButton::Left), active, btn
+                    );
+                    if t == 0 {
+                        let cs: Vec<String> = cams.iter().map(|(c, r)| format!("active {} order {} viewport {:?} target {:?}", c.is_active, c.order, c.physical_viewport_rect(), r)).collect();
+                        info!("input-test:   cameras {:?}; ui stack nodes {}", cs, ui_stack.uinodes.len());
+                    }
+            }
             match (t, target) {
                 (0, Some((name, p))) => {
                     st.button_name = Some(name);
@@ -158,12 +174,6 @@ fn drive(
                 }
                 (1, _) => act = Some(Act::Down(MouseButton::Left)),
                 (2, _) => act = Some(Act::Up(MouseButton::Left)),
-                (3..=5, _) => {
-                    let name = st.button_name.clone();
-                    if let Some(row) = bar.iter().find(|r| Some(&r.0.name) == name.as_ref()) {
-                        info!("input-test:   t={t} button interaction {:?} disabled {}", row.5, row.1.disabled);
-                    }
-                }
                 (6, _) => {
                     let ok = st.button_name.is_some() && st.button_name == st.clicked_button && !sel.ships.is_empty();
                     info!("input-test: button {:?}, got {:?}", st.button_name, st.clicked_button);

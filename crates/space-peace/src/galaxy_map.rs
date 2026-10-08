@@ -41,6 +41,7 @@ impl Plugin for GalaxyMapPlugin {
             .init_resource::<MapScale>()
             .init_gizmo_group::<RingGizmos>()
             .init_gizmo_group::<SelectGizmos>()
+            .init_gizmo_group::<TerritoryGizmos>()
             .insert_resource(ClearColor(Color::BLACK))
             .insert_resource(GlobalAmbientLight {
                 color: Color::srgb(0.55, 0.62, 0.85),
@@ -408,6 +409,7 @@ fn setup_scene(
     // Route line widths in pixels per width tier.
     gizmo_store.config_mut::<RingGizmos>().0.line.width = 1.6;
     gizmo_store.config_mut::<SelectGizmos>().0.line.width = 2.6;
+    gizmo_store.config_mut::<TerritoryGizmos>().0.line.width = 6.0;
 }
 
 /// Spawns planets, labels and the selection ring from the [`GalaxyView`] resource.
@@ -730,6 +732,7 @@ fn draw_rings(
     selection: Res<Selection>,
     mut rings: Gizmos<RingGizmos>,
     mut select: Gizmos<SelectGizmos>,
+    mut border: Gizmos<TerritoryGizmos>,
     mut territory: Local<(u64, Vec<(Vec3, Vec3, Color)>)>,
 ) {
     let flat = Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2);
@@ -739,7 +742,7 @@ fn draw_rings(
         territory.0 = owners_hash;
     }
     for (a, b, c) in territory.1.iter() {
-        select.line(*a, *b, *c);
+        border.line(*a, *b, *c);
     }
     for (i, p) in view.planets.iter().enumerate() {
         let pos = galaxy_to_world(p.position);
@@ -1328,3 +1331,7 @@ fn territory_segments(view: &GalaxyView, radii: &PlanetRadii) -> Vec<(Vec3, Vec3
 
 /// Radius of a planet's territory disc in planet radii.
 const TERRITORY_RADIUS: f32 = 11.0;
+
+/// Gizmo group of the thick dashed faction territory outline.
+#[derive(Default, Reflect, GizmoConfigGroup)]
+struct TerritoryGizmos;
