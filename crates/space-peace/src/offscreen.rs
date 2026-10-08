@@ -18,10 +18,17 @@ use crate::flow::AppScreen;
 use crate::galaxy_map::{Selection, galaxy_to_world};
 use crate::galaxy_view::GalaxyView;
 
-/// Render target size in physical pixels.
-pub const SIZE: (u32, u32) = (3840, 2160);
-/// UI scale of the target (a typical Windows setting for 4K monitors).
-const SCALE_FACTOR: f32 = 1.5;
+static TARGET_SIZE: std::sync::OnceLock<(u32, u32)> = std::sync::OnceLock::new();
+
+/// Render target size in physical pixels (`--size`, default 4K).
+pub fn size() -> (u32, u32) {
+    TARGET_SIZE.get().copied().unwrap_or((3840, 2160))
+}
+
+/// OS display scaling of the target: 150 % on 4K like a typical monitor, 100 % below.
+fn scale_factor(height: u32) -> f32 {
+    if height >= 2000 { 1.5 } else { 1.0 }
+}
 
 /// The texture the camera renders into.
 #[derive(Resource)]
@@ -58,10 +65,11 @@ struct OffscreenState {
 
 /// Registers the offscreen target and the driver system on `app` (call before `run`).
 pub fn configure(app: &mut App, args: &Args, path: PathBuf) {
-    let image = Image::new_target_texture(SIZE.0, SIZE.1, TextureFormat::Rgba8UnormSrgb, None);
+    let _ = TARGET_SIZE.set(args.size.unwrap_or((3840, 2160)));
+    let image = Image::new_target_texture(size().0, size().1, TextureFormat::Rgba8UnormSrgb, None);
     let handle = app.world_mut().resource_mut::<Assets<Image>>().add(image);
     let frames = args.frames.max(2);
-    app.insert_resource(OffscreenTarget { image: handle, scale_factor: SCALE_FACTOR })
+    app.insert_resource(OffscreenTarget { image: handle, scale_factor: scale_factor(size().1) })
         .insert_resource(OffscreenState {
             path,
             frames,
@@ -187,8 +195,8 @@ fn finish(_: On<ScreenshotCaptured>, st: Res<OffscreenState>, mut exit: MessageW
         let secs = started.elapsed().as_secs_f64();
         info!(
             "offscreen: {n} frames at {}x{} in {:.2} s = {:.2} ms/frame throughput (includes finishing queued GPU work)",
-            SIZE.0,
-            SIZE.1,
+            size().0,
+            size().1,
             secs,
             secs * 1000.0 / n as f64
         );

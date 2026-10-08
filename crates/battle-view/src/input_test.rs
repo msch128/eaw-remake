@@ -7,6 +7,8 @@
 //! reaches the button and does not touch the selection, a click on the bar's empty selection area does not deselect, a
 //! left click on open space deselects. The verdict is one log line `input-test: ... PASS|FAIL`.
 
+#![allow(clippy::type_complexity, clippy::clone_on_copy, clippy::too_many_arguments, clippy::unnecessary_sort_by)]
+
 use bevy::input::ButtonState;
 use bevy::input::InputSystems;
 use bevy::input::mouse::MouseButtonInput;

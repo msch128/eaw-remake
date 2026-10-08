@@ -266,7 +266,8 @@ pub fn on_play_death(
     if explosions.is_empty() && defs.particle(&fallback).is_some() {
         explosions.push(fallback);
     }
-    let finale_names: [&str; 2] = if length > 1500.0 {
+    info!("death sequence: unit {:?} length {length:.0} explosions {explosions:?}", ev.unit);
+    let finale_names: [&str; 2] = if length > 3000.0 {
         ["Huge_Explosion_Space", "Large_Explosion_Space"]
     } else {
         ["Large_Explosion_Space", "Medium_Explosion_Space"]

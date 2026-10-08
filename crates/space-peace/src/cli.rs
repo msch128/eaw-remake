@@ -90,6 +90,8 @@ pub struct Args {
     pub battle_speed: Option<f32>,
     /// Offscreen only: battle time of the mid-battle capture (`--battle-seconds <s>`).
     pub battle_seconds: Option<f32>,
+    /// Offscreen only: render target size in pixels (`--size 1920x1080`, default 3840x2160).
+    pub size: Option<(u32, u32)>,
 }
 
 impl Default for Args {
@@ -136,6 +138,7 @@ impl Default for Args {
             load_from: None,
             battle_speed: None,
             battle_seconds: None,
+            size: None,
         }
     }
 }
@@ -179,6 +182,7 @@ OPTIONS:
   --load-from <file>     Start from a save file
   --battle-speed <x>     Tactical battle speed multiplier
   --battle-seconds <s>   Offscreen: battle time of the mid-battle capture (default 12)
+  --size <WxH>          Offscreen: render target size (default 3840x2160)
   --no-vsync             Disable vertical sync
   --fullscreen           Start in borderless fullscreen
   -h, --help             Show this help
@@ -263,6 +267,11 @@ impl Args {
                 "--battle-speed" => {
                     let v = it.next().ok_or("--battle-speed needs a value")?;
                     out.battle_speed = Some(v.parse().map_err(|e| format!("bad --battle-speed: {e}"))?);
+                }
+                "--size" => {
+                    let v = it.next().ok_or("--size needs WxH")?;
+                    let (w, h) = v.split_once(['x', 'X']).ok_or("bad --size (use WxH)")?;
+                    out.size = Some((w.parse().map_err(|e| format!("bad --size: {e}"))?, h.parse().map_err(|e| format!("bad --size: {e}"))?));
                 }
                 "--battle-seconds" => {
                     let v = it.next().ok_or("--battle-seconds needs a value")?;

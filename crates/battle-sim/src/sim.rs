@@ -752,7 +752,7 @@ impl Battle {
         if cfg.fog_of_war && self.tick % 15 == 1 {
             self.update_visibility();
         }
-        if cfg.fog_of_war && self.tick % 300 == 0 {
+        if cfg.fog_of_war && self.tick.is_multiple_of(300) {
             self.ai_search();
         }
         // Snapshot and grid.

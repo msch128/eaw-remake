@@ -133,7 +133,7 @@ fn drive_ui_scale(
 ) {
     let height = match (&window, &offscreen) {
         (Some(w), _) => w.height(),
-        (None, Some(t)) => crate::offscreen::SIZE.1 as f32 / t.scale_factor,
+        (None, Some(t)) => crate::offscreen::size().1 as f32 / t.scale_factor,
         _ => 768.0,
     };
     let v = if bar.is_empty() { settings.ui_scale } else { height / 768.0 * settings.ui_scale };
