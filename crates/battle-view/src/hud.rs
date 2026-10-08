@@ -4,6 +4,7 @@
 //! Texts come from the game's string table: `TEXT_DROID_ADVISOR_<FACTION>_SPACE_NN`, `TEXT_TEST_OBJECTIVE_HEADER`,
 //! `TEXT_TACTICAL_PRIMARY_SPACE_ATTACK` / `_DEFEND[_<ATTACKER>]`. Positions are design pixels (1366x768, scaled by
 //! eaw-ui's `UiScale`) measured from the reference screenshot of the real game.
+#![allow(clippy::type_complexity, clippy::too_many_arguments)]
 
 use std::collections::HashMap;
 

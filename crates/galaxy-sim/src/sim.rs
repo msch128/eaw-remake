@@ -187,6 +187,11 @@ impl Sim {
                 Ok(CommandOk::Done)
             }
             Command::MoveFleet { faction, fleet, to } => {
+                if std::env::var("TRACE_APPLY").is_ok() {
+                    let bt = std::backtrace::Backtrace::force_capture().to_string();
+                    let callers: Vec<&str> = bt.lines().filter(|l| l.contains("galaxy_") && !l.contains("Sim>::apply")).take(4).collect();
+                    eprintln!("APPLY move faction {faction} fleet {fleet} to {to} t={:.0} {callers:?}", g.time);
+                }
                 let f = g.fleets.get(&fleet).filter(|f| f.owner == faction).ok_or(CommandError::Invalid)?;
                 let FleetLocation::AtPlanet(from) = f.location else { return Err(CommandError::WrongState) };
                 if to as usize >= world.planets.len() {
@@ -198,7 +203,12 @@ impl Sim {
                 if g.battles.iter().any(|b| b.fleets.contains(&fleet)) {
                     return Err(CommandError::WrongState);
                 }
-                let path = world.find_path(from, to).ok_or(CommandError::NoPath)?;
+                // Fleets go around systems that would stop them (hostile star base or fleet), when there is a way around.
+                let path = {
+                    let gal: &Galaxy = g;
+                    world.find_path_avoiding(from, to, |p| p != to && world.blockades(gal, p, faction))
+                }
+                .ok_or(CommandError::NoPath)?;
                 start_move(&world, g, fleet, path);
                 Ok(CommandOk::Done)
             }
@@ -1043,10 +1053,20 @@ impl World {
 
     /// Fastest lane path from `from` to `to` (inclusive), by travel time.
     pub fn find_path(&self, from: PlanetId, to: PlanetId) -> Option<Vec<PlanetId>> {
-        let (dist, prev) = self.shortest_paths(from);
+        self.find_path_avoiding(from, to, |_| false)
+    }
+
+    /// Fastest path that does not pass through planets for which `avoid` is true (the destination itself is always allowed).
+    /// Falls back to the plain fastest path when no such route exists, so a fleet still gets there (and fights its way through).
+    pub fn find_path_avoiding(&self, from: PlanetId, to: PlanetId, avoid: impl Fn(PlanetId) -> bool) -> Option<Vec<PlanetId>> {
+        let (dist, prev) = self.shortest_paths_avoiding(from, to, &avoid);
         if dist[to as usize] == u64::MAX {
-            return None;
+            return if (0..self.planets.len() as PlanetId).any(&avoid) { self.find_path(from, to) } else { None };
         }
+        Self::walk_back(&prev, from, to)
+    }
+
+    fn walk_back(prev: &[Option<PlanetId>], from: PlanetId, to: PlanetId) -> Option<Vec<PlanetId>> {
         let mut path = vec![to];
         let mut cur = to;
         while cur != from {
@@ -1059,6 +1079,11 @@ impl World {
 
     /// Dijkstra from `src`: travel time in milliseconds-ish integer units and predecessor table.
     pub fn shortest_paths(&self, src: PlanetId) -> (Vec<u64>, Vec<Option<PlanetId>>) {
+        self.shortest_paths_avoiding(src, src, &|_| false)
+    }
+
+    /// [`Self::shortest_paths`] where planets for which `avoid` is true are only reached, never passed through (except `src`).
+    fn shortest_paths_avoiding(&self, src: PlanetId, _dst: PlanetId, avoid: &dyn Fn(PlanetId) -> bool) -> (Vec<u64>, Vec<Option<PlanetId>>) {
         let n = self.planets.len();
         let mut dist = vec![u64::MAX; n];
         let mut prev = vec![None; n];
@@ -1067,6 +1092,9 @@ impl World {
         heap.push(Reverse((0u64, src)));
         while let Some(Reverse((d, u))) = heap.pop() {
             if d > dist[u as usize] {
+                continue;
+            }
+            if u != src && avoid(u) {
                 continue;
             }
             for &(v, r) in &self.adjacency[u as usize] {

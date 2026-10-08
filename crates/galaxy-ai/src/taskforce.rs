@@ -141,6 +141,8 @@ pub struct TaskForceStats {
     pub unimplemented: HashMap<String, u32>,
     /// Credits spent through plans.
     pub credits_spent: f64,
+    /// Attacks the force check called off because the assembled fleet was too weak.
+    pub attacks_called_off: u32,
 }
 
 /// All task forces and their pending commands.
@@ -397,6 +399,9 @@ impl TaskForces {
     ) -> Option<HostValue> {
         let now = sim.time();
         let kind = self.forces.get(&tf_id)?.kind;
+        if std::env::var("TRACE_CALLS").is_ok() {
+            eprintln!("CALL {method}");
+        }
         let obj_planet = |sim: &dyn AiSim, v: Option<&HostValue>| -> Option<PlanetId> {
             match v {
                 Some(HostValue::Object(o)) => sim.object_planet(*o),
@@ -447,6 +452,12 @@ impl TaskForces {
                         let player = self.forces[&tf_id].player;
                         self.rally.entry((player, to)).or_default().push(tf_id);
                         self.jobs.push(Job::Rally { block, tf: tf_id, to, started: now });
+                    }
+                    (ForceKind::Units, Some(to)) if self.too_weak_to_attack(sim, snap, tf_id, to) => {
+                        // The assembled force is clearly weaker than what the player believes defends the target: stay home (the plan fails,
+                        // which raises the contrast of later forces) instead of throwing the fleet away.
+                        self.stats.attacks_called_off += 1;
+                        self.finish(block, false);
                     }
                     (ForceKind::Units, Some(to)) => {
                         let moved = self.start_move(sim, tf_id, to);
@@ -708,6 +719,18 @@ impl TaskForces {
                 }));
             }
         }
+    }
+
+    /// True if the force of `tf_id` is weaker than `ATTACK_GO_MARGIN` times the strength its player believes defends the enemy planet `to`.
+    fn too_weak_to_attack(&self, sim: &dyn AiSim, snap: &Snapshot, tf_id: u64, to: PlanetId) -> bool {
+        let Some(t) = self.forces.get(&tf_id) else { return false };
+        if !snap.owner[to as usize].is_some_and(|o| snap.enemy[t.player as usize][o as usize]) {
+            return false;
+        }
+        let Some(fleet) = t.fleet.and_then(|f| sim.fleet(f)) else { return false };
+        let believed = self.believed.get(&t.player).map_or(0.0, |v| v[to as usize]);
+        let mine = sim.force_strength(&fleet.units);
+        believed > 0.0 && mine > 0.0 && mine < believed * ATTACK_GO_MARGIN
     }
 
     fn start_move(&mut self, sim: &mut dyn AiSim, tf_id: u64, to: PlanetId) -> bool {
@@ -1207,3 +1230,7 @@ impl TaskForces {
         self.clock = m.clock;
     }
 }
+
+/// A force goes to an enemy planet only if its strength is at least this share of what its player believes defends it (estimate: the
+/// plan scripts size forces with a margin, but forces that could not be completed used to leave anyway).
+const ATTACK_GO_MARGIN: f64 = 0.9;

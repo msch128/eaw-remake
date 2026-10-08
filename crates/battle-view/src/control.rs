@@ -337,8 +337,9 @@ pub fn selection(
         KeyCode::Digit8,
         KeyCode::Digit9,
     ];
+    let shift_held = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
     for (i, k) in DIGITS.iter().enumerate() {
-        if keys.just_pressed(*k) {
+        if keys.just_pressed(*k) && !shift_held {
             if ctrl {
                 groups.0[i] = sel.ships.clone();
             } else {

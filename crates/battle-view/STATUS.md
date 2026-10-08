@@ -197,3 +197,11 @@ Add `battle-view`, `galaxy-sim` (already there through galaxy-play) and `eaw-ui`
   The "No AI / Destination" lines of the video are not reproduced (the snapshot has no order state).
 - **Heroes:** portraits top right with orange rings (white when selected), plus a small face box floating next to each hero ship (`HeroBillboard`).
 - Seen in the offscreen render: the integrator's galaxy planet tooltip ("The Yavin System ...") stays on screen during the battle.
+
+## Tactical round 4: ability targeting and hotkeys
+- Targeted abilities (`reveal_radius > 0`, `zone` = lightning storm, `super_laser` = Death Star) arm a target click: the cursor shows the area (ping radius, storm radius plus the placing range
+  `zone.max_range` around the caster, super laser aim circle of 600 units = the sim's target search), green / violet / orange when valid, red with the reason when the sim would refuse
+  ("Not ready", "Out of range", "No target": a capital, frigate or structure of the enemy within 600 of the point). Valid click = `Command::UseAbilityAt`; the mode stays on after a refusal.
+  The sim's refusal itself is not visible to the view (commands are fire and forget), so the checks are replicated on the snapshot.
+- Hotkeys: Shift + 1..6 press the ability buttons of the focused unit (the data has none; plain digits stay control groups). Autocast toggles are not implemented (no state for it in battle-sim).
+- Tests: `ability-hotkey` in `input_test` only runs for real when the selected unit has an ability (it is vacuous in the Hoth smoke scenario); the targeting cursor has no automated test yet.

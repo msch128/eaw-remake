@@ -59,9 +59,11 @@ enum Step {
     MiddleDrag,
     /// Page Up rotates the camera.
     PageUpRotates,
+    /// Shift + 1 presses the first ability button of the selected unit (vacuous when the unit has none).
+    AbilityHotkey,
 }
 
-const STEPS: [Step; 20] = [
+const STEPS: [Step; 21] = [
     Step::SelectShip,
     Step::RightClickGround,
     Step::RightClickEnemyRim,
@@ -75,6 +77,7 @@ const STEPS: [Step; 20] = [
     Step::Button("c_button04", Check::Order),
     Step::Button("c_button02", Check::Armed(ArmedKind::Move)),
     Step::ArmedGroundClick,
+    Step::AbilityHotkey,
     Step::Button("b_reinforcement", Check::ReinforceWindow),
     Step::Button("r_0000", Check::Armed(ArmedKind::Reinforce)),
     Step::PlaceReinforcement,
@@ -99,6 +102,7 @@ struct TestState {
     probe_press: bool,
     place_world: Option<Vec3>,
     /// Camera yaw / pitch at the start and after the horizontal part of a drag.
+    ability_clicks: u32,
     cam0: (f32, f32),
     cam1: (f32, f32),
     reserve_before: u32,
@@ -145,9 +149,12 @@ fn drive(
         Query<&BattleCamera>,
         MessageWriter<MouseMotion>,
         MessageWriter<KeyboardInput>,
+        Res<eaw_ui::TacticalData>,
+        MessageReader<eaw_ui::EawAbilityClicked>,
     ),
 ) {
-    let (block, pointer, hover, names, all_nodes, interactions, mut commands, action, armed, reinforce, cams, mut motion, mut keyboard) = extra;
+    let (block, pointer, hover, names, all_nodes, interactions, mut commands, action, armed, reinforce, cams, mut motion, mut keyboard, tactical, mut ability_clicks) = extra;
+    st.ability_clicks += ability_clicks.read().count() as u32;
     let cam_pose = cams.single().map(|c| (c.target_yaw, c.pitch)).unwrap_or_default();
     let (cam_entity, cam, gt) = *camera;
     let sf = cam.target_scaling_factor().unwrap_or(1.0);
@@ -372,6 +379,18 @@ fn drive(
             }
             _ => {}
         },
+        Step::AbilityHotkey => {
+            let has = tactical.selection.get(tactical.focus).is_some_and(|u| u.abilities.first().is_some_and(|a| !a.disabled));
+            match t {
+                0 if !has => verdict = Some(("ability-hotkey (selected unit has no ability)".into(), true)),
+                1 => act = Some(Act::KeyDown(KeyCode::ShiftLeft, Key::Shift)),
+                2 => act = Some(Act::KeyDown(KeyCode::Digit1, Key::Character("1".into()))),
+                3 => act = Some(Act::KeyUp(KeyCode::Digit1, Key::Character("1".into()))),
+                4 => act = Some(Act::KeyUp(KeyCode::ShiftLeft, Key::Shift)),
+                8 => verdict = Some(("ability-hotkey".into(), st.ability_clicks > 0)),
+                _ => {}
+            }
+        }
         Step::PageUpRotates => match t {
             0 => {
                 st.cam0 = cam_pose;

@@ -103,9 +103,40 @@ fn main() {
     let mut tallies = vec![Tally::default(); names.len()];
     let mut lane_use: BTreeMap<i32, u32> = BTreeMap::new();
     let mut border_fleet_weeks_next_to_enemy = 0u32;
+    let mut pending: BTreeMap<u32, (i32, Option<u32>, Vec<(u32, u32)>, u32)> = BTreeMap::new();
+    let mut attacks: Vec<(u32, u32, u32, i32, bool)> = Vec::new();
     let mut week = 0;
     while week < weeks {
+        let prev_fleets = sim.with_sim(|s| s.galaxy().fleets.clone());
         for e in sim.step(1.0).sim_events {
+            match &e {
+                Event::BattlePending(b) => {
+                    let rec = sim.with_sim(|s| {
+                        let (w, g) = (s.world(), s.galaxy());
+                        let ps = &g.planets[b.planet as usize];
+                        let level = ps.starbase.map_or(0, |sb| w.starbases[sb as usize].level.max(0));
+                        let per: Vec<(u32, u32)> = b.factions.iter().map(|&f| (f, b.fleets.iter().filter_map(|id| prev_fleets.get(id).or_else(|| g.fleets.get(id))).filter(|x| x.owner == f).map(|x| x.unit_count()).sum::<u32>())).collect();
+                        (level, ps.owner, per, b.planet)
+                    });
+                    pending.insert(b.id, rec);
+                }
+                Event::BattleResolved { id, winner, .. } => {
+                    if let Some((level, owner, per, planet)) = pending.remove(id) {
+                        for &(att, n) in per.iter().filter(|(f, _)| Some(*f) != owner) {
+                            if !majors.contains(&(att as usize)) {
+                                continue;
+                            }
+                            let def: u32 = per.iter().filter(|(f, _)| *f != att).map(|x| x.1).sum();
+                            attacks.push((att, n, def, level, *winner == Some(att)));
+                            if attacks.len() <= 40 && std::env::var("TRACE").is_ok() {
+                                let (pn, on) = sim.with_sim(|s| (s.world().planets[planet as usize].name.clone(), owner.map(|o| s.world().factions[o as usize].name.clone())));
+                                println!("  week {week}: {} attacks {pn} (owner {on:?}) with {n} vs {def} ships, star base level {level}, won {}", names[att as usize], *winner == Some(att));
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
             let Event::WeekEnded { week: w } = e else { continue };
             week = w;
             if week % 5 == 0 {
@@ -229,6 +260,17 @@ fn main() {
             let frac: Vec<String> = mem.brains.iter().filter(|b| b.player as usize == pi).flat_map(|b| b.fractions.iter().map(|(c, f)| format!("{c} {:.0}%", f * 100.0))).collect();
             let acc: Vec<String> = mem.task_forces.accounts.iter().filter(|a| a.0 as usize == pi).map(|a| format!("{} {:.0}", a.1, a.2)).collect();
             println!("{name} budget shares [{}]; unspent earmarked per category [{}]", frac.join(", "), acc.join(", "));
+        }
+    }
+    for &f in &majors {
+        let mine: Vec<_> = attacks.iter().filter(|a| a.0 as usize == f).collect();
+        let wins = mine.iter().filter(|a| a.4).count();
+        println!("{} attacks on enemy planets: {} battles, {wins} won", names[f], mine.len());
+        for (label, lo, hi) in [("attackers outnumbered (<0.7x)", 0.0, 0.7), ("even (0.7-1.5x)", 0.7, 1.5), ("superior (1.5-3x)", 1.5, 3.0), ("overwhelming (>3x)", 3.0, 1e9), ("no defending ships", -1.0, -0.5)] {
+            let sel: Vec<_> = mine.iter().filter(|a| if hi < 0.0 { a.2 == 0 } else { a.2 > 0 && (f64::from(a.1) / f64::from(a.2)) >= lo && (f64::from(a.1) / f64::from(a.2)) < hi }).collect();
+            if !sel.is_empty() {
+                println!("    {label}: {} battles, {} won; with a star base {} ({} won)", sel.len(), sel.iter().filter(|a| a.4).count(), sel.iter().filter(|a| a.3 > 0).count(), sel.iter().filter(|a| a.3 > 0 && a.4).count());
+            }
         }
     }
     let total: u32 = lane_use.values().sum();

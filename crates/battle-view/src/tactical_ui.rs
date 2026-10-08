@@ -6,6 +6,7 @@
 //! to get the bar; it spawns with each [`BattleRuntime`] and despawns with it. Not covered: reinforcement
 //! buttons (the sim supports `Command::Reinforce`, the galaxy request has no reinforcement pool yet) and
 //! eaw-ui's world-space ship overlays (the gizmo bars of `control::overlays` stay in use).
+#![allow(clippy::type_complexity, clippy::too_many_arguments)]
 
 use std::collections::BTreeMap;
 
@@ -43,7 +44,7 @@ impl Plugin for TacticalUiPlugin {
                 spawn_bar.run_if(resource_exists::<crate::BattleSession>.and_then(not(resource_exists::<TacticalBarSpawned>))),
                 remove_reinforce.run_if(resource_removed::<BattleRuntime>),
                 remove_bar.run_if(resource_removed::<BattleRuntime>.or_eager(resource_removed::<crate::BattleSession>)),
-                (sync_data, sync_overlays, handle_clicks, ability_at, hardpoint_clicks, reinforce_clicks, reinforce_place, reinforce_events, reinforce_panel, sync_minimap, minimap_pan).chain().run_if(resource_exists::<BattleRuntime>),
+                (sync_data, sync_overlays, handle_clicks, ability_keys, ability_at, hardpoint_clicks, reinforce_clicks, reinforce_place, reinforce_events, reinforce_panel, sync_minimap, minimap_pan).chain().run_if(resource_exists::<BattleRuntime>),
             )
                 .chain(),
         );
@@ -57,6 +58,8 @@ pub struct TacticalUiState {
     pub groups: Vec<Vec<u32>>,
     /// A targeted ability waits for a click on the map: the ships of the slot and the ability type.
     pub pending_ability: Option<(Vec<u32>, String)>,
+    /// The cursor label while a targeted ability is armed.
+    ability_label: Option<Entity>,
 }
 
 /// Counts frames after a battle ended, then checks that no battle UI is left (a leftover would draw over the galaxy).
@@ -252,7 +255,7 @@ fn handle_clicks(
         let Some(group) = tac.selection.get(tac.focus).and_then(|_| state.groups.get(tac.focus)) else { continue };
         // Targeted abilities (reveal ping): the next click on the map is the target.
         let targeted = group.first().and_then(|&id| rt.cur.as_ref().and_then(|c| c.ship(id))).is_some_and(|s| {
-            rt.catalog.ship(s.def).abilities.iter().any(|d| d.kind.eq_ignore_ascii_case(&a.ability) && d.reveal_radius > 0.0)
+            rt.catalog.ship(s.def).abilities.iter().any(|d| d.kind.eq_ignore_ascii_case(&a.ability) && is_targeted(d))
         });
         if targeted {
             state.pending_ability = Some((group.clone(), a.ability.clone()));
@@ -541,7 +544,17 @@ Follows the selected unit; you can rotate around it".to_string());
     }
 }
 
-/// Completes a targeted ability: the click on the map sends `UseAbilityAt` for the first ship of the slot that has it ready.
+/// Abilities that are aimed at a point: the reveal ping, the lightning storm (zone) and the super laser.
+fn is_targeted(d: &battle_sim::AbilityDef) -> bool {
+    d.reveal_radius > 0.0 || d.zone.is_some() || d.super_laser.is_some()
+}
+
+/// Radius within which the sim looks for a super laser target around the aimed point (`Battle::command`, `UseAbilityAt`).
+const SUPER_LASER_AIM_RADIUS: f32 = 600.0;
+
+/// Completes a targeted ability: the cursor shows its area (reveal ping radius, storm radius with the placing range around the ship,
+/// super laser aim circle); the click sends `UseAbilityAt` for the first ship of the slot that has it ready. A position that the sim would
+/// refuse (out of the storm's range, no enemy capital / frigate / structure near the super laser aim) shows the reason and keeps the mode.
 #[allow(clippy::too_many_arguments)]
 fn ability_at(
     mut state: ResMut<TacticalUiState>,
@@ -551,37 +564,133 @@ fn ability_at(
     hover: Res<Hover>,
     pointer: Res<control::Pointer>,
     block: Res<control::UiBlock>,
+    scale: Res<UiScale>,
+    mut labels: Query<(&mut Node, &mut Text, &mut TextColor)>,
+    mut commands: Commands,
     mut gizmos: Gizmos,
 ) {
     if armed.0 != Some(control::ArmedKind::AbilityAt) {
         state.pending_ability = None;
+        if let Some(e) = state.ability_label.take() {
+            commands.entity(e).try_despawn();
+        }
         return;
     }
     let Some((group, kind)) = state.pending_ability.clone() else {
         armed.0 = None;
         return;
     };
-    let Some(ground) = hover.ground.filter(|_| !block.0) else { return };
-    let radius = group
-        .first()
-        .and_then(|&id| rt.cur.as_ref().and_then(|c| c.ship(id)))
-        .and_then(|s| rt.catalog.ship(s.def).abilities.iter().find(|d| d.kind.eq_ignore_ascii_case(&kind)).map(|d| d.reveal_radius))
-        .unwrap_or(500.0);
-    gizmos.circle(Isometry3d::new(ground, Quat::from_rotation_x(std::f32::consts::FRAC_PI_2)), radius, Color::srgb(0.4, 0.8, 1.0)).resolution(48);
-    if !pointer.left_released {
+    let label = match state.ability_label {
+        Some(e) => e,
+        None => {
+            let e = commands
+                .spawn((
+                    crate::BattleEntity,
+                    Text::new(""),
+                    TextFont { font_size: FontSize::Px(12.0), ..default() },
+                    TextColor(Color::WHITE),
+                    TextShadow { offset: Vec2::splat(1.0), color: Color::BLACK },
+                    Node { position_type: PositionType::Absolute, display: Display::None, ..default() },
+                    GlobalZIndex(70),
+                    bevy::ui::FocusPolicy::Pass,
+                ))
+                .id();
+            state.ability_label = Some(e);
+            e
+        }
+    };
+    let (Some(ground), Some(cursor)) = (hover.ground.filter(|_| !block.0), pointer.cursor) else {
+        if let Ok((mut n, ..)) = labels.get_mut(label) {
+            n.display = Display::None;
+        }
+        return;
+    };
+    let Some(cur) = rt.cur.as_ref() else { return };
+    let shape = |g: Vec3, r: f32, c: Color, gizmos: &mut Gizmos| {
+        gizmos.circle(Isometry3d::new(g, Quat::from_rotation_x(std::f32::consts::FRAC_PI_2)), r, c).resolution(48);
+    };
+    let pos = crate::convert::bevy_to_sim(ground);
+    // The caster: the first ship of the slot that has the ability ready (else the first one).
+    let caster = group.iter().filter_map(|&id| cur.ship(id)).find_map(|s| {
+        let i = rt.catalog.ship(s.def).abilities.iter().position(|d| d.kind.eq_ignore_ascii_case(&kind))?;
+        Some((s, i))
+    });
+    let Some((caster, idx)) = caster else {
+        armed.0 = None;
+        return;
+    };
+    let def = &rt.catalog.ship(caster.def).abilities[idx];
+    let ready = caster.abilities.get(idx).is_some_and(|a| a.1 <= 0.0 && a.0 <= 0.0);
+    let mut verdict: Result<(), &str> = if ready { Ok(()) } else { Err("Not ready") };
+    let (mut radius, mut colour) = (def.reveal_radius.max(60.0), Color::srgb(0.4, 0.8, 1.0));
+    if let Some(zone) = &def.zone {
+        radius = zone.radius;
+        // The placing range around the caster.
+        let from = crate::convert::sim_to_bevy(caster.pos);
+        shape(from, zone.max_range, Color::srgba(0.6, 0.9, 1.0, 0.4), &mut gizmos);
+        if caster.pos.dist(pos) > zone.max_range {
+            verdict = verdict.and(Err("Out of range"));
+        }
+        colour = Color::srgb(0.8, 0.5, 1.0);
+    }
+    if def.super_laser.is_some() {
+        radius = SUPER_LASER_AIM_RADIUS;
+        colour = Color::srgb(1.0, 0.5, 0.2);
+        let target = cur.ships.iter().any(|t| {
+            t.side != settings.player_side
+                && matches!(rt.catalog.ship(t.def).class, battle_sim::TargetClass::Capital | battle_sim::TargetClass::Frigate | battle_sim::TargetClass::Structure)
+                && t.pos.dist(pos) <= SUPER_LASER_AIM_RADIUS
+        });
+        if !target {
+            verdict = verdict.and(Err("No target"));
+        }
+    }
+    if verdict.is_err() {
+        colour = Color::srgb(1.0, 0.35, 0.3);
+    }
+    shape(ground, radius, colour, &mut gizmos);
+    if let Ok((mut node, mut text, mut tc)) = labels.get_mut(label) {
+        node.display = Display::Flex;
+        node.left = Val::Px((cursor.x + 18.0) / scale.0);
+        node.top = Val::Px((cursor.y + 14.0) / scale.0);
+        let msg = match verdict {
+            Ok(()) => "Click to use".to_string(),
+            Err(why) => why.to_string(),
+        };
+        if text.0 != msg {
+            text.0 = msg;
+        }
+        tc.0 = colour;
+    }
+    if !pointer.left_released || verdict.is_err() {
         return;
     }
-    let pos = crate::convert::bevy_to_sim(ground);
-    for &id in &group {
-        let Some(s) = rt.cur.as_ref().and_then(|c| c.ship(id)) else { continue };
-        let Some(i) = rt.catalog.ship(s.def).abilities.iter().position(|d| d.kind.eq_ignore_ascii_case(&kind)) else { continue };
-        if s.abilities.get(i).is_some_and(|a| a.1 <= 0.0) {
-            rt.command(settings.player_side, Command::UseAbilityAt { ship: id, ability: i as u16, pos });
-            break;
-        }
+    let casters: Vec<u32> = group.iter().copied().filter(|id| cur.ship(*id).is_some_and(|s| s.id == caster.id)).collect();
+    if let Some(&id) = casters.first() {
+        rt.command(settings.player_side, Command::UseAbilityAt { ship: id, ability: idx as u16, pos });
     }
     state.pending_ability = None;
     armed.0 = None;
+}
+
+/// Shift + 1..6 press the ability buttons of the focused unit (the data has no ability hotkeys; the digits alone are control groups).
+fn ability_keys(
+    keys: Res<ButtonInput<KeyCode>>,
+    tac: Res<TacticalData>,
+    mut clicks: MessageWriter<EawAbilityClicked>,
+) {
+    if !(keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight)) {
+        return;
+    }
+    const DIGITS: [KeyCode; 6] = [KeyCode::Digit1, KeyCode::Digit2, KeyCode::Digit3, KeyCode::Digit4, KeyCode::Digit5, KeyCode::Digit6];
+    let Some(unit) = tac.selection.get(tac.focus) else { return };
+    for (k, key) in DIGITS.iter().enumerate() {
+        if keys.just_pressed(*key)
+            && let Some(a) = unit.abilities.get(k).filter(|a| !a.disabled)
+        {
+            clicks.write(EawAbilityClicked { unit_type: unit.name.clone(), ability: a.def.kind.clone() });
+        }
+    }
 }
 
 /// Reticle kind of a hardpoint (`I_HARD_POINT_RETICLE_<KIND>`).
@@ -853,13 +962,11 @@ fn reinforce_place(
         }
         tc.0 = colour;
     }
-    if pointer.left_released {
-        if ok {
-            let count = if all { row.2 } else { 1 };
-            // The count drops when the simulation reports the call (`ReinforcementsCalled`).
-            rt.command(player, Command::ReinforceAt { ship: row.1, count, pos: sim_pos });
-            info!("reinforcements: placing {count} x {} at {sim_pos:?}", row.0);
-            armed.0 = None;
-        }
+    if pointer.left_released && ok {
+        let count = if all { row.2 } else { 1 };
+        // The count drops when the simulation reports the call (`ReinforcementsCalled`).
+        rt.command(player, Command::ReinforceAt { ship: row.1, count, pos: sim_pos });
+        info!("reinforcements: placing {count} x {} at {sim_pos:?}", row.0);
+        armed.0 = None;
     }
 }
