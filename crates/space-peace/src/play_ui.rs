@@ -898,13 +898,15 @@ fn scripted_clicks(
     mut out: MessageWriter<EawButtonClicked>,
     mut galaxy_frames: Local<u32>,
     mut battle_frames: Local<u32>,
+    runtime: Option<Res<battle_view::BattleRuntime>>,
 ) {
     if !args.scripted() {
         return;
     }
     let (list, frames) = match screen.get() {
         AppScreen::Galaxy if !hold.active && !state.current.loading => (args.click.as_deref(), &mut *galaxy_frames),
-        AppScreen::SpaceBattle => (args.battle_click.as_deref(), &mut *battle_frames),
+        // Clicks wait for the battle itself: its bar and reserve are set up after the loading screen.
+        AppScreen::SpaceBattle if runtime.is_some() => (args.battle_click.as_deref(), &mut *battle_frames),
         _ => return,
     };
     let Some(list) = list else { return };
