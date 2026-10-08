@@ -50,3 +50,6 @@ the first directional light. `battle-view` spawns the map's fill lights from the
   On the Kuat low-orbit view it changes nothing visible: the terrain normal map is magnified there (filtered length ~1), so the bright specks are the
   texture's real detail, not aliasing. A distance-based bump fade was not added (no EaW reference for the scale).
 - Acclamator engine glow is not missing: `pe_acclamatorengines`/`_sml` render as cyan particle puffs behind the stern (seen from behind with `render_scene EV_ACCLAMATOR.ALO --cam 20,-10,1.8`); the earlier views showed the bow side.
+- Additive particles now multiply by the texture alpha (`particle.wgsl`, modes 1 and 2). `P_PARTICLE_LIGHT.dds` (10x10 atlas, used by the Acclamator/ISD
+  engine emitters and explosion sparks) stores hard-edged solid discs in RGB and the soft falloff only in alpha; ignoring alpha drew hard discs.
+  Assumes EaW additive = SRCALPHA/ONE (not confirmed from engine data). Effects get somewhat dimmer; before/after: `target/vis/pb_*.png` vs `pa_*.png`.

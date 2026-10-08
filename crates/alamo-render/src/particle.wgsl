@@ -24,10 +24,10 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
 #endif
     let rgb = t.rgb * c.rgb;
     if additive == 1u {
-        return vec4<f32>(to_linear(rgb * c.a), 0.0);
+        return vec4<f32>(to_linear(rgb * c.a * t.a), 0.0);
     }
     if additive == 2u {
-        return vec4<f32>(to_linear(rgb), 0.0);
+        return vec4<f32>(to_linear(rgb * t.a), 0.0);
     }
     return vec4<f32>(to_linear(rgb), t.a * c.a);
 }
