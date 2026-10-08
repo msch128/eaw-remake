@@ -16,7 +16,7 @@ pub mod xml;
 
 pub use combat::CombatTable;
 pub use difficulty::{DifficultyAdjustment, DifficultyTable};
-pub use galaxy::{GameData, load_galaxy};
+pub use galaxy::{CampaignSet, GameData, PlayableCampaign, load_galaxy};
 pub use model::{
     Campaign, CampaignFaction, Faction, LineSettings, Planet, StartingForce, TradeRoute,
     TradeRouteLine,

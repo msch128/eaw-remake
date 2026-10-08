@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use alamo_fs::FileSource;
 
 use crate::combat::CombatTable;
-use crate::model::{Campaign, Faction, Planet, TradeRoute, TradeRouteLine};
+use crate::model::{Campaign, CampaignFaction, Faction, Planet, TradeRoute, TradeRouteLine};
 use crate::objects::GameObjects;
 use crate::text::TextTable;
 use crate::xml::{self, Element, Warning};
@@ -354,6 +354,80 @@ pub(crate) fn index_files(src: &dyn FileSource, path: &str, w: &mut Vec<Warning>
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// One galactic conquest the player can start: a campaign with a galaxy and the faction the player takes (`Starting_Active_Player`).
+#[derive(Debug, Clone, Copy)]
+pub struct PlayableCampaign<'a> {
+    /// The campaign (`GC_Full_Web_Way_Rebel`).
+    pub campaign: &'a Campaign,
+    /// The faction the player plays.
+    pub faction: &'a Faction,
+    /// The campaign's entry of that faction (credits, tech, home planet, story plot).
+    pub slot: Option<&'a CampaignFaction>,
+}
+
+/// A campaign set as the menu shows it: the campaigns that share a galaxy and size (`Campaign_Set`, for example `Web_Way4` = the Full galaxy),
+/// one per playable faction.
+#[derive(Debug, Clone)]
+pub struct CampaignSet<'a> {
+    /// `Campaign_Set` value.
+    pub name: String,
+    /// Playable campaigns of the set, in menu order (`Sort_Order`, then file order).
+    pub campaigns: Vec<PlayableCampaign<'a>>,
+}
+
+impl GameData {
+    /// The campaigns the player can start, grouped by campaign set in file order. Only campaigns that define a galaxy and whose
+    /// `Starting_Active_Player` is a known faction count; menu-only entries and the dummy / language entries are left out.
+    pub fn campaign_sets(&self) -> Vec<CampaignSet<'_>> {
+        let mut sets: Vec<CampaignSet<'_>> = Vec::new();
+        for c in self.campaigns.iter().filter(|c| c.has_galaxy()) {
+            let Some(faction) = c.starting_active_player.as_deref().and_then(|f| self.faction(f)) else { continue };
+            let name = c.set.clone().unwrap_or_else(|| c.name.clone());
+            let slot = c.factions.iter().find(|f| f.name.eq_ignore_ascii_case(&faction.name));
+            let entry = PlayableCampaign { campaign: c, faction, slot };
+            match sets.iter_mut().find(|s| s.name.eq_ignore_ascii_case(&name)) {
+                Some(s) => s.campaigns.push(entry),
+                None => sets.push(CampaignSet { name, campaigns: vec![entry] }),
+            }
+        }
+        for s in &mut sets {
+            s.campaigns.sort_by_key(|p| p.campaign.sort_order);
+        }
+        sets
+    }
+
+    /// Factions the player can pick in at least one campaign set, in first-seen order.
+    pub fn playable_factions(&self) -> Vec<&Faction> {
+        let mut out: Vec<&Faction> = Vec::new();
+        for s in self.campaign_sets() {
+            for p in s.campaigns {
+                if !out.iter().any(|f| std::ptr::eq(*f, p.faction)) {
+                    out.push(p.faction);
+                }
+            }
+        }
+        out
+    }
+
+    /// Factions that carry `Is_Playable` in the faction files but have no campaign of their own (the Remake lists many minor factions that way:
+    /// they play as AI factions in every campaign, the player picks one of the campaign factions instead).
+    pub fn flagged_playable_without_campaign(&self) -> Vec<&Faction> {
+        let picked = self.playable_factions();
+        self.factions.iter().filter(|f| f.is_playable && !f.name.to_ascii_lowercase().starts_with("dummy") && !picked.iter().any(|p| std::ptr::eq(*p, *f))).collect()
+    }
+
+    /// The other factions of a campaign (everything but the player's, without neutral and pirate placeholders), with their campaign entries.
+    pub fn campaign_opponents<'a>(&'a self, campaign: &'a Campaign) -> Vec<(&'a Faction, &'a CampaignFaction)> {
+        campaign
+            .factions
+            .iter()
+            .filter(|cf| !campaign.starting_active_player.as_deref().is_some_and(|p| p.eq_ignore_ascii_case(&cf.name)))
+            .filter_map(|cf| self.faction(&cf.name).map(|f| (f, cf)))
+            .filter(|(f, _)| !f.is_neutral && !f.name.to_ascii_lowercase().starts_with("dummy"))
+            .collect()
+    }
 }
 
 #[cfg(test)]

@@ -170,3 +170,29 @@ fn ownership_is_consistent() {
     );
     assert_eq!(owners.get("Yavin_WW").map(String::as_str), Some("Rebel"));
 }
+
+#[test]
+fn campaign_sets_list_the_playable_factions() {
+    let Some(src) = open() else { return };
+    let (data, _) = load_galaxy(&src);
+    let sets = data.campaign_sets();
+    for s in &sets {
+        let names: Vec<String> = s.campaigns.iter().map(|p| format!("{} -> {} ({})", p.faction.name, p.campaign.name, p.slot.and_then(|c| c.home_location.clone()).unwrap_or_default())).collect();
+        println!("set {}: {}", s.name, names.join(", "));
+    }
+    assert!(sets.len() >= 4, "Mini, Standard, Full and the casual / observer sets: {}", sets.len());
+    let full = sets.iter().find(|s| s.name.eq_ignore_ascii_case("Web_Way4")).expect("the Full galaxy set");
+    let factions: Vec<&str> = full.campaigns.iter().map(|p| p.faction.name.as_str()).collect();
+    assert_eq!(factions.len(), 3);
+    for f in ["Rebel", "Empire", "Underworld"] {
+        assert!(factions.contains(&f), "{f} in {factions:?}");
+    }
+    assert!(full.campaigns.iter().all(|p| p.faction.is_playable));
+    let playable: Vec<&str> = data.playable_factions().iter().map(|f| f.name.as_str()).collect();
+    let flagged: Vec<&str> = data.flagged_playable_without_campaign().iter().map(|f| f.name.as_str()).collect();
+    println!("playable in GC: {playable:?}\nflagged Is_Playable but only AI: {flagged:?}");
+    let rebel = full.campaigns.iter().find(|p| p.faction.name == "Rebel").unwrap();
+    let opponents: Vec<&str> = data.campaign_opponents(rebel.campaign).iter().map(|(f, _)| f.name.as_str()).collect();
+    println!("opponents in {}: {opponents:?}", rebel.campaign.name);
+    assert!(opponents.contains(&"Empire") && opponents.contains(&"Underworld") && !opponents.contains(&"Rebel"));
+}
