@@ -42,7 +42,7 @@ pub use tactical::{TacticalOverlayRoot,
 };
 pub use widgets::{
     CommandBarMode, CommandBarSpec, EawButton, EawCommandBar, EawPanel, ShellAnchor, ShellSpec,
-    spawn_command_bar, spawn_shell,
+    clamp_to_screen, spawn_command_bar, spawn_shell,
 };
 
 /// How design pixels (1366x768 reference) map to screen pixels.

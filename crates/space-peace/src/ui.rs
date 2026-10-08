@@ -31,7 +31,8 @@ impl Plugin for UiPlugin {
             .add_systems(
                 Update,
                 (update_info_panel, update_faction_bar, update_tooltip)
-                    .run_if(in_state(AppScreen::Galaxy)),
+                    .run_if(in_state(AppScreen::Galaxy))
+                    .run_if(not(resource_exists::<galaxy_play::SimState>)),
             );
     }
 }

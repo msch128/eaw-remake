@@ -1343,12 +1343,12 @@ pub(crate) fn tooltip(
     assets: Res<EawUiAssets>,
     forced: Res<ForcedTooltip>,
     buttons: Query<(&EawButton, &Interaction, &ComputedNode, &UiGlobalTransform)>,
-    mut tip: Query<(&mut Node, &Children), With<Tooltip>>,
+    mut tip: Query<(&mut Node, &Children, &ComputedNode), With<Tooltip>>,
     mut texts: Query<&mut Text>,
     window: Query<&Window, With<PrimaryWindow>>,
     scale: Res<UiScale>,
 ) {
-    let Ok((mut node, kids)) = tip.single_mut() else {
+    let Ok((mut node, kids, own)) = tip.single_mut() else {
         return;
     };
     let mut hit = None;
@@ -1393,6 +1393,10 @@ pub(crate) fn tooltip(
             .ok()
             .and_then(Window::cursor_position)
             .map_or(Vec2::ZERO, |p| p + Vec2::new(14.0, 18.0))
+    };
+    let anchor = match window.single() {
+        Ok(w) if !forced_hit => clamp_to_screen(anchor, w.cursor_position().unwrap_or(anchor), own.size() / w.scale_factor(), w.size()),
+        _ => anchor,
     };
     // Bevy positions logical px; UiScale is applied to Val::Px so undo it.
     node.left = Val::Px(anchor.x / scale.0);
@@ -1448,6 +1452,19 @@ pub(crate) fn panel_texts(
 
 
 
+
+/// Keeps a tooltip of `size` (logical px) on the screen: shifted left at the right edge, and flipped above the
+/// cursor when it would run over the bottom edge.
+pub fn clamp_to_screen(anchor: Vec2, cursor: Vec2, size: Vec2, screen: Vec2) -> Vec2 {
+    let mut p = anchor;
+    if p.x + size.x > screen.x - 4.0 {
+        p.x = (screen.x - size.x - 4.0).max(0.0);
+    }
+    if p.y + size.y > screen.y - 4.0 {
+        p.y = (cursor.y - size.y - 12.0).max(0.0);
+    }
+    p
+}
 
 /// Roman numeral of a small level ("" for 0).
 fn roman(level: u8) -> String {

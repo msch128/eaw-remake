@@ -2,7 +2,7 @@
 //! hyperspace lane with a streak, owner-coloured rings, selection highlight and count labels.
 
 use std::collections::{BTreeMap, HashMap};
-use std::f32::consts::{FRAC_PI_2, TAU};
+use std::f32::consts::FRAC_PI_2;
 
 use alamo_render::{AlamoFs, AlamoModel, AlamoModelLoaded};
 use bevy::prelude::*;
