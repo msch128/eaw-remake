@@ -259,7 +259,7 @@ fn fix_star_dome(
                         material: h.0.clone(),
                         base: m.params.diffuse,
                         // Reference look: orbit lines at full strength, the core glow dimmed to a maroon haze, no grid.
-                        strength: match name.as_str() { "grid" => 0.0, "core" => 0.32, _ => 0.9 },
+                        strength: match name.as_str() { "grid" => 0.0, "core" => 0.14, _ => 0.9 },
                     });
                 }
             }
@@ -918,9 +918,9 @@ struct LaneState {
 
 /// Half widths of the ribbons in planet radii (`MapScale::unit`), by data width class. The reference
 /// shows wide soft light-blue beams of about 0.7 planet radii, thinner inter lanes and hair lines.
-const LANE_HALF_WIDTH: [f32; 3] = [0.16, 0.07, 0.03];
+const LANE_HALF_WIDTH: [f32; 3] = [0.12, 0.05, 0.022];
 /// Peak brightness (linear) of the beams.
-const LANE_PEAK: [f32; 3] = [0.42, 0.34, 0.26];
+const LANE_PEAK: [f32; 3] = [0.3, 0.24, 0.18];
 
 fn lane_class(width: f32) -> usize {
     if width >= 4.0 {
