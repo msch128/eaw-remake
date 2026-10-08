@@ -346,7 +346,7 @@ pub(crate) fn unit_tooltip(
         {
             let name = game
                 .as_ref()
-                .and_then(|g| g.objects.resolve(&hdef.name).and_then(|r| r.get("text_id").map(str::to_string)))
+                .and_then(|g| g.objects.resolve(&hdef.name).and_then(|r| r.get("tooltip_text").or_else(|| r.get("text_id")).and_then(|v| v.split_whitespace().next().map(str::to_string))))
                 .and_then(|k| assets.as_ref().and_then(|a| a.text.get(k.trim()).map(str::to_string)))
                 .unwrap_or_else(|| hdef.name.replace('_', " "));
             let dmg = hdef.projectile.and_then(|p| rt.catalog.projectiles.get(p as usize)).map(|p| p.damage);

@@ -129,6 +129,11 @@ pub struct MoveLines {
     pub rings: Vec<Vec3>,
 }
 
+/// Move marker ring radius in hull radii of the biggest ship sent there, and its limits in world units (estimates from the video frames b0641..b0643).
+const RING_HULL_RADII: f32 = 4.0;
+const RING_MIN: f32 = 250.0;
+const RING_MAX: f32 = 3500.0;
+
 /// Seconds the move line of an ordered ship stays up after the order when it is not selected (estimate).
 const ORDER_LINE_SECONDS: f32 = 3.0;
 
@@ -715,7 +720,7 @@ pub fn overlays(
     });
     let mut listed: Vec<u32> = sel.ships.clone();
     listed.extend(recent.0.keys().copied().filter(|id| !sel.ships.contains(id)));
-    let mut rings: Vec<(Vec3, Color)> = Vec::new();
+    let mut rings: Vec<(Vec3, Color, f32)> = Vec::new();
     let mut drawn: Vec<(Vec3, Vec3)> = Vec::new();
     for id in listed {
         let Some(s) = ships.0.get(&id).filter(|s| s.side == player && s.visible) else { continue };
@@ -732,7 +737,10 @@ pub fn overlays(
             },
             _ => continue,
         };
-        if (dest - s.pos).length() < s.radius.max(40.0) {
+        // The ring is world sized like in the real game (about four hull radii of the biggest ship sent there, estimate from the video frames);
+        // it goes away once the ships are inside it.
+        let ring_radius = (s.radius * RING_HULL_RADII).clamp(RING_MIN, RING_MAX);
+        if (dest - s.pos).length() < ring_radius * 0.3 {
             continue;
         }
         drawn.push((s.pos, dest));
@@ -742,15 +750,19 @@ pub fn overlays(
             let (a, b) = (s.pos.lerp(dest, t0), s.pos.lerp(dest, t1));
             gizmos.line_gradient(a, b, base.with_alpha(0.9 * (1.0 - t0 * 0.8)), base.with_alpha(0.9 * (1.0 - t1 * 0.8)));
         }
-        if !matches!(s.order, battle_sim::Order::Attack(_)) && !rings.iter().any(|(p, _)| p.distance(dest) < 30.0) {
-            rings.push((dest, base));
+        if !matches!(s.order, battle_sim::Order::Attack(_)) {
+            match rings.iter_mut().find(|(p, ..)| p.distance(dest) < 30.0) {
+                Some(ring) => ring.2 = ring.2.max(ring_radius),
+                None => rings.push((dest, base, ring_radius)),
+            }
         }
     }
     *move_lines = MoveLines { lines: drawn, rings: rings.iter().map(|r| r.0).collect() };
-    for (p, c) in rings {
-        let r = wpp(p) * 30.0 * scale;
-        gizmos.circle(Isometry3d::new(p, flat), r, c.with_alpha(0.9)).resolution(48);
-        gizmos.circle(Isometry3d::new(p, flat), r * 0.82, c.with_alpha(0.35)).resolution(48);
+    for (p, c, r) in rings {
+        // A few hairline circles side by side make the glowing 5 px band of the real marker.
+        for (k, a) in [(0.0, 0.95), (0.006, 0.55), (-0.006, 0.55), (0.012, 0.25), (-0.012, 0.25)] {
+            gizmos.circle(Isometry3d::new(p, flat), r * (1.0 + k), c.with_alpha(a)).resolution(96);
+        }
     }
 
     // Order flashes.

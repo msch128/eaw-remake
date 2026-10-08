@@ -211,6 +211,7 @@ pub fn update_ships(
     mut touch: ModelTouch,
     mut views: Query<(&mut ShipView, &mut Transform), Without<Dying>>,
     arrivals: Query<&HyperspaceArrival>,
+    mut sfx: MessageWriter<alamo_audio::PlaySfx>,
     mut flash_spots: Local<Vec<Vec3>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
@@ -282,6 +283,10 @@ pub fn update_ships(
                 let lead = if std::env::var_os("SP_FORCE_ARRIVAL").is_some() { 4.0 } else { 0.0 };
                 if cur.time > 2.0 || lead > 0.0 {
                     commands.entity(e).insert(HyperspaceArrival { start: cur.time + lead });
+                    // `SFXEvent_Arrive_From_Hyperspace` of the factions (the same event for all three).
+                    if flash_spots.len() < 3 {
+                        sfx.write(alamo_audio::PlaySfx { event: "Unit_Ship_Hyperspace_Enter".into(), position: Some(pos), source: None });
+                    }
                     let fighter = matches!(def.class, TargetClass::Fighter | TargetClass::Bomber);
                     // One flash per squadron: a fighter arriving next to another fighter that already got one shares it.
                     let shared = fighter && flash_spots.iter().any(|p| p.distance(pos) < 900.0);
@@ -412,6 +417,10 @@ pub fn update_ships(
             continue;
         };
         if !rt.dying.contains(&id) {
+            // A ship that leaves without dying retreated: `SFXEvent_Exit_Into_Hyperspace`.
+            if let Ok((_, t)) = views.get(e) {
+                sfx.write(alamo_audio::PlaySfx { event: "Unit_Ship_Hyperspace_Exit".into(), position: Some(t.translation), source: None });
+            }
             commands.entity(e).try_despawn();
         }
     }

@@ -123,6 +123,8 @@ struct TestState {
     /// Camera yaw / pitch at the start and after the horizontal part of a drag.
     ability_clicks: u32,
     hp_marker: Option<Vec2>,
+    hp_ship: Option<u32>,
+    cam_saved: Option<(Vec3, f32)>,
     cam0: (f32, f32),
     cam1: (f32, f32),
     reserve_before: u32,
@@ -155,7 +157,7 @@ fn drive(
     mut clicks: MessageReader<EawButtonClicked>,
     bar: Query<(&EawButton, &EawButtonState, &ComputedNode, &UiGlobalTransform, &InheritedVisibility)>,
     mut exit: MessageWriter<AppExit>,
-    hp_ui: (Res<eaw_ui::TacticalOverlays>, Query<&Node, With<crate::hud::HardpointTip>>),
+    hp_ui: (Res<eaw_ui::TacticalOverlays>, Query<(&Node, &Text), With<crate::hud::HardpointTip>>, Query<&mut BattleCamera>),
     extra: (
         Res<UiBlock>,
         Res<Pointer>,
@@ -167,7 +169,6 @@ fn drive(
         Res<ActionCam>,
         Res<ArmedOrder>,
         Res<crate::tactical_ui::ReinforceUi>,
-        Query<&BattleCamera>,
         MessageWriter<MouseMotion>,
         MessageWriter<KeyboardInput>,
         Res<eaw_ui::TacticalData>,
@@ -175,8 +176,9 @@ fn drive(
         Res<crate::control::MoveLines>,
     ),
 ) {
-    let (block, pointer, hover, names, all_nodes, interactions, mut commands, action, armed, reinforce, cams, mut motion, mut keyboard, tactical, mut ability_clicks, move_lines) = extra;
+    let (block, pointer, hover, names, all_nodes, interactions, mut commands, action, armed, reinforce, mut motion, mut keyboard, tactical, mut ability_clicks, move_lines) = extra;
     st.ability_clicks += ability_clicks.read().count() as u32;
+    let (hp_overlays, hp_tips, mut cams) = hp_ui;
     let cam_pose = cams.single().map(|c| (c.target_yaw, c.pitch)).unwrap_or_default();
     let (cam_entity, cam, gt) = *camera;
     let sf = cam.target_scaling_factor().unwrap_or(1.0);
@@ -402,36 +404,53 @@ fn drive(
             _ => {}
         },
         Step::HardpointTooltip => {
-            let (overlays, tips) = hp_ui;
+            let (overlays, tips) = (&hp_overlays, &hp_tips);
             match t {
                 0 => {
-                    // The biggest ship on screen that has hardpoints a reticle can mark.
+                    // The biggest ship with hardpoints a reticle can mark: bring the camera over it.
                     let pick = ships
                         .0
                         .values()
                         .filter(|s| s.visible && rt.catalog.ship(s.def).hardpoints.iter().any(|h| h.destroyable && crate::visuals::is_markable(h.kind)))
-                        .filter_map(|s| cam.world_to_viewport(gt, s.pos).ok().map(|p| (s.radius, p)))
-                        .filter(|(_, p)| p.x > vp.x * 0.1 && p.x < vp.x * 0.9 && p.y > vp.y * 0.1 && p.y < vp.y * 0.78)
-                        .max_by(|a, b| a.0.total_cmp(&b.0));
-                    match pick {
-                        Some((_, p)) => act = Some(Act::Move(p)),
-                        None => {
-                            info!("input-test:   {} ships, {} with markable hardpoints", ships.0.len(), ships.0.values().filter(|s| rt.catalog.ship(s.def).hardpoints.iter().any(|h| h.destroyable && crate::visuals::is_markable(h.kind))).count());
-                            verdict = Some(("hardpoint-tooltip (no ship with hardpoints on screen)".into(), false));
+                        .max_by(|a, b| a.radius.total_cmp(&b.radius));
+                    match (pick, cams.single_mut()) {
+                        (Some(s), Ok(mut c)) => {
+                            st.cam_saved = Some((c.focus, c.distance));
+                            let at = Vec3::new(s.pos.x, c.target_focus.y, s.pos.z);
+                            c.focus = at;
+                            c.target_focus = at;
+                            c.distance = (s.radius * 5.0).max(c.min_distance);
+                            c.target_distance = c.distance;
+                            st.hp_ship = Some(s.id);
                         }
+                        _ => verdict = Some(("hardpoint-tooltip (no ship with hardpoints)".into(), false)),
                     }
                 }
-                10 => {
+                8 => {
+                    let p = st.hp_ship.and_then(|id| ships.0.get(&id)).and_then(|s| cam.world_to_viewport(gt, s.pos).ok());
+                    match p {
+                        Some(p) => act = Some(Act::Move(p)),
+                        None => verdict = Some(("hardpoint-tooltip: ship not on screen".into(), false)),
+                    }
+                }
+                16 => {
                     st.hp_marker = overlays.hardpoints.first().map(|h| h.screen_pos);
                     match st.hp_marker {
                         Some(p) => act = Some(Act::Move(p)),
                         None => verdict = Some(("hardpoint-tooltip: no reticle appeared while hovering the ship".into(), false)),
                     }
                 }
-                30 => {
-                    let shown = tips.iter().any(|n| n.display != Display::None);
+                36 => {
+                    let shown = tips.iter().any(|(n, _)| n.display != Display::None);
+                    info!("input-test:   hardpoint tooltip text {:?}", tips.iter().map(|(_, t)| t.0.clone()).collect::<Vec<_>>());
                     if !shown {
                         info!("input-test:   reticle at {:?}, cursor {:?}, markers {}", st.hp_marker, pointer.cursor, overlays.hardpoints.len());
+                    }
+                    if let (Some((f, d)), Ok(mut c)) = (st.cam_saved.take(), cams.single_mut()) {
+                        c.focus = f;
+                        c.target_focus = f;
+                        c.distance = d;
+                        c.target_distance = d;
                     }
                     verdict = Some(("hardpoint-tooltip".into(), shown));
                 }
