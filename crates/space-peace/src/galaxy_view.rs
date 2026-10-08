@@ -85,6 +85,8 @@ pub struct PlanetView {
     pub ability: Option<(String, String)>,
     /// Display names of the structures/forces the campaign places here at the start.
     pub starting_forces: Vec<String>,
+    /// Description lines of the planet panel (system text, climate, population ... then the history), from the data.
+    pub info: Vec<String>,
 }
 
 /// A trade route / hyperspace lane between two planets.
@@ -255,6 +257,7 @@ impl GalaxyView {
                     special_slots: 6,
                     ability: None,
                     starting_forces: Vec::new(),
+                    info: Vec::new(),
                 },
             )
             .collect();

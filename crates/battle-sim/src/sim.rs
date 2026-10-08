@@ -1262,7 +1262,7 @@ impl Battle {
                 let t = &self.ships[s.target as usize];
                 let dist = t.pos.dist(s.pos);
                 for (k, a) in def.abilities.iter().enumerate() {
-                    let boosts_weapons = a.salvo || a.weapon_delay_mult < 0.99;
+                    let boosts_weapons = a.salvo || a.rocket || a.weapon_delay_mult < 0.99;
                     if boosts_weapons && s.abilities[k].cooldown <= 0.0 && s.abilities[k].active <= 0.0 && dist < def.max_weapon_range {
                         auto_use.push(k);
                         break;
@@ -1858,6 +1858,7 @@ fn weapons(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, rng:
     let hp_set = if cfg.attack_move_sets && matches!(s.order, Order::AttackMove(_)) { def.priority_attack_move } else { def.priority }
         .and_then(|i| cat.priority_sets.get(i as usize))
         .filter(|p| !p.hardpoints.is_empty());
+    let rocket_active = def.abilities.iter().zip(&s.abilities).any(|(a, st)| a.rocket && st.active > 0.0);
     let salvo_active = def.abilities.iter().zip(&s.abilities).any(|(a, st)| a.salvo && st.active > 0.0);
     let power_active = def.abilities.iter().zip(&s.abilities).any(|(a, st)| st.active > 0.0 && a.kind.eq_ignore_ascii_case("POWER_TO_WEAPONS"));
     if delay_mult <= 0.0 {
@@ -1930,6 +1931,9 @@ fn weapons(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, rng:
                 }
                 if power_active {
                     m *= hp.power_weapons_mult;
+                }
+                if rocket_active && matches!(pd.category.as_str(), "missile" | "rocket" | "torpedo") {
+                    m *= ROCKET_RELOAD_MULT;
                 }
                 st.cooldown = rng.range(hp.recharge_min, hp.recharge_max) * m;
             }
@@ -2089,3 +2093,6 @@ enum Deflect {
     Blocked,
     Reflected,
 }
+
+/// Reload delay multiplier of missile weapons while `ROCKET_ATTACK` is active (estimate).
+const ROCKET_RELOAD_MULT: f32 = 0.4;

@@ -1367,7 +1367,7 @@ pub(crate) fn spawn_tooltip(mut commands: Commands, settings: Res<EawUiSettings>
                 display: Display::None,
                 ..default()
             },
-            BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.87)),
+            BackgroundColor(Color::srgba(0.13, 0.27, 0.31, 0.9)),
             BorderColor::all(Color::srgb(0.0, 0.76, 0.99)),
             GlobalZIndex(1000),
             FocusPolicy::Pass,

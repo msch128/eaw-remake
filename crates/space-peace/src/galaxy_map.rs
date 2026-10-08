@@ -783,7 +783,9 @@ fn draw_rings(
         let pulse = 1.0 + 0.012 * (time.elapsed_secs() * 3.0).sin();
         let pos = galaxy_to_world(view.planets[i].position);
         let r = radii.0[i] * NOTCH_RADIUS * pulse;
-        let color = rgb(relation_color(&view, view.player_faction));
+        // Own planets get the green ring, everything else the cool cyan of the original.
+        let owner = view.planets[i].owner;
+        let color = if owner.is_some() && owner == view.player_faction { rgb(relation_color(&view, view.player_faction)) } else { rgb([0.1, 0.75, 1.0]) };
         let l = color.to_linear();
         let bright = Color::LinearRgba(LinearRgba::new(l.red * 1.3 + 0.1, l.green * 1.3 + 0.1, l.blue * 1.3 + 0.1, 1.0));
         select.circle(Isometry3d::new(pos, flat), r, bright).resolution(96);
@@ -856,7 +858,8 @@ fn place_notch_fill(
                 if *last != Some(i)
                     && let Some(mut m) = materials.get_mut(&mat.0)
                 {
-                    let c = rgb(relation_color(&view, view.player_faction));
+                    let owner = view.planets[i].owner;
+                    let c = if owner.is_some() && owner == view.player_faction { rgb(relation_color(&view, view.player_faction)) } else { rgb([0.1, 0.75, 1.0]) };
                     m.base_color = c.with_alpha(0.38);
                     *last = Some(i);
                 }

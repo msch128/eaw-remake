@@ -118,16 +118,16 @@ fn view_scene(
         Transform::from_translation(ORIGIN).looking_to(Vec3::new(-0.5, -0.25, -0.8), Vec3::Y),
     ));
     if let Some(model) = &p.1.model {
-        commands.spawn((ViewEntity, AlamoModel::new(model.clone()), FitModel { radius: 11.0, spin: 0.01 }, Transform::from_translation(ORIGIN + Vec3::new(-7.5, -0.5, -15.0))));
+        commands.spawn((ViewEntity, AlamoModel::new(model.clone()), FitModel { radius: 11.0, spin: 0.01 }, Transform::from_translation(ORIGIN + Vec3::new(-8.5, -0.5, -15.0))));
     }
     // Station: the model of the planet's star base level.
     if let (Some(sim), Some(cat)) = (sim, catalog)
         && let Some(sb) = sim.galaxy().planets.get(p.0).and_then(|s| s.starbase)
         && let Some(Some(m)) = cat.starbase_models.get(sb as usize)
     {
-        commands.spawn((ViewEntity, AlamoModel::new(m.clone()), FitModel { radius: 0.9, spin: 0.15 }, Transform::from_translation(ORIGIN + Vec3::new(-2.6, -0.8, -9.0))));
+        commands.spawn((ViewEntity, AlamoModel::new(m.clone()), FitModel { radius: 1.3, spin: 0.15 }, Transform::from_translation(ORIGIN + Vec3::new(-3.4, -0.9, -9.0))));
     }
-    commands.spawn((ViewEntity, AlamoModel::new("W_BuildBaseFOC.alo"), FitModel { radius: 2.2, spin: 0.0 }, Transform::from_translation(ORIGIN + Vec3::new(0.5, -1.9, -9.0))));
+    spawn_platform(&mut commands, &mut meshes, &mut mats, ORIGIN + Vec3::new(0.4, -1.5, -10.5));
 }
 
 fn view_camera(state: Res<PlanetViewState>, mut cam: Single<&mut Transform, With<GalaxyCamera>>) {
@@ -135,7 +135,7 @@ fn view_camera(state: Res<PlanetViewState>, mut cam: Single<&mut Transform, With
         return;
     }
     let t = state.blend * state.blend * (3.0 - 2.0 * state.blend);
-    let target = Transform::from_translation(ORIGIN).looking_at(ORIGIN + Vec3::new(0.0, -1.3, -10.0), Vec3::Y);
+    let target = Transform::from_translation(ORIGIN).looking_at(ORIGIN + Vec3::new(0.0, -1.6, -10.0), Vec3::Y);
     cam.translation = cam.translation.lerp(target.translation, t);
     cam.rotation = cam.rotation.slerp(target.rotation, t);
 }
@@ -150,5 +150,31 @@ fn fit_models(time: Res<Time>, mut models: Query<(&FitModel, &mut Transform, Opt
         if f.spin != 0.0 {
             tf.rotate_y(f.spin * time.delta_secs());
         }
+    }
+}
+
+/// Builds the tan base-layout platform of the video: a back slab with three rectangular slot frames and a lower
+/// front strip with six round slots (no original model for it was found, so it is made from primitives).
+fn spawn_platform(commands: &mut Commands, meshes: &mut Assets<Mesh>, mats: &mut Assets<StandardMaterial>, at: Vec3) {
+    let tan = mats.add(StandardMaterial { base_color: Color::srgb(0.62, 0.52, 0.34), perceptual_roughness: 0.8, ..default() });
+    let dark = mats.add(StandardMaterial { base_color: Color::srgb(0.48, 0.40, 0.26), perceptual_roughness: 0.9, ..default() });
+    let frame = mats.add(StandardMaterial { base_color: Color::srgb(0.95, 0.93, 0.85), emissive: LinearRgba::rgb(0.5, 0.5, 0.45), unlit: false, ..default() });
+    let root = commands.spawn((ViewEntity, Name::new("base layout"), Transform::from_translation(at).with_rotation(Quat::from_rotation_x(0.0)), Visibility::default())).id();
+    let mut part = |mesh: Mesh, mat: &Handle<StandardMaterial>, pos: Vec3| {
+        commands.spawn((Mesh3d(meshes.add(mesh)), MeshMaterial3d(mat.clone()), Transform::from_translation(pos), ChildOf(root)));
+    };
+    // Back slab (x 5.6 wide, z 2.0 deep) and the lower front strip.
+    part(Cuboid::new(5.6, 0.12, 2.0).into(), &tan, Vec3::ZERO);
+    part(Cuboid::new(5.6, 0.08, 0.8).into(), &dark, Vec3::new(0.0, -0.1, 1.6));
+    // Three slot frames on the slab.
+    for k in 0..3 {
+        let cx = (k as f32 - 1.0) * 1.8;
+        for (w, d, dx, dz) in [(1.5, 0.05, 0.0, -0.8), (1.5, 0.05, 0.0, 0.8), (0.05, 1.65, -0.75, 0.0), (0.05, 1.65, 0.75, 0.0)] {
+            part(Cuboid::new(w, 0.04, d).into(), &frame, Vec3::new(cx + dx, 0.08, dz));
+        }
+    }
+    // Round slots on the front strip.
+    for k in 0..6 {
+        part(Cylinder::new(0.28, 0.02).into(), &tan, Vec3::new((k as f32 - 2.5) * 0.85, -0.04, 1.6));
     }
 }

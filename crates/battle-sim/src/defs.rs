@@ -193,6 +193,9 @@ pub struct AbilityDef {
     pub duration: f32,
     /// True for `FULL_SALVO`, whose effect is defined per hardpoint.
     pub salvo: bool,
+    /// `ROCKET_ATTACK` / `SWAP_WEAPONS` (missile boats): for `duration` seconds the missile, rocket and torpedo hardpoints reload
+    /// at `ROCKET_RELOAD_MULT` of their normal delay (estimate: the data names the ability but gives no numbers).
+    pub rocket: bool,
     /// `MISSILE_SHIELD`: radius in which enemy missiles and torpedoes are destroyed (0 = not a missile shield).
     pub missile_radius: f32,
     /// `Disable_Movement`: the ship cannot move while the ability is active.
@@ -1313,7 +1316,7 @@ fn ability_defs(u: &SpaceUnitDef) -> Vec<AbilityDef> {
         .iter()
         .filter(|a| {
             a.expiration_seconds.unwrap_or(0.0) > 0.0
-                || ["FULL_SALVO", "TRACTOR_BEAM", "MISSILE_SHIELD", "INTERDICT", "STEALTH", "FOW_REVEAL_PING", "LASER_DEFENSE"].iter().any(|k| a.kind.eq_ignore_ascii_case(k))
+                || ["FULL_SALVO", "TRACTOR_BEAM", "MISSILE_SHIELD", "INTERDICT", "STEALTH", "FOW_REVEAL_PING", "LASER_DEFENSE", "ROCKET_ATTACK", "SWAP_WEAPONS"].iter().any(|k| a.kind.eq_ignore_ascii_case(k))
         })
         .map(|a| {
             let toggle = a.expiration_seconds.unwrap_or(0.0) <= 0.0 && ["MISSILE_SHIELD", "INTERDICT", "STEALTH"].iter().any(|k| a.kind.eq_ignore_ascii_case(k));
@@ -1338,6 +1341,7 @@ fn ability_defs(u: &SpaceUnitDef) -> Vec<AbilityDef> {
                 interdict: a.kind.eq_ignore_ascii_case("INTERDICT"),
                 toggle,
                 salvo: a.kind.eq_ignore_ascii_case("FULL_SALVO"),
+                rocket: a.kind.eq_ignore_ascii_case("ROCKET_ATTACK") || a.kind.eq_ignore_ascii_case("SWAP_WEAPONS"),
                 missile_radius: if a.kind.eq_ignore_ascii_case("MISSILE_SHIELD") || laser { a.fields.get("effective_radius").and_then(|v| v.parse().ok()).unwrap_or(750.0) } else { 0.0 },
                 disable_movement: a.fields.get("disable_movement").is_some_and(|v| alamo_data::xml::parse_bool(v)),
                 tractor: a.kind.eq_ignore_ascii_case("TRACTOR_BEAM").then(|| {

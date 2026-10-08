@@ -141,6 +141,8 @@ pub fn handle_actions(
             PlayAction::DebugGrant { unit_name, planet, count } => {
                 if let (Some(h), Some(unit)) = (player.0, state.world.unit_id(unit_name)) {
                     state.driver.send_command(Command::DebugGrant { faction: h, planet: *planet, unit, count: *count });
+                } else {
+                    warn!("debug grant: unknown unit name `{unit_name}` (or no player faction); nothing granted");
                 }
             }
             PlayAction::DestroyPlanet(planet) => {

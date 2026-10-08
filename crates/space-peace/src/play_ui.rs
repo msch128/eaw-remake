@@ -105,7 +105,7 @@ impl Plugin for PlayUiPlugin {
                     .chain()
                     .run_if(resource_exists::<PlayBridge>.and_then(resource_exists::<SimState>)),
             )
-            .add_systems(Update, (declutter_top, hero_bar, locked_clicks).chain().run_if(resource_exists::<PlayBridge>.and_then(resource_exists::<SimState>)))
+            .add_systems(Update, (declutter_top, hero_bar, locked_clicks, spawn_planet_panel, update_planet_panel).chain().run_if(resource_exists::<PlayBridge>.and_then(resource_exists::<SimState>)))
             .add_systems(Update, show_battle_summary.run_if(in_state(AppScreen::Galaxy)).run_if(resource_exists::<crate::battle_play::BattleSummary>))
             .add_systems(
                 Update,
@@ -205,7 +205,7 @@ fn pad_tooltip(o: &galaxy_play::BuildOption, week: f32, state: &SimState, game: 
         .and_then(|r| r.get("tooltip_text").map(str::to_owned))
         .and_then(|id| game?.text(id.split_whitespace().next().unwrap_or("")).map(str::to_owned))
         .filter(|t| !t.trim().is_empty());
-    let mut s = o.name.clone();
+    let mut s = o.name.to_uppercase();
     if let Some(d) = description {
         s.push('\n');
         s.push_str(d.trim());
@@ -435,7 +435,7 @@ fn spawn_hud(mut commands: Commands, existing: Query<(), With<PlayHud>>) {
             border: UiRect::all(Val::Px(1.0)),
             ..default()
         },
-        BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.87)),
+        BackgroundColor(Color::srgba(0.13, 0.27, 0.31, 0.9)),
         BorderColor::all(Color::srgb(0.0, 0.76, 0.99)),
         GlobalZIndex(30),
         Visibility::Hidden,
@@ -452,7 +452,7 @@ fn spawn_hud(mut commands: Commands, existing: Query<(), With<PlayHud>>) {
             border: UiRect::all(Val::Px(1.0)),
             ..abs
         },
-        BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.87)),
+        BackgroundColor(Color::srgba(0.13, 0.27, 0.31, 0.9)),
         BorderColor::all(Color::srgb(0.0, 0.76, 0.99)),
         Visibility::Hidden,
         FleetText,
@@ -642,7 +642,7 @@ fn fix_fleet_label_scale(scale: Res<UiScale>, mut labels: Query<&mut Node, With<
 /// Tells the label layout where the planet panel is.
 #[allow(clippy::type_complexity)]
 fn publish_panel_rect(
-    panels: Query<(&ComputedNode, &UiGlobalTransform, &InheritedVisibility), (Or<(With<crate::ui::SkinPanel>, With<Ticker>, With<eaw_ui::EawPanel>)>, Without<crate::ui::Tooltip>)>,
+    panels: Query<(&ComputedNode, &UiGlobalTransform, &InheritedVisibility), (Or<(With<crate::ui::SkinPanel>, With<Ticker>, With<eaw_ui::EawPanel>, With<PlanetPanel>)>, Without<crate::ui::Tooltip>)>,
     ui_scale: Res<UiScale>,
     mut rect: ResMut<crate::galaxy_map::PanelRect>,
 ) {
@@ -1624,5 +1624,78 @@ mod tests {
     fn capitalize_first_letter() {
         assert_eq!(capitalize("requires tech"), "Requires tech");
         assert_eq!(capitalize(""), "");
+    }
+}
+
+/// The selected planet's description panel, upper left of the HUD, in the original's cyan glass.
+#[derive(Component)]
+struct PlanetPanel;
+/// Its title / income / body texts.
+#[derive(Component, Clone, Copy, PartialEq)]
+enum PlanetPanelText {
+    Title,
+    Income,
+    Body,
+}
+
+fn spawn_planet_panel(mut commands: Commands, existing: Query<(), With<PlanetPanel>>) {
+    if !existing.is_empty() {
+        return;
+    }
+    let font = |size: f32| TextFont { font: FontSource::Family("Bahnschrift".into()), font_size: FontSize::Px(size), ..default() };
+    commands
+        .spawn((
+            PlanetPanel,
+            PlayHud,
+            GalaxyEntity,
+            Node {
+                position_type: PositionType::Absolute,
+                left: Val::Px(20.0),
+                top: Val::Px(140.0),
+                width: Val::Px(420.0),
+                min_height: Val::Px(150.0),
+                max_height: Val::Px(310.0),
+                padding: UiRect::all(Val::Px(8.0)),
+                border: UiRect::all(Val::Px(1.5)),
+                flex_direction: FlexDirection::Column,
+                overflow: Overflow::clip(),
+                ..default()
+            },
+            BackgroundColor(Color::srgba(0.13, 0.27, 0.31, 0.88)),
+            BorderColor::all(Color::srgb(0.0, 0.76, 0.99)),
+            GlobalZIndex(12),
+            Visibility::Hidden,
+        ))
+        .with_children(|p| {
+            p.spawn(Node { justify_content: JustifyContent::SpaceBetween, margin: UiRect::bottom(Val::Px(8.0)), ..default() }).with_children(|r| {
+                r.spawn((Text::new(""), font(13.0), TextColor(Color::srgb(0.9, 0.95, 1.0)), bevy::text::LetterSpacing::Rem(0.12), PlanetPanelText::Title));
+                r.spawn((Text::new(""), font(12.0), TextColor(Color::srgb(0.3, 1.0, 0.4)), PlanetPanelText::Income));
+            });
+            p.spawn((Text::new(""), font(9.5), TextColor(Color::srgb(0.93, 0.96, 0.98)), PlanetPanelText::Body));
+        });
+}
+
+fn update_planet_panel(
+    selection: Res<PlayerSelection>,
+    bridge: Res<PlayBridge>,
+    view: Res<crate::galaxy_view::GalaxyView>,
+    mut panel: Single<&mut Visibility, With<PlanetPanel>>,
+    mut texts: Query<(&PlanetPanelText, &mut Text)>,
+) {
+    let planet = selection.planet.and_then(|p| bridge.sim_to_planet.get(p as usize).copied().flatten()).and_then(|i| view.planets.get(i));
+    let Some(p) = planet.filter(|p| !p.info.is_empty()) else {
+        panel.set_if_neq(Visibility::Hidden);
+        return;
+    };
+    panel.set_if_neq(Visibility::Inherited);
+    for (kind, mut t) in &mut texts {
+        let s = match kind {
+            PlanetPanelText::Title => p.display_name.to_uppercase(),
+            PlanetPanelText::Income => format!("+{}", p.income),
+            PlanetPanelText::Body => p.info.join("\n"),
+        };
+        if t.0 != s {
+            t.0 = s;
+        }
     }
 }

@@ -498,6 +498,7 @@ pub fn build_view(data: &GameData, campaign: &Campaign) -> (GalaxyView, Vec<Stri
             surface_color: terrain_color(p),
             max_space_base: p.max_space_base,
             max_ground_base: p.max_ground_base,
+            info: planet_info(data, p),
             special_slots: p.special_structures_space,
             ability: planet_ability(data, p),
             starting_forces: forces
@@ -718,4 +719,31 @@ mod problem_tests {
         assert!(incomplete.contains("incomplete"));
         assert!(describe_problem("weird", "1").contains("Verify the game"));
     }
+}
+
+/// The planet panel text of the original: the `Describe_*` lines (system, climate, population, minerals ...) followed by
+/// the history paragraph of the encyclopedia.
+fn planet_info(data: &GameData, p: &alamo_data::Planet) -> Vec<String> {
+    let mut lines: Vec<String> = p
+        .description_ids
+        .iter()
+        .filter_map(|id| data.text(id))
+        .flat_map(|t| t.replace("\n", "\n").lines().map(str::to_owned).collect::<Vec<_>>())
+        .collect();
+    let history = p
+        .encyclopedia_text
+        .iter()
+        .find(|k| k.to_ascii_uppercase().ends_with("_INFO_HIS_01"))
+        .or_else(|| p.encyclopedia_text.iter().find(|k| k.to_ascii_uppercase().ends_with("_INFO_HIS")))
+        .and_then(|k| data.text(k));
+    // Texts may repeat (the same history under two keys, shipyard names twice): keep the first of each.
+    let mut seen = std::collections::HashSet::new();
+    lines.retain(|l| l.is_empty() || seen.insert(l.clone()));
+    if let Some(h) = history
+        && !lines.iter().any(|l| l == h.trim())
+    {
+        lines.push(String::new());
+        lines.push(h.trim().to_owned());
+    }
+    lines
 }
