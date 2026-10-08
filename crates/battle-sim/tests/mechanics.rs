@@ -259,8 +259,10 @@ fn reinforcements_can_be_called_to_a_chosen_position_inside_the_zone() {
 #[test]
 fn fog_of_war_hides_ships_outside_sensor_range_until_seen() {
     let mut sensor = ship("seer", 1.0e6, 0.0, vec![]);
+    sensor.is_static = false;
     sensor.sensor_range = 1500.0;
     let mut target = ship("far", 1.0e6, 0.0, vec![]);
+    target.is_static = false;
     target.sensor_range = 1500.0;
     let cat = Catalog::from_defs(vec![sensor, target], vec![laser()]);
     let mut b = Battle::new(setup(cat, "seer", "far", 1, 1, cfg()));
@@ -291,9 +293,11 @@ fn fog_of_war_hides_ships_outside_sensor_range_until_seen() {
 #[test]
 fn stealth_and_reveal_pings_change_what_is_seen() {
     let mut ghost = ship("ghost", 1.0e6, 0.0, vec![]);
+    ghost.is_static = false;
     ghost.sensor_range = 4000.0;
     ghost.abilities.push(battle_sim::AbilityDef { kind: "STEALTH".into(), stealth: true, toggle: true, duration: f32::MAX / 4.0, speed_mult: 1.0, shield_regen_mult: 1.0, weapon_delay_mult: 1.0, take_damage_mult: 1.0, ..Default::default() });
     let mut watcher = ship("watcher", 1.0e6, 0.0, vec![]);
+    watcher.is_static = false;
     watcher.sensor_range = 4000.0;
     watcher.abilities.push(battle_sim::AbilityDef { kind: "FOW_REVEAL_PING".into(), reveal_radius: 1000.0, duration: 5.0, recharge: 60.0, speed_mult: 1.0, shield_regen_mult: 1.0, weapon_delay_mult: 1.0, take_damage_mult: 1.0, ..Default::default() });
     let cat = Catalog::from_defs(vec![ghost, watcher], vec![laser()]);

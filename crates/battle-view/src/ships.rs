@@ -200,6 +200,9 @@ pub fn update_ships(
     mut rendered: ResMut<RenderedShips>,
     mut touch: ModelTouch,
     mut views: Query<(&mut ShipView, &mut Transform), Without<Dying>>,
+    arrivals: Query<&HyperspaceArrival>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     let (Some(cur), alpha) = (rt.cur.clone(), rt.alpha) else {
         return;
@@ -251,6 +254,26 @@ pub fn update_ships(
                         },
                     ))
                     .id();
+                // Ships that show up after the start (reinforcements) drop out of hyperspace.
+                let lead = if std::env::var_os("SP_FORCE_ARRIVAL").is_some() { 4.0 } else { 0.0 };
+                if cur.time > 2.0 || lead > 0.0 {
+                    commands.entity(e).insert(HyperspaceArrival { start: cur.time + lead });
+                    let radius = (def.radius * vis.scale.max(1.0)).max(40.0);
+                    commands.spawn((
+                        Name::new("hyperspace flash"),
+                        BattleEntity,
+                        Mesh3d(meshes.add(Sphere::new(1.0).mesh().uv(24, 16))),
+                        MeshMaterial3d(materials.add(StandardMaterial {
+                            base_color: Color::srgba(0.75, 0.88, 1.0, 0.0),
+                            unlit: true,
+                            alpha_mode: AlphaMode::Add,
+                            ..default()
+                        })),
+                        Transform::from_translation(pos).with_scale(Vec3::splat(radius)),
+                        Visibility::Hidden,
+                        ArrivalFlash { at: cur.time + lead + ARRIVAL_SECONDS * 0.85, radius: radius * 0.45 },
+                    ));
+                }
                 rt.entities.insert(s.id, e);
                 e
             }
@@ -291,6 +314,11 @@ pub fn update_ships(
             tf.translation = pos;
             tf.rotation = ship_rotation(yaw) * Quat::from_rotation_z(view.bank);
             tf.scale = Vec3::splat(vis.scale);
+            if let Ok(a) = arrivals.get(entity) {
+                if !apply_arrival(a, cur.time, radius, &mut tf) {
+                    commands.entity(entity).remove::<HyperspaceArrival>();
+                }
+            }
 
             // Hardpoint damage.
             if !s.hps.is_empty() {
@@ -505,3 +533,62 @@ pub fn default_effect(class: TargetClass) -> &'static str {
 
 
 
+
+/// Seconds a reinforcement takes to drop out of hyperspace (stretched in from far away).
+const ARRIVAL_SECONDS: f32 = 1.5;
+
+/// A ship that just arrived from hyperspace: it streaks in along its heading, stretched, and
+/// settles at its sim position. EaW has no data-driven effect for this (only the enter/exit sounds
+/// in `FACTIONS.XML`), so the look is built here.
+#[derive(Component)]
+pub struct HyperspaceArrival {
+    /// Battle time the ship appeared.
+    start: f32,
+}
+
+/// Flash where a reinforcement drops out of hyperspace: an additive sphere that blooms and fades.
+#[derive(Component)]
+pub struct ArrivalFlash {
+    /// Battle time the flash starts.
+    at: f32,
+    radius: f32,
+}
+
+/// Applies the streak to ships that are still arriving.
+fn apply_arrival(arrival: &HyperspaceArrival, now: f32, radius: f32, tf: &mut Transform) -> bool {
+    let p = ((now - arrival.start) / ARRIVAL_SECONDS).clamp(0.0, 1.0);
+    if p >= 1.0 {
+        return false;
+    }
+    let fwd = tf.rotation * Vec3::Z;
+    let left = (1.0 - p).powi(3);
+    tf.translation -= fwd * (radius * 40.0 * left);
+    // Stretch along the heading (the model's local Z axis) while far away.
+    tf.scale *= Vec3::new(1.0, 1.0, 1.0 + 7.0 * left);
+    true
+}
+
+/// Grows, fades and removes arrival flashes.
+pub fn update_arrival_flashes(
+    mut commands: Commands,
+    rt: Res<BattleRuntime>,
+    mut flashes: Query<(Entity, &ArrivalFlash, &mut Transform, &MeshMaterial3d<StandardMaterial>, &mut Visibility)>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+) {
+    let Some(now) = rt.cur.as_ref().map(|c| c.time) else { return };
+    for (e, f, mut tf, mat, mut vis) in &mut flashes {
+        if now < f.at {
+            continue;
+        }
+        let t = (now - f.at) / 0.6;
+        if t >= 1.0 {
+            commands.entity(e).despawn();
+            continue;
+        }
+        *vis = Visibility::Inherited;
+        tf.scale = Vec3::splat(f.radius * (0.4 + 1.6 * t.sqrt()));
+        if let Some(mut m) = materials.get_mut(&mat.0) {
+            m.base_color = Color::srgba(0.75, 0.88, 1.0, (1.0 - t) * (1.0 - t) * 0.55);
+        }
+    }
+}

@@ -193,9 +193,9 @@ fn drive(
             let target = bar
                 .iter()
                 .filter(|(b, st, n, _, v, _)| {
-                    !st.disabled && v.get() && n.size().x > 4.0 && n.size().y > 4.0 && b.name.starts_with("b_") && !b.name.contains("retreat") && !b.name.contains("reinforce")
+                    !st.disabled && v.get() && n.size().x > 4.0 && n.size().y > 4.0 && b.name.starts_with("b_") && !b.name.contains("droid") && !b.name.contains("retreat") && !b.name.contains("reinforce")
                 })
-                .min_by_key(|(b, ..)| (b.name.contains("camera"), !(b.name.contains("stop") || b.name.contains("move") || b.name.contains("attack")), b.name.clone()))
+                .min_by_key(|(b, ..)| (b.name.contains("camera") || b.name.contains("droid"), !(b.name.contains("stop") || b.name.contains("move") || b.name.contains("attack")), b.name.clone()))
                 .map(|(b, _, n, g, _, _)| (b.name.clone(), g.translation * n.inverse_scale_factor()));
             if t == 0 {
                 let all: Vec<String> = bar.iter().filter(|r| r.4.get() && r.2.size().x > 4.0).map(|r| format!("{}({}x{} dis {})", r.0.name, r.2.size().x, r.2.size().y, r.1.disabled)).collect();
@@ -209,6 +209,21 @@ fn drive(
                         window.1.physical_cursor_position(), mouse.pressed(MouseButton::Left), mouse.just_pressed(MouseButton::Left), mouse.just_released(MouseButton::Left), active, btn
                     );
                     if t == 3 {
+                        let target_entity = bar.iter().find(|r| Some(&r.0.name) == st.button_name.as_ref()).map(|_| ());
+                        let _ = target_entity;
+                        if let Some(entity) = all_nodes.iter().find(|n| names.get(n.0).ok().map(|x| x.as_str()) == st.button_name.as_deref()).map(|n| n.0) {
+                            let pos = ui_stack.uinodes.iter().position(|x| *x == entity);
+                            let part = pos.and_then(|p| ui_stack.partition.iter().find(|r| r.contains(&p)).cloned());
+                            if let Some(range) = part {
+                                let root = ui_stack.uinodes[range.start];
+                                let rn = all_nodes.iter().find(|n| n.0 == root);
+                                info!("input-test:   button stack pos {pos:?} partition {range:?} root {:?} root cam {:?} root vis {:?} focus {:?}", names.get(root).ok().map(|n| n.as_str().to_string()), rn.map(|n| n.8.get()), rn.map(|n| n.3.get()), rn.map(|n| n.7.copied()));
+                                let above: Vec<String> = ui_stack.uinodes[pos.unwrap_or(0)..range.end].iter().filter_map(|e| all_nodes.iter().find(|n| n.0 == *e)).filter(|n| n.1.size().x > 0.0 && n.1.contains_point(*n.2, window.1.physical_cursor_position().unwrap_or_default())).map(|n| format!("{:?}/{:?}/vis{}", names.get(n.0).ok().map(|x| x.as_str().to_string()), n.7.copied(), n.3.get())).collect();
+                                info!("input-test:   nodes above the button under the cursor in its partition: {above:?}");
+                            } else {
+                                info!("input-test:   button entity {entity:?} not in any partition (stack pos {pos:?})");
+                            }
+                        }
                         let cur = window.1.physical_cursor_position().unwrap_or_default();
                         let mut hit: Vec<(usize, String)> = Vec::new();
                         for (e, n, g, v, _img, inter, _bg, fp, cam, _z) in &all_nodes {

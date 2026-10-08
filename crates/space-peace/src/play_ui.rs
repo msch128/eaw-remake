@@ -697,6 +697,8 @@ fn show_play_ui(mut bar: Query<&mut Visibility, Or<(With<EawCommandBar>, With<Ba
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 fn feed_minimap(
     time: Res<Time>,
+    bridge: Res<PlayBridge>,
+    player: Res<PlayerFaction>,
     view: Res<crate::galaxy_view::GalaxyView>,
     selection: Res<crate::galaxy_map::Selection>,
     state: Res<SimState>,
@@ -722,8 +724,8 @@ fn feed_minimap(
             let pos = galaxy(crate::galaxy_map::galaxy_to_world(p.position));
             lo = lo.min(pos);
             hi = hi.max(pos);
-            let c = view.owner_of(i).map_or([0.55, 0.58, 0.62], |f| f.color);
-            MinimapDot { pos, color: Color::srgb(c[0], c[1], c[2]), selected: selection.0 == Some(i) }
+            let owner = bridge.planet_to_sim.get(i).copied().flatten().and_then(|p| state.galaxy().planets[p as usize].owner);
+            MinimapDot { pos, color: relation_color(&state, player.0, owner), selected: selection.0 == Some(i) }
         })
         .collect();
     if planets.is_empty() {
@@ -733,8 +735,7 @@ fn feed_minimap(
     let units = fleets
         .iter()
         .map(|(f, t)| {
-            let c = state.world.factions[f.owner as usize].color;
-            MinimapDot { pos: galaxy(t.translation), color: Color::srgb_u8(c[0], c[1], c[2]), selected: false }
+            MinimapDot { pos: galaxy(t.translation), color: relation_color(&state, player.0, Some(f.owner)), selected: false }
         })
         .collect();
     let (cam, orbit, projection) = *camera;
@@ -1603,5 +1604,14 @@ fn locked_clicks(
         toast.0 = format!("{}: {}", o.name, capitalize(&o.availability.reason()));
         toast.1 = 3.5;
         sound.write(crate::flow::UiSound(crate::menu::SFX_BACK));
+    }
+}
+
+/// Minimap colours of the original: own green, at war red, everything else (neutral, allied) orange.
+fn relation_color(state: &SimState, me: Option<u32>, owner: Option<u32>) -> Color {
+    match (me, owner) {
+        (Some(m), Some(o)) if m == o => Color::srgb(0.2, 0.9, 0.25),
+        (Some(m), Some(o)) if state.galaxy().hostile(&state.world, m, o) => Color::srgb(0.95, 0.15, 0.12),
+        _ => Color::srgb(0.95, 0.55, 0.12),
     }
 }

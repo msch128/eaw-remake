@@ -110,7 +110,8 @@ impl SpaceScene {
             let to_light = map_to_bevy(l.direction_to_light());
             SceneLight {
                 direction: -to_light,
-                color: Vec3::from(l.color),
+                // Test switch: weigh the lights by the TED scalar (0.5 counts as 1.0, the level used so far).
+                color: Vec3::from(l.color) * if std::env::var_os("SP_LIGHT_SCALARS").is_some() { l.scalar * 2.0 } else { 1.0 },
             }
         };
         let exists = |model: &str| {

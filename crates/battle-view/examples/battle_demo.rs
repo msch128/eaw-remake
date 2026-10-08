@@ -282,6 +282,7 @@ fn capture_driver(
     hover: Res<Hover>,
     cam: Option<Single<(&mut BattleCamera, &Camera, &GlobalTransform)>>,
     mesh_entities: Query<&ViewVisibility, With<Mesh3d>>,
+    mut reinforced: Local<bool>,
 ) {
     let now = Instant::now();
     let dt = now.duration_since(cap.last).as_secs_f64() * 1000.0;
@@ -291,6 +292,15 @@ fn capture_driver(
         cap.early_ms.push(dt);
     }
     let Some(rt) = rt else { return };
+    if !*reinforced
+        && let Some(at) = std::env::var("SP_DEMO_REINFORCE").ok().and_then(|v| v.parse::<f32>().ok())
+        && let Some(cur) = rt.cur.as_ref()
+        && cur.time >= at
+        && let Some(s) = cur.ships.iter().find(|s| s.side == 0)
+    {
+        rt.command(0, battle_sim::Command::Reinforce { ship: s.def, count: 3 });
+        *reinforced = true;
+    }
     if status.tick == 0 || ships.0.is_empty() {
         return;
     }
@@ -308,6 +318,18 @@ fn capture_driver(
         }
         bc.min_distance = 100.0;
         cap.cam_applied = true;
+    }
+    if std::env::var_os("SP_DEMO_FIGHT").is_some() {
+        // Frame the line between the two fleets (a close view of the engagement).
+        let centre = |side: u8| {
+            let v: Vec<Vec3> = ships.0.values().filter(|s| s.side == side).map(|s| s.pos).collect();
+            (!v.is_empty()).then(|| v.iter().sum::<Vec3>() / v.len() as f32)
+        };
+        if let (Some(a), Some(b)) = (centre(0), centre(1)) {
+            bc.snap = true;
+            bc.target_focus = (a + b) * 0.5;
+            bc.target_distance = ((a - b).length() * 0.9).clamp(1800.0, 5000.0);
+        }
     }
     if cap.auto {
         // Frame all living ships (a stand-in for the player scrolling to the action).

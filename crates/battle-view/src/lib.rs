@@ -409,6 +409,7 @@ impl Plugin for BattleViewPlugin {
                         advance_clock,
                         (effects::impact_effects, ships::ship_events),
                         ships::update_ships,
+                        ships::update_arrival_flashes,
                         ships::update_dying,
                         effects::update_projectiles,
                         camera::camera_input,

@@ -181,6 +181,7 @@ impl Battle {
             cmd_events: Vec::new(),
             retreat_ordered: vec![false; sides.len()],
             reveals: Vec::new(),
+            search: vec![(0, 0.0); sides.len()],
             sides,
             ships: Vec::new(),
             projectiles: Vec::new(),
@@ -462,10 +463,46 @@ impl Battle {
         }
     }
 
+    /// An AI side that sees no enemy ship searches for it: its attack-moving ships that have no target are sent to the next of a list of search points
+    /// (the enemy deployment area, then the centre and the four quarters of the map) every 30 s while nothing is in sight. Without this, fogged AI fleets
+    /// that reach the enemy spawn marker and find it empty would idle for ever (an estimate: the engine AI knows more than the fog lets it see).
+    fn ai_search(&mut self) {
+        let cat = self.catalog.clone();
+        let (time, half) = (self.time, self.config.half_size);
+        for side in 0..self.sides.len().min(4) as u8 {
+            if !self.sides[side as usize].ai {
+                continue;
+            }
+            let sees_enemy = self.ships.iter().any(|s| s.alive && !s.retreated && s.side != side && !cat.ship(s.def).is_static && time <= s.seen_until[side as usize]);
+            if sees_enemy {
+                self.search[side as usize] = (0, time);
+                continue;
+            }
+            let (idx, since) = self.search[side as usize];
+            if time - since < 30.0 {
+                continue;
+            }
+            let next = idx + 1;
+            let enemy = self.spawn_pos[(side as usize + 1) % self.sides.len()];
+            let point = match next % 6 {
+                0 => enemy,
+                1 => Vec3::ZERO,
+                2 => Vec3::new(half * 0.5, half * 0.5, 0.0),
+                3 => Vec3::new(-half * 0.5, half * 0.5, 0.0),
+                4 => Vec3::new(-half * 0.5, -half * 0.5, 0.0),
+                _ => Vec3::new(half * 0.5, -half * 0.5, 0.0),
+            };
+            self.search[side as usize] = (next, time);
+            for s in self.ships.iter_mut().filter(|s| s.alive && !s.retreated && s.side == side && s.target == NONE && matches!(s.order, Order::AttackMove(_))) {
+                s.order = Order::AttackMove(point);
+            }
+        }
+    }
+
     /// True if `side` currently sees ship `id` (always true for its own ships and without fog of war).
     pub fn is_visible_to(&self, side: u8, id: u32) -> bool {
         let Some(s) = self.ships.get(id as usize) else { return false };
-        !self.config.fog_of_war || s.side == side || side >= 4 || self.time <= s.seen_until[side as usize]
+        !self.config.fog_of_war || s.side == side || side >= 4 || self.catalog.ship(s.def).is_static || self.time <= s.seen_until[side as usize]
     }
 
     /// Whether `side` may call in reinforcements at `pos`: inside the battle area, within `reinforce_zone` of one of its ships or structures that is alive,
@@ -715,6 +752,9 @@ impl Battle {
         if cfg.fog_of_war && self.tick % 15 == 1 {
             self.update_visibility();
         }
+        if cfg.fog_of_war && self.tick % 300 == 0 {
+            self.ai_search();
+        }
         // Snapshot and grid.
         let time_now = self.time;
         let fog = cfg.fog_of_war;
@@ -736,7 +776,8 @@ impl Battle {
                     golan: d.golan,
                     hp_alive: s.hps.iter().take(64).enumerate().fold(0u64, |m, (i, h)| m | (u64::from(h.alive) << i)),
                     health: ((s.hull.max(0.0) + s.shield.max(0.0)) / (d.hull.max(1.0) + d.shield)).clamp(0.0, 1.0),
-                    seen_by: if fog {
+                    // Stations and structures are known from the start (the map shows them); only mobile ships hide in the fog.
+                    seen_by: if fog && !d.is_static {
                         (0..4u8).filter(|&k| k == s.side || time_now <= s.seen_until[k as usize]).fold(!0u8 << 4, |m, k| m | (1 << k))
                     } else {
                         0xFF

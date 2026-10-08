@@ -442,6 +442,20 @@ pub fn bounds_of(rects: impl Iterator<Item = (Vec2, Vec2)>) -> (Vec2, Vec2) {
     if lo.x > hi.x { (Vec2::ZERO, Vec2::ONE) } else { (lo, hi) }
 }
 impl Builder<'_> {
+    /// The credit symbol as a white mask: the original tints it with the text colour (the file itself is yellow).
+    fn credit_icon(&mut self) -> Option<UiTexture> {
+        let mut raw = self.textures.library().load("i_icon_credit.tga")?;
+        // The symbol is drawn in the colour channels (yellow on black); it becomes the alpha of a white image.
+        for px in raw.pixels.chunks_exact_mut(4) {
+            let lum = px[0].max(px[1]).max(px[2]);
+            px[3] = (u16::from(lum) * u16::from(px[3]) / 255) as u8;
+            px[..3].fill(255);
+        }
+        let size = UVec2::new(raw.width as u32, raw.height as u32);
+        let handle = self.upload_raw("credit_icon_white", raw);
+        Some(UiTexture { handle, size })
+    }
+
     fn hide(&mut self, e: Entity) {
         if let Some(mut n) = self.world.entity_mut(e).get_mut::<Node>() {
             n.display = Display::None;
@@ -580,6 +594,14 @@ impl Builder<'_> {
 
     fn spawn_component(&mut self, def: &CommandBarComponent, center: Vec2, size: Vec2) {
         let lname = def.name.to_lowercase();
+        // The help droid button is only the question mark at the bottom of its tall rectangle (R2 sits above it).
+        let (center, size) = match (lname.as_str(), def.blank.first().and_then(|n| self.tex(n))) {
+            ("b_droid_help", Some(t)) => {
+                let sz = (t.size.as_vec2() * def.scale).min(size);
+                (Vec2::new(center.x - (size.x - sz.x) * 0.5, center.y - (size.y - sz.y) * 0.5), sz)
+            }
+            _ => (center, size),
+        };
         let fi = self.faction.list_index();
 
         // Discrete bars.
@@ -702,11 +724,18 @@ impl Builder<'_> {
             let color = def.text_color.map_or(Color::WHITE, rgba);
             let t = self.text_layer(holder, size, def, "", def.text_offset, color);
             self.world.entity_mut(t).insert(BoundField(field));
+            if field == Field::Pop && let Some(mut font) = self.world.entity_mut(t).get_mut::<TextFont>() && let FontSize::Px(px) = font.font_size {
+                // The component asks for 8 pt, the original draws it like the other read-outs.
+                font.font_size = FontSize::Px(px * 0.8);
+            }
             if matches!(field, Field::Credits | Field::Income | Field::MonthIncome)
-                && let Some(tx) = self.tex("i_icon_credit.tga")
+                && let Some(tx) = self.credit_icon()
             {
-                let sz = tx.size.as_vec2() * 0.8;
-                self.layer(holder, size, &tx, sz, Vec2::new(-size.x * 0.5 + sz.x * 0.5 + 2.0, 0.0), Color::WHITE);
+                let sz = tx.size.as_vec2() * 0.6;
+                let icon = self.layer(holder, size, &tx, sz, Vec2::new(-size.x * 0.5 + sz.x * 0.5 + 2.0, 0.0), PALE);
+                if field == Field::Income {
+                    self.world.entity_mut(icon).insert(BoundField(field));
+                }
             }
             if let Some(icon) = def.icon.first().cloned()
                 && let Some(tx) = self.tex(&icon)
@@ -761,7 +790,7 @@ impl Builder<'_> {
             }
             return;
         }
-        let alt_icons = CommandBarComponent::pick(&def.icon_alt, 0).is_some();
+        let alt_icons = CommandBarComponent::pick(&def.icon_alt, usize::from(lname == "b_zoom")).is_some();
 
         let button = self
             .world
@@ -786,6 +815,8 @@ impl Builder<'_> {
                     top: Val::Px(self.root_h - center.y - size.y * 0.5),
                     width: Val::Px(size.x),
                     height: Val::Px(size.y),
+                    // Tab textures are tall sheets of two tiles; the offsets pick one, the rest must not show.
+                    overflow: if def.tab { Overflow::clip() } else { Overflow::visible() },
                     ..default()
                 },
                 ChildOf(self.root),
@@ -825,7 +856,7 @@ impl Builder<'_> {
         let icon_tex = CommandBarComponent::pick(&def.icon, fi)
             .or_else(|| {
                 alt_icons
-                    .then(|| CommandBarComponent::pick(&def.icon_alt, 0))
+                    .then(|| CommandBarComponent::pick(&def.icon_alt, usize::from(lname == "b_zoom")))
                     .flatten()
             })
             .and_then(|n| self.tex(n));
@@ -906,15 +937,17 @@ impl Builder<'_> {
             } else {
                 def.text_offset
             };
-            let color = def
-                .text_color2
-                .or(def.text_color)
-                .map_or(Color::srgb(0.85, 0.9, 1.0), rgba);
-            let l = self.text_layer(button, size, def, "", label_off, color);
+            // Prices and counts are white in the original whatever the component says, and larger than the default.
+            let l = self.text_layer(button, size, def, "", label_off, Color::srgb(0.93, 0.95, 0.98));
+            if let Some(mut font) = self.world.entity_mut(l).get_mut::<TextFont>() {
+                if let FontSize::Px(px) = font.font_size {
+                    font.font_size = FontSize::Px(px * 1.25);
+                }
+            }
             self.world.entity_mut(l).insert(SlotPart::Label);
             if s.kind == SlotKind::Pad {
                 // Upkeep marker (top left) and level numeral (top right) of build pads.
-                if let Some(t) = self.tex("i_icon_credit.tga") {
+                if let Some(t) = self.credit_icon() {
                     let e = self.world.spawn((
                         SlotPart::UpkeepIcon,
                         ImageNode::new(t.handle.clone()),
@@ -1024,13 +1057,13 @@ pub(crate) fn bound_fields(
         return;
     }
     for (f, mut t, color) in &mut texts {
-        if f.0 == Field::PlanetName && let (Some(c), Some(mut tc)) = (data.planet_color, color) {
+        if matches!(f.0, Field::PlanetName | Field::Income) && let (Some(c), Some(mut tc)) = (data.planet_color, color) {
             tc.0 = c;
         }
         t.0 = match f.0 {
             Field::Credits => group_digits(data.credits),
             Field::Income => group_digits(data.planet_income),
-            Field::PlanetName => data.planet_name.clone(),
+            Field::PlanetName => data.planet_name.to_uppercase(),
             Field::Day => format!("MONTH: {}", data.day),
             Field::MonthIncome => group_digits(data.month_income),
             Field::TechLevel => format!("TECH: {}", data.tech_level),
@@ -1040,6 +1073,9 @@ pub(crate) fn bound_fields(
     }
     if let Some(alt) = db.get("Text_Allegiance_A") {
         for (f, mut img) in &mut icons {
+            if f.0 == Field::Income {
+                img.color = data.planet_color.unwrap_or(PALE);
+            }
             if f.0 == Field::Allegiance
                 && let Some(owner) = data.planet_owner
                 && let Some(n) = CommandBarComponent::pick(&alt.icon_alt, owner.list_index())
@@ -1268,7 +1304,7 @@ impl Builder<'_> {
                     position_type: PositionType::Absolute,
                     left: Val::Px(center.x - size.x * 0.5),
                     top: Val::Px(self.root_h - center.y - size.y * 0.5),
-                    width: Val::Px(size.x),
+                    width: Val::Px(size.x * 0.65),
                     height: Val::Px(size.y),
                     column_gap: Val::Px(1.5),
                     padding: UiRect::axes(Val::Px(1.0), Val::Px(3.0)),
@@ -1290,8 +1326,10 @@ impl Builder<'_> {
     }
 }
 
-const SEGMENT_ON: Color = Color::srgb(0.25, 0.95, 0.3);
-const SEGMENT_OFF: Color = Color::srgba(0.1, 0.3, 0.12, 0.8);
+/// Text and icon colour of the bar read-outs (`Text_Color` 189 216 245).
+const PALE: Color = Color::srgb(0.74, 0.85, 0.96);
+const SEGMENT_ON: Color = Color::srgb(0.25, 0.9, 0.3);
+const SEGMENT_OFF: Color = Color::srgba(0.05, 0.22, 0.08, 0.9);
 
 /// Lights the month bar's segments.
 pub(crate) fn segment_bars(panel: Res<PanelData>, fresh: Query<(), Added<BarSegment>>, mut segments: Query<(&BarSegment, &mut BackgroundColor)>) {

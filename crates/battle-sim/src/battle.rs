@@ -604,6 +604,8 @@ pub struct Battle {
     pub(crate) grid_cells: Vec<Vec<u32>>,
     /// Areas revealed to a side for a while: `(side, centre, radius, until)`.
     pub(crate) reveals: Vec<(u8, Vec3, f32, f32)>,
+    /// Per side: `(search point index, time it was set)` of the AI search for hidden enemies.
+    pub(crate) search: Vec<(u32, f32)>,
 }
 
 impl Battle {

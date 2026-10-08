@@ -36,9 +36,14 @@ pub struct MenuScenePlugin;
 
 impl Plugin for MenuScenePlugin {
     fn build(&self, app: &mut App) {
+        // The scene stays behind the campaign selection too (like the original) and goes when the game starts.
         app.add_systems(OnEnter(AppScreen::MainMenu), load_scene.after(crate::menu::spawn_main_menu))
-            .add_systems(Update, spawn_scene.run_if(resource_exists::<PendingScene>).run_if(in_state(AppScreen::MainMenu)))
-            .add_systems(OnExit(AppScreen::MainMenu), remove_scene)
+            .add_systems(OnEnter(AppScreen::CampaignSelect), load_scene)
+            .add_systems(
+                Update,
+                spawn_scene.run_if(resource_exists::<PendingScene>).run_if(in_state(AppScreen::MainMenu).or_else(in_state(AppScreen::CampaignSelect))),
+            )
+            .add_systems(OnEnter(AppScreen::Galaxy), remove_scene)
             .add_systems(Update, (tag_scene_entities, drift_camera).run_if(resource_exists::<MenuSceneInfo>));
     }
 }
