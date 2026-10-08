@@ -125,9 +125,6 @@ pub struct AiEngine {
     next_plan: u64,
     /// Seconds between goal evaluations per player.
     pub interval: f64,
-    /// The AI factions follow the human player's tech level through the story scripts (`Story/Tech_Levels_*.xml`). Turn off when the human is a faction without such
-    /// a plot (a minor): the fallback research heuristic then runs for every AI faction.
-    pub follow_human_tech: bool,
     /// Task forces and their commands.
     pub task_forces: TaskForces,
     /// Strategic layer (influence maps, utility scoring); see `strategy.rs`.
@@ -187,7 +184,6 @@ impl AiEngine {
             rng: 0x2545_F491_4F6C_DD1D,
             next_plan: 0,
             interval: 8.0,
-            follow_human_tech: true,
             task_forces: TaskForces::default(),
             strategy: Strategy::default(),
             strategy_at: f64::NAN,
@@ -356,7 +352,7 @@ impl AiEngine {
         for bi in 0..self.brains.len() {
             let (player, next) = (self.brains[bi].player, self.brains[bi].next_tech);
             let me = player as usize;
-            if now < next || sim.is_eliminated(player) || (self.follow_human_tech && snap.human.iter().any(|h| *h)) {
+            if now < next || sim.is_eliminated(player) || snap.human.iter().any(|h| *h) {
                 continue;
             }
             self.brains[bi].next_tech = now + 4.0 * week_seconds;

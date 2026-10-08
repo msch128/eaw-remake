@@ -518,36 +518,56 @@ fn battle_dialog(world: &mut World, mut gone_frames: Local<u32>) {
         let state = world.resource::<SimState>();
         ui_faction(state, world.resource::<PlayerFaction>())
     };
-    let sides: Vec<String> = b
-        .sides
-        .iter()
-        .map(|s| format!("{}: {} ships{}{}", s.faction, s.ships, if s.defender { " (defending)" } else { "" }, if s.mine { " - you" } else { "" }))
-        .collect();
-    let spec = DialogSpec {
-        title: format!("Battle at {}", b.planet_name),
-        text: sides.join("\n"),
-        portrait: None,
-        faction,
-        buttons: vec!["Fight".into(), "Auto-resolve".into()],
+    let game = world.get_resource::<EawUiAssets>().and_then(|a| a.game.clone());
+    let side = |s: &galaxy_play::BattleSide| eaw_ui::BannerSide {
+        stacks: s.ships.clamp(1, 5),
+        icon: game.as_ref().and_then(|g| eaw_ui::unit_icon(g, &s.flagship)).filter(|_| !s.flagship.is_empty()),
+        tint: if s.mine { Color::srgb(0.35, 1.0, 0.45) } else { Color::srgb(1.0, 0.3, 0.3) },
     };
-    if let Some(e) = spawn_dialog(world, &spec) {
+    let mine = b.sides.iter().find(|s| s.mine).or(b.sides.first());
+    let other = b.sides.iter().find(|s| !s.mine && Some(*s) != mine).or(b.sides.get(1));
+    let (Some(mine), Some(other)) = (mine, other) else { return };
+    let spec = eaw_ui::BattleBannerSpec {
+        title: format!("{}{}", b.planet_name.to_uppercase(), game.as_ref().and_then(|g| g.text("TEXT_TACTICAL_SPACE_BATTLE_IS_PENDING")).unwrap_or(": SPACE BATTLE IMMINENT!")),
+        faction,
+        begin: "BEGIN".into(),
+        auto: "AUTO-RESOLVE".into(),
+        left: side(mine),
+        right: side(other),
+    };
+    if let Some(e) = eaw_ui::spawn_battle_banner(world, &spec) {
         info!("play: battle dialog shown for battle {} at {}", b.id, b.planet_name);
         world.resource_mut::<BattleDialogState>().open = Some((b.id, e));
     }
 }
 
-fn battle_dialog_result(mut results: MessageReader<EawDialogResult>, mut dialog: ResMut<BattleDialogState>, mut actions: MessageWriter<PlayAction>) {
+fn battle_dialog_result(
+    mut results: MessageReader<EawDialogResult>,
+    mut clicks: MessageReader<EawButtonClicked>,
+    mut dialog: ResMut<BattleDialogState>,
+    mut actions: MessageWriter<PlayAction>,
+    mut commands: Commands,
+) {
+    let mut pressed: Vec<usize> = Vec::new();
     for r in results.read() {
-        let Some((id, e)) = dialog.open else { continue };
-        if r.dialog != e {
-            continue;
+        if dialog.open.is_some_and(|(_, e)| e == r.dialog) {
+            pressed.push(r.button);
         }
-        info!("play: battle dialog button {} pressed for battle {id}", r.button);
-        dialog.open = None;
-        dialog.decided = Some(id);
-        let choice = if r.button == 0 { BattleChoice::Fight } else { BattleChoice::AutoResolve };
-        actions.write(PlayAction::ResolveBattle { id, choice });
     }
+    for c in clicks.read() {
+        match c.name.as_str() {
+            eaw_ui::BANNER_BEGIN => pressed.push(0),
+            eaw_ui::BANNER_AUTO => pressed.push(1),
+            _ => {}
+        }
+    }
+    let (Some(&button), Some((id, e))) = (pressed.first(), dialog.open) else { return };
+    info!("play: battle dialog button {button} pressed for battle {id}");
+    commands.entity(e).despawn();
+    dialog.open = None;
+    dialog.decided = Some(id);
+    let choice = if button == 0 { BattleChoice::Fight } else { BattleChoice::AutoResolve };
+    actions.write(PlayAction::ResolveBattle { id, choice });
 }
 
 /// With a command bar in the bottom left corner the planet details move to the right edge.

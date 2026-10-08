@@ -55,9 +55,6 @@ pub struct SimConfig {
     pub victory_enabled: bool,
     /// Allow `Command::DebugGrant` (offscreen tests and debugging only; off by default).
     pub debug_commands: bool,
-    /// The faction the human plays when it is not the campaign's `Starting_Active_Player` (any faction of the campaign, a minor one for example): its
-    /// human victory conditions apply to it. `None` or a name the campaign does not have = the campaign's own player.
-    pub player_faction: Option<String>,
     /// Estimate (calibrated against the tactical simulation, `examples/calibrate.rs`): how many random enemies a weapon compares before firing at the weakest. 1 = spread at random.
     pub combat_focus: u32,
     /// Estimate (calibrated against the tactical simulation): multiplier on hull, shield and damage of star bases, structures and garrison squadrons in the statistical resolver.
@@ -120,7 +117,6 @@ impl Default for SimConfig {
             max_queue_len: 8,
             victory_enabled: true,
             debug_commands: false,
-            player_faction: None,
             combat_focus: 1,
             combat_base_factor: 0.15,
             combat_efficiency: [0.5, 0.5, 1.0, 1.0],
@@ -163,6 +159,8 @@ pub struct PlanetInfo {
     pub surface_accessible: bool,
     /// `Planet_Capture_Bonus_Reward`: credits for the faction that conquers the planet.
     pub capture_bonus: f32,
+    /// `Max_Space_Base`: highest star base level the planet can get (3 on most planets, 1 on small ones; 0 = not given, no limit).
+    pub max_space_base: i32,
     /// `Planet_Is_Destroyable_By_TSW` (a superweapon may destroy it). Planets without the tag count as destroyable (estimate).
     pub destroyable: bool,
 }
@@ -630,6 +628,7 @@ impl World {
                 position: p.position,
                 credit_value: p.credit_value as f32,
                 space_slots: p.special_structures_space,
+                max_space_base: p.max_space_base,
                 ground_slots: p.special_structures_land,
                 population_capacity: pop,
                 space_map: p.space_tactical_map.clone(),

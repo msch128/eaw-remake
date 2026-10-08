@@ -41,10 +41,21 @@ pub struct FleetEntities(pub HashMap<FleetId, Entity>);
 #[derive(Resource)]
 pub struct FleetAssets {
     cone: Handle<Mesh>,
+    /// Unit disc (flat in XZ after the child rotation) used as the base under fleets.
+    disc: Handle<Mesh>,
 }
 
 pub(crate) fn setup_assets(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>) {
-    commands.insert_resource(FleetAssets { cone: meshes.add(Cone::new(0.5, 1.4)) });
+    commands.insert_resource(FleetAssets { cone: meshes.add(Cone::new(0.5, 1.4)), disc: meshes.add(Circle::new(1.0).mesh().resolution(48)) });
+}
+
+/// Colour of a faction on the map: the player's own is green like in the game, the others use their data colour.
+pub fn map_color(world: &galaxy_sim::World, player: Option<FactionId>, faction: FactionId) -> Color {
+    if player == Some(faction) {
+        Color::srgb(0.15, 1.0, 0.25)
+    } else {
+        faction_color(world, faction)
+    }
 }
 
 /// sRGB triple of a faction.
@@ -87,6 +98,7 @@ pub fn sync_fleets(
     assets: Res<FleetAssets>,
     alamo: Option<Res<AlamoFs>>,
     cfg: Res<crate::state::PlayConfig>,
+    player: Res<PlayerFaction>,
     mut mats: ResMut<Assets<StandardMaterial>>,
     mut entities: ResMut<FleetEntities>,
     mut fleets: Query<(&mut FleetVisual, &mut Transform, &Children)>,
@@ -136,11 +148,15 @@ pub fn sync_fleets(
         let (pos, heading) = match place {
             FleetPlace::Orbit(p) => {
                 let (i, n) = slot_of(p, f.id);
-                let phase = p as f32 * 0.9 + i as f32 * TAU / n as f32 + t * 0.06;
-                let r = layout.orbit_radius(p);
+                // Three fixed GUI fleet slots above the planet (no fleet limit in the data); extra fleets share a slot.
+                let _ = n;
+                let (s, k) = (i % 3, i / 3);
+                let a = slot_angle(s);
+                let r = layout.orbit_radius(p) + k as f32 * layout.unit * 0.35;
                 let c = layout.positions[p as usize];
-                let pos = c + Vec3::new(phase.cos() * r, layout.unit * 0.25, phase.sin() * r);
-                (pos, Vec3::new(-phase.sin(), 0.0, phase.cos()))
+                let pos = c + Vec3::new(a.cos() * r, layout.unit * 0.25, a.sin() * r);
+                let _ = t;
+                (pos, Vec3::new(1.0, 0.0, 0.0))
             }
             FleetPlace::Lane { from, to, t, .. } => {
                 let (a, b) = (layout.positions[from as usize], layout.positions[to as usize]);
@@ -170,6 +186,20 @@ pub fn sync_fleets(
                     .spawn((tf, Visibility::default(), FleetVisual { id: f.id, owner: f.owner, model: model.clone(), heading }))
                     .id();
                 spawn_model(&mut commands, &assets, &mut mats, alamo.is_some(), model.as_deref(), bow, team, root);
+                // The flat translucent base disc the fleet stands on (faction coloured, like the original).
+                let tl = map_color(world, player.0, f.owner).to_linear();
+                commands.spawn((
+                    Mesh3d(assets.disc.clone()),
+                    MeshMaterial3d(mats.add(StandardMaterial {
+                        base_color: Color::LinearRgba(LinearRgba::new(tl.red * 0.25, tl.green * 0.25, tl.blue * 0.25, 0.7)),
+                        unlit: true,
+                        alpha_mode: AlphaMode::Blend,
+                        cull_mode: None,
+                        ..default()
+                    })),
+                    Transform::from_xyz(0.0, -layout.unit * 0.12, 0.0).with_rotation(Quat::from_rotation_x(-FRAC_PI_2)).with_scale(Vec3::splat(layout.unit * 0.95)),
+                    ChildOf(root),
+                ));
                 entities.0.insert(f.id, root);
                 commands.spawn((
                     Text::new(""),
@@ -215,11 +245,21 @@ pub fn draw_fleet_markers(
     let world = &state.world;
     let g = state.galaxy();
     let ring = layout.unit * cfg.fleet_icon_scale * 1.5;
+    if let Some(p) = selection.planet {
+        // Empty fleet slots of the selected planet stay visible as thin base circles.
+        let c = layout.positions[p as usize];
+        for s in 0..3 {
+            let a = slot_angle(s);
+            let r = layout.orbit_radius(p);
+            let at = c + Vec3::new(a.cos() * r, 0.0, a.sin() * r);
+            gizmos.circle(Isometry3d::new(at, Quat::from_rotation_x(-FRAC_PI_2)), layout.unit * 0.95, Color::srgba(0.4, 0.9, 0.5, 0.35));
+        }
+    }
     let flat = Quat::from_rotation_x(-FRAC_PI_2);
     let pulse = 1.0 + 0.08 * (time.elapsed_secs() * 4.0).sin();
     for (v, tf) in &fleets {
         let Some(f) = g.fleets.get(&v.id) else { continue };
-        let team = faction_color(world, v.owner);
+        let team = map_color(world, player.0, v.owner);
         let base = tf.translation;
         let center = Vec3::new(base.x, base.y - layout.unit * 0.1, base.z);
         gizmos.circle(Isometry3d::new(center, flat), ring, team);
@@ -273,3 +313,8 @@ pub fn update_fleet_labels(
     }
 }
 
+
+/// Angle (in the XZ plane, -Z is screen up) of fleet slot `s` (0..3) around a planet: three bases in an arc above it.
+pub fn slot_angle(s: usize) -> f32 {
+    -FRAC_PI_2 + (s as f32 - 1.0) * 0.95
+}

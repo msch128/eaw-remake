@@ -1001,6 +1001,9 @@ pub fn apply_engine_throttle(
 /// Registers particle resources and systems.
 pub fn build(app: &mut App) {
     bevy::asset::embedded_asset!(app, "particle.wgsl");
+    if std::env::var_os("SP_ASSET_LOG").is_some() {
+        app.add_systems(Update, log_asset_counts);
+    }
     app.add_plugins(MaterialPlugin::<ParticleMaterial>::default())
         .init_resource::<ParticleSettings>()
         .init_resource::<ParticleStats>()
@@ -1050,4 +1053,33 @@ mod tests {
         let v = rt.range(2.0, 3.0);
         assert!((2.0..=3.0).contains(&v));
     }
+}
+
+/// Debug aid (`SP_ASSET_LOG=1`): logs asset counts every 10 s to spot leaks.
+pub fn log_asset_counts(
+    time: Res<Time>,
+    images: Res<Assets<Image>>,
+    meshes: Res<Assets<Mesh>>,
+    std_mats: Res<Assets<StandardMaterial>>,
+    part_mats: Res<Assets<ParticleMaterial>>,
+    buffers: Res<Assets<ShaderBuffer>>,
+    mut next: Local<f32>,
+) {
+    if time.elapsed_secs() < *next {
+        return;
+    }
+    *next = time.elapsed_secs() + 10.0;
+    let img_bytes: usize = images.iter().map(|(_, i)| i.data.as_ref().map_or(0, |d| d.len())).sum();
+    let buf_bytes: usize = buffers.iter().map(|(_, b)| b.data.as_ref().map_or(0, |d| d.len())).sum();
+    info!(
+        "assetlog t={:.0}s images={} ({} MB) meshes={} std_mats={} particle_mats={} shader_buffers={} ({} MB)",
+        time.elapsed_secs(),
+        images.len(),
+        img_bytes >> 20,
+        meshes.len(),
+        std_mats.len(),
+        part_mats.len(),
+        buffers.len(),
+        buf_bytes >> 20
+    );
 }

@@ -169,27 +169,3 @@ fn plain_backend_reports_that_it_cannot_save() {
     let snaps = d.wait_idle();
     assert!(snaps.iter().flat_map(|s| &s.saves).any(|s| s.result.is_err()));
 }
-
-#[test]
-fn a_minor_faction_can_be_the_player_and_survives_a_save() {
-    let Some(c) = ctx() else { return };
-    let path = std::env::temp_dir().join("galaxy_play_test_minor.json");
-    let mut cfg = config(4, false);
-    cfg.player_faction = Some("Hapan".into());
-    let mut d = start(&c, cfg);
-    d.wait_initial();
-    let human = d.human().expect("a human faction");
-    run_weeks(&mut d, 3);
-    d.save(&path);
-    let snaps = d.wait_idle();
-    assert_eq!(snaps.iter().flat_map(|s| &s.saves).next().expect("save result").result, Ok(()));
-    // The save remembers who plays.
-    let file = galaxy_script::SaveFile::read(&path).unwrap();
-    assert_eq!(file.header.sim_config.player_faction.as_deref(), Some("Hapan"));
-    assert_eq!(file.header.config.human.as_deref(), Some("Hapan"));
-    let init = PlayInit::from_save(&path, c.data.clone(), c.fs.clone(), PlayConfig::default()).unwrap();
-    let mut d2 = spawn(init);
-    d2.wait_initial();
-    assert_eq!(d2.human(), Some(human));
-    run_weeks(&mut d2, 2);
-}

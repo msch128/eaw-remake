@@ -192,3 +192,32 @@ fn a_restored_sim_continues_exactly_like_the_original() {
     assert_eq!(a.galaxy().state_hash(), b.galaxy().state_hash(), "the sim part of a save is exact");
     assert_eq!(a.galaxy(), b.galaxy());
 }
+
+#[test]
+fn a_planet_takes_star_bases_only_up_to_its_max_space_base() {
+    let Some(data) = load() else { return };
+    let campaign = data.campaign("GC_Full_Web_Way_Rebel").unwrap();
+    let mut sim = Sim::new(&data, campaign, SimConfig { victory_enabled: false, ..SimConfig::default() }).unwrap();
+    let w = sim.world().clone();
+    let empire = w.faction_id("Empire").unwrap();
+    sim.add_credits(empire, 5.0e6);
+    sim.set_tech_level(empire, w.factions[empire as usize].max_tech);
+    let small = (0..w.planets.len() as u32).find(|&p| w.real[p as usize] && w.planets[p as usize].max_space_base == 1).expect("a planet limited to level 1");
+    let big = (0..w.planets.len() as u32).find(|&p| w.real[p as usize] && w.planets[p as usize].max_space_base == 3 && p != small).expect("a planet that takes level 3");
+    for p in [small, big] {
+        sim.set_planet_owner(p, Some(empire));
+        sim.galaxy_mut().planets[p as usize].structures.clear();
+        let first = w.first_starbase[empire as usize].expect("Empire star base chain");
+        sim.set_starbase(p, Some(first));
+        assert_eq!(w.starbases[first as usize].level, 1);
+    }
+    let r = w.check_upgrade_starbase(sim.galaxy(), empire, small);
+    assert!(matches!(r, Err(CommandError::RequirementsNotMet(_))), "level 2 on a level-1 planet: {r:?}");
+    // The other planet climbs to 3 and stops there.
+    for expect in [2, 3] {
+        let next = w.check_upgrade_starbase(sim.galaxy(), empire, big).unwrap_or_else(|e| panic!("level {expect}: {e:?}"));
+        assert_eq!(w.starbases[next as usize].level, expect);
+        sim.set_starbase(big, Some(next));
+    }
+    assert!(w.check_upgrade_starbase(sim.galaxy(), empire, big).is_err(), "level 4 is beyond Max_Space_Base");
+}

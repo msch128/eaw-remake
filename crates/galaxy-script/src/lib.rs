@@ -322,9 +322,6 @@ impl ScriptedSim {
             let i = self.inner.borrow();
             (i.world.clone(), i.human)
         };
-        // AI factions follow the human tech level through the human faction story plot; a human without a story plot (a minor) gets no such plot.
-        let human_story = world.factions.get(human as usize).is_some_and(|f| campaign.fields.get(&format!("{}_story_name", f.name.to_ascii_lowercase())).or_else(|| campaign.fields.get(&format!("{}_STORY_NAME", f.name.to_ascii_uppercase()))).is_some_and(|v| !v.trim().is_empty()));
-        engine.follow_human_tech = human_story;
         let mut added = std::collections::HashSet::new();
         let mut default_type = None;
         for (faction, ai_type) in galaxy_ai::campaign_ai_players(&**fs, campaign) {

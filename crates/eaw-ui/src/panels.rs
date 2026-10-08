@@ -533,6 +533,122 @@ pub fn spawn_dialog(world: &mut World, spec: &DialogSpec) -> Option<Entity> {
     Some(root)
 }
 
+/// One side of the battle banner: a stack of discs with a portrait on top.
+#[derive(Debug, Clone)]
+pub struct BannerSide {
+    /// Number of discs (1..=5, by fleet size).
+    pub stacks: u32,
+    /// Portrait or ship icon texture name.
+    pub icon: Option<String>,
+    /// Disc tint (green for the player, red for the enemy).
+    pub tint: Color,
+}
+
+/// The "<PLANET>: SPACE BATTLE IMMINENT!" banner at the top of the galaxy map.
+#[derive(Debug, Clone)]
+pub struct BattleBannerSpec {
+    /// Headline (literal, already upper case).
+    pub title: String,
+    /// Faction skin.
+    pub faction: UiFaction,
+    /// Label of the left button (Begin).
+    pub begin: String,
+    /// Label of the right button (Auto-Resolve).
+    pub auto: String,
+    /// Left disc stack (the player).
+    pub left: BannerSide,
+    /// Right disc stack (the opponent).
+    pub right: BannerSide,
+}
+
+/// Names of the banner buttons in [`EawButtonClicked`].
+pub const BANNER_BEGIN: &str = "choice_button_left";
+/// See [`BANNER_BEGIN`].
+pub const BANNER_AUTO: &str = "choice_button_right";
+
+/// Spawns the original battle banner (`i_attack_mode_choice.alo`); returns its root. The buttons report
+/// [`BANNER_BEGIN`] / [`BANNER_AUTO`] through [`EawButtonClicked`]; the caller closes the banner.
+pub fn spawn_battle_banner(world: &mut World, spec: &BattleBannerSpec) -> Option<Entity> {
+    use crate::widgets::{ShellAnchor, ShellSpec, spawn_shell};
+    let font_family = world.get_resource::<EawUiSettings>()?.font_family.clone();
+    {
+        let mut data = world.get_resource_mut::<PanelData>()?;
+        data.set_text(BANNER_BEGIN, spec.begin.clone());
+        data.set_text(BANNER_AUTO, spec.auto.clone());
+    }
+    let mut shell = ShellSpec::new("i_attack_mode_choice.alo", spec.faction);
+    shell.anchor = ShellAnchor::TopCenter;
+    shell.offset = Vec2::new(0.0, -6.0);
+    let root = spawn_shell(world, &shell)?;
+    world.entity_mut(root).insert(GlobalZIndex(500));
+    let (width, height) = {
+        let n = world.get::<Node>(root)?;
+        match (n.width, n.height) {
+            (Val::Px(w), Val::Px(h)) => (w, h),
+            _ => (436.0, 110.0),
+        }
+    };
+    let font = |size: f32| match &font_family {
+        Some(f) => TextFont { font: FontSource::Family(f.as_str().into()), font_size: FontSize::Px(size), ..default() },
+        None => TextFont::from_font_size(size),
+    };
+    world
+        .spawn((
+            Node {
+                position_type: PositionType::Absolute,
+                left: Val::Px(0.0),
+                top: Val::Px(8.0),
+                width: Val::Px(width),
+                height: Val::Px(26.0),
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                ..default()
+            },
+            FocusPolicy::Pass,
+            ChildOf(root),
+        ))
+        .with_children(|p| {
+            p.spawn((Text::new(spec.title.clone()), font(15.0), TextColor(Color::srgb(0.95, 0.97, 1.0)), FocusPolicy::Pass));
+        });
+    // Disc centres sit on the button row, either side of the centre column.
+    let row_y = height - 35.0;
+    for (side, dx) in [(&spec.left, -23.0), (&spec.right, 23.0)] {
+        let stack = format!("fleet_stacks_{:02}.tga", side.stacks.clamp(1, 5));
+        let discs = {
+            let mut textures = world.remove_resource::<UiTextures>()?;
+            let t = {
+                let mut images = world.get_resource_mut::<Assets<Image>>()?;
+                (textures.get(&mut images, &stack), side.icon.as_deref().and_then(|n| textures.get(&mut images, n)))
+            };
+            world.insert_resource(textures);
+            t
+        };
+        let cx = width * 0.5 + dx;
+        let image = |world: &mut World, tex: &crate::textures::UiTexture, size: Vec2, centre: Vec2, tint: Color| {
+            world.spawn((
+                ImageNode::new(tex.handle.clone()).with_color(tint),
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: Val::Px(centre.x - size.x * 0.5),
+                    top: Val::Px(centre.y - size.y * 0.5),
+                    width: Val::Px(size.x),
+                    height: Val::Px(size.y),
+                    ..default()
+                },
+                FocusPolicy::Pass,
+                ChildOf(root),
+            ));
+        };
+        if let Some(t) = &discs.0 {
+            image(world, t, Vec2::new(42.0, 52.5), Vec2::new(cx, row_y + 2.0), side.tint);
+        }
+        if let Some(t) = &discs.1 {
+            image(world, t, Vec2::splat(34.0), Vec2::new(cx, row_y - 9.0), Color::WHITE);
+        }
+    }
+    Some(root)
+}
+
 /// Closes dialogs when a button is pressed and reports the choice. Firing on the press (not the
 /// release) cannot be lost when press and release land in one frame, or when the cursor leaves
 /// the button in between.

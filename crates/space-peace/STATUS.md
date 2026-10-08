@@ -48,3 +48,9 @@ F9 on the map opens the placeholder screen. Needed: galaxy-sim API to apply a ta
 ## Next steps
 Connect the real battle-view hook and galaxy-sim result injection, switch menus to `eaw-ui`, run the app in a real window (input, settings apply,
 fullscreen, FPS cap).
+
+## Galaxy map visuals (2026-10-08)
+- Lanes: wide soft additive ribbons (galaxy_map.rs spawn_lanes/update_lanes); orbit-line art always visible, core dimmed, grid off.
+- Labels: caps in faction colour (own = green via relation_color), two pip rows (ground, space) from Max_Ground_Base/Max_Space_Base.
+- Selection: notched ring (mesh fill + gizmo outline); fleets stand on a faction-coloured base disc (galaxy-play visuals.rs).
+- Missing vs original: hero head portraits, faction emblem beside planets, dashed sector ring (W_Planet_GC_Sector), lane/slot textures from the game.

@@ -77,6 +77,8 @@ pub struct PlanetView {
     pub surface_color: [f32; 3],
     /// Number of space structure (starbase) slots, `Max_Space_Base`.
     pub max_space_base: i32,
+    /// Number of ground structure slots, `Max_Ground_Base`.
+    pub max_ground_base: i32,
     /// Extra special structure slots in space.
     pub special_slots: i32,
     /// Planet ability as `(name, description)` in English, if the planet has one.
@@ -244,6 +246,7 @@ impl GalaxyView {
                     model_scale: 1.0,
                     surface_color: surface,
                     max_space_base: 3,
+                    max_ground_base: 3,
                     special_slots: 6,
                     ability: None,
                     starting_forces: Vec::new(),

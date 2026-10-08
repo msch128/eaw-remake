@@ -45,8 +45,6 @@ pub struct PlayConfig {
     pub difficulty: Option<galaxy_script::DifficultyTier>,
     /// Use galaxy-sim's built-in (classic) AI instead of the Remake AI with strategy ([`PlayInit::scripted`]).
     pub classic_ai: bool,
-    /// Play this faction instead of the campaign player (any faction of the campaign, a minor one included; "Advanced" campaign option). `None` = the campaign player.
-    pub player_faction: Option<String>,
 }
 
 impl Default for PlayConfig {
@@ -64,7 +62,6 @@ impl Default for PlayConfig {
             ui_interval: 0.2,
             difficulty: Some(galaxy_script::DifficultyTier::Normal),
             classic_ai: false,
-            player_faction: None,
         }
     }
 }
@@ -72,7 +69,7 @@ impl Default for PlayConfig {
 impl PlayConfig {
     /// The simulation config to build the [`Sim`] with: the configured one with auto-resolve off.
     pub fn sim_config(&self) -> SimConfig {
-        SimConfig { auto_resolve_battles: false, player_faction: self.player_faction.clone().or_else(|| self.sim.player_faction.clone()), ..self.sim.clone() }
+        SimConfig { auto_resolve_battles: false, ..self.sim.clone() }
     }
 }
 
@@ -411,6 +408,8 @@ pub struct BattleSide {
     pub color: [f32; 3],
     /// Ships in orbit.
     pub ships: u32,
+    /// Its strongest unit type (the portrait on the battle banner); empty without ships.
+    pub flagship: String,
     /// Fights with its star base and structures.
     pub defender: bool,
     /// The player's side.

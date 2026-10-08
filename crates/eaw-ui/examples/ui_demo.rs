@@ -381,13 +381,19 @@ fn spawn_panel(world: &mut World, name: &str, faction: UiFaction, game: &alamo_d
             spawn_shell(world, &spec);
         }
         "battle" => {
-            data.set_text("text_attack_choice", "BESTINE: SPACE BATTLE IMMINENT!");
-            data.set_text("choice_button_left", "Begin");
-            data.set_text("choice_button_right", "Auto-Resolve");
             drop(data);
-            let mut spec = ShellSpec::new("i_attack_mode_choice.alo", faction);
-            spec.anchor = ShellAnchor::TopCenter;
-            spawn_shell(world, &spec);
+            let side = |stacks, tint| eaw_ui::BannerSide { stacks, icon: Some(icon(0)), tint };
+            spawn_battle_banner(
+                world,
+                &eaw_ui::BattleBannerSpec {
+                    title: "BESTINE: SPACE BATTLE IMMINENT!".into(),
+                    faction,
+                    begin: "BEGIN".into(),
+                    auto: "AUTO-RESOLVE".into(),
+                    left: side(2, Color::srgb(0.3, 1.0, 0.4)),
+                    right: side(3, Color::srgb(1.0, 0.25, 0.25)),
+                },
+            );
         }
         "dialog" => {
             drop(data);

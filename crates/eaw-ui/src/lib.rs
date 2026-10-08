@@ -32,8 +32,8 @@ pub use data::{
 };
 pub use faction::UiFaction;
 pub use panels::{
-    DialogSpec, EawDialogResult, EawMinimapClicked, EawSlotDropped, MinimapData, MinimapDot,
-    MinimapKind, PanelData, PanelSlot, fleet_slot_name, spawn_dialog,
+    BANNER_AUTO, BANNER_BEGIN, BannerSide, BattleBannerSpec, DialogSpec, EawDialogResult, EawMinimapClicked, EawSlotDropped, MinimapData, MinimapDot,
+    MinimapKind, PanelData, PanelSlot, fleet_slot_name, spawn_battle_banner, spawn_dialog,
 };
 pub use tactical::{
     AbilityDef, AbilityState, EawAbilityClicked, EawHardpointClicked, EawSelectionClicked,

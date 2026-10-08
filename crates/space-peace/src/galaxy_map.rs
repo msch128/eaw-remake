@@ -39,9 +39,6 @@ impl Plugin for GalaxyMapPlugin {
             .init_resource::<Wrecks>()
             .init_resource::<DestroyedPlanets>()
             .init_resource::<MapScale>()
-            .init_gizmo_group::<RouteWide>()
-            .init_gizmo_group::<RouteMid>()
-            .init_gizmo_group::<RouteThin>()
             .init_gizmo_group::<RingGizmos>()
             .init_gizmo_group::<SelectGizmos>()
             .insert_resource(ClearColor(Color::BLACK))
@@ -70,7 +67,8 @@ impl Plugin for GalaxyMapPlugin {
                     (update_hover, pick_planet).chain().run_if(not_paused.and_then(cursor_free)),
                     update_labels,
                     draw_rings,
-                    draw_routes,
+                    update_lanes,
+                    place_notch_fill,
                     log_props,
                     sync_wrecks,
                     fade_galaxy_disc,
@@ -80,15 +78,6 @@ impl Plugin for GalaxyMapPlugin {
     }
 }
 
-/// Gizmo group for wide trade routes (`Width` >= 4 in `TRADEROUTELINES.XML`).
-#[derive(Default, Reflect, GizmoConfigGroup)]
-struct RouteWide;
-/// Gizmo group for medium trade routes.
-#[derive(Default, Reflect, GizmoConfigGroup)]
-struct RouteMid;
-/// Gizmo group for thin (capillary) trade routes.
-#[derive(Default, Reflect, GizmoConfigGroup)]
-struct RouteThin;
 /// Gizmo group for the owner rings under planets (constant pixel width).
 #[derive(Default, Reflect, GizmoConfigGroup)]
 struct RingGizmos;
@@ -96,9 +85,6 @@ struct RingGizmos;
 #[derive(Default, Reflect, GizmoConfigGroup)]
 struct SelectGizmos;
 
-/// The game's route colours are very dark additive teal (around 13, 31, 38) meant to sit on top
-/// of the original galaxy backdrop art; this brightens them so they read on plain black space.
-const ROUTE_GLOW: f32 = 8.0;
 
 /// Bottom strip of the viewport (logical pixels) covered by the command bar; labels avoid it.
 #[derive(Resource, Default, Debug)]
@@ -219,11 +205,14 @@ fn fade_galaxy_disc(
     bounds: Res<CameraBounds>,
     camera: Single<&GalaxyCamera>,
     parts: Query<&DiscPart>,
+    added: Query<(), Added<DiscPart>>,
     mut materials: ResMut<Assets<AlamoMaterial>>,
     mut last: Local<f32>,
 ) {
-    let k = smoothstep(0.08, 0.5, zoom_fraction(&bounds, camera.distance));
-    if (k - *last).abs() < 0.004 && *last != 0.0 {
+    // The Remake keeps the galaxy disc (maroon nebula, orbit rings) visible at every zoom level.
+    let _ = (&bounds, &camera);
+    let k = 1.0;
+    if added.is_empty() && (k - *last).abs() < 0.004 && *last != 0.0 {
         return;
     }
     *last = k.max(1e-4);
@@ -266,7 +255,8 @@ fn fix_star_dome(
                     commands.entity(part).insert(DiscPart {
                         material: h.0.clone(),
                         base: m.params.diffuse,
-                        strength: if name == "grid" { 0.6 } else { 1.0 },
+                        // Reference look: orbit lines at full strength, the core glow dimmed to a maroon haze, no grid.
+                        strength: match name.as_str() { "grid" => 0.0, "core" => 0.55, _ => 1.0 },
                     });
                 }
             }
@@ -415,9 +405,6 @@ fn setup_scene(
     ));
 
     // Route line widths in pixels per width tier.
-    gizmo_store.config_mut::<RouteWide>().0.line.width = 4.5;
-    gizmo_store.config_mut::<RouteMid>().0.line.width = 3.0;
-    gizmo_store.config_mut::<RouteThin>().0.line.width = 1.8;
     gizmo_store.config_mut::<RingGizmos>().0.line.width = 1.6;
     gizmo_store.config_mut::<SelectGizmos>().0.line.width = 2.6;
 }
@@ -433,6 +420,7 @@ fn spawn_galaxy(
     mut scale: ResMut<MapScale>,
     alamo: Option<Res<AlamoFs>>,
     existing: Query<(), With<GalaxyEntity>>,
+    mut images: ResMut<Assets<Image>>,
 ) {
     // Coming back from a tactical battle the scene is still there.
     if !existing.is_empty() {
@@ -464,17 +452,29 @@ fn spawn_galaxy(
         commands.entity(root).insert(GalaxyEntity);
 
         // Name label in the owner's colour (positioned and decluttered every frame).
-        let owner = planet
-            .owner
-            .and_then(|o| view.factions.get(o))
-            .map_or(NEUTRAL, |f| f.color);
-        let label_c = [
-            owner[0] * 0.65 + 0.35,
-            owner[1] * 0.65 + 0.35,
-            owner[2] * 0.65 + 0.35,
-        ];
+        let owner = relation_color(&view, planet.owner);
+        // The game prints the name in capitals in the full, saturated faction colour.
+        let label_c = if planet.owner.is_some() { owner } else { [0.62, 0.62, 0.62] };
+        for (row, count) in [planet.max_ground_base, planet.special_slots].into_iter().enumerate() {
+            let count = count.clamp(0, 8) as usize;
+            if count == 0 {
+                continue;
+            }
+            commands
+                .spawn((
+                    Node { position_type: PositionType::Absolute, flex_direction: FlexDirection::Row, column_gap: Val::Px(1.0), ..default() },
+                    Visibility::Hidden,
+                    PipRow { planet: i, row, count },
+                    GalaxyEntity,
+                ))
+                .with_children(|p| {
+                    for _ in 0..count {
+                        p.spawn((Node { width: Val::Px(6.0), height: Val::Px(8.0), ..default() }, BackgroundColor(rgb(label_c).with_alpha(0.85)), PipIcon { space: row == 1 }));
+                    }
+                });
+        }
         commands.spawn((
-            Text::new(planet.display_name.clone()),
+            Text::new(planet.display_name.to_uppercase()),
             TextFont {
                 font: FontSource::Family("Bahnschrift".into()),
                 font_size: FontSize::Px(14.0),
@@ -499,6 +499,23 @@ fn spawn_galaxy(
     if use_models {
         spawn_props(&mut commands, &view.props, GalaxyEntity);
     }
+    spawn_lanes(&mut commands, &view, &scale, &mut meshes, &mut materials, &mut images);
+    commands.spawn((
+        Name::new("selection ring fill"),
+        Mesh3d(meshes.add(notch_mesh())),
+        MeshMaterial3d(materials.add(StandardMaterial {
+            base_color: Color::srgba(0.35, 1.0, 0.45, 0.38),
+            unlit: true,
+            alpha_mode: AlphaMode::Blend,
+            cull_mode: None,
+            ..default()
+        })),
+        Transform::default(),
+        Visibility::Hidden,
+        bevy::camera::visibility::NoFrustumCulling,
+        NotchFill,
+        GalaxyEntity,
+    ));
     commands.insert_resource(PlanetRadii(radii));
     commands.insert_resource(assets);
 
@@ -543,7 +560,10 @@ fn update_labels(
     reserved: Res<ReservedBottom>,
     panel: Res<PanelRect>,
     camera: Single<(&Camera, &GlobalTransform, &GalaxyCamera)>,
-    mut labels: Query<(&PlanetLabel, &mut Node, &mut Visibility, &ComputedNode, &mut TextFont)>,
+    mut labels: Query<(&PlanetLabel, &mut Node, &mut Visibility, &ComputedNode, &mut TextFont), Without<PipRow>>,
+    mut pip_rows: Query<(&PipRow, &mut Node, &mut Visibility), Without<PlanetLabel>>,
+    mut pip_icons: Query<&mut Node, (With<PipIcon>, Without<PlanetLabel>, Without<PipRow>)>,
+    mut last_font: Local<f32>,
     mut slots: Local<Vec<Option<LabelSlot>>>,
     mut visible: Local<Vec<bool>>,
 ) {
@@ -586,7 +606,8 @@ fn update_labels(
         };
         slots[label.0] = Some(LabelSlot {
             pos: Vec2::new(p.x - size.x * 0.5, p.y),
-            size,
+            // Room for the two rows of structure slot pips under the name.
+            size: size + Vec2::new(0.0, font_px * 1.1),
             score,
         });
     }
@@ -649,6 +670,28 @@ fn update_labels(
             _ => *vis = Visibility::Hidden,
         }
     }
+
+    // Structure slot pips: ground row, then space row, centred under the name.
+    let pip_h = (font_px * 0.5).round().max(4.0);
+    let pip_w = (pip_h * 0.75).round().max(3.0);
+    if (*last_font - font_px).abs() > 0.1 {
+        *last_font = font_px;
+        for mut n in &mut pip_icons {
+            n.width = Val::Px(pip_w / us);
+            n.height = Val::Px(pip_h / us);
+        }
+    }
+    for (row, mut node, mut vis) in &mut pip_rows {
+        match slots.get(row.planet).copied().flatten() {
+            Some(s) if visible[row.planet] => {
+                let width = row.count as f32 * (pip_w + 1.0);
+                node.left = Val::Px((s.pos.x + (s.size.x - width) * 0.5) / us);
+                node.top = Val::Px((s.pos.y + font_px * 1.15 + row.row as f32 * (pip_h + 2.0)) / us);
+                *vis = Visibility::Inherited;
+            }
+            _ => *vis = Visibility::Hidden,
+        }
+    }
 }
 
 /// Draws the owner ring under every planet and the pulsing selection ring. Gizmo lines keep a
@@ -664,8 +707,8 @@ fn draw_rings(
     let flat = Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2);
     for (i, p) in view.planets.iter().enumerate() {
         let pos = galaxy_to_world(p.position);
-        let (c, alpha) = match p.owner.and_then(|o| view.factions.get(o)) {
-            Some(f) => (f.color, 0.85),
+        let (c, alpha) = match p.owner {
+            Some(_) => (relation_color(&view, p.owner), 0.85),
             None => (NEUTRAL, 0.3),
         };
         let l = rgb(c).to_linear();
@@ -675,11 +718,93 @@ fn draw_rings(
             .resolution(48);
     }
     if let Some(i) = selection.0.filter(|&i| i < view.planets.len()) {
-        let pulse = 1.0 + 0.05 * (time.elapsed_secs() * 3.0).sin();
+        // The notched selection ring: a translucent band with raised teeth, bright inner and outer outline.
+        let pulse = 1.0 + 0.012 * (time.elapsed_secs() * 3.0).sin();
         let pos = galaxy_to_world(view.planets[i].position);
-        select
-            .circle(Isometry3d::new(pos, flat), radii.0[i] * 1.65 * pulse, Color::WHITE)
-            .resolution(64);
+        let r = radii.0[i] * NOTCH_RADIUS * pulse;
+        let color = rgb(relation_color(&view, view.player_faction));
+        let l = color.to_linear();
+        let bright = Color::LinearRgba(LinearRgba::new(l.red * 1.3 + 0.1, l.green * 1.3 + 0.1, l.blue * 1.3 + 0.1, 1.0));
+        select.circle(Isometry3d::new(pos, flat), r, bright).resolution(96);
+        let outer = (0..=NOTCH_SEGMENTS).map(|k| {
+            let th = k as f32 / NOTCH_SEGMENTS as f32 * std::f32::consts::TAU;
+            let ro = r * notch_outer(th);
+            pos + Vec3::new(th.cos() * ro, 0.0, th.sin() * ro)
+        });
+        select.linestrip(outer, bright);
+    }
+}
+
+/// Radius of the notched selection ring in planet radii (about 10 in the reference).
+const NOTCH_RADIUS: f32 = 4.1;
+const NOTCH_SEGMENTS: usize = 360;
+
+/// Outer contour of the notched ring in units of the inner radius.
+fn notch_outer(theta: f32) -> f32 {
+    let deg = theta.to_degrees().rem_euclid(360.0);
+    let slot = (deg / 10.0) as u32;
+    let within = deg % 10.0;
+    let tooth = if slot % 2 == 0 && within > 2.0 && within < 8.0 { 1.0 } else { 0.0 };
+    let big = if slot % 6 == 0 { 1.7 } else { 1.0 };
+    1.06 + 0.035 * tooth * big
+}
+
+/// Translucent fill of the notched ring (unit radius, flat in the XZ plane).
+#[derive(Component)]
+struct NotchFill;
+
+fn notch_mesh() -> Mesh {
+    use bevy::asset::RenderAssetUsages;
+    use bevy::mesh::{Indices, PrimitiveTopology};
+    let mut pos = Vec::new();
+    let mut idx = Vec::new();
+    for k in 0..NOTCH_SEGMENTS {
+        let th = k as f32 / NOTCH_SEGMENTS as f32 * std::f32::consts::TAU;
+        let (c, s) = (th.cos(), th.sin());
+        let ro = notch_outer(th);
+        pos.push([c, 0.0, s]);
+        pos.push([c * ro, 0.0, s * ro]);
+        let (a, b) = ((2 * k) as u32, (2 * k + 1) as u32);
+        let (na, nb) = (((2 * ((k + 1) % NOTCH_SEGMENTS)) as u32), ((2 * ((k + 1) % NOTCH_SEGMENTS) + 1) as u32));
+        idx.extend([a, b, na, na, b, nb]);
+    }
+    let n = pos.len();
+    let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default());
+    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, pos);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, vec![[0.0f32, 1.0, 0.0]; n]);
+    mesh.insert_indices(Indices::U32(idx));
+    mesh
+}
+
+/// Puts the ring fill under the selected planet and tints it with the player's colour.
+fn place_notch_fill(
+    view: Res<GalaxyView>,
+    radii: Res<PlanetRadii>,
+    selection: Res<Selection>,
+    mut fills: Query<(&mut Transform, &mut Visibility, &MeshMaterial3d<StandardMaterial>), With<NotchFill>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut last: Local<Option<usize>>,
+) {
+    for (mut tf, mut vis, mat) in &mut fills {
+        match selection.0.filter(|&i| i < view.planets.len()) {
+            Some(i) => {
+                let pos = galaxy_to_world(view.planets[i].position);
+                tf.translation = pos;
+                tf.scale = Vec3::splat(radii.0[i] * NOTCH_RADIUS);
+                *vis = Visibility::Inherited;
+                if *last != Some(i)
+                    && let Some(mut m) = materials.get_mut(&mat.0)
+                {
+                    let c = rgb(relation_color(&view, view.player_faction));
+                    m.base_color = c.with_alpha(0.38);
+                    *last = Some(i);
+                }
+            }
+            None => {
+                *vis = Visibility::Hidden;
+                *last = None;
+            }
+        }
     }
 }
 /// Relation of a trade route to the human player, derived from the owners of its end points.
@@ -705,65 +830,186 @@ pub fn route_relation(a: Option<usize>, b: Option<usize>, player: Option<usize>)
     }
 }
 
-/// Linear colour of a line style at zoom `t` (0 = close, 1 = far), as additive-looking RGB.
-fn route_color(style: &LineStyleView, t: f32) -> Option<Color> {
+/// A lane class: one combined ribbon mesh per width class (main web ways, inter lanes, capillaries).
+#[derive(Component)]
+struct LaneMesh {
+    mesh: Handle<Mesh>,
+    /// Route indices of the ribbon quads in vertex order (4 vertices each).
+    routes: Vec<usize>,
+}
+
+/// Lane colour/zoom state of the last colour update (vertex colours are only rewritten when it changes).
+#[derive(Default)]
+struct LaneState {
+    zoom_bucket: i32,
+    owners: u64,
+    built: bool,
+}
+
+/// Half widths of the ribbons in planet radii (`MapScale::unit`), by data width class. The reference
+/// shows wide soft light-blue beams of about 0.7 planet radii, thinner inter lanes and hair lines.
+const LANE_HALF_WIDTH: [f32; 3] = [0.2, 0.09, 0.04];
+/// Peak brightness (linear) of the beams.
+const LANE_PEAK: [f32; 3] = [0.34, 0.30, 0.26];
+
+fn lane_class(width: f32) -> usize {
+    if width >= 4.0 {
+        0
+    } else if width >= 1.5 {
+        1
+    } else {
+        2
+    }
+}
+
+/// Soft beam profile across the ribbon (u) and a gentle fade towards both ends (v).
+fn lane_texture() -> Image {
+    use bevy::asset::RenderAssetUsages;
+    use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
+    let (w, h) = (64u32, 16u32);
+    let mut px = Vec::with_capacity((w * h * 4) as usize);
+    for y in 0..h {
+        let v = (y as f32 + 0.5) / h as f32;
+        let along = 0.6 + 0.4 * (std::f32::consts::PI * v).sin();
+        for x in 0..w {
+            let u = ((x as f32 + 0.5) / w as f32 - 0.5) * 2.0;
+            // Bright core with soft shoulders.
+            let profile = (1.0 - u * u).max(0.0).powf(1.6);
+            let a = (profile * along).clamp(0.0, 1.0);
+            let c = 200 + (55.0 * (1.0 - u.abs())) as u8;
+            px.extend_from_slice(&[c, c, 255, (a * 255.0) as u8]);
+        }
+    }
+    let mut img = Image::new(
+        Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+        TextureDimension::D2,
+        px,
+        TextureFormat::Rgba8UnormSrgb,
+        RenderAssetUsages::RENDER_WORLD,
+    );
+    img.sampler = bevy::image::ImageSampler::linear();
+    img
+}
+
+/// Spawns the three lane ribbon meshes of the galaxy.
+fn spawn_lanes(
+    commands: &mut Commands,
+    view: &GalaxyView,
+    scale: &MapScale,
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<StandardMaterial>,
+    images: &mut Assets<Image>,
+) {
+    use bevy::asset::RenderAssetUsages;
+    use bevy::mesh::{Indices, PrimitiveTopology};
+    let tex = images.add(lane_texture());
+    let material = materials.add(StandardMaterial {
+        base_color: Color::WHITE,
+        base_color_texture: Some(tex),
+        unlit: true,
+        alpha_mode: AlphaMode::Add,
+        cull_mode: None,
+        ..default()
+    });
+    let mut classes: [Vec<usize>; 3] = Default::default();
+    for (i, r) in view.routes.iter().enumerate() {
+        let (Some(_), Some(_), Some(style)) = (view.planets.get(r.a), view.planets.get(r.b), view.route_styles.get(r.style)) else {
+            continue;
+        };
+        classes[lane_class(style.neutral.width.max(style.own.width))].push(i);
+    }
+    for (class, routes) in classes.into_iter().enumerate() {
+        if routes.is_empty() {
+            continue;
+        }
+        let half = LANE_HALF_WIDTH[class] * scale.unit;
+        let (mut pos, mut uv, mut idx) = (Vec::new(), Vec::new(), Vec::new());
+        for (n, &ri) in routes.iter().enumerate() {
+            let r = &view.routes[ri];
+            let (pa, pb) = (galaxy_to_world(view.planets[r.a].position), galaxy_to_world(view.planets[r.b].position));
+            let dir = (pb - pa).normalize_or_zero();
+            let mut side = Vec3::Y.cross(dir);
+            if side.length_squared() < 1e-6 {
+                side = Vec3::X;
+            }
+            let side = side.normalize() * half;
+            pos.extend([pa - side, pa + side, pb - side, pb + side].map(|p| p.to_array()));
+            uv.extend([[0.0f32, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]]);
+            let b = (n * 4) as u32;
+            idx.extend([b, b + 1, b + 2, b + 2, b + 1, b + 3]);
+        }
+        let n = pos.len();
+        let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default());
+        mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, pos);
+        mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uv);
+        mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, vec![[0.0f32; 4]; n]);
+        mesh.insert_indices(Indices::U32(idx));
+        let handle = meshes.add(mesh);
+        commands.spawn((
+            Name::new("lanes"),
+            Mesh3d(handle.clone()),
+            MeshMaterial3d(material.clone()),
+            Transform::IDENTITY,
+            bevy::camera::visibility::NoFrustumCulling,
+            LaneMesh { mesh: handle, routes },
+            GalaxyEntity,
+        ));
+    }
+}
+
+/// Linear RGB of a lane for the relation of its ends at zoom `t`; `None` when the style hides it.
+/// The game's colours are dark additive teal (13, 31, 38) meant to be added on the backdrop; they give the
+/// hue, the peak brightness per width class gives the beam.
+fn lane_color(style: &LineStyleView, t: f32, class: usize) -> [f32; 4] {
     let mix = |i: usize| style.color_near[i] + (style.color_far[i] - style.color_near[i]) * t;
     let alpha = mix(3);
     if style.width <= 0.0 || alpha <= 0.01 {
-        return None;
+        return [0.0; 4];
     }
-    let l = Color::srgb(mix(0), mix(1), mix(2)).to_linear();
-    let k = alpha * ROUTE_GLOW;
-    Some(Color::LinearRgba(LinearRgba::new(l.red * k, l.green * k, l.blue * k, 1.0)))
+    let rgb = Vec3::new(mix(0), mix(1), mix(2));
+    let rgb = rgb / rgb.max_element().max(1e-3);
+    // Washed towards light steel blue like the reference beams.
+    let rgb = rgb * 0.45 + Vec3::splat(0.55);
+    let l = Color::srgb(rgb.x, rgb.y, rgb.z).to_linear();
+    let k = LANE_PEAK[class] * alpha;
+    [l.red * k, l.green * k, l.blue * k, 1.0]
 }
 
-/// Draws all trade routes with the styles from `TRADEROUTELINES.XML`, picked by the route's
-/// relation to the player and blended between the zoomed-in and zoomed-out colours.
-fn draw_routes(
+/// Keeps the ribbon colours in sync with ownership (relation of the ends) and zoom.
+fn update_lanes(
     view: Res<GalaxyView>,
     bounds: Res<CameraBounds>,
     camera: Single<&GalaxyCamera>,
-    mut wide: Gizmos<RouteWide>,
-    mut mid: Gizmos<RouteMid>,
-    mut thin: Gizmos<RouteThin>,
+    lanes: Query<&LaneMesh>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut state: Local<LaneState>,
 ) {
-    let t = ((camera.distance - bounds.min_distance)
-        / (bounds.max_distance - bounds.min_distance).max(1.0))
-    .clamp(0.0, 1.0);
-    for r in &view.routes {
-        let (Some(a), Some(b)) = (view.planets.get(r.a), view.planets.get(r.b)) else {
-            continue;
-        };
-        let Some(style) = view.route_styles.get(r.style) else {
-            continue;
-        };
-        let relation = route_relation(a.owner, b.owner, view.player_faction);
-        let line = match relation {
-            RouteRelation::Own => &style.own,
-            RouteRelation::Enemy => &style.enemy,
-            RouteRelation::Contested | RouteRelation::Neutral => &style.neutral,
-        };
-        let Some(color) = route_color(line, t) else {
-            continue;
-        };
-        // Own lanes glow in the player colour, front lines (two different owners) in warning orange.
-        let color = match relation {
-            RouteRelation::Own => view.player_faction.and_then(|p| view.factions.get(p)).map_or(color, |f| {
-                let l = Color::srgb(f.color[0], f.color[1], f.color[2]).to_linear();
-                Color::LinearRgba(LinearRgba::new(l.red * 0.9, l.green * 0.9, l.blue * 0.9, 1.0))
-            }),
-            RouteRelation::Contested => Color::LinearRgba(LinearRgba::new(0.45, 0.14, 0.06, 1.0)),
-            _ => color,
-        };
-        let (pa, pb) = (galaxy_to_world(a.position), galaxy_to_world(b.position));
-        if line.width >= 4.0 {
-            wide.line(pa, pb, color);
-        } else if line.width >= 1.5 {
-            mid.line(pa, pb, color);
-        } else {
-            thin.line(pa, pb, color);
+    let t = zoom_fraction(&bounds, camera.distance);
+    let bucket = (t * 24.0) as i32;
+    let owners = view.planets.iter().fold(1469598103934665603u64, |h, p| (h ^ p.owner.map_or(0xffff, |o| o as u64)).wrapping_mul(1099511628211));
+    if state.built && state.zoom_bucket == bucket && state.owners == owners {
+        return;
+    }
+    for lane in &lanes {
+        let mut col: Vec<[f32; 4]> = Vec::with_capacity(lane.routes.len() * 4);
+        for &ri in &lane.routes {
+            let r = &view.routes[ri];
+            let (a, b) = (&view.planets[r.a], &view.planets[r.b]);
+            let style = &view.route_styles[r.style];
+            let class = lane_class(style.neutral.width.max(style.own.width));
+            let line = match route_relation(a.owner, b.owner, view.player_faction) {
+                RouteRelation::Own => &style.own,
+                RouteRelation::Enemy => &style.enemy,
+                RouteRelation::Contested | RouteRelation::Neutral => &style.neutral,
+            };
+            let c = lane_color(line, t, class);
+            col.extend([c; 4]);
+        }
+        if let Some(mut m) = meshes.get_mut(&lane.mesh) {
+            m.insert_attribute(Mesh::ATTRIBUTE_COLOR, col);
         }
     }
+    *state = LaneState { zoom_bucket: bucket, owners, built: true };
 }
 
 /// Finds the planet under the mouse cursor (ray vs. a generous pick sphere).
@@ -950,5 +1196,32 @@ mod tests {
         assert_eq!(route_relation(Some(1), Some(2), p), RouteRelation::Contested);
         assert_eq!(route_relation(None, Some(2), p), RouteRelation::Neutral);
         assert_eq!(route_relation(Some(1), Some(1), None), RouteRelation::Enemy);
+    }
+}
+/// A row of structure slot pips under a planet name: `row` 0 = ground slots, 1 = space slots.
+#[derive(Component)]
+struct PipRow {
+    planet: usize,
+    row: usize,
+    count: usize,
+}
+
+/// One pip of a [`PipRow`].
+#[derive(Component)]
+struct PipIcon {
+    #[allow(dead_code)]
+    space: bool,
+}
+
+/// sRGB colour a planet owner is drawn in on the map. Like the game the player's own planets are green; the other
+/// factions keep their `Color` from `FACTIONS.XML` (Rebel red, Underworld orange, ...), brightened to read on the nebula.
+fn relation_color(view: &GalaxyView, owner: Option<usize>) -> [f32; 3] {
+    match owner {
+        None => [0.62, 0.62, 0.62],
+        Some(o) if Some(o) == view.player_faction => [0.15, 1.0, 0.25],
+        Some(o) => view.factions.get(o).map_or(NEUTRAL, |f| {
+            let m = f.color[0].max(f.color[1]).max(f.color[2]).max(1e-3);
+            [(f.color[0] / m).powf(1.4), (f.color[1] / m).powf(1.4), (f.color[2] / m).powf(1.4)]
+        }),
     }
 }

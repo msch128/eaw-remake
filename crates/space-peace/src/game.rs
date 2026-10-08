@@ -496,6 +496,7 @@ pub fn build_view(data: &GameData, campaign: &Campaign) -> (GalaxyView, Vec<Stri
             model_scale: if p.scale_factor > 0.0 { p.scale_factor } else { 1.0 },
             surface_color: terrain_color(p),
             max_space_base: p.max_space_base,
+            max_ground_base: p.max_ground_base,
             special_slots: p.special_structures_space,
             ability: planet_ability(data, p),
             starting_forces: forces

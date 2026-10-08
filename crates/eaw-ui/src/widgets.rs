@@ -833,6 +833,12 @@ impl Builder<'_> {
             layers.over = Some(e);
         }
         self.world.entity_mut(button).insert(layers);
+        if lname.starts_with("choice_button_") {
+            // Labels of the battle banner buttons come from `PanelData::texts`.
+            let color = def.text_color.map_or(Color::WHITE, rgba);
+            let l = self.text_layer(button, size, def, "", Vec2::ZERO, color);
+            self.world.entity_mut(l).insert(PanelText(lname.clone()));
+        }
         if matches!(lname.as_str(), "b_retreat" | "b_reinforcement") {
             let off = Vec2::new(0.0, -size.y * 0.5 - 4.0);
             let l = self.text_layer(button, size, def, "", off, Color::srgb(0.9, 0.95, 1.0));

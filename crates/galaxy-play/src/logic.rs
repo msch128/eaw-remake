@@ -340,6 +340,14 @@ pub fn update_ui_model(
                 faction: catalog.faction(fac).to_owned(),
                 color: [world.factions[fac as usize].color[0] as f32 / 255.0, world.factions[fac as usize].color[1] as f32 / 255.0, world.factions[fac as usize].color[2] as f32 / 255.0],
                 ships: b.fleets.iter().filter_map(|id| g.fleets.get(id)).filter(|f| f.owner == fac).map(|f| f.unit_count()).sum(),
+                flagship: b
+                    .fleets
+                    .iter()
+                    .filter_map(|id| g.fleets.get(id))
+                    .filter(|f| f.owner == fac)
+                    .max_by_key(|f| f.unit_count())
+                    .and_then(|f| flagship(world, f))
+                    .map_or_else(String::new, |u| catalog.unit(u).to_owned()),
                 defender: b.defender == Some(fac),
                 mine: human == Some(fac),
             })

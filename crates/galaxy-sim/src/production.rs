@@ -217,6 +217,10 @@ impl World {
         }
         let next = self.next_starbase(galaxy, faction, planet).ok_or(CommandError::NotAvailable)?;
         let sb = &self.starbases[next as usize];
+        let limit = self.planets[planet as usize].max_space_base;
+        if limit > 0 && sb.level > limit {
+            return Err(CommandError::RequirementsNotMet(format!("this planet takes star bases up to level {limit}")));
+        }
         if sb.tech > fs.tech {
             return Err(CommandError::RequirementsNotMet(format!("tech level {}", sb.tech)));
         }
