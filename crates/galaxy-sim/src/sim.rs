@@ -187,11 +187,6 @@ impl Sim {
                 Ok(CommandOk::Done)
             }
             Command::MoveFleet { faction, fleet, to } => {
-                if std::env::var("TRACE_APPLY").is_ok() {
-                    let bt = std::backtrace::Backtrace::force_capture().to_string();
-                    let callers: Vec<&str> = bt.lines().filter(|l| l.contains("galaxy_") && !l.contains("Sim>::apply")).take(4).collect();
-                    eprintln!("APPLY move faction {faction} fleet {fleet} to {to} t={:.0} {callers:?}", g.time);
-                }
                 let f = g.fleets.get(&fleet).filter(|f| f.owner == faction).ok_or(CommandError::Invalid)?;
                 let FleetLocation::AtPlanet(from) = f.location else { return Err(CommandError::WrongState) };
                 if to as usize >= world.planets.len() {

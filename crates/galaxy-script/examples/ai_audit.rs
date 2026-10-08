@@ -103,7 +103,8 @@ fn main() {
     let mut tallies = vec![Tally::default(); names.len()];
     let mut lane_use: BTreeMap<i32, u32> = BTreeMap::new();
     let mut border_fleet_weeks_next_to_enemy = 0u32;
-    let mut pending: BTreeMap<u32, (i32, Option<u32>, Vec<(u32, u32)>, u32)> = BTreeMap::new();
+    type PendingInfo = (i32, Option<u32>, Vec<(u32, u32)>, u32);
+    let mut pending: BTreeMap<u32, PendingInfo> = BTreeMap::new();
     let mut attacks: Vec<(u32, u32, u32, i32, bool)> = Vec::new();
     let mut week = 0;
     while week < weeks {

@@ -799,6 +799,10 @@ fn reach_from_owned(snap: &Snapshot, player: PlayerId, max_hops: u32) -> Vec<u32
         if d[p as usize] >= max_hops {
             continue;
         }
+        // An enemy star base stops fleets: what lies behind it can only be reached by taking it first.
+        if snap.owner[p as usize].is_some_and(|o| snap.enemy[player as usize][o as usize]) && snap.starbase[p as usize].0 > 0 {
+            continue;
+        }
         for &n in &snap.adjacency[p as usize] {
             if d[n as usize] == u32::MAX {
                 d[n as usize] = d[p as usize] + 1;

@@ -141,8 +141,6 @@ pub struct TaskForceStats {
     pub unimplemented: HashMap<String, u32>,
     /// Credits spent through plans.
     pub credits_spent: f64,
-    /// Attacks the force check called off because the assembled fleet was too weak.
-    pub attacks_called_off: u32,
 }
 
 /// All task forces and their pending commands.
@@ -197,6 +195,34 @@ fn hop_distances(snap: &Snapshot, from: PlanetId) -> Vec<u32> {
         }
     }
     d
+}
+
+/// Planets from which `stage` can be reached without passing a system that would stop the player's ships (an enemy star base):
+/// ships sent from anywhere else would be blockaded and destroyed one by one on the way.
+fn safe_from(snap: &Snapshot, player: PlayerId, stage: PlanetId) -> Vec<bool> {
+    let blocks = |p: PlanetId| snap.owner[p as usize].is_some_and(|o| snap.enemy[player as usize][o as usize]) && snap.starbase[p as usize].0 > 0;
+    let mut seen = vec![false; snap.adjacency.len()];
+    let mut q = VecDeque::new();
+    seen[stage as usize] = true;
+    q.push_back(stage);
+    while let Some(p) = q.pop_front() {
+        if p != stage && blocks(p) {
+            continue; // reached, but nothing travels on through it
+        }
+        for &n in &snap.adjacency[p as usize] {
+            if !seen[n as usize] {
+                seen[n as usize] = true;
+                q.push_back(n);
+            }
+        }
+    }
+    // A blockading system itself is no starting point for the player's ships.
+    for (p, s) in seen.iter_mut().enumerate() {
+        if p as PlanetId != stage && blocks(p as PlanetId) {
+            *s = false;
+        }
+    }
+    seen
 }
 
 fn next_rand(rng: &mut u64) -> f64 {
@@ -399,9 +425,6 @@ impl TaskForces {
     ) -> Option<HostValue> {
         let now = sim.time();
         let kind = self.forces.get(&tf_id)?.kind;
-        if std::env::var("TRACE_CALLS").is_ok() {
-            eprintln!("CALL {method}");
-        }
         let obj_planet = |sim: &dyn AiSim, v: Option<&HostValue>| -> Option<PlanetId> {
             match v {
                 Some(HostValue::Object(o)) => sim.object_planet(*o),
@@ -452,12 +475,6 @@ impl TaskForces {
                         let player = self.forces[&tf_id].player;
                         self.rally.entry((player, to)).or_default().push(tf_id);
                         self.jobs.push(Job::Rally { block, tf: tf_id, to, started: now });
-                    }
-                    (ForceKind::Units, Some(to)) if self.too_weak_to_attack(sim, snap, tf_id, to) => {
-                        // The assembled force is clearly weaker than what the player believes defends the target: stay home (the plan fails,
-                        // which raises the contrast of later forces) instead of throwing the fleet away.
-                        self.stats.attacks_called_off += 1;
-                        self.finish(block, false);
                     }
                     (ForceKind::Units, Some(to)) => {
                         let moved = self.start_move(sim, tf_id, to);
@@ -527,6 +544,14 @@ impl TaskForces {
         let mut seeded: u64 = 0x9E37_79B9_7F4A_7C15 ^ (u64::from(t.player) << 40) ^ (u64::from(t.target.unwrap_or(0)) << 8) ^ t.name.bytes().fold(7u64, |a, b| a.wrapping_mul(31).wrapping_add(u64::from(b)));
         let rng = &mut seeded;
         let mut candidates: Vec<(String, String, f64)> = Vec::new(); // name, category, power
+        // Ships built at a planet that cannot reach the stage safely would be lost on the way: only the planets that can count.
+        let safe_planets: Vec<PlanetId> = match t.stage.or_else(|| self.choose_stage(snap, t)) {
+            Some(stage) if t.kind != ForceKind::Structure => {
+                let safe = safe_from(snap, t.player, stage);
+                snap.owned[t.player as usize].iter().copied().filter(|&p| safe[p as usize]).take(40).collect()
+            }
+            _ => snap.owned[t.player as usize].iter().copied().take(40).collect(),
+        };
         for name in sim.buildable_units(t.player) {
             if t.reqs.excluded.contains(&name.to_ascii_lowercase()) {
                 continue;
@@ -536,9 +561,8 @@ impl TaskForces {
                 continue;
             }
             // Only ships some owned planet can build right now (tech, shipyard, slots); money may still be missing.
-            let buildable = snap.owned[t.player as usize]
+            let buildable = safe_planets
                 .iter()
-                .take(10)
                 .any(|&pl| matches!(sim.can_build_unit(t.player, pl, &name), Ok(()) | Err(Refused::NoCredits)));
             if !buildable {
                 continue;
@@ -719,18 +743,6 @@ impl TaskForces {
                 }));
             }
         }
-    }
-
-    /// True if the force of `tf_id` is weaker than `ATTACK_GO_MARGIN` times the strength its player believes defends the enemy planet `to`.
-    fn too_weak_to_attack(&self, sim: &dyn AiSim, snap: &Snapshot, tf_id: u64, to: PlanetId) -> bool {
-        let Some(t) = self.forces.get(&tf_id) else { return false };
-        if !snap.owner[to as usize].is_some_and(|o| snap.enemy[t.player as usize][o as usize]) {
-            return false;
-        }
-        let Some(fleet) = t.fleet.and_then(|f| sim.fleet(f)) else { return false };
-        let believed = self.believed.get(&t.player).map_or(0.0, |v| v[to as usize]);
-        let mine = sim.force_strength(&fleet.units);
-        believed > 0.0 && mine > 0.0 && mine < believed * ATTACK_GO_MARGIN
     }
 
     fn start_move(&mut self, sim: &mut dyn AiSim, tf_id: u64, to: PlanetId) -> bool {
@@ -931,13 +943,14 @@ impl TaskForces {
         let mut remaining: Vec<String> = Vec::new();
         let mut free = if allow_free { self.free_ships(sim, player, self.forces.get(&j.tf).and_then(|t| t.target)) } else { HashMap::new() };
         let dist = hop_distances(snap, j.stage);
+        let safe = safe_from(snap, player, j.stage);
         for unit in std::mem::take(&mut j.wanted) {
             let key = unit.to_ascii_lowercase();
             let mut best: Option<(PlanetId, FleetId, u32)> = None;
             let mut entries: Vec<_> = free.iter().collect();
             entries.sort_by_key(|((pl, _), _)| *pl);
             for ((pl, u), (fid, cnt)) in entries {
-                if *u == key && *cnt > 0 && best.is_none_or(|b| dist[*pl as usize] < dist[b.0 as usize]) {
+                if *u == key && *cnt > 0 && safe[*pl as usize] && best.is_none_or(|b| dist[*pl as usize] < dist[b.0 as usize]) {
                     best = Some((*pl, *fid, *cnt));
                 }
             }
@@ -952,6 +965,7 @@ impl TaskForces {
             }
             // Queue it at the nearest planet that accepts it.
             let mut planets: Vec<PlanetId> = snap.owned[player as usize].clone();
+            planets.retain(|&p| safe[p as usize]);
             planets.sort_by_key(|&p| dist[p as usize]);
             let mut queued = false;
             let mut no_credits = false;
@@ -1231,6 +1245,3 @@ impl TaskForces {
     }
 }
 
-/// A force goes to an enemy planet only if its strength is at least this share of what its player believes defends it (estimate: the
-/// plan scripts size forces with a margin, but forces that could not be completed used to leave anyway).
-const ATTACK_GO_MARGIN: f64 = 0.9;

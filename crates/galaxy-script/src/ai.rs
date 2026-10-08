@@ -201,14 +201,6 @@ impl AiSim for SimAdapter<'_> {
         Ok(0.0)
     }
     fn move_fleet(&mut self, p: PlayerId, fleet: u32, to: PlanetId) -> Result<(), Refused> {
-        if std::env::var("TRACE_MOVES").is_ok() {
-            let bt = std::backtrace::Backtrace::force_capture().to_string();
-            let callers: Vec<&str> = bt.lines().filter(|l| l.contains("galaxy_ai")).take(3).collect();
-            let g = self.sim.galaxy();
-            let n = g.fleets.get(&fleet).map_or(0, |f| f.unit_count());
-            let owner = g.planets[to as usize].owner;
-            eprintln!("MOVE player {p} fleet {fleet} ({n} ships) to {to} owner {owner:?} t={:.0} via {callers:?}", g.time);
-        }
         self.sim.apply(Command::MoveFleet { faction: p, fleet, to }).map(|_| ()).map_err(refuse)
     }
     fn split_fleet(&mut self, p: PlayerId, fleet: u32, units: &[(String, u32)]) -> Result<u32, Refused> {
