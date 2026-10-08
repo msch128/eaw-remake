@@ -91,6 +91,9 @@ pub(crate) struct UnitPanelStats;
 #[derive(Component)]
 pub(crate) struct HardpointTip;
 
+/// Radius of a weapon hit area as a share of the hull radius (estimate).
+const HARDPOINT_RADIUS_OF_HULL: f32 = 0.04;
+
 /// Seconds the cursor rests on a ship before its tooltip shows (estimate).
 const TOOLTIP_DELAY: f32 = 0.35;
 
@@ -290,9 +293,8 @@ pub fn spawn_hud(
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub(crate) fn unit_tooltip(
     time: Res<Time>,
-    hover: Res<crate::control::Hover>,
-    pointer: Res<crate::control::Pointer>,
-    block: Res<crate::control::UiBlock>,
+    inputs: (Res<crate::control::Hover>, Res<crate::control::Pointer>, Res<crate::control::UiBlock>),
+    camera: Single<(&Camera, &GlobalTransform), With<crate::camera::BattleCamera>>,
     rt: Res<BattleRuntime>,
     ships: Res<RenderedShips>,
     assets: Option<Res<EawUiAssets>>,
@@ -313,6 +315,8 @@ pub(crate) fn unit_tooltip(
     mut bubble: Query<&mut Visibility, With<AdvisorBubble>>,
 ) {
     let (Ok(mut panel), Ok((mut tip_node, mut tip_text))) = (panel.single_mut(), tip.single_mut()) else { return };
+    let (hover, pointer, block) = inputs;
+    let (cam, gt) = *camera;
     let now = time.elapsed_secs();
     let hovered = hover.ship.filter(|_| !block.0);
     match (hovered, state.hover_since) {
@@ -332,11 +336,20 @@ pub(crate) fn unit_tooltip(
     let game = assets.as_ref().and_then(|a| a.game.clone());
 
     // A hardpoint reticle under the cursor wins.
+    // The hit area of a weapon is its projected size (a few percent of the hull radius, estimate: the bone has no extent in the data), at least 24 px
+    // around the reticle so that the edge of a turret counts too; the closest one wins.
     let near = overlays
         .hardpoints
         .iter()
-        .map(|h| (h, h.screen_pos.distance(cursor)))
-        .filter(|(_, d)| *d < 16.0 * scale.0)
+        .filter_map(|h| {
+            let sid = h.id.split_once(':').and_then(|(a, _)| a.parse::<u32>().ok())?;
+            let s = ships.0.get(&sid)?;
+            let c = cam.world_to_viewport(gt, s.pos).ok()?;
+            let e = cam.world_to_viewport(gt, s.pos + gt.right() * s.radius * HARDPOINT_RADIUS_OF_HULL).ok()?;
+            let reach = (e - c).length().max(24.0 * scale.0);
+            let d = h.screen_pos.distance(cursor);
+            (d < reach).then_some((h, d / reach))
+        })
         .min_by(|a, b| a.1.total_cmp(&b.1));
     if let (Some((marker, _)), false) = (near, block.0) {
         let parsed = marker.id.split_once(':').and_then(|(a, b)| Some((a.parse::<u32>().ok()?, b.parse::<usize>().ok()?)));

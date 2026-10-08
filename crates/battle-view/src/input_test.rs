@@ -435,8 +435,9 @@ fn drive(
                 }
                 16 => {
                     st.hp_marker = overlays.hardpoints.first().map(|h| h.screen_pos);
+                    // Hover the edge of the turret, not its centre.
                     match st.hp_marker {
-                        Some(p) => act = Some(Act::Move(p)),
+                        Some(p) => act = Some(Act::Move(p + Vec2::new(20.0, 0.0))),
                         None => verdict = Some(("hardpoint-tooltip: no reticle appeared while hovering the ship".into(), false)),
                     }
                 }
