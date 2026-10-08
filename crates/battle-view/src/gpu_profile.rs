@@ -70,10 +70,11 @@ fn collect(store: Res<DiagnosticsStore>, mut profile: ResMut<GpuProfile>) {
     }
     for d in store.iter() {
         let path = d.path().as_str();
-        if path.starts_with("render/") && (path.ends_with("elapsed_gpu") || path.ends_with("elapsed_cpu")) {
-            if let Some(v) = d.value() {
-                profile.samples.entry(path.to_string()).or_default().push(v);
-            }
+        if path.starts_with("render/")
+            && (path.ends_with("elapsed_gpu") || path.ends_with("elapsed_cpu"))
+            && let Some(v) = d.value()
+        {
+            profile.samples.entry(path.to_string()).or_default().push(v);
         }
     }
 }

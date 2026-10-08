@@ -418,7 +418,7 @@ impl Drop for SimDriver {
 
 /// The simulation the worker drives: plain galaxy-sim, or galaxy-sim with the Remake scripts, AI and save journal.
 enum Core {
-    Plain(Sim),
+    Plain(Box<Sim>),
     Scripted(Box<ScriptedSim>),
 }
 
@@ -602,7 +602,7 @@ fn worker(sim: Sim, script: Option<ScriptSetup>, human: Option<FactionId>, progr
     let mut first_loads = Vec::new();
     let mut core = match &script {
         Some(setup) => build_scripted(sim, setup, human, &progress, &mut first_loads),
-        None => Core::Plain(sim),
+        None => Core::Plain(Box::new(sim)),
     };
     if let Core::Scripted(s) = &core {
         week = s.checkpoint().week;

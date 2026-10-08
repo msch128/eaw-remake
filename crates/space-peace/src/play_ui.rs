@@ -1191,7 +1191,9 @@ fn superweapon_target(state: &SimState, player: &PlayerFaction, selection: &Play
         let p = f.planet()?;
         let armed = f.units.iter().any(|(&u, &n)| n > 0 && state.world.units[u as usize].planet_destroyer);
         let ps = &g.planets[p as usize];
-        if armed && state.world.planets[p as usize].destroyable && !ps.destroyed && ps.owner != Some(me) {
+        // Same predicate as the simulation: not yours, not an ally, destroyable, not already destroyed.
+        let foe = ps.owner.is_none_or(|o| o != me && g.hostile(&state.world, me, o));
+        if armed && state.world.planets[p as usize].destroyable && !ps.destroyed && foe {
             let ready = g.time >= g.factions[me as usize].superweapon_ready_at;
             return Some((p, ready));
         }
@@ -1286,6 +1288,24 @@ fn superweapon_dialog(mut results: MessageReader<EawDialogResult>, mut ask: ResM
         ask.0 = None;
         if r.button == 0 {
             actions.write(PlayAction::DestroyPlanet(p));
+        }
+    }
+}
+
+/// The planet explosion effect of the galactic map plays at a planet that was just destroyed.
+fn explode_on_destroy(
+    mut commands: Commands,
+    mut events: MessageReader<galaxy_play::PlayEvent>,
+    layout: Res<galaxy_play::GalaxyLayout>,
+    alamo: Option<Res<alamo_render::AlamoFs>>,
+) {
+    for e in events.read() {
+        let galaxy_play::PlayEvent::Sim(galaxy_sim::Event::PlanetDestroyed { planet, .. }) = e else { continue };
+        info!("play: planet {planet} destroyed");
+        if alamo.is_some() {
+            let pos = layout.positions[*planet as usize];
+            let scale = layout.radii[*planet as usize].max(1.0);
+            commands.spawn((alamo_render::AlamoParticles::new("P_Planet_Explode_Galactic.alo"), Transform::from_translation(pos).with_scale(Vec3::splat(scale)), GalaxyEntity));
         }
     }
 }
