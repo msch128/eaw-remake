@@ -126,6 +126,8 @@ fn control_camera(
     settings: Res<Settings>,
     window: Option<Single<&Window, With<PrimaryWindow>>>,
     mut cam: Single<(&mut GalaxyCamera, &Projection)>,
+    selection: Option<Res<crate::galaxy_map::Selection>>,
+    view: Option<Res<crate::galaxy_view::GalaxyView>>,
 ) {
     let dt = time.delta_secs();
     let (cam, projection) = &mut *cam;
@@ -150,6 +152,15 @@ fn control_camera(
     if notches != 0.0 {
         cam.target_distance = (cam.target_distance * ZOOM_STEP.powf(notches))
             .clamp(bounds.min_distance, bounds.max_distance);
+        // Zooming in with a planet selected homes in on it, like the original.
+        if notches > 0.0
+            && let (Some(sel), Some(view)) = (selection.as_deref(), view.as_deref())
+            && let Some(p) = sel.0.and_then(|i| view.planets.get(i))
+        {
+            let w = crate::galaxy_map::galaxy_to_world(p.position);
+            let k = (notches * 0.18).clamp(0.0, 1.0);
+            cam.target_focus = cam.target_focus.lerp(Vec3::new(w.x, 0.0, w.z), k);
+        }
     }
 
     // Pan basis on the galaxy plane, rotated by yaw.

@@ -196,17 +196,43 @@ fn reset_on_stop(mut bar: ResMut<BarState>, data: Option<ResMut<CommandBarData>>
 }
 
 /// Name, cost, build time and (when greyed out) the reason.
-fn pad_tooltip(o: &galaxy_play::BuildOption, week: f32) -> String {
-    let mut s = format!("{}
-Cost: {:.0} credits   Build time: {}", o.name, o.cost, format_duration(o.build_seconds, week));
+fn pad_tooltip(o: &galaxy_play::BuildOption, week: f32, state: &SimState, game: Option<&alamo_data::GameData>) -> String {
+    let world = &state.world;
+    let object = match o.target {
+        BuildTarget::Unit(u) => Some(&world.units[u as usize].name),
+        BuildTarget::Structure(s) => Some(&world.structures[s as usize].name),
+        BuildTarget::Starbase(s) => Some(&world.starbases[s as usize].name),
+        BuildTarget::Tech(_) => None,
+    };
+    let description = object
+        .and_then(|n| game?.objects.resolve(n))
+        .and_then(|r| r.get("tooltip_text").map(str::to_owned))
+        .and_then(|id| game?.text(id.split_whitespace().next().unwrap_or("")).map(str::to_owned))
+        .filter(|t| !t.trim().is_empty());
+    let mut s = o.name.clone();
+    if let Some(d) = description {
+        s.push('\n');
+        s.push_str(d.trim());
+    }
+    s.push_str(&format!("\nCost: {:.0} credits\nBuild time: {}", o.cost, format_duration(o.build_seconds, week)));
     if o.population > 0 {
-        s.push_str(&format!("   Pop: {}", o.population));
+        s.push_str(&format!("\nPopulation: {}", o.population));
+    }
+    let upkeep = pad_upkeep(state, o.target);
+    if upkeep < -0.5 {
+        s.push_str(&format!("\nUpkeep: {:.0} credits per week", -upkeep));
+    } else if upkeep > 0.5 {
+        s.push_str(&format!("\nIncome: {upkeep:.0} credits per week"));
     }
     if !o.availability.is_available() {
-        s.push_str(&format!("
-({})", o.availability.reason()));
+        s.push_str(&format!("\n\n{}", capitalize(&o.availability.reason())));
     }
     s
+}
+
+fn capitalize(s: &str) -> String {
+    let mut c = s.chars();
+    c.next().map_or_else(String::new, |f| f.to_uppercase().collect::<String>() + c.as_str())
 }
 
 fn icon_for(state: &SimState, game: Option<&alamo_data::GameData>, target: BuildTarget) -> String {
@@ -289,7 +315,7 @@ fn feed_bar(
                 price: Some(o.cost.max(0.0) as u32),
                 disabled: !o.availability.is_available(),
                 building: menu.queue.iter().any(|q| q.target == o.target),
-                tooltip: pad_tooltip(o, week),
+                tooltip: pad_tooltip(o, week, &state, game),
                 upkeep: pad_upkeep(&state, o.target),
                 level: pad_level(&state, o.target),
             });
@@ -384,16 +410,15 @@ fn spawn_hud(mut commands: Commands, existing: Query<(), With<PlayHud>>) {
     commands.spawn((
         PlayHud,
         FleetTip,
-        text_bundle("", 14.0, Color::srgb(0.9, 0.95, 1.0)),
+        text_bundle("", 14.0, Color::srgb(0.74, 0.85, 0.96)),
         Node {
             position_type: PositionType::Absolute,
             padding: UiRect::axes(Val::Px(8.0), Val::Px(5.0)),
             border: UiRect::all(Val::Px(1.0)),
             ..default()
         },
-        crate::ui::SkinPanel,
-        BackgroundColor(Color::srgba(0.02, 0.05, 0.10, 0.92)),
-        BorderColor::all(Color::srgba(0.35, 0.65, 1.0, 0.8)),
+        BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.87)),
+        BorderColor::all(Color::srgb(0.0, 0.76, 0.99)),
         GlobalZIndex(30),
         Visibility::Hidden,
         GalaxyEntity,
@@ -864,10 +889,13 @@ fn draw_move_markers(time: Res<Time>, layout: Res<galaxy_play::GalaxyLayout>, mu
 #[derive(Component)]
 struct FleetTip;
 
+#[allow(clippy::too_many_arguments)]
 fn fleet_tooltip(
     hover: Res<galaxy_play::PlayHover>,
     state: Res<SimState>,
     catalog: Res<galaxy_play::PlayCatalog>,
+    bridge: Res<PlayBridge>,
+    view: Res<crate::galaxy_view::GalaxyView>,
     window: Option<Single<&Window, With<PrimaryWindow>>>,
     scale: Res<UiScale>,
     mut tip: Single<(&mut Node, &mut Text, &mut Visibility), With<FleetTip>>,
@@ -875,12 +903,22 @@ fn fleet_tooltip(
     let (node, text, vis) = &mut *tip;
     let cursor = window.and_then(|w| w.cursor_position());
     let fleet = hover.fleet.and_then(|id| state.galaxy().fleets.get(&id));
-    let (Some(cursor), Some(f)) = (cursor, fleet) else {
+    let planet = hover.planet.and_then(|p| bridge.sim_to_planet.get(p as usize).copied().flatten()).and_then(|i| view.planets.get(i).map(|pv| (i, pv)));
+    let (Some(cursor), Some(s)) = (cursor, fleet.map(|f| fleet_text(f, &state, &catalog)).or_else(|| planet.map(|(i, pv)| planet_text(i, pv, &view)))) else {
         if **vis != Visibility::Hidden {
             **vis = Visibility::Hidden;
         }
         return;
     };
+    if text.0 != s {
+        text.0 = s;
+    }
+    node.left = Val::Px((cursor.x + 16.0) / scale.0);
+    node.top = Val::Px((cursor.y + 18.0) / scale.0);
+    **vis = Visibility::Inherited;
+}
+
+fn fleet_text(f: &galaxy_sim::Fleet, state: &SimState, catalog: &galaxy_play::PlayCatalog) -> String {
     let mut lines = vec![format!("{} fleet - {} ships", catalog.faction(f.owner), f.unit_count())];
     for (&u, &c) in f.units.iter().take(8) {
         lines.push(format!("  {c}x {}", catalog.unit(u)));
@@ -888,18 +926,25 @@ fn fleet_tooltip(
     if f.units.len() > 8 {
         lines.push(format!("  +{} more types", f.units.len() - 8));
     }
-    let place = match &f.location {
-        galaxy_sim::FleetLocation::AtPlanet(p) => format!("in orbit of {}", state.world.planets[*p as usize].display_name),
-        galaxy_sim::FleetLocation::Moving { to, .. } => format!("heading to {}", state.world.planets[*to as usize].display_name),
-    };
-    lines.push(place);
-    let s = lines.join("\n");
-    if text.0 != s {
-        text.0 = s;
+    lines.push(match &f.location {
+        galaxy_sim::FleetLocation::AtPlanet(p) => format!("In orbit of {}", state.world.planets[*p as usize].display_name),
+        galaxy_sim::FleetLocation::Moving { to, .. } => format!("Heading to {}", state.world.planets[*to as usize].display_name),
+    });
+    lines.join("\n")
+}
+
+fn planet_text(i: usize, p: &crate::galaxy_view::PlanetView, view: &crate::galaxy_view::GalaxyView) -> String {
+    let mut lines = vec![p.display_name.clone()];
+    lines.push(format!("Owner: {}", view.owner_of(i).map_or("Neutral", |f| f.name.as_str())));
+    lines.push(format!("Income: {} credits", crate::ui::thousands(i64::from(p.income))));
+    lines.push(format!("Space slots: {}   Ground slots: {}", p.max_space_base, p.max_ground_base));
+    if let Some((name, desc)) = &p.ability {
+        lines.push(format!("Bonus: {name}"));
+        if !desc.is_empty() {
+            lines.push(desc.clone());
+        }
     }
-    node.left = Val::Px((cursor.x + 16.0) / scale.0);
-    node.top = Val::Px((cursor.y + 18.0) / scale.0);
-    **vis = Visibility::Inherited;
+    lines.join("\n")
 }
 
 /// HUD panels take the faction skin colours of the command bar.

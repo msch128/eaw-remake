@@ -136,7 +136,9 @@ fn main() {
             ("TIE_Fighter_Squadron", 4),
         ]
     };
-    let rebel: &[(&str, u32)] = if small {
+    let rebel: &[(&str, u32)] = if std::env::var("STATION_ONLY").is_ok() {
+        &[]
+    } else if small {
         &[("MC-80_Star_Cruiser", 1), ("X-Wing_Squadron", 2)]
     } else {
         &[

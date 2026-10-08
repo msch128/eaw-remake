@@ -1004,7 +1004,7 @@ pub fn build(app: &mut App) {
     if std::env::var_os("SP_ASSET_LOG").is_some() {
         app.add_systems(Update, log_asset_counts);
     }
-    app.add_systems(Update, collect_font_atlases);
+    app.init_resource::<StableFonts>().add_systems(Update, (stabilize_fonts, collect_font_atlases).chain());
     app.add_plugins(MaterialPlugin::<ParticleMaterial>::default())
         .init_resource::<ParticleSettings>()
         .init_resource::<ParticleStats>()
@@ -1159,4 +1159,34 @@ pub fn collect_font_atlases(
         f.set_changed();
     }
     info!("font atlas set had {count} atlases; cleared and re-queued all text");
+}
+
+/// System font files loaded once, so text uses a stable `Font` asset instead of a family lookup
+/// (family lookups hand out a new font blob id whenever the font source cache reloads a file).
+#[derive(Resource, Default)]
+pub struct StableFonts(HashMap<String, Option<Handle<bevy::text::Font>>>);
+
+/// Replaces `FontSource::Family("Bahnschrift"/"Arial"/...)` by a handle to the same file loaded
+/// once from the Windows font folder. Families that cannot be read keep the family lookup.
+pub fn stabilize_fonts(
+    mut stable: ResMut<StableFonts>,
+    mut fonts: ResMut<Assets<bevy::text::Font>>,
+    mut texts: Query<&mut TextFont, Changed<TextFont>>,
+) {
+    for mut f in &mut texts {
+        let bevy::text::FontSource::Family(name) = &f.font else { continue };
+        let key = name.to_string().to_ascii_lowercase();
+        let handle = stable
+            .0
+            .entry(key.clone())
+            .or_insert_with(|| {
+                let path = format!("C:/Windows/Fonts/{key}.ttf");
+                let bytes = std::fs::read(path).ok()?;
+                Some(fonts.add(bevy::text::Font::from_bytes(bytes)))
+            })
+            .clone();
+        if let Some(h) = handle {
+            f.font = bevy::text::FontSource::Handle(h);
+        }
+    }
 }

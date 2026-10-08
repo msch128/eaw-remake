@@ -920,7 +920,7 @@ impl Builder<'_> {
                         ImageNode::new(t.handle.clone()),
                         Node {
                             position_type: PositionType::Absolute,
-                            left: Val::Px(size.x * 0.5 - 4.0),
+                            left: Val::Px(7.0),
                             top: Val::Px(-2.0),
                             width: Val::Px(13.0),
                             height: Val::Px(13.0),
@@ -932,9 +932,9 @@ impl Builder<'_> {
                     ));
                     let _ = e;
                 }
-                let p = self.text_layer(button, size, def, "", Vec2::new(-size.x * 0.5 + 2.0, size.y * 0.5 - 2.0), Color::srgb(1.0, 0.25, 0.2));
+                let p = self.text_layer(button, size, def, "", Vec2::new(-size.x * 0.5 + 3.0, size.y * 0.5 - 8.0), Color::srgb(1.0, 0.25, 0.2));
                 self.world.entity_mut(p).insert(SlotPart::UpkeepPlus);
-                let l = self.text_layer(button, size, def, "", Vec2::new(size.x * 0.42, size.y * 0.5 - 2.0), Color::srgb(0.9, 0.93, 0.98));
+                let l = self.text_layer(button, size, def, "", Vec2::new(size.x * 0.40, size.y * 0.5 - 8.0), Color::srgb(0.9, 0.93, 0.98));
                 self.world.entity_mut(l).insert(SlotPart::Level);
             }
             let _ = s;
@@ -1319,8 +1319,8 @@ pub(crate) fn spawn_tooltip(mut commands: Commands, settings: Res<EawUiSettings>
                 display: Display::None,
                 ..default()
             },
-            BackgroundColor(Color::srgba(0.02, 0.05, 0.12, 0.92)),
-            BorderColor::all(Color::srgba(0.35, 0.55, 0.85, 0.9)),
+            BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.87)),
+            BorderColor::all(Color::srgb(0.0, 0.76, 0.99)),
             GlobalZIndex(1000),
             FocusPolicy::Pass,
         ));
@@ -1331,7 +1331,7 @@ pub(crate) fn spawn_tooltip(mut commands: Commands, settings: Res<EawUiSettings>
         p.spawn((
             Text::new(""),
             font,
-            TextColor(Color::srgb(0.9, 0.95, 1.0)),
+            TextColor(Color::srgb(0.74, 0.85, 0.96)),
             FocusPolicy::Pass,
         ));
     });
@@ -1449,6 +1449,10 @@ pub(crate) fn panel_texts(
 
 
 
+/// Roman numeral of a small level ("" for 0).
+fn roman(level: u8) -> String {
+    ["", "I", "II", "III", "IV", "V"].get(level as usize).copied().unwrap_or("").to_owned()
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1498,8 +1502,3 @@ mod tests {
 
 
 
-
-/// Roman numeral of a small level ("" for 0).
-fn roman(level: u8) -> String {
-    ["", "I", "II", "III", "IV", "V"].get(level as usize).copied().unwrap_or("").to_owned()
-}

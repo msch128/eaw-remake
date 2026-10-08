@@ -732,6 +732,17 @@ fn draw_rings(
             pos + Vec3::new(th.cos() * ro, 0.0, th.sin() * ro)
         });
         select.linestrip(outer, bright);
+        // Sector boundary: a large dashed ring around the notched one.
+        let rs = r * 2.6;
+        let dim = Color::LinearRgba(LinearRgba::new(l.red, l.green, l.blue, 0.55));
+        const DASHES: usize = 72;
+        for k in 0..DASHES {
+            let a0 = k as f32 / DASHES as f32 * std::f32::consts::TAU;
+            let a1 = (k as f32 + 0.55) / DASHES as f32 * std::f32::consts::TAU;
+            let p0 = pos + Vec3::new(a0.cos() * rs, 0.0, a0.sin() * rs);
+            let p1 = pos + Vec3::new(a1.cos() * rs, 0.0, a1.sin() * rs);
+            select.line(p0, p1, dim);
+        }
     }
 }
 

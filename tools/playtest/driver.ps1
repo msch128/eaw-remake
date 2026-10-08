@@ -1,5 +1,11 @@
 # Real-input playtest helpers for Space Peace (Windows PowerShell 5.1).
 # Dot-source it:  . .\tools\playtest\driver.ps1
+# Usage:
+#   Start-Game -Exe 'target\playfix\release\space-peace.exe'   # windowed, --volume 0 (muted; the flag overrides the stored setting), scratch APPDATA
+#   Save-Shot 'menu'                                           # PNG of OUR window only; returns the path to read
+#   Click-At 0.5 0.4                  # left click at 50% x, 40% y of the window; -Button R for right click
+#   Drag-Box 0.2 0.3 0.6 0.7          # box select; Press-Key 'S'; Press-Key $VK.Esc; Press-Key '0' -Mods $VK.Ctrl
+#   Show-LogTail; Get-LogProblems; Stop-Game
 # Nothing here runs a game by itself. Start-Game launches a WINDOWED app and the mouse/key functions move the real OS
 # cursor, so only use it when the machine is free. Coordinates are fractions (0..1) of the game window's client area.
 # Captures cover only the game window (never the full desktop) and go to a scratch folder, not the repo.
