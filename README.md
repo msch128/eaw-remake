@@ -10,9 +10,14 @@ An unofficial, lightweight Rust/Bevy engine that plays the **Galactic Conquest**
 
 ## Status
 
-**Work in progress - the whole loop runs, but it has had very little testing with a real mouse and keyboard.**
+**Work in progress - roughly 58% of the goal. The whole loop runs, but it does not yet feel like Empire at War.**
 
-What works (verified with an automated offscreen smoke test, `tools\smoke.ps1`, and rendered pictures):
+Weakest areas today: the galaxy map look (routes, fleet/station/hero models, background, labels), tactical battle
+controls (action camera, reinforcement placement, ability buttons, shield and hull bars), battle depth and sound.
+Scores and priorities: [`HANDOFF.md`](HANDOFF.md). Every build must pass `tools\smoke.ps1` (offscreen/hidden scenarios)
+and `tools\soak.ps1` (long hidden runs: memory and asset growth, log errors, frame times); memory stays flat at about 2 GB.
+
+What works (verified with the smoke and soak tests and rendered pictures):
 
 - Title screen on one of the game's own space maps, campaign and difficulty selection, faction loading screens.
 - Galactic Conquest on the Remake's galaxies: the real planet models, the original command bar and minimap, fleets, build
@@ -22,7 +27,7 @@ What works (verified with an automated offscreen smoke test, `tools\smoke.ps1`, 
 - Space battles from the galaxy: the original tactical bar, orders, abilities, retreat, reinforcements, result dialog and
   the result applied back to the galaxy.
 
-What is still rough or missing: real-input testing, sound and music were never heard in testing, entering a battle can
+What is still rough or missing: real-input testing is limited, sound and music were never heard in testing, entering a battle can
 still hitch briefly while models load, AI balance needs live play, and ground combat, story campaigns and
 cinematics are out of scope. Details: [`PLAYTEST.md`](PLAYTEST.md), [`HANDOFF.md`](HANDOFF.md) and the `STATUS.md` in each
 crate.

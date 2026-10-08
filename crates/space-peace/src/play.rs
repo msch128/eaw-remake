@@ -282,10 +282,15 @@ fn forward_battles(mut commands: Commands, mut events: MessageReader<PlayEvent>,
 
 /// A battle left without a result is abandoned: the sim auto-resolves it. Real results are
 /// applied by `battle_play`.
-fn finish_battles(mut finished: MessageReader<BattleFinished>, mut actions: MessageWriter<PlayAction>) {
+fn finish_battles(mut finished: MessageReader<BattleFinished>, mut actions: MessageWriter<PlayAction>, runtime: Option<Res<battle_view::BattleRuntime>>) {
     for f in finished.read() {
         if f.outcome == BattleOutcome::Aborted {
-            actions.write(PlayAction::CancelTactical(f.id));
+            // Losses so far count: the sim auto-resolves from what is left of the fleets. Without a running
+            // fight (it never started) the full forces are resolved.
+            match runtime.as_ref().and_then(|r| r.partial_outcome()) {
+                Some(partial) => actions.write(PlayAction::AbandonTactical { id: f.id, partial: Box::new(partial) }),
+                None => actions.write(PlayAction::CancelTactical(f.id)),
+            };
         }
     }
 }

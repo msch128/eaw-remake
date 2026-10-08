@@ -1,35 +1,41 @@
-//! Hero portraits next to the fleets of the galaxy map: the hero's button portrait inside the game's
-//! round hero ring (`HERO_RING_GOOD` for the player, `HERO_RING_EVIL` for others), left and right of
-//! the fleet base like in the original.
+//! Heroes next to the fleets of the galaxy map: like the original, a hero is its normal unit model
+//! (`Land_Model_Name`, or the space model for ship heroes) scaled down on its own disc left and right
+//! of the fleet, turning slowly.
 
 use std::collections::HashMap;
 
+use alamo_render::{AlamoModel, AlamoModelLoaded};
 use bevy::prelude::*;
-use eaw_ui::textures::UiTextures;
-use galaxy_play::{FleetEntities, PlayCatalog, PlayerFaction, SimState};
+use galaxy_play::{FleetEntities, GalaxyLayout, PlayCatalog, PlayerFaction, SimState};
 
-/// Draws the portraits.
+/// Draws the heroes.
 pub struct HeroHeadsPlugin;
 
 impl Plugin for HeroHeadsPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<HeroHeads>().add_systems(
             Update,
-            update_hero_heads
+            (update_hero_heads, fit_heroes)
+                .chain()
                 .after(galaxy_play::PlaySet::Visuals)
                 .run_if(resource_exists::<SimState>)
-                .run_if(resource_exists::<PlayCatalog>),
+                .run_if(resource_exists::<PlayCatalog>)
+                .run_if(resource_exists::<GalaxyLayout>),
         );
     }
 }
 
-/// UI nodes by (fleet id, unit type).
+/// Hero root entity by (fleet id, unit type).
 #[derive(Resource, Default)]
 struct HeroHeads(HashMap<(u32, u32), Entity>);
 
-/// Marks a portrait root node.
+/// Root of a hero figure.
 #[derive(Component)]
-struct HeroHead;
+struct HeroRoot;
+
+/// Model child of a hero root.
+#[derive(Component)]
+struct HeroModel;
 
 #[allow(clippy::too_many_arguments)]
 fn update_hero_heads(
@@ -37,22 +43,18 @@ fn update_hero_heads(
     mut heads: ResMut<HeroHeads>,
     state: Res<SimState>,
     catalog: Res<PlayCatalog>,
+    layout: Res<GalaxyLayout>,
     player: Res<PlayerFaction>,
+    time: Res<Time>,
     entities: Option<Res<FleetEntities>>,
-    layout: Option<Res<galaxy_play::GalaxyLayout>>,
-    ui_scale: Res<UiScale>,
-    textures: Option<ResMut<UiTextures>>,
-    mut images: ResMut<Assets<Image>>,
-    camera: Query<(&Camera, &GlobalTransform), With<Camera3d>>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut mats: ResMut<Assets<StandardMaterial>>,
     transforms: Query<&GlobalTransform, With<galaxy_play::FleetVisual>>,
-    mut nodes: Query<(&mut Node, &mut Visibility), With<HeroHead>>,
-    mut rects: ResMut<crate::galaxy_map::PanelRect>,
+    mut roots: Query<&mut Transform, (With<HeroRoot>, Without<galaxy_play::FleetVisual>)>,
 ) {
-    let mut taken: Vec<(Vec2, Vec2)> = Vec::new();
-    let (Some(entities), Some(layout), Some(mut textures)) = (entities, layout, textures) else { return };
-    let Some((camera, cam_tf)) = camera.iter().next() else { return };
-    let us = ui_scale.0.max(0.1);
+    let Some(entities) = entities else { return };
     let g = state.galaxy();
+    let fake = std::env::var_os("SP_HERO_FAKE").is_some();
     let mut alive: Vec<(u32, u32)> = Vec::new();
     for f in g.fleets.values() {
         let Some(&e) = entities.0.get(&f.id) else { continue };
@@ -60,61 +62,53 @@ fn update_hero_heads(
         let heroes: Vec<u32> = f
             .units
             .iter()
-            .filter(|&(&u, &n)| n > 0 && state.world.units.get(u as usize).is_some_and(|d| d.hero))
-            .map(|(&u, _)| u)
+            .filter(|&(&u, &n)| n > 0 && (fake || state.world.units.get(u as usize).is_some_and(|d| d.hero)))
+            .map(|(&u, _)| u as u32)
+            .take(4)
             .collect();
-        if heroes.is_empty() {
-            continue;
-        }
-        let base = tf.translation();
-        let (Ok(p0), Ok(p1)) = (camera.world_to_viewport(cam_tf, base), camera.world_to_viewport(cam_tf, base + Vec3::X * layout.unit)) else {
-            continue;
-        };
-        // Portrait size follows the on-screen size of a fleet base.
-        let size = ((p1 - p0).length() * 2.4).clamp(10.0, 130.0);
-        for (k, &u) in heroes.iter().take(4).enumerate() {
-            let key = (f.id, u);
+        for (k, &u) in heroes.iter().enumerate() {
+            let key = (f.id as u32, u);
             alive.push(key);
-            let side = if k % 2 == 0 { -1.0 } else { 1.0 };
-            let step = (k / 2) as f32 + 1.0;
-            let (x, y) = (p0.x + side * size * 1.35 * step - size * 0.5, p0.y - size * 0.9);
-            taken.push((Vec2::new(x, y), Vec2::new(x + size, y + size)));
-            if let Some(&node) = heads.0.get(&key) {
-                if let Ok((mut n, mut vis)) = nodes.get_mut(node) {
-                    n.left = Val::Px(x / us);
-                    n.top = Val::Px(y / us);
-                    n.width = Val::Px(size / us);
-                    n.height = Val::Px(size / us);
-                    *vis = Visibility::Inherited;
+            // Left and right of the fleet base, further out for more heroes.
+            let side = if k % 2 == 0 { 1.0 } else { -1.0 };
+            let pos = tf.translation() + Vec3::new(side * layout.unit * 1.5 * (1.0 + (k / 2) as f32), 0.0, 0.0);
+            if let Some(&root) = heads.0.get(&key) {
+                if let Ok(mut t) = roots.get_mut(root) {
+                    t.translation = pos;
+                    t.rotation = Quat::from_rotation_y(time.elapsed_secs() * 0.4);
                 }
                 continue;
             }
-            let icon = catalog.unit_icons.get(u as usize).cloned().flatten();
-            let good = player.0 == Some(f.owner);
-            let ring_name = if good { "HERO_RING_GOOD.TGA" } else { "HERO_RING_EVIL.TGA" };
-            let (Some(ring), Some(portrait)) = (textures.get(&mut images, ring_name), icon.and_then(|n| textures.get(&mut images, &n))) else {
-                continue;
-            };
+            let model = catalog
+                .unit_land_models
+                .get(u as usize)
+                .cloned()
+                .flatten()
+                .or_else(|| catalog.unit_space_models.get(u as usize).cloned().flatten());
+            let Some(model) = model else { continue };
+            let own = player.0 == Some(f.owner);
+            let col = if own { Color::srgb(0.1, 0.9, 0.2) } else { Color::srgb(0.9, 0.2, 0.15) };
+            let lin = col.to_linear();
             let root = commands
-                .spawn((
-                    Node { position_type: PositionType::Absolute, left: Val::Px(x / us), top: Val::Px(y / us), width: Val::Px(size / us), height: Val::Px(size / us), ..default() },
-                    ImageNode::new(ring.handle),
-                    GlobalZIndex(-1),
-                    HeroHead,
-                    crate::galaxy_map::GalaxyEntity,
-                ))
-                .with_children(|p| {
-                    p.spawn((
-                        Node { position_type: PositionType::Absolute, left: Val::Percent(14.0), top: Val::Percent(14.0), width: Val::Percent(72.0), height: Val::Percent(72.0), ..default() },
-                        ImageNode::new(portrait.handle),
-                    ));
-                })
+                .spawn((Name::new("hero"), HeroRoot, Transform::from_translation(pos), Visibility::default()))
                 .id();
+            commands.spawn((
+                Mesh3d(meshes.add(Circle::new(1.0).mesh().resolution(48))),
+                MeshMaterial3d(mats.add(StandardMaterial {
+                    base_color: Color::LinearRgba(LinearRgba::new(lin.red * 0.2, lin.green * 0.2, lin.blue * 0.2, 0.75)),
+                    unlit: true,
+                    alpha_mode: AlphaMode::Blend,
+                    cull_mode: None,
+                    ..default()
+                })),
+                Transform::from_xyz(0.0, -layout.unit * 0.12, 0.0)
+                    .with_rotation(Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2))
+                    .with_scale(Vec3::splat(layout.unit * 0.7)),
+                ChildOf(root),
+            ));
+            commands.spawn((AlamoModel::new(model).with_team_color(col), Transform::default(), HeroModel, ChildOf(root)));
             heads.0.insert(key, root);
         }
-    }
-    if rects.1 != taken {
-        rects.1 = taken;
     }
     heads.0.retain(|key, e| {
         if alive.contains(key) {
@@ -124,4 +118,13 @@ fn update_hero_heads(
             false
         }
     });
+}
+
+/// Scales freshly loaded hero models to a fixed size, centred on the disc.
+fn fit_heroes(layout: Res<GalaxyLayout>, mut loaded: Query<(&AlamoModelLoaded, &mut Transform), (With<HeroModel>, Added<AlamoModelLoaded>)>) {
+    for (m, mut tf) in &mut loaded {
+        let s = if m.radius > 0.0 { layout.unit * 0.6 / m.radius } else { 1.0 };
+        tf.scale = Vec3::splat(s);
+        tf.translation = -m.center * s;
+    }
 }

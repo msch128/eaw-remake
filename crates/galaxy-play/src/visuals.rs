@@ -329,8 +329,8 @@ pub struct RouteGlowGizmos;
 
 /// Line widths of the route gizmos (pixels).
 pub fn configure_route_gizmos(mut store: ResMut<GizmoConfigStore>) {
-    store.config_mut::<RouteGizmos>().0.line.width = 4.0;
-    store.config_mut::<RouteGlowGizmos>().0.line.width = 14.0;
+    store.config_mut::<RouteGizmos>().0.line.width = 3.0;
+    store.config_mut::<RouteGlowGizmos>().0.line.width = 9.0;
 }
 
 /// The planned route of the player's selected or moving fleets, as in the original: a yellow line along the
@@ -353,7 +353,7 @@ pub fn draw_routes(
     let phase = time.elapsed_secs() * 0.8;
     let mut draw = |pts: &[Vec3], alpha: f32| {
         let yellow = Color::srgba(1.0, 0.85, 0.1, alpha);
-        let halo = Color::srgba(1.0, 0.75, 0.05, alpha * 0.18);
+        let halo = Color::srgba(1.0, 0.75, 0.05, alpha * 0.10);
         glow.linestrip(pts.iter().copied(), halo);
         // Marching dashes: lengths in world units of the planet size.
         let dash = layout.unit * 1.6;

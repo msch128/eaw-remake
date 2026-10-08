@@ -18,6 +18,8 @@ pub struct PlayCatalog {
     pub unit_space_models: Vec<Option<String>>,
     /// `Icon_Name` per unit type (hero portraits on the map).
     pub unit_icons: Vec<Option<String>>,
+    /// `Land_Model_Name` per unit type (how heroes look on the galaxy map).
+    pub unit_land_models: Vec<Option<String>>,
     /// Model of a fleet on the galactic map (`Galactic_Fleet` container, `w_planet_fleet.alo`).
     pub generic_fleet_model: Option<String>,
     /// Display name per structure type.
@@ -54,6 +56,7 @@ impl PlayCatalog {
             unit_models: vec![None; world.units.len()],
             unit_space_models: vec![None; world.units.len()],
             unit_icons: vec![None; world.units.len()],
+            unit_land_models: vec![None; world.units.len()],
             generic_fleet_model: None,
             structures: world.structures.iter().map(|s| prettify(&s.name)).collect(),
             starbases: world.starbases.iter().map(|s| prettify(&s.name)).collect(),
@@ -71,6 +74,7 @@ impl PlayCatalog {
         let mut unit_models = Vec::with_capacity(world.units.len());
         let mut unit_space_models = Vec::with_capacity(world.units.len());
         let mut unit_icons = Vec::with_capacity(world.units.len());
+        let mut unit_land_models = Vec::with_capacity(world.units.len());
         for u in &world.units {
             units.push(text(&u.text_id, &u.name));
             let r = data.objects.resolve(&u.name);
@@ -78,6 +82,7 @@ impl PlayCatalog {
             unit_models.push(get("galactic_fleet_override_model_name"));
             unit_space_models.push(get("space_model_name"));
             unit_icons.push(r.as_ref().and_then(|r| r.string("icon_name")).filter(|n| !n.trim().is_empty()));
+            unit_land_models.push(r.as_ref().and_then(|r| r.string("land_model_name")).filter(|n| !n.trim().is_empty()));
         }
         let generic_fleet_model = data.objects.resolve("Galactic_Fleet").and_then(|r| r.string("galactic_model_name")).filter(|m| !m.is_empty());
         Self {
@@ -85,6 +90,7 @@ impl PlayCatalog {
             unit_models,
             unit_space_models,
             unit_icons,
+            unit_land_models,
             generic_fleet_model,
             structures: world.structures.iter().map(|s| text(&s.text_id, &s.name)).collect(),
             starbases: world

@@ -522,6 +522,7 @@ fn spawn_galaxy(
         spawn_props(&mut commands, &view.props, GalaxyEntity);
     }
     spawn_lanes(&mut commands, &view, &scale, &mut meshes, &mut materials, &mut images);
+    spawn_nebula_plane(&mut commands, &view, &mut meshes, &mut materials, &mut images);
     commands.spawn((
         Name::new("selection ring fill"),
         Mesh3d(meshes.add(notch_mesh())),
@@ -735,6 +736,7 @@ fn draw_rings(
     view: Res<GalaxyView>,
     radii: Res<PlanetRadii>,
     selection: Res<Selection>,
+    hover: Res<Hover>,
     mut rings: Gizmos<RingGizmos>,
     mut select: Gizmos<SelectGizmos>,
     mut border: Gizmos<TerritoryGizmos>,
@@ -751,9 +753,12 @@ fn draw_rings(
     }
     for (i, p) in view.planets.iter().enumerate() {
         let pos = galaxy_to_world(p.position);
+        // The original has no rings: only a very faint owner halo, and a clear ring under the cursor.
+        let hovered = hover.0 == Some(i);
         let (c, alpha) = match p.owner {
-            Some(_) => (relation_color(&view, p.owner), 0.85),
-            None => (NEUTRAL, 0.3),
+            Some(_) => (relation_color(&view, p.owner), if hovered { 0.8 } else { 0.12 }),
+            None if hovered => (NEUTRAL, 0.7),
+            None => continue,
         };
         let l = rgb(c).to_linear();
         let color = Color::LinearRgba(LinearRgba::new(l.red, l.green, l.blue, alpha));
@@ -1377,4 +1382,63 @@ fn pip_image(space: bool) -> Image {
     );
     img.sampler = bevy::image::ImageSampler::linear();
     img
+}
+
+/// The original lays a dense maroon nebula over the whole picture (not only over the galaxy disc art): a huge flat,
+/// unlit, additive plane under the map with a soft radial falloff and cloudy variation.
+fn spawn_nebula_plane(commands: &mut Commands, view: &GalaxyView, meshes: &mut Assets<Mesh>, materials: &mut Assets<StandardMaterial>, images: &mut Assets<Image>) {
+    use bevy::asset::RenderAssetUsages;
+    use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
+    let (mut lo, mut hi) = (Vec2::splat(f32::MAX), Vec2::splat(f32::MIN));
+    for p in &view.planets {
+        let w = galaxy_to_world(p.position);
+        lo = lo.min(Vec2::new(w.x, w.z));
+        hi = hi.max(Vec2::new(w.x, w.z));
+    }
+    if lo.x > hi.x {
+        return;
+    }
+    let centre = (lo + hi) * 0.5;
+    let size = ((hi - lo).max_element() * 1.9).max(2000.0);
+    const N: usize = 256;
+    let mut rng = SmallRng::seed_from_u64(0xA11CE);
+    let grid: Vec<f32> = (0..17 * 17).map(|_| rng.random::<f32>()).collect();
+    let noise = |x: f32, y: f32| {
+        let (fx, fy) = (x * 16.0, y * 16.0);
+        let (ix, iy) = (fx.floor() as usize, fy.floor() as usize);
+        let (tx, ty) = (fx - fx.floor(), fy - fy.floor());
+        let g = |a: usize, b: usize| grid[b.min(16) * 17 + a.min(16)];
+        let top = g(ix, iy) * (1.0 - tx) + g(ix + 1, iy) * tx;
+        let bot = g(ix, iy + 1) * (1.0 - tx) + g(ix + 1, iy + 1) * tx;
+        top * (1.0 - ty) + bot * ty
+    };
+    let mut px = Vec::with_capacity(N * N * 4);
+    for y in 0..N {
+        for x in 0..N {
+            let (u, v) = (x as f32 / (N - 1) as f32, y as f32 / (N - 1) as f32);
+            let r = ((u - 0.5).powi(2) + (v - 0.5).powi(2)).sqrt() * 2.0;
+            let falloff = (1.0 - r).clamp(0.0, 1.0);
+            let falloff = falloff * falloff * (3.0 - 2.0 * falloff);
+            let cloud = 0.55 + 0.45 * noise(u, v);
+            let a = (falloff * cloud).clamp(0.0, 1.0);
+            px.extend_from_slice(&[(a * 255.0) as u8, (a * 255.0) as u8, (a * 255.0) as u8, 255]);
+        }
+    }
+    let mut img = Image::new(Extent3d { width: N as u32, height: N as u32, depth_or_array_layers: 1 }, TextureDimension::D2, px, TextureFormat::Rgba8UnormSrgb, RenderAssetUsages::RENDER_WORLD);
+    img.sampler = bevy::image::ImageSampler::linear();
+    let tex = images.add(img);
+    let material = materials.add(StandardMaterial {
+        base_color: Color::linear_rgb(0.34, 0.075, 0.095),
+        base_color_texture: Some(tex),
+        unlit: true,
+        alpha_mode: AlphaMode::Add,
+        cull_mode: None,
+        ..default()
+    });
+    commands.spawn((
+        Mesh3d(meshes.add(Plane3d::default().mesh().size(size, size))),
+        MeshMaterial3d(material),
+        Transform::from_xyz(centre.x, -8.0, centre.y),
+        GalaxyEntity,
+    ));
 }

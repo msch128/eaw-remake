@@ -160,6 +160,8 @@ struct Queue {
     target: u64,
     stop: bool,
     done: bool,
+    /// Result so far, refreshed once per battle second (for abandoning a half-fought battle).
+    progress: Option<battle_sim::BattleResult>,
 }
 
 /// Handle to the simulation worker.
@@ -206,6 +208,9 @@ impl SimHandle {
                     let over = snap.over;
                     worker.produced.store(snap.tick, Ordering::Release);
                     let mut q = worker.state.lock().unwrap();
+                    if snap.tick.is_multiple_of(30) {
+                        q.progress = Some(battle.result());
+                    }
                     if !snap.events.is_empty() {
                         q.events.push_back((snap.tick, std::mem::take(&mut snap.events)));
                     }
@@ -280,6 +285,11 @@ impl SimHandle {
     /// Newest snapshot produced so far.
     pub fn latest(&self) -> Option<Arc<Snapshot>> {
         self.shared.state.lock().unwrap().snaps.back().cloned()
+    }
+
+    /// The battle's result so far, at most one second old (survivors per group); `None` before the first second.
+    pub fn progress(&self) -> Option<battle_sim::BattleResult> {
+        self.shared.state.lock().unwrap().progress.clone()
     }
 
     /// Highest tick produced so far.

@@ -91,6 +91,9 @@ speed, anti-aliasing, bloom, shadows, and a graphics quality preset (which also 
 
 ## Known gaps
 
+- Overall state is about 58% (see `HANDOFF.md`). Weakest areas: tactical battle controls (no action camera,
+  reinforcement placement, ability buttons or shield/hull bars yet) and the galaxy map look (routes, fleet/station/hero
+  models, background, labels are not EaW-like yet). Report anything else you find.
 - No ground combat, story campaigns or cinematics (out of scope).
 - Entering a battle: models now preload behind the loading screen, but a short hitch (~60 ms in release tests) can remain;
   hardpoint models still load on first use.
@@ -100,9 +103,10 @@ speed, anti-aliasing, bloom, shadows, and a graphics quality preset (which also 
   (the original logo plate is deliberately not used).
 - Battle loading uses your faction's loading art, not the defender's. An early render of a planet explosion showed
   hard-edged squares; not reproduced since the particle rework – tell us if you see it.
-- Real mouse and keyboard input, window handling, hotkeys and fullscreen have had little live testing.
-- Performance: in offscreen tests the galaxy map ran at about 4-5 ms/frame at 4K, but battles with many ships were not
-  measured on real hardware; send the F3 numbers and what was on screen if it is slow.
+- Real mouse and keyboard input, window handling, hotkeys and fullscreen have had limited live testing (a real-mouse QA
+  pass is logged in `docs/QA-2026-10-08.md`).
+- Performance: offscreen the galaxy map runs at about 5 ms/frame at 4K. Hidden long runs (`tools\soak.ps1`) show flat
+  memory (about 2 GB) and a median p99 under 25 ms; send the F3 numbers and what was on screen if it is slow.
 
 ## Logs and reporting problems
 

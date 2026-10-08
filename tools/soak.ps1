@@ -63,7 +63,7 @@ function Invoke-Soak([string]$name, [string[]]$appArgs, [int]$minutes) {
 
     # Log hygiene.
     if ($text -match 'panicked at') { $fails += 'panic' }
-    if ($text -match '\bERROR\b') { $fails += ('ERROR x' + ([regex]::Matches($text, '\bERROR\b').Count)) }
+    if ($text -cmatch '\bERROR\b') { $fails += ('ERROR x' + ([regex]::Matches($text, '\bERROR\b').Count)) }
     if ($text -match '(?i)out of memory') { $fails += 'out of memory' }
     if ($text -match 'failed validation') { $fails += 'failed validation' }
     $warnGroups = $lines | Where-Object { $_ -match '\bWARN\b' } | ForEach-Object { ($_ -replace '^\S+\s+', '') -replace '\d+(\.\d+)?', '#' } | Group-Object | Where-Object Count -gt 20
@@ -150,7 +150,7 @@ if (-not $Only -or 'frametime' -like "*$Only*") {
         $note = "mean $($Matches[2]) p95 $($Matches[4]) p99 $($Matches[5]) max $($Matches[6]) ms"
         if ([double]$Matches[5] -ge $MaxP99Ms) { $fails += "p99 $($Matches[5]) ms >= $MaxP99Ms ms" }
     } else { $fails += 'no frame-time line in log' }
-    if ($text -match 'panicked at|\bERROR\b') { $fails += 'panic/ERROR in log' }
+    if ($text -cmatch 'panicked at|\bERROR\b') { $fails += 'panic/ERROR in log' }
     $rows += [pscustomobject]@{ Scenario = 'frametime-offscreen'; Result = $(if ($fails) { 'FAIL' } else { 'ok' }); Minutes = [math]::Round($sw.Elapsed.TotalMinutes, 1); PeakGB = ''; 'Growth%/min' = ''; Assets = ''; Notes = ((@($fails) + $note) -join ' | ') }
 }
 

@@ -369,6 +369,13 @@ impl BattleRuntime {
         request.result_from(&self.catalog, snap.result.as_ref()?)
     }
 
+    /// The state of a battle that is still running, shaped like a finished result: used to abandon the fight half way so that
+    /// the galaxy keeps the losses so far. `None` without a request or before the first battle second.
+    pub fn partial_outcome(&self) -> Option<TacticalResult> {
+        let request = self.request.as_ref()?;
+        request.result_from(&self.catalog, &self.sim.progress()?)
+    }
+
     /// Speed multiplier of the battle clock (0 while paused).
     pub fn speed_factor(&self) -> f32 {
         self.speed
