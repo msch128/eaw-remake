@@ -113,10 +113,12 @@ impl Plugin for CampaignSelectPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<SetupState>()
             .add_systems(OnEnter(AppScreen::CampaignSelect), enter)
-            .add_systems(OnExit(AppScreen::CampaignSelect), (leave, restore_scale))
+            .add_systems(OnExit(AppScreen::CampaignSelect), leave)
+            .add_systems(OnEnter(AppScreen::Galaxy), restore_scale)
+            .add_systems(Update, screen_scale.run_if(in_state(AppScreen::CampaignSelect).or_else(in_state(AppScreen::MainMenu))))
             .add_systems(
                 Update,
-                (screen_scale, clicks, respawn.run_if(resource_changed::<SetupState>.or_else(resource_changed::<NewGameOptions>))).chain().run_if(in_state(AppScreen::CampaignSelect)),
+                (clicks, respawn.run_if(resource_changed::<SetupState>.or_else(resource_changed::<NewGameOptions>))).chain().run_if(in_state(AppScreen::CampaignSelect)),
             );
     }
 }

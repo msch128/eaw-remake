@@ -85,6 +85,10 @@ struct SlotMenu;
 
 /// `%APPDATA%\SpacePeace\saves`, `None` when `%APPDATA%` is not set.
 pub fn saves_dir() -> Option<PathBuf> {
+    // Tests point this elsewhere so they never touch the player's saves.
+    if let Some(d) = std::env::var_os("SP_SAVES_DIR") {
+        return Some(PathBuf::from(d));
+    }
     std::env::var_os("APPDATA").map(|a| PathBuf::from(a).join("SpacePeace").join("saves"))
 }
 

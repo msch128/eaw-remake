@@ -58,7 +58,7 @@ fn drive(
     mut buttons: MessageWriter<MouseButtonInput>,
     mut orders: MessageReader<OrderIssued>,
     mut clicks: MessageReader<EawButtonClicked>,
-    bar: Query<(&EawButton, &eaw_ui::EawButtonState, &ComputedNode, &UiGlobalTransform, &InheritedVisibility)>,
+    bar: Query<(&EawButton, &eaw_ui::EawButtonState, &ComputedNode, &UiGlobalTransform, &InheritedVisibility, &Interaction)>,
     mut exit: MessageWriter<AppExit>,
     diag: (
         Res<crate::control::UiBlock>,
@@ -144,11 +144,11 @@ fn drive(
         2 => {
             let target = bar
                 .iter()
-                .filter(|(b, st, n, _, v)| {
+                .filter(|(b, st, n, _, v, _)| {
                     !st.disabled && v.get() && n.size().x > 4.0 && n.size().y > 4.0 && b.name.starts_with("b_") && !b.name.contains("retreat") && !b.name.contains("reinforce")
                 })
                 .min_by(|a, b| a.0.name.cmp(&b.0.name))
-                .map(|(b, _, n, g, _)| (b.name.clone(), g.translation * n.inverse_scale_factor()));
+                .map(|(b, _, n, g, _, _)| (b.name.clone(), g.translation * n.inverse_scale_factor()));
             match (t, target) {
                 (0, Some((name, p))) => {
                     st.button_name = Some(name);
@@ -156,6 +156,12 @@ fn drive(
                 }
                 (1, _) => act = Some(Act::Down(MouseButton::Left)),
                 (2, _) => act = Some(Act::Up(MouseButton::Left)),
+                (3..=5, _) => {
+                    let name = st.button_name.clone();
+                    if let Some(row) = bar.iter().find(|r| Some(&r.0.name) == name.as_ref()) {
+                        info!("input-test:   t={t} button interaction {:?} disabled {}", row.5, row.1.disabled);
+                    }
+                }
                 (6, _) => {
                     let ok = st.button_name.is_some() && st.button_name == st.clicked_button && !sel.ships.is_empty();
                     info!("input-test: button {:?}, got {:?}", st.button_name, st.clicked_button);

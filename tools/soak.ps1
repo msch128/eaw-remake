@@ -86,8 +86,9 @@ function Invoke-Soak([string]$name, [string[]]$appArgs, [int]$minutes) {
     $assets = @()
     foreach ($l in $lines) {
         if ($l -match 'assetlog frame=(\d+) images=(\d+).*?meshes=(\d+) std_mats=(\d+) particle_mats=(\d+) shader_buffers=(\d+)') {
+            $m = $Matches
             $ts = if ($l -match '^(\d{4}-\d\d-\d\dT[\d:.]+)Z') { [datetime]::Parse($Matches[1]).ToUniversalTime() } else { $null }
-            $assets += [pscustomobject]@{ Frame = [int]$matches[1]; Time = $ts; images = [int]$matches[2]; meshes = [int]$matches[3]; std_mats = [int]$matches[4]; particle_mats = [int]$matches[5]; shader_buffers = [int]$matches[6] }
+            $assets += [pscustomobject]@{ Frame = [int]$m[1]; Time = $ts; images = [int]$m[2]; meshes = [int]$m[3]; std_mats = [int]$m[4]; particle_mats = [int]$m[5]; shader_buffers = [int]$m[6] }
         }
     }
     $assetSummary = @()

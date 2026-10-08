@@ -69,6 +69,7 @@ impl Plugin for GalaxyMapPlugin {
                     draw_rings,
                     update_lanes,
                     place_notch_fill,
+                    fill_emblems,
                     log_props,
                     sync_wrecks,
                     fade_galaxy_disc,
@@ -473,6 +474,20 @@ fn spawn_galaxy(
                     }
                 });
         }
+        // Faction emblem beside owned planets.
+        if let Some(o) = planet.owner
+            && view.factions.get(o).is_some_and(|f| f.icon.is_some())
+        {
+            {
+                commands.spawn((
+                    ImageNode::default().with_color(Color::NONE),
+                    Node { position_type: PositionType::Absolute, width: Val::Px(18.0), height: Val::Px(18.0), ..default() },
+                    Visibility::Hidden,
+                    Emblem(i),
+                    GalaxyEntity,
+                ));
+            }
+        }
         commands.spawn((
             Text::new(planet.display_name.to_uppercase()),
             TextFont {
@@ -562,6 +577,7 @@ fn update_labels(
     camera: Single<(&Camera, &GlobalTransform, &GalaxyCamera)>,
     mut labels: Query<(&PlanetLabel, &mut Node, &mut Visibility, &ComputedNode, &mut TextFont), Without<PipRow>>,
     mut pip_rows: Query<(&PipRow, &mut Node, &mut Visibility), Without<PlanetLabel>>,
+    mut emblems: Query<(&Emblem, &mut Node, &mut Visibility), (Without<PlanetLabel>, Without<PipRow>, Without<PipIcon>)>,
     mut pip_icons: Query<&mut Node, (With<PipIcon>, Without<PlanetLabel>, Without<PipRow>)>,
     mut last_font: Local<f32>,
     mut slots: Local<Vec<Option<LabelSlot>>>,
@@ -665,6 +681,17 @@ fn update_labels(
             Some(s) if visible[label.0] => {
                 node.left = Val::Px(s.pos.x / us);
                 node.top = Val::Px(s.pos.y / us);
+                *vis = Visibility::Inherited;
+            }
+            _ => *vis = Visibility::Hidden,
+        }
+    }
+
+    for (e, mut node, mut vis) in &mut emblems {
+        match slots.get(e.planet_index()).copied().flatten() {
+            Some(s) if visible[e.planet_index()] => {
+                node.left = Val::Px((s.pos.x - 22.0 * us) / us);
+                node.top = Val::Px((s.pos.y - font_px * 0.4) / us);
                 *vis = Visibility::Inherited;
             }
             _ => *vis = Visibility::Hidden,
@@ -1234,5 +1261,37 @@ fn relation_color(view: &GalaxyView, owner: Option<usize>) -> [f32; 3] {
             let m = f.color[0].max(f.color[1]).max(f.color[2]).max(1e-3);
             [(f.color[0] / m).powf(1.4), (f.color[1] / m).powf(1.4), (f.color[2] / m).powf(1.4)]
         }),
+    }
+}
+
+/// Faction emblem icon next to an owned planet (screen space, positioned with the label).
+#[derive(Component)]
+struct Emblem(usize);
+
+impl Emblem {
+    fn planet_index(&self) -> usize {
+        self.0
+    }
+}
+
+/// Gives each emblem its texture once the UI texture library can provide it (the mega texture
+/// decodes in the background).
+fn fill_emblems(
+    view: Res<GalaxyView>,
+    textures: Option<ResMut<eaw_ui::textures::UiTextures>>,
+    mut images: ResMut<Assets<Image>>,
+    mut emblems: Query<(&Emblem, &mut ImageNode)>,
+) {
+    let Some(mut textures) = textures else { return };
+    for (e, mut node) in &mut emblems {
+        if node.color != Color::NONE {
+            continue;
+        }
+        let Some(planet) = view.planets.get(e.0) else { continue };
+        let Some(name) = planet.owner.and_then(|o| view.factions.get(o)).and_then(|f| f.icon.clone()) else { continue };
+        if let Some(t) = textures.get(&mut images, &name) {
+            node.image = t.handle;
+            node.color = rgb(relation_color(&view, planet.owner));
+        }
     }
 }

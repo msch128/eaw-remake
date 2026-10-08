@@ -61,10 +61,10 @@ struct FleetText;
 
 /// The open "battle pending" dialog.
 #[derive(Resource, Default)]
-struct BattleDialogState {
-    open: Option<(u32, Entity)>,
+pub(crate) struct BattleDialogState {
+    pub(crate) open: Option<(u32, Entity)>,
     /// Battle the player just decided; the model still lists it until the next snapshot.
-    decided: Option<u32>,
+    pub(crate) decided: Option<u32>,
 }
 
 /// Wires the HUD.
@@ -78,7 +78,7 @@ impl Plugin for PlayUiPlugin {
             .init_resource::<SuperweaponAsk>()
             .init_resource::<Toast>()
             .init_resource::<EndState>()
-            .add_systems(PreUpdate, drive_ui_scale.run_if(resource_exists::<EawUiSettings>).run_if(not(in_state(AppScreen::CampaignSelect))))
+            .add_systems(PreUpdate, drive_ui_scale.run_if(resource_exists::<EawUiSettings>).run_if(not(in_state(AppScreen::CampaignSelect).or_else(in_state(AppScreen::MainMenu)))))
             .add_systems(
                 Update,
                 (
@@ -1457,6 +1457,7 @@ fn expire_explosions(mut commands: Commands, time: Res<Time>, mut q: Query<(Enti
 fn declutter_top(
     bar: Query<(), With<EawCommandBar>>,
     dialog: Res<BattleDialogState>,
+    paused: Res<crate::flow::Paused>,
     mut top: Query<&mut Visibility, (With<crate::ui::TopBar>, Without<SpeedText>)>,
     mut speed: Query<&mut Visibility, (With<SpeedText>, Without<crate::ui::TopBar>)>,
 ) {
@@ -1465,7 +1466,7 @@ fn declutter_top(
             v.set_if_neq(Visibility::Hidden);
         }
     }
-    let want = if dialog.open.is_some() { Visibility::Hidden } else { Visibility::Inherited };
+    let want = if dialog.open.is_some() || paused.0 { Visibility::Hidden } else { Visibility::Inherited };
     for mut v in &mut speed {
         v.set_if_neq(want);
     }
@@ -1538,5 +1539,26 @@ fn pad_level(state: &SimState, target: BuildTarget) -> u8 {
     match target {
         BuildTarget::Starbase(s) => state.world.starbases[s as usize].level.clamp(0, 5) as u8,
         _ => 0,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn planet_tooltip_lists_owner_income_and_slots() {
+        let view = crate::galaxy_view::GalaxyView::demo();
+        let text = planet_text(0, &view.planets[0], &view);
+        assert!(text.starts_with(&view.planets[0].display_name));
+        assert!(text.contains("Owner: "));
+        assert!(text.contains("Income: "));
+        assert!(text.contains("Space slots: "));
+    }
+
+    #[test]
+    fn capitalize_first_letter() {
+        assert_eq!(capitalize("requires tech"), "Requires tech");
+        assert_eq!(capitalize(""), "");
     }
 }

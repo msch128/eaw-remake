@@ -287,6 +287,8 @@ pub struct Faction {
     pub enemies: Vec<String>,
     /// `Icon_Name`.
     pub icon_name: Option<String>,
+    /// `Alternate_Icon_Name`: the small emblem drawn next to planets on the galaxy map.
+    pub alternate_icon_name: Option<String>,
     /// `Credits_Accumulation_Factor`.
     pub credits_accumulation_factor: f32,
     /// `Maintenance_Cost`.
@@ -317,6 +319,7 @@ impl Faction {
             primary_enemy: get_string(&f, "primary_enemy"),
             enemies: get_list(&f, "enemies"),
             icon_name: get_string(&f, "icon_name"),
+            alternate_icon_name: get_string(&f, "alternate_icon_name"),
             credits_accumulation_factor: get_num(&f, "credits_accumulation_factor"),
             maintenance_cost: get_num(&f, "maintenance_cost"),
             hyperspace_speed_factor: get_num(&f, "hyperspace_speed_factor"),

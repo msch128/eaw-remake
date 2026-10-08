@@ -414,6 +414,7 @@ pub fn build_view(data: &GameData, campaign: &Campaign) -> (GalaxyView, Vec<Stri
                 c[2] as f32 / 255.0,
             ],
             credits: cf.starting_credits.unwrap_or(0),
+            icon: def.alternate_icon_name.clone().or_else(|| def.icon_name.clone()),
         });
         faction_names.push(&cf.name);
     }

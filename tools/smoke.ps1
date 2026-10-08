@@ -44,6 +44,8 @@ $scenarios = @(
     @('windowed-battle',     @('--hidden', '--no-vsync', '--exit-after', '9000', '--volume', '0', '--campaign', $camp, '--select', $yavin, '--weeks', '8', '--move', 'Hoth', '--battle-choice', 'fight', '--battle-auto', '--battle-speed', '30'), 'battle: over'),
     # Real input path of the tactical screen: injected window events (select, order, bar button, deselect); see battle-view/src/input_test.rs.
     @('windowed-battle-input', @('--hidden', '--no-vsync', '--exit-after', '9000', '--volume', '0', '--campaign', $camp, '--select', $yavin, '--weeks', '8', '--move', 'Hoth', '--battle-choice', 'fight', '--battle-speed', '1'), 'input-test: [0-9]+ checks PASS'),
+    # Real pointer path of the galaxy screens: battle banner, ESC menu (save, slots, options, load, main menu); see space-peace/src/input_test.rs.
+    @('windowed-ui-pointer', @('--hidden', '--no-vsync', '--exit-after', '8000', '--volume', '0', '--campaign', $camp, '--select', $yavin, '--weeks', '8', '--move', 'Hoth'), 'ui-test: [0-9]+ checks PASS'),
     @('battle-reinforce',    @('--campaign', $camp, '--select', $yavin, '--weeks', '8', '--move', 'Hoth', '--battle-choice', 'fight', '--battle-reserve', '3', '--battle-click', 'b_reinforcement,r_0000', '--battle-speed', '30', '--frames', '5'), 'simulation accepted')
 )
 
@@ -59,6 +61,7 @@ foreach ($s in $scenarios) {
     $base = if ($windowed) { @() } else { @('--offscreen', $png) }
     $args = ($base + $s[1]) | ForEach-Object { if ($_ -match '\s') { "`"$_`"" } else { $_ } }
     if ($name -like '*input*') { $env:SP_INPUT_TEST = 'exit' } else { Remove-Item Env:SP_INPUT_TEST -ErrorAction SilentlyContinue }
+    if ($name -like '*ui-pointer*') { $env:SP_UI_TEST = 'exit'; $env:SP_SAVES_DIR = Join-Path $Out 'ui-test-saves' } else { Remove-Item Env:SP_UI_TEST, Env:SP_SAVES_DIR -ErrorAction SilentlyContinue }
     $sw = [Diagnostics.Stopwatch]::StartNew()
     $p = Start-Process -FilePath $Exe -ArgumentList $args -NoNewWindow -PassThru -RedirectStandardOutput "$log.out" -RedirectStandardError "$log.err"
     $null = $p.Handle   # keeps the process handle so ExitCode is readable after WaitForExit

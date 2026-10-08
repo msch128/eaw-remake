@@ -1004,6 +1004,11 @@ pub fn build(app: &mut App) {
     if std::env::var_os("SP_ASSET_LOG").is_some() {
         app.add_systems(Update, log_asset_counts);
     }
+    if std::env::var_os("SP_ASSET_LOG").is_some()
+        && let Some(render) = app.get_sub_app_mut(bevy::render::RenderApp)
+    {
+        render.add_systems(bevy::render::Render, publish_gpu_memory);
+    }
     app.init_resource::<StableFonts>().add_systems(Update, (stabilize_fonts, collect_font_atlases).chain());
     app.add_plugins(MaterialPlugin::<ParticleMaterial>::default())
         .init_resource::<ParticleSettings>()
@@ -1088,6 +1093,11 @@ pub fn log_asset_counts(
     let p99 = ft.get(((ft.len() as f32 * 0.99) as usize).min(ft.len().saturating_sub(1))).copied().unwrap_or(0.0);
     let mean = ft.iter().sum::<f32>() / ft.len().max(1) as f32;
     info!("assetlog rss={rss} MB (peak {peak} MB) frame_ms mean={mean:.1} p99={p99:.1} max={:.1}", ft.last().copied().unwrap_or(0.0));
+    info!(
+        "assetlog gpu allocated={} MB reserved={} MB",
+        GPU_ALLOCATED.load(std::sync::atomic::Ordering::Relaxed) >> 20,
+        GPU_RESERVED.load(std::sync::atomic::Ordering::Relaxed) >> 20
+    );
     ft.clear();
     info!("assetlog top cpu-image sizes (w,h,mips)=count: {:?}", &top[..top.len().min(4)]);
     let img_none = images.iter().filter(|(_, i)| i.data.is_none()).count();
@@ -1188,5 +1198,21 @@ pub fn stabilize_fonts(
         if let Some(h) = handle {
             f.font = bevy::text::FontSource::Handle(h);
         }
+    }
+}
+
+/// Bytes the GPU allocator reports as allocated (0 when the backend gives no report).
+static GPU_ALLOCATED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static GPU_RESERVED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Render-world system (every 120th run): publishes the wgpu allocator totals for the asset log.
+fn publish_gpu_memory(device: Res<bevy::render::renderer::RenderDevice>, mut n: Local<u32>) {
+    *n += 1;
+    if *n % 120 != 1 {
+        return;
+    }
+    if let Some(report) = device.wgpu_device().generate_allocator_report() {
+        GPU_ALLOCATED.store(report.total_allocated_bytes, std::sync::atomic::Ordering::Relaxed);
+        GPU_RESERVED.store(report.total_reserved_bytes, std::sync::atomic::Ordering::Relaxed);
     }
 }

@@ -159,17 +159,18 @@ struct PauseMenu;
 
 /// A clickable menu button.
 #[derive(Component)]
-struct MenuButton(MenuAction);
+pub(crate) struct MenuButton(pub(crate) MenuAction);
 
 /// Menu button was activated.
 #[derive(Message)]
 struct MenuClicked(MenuAction);
 
-const PANEL_BG: Color = Color::srgba(0.02, 0.05, 0.10, 0.85);
-const PANEL_BORDER: Color = Color::srgba(0.35, 0.65, 1.0, 0.8);
-const BUTTON_IDLE: Color = Color::srgba(0.06, 0.12, 0.2, 0.9);
-const BUTTON_HOVER: Color = Color::srgba(0.15, 0.32, 0.5, 0.95);
-const BUTTON_PRESSED: Color = Color::srgba(0.25, 0.5, 0.75, 1.0);
+const PANEL_BG: Color = Color::srgba(0.03, 0.05, 0.12, 0.9);
+const PANEL_BORDER: Color = Color::srgb(0.42, 0.58, 0.88);
+const BUTTON_BORDER: Color = Color::srgb(0.6, 0.65, 0.75);
+const BUTTON_IDLE: Color = Color::srgb(0.01, 0.01, 0.03);
+const BUTTON_HOVER: Color = Color::srgb(0.1, 0.13, 0.24);
+const BUTTON_PRESSED: Color = Color::srgb(0.2, 0.28, 0.5);
 
 /// Menu screens and their input handling.
 pub struct MenuPlugin;
@@ -304,7 +305,7 @@ pub fn spawn_menu(commands: &mut Commands, spec: &MenuSpec, marker: impl Compone
                 flex_direction: FlexDirection::Column,
                 justify_content: JustifyContent::Center,
                 align_items: AlignItems::Center,
-                row_gap: Val::Px(14.0),
+                row_gap: Val::Px(8.0),
                 ..default()
             },
             BackgroundColor(background),
@@ -313,21 +314,21 @@ pub fn spawn_menu(commands: &mut Commands, spec: &MenuSpec, marker: impl Compone
         ))
         .with_children(|root| {
             root.spawn((
-                Text::new(spec.title.clone()),
-                TextFont { font: FontSource::Family("Bahnschrift".into()), font_size: FontSize::Px(54.0), ..default() },
-                TextColor(Color::srgb(0.85, 0.93, 1.0)),
+                Text::new(spec.title.to_uppercase()),
+                TextFont { font: FontSource::Family("Bahnschrift".into()), font_size: FontSize::Px(26.0), ..default() },
+                TextColor(Color::srgb(0.95, 0.96, 0.98)),
                 TextShadow { offset: Vec2::splat(2.0), color: Color::srgba(0.0, 0.1, 0.3, 0.9) },
             ));
             if !spec.subtitle.is_empty() {
                 root.spawn((
                     Text::new(spec.subtitle.clone()),
-                    TextFont { font: FontSource::Family("Bahnschrift".into()), font_size: FontSize::Px(22.0), ..default() },
+                    TextFont { font: FontSource::Family("Bahnschrift".into()), font_size: FontSize::Px(13.0), ..default() },
                     TextColor(Color::srgb(0.75, 0.86, 1.0)),
                     TextShadow { offset: Vec2::splat(1.5), color: Color::srgba(0.0, 0.0, 0.1, 0.95) },
                 ));
             }
             root.spawn(Node {
-                margin: UiRect::top(Val::Px(24.0)),
+                margin: UiRect::top(Val::Px(14.0)),
                 column_gap: Val::Px(26.0),
                 align_items: AlignItems::FlexStart,
                 ..default()
@@ -359,20 +360,21 @@ fn spawn_column(parent: &mut ChildSpawnerCommands, column: &MenuColumn) {
             Node {
                 flex_direction: FlexDirection::Column,
                 align_items: AlignItems::Center,
-                row_gap: Val::Px(10.0),
-                padding: UiRect::all(Val::Px(16.0)),
-                border: UiRect::all(Val::Px(1.0)),
-                min_width: Val::Px(240.0),
+                row_gap: Val::Px(7.0),
+                padding: UiRect::all(Val::Px(14.0)),
+                border: UiRect::all(Val::Px(2.0)),
+                min_width: Val::Px(200.0),
                 ..default()
             },
             BackgroundColor(PANEL_BG),
             BorderColor::all(PANEL_BORDER),
+            BoxShadow::new(Color::srgba(0.3, 0.5, 1.0, 0.4), Val::Px(0.0), Val::Px(0.0), Val::Px(3.0), Val::Px(14.0)),
         ))
         .with_children(|col| {
             if !column.heading.is_empty() {
                 col.spawn((
-                    Text::new(column.heading.clone()),
-                    TextFont { font: FontSource::Family("Bahnschrift".into()), font_size: FontSize::Px(26.0), ..default() },
+                    Text::new(column.heading.to_uppercase()),
+                    TextFont { font: FontSource::Family("Bahnschrift".into()), font_size: FontSize::Px(18.0), ..default() },
                     TextColor(Color::WHITE),
                 ));
             }
@@ -395,20 +397,20 @@ fn spawn_button(parent: &mut ChildSpawnerCommands, item: &MenuItem) {
         .spawn((
             Button,
             Node {
-                min_width: Val::Px(210.0),
-                padding: UiRect::axes(Val::Px(18.0), Val::Px(10.0)),
+                min_width: Val::Px(190.0),
+                padding: UiRect::axes(Val::Px(14.0), Val::Px(7.0)),
                 border: UiRect::all(Val::Px(1.0)),
                 justify_content: JustifyContent::Center,
                 ..default()
             },
             BackgroundColor(BUTTON_IDLE),
-            BorderColor::all(PANEL_BORDER),
+            BorderColor::all(BUTTON_BORDER),
             MenuButton(item.action.clone()),
         ))
         .with_children(|b| {
             b.spawn((
-                Text::new(item.label.clone()),
-                TextFont { font: FontSource::Family("Bahnschrift".into()), font_size: FontSize::Px(20.0), ..default() },
+                Text::new(item.label.to_uppercase()),
+                TextFont { font: FontSource::Family("Bahnschrift".into()), font_size: FontSize::Px(14.5), ..default() },
                 TextColor(label_color),
             ));
         });

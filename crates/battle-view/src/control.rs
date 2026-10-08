@@ -127,7 +127,8 @@ pub fn read_pointer(
 pub fn ui_block(
     pointer: Res<Pointer>,
     mut block: ResMut<UiBlock>,
-    nodes: Query<(Entity, &ComputedNode, &UiGlobalTransform, &InheritedVisibility, Has<ImageNode>, Option<&BackgroundColor>, Option<&Interaction>)>,
+    nodes: Query<(Entity, &ComputedNode, &UiGlobalTransform, &InheritedVisibility, Option<&ImageNode>, Option<&BackgroundColor>, Option<&Interaction>)>,
+    images: Res<Assets<Image>>,
     parents: Query<&ChildOf>,
     overlay_roots: Query<(), With<eaw_ui::TacticalOverlayRoot>>,
 ) {
@@ -138,9 +139,26 @@ pub fn ui_block(
             if !vis.get() || node.size().x <= 0.0 || node.size().y <= 0.0 {
                 continue;
             }
-            let visual = image || interaction.is_some() || bg.is_some_and(|b| b.0.alpha() > 0.01);
-            if !visual || !node.contains_point(*gt, cursor / node.inverse_scale_factor().max(1e-4)) {
+            let visual = image.is_some() || interaction.is_some() || bg.is_some_and(|b| b.0.alpha() > 0.01);
+            let point = cursor / node.inverse_scale_factor().max(1e-4);
+            if !visual || !node.contains_point(*gt, point) {
                 continue;
+            }
+            // Pictures count where they are not transparent (the frame art of the bar spans a big mostly empty rectangle).
+            let solid = interaction.is_some() || bg.is_some_and(|b| b.0.alpha() > 0.01);
+            if !solid
+                && let Some(img) = image
+                && img.texture_atlas.is_none()
+                && img.rect.is_none()
+                && let Some(tex) = images.get(&img.image)
+                && let Some(n) = node.normalize_point(*gt, point)
+            {
+                let uv = n + Vec2::splat(0.5);
+                let (w, h) = (tex.width() as f32, tex.height() as f32);
+                let (x, y) = ((uv.x * w).clamp(0.0, w - 1.0) as u32, (uv.y * h).clamp(0.0, h - 1.0) as u32);
+                if tex.get_color_at(x, y).is_ok_and(|c| c.alpha() < 0.06) {
+                    continue;
+                }
             }
             let mut cur = e;
             let mut overlay = false;
