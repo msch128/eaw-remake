@@ -65,6 +65,7 @@ impl Plugin for BattlePlayPlugin {
                 (suspend_galaxy_look, spawn_loading_art).chain().run_if(resource_exists::<PendingTactical>),
             )
             .add_systems(Update, start_after_loading_art.run_if(in_state(AppScreen::SpaceBattle).and_then(resource_exists::<PendingTactical>)).before(finish_battle_view))
+            .add_systems(Update, poll_session_build.run_if(in_state(AppScreen::SpaceBattle).and_then(resource_exists::<SessionBuild>)))
             .add_systems(OnExit(AppScreen::SpaceBattle), end_session)
             .add_systems(
                 Update,
@@ -145,7 +146,11 @@ fn spawn_loading_art(mut commands: Commands, game: Res<Game>, mut images: ResMut
 fn start_after_loading_art(world: &mut World) {
     let mut q = world.query::<(Entity, &mut BattleLoadingArt)>();
     let Some((e, art)) = q.iter_mut(world).next().map(|(e, a)| (e, a.0)) else { return };
-    let started = world.contains_resource::<BattleSession>() || world.contains_resource::<battle_view::BattleRuntime>();
+    // Longest frame while the battle loads: the freeze the player sees.
+    let dt = world.resource::<Time<Real>>().delta_secs();
+    let mut worst = world.get_resource_or_insert_with(|| WorstFrame(0.0));
+    worst.0 = worst.0.max(dt);
+    let started = world.contains_resource::<BattleSession>() || world.contains_resource::<battle_view::BattleRuntime>() || world.contains_resource::<SessionBuild>();
     if !started {
         if let Some(mut a) = world.get_mut::<BattleLoadingArt>(e) {
             a.0 += 1;
@@ -156,6 +161,9 @@ fn start_after_loading_art(world: &mut World) {
     } else if world.contains_resource::<battle_view::BattleRuntime>() {
         if let Some(mut a) = world.get_mut::<BattleLoadingArt>(e) {
             a.0 += 1;
+        }
+        if art == 20 {
+            info!("battle: longest frame while loading {:.0} ms", world.resource::<WorstFrame>().0 * 1000.0);
         }
         if art > 20 {
             world.entity_mut(e).despawn();
@@ -185,14 +193,51 @@ fn begin_session(world: &mut World) {
             }
         }
     }
-    let started = std::time::Instant::now();
     // `--battle-auto` lets the AI play both sides (headless scenarios).
     let side_player = if args.battle_auto { None } else { player };
-    match BattleSession::from_request(&assets.data, &*assets.fs, &req, side_player) {
+    // The catalog, the map and the visuals take a moment: build them off the main thread while the loading screen runs.
+    let (tx, rx) = std::sync::mpsc::channel();
+    let started = std::time::Instant::now();
+    std::thread::Builder::new()
+        .name("battle-setup".into())
+        .spawn(move || {
+            let result = BattleSession::from_request(&assets.data, &*assets.fs, &req, side_player);
+            let _ = tx.send((result, req.battle_id, req.planet_name.clone(), started.elapsed()));
+        })
+        .expect("spawn battle setup thread");
+    world.insert_resource(SessionBuild { rx: std::sync::Mutex::new(rx), msaa, bloom, shadows, density, target, speed: args.battle_speed });
+}
+
+/// Longest frame time seen while a battle loads (seconds).
+#[derive(Resource)]
+struct WorstFrame(f32);
+
+/// A battle session being built on a worker thread.
+#[derive(Resource)]
+#[allow(clippy::type_complexity)]
+struct SessionBuild {
+    rx: std::sync::Mutex<std::sync::mpsc::Receiver<(Result<BattleSession, String>, u32, String, std::time::Duration)>>,
+    msaa: u32,
+    bloom: bool,
+    shadows: bool,
+    density: f32,
+    target: Option<(Handle<Image>, f32)>,
+    speed: Option<f32>,
+}
+
+/// Starts the battle when the worker is done.
+fn poll_session_build(world: &mut World) {
+    let Some(build) = world.get_resource::<SessionBuild>() else { return };
+    let got = build.rx.lock().ok().and_then(|rx| rx.try_recv().ok());
+    let Some((result, battle_id, planet, took)) = got else { return };
+    let build = world.remove_resource::<SessionBuild>().expect("present");
+    let (msaa, bloom, shadows, density, target) = (build.msaa, build.bloom, build.shadows, build.density, build.target);
+    let args_speed = build.speed;
+    match result {
         Ok(session) => {
-            info!("battle: session for {} built in {:.2?}", req.planet_name, started.elapsed());
+            info!("battle: session for {planet} built in {took:.2?} (off the main thread)");
             let mut settings = world.resource_mut::<BattleViewSettings>();
-            settings.speed = args.battle_speed.unwrap_or(1.0);
+            settings.speed = args_speed.unwrap_or(1.0);
             settings.msaa_samples = msaa;
             settings.bloom = bloom;
             settings.shadows = shadows;
@@ -211,7 +256,7 @@ fn begin_session(world: &mut World) {
         }
         Err(e) => {
             error!("battle: cannot build the tactical session: {e}");
-            world.write_message(BattleFinished { id: req.battle_id, outcome: BattleOutcome::Aborted });
+            world.write_message(BattleFinished { id: battle_id, outcome: BattleOutcome::Aborted });
         }
     }
 }

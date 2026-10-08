@@ -53,6 +53,7 @@ fn spawn_scene(
 ) {
     let (None, Some(assets)) = (existing, game.0.as_ref()) else { return };
     let pick = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as usize) % MAPS.len();
+    let pick = std::env::var("SP_MENU_MAP").ok().and_then(|v| v.parse::<usize>().ok()).map_or(pick, |v| v % MAPS.len());
     let path = format!("Art/Maps/{}", MAPS[pick]);
     let scene = match SpaceScene::load(&*assets.fs, &assets.data, &path) {
         Ok(s) => s,
@@ -63,7 +64,10 @@ fn spawn_scene(
     };
     let props: Vec<Vec3> = scene.props.iter().filter(|p| !p.backdrop).map(|p| p.position).collect();
     let center = if props.is_empty() { Vec3::ZERO } else { props.iter().copied().sum::<Vec3>() / props.len() as f32 };
-    let radius = props.iter().map(|p| p.distance(center)).fold(800.0f32, f32::max).min(6000.0);
+    // Frame the bulk of the objects (the 60th percentile), so the camera sits outside the cluster but still sees it.
+    let mut dists: Vec<f32> = props.iter().map(|p| p.distance(center)).collect();
+    dists.sort_by(f32::total_cmp);
+    let radius = dists.get(dists.len() * 6 / 10).copied().unwrap_or(800.0).clamp(800.0, 12_000.0);
     info!("title scene {} with {} objects", MAPS[pick], props.len());
     // The galaxy backdrop and the galaxy lights make way for the scene.
     for e in &backdrop {
@@ -101,7 +105,7 @@ fn drift_camera(
     }
     let t = time.elapsed_secs();
     let angle = (t * 0.1).sin() * 0.6;
-    let dist = info.radius * 1.5 + 1500.0;
+    let dist = info.radius * 1.6 + 1200.0;
     let eye = info.center + Quat::from_rotation_y(angle) * (info.toward_sun * dist + Vec3::Y * (dist * 0.22 + 100.0 * (t * 0.3).sin()));
     **camera = Transform::from_translation(eye).looking_at(info.center, Vec3::Y);
     // Sky models stay centred on the camera and scaled to the far plane, like in a battle.

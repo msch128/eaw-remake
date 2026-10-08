@@ -175,6 +175,8 @@ impl Default for BattleViewSettings {
 #[derive(Resource)]
 pub struct BattleSession {
     setup: Option<BattleSetup>,
+    /// The battle already constructed (by `from_request`, which runs off the main thread) with its catalog.
+    built: Option<(Battle, Arc<Catalog>)>,
     visuals: Arc<VisualCatalog>,
     scene: SpaceScene,
     request: Option<Arc<TacticalRequest>>,
@@ -187,6 +189,7 @@ impl BattleSession {
     pub fn new(setup: BattleSetup, visuals: VisualCatalog, scene: SpaceScene) -> Self {
         Self {
             setup: Some(setup),
+            built: None,
             visuals: Arc::new(visuals),
             scene,
             request: None,
@@ -228,8 +231,11 @@ impl BattleSession {
             })
             .collect();
         let visuals = VisualCatalog::build(data, &catalog, colors);
+        // Building the battle (navigation, spawning the ships) is the slow part: do it here, not on the render thread.
+        let built = Battle::new(setup);
         Ok(Self {
-            setup: Some(setup),
+            setup: None,
+            built: Some((built, catalog.clone())),
             visuals: Arc::new(visuals),
             scene,
             request: Some(Arc::new(request.clone())),
@@ -397,14 +403,16 @@ fn start_battle(
     mut render_settings: ResMut<alamo_render::AlamoRenderSettings>,
     particles: Option<ResMut<alamo_render::ParticleSettings>>,
 ) {
-    let Some(setup) = session.setup.take() else {
+    let Some((battle, catalog)) = session.built.take().or_else(|| {
+        let setup = session.setup.take()?;
+        let catalog = setup.catalog.clone();
+        Some((Battle::new(setup), catalog))
+    }) else {
         return;
     };
     if let Some(side) = session.player_side {
         settings.player_side = side;
     }
-    let catalog = setup.catalog.clone();
-    let battle = Battle::new(setup);
     let start_alive: Vec<u32> = (0..battle.side_count()).map(|s| battle.alive_count(s as u8) as u32).collect();
     let (retreat_countdown, unit_cap) = (battle.config().retreat_countdown, battle.config().unit_cap);
     let dt = battle.config().dt;
