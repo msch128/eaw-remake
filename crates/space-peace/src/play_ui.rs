@@ -79,6 +79,7 @@ impl Plugin for PlayUiPlugin {
                     minimap_pan.run_if(in_state(AppScreen::Galaxy)),
                     bar_clicks,
                     loading_overlay,
+                    skin_panels,
                     collect_move_markers,
                     fleet_tooltip.run_if(in_state(AppScreen::Galaxy)),
                     draw_move_markers,
@@ -320,6 +321,7 @@ fn spawn_hud(mut commands: Commands, existing: Query<(), With<PlayHud>>) {
             border: UiRect::all(Val::Px(1.0)),
             ..default()
         },
+        crate::ui::SkinPanel,
         BackgroundColor(Color::srgba(0.02, 0.05, 0.10, 0.92)),
         BorderColor::all(Color::srgba(0.35, 0.65, 1.0, 0.8)),
         GlobalZIndex(30),
@@ -337,6 +339,7 @@ fn spawn_hud(mut commands: Commands, existing: Query<(), With<PlayHud>>) {
             border: UiRect::all(Val::Px(1.0)),
             ..abs
         },
+        crate::ui::SkinPanel,
         BackgroundColor(Color::srgba(0.02, 0.05, 0.10, 0.8)),
         BorderColor::all(Color::srgba(0.35, 0.65, 1.0, 0.7)),
         Visibility::Hidden,
@@ -756,4 +759,22 @@ fn fleet_tooltip(
     node.left = Val::Px((cursor.x + 16.0) / scale.0);
     node.top = Val::Px((cursor.y + 18.0) / scale.0);
     **vis = Visibility::Inherited;
+}
+
+/// HUD panels take the faction skin colours of the command bar.
+fn skin_panels(
+    state: Res<SimState>,
+    player: Res<PlayerFaction>,
+    mut panels: Query<(&mut BackgroundColor, &mut BorderColor), With<crate::ui::SkinPanel>>,
+) {
+    let (bg, border, _) = eaw_ui::panels::faction_colors(ui_faction(&state, &player));
+    for (mut b, mut c) in &mut panels {
+        if b.0 != bg {
+            b.0 = bg;
+        }
+        let want = BorderColor::all(border);
+        if *c != want {
+            *c = want;
+        }
+    }
 }

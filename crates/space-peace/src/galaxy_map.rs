@@ -94,7 +94,7 @@ struct SelectGizmos;
 
 /// The game's route colours are very dark additive teal (around 13, 31, 38) meant to sit on top
 /// of the original galaxy backdrop art; this brightens them so they read on plain black space.
-const ROUTE_GLOW: f32 = 5.0;
+const ROUTE_GLOW: f32 = 8.0;
 
 /// Bottom strip of the viewport (logical pixels) covered by the command bar; labels avoid it.
 #[derive(Resource, Default, Debug)]
@@ -367,9 +367,9 @@ fn setup_scene(
     ));
 
     // Route line widths in pixels per width tier.
-    gizmo_store.config_mut::<RouteWide>().0.line.width = 3.2;
-    gizmo_store.config_mut::<RouteMid>().0.line.width = 2.0;
-    gizmo_store.config_mut::<RouteThin>().0.line.width = 1.2;
+    gizmo_store.config_mut::<RouteWide>().0.line.width = 4.5;
+    gizmo_store.config_mut::<RouteMid>().0.line.width = 3.0;
+    gizmo_store.config_mut::<RouteThin>().0.line.width = 1.8;
     gizmo_store.config_mut::<RingGizmos>().0.line.width = 1.6;
     gizmo_store.config_mut::<SelectGizmos>().0.line.width = 2.6;
 }
@@ -428,6 +428,7 @@ fn spawn_galaxy(
         commands.spawn((
             Text::new(planet.display_name.clone()),
             TextFont {
+                font: FontSource::Family("Bahnschrift".into()),
                 font_size: FontSize::Px(14.0),
                 ..default()
             },
@@ -686,13 +687,23 @@ fn draw_routes(
         let Some(style) = view.route_styles.get(r.style) else {
             continue;
         };
-        let line = match route_relation(a.owner, b.owner, view.player_faction) {
+        let relation = route_relation(a.owner, b.owner, view.player_faction);
+        let line = match relation {
             RouteRelation::Own => &style.own,
             RouteRelation::Enemy => &style.enemy,
             RouteRelation::Contested | RouteRelation::Neutral => &style.neutral,
         };
         let Some(color) = route_color(line, t) else {
             continue;
+        };
+        // Own lanes glow in the player colour, front lines (two different owners) in warning orange.
+        let color = match relation {
+            RouteRelation::Own => view.player_faction.and_then(|p| view.factions.get(p)).map_or(color, |f| {
+                let l = Color::srgb(f.color[0], f.color[1], f.color[2]).to_linear();
+                Color::LinearRgba(LinearRgba::new(l.red * 0.9, l.green * 0.9, l.blue * 0.9, 1.0))
+            }),
+            RouteRelation::Contested => Color::LinearRgba(LinearRgba::new(0.45, 0.14, 0.06, 1.0)),
+            _ => color,
         };
         let (pa, pb) = (galaxy_to_world(a.position), galaxy_to_world(b.position));
         if line.width >= 4.0 {

@@ -43,6 +43,10 @@ struct FpsText;
 #[derive(Component)]
 pub(crate) struct HudEntity;
 
+/// Panels that take the colours of the player faction skin (see `play_ui::skin_panels`).
+#[derive(Component)]
+pub(crate) struct SkinPanel;
+
 /// The controls hint text.
 #[derive(Component)]
 pub(crate) struct HintText;
@@ -148,6 +152,7 @@ fn spawn_hud(mut commands: Commands, existing: Query<(), With<HudEntity>>) {
                 row_gap: Val::Px(4.0),
                 ..default()
             },
+            SkinPanel,
             BackgroundColor(PANEL_BG),
             BorderColor::all(PANEL_BORDER),
             Visibility::Hidden,
@@ -158,7 +163,7 @@ fn spawn_hud(mut commands: Commands, existing: Query<(), With<HudEntity>>) {
             let line = |p: &mut ChildSpawnerCommands, which: InfoLine, size: f32, color: Color| {
                 p.spawn((
                     Text::new(""),
-                    TextFont { font_size: FontSize::Px(size), ..default() },
+                    TextFont { font: FontSource::Family("Bahnschrift".into()), font_size: FontSize::Px(size), ..default() },
                     TextColor(color),
                     which,
                 ));
@@ -191,7 +196,8 @@ fn spawn_hud(mut commands: Commands, existing: Query<(), With<HudEntity>>) {
                     column_gap: Val::Px(26.0),
                     ..default()
                 },
-                BackgroundColor(PANEL_BG),
+                SkinPanel,
+            BackgroundColor(PANEL_BG),
                 BorderColor::all(PANEL_BORDER),
             ))
             .with_children(|bar| {
@@ -202,7 +208,7 @@ fn spawn_hud(mut commands: Commands, existing: Query<(), With<HudEntity>>) {
                 ] {
                     bar.spawn((
                         Text::new(""),
-                        TextFont { font_size: FontSize::Px(17.0), ..default() },
+                        TextFont { font: FontSource::Family("Bahnschrift".into()), font_size: FontSize::Px(17.0), ..default() },
                         TextColor(color),
                         field,
                     ));
@@ -219,6 +225,7 @@ fn spawn_hud(mut commands: Commands, existing: Query<(), With<HudEntity>>) {
                 border: UiRect::all(Val::Px(1.0)),
                 ..default()
             },
+            SkinPanel,
             BackgroundColor(PANEL_BG),
             BorderColor::all(PANEL_BORDER),
             Visibility::Hidden,
