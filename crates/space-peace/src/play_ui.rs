@@ -74,6 +74,7 @@ impl Plugin for PlayUiPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<BarState>()
             .init_resource::<BattleDialogState>()
+            .init_resource::<ObjectivesWindow>()
             .init_resource::<MoveMarkers>()
             .init_resource::<SuperweaponAsk>()
             .init_resource::<Toast>()
@@ -105,7 +106,7 @@ impl Plugin for PlayUiPlugin {
                     .chain()
                     .run_if(resource_exists::<PlayBridge>.and_then(resource_exists::<SimState>)),
             )
-            .add_systems(Update, (declutter_top, hero_bar, locked_clicks, spawn_planet_panel, update_planet_panel, place_planet_panel, base_layout_click, planet_view_ui).chain().run_if(resource_exists::<PlayBridge>.and_then(resource_exists::<SimState>)))
+            .add_systems(Update, (declutter_top, hero_bar, locked_clicks, spawn_planet_panel, update_planet_panel, place_planet_panel, base_layout_click, planet_view_ui, objectives_toggle, objectives_window).chain().run_if(resource_exists::<PlayBridge>.and_then(resource_exists::<SimState>)))
             .add_systems(Update, show_battle_summary.run_if(in_state(AppScreen::Galaxy)).run_if(resource_exists::<crate::battle_play::BattleSummary>))
             .add_systems(
                 Update,
@@ -1890,3 +1891,113 @@ fn planet_view_ui(world: &mut World, mut last_key: Local<Option<(usize, u64)>>) 
     }
 }
 
+
+/// The "Active Story Objectives" window (the holocron button of the bar). The Remake's scripted objectives are not
+/// forwarded by the simulation yet, so it lists the campaign itself with its description as the advisor transmission.
+#[derive(Resource, Default)]
+struct ObjectivesWindow {
+    open: bool,
+    completed_tab: bool,
+}
+#[derive(Component)]
+struct ObjectivesRoot;
+#[derive(Component, Clone, Copy)]
+enum ObjectivesClick {
+    Active,
+    Completed,
+    Close,
+}
+
+fn objectives_toggle(mut clicks: MessageReader<EawButtonClicked>, mut win: ResMut<ObjectivesWindow>) {
+    for c in clicks.read() {
+        if c.name == "b_story_arc_g" {
+            win.open = !win.open;
+            win.completed_tab = false;
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn objectives_window(
+    mut commands: Commands,
+    mut win: ResMut<ObjectivesWindow>,
+    existing: Query<Entity, With<ObjectivesRoot>>,
+    clicks: Query<(&Interaction, &ObjectivesClick), Changed<Interaction>>,
+    keys: Res<ButtonInput<KeyCode>>,
+    game: Res<crate::game::Game>,
+    campaign: Res<crate::flow::CurrentCampaign>,
+    mut last: Local<Option<(bool, bool)>>,
+) {
+    for (i, c) in &clicks {
+        if *i == Interaction::Pressed {
+            match c {
+                ObjectivesClick::Active => win.completed_tab = false,
+                ObjectivesClick::Completed => win.completed_tab = true,
+                ObjectivesClick::Close => win.open = false,
+            }
+        }
+    }
+    if keys.just_pressed(KeyCode::Escape) && win.open {
+        win.open = false;
+    }
+    let state = (win.open, win.completed_tab);
+    if *last == Some(state) {
+        return;
+    }
+    *last = Some(state);
+    for e in &existing {
+        commands.entity(e).despawn();
+    }
+    if !win.open {
+        return;
+    }
+    let (title, text) = game
+        .0
+        .as_ref()
+        .and_then(|g| {
+            let c = g.data.campaign(campaign.name.as_deref()?)?;
+            let title = c.text_id.as_deref().and_then(|id| g.data.text(id)).unwrap_or(&c.name).to_owned();
+            let desc = c.description_id.as_deref().and_then(|id| g.data.text(id)).unwrap_or("").replace("\\n", "\n");
+            Some((title, desc))
+        })
+        .unwrap_or_else(|| ("Galactic Conquest".to_owned(), String::new()));
+    let font = |size: f32| TextFont { font: FontSource::Family("Bahnschrift".into()), font_size: FontSize::Px(size), ..default() };
+    let blue = Color::srgb(0.32, 0.52, 0.93);
+    commands
+        .spawn((
+            ObjectivesRoot,
+            Node { position_type: PositionType::Absolute, left: Val::Percent(17.5), top: Val::Percent(7.3), width: Val::Percent(65.5), height: Val::Percent(85.0), padding: UiRect::all(Val::Px(14.0)), border: UiRect::all(Val::Px(3.0)), flex_direction: FlexDirection::Column, row_gap: Val::Px(8.0), ..default() },
+            BackgroundColor(Color::srgba(0.02, 0.03, 0.08, 0.96)),
+            BorderColor::all(Color::srgb(0.45, 0.6, 0.95)),
+            BoxShadow::new(Color::srgba(0.3, 0.5, 1.0, 0.5), Val::Px(0.0), Val::Px(0.0), Val::Px(4.0), Val::Px(20.0)),
+            GlobalZIndex(600),
+        ))
+        .with_children(|r| {
+            r.spawn((Text::new("ACTIVE STORY OBJECTIVES"), font(26.0), TextColor(Color::WHITE), bevy::text::LetterSpacing::Rem(0.08)));
+            r.spawn(Node { column_gap: Val::Px(8.0), ..default() }).with_children(|t| {
+                for (label, click, on) in [("ACTIVE", ObjectivesClick::Active, !win.completed_tab), ("COMPLETED", ObjectivesClick::Completed, win.completed_tab)] {
+                    t.spawn((Button, click, Node { width: Val::Percent(33.0), justify_content: JustifyContent::Center, padding: UiRect::vertical(Val::Px(3.0)), ..default() }, BackgroundColor(if on { Color::srgb(0.35, 0.42, 0.62) } else { Color::srgb(0.16, 0.19, 0.26) })))
+                        .with_child((Text::new(label), font(14.0), TextColor(Color::WHITE), bevy::text::LetterSpacing::Rem(0.1)));
+                }
+            });
+            r.spawn((Node { height: Val::Percent(22.0), padding: UiRect::all(Val::Px(8.0)), flex_direction: FlexDirection::Column, ..default() }, BackgroundColor(Color::BLACK)))
+                .with_children(|l| {
+                    if !win.completed_tab {
+                        l.spawn((Node { padding: UiRect::horizontal(Val::Px(6.0)), ..default() }, BackgroundColor(Color::srgba(0.6, 0.6, 0.65, 0.9)))).with_child((Text::new(title.clone()), font(17.0), TextColor(Color::WHITE)));
+                    }
+                });
+            r.spawn((Text::new("INCOMING TRANSMISSION FROM ADVISOR"), font(13.0), TextColor(blue), bevy::text::LetterSpacing::Rem(0.08)));
+            r.spawn((Node { flex_grow: 1.0, padding: UiRect::all(Val::Px(10.0)), overflow: Overflow::clip(), flex_direction: FlexDirection::Column, ..default() }, BackgroundColor(Color::BLACK)))
+                .with_children(|b| {
+                    if !win.completed_tab {
+                        b.spawn((Text::new(title.clone()), font(15.0), TextColor(Color::srgb(0.7, 1.0, 0.8))));
+                        b.spawn((Text::new(format!("\n{text}")), font(14.0), TextColor(Color::srgb(0.2, 1.0, 0.2))));
+                    }
+                });
+            r.spawn(Node { justify_content: JustifyContent::SpaceBetween, align_items: AlignItems::Center, ..default() }).with_children(|f| {
+                f.spawn((Text::new("HINT: THIS MENU RECALLS MISSION GOALS."), font(14.0), TextColor(blue), bevy::text::LetterSpacing::Rem(0.06)));
+                f.spawn((Button, ObjectivesClick::Close, Node { width: Val::Px(220.0), padding: UiRect::vertical(Val::Px(7.0)), justify_content: JustifyContent::Center, border: UiRect::all(Val::Px(1.0)), ..default() }, BackgroundColor(Color::BLACK), BorderColor::all(Color::srgb(0.6, 0.65, 0.75))))
+                    .with_child((Text::new("CLOSE"), font(16.0), TextColor(Color::WHITE), bevy::text::LetterSpacing::Rem(0.1)));
+            });
+        });
+}

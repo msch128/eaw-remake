@@ -70,7 +70,7 @@ impl Plugin for BattlePlayPlugin {
             .add_systems(OnExit(AppScreen::SpaceBattle), end_session)
             .add_systems(
                 Update,
-                (finish_battle_view, abort_key, battle_menu, battle_ui_camera, battle_shot, battle_header, battle_orders)
+                (finish_battle_view, abort_key, begin_button, loading_shot, battle_menu, battle_ui_camera, battle_shot, battle_header, battle_orders)
                     .run_if(in_state(AppScreen::SpaceBattle).and_then(resource_exists::<PendingTactical>)),
             );
     }
@@ -114,10 +114,9 @@ struct BattleLoadingArt(u32);
 
 /// Shows a faction loading screen (the session is built a few frames later, because that stalls for a moment).
 fn spawn_loading_art(mut commands: Commands, game: Res<Game>, pending: Res<PendingTactical>, player: Res<PlayerFaction>, campaign: Res<crate::flow::CurrentCampaign>) {
-    // The player's faction, or the defender's when watching.
-    let _ = (&pending, &player);
+    let _ = &player;
     // The PNG decode takes tens of milliseconds: do it on a worker thread, the art appears a few frames later
-    // (`attach_loading_art`) while the black screen with the text is already up.
+    // (`attach_loading_art`) while the black screen with the header is already up.
     let (tx, rx) = std::sync::mpsc::channel();
     if let Some(g) = game.0.as_ref() {
         let fs = g.fs.clone();
@@ -126,26 +125,64 @@ fn spawn_loading_art(mut commands: Commands, game: Res<Game>, pending: Res<Pendi
             let _ = tx.send(crate::loading::decode_art(&fs, faction.as_deref()));
         });
     }
-    let art: Option<Handle<Image>> = None;
-    let mut e = commands.spawn((
-        BattleLoadingArt(0),
-        LoadingArtJob(std::sync::Mutex::new(Some(rx))),
-        Node { position_type: PositionType::Absolute, width: Val::Percent(100.0), height: Val::Percent(100.0), justify_content: JustifyContent::Center, align_items: AlignItems::FlexEnd, padding: UiRect::bottom(Val::Px(70.0)), ..default() },
-        BackgroundColor(Color::BLACK),
-        GlobalZIndex(50),
-    ));
-    e.with_children(|root| {
-        if let Some(h) = art {
-            root.spawn((Node { position_type: PositionType::Absolute, width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() }, ImageNode::new(h).with_mode(NodeImageMode::Stretch)));
-        }
-        root.spawn((
-            Text::new("Preparing the battle..."),
-            TextFont { font: FontSource::Family("Bahnschrift".into()), font_size: FontSize::Px(26.0), ..default() },
-            TextColor(Color::srgb(0.9, 0.95, 1.0)),
-            TextShadow { offset: Vec2::splat(1.5), color: Color::srgba(0.0, 0.0, 0.0, 0.9) },
-        ));
-    });
+    let font = |size: f32| TextFont { font: FontSource::Family("Bahnschrift".into()), font_size: FontSize::Px(size), ..default() };
+    let bar = Color::srgb(0.02, 0.03, 0.08);
+    let line = Color::srgb(0.2, 0.35, 0.7);
+    commands
+        .spawn((
+            BattleLoadingArt(0),
+            LoadingArtJob(std::sync::Mutex::new(Some(rx))),
+            Node { position_type: PositionType::Absolute, width: Val::Percent(100.0), height: Val::Percent(100.0), flex_direction: FlexDirection::Column, justify_content: JustifyContent::SpaceBetween, ..default() },
+            BackgroundColor(Color::BLACK),
+            GlobalZIndex(800),
+        ))
+        .with_children(|root| {
+            // Header bar: "SPACE BATTLE AT <PLANET>" in the original's orange.
+            root.spawn((
+                Node { width: Val::Percent(100.0), height: Val::Percent(10.8), padding: UiRect::left(Val::Percent(2.8)), align_items: AlignItems::Center, border: UiRect::bottom(Val::Px(2.0)), ..default() },
+                BackgroundColor(bar),
+                BorderColor::all(line),
+            ))
+            .with_child((
+                Text::new(format!("SPACE BATTLE AT {}", pending.0.planet_name.trim_end_matches("_WW").replace('_', " ").to_uppercase())),
+                font(40.0),
+                TextColor(Color::srgb(1.0, 0.62, 0.2)),
+                bevy::text::LetterSpacing::Rem(0.08),
+            ));
+            // Footer with the Begin button (shown once the battle is ready).
+            root.spawn((
+                Node { width: Val::Percent(100.0), height: Val::Percent(10.8), justify_content: JustifyContent::Center, align_items: AlignItems::Center, border: UiRect::top(Val::Px(2.0)), ..default() },
+                BackgroundColor(bar),
+                BorderColor::all(line),
+            ))
+            .with_children(|f| {
+                f.spawn((
+                    Text::new("Preparing the battle..."),
+                    font(22.0),
+                    TextColor(Color::srgb(0.8, 0.88, 1.0)),
+                    LoadingStatusText,
+                ));
+                f.spawn((
+                    Button,
+                    BeginButton,
+                    Node { width: Val::Percent(19.5), height: Val::Percent(52.0), justify_content: JustifyContent::Center, align_items: AlignItems::Center, border: UiRect::all(Val::Px(1.0)), display: Display::None, ..default() },
+                    BackgroundColor(Color::srgb(0.01, 0.01, 0.03)),
+                    BorderColor::all(Color::srgb(0.6, 0.65, 0.75)),
+                ))
+                .with_child((Text::new("BEGIN"), font(22.0), TextColor(Color::srgb(0.95, 0.96, 0.98)), bevy::text::LetterSpacing::Rem(0.12)));
+            });
+        });
 }
+
+/// "Preparing ..." text of the loading screen footer.
+#[derive(Component)]
+struct LoadingStatusText;
+/// The loading screen's Begin button.
+#[derive(Component)]
+struct BeginButton;
+/// The battle is loaded and waits for the player's Begin.
+#[derive(Component)]
+struct WaitingForBegin;
 
 /// The loading art being decoded on a worker thread.
 #[derive(Component)]
@@ -197,7 +234,15 @@ fn start_after_loading_art(world: &mut World) {
             .count();
         if art > 20 && pending == 0 {
             info!("battle: longest frame while loading {:.0} ms", world.resource::<WorstFrame>().0 * 1000.0);
-            world.entity_mut(e).despawn();
+            // Scripted, offscreen and test runs begin at once; a player confirms with the Begin button.
+            let args = world.resource::<Args>();
+            let auto = std::env::var_os("SP_HOLD_LOADING").is_none() && (args.offscreen.is_some() || args.battle_choice.is_some() || args.battle_auto || std::env::var_os("SP_UI_TEST").is_some() || std::env::var_os("SP_INPUT_TEST").is_some());
+            if auto {
+                world.entity_mut(e).despawn();
+            } else if !world.entity(e).contains::<WaitingForBegin>() {
+                world.entity_mut(e).insert(WaitingForBegin);
+                world.resource_mut::<Time<Virtual>>().pause();
+            }
         }
     }
 }
@@ -564,4 +609,61 @@ fn battle_orders(
         }
         _ => {}
     }
+}
+
+/// Shows the Begin button once the battle is loaded and closes the loading screen when it is pressed (or Enter / Space).
+fn begin_button(
+    mut commands: Commands,
+    keys: Res<ButtonInput<KeyCode>>,
+    screens: Query<Entity, (With<BattleLoadingArt>, With<WaitingForBegin>)>,
+    mut button: Query<(&Interaction, &mut Node, &mut BackgroundColor), With<BeginButton>>,
+    mut status: Query<&mut Node, (With<LoadingStatusText>, Without<BeginButton>)>,
+    mut time: ResMut<Time<Virtual>>,
+) {
+    let Some(screen) = screens.iter().next() else { return };
+    let mut pressed = keys.just_pressed(KeyCode::Enter) || keys.just_pressed(KeyCode::Space);
+    for (i, mut node, mut bg) in &mut button {
+        node.display = Display::Flex;
+        bg.0 = match i {
+            Interaction::Pressed => {
+                pressed = true;
+                Color::srgb(0.2, 0.28, 0.5)
+            }
+            Interaction::Hovered => Color::srgb(0.1, 0.13, 0.24),
+            Interaction::None => Color::srgb(0.01, 0.01, 0.03),
+        };
+    }
+    for mut n in &mut status {
+        n.display = Display::None;
+    }
+    if pressed {
+        commands.entity(screen).despawn();
+        time.unpause();
+    }
+}
+
+/// Test hook (`SP_HOLD_LOADING=1`): the loading screen waits for Begin and is captured once (`<out>_loading.png`).
+fn loading_shot(
+    mut commands: Commands,
+    args: Res<Args>,
+    target: Option<Res<OffscreenTarget>>,
+    waiting: Query<(), With<WaitingForBegin>>,
+    mut frames: Local<u32>,
+    mut taken: Local<bool>,
+) {
+    let (Some(out), Some(target)) = (args.offscreen.as_ref(), target) else { return };
+    if *taken || std::env::var_os("SP_HOLD_LOADING").is_none() || waiting.is_empty() {
+        return;
+    }
+    *frames += 1;
+    if *frames < 20 {
+        return;
+    }
+    *taken = true;
+    let mut path = out.clone();
+    let stem = path.file_stem().map_or_else(|| "out".into(), |s| s.to_string_lossy().into_owned());
+    path.set_file_name(format!("{stem}_loading.png"));
+    commands
+        .spawn(Screenshot(RenderTarget::Image(ImageRenderTarget { handle: target.image.clone(), scale_factor: target.scale_factor })))
+        .observe(save_to_disk(path));
 }
