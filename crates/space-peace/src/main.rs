@@ -7,6 +7,7 @@ mod camera;
 mod cli;
 mod flow;
 mod galaxy_map;
+mod hero_heads;
 mod input_test;
 mod galaxy_view;
 mod game;
@@ -171,6 +172,7 @@ fn main() {
         .insert_resource(GalaxyView::default())
         .add_systems(Startup, game::replay_startup_log)
         .add_plugins(input_test::plugin)
+        .add_plugins(hero_heads::HeroHeadsPlugin)
         .add_plugins((
             FlowPlugin,
             LoadingPlugin,

@@ -291,6 +291,13 @@ fn sync_pause_menu(
 ///
 /// This is the single replacement point for a different menu look.
 pub fn spawn_menu(commands: &mut Commands, spec: &MenuSpec, marker: impl Component) -> Entity {
+    // A single column carries the title inside its frame, like the original dialogs.
+    let mut spec = spec.clone();
+    let title_inside = spec.columns.len() == 1 && spec.columns[0].heading.is_empty();
+    if title_inside {
+        spec.columns[0].heading = std::mem::take(&mut spec.title);
+    }
+    let spec = &spec;
     let background = if spec.dim_background {
         Color::srgba(0.0, 0.0, 0.03, 0.6)
     } else {
@@ -309,16 +316,18 @@ pub fn spawn_menu(commands: &mut Commands, spec: &MenuSpec, marker: impl Compone
                 ..default()
             },
             BackgroundColor(background),
-            GlobalZIndex(20),
+            GlobalZIndex(60),
             marker,
         ))
         .with_children(|root| {
+            if !spec.title.is_empty() {
             root.spawn((
                 Text::new(spec.title.to_uppercase()),
                 TextFont { font: FontSource::Family("Bahnschrift".into()), font_size: FontSize::Px(26.0), ..default() },
                 TextColor(Color::srgb(0.95, 0.96, 0.98)),
                 TextShadow { offset: Vec2::splat(2.0), color: Color::srgba(0.0, 0.1, 0.3, 0.9) },
             ));
+            }
             if !spec.subtitle.is_empty() {
                 root.spawn((
                     Text::new(spec.subtitle.clone()),

@@ -31,8 +31,19 @@ pub struct BattleConfig {
     pub retarget_interval: f32,
     /// Population cap per side for reinforcements (`Space_Tactical_Unit_Cap`).
     pub unit_cap: i32,
+    /// Fog of war: ships only target what a friendly ship sees (`Space_FOW_Reveal_Range` of each ship). Off = everything is visible.
+    pub fog_of_war: bool,
+    /// Seconds an enemy stays visible after it left every sensor range (`SpaceFOWRegrowTime`).
+    pub fog_linger: f32,
+    /// A stealthed ship is only seen by enemies within this distance (the data has no value: estimate).
+    pub stealth_detection: f32,
     /// Seconds before reinforcements arrive (`Skirmish_Reinforcement_Delay_Frames` 150 at 30 fps).
     pub reinforce_delay: f32,
+    /// A reinforcement position must be within this distance of an own ship or structure and farther than it from every enemy (the Remake AI equations
+    /// `Target_Is_Near_Friendly_Unit` / `Target_Is_Not_Close_To_Enemy_Units` use 2000; the engine zone itself is not in the data).
+    pub reinforce_zone: f32,
+    /// Free space needed at the arrival point (`Space_Reinforcement_Collision_Check_Distance`).
+    pub reinforce_clearance: f32,
     /// Use rayon for per-entity work.
     pub parallel: bool,
     /// Use the `<set>_Attack_Move` targeting sets (category exclusions and hardpoint sniping) for ships
@@ -67,6 +78,11 @@ impl Default for BattleConfig {
             retarget_interval: 0.4,
             unit_cap: 150,
             reinforce_delay: 5.0,
+            fog_of_war: true,
+            fog_linger: 15.0,
+            stealth_detection: 500.0,
+            reinforce_zone: 2000.0,
+            reinforce_clearance: 150.0,
             parallel: true,
             shield_regen_delay: 0.0,
             attack_move_sets: false,
@@ -194,14 +210,33 @@ pub enum Command {
         /// New stance.
         stance: Stance,
     },
+    /// Use an ability on a place: a `FOW_REVEAL_PING` shows the area around `pos` to the side.
+    UseAbilityAt {
+        /// Ship.
+        ship: u32,
+        /// Index into the ship definition's abilities.
+        ability: u16,
+        /// Target position.
+        pos: Vec3,
+    },
     /// Order the whole side to leave the battlefield.
     Retreat,
-    /// Call in reinforcements (limited by the unit cap, arrive after a delay).
+    /// Call in reinforcements (limited by the unit cap, arrive after a delay) at the side's reinforcement point.
     Reinforce {
         /// Definition.
         ship: ShipId,
         /// Number of units.
         count: u32,
+    },
+    /// Call in reinforcements at a chosen position (`Battle::reinforcement_zone_check` says whether it is allowed): near own ships or structures,
+    /// away from the enemy, inside the map. They drop out of hyperspace there after the reinforcement delay.
+    ReinforceAt {
+        /// Definition.
+        ship: ShipId,
+        /// Number of units.
+        count: u32,
+        /// Where they arrive (battle-sim coordinates).
+        pos: Vec3,
     },
 }
 
@@ -222,6 +257,12 @@ pub enum CommandError {
     BattleOver,
     /// An enemy interdictor prevents retreating.
     RetreatBlocked,
+    /// The chosen reinforcement position is not near any own ship or structure.
+    NotNearOwnForces,
+    /// The chosen reinforcement position is too close to the enemy.
+    TooCloseToEnemy,
+    /// The chosen reinforcement position is outside the battle area.
+    OutsideBattleArea,
 }
 
 /// What was hit.
@@ -488,6 +529,8 @@ pub struct Ship {
     /// Nearby enemies sorted by priority and distance.
     pub candidates: Vec<u32>,
     pub(crate) scan_in: f32,
+    /// Game time until which each side (the first four) still sees this ship (fog of war).
+    pub(crate) seen_until: [f32; 4],
 }
 
 /// A projectile in flight.
@@ -518,6 +561,8 @@ pub(crate) struct Reinforcement {
     pub side: u8,
     pub ship: ShipId,
     pub count: u32,
+    /// Chosen arrival position (`None` = the side reinforcement point).
+    pub pos: Option<Vec3>,
 }
 
 /// Group bookkeeping for results.
@@ -555,6 +600,8 @@ pub struct Battle {
     pub(crate) cmd_events: Vec<Event>,
     pub(crate) retreat_ordered: Vec<bool>,
     pub(crate) grid_cells: Vec<Vec<u32>>,
+    /// Areas revealed to a side for a while: `(side, centre, radius, until)`.
+    pub(crate) reveals: Vec<(u8, Vec3, f32, f32)>,
 }
 
 impl Battle {

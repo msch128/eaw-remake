@@ -126,7 +126,7 @@ fn spawn_overlay(commands: &mut Commands, settings: &Settings) {
             },
             BackgroundColor(Color::srgba(0.0, 0.0, 0.03, 0.7)),
             FocusPolicy::Block,
-            GlobalZIndex(40),
+            GlobalZIndex(70),
             OptionsOverlay,
         ))
         .with_children(|root| {

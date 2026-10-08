@@ -203,6 +203,10 @@ pub struct AbilityDef {
     pub toggle: bool,
     /// `TRACTOR_BEAM`: beam parameters from the linked `Tractor_Beam_Attack_Ability`.
     pub tractor: Option<TractorDef>,
+    /// `STEALTH`: while active the ship is hidden from enemies unless one of them is within `BattleConfig::stealth_detection`.
+    pub stealth: bool,
+    /// `FOW_REVEAL_PING`: radius of the area it reveals to the owner for the duration (`Effective_Radius`; 0 = not a reveal ping).
+    pub reveal_radius: f32,
 }
 
 /// Parameters of a tractor beam ability.
@@ -225,6 +229,8 @@ pub struct ShipDef {
     pub text_id: Option<String>,
     /// Target class.
     pub class: TargetClass,
+    /// `Space_FOW_Reveal_Range`: how far this ship sees (fog of war); 1250 where the data gives none.
+    pub sensor_range: f32,
     /// True for stations and structures (never move).
     pub is_static: bool,
     /// True for `Squadron` definitions, which expand into `members` when spawned.
@@ -966,9 +972,17 @@ impl Catalog {
             _ => false,
         };
 
+        let sensor_range = match src {
+            Source::Unit(u) => u.fields.get("space_fow_reveal_range").and_then(|v| v.trim().parse::<f32>().ok()),
+            Source::Structure(s) => s.fields.get("space_fow_reveal_range").and_then(|v| v.trim().parse::<f32>().ok()),
+            _ => None,
+        }
+        .filter(|&r| r > 0.0)
+        .unwrap_or(1250.0);
         ShipDef {
             name,
             text_id,
+            sensor_range,
             class,
             is_static,
             is_squadron,
@@ -1177,10 +1191,11 @@ fn ability_defs(u: &SpaceUnitDef) -> Vec<AbilityDef> {
         .iter()
         .filter(|a| {
             a.expiration_seconds.unwrap_or(0.0) > 0.0
-                || ["FULL_SALVO", "TRACTOR_BEAM", "MISSILE_SHIELD", "INTERDICT"].iter().any(|k| a.kind.eq_ignore_ascii_case(k))
+                || ["FULL_SALVO", "TRACTOR_BEAM", "MISSILE_SHIELD", "INTERDICT", "STEALTH", "FOW_REVEAL_PING"].iter().any(|k| a.kind.eq_ignore_ascii_case(k))
         })
         .map(|a| {
-            let toggle = a.expiration_seconds.unwrap_or(0.0) <= 0.0 && ["MISSILE_SHIELD", "INTERDICT"].iter().any(|k| a.kind.eq_ignore_ascii_case(k));
+            let toggle = a.expiration_seconds.unwrap_or(0.0) <= 0.0 && ["MISSILE_SHIELD", "INTERDICT", "STEALTH"].iter().any(|k| a.kind.eq_ignore_ascii_case(k));
+            let ping = a.kind.eq_ignore_ascii_case("FOW_REVEAL_PING");
             let m = |k: &str| a.mod_multipliers.iter().find(|(n, _)| n == k).map(|&(_, v)| v);
             AbilityDef {
                 kind: a.kind.clone(),
@@ -1189,7 +1204,10 @@ fn ability_defs(u: &SpaceUnitDef) -> Vec<AbilityDef> {
                 weapon_delay_mult: m("WEAPON_DELAY_MULTIPLIER").unwrap_or(1.0),
                 take_damage_mult: m("TAKE_DAMAGE_MULTIPLIER").unwrap_or(1.0),
                 recharge: a.recharge_seconds.unwrap_or(30.0),
-                duration: if toggle { f32::MAX / 4.0 } else { a.expiration_seconds.unwrap_or(12.0) },
+                // A reveal ping has no expiration in the data: it shows the area for 5 s (estimate).
+                duration: if toggle { f32::MAX / 4.0 } else if ping { a.expiration_seconds.filter(|&x| x > 0.0).unwrap_or(5.0) } else { a.expiration_seconds.unwrap_or(12.0) },
+                stealth: a.kind.eq_ignore_ascii_case("STEALTH"),
+                reveal_radius: if ping { a.fields.get("effective_radius").and_then(|v| v.parse().ok()).unwrap_or(1000.0) } else { 0.0 },
                 interdict: a.kind.eq_ignore_ascii_case("INTERDICT"),
                 toggle,
                 salvo: a.kind.eq_ignore_ascii_case("FULL_SALVO"),

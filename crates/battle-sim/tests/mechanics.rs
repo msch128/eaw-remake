@@ -220,6 +220,113 @@ fn losses_make_room_under_the_unit_cap() {
 }
 
 #[test]
+fn reinforcements_can_be_called_to_a_chosen_position_inside_the_zone() {
+    let cat = Catalog::from_defs(vec![ship("a", 1.0e6, 0.0, vec![]), ship("b", 1.0e6, 0.0, vec![])], vec![laser()]);
+    let mut c = cfg();
+    c.unit_cap = 100;
+    let mut b = Battle::new(setup(cat, "a", "b", 1, 1, c));
+    let a = b.catalog().ship_id("a").unwrap();
+    let (own, foe) = (b.ships.iter().find(|s| s.side == 0).unwrap().pos, b.ships.iter().find(|s| s.side == 1).unwrap().pos);
+    let toward_enemy = (foe - own).normalized();
+    let beside = Vec3::new(own.x + 600.0, own.y + 300.0, own.z);
+    // Near an own ship, far from the enemy: accepted.
+    assert_eq!(b.reinforcement_zone_check(0, beside), Ok(()));
+    // Far from everything of its own.
+    let far = own - toward_enemy * 3500.0;
+    assert!(matches!(b.reinforcement_zone_check(0, far), Err(CommandError::NotNearOwnForces | CommandError::OutsideBattleArea)), "{:?}", b.reinforcement_zone_check(0, far));
+    // Within 2000 of the enemy.
+    let near_enemy = foe + Vec3::new(500.0, 0.0, 0.0);
+    assert_eq!(b.reinforcement_zone_check(0, near_enemy), Err(CommandError::TooCloseToEnemy));
+    // Outside the map.
+    assert_eq!(b.reinforcement_zone_check(0, Vec3::new(1.0e6, 0.0, 0.0)), Err(CommandError::OutsideBattleArea));
+    assert_eq!(b.command(0, Command::ReinforceAt { ship: a, count: 1, pos: near_enemy }), Err(CommandError::TooCloseToEnemy));
+    // The accepted call arrives after the delay, at the chosen point (on free space), facing the enemy.
+    b.command(0, Command::ReinforceAt { ship: a, count: 2, pos: beside }).unwrap();
+    let mut arrived = false;
+    for _ in 0..400 {
+        arrived |= b.step().iter().any(|e| matches!(e, Event::ReinforcementsArrived { side: 0, .. }));
+    }
+    assert!(arrived);
+    let new: Vec<_> = b.ships.iter().filter(|s| s.side == 0 && s.id > 1).collect();
+    assert_eq!(new.len(), 2);
+    for s in &new {
+        assert!(s.pos.dist(beside) < 1200.0, "arrived near the chosen point: {:?}", s.pos);
+        assert!(s.pos.dist(own) >= 150.0, "not on top of the existing ship");
+    }
+    assert!(new[0].pos.dist(new[1].pos) >= 150.0, "not on top of each other");
+}
+
+#[test]
+fn fog_of_war_hides_ships_outside_sensor_range_until_seen() {
+    let mut sensor = ship("seer", 1.0e6, 0.0, vec![]);
+    sensor.sensor_range = 1500.0;
+    let mut target = ship("far", 1.0e6, 0.0, vec![]);
+    target.sensor_range = 1500.0;
+    let cat = Catalog::from_defs(vec![sensor, target], vec![laser()]);
+    let mut b = Battle::new(setup(cat, "seer", "far", 1, 1, cfg()));
+    let (s0, s1) = (b.ships.iter().find(|s| s.side == 0).unwrap().id, b.ships.iter().find(|s| s.side == 1).unwrap().id);
+    b.step();
+    let apart = b.ships[s0 as usize].pos.dist(b.ships[s1 as usize].pos);
+    assert!(apart > 1500.0, "the spawn points are out of sensor range: {apart}");
+    assert!(b.is_visible_to(0, s0) && !b.is_visible_to(0, s1) && !b.is_visible_to(1, s0), "nobody sees the other side yet");
+    // An ally ship moves into range: now side 0 sees the enemy (and the enemy sees it back).
+    let ally_pos = b.ships[s1 as usize].pos + Vec3::new(1000.0, 0.0, 0.0);
+    b.ships[s0 as usize].pos = ally_pos;
+    for _ in 0..20 {
+        b.step();
+    }
+    assert!(b.is_visible_to(0, s1) && b.is_visible_to(1, s0));
+    // Out of sight again: it stays visible for `fog_linger` (15 s), then it is lost.
+    b.ships[s0 as usize].pos = b.ships[s1 as usize].pos + Vec3::new(4000.0, 0.0, 0.0);
+    for _ in 0..30 * 10 {
+        b.step();
+    }
+    assert!(b.is_visible_to(0, s1), "still remembered after 10 s");
+    for _ in 0..30 * 10 {
+        b.step();
+    }
+    assert!(!b.is_visible_to(0, s1), "lost after the linger time");
+}
+
+#[test]
+fn stealth_and_reveal_pings_change_what_is_seen() {
+    let mut ghost = ship("ghost", 1.0e6, 0.0, vec![]);
+    ghost.sensor_range = 4000.0;
+    ghost.abilities.push(battle_sim::AbilityDef { kind: "STEALTH".into(), stealth: true, toggle: true, duration: f32::MAX / 4.0, speed_mult: 1.0, shield_regen_mult: 1.0, weapon_delay_mult: 1.0, take_damage_mult: 1.0, ..Default::default() });
+    let mut watcher = ship("watcher", 1.0e6, 0.0, vec![]);
+    watcher.sensor_range = 4000.0;
+    watcher.abilities.push(battle_sim::AbilityDef { kind: "FOW_REVEAL_PING".into(), reveal_radius: 1000.0, duration: 5.0, recharge: 60.0, speed_mult: 1.0, shield_regen_mult: 1.0, weapon_delay_mult: 1.0, take_damage_mult: 1.0, ..Default::default() });
+    let cat = Catalog::from_defs(vec![ghost, watcher], vec![laser()]);
+    let mut b = Battle::new(setup(cat, "ghost", "watcher", 1, 1, cfg()));
+    let (g, w) = (b.ships.iter().find(|s| s.side == 0).unwrap().id, b.ships.iter().find(|s| s.side == 1).unwrap().id);
+    // 3000 apart: inside the 4000 sensor range, outside the 500 stealth detection once stealth is on.
+    let wp = b.ships[w as usize].pos;
+    b.ships[g as usize].pos = wp + Vec3::new(3000.0, 0.0, 0.0);
+    for _ in 0..20 {
+        b.step();
+    }
+    assert!(b.is_visible_to(1, g), "visible without stealth");
+    b.command(0, Command::UseAbility { ship: g, ability: 0 }).unwrap();
+    for _ in 0..30 * 20 {
+        b.step();
+    }
+    assert!(!b.is_visible_to(1, g), "hidden by stealth beyond the detection range");
+    // A reveal ping on the spot shows it for the ping duration.
+    let at = b.ships[g as usize].pos;
+    b.command(1, Command::UseAbilityAt { ship: w, ability: 0, pos: at }).unwrap();
+    for _ in 0..20 {
+        b.step();
+    }
+    assert!(b.is_visible_to(1, g), "revealed by the ping");
+    // Close enough, stealth no longer helps.
+    b.ships[g as usize].pos = wp + Vec3::new(400.0, 0.0, 0.0);
+    for _ in 0..30 * 20 {
+        b.step();
+    }
+    assert!(b.is_visible_to(1, g), "inside the detection range");
+}
+
+#[test]
 fn carriers_launch_and_replace_squadrons() {
     let mut fighter = ship("fighter", 20.0, 0.0, vec![]);
     fighter.class = TargetClass::Fighter;

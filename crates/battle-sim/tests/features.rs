@@ -128,7 +128,7 @@ fn tractor_beam_slows_its_target() {
     let tractor = cat.ship(isd_def).abilities[idx].tractor.clone().unwrap();
     assert!((tractor.slow - 0.75).abs() < 0.01 && tractor.range >= 2500.0, "{tractor:?}");
     let sides = vec![side(&cat, "Empire", &[("Star_Destroyer", 1)], &[], false), side(&cat, "Rebel", &[("CR-90_Corvette", 1)], &[], false)];
-    let config = BattleConfig { half_size: 9000.0, ..BattleConfig::default() };
+    let config = BattleConfig { half_size: 9000.0, fog_of_war: false, ..BattleConfig::default() };
     let mut b = Battle::new(BattleSetup { catalog: cat.clone(), sides, config });
     let corvette = b.ships.iter().find(|s| s.side == 1).unwrap().id;
     b.command(1, Command::Move { ships: vec![corvette], to: Vec3::new(-1000.0, 0.0, 0.0) }).unwrap();

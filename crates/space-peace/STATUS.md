@@ -54,3 +54,9 @@ fullscreen, FPS cap).
 - Labels: caps in faction colour (own = green via relation_color), two pip rows (ground, space) from Max_Ground_Base/Max_Space_Base.
 - Selection: notched ring (mesh fill + gizmo outline); fleets stand on a faction-coloured base disc (galaxy-play visuals.rs).
 - Missing vs original: hero head portraits, faction emblem beside planets, dashed sector ring (W_Planet_GC_Sector), lane/slot textures from the game.
+
+## Real pointer test (galaxy screens)
+`SP_UI_TEST=exit SP_SAVES_DIR=<scratch> space-peace --hidden --exit-after 8000 --volume 0 --campaign <c> --select <planet> --weeks 8 --move <planet>`
+injects window events (cursor, mouse buttons, Esc) and checks the battle banner click, the pause menu, Save Game with a slot
+click, Options, Load Game with a slot click and Main Menu (10 checks, log line `ui-test: ... PASS`). `tools\smoke.ps1`
+runs it as `windowed-ui-pointer`. Source: `src/input_test.rs`.

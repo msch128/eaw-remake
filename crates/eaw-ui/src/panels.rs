@@ -395,7 +395,9 @@ pub fn faction_colors(f: UiFaction) -> (Color, Color, Color) {
 
 /// Spawns a centred GC message dialog; returns its root.
 pub fn spawn_dialog(world: &mut World, spec: &DialogSpec) -> Option<Entity> {
-    let (bg, border, accent) = faction_colors(spec.faction);
+    // The original dialogs share one frame whatever the faction: navy glass, blue glow, black buttons.
+    let _ = faction_colors(spec.faction);
+    let (bg, border, accent) = (Color::srgba(0.03, 0.05, 0.12, 0.93), Color::srgb(0.42, 0.58, 0.88), Color::srgb(0.95, 0.96, 0.98));
     let (font_family, camera) = {
         let s = world.get_resource::<EawUiSettings>()?;
         (s.font_family.clone(), s.camera)
@@ -461,6 +463,7 @@ pub fn spawn_dialog(world: &mut World, spec: &DialogSpec) -> Option<Entity> {
             },
             BackgroundColor(bg),
             BorderColor::all(border),
+            BoxShadow::new(Color::srgba(0.3, 0.5, 1.0, 0.4), Val::Px(0.0), Val::Px(0.0), Val::Px(3.0), Val::Px(14.0)),
             GlobalZIndex(500),
         ))
         .id();
@@ -491,7 +494,7 @@ pub fn spawn_dialog(world: &mut World, spec: &DialogSpec) -> Option<Entity> {
         ))
         .id();
     world.spawn((
-        Text::new(title),
+        Text::new(title.to_uppercase()),
         font(16.0),
         TextColor(accent),
         ChildOf(col),
@@ -523,12 +526,12 @@ pub fn spawn_dialog(world: &mut World, spec: &DialogSpec) -> Option<Entity> {
                     border: UiRect::all(Val::Px(1.0)),
                     ..default()
                 },
-                BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.06)),
-                BorderColor::all(border),
+                BackgroundColor(Color::srgb(0.01, 0.01, 0.03)),
+                BorderColor::all(Color::srgb(0.6, 0.65, 0.75)),
                 ChildOf(row),
             ))
             .id();
-        world.spawn((Text::new(label), font(13.0), TextColor(accent), ChildOf(btn)));
+        world.spawn((Text::new(label.to_uppercase()), font(13.0), TextColor(accent), ChildOf(btn)));
     }
     Some(root)
 }
@@ -672,8 +675,8 @@ pub(crate) fn dialog_buttons(
                 });
                 commands.entity(b.dialog).despawn();
             }
-            Interaction::Hovered => bg.0 = Color::srgba(1.0, 1.0, 1.0, 0.16),
-            Interaction::None => bg.0 = Color::srgba(1.0, 1.0, 1.0, 0.06),
+            Interaction::Hovered => bg.0 = Color::srgb(0.1, 0.13, 0.24),
+            Interaction::None => bg.0 = Color::srgb(0.01, 0.01, 0.03),
         }
     }
 }

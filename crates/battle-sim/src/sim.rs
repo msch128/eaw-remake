@@ -33,6 +33,8 @@ struct Snap {
     hp_alive: u64,
     /// Hull and shield left as a share of the maximum (0..1).
     health: f32,
+    /// Bit s set = side s sees this ship (fog of war).
+    seen_by: u8,
 }
 
 /// Uniform grid of ship ids for projectile collision.
@@ -178,6 +180,7 @@ impl Battle {
             catalog,
             cmd_events: Vec::new(),
             retreat_ordered: vec![false; sides.len()],
+            reveals: Vec::new(),
             sides,
             ships: Vec::new(),
             projectiles: Vec::new(),
@@ -378,6 +381,7 @@ impl Battle {
             lane: 0.0,
             candidates: Vec::new(),
             scan_in: rng.range(0.0, self.config.retarget_interval),
+            seen_until: [0.0; 4],
         });
         id
     }
@@ -429,6 +433,64 @@ impl Battle {
             self.events.push(Event::SquadronLaunched { carrier, ships: ids.clone() });
         }
         ids
+    }
+
+    /// Recomputes which enemy ships each side sees: within the `Space_FOW_Reveal_Range` of one of its ships (a stealthed ship only within
+    /// `stealth_detection`) or inside a revealed area. A seen ship stays visible for `fog_linger` seconds.
+    fn update_visibility(&mut self) {
+        let cat = self.catalog.clone();
+        let (time, linger, detect) = (self.time, self.config.fog_linger, self.config.stealth_detection);
+        self.reveals.retain(|r| r.3 > time);
+        let sides = self.sides.len().min(4);
+        for side in 0..sides as u8 {
+            let observers: Vec<(Vec3, f32)> = self.ships.iter().filter(|s| s.alive && !s.retreated && s.side == side).map(|s| (s.pos, if cat.ship(s.def).sensor_range > 0.0 { cat.ship(s.def).sensor_range } else { f32::MAX })).collect();
+            let reveals: Vec<(Vec3, f32)> = self.reveals.iter().filter(|r| r.0 == side).map(|r| (r.1, r.2)).collect();
+            for s in self.ships.iter_mut().filter(|s| s.alive && !s.retreated && s.side != side) {
+                let d = cat.ship(s.def);
+                let stealthed = d.abilities.iter().zip(&s.abilities).any(|(a, st)| a.stealth && st.active > 0.0);
+                let r = d.radius;
+                let seen = reveals.iter().any(|&(p, rad)| p.dist(s.pos) <= rad + r)
+                    || observers.iter().any(|&(p, range)| {
+                        let dist = p.dist(s.pos) - r;
+                        dist <= if stealthed { range.min(detect) } else { range }
+                    });
+                if seen {
+                    s.seen_until[side as usize] = time + linger;
+                }
+            }
+        }
+    }
+
+    /// True if `side` currently sees ship `id` (always true for its own ships and without fog of war).
+    pub fn is_visible_to(&self, side: u8, id: u32) -> bool {
+        let Some(s) = self.ships.get(id as usize) else { return false };
+        !self.config.fog_of_war || s.side == side || side >= 4 || self.time <= s.seen_until[side as usize]
+    }
+
+    /// Whether `side` may call in reinforcements at `pos`: inside the battle area, within `reinforce_zone` of one of its ships or structures that is alive,
+    /// and farther than `reinforce_zone` from every enemy ship or structure. The UI uses it to colour the reinforcement overlay.
+    pub fn reinforcement_zone_check(&self, side: u8, pos: Vec3) -> Result<(), CommandError> {
+        let zone = self.config.reinforce_zone;
+        let half = self.config.half_size - 300.0;
+        if pos.x.abs() > half || pos.y.abs() > half {
+            return Err(CommandError::OutsideBattleArea);
+        }
+        let (mut near_own, mut nearest_enemy) = (false, f32::MAX);
+        for s in self.ships.iter().filter(|s| s.alive && !s.retreated) {
+            let d = s.pos.dist(pos);
+            if s.side == side {
+                near_own |= d <= zone;
+            } else {
+                nearest_enemy = nearest_enemy.min(d);
+            }
+        }
+        if nearest_enemy <= zone {
+            return Err(CommandError::TooCloseToEnemy);
+        }
+        if !near_own {
+            return Err(CommandError::NotNearOwnForces);
+        }
+        Ok(())
     }
 
     /// Population of everything of `side` that is alive (or on its way) now, counted per unit (a squadron once while any of its fighters lives).
@@ -498,6 +560,19 @@ impl Battle {
                     s.target_hp = NO_HP;
                 }
             }
+            Command::UseAbilityAt { ship, ability, pos } => {
+                if !own(self, &[ship]) {
+                    return Err(CommandError::InvalidShip);
+                }
+                if !self.activate_ability(ship, ability as usize) {
+                    return Err(CommandError::AbilityUnavailable);
+                }
+                let d = self.catalog.ship(self.ships[ship as usize].def);
+                if let Some(a) = d.abilities.get(ability as usize).filter(|a| a.reveal_radius > 0.0) {
+                    self.reveals.retain(|r| r.3 > self.time);
+                    self.reveals.push((side, pos, a.reveal_radius, self.time + a.duration));
+                }
+            }
             Command::UseAbility { ship, ability } => {
                 if !own(self, &[ship]) {
                     return Err(CommandError::InvalidShip);
@@ -533,6 +608,17 @@ impl Battle {
                     s.order = Order::Retreat;
                 }
             }
+            Command::ReinforceAt { ship, count, pos } => {
+                self.reinforcement_zone_check(side, pos)?;
+                let pop = self.catalog.ship(ship).population * count as i32;
+                if self.pop_in_play(side) + pop > self.config.unit_cap {
+                    return Err(CommandError::UnitCap);
+                }
+                if self.config.record_events {
+                    self.cmd_events.push(Event::ReinforcementsCalled { side, ship, count });
+                }
+                self.pending.push(Reinforcement { at: self.time + self.config.reinforce_delay, side, ship, count, pos: Some(pos) });
+            }
             Command::Reinforce { ship, count } => {
                 let pop = self.catalog.ship(ship).population * count as i32;
                 if self.pop_in_play(side) + pop > self.config.unit_cap {
@@ -544,7 +630,7 @@ impl Battle {
                 if self.config.record_events {
                     self.cmd_events.push(Event::ReinforcementsCalled { side, ship, count });
                 }
-                self.pending.push(Reinforcement { at: self.time + self.config.reinforce_delay, side, ship, count });
+                self.pending.push(Reinforcement { at: self.time + self.config.reinforce_delay, side, ship, count, pos: None });
             }
         }
         Ok(())
@@ -586,6 +672,12 @@ impl Battle {
             return false;
         }
         let mut target = NONE;
+        if a.reveal_radius > 0.0 {
+            // Used without a place: the area around the ship.
+            let (side, pos) = (self.ships[ship as usize].side, self.ships[ship as usize].pos);
+            self.reveals.retain(|r| r.3 > self.time);
+            self.reveals.push((side, pos, a.reveal_radius, self.time + a.duration));
+        }
         if let Some(t) = &a.tractor {
             match self.tractor_target(ship, t) {
                 Some(x) => target = x,
@@ -619,7 +711,12 @@ impl Battle {
         let cfg = self.config.clone();
         let par = cfg.parallel;
 
+        if cfg.fog_of_war && self.tick % 15 == 1 {
+            self.update_visibility();
+        }
         // Snapshot and grid.
+        let time_now = self.time;
+        let fog = cfg.fog_of_war;
         let snaps: Vec<Snap> = self
             .ships
             .iter()
@@ -638,6 +735,11 @@ impl Battle {
                     golan: d.golan,
                     hp_alive: s.hps.iter().take(64).enumerate().fold(0u64, |m, (i, h)| m | (u64::from(h.alive) << i)),
                     health: ((s.hull.max(0.0) + s.shield.max(0.0)) / (d.hull.max(1.0) + d.shield)).clamp(0.0, 1.0),
+                    seen_by: if fog {
+                        (0..4u8).filter(|&k| k == s.side || time_now <= s.seen_until[k as usize]).fold(!0u8 << 4, |m, k| m | (1 << k))
+                    } else {
+                        0xFF
+                    },
                 }
             })
             .collect();
@@ -773,13 +875,36 @@ impl Battle {
         for r in due {
             let cat = self.catalog.clone();
             let def = cat.ship(r.ship);
-            let origin = self.spawn_pos[r.side as usize];
-            let yaw = (Vec3::ZERO - origin).y.atan2((Vec3::ZERO - origin).x);
+            let origin = r.pos.unwrap_or(self.spawn_pos[r.side as usize]);
+            // Face the enemy: the nearest enemy ship for a chosen position, the battle centre for the side reinforcement point.
+            let heading = match r.pos {
+                Some(p) => self.ships.iter().filter(|s| s.alive && s.side != r.side).min_by(|a, b| a.pos.dist(p).total_cmp(&b.pos.dist(p))).map_or(Vec3::ZERO, |s| s.pos),
+                None => Vec3::ZERO,
+            };
+            let yaw = (heading - origin).y.atan2((heading - origin).x);
             let mut ids = Vec::new();
             for k in 0..r.count {
                 let mut rng = Rng::for_entity(self.config.seed, self.tick, k, 0x7E1F + r.ship as u64);
                 let mut pos = origin + rng.in_ball() * 800.0;
                 pos.z = origin.z;
+                if r.pos.is_some() {
+                    // A chosen point: arrive in a tight group on free space (nothing within `reinforce_clearance`), moving out in rings when it is taken.
+                    let clear = self.config.reinforce_clearance;
+                    let taken = |p: Vec3, ships: &[Ship]| ships.iter().any(|s| s.alive && !s.retreated && s.pos.dist(p) < clear + self.catalog.ship(s.def).radius);
+                    let mut found = origin;
+                    'ring: for ring in 0..12u32 {
+                        let n = if ring == 0 { 1 } else { 6 * ring };
+                        for j in 0..n {
+                            let a = std::f32::consts::TAU * j as f32 / n as f32 + k as f32;
+                            let p = origin + Vec3::new(a.cos(), a.sin(), 0.0) * (ring as f32 * clear * 1.5);
+                            if !taken(p, &self.ships) {
+                                found = p;
+                                break 'ring;
+                            }
+                        }
+                    }
+                    pos = found;
+                }
                 // Reinforcements are results groups too (tag `REINFORCE_TAG`), so the galaxy learns which of them survived.
                 let group = self.groups.len() as u32;
                 self.groups.push(Group { side: r.side, tag: REINFORCE_TAG, ship: r.ship, members: Vec::new() });
@@ -1223,7 +1348,8 @@ fn ability_product(def: &ShipDef, s: &Ship, f: impl Fn(&AbilityDef) -> f32) -> f
 fn scan(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig) {
     s.scan_in -= cfg.dt;
     let explicit = if let Order::Attack(t) = s.order { Some(t) } else { None };
-    let target_ok = s.target != NONE && snaps[s.target as usize].alive;
+    let sees = |t: &Snap| s.side >= 4 || t.seen_by & (1 << s.side) != 0;
+    let target_ok = s.target != NONE && snaps[s.target as usize].alive && sees(&snaps[s.target as usize]);
     if s.scan_in > 0.0 && (target_ok || s.target == NONE) {
         return;
     }
@@ -1239,7 +1365,7 @@ fn scan(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig) {
         .and_then(|i| cat.priority_sets.get(i as usize));
     let mut found: Vec<(f32, f32, u32)> = Vec::with_capacity(32);
     for (i, t) in snaps.iter().enumerate() {
-        if !t.alive || t.side == s.side {
+        if !t.alive || t.side == s.side || !sees(t) {
             continue;
         }
         let d = t.pos.dist(me.pos) - t.radius;
