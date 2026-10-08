@@ -33,7 +33,7 @@ use bevy::prelude::*;
 
 pub use build_menu::{Availability, BuildCategory, BuildMenu, BuildOption, BuildTarget, QueueEntry, build_command};
 pub use catalog::{FleetModelStyle, PlayCatalog};
-pub use driver::{CommandResult, LoadProgressView, LoadResult, ResolveMode, SaveResult, ScriptSetup, SimDriver, Snapshot, Ticket};
+pub use driver::{TacticalRuntime, CommandResult, LoadProgressView, LoadResult, ResolveMode, SaveResult, ScriptSetup, SimDriver, Snapshot, Ticket};
 pub use geometry::{FleetPlace, GalaxyLayout, RoutePlan, galaxy_to_world};
 pub use input::{PlayCursorBlocked, PlayHover, PlayUiBlock};
 

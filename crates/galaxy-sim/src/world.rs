@@ -57,6 +57,9 @@ pub struct SimConfig {
     pub resolver: BattleResolver,
     /// Longest tactical battle in simulated seconds before it is declared a draw.
     pub tactical_max_seconds: f32,
+    /// `BattleResolver::Tactical` settles only battles with at most this many ships, structures and squadrons; bigger ones use the statistical resolver
+    /// (a full headless battle of a hundred ships takes seconds of CPU; the soak test saw single battles of 25 s). Explicit `resolve_battle_tactical` ignores it.
+    pub tactical_resolver_max_ships: u32,
     /// Estimate: share of hull restored per week at an owned planet without a star base (the data has no galactic repair rule).
     pub repair_base_per_week: f32,
     /// Estimate: extra share per week and star base level.
@@ -95,6 +98,7 @@ impl Default for SimConfig {
             victory_enabled: true,
             resolver: BattleResolver::Statistical,
             tactical_max_seconds: 900.0,
+            tactical_resolver_max_ships: 16,
             repair_base_per_week: 0.05,
             repair_per_starbase_level_per_week: 0.10,
             repair_shield_factor: 4.0,

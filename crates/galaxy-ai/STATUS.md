@@ -63,3 +63,5 @@ The Remake's galactic AI on top of an abstract `AiSim` (implemented for galaxy-s
   and an option "classic AI" (`remake_ai: false, difficulty: None`).
 - Save/load and the journaled input methods: see `galaxy-script/STATUS.md` (route every command through `ScriptedSim`, never through `with_sim_mut`).
 - Persistent damage: the tactical front end passes `TacticalResult::health` through unchanged; the HUD can read `Galaxy::damage` / `PlanetState::base_health` (fractions) for fleet panels.
+- Soak findings fixed: factions never advanced their tech level (the Remake AI has no galactic tech plan we run; now `AiEngine` queues the next level every 4 weeks for a faction with > 20000 credits, level L from week 10 x L on: an **estimate**; `AiStats::tech_upgrades`), `plan_category` and `reserved` entries are pruned.
+  Open: the AI floats millions of credits late in the game (build plans refused by every planet / limited throughput), see galaxy-play/STATUS.md.

@@ -19,7 +19,7 @@ use std::time::Instant;
 
 use alamo_data::GameData;
 use alamo_fs::FileSource;
-use galaxy_script::{LoadProgress, SaveFile, ScriptEvent, ScriptedConfig, ScriptedSim};
+use galaxy_script::{Diagnostics, LoadProgress, SaveFile, ScriptEvent, ScriptedConfig, ScriptedSim};
 use galaxy_sim::{Command, CommandError, CommandOk, Event, FactionId, Galaxy, PendingBattle, Sim, TacticalRequest, TacticalResult, World};
 
 /// Identifies a submitted command so its result can be matched in a later snapshot.
@@ -86,6 +86,27 @@ pub struct ScriptSetup {
     pub load: Option<SaveFile>,
     /// Path of that save (reported back in [`Snapshot::loads`]).
     pub load_path: Option<PathBuf>,
+    /// Runtime-only tactical resources: with them battles can be settled by the headless battle simulation (`ResolveMode::Headless` and
+    /// `SimConfig::resolver = Tactical`). Not part of saves; reapplied after every load.
+    pub tactical: Option<TacticalRuntime>,
+}
+
+/// Battle catalog and map arenas for headless tactical resolution.
+#[derive(Clone)]
+pub struct TacticalRuntime {
+    /// Unit catalog (`battle_sim::Catalog::build` with `Sim::tactical_names()`).
+    pub catalog: Arc<battle_sim::Catalog>,
+    /// Arenas by map name (`Sim::tactical_map_names()`).
+    pub arenas: std::collections::HashMap<String, Arc<battle_sim::Arena>>,
+}
+
+fn install_tactical(s: &ScriptedSim, t: &Option<TacticalRuntime>) {
+    if let Some(t) = t {
+        s.with_sim_runtime(|sim| {
+            sim.set_tactical_catalog(t.catalog.clone());
+            sim.set_tactical_arenas(t.arenas.clone());
+        });
+    }
 }
 
 /// Result of a [`Request::Save`].
@@ -196,6 +217,8 @@ pub struct Snapshot {
     /// True for the placeholder shown while the worker is still setting up (scripts, AI, replay of a save): the galaxy is the
     /// starting state, not the game.
     pub loading: bool,
+    /// Script/AI error counts and journal size (scripted backend).
+    pub diagnostics: Option<Diagnostics>,
 }
 
 impl Snapshot {
@@ -217,6 +240,7 @@ impl Snapshot {
             saves: Vec::new(),
             loads: Vec::new(),
             loading: true,
+            diagnostics: None,
         }
     }
 }
@@ -527,6 +551,7 @@ fn build_scripted(sim: Sim, setup: &ScriptSetup, human: Option<FactionId>, progr
     let campaign = setup.data.campaign(&setup.campaign).expect("campaign of the game").clone();
     let fresh = |sim: Sim| {
         let mut s = ScriptedSim::from_sim(sim, setup.fs.clone(), setup.data.clone(), &campaign, setup.config.clone());
+        install_tactical(&s, &setup.tactical);
         if !setup.config.remake_ai {
             s.set_ai_factions((0..s.with_sim(|x| x.world().factions.len()) as FactionId).filter(|&f| Some(f) != human));
         }
@@ -535,7 +560,7 @@ fn build_scripted(sim: Sim, setup: &ScriptSetup, human: Option<FactionId>, progr
     if let Some(file) = &setup.load {
         progress.begin(file.total_steps());
         let path = setup.load_path.clone().unwrap_or_default();
-        let r = ScriptedSim::from_save_progress(file.clone(), setup.fs.clone(), setup.data.clone(), |_| {}, &mut |p| progress.update(p));
+        let r = ScriptedSim::from_save_progress(file.clone(), setup.fs.clone(), setup.data.clone(), |s| install_tactical(s, &setup.tactical), &mut |p| progress.update(p));
         progress.end();
         match r {
             Ok(s) => {
@@ -556,7 +581,7 @@ fn load_into(core: &mut Core, path: &std::path::Path, setup: Option<&ScriptSetup
         return Err("this save belongs to another campaign or player; start the game from the save instead".into());
     }
     progress.begin(file.total_steps());
-    let r = ScriptedSim::from_save_progress(file, setup.fs.clone(), setup.data.clone(), |_| {}, &mut |p| progress.update(p));
+    let r = ScriptedSim::from_save_progress(file, setup.fs.clone(), setup.data.clone(), |s| install_tactical(s, &setup.tactical), &mut |p| progress.update(p));
     progress.end();
     let s = r.map_err(|e| e.to_string())?;
     let week = s.checkpoint().week;
@@ -600,6 +625,7 @@ fn worker(sim: Sim, script: Option<ScriptSetup>, human: Option<FactionId>, progr
             saves: p.saves,
             loads: p.loads,
             loading: false,
+            diagnostics: match core { Core::Scripted(s) => Some(s.diagnostics()), Core::Plain(_) => None },
         };
         *seq += 1;
         tx.send(Arc::new(snap)).is_ok()

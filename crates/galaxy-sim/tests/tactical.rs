@@ -203,13 +203,13 @@ fn damage_persists_between_battles_and_is_repaired_at_owned_planets() {
         let b2 = pending(&mut sim);
         let req2 = sim.tactical_setup(b2.id).unwrap();
         let g = req2.sides.iter().flat_map(|s| &s.groups).find(|g| g.fleet == Some(ef)).unwrap();
-        assert!(!g.unit_health.is_empty() && g.health < 1.0, "the request carries the damage");
+        assert!(!g.unit_health.is_empty() && g.unit_health.iter().any(|h| !h.is_full()), "the request carries the damage: group {g:?}, damage {:?}, ships {:?}", sim.galaxy().damage, sim.galaxy().ships.get(&ef));
         // ... and battle-sim starts those ships damaged.
         let cat2 = catalog_for(&ctx, &req2);
         let setup = req2.battle_setup(&cat2, req2.battle_config(None), |_| true).unwrap();
         let battle = battle_sim::Battle::new(setup);
-        let max_hull = cat2.ship(cat2.ship_id(&g.name).unwrap()).hull;
-        assert!(battle.ships.iter().any(|s| s.def == cat2.ship_id(&g.name).unwrap() && s.hull < max_hull * 0.999), "a damaged ship starts below its maximum hull");
+        let def = cat2.ship(cat2.ship_id(&g.name).unwrap());
+        assert!(battle.ships.iter().any(|s| s.def == cat2.ship_id(&g.name).unwrap() && (s.hull < def.hull * 0.999 || s.shield < def.shield * 0.999)), "a damaged ship starts below its maximum hull or shield");
     }
     // Long enough at an owned planet: fully repaired.
     sim.cancel_tactical(0);

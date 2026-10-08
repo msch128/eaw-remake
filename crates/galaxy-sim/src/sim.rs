@@ -473,7 +473,11 @@ impl Sim {
 
     /// Resolves a pending battle with the resolver chosen in [`SimConfig::resolver`].
     pub fn resolve_battle(&mut self, id: u32) -> Option<Vec<Event>> {
-        let tactical = self.world.config.resolver == BattleResolver::Tactical && self.tactical.is_some();
+        let small_enough = self.galaxy.battles.iter().find(|b| b.id == id).is_none_or(|b| {
+            let ships: u32 = self.battle_sides(b).iter().flat_map(|s| &s.members).filter(|m| !matches!(m.source, Source::Garrison(_))).map(|m| m.count).sum();
+            ships <= self.world.config.tactical_resolver_max_ships
+        });
+        let tactical = self.world.config.resolver == BattleResolver::Tactical && self.tactical.is_some() && small_enough;
         self.resolve_inner(id, tactical)
     }
 

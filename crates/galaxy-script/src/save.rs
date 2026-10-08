@@ -359,3 +359,35 @@ impl ScriptedSim {
         self.with_sim(|s| (s.galaxy().time / f64::from(s.world().config.week_seconds)) as u64)
     }
 }
+
+/// Health counters of a running match (for soak tests and debug overlays).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Diagnostics {
+    /// Lua scripts that died with an error.
+    pub script_errors: usize,
+    /// Message of the latest dead script.
+    pub last_script_error: Option<String>,
+    /// AI plans that could not be started.
+    pub ai_errors: usize,
+    /// Story scripts that failed to start.
+    pub start_errors: usize,
+    /// Entries in the save journal.
+    pub journal_entries: usize,
+    /// Steps in the save journal.
+    pub journal_steps: u64,
+}
+
+impl ScriptedSim {
+    /// Error counts and journal size.
+    pub fn diagnostics(&self) -> Diagnostics {
+        let errors = self.runtime().errors();
+        Diagnostics {
+            script_errors: errors.len(),
+            last_script_error: errors.last().map(|e| format!("{}: {}", e.script, e.message)),
+            ai_errors: self.ai_errors.len(),
+            start_errors: self.start_errors.len(),
+            journal_entries: self.journal.entries.len(),
+            journal_steps: self.journal.entries.iter().map(|e| if let Entry::Steps { n, .. } = e { u64::from(*n) } else { 0 }).sum(),
+        }
+    }
+}

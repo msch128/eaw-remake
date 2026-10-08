@@ -79,6 +79,8 @@ struct PlayerBrain {
     bonuses: Vec<(String, PlanetId, f64, f64)>,
     /// Game time money was last earmarked for the budget categories.
     last_fund: Option<f64>,
+    /// Next time the AI considers a tech upgrade.
+    next_tech: f64,
 }
 
 /// Report counters.
@@ -100,6 +102,8 @@ pub struct AiStats {
     pub tick_nanos: u128,
     /// Nanoseconds spent refreshing the strategic layer.
     pub strategy_nanos: u128,
+    /// Tech upgrades the AI queued.
+    pub tech_upgrades: u32,
     /// Nanoseconds spent building perception snapshots.
     pub snapshot_nanos: u128,
     /// Unknown variables / missing equations aggregated over all evaluations.
@@ -229,6 +233,7 @@ impl AiEngine {
             goal_next: Vec::new(),
             bonuses: Vec::new(),
             last_fund: None,
+            next_tech: 0.0,
         });
         Ok(())
     }
@@ -333,6 +338,29 @@ impl AiEngine {
                 self.task_forces.set_sizing(b.player, t.contrast * (p.caution / p.aggression.max(0.1)).sqrt());
                 let believed: Vec<f64> = (0..snap.owner.len() as u32).map(|pl| self.strategy.believed_hostile_strength(&snap, b.player, pl)).collect();
                 self.task_forces.set_believed(b.player, believed);
+            }
+        }
+        // Tech upgrades. The Remake AI has no galactic tech plan we can run (its tech goal is the Empire's Death Star chain), so without this every faction stayed
+        // on tech level 1 forever. Estimate: every 4 weeks a faction with money to spare (three times the price of the planet's upgrade is not known, so: more than
+        // 20000 credits) tries the next level at its best planet, but level L only from week 10 x L on.
+        let week_seconds = if snap.weeks > 0.0 { snap.time / snap.weeks } else { 60.0 };
+        for bi in 0..self.brains.len() {
+            let (player, next) = (self.brains[bi].player, self.brains[bi].next_tech);
+            let me = player as usize;
+            if now < next || sim.is_eliminated(player) || snap.human.get(me).copied().unwrap_or(false) {
+                continue;
+            }
+            self.brains[bi].next_tech = now + 4.0 * week_seconds;
+            if snap.tech[me] >= snap.max_tech[me] || snap.weeks < 10.0 * f64::from(snap.tech[me]) || snap.credits[me] < 20_000.0 {
+                continue;
+            }
+            let mut planets = snap.owned[me].clone();
+            planets.sort_by_key(|&p| std::cmp::Reverse(snap.starbase[p as usize].0));
+            for pl in planets.into_iter().take(8) {
+                if sim.queue_tech(player, pl).is_ok() {
+                    self.stats.tech_upgrades += 1;
+                    break;
+                }
             }
         }
         for i in due {

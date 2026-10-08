@@ -56,3 +56,14 @@ the journaled methods, so a save is possible at any moment. `PlayInit::from_data
 5. Battles keep working as before (`tactical_hook`, `TacticalReady`, `ApplyTactical`); they are journaled, so a save made while a battle is pending replays correctly. For tactical resolution of AI battles
    the catalog/arenas are runtime-only (see `galaxy-script/STATUS.md`); the worker uses the statistical resolver unless a catalog is installed through `ScriptedSim::with_sim_runtime`.
 6. Do not call `Sim` mutators from the app thread; everything goes through `PlayAction`.
+
+## Soak test (example `soak` + ignored tests)
+`cargo run --release -p galaxy-play --example soak -- --campaign GC_Full_Web_Way_Imperial --human Empire --seed 2 --weeks 120 --tier brutal [--battles tactical] [--ai-tactical [--ai-tactical-max N]] [--classic] [--twice]`
+plays a scripted game headless with a simple player bot (builds, merges, attacks weak neighbours) and checks every week: credits negative/exploding, script errors (`Snapshot::diagnostics`), absurd fleet sizes,
+fleets frozen in hyperspace, stalled game time, a dead worker; every 25 weeks save size per journal step and process memory; at the end factions that never acted and (with `--twice`) determinism. Exit code 1 on findings.
+`cargo test --release -p galaxy-play --test soak -- --ignored` runs 2 x 100 weeks (determinism) and a small classic-AI campaign.
+Matrix run on 2026-10 (all clean after the fixes below): Full GC Rebel/Normal 100 weeks, Full GC Empire/Brutal 120, Mini Rebel/Normal 120, Standard Empire/Hard 120 with tactical player battles, Standard Underworld classic AI 100,
+Mini Empire/Fair 60 twice (identical final state), Full GC Rebel 110 with tactical player battles and AI battles. 150-210 ms worker time per game week (worst batch 260 ms), memory flat at 340-410 MB, journal ~7 bytes per step.
+Findings fixed: Lua VM leak (below), tech never advanced, AI task force bookkeeping leaks. Open: the AI hoards credits (Empire 2.4M at week 100 with population far below the cap),
+classic AI snowballs (879 captures in 100 weeks), `BattleResolver::Tactical` for AI battles costs ~0.7 s per battle (12 s per game week with 18 battles) so it is only for the player's battles
+(`SimConfig::tactical_resolver_max_ships`, default 16, limits it).

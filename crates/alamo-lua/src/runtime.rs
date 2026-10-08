@@ -60,7 +60,8 @@ struct ThreadSlot {
 }
 
 struct Instance {
-    lua: Lua,
+    /// `None` once the script ended: its Lua state (hundreds of KB with the API and prelude) is dropped so long games do not leak one VM per plan.
+    lua: Option<Lua>,
     threads: Vec<ThreadSlot>,
     next_service: f64,
     /// Consecutive services without any engine call.
@@ -123,7 +124,7 @@ impl ScriptRuntime {
             log: Vec::new(),
             api_hits: BTreeMap::new(),
             method_hits: HashMap::new(),
-            fast_hits: Vec::new(),
+            fast_hits: HashMap::new(),
             event_queues: HashMap::new(),
             event_params: HashMap::new(),
             activity: Rc::new(std::cell::Cell::new(0)),
@@ -271,6 +272,13 @@ impl ScriptRuntime {
     }
 
     fn sweep_finished_plans(&mut self) {
+        // Ended scripts give their Lua state back.
+        for s in &mut self.scripts {
+            if !s.alive && s.lua.is_some() {
+                s.threads.clear();
+                s.lua = None;
+            }
+        }
         for s in &mut self.scripts {
             if let Some(p) = s.plan
                 && !s.alive
@@ -427,7 +435,7 @@ impl ScriptRuntime {
             Ok(threads) => {
                 let alive = !threads.is_empty();
                 self.scripts.push(Instance {
-                    lua,
+                    lua: Some(lua),
                     threads,
                     next_service: 0.0,
                     idle: 0,
@@ -445,7 +453,7 @@ impl ScriptRuntime {
                     message: msg.clone(),
                 });
                 self.scripts.push(Instance {
-                    lua,
+                    lua: Some(lua),
                     threads: Vec::new(),
                     next_service: 0.0,
                     idle: 0,
@@ -529,6 +537,7 @@ impl ScriptRuntime {
 
     /// Advances game time by `dt` seconds: story timers, script services.
     pub fn update(&mut self, dt: f64) {
+        self.sweep_finished_plans();
         let now = {
             let mut s = self.shared.borrow_mut();
             s.time += dt;
@@ -596,7 +605,8 @@ impl ScriptRuntime {
         }
     }
     fn service_rate(&self, sid: usize) -> f64 {
-        match self.scripts[sid].lua.globals().get::<Value>("ServiceRate") {
+        let rate = self.scripts[sid].lua.as_ref().map(|l| l.globals().get::<Value>("ServiceRate"));
+        match rate.unwrap_or(Ok(Value::Nil)) {
             Ok(Value::Number(n)) if n > 0.0 => n,
             Ok(Value::Integer(n)) if n > 0 => n as f64,
             _ => 0.2,
@@ -619,7 +629,7 @@ impl ScriptRuntime {
                     self.scripts[f.script].next_service.min(self.time());
                 let name = self.shared.borrow().script_names[f.script].clone();
                 self.shared.borrow_mut().current_thread = -1;
-                let lua = &self.scripts[f.script].lua;
+                let Some(lua) = self.scripts[f.script].lua.clone() else { continue };
                 if let Ok(Value::Function(func)) = lua.globals().get::<Value>("Story_Event_Trigger")
                     && let Err(e) = func.call::<()>(f.event.as_str())
                 {

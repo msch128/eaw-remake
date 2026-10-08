@@ -100,7 +100,7 @@ impl PlayInit {
             difficulty: if config.classic_ai { None } else { config.difficulty },
             ..Default::default()
         };
-        let script = ScriptSetup { fs, data, campaign: campaign.name.clone(), config: script_config, load: None, load_path: None };
+        let script = ScriptSetup { fs, data, campaign: campaign.name.clone(), config: script_config, load: None, load_path: None, tactical: None };
         Ok(Self { sim, catalog, config, script: Some(script) })
     }
 
@@ -113,7 +113,7 @@ impl PlayInit {
         config.sim = file.header.sim_config.clone();
         let sim = Sim::new(&data, &campaign, config.sim_config()).map_err(|e| e.to_string())?;
         let catalog = PlayCatalog::from_data(sim.world(), &data);
-        let script = ScriptSetup { fs, data, campaign: campaign.name.clone(), config: file.header.config.clone(), load: Some(file), load_path: Some(path) };
+        let script = ScriptSetup { fs, data, campaign: campaign.name.clone(), config: file.header.config.clone(), load: Some(file), load_path: Some(path), tactical: None };
         Ok(Self { sim, catalog, config, script: Some(script) })
     }
 

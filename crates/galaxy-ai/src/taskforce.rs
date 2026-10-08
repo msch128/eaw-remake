@@ -313,6 +313,7 @@ impl TaskForces {
             self.release(*id);
         }
         self.forces.retain(|_, t| t.plan != plan);
+        self.plan_category.remove(&plan);
         self.jobs.retain(|j| !ids.contains(&job_tf(j)));
     }
 
@@ -719,6 +720,7 @@ impl TaskForces {
     pub fn tick(&mut self, sim: &mut dyn AiSim, snap: &Snapshot, rng: &mut u64) {
         let now = sim.time();
         self.clock = now;
+        self.reserved.retain(|_, (_, until)| *until > now);
         let jobs = std::mem::take(&mut self.jobs);
         let mut keep = Vec::new();
         for job in jobs {

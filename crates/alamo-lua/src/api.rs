@@ -88,7 +88,7 @@ pub struct Shared {
     /// Arguments of the event GetEvent returned last, per script instance.
     pub event_params: HashMap<usize, Vec<crate::host::HostValue>>,
     /// Per-function counters (see `fast_counter`); one entry per bound function and script instance.
-    pub fast_hits: Vec<(String, Rc<std::cell::Cell<usize>>)>,
+    pub fast_hits: HashMap<String, Rc<std::cell::Cell<usize>>>,
     /// Methods already reported as unimplemented.
     pub method_logged: HashSet<String>,
     /// Cache for `Type` numeric lookups by (type id, kind).
@@ -207,11 +207,8 @@ pub(crate) fn hit(sh: &Sh, name: &str) {
 /// A call counter owned by one bound function; merged into [`Shared::api_hits`] when read. Avoids a map
 /// lookup per call for the hot engine functions.
 fn fast_counter(sh: &Sh, name: &str) -> Rc<std::cell::Cell<usize>> {
-    let c = Rc::new(std::cell::Cell::new(0));
-    sh.borrow_mut()
-        .fast_hits
-        .push((name.to_string(), c.clone()));
-    c
+    // One counter per name, shared by every script instance (a counter per instance leaked memory in long games).
+    sh.borrow_mut().fast_hits.entry(name.to_string()).or_insert_with(|| Rc::new(std::cell::Cell::new(0))).clone()
 }
 
 /// Reports an unimplemented method (first use is logged; later calls only count).
