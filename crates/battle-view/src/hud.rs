@@ -25,7 +25,7 @@ const HINT_EVERY: f32 = 75.0;
 /// upgradeable station, the Emperor or a Broadside Cruiser and are skipped).
 const HINTS: [u32; 9] = [1, 2, 3, 4, 5, 8, 10, 11, 6];
 
-/// Marks everything this module spawns.
+/// Marks the root nodes this module spawns (children go with them).
 #[derive(Component)]
 pub struct TacticalHud;
 
@@ -141,7 +141,6 @@ pub fn spawn_hud(
     target(&mut bubble);
     let bubble = bubble.id();
     commands.spawn((
-        TacticalHud,
         AdvisorText,
         Text::new(""),
         font(&ui, 11.0),
@@ -171,9 +170,8 @@ pub fn spawn_hud(
     ));
     target(&mut boxed);
     let boxed = boxed.id();
-    commands.spawn((TacticalHud, Text::new(header), font(&ui, 13.0), TextColor(Color::srgb(0.84, 0.9, 0.98)), ChildOf(boxed)));
+    commands.spawn((Text::new(header), font(&ui, 13.0), TextColor(Color::srgb(0.84, 0.9, 0.98)), ChildOf(boxed)));
     commands.spawn((
-        TacticalHud,
         Text::new(format!("1. {body}")),
         font(&ui, 10.5),
         TextColor(Color::srgb(0.9, 0.93, 0.97)),
@@ -280,7 +278,6 @@ pub(crate) fn heroes(
             let icon = unit_icon(&game, name).and_then(|n| textures.get(&mut images, &n)).map(|t| t.handle);
             let portrait = commands
                 .spawn((
-                    TacticalHud,
                     HeroPortrait(*id),
                     Name::new(format!("hero {name}")),
                     Button,

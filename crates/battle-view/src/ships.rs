@@ -214,11 +214,22 @@ pub fn update_ships(
     let mut present: HashSet<u32> = HashSet::with_capacity(cur.ships.len());
     flash_spots.clear();
     rendered.0.clear();
+    // Debug aid (`SP_DEBUG_KILL_HP=<battle time>`): from then on, the first capital ship of side 0 shows five destroyed hardpoints.
+    let debug_kill = std::env::var("SP_DEBUG_KILL_HP").ok().and_then(|v| v.parse::<f32>().ok()).filter(|t| cur.time >= *t);
+    let debug_target = debug_kill.and_then(|_| cur.ships.iter().find(|s| s.side == 0 && !s.hps.is_empty() && catalog.ship(s.def).radius > 300.0).map(|s| s.id));
+    let mut debug_copy: ShipSnap;
     for s in &cur.ships {
         let def = catalog.ship(s.def);
         if def.is_squadron {
             continue;
         }
+        let s = if Some(s.id) == debug_target {
+            debug_copy = s.clone();
+            debug_copy.hps.iter_mut().take(5).for_each(|h| h.alive = false);
+            &debug_copy
+        } else {
+            s
+        };
         let vis = visuals.ship(s.def);
         let Some(model) = vis.model.clone() else {
             continue;
