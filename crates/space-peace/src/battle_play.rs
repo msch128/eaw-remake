@@ -62,8 +62,9 @@ impl Plugin for BattlePlayPlugin {
             .init_resource::<BattleShot>()
             .add_systems(
                 OnEnter(AppScreen::SpaceBattle),
-                (suspend_galaxy_look, begin_session).chain().run_if(resource_exists::<PendingTactical>),
+                (suspend_galaxy_look, spawn_loading_art).chain().run_if(resource_exists::<PendingTactical>),
             )
+            .add_systems(Update, start_after_loading_art.run_if(in_state(AppScreen::SpaceBattle).and_then(resource_exists::<PendingTactical>)).before(finish_battle_view))
             .add_systems(OnExit(AppScreen::SpaceBattle), end_session)
             .add_systems(
                 Update,
@@ -110,6 +111,56 @@ fn suspend_galaxy_look(
         TextColor(Color::srgba(0.75, 0.85, 1.0, 0.6)),
         Node { position_type: PositionType::Absolute, top: Val::Px(6.0), left: Val::Px(8.0), ..default() },
     ));
+}
+
+/// Root of the battle loading screen and the frames it has been shown.
+#[derive(Component)]
+struct BattleLoadingArt(u32);
+
+/// Shows a faction loading screen (the session is built a few frames later, because that stalls for a moment).
+fn spawn_loading_art(mut commands: Commands, game: Res<Game>, mut images: ResMut<Assets<Image>>, pending: Res<PendingTactical>, player: Res<PlayerFaction>, campaign: Res<crate::flow::CurrentCampaign>) {
+    // The player's faction, or the defender's when watching.
+    let _ = (&pending, &player);
+    let art = game.0.as_ref().and_then(|g| crate::loading::load_art(&g.fs, campaign.faction.as_deref(), &mut images));
+    let mut e = commands.spawn((
+        BattleLoadingArt(0),
+        Node { position_type: PositionType::Absolute, width: Val::Percent(100.0), height: Val::Percent(100.0), justify_content: JustifyContent::Center, align_items: AlignItems::FlexEnd, padding: UiRect::bottom(Val::Px(70.0)), ..default() },
+        BackgroundColor(Color::BLACK),
+        GlobalZIndex(50),
+    ));
+    e.with_children(|root| {
+        if let Some(h) = art {
+            root.spawn((Node { position_type: PositionType::Absolute, width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() }, ImageNode::new(h).with_mode(NodeImageMode::Stretch)));
+        }
+        root.spawn((
+            Text::new("Preparing the battle..."),
+            TextFont { font: FontSource::Family("Bahnschrift".into()), font_size: FontSize::Px(26.0), ..default() },
+            TextColor(Color::srgb(0.9, 0.95, 1.0)),
+            TextShadow { offset: Vec2::splat(1.5), color: Color::srgba(0.0, 0.0, 0.0, 0.9) },
+        ));
+    });
+}
+
+/// Builds the session after the loading screen had a few frames on screen, and removes the screen once the battle shows.
+fn start_after_loading_art(world: &mut World) {
+    let mut q = world.query::<(Entity, &mut BattleLoadingArt)>();
+    let Some((e, art)) = q.iter_mut(world).next().map(|(e, a)| (e, a.0)) else { return };
+    let started = world.contains_resource::<BattleSession>() || world.contains_resource::<battle_view::BattleRuntime>();
+    if !started {
+        if let Some(mut a) = world.get_mut::<BattleLoadingArt>(e) {
+            a.0 += 1;
+        }
+        if art == 3 {
+            begin_session(world);
+        }
+    } else if world.contains_resource::<battle_view::BattleRuntime>() {
+        if let Some(mut a) = world.get_mut::<BattleLoadingArt>(e) {
+            a.0 += 1;
+        }
+        if art > 20 {
+            world.entity_mut(e).despawn();
+        }
+    }
 }
 
 /// Builds the battle from the prepared request.
@@ -267,6 +318,7 @@ fn end_session(
     mut suns: Query<&mut DirectionalLight, (With<SunLight>, Without<BattleEntity>)>,
     mut hud: Query<&mut Visibility, (Or<(With<HudEntity>, With<Skybox>)>, Without<SunLight>)>,
     hints: Query<Entity, With<BattleHint>>,
+    loading_art: Query<Entity, With<BattleLoadingArt>>,
     settings: Option<ResMut<EawUiSettings>>,
     mut hold: ResMut<ScriptHold>,
     mut shot: ResMut<BattleShot>,
@@ -274,6 +326,9 @@ fn end_session(
     commands.remove_resource::<BattleSession>();
     commands.remove_resource::<PendingTactical>();
     for e in &hints {
+        commands.entity(e).despawn();
+    }
+    for e in &loading_art {
         commands.entity(e).despawn();
     }
     if let Some(a) = saved.ambient.take() {

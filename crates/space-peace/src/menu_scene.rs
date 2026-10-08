@@ -133,3 +133,4 @@ fn remove_scene(
     }
     commands.remove_resource::<MenuSceneInfo>();
 }
+
