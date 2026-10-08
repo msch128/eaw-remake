@@ -1057,29 +1057,74 @@ mod tests {
 
 /// Debug aid (`SP_ASSET_LOG=1`): logs asset counts every 10 s to spot leaks.
 pub fn log_asset_counts(
-    time: Res<Time>,
+    frames: Res<bevy::diagnostic::FrameCount>,
     images: Res<Assets<Image>>,
     meshes: Res<Assets<Mesh>>,
     std_mats: Res<Assets<StandardMaterial>>,
     part_mats: Res<Assets<ParticleMaterial>>,
     buffers: Res<Assets<ShaderBuffer>>,
-    mut next: Local<f32>,
+    atlases: Res<bevy::text::FontAtlasSet>,
 ) {
-    if time.elapsed_secs() < *next {
+    if frames.0 % 300 != 0 {
         return;
     }
-    *next = time.elapsed_secs() + 10.0;
     let img_bytes: usize = images.iter().map(|(_, i)| i.data.as_ref().map_or(0, |d| d.len())).sum();
+    let mut hist: std::collections::BTreeMap<(u32, u32, u32), usize> = Default::default();
+    for (_, i) in images.iter().filter(|(_, i)| i.data.is_some()) {
+        *hist.entry((i.texture_descriptor.size.width, i.texture_descriptor.size.height, i.texture_descriptor.mip_level_count)).or_default() += 1;
+    }
+    let mut top: Vec<_> = hist.into_iter().collect();
+    top.sort_by_key(|(_, n)| std::cmp::Reverse(*n));
+    let atlas_count: usize = atlases.values().map(|v| v.len()).sum();
+    let mut by_size: Vec<(String, usize)> = atlases.iter().map(|(k, v)| (format!("{}/{}/{}/{:x}", k.id, k.index, f32::from_bits(k.font_size_bits), k.variations_hash), v.len())).collect();
+    by_size.sort_by(|a, b| a.0.cmp(&b.0));
+    info!("assetlog font atlases: keys={} atlases={} top(size,count)={:?}", atlases.len(), atlas_count, &by_size[..by_size.len().min(60)]);
+    let (rss, peak) = process_memory_mb();
+    info!("assetlog rss={rss} MB (peak {peak} MB)");
+    info!("assetlog top cpu-image sizes (w,h,mips)=count: {:?}", &top[..top.len().min(4)]);
+    let img_none = images.iter().filter(|(_, i)| i.data.is_none()).count();
+    let img_gpu: usize = images
+        .iter()
+        .filter(|(_, i)| i.data.is_none())
+        .map(|(_, i)| i.texture_descriptor.size.width as usize * i.texture_descriptor.size.height as usize * 4)
+        .sum();
     let buf_bytes: usize = buffers.iter().map(|(_, b)| b.data.as_ref().map_or(0, |d| d.len())).sum();
     info!(
-        "assetlog t={:.0}s images={} ({} MB) meshes={} std_mats={} particle_mats={} shader_buffers={} ({} MB)",
-        time.elapsed_secs(),
+        "assetlog frame={} images={} (cpu {} MB, uploaded {} = ~{} MB) meshes={} std_mats={} particle_mats={} shader_buffers={} ({} MB)",
+        frames.0,
         images.len(),
         img_bytes >> 20,
+        img_none,
+        img_gpu >> 20,
         meshes.len(),
         std_mats.len(),
         part_mats.len(),
         buffers.len(),
         buf_bytes >> 20
     );
+}
+
+/// Working set and peak working set of this process in MB (Windows only, 0 elsewhere).
+fn process_memory_mb() -> (usize, usize) {
+    #[cfg(windows)]
+    {
+        #[repr(C)]
+        struct Counters {
+            cb: u32,
+            page_faults: u32,
+            peak_working_set: usize,
+            working_set: usize,
+            rest: [usize; 6],
+        }
+        unsafe extern "system" {
+            fn GetCurrentProcess() -> isize;
+            fn K32GetProcessMemoryInfo(process: isize, counters: *mut Counters, cb: u32) -> i32;
+        }
+        let mut c = Counters { cb: std::mem::size_of::<Counters>() as u32, page_faults: 0, peak_working_set: 0, working_set: 0, rest: [0; 6] };
+        // SAFETY: plain Win32 call filling a correctly sized, repr(C) struct we own.
+        if unsafe { K32GetProcessMemoryInfo(GetCurrentProcess(), &mut c, c.cb) } != 0 {
+            return (c.working_set >> 20, c.peak_working_set >> 20);
+        }
+    }
+    (0, 0)
 }

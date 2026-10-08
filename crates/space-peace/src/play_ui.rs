@@ -78,7 +78,7 @@ impl Plugin for PlayUiPlugin {
             .init_resource::<SuperweaponAsk>()
             .init_resource::<Toast>()
             .init_resource::<EndState>()
-            .add_systems(PreUpdate, drive_ui_scale.run_if(resource_exists::<EawUiSettings>))
+            .add_systems(PreUpdate, drive_ui_scale.run_if(resource_exists::<EawUiSettings>).run_if(not(in_state(AppScreen::CampaignSelect))))
             .add_systems(
                 Update,
                 (
@@ -105,6 +105,7 @@ impl Plugin for PlayUiPlugin {
                     .chain()
                     .run_if(resource_exists::<PlayBridge>.and_then(resource_exists::<SimState>)),
             )
+            .add_systems(Update, (declutter_top, hero_bar).chain().run_if(resource_exists::<PlayBridge>.and_then(resource_exists::<SimState>)))
             .add_systems(Update, show_battle_summary.run_if(in_state(AppScreen::Galaxy)).run_if(resource_exists::<crate::battle_play::BattleSummary>))
             .add_systems(
                 Update,
@@ -230,6 +231,8 @@ fn feed_bar(
     assets: Option<Res<EawUiAssets>>,
     mut bar: ResMut<BarState>,
     mut data: ResMut<CommandBarData>,
+    mut panel: ResMut<eaw_ui::PanelData>,
+    player: Res<PlayerFaction>,
 ) {
     if !model.is_changed() && !bar.is_changed() {
         return;
@@ -238,7 +241,9 @@ fn feed_bar(
     let game = game.as_deref();
     let mut next = CommandBarData {
         credits: model.top.credits as i64,
-        day: (state.current.time / f64::from(state.world.config.week_seconds) * 7.0) as u32 + 1,
+        day: (state.current.time / f64::from(state.world.config.week_seconds) / 4.0) as u32 + 1,
+        month_income: (model.top.income_per_week * 4.0) as i64,
+        month_progress: ((state.current.time / f64::from(state.world.config.week_seconds) / 4.0).fract()) as f32,
         tech_level: state.galaxy().factions.get(state.world.victory.active_player.unwrap_or(0) as usize).map_or(0, |f| f.tech.max(0) as u32),
         pop_current: model.top.population_used.max(0) as u32,
         pop_cap: model.top.population_cap.max(0) as u32,
@@ -248,6 +253,12 @@ fn feed_bar(
     if let Some(p) = selection.planet {
         next.planet_name = state.world.planets[p as usize].display_name.clone();
         next.planet_owner = state.galaxy().planets[p as usize].owner.map(|o| UiFaction::from_name(&state.world.factions[o as usize].name));
+        let owner = state.galaxy().planets[p as usize].owner;
+        next.planet_color = Some(match (owner, player.0) {
+            (Some(o), Some(me)) if o == me => Color::srgb(0.3, 1.0, 0.4),
+            (Some(_), _) => Color::srgb(1.0, 0.3, 0.3),
+            _ => Color::WHITE,
+        });
         next.planet_income = match &model.planet {
             Some(m) => m.income as i64,
             None => bridge.sim_to_planet[p as usize].and_then(|i| view.planets.get(i)).map_or(0, |pv| i64::from(pv.income)),
@@ -282,6 +293,10 @@ fn feed_bar(
             });
             bar.pads.push(o.target);
         }
+    }
+    let level = (next.month_progress * 10.0).round() / 10.0;
+    if panel.bars.get("fight_bar_g") != Some(&level) {
+        panel.bars.insert("fight_bar_g".into(), level);
     }
     if *data != next {
         *data = next;
@@ -535,6 +550,7 @@ fn battle_dialog(world: &mut World, mut gone_frames: Local<u32>) {
         left: side(mine),
         right: side(other),
     };
+    info!("play: battle banner flagships {:?} / {:?}, icons {:?} / {:?}", mine.flagship, other.flagship, spec.left.icon, spec.right.icon);
     if let Some(e) = eaw_ui::spawn_battle_banner(world, &spec) {
         info!("play: battle dialog shown for battle {} at {}", b.id, b.planet_name);
         world.resource_mut::<BattleDialogState>().open = Some((b.id, e));
@@ -615,21 +631,21 @@ fn move_info_panel(mut panel: Single<&mut Node, With<InfoPanel>>, mut hint: Quer
     panel.left = Val::Auto;
     panel.bottom = Val::Auto;
     panel.right = Val::Px(16.0);
-    panel.top = Val::Px(52.0);
+    panel.top = Val::Px(72.0);
     for mut h in &mut hint {
         h.bottom = Val::Px(130.0);
     }
 }
 
 #[allow(clippy::type_complexity)]
-fn hide_play_ui(mut bar: Query<&mut Visibility, Or<(With<EawCommandBar>, With<BarBacking>)>>) {
+fn hide_play_ui(mut bar: Query<&mut Visibility, Or<(With<EawCommandBar>, With<BarBacking>, With<HeroBar>)>>) {
     for mut v in &mut bar {
         *v = Visibility::Hidden;
     }
 }
 
 #[allow(clippy::type_complexity)]
-fn show_play_ui(mut bar: Query<&mut Visibility, Or<(With<EawCommandBar>, With<BarBacking>)>>) {
+fn show_play_ui(mut bar: Query<&mut Visibility, Or<(With<EawCommandBar>, With<BarBacking>, With<HeroBar>)>>) {
     for mut v in &mut bar {
         *v = Visibility::Inherited;
     }
@@ -1386,5 +1402,78 @@ fn expire_explosions(mut commands: Commands, time: Res<Time>, mut q: Query<(Enti
         if life.0 <= 0.0 {
             commands.entity(e).despawn();
         }
+    }
+}
+
+/// The EaW command bar carries credits and planet counts; the generic top bar goes away, and the
+/// speed read-out makes room for the battle banner.
+fn declutter_top(
+    bar: Query<(), With<EawCommandBar>>,
+    dialog: Res<BattleDialogState>,
+    mut top: Query<&mut Visibility, (With<crate::ui::TopBar>, Without<SpeedText>)>,
+    mut speed: Query<&mut Visibility, (With<SpeedText>, Without<crate::ui::TopBar>)>,
+) {
+    if !bar.is_empty() {
+        for mut v in &mut top {
+            v.set_if_neq(Visibility::Hidden);
+        }
+    }
+    let want = if dialog.open.is_some() { Visibility::Hidden } else { Visibility::Inherited };
+    for mut v in &mut speed {
+        v.set_if_neq(want);
+    }
+}
+
+/// The player's heroes, top right (the original's hero frame with one ring per living hero).
+#[derive(Component)]
+struct HeroBar;
+
+fn hero_bar(world: &mut World, mut shown: Local<Option<Vec<String>>>) {
+    let screen = world.resource::<State<AppScreen>>().get().to_owned();
+    let heroes = world.resource::<PlayUiModel>().heroes.clone();
+    let faction = {
+        let state = world.resource::<SimState>();
+        ui_faction(state, world.resource::<PlayerFaction>())
+    };
+    let existing: Vec<Entity> = world.query_filtered::<Entity, With<HeroBar>>().iter(world).collect();
+    if screen != AppScreen::Galaxy || world.get_resource::<EawUiAssets>().is_none() {
+        return;
+    }
+    if shown.as_ref() == Some(&heroes) && !existing.is_empty() {
+        return;
+    }
+    if shown.as_ref() == Some(&heroes) && heroes.is_empty() {
+        return;
+    }
+    for e in existing {
+        world.entity_mut(e).despawn();
+    }
+    let slots = heroes.len().min(11);
+    debug!("play: hero bar {heroes:?}");
+    let side = if faction == UiFaction::Rebel { "good" } else { "evil" };
+    let game = world.get_resource::<EawUiAssets>().and_then(|a| a.game.clone());
+    {
+        let mut data = world.resource_mut::<eaw_ui::PanelData>();
+        for k in 0..11 {
+            data.slots.remove(&format!("hero_slot_{side}{k:02}"));
+        }
+        for (k, name) in heroes.iter().take(slots).enumerate() {
+            let icon = game.as_ref().and_then(|g| eaw_ui::unit_icon(g, name)).unwrap_or_default();
+            data.set_slot(&format!("hero_slot_{side}{k:02}"), eaw_ui::PanelSlot { icon, ..default() });
+            data.bars.insert(format!("hero_hb_{side}{k:02}"), 1.0);
+        }
+    }
+    if slots == 0 {
+        *shown = Some(heroes);
+        return;
+    }
+    let model = if faction == UiFaction::Rebel { "I_Main_Hero_Frame_Rebel.ALO" } else { "I_Main_Hero_Frame_Empire.ALO" };
+    let mut spec = eaw_ui::ShellSpec::new(model, faction);
+    spec.art_alt = Some(slots - 1);
+    spec.anchor = eaw_ui::ShellAnchor::TopRight;
+    spec.offset = Vec2::new(0.0, -2.0);
+    if let Some(root) = eaw_ui::spawn_shell(world, &spec) {
+        world.entity_mut(root).insert(HeroBar);
+        *shown = Some(heroes);
     }
 }

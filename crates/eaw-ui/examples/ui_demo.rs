@@ -170,7 +170,10 @@ fn sample_data(game: &alamo_data::GameData, faction: UiFaction) -> CommandBarDat
         planet_income: 350,
         planet_name: "Coruscant".into(),
         planet_owner: Some(faction),
-        day: 37,
+        day: 2,
+        month_income: 4_634,
+        month_progress: 0.4,
+        planet_color: Some(Color::srgb(0.3, 1.0, 0.4)),
         tech_level: 3,
         pop_current: 42,
         pop_cap: 100,
@@ -510,6 +513,7 @@ fn spawn_panel(world: &mut World, name: &str, faction: UiFaction, game: &alamo_d
                 selected: sel,
                 hovered: false,
                 enemy,
+                always: false,
             };
             world.insert_resource(TacticalData {
                 active: true,
@@ -518,7 +522,9 @@ fn spawn_panel(world: &mut World, name: &str, faction: UiFaction, game: &alamo_d
                 reinforcement_points: Some(3),
                 pop: Some((42, 100)),
                 retreat: RetreatState::Countdown(45.0),
-                overlays: vec![
+            });
+            world.insert_resource(TacticalOverlays {
+                ships: vec![
                     ship(1, 520.0, 400.0, 46.0, 0.9, true, false),
                     ship(2, 700.0, 250.0, 30.0, 0.5, true, false),
                     ship(3, 300.0, 300.0, 22.0, 0.25, true, false),

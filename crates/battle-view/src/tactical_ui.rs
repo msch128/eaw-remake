@@ -9,18 +9,19 @@
 
 use std::collections::BTreeMap;
 
-use battle_sim::Command;
+use battle_sim::{Command, HpKind};
 use bevy::prelude::*;
 use eaw_ui::textures::UiTextures;
 use eaw_ui::{
-    AbilityState, CommandBarMode, CommandBarSpec, EawAbilityClicked, EawButtonClicked, EawCommandBar, EawMinimapClicked, EawSelectionClicked,
-    EawUiAssets, EawUiCommandsExt, MinimapData, MinimapDot, PanelData, PanelSlot, RetreatState, ShellAnchor, ShellSpec, TacticalData,
-    TacticalUnit, UiFaction, spawn_shell,
+    AbilityState, CommandBarMode, CommandBarSpec, EawAbilityClicked, EawButtonClicked, EawCommandBar, EawHardpointClicked, EawMinimapClicked,
+    EawSelectionClicked, EawUiAssets, EawUiCommandsExt, HardpointMarker, MinimapData, MinimapDot, PanelData, PanelSlot, RetreatState,
+    ShellAnchor, ShellSpec, ShipOverlay, TacticalData, TacticalOverlays, TacticalUnit, UiFaction, spawn_shell,
 };
 
 use crate::camera::BattleCamera;
 
-use crate::control::Selection;
+use crate::control::{self, Hover, OverlaysActive, Selection};
+use crate::visuals::is_markable;
 use crate::ships::RenderedShips;
 use crate::{BattleRuntime, BattleStatus, BattleViewSettings};
 
@@ -29,14 +30,19 @@ pub struct TacticalUiPlugin;
 
 impl Plugin for TacticalUiPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<TacticalUiState>().init_resource::<ReinforceUi>().add_systems(
+        app.init_resource::<TacticalUiState>().init_resource::<ReinforceUi>().init_resource::<crate::hud::HudState>().insert_resource(OverlaysActive);
+        crate::input_test::build(app);
+        app.add_systems(
             Update,
             (
+                control::ui_block.after(control::read_pointer).before(control::selection).run_if(resource_exists::<BattleRuntime>),
+                (crate::hud::spawn_hud, crate::hud::advisor, crate::hud::heroes).chain().run_if(resource_exists::<BattleRuntime>),
+                crate::hud::remove_hud.run_if(resource_removed::<BattleRuntime>.or_eager(resource_removed::<crate::BattleSession>)),
                 init_reinforce.run_if(resource_added::<BattleRuntime>),
                 spawn_bar.run_if(resource_exists::<crate::BattleSession>.and_then(not(resource_exists::<TacticalBarSpawned>))),
                 remove_reinforce.run_if(resource_removed::<BattleRuntime>),
                 remove_bar.run_if(resource_removed::<BattleRuntime>.or_eager(resource_removed::<crate::BattleSession>)),
-                (sync_data, handle_clicks, reinforce_clicks, reinforce_events, reinforce_panel, sync_minimap, minimap_pan).chain().run_if(resource_exists::<BattleRuntime>),
+                (sync_data, sync_overlays, handle_clicks, hardpoint_clicks, reinforce_clicks, reinforce_events, reinforce_panel, sync_minimap, minimap_pan).chain().run_if(resource_exists::<BattleRuntime>),
             )
                 .chain(),
         );
@@ -142,8 +148,6 @@ fn sync_data(
         reinforcement_points: (!reinforce.rows.is_empty()).then(|| reinforce.rows.iter().map(|r| r.2).sum()),
         pop: Some((status.alive.get(player as usize).copied().unwrap_or(0), rt.unit_cap.max(0) as u32)),
         retreat,
-        overlays: Vec::new(),
-        hardpoints: Vec::new(),
     };
     if *tac != new {
         *tac = new;
@@ -413,6 +417,136 @@ fn reinforce_events(
             ui.notice = None;
         } else {
             ui.notice = Some((e, left));
+        }
+    }
+}
+
+/// Reticle kind of a hardpoint (`I_HARD_POINT_RETICLE_<KIND>`).
+fn reticle_kind(kind: HpKind) -> &'static str {
+    match kind {
+        HpKind::Weapon => "WEAPONS",
+        HpKind::ShieldGenerator => "SHIELD_GEN",
+        HpKind::Engine => "ENGINES",
+        HpKind::FighterBay => "DOCKING_BAY",
+        HpKind::TractorBeam => "GRAV_WELL",
+        _ => "GENERIC",
+    }
+}
+
+/// Marker id of a hardpoint: `<ship>:<hardpoint index>`.
+fn hardpoint_id(ship: u32, hp: usize) -> String {
+    format!("{ship}:{hp}")
+}
+
+/// Most own ships that get an always-on health line (the rest only when selected or hovered).
+const MAX_BAR_ONLY: usize = 200;
+
+/// Feeds eaw-ui's world-space overlays: selection brackets, health/shield lines under own ships (always), the
+/// hovered or selected enemy and the hardpoint reticles of the targeted enemy.
+#[allow(clippy::too_many_arguments)]
+fn sync_overlays(
+    rt: Res<BattleRuntime>,
+    sel: Res<Selection>,
+    hover: Res<Hover>,
+    ships: Res<RenderedShips>,
+    settings: Res<BattleViewSettings>,
+    assets: Option<Res<EawUiAssets>>,
+    camera: Single<(&Camera, &GlobalTransform), With<BattleCamera>>,
+    mut out: ResMut<TacticalOverlays>,
+) {
+    let (cam, gt) = *camera;
+    let Some(vp) = cam.logical_viewport_size() else { return };
+    let player = settings.player_side;
+    let right = gt.right();
+    let margin = 120.0;
+    let mut next = TacticalOverlays::default();
+    let mut bar_only = 0;
+    let mut ids: Vec<u32> = ships.0.keys().copied().collect();
+    ids.sort_unstable();
+    for id in ids {
+        let s = &ships.0[&id];
+        let enemy = s.side != player;
+        let selected = sel.ships.contains(&id) || sel.enemy == Some(id);
+        let hovered = hover.ship == Some(id);
+        if enemy && !selected && !hovered {
+            continue;
+        }
+        let always = !enemy && !selected && !hovered;
+        if always {
+            if bar_only >= MAX_BAR_ONLY {
+                continue;
+            }
+            bar_only += 1;
+        }
+        let Ok(c) = cam.world_to_viewport(gt, s.pos) else { continue };
+        if c.x < -margin || c.y < -margin || c.x > vp.x + margin || c.y > vp.y + margin {
+            continue;
+        }
+        let edge = cam.world_to_viewport(gt, s.pos + right * s.radius).map_or(8.0, |e| (e - c).length());
+        let def = rt.catalog.ship(s.def);
+        let name = (selected || hovered).then(|| {
+            def.text_id
+                .as_deref()
+                .and_then(|k| assets.as_ref().and_then(|a| a.text.get(k)))
+                .filter(|t| !t.is_empty())
+                .map_or_else(|| def.name.clone(), str::to_string)
+        });
+        next.ships.push(ShipOverlay {
+            id: u64::from(id),
+            screen_pos: c,
+            half_size: edge.clamp(8.0, 220.0),
+            health: s.hull,
+            shield: (def.shield > 0.0 && !always).then_some(s.shield),
+            selected,
+            hovered,
+            enemy,
+            name,
+            always,
+        });
+    }
+    // Hardpoint reticles on the enemy under the cursor (or the selected one) while own ships are selected.
+    let target = hover.ship.filter(|id| ships.0.get(id).is_some_and(|s| s.side != player)).or(sel.enemy);
+    if let Some(s) = target.and_then(|id| ships.0.get(&id)).filter(|_| !sel.ships.is_empty()) {
+        let def = rt.catalog.ship(s.def);
+        for (i, h) in def.hardpoints.iter().enumerate() {
+            if !h.targetable || !h.destroyable || !is_markable(h.kind) || !s.hp_alive.get(i).copied().unwrap_or(false) {
+                continue;
+            }
+            let Ok(p) = cam.world_to_viewport(gt, control::hardpoint_world(&rt, s, i)) else { continue };
+            next.hardpoints.push(HardpointMarker {
+                id: hardpoint_id(s.id, i),
+                kind: reticle_kind(h.kind).to_string(),
+                tracked: hover.hardpoint == Some((s.id, i as u16)),
+                screen_pos: p,
+                health: 1.0,
+                targetable: true,
+                destroyed: false,
+            });
+        }
+    }
+    if *out != next {
+        *out = next;
+    }
+}
+
+/// A click on a hardpoint reticle sends the selected ships to attack that hardpoint.
+fn hardpoint_clicks(
+    mut clicks: MessageReader<EawHardpointClicked>,
+    rt: Res<BattleRuntime>,
+    settings: Res<BattleViewSettings>,
+    sel: Res<Selection>,
+    ships: Res<RenderedShips>,
+) {
+    for c in clicks.read() {
+        let Some((target, hp)) = c.id.split_once(':').and_then(|(a, b)| Some((a.parse::<u32>().ok()?, b.parse::<u16>().ok()?))) else { continue };
+        let mine: Vec<u32> = sel
+            .ships
+            .iter()
+            .copied()
+            .filter(|id| ships.0.get(id).is_some_and(|s| s.side == settings.player_side && !rt.catalog.ship(s.def).is_static))
+            .collect();
+        if !mine.is_empty() {
+            rt.command(settings.player_side, Command::AttackHardpoint { ships: mine, target, hardpoint: hp });
         }
     }
 }

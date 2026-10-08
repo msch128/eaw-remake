@@ -21,6 +21,20 @@ pub struct Selection {
     pub enemy: Option<u32>,
 }
 
+/// True while the cursor is over an opaque part of the interface (command bar, panels, portraits): world clicks,
+/// hover and orders are ignored then. Written by [`ui_block`].
+#[derive(Resource, Default, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UiBlock(pub bool, pub Option<Entity>);
+
+/// Present while the EaW overlays of `eaw-ui` draw brackets, bars and hardpoint reticles; the gizmo versions
+/// of [`overlays`] are then switched off.
+#[derive(Resource, Default, Debug, Clone, Copy)]
+pub struct OverlaysActive;
+
+/// Ask the camera to centre on the selection (double click on a selected ship, space bar, hero portrait).
+#[derive(Message, Debug, Clone, Copy)]
+pub struct FocusCamera;
+
 /// Kind of order the player gave (for unit responses).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OrderKind {
@@ -80,6 +94,9 @@ pub struct Drag {
     start: Option<Vec2>,
 }
 
+/// Two clicks on the same ship within this time count as a double click. Estimate (the engine value is not in the data).
+const DOUBLE_CLICK_SECONDS: f32 = 0.4;
+
 /// Marker flashes where orders were given.
 #[derive(Resource, Default)]
 pub struct OrderMarkers(Vec<(Vec3, f32, Color)>);
@@ -101,6 +118,61 @@ pub fn read_pointer(
     pointer.left_released = buttons.just_released(MouseButton::Left);
     pointer.right_pressed = buttons.just_pressed(MouseButton::Right);
     pointer.shift = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
+}
+
+/// Sets [`UiBlock`]: the cursor is inside a visible interface node that has a picture or a background. The
+/// transparent full-screen layers of the world-space overlays (ship bars, hardpoint reticles) do not count, so
+/// reticles stay clickable and right-click orders on them reach the world.
+#[allow(clippy::type_complexity)]
+pub fn ui_block(
+    pointer: Res<Pointer>,
+    mut block: ResMut<UiBlock>,
+    nodes: Query<(Entity, &ComputedNode, &UiGlobalTransform, &InheritedVisibility, Has<ImageNode>, Option<&BackgroundColor>, Option<&Interaction>)>,
+    parents: Query<&ChildOf>,
+    overlay_roots: Query<(), With<eaw_ui::TacticalOverlayRoot>>,
+    panels: Query<(Entity, &ComputedNode, &UiGlobalTransform, &InheritedVisibility), Or<(With<eaw_ui::EawPanel>, With<eaw_ui::EawCommandBar>)>>,
+) {
+    let mut hit = false;
+    let mut by = None;
+    if let Some(cursor) = pointer.cursor {
+        // Whole command bar and shell panels (their empty areas count, like in the game).
+        for (e, node, gt, vis) in &panels {
+            if vis.get() && node.size().x > 0.0 && node.contains_point(*gt, cursor / node.inverse_scale_factor().max(1e-4)) {
+                hit = true;
+                by = Some(e);
+                break;
+            }
+        }
+        for (e, node, gt, vis, image, bg, interaction) in nodes.iter().filter(|_| !hit) {
+            if !vis.get() || node.size().x <= 0.0 || node.size().y <= 0.0 {
+                continue;
+            }
+            let visual = image || interaction.is_some() || bg.is_some_and(|b| b.0.alpha() > 0.01);
+            if !visual || !node.contains_point(*gt, cursor / node.inverse_scale_factor().max(1e-4)) {
+                continue;
+            }
+            let mut cur = e;
+            let mut overlay = false;
+            for _ in 0..8 {
+                if overlay_roots.contains(cur) {
+                    overlay = true;
+                    break;
+                }
+                match parents.get(cur) {
+                    Ok(p) => cur = p.parent(),
+                    Err(_) => break,
+                }
+            }
+            if !overlay {
+                hit = true;
+                by = Some(e);
+                break;
+            }
+        }
+    }
+    if block.0 != hit || block.1 != by {
+        *block = UiBlock(hit, by);
+    }
 }
 
 /// Screen-space description of a ship for picking.
@@ -164,6 +236,10 @@ pub fn selection(
     mut groups: ResMut<ControlGroups>,
     mut hover: ResMut<Hover>,
     mut drag: ResMut<Drag>,
+    block: Res<UiBlock>,
+    time: Res<Time>,
+    mut last_click: Local<(f32, Option<u32>)>,
+    mut focus: MessageWriter<FocusCamera>,
 ) {
     let (cam, gt) = *camera;
     let player = settings.player_side;
@@ -178,7 +254,8 @@ pub fn selection(
     };
     let scale = settings.ui_scale;
     let projected = project_ships(cam, gt, &ships, scale);
-    hover.ship = pick(&projected, cursor, |_| true);
+    // Over the interface only a drag that started in the world may end; nothing is hovered or started.
+    hover.ship = if block.0 { None } else { pick(&projected, cursor, |_| true) };
     if let Ok(ray) = cam.viewport_to_world(gt, cursor)
         && let Some(d) = ray.intersect_plane(Vec3::ZERO, InfinitePlane3d::new(Vec3::Y))
     {
@@ -251,7 +328,7 @@ pub fn selection(
     }
 
     // Click / drag selection.
-    if pointer.left_pressed {
+    if pointer.left_pressed && !block.0 {
         drag.start = Some(cursor);
     }
     if pointer.left_released
@@ -275,6 +352,18 @@ pub fn selection(
         } else {
             pick(&projected, cursor, own).into_iter().collect()
         };
+        // Double click on a ship focuses the camera on the selection.
+        let now = time.elapsed_secs();
+        if !moved && let &[only] = picked.as_slice() {
+            if last_click.1 == Some(only) && now - last_click.0 < DOUBLE_CLICK_SECONDS {
+                focus.write(FocusCamera);
+                *last_click = (0.0, None);
+            } else {
+                *last_click = (now, Some(only));
+            }
+        } else {
+            *last_click = (0.0, None);
+        }
         if moved || !picked.is_empty() {
             if pointer.shift {
                 for id in picked {
@@ -313,6 +402,7 @@ pub fn orders(
     hover: Res<Hover>,
     mut markers: ResMut<OrderMarkers>,
     mut issued: MessageWriter<OrderIssued>,
+    block: Res<UiBlock>,
 ) {
     let player = settings.player_side;
     let mine: Vec<u32> = sel
@@ -334,7 +424,7 @@ pub fn orders(
         rt.sim.command(player, Command::Stop { ships: mine.clone() });
         issued.write(OrderIssued { kind: OrderKind::Stop, lead });
     }
-    if !pointer.right_pressed {
+    if !pointer.right_pressed || block.0 {
         return;
     }
     if let Some((target, hp)) = hover.hardpoint {
@@ -397,7 +487,9 @@ pub fn overlays(
     mut markers: ResMut<OrderMarkers>,
     camera: Single<(&Camera, &GlobalTransform, &Projection), With<BattleCamera>>,
     mut gizmos: Gizmos,
+    eaw_overlays: Option<Res<OverlaysActive>>,
 ) {
+    let gizmo_marks = eaw_overlays.is_none();
     let (cam, gt, projection) = *camera;
     let player = settings.player_side;
     let fov = match projection {
@@ -450,13 +542,13 @@ pub fn overlays(
         }
     };
 
-    for id in &sel.ships {
+    for id in sel.ships.iter().filter(|_| gizmo_marks) {
         if let Some(s) = ships.0.get(id) {
             ring(&mut gizmos, s, Color::srgb(0.2, 1.0, 0.35), 1.05);
             bars(&mut gizmos, s);
         }
     }
-    if let Some(s) = hover.ship.and_then(|id| ships.0.get(&id)) {
+    if let Some(s) = hover.ship.and_then(|id| ships.0.get(&id)).filter(|_| gizmo_marks) {
         let enemy = s.side != player;
         if !sel.ships.contains(&s.id) {
             ring(
@@ -472,13 +564,13 @@ pub fn overlays(
             bars(&mut gizmos, s);
         }
     }
-    if let Some(s) = sel.enemy.and_then(|id| ships.0.get(&id)) {
+    if let Some(s) = sel.enemy.and_then(|id| ships.0.get(&id)).filter(|_| gizmo_marks) {
         ring(&mut gizmos, s, Color::srgb(1.0, 0.35, 0.2), 1.12);
         bars(&mut gizmos, s);
     }
 
     // Hardpoint markers on the targeted enemy while own ships are selected.
-    if !sel.ships.is_empty() {
+    if !sel.ships.is_empty() && gizmo_marks {
         let enemy = hover
             .ship
             .filter(|id| ships.0.get(id).is_some_and(|s| s.side != player))

@@ -89,7 +89,13 @@ pub struct CommandBarData {
     pub planet_name: String,
     /// Owner of the selected planet (allegiance symbol).
     pub planet_owner: Option<UiFaction>,
-    /// Galactic day counter.
+    /// Credits per month (`Text_Day_Credits`).
+    pub month_income: i64,
+    /// Progress through the current month, 0..1 (the green bar next to "MONTH").
+    pub month_progress: f32,
+    /// Colour of the planet name (owner relation); `None` keeps the data default.
+    pub planet_color: Option<Color>,
+    /// Galactic month counter (shown as "MONTH: n").
     pub day: u32,
     /// Tech level of the player.
     pub tech_level: u32,

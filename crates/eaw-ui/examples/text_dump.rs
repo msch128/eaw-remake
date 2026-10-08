@@ -7,5 +7,5 @@ fn main() {
     let t = TextTable::load(&fs, "Text/MasterTextFile_ENGLISH.DAT").unwrap();
     println!("{} entries", t.len());
     let pat = a[0].to_uppercase();
-    for (k, v) in t.iter() { if k.to_uppercase().contains(&pat) { println!("{k} = {v}"); } }
+    for (k, v) in t.iter() { if k.to_uppercase().contains(&pat) || v.to_uppercase().contains(&pat) { println!("{k} = {v}"); } }
 }

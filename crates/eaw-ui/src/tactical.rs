@@ -199,6 +199,9 @@ pub struct ShipOverlay {
     pub enemy: bool,
     /// Floating name label above the bars (the `Game_Object_Name` font of the game).
     pub name: Option<String>,
+    /// Shown with bars only (no brackets) even when neither selected nor hovered: own units in the
+    /// real game keep a health line under them.
+    pub always: bool,
 }
 
 /// A hardpoint marker on a hovered capital ship.
@@ -237,8 +240,13 @@ pub struct TacticalData {
     pub pop: Option<(u32, u32)>,
     /// Retreat button.
     pub retreat: RetreatState,
+}
+
+/// World-space overlays of the frame (own resource so that moving ships do not mark [`TacticalData`] changed).
+#[derive(Resource, Debug, Clone, Default, PartialEq)]
+pub struct TacticalOverlays {
     /// Ship overlays for the frame.
-    pub overlays: Vec<ShipOverlay>,
+    pub ships: Vec<ShipOverlay>,
     /// Hardpoint markers for the frame.
     pub hardpoints: Vec<HardpointMarker>,
 }
@@ -492,7 +500,7 @@ fn bar_set(
 /// Creates, moves and removes ship overlay nodes.
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub(crate) fn ship_overlays(
-    tac: Res<TacticalData>,
+    tac: Res<TacticalOverlays>,
     scale: Res<UiScale>,
     root: Query<Entity, With<TacticalOverlayRoot>>,
     mut existing: Local<HashMap<u64, Entity>>,
@@ -505,7 +513,7 @@ pub(crate) fn ship_overlays(
     settings: Res<EawUiSettings>,
 ) {
     let Ok(root) = root.single() else { return };
-    let live: Vec<u64> = tac.overlays.iter().map(|o| o.id).collect();
+    let live: Vec<u64> = tac.ships.iter().map(|o| o.id).collect();
     existing.retain(|id, e| {
         let keep = live.contains(id);
         if !keep {
@@ -514,12 +522,12 @@ pub(crate) fn ship_overlays(
         keep
     });
     let s = scale.0;
-    for o in &tac.overlays {
+    for o in &tac.ships {
         let w = o.half_size * 2.0;
         let accent = match (o.enemy, o.selected) {
             (true, _) => Color::srgb(1.0, 0.25, 0.2),
-            (false, true) => Color::srgb(0.85, 1.0, 0.9),
-            (false, false) => Color::srgba(0.5, 0.75, 1.0, 0.8),
+            (false, true) => Color::srgb(0.3, 1.0, 0.4),
+            (false, false) => Color::srgba(0.45, 0.9, 0.55, 0.8),
         };
         let Some(&e) = existing.get(&o.id) else {
             let class = bar_class(o.half_size);
@@ -535,10 +543,10 @@ pub(crate) fn ship_overlays(
                     ChildOf(root),
                 ))
                 .id();
-            let bar = |top: f32| Node {
+            let bar = |below: f32| Node {
                 position_type: PositionType::Absolute,
                 left: Val::Px(0.0),
-                top: Val::Px(top),
+                bottom: Val::Px(-below),
                 height: Val::Px(2.0),
                 width: Val::Percent(100.0),
                 ..default()
@@ -553,13 +561,13 @@ pub(crate) fn ship_overlays(
             };
             let img = |h: Option<Handle<Image>>| h.map_or_else(ImageNode::default, ImageNode::new);
             // Health bar: frame + discrete level texture.
-            let health_bar = commands.spawn((bar(-8.0), FocusPolicy::Pass, ChildOf(id))).id();
+            let health_bar = commands.spawn((bar(5.0), FocusPolicy::Pass, ChildOf(id))).id();
             commands.spawn((full.clone(), img(set.frame.clone()), ChildOf(health_bar)));
             let health_img = commands
                 .spawn((full.clone(), img(set.health.last().cloned()), ChildOf(health_bar)))
                 .id();
             // Shield bar: frame + the full shield texture clipped to the fraction.
-            let shield_bg = commands.spawn((bar(-5.0), FocusPolicy::Pass, ChildOf(id))).id();
+            let shield_bg = commands.spawn((bar(8.0), FocusPolicy::Pass, ChildOf(id))).id();
             commands.spawn((full.clone(), img(set.frame.clone()), ChildOf(shield_bg)));
             let shield_clip = commands
                 .spawn((
@@ -661,7 +669,7 @@ pub(crate) fn ship_overlays(
             node.top = px(o.screen_pos.y - o.half_size, s);
             node.width = px(w, s);
             node.height = px(w, s);
-            node.display = if o.selected || o.hovered || o.enemy {
+            node.display = if o.selected || o.hovered || o.enemy || o.always {
                 Display::Flex
             } else {
                 Display::None
@@ -690,9 +698,10 @@ pub(crate) fn ship_overlays(
             }
         }
         commands.entity(parts.label).insert(TextColor(accent));
+        let brackets = if o.selected || o.hovered || o.enemy { accent } else { Color::NONE };
         for b in parts.brackets {
             if let Ok((_, _, Some(mut bc), _)) = styles.get_mut(b) {
-                *bc = BorderColor::all(accent);
+                *bc = BorderColor::all(brackets);
             }
         }
     }
@@ -711,7 +720,7 @@ pub fn hardpoint_reticle(kind: &str, tracked: bool) -> String {
 /// Creates, moves and removes hardpoint markers; emits [`EawHardpointClicked`].
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub(crate) fn hardpoint_markers(
-    tac: Res<TacticalData>,
+    tac: Res<TacticalOverlays>,
     scale: Res<UiScale>,
     root: Query<Entity, With<TacticalOverlayRoot>>,
     mut existing: Local<HashMap<String, Entity>>,

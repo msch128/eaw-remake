@@ -6,10 +6,10 @@
 use bevy::{app::AppExit, prelude::*};
 
 use crate::camera::GalaxyCamera;
-use crate::flow::{AppScreen, Paused, StartCampaign, UiSound};
+use crate::flow::{AppScreen, Paused, UiSound};
 use crate::galaxy_map::spawn_props;
 use crate::game::{self, CampaignEntry, DEFAULT_CAMPAIGN, Game, GameAssets, StartupLog, StartupProblem};
-use crate::newgame::{MenuRefresh, NewGameOptions, SlotChosen, SlotMode, SlotScreen};
+use crate::newgame::{MenuRefresh, SlotChosen, SlotMode, SlotScreen};
 use crate::options::OptionsOpen;
 
 /// SFX event played when the cursor enters a button.
@@ -30,8 +30,6 @@ pub enum MenuAction {
     OpenCampaigns,
     /// Open the options overlay.
     Options,
-    /// Start the named campaign.
-    Campaign(String),
     /// Back to the main menu.
     MainMenu,
     /// Close the pause menu.
@@ -42,10 +40,6 @@ pub enum MenuAction {
     EndBattle,
     /// Dismiss the startup problem and continue with the demo galaxy.
     AckProblem,
-    /// Next AI difficulty tier of a new game.
-    CycleDifficulty,
-    /// Switch between the Remake AI and the classic AI.
-    ToggleClassicAi,
     /// Open the save or load slot list.
     OpenSlots(SlotMode),
     /// A slot button.
@@ -97,23 +91,7 @@ pub struct MenuSpec {
     pub dim_background: bool,
 }
 
-/// Faction colours used for the faction buttons.
-fn faction_accent(faction: &str) -> [f32; 3] {
-    match faction {
-        "Rebel" => [1.0, 0.45, 0.4],
-        "Empire" => [0.55, 0.95, 0.65],
-        _ => [1.0, 0.8, 0.35],
-    }
-}
 
-fn faction_label(faction: &str) -> &str {
-    match faction {
-        "Rebel" => "Rebel Alliance",
-        "Empire" => "Galactic Empire",
-        "Underworld" => "Underworld",
-        other => other,
-    }
-}
 
 /// The title screen.
 pub fn main_menu_spec() -> MenuSpec {
@@ -133,41 +111,6 @@ pub fn main_menu_spec() -> MenuSpec {
     }
 }
 
-/// The campaign selection: one column per map size, one button per human faction.
-pub fn campaign_spec(campaigns: &[CampaignEntry], options: &NewGameOptions) -> MenuSpec {
-    let mut columns: Vec<MenuColumn> = Vec::new();
-    let mut groups: Vec<&str> = Vec::new();
-    for c in campaigns {
-        let idx = match groups.iter().position(|g| *g == c.group) {
-            Some(i) => i,
-            None => {
-                groups.push(&c.group);
-                columns.push(MenuColumn {
-                    heading: c.group_title.clone(),
-                    subheading: format!("{} planets", c.planets),
-                    items: Vec::new(),
-                });
-                columns.len() - 1
-            }
-        };
-        columns[idx].items.push(MenuItem {
-            label: faction_label(&c.faction).to_owned(),
-            action: MenuAction::Campaign(c.name.clone()),
-            accent: Some(faction_accent(&c.faction)),
-        });
-    }
-    MenuSpec {
-        title: "Galactic Conquest".into(),
-        subtitle: "Choose a galaxy and your side".into(),
-        columns,
-        footer: vec![
-            MenuItem::new(options.difficulty_label(), MenuAction::CycleDifficulty),
-            MenuItem::new(options.classic_label(), MenuAction::ToggleClassicAi),
-            MenuItem::new("Back", MenuAction::MainMenu),
-        ],
-        ..default()
-    }
-}
 
 /// Shown instead of the title screen when the game files cannot be used.
 pub fn problem_spec(message: &str) -> MenuSpec {
@@ -236,11 +179,10 @@ impl Plugin for MenuPlugin {
         app.init_resource::<Campaigns>()
             .add_message::<MenuClicked>()
             .add_systems(OnEnter(AppScreen::MainMenu), (spawn_main_menu, spawn_backdrop_unless_scene))
-            .add_systems(OnEnter(AppScreen::CampaignSelect), (spawn_campaign_menu, spawn_backdrop))
+            .add_systems(OnEnter(AppScreen::CampaignSelect), spawn_backdrop)
             .add_systems(OnEnter(AppScreen::Galaxy), despawn_backdrop)
             .add_systems(OnEnter(AppScreen::Galaxy), sync_pause_menu)
             .add_systems(OnExit(AppScreen::MainMenu), despawn_screen_menu)
-            .add_systems(OnExit(AppScreen::CampaignSelect), despawn_screen_menu)
             .add_systems(OnExit(AppScreen::Galaxy), despawn_pause_menu)
             .add_systems(
                 Update,
@@ -268,9 +210,6 @@ pub(crate) fn spawn_main_menu(mut commands: Commands, problem: Res<StartupProble
     };
 }
 
-fn spawn_campaign_menu(mut commands: Commands, campaigns: Res<Campaigns>, options: Res<NewGameOptions>) {
-    spawn_menu(&mut commands, &campaign_spec(&campaigns.0, &options), ScreenMenu);
-}
 
 /// Marks the 3D scene behind the menus: the galaxy art with its star dome.
 #[derive(Component, Clone)]
@@ -509,9 +448,7 @@ fn apply_clicks(
     mut next: ResMut<NextState<AppScreen>>,
     mut paused: ResMut<Paused>,
     mut options: ResMut<OptionsOpen>,
-    mut start: MessageWriter<StartCampaign>,
     mut exit: MessageWriter<AppExit>,
-    mut newgame: ResMut<NewGameOptions>,
     mut slots: ResMut<SlotScreen>,
     mut chosen: MessageWriter<SlotChosen>,
     mut refresh: MessageWriter<MenuRefresh>,
@@ -521,9 +458,6 @@ fn apply_clicks(
         match action {
             MenuAction::OpenCampaigns => next.set(AppScreen::CampaignSelect),
             MenuAction::Options => options.0 = true,
-            MenuAction::Campaign(name) => {
-                start.write(StartCampaign(name.clone()));
-            }
             MenuAction::MainMenu => {
                 paused.0 = false;
                 next.set(AppScreen::MainMenu);
@@ -537,14 +471,6 @@ fn apply_clicks(
             }
             MenuAction::AckProblem => {
                 problem.0 = None;
-                refresh.write(MenuRefresh);
-            }
-            MenuAction::CycleDifficulty => {
-                newgame.cycle();
-                refresh.write(MenuRefresh);
-            }
-            MenuAction::ToggleClassicAi => {
-                newgame.classic_ai = !newgame.classic_ai;
                 refresh.write(MenuRefresh);
             }
             MenuAction::OpenSlots(mode) => slots.0 = Some(*mode),
@@ -565,15 +491,12 @@ fn refresh_campaign_menu(
     mut commands: Commands,
     screen: Res<State<AppScreen>>,
     menus: Query<Entity, With<ScreenMenu>>,
-    campaigns: Res<Campaigns>,
-    options: Res<NewGameOptions>,
     problem: Res<StartupProblem>,
 ) {
     if refresh.read().last().is_none() {
         return;
     }
     let spec = match *screen.get() {
-        AppScreen::CampaignSelect => campaign_spec(&campaigns.0, &options),
         AppScreen::MainMenu => match &problem.0 {
             Some(m) => problem_spec(m),
             None => main_menu_spec(),
@@ -586,32 +509,3 @@ fn refresh_campaign_menu(
     spawn_menu(&mut commands, &spec, ScreenMenu);
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn entry(name: &str, group: &str, faction: &str) -> CampaignEntry {
-        CampaignEntry {
-            name: name.into(),
-            title: name.into(),
-            group: group.into(),
-            group_title: group.into(),
-            faction: faction.into(),
-            planets: 100,
-        }
-    }
-
-    #[test]
-    fn campaign_spec_groups_factions_into_columns() {
-        let spec = campaign_spec(&[
-            entry("a_rebel", "A", "Rebel"),
-            entry("a_empire", "A", "Empire"),
-            entry("b_rebel", "B", "Rebel"),
-        ], &NewGameOptions::default());
-        assert_eq!(spec.columns.len(), 2);
-        assert_eq!(spec.columns[0].items.len(), 2);
-        assert_eq!(spec.columns[0].items[1].label, "Galactic Empire");
-        assert_eq!(spec.columns[1].items[0].action, MenuAction::Campaign("b_rebel".into()));
-        assert_eq!(spec.footer.len(), 3);
-    }
-}

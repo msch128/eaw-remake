@@ -131,6 +131,7 @@ pub enum Field {
     Income,
     PlanetName,
     Day,
+    MonthIncome,
     TechLevel,
     Pop,
     Allegiance,
@@ -152,6 +153,7 @@ fn field_for(name: &str) -> Option<Field> {
         "text_planetary_income" => Field::Income,
         "text_planet" | "text_planet_tactical" => Field::PlanetName,
         "text_day_counter" => Field::Day,
+        "text_day_credits" => Field::MonthIncome,
         "text_tech_level" | "text_tactical_tech" => Field::TechLevel,
         "text_pop_cap" | "text_planetary_pop" => Field::Pop,
         "text_allegiance_a" | "text_allegiance_tactical" => Field::Allegiance,
@@ -391,7 +393,18 @@ pub fn spawn_shell(world: &mut World, spec: &ShellSpec) -> Option<Entity> {
         if !within(item.center, lo - Vec2::splat(MARGIN), hi + Vec2::splat(MARGIN)) {
             continue;
         }
-        let Some(def) = b.db.get(&item.name).cloned() else {
+        // The month bar's bone has no component of its own; it uses the small health bar art.
+        let def = b.db.get(&item.name).cloned().or_else(|| {
+            if !item.name.eq_ignore_ascii_case("fight_bar_g") {
+                return None;
+            }
+            let mut d = b.db.get("g_credit_bar").cloned()?;
+            d.name = "fight_bar_g".to_string();
+            d.bar_texture = (0..=10).map(|i| format!("i_bar_health_small{i}.tga")).collect();
+            d.bar_overlay = d.bar_texture.clone();
+            Some(d)
+        });
+        let Some(def) = def else {
             continue;
         };
         b.spawn_component(&def, item.center - lo, item.size);
@@ -965,7 +978,7 @@ pub(crate) fn button_visuals(
 pub(crate) fn bound_fields(
     fresh: Query<(), Added<BoundField>>,
     data: Res<CommandBarData>,
-    mut texts: Query<(&BoundField, &mut Text)>,
+    mut texts: Query<(&BoundField, &mut Text, Option<&mut TextColor>)>,
     mut icons: Query<(&BoundField, &mut ImageNode), Without<Text>>,
     mut tex: ResMut<UiTextures>,
     db: Res<CommandBarDb>,
@@ -974,14 +987,18 @@ pub(crate) fn bound_fields(
     if !data.is_changed() && fresh.is_empty() {
         return;
     }
-    for (f, mut t) in &mut texts {
+    for (f, mut t, color) in &mut texts {
+        if f.0 == Field::PlanetName && let (Some(c), Some(mut tc)) = (data.planet_color, color) {
+            tc.0 = c;
+        }
         t.0 = match f.0 {
             Field::Credits => group_digits(data.credits),
             Field::Income => group_digits(data.planet_income),
             Field::PlanetName => data.planet_name.clone(),
-            Field::Day => format!("Day {}", data.day),
-            Field::TechLevel => data.tech_level.to_string(),
-            Field::Pop => format!("{}/{}", data.pop_current, data.pop_cap),
+            Field::Day => format!("MONTH: {}", data.day),
+            Field::MonthIncome => group_digits(data.month_income),
+            Field::TechLevel => format!("TECH: {}", data.tech_level),
+            Field::Pop => format!("{} / {}", data.pop_current, data.pop_cap),
             Field::Allegiance => String::new(),
         };
     }
@@ -1164,6 +1181,10 @@ pub(crate) fn status_bars(
                 let list = if layer.fill { &tex.fill } else { &tex.frame };
                 if let Some(h) = list.get(level).or_else(|| list.last()) {
                     img.image = h.clone();
+                    if pname.is_some_and(|n| n.0 == "fight_bar_g") {
+                        // The month bar is always green (the health art shifts to yellow when full).
+                        img.color = Color::srgb(0.3, 1.0, 0.45);
+                    }
                 }
             }
         }

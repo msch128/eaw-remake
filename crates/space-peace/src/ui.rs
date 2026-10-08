@@ -47,6 +47,10 @@ pub(crate) struct HudEntity;
 #[derive(Component)]
 pub(crate) struct SkinPanel;
 
+/// Root of the faction overview bar at the top (hidden once the EaW command bar shows the same numbers).
+#[derive(Component)]
+pub(crate) struct TopBar;
+
 /// The controls hint text.
 #[derive(Component)]
 pub(crate) struct HintText;
@@ -181,6 +185,7 @@ fn spawn_hud(mut commands: Commands, existing: Query<(), With<HudEntity>>) {
     commands
         .spawn((
             HudEntity,
+            TopBar,
             Node {
                 position_type: PositionType::Absolute,
                 top: Val::Px(8.0),

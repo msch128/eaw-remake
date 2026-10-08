@@ -52,27 +52,6 @@ impl NewGameOptions {
         };
         Self { difficulty, classic_ai: args.classic_ai }
     }
-
-    /// Next tier in the order Easy, Normal, Hard, Brutal, Fair.
-    pub fn cycle(&mut self) {
-        self.difficulty = match self.difficulty {
-            DifficultyTier::Easy => DifficultyTier::Normal,
-            DifficultyTier::Normal => DifficultyTier::Hard,
-            DifficultyTier::Hard => DifficultyTier::Brutal,
-            DifficultyTier::Brutal => DifficultyTier::Fair,
-            DifficultyTier::Fair => DifficultyTier::Easy,
-        };
-    }
-
-    /// Label of the difficulty button.
-    pub fn difficulty_label(&self) -> String {
-        if self.classic_ai { "AI difficulty: - (classic AI)".to_owned() } else { format!("AI difficulty: {}", tier_name(self.difficulty)) }
-    }
-
-    /// Label of the classic-AI button.
-    pub fn classic_label(&self) -> String {
-        format!("Classic AI: {}", if self.classic_ai { "on" } else { "off" })
-    }
 }
 
 /// A save to start the next game from (set by the load menu, taken by `play::begin_play`).

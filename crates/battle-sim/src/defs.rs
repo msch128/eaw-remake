@@ -241,6 +241,8 @@ pub struct ShipDef {
     pub shield_armor: Option<u16>,
     /// Collision radius.
     pub radius: f32,
+    /// Radius of the model (bones) before the class clamp; stations and big ships are larger than the collision radius.
+    pub model_extent: f32,
     /// Maximum speed, units per second.
     pub max_speed: f32,
     /// Acceleration, units per second squared.
@@ -822,6 +824,7 @@ impl Catalog {
                 radius = r;
             }
         }
+        let model_extent = model.map_or(radius, |m| m.radius.max(radius));
         radius = radius.clamp(rmin, rmax);
 
         // Hardpoints.
@@ -975,6 +978,7 @@ impl Catalog {
             armor: armor.as_deref().and_then(|a| self.damage.armor_index(a)),
             shield_armor: sarmor.as_deref().and_then(|a| self.damage.armor_index(a)),
             radius,
+            model_extent,
             max_speed,
             accel,
             turn_rate,

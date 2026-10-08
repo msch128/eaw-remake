@@ -2,6 +2,7 @@
 
 mod battle_play;
 mod battle_seam;
+mod campaign_select;
 mod camera;
 mod cli;
 mod flow;
@@ -172,6 +173,7 @@ fn main() {
             FlowPlugin,
             LoadingPlugin,
             MenuPlugin,
+            campaign_select::CampaignSelectPlugin,
             menu_scene::MenuScenePlugin,
             NewGamePlugin,
             OptionsPlugin,

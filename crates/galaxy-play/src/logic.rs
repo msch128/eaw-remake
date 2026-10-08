@@ -297,6 +297,13 @@ pub fn update_ui_model(
     } else {
         next.top = TopBarModel { faction: "Spectator".into(), week: state.current.week, time: state.current.time, winner: g.winner.map(|w| catalog.faction(w).to_owned()), ..default() };
     }
+    if let Some(h) = human {
+        let mut heroes: std::collections::BTreeSet<u32> = Default::default();
+        for f in g.fleets.values().filter(|f| f.owner == h) {
+            heroes.extend(f.units.keys().copied().filter(|&u| world.units[u as usize].hero));
+        }
+        next.heroes = heroes.into_iter().map(|u| world.units[u as usize].name.clone()).collect();
+    }
     next.speed = SpeedModel { level: clock.level, speeds: clock.speeds.clone(), rate: clock.rate(), held_by_battle: !state.current.human_battles.is_empty() };
 
     if let Some(p) = selection.planet {
@@ -347,7 +354,7 @@ pub fn update_ui_model(
                     .filter(|f| f.owner == fac)
                     .max_by_key(|f| f.unit_count())
                     .and_then(|f| flagship(world, f))
-                    .map_or_else(String::new, |u| catalog.unit(u).to_owned()),
+                    .map_or_else(String::new, |u| world.units[u as usize].name.clone()),
                 defender: b.defender == Some(fac),
                 mine: human == Some(fac),
             })

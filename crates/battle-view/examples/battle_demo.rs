@@ -5,6 +5,7 @@
 //! battle_demo [--offscreen out.png] [--times 5,30,90] [--seconds N] [--size WxH]
 //!             [--map _SPACE_PLANET_KUAT_01] [--speed S] [--seed N] [--scale k]
 //!             [--cam yaw_deg,pitch_deg,distance[,x,z]]   (repeatable, one per capture time)
+//!             [--station Rebel_Star_Base_2]   give the Rebels a star base
 //!             [--overlay]   select the player's capital ships and hover an enemy (offscreen)
 //!             [--msaa N] [--no-bloom] [--small]
 //! ```
@@ -74,6 +75,7 @@ fn main() {
     let mut gpu_profile = false;
     let (mut shadows, mut quality) = (false, None::<battle_view::QualityPreset>);
     let mut auto = false;
+    let mut station: Option<String> = None;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
@@ -98,6 +100,7 @@ fn main() {
             "--scale" => scale = it.next().unwrap().parse().unwrap(),
             "--small" => small = true,
             "--auto" => auto = true,
+            "--station" => station = it.next().cloned(),
             other => eprintln!("ignoring argument {other}"),
         }
     }
@@ -143,9 +146,12 @@ fn main() {
             ("X-Wing_Squadron", 4),
         ]
     };
-    let names: Vec<&str> = empire.iter().chain(rebel).map(|x| x.0).collect();
+    let mut names: Vec<&str> = empire.iter().chain(rebel).map(|x| x.0).collect();
+    if let Some(st) = station.as_deref() {
+        names.push(st);
+    }
     let catalog = Arc::new(Catalog::build(&data, Some(&*fs), &names));
-    let side = |name: &str, fleet: &[(&str, u32)]| SideSetup {
+    let side = |name: &str, fleet: &[(&str, u32)], structures: Vec<battle_sim::ShipId>| SideSetup {
         name: name.into(),
         units: fleet
             .iter()
@@ -155,9 +161,10 @@ fn main() {
                 tag: 0,
             })
             .collect(),
-        structures: vec![],
+        structures,
         ai: true,
     };
+    let station_ids: Vec<battle_sim::ShipId> = station.as_deref().and_then(|n| catalog.ship_id(n)).into_iter().collect();
     let arena = battle_sim::Arena::load(&data, &*fs, &format!("{map}.TED")).map(Arc::new);
     let half = arena.as_ref().map_or(7000.0, |a| a.half_size());
     let config = BattleConfig {
@@ -168,7 +175,7 @@ fn main() {
     };
     let setup = battle_sim::setup(
         catalog.clone(),
-        vec![side("Empire", empire), side("Rebel_Alliance", rebel)],
+        vec![side("Empire", empire, vec![]), side("Rebel_Alliance", rebel, station_ids)],
         config,
     );
     let faction_color = |name: &str, fallback: Color| {

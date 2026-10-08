@@ -39,6 +39,7 @@ Build per crate with a per-area `CARGO_TARGET_DIR` (`target/app`, `target/render
 Verify visually with headless `--offscreen out.png` renders and look at the PNG. Details: `.claude/skills/eaw-verify`.
 Full build: `.\build.ps1` (release) / `.\build.ps1 -Debug`. Regression smoke test of the release exe (offscreen
 scenarios, pass/fail table): `.\tools\smoke.ps1 [-Exe path] [-Only name]`.
+Leak/crash/frame-time guard (hidden window, `SP_ASSET_LOG=1`, memory + asset-count growth, log spam, p99): `.\tools\soak.ps1 [-Exe path] [-BattleMinutes 5] [-GalaxyMinutes 10] [-Only battle|galaxy|frametime]`.
 
 ## Project skills
 `eaw-formats` (file formats + coordinates), `remake-data` (finding/trusting game data),

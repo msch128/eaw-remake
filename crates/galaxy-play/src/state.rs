@@ -408,7 +408,7 @@ pub struct BattleSide {
     pub color: [f32; 3],
     /// Ships in orbit.
     pub ships: u32,
-    /// Its strongest unit type (the portrait on the battle banner); empty without ships.
+    /// Object name of its strongest unit type (the portrait on the battle banner); empty without ships.
     pub flagship: String,
     /// Fights with its star base and structures.
     pub defender: bool,
@@ -449,6 +449,8 @@ pub struct PlayUiModel {
     pub notifications: Vec<Notification>,
     /// Battle prompt, if a battle waits for the player.
     pub battle: Option<BattleDialog>,
+    /// Object names of the player's heroes that are alive in a fleet (the hero bar).
+    pub heroes: Vec<String>,
     /// Hint for the current drag, e.g. route and ETA.
     pub route_hint: Option<String>,
 }

@@ -5,7 +5,9 @@ use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll, MouseSc
 use bevy::prelude::*;
 use bevy::window::{PrimaryWindow, WindowMode};
 
+use crate::control::{FocusCamera, Selection};
 use crate::scene::SkyFollow;
+use crate::ships::RenderedShips;
 use alamo_render::AlamoModelLoaded;
 
 /// Orbit camera state; the [`Transform`] is derived from it every frame.
@@ -81,9 +83,18 @@ impl BattleCamera {
 const ZOOM_STEP: f32 = 0.86;
 const ZOOM_SMOOTH: f32 = 10.0;
 const PAN_SMOOTH: f32 = 12.0;
-const KEY_PAN_SPEED: f32 = 0.9;
-const EDGE_PIXELS: f32 = 3.0;
+/// `Tactical_Min_Scroll_Speed` / `Tactical_Max_Scroll_Speed` (Gameconstants.xml), world units per second: the
+/// closest zoom scrolls at the minimum, the farthest at the maximum (the interpolation between them is an estimate).
+const SCROLL_SPEED_MIN: f32 = 1000.0;
+const SCROLL_SPEED_MAX: f32 = 4000.0;
+/// `Push_Scroll_Speed_Modifier` (Gameconstants.xml): Shift speeds scrolling up.
+const PUSH_SCROLL_MODIFIER: f32 = 2.0;
+/// `Tactical_Edge_Scroll_Region` (Gameconstants.xml) in pixels.
+const EDGE_PIXELS: f32 = 2.0;
 const ROTATE_SPEED: f32 = 1.6;
+/// Tilt limits of the base pitch in radians (estimate; the engine's tactical camera limits are not in the data).
+const PITCH_RANGE: (f32, f32) = (0.55, 1.30);
+const PITCH_KEY_SPEED: f32 = 0.8;
 
 /// Reads keyboard, edge scrolling, wheel and drag input.
 #[allow(clippy::too_many_arguments)]
@@ -145,8 +156,10 @@ pub fn camera_input(
             dir.y -= 1.0;
         }
     }
-    let fast = if keys.pressed(KeyCode::ShiftLeft) { 2.5 } else { 1.0 };
-    let mut pan = (right * dir.x + forward * dir.y) * KEY_PAN_SPEED * cam.distance * dt * fast;
+    let fast = if keys.pressed(KeyCode::ShiftLeft) { PUSH_SCROLL_MODIFIER } else { 1.0 };
+    let zoom_t = ((cam.distance - cam.min_distance) / (cam.max_distance - cam.min_distance)).clamp(0.0, 1.0);
+    let speed = SCROLL_SPEED_MIN + (SCROLL_SPEED_MAX - SCROLL_SPEED_MIN) * zoom_t;
+    let mut pan = (right * dir.x + forward * dir.y).normalize_or_zero() * speed * dt * fast;
 
     // Rotate with Q / E or by dragging with the middle mouse button.
     let mut rot = 0.0;
@@ -157,6 +170,9 @@ pub fn camera_input(
         rot += 1.0;
     }
     cam.target_yaw += rot * ROTATE_SPEED * dt;
+    // Page Up / Page Down tilt the view.
+    let tilt = f32::from(keys.pressed(KeyCode::PageUp)) - f32::from(keys.pressed(KeyCode::PageDown));
+    cam.pitch = (cam.pitch + tilt * PITCH_KEY_SPEED * dt).clamp(PITCH_RANGE.0, PITCH_RANGE.1);
     if buttons.pressed(MouseButton::Middle) && motion.delta != Vec2::ZERO {
         let fov = match projection {
             Projection::Perspective(p) => p.fov,
@@ -172,11 +188,32 @@ pub fn camera_input(
         } else {
             cam.target_yaw -= motion.delta.x * 0.005;
             cam.yaw = cam.target_yaw;
+            cam.pitch = (cam.pitch + motion.delta.y * 0.003).clamp(PITCH_RANGE.0, PITCH_RANGE.1);
         }
     }
     if pan != Vec3::ZERO {
         cam.target_focus += std::mem::take(&mut pan);
     }
+}
+
+/// Centres the camera on the selected ships (space bar or a [`FocusCamera`] request).
+pub fn focus_camera(
+    keys: Res<ButtonInput<KeyCode>>,
+    mut requests: MessageReader<FocusCamera>,
+    sel: Res<Selection>,
+    ships: Res<RenderedShips>,
+    mut cam: Single<&mut BattleCamera>,
+) {
+    let asked = requests.read().count() > 0 || keys.just_pressed(KeyCode::Space);
+    if !asked {
+        return;
+    }
+    let pts: Vec<Vec3> = sel.ships.iter().filter_map(|id| ships.0.get(id)).map(|s| s.pos).collect();
+    if pts.is_empty() {
+        return;
+    }
+    let center = pts.iter().copied().sum::<Vec3>() / pts.len() as f32;
+    cam.target_focus = Vec3::new(center.x, cam.target_focus.y, center.z);
 }
 
 /// Smooths the camera pose, clamps it to the bounds and writes the transform.

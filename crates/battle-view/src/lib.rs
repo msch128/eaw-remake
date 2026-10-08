@@ -19,6 +19,8 @@ pub mod camera;
 pub mod control;
 pub mod convert;
 pub mod gpu_profile;
+pub(crate) mod hud;
+mod input_test;
 mod effects;
 pub mod scene;
 pub mod ships;
@@ -387,6 +389,8 @@ impl Plugin for BattleViewPlugin {
             .init_resource::<Hover>()
             .init_resource::<OrderMarkers>()
             .init_resource::<control::Drag>()
+            .init_resource::<control::UiBlock>()
+            .add_message::<control::FocusCamera>()
             .init_resource::<effects::BoltPools>()
             .init_resource::<audio::BattleAudioStats>()
             .add_message::<control::OrderIssued>()
@@ -408,6 +412,7 @@ impl Plugin for BattleViewPlugin {
                         ships::update_dying,
                         effects::update_projectiles,
                         camera::camera_input,
+                        camera::focus_camera,
                         camera::apply_camera,
                         camera::sky_follow,
                         control::selection,
