@@ -22,6 +22,8 @@ pub const RESOLUTIONS: [(u32, u32); 6] =
 pub const FPS_CAPS: [u32; 6] = [0, 30, 60, 120, 144, 240];
 /// Selectable UI scales.
 pub const UI_SCALES: [f32; 6] = [0.75, 1.0, 1.25, 1.5, 1.75, 2.0];
+/// Selectable MSAA sample counts (1 = off).
+pub const MSAA_MODES: [u32; 4] = [1, 2, 4, 8];
 /// Selectable camera speed multipliers.
 pub const CAMERA_SPEEDS: [f32; 5] = [0.5, 0.75, 1.0, 1.5, 2.0];
 
@@ -50,6 +52,10 @@ pub struct Settings {
     pub edge_scroll: bool,
     /// Camera pan speed multiplier.
     pub camera_speed: f32,
+    /// MSAA samples of the 3D views (1, 2, 4 or 8).
+    pub msaa: u32,
+    /// Bloom around bright lights.
+    pub bloom: bool,
 }
 
 impl Default for Settings {
@@ -66,6 +72,8 @@ impl Default for Settings {
             speech: 1.0,
             edge_scroll: true,
             camera_speed: 1.0,
+            msaa: 4,
+            bloom: true,
         }
     }
 }
@@ -95,11 +103,15 @@ pub enum OptionKey {
     EdgeScroll,
     /// Camera speed.
     CameraSpeed,
+    /// Anti-aliasing (MSAA).
+    Msaa,
+    /// Bloom.
+    Bloom,
 }
 
 impl OptionKey {
     /// All rows in display order.
-    pub const ALL: [OptionKey; 11] = [
+    pub const ALL: [OptionKey; 13] = [
         OptionKey::WindowMode,
         OptionKey::Resolution,
         OptionKey::Vsync,
@@ -111,6 +123,8 @@ impl OptionKey {
         OptionKey::Speech,
         OptionKey::EdgeScroll,
         OptionKey::CameraSpeed,
+        OptionKey::Msaa,
+        OptionKey::Bloom,
     ];
 
     /// Row label.
@@ -127,6 +141,8 @@ impl OptionKey {
             OptionKey::Speech => "Speech volume",
             OptionKey::EdgeScroll => "Edge scrolling",
             OptionKey::CameraSpeed => "Camera speed",
+            OptionKey::Msaa => "Anti-aliasing",
+            OptionKey::Bloom => "Bloom",
         }
     }
 }
@@ -166,6 +182,8 @@ impl Settings {
             OptionKey::Speech => pct(self.speech),
             OptionKey::EdgeScroll => on(self.edge_scroll),
             OptionKey::CameraSpeed => format!("{:.2}x", self.camera_speed),
+            OptionKey::Msaa => if self.msaa <= 1 { "Off".into() } else { format!("{}x", self.msaa) },
+            OptionKey::Bloom => on(self.bloom),
         }
     }
 
@@ -197,6 +215,11 @@ impl Settings {
                 let i = nearest(&CAMERA_SPEEDS, |s| (s - self.camera_speed).abs());
                 self.camera_speed = CAMERA_SPEEDS[cycle(i, dir, CAMERA_SPEEDS.len())];
             }
+            OptionKey::Msaa => {
+                let i = nearest(&MSAA_MODES, |m| (m as f32 - self.msaa as f32).abs());
+                self.msaa = MSAA_MODES[cycle(i, dir, MSAA_MODES.len())];
+            }
+            OptionKey::Bloom => self.bloom = !self.bloom,
         }
     }
 
@@ -239,7 +262,9 @@ impl Settings {
              sfx_volume = {}\n\
              speech_volume = {}\n\
              edge_scroll = {}\n\
-             camera_speed = {}\n",
+             camera_speed = {}\n\
+             msaa = {}\n\
+             bloom = {}\n",
             if self.borderless { "borderless" } else { "windowed" },
             self.resolution.0,
             self.resolution.1,
@@ -252,6 +277,8 @@ impl Settings {
             self.speech,
             self.edge_scroll,
             self.camera_speed,
+            self.msaa,
+            self.bloom,
         )
     }
 
@@ -289,6 +316,8 @@ impl Settings {
                 "speech_volume" => s.speech = float().unwrap_or(s.speech).clamp(0.0, 1.0),
                 "edge_scroll" => s.edge_scroll = boolean().unwrap_or(s.edge_scroll),
                 "camera_speed" => s.camera_speed = float().unwrap_or(s.camera_speed).clamp(0.1, 4.0),
+                "msaa" => s.msaa = value.parse().ok().filter(|m| MSAA_MODES.contains(m)).unwrap_or(s.msaa),
+                "bloom" => s.bloom = boolean().unwrap_or(s.bloom),
                 _ => {}
             }
         }
@@ -317,9 +346,33 @@ impl Plugin for SettingsPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(
             Update,
-            (apply_window, apply_ui_scale.run_if(not(resource_exists::<eaw_ui::EawUiSettings>)), apply_audio).run_if(resource_changed::<Settings>),
+            (apply_window, apply_graphics, apply_ui_scale.run_if(not(resource_exists::<eaw_ui::EawUiSettings>)), apply_audio).run_if(resource_changed::<Settings>),
         )
         .add_systems(Last, limit_fps);
+    }
+}
+
+/// MSAA and bloom of the galaxy camera (the battle reads them when it starts).
+fn apply_graphics(
+    settings: Res<Settings>,
+    mut commands: Commands,
+    mut cameras: Query<(Entity, &mut Msaa, Has<bevy::post_process::bloom::Bloom>), With<crate::camera::GalaxyCamera>>,
+) {
+    let msaa = match settings.msaa {
+        1 => Msaa::Off,
+        2 => Msaa::Sample2,
+        8 => Msaa::Sample8,
+        _ => Msaa::Sample4,
+    };
+    for (e, mut current, has_bloom) in &mut cameras {
+        if *current != msaa {
+            *current = msaa;
+        }
+        if settings.bloom && !has_bloom {
+            commands.entity(e).insert(bevy::post_process::bloom::Bloom { intensity: 0.12, ..bevy::post_process::bloom::Bloom::NATURAL });
+        } else if !settings.bloom && has_bloom {
+            commands.entity(e).remove::<bevy::post_process::bloom::Bloom>();
+        }
     }
 }
 
@@ -397,6 +450,8 @@ mod tests {
             speech: 0.1,
             edge_scroll: false,
             camera_speed: 1.5,
+            msaa: 2,
+            bloom: false,
         };
         assert_eq!(Settings::from_toml(&s.to_toml()), s);
     }

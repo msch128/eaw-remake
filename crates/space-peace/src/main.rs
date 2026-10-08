@@ -65,6 +65,7 @@ fn main() {
     // Opening the file system is fast; the data itself is parsed in the background while the
     // loading screen is shown. Without an install the demo galaxy is used.
     let mut log = StartupLog::default();
+    let mut problem = game::StartupProblem::default();
     let fs = if args.demo {
         log.info("using the built-in demo galaxy (--demo)".into());
         None
@@ -73,6 +74,7 @@ fn main() {
             Ok((_, fs)) => Some(fs),
             Err(e) => {
                 log.warn(format!("FALLING BACK TO DEMO GALAXY: {e}"));
+                problem.0 = Some(game::describe_problem(&e, args.mod_id.as_deref().unwrap_or(game::DEFAULT_MOD_ID)));
                 None
             }
         }
@@ -150,6 +152,7 @@ fn main() {
         .insert_resource(args)
         .insert_resource(log)
         .insert_resource(Game(None))
+        .insert_resource(problem)
         .insert_resource(GalaxyView::default())
         .add_systems(Startup, game::replay_startup_log)
         .add_plugins((

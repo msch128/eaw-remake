@@ -118,6 +118,7 @@ fn begin_session(world: &mut World) {
     let args = world.resource::<Args>().clone();
     let player = world.get_resource::<PlayerFaction>().and_then(|p| p.0);
     let target = world.get_resource::<OffscreenTarget>().map(|t| (t.image.clone(), t.scale_factor));
+    let (msaa, bloom) = world.get_resource::<crate::settings::Settings>().map_or((4, true), |s| (s.msaa, s.bloom));
     let Some(assets) = world.resource::<Game>().0.clone() else { return };
     let started = std::time::Instant::now();
     // `--battle-auto` lets the AI play both sides (headless scenarios).
@@ -127,6 +128,8 @@ fn begin_session(world: &mut World) {
             info!("battle: session for {} built in {:.2?}", req.planet_name, started.elapsed());
             let mut settings = world.resource_mut::<BattleViewSettings>();
             settings.speed = args.battle_speed.unwrap_or(1.0);
+            settings.msaa_samples = msaa;
+            settings.bloom = bloom;
             match target {
                 Some((image, scale)) => {
                     settings.render_target = Some(image);

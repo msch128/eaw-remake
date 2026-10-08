@@ -172,12 +172,18 @@ fn poll_task(
         (Some(data), Some(fs)) => Some(GameAssets { fs, data: Arc::new(*data) }),
         _ => {
             warn!("game data could not be loaded, using the demo galaxy");
+            if files.0.is_some() {
+                commands.insert_resource(game::StartupProblem(Some(game::describe_problem("the game data could not be loaded", game::DEFAULT_MOD_ID))));
+            }
             None
         }
     };
 
     let mut entries = assets.as_ref().map(|a| game::campaign_entries(&a.data)).unwrap_or_default();
     if entries.is_empty() {
+        if assets.is_some() {
+            commands.insert_resource(game::StartupProblem(Some(game::describe_problem("no galactic conquest campaigns found", game::DEFAULT_MOD_ID))));
+        }
         entries.push(game::demo_entry());
     }
     commands.insert_resource(Campaigns(entries));

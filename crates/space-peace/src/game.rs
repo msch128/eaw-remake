@@ -60,6 +60,26 @@ pub struct GameAssets {
     pub data: Arc<GameData>,
 }
 
+/// Why the real game could not be used (shown on the title screen until acknowledged).
+#[derive(Resource, Default, Debug, Clone)]
+pub struct StartupProblem(pub Option<String>);
+
+/// Turns a technical error of the file system or the data loader into advice for the player.
+pub fn describe_problem(error: &str, mod_id: &str) -> String {
+    let lower = error.to_lowercase();
+    let advice = if lower.contains("no empire at war install") {
+        "Star Wars: Empire at War was not found.\n\nInstall Empire at War - Gold Pack (includes Forces of Corruption) from Steam,\nstart it once, or pass the folder with --game-dir <path> (or set EAW_GAME_DIR)."
+            .to_owned()
+    } else if lower.contains("mod data not found") {
+        format!("The Empire at War Remake mod is not installed.\n\nSubscribe to Empire at War Remake 4.0 on the Steam Workshop (id {mod_id}),\nlet Steam download it, then start again. Use --mod <id> for another mod.")
+    } else if lower.contains("no galactic conquest") {
+        format!("The mod {mod_id} has no Galactic Conquest campaigns: its files are incomplete or a different version.\n\nLet Steam finish the download or verify the files of the mod, then start again.")
+    } else {
+        "The game files could not be read.\n\nVerify the game and the mod in Steam (right click, Properties, Installed Files), then start again.".to_owned()
+    };
+    format!("{advice}\n\nDetails: {error}")
+}
+
 /// The installed game, or `None` when only the demo galaxy is available.
 #[derive(Resource, Clone, Default)]
 pub struct Game(pub Option<GameAssets>);
@@ -679,5 +699,21 @@ mod tests {
         let music = alamo_audio::MusicLibrary::load(assets.fs.as_ref(), &mut w);
         assert!(music.get("Galactic_Map_Rebel_Music_Event").is_some());
         assert!(music.get("Main_Menu_Music_Event").is_some());
+    }
+}
+
+#[cfg(test)]
+mod problem_tests {
+    use super::describe_problem;
+
+    #[test]
+    fn problems_get_actionable_advice() {
+        let install = describe_problem("no Empire at War install found (use --game-dir <path>)", "123");
+        assert!(install.contains("--game-dir") && install.contains("Steam"));
+        let missing_mod = describe_problem("cannot open game files: mod data not found: X", "123");
+        assert!(missing_mod.contains("Workshop") && missing_mod.contains("123"));
+        let incomplete = describe_problem("no galactic conquest campaigns found", "123");
+        assert!(incomplete.contains("incomplete"));
+        assert!(describe_problem("weird", "1").contains("Verify the game"));
     }
 }

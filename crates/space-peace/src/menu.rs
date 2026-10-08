@@ -8,7 +8,7 @@ use bevy::{app::AppExit, prelude::*};
 use crate::camera::GalaxyCamera;
 use crate::flow::{AppScreen, Paused, StartCampaign, UiSound};
 use crate::galaxy_map::spawn_props;
-use crate::game::{self, CampaignEntry, DEFAULT_CAMPAIGN, Game, GameAssets, StartupLog};
+use crate::game::{self, CampaignEntry, DEFAULT_CAMPAIGN, Game, GameAssets, StartupLog, StartupProblem};
 use crate::newgame::{MenuRefresh, NewGameOptions, SlotChosen, SlotMode, SlotScreen};
 use crate::options::OptionsOpen;
 
@@ -40,6 +40,8 @@ pub enum MenuAction {
     Quit,
     /// Leave the (placeholder) tactical battle screen.
     EndBattle,
+    /// Dismiss the startup problem and continue with the demo galaxy.
+    AckProblem,
     /// Next AI difficulty tier of a new game.
     CycleDifficulty,
     /// Switch between the Remake AI and the classic AI.
@@ -167,6 +169,19 @@ pub fn campaign_spec(campaigns: &[CampaignEntry], options: &NewGameOptions) -> M
     }
 }
 
+/// Shown instead of the title screen when the game files cannot be used.
+pub fn problem_spec(message: &str) -> MenuSpec {
+    MenuSpec {
+        title: "Cannot find the game".into(),
+        subtitle: message.to_owned(),
+        columns: vec![MenuColumn {
+            items: vec![MenuItem::new("Continue with the demo galaxy", MenuAction::AckProblem), MenuItem::new("Quit", MenuAction::Quit)],
+            ..default()
+        }],
+        ..default()
+    }
+}
+
 /// The pause menu.
 pub fn pause_spec() -> MenuSpec {
     MenuSpec {
@@ -246,8 +261,11 @@ impl Plugin for MenuPlugin {
     }
 }
 
-fn spawn_main_menu(mut commands: Commands) {
-    spawn_menu(&mut commands, &main_menu_spec(), ScreenMenu);
+fn spawn_main_menu(mut commands: Commands, problem: Res<StartupProblem>) {
+    match &problem.0 {
+        Some(m) => spawn_menu(&mut commands, &problem_spec(m), ScreenMenu),
+        None => spawn_menu(&mut commands, &main_menu_spec(), ScreenMenu),
+    };
 }
 
 fn spawn_campaign_menu(mut commands: Commands, campaigns: Res<Campaigns>, options: Res<NewGameOptions>) {
@@ -486,6 +504,7 @@ fn apply_clicks(
     mut slots: ResMut<SlotScreen>,
     mut chosen: MessageWriter<SlotChosen>,
     mut refresh: MessageWriter<MenuRefresh>,
+    mut problem: ResMut<StartupProblem>,
 ) {
     for MenuClicked(action) in clicks.read() {
         match action {
@@ -504,6 +523,10 @@ fn apply_clicks(
                     id: request.as_ref().map_or(0, |r| r.id),
                     outcome: crate::battle_seam::BattleOutcome::Aborted,
                 });
+            }
+            MenuAction::AckProblem => {
+                problem.0 = None;
+                refresh.write(MenuRefresh);
             }
             MenuAction::CycleDifficulty => {
                 newgame.cycle();
@@ -533,14 +556,23 @@ fn refresh_campaign_menu(
     menus: Query<Entity, With<ScreenMenu>>,
     campaigns: Res<Campaigns>,
     options: Res<NewGameOptions>,
+    problem: Res<StartupProblem>,
 ) {
-    if refresh.read().last().is_none() || *screen.get() != AppScreen::CampaignSelect {
+    if refresh.read().last().is_none() {
         return;
     }
+    let spec = match *screen.get() {
+        AppScreen::CampaignSelect => campaign_spec(&campaigns.0, &options),
+        AppScreen::MainMenu => match &problem.0 {
+            Some(m) => problem_spec(m),
+            None => main_menu_spec(),
+        },
+        _ => return,
+    };
     for e in &menus {
         commands.entity(e).despawn();
     }
-    spawn_menu(&mut commands, &campaign_spec(&campaigns.0, &options), ScreenMenu);
+    spawn_menu(&mut commands, &spec, ScreenMenu);
 }
 
 #[cfg(test)]
