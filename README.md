@@ -10,13 +10,22 @@ An unofficial, lightweight Rust/Bevy engine that plays the **Galactic Conquest**
 
 ## Status
 
-**Work in progress - not playable end-to-end yet (roughly 35% of the goal).**
+**Work in progress - the whole loop runs, but it has had very little testing with a real mouse and keyboard.**
 
-The building blocks exist and are tested individually: file system and data loading, model/animation/particle
-parsing, a Bevy renderer with reconstructed EaW-style shaders, headless deterministic simulations for the galaxy and
-for space battles, a Lua runtime for the Remake's scripts, audio, the original EaW UI built from game data, and an app
-shell (loading screen, menu, campaign select, galaxy map). What is still missing is the integration into one playable
-loop (galaxy map -> battle -> result -> galaxy map). See [`HANDOFF.md`](HANDOFF.md) and the `STATUS.md` in each crate.
+What works (verified with an automated offscreen smoke test, `tools\smoke.ps1`, and rendered pictures):
+
+- Title screen on one of the game's own space maps, campaign and difficulty selection, faction loading screens.
+- Galactic Conquest on the Remake's galaxies: the real planet models, the original command bar and minimap, fleets, build
+  and move orders, production queue with cancel, notifications, pause and speed control, the Remake's story scripts and
+  AI (several difficulty levels, or the built-in classic AI), save and load, superweapon planet destruction, victory and
+  defeat screens with statistics.
+- Space battles from the galaxy: the original tactical bar, orders, abilities, retreat, reinforcements, result dialog and
+  the result applied back to the galaxy.
+
+What is still rough or missing: real-input testing, sound and music were never heard in testing, entering a battle can
+still hitch briefly while models load, AI balance needs live play, and ground combat, story campaigns and
+cinematics are out of scope. Details: [`PLAYTEST.md`](PLAYTEST.md), [`HANDOFF.md`](HANDOFF.md) and the `STATUS.md` in each
+crate.
 
 ## Goals
 

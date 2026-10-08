@@ -1,8 +1,9 @@
 # Playtest guide
 
-First live test of **Space Peace: Not at War**. The game is a work in progress: the galaxy map, the Remake scripts and AI,
-the tactical battle round trip and save/load work in offscreen tests, but the real-window input has had little live testing.
-Please note anything odd and send the log file (see below).
+First live test of **Space Peace: Not at War**. The whole loop (title screen, galaxy map, battle, result, end screen,
+save/load) runs and passes an automated offscreen smoke test (`tools\smoke.ps1`, 18 scenarios), but almost everything
+was checked with scripted input and rendered pictures, not with a real mouse and keyboard. Expect rough edges in input,
+camera feel and performance on your machine, and please send the log file (see the end).
 
 ## Build and run
 
@@ -14,21 +15,30 @@ Requirements: Windows 10/11, the Steam copy of *Empire at War - Gold Pack* (Forc
 .\target\release\space-peace.exe
 ```
 
+If the game or the mod is not found, the title screen says what is missing and how to fix it (install via Steam,
+subscribe to the Workshop mod, or `--game-dir <path>`).
+
 Useful flags: `--fullscreen`, `--no-vsync`, `--volume 0.5`, `--campaign <name>` (skip the menu),
 `--difficulty easy|normal|hard|brutal|fair`, `--classic-ai`, `--load-from <save.json>`, `--game-dir <path>`, `--help` lists all.
 
 ## A first game
 
-1. Main menu: **Galactic Conquest**, pick a galaxy and your side. Under the list: **AI difficulty** (Easy / Normal / Hard come
-   from the mod, Brutal and Fair are custom) and **Classic AI** (the built-in AI instead of the Remake AI).
-2. The galaxy starts running at 1x ("Preparing galaxy..." for about a second). Press **Space** to pause.
-3. Click one of your planets (ringed in your colour): the bottom bar shows its build pads. Click a pad to queue a unit or structure
-   (credits are paid at once). The top row of pads are ships and star base upgrades, the planet tab (second bar button) lists structures.
-   Hover a pad for name, cost and build time.
-4. Click a fleet (small ship marker next to a planet) or drag a box around fleets, then **right-click** a planet or drag the
-   fleet onto it. A green ring marks the destination and the fleet line shows the route and ETA. Fleets in hyperspace cannot be
-   redirected, order a retreat first.
+1. Title screen (one of the game's own space maps, slowly drifting): **Galactic Conquest**, pick a galaxy and your side.
+   Under the list: **AI difficulty** (Easy / Normal / Hard come from the mod, Brutal and Fair are custom) and **Classic AI**
+   (the built-in AI instead of the Remake's scripts and AI).
+2. A faction loading screen shows while the galaxy is prepared (about a second). The map opens on your richest planet with
+   it selected. The galaxy runs at 1x; press **Space** to pause.
+3. The bottom bar shows the planet's build pads. Click a pad to queue a ship, squadron, structure or upgrade (credits are paid
+   at once; hover for name, cost, build time, and why it is greyed out). The second bar tab lists structures. Click a queue
+   slot to **cancel** it; the tooltip shows the refund and a message confirms it.
+4. Click a fleet (marker next to a planet) or drag a box around fleets, then **right-click** a planet or drag the fleet onto
+   it. A green ring marks the destination, the fleet line shows route and ETA. Fleets in hyperspace cannot be redirected,
+   order a retreat first.
 5. When hostile fleets meet at a planet with you, a dialog offers **Fight** (tactical battle) or **Auto-resolve**.
+6. After a battle a result dialog lists each side's units, survivors and losses. A won campaign (or a lost one) ends with a
+   Victory / Defeat screen with your statistics; you can stay on the map or return to the menu.
+7. **Superweapon:** with a fleet that has a planet destroyer (e.g. the Death Star) in orbit of a hostile planet, a red
+   "Fire superweapon" button appears; a confirmation dialog follows. The planet becomes an asteroid wreck.
 
 ## Controls
 
@@ -41,7 +51,7 @@ Galaxy map
 | Mouse wheel | zoom |
 | Right or middle drag, WASD / arrows, screen edge | pan |
 | Space | pause / resume |
-| 1 - 5 | game speed levels |
+| 1 - 5 | game speed levels (also the bar's play/pause and fast-forward buttons) |
 | M / V / R | merge / split / retreat the selected fleets |
 | Minimap click or drag | move the camera |
 | Esc | pause menu (Resume, Save Game, Load Game, Options, Main Menu, Quit) |
@@ -57,31 +67,45 @@ Tactical battle
 | S | stop |
 | Ctrl + 0-9, 0-9 | store / recall control groups; Ctrl + A selects all |
 | WASD / arrows, Q / E, middle drag, wheel | camera |
-| Bottom bar | selection slots, ability buttons, retreat (available after the countdown) |
+| Bottom bar | selection slots, ability buttons, retreat (after the countdown) |
+| Reinforcement button (bar) | opens the reserve window: units that did not fit under the unit cap; click a slot to call one in (Shift: all). A refusal at the cap shows a message |
+| Minimap | tactical minimap (map objects, ships by side, camera); click or drag to move the camera |
 | **F10** | abandon the battle: the galaxy simulation auto-resolves it |
 
 Saving: Esc -> **Save Game** -> a slot (5 slots). Loading: **Load Game** in the main menu (any slot, restarts that galaxy) or in
 the pause menu (same galaxy only). Saves live in `%APPDATA%\SpacePeace\saves\slotN.json` and replay the game when loaded, so
 loading a long game takes a while (a progress bar shows the week reached).
 
+Options (title screen or pause menu): window mode, resolution, vsync, FPS limit, UI scale, volumes, edge scrolling, camera
+speed, graphics quality preset (anti-aliasing, bloom, shadows, particle density; also individually). Settings are saved.
+
 ## What to try
 
-- Build a few ships and structures, watch the production queue and the credit counter.
-- Send a fleet along two or three jumps; let the AI take planets and watch the notification ticker (top left).
-- Fight a battle yourself, then auto-resolve another. After a battle the result (losses, captured planet) shows on the map.
-- Save, quit to the menu, load; try Hard and the classic AI.
-- Resize / fullscreen / different resolutions, 4K if you have it (the UI scales with the window height).
+- Build a few ships and structures, cancel one, watch the credits and the production queue.
+- Send a fleet along two or three jumps; watch the notification ticker (top left) and the AI taking planets.
+- Fight a battle yourself (selection, orders, abilities, reinforcements, retreat), then auto-resolve another; read the result dialog.
+- Save, go to the menu, load; try Hard, Brutal and the classic AI.
+- Resize, fullscreen, other resolutions, 4K if you have it (the UI scales with the window height); try the quality presets
+  if the frame rate is low.
+- If you have a way to get a Death Star: fire it at an enemy planet.
 
 ## Known gaps
 
-- No reinforcements in battles yet (needs a galaxy-sim API), no ground combat, no story campaigns, no cinematics.
-- Production queue entries cannot be cancelled; planet-screen pad layout is the simple version of the original.
-- The tactical minimap shows the galaxy picture as background, not the battle map.
-- Map lighting follows the map data: red sun systems (e.g. Celanon) make ships look red and dark.
-- Window mode, click handling, hotkeys, audio and fullscreen were only partly tested live; audio is silent in the offscreen tests.
-- Performance: if the frame rate is low, send the numbers from F3 and what was on screen.
+- No ground combat, story campaigns or cinematics (out of scope).
+- Entering a battle: models now preload behind the loading screen, but a short hitch (~60 ms in release tests) can remain;
+  hardpoint models still load on first use.
+- Unit voices, advisor lines, the victory announcer and music hooks exist but were never heard in testing (playback is
+  silent in the automated tests); expect missing or mistimed sounds.
+- Title screen: the camera framing is not tuned per map (one map shows mostly nebula); no menu art from the original
+  (the original logo plate is deliberately not used).
+- Battle loading uses your faction's loading art, not the defender's. An early render of a planet explosion showed
+  hard-edged squares; not reproduced since the particle rework – tell us if you see it.
+- Real mouse and keyboard input, window handling, hotkeys and fullscreen have had little live testing.
+- Performance: in offscreen tests the galaxy map ran at about 4-5 ms/frame at 4K, but battles with many ships were not
+  measured on real hardware; send the F3 numbers and what was on screen if it is slow.
 
 ## Logs and reporting problems
 
-Every run writes a log to `%APPDATA%\SpacePeace\logs\space-peace-<time>.log` (the 10 newest are kept, panics are included).
-Settings are in `%APPDATA%\SpacePeace\settings.toml`. Please send the newest log with a short description of what you did.
+Every windowed run writes a log to `%APPDATA%\SpacePeace\logs\space-peace-<time>.log` (the 10 newest are kept, panics
+included). Settings are in `%APPDATA%\SpacePeace\settings.toml`. Please send the newest log with a short description of
+what you did and what you saw.
