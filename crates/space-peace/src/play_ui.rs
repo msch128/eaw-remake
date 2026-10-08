@@ -1726,6 +1726,7 @@ fn spawn_planet_panel(mut commands: Commands, existing: Query<(), With<PlanetPan
 
 #[allow(clippy::too_many_arguments)]
 fn update_planet_panel(
+    screen: Res<State<AppScreen>>,
     pv: Res<crate::planet_view::PlanetViewState>,
     selection: Res<PlayerSelection>,
     bridge: Res<PlayBridge>,
@@ -1739,6 +1740,10 @@ fn update_planet_panel(
 ) {
     // In the planet view the viewed planet counts even when only a fleet is selected.
     let planet = if pv.active { pv.planet } else { selection.planet.and_then(|p| bridge.sim_to_planet.get(p as usize).copied().flatten()) }.and_then(|i| view.planets.get(i));
+    if *screen.get() == AppScreen::SpaceBattle {
+        panel.set_if_neq(Visibility::Hidden);
+        return;
+    }
     let Some(p) = planet.filter(|p| !p.info.is_empty()) else {
         panel.set_if_neq(Visibility::Hidden);
         return;
