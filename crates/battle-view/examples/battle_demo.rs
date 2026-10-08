@@ -54,6 +54,8 @@ struct Capture {
     /// Wall milliseconds of every simulation step seen (one entry per tick).
     step_ms: Vec<f32>,
     last_tick: u64,
+    /// Frame times before the statistics start (entering the battle: model and texture loading).
+    early_ms: Vec<f64>,
     frames: u32,
     cam_applied: bool,
     auto: bool,
@@ -226,6 +228,7 @@ fn main() {
                 skip: 0,
                 step_ms: Vec::new(),
                 last_tick: 0,
+                early_ms: Vec::new(),
                 frames: 0,
                 cam_applied: false,
                 auto,
@@ -275,6 +278,9 @@ fn capture_driver(
     let dt = now.duration_since(cap.last).as_secs_f64() * 1000.0;
     cap.last = now;
     cap.frames += 1;
+    if cap.frames <= 400 {
+        cap.early_ms.push(dt);
+    }
     let Some(rt) = rt else { return };
     if status.tick == 0 || ships.0.is_empty() {
         return;
@@ -403,6 +409,12 @@ fn capture_driver(
                         }
                         if let Some(p) = prof {
                             print!("{}", p.summary());
+                        }
+                        {
+                            let mut v: Vec<(usize, f64)> = cap.early_ms.iter().copied().enumerate().skip(1).collect();
+                            v.sort_by(|a, b| b.1.total_cmp(&a.1));
+                            let top: Vec<String> = v.iter().take(4).map(|(i, m)| format!("{m:.0} ms (frame {i})")).collect();
+                            println!("longest of the first {} frames: {top:?}", cap.early_ms.len());
                         }
                         let mut st = cap.step_ms.clone();
                         st.sort_by(f32::total_cmp);

@@ -122,3 +122,9 @@ Add `battle-view`, `galaxy-sim` (already there through galaxy-play) and `eaw-ui`
   `prepare_preprocess_bind_groups` 0.7). Main world is small: `propagate_parent_transforms` 0.29, `simulate_particles` 0.22, `animate_models` 0.16, `update_particle_batches` 0.15, `update_ships` 0.13, everything else < 0.12 ms.
 - Scene scaling: `battle_demo --small` (1214 mesh entities, ~650 visible) 7.3 ms vs 8.4 ms for the full battle (2728 entities, ~850-1150 visible): the 290 ships add only ~1 ms; ~6.5 ms is a floor of the offscreen
   harness (1 ms `ScheduleRunnerPlugin` wait, Bevy render-graph/submit overhead, MSAA/HDR 4K target) that does not scale with resolution (960x540 is not faster). No game-side hotspot to optimize; the windowed app does not have the 1 ms wait.
+
+## Entering a battle without a stall
+- `start_battle` now requests `BattleSession::asset_paths()` (ship models, sky, nebula, props) from `alamo_render::ModelPreloader` the first frame the session exists and waits (`is_idle`) before it spawns the
+  scene, so file reads, `.alo` parsing and texture decoding run on worker threads and the render thread only builds meshes. The system runs while the `BattleSession` resource exists (no longer only on the frame
+  it is added); it does nothing once the battle has started. No app change needed: the loading screen just stays up a few frames longer. Hardpoint/turret models are not in the list and still load on first use.
+- `battle_demo` prints `longest of the first 400 frames`. Release, 1920x1080, demo battle: 107-118 ms (frame 2) before, 62 ms after; the remaining 62 ms is the demo's own `Battle::new` (the app builds the battle on a worker thread in `from_request`). A later 58-61 ms frame in one of three runs is the Executor's mesh build (18 ms) plus other spawns.

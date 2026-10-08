@@ -218,6 +218,18 @@ impl TextureCache {
         handle
     }
 
+    /// Registers a texture that was decoded off the main thread (`None` = missing or undecodable).
+    pub fn insert_decoded(&mut self, name: &str, image: Option<Image>, images: &mut Assets<Image>) {
+        let key = name.to_ascii_lowercase();
+        if self.by_name.contains_key(&key) {
+            return;
+        }
+        if image.is_none() {
+            self.missing.push(name.to_string());
+        }
+        self.by_name.insert(key, image.map(|i| images.add(i)));
+    }
+
     /// Magenta-ish placeholder used for textures that cannot be loaded.
     pub fn fallback(&mut self, images: &mut Assets<Image>) -> Handle<Image> {
         self.fallback

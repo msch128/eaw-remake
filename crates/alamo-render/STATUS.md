@@ -78,3 +78,11 @@ the first directional light. `battle-view` spawns the map's fill lights from the
   `particle.wgsl` has a vertex stage that reads them (indices past the live count give degenerate triangles). Gotcha: a non-indexed draw's `vertex_index` includes the mesh's first vertex in the shared mesh slab,
   so the shader subtracts `mesh[instance_index].first_vertex_index`. Bolts keep their arbitrary indices. Measured with the Chrome trace: `allocate_and_free_meshes` 1123 us -> 4 us per frame.
   Visual check: death-explosion scene mean abs diff 0.2/255 (0.13% of sampled pixels > 24), bolts scene 0.007, capital explosion 0.2 (`target/vis/death_before_t01000.png` vs `death_after5_t01000.png`).
+- `P_Planet_Explode_Galactic` showed solid orange squares in an older galaxy render (integrator `sw4.png`: every particle quad a flat square, i.e. the sprite texture sampled as white). Current builds render it
+  textured (round shockwave, smoke clouds, discs; checked in `render_scene` and in `space-peace --offscreen ... --grant-unit Death_Star --at Arda --fire confirm`), and the textures load (logged `texture loaded = true`).
+  Most likely cause: Bevy binds its white fallback image until the sprite texture / storage buffers are prepared on the GPU, so the first frames of a new batch were solid squares. New batches now stay hidden for
+  `BATCH_WARMUP_FRAMES` (3) frames. I could not catch the very first frames offscreen (the burst is already advanced at the earliest frame I could capture), so the warm-up is a mitigation, not a verified fix.
+- Asynchronous preloading (`preload.rs`): `ModelPreloader::request(fs, cache, paths)` reads, parses and texture-decodes models on up to 4 worker threads; `integrate_preloads` (PostUpdate, before `spawn_models`)
+  moves results into `ModelCache`/`TextureCache` within a 3 ms/frame budget; `load_model` then skips read+parse and the texture decode. `is_idle()` tells when everything requested is cached. `load_model` logs
+  a breakdown (read / parse / textures / rest) for models that take >= 20 ms. Release numbers for the 13 distinct models of the demo battle before: Imperial_SD 88 ms, Executor 208 ms (read 58, parse 80, textures 51,
+  rest 19), Titan 66, Allegiance 56, MC80 45, ...; textures were ~half of it, read+parse ~35 %.

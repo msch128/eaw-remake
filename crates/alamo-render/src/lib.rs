@@ -14,6 +14,7 @@ pub mod lod;
 pub mod material;
 pub mod model;
 pub mod particles;
+pub mod preload;
 pub mod projectiles;
 pub mod sequences;
 pub mod texture;
@@ -41,6 +42,7 @@ pub use projectiles::{
     AutoDespawn, ImpactKind, ProjectileImpact, ProjectileVisual, ShieldFlash, ShieldHit,
     SpawnParticleEffect,
 };
+pub use preload::ModelPreloader;
 pub use sequences::{DeathSequence, HyperspaceArrival, HyperspaceArrived, PlayDeath};
 pub use xmldata::{HardpointDef, ParticleDef, ProjectileDef, UnitDef, XmlDefs};
 
@@ -64,9 +66,11 @@ impl Plugin for AlamoRenderPlugin {
             .init_resource::<AlamoRenderSettings>()
             .init_resource::<ModelCache>()
             .init_resource::<texture::TextureCache>()
+            .init_resource::<preload::ModelPreloader>()
             .add_systems(
                 PostUpdate,
                 (
+                    preload::integrate_preloads.before(model::spawn_models),
                     model::spawn_models,
                     model::update_team_colors,
                     model::update_billboards.before(TransformSystems::Propagate),

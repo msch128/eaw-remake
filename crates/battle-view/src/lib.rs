@@ -182,6 +182,8 @@ pub struct BattleSession {
     request: Option<Arc<TacticalRequest>>,
     player_side: Option<u8>,
     player_faction: Option<String>,
+    /// The model preload for this session was requested (see `start_battle`).
+    preload_requested: bool,
 }
 
 impl BattleSession {
@@ -195,6 +197,7 @@ impl BattleSession {
             request: None,
             player_side: None,
             player_faction: None,
+            preload_requested: false,
         }
     }
 
@@ -241,7 +244,17 @@ impl BattleSession {
             request: Some(Arc::new(request.clone())),
             player_side,
             player_faction: player_side.map(|i| request.sides[i as usize].faction_name.clone()),
+            preload_requested: false,
         })
+    }
+
+    /// Model files of the battle (ships, sky, nebula, props) for [`alamo_render::ModelPreloader::request`].
+    pub fn asset_paths(&self) -> Vec<String> {
+        let mut v: Vec<String> = self.visuals.ships.iter().filter_map(|s| s.model.clone()).collect();
+        v.extend(self.scene.skydome.clone());
+        v.extend(self.scene.nebula.clone());
+        v.extend(self.scene.props.iter().map(|p| p.model.clone()));
+        v
     }
 
     /// The galactic request this battle was built from, if any.
@@ -368,7 +381,7 @@ impl Plugin for BattleViewPlugin {
         app.add_systems(
                 Update,
                 (
-                    start_battle.run_if(resource_added::<BattleSession>),
+                    start_battle.run_if(resource_exists::<BattleSession>),
                     stop_battle.run_if(resource_removed::<BattleSession>),
                     (
                         control::read_pointer,
@@ -402,7 +415,24 @@ fn start_battle(
     mut gizmo_config: ResMut<GizmoConfigStore>,
     mut render_settings: ResMut<alamo_render::AlamoRenderSettings>,
     particles: Option<ResMut<alamo_render::ParticleSettings>>,
+    preloader: Option<Res<alamo_render::ModelPreloader>>,
+    alamo_fs: Option<Res<alamo_render::AlamoFs>>,
+    model_cache: Option<Res<alamo_render::ModelCache>>,
 ) {
+    if session.built.is_none() && session.setup.is_none() {
+        return;
+    }
+    // Load the battle's models and textures on worker threads first (a few frames) instead of stalling
+    // the render thread for the length of the whole load on the frame the ships spawn.
+    if let (Some(pre), Some(fs), Some(cache)) = (&preloader, &alamo_fs, &model_cache) {
+        if !session.preload_requested {
+            session.preload_requested = true;
+            pre.request(&fs.0, cache, session.asset_paths());
+        }
+        if !pre.is_idle() {
+            return;
+        }
+    }
     let Some((battle, catalog)) = session.built.take().or_else(|| {
         let setup = session.setup.take()?;
         let catalog = setup.catalog.clone();

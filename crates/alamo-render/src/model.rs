@@ -226,11 +226,23 @@ pub struct CachedModel {
 #[derive(Resource, Default)]
 pub struct ModelCache {
     models: HashMap<String, Arc<CachedModel>>,
+    /// Models parsed by the preload workers, waiting for `load_model` to build their meshes.
+    preparsed: HashMap<String, Model>,
     materials: HashMap<(String, usize, usize, [u32; 3]), Handle<AlamoMaterial>>,
     logged_shaders: HashSet<String>,
 }
 
 impl ModelCache {
+    /// True if `path` (a resolved model path) is loaded or waiting as a preparsed model.
+    pub fn contains(&self, path: &str) -> bool {
+        let k = path.to_ascii_lowercase();
+        self.models.contains_key(&k) || self.preparsed.contains_key(&k)
+    }
+
+    pub(crate) fn insert_preparsed(&mut self, path: &str, model: Model) {
+        self.preparsed.insert(path.to_ascii_lowercase(), model);
+    }
+
     /// Number of distinct models loaded.
     pub fn model_count(&self) -> usize {
         self.models.len()
@@ -553,11 +565,23 @@ fn load_model(p: &mut LoaderParams, key: &str) -> Result<Arc<CachedModel>, Strin
     if let Some(m) = p.cache.models.get(&key.to_ascii_lowercase()) {
         return Ok(m.clone());
     }
-    let data =
-        p.fs.0
-            .read(key)
-            .map_err(|e| format!("cannot read {key}: {e}"))?;
-    let model = Model::parse(&data).map_err(|e| format!("cannot parse {key}: {e}"))?;
+    let t_start = std::time::Instant::now();
+    // A model parsed by the preload workers skips the file read and the parse.
+    let (model, t_read) = if let Some(m) = p.cache.preparsed.remove(&key.to_ascii_lowercase()) {
+        (m, t_start.elapsed())
+    } else {
+        let data =
+            p.fs.0
+                .read(key)
+                .map_err(|e| format!("cannot read {key}: {e}"))?;
+        let t_read = t_start.elapsed();
+        (
+            Model::parse(&data).map_err(|e| format!("cannot parse {key}: {e}"))?,
+            t_read,
+        )
+    };
+    let t_parse = t_start.elapsed();
+    let mut t_tex = std::time::Duration::ZERO;
     let most = select_lod(&model, LodSelect::MostDetailed);
 
     let mut meshes = Vec::new();
@@ -585,7 +609,10 @@ fn load_model(p: &mut LoaderParams, key: &str) -> Result<Arc<CachedModel>, Strin
                 has_tangents(sub),
                 has_vertex_color(sub),
                 |name| {
-                    textures.get(&fs.0, images, name).or_else(|| {
+                    let t0 = std::time::Instant::now();
+                    let r = textures.get(&fs.0, images, name);
+                    t_tex += t0.elapsed();
+                    r.or_else(|| {
                         // Missing base textures get the loud placeholder, others are ignored.
                         name.to_ascii_lowercase()
                             .contains("texture")
@@ -644,6 +671,14 @@ fn load_model(p: &mut LoaderParams, key: &str) -> Result<Arc<CachedModel>, Strin
     p.cache
         .models
         .insert(key.to_ascii_lowercase(), cached.clone());
+    let total = t_start.elapsed();
+    if total.as_millis() >= 20 {
+        info!(
+            "load_model {key}: {total:.1?} (read {t_read:.1?}, parse {:.1?}, textures {t_tex:.1?}, rest {:.1?})",
+            t_parse - t_read,
+            total - t_parse - t_tex
+        );
+    }
     Ok(cached)
 }
 
