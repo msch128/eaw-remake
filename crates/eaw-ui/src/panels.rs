@@ -533,36 +533,31 @@ pub fn spawn_dialog(world: &mut World, spec: &DialogSpec) -> Option<Entity> {
     Some(root)
 }
 
-/// Closes dialogs on button release and reports the choice.
+/// Closes dialogs when a button is pressed and reports the choice. Firing on the press (not the
+/// release) cannot be lost when press and release land in one frame, or when the cursor leaves
+/// the button in between.
 pub(crate) fn dialog_buttons(
     mut q: Query<(&DialogButton, &Interaction, &mut BackgroundColor), Changed<Interaction>>,
     mut out: MessageWriter<EawDialogResult>,
     mut clicked: MessageWriter<EawButtonClicked>,
     mut commands: Commands,
-    mut armed: Local<bool>,
 ) {
     for (b, i, mut bg) in &mut q {
         match i {
-            Interaction::Pressed => *armed = true,
-            Interaction::Hovered => {
-                bg.0 = Color::srgba(1.0, 1.0, 1.0, 0.16);
-                if std::mem::take(&mut *armed) {
-                    out.write(EawDialogResult {
-                        dialog: b.dialog,
-                        button: b.index,
-                    });
-                    clicked.write(EawButtonClicked {
-                        name: format!("dialog_button_{}", b.index),
-                        entity: b.dialog,
-                        shift: false,
-                    });
-                    commands.entity(b.dialog).despawn();
-                }
+            Interaction::Pressed => {
+                out.write(EawDialogResult {
+                    dialog: b.dialog,
+                    button: b.index,
+                });
+                clicked.write(EawButtonClicked {
+                    name: format!("dialog_button_{}", b.index),
+                    entity: b.dialog,
+                    shift: false,
+                });
+                commands.entity(b.dialog).despawn();
             }
-            Interaction::None => {
-                bg.0 = Color::srgba(1.0, 1.0, 1.0, 0.06);
-                *armed = false;
-            }
+            Interaction::Hovered => bg.0 = Color::srgba(1.0, 1.0, 1.0, 0.16),
+            Interaction::None => bg.0 = Color::srgba(1.0, 1.0, 1.0, 0.06),
         }
     }
 }
@@ -570,6 +565,26 @@ pub(crate) fn dialog_buttons(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pressing_a_dialog_button_reports_and_closes() {
+        let mut app = App::new();
+        app.add_message::<EawDialogResult>()
+            .add_message::<EawButtonClicked>()
+            .add_systems(Update, dialog_buttons);
+        let dialog = app.world_mut().spawn(EawDialog).id();
+        let btn = app
+            .world_mut()
+            .spawn((DialogButton { dialog, index: 1 }, Interaction::Hovered, BackgroundColor(Color::NONE)))
+            .id();
+        app.update();
+        *app.world_mut().get_mut::<Interaction>(btn).unwrap() = Interaction::Pressed;
+        app.update();
+        let got: Vec<_> = app.world_mut().resource_mut::<Messages<EawDialogResult>>().drain().collect();
+        assert_eq!(got.len(), 1);
+        assert_eq!((got[0].dialog, got[0].button), (dialog, 1));
+        assert!(app.world().get_entity(dialog).is_err());
+    }
 
     #[test]
     fn minimap_mapping_roundtrips() {

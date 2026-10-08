@@ -380,6 +380,15 @@ fn spawn_panel(world: &mut World, name: &str, faction: UiFaction, game: &alamo_d
             spec.offset = Vec2::new(0.0, -20.0);
             spawn_shell(world, &spec);
         }
+        "battle" => {
+            data.set_text("text_attack_choice", "BESTINE: SPACE BATTLE IMMINENT!");
+            data.set_text("choice_button_left", "Begin");
+            data.set_text("choice_button_right", "Auto-Resolve");
+            drop(data);
+            let mut spec = ShellSpec::new("i_attack_mode_choice.alo", faction);
+            spec.anchor = ShellAnchor::TopCenter;
+            spawn_shell(world, &spec);
+        }
         "dialog" => {
             drop(data);
             spawn_dialog(

@@ -201,6 +201,8 @@ pub enum ShellAnchor {
     TopLeft,
     /// Top-right corner.
     TopRight,
+    /// Top edge, horizontally centred (battle banner).
+    TopCenter,
     /// Screen centre (fleet organizer, planet screen, dialogs).
     Center,
 }
@@ -320,6 +322,11 @@ pub fn spawn_shell(world: &mut World, spec: &ShellSpec) -> Option<Entity> {
         ShellAnchor::TopRight => {
             node.right = Val::Px(-ox);
             node.top = Val::Px(-oy);
+        }
+        ShellAnchor::TopCenter => {
+            node.left = Val::Percent(50.0);
+            node.top = Val::Px(-oy);
+            node.margin.left = Val::Px(-width * 0.5 + ox);
         }
         ShellAnchor::Center => {
             node.left = Val::Percent(50.0);
