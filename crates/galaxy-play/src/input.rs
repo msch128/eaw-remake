@@ -279,11 +279,6 @@ pub fn draw_drag(
         }
         None => **vis = Visibility::Hidden,
     }
-    if let Some((_, plan)) = &drag.preview {
-        let color = if plan.blockades.is_empty() { Color::srgb(0.4, 1.0, 0.6) } else { Color::srgb(1.0, 0.6, 0.2) };
-        let pts: Vec<Vec3> = plan.path.iter().map(|&p| layout.positions[p as usize] + Vec3::Y * 0.2).collect();
-        gizmos.linestrip(pts, color);
-    }
     if drag.dragging
         && let Some(p) = hover.planet
     {

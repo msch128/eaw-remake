@@ -318,3 +318,90 @@ pub fn update_fleet_labels(
 pub fn slot_angle(s: usize) -> f32 {
     -FRAC_PI_2 + (s as f32 - 1.0) * 0.95
 }
+
+/// Gizmo group of the route lines: a soft wide glow under a bright core.
+#[derive(Default, Reflect, GizmoConfigGroup)]
+pub struct RouteGizmos;
+
+/// Gizmo group of the wide, faint halo under the route line.
+#[derive(Default, Reflect, GizmoConfigGroup)]
+pub struct RouteGlowGizmos;
+
+/// Line widths of the route gizmos (pixels).
+pub fn configure_route_gizmos(mut store: ResMut<GizmoConfigStore>) {
+    store.config_mut::<RouteGizmos>().0.line.width = 4.0;
+    store.config_mut::<RouteGlowGizmos>().0.line.width = 14.0;
+}
+
+/// The planned route of the player's selected or moving fleets, as in the original: a yellow line along the
+/// lanes, hop by hop, with marching dashes, plus a preview to the hovered planet while fleets are selected.
+#[allow(clippy::too_many_arguments)]
+pub fn draw_routes(
+    mut core: Gizmos<RouteGizmos>,
+    mut glow: Gizmos<RouteGlowGizmos>,
+    state: Res<SimState>,
+    layout: Res<GalaxyLayout>,
+    selection: Res<PlayerSelection>,
+    player: Res<PlayerFaction>,
+    hover: Res<crate::input::PlayHover>,
+    time: Res<Time>,
+    fleets: Query<(&FleetVisual, &Transform)>,
+) {
+    let g = state.galaxy();
+    let world = &state.world;
+    let lift = Vec3::Y * 0.3;
+    let phase = time.elapsed_secs() * 0.8;
+    let mut draw = |pts: &[Vec3], alpha: f32| {
+        let yellow = Color::srgba(1.0, 0.85, 0.1, alpha);
+        let halo = Color::srgba(1.0, 0.75, 0.05, alpha * 0.18);
+        glow.linestrip(pts.iter().copied(), halo);
+        // Marching dashes: lengths in world units of the planet size.
+        let dash = layout.unit * 1.6;
+        let gap = layout.unit * 0.9;
+        let period = dash + gap;
+        let mut travelled = -(phase * period).rem_euclid(period);
+        for w in pts.windows(2) {
+            let (a, b) = (w[0], w[1]);
+            let len = a.distance(b);
+            if len < 1e-3 {
+                continue;
+            }
+            let dir = (b - a) / len;
+            let mut s = travelled;
+            while s < len {
+                let (s0, s1) = (s.max(0.0), (s + dash).min(len));
+                if s1 > s0 {
+                    core.line(a + dir * s0, a + dir * s1, yellow);
+                }
+                s += period;
+            }
+            travelled += len;
+        }
+    };
+    let mut previewed = false;
+    for (v, tf) in &fleets {
+        let Some(f) = g.fleets.get(&v.id) else { continue };
+        if player.0 != Some(v.owner) {
+            continue;
+        }
+        let selected = selection.fleets.contains(&v.id);
+        match &f.location {
+            galaxy_sim::FleetLocation::Moving { to, rest, .. } => {
+                // Always shown for the player's moving fleets, brighter when selected.
+                let mut pts = vec![tf.translation + lift, layout.positions[*to as usize] + lift];
+                pts.extend(rest.iter().map(|&p| layout.positions[p as usize] + lift));
+                draw(&pts, if selected { 1.0 } else { 0.55 });
+            }
+            galaxy_sim::FleetLocation::AtPlanet(at) if selected && !previewed => {
+                if let Some(target) = hover.planet.filter(|t| t != at)
+                    && let Some(plan) = crate::geometry::plan_route(world, g, v.owner, world.fleet_speed(f), *at, target)
+                {
+                    let pts: Vec<Vec3> = plan.path.iter().map(|&p| layout.positions[p as usize] + lift).collect();
+                    draw(&pts, 0.9);
+                    previewed = true;
+                }
+            }
+            _ => {}
+        }
+    }
+}

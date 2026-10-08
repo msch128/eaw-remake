@@ -156,7 +156,9 @@ impl Plugin for GalaxyPlayPlugin {
             .init_resource::<visuals::FleetEntities>()
             .add_message::<PlayAction>()
             .add_message::<PlayEvent>()
-            .add_systems(Startup, (visuals::setup_assets, input::spawn_box_rect))
+            .init_gizmo_group::<visuals::RouteGizmos>()
+            .init_gizmo_group::<visuals::RouteGlowGizmos>()
+            .add_systems(Startup, (visuals::setup_assets, input::spawn_box_rect, visuals::configure_route_gizmos))
             .configure_sets(Update, (PlaySet::Logic, PlaySet::Visuals, PlaySet::Input, PlaySet::Ui).chain())
             .configure_sets(Update, (PlaySet::Logic, PlaySet::Visuals, PlaySet::Input, PlaySet::Ui).run_if(resource_exists::<SimState>))
             .add_systems(
@@ -165,7 +167,7 @@ impl Plugin for GalaxyPlayPlugin {
                     (logic::pump_snapshots, logic::hotkeys, logic::handle_actions, logic::drive_clock, logic::prune_selection).chain().in_set(PlaySet::Logic),
                     (
                         (visuals::sync_fleets, visuals::fit_fleet_models).chain(),
-                        (visuals::draw_fleet_markers, visuals::update_fleet_labels).run_if(|hidden: Res<PlayMapHidden>| !hidden.0),
+                        (visuals::draw_fleet_markers, visuals::draw_routes, visuals::update_fleet_labels).run_if(|hidden: Res<PlayMapHidden>| !hidden.0),
                     )
                         .chain()
                         .in_set(PlaySet::Visuals),
