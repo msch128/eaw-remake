@@ -205,3 +205,4 @@ Add `battle-view`, `galaxy-sim` (already there through galaxy-play) and `eaw-ui`
   The sim's refusal itself is not visible to the view (commands are fire and forget), so the checks are replicated on the snapshot.
 - Hotkeys: Shift + 1..6 press the ability buttons of the focused unit (the data has none; plain digits stay control groups). Autocast toggles are not implemented (no state for it in battle-sim).
 - Tests: `ability-hotkey` in `input_test` only runs for real when the selected unit has an ability (it is vacuous in the Hoth smoke scenario); the targeting cursor has no automated test yet.
+- Esc (host decision, `space-peace::battle_play::battle_menu`): cancels an armed order / targeting first; with nothing armed it opens the Resume / Retreat menu, which pauses the battle clock while open (the player's own pause is restored on close). `control::orders` no longer reads Esc. `input_test` steps `escape ArmedCleared / Paused(true) / Paused(false)` (25 checks).

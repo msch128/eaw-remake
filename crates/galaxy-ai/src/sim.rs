@@ -63,8 +63,10 @@ pub struct QueueView {
 pub enum Refused {
     /// Not enough credits (retry later).
     NoCredits,
-    /// Requirements not met on this planet (tech, shipyard, slots, locks) or population/limit reached.
+    /// Requirements not met on this planet (tech, shipyard, locks) or a build limit reached.
     Unavailable,
+    /// Fine in principle but busy right now: the production queue of the planet is full or the population cap is reached (retry later).
+    Busy,
     /// Unknown name or other permanent problem.
     Invalid,
 }
