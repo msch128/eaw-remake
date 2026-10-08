@@ -22,6 +22,10 @@ pub struct PlanetViewState {
     pub planet: Option<usize>,
     /// 0 = galaxy map, 1 = fully in the planet view (eased).
     pub blend: f32,
+    /// World positions of the three rectangular ground-structure frames on the base layout (left to right).
+    pub ground_slots: Vec<Vec3>,
+    /// World positions of the six round orbital/defence slots on the front strip (left to right).
+    pub orbital_slots: Vec<Vec3>,
 }
 
 /// Registers the planet view.
@@ -31,7 +35,7 @@ impl Plugin for PlanetViewPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<PlanetViewState>().add_systems(
             Update,
-            (view_input, view_scene, view_camera.after(crate::camera::apply_camera), fit_models)
+            (view_input, view_scene, view_camera.after(crate::camera::apply_camera), view_fade, fit_models)
                 .chain()
                 .run_if(in_state(AppScreen::Galaxy)),
         );
@@ -123,7 +127,8 @@ fn view_scene(
         commands.spawn((ViewEntity, AlamoModel::new(model.clone()), FitModel { radius: 24.0, spin: 0.01 }, Transform::from_translation(ORIGIN + Vec3::new(-15.8, -1.0, -15.0))));
     }
     // Station: the model of the planet's star base level.
-    if let (Some(sim), Some(cat)) = (sim, catalog)
+    let (sim_for_structs, cat_for_structs) = (sim.as_deref(), catalog.as_deref());
+    if let (Some(sim), Some(cat)) = (sim_for_structs, cat_for_structs)
         && let Some(sb) = sim.galaxy().planets.get(p.0).and_then(|s| s.starbase)
         && let Some(Some(m)) = cat.starbase_models.get(sb as usize)
     {
@@ -131,6 +136,22 @@ fn view_scene(
     }
     if let Some(tex) = textures.as_mut().and_then(|t| t.get(&mut images, "i_galactic_organize_land.dds")) {
         spawn_platform(&mut commands, &mut meshes, &mut mats, tex.handle, land_cell(p.1.terrain.as_deref()), ORIGIN + Vec3::new(0.0, -2.5, -10.0));
+    }
+    // Slot positions on the platform quad (centre `plat`, 3.8 x 1.9, facing +Z): read off the art.
+    let plat = ORIGIN + Vec3::new(0.0, -2.5, -10.0);
+    state.ground_slots = [-0.9f32, 0.0, 0.95].iter().map(|x| plat + Vec3::new(*x, -0.07, 0.05)).collect();
+    state.orbital_slots = (0..6).map(|k| plat + Vec3::new((k as f32 - 2.5) * 0.62, -0.74, 0.05)).collect();
+    if let Some(sim) = sim_for_structs {
+        let cat_for_structs = cat_for_structs;
+        let (mut g, mut o) = (0usize, 0usize);
+        for &s in &sim.galaxy().planets.get(p.0).map(|pl| pl.structures.clone()).unwrap_or_default() {
+            let Some(def) = sim.world.structures.get(s as usize) else { continue };
+            let Some(Some(model)) = cat_for_structs.and_then(|c| c.structure_models.get(s as usize)) else { continue };
+            let slot = if def.orbital { o += 1; state.orbital_slots.get(o - 1) } else { g += 1; state.ground_slots.get(g - 1) };
+            if let Some(at) = slot {
+                commands.spawn((ViewEntity, AlamoModel::new(model.clone()), FitModel { radius: if def.orbital { 0.22 } else { 0.5 }, spin: 0.3 }, Transform::from_translation(*at + Vec3::Y * 0.2)));
+            }
+        }
     }
 }
 
@@ -195,4 +216,43 @@ fn spawn_platform(
         ..default()
     });
     commands.spawn((ViewEntity, Name::new("base layout"), Mesh3d(meshes.add(Rectangle::new(3.8, 1.9))), MeshMaterial3d(mat), Transform::from_translation(at)));
+}
+
+/// Black quad in front of the camera: the galaxy fades to black while the camera flies in, and the planet
+/// scene fades in (and the reverse when leaving).
+#[derive(Component)]
+struct FadeQuad;
+
+fn view_fade(
+    mut commands: Commands,
+    state: Res<PlanetViewState>,
+    cam: Single<&Transform, With<GalaxyCamera>>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut mats: ResMut<Assets<StandardMaterial>>,
+    mut quad: Query<(Entity, &mut Transform, &MeshMaterial3d<StandardMaterial>), (With<FadeQuad>, Without<GalaxyCamera>)>,
+) {
+    let alpha = (std::f32::consts::PI * state.blend).sin().powi(2).powf(0.7);
+    let visible = state.blend > 0.0 && state.blend < 1.0;
+    match quad.single_mut() {
+        Ok((e, mut tf, mat)) => {
+            if !visible {
+                commands.entity(e).despawn();
+                return;
+            }
+            tf.translation = cam.translation + cam.rotation * Vec3::NEG_Z * 1.6;
+            tf.rotation = cam.rotation;
+            if let Some(mut m) = mats.get_mut(&mat.0) {
+                m.base_color = Color::srgba(0.0, 0.0, 0.0, alpha);
+            }
+        }
+        Err(_) if visible => {
+            commands.spawn((
+                FadeQuad,
+                Mesh3d(meshes.add(Rectangle::new(8.0, 8.0))),
+                MeshMaterial3d(mats.add(StandardMaterial { base_color: Color::srgba(0.0, 0.0, 0.0, 0.0), unlit: true, alpha_mode: AlphaMode::Blend, cull_mode: None, ..default() })),
+                Transform::default(),
+            ));
+        }
+        Err(_) => {}
+    }
 }

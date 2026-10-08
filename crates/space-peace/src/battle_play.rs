@@ -4,7 +4,7 @@
 //! Flow: "Fight" in the pending-battle dialog -> `galaxy-play` asks the sim worker for the tactical
 //! setup -> `PlayEvent::TacticalReady` (see `play.rs`) stores [`PendingTactical`] and opens the screen
 //! -> [`begin_session`] inserts the `BattleSession` -> `battle_view::BattleFinished` ->
-//! `PlayAction::ApplyTactical` and back to the map. F10 abandons the fight (the sim auto-resolves it).
+//! `PlayAction::ApplyTactical` and back to the map. Esc opens the battle menu; Retreat (or F10) abandons the fight (the sim auto-resolves it).
 
 use alamo_render::SunLight;
 use battle_view::{BattleCamera, BattleEntity, BattleSession, BattleStatus, BattleViewSettings};
@@ -70,7 +70,7 @@ impl Plugin for BattlePlayPlugin {
             .add_systems(OnExit(AppScreen::SpaceBattle), end_session)
             .add_systems(
                 Update,
-                (finish_battle_view, abort_key, battle_ui_camera, battle_shot, battle_header, battle_orders)
+                (finish_battle_view, abort_key, battle_menu, battle_ui_camera, battle_shot, battle_header, battle_orders)
                     .run_if(in_state(AppScreen::SpaceBattle).and_then(resource_exists::<PendingTactical>)),
             );
     }
@@ -106,13 +106,6 @@ fn suspend_galaxy_look(
         saved.hud.push((e, *v));
         *v = Visibility::Hidden;
     }
-    commands.spawn((
-        BattleHint,
-        Text::new("F10: abandon the battle (auto-resolve)"),
-        TextFont { font_size: FontSize::Px(13.0), ..default() },
-        TextColor(Color::srgba(0.75, 0.85, 1.0, 0.6)),
-        Node { position_type: PositionType::Absolute, top: Val::Px(6.0), left: Val::Px(8.0), ..default() },
-    ));
 }
 
 /// Root of the battle loading screen and the frames it has been shown.
@@ -362,6 +355,38 @@ Battle time: {:.0} s", lines.join("
 pub struct BattleSummary {
     pub title: String,
     pub text: String,
+}
+
+#[derive(Component)]
+struct BattleMenuRoot;
+
+/// Esc opens the battle menu (Resume / Retreat); Retreat gives the fight up like F10.
+fn battle_menu(
+    keys: Res<ButtonInput<KeyCode>>,
+    mut menu: ResMut<crate::menu::BattleMenu>,
+    pending: Res<PendingTactical>,
+    existing: Query<Entity, With<BattleMenuRoot>>,
+    mut commands: Commands,
+    mut done: MessageWriter<BattleFinished>,
+) {
+    if keys.just_pressed(KeyCode::Escape) {
+        menu.open = !menu.open;
+    }
+    if menu.retreat {
+        menu.retreat = false;
+        done.write(BattleFinished { id: pending.0.battle_id, outcome: BattleOutcome::Aborted });
+    }
+    match (menu.open, existing.is_empty()) {
+        (true, true) => {
+            crate::menu::spawn_menu(&mut commands, &crate::menu::battle_menu_spec(), BattleMenuRoot);
+        }
+        (false, false) => {
+            for e in &existing {
+                commands.entity(e).despawn();
+            }
+        }
+        _ => {}
+    }
 }
 
 /// F10 gives the fight up; the sim settles the battle with its auto-resolve.

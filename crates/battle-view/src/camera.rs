@@ -92,9 +92,8 @@ const PUSH_SCROLL_MODIFIER: f32 = 2.0;
 /// `Tactical_Edge_Scroll_Region` (Gameconstants.xml) in pixels.
 const EDGE_PIXELS: f32 = 2.0;
 const ROTATE_SPEED: f32 = 1.6;
-/// Tilt limits of the base pitch in radians (estimate; the engine's tactical camera limits are not in the data).
+/// Tilt limits of the base pitch in radians, changed by middle-drag up / down (estimate; the engine's tactical camera limits are not in the data).
 const PITCH_RANGE: (f32, f32) = (0.55, 1.30);
-const PITCH_KEY_SPEED: f32 = 0.8;
 
 /// Reads keyboard, edge scrolling, wheel and drag input.
 #[allow(clippy::too_many_arguments)]
@@ -170,9 +169,9 @@ pub fn camera_input(
         rot += 1.0;
     }
     cam.target_yaw += rot * ROTATE_SPEED * dt;
-    // Page Up / Page Down tilt the view.
-    let tilt = f32::from(keys.pressed(KeyCode::PageUp)) - f32::from(keys.pressed(KeyCode::PageDown));
-    cam.pitch = (cam.pitch + tilt * PITCH_KEY_SPEED * dt).clamp(PITCH_RANGE.0, PITCH_RANGE.1);
+    // Page Up / Page Down rotate the view around the focus point like Q / E.
+    let turn = f32::from(keys.pressed(KeyCode::PageUp)) - f32::from(keys.pressed(KeyCode::PageDown));
+    cam.target_yaw += turn * ROTATE_SPEED * dt;
     if buttons.pressed(MouseButton::Middle) && motion.delta != Vec2::ZERO {
         let fov = match projection {
             Projection::Perspective(p) => p.fov,

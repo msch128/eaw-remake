@@ -153,10 +153,13 @@ pub fn discover_plans(src: &dyn alamo_fs::FileSource) -> HashMap<String, Vec<Str
             if let Some(rest) = l.strip_prefix("Category")
                 && let Some((_, v)) = rest.split_once('=')
             {
-                let cat = v.trim().trim_matches('"').trim_matches('\'').to_ascii_lowercase();
-                if !cat.is_empty() {
+                // A script can serve several goals: `Category = "Build_Starbase_Upgrade | Build_Initial_Starbase"`.
+                let cats: Vec<String> = v.trim().trim_matches('"').trim_matches('\'').split('|').map(|c| c.trim().to_ascii_lowercase()).filter(|c| !c.is_empty()).collect();
+                if !cats.is_empty() {
                     let name = rest_name(&path);
-                    out.entry(cat).or_default().push(name);
+                    for cat in cats {
+                        out.entry(cat).or_default().push(name.clone());
+                    }
                     break;
                 }
             }

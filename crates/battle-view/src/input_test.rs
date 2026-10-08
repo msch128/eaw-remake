@@ -12,7 +12,8 @@
 
 use bevy::input::ButtonState;
 use bevy::input::InputSystems;
-use bevy::input::mouse::MouseButtonInput;
+use bevy::input::keyboard::{Key, KeyboardInput};
+use bevy::input::mouse::{MouseButtonInput, MouseMotion};
 use bevy::prelude::*;
 use bevy::window::{CursorMoved, PrimaryWindow};
 use eaw_ui::{EawButton, EawButtonClicked, EawButtonState};
@@ -54,9 +55,13 @@ enum Step {
     PlaceReinforcement,
     BarAreaKeepsSelection,
     EmptyClickDeselects,
+    /// Hold the middle button and move: left / right rotates, up / down tilts.
+    MiddleDrag,
+    /// Page Up rotates the camera.
+    PageUpRotates,
 }
 
-const STEPS: [Step; 18] = [
+const STEPS: [Step; 20] = [
     Step::SelectShip,
     Step::RightClickGround,
     Step::RightClickEnemyRim,
@@ -75,6 +80,8 @@ const STEPS: [Step; 18] = [
     Step::PlaceReinforcement,
     Step::BarAreaKeepsSelection,
     Step::EmptyClickDeselects,
+    Step::MiddleDrag,
+    Step::PageUpRotates,
 ];
 
 #[derive(Resource, Default)]
@@ -91,16 +98,22 @@ struct TestState {
     probe_hover: bool,
     probe_press: bool,
     place_world: Option<Vec3>,
+    /// Camera yaw / pitch at the start and after the horizontal part of a drag.
+    cam0: (f32, f32),
+    cam1: (f32, f32),
     reserve_before: u32,
     results: Vec<(String, bool)>,
     done: bool,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 enum Act {
     Move(Vec2),
     Down(MouseButton),
     Up(MouseButton),
+    Drag(Vec2),
+    KeyDown(KeyCode, Key),
+    KeyUp(KeyCode, Key),
 }
 
 fn drive(
@@ -129,9 +142,13 @@ fn drive(
         Res<ActionCam>,
         Res<ArmedOrder>,
         Res<crate::tactical_ui::ReinforceUi>,
+        Query<&BattleCamera>,
+        MessageWriter<MouseMotion>,
+        MessageWriter<KeyboardInput>,
     ),
 ) {
-    let (block, pointer, hover, names, all_nodes, interactions, mut commands, action, armed, reinforce) = extra;
+    let (block, pointer, hover, names, all_nodes, interactions, mut commands, action, armed, reinforce, cams, mut motion, mut keyboard) = extra;
+    let cam_pose = cams.single().map(|c| (c.target_yaw, c.pitch)).unwrap_or_default();
     let (cam_entity, cam, gt) = *camera;
     let sf = cam.target_scaling_factor().unwrap_or(1.0);
     for o in orders.read() {
@@ -333,6 +350,40 @@ fn drive(
             6 => verdict = Some(("bar-area-keeps-selection".into(), !sel.ships.is_empty())),
             _ => {}
         },
+        Step::MiddleDrag => match t {
+            0 => {
+                st.cam0 = cam_pose;
+                act = Some(Act::Move(Vec2::new(vp.x * 0.5, vp.y * 0.3)));
+            }
+            1 => act = Some(Act::Down(MouseButton::Middle)),
+            2 => act = Some(Act::Drag(Vec2::new(60.0, 0.0))),
+            4 => {
+                st.cam1 = cam_pose;
+                act = Some(Act::Drag(Vec2::new(0.0, 40.0)));
+            }
+            6 => act = Some(Act::Up(MouseButton::Middle)),
+            10 => {
+                let yaw_only = (st.cam1.0 - st.cam0.0).abs() > 0.05 && (st.cam1.1 - st.cam0.1).abs() < 1e-4;
+                let tilt = (cam_pose.1 - st.cam1.1).abs() > 0.02 && (cam_pose.0 - st.cam1.0).abs() < 1e-4;
+                if !(yaw_only && tilt) {
+                    info!("input-test:   drag: start {:?}, after horizontal {:?}, end {:?}", st.cam0, st.cam1, cam_pose);
+                }
+                verdict = Some(("middle-drag-rotates-and-tilts".into(), yaw_only && tilt));
+            }
+            _ => {}
+        },
+        Step::PageUpRotates => match t {
+            0 => {
+                st.cam0 = cam_pose;
+                act = Some(Act::KeyDown(KeyCode::PageUp, Key::PageUp));
+            }
+            12 => act = Some(Act::KeyUp(KeyCode::PageUp, Key::PageUp)),
+            16 => {
+                let ok = (cam_pose.0 - st.cam0.0).abs() > 0.05 && (cam_pose.1 - st.cam0.1).abs() < 1e-4;
+                verdict = Some(("page-up-rotates".into(), ok));
+            }
+            _ => {}
+        },
         Step::EmptyClickDeselects => match t {
             0 => act = click_at(0, Vec2::new(vp.x * 0.5, vp.y * 0.12), MouseButton::Left),
             1 | 2 => act = click_at(t, Vec2::ZERO, MouseButton::Left),
@@ -369,6 +420,15 @@ fn drive(
         }
         Some(Act::Up(b)) => {
             buttons.write(MouseButtonInput { button: b, state: ButtonState::Released, window: *entity });
+        }
+        Some(Act::Drag(delta)) => {
+            motion.write(MouseMotion { delta });
+        }
+        Some(Act::KeyDown(code, key)) => {
+            keyboard.write(KeyboardInput { key_code: code, logical_key: key, state: ButtonState::Pressed, text: None, repeat: false, window: *entity });
+        }
+        Some(Act::KeyUp(code, key)) => {
+            keyboard.write(KeyboardInput { key_code: code, logical_key: key, state: ButtonState::Released, text: None, repeat: false, window: *entity });
         }
         None => {}
     }

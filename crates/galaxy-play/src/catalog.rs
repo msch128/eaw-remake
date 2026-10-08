@@ -24,6 +24,8 @@ pub struct PlayCatalog {
     pub generic_fleet_model: Option<String>,
     /// Display name per structure type.
     pub structures: Vec<String>,
+    /// Model per structure type (`Land_Model_Name` for ground, `Space_Model_Name` for orbital structures), for the planet view.
+    pub structure_models: Vec<Option<String>>,
     /// Display name per star base level.
     pub starbases: Vec<String>,
     /// `Galactic_Model_Name` per star base level (the small station drawn next to the planet).
@@ -59,6 +61,7 @@ impl PlayCatalog {
             unit_land_models: vec![None; world.units.len()],
             generic_fleet_model: None,
             structures: world.structures.iter().map(|s| prettify(&s.name)).collect(),
+            structure_models: vec![None; world.structures.len()],
             starbases: world.starbases.iter().map(|s| prettify(&s.name)).collect(),
             factions: world.factions.iter().map(|f| prettify(&f.name)).collect(),
             starbase_models: vec![None; world.starbases.len()],
@@ -93,6 +96,15 @@ impl PlayCatalog {
             unit_land_models,
             generic_fleet_model,
             structures: world.structures.iter().map(|s| text(&s.text_id, &s.name)).collect(),
+            structure_models: world
+                .structures
+                .iter()
+                .map(|s| {
+                    let r = data.objects.resolve(&s.name)?;
+                    let key = if s.orbital { "space_model_name" } else { "land_model_name" };
+                    r.string(key).or_else(|| r.string("space_model_name")).filter(|m| !m.trim().is_empty())
+                })
+                .collect(),
             starbases: world
                 .starbases
                 .iter()

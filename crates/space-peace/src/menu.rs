@@ -38,6 +38,10 @@ pub enum MenuAction {
     Quit,
     /// Leave the (placeholder) tactical battle screen.
     EndBattle,
+    /// Close the tactical battle menu.
+    CloseBattleMenu,
+    /// Retreat from the tactical battle (the galaxy simulation settles it).
+    RetreatBattle,
     /// Dismiss the startup problem and continue with the demo galaxy.
     AckProblem,
     /// Open the save or load slot list.
@@ -145,6 +149,28 @@ pub fn pause_spec() -> MenuSpec {
     }
 }
 
+/// The Esc menu of the tactical battle: open flag and a pending retreat request.
+#[derive(Resource, Default, Debug)]
+pub struct BattleMenu {
+    /// Menu is shown.
+    pub open: bool,
+    /// The player chose Retreat.
+    pub retreat: bool,
+}
+
+/// The battle menu.
+pub fn battle_menu_spec() -> MenuSpec {
+    MenuSpec {
+        title: "Space Battle".into(),
+        columns: vec![MenuColumn {
+            items: vec![MenuItem::new("Resume", MenuAction::CloseBattleMenu), MenuItem::new("Retreat", MenuAction::RetreatBattle)],
+            ..default()
+        }],
+        dim_background: true,
+        ..default()
+    }
+}
+
 /// Campaigns offered on the selection screen.
 #[derive(Resource, Default, Debug)]
 pub struct Campaigns(pub Vec<CampaignEntry>);
@@ -182,6 +208,7 @@ pub struct MenuPlugin;
 impl Plugin for MenuPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Campaigns>()
+            .init_resource::<BattleMenu>()
             .add_message::<MenuClicked>()
             .add_systems(OnEnter(AppScreen::MainMenu), (spawn_main_menu, spawn_backdrop_unless_scene))
             .add_systems(OnEnter(AppScreen::CampaignSelect), spawn_backdrop)
@@ -539,6 +566,7 @@ fn apply_clicks(
     mut slots: ResMut<SlotScreen>,
     mut chosen: MessageWriter<SlotChosen>,
     mut refresh: MessageWriter<MenuRefresh>,
+    mut battle_menu: ResMut<BattleMenu>,
     mut problem: ResMut<StartupProblem>,
 ) {
     for MenuClicked(action) in clicks.read() {
@@ -550,6 +578,11 @@ fn apply_clicks(
                 next.set(AppScreen::MainMenu);
             }
             MenuAction::Resume => paused.0 = false,
+            MenuAction::CloseBattleMenu => battle_menu.open = false,
+            MenuAction::RetreatBattle => {
+                battle_menu.open = false;
+                battle_menu.retreat = true;
+            }
             MenuAction::EndBattle => {
                 finished.write(crate::battle_seam::BattleFinished {
                     id: request.as_ref().map_or(0, |r| r.id),

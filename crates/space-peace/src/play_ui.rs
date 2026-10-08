@@ -675,7 +675,7 @@ fn move_info_panel(mut panel: Single<&mut Node, With<InfoPanel>>, mut hint: Quer
 }
 
 #[allow(clippy::type_complexity)]
-fn hide_play_ui(mut bar: Query<&mut Visibility, Or<(With<EawCommandBar>, With<BarBacking>, With<HeroBar>)>>) {
+fn hide_play_ui(mut bar: Query<&mut Visibility, Or<(With<EawCommandBar>, With<BarBacking>, With<HeroBar>, With<SpeedText>)>>) {
     for mut v in &mut bar {
         *v = Visibility::Hidden;
     }
