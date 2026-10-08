@@ -36,20 +36,27 @@ pub struct MenuScenePlugin;
 
 impl Plugin for MenuScenePlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(OnEnter(AppScreen::MainMenu), spawn_scene.after(crate::menu::spawn_main_menu))
+        app.add_systems(OnEnter(AppScreen::MainMenu), load_scene.after(crate::menu::spawn_main_menu))
+            .add_systems(Update, spawn_scene.run_if(resource_exists::<PendingScene>).run_if(in_state(AppScreen::MainMenu)))
             .add_systems(OnExit(AppScreen::MainMenu), remove_scene)
             .add_systems(Update, (tag_scene_entities, drift_camera).run_if(resource_exists::<MenuSceneInfo>));
     }
 }
 
-#[allow(clippy::type_complexity)]
-fn spawn_scene(
+/// A title scene whose models are being loaded by the preloader.
+#[derive(Resource)]
+struct PendingScene {
+    scene: SpaceScene,
+    name: String,
+}
+
+/// Reads the map and asks the preloader for its models, so they are ready when the scene spawns (no freeze).
+fn load_scene(
     mut commands: Commands,
     game: Res<Game>,
     existing: Option<Res<MenuSceneInfo>>,
-    ambient: Option<Res<GlobalAmbientLight>>,
-    mut suns: Query<(Entity, &mut DirectionalLight), (With<SunLight>, Without<battle_view::BattleEntity>)>,
-    backdrop: Query<Entity, With<MenuBackdrop>>,
+    preloader: Option<Res<alamo_render::ModelPreloader>>,
+    cache: Option<Res<alamo_render::ModelCache>>,
 ) {
     let (None, Some(assets)) = (existing, game.0.as_ref()) else { return };
     let pick = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as usize) % MAPS.len();
@@ -62,13 +69,36 @@ fn spawn_scene(
             return;
         }
     };
+    if let (Some(pre), Some(cache)) = (preloader, cache) {
+        let mut paths: Vec<String> = scene.props.iter().map(|p| p.model.clone()).collect();
+        paths.extend(scene.skydome.clone());
+        paths.extend(scene.nebula.clone());
+        pre.request(&assets.fs, &cache, paths);
+    }
+    commands.insert_resource(PendingScene { scene, name: MAPS[pick].to_owned() });
+}
+
+#[allow(clippy::type_complexity)]
+fn spawn_scene(
+    mut commands: Commands,
+    pending: Res<PendingScene>,
+    preloader: Option<Res<alamo_render::ModelPreloader>>,
+    ambient: Option<Res<GlobalAmbientLight>>,
+    mut suns: Query<(Entity, &mut DirectionalLight), (With<SunLight>, Without<battle_view::BattleEntity>)>,
+    backdrop: Query<Entity, With<MenuBackdrop>>,
+) {
+    if preloader.is_some_and(|p| !p.is_idle()) {
+        return;
+    }
+    let scene = &pending.scene;
+    commands.remove_resource::<PendingScene>();
     let props: Vec<Vec3> = scene.props.iter().filter(|p| !p.backdrop).map(|p| p.position).collect();
     let center = if props.is_empty() { Vec3::ZERO } else { props.iter().copied().sum::<Vec3>() / props.len() as f32 };
     // Frame the bulk of the objects (the 60th percentile), so the camera sits outside the cluster but still sees it.
     let mut dists: Vec<f32> = props.iter().map(|p| p.distance(center)).collect();
     dists.sort_by(f32::total_cmp);
     let radius = dists.get(dists.len() * 6 / 10).copied().unwrap_or(800.0).clamp(800.0, 12_000.0);
-    info!("title scene {} with {} objects", MAPS[pick], props.len());
+    info!("title scene {} with {} objects", pending.name, props.len());
     // The galaxy backdrop and the galaxy lights make way for the scene.
     for e in &backdrop {
         commands.entity(e).despawn();
@@ -78,7 +108,7 @@ fn spawn_scene(
         dimmed.push((e, light.illuminance));
         light.illuminance = 0.0;
     }
-    battle_view::scene::spawn_scene(&mut commands, &scene, 9_000.0, false);
+    battle_view::scene::spawn_scene(&mut commands, scene, 9_000.0, false);
     commands.insert_resource(MenuSceneInfo { center, radius, toward_sun: Vec3::new(scene.lights[0].direction.x, 0.0, scene.lights[0].direction.z).normalize_or(Vec3::Z), ambient: ambient.map(|a| a.clone()), suns: dimmed });
 }
 
@@ -123,6 +153,7 @@ fn remove_scene(
     scene: Query<Entity, With<MenuSceneEntity>>,
     mut galaxy_suns: Query<(Entity, &mut DirectionalLight), (With<SunLight>, Without<MenuSceneEntity>)>,
 ) {
+    commands.remove_resource::<PendingScene>();
     let Some(info) = info else { return };
     for e in &scene {
         commands.entity(e).despawn();

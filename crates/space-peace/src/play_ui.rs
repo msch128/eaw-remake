@@ -481,7 +481,7 @@ fn refresh_texts(
 }
 
 /// Opens the dialog for a battle that waits for the player.
-fn battle_dialog(world: &mut World) {
+fn battle_dialog(world: &mut World, mut gone_frames: Local<u32>) {
     let Some(model) = world.get_resource::<PlayUiModel>() else { return };
     let wanted = model.battle.clone();
     let open = world.resource::<BattleDialogState>().open;
@@ -489,8 +489,19 @@ fn battle_dialog(world: &mut World) {
         && b.id == id
         && world.get_entity(e).is_ok()
     {
+        *gone_frames = 0;
         return;
     }
+    // The dialog closes itself when a button is pressed; its result arrives a frame later. Do not
+    // open a second dialog in between (it would be left behind with nobody listening).
+    if let (Some((id, _)), Some(b)) = (open, &wanted)
+        && b.id == id
+        && *gone_frames < 10
+    {
+        *gone_frames += 1;
+        return;
+    }
+    *gone_frames = 0;
     let Some(b) = wanted else {
         world.resource_mut::<BattleDialogState>().decided = None;
         return;
@@ -520,6 +531,7 @@ fn battle_dialog(world: &mut World) {
         buttons: vec!["Fight".into(), "Auto-resolve".into()],
     };
     if let Some(e) = spawn_dialog(world, &spec) {
+        info!("play: battle dialog shown for battle {} at {}", b.id, b.planet_name);
         world.resource_mut::<BattleDialogState>().open = Some((b.id, e));
     }
 }
@@ -530,6 +542,7 @@ fn battle_dialog_result(mut results: MessageReader<EawDialogResult>, mut dialog:
         if r.dialog != e {
             continue;
         }
+        info!("play: battle dialog button {} pressed for battle {id}", r.button);
         dialog.open = None;
         dialog.decided = Some(id);
         let choice = if r.button == 0 { BattleChoice::Fight } else { BattleChoice::AutoResolve };
@@ -890,6 +903,7 @@ fn draw_toast(time: Res<Time>, mut toast: ResMut<Toast>, mut tip: Single<(&mut T
 }
 
 /// Offscreen `--click` / `--battle-click`: presses command bar buttons by name so UI paths can be verified headless.
+#[allow(clippy::too_many_arguments)]
 fn scripted_clicks(
     args: Res<crate::cli::Args>,
     screen: Res<State<AppScreen>>,

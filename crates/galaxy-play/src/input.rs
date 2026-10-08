@@ -86,7 +86,6 @@ pub fn update_hover(
     window: Option<Single<&Window, With<PrimaryWindow>>>,
     camera: Query<(&Camera, &GlobalTransform), With<Camera3d>>,
     layout: Res<GalaxyLayout>,
-    cfg: Res<PlayConfig>,
     entities: Res<FleetEntities>,
     transforms: Query<&Transform, With<FleetVisual>>,
     mut hover: ResMut<PlayHover>,
@@ -102,18 +101,15 @@ pub fn update_hover(
             }),
         );
         let right = cam_tf.right();
-        let planet = if cfg.pick_planets || fleet.is_none() {
-            pick_nearest(
+        // The planet under the cursor is always known (also with a fleet icon next to it): orders need it as their target.
+        let planet = pick_nearest(
                 cursor,
                 layout.positions.iter().enumerate().filter_map(|(i, &c)| {
                     let a = camera.world_to_viewport(cam_tf, c).ok()?;
                     let b = camera.world_to_viewport(cam_tf, c + right * layout.radii[i]).ok()?;
                     Some((i as PlanetId, a, (a.distance(b) * 1.3).max(14.0)))
                 }),
-            )
-        } else {
-            None
-        };
+        );
         Some(PlayHover { fleet, planet })
     })()
     .unwrap_or_default();

@@ -67,6 +67,7 @@ impl Plugin for PlayGluePlugin {
                 Update,
                 (
                     hold_clock,
+                    log_play_flow,
                     select_granted.run_if(resource_exists::<PlayBridge>),
                     sync_destroyed.run_if(resource_exists::<PlayBridge>),
                     galaxy_audio.run_if(resource_exists::<alamo_audio::plugin::AlamoAudio>.and_then(resource_exists::<PlayerFaction>)),
@@ -585,5 +586,42 @@ fn select_granted(
     if let Some(f) = found {
         actions.write(PlayAction::SelectPlanet(f.planet()));
         actions.write(PlayAction::SelectFleets(vec![f.id]));
+    }
+}
+
+/// INFO lines for the player's orders and the battle flow, so a live test can be read from the log file.
+fn log_play_flow(
+    mut actions: MessageReader<PlayAction>,
+    mut events: MessageReader<PlayEvent>,
+    state: Option<Res<SimState>>,
+    selection: Res<PlayerSelection>,
+) {
+    let Some(state) = state else {
+        actions.clear();
+        events.clear();
+        return;
+    };
+    let name = |p: PlanetId| state.world.planets[p as usize].display_name.clone();
+    for a in actions.read() {
+        match a {
+            PlayAction::SelectFleets(f) => info!("play: fleet selection {f:?}"),
+            PlayAction::SelectPlanet(p) => info!("play: planet selected {:?}", p.map(name)),
+            PlayAction::MoveSelected(to) => info!("play: order - move fleets {:?} to {}", selection.fleets, name(*to)),
+            PlayAction::RetreatSelected => info!("play: order - retreat fleets {:?}", selection.fleets),
+            PlayAction::ResolveBattle { id, choice } => info!("play: battle {id}: player chose {choice:?}"),
+            PlayAction::CancelTactical(id) => info!("play: battle {id}: tactical fight abandoned"),
+            _ => {}
+        }
+    }
+    for e in events.read() {
+        match e {
+            PlayEvent::CommandRejected { command, error } => warn!("play: order refused: {command:?}: {error:?}"),
+            PlayEvent::Sim(galaxy_sim::Event::FleetArrived { fleet, planet }) => info!("play: fleet {fleet} arrived at {}", name(*planet)),
+            PlayEvent::Sim(galaxy_sim::Event::BattlePending(b)) => {
+                info!("play: battle {} pending at {} between factions {:?} (human involved: {})", b.id, name(b.planet), b.factions, state.current.human_battles.iter().any(|h| h.id == b.id))
+            }
+            PlayEvent::TacticalReady(r) => info!("play: tactical fight {} ready ({} sides)", r.battle_id, r.sides.len()),
+            _ => {}
+        }
     }
 }
