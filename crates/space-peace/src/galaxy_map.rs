@@ -259,7 +259,7 @@ fn fix_star_dome(
                         material: h.0.clone(),
                         base: m.params.diffuse,
                         // Reference look: orbit lines at full strength, the core glow dimmed to a maroon haze, no grid.
-                        strength: match name.as_str() { "grid" => 0.0, "core" => 0.32, _ => 1.8 },
+                        strength: match name.as_str() { "grid" => 0.0, "core" => 0.32, _ => 0.9 },
                     });
                 }
             }
@@ -607,7 +607,7 @@ fn update_labels(
     };
     // Labels grow when zoomed in and shrink when zoomed out (whole pixel steps only).
     let zoom_out = zoom_fraction(&bounds, orbit.distance);
-    let font_px = (21.0 + (9.0 - 21.0) * smoothstep(0.0, 0.7, zoom_out)).round();
+    let font_px = (16.0 + (8.0 - 16.0) * smoothstep(0.0, 0.7, zoom_out)).round();
     // UI coordinates are multiplied by the UI scale; the layout below works in viewport pixels.
     let us = ui_scale.0.max(0.1);
     let font_node_px = (font_px / us).round().max(1.0);
@@ -736,7 +736,7 @@ fn update_labels(
     }
     for (row, mut node, mut vis) in &mut pip_rows {
         match slots.get(row.planet).copied().flatten() {
-            Some(s) if visible[row.planet] && (selection.0 == Some(row.planet) || zoom_out < 0.3) => {
+            Some(s) if visible[row.planet] && (selection.0 == Some(row.planet) || hover.0 == Some(row.planet)) => {
                 let width = row.count as f32 * (pip_w + 1.0);
                 node.left = Val::Px((s.pos.x + (s.size.x - width) * 0.5) / us);
                 node.top = Val::Px((s.pos.y + font_px * 1.15 + row.row as f32 * (pip_h + 2.0)) / us);

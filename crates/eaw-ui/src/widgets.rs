@@ -1065,7 +1065,7 @@ pub(crate) fn bound_fields(
         }
         t.0 = match f.0 {
             Field::Credits => group_digits(data.credits),
-            Field::Income => group_digits(data.planet_income),
+            Field::Income => if data.planet_name.is_empty() { String::new() } else { group_digits(data.planet_income) },
             Field::PlanetName => data.planet_name.to_uppercase(),
             Field::Day => format!("MONTH: {}", data.day),
             Field::MonthIncome => group_digits(data.month_income),
