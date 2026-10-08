@@ -105,6 +105,14 @@ fn fill_light(n: vec3<f32>) -> vec3<f32> {
     return sum;
 }
 
+// Specular antialiasing (screen-space normal variance, Tokuyoshi/Kaplanyan): widens the Blinn-Phong lobe
+// where the shading normal changes quickly between pixels, so bumpy hulls and terrain do not sparkle.
+fn filtered_shininess(n: vec3<f32>, shininess: f32) -> f32 {
+    let variance = 0.5 * (dot(dpdx(n), dpdx(n)) + dot(dpdy(n), dpdy(n)));
+    let alpha2 = min(2.0 / (shininess + 2.0) + min(variance, 0.18), 1.0);
+    return max(2.0 / alpha2 - 2.0, 1.0);
+}
+
 @fragment
 fn fragment(in: VertexOutput, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
     let uv = in.uv + mat.uv_offset.xy + mat.uv_offset.zw * globals.time;
@@ -192,7 +200,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) front: bool) -> @location(0
         let cdl = saturate(dot(ncloud, L));
         let surf = base.rgb * mat.diffuse.rgb * (amb + sun * ndl + fill_light(n));
         let H = normalize(L + V);
-        let spec = mat.specular.rgb * spec_mask * pow(saturate(dot(n, H)), max(mat.shininess, 8.0)) * sun * step(0.0, dot(N, L));
+        let spec = mat.specular.rgb * spec_mask * pow(saturate(dot(n, H)), filtered_shininess(n, max(mat.shininess, 8.0))) * sun * step(0.0, dot(N, L));
         var col = surf + spec;
         // Cloud layer, shaded with its own normal map.
         let cloud_lit = vec3<f32>(1.0) * (amb + sun * cdl);
@@ -238,7 +246,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) front: bool) -> @location(0
     }
     let ndl = saturate(dot(n, L)) * shadow;
     let H = normalize(L + V);
-    let spec = mat.specular.rgb * spec_mask * pow(saturate(dot(n, H)), max(mat.shininess, 1.0)) * sun * step(0.0, dot(N, L)) * shadow;
+    let spec = mat.specular.rgb * spec_mask * pow(saturate(dot(n, H)), filtered_shininess(n, max(mat.shininess, 1.0))) * sun * step(0.0, dot(N, L)) * shadow;
     // Emissive is the self-illumination of the base texture.
     rgb = albedo * (amb + sun * ndl + fill_light(n)) + spec + mat.emissive.rgb * base.rgb;
     if mat.kind == KIND_ALPHA {

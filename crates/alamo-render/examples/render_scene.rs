@@ -14,6 +14,7 @@
 //!   --times t1,t2,...     capture at these simulation times in seconds (out_t<ms>.png)
 //!   --radius r            framing radius when no model is given
 //!   --look x,y,z          camera target offset
+//!   --offset x,y,z        model position (use with --look to test large-coordinate precision)
 //! ```
 //! Time advances in fixed 16 ms steps, so particle runs are reproducible.
 
@@ -82,6 +83,7 @@ fn main() {
     let (mut many, mut radius) = (0usize, 100.0f32);
     let (mut fx, mut enable, mut times) = (Vec::new(), Vec::new(), vec![0.0f32]);
     let mut look = vec![0.0, 0.0, 0.0];
+    let mut offset = vec![0.0, 0.0, 0.0];
     let mut no_alpha = false;
     let mut hdr = false;
     let (mut shadows, mut nolod) = (false, false);
@@ -126,6 +128,7 @@ fn main() {
             "--fxn" => fxn = it.next().unwrap().parse().unwrap_or(1),
             "--move" => mv = parse_vec(it.next().unwrap()),
             "--look" => look = parse_vec(it.next().unwrap()),
+            "--offset" => offset = parse_vec(it.next().unwrap()),
             _ if model.is_none() => model = Some(a.clone()),
             _ => out = Some(a.clone()),
         }
@@ -187,7 +190,9 @@ fn main() {
             spec = spec.with_lod(LodSelect::Level(l));
         }
         spec.bow_forward = bow;
-        let mut r = app.world_mut().spawn((spec, Transform::default()));
+        let mut r = app
+            .world_mut()
+            .spawn((spec, Transform::from_xyz(offset[0], offset[1], offset[2])));
         if let Some(t) = throttle {
             r.insert(alamo_render::EngineThrottle(t));
         }
