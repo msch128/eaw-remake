@@ -774,7 +774,8 @@ fn draw_rings(
         // The original has no rings: only a very faint owner halo, and a clear ring under the cursor.
         let hovered = hover.0 == Some(i);
         let (c, alpha) = match p.owner {
-            Some(_) => (relation_color(&view, p.owner), if hovered { 0.8 } else { 0.12 }),
+            Some(_) if hovered => (relation_color(&view, p.owner), 0.8),
+            Some(_) => continue,
             None if hovered => (NEUTRAL, 0.7),
             None => continue,
         };
