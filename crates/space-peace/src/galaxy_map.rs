@@ -48,6 +48,7 @@ impl Plugin for GalaxyMapPlugin {
                 brightness: 6.0,
                 ..default()
             })
+            .add_systems(Update, update_pip_colors.run_if(in_state(AppScreen::Galaxy)))
             .add_systems(Startup, setup_scene)
             .add_systems(OnEnter(AppScreen::Galaxy), spawn_galaxy)
             .add_systems(
@@ -476,7 +477,7 @@ fn spawn_galaxy(
                         p.spawn((
                             ImageNode::new(pip_images[row].clone()).with_color(rgb(label_c).with_alpha(0.9)),
                             Node { width: Val::Px(8.0), height: Val::Px(8.0), ..default() },
-                            PipIcon { space: row == 1 },
+                            PipIcon { space: row == 1, planet: i },
                         ));
                     }
                 });
@@ -1271,6 +1272,7 @@ struct PipRow {
 struct PipIcon {
     #[allow(dead_code)]
     space: bool,
+    planet: usize,
 }
 
 /// sRGB colour a planet owner is drawn in on the map. Like the game the player's own planets are green; the other
@@ -1350,7 +1352,7 @@ struct TerritoryGizmos;
 
 /// Small white silhouettes for the slot pips under a planet name: a trooper (ground slots) and a turret tower
 /// (space slots), 16x16, tinted with the label colour.
-fn pip_image(space: bool) -> Image {
+pub(crate) fn pip_image(space: bool) -> Image {
     use bevy::asset::RenderAssetUsages;
     use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
     const N: i32 = 16;
@@ -1445,4 +1447,16 @@ fn spawn_nebula_plane(commands: &mut Commands, view: &GalaxyView, meshes: &mut A
         Transform::from_xyz(centre.x, -8.0, centre.y),
         GalaxyEntity,
     ));
+}
+
+/// Slot pips follow the owner colour of their planet (a captured planet changes it).
+fn update_pip_colors(view: Res<GalaxyView>, mut pips: Query<(&PipIcon, &mut ImageNode)>) {
+    for (pip, mut img) in &mut pips {
+        let owner = view.planets.get(pip.planet).and_then(|p| p.owner);
+        let c = if owner.is_some() { relation_color(&view, owner) } else { [0.62, 0.62, 0.62] };
+        let want = rgb(c).with_alpha(0.9);
+        if img.color != want {
+            img.color = want;
+        }
+    }
 }

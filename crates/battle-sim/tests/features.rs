@@ -202,3 +202,13 @@ fn super_laser_storm_rocket_and_jamming_abilities_are_read_from_the_data() {
     let boat = cat.ship(cat.ship_id("MissileBoat").expect("missile boat"));
     assert!(boat.abilities.iter().any(|a| a.rocket));
 }
+
+#[test]
+fn projectile_combat_mods_are_read_from_the_data() {
+    let Some((data, fs)) = load() else { return };
+    let cat = Catalog::build(&data, Some(&fs), &["T-Wing_Squadron"]);
+    let torpedo = cat.projectile_id("Proj_Proton_Torpedo").map(|p| &cat.projectiles[p as usize]).expect("proton torpedo");
+    let m = torpedo.combat_mod.as_ref().expect("combat mod");
+    assert_eq!(m.kind, ModKind::Health);
+    assert!((m.value + 0.25).abs() < 1e-4 && (m.duration - 14.0).abs() < 1e-4 && m.classes != 0, "{m:?}");
+}

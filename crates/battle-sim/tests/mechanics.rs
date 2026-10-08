@@ -721,3 +721,35 @@ fn the_ai_uses_each_new_ability_in_a_suitable_scenario() {
     }
     assert!(used(&b, 0), "reveal ping into the fog");
 }
+
+#[test]
+fn projectile_combat_mods_weaken_the_ships_hit_for_a_while() {
+    let mut debuff = laser();
+    debuff.name = "debuff".into();
+    debuff.damage = 1.0;
+    debuff.combat_mod = Some(CombatMod { kind: ModKind::Defense, value: -0.5, duration: 5.0, classes: 0 });
+    let run = |hit_first: bool| {
+        let cat = Catalog::from_defs(vec![ship("gunner", 1.0e6, 0.0, vec![gun("g", 0.0)]), ship("target", 1.0e6, 0.0, vec![])], vec![laser(), debuff.clone()]);
+        let mut b = Battle::new(setup(cat, "gunner", "target", 1, 1, cfg()));
+        let (g, t) = (b.ships.iter().find(|s| s.side == 0).unwrap().id, b.ships.iter().find(|s| s.side == 1).unwrap().id);
+        if hit_first {
+            let tp = b.ships[t as usize].pos;
+            b.projectiles.push(Projectile { pos: tp - Vec3::new(30.0, 0.0, 0.0), vel: Vec3::new(500.0, 0.0, 0.0), def: 1, side: 0, owner: g, target: NONE, aim_hp: u16::MAX, range_left: 9000.0 });
+        }
+        let loss = |b: &Battle| 1.0e6 - b.ships[t as usize].hull;
+        // Window one: the debuff is on. Window two: it has expired.
+        for _ in 0..30 * 5 {
+            b.step();
+        }
+        let first = loss(&b);
+        for _ in 0..30 * 5 {
+            b.step();
+        }
+        let second = loss(&b) - first;
+        (first, second)
+    };
+    let (plain1, plain2) = run(false);
+    let (weak1, weak2) = run(true);
+    assert!(weak1 > plain1 * 1.5, "defense -50% doubles the damage taken: {plain1} -> {weak1}");
+    assert!((weak2 - plain2).abs() < plain2 * 0.35, "the debuff wore off: {plain2} vs {weak2}");
+}

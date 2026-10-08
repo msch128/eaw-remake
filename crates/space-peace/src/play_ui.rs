@@ -105,7 +105,7 @@ impl Plugin for PlayUiPlugin {
                     .chain()
                     .run_if(resource_exists::<PlayBridge>.and_then(resource_exists::<SimState>)),
             )
-            .add_systems(Update, (declutter_top, hero_bar, locked_clicks, spawn_planet_panel, update_planet_panel, place_planet_panel, planet_view_ui).chain().run_if(resource_exists::<PlayBridge>.and_then(resource_exists::<SimState>)))
+            .add_systems(Update, (declutter_top, hero_bar, locked_clicks, spawn_planet_panel, update_planet_panel, place_planet_panel, base_layout_click, planet_view_ui).chain().run_if(resource_exists::<PlayBridge>.and_then(resource_exists::<SimState>)))
             .add_systems(Update, show_battle_summary.run_if(in_state(AppScreen::Galaxy)).run_if(resource_exists::<crate::battle_play::BattleSummary>))
             .add_systems(
                 Update,
@@ -1627,7 +1627,8 @@ mod tests {
     }
 }
 
-/// The selected planet's description panel, upper left of the HUD, in the original's cyan glass.
+/// The selected planet's description panel, upper left of the HUD, in the original's cyan glass. In the planet view it
+/// sits on the right without a frame, text straight on the dark background.
 #[derive(Component)]
 struct PlanetPanel;
 /// Its title / income / body texts.
@@ -1637,12 +1638,25 @@ enum PlanetPanelText {
     Income,
     Body,
 }
+/// Owner emblem of the panel header.
+#[derive(Component)]
+struct PanelEmblem;
+/// A slot pip of the panel: `row` 0 ground (trooper), 1 space (tower), `index` within the row.
+#[derive(Component)]
+struct PanelPip {
+    row: usize,
+    index: usize,
+}
+/// The planet view's "BASE LAYOUT" button.
+#[derive(Component)]
+struct BaseLayoutButton;
 
-fn spawn_planet_panel(mut commands: Commands, existing: Query<(), With<PlanetPanel>>) {
+fn spawn_planet_panel(mut commands: Commands, existing: Query<(), With<PlanetPanel>>, mut images: ResMut<Assets<Image>>) {
     if !existing.is_empty() {
         return;
     }
     let font = |size: f32| TextFont { font: FontSource::Family("Bahnschrift".into()), font_size: FontSize::Px(size), ..default() };
+    let pips = [images.add(crate::galaxy_map::pip_image(false)), images.add(crate::galaxy_map::pip_image(true))];
     commands
         .spawn((
             PlanetPanel,
@@ -1654,7 +1668,7 @@ fn spawn_planet_panel(mut commands: Commands, existing: Query<(), With<PlanetPan
                 top: Val::Px(140.0),
                 width: Val::Px(420.0),
                 min_height: Val::Px(150.0),
-                max_height: Val::Px(310.0),
+                max_height: Val::Px(330.0),
                 padding: UiRect::all(Val::Px(8.0)),
                 border: UiRect::all(Val::Px(1.5)),
                 flex_direction: FlexDirection::Column,
@@ -1667,20 +1681,60 @@ fn spawn_planet_panel(mut commands: Commands, existing: Query<(), With<PlanetPan
             Visibility::Hidden,
         ))
         .with_children(|p| {
-            p.spawn(Node { justify_content: JustifyContent::SpaceBetween, margin: UiRect::bottom(Val::Px(8.0)), ..default() }).with_children(|r| {
-                r.spawn((Text::new(""), font(13.0), TextColor(Color::srgb(0.9, 0.95, 1.0)), bevy::text::LetterSpacing::Rem(0.12), PlanetPanelText::Title));
+            p.spawn(Node { align_items: AlignItems::Center, column_gap: Val::Px(8.0), margin: UiRect::bottom(Val::Px(8.0)), ..default() }).with_children(|r| {
+                r.spawn((ImageNode::default().with_color(Color::NONE), Node { width: Val::Px(18.0), height: Val::Px(18.0), ..default() }, PanelEmblem));
+                r.spawn((Text::new(""), font(13.0), TextColor(Color::srgb(0.9, 0.95, 1.0)), bevy::text::LetterSpacing::Rem(0.12), Node { flex_grow: 1.0, ..default() }, PlanetPanelText::Title));
                 r.spawn((Text::new(""), font(12.0), TextColor(Color::srgb(0.3, 1.0, 0.4)), PlanetPanelText::Income));
             });
             p.spawn((Text::new(""), font(9.5), TextColor(Color::srgb(0.93, 0.96, 0.98)), PlanetPanelText::Body));
+            for row in 0..2 {
+                p.spawn(Node { column_gap: Val::Px(4.0), margin: UiRect::top(Val::Px(8.0)), ..default() }).with_children(|r| {
+                    for index in 0..8 {
+                        r.spawn((
+                            ImageNode::new(pips[row].clone()).with_color(Color::srgb(0.75, 0.9, 1.0)),
+                            Node { width: Val::Px(14.0), height: Val::Px(14.0), display: Display::None, ..default() },
+                            PanelPip { row, index },
+                        ));
+                    }
+                });
+            }
         });
+    // The planet view's button under the platform.
+    commands
+        .spawn((
+            BaseLayoutButton,
+            PlayHud,
+            GalaxyEntity,
+            Button,
+            Node {
+                position_type: PositionType::Absolute,
+                left: Val::Percent(44.0),
+                top: Val::Percent(76.0),
+                width: Val::Px(250.0),
+                padding: UiRect::axes(Val::Px(14.0), Val::Px(5.0)),
+                border: UiRect::all(Val::Px(1.0)),
+                justify_content: JustifyContent::Center,
+                display: Display::None,
+                ..default()
+            },
+            BackgroundColor(Color::srgb(0.02, 0.04, 0.09)),
+            BorderColor::all(Color::srgb(0.55, 0.6, 0.7)),
+            GlobalZIndex(12),
+        ))
+        .with_child((Text::new("BASE LAYOUT"), font(13.0), TextColor(Color::srgb(0.9, 0.93, 0.98)), bevy::text::LetterSpacing::Rem(0.12)));
 }
 
+#[allow(clippy::too_many_arguments)]
 fn update_planet_panel(
     selection: Res<PlayerSelection>,
     bridge: Res<PlayBridge>,
     view: Res<crate::galaxy_view::GalaxyView>,
+    textures: Option<ResMut<eaw_ui::textures::UiTextures>>,
+    mut images: ResMut<Assets<Image>>,
     mut panel: Single<&mut Visibility, With<PlanetPanel>>,
     mut texts: Query<(&PlanetPanelText, &mut Text)>,
+    mut emblem: Single<&mut ImageNode, With<PanelEmblem>>,
+    mut pips: Query<(&PanelPip, &mut Node)>,
 ) {
     let planet = selection.planet.and_then(|p| bridge.sim_to_planet.get(p as usize).copied().flatten()).and_then(|i| view.planets.get(i));
     let Some(p) = planet.filter(|p| !p.info.is_empty()) else {
@@ -1697,6 +1751,57 @@ fn update_planet_panel(
         if t.0 != s {
             t.0 = s;
         }
+    }
+    let icon = p.owner.and_then(|o| view.factions.get(o)).and_then(|f| f.icon.clone());
+    match (icon, textures) {
+        (Some(name), Some(mut tex)) => {
+            if let Some(t) = tex.get(&mut images, &name) {
+                if emblem.image != t.handle {
+                    emblem.image = t.handle;
+                }
+                emblem.color = Color::WHITE;
+            }
+        }
+        _ => emblem.color = Color::NONE,
+    }
+    let counts = [p.max_ground_base.clamp(0, 8) as usize, p.max_space_base.clamp(0, 8) as usize];
+    for (pip, mut node) in &mut pips {
+        let want = if pip.index < counts[pip.row] { Display::Flex } else { Display::None };
+        if node.display != want {
+            node.display = want;
+        }
+    }
+}
+
+/// Description panel placement: left in the galaxy view; in the planet view right of the platform, frameless.
+fn place_planet_panel(
+    state: Res<crate::planet_view::PlanetViewState>,
+    mut panel: Single<(&mut Node, &mut BackgroundColor, &mut BorderColor), (With<PlanetPanel>, Without<BaseLayoutButton>)>,
+    mut button: Single<&mut Node, (With<BaseLayoutButton>, Without<PlanetPanel>)>,
+) {
+    let in_view = state.active && state.blend > 0.5;
+    let (node, bg, border) = &mut *panel;
+    let want_left = if in_view { Val::Percent(66.0) } else { Val::Px(20.0) };
+    if node.left != want_left {
+        node.left = want_left;
+        node.top = if in_view { Val::Percent(34.0) } else { Val::Px(140.0) };
+        node.width = if in_view { Val::Percent(30.0) } else { Val::Px(420.0) };
+        node.max_height = if in_view { Val::Percent(52.0) } else { Val::Px(330.0) };
+        node.border = if in_view { UiRect::ZERO } else { UiRect::all(Val::Px(1.5)) };
+        bg.0 = if in_view { Color::NONE } else { Color::srgba(0.13, 0.27, 0.31, 0.88) };
+        **border = if in_view { BorderColor::all(Color::NONE) } else { BorderColor::all(Color::srgb(0.0, 0.76, 0.99)) };
+    }
+    let want = if in_view { Display::Flex } else { Display::None };
+    if button.display != want {
+        button.display = want;
+    }
+}
+
+/// "BASE LAYOUT" is shown like in the original; base editing is out of scope, the click only says so.
+fn base_layout_click(button: Query<&Interaction, (With<BaseLayoutButton>, Changed<Interaction>)>, mut toast: ResMut<Toast>) {
+    if button.iter().any(|i| *i == Interaction::Pressed) {
+        toast.0 = "Base layout editing is not available.".to_owned();
+        toast.1 = 3.0;
     }
 }
 
@@ -1775,12 +1880,3 @@ fn planet_view_ui(world: &mut World, mut last_key: Local<Option<(usize, u64)>>) 
     }
 }
 
-/// Description panel placement: left in the galaxy view, right side under the orbit boxes in the planet view.
-fn place_planet_panel(state: Res<crate::planet_view::PlanetViewState>, mut panel: Single<&mut Node, With<PlanetPanel>>) {
-    let (left, top, max_h) = if state.active && state.blend > 0.5 { (Val::Percent(65.0), Val::Percent(38.0), Val::Px(420.0)) } else { (Val::Px(20.0), Val::Px(140.0), Val::Px(310.0)) };
-    if panel.left != left {
-        panel.left = left;
-        panel.top = top;
-        panel.max_height = max_h;
-    }
-}

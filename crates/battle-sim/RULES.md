@@ -169,3 +169,6 @@ Source: `XML/AI/GoalFunctions/Remake_SpaceCombat.xml`, `PerceptualEquations/Rema
   Targeting (`scan`) only considers visible enemies, so idle and attack-moving ships no longer know where the enemy is; the AI respects it because it uses the same scan. `Battle::is_visible_to(side, ship)` for the renderer.
   Stealthed ships (`STEALTH`) are seen only within `stealth_detection` (500, estimate); `FOW_REVEAL_PING` reveals an area for 5 s (estimate).
 * Also: `LASER_DEFENSE`, `Force_Healing_Ability`.
+
+## Projectile combat mods
+`Projectile_Combat_Mod` (`COMBAT_MOD_SPEED`, `_FIRE_RATE`, `_DEFENSE`, `_HEALTH`, `_SHIELD` with `_Value`, `_Duration`, `_Category_Mask`): the ship hit and every ship within the projectile's `Projectile_Blast_Area_Range` of the impact (the data says this range, not `_Radius`, governs the area) get the change for the duration. Negative values hit enemies of the shooter, positive ones help its friends. Speed and fire rate are multiplied by `1 + value`; damage taken (all, hull only, shield only) is divided by `1 + value`. The strongest value of a kind counts and a new hit refreshes the time; they do not stack (estimate, the data does not say). Example: the proton torpedo's burn, -25% health for 14 s on fighters, gunships, bombers, transports and corvettes.

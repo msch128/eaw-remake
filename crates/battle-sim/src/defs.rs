@@ -293,6 +293,40 @@ pub struct SuperLaserDef {
     pub classes: u16,
 }
 
+/// What a `Projectile_Combat_Mod` changes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModKind {
+    /// `COMBAT_MOD_SPEED`: top speed.
+    Speed,
+    /// `COMBAT_MOD_FIRE_RATE`: shots per second.
+    FireRate,
+    /// `COMBAT_MOD_DEFENSE`: all damage taken.
+    Defense,
+    /// `COMBAT_MOD_HEALTH`: hull damage taken.
+    Health,
+    /// `COMBAT_MOD_SHIELD`: shield damage taken.
+    Shield,
+}
+
+impl ModKind {
+    pub(crate) const COUNT: usize = 5;
+}
+
+/// A `Projectile_Combat_Mod`: for `duration` seconds the ships hit (and those within the blast range of the impact)
+/// have `kind` changed by `value` (-0.25 = 25% less speed / fire rate / defense / health; damage taken is divided by `1 + value`).
+/// Negative values hit enemies of the shooter, positive ones help its friends. The strongest value of a kind counts, they do not stack.
+#[derive(Debug, Clone)]
+pub struct CombatMod {
+    /// What changes.
+    pub kind: ModKind,
+    /// `Projectile_Combat_Mod_Value`.
+    pub value: f32,
+    /// `Projectile_Combat_Mod_Duration` in seconds.
+    pub duration: f32,
+    /// Bit mask of affected classes (`Projectile_Combat_Mod_Category_Mask`; 0 = any).
+    pub classes: u16,
+}
+
 /// Parameters of a tractor beam ability.
 #[derive(Debug, Clone, Default)]
 pub struct TractorDef {
@@ -406,6 +440,8 @@ pub struct DirectWeaponDef {
 /// A projectile type.
 #[derive(Debug, Clone, Default)]
 pub struct ProjDef {
+    /// `Projectile_Combat_Mod`: a timed debuff (or buff) on the ships hit.
+    pub combat_mod: Option<CombatMod>,
     /// Object name.
     pub name: String,
     /// `Projectile_Category` (lower case), e.g. `laser`, `missile`.
@@ -854,6 +890,21 @@ impl Catalog {
             blast_range: p.blast_range,
             blast_damage: p.blast_damage,
             blast_victims: p.blast_max_victims.unwrap_or(10).max(1) as u32,
+            combat_mod: p.fields.get("projectile_combat_mod").and_then(|v| match v.trim().to_ascii_uppercase().as_str() {
+                "COMBAT_MOD_SPEED" => Some(ModKind::Speed),
+                "COMBAT_MOD_FIRE_RATE" => Some(ModKind::FireRate),
+                "COMBAT_MOD_DEFENSE" => Some(ModKind::Defense),
+                "COMBAT_MOD_HEALTH" => Some(ModKind::Health),
+                "COMBAT_MOD_SHIELD" => Some(ModKind::Shield),
+                _ => None,
+            })
+            .map(|kind| CombatMod {
+                kind,
+                value: f("projectile_combat_mod_value").clamp(-0.9, 10.0),
+                duration: f("projectile_combat_mod_duration"),
+                classes: p.fields.get("projectile_combat_mod_category_mask").map_or(0, |v| alamo_data::xml::split_list(v).iter().filter_map(|t| TargetClass::from_token(t)).fold(0u16, |m, c| m | c.bit())),
+            })
+            .filter(|m| m.value != 0.0 && m.duration > 0.0),
             ion_duration: p.ion_stun_duration,
             ion_speed_cut: (p.ion_stun_speed_reduction / 100.0).clamp(0.0, 1.0),
             ion_rate_cut: (p.ion_stun_shot_rate_reduction / 100.0).clamp(0.0, 1.0),

@@ -535,6 +535,8 @@ pub struct Ship {
     pub(crate) heal_in: [f32; 2],
     /// Multipliers from friendly `Combat_Bonus_Ability` auras (refreshed once per second).
     pub(crate) bonus: Bonus,
+    /// Active `Projectile_Combat_Mod`s per `ModKind`: value and seconds left.
+    pub(crate) mods: [(f32, f32); ModKind::COUNT],
 }
 
 /// Multipliers a ship gets from friendly combat bonus auras; `1.0` = none.

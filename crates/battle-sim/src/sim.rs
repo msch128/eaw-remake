@@ -389,6 +389,7 @@ impl Battle {
             seen_until: [0.0; 4],
             heal_in: [0.0; 2],
             bonus: Bonus::default(),
+            mods: [(0.0, 0.0); ModKind::COUNT],
         });
         id
     }
@@ -1009,6 +1010,23 @@ impl Battle {
         }
     }
 
+    /// `Projectile_Combat_Mod`: the ship hit and every ship within the blast range of the impact get the timed change (see [`CombatMod`]).
+    fn apply_combat_mod(&mut self, p: &Projectile, pd: &ProjDef, hit: u32, pos: Vec3) {
+        let Some(m) = &pd.combat_mod else { return };
+        let cat = self.catalog.clone();
+        for (i, s) in self.ships.iter_mut().enumerate() {
+            let near = i as u32 == hit || (pd.blast_range > 0.0 && s.pos.dist(pos) - cat.ship(s.def).radius <= pd.blast_range);
+            let wanted = if m.value < 0.0 { s.side != p.side } else { s.side == p.side };
+            if !near || !wanted || !s.alive || s.retreated || (m.classes != 0 && m.classes & cat.ship(s.def).class.bit() == 0) {
+                continue;
+            }
+            let slot = &mut s.mods[m.kind as usize];
+            if m.value.abs() >= slot.0.abs() || slot.1 <= 0.0 {
+                *slot = (m.value, m.duration);
+            }
+        }
+    }
+
     /// `Redirect_Blaster_Ability`: does ship `ship` block or reflect the shot `p`? Only direct shots from an enemy ship in the
     /// reaction arc count; the roll is deterministic per tick, ship and shot.
     fn redirect_roll(&self, ship: u32, p: &Projectile) -> Deflect {
@@ -1049,6 +1067,7 @@ impl Battle {
             Deflect::None => {}
         }
         self.damage_ship(ship, p.owner, pd, p.def, pd.damage, pos, p.aim_hp);
+        self.apply_combat_mod(p, pd, ship, pos);
         if pd.blast_range > 0.0 && pd.blast_damage > 0.0 {
             let mut near: Vec<(f32, u32)> = snaps
                 .iter()
@@ -1085,11 +1104,11 @@ impl Battle {
             .map(|(a, _)| a.take_damage_mult)
             .product();
         s.since_hit = 0.0;
-        let dmg = raw * take * atk_damage;
+        let dmg = raw * take * atk_damage / (1.0 + s.mods[ModKind::Defense as usize].0);
         let mut hull_part = 0.0;
         let mut shield_hit = false;
         if s.shield > 0.0 && pd.shield_damage {
-            let sd = dmg * cat.damage.multiplier(pd.damage_type, def.shield_armor) / tgt_shield * s.bonus.taken_shield;
+            let sd = dmg * cat.damage.multiplier(pd.damage_type, def.shield_armor) / tgt_shield * s.bonus.taken_shield / (1.0 + s.mods[ModKind::Shield as usize].0);
             if sd <= s.shield {
                 s.shield -= sd;
                 if s.shield <= 0.0 {
@@ -1109,7 +1128,7 @@ impl Battle {
             hull_part = dmg;
         }
         if !shield_hit && pd.hull_damage && hull_part > 0.0 && (s.shield <= 0.0 || !pd.shield_damage) {
-            let h = hull_part * cat.damage.multiplier(pd.damage_type, def.armor) / tgt_health * s.bonus.taken_hull;
+            let h = hull_part * cat.damage.multiplier(pd.damage_type, def.armor) / tgt_health * s.bonus.taken_hull / (1.0 + s.mods[ModKind::Health as usize].0);
             s.hull -= h;
             // Hardpoint: the aimed one, else the destroyable hardpoint nearest to the impact.
             let local = (pos - s.pos).rotate_yaw(-s.yaw);
@@ -1272,6 +1291,12 @@ impl Battle {
                     s.stun_rate_cut = 0.0;
                 }
                 s.since_hit += dt;
+                for m in &mut s.mods {
+                    m.1 = (m.1 - dt).max(0.0);
+                    if m.1 == 0.0 {
+                        m.0 = 0.0;
+                    }
+                }
                 s.shield_lock = (s.shield_lock - dt).max(0.0);
                 if s.shield_gen_ok && def.shield > 0.0 && s.shield < def.shield && s.shield_lock <= 0.0 && s.since_hit >= self.config.shield_regen_delay {
                     let mult: f32 = def.abilities.iter().zip(&s.abilities).filter(|(_, st)| st.active > 0.0).map(|(a, _)| a.shield_regen_mult).product();
@@ -1762,7 +1787,7 @@ fn mov(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, spawn: &
     let dt = cfg.dt;
     let speed_mult = ability_product(def, s, |a| a.speed_mult) * (1.0 - s.stun_speed_cut) * (1.0 - s.tractor_cut) * s.engine_factor;
     let pinned = def.abilities.iter().zip(&s.abilities).any(|(a, st)| a.disable_movement && st.active > 0.0);
-    let max_speed = if pinned { 0.0 } else { def.max_speed * speed_mult * s.bonus.speed };
+    let max_speed = if pinned { 0.0 } else { def.max_speed * speed_mult * s.bonus.speed * (1.0 + s.mods[ModKind::Speed as usize].0) };
     let target = (s.target != NONE && snaps[s.target as usize].alive).then(|| snaps[s.target as usize]);
     let fighter = matches!(def.class, TargetClass::Fighter | TargetClass::Bomber);
     let aggressive = s.stance == Stance::Aggressive;
@@ -2011,7 +2036,7 @@ fn weapons(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, rng:
     let explicit_attack = matches!(s.order, Order::Attack(_));
     let may_start = s.stance != Stance::HoldFire || explicit_attack;
     let rate_cut = if s.stun > 0.0 { 1.0 / (1.0 - s.stun_rate_cut).max(0.1) } else { 1.0 };
-    let mut delay_mult = ability_product(def, s, |a| a.weapon_delay_mult) * rate_cut;
+    let mut delay_mult = ability_product(def, s, |a| a.weapon_delay_mult) * rate_cut / (1.0 + s.mods[ModKind::FireRate as usize].0);
     // Hardpoint priorities of the ship's targeting set (AI attack-move sets name shield generators,
     // engines, hangars ... in order).
     let hp_set = if cfg.attack_move_sets && matches!(s.order, Order::AttackMove(_)) { def.priority_attack_move } else { def.priority }
