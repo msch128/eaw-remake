@@ -112,7 +112,7 @@ impl SpaceScene {
                 direction: -to_light,
                 // The TED scalar weighs the light, relative to 0.5 (full strength: the original shaders double the stored value).
                 // Low scalars (asteroid fields at 0.05-0.2) made maps unplayably dark with a linear weight, so the weight is
-                // a square root of the ratio, kept within 0.75..1.4 while a zero scalar still switches the light off. Only the sun
+                // a square root of the ratio, kept within 0.5..1.4 while a zero scalar still switches the light off. Only the sun
                 // uses it: the fill lights stay linear so tinted fills (Coruscant) do not grow.
                 // `SP_LIGHT_MODE=old` restores the linear weight (2 x scalar), `=raw` ignores the scalar.
                 color: Vec3::from(l.color) * if i == 0 { light_gain(l.scalar) } else { l.scalar * 2.0 },
@@ -211,7 +211,9 @@ pub fn spawn_scene(commands: &mut Commands, scene: &SpaceScene, sky_radius: f32,
         ..default()
     });
     let sun = &scene.lights[0];
-    let sun_color = Color::srgb(sun.color.x, sun.color.y, sun.color.z);
+    // The Alamo shaders work on raw (gamma-space) light values: hand them over as linear so Bevy does not convert them
+    // (an sRGB red sun of (1, 0.33, 0.21) would otherwise reach the shader as (1, 0.09, 0.04) and wash out to flat red).
+    let sun_color = Color::LinearRgba(LinearRgba::rgb(sun.color.x, sun.color.y, sun.color.z));
     let sun_entity = if shadows {
         // Three cascades out to 8000 units: ships are 100..1600 long and the camera mostly looks from 1000..5000.
         alamo_render::spawn_sun_shadowed(commands, sun.direction, 1.0, sun_color, 8000.0, 3)
@@ -283,7 +285,7 @@ fn light_gain(scalar: f32) -> f32 {
         Ok("old") => scalar * 2.0,
         Ok("raw") => 1.0,
         _ if scalar <= 0.0 => 0.0,
-        _ => (scalar / 0.5).sqrt().clamp(0.75, 1.4),
+        _ => (scalar / 0.5).sqrt().clamp(0.5, 1.4),
     }
 }
 
