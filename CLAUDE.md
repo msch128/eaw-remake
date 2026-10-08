@@ -37,7 +37,8 @@ UI findings: `eaw-ui/UI.md`. Lua API inventory: `alamo-lua/API.md`.
 ## Build and verify
 Build per crate with a per-area `CARGO_TARGET_DIR` (`target/app`, `target/render`, `target/battle`, `target/ui`, ...).
 Verify visually with headless `--offscreen out.png` renders and look at the PNG. Details: `.claude/skills/eaw-verify`.
-Full build: `.\build.ps1` (release) / `.\build.ps1 -Debug`.
+Full build: `.\build.ps1` (release) / `.\build.ps1 -Debug`. Regression smoke test of the release exe (offscreen
+scenarios, pass/fail table): `.\tools\smoke.ps1 [-Exe path] [-Only name]`.
 
 ## Project skills
 `eaw-formats` (file formats + coordinates), `remake-data` (finding/trusting game data),

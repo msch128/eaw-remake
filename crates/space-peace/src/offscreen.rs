@@ -100,6 +100,9 @@ fn drive(
     let now = Instant::now();
     let dt = now.duration_since(st.last).as_secs_f64() * 1000.0;
     st.last = now;
+    if dt > 40.0 && st.frame > 3 {
+        info!("slow frame: {dt:.0} ms (frame {}, screen {:?})", st.frame + 1, *screen.get());
+    }
     st.frame += 1;
     let frame = st.frame;
     let screen = *screen.get();

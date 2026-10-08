@@ -79,7 +79,7 @@ fn spawn_scene(
         light.illuminance = 0.0;
     }
     battle_view::scene::spawn_scene(&mut commands, &scene, 9_000.0, false);
-    commands.insert_resource(MenuSceneInfo { center, radius, toward_sun: Vec3::new(-scene.lights[0].direction.x, 0.0, -scene.lights[0].direction.z).normalize_or(Vec3::Z), ambient: ambient.map(|a| a.clone()), suns: dimmed });
+    commands.insert_resource(MenuSceneInfo { center, radius, toward_sun: Vec3::new(scene.lights[0].direction.x, 0.0, scene.lights[0].direction.z).normalize_or(Vec3::Z), ambient: ambient.map(|a| a.clone()), suns: dimmed });
 }
 
 /// The scene's entities are spawned as battle entities; this claims them for the menu.
