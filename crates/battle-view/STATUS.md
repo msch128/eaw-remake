@@ -140,3 +140,10 @@ Add `battle-view`, `galaxy-sim` (already there through galaxy-play) and `eaw-ui`
   / `suspend_galaxy_look`, `hide_galaxy`, `hide_play_ui`), the command flush that spawns the ships' bone hierarchies 31 ms (+10 ms in `spawn_models`), and `tactical_ui::spawn_bar` -> `spawn_eaw_command_bar` 40 ms
   (the whole command bar tree in one command). Bevy's own `run_render_schedule` shows 30-40 ms spikes (and the systems that wait for it) a few times per run. Not fixed: each needs structural work
   (async loading-art decode, chunked UI spawn).
+- Battle-entry hitches, round 2 (all behind the loading screen): (1) the loading art is decoded on a worker thread (`loading::decode_art`, `battle_play::attach_loading_art`): `OnEnter(SpaceBattle)` no longer shows up
+  in the trace (was 55 ms) and the art fades in a few frames later; (2) `tactical_ui::spawn_bar` runs as soon as the `BattleSession` exists (resource `TacticalBarSpawned`, removed with the runtime or the session), a
+  frame of its own before the ships spawn (still ~44 ms traced, it is one command inside eaw-ui); (3) `start_battle` sets `AlamoRenderSettings::spawn_budget` to 8 ms (reset in `stop_battle`) so ships spawn over several
+  frames, and `battle_play` keeps the loading screen until no `AlamoModel` is waiting for its `AlamoModelLoaded`. The ship spawn flush went from 31 + 10 ms to 25 ms per frame.
+  Longest frame while loading, release: Yavin_WW scenario 71-125 ms before, Hoth (`--campaign GC_Full_Web_Way_Rebel --select "The Yavin System" --weeks 8 --move Hoth --battle-choice fight`, deterministic) 56-70 ms now,
+  one random-battle run 57/57/91 ms. The rest is Bevy's render world (`run_render_schedule` 30-40 ms spikes with `propagate_parent_transforms`/instance-buffer writes waiting on it), not our systems.
+  `tools\smoke.ps1 -Only battle-fight-orders` passes.

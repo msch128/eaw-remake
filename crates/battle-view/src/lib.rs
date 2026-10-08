@@ -478,6 +478,8 @@ fn start_battle(
     let sky = settings.sky_radius;
     // Models read the shadow flag when their materials are created, so set it before they spawn.
     render_settings.shadows = settings.shadows;
+    // Spawn the ships over several frames (the app keeps its loading screen until all are there).
+    render_settings.spawn_budget = Some(std::time::Duration::from_millis(8));
     if let Some(mut p) = particles {
         p.density = settings.particle_density;
     }
@@ -574,7 +576,11 @@ fn stop_battle(
     all: Query<Entity, With<BattleEntity>>,
     mut ships: ResMut<RenderedShips>,
     mut pools: ResMut<effects::BoltPools>,
+    render_settings: Option<ResMut<alamo_render::AlamoRenderSettings>>,
 ) {
+    if let Some(mut s) = render_settings {
+        s.spawn_budget = None;
+    }
     for e in &all {
         commands.entity(e).despawn();
     }

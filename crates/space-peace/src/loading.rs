@@ -296,6 +296,11 @@ fn on_model_failed(
 
 /// A random loading screen of the game (`Art/Textures/LoadScreens`), of `faction` (`Rebel`, `Empire`, `Underworld`) when it has some.
 pub fn load_art(fs: &GameFs, faction: Option<&str>, images: &mut Assets<Image>) -> Option<Handle<Image>> {
+    decode_art(fs, faction).map(|image| images.add(image))
+}
+
+/// Decodes a random loading screen to a CPU image (thread-safe: run it off the main thread).
+pub fn decode_art(fs: &GameFs, faction: Option<&str>) -> Option<Image> {
     use alamo_fs::FileSource;
     use bevy::asset::RenderAssetUsages;
     use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
@@ -319,7 +324,7 @@ pub fn load_art(fs: &GameFs, faction: Option<&str>, images: &mut Assets<Image>) 
         TextureFormat::Rgba8UnormSrgb,
         RenderAssetUsages::RENDER_WORLD,
     );
-    Some(images.add(image))
+    Some(image)
 }
 
 /// The loading screen art behind the progress bar.

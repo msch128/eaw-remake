@@ -64,6 +64,7 @@ impl Plugin for BattlePlayPlugin {
                 OnEnter(AppScreen::SpaceBattle),
                 (suspend_galaxy_look, spawn_loading_art).chain().run_if(resource_exists::<PendingTactical>),
             )
+            .add_systems(Update, attach_loading_art.run_if(resource_exists::<PendingTactical>))
             .add_systems(Update, start_after_loading_art.run_if(in_state(AppScreen::SpaceBattle).and_then(resource_exists::<PendingTactical>)).before(finish_battle_view))
             .add_systems(Update, poll_session_build.run_if(in_state(AppScreen::SpaceBattle).and_then(resource_exists::<SessionBuild>)))
             .add_systems(OnExit(AppScreen::SpaceBattle), end_session)
@@ -119,12 +120,23 @@ fn suspend_galaxy_look(
 struct BattleLoadingArt(u32);
 
 /// Shows a faction loading screen (the session is built a few frames later, because that stalls for a moment).
-fn spawn_loading_art(mut commands: Commands, game: Res<Game>, mut images: ResMut<Assets<Image>>, pending: Res<PendingTactical>, player: Res<PlayerFaction>, campaign: Res<crate::flow::CurrentCampaign>) {
+fn spawn_loading_art(mut commands: Commands, game: Res<Game>, pending: Res<PendingTactical>, player: Res<PlayerFaction>, campaign: Res<crate::flow::CurrentCampaign>) {
     // The player's faction, or the defender's when watching.
     let _ = (&pending, &player);
-    let art = game.0.as_ref().and_then(|g| crate::loading::load_art(&g.fs, campaign.faction.as_deref(), &mut images));
+    // The PNG decode takes tens of milliseconds: do it on a worker thread, the art appears a few frames later
+    // (`attach_loading_art`) while the black screen with the text is already up.
+    let (tx, rx) = std::sync::mpsc::channel();
+    if let Some(g) = game.0.as_ref() {
+        let fs = g.fs.clone();
+        let faction = campaign.faction.clone();
+        std::thread::spawn(move || {
+            let _ = tx.send(crate::loading::decode_art(&fs, faction.as_deref()));
+        });
+    }
+    let art: Option<Handle<Image>> = None;
     let mut e = commands.spawn((
         BattleLoadingArt(0),
+        LoadingArtJob(std::sync::Mutex::new(Some(rx))),
         Node { position_type: PositionType::Absolute, width: Val::Percent(100.0), height: Val::Percent(100.0), justify_content: JustifyContent::Center, align_items: AlignItems::FlexEnd, padding: UiRect::bottom(Val::Px(70.0)), ..default() },
         BackgroundColor(Color::BLACK),
         GlobalZIndex(50),
@@ -140,6 +152,29 @@ fn spawn_loading_art(mut commands: Commands, game: Res<Game>, mut images: ResMut
             TextShadow { offset: Vec2::splat(1.5), color: Color::srgba(0.0, 0.0, 0.0, 0.9) },
         ));
     });
+}
+
+/// The loading art being decoded on a worker thread.
+#[derive(Component)]
+struct LoadingArtJob(std::sync::Mutex<Option<std::sync::mpsc::Receiver<Option<Image>>>>);
+
+/// Puts the decoded loading art behind the text as soon as the worker is done.
+fn attach_loading_art(mut commands: Commands, mut images: ResMut<Assets<Image>>, jobs: Query<(Entity, &LoadingArtJob)>) {
+    for (e, job) in &jobs {
+        let mut slot = job.0.lock().unwrap();
+        let Some(rx) = slot.as_ref() else { continue };
+        match rx.try_recv() {
+            Ok(Some(image)) => {
+                let h = images.add(image);
+                commands.entity(e).with_children(|root| {
+                    root.spawn((Node { position_type: PositionType::Absolute, width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() }, ImageNode::new(h).with_mode(NodeImageMode::Stretch), ZIndex(-1)));
+                });
+                *slot = None;
+            }
+            Ok(None) | Err(std::sync::mpsc::TryRecvError::Disconnected) => *slot = None,
+            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+        }
+    }
 }
 
 /// Builds the session after the loading screen had a few frames on screen, and removes the screen once the battle shows.
@@ -162,10 +197,13 @@ fn start_after_loading_art(world: &mut World) {
         if let Some(mut a) = world.get_mut::<BattleLoadingArt>(e) {
             a.0 += 1;
         }
-        if art == 20 {
+        // The ships spawn over several frames (`spawn_budget`): keep the loading screen until all models are there.
+        let pending = world
+            .query_filtered::<(), (With<alamo_render::AlamoModel>, Without<alamo_render::AlamoModelLoaded>, Without<alamo_render::model::AlamoLoadFailed>)>()
+            .iter(world)
+            .count();
+        if art > 20 && pending == 0 {
             info!("battle: longest frame while loading {:.0} ms", world.resource::<WorstFrame>().0 * 1000.0);
-        }
-        if art > 20 {
             world.entity_mut(e).despawn();
         }
     }

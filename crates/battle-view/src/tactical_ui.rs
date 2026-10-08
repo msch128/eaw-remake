@@ -33,9 +33,9 @@ impl Plugin for TacticalUiPlugin {
             Update,
             (
                 init_reinforce.run_if(resource_added::<BattleRuntime>),
-                spawn_bar.run_if(resource_added::<BattleRuntime>),
+                spawn_bar.run_if(resource_exists::<crate::BattleSession>.and_then(not(resource_exists::<TacticalBarSpawned>))),
                 remove_reinforce.run_if(resource_removed::<BattleRuntime>),
-                remove_bar.run_if(resource_removed::<BattleRuntime>),
+                remove_bar.run_if(resource_removed::<BattleRuntime>.or_eager(resource_removed::<crate::BattleSession>)),
                 (sync_data, handle_clicks, reinforce_clicks, reinforce_events, reinforce_panel, sync_minimap, minimap_pan).chain().run_if(resource_exists::<BattleRuntime>),
             )
                 .chain(),
@@ -50,9 +50,16 @@ pub struct TacticalUiState {
     pub groups: Vec<Vec<u32>>,
 }
 
-fn spawn_bar(mut commands: Commands, rt: Res<BattleRuntime>) {
-    let faction = UiFaction::from_name(rt.player_faction.as_deref().unwrap_or("Empire"));
+/// Marks that the bar of the current battle was spawned.
+#[derive(Resource)]
+struct TacticalBarSpawned;
+
+/// Spawns the bar as soon as the [`BattleSession`](crate::BattleSession) exists, i.e. while the loading screen
+/// is still up, not in the frame where the ships spawn (the whole command bar tree is one costly command).
+fn spawn_bar(mut commands: Commands, session: Res<crate::BattleSession>) {
+    let faction = UiFaction::from_name(session.player_faction.as_deref().unwrap_or("Empire"));
     commands.spawn_eaw_command_bar(CommandBarSpec { mode: CommandBarMode::SpaceTactical, faction });
+    commands.insert_resource(TacticalBarSpawned);
 }
 
 fn remove_bar(mut commands: Commands, bars: Query<Entity, With<EawCommandBar>>, mut tac: ResMut<TacticalData>) {
@@ -60,6 +67,7 @@ fn remove_bar(mut commands: Commands, bars: Query<Entity, With<EawCommandBar>>, 
         commands.entity(e).despawn();
     }
     tac.active = false;
+    commands.remove_resource::<TacticalBarSpawned>();
 }
 
 /// Fills [`TacticalData`] from the selection and the displayed step.
