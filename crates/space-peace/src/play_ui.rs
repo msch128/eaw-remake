@@ -75,6 +75,7 @@ impl Plugin for PlayUiPlugin {
             .init_resource::<BattleDialogState>()
             .init_resource::<MoveMarkers>()
             .init_resource::<Toast>()
+            .init_resource::<EndState>()
             .add_systems(PreUpdate, drive_ui_scale.run_if(resource_exists::<EawUiSettings>))
             .add_systems(
                 Update,
@@ -102,10 +103,16 @@ impl Plugin for PlayUiPlugin {
                     .chain()
                     .run_if(resource_exists::<PlayBridge>.and_then(resource_exists::<SimState>)),
             )
+            .add_systems(
+                Update,
+                (track_game_end, force_end_script, show_end_dialog, end_dialog_result)
+                    .chain()
+                    .run_if(resource_exists::<PlayBridge>.and_then(resource_exists::<SimState>)),
+            )
             .add_systems(Update, fix_fleet_label_scale.after(galaxy_play::PlaySet::Visuals).run_if(resource_exists::<SimState>))
             .add_systems(OnEnter(AppScreen::SpaceBattle), hide_play_ui)
             .add_systems(OnExit(AppScreen::SpaceBattle), show_play_ui)
-            .add_systems(Update, reset_on_stop.run_if(not(resource_exists::<SimState>)));
+            .add_systems(Update, (reset_on_stop, reset_end_state).run_if(not(resource_exists::<SimState>)));
     }
 }
 
@@ -867,5 +874,148 @@ fn scripted_clicks(
             info!("script: clicking `{name}`");
             out.write(EawButtonClicked { name: name.trim().to_lowercase(), entity: Entity::PLACEHOLDER, shift: false });
         }
+    }
+}
+
+/// What the player did in this game (counted from the simulation events; a loaded save starts again at zero).
+#[derive(Debug, Default, Clone, PartialEq)]
+struct GameStats {
+    battles_won: u32,
+    battles_lost: u32,
+    ships_built: u32,
+    ships_lost: u32,
+}
+
+/// The campaign result and its dialog.
+#[derive(Resource, Default)]
+struct EndState {
+    stats: GameStats,
+    /// `Some(true)` victory, `Some(false)` defeat, waiting for the dialog.
+    pending: Option<bool>,
+    /// The dialog entity once shown.
+    dialog: Option<Entity>,
+    /// The result was already announced for this game.
+    announced: bool,
+}
+
+/// Counts the player's events and notices victory and defeat.
+fn track_game_end(mut events: MessageReader<galaxy_play::PlayEvent>, player: Res<PlayerFaction>, mut end: ResMut<EndState>) {
+    use galaxy_sim::Event;
+    let Some(me) = player.0 else {
+        events.clear();
+        return;
+    };
+    for e in events.read() {
+        let galaxy_play::PlayEvent::Sim(ev) = e else { continue };
+        match ev {
+            Event::BattleWon { faction, .. } if *faction == me => end.stats.battles_won += 1,
+            Event::BattleLost { faction, .. } if *faction == me => end.stats.battles_lost += 1,
+            Event::UnitsDestroyed { faction, count, .. } if *faction == me => end.stats.ships_lost += count,
+            Event::ConstructionComplete { faction, kind: galaxy_sim::ProductionKind::Unit(_), .. } if *faction == me => end.stats.ships_built += 1,
+            Event::Victory { faction } if !end.announced => {
+                end.pending = Some(*faction == me);
+                end.announced = true;
+            }
+            Event::FactionEliminated { faction } if *faction == me && !end.announced => {
+                end.pending = Some(false);
+                end.announced = true;
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Offscreen `--force-end win|lose`: injects the event that ends the campaign.
+fn force_end_script(
+    args: Res<crate::cli::Args>,
+    player: Res<PlayerFaction>,
+    state: Res<SimState>,
+    hold: Res<crate::play::ScriptHold>,
+    mut out: MessageWriter<galaxy_play::PlayEvent>,
+    mut frames: Local<u32>,
+) {
+    let (Some(mode), Some(me), true) = (args.force_end.as_deref(), player.0, args.offscreen.is_some()) else { return };
+    if hold.active || state.current.loading {
+        return;
+    }
+    *frames += 1;
+    if *frames == 90 {
+        let ev = if mode == "win" { galaxy_sim::Event::Victory { faction: me } } else { galaxy_sim::Event::FactionEliminated { faction: me } };
+        out.write(galaxy_play::PlayEvent::Sim(ev));
+    }
+}
+
+/// Victory / defeat dialog with the game statistics, music stinger and advisor line.
+fn show_end_dialog(world: &mut World) {
+    let Some(win) = world.resource::<EndState>().pending else { return };
+    if world.get_resource::<EawUiAssets>().is_none() {
+        world.resource_mut::<EndState>().pending = None;
+        return;
+    }
+    let (faction, weeks, planets, credits, total) = {
+        let state = world.resource::<SimState>();
+        let player = world.resource::<PlayerFaction>();
+        let model = world.resource::<PlayUiModel>();
+        (
+            ui_faction(state, player),
+            state.current.week + 1,
+            model.top.planets,
+            model.top.credits,
+            world.resource::<crate::galaxy_view::GalaxyView>().planets.len(),
+        )
+    };
+    let stats = world.resource::<EndState>().stats.clone();
+    let name = world.resource::<crate::flow::CurrentCampaign>().faction.clone().unwrap_or_else(|| "Rebel".into());
+    let text = format!(
+        "Weeks played: {weeks}\nPlanets held: {planets} of {total}\nBattles won: {}   lost: {}\nShips built: {}   lost: {}\nCredits: {}",
+        stats.battles_won,
+        stats.battles_lost,
+        stats.ships_built,
+        stats.ships_lost,
+        crate::ui::thousands(credits as i64)
+    );
+    let spec = DialogSpec {
+        title: if win { "Victory".into() } else { "Defeat".into() },
+        text,
+        portrait: None,
+        faction,
+        buttons: vec!["Main Menu".into(), "Stay on the map".into()],
+    };
+    if let Some(e) = spawn_dialog(world, &spec) {
+        let mut end = world.resource_mut::<EndState>();
+        end.pending = None;
+        end.dialog = Some(e);
+        if let Some(mut music) = world.get_resource_mut::<alamo_audio::MusicDirector>() {
+            music.set_scene(alamo_audio::MusicScene::Result { faction: name.clone(), win, tactical: false });
+        }
+        if !win && world.contains_resource::<alamo_audio::plugin::AlamoAudio>() {
+            world.write_message(alamo_audio::plugin::GalaxyAudio { faction: name, event: alamo_audio::GalaxyEvent::Defeated });
+        }
+    }
+}
+
+/// "Main Menu" leaves the game, the other button keeps watching the map.
+fn end_dialog_result(
+    mut results: MessageReader<EawDialogResult>,
+    mut end: ResMut<EndState>,
+    mut next: ResMut<NextState<AppScreen>>,
+    mut paused: ResMut<crate::flow::Paused>,
+) {
+    for r in results.read() {
+        if end.dialog != Some(r.dialog) {
+            continue;
+        }
+        end.dialog = None;
+        if r.button == 0 {
+            paused.0 = false;
+            next.set(AppScreen::MainMenu);
+        }
+    }
+}
+
+/// A new game starts with fresh statistics.
+fn reset_end_state(mut end: ResMut<EndState>) {
+    if end.announced || end.dialog.is_some() || end.pending.is_some() || end.stats != GameStats::default() {
+        *end = EndState::default();
     }
 }

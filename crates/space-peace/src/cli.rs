@@ -52,6 +52,8 @@ pub struct Args {
     pub battle_orders: bool,
     /// Offscreen only: reach the map the way a player does, main menu -> campaign list -> campaign (`--via-menu`).
     pub via_menu: bool,
+    /// Offscreen only: pretend the campaign ended for the player (`--force-end win|lose`).
+    pub force_end: Option<String>,
     /// Offscreen only, with `--battle-reserve`: the unit cap of every side equals the deployed units, so call-ins are refused (`--battle-low-cap`).
     pub battle_low_cap: bool,
     /// Offscreen only: deploy only the first N groups of the player side, the rest becomes the reinforcement reserve (`--battle-reserve N`).
@@ -103,6 +105,7 @@ impl Default for Args {
             battle_auto: false,
             battle_orders: false,
             via_menu: false,
+            force_end: None,
             battle_low_cap: false,
             battle_reserve: None,
             click: None,
@@ -144,6 +147,7 @@ OPTIONS:
   --battle-choice <c>    Offscreen: click fight or auto in the battle dialog when it opens
   --battle-auto           Offscreen: the AI plays both sides of a tactical battle
   --via-menu            Offscreen: start from the main menu and click through to the campaign
+  --force-end <win|lose> Offscreen: end the campaign for the player to check the end screen
   --click <names>        Offscreen: click command bar buttons on the map (comma separated)
   --battle-click <names> Offscreen: click buttons once the battle runs (comma separated)
   --difficulty <d>      AI difficulty of a new game: easy, normal, hard, brutal, fair
@@ -211,6 +215,7 @@ impl Args {
                 "--battle-auto" => out.battle_auto = true,
                 "--battle-orders" => out.battle_orders = true,
                 "--via-menu" => out.via_menu = true,
+                "--force-end" => out.force_end = Some(it.next().ok_or("--force-end needs win or lose")?),
                 "--battle-low-cap" => out.battle_low_cap = true,
                 "--battle-reserve" => out.battle_reserve = Some(it.next().ok_or("--battle-reserve needs a number")?.parse().map_err(|e| format!("bad --battle-reserve: {e}"))?),
                 "--click" => out.click = Some(it.next().ok_or("--click needs button names")?),

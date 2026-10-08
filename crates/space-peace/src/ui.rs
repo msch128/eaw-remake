@@ -88,7 +88,7 @@ struct Tooltip;
 struct TooltipText;
 
 /// Formats an integer with thousands separators (`15000` -> `15,000`).
-fn thousands(n: i64) -> String {
+pub(crate) fn thousands(n: i64) -> String {
     let s = n.abs().to_string();
     let mut out = String::new();
     for (i, c) in s.chars().enumerate() {
