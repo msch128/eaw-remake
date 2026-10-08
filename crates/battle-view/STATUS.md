@@ -135,3 +135,8 @@ Add `battle-view`, `galaxy-sim` (already there through galaxy-play) and `eaw-ui`
   release 71-125 ms with preload vs 191-232 ms without (`SP_NO_PRELOAD=1` switches it off); dev profile 144 ms vs 627 ms. Run-to-run noise on this shared machine is about +-30 ms.
   Tried and dropped (no measurable change): a per-frame spawn budget for `spawn_models` (`AlamoRenderSettings::spawn_budget`, still available, default off) and `RenderAssetBytesPerFrame` (16 MiB). The remaining ~70-100 ms
   frame is not in `start_battle` (it takes ~0.1 ms) nor in model loading; it is app-side (tactical UI / session start) and needs a Chrome trace of that frame.
+- Chrome trace of the battle entry on the app path (`cargo build --release -p space-peace --features battle-view/profile`, `TRACE_CHROME=...`; ~27 GB for 100 s, so analyse with grep + awk for spans > 10 ms and
+  delete it): the remaining hitches are three separate one-frame costs, none of them model or texture loading (traced times, release is faster): `OnEnter(AppScreen::SpaceBattle)` 55 ms (`battle_play::spawn_loading_art`
+  / `suspend_galaxy_look`, `hide_galaxy`, `hide_play_ui`), the command flush that spawns the ships' bone hierarchies 31 ms (+10 ms in `spawn_models`), and `tactical_ui::spawn_bar` -> `spawn_eaw_command_bar` 40 ms
+  (the whole command bar tree in one command). Bevy's own `run_render_schedule` shows 30-40 ms spikes (and the systems that wait for it) a few times per run. Not fixed: each needs structural work
+  (async loading-art decode, chunked UI spawn).
