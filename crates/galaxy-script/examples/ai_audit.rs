@@ -180,7 +180,7 @@ fn main() {
                 levels[g.planets[p].starbase.map_or(0, |sb| w.starbases[sb as usize].level.clamp(0, 4) as usize)] += 1;
             }
             let mut top: Vec<_> = structs.into_iter().collect();
-            top.sort_by(|a, b| b.1.cmp(&a.1));
+            top.sort_by_key(|x| std::cmp::Reverse(x.1));
             println!(
                 "{:11} planets {:3}, credits {:.0}; star base levels 0..4 {levels:?}; {} distinct structure types, {} built; top {:?}",
                 names[f],
@@ -218,7 +218,7 @@ fn main() {
                 .filter(|((p, _), _)| *p as usize == pi)
                 .map(|((_, goal), n)| (goal.clone(), *n, st.plans_succeeded.get(&(pi as u32, goal.clone())).copied().unwrap_or(0), st.plans_failed.get(&(pi as u32, goal.clone())).copied().unwrap_or(0)))
                 .collect();
-            v.sort_by(|a, b| b.1.cmp(&a.1));
+            v.sort_by_key(|x| std::cmp::Reverse(x.1));
             println!("{name} plans (goal, started, ok, failed): {:?}", v.iter().take(80).collect::<Vec<_>>());
         }
         println!("goals without a plan script: {:?}", st.goals_without_plan);

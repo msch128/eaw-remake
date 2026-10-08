@@ -42,7 +42,7 @@ fn plan_scripts_serving_several_goals_are_found_under_each_goal() {
     let plans = galaxy_ai::discover_plans(&fs);
     // UpgradeStarbasePlan.lua: Category = "Build_Starbase_Upgrade | Build_Initial_Starbase".
     for goal in ["build_starbase_upgrade", "build_initial_starbase"] {
-        assert_eq!(plans.get(goal).map(Vec::as_slice), Some(&["UpgradeStarbasePlan".to_string()][..]), "{goal}");
+        assert_eq!(plans.get(goal).map(Vec::as_slice), Some(&["UPGRADESTARBASEPLAN".to_string()][..]), "{goal}");
     }
     assert!(plans.keys().all(|k| !k.contains('|')), "no combined keys left");
 }
