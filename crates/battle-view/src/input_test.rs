@@ -69,6 +69,8 @@ enum Step {
     Escape(EscCheck),
     /// After a move order the selected ship shows a line to its destination and a ring there.
     MoveLineVisible,
+    /// Hover a carrier or station: its unit panel lists the squadrons still in reserve (vacuous without one).
+    CarrierPanel,
     /// Hover a ship, then one of its hardpoint reticles: the weapon tooltip must show.
     HardpointTooltip,
 }
@@ -80,11 +82,12 @@ enum EscCheck {
     Paused(bool),
 }
 
-const STEPS: [Step; 29] = [
+const STEPS: [Step; 30] = [
     Step::SelectShip,
     Step::RightClickGround,
     Step::MoveLineVisible,
     Step::HardpointTooltip,
+    Step::CarrierPanel,
     Step::RightClickEnemyRim,
     Step::PlainButton,
     Step::Button("b_fast_forward_t", Check::SpeedIs(2.0)),
@@ -164,7 +167,13 @@ fn drive(
     mut clicks: MessageReader<EawButtonClicked>,
     bar: Query<(&EawButton, &EawButtonState, &ComputedNode, &UiGlobalTransform, &InheritedVisibility)>,
     mut exit: MessageWriter<AppExit>,
-    hp_ui: (Res<eaw_ui::TacticalOverlays>, Query<(&Node, &Text), With<crate::hud::HardpointTip>>, Query<&mut BattleCamera>),
+    hp_ui: (
+        Res<eaw_ui::TacticalOverlays>,
+        Query<(&Node, &Text), With<crate::hud::HardpointTip>>,
+        Query<&mut BattleCamera>,
+        Query<(), With<crate::tactical_ui::AutocastRing>>,
+        Query<&Text, With<crate::hud::UnitPanelStats>>,
+    ),
     extra: (
         Res<UiBlock>,
         Res<Pointer>,
@@ -185,7 +194,7 @@ fn drive(
 ) {
     let (block, pointer, hover, names, all_nodes, interactions, mut commands, action, armed, reinforce, mut motion, mut keyboard, tactical, mut ability_clicks, move_lines) = extra;
     st.ability_clicks += ability_clicks.read().count() as u32;
-    let (hp_overlays, hp_tips, mut cams) = hp_ui;
+    let (hp_overlays, hp_tips, mut cams, autocast_rings, panel_stats) = hp_ui;
     let cam_pose = cams.single().map(|c| (c.target_yaw, c.pitch)).unwrap_or_default();
     let (cam_entity, cam, gt) = *camera;
     let sf = cam.target_scaling_factor().unwrap_or(1.0);
@@ -471,7 +480,75 @@ fn drive(
                         c.target_distance = d;
                     }
                     let ok = st.autocast.is_some_and(|(id, i, before)| rt.cur.as_ref().and_then(|c| c.ship(id)).is_some_and(|s| s.autocast.get(i).copied() == Some(!before)));
-                    verdict = Some(("autocast-toggle".into(), ok));
+                    // The ring on the button follows the state.
+                    let ring_ok = st.autocast.is_some_and(|(_, _, before)| autocast_rings.iter().count() == usize::from(!before));
+                    if !ring_ok {
+                        info!("input-test:   autocast rings on the bar: {}", autocast_rings.iter().count());
+                    }
+                    verdict = Some(("autocast-toggle-and-ring".into(), ok && ring_ok));
+                }
+                _ => {}
+            }
+        }
+        Step::CarrierPanel => {
+            let pick = rt.cur.as_ref().and_then(|c| c.ships.iter().filter(|s| s.reserve_squadrons > 0).max_by_key(|s| s.id).map(|s| s.id));
+            match t {
+                0 => match (pick, pick.and_then(|id| ships.0.get(&id)), cams.single_mut()) {
+                    (Some(id), Some(s), Ok(mut c)) => {
+                        st.cam_saved = Some((c.focus, c.distance));
+                        let at = Vec3::new(s.pos.x, c.target_focus.y, s.pos.z);
+                        c.focus = at;
+                        c.target_focus = at;
+                        c.distance = (s.radius * 5.0).max(c.min_distance);
+                        c.target_distance = c.distance;
+                        st.hp_ship = Some(id);
+                    }
+                    _ => verdict = Some(("carrier-panel (no ship with squadrons in reserve)".into(), true)),
+                },
+                8 => match st.hp_ship.and_then(|id| ships.0.get(&id)).and_then(|s| cam.world_to_viewport(gt, s.pos).ok()) {
+                    Some(p) => act = Some(Act::Move(p)),
+                    None => verdict = Some(("carrier-panel: ship not on screen".into(), false)),
+                },
+                20 => {
+                    // Reticles appear while the ship is hovered; the panel only shows away from them, so move to the free spot farthest from all of them.
+                    let ship = st.hp_ship.and_then(|id| ships.0.get(&id));
+                    if let Some(s) = ship
+                        && let (Ok(c), Ok(e)) = (cam.world_to_viewport(gt, s.pos), cam.world_to_viewport(gt, s.pos + gt.right() * s.radius))
+                    {
+                        let r = (e - c).length();
+                        let spot = (0..16)
+                            .flat_map(|k| {
+                                let a = k as f32 / 16.0 * std::f32::consts::TAU;
+                                [0.35f32, 0.6].map(|f| c + Vec2::new(a.cos(), a.sin()) * r * f)
+                            })
+                            .max_by(|x, y| {
+                                let d = |p: &Vec2| hp_overlays.hardpoints.iter().map(|h| h.screen_pos.distance(*p)).fold(f32::MAX, f32::min);
+                                d(x).total_cmp(&d(y))
+                            });
+                        if let Some(p) = spot {
+                            act = Some(Act::Move(p));
+                        }
+                    }
+                }
+                140 => {
+                    if let (Some((f, d)), Ok(mut c)) = (st.cam_saved.take(), cams.single_mut()) {
+                        c.focus = f;
+                        c.target_focus = f;
+                        c.distance = d;
+                        c.target_distance = d;
+                    }
+                    let shown = panel_stats.iter().map(|t| t.0.clone()).collect::<Vec<_>>();
+                    let ok = shown.iter().any(|t| t.contains("in reserve"));
+                    // A fighter next to the carrier can win the pick; that is not a panel fault.
+                    let picked_other = hover.ship != st.hp_ship;
+                    if !ok {
+                        info!("input-test:   panel stats {shown:?}, hover {:?}, wanted {:?}", hover.ship, st.hp_ship);
+                    }
+                    if picked_other {
+                        verdict = Some(("carrier-panel (cursor picked another ship, not judged)".into(), true));
+                    } else {
+                        verdict = Some(("carrier-panel-shows-reserve".into(), ok));
+                    }
                 }
                 _ => {}
             }

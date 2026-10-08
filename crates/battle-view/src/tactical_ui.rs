@@ -701,7 +701,7 @@ fn ability_keys(
 
 /// Ring on an ability button whose autocast is on.
 #[derive(Component)]
-struct AutocastRing;
+pub(crate) struct AutocastRing;
 
 /// The ability of the focused unit behind `special_button_NN`: (ship slot group, kind of the ability).
 fn button_ability(name: &str, tac: &TacticalData, state: &TacticalUiState) -> Option<(Vec<u32>, String)> {
