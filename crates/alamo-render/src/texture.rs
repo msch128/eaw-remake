@@ -203,17 +203,21 @@ impl TextureCache {
         if let Some(h) = self.by_name.get(&key) {
             return h.clone();
         }
-        let loaded = read_texture_file(fs, name)
-            .ok_or_else(|| "file not found".to_string())
-            .and_then(|d| image_from_bytes(&d))
-            .map(|img| images.add(img));
-        let handle = match loaded {
-            Ok(h) => Some(h),
-            Err(e) => {
-                warn!("texture {name}: {e}");
+        let handle = match read_texture_file(fs, name) {
+            // A data gap (the file exists in no layer): logged once, not an error of ours.
+            None => {
+                info!("texture {name}: absent in data, using the neutral fallback");
                 self.missing.push(name.to_string());
                 None
             }
+            Some(d) => match image_from_bytes(&d) {
+                Ok(img) => Some(images.add(img)),
+                Err(e) => {
+                    warn!("texture {name}: undecodable ({e}), using the neutral fallback");
+                    self.missing.push(name.to_string());
+                    None
+                }
+            },
         };
         self.by_name.insert(key, handle.clone());
         handle
@@ -226,7 +230,7 @@ impl TextureCache {
             return;
         }
         if image.is_none() {
-            warn!("texture {name}: missing or undecodable, using the neutral fallback");
+            // The reason (absent in data / undecodable) was logged where the file was read.
             self.missing.push(name.to_string());
         }
         self.by_name.insert(key, image.map(|i| images.add(i)));

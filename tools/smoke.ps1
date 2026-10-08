@@ -85,9 +85,8 @@ foreach ($s in $scenarios) {
     # Battle scenarios save their mid-battle shot as <name>_battle.png; every other scenario must write its picture.
     $shot = if ($name -like 'battle-fight*' -or $name -like 'battle-reinforce*') { Join-Path $Out "${name}_battle.png" } else { $png }
     if (-not $windowed -and -not (Test-Path $shot)) { $problems += 'no picture' }
-    # A missing texture must never reach the screen as a loud colour: it is logged and replaced by black.
-    if ($text -match 'texture [^
-]*: missing or undecodable') { $problems += 'missing texture (see log)' }
+    # A texture that exists but cannot be decoded is our bug (absent files are data gaps, logged at INFO and replaced by a neutral fallback).
+    if ($text -match 'texture [^\r\n]*: undecodable') { $problems += 'undecodable texture (see log)' }
     if (-not $windowed -and (Test-Path $shot)) {
         Add-Type -AssemblyName System.Drawing
         $bmp = [System.Drawing.Bitmap]::FromFile($shot)

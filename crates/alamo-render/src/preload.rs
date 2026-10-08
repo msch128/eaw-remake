@@ -144,7 +144,20 @@ fn decode_new(fs: &GameFs, claimed: &Mutex<HashSet<String>>, names: Vec<String>)
         if name.is_empty() || !claimed.lock().unwrap().insert(name.to_ascii_lowercase()) {
             continue;
         }
-        let img = read_texture_file(fs, &name).and_then(|d| image_from_bytes(&d).ok());
+        let img = match read_texture_file(fs, &name) {
+            // A data gap (the file exists in no layer): logged once, not an error of ours.
+            None => {
+                info!("texture {name}: absent in data, using the neutral fallback");
+                None
+            }
+            Some(d) => match image_from_bytes(&d) {
+                Ok(i) => Some(i),
+                Err(e) => {
+                    warn!("texture {name}: undecodable ({e}), using the neutral fallback");
+                    None
+                }
+            },
+        };
         out.push((name, img));
     }
     out
