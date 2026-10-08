@@ -739,18 +739,16 @@ struct Batch {
     indices: Handle<ShaderBuffer>,
     verts: Handle<ShaderBuffer>,
     material: Handle<ParticleMaterial>,
-    /// Frames since creation; a batch stays hidden for the first few so the sprite texture and the
-    /// storage buffers are on the GPU (until then Bevy binds its white fallback image, which shows up as
-    /// solid squares).
-    age: u32,
+    /// False when the sprite texture could not be loaded: such a batch is never drawn (a `None` texture
+    /// would bind Bevy's white fallback image and show solid squares). A texture that is merely not
+    /// uploaded yet needs no check: the material stays unprepared (`RetryNextUpdate`) and is not drawn.
+    texture_ok: bool,
     /// Capacity in indices (also the vertex count of the dummy draw mesh) and in vertices.
     cap_idx: usize,
     cap_vert: usize,
 }
 
 const INITIAL_IDX_CAPACITY: usize = 6 * 1024;
-/// Frames a new batch stays hidden (see [`Batch::age`]).
-const BATCH_WARMUP_FRAMES: u32 = 3;
 
 /// Vertex data of extra geometry (projectile bolts) that is merged into the batch of the same
 /// texture and blend mode every frame.
@@ -837,6 +835,7 @@ pub fn update_particle_batches(
         let bolts = extra_bufs.remove(&key);
         if !batches.batches.contains_key(&key) {
             let texture = textures.get(&fs.0, &mut images, &key.0);
+            let texture_ok = texture.is_some();
             let cap_idx = INITIAL_IDX_CAPACITY;
             let cap_vert = cap_idx / 6 * 4;
             let indices = buffers.add(ShaderBuffer::new(&vec![0u8; (cap_idx + 1) * 4], RenderAssetUsages::default()));
@@ -859,7 +858,7 @@ pub fn update_particle_batches(
                 .id();
             batches.batches.insert(
                 key.clone(),
-                Batch { entity, mesh, indices, verts, material, age: 0, cap_idx, cap_vert },
+                Batch { entity, mesh, indices, verts, material, texture_ok, cap_idx, cap_vert },
             );
         }
         let batch = batches.batches.get_mut(&key).expect("batch exists");
@@ -955,9 +954,8 @@ pub fn update_particle_batches(
             b.data = Some(vb);
             b.buffer_description.size = (batch.cap_vert * 48) as u64;
         }
-        batch.age = batch.age.saturating_add(1);
         if let Ok(mut v) = visibility.get_mut(batch.entity) {
-            *v = if batch.age > BATCH_WARMUP_FRAMES { Visibility::Visible } else { Visibility::Hidden };
+            *v = if batch.texture_ok { Visibility::Visible } else { Visibility::Hidden };
         }
     }
     stats.batches = active;

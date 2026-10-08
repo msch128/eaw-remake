@@ -86,3 +86,7 @@ the first directional light. `battle-view` spawns the map's fill lights from the
   moves results into `ModelCache`/`TextureCache` within a 3 ms/frame budget; `load_model` then skips read+parse and the texture decode. `is_idle()` tells when everything requested is cached. `load_model` logs
   a breakdown (read / parse / textures / rest) for models that take >= 20 ms. Release numbers for the 13 distinct models of the demo battle before: Imperial_SD 88 ms, Executor 208 ms (read 58, parse 80, textures 51,
   rest 19), Titan 66, Allegiance 56, MC80 45, ...; textures were ~half of it, read+parse ~35 %.
+- Replaced the 3-frame batch warm-up by a real readiness rule. Bevy's `AsBindGroup` derive returns `RetryNextUpdate` while a `Handle<Image>` or `Handle<ShaderBuffer>` has no prepared GPU asset
+  (bevy_render_macros `as_bind_group.rs`), so a particle material, and with it the draw, simply waits until the sprite texture and both storage buffers are on the GPU; there was never a white-fallback frame for a
+  texture that is merely not uploaded yet. The white fallback only happens for a `None` handle (texture missing), so a batch whose texture failed to load is now never drawn (`Batch::texture_ok`; the loader already
+  warns once). The squares in the old `sw4.png` predate the storage-buffer change; current builds render the planet explosion textured.
