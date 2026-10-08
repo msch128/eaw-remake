@@ -51,7 +51,7 @@ pub struct TacticalGroup {
 pub struct TacticalSide {
     /// Faction id.
     pub faction: FactionId,
-    /// Tech level of the faction (0 to 4): selects the `..._Spawned_Units_Tech_N` entries its carriers launch.
+    /// Tech level of the faction as an index (0 to 4; the galaxy counter starts at 1, `Tech_0` is the level at the start): selects the `..._Spawned_Units_Tech_N` entries its carriers launch.
     pub tech: u8,
     /// Faction name, e.g. `Empire`.
     pub faction_name: String,
@@ -208,7 +208,7 @@ impl TacticalRequest {
                     reserve,
                     unit_cap: cap,
                     faction: side.faction,
-                    tech: galaxy.factions.get(side.faction as usize).map_or(0, |f| f.tech.clamp(0, 4) as u8),
+                    tech: galaxy.factions.get(side.faction as usize).map_or(0, |f| (f.tech - 1).clamp(0, 4) as u8),
                     faction_name: world.factions[side.faction as usize].name.clone(),
                     defender: battle.defender == Some(side.faction),
                     damage_mult: world_diff(side.faction).damage,

@@ -323,3 +323,29 @@ fn abandoning_a_half_fought_battle_keeps_the_losses() {
     let lost: u32 = events.iter().filter_map(|e| if let Event::UnitsDestroyed { faction, count, .. } = e { (*faction == rebel).then_some(*count) } else { None }).sum();
     assert!(lost <= 2, "only what was left can be lost, got {lost}");
 }
+
+#[test]
+fn a_sides_tech_index_counts_from_zero_at_the_games_start_level() {
+    let Some(ctx) = load() else { return };
+    let side_techs = |tech_of_empire: Option<i32>| {
+        let mut sim = new_sim(&ctx);
+        let w = sim.world().clone();
+        let (empire, rebel) = (w.faction_id("Empire").unwrap(), w.faction_id("Rebel").unwrap());
+        if let Some(t) = tech_of_empire {
+            sim.galaxy_mut().factions[empire as usize].tech = t;
+        }
+        let target = empty_planet(&sim);
+        let (isd, xw) = (w.unit_id("Star_Destroyer").unwrap(), w.unit_id("X-Wing_Squadron").unwrap());
+        add_fleet(&mut sim, empire, isd, 1, target, target);
+        add_fleet(&mut sim, rebel, xw, 1, target, neighbour(&w, target));
+        let battle = pending(&mut sim);
+        let req = sim.tactical_setup(battle.id).unwrap();
+        let by_name = |f: FactionId| req.sides.iter().find(|s| s.faction == f).unwrap().tech;
+        (by_name(empire), by_name(rebel), sim.galaxy().factions[empire as usize].tech)
+    };
+    // The galaxy shows "TECH: 1" at the start: that is index 0, the `Tech_0` entries.
+    let (empire, rebel, counter) = side_techs(None);
+    assert_eq!((counter, empire, rebel), (1, 0, 0));
+    assert_eq!(side_techs(Some(3)).0, 2);
+    assert_eq!(side_techs(Some(5)).0, 4);
+}

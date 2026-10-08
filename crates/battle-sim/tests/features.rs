@@ -233,3 +233,15 @@ fn carriers_with_only_higher_tech_entries_still_launch() {
     assert!(!d.spawned_by_tech.is_empty() && d.spawned_by_tech.iter().all(|t| t.0 >= 1), "{:?}", d.spawned_by_tech.iter().map(|t| t.0).collect::<Vec<_>>());
     assert!(!d.carried.is_empty() && !d.reserve.is_empty(), "the lowest level the unit has is used when the owner is below it");
 }
+
+#[test]
+fn the_star_destroyer_at_the_start_tech_brings_exactly_its_tech_0_wing() {
+    let Some((data, fs)) = load() else { return };
+    let cat = Catalog::build(&data, Some(&fs), &["Star_Destroyer", "Venator_Empire"]);
+    let isd = cat.ship(cat.ship_id("Star_Destroyer").unwrap());
+    assert_eq!(isd.spawned_by_tech.iter().map(|t| t.0).collect::<Vec<_>>(), vec![0], "only Tech_0 entries");
+    assert!(!isd.carried.is_empty());
+    // The Venator of the Empire refits: Republic wings at level index 1, TIEs at index 2 (it needs tech level 2, so it never has index 0).
+    let ven = cat.ship(cat.ship_id("Venator_Empire").unwrap());
+    assert_eq!(ven.spawned_by_tech.iter().map(|t| t.0).collect::<Vec<_>>(), vec![1, 2]);
+}
