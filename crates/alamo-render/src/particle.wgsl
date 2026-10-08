@@ -46,9 +46,32 @@ fn vertex(in: ParticleVertexInput) -> VertexOutput {
         return out;
     }
     let ix = quad_indices[1u + local_vi];
-    let p = quad_verts[ix * 3u];
+    var p = quad_verts[ix * 3u];
     let t = quad_verts[ix * 3u + 1u];
     let c = quad_verts[ix * 3u + 2u];
+    // Keep thin quads (bolts, sparks, distant effects) at least about 2 px wide at 4K: each quad is
+    // (b, b+1, b+2, b+3) with corners p0 + {0,u} + {0,w}; widen an edge that projects below the minimum.
+    {
+        let qb = ix & 0xFFFFFFFCu;
+        let p0 = quad_verts[qb * 3u].xyz;
+        let u = quad_verts[(qb + 1u) * 3u].xyz - p0;
+        let w = quad_verts[(qb + 2u) * 3u].xyz - p0;
+        let centre = p0 + 0.5 * (u + w);
+        let cw = (view.clip_from_world * vec4<f32>(centre, 1.0)).w;
+        // Only for visibly bright quads: faint ribbons stay as thin as the data makes them.
+        let qc = quad_verts[qb * 3u + 2u];
+        if cw > 0.0 && qc.a * max(qc.r, max(qc.g, qc.b)) > 0.35 {
+            let px_per_unit = view.clip_from_view[1][1] * 0.5 * view.viewport.w / cw;
+            let min_px = 2.0 * view.viewport.w / 2160.0;
+            let lu = length(u) * px_per_unit;
+            let lw = length(w) * px_per_unit;
+            let ku = select(1.0, min(min_px / lu, 64.0), lu > 1e-4 && lu < min_px);
+            let kw = select(1.0, min(min_px / lw, 64.0), lw > 1e-4 && lw < min_px);
+            let su = select(-1.0, 1.0, (ix & 1u) == 1u);
+            let sw = select(-1.0, 1.0, (ix & 2u) == 2u);
+            p = vec4<f32>(centre + 0.5 * su * ku * u + 0.5 * sw * kw * w, p.w);
+        }
+    }
     out.world_position = vec4<f32>(p.xyz, 1.0);
     out.position = view.clip_from_world * out.world_position;
 #ifdef VERTEX_UVS_A

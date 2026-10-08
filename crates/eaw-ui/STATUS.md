@@ -42,3 +42,9 @@ Tests: `cargo test -p eaw-ui` (2 integration tests need the game install and ski
 Integrate with the app crate (feed the data resources from the sim, handle the messages), test
 interaction in a real window, build the planet-screen pad layout, replace the tint with radial
 dials, and compare screenshots against the real game.
+
+## Tactical round (2026-10-08)
+- `TacticalOverlays { ships, hardpoints }` is a separate resource (was `TacticalData::overlays/hardpoints`); `ShipOverlay::always` shows the bars of own ships without brackets.
+  Bars sit under the ship box, brackets are 7 px corners, own selected = green.
+- `b_droid_help*` is spawned first so the pause / fast-forward buttons stay above its big rectangle (real clicks used to hit the droid).
+- Re-exports: `TacticalOverlayRoot`, `TacticalOverlays`. `examples/ui_demo.rs` needs `CommandBarData { month_income, month_progress, planet_color }` (integrator's change) to compile.

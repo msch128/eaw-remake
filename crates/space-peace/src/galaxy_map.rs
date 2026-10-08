@@ -45,7 +45,7 @@ impl Plugin for GalaxyMapPlugin {
             .insert_resource(ClearColor(Color::BLACK))
             .insert_resource(GlobalAmbientLight {
                 color: Color::srgb(0.55, 0.62, 0.85),
-                brightness: 80.0,
+                brightness: 30.0,
                 ..default()
             })
             .add_systems(Startup, setup_scene)
@@ -366,7 +366,7 @@ fn setup_scene(
     ) * Vec3::NEG_Z;
     if alamo.is_some() {
         // The Alamo shaders take a unit-less 0..1 sun strength.
-        spawn_sun(&mut commands, direction, view.light.level.max(1.0), Color::WHITE);
+        spawn_sun(&mut commands, direction, view.light.level.clamp(0.3, 1.0), Color::WHITE);
     } else {
         commands.spawn((
             DirectionalLight {

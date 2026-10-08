@@ -147,3 +147,27 @@ Add `battle-view`, `galaxy-sim` (already there through galaxy-play) and `eaw-ui`
   Longest frame while loading, release: Yavin_WW scenario 71-125 ms before, Hoth (`--campaign GC_Full_Web_Way_Rebel --select "The Yavin System" --weeks 8 --move Hoth --battle-choice fight`, deterministic) 56-70 ms now,
   one random-battle run 57/57/91 ms. The rest is Bevy's render world (`run_render_schedule` 30-40 ms spikes with `propagate_parent_transforms`/instance-buffer writes waiting on it), not our systems.
   `tools\smoke.ps1 -Only battle-fight-orders` passes.
+
+## Tactical screen fidelity round (2026-10-08, tactical agent)
+- **World overlays are eaw-ui's now:** `tactical_ui::sync_overlays` fills `eaw_ui::TacticalOverlays` (own resource; `TacticalData` no longer carries overlays):
+  green corner brackets + the game's `i_bar_*` health/shield textures for selected and hovered ships, a health line under every own ship
+  (`ShipOverlay::always`, cap 200), brackets/bars on the hovered or selected enemy, hardpoint reticles (`I_HARD_POINT_RETICLE_*`) of the targeted enemy;
+  a click on a reticle sends `AttackHardpoint`. Names float only over hovered ships and a lone selected ship. The gizmo rings/bars of
+  `control::overlays` run only when `TacticalUiPlugin` is absent (`control::OverlaysActive`). Order flashes and the drag box are still gizmos.
+- **`hud.rs`** (positions measured from the real-game reference screenshot, design pixels): R2 advisor bubble (`TEXT_DROID_ADVISOR_<FACTION>_SPACE_NN`,
+  first hint at 1 s, then one every 75 s for 14 s: estimates), "Mission Objectives" box (`TEXT_TEST_OBJECTIVE_HEADER`, `TEXT_TACTICAL_PRIMARY_SPACE_ATTACK`
+  or `..._DEFEND_<ATTACKER>` from the request: attacker = any side before the last), hero portraits top right (`is_named_hero` ships of the player, `Icon_Name`,
+  health line, ring turns orange when selected, click selects, double click focuses). Not done: the cyan tail of the advisor bubble, hero ability buttons.
+- **Camera:** edge scroll 2 px region, speeds 1000 (close) to 4000 (far) units/s and Shift x2 straight from `Gameconstants.xml` (`Tactical_*`, `Push_Scroll_Speed_Modifier`);
+  Space or a double click on a ship (`control::FocusCamera`) centres on the selection; Page Up/Down and middle-drag tilt (limits are estimates). Default pitch/zoom limits
+  are still estimates (not in the data).
+- **Input blocking:** `control::ui_block` sets `UiBlock` while the cursor is on a visible UI node with a picture (alpha tested, the bar's frame art is mostly transparent),
+  a background or an `Interaction`; the overlay layer (ship bars, reticles) does not count. `selection`/`orders` ignore clicks and hover then.
+  **Pitfall found:** node transforms are physical pixels of the window; `ComputedNode::inverse_scale_factor` includes `UiScale`, so cursor / inverse_scale_factor is wrong
+  (use `camera.target_scaling_factor()`).
+- **Bug fixed in eaw-ui:** `b_droid_help_tactical` (R2) is a 93x120 Block button that covered pause / fast-forward, so those clicks went to the droid. It is now built first
+  (underneath). Camera/pause/option buttons are fine.
+- **Real-input self test** `input_test.rs`: `SP_INPUT_TEST=1|exit` with a windowed run (`space-peace --hidden ...`, battle for the player) injects `CursorMoved`,
+  `MouseButtonInput` and the window's cursor position before Bevy's input systems, so it exercises the real pipeline (`ButtonInput`, `ui_focus_system`, `read_pointer`):
+  select ship, right-click order, plain `Button` control experiment, a command bar button click, bar area keeps the selection, empty click deselects. One line
+  `input-test: N checks PASS|FAIL`; smoke scenario `windowed-battle-input`. Failures print the nodes under the cursor.

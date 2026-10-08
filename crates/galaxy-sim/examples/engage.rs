@@ -47,15 +47,17 @@ fn main() {
     println!("{} at {} ({}): {}x {} vs {} level {} star base ({})", w.planets[planet as usize].name, req.map.clone().unwrap_or_default(), req.planet_name, count, unit_name, def_name, level, w.starbases[sb as usize].name);
     {
         // Expected damage rate from the data: every weapon of the fleet in range, damage type against the station armor, no misses.
-        let u = &w.units[w.unit_id(unit_name.split(',').next().unwrap().split(':').next().unwrap()).unwrap() as usize];
         let sbd = &w.starbases[sb as usize].combat;
-        let (mut shield_dps, mut hull_dps) = (0.0, 0.0);
-        for wp in &u.combat.weapons {
-            shield_dps += wp.shield_dps * w.damage.multiplier(wp.damage_type, sbd.shield_armor);
-            hull_dps += wp.hull_dps * w.damage.multiplier(wp.damage_type, sbd.armor);
+        let (mut shield_dps, mut hull_dps) = (0.0f32, 0.0f32);
+        for part in unit_name.split(',') {
+            let (n, c) = part.split_once(':').map_or((part, count), |(n, c)| (n, c.parse().unwrap()));
+            let u = &w.units[w.unit_id(n).unwrap() as usize];
+            for wp in &u.combat.weapons {
+                shield_dps += c as f32 * wp.shield_dps * w.damage.multiplier(wp.damage_type, sbd.shield_armor);
+                hull_dps += c as f32 * wp.hull_dps * w.damage.multiplier(wp.damage_type, sbd.armor);
+            }
         }
-        println!("data: one {} has {:.0} raw shield dps / {:.0} raw hull dps ({} weapons); against the station armor {:.0} / {:.0}; x{} = {:.0} / {:.0}. Station shield {:.0}, hull {:.0}, regen {:.0}/s",
-            unit_name, u.combat.weapons.iter().map(|x| x.shield_dps).sum::<f32>(), u.combat.weapons.iter().map(|x| x.hull_dps).sum::<f32>(), u.combat.weapons.len(), shield_dps, hull_dps, count, shield_dps * count as f32, hull_dps * count as f32, sbd.shield, sbd.hull, sbd.shield_regen);
+        println!("data: the whole fleet has {shield_dps:.0} shield dps / {hull_dps:.0} hull dps against the station armor (every weapon in range, no misses). Station shield {:.0} with regen {:.0} per {}s = {:.0}/s, hull {:.0}", sbd.shield, sbd.shield_regen, w.config.week_seconds * 0.0 + 2.0, sbd.shield_regen / 2.0, sbd.hull);
     }
     let names: Vec<&str> = req.sides.iter().flat_map(|s| s.groups.iter().map(|g| g.name.as_str())).collect();
     let catalog = Arc::new(battle_sim::Catalog::build(&data, Some(&fs), &names));

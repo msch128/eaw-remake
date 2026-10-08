@@ -726,22 +726,18 @@ impl Sim {
         }
     }
 
-    /// Applies a combat result (statistical or tactical) to the galaxy: losses, destroyed star base and
-    /// structures, retreats, events.
-    pub(crate) fn apply_combat(&mut self, battle: &PendingBattle, sides: &[SideInput], result: combat::CombatResult) -> Vec<Event> {
+    /// Removes the units, star base and structures that did not survive from the galaxy (fleets are cut by type).
+    /// Returns the `UnitsDestroyed` / `HeroDestroyed` events and the unit losses per faction.
+    pub(crate) fn apply_losses(&mut self, p: PlanetId, sides: &[SideInput], survivors: &[Vec<Member>]) -> (Vec<Event>, BTreeMap<FactionId, u32>) {
         let world = self.world.clone();
         let w = &*world;
-        let (id, p) = (battle.id, battle.planet);
         let mut events = Vec::new();
-        let ps = self.galaxy.planets[p as usize].clone();
-
-        // Apply fleet losses.
         self.galaxy.sync_ships();
         let mut losses: BTreeMap<FactionId, u32> = BTreeMap::new();
         for (si, side) in sides.iter().enumerate() {
             let mut surviving: BTreeMap<(FleetId, UnitTypeId), u32> = BTreeMap::new();
             let (mut base_alive, mut struct_alive) = (false, BTreeMap::new());
-            for m in &result.survivors[si] {
+            for m in &survivors[si] {
                 match (m.source, m.fleet) {
                     (Source::Unit(u), Some(f)) => *surviving.entry((f, u)).or_default() += m.count,
                     (Source::Starbase(_), _) => base_alive = true,
@@ -788,6 +784,17 @@ impl Sim {
             }
         }
         self.galaxy.fleets.retain(|_, f| !f.units.is_empty());
+        (events, losses)
+    }
+
+    /// Applies a combat result (statistical or tactical) to the galaxy: losses, destroyed star base and
+    /// structures, retreats, events.
+    pub(crate) fn apply_combat(&mut self, battle: &PendingBattle, sides: &[SideInput], result: combat::CombatResult) -> Vec<Event> {
+        let world = self.world.clone();
+        let w = &*world;
+        let (id, p) = (battle.id, battle.planet);
+        let ps = self.galaxy.planets[p as usize].clone();
+        let (mut events, losses) = self.apply_losses(p, sides, &result.survivors);
 
         let winner = result.winner.map(|i| sides[i].faction);
         for (si, side) in sides.iter().enumerate() {
