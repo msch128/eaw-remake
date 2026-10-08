@@ -51,6 +51,9 @@ struct Capture {
     warm: u32,
     /// Frames to leave out of the statistics after a screenshot (the readback stalls the frame).
     skip: u32,
+    /// Wall milliseconds of every simulation step seen (one entry per tick).
+    step_ms: Vec<f32>,
+    last_tick: u64,
     frames: u32,
     cam_applied: bool,
     auto: bool,
@@ -221,6 +224,8 @@ fn main() {
                 wall_start: Instant::now(),
                 warm: 0,
                 skip: 0,
+                step_ms: Vec::new(),
+                last_tick: 0,
                 frames: 0,
                 cam_applied: false,
                 auto,
@@ -330,6 +335,10 @@ fn capture_driver(
 
     // Frame time statistics start once the first step has been reached.
     cap.warm += 1;
+    if status.tick != cap.last_tick {
+        cap.last_tick = status.tick;
+        cap.step_ms.push(status.step_ms);
+    }
     if cap.skip > 0 {
         cap.skip -= 1;
     } else if cap.warm > 40 {
@@ -391,6 +400,20 @@ fn capture_driver(
                         }
                         if let Some(p) = prof {
                             print!("{}", p.summary());
+                        }
+                        let mut st = cap.step_ms.clone();
+                        st.sort_by(f32::total_cmp);
+                        if !st.is_empty() {
+                            let p = |q: f32| st[((st.len() - 1) as f32 * q) as usize];
+                            println!(
+                                "sim step over {} ticks: mean {:.2} ms, p50 {:.2}, p95 {:.2}, p99 {:.2}, max {:.2}",
+                                st.len(),
+                                st.iter().sum::<f32>() / st.len() as f32,
+                                p(0.5),
+                                p(0.95),
+                                p(0.99),
+                                st[st.len() - 1]
+                            );
                         }
                         println!("wall time {:.1} s", cap.wall_start.elapsed().as_secs_f32());
                         exit.write(AppExit::Success);

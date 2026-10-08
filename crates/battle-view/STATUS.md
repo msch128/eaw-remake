@@ -108,3 +108,10 @@ Add `battle-view`, `galaxy-sim` (already there through galaxy-play) and `eaw-ui`
   with `TRACE_CHROME=1`). To use it in `space-peace --offscreen`: build `DefaultPlugins` with `.set(timestamp_render_plugin())`, add `GpuProfilePlugin` after it, print `GpuProfile::summary()` on exit.
 - 4K, 290-ship battle, High (shadows): GPU medians per frame: bin_unpacking 0.96 ms (GPU mesh preprocessing), opaque pass 0.47, bloom 0.19, transparent pass (all particles) 0.07, clustering 0.07,
   upscaling 0.03: about 1.8 ms in total against a 9.4 ms wall mean, so the demo is CPU / pacing bound, not GPU bound. Hitches of 20-40 ms line up with sim steps of 4-12 ms (blocking offscreen mode waits for the sim).
+
+## Sim threading and step cost (checked, nothing to change)
+- `sim.rs` already runs `battle-sim` on a worker thread: the render side keeps a virtual clock, fetches the snapshots for `tick` and `tick + 1` and interpolates; commands go through a channel;
+  `blocking` (offscreen/tests) waits for the snapshots so output stays deterministic. The windowed app uses the non-blocking path, so sim steps never run on the render thread.
+- `battle_demo` now prints sim step statistics (`sim step over N ticks`). 4K, ~290 ships, three runs: step mean 0.44-0.59 ms, p50 0.38-0.41, p99 1.1-1.9; one outlier of ~40 ms in two of the
+  runs (coincides with the screenshot readback). `battle_bench` (headless, 1254 ships incl. fighters): 0.45 ms/step parallel, 1.73 ms sequential. The wall frame mean is 7.7-8.2 ms, so the render
+  thread (main-thread systems, extraction, draw submission), not the sim, is the CPU cost; the GPU is ~1.8 ms (see GPU profiling). Next candidate: a Chrome trace of the render-side systems.
