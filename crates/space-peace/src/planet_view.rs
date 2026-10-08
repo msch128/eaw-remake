@@ -120,17 +120,17 @@ fn view_scene(
         Transform::from_translation(ORIGIN).looking_to(Vec3::new(-0.5, -0.25, -0.8), Vec3::Y),
     ));
     if let Some(model) = &p.1.model {
-        commands.spawn((ViewEntity, AlamoModel::new(model.clone()), FitModel { radius: 11.0, spin: 0.01 }, Transform::from_translation(ORIGIN + Vec3::new(-8.5, -0.5, -15.0))));
+        commands.spawn((ViewEntity, AlamoModel::new(model.clone()), FitModel { radius: 13.0, spin: 0.01 }, Transform::from_translation(ORIGIN + Vec3::new(-17.5, -1.0, -15.0))));
     }
     // Station: the model of the planet's star base level.
     if let (Some(sim), Some(cat)) = (sim, catalog)
         && let Some(sb) = sim.galaxy().planets.get(p.0).and_then(|s| s.starbase)
         && let Some(Some(m)) = cat.starbase_models.get(sb as usize)
     {
-        commands.spawn((ViewEntity, AlamoModel::new(m.clone()), FitModel { radius: 1.3, spin: 0.15 }, Transform::from_translation(ORIGIN + Vec3::new(-3.4, -0.9, -9.0))));
+        commands.spawn((ViewEntity, AlamoModel::new(m.clone()), FitModel { radius: 1.1, spin: 0.15 }, Transform::from_translation(ORIGIN + Vec3::new(-2.6, -1.5, -9.0))));
     }
     if let Some(tex) = textures.as_mut().and_then(|t| t.get(&mut images, "i_galactic_organize_land.dds")) {
-        spawn_platform(&mut commands, &mut meshes, &mut mats, tex.handle, land_cell(p.1.terrain.as_deref()), ORIGIN + Vec3::new(0.6, -1.9, -10.0));
+        spawn_platform(&mut commands, &mut meshes, &mut mats, tex.handle, land_cell(p.1.terrain.as_deref()), ORIGIN + Vec3::new(0.0, -2.5, -10.0));
     }
 }
 
@@ -194,5 +194,5 @@ fn spawn_platform(
         ),
         ..default()
     });
-    commands.spawn((ViewEntity, Name::new("base layout"), Mesh3d(meshes.add(Rectangle::new(7.0, 3.5))), MeshMaterial3d(mat), Transform::from_translation(at)));
+    commands.spawn((ViewEntity, Name::new("base layout"), Mesh3d(meshes.add(Rectangle::new(3.8, 1.9))), MeshMaterial3d(mat), Transform::from_translation(at)));
 }

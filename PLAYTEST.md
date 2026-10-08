@@ -49,7 +49,8 @@ Galaxy map
 | Left click | select planet / fleet; drag = box select fleets; drag a fleet onto a planet = move |
 | Right click | move selected fleets to the planet under the cursor |
 | Mouse wheel | zoom |
-| Right or middle drag, WASD / arrows, screen edge | pan |
+| Right drag, WASD / arrows, screen edge | pan |
+| Middle drag (sideways = rotate, up/down = tilt), Page Up / Page Down | rotate the view |
 | Space | pause / resume |
 | 1 - 5 | game speed levels (also the bar's play/pause and fast-forward buttons) |
 | M / V / R | merge / split / retreat the selected fleets |

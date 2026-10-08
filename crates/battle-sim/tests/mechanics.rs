@@ -610,7 +610,7 @@ fn sensor_jamming_breaks_missile_locks() {
 #[test]
 fn buzz_droid_storm_damages_enemies_in_the_area_over_time() {
     let mut caster = ship("caster", 1.0e6, 0.0, vec![]);
-    caster.abilities.push(AbilityDef { kind: "BUZZ_DROIDS".into(), zone: Some(ZoneDef { radius: 500.0, enemy_dps: 100.0, max_range: 5000.0 }), duration: 10.0, recharge: 75.0, speed_mult: 1.0, shield_regen_mult: 1.0, weapon_delay_mult: 1.0, take_damage_mult: 1.0, ..Default::default() });
+    caster.abilities.push(AbilityDef { kind: "BUZZ_DROIDS".into(), zone: Some(ZoneDef { radius: 500.0, enemy_dps: 100.0, max_range: 50000.0 }), duration: 10.0, recharge: 75.0, speed_mult: 1.0, shield_regen_mult: 1.0, weapon_delay_mult: 1.0, take_damage_mult: 1.0, ..Default::default() });
     let victim = ship("victim", 10000.0, 0.0, vec![]);
     let cat = Catalog::from_defs(vec![caster, victim], vec![laser()]);
     let mut b = Battle::new(setup(cat, "caster", "victim", 1, 1, cfg()));
