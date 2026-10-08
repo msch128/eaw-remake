@@ -14,6 +14,7 @@ use galaxy_play::{
 };
 
 use crate::flow::AppScreen;
+use crate::battle_play::PendingTactical;
 use crate::galaxy_map::GalaxyEntity;
 use crate::offscreen::OffscreenTarget;
 use crate::play::{PlayBridge, is_structure};
@@ -103,6 +104,7 @@ impl Plugin for PlayUiPlugin {
                     .chain()
                     .run_if(resource_exists::<PlayBridge>.and_then(resource_exists::<SimState>)),
             )
+            .add_systems(Update, show_battle_summary.run_if(in_state(AppScreen::Galaxy)).run_if(resource_exists::<crate::battle_play::BattleSummary>))
             .add_systems(
                 Update,
                 (track_game_end, force_end_script, show_end_dialog, end_dialog_result)
@@ -341,7 +343,8 @@ fn spawn_hud(mut commands: Commands, existing: Query<(), With<PlayHud>>) {
     let abs = Node { position_type: PositionType::Absolute, ..default() };
     commands.spawn((
         PlayHud,
-        Node { top: Val::Px(52.0), left: Val::Px(16.0), width: Val::Px(440.0), flex_direction: FlexDirection::Column, row_gap: Val::Px(2.0), ..abs.clone() },
+        Node { top: Val::Px(52.0), left: Val::Px(16.0), width: Val::Px(440.0), padding: UiRect::all(Val::Px(6.0)), flex_direction: FlexDirection::Column, row_gap: Val::Px(2.0), ..abs.clone() },
+        BackgroundColor(Color::NONE),
         Ticker,
         GalaxyEntity,
     ));
@@ -413,6 +416,8 @@ fn refresh_ticker(mut commands: Commands, model: Res<PlayUiModel>, ticker: Singl
         return;
     }
     *last = ids;
+    let backing = if model.notifications.is_empty() { Color::NONE } else { Color::srgba(0.02, 0.04, 0.09, 0.55) };
+    commands.entity(*ticker).insert(BackgroundColor(backing));
     commands.entity(*ticker).despawn_children();
     for n in model.notifications.iter().rev().take(6) {
         commands.spawn((text_bundle(&n.text, 15.0, kind_color(n.kind)), ChildOf(*ticker)));
@@ -549,22 +554,22 @@ fn fix_fleet_label_scale(scale: Res<UiScale>, mut labels: Query<&mut Node, With<
 
 /// Tells the label layout where the planet panel is.
 fn publish_panel_rect(
-    panel: Single<(&ComputedNode, &UiGlobalTransform, &Visibility), With<InfoPanel>>,
-    window: Option<Single<&Window, With<PrimaryWindow>>>,
-    offscreen: Option<Res<OffscreenTarget>>,
+    panels: Query<(&ComputedNode, &UiGlobalTransform, &InheritedVisibility), (Or<(With<crate::ui::SkinPanel>, With<Ticker>)>, Without<crate::ui::Tooltip>)>,
     ui_scale: Res<UiScale>,
     mut rect: ResMut<crate::galaxy_map::PanelRect>,
 ) {
-    let (node, tf, vis) = *panel;
-    let sf = node.inverse_scale_factor() * ui_scale.0.max(0.1);
-    let _ = (window, offscreen);
-    let next = (*vis != Visibility::Hidden).then(|| {
-        let c = tf.translation * sf;
-        let half = node.size() * sf * 0.5;
-        (c - half, c + half)
-    });
-    if rect.0 != next {
-        rect.0 = next;
+    let rects: Vec<(Vec2, Vec2)> = panels
+        .iter()
+        .filter(|(_, _, vis)| vis.get())
+        .map(|(node, tf, _)| {
+            let sf = node.inverse_scale_factor() * ui_scale.0.max(0.1);
+            let c = tf.translation * sf;
+            let half = node.size() * sf * 0.5;
+            (c - half, c + half)
+        })
+        .collect();
+    if rect.0 != rects {
+        rect.0 = rects;
     }
 }
 
@@ -1187,5 +1192,22 @@ fn focus_start(
         let d = bounds.min_distance + (bounds.max_distance - bounds.min_distance) * 0.25;
         cam.target_distance = d;
         cam.distance = d;
+    }
+}
+
+/// The battle result dialog (EaW shows the losses of the fight when it ends).
+fn show_battle_summary(world: &mut World) {
+    if world.get_resource::<EawUiAssets>().is_none() || world.contains_resource::<PendingTactical>() {
+        world.remove_resource::<crate::battle_play::BattleSummary>();
+        return;
+    }
+    let Some(s) = world.remove_resource::<crate::battle_play::BattleSummary>() else { return };
+    let faction = {
+        let state = world.resource::<SimState>();
+        ui_faction(state, world.resource::<PlayerFaction>())
+    };
+    let spec = DialogSpec { title: s.title.clone(), text: s.text.clone(), portrait: None, faction, buttons: vec!["OK".into()] };
+    if spawn_dialog(world, &spec).is_none() {
+        world.insert_resource(s);
     }
 }

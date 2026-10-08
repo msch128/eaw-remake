@@ -180,6 +180,7 @@ fn finish_battle_view(
     mut actions: MessageWriter<PlayAction>,
     mut done: MessageWriter<BattleFinished>,
     music: Option<ResMut<MusicDirector>>,
+    mut commands: Commands,
     pending: Res<PendingTactical>,
     player: Res<PlayerFaction>,
     campaign: Res<crate::flow::CurrentCampaign>,
@@ -192,10 +193,34 @@ fn finish_battle_view(
             m.set_scene(MusicScene::Result { faction, win, tactical: true });
         }
         info!("battle: over after {:.0} s, winner side {:?}, survivors {:?}", f.result.duration, f.result.winner, f.result.survived);
+        // Result screen: ships at the start and survivors per side.
+        let mut lines = Vec::new();
+        for (si, side) in pending.0.sides.iter().enumerate() {
+            let total: u32 = side.groups.iter().map(|g| g.count).sum();
+            let alive: u32 = side.groups.iter().enumerate().map(|(gi, _)| f.result.survived.get(si).and_then(|r| r.get(gi)).copied().unwrap_or(0)).sum();
+            lines.push(format!("{}: {} of {} units survived (lost {})", side.faction_name, alive, total, total.saturating_sub(alive)));
+        }
+        let planet = pending.0.planet_name.trim_end_matches("_WW").replace('_', " ");
+        let winner = f.result.winner.and_then(|w| pending.0.sides.get(w)).map(|s| s.faction_name.clone());
+        let title = match (&winner, f.result.winner.and_then(|w| pending.0.sides.get(w)).map(|s| Some(s.faction) == player.0)) {
+            (Some(_), Some(true)) => format!("Victory at {}", planet),
+            (Some(w), _) => format!("Defeat at {} - {w} wins", planet),
+            _ => format!("Battle at {} ends in a draw", planet),
+        };
+        commands.insert_resource(BattleSummary { title, text: format!("{}
+Battle time: {:.0} s", lines.join("
+"), f.result.duration) });
         let outcome = f.result.winner.map_or(BattleOutcome::Draw, BattleOutcome::Victory);
         actions.write(PlayAction::ApplyTactical { id: f.battle_id, result: Box::new(f.result.clone()) });
         done.write(BattleFinished { id: f.battle_id, outcome });
     }
+}
+
+/// Result of the last battle, shown as a dialog once the map is back.
+#[derive(Resource)]
+pub struct BattleSummary {
+    pub title: String,
+    pub text: String,
 }
 
 /// F10 gives the fight up; the sim settles the battle with its auto-resolve.

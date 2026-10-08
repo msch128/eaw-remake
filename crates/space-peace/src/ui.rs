@@ -81,7 +81,7 @@ enum BarField {
 
 /// Mouse-follow tooltip root.
 #[derive(Component)]
-struct Tooltip;
+pub(crate) struct Tooltip;
 
 /// Text of the tooltip.
 #[derive(Component)]
