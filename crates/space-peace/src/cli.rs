@@ -94,6 +94,8 @@ pub struct Args {
     pub battle_abort_after: Option<f32>,
     /// Offscreen only: render target size in pixels (`--size 1920x1080`, default 3840x2160).
     pub size: Option<(u32, u32)>,
+    /// Offscreen only: act as if the cursor hovered the selected planet (`--hover`).
+    pub hover_selected: bool,
 }
 
 impl Default for Args {
@@ -142,6 +144,7 @@ impl Default for Args {
             battle_seconds: None,
             battle_abort_after: None,
             size: None,
+            hover_selected: false,
         }
     }
 }
@@ -187,6 +190,7 @@ OPTIONS:
   --battle-seconds <s>   Offscreen: battle time of the mid-battle capture (default 12)
   --battle-abort-after <s>  Abandon the tactical battle after s battle seconds (like F10)
   --size <WxH>          Offscreen: render target size (default 3840x2160)
+  --hover               Offscreen: hover the selected planet (shows its hover panel)
   --no-vsync             Disable vertical sync
   --fullscreen           Start in borderless fullscreen
   -h, --help             Show this help
@@ -272,6 +276,7 @@ impl Args {
                     let v = it.next().ok_or("--battle-speed needs a value")?;
                     out.battle_speed = Some(v.parse().map_err(|e| format!("bad --battle-speed: {e}"))?);
                 }
+                "--hover" => out.hover_selected = true,
                 "--size" => {
                     let v = it.next().ok_or("--size needs WxH")?;
                     let (w, h) = v.split_once(['x', 'X']).ok_or("bad --size (use WxH)")?;

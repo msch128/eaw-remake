@@ -48,7 +48,7 @@ impl Plugin for GalaxyMapPlugin {
                 brightness: 2.0,
                 ..default()
             })
-            .add_systems(Update, update_pip_colors.run_if(in_state(AppScreen::Galaxy)))
+            .add_systems(Update, (update_pip_colors, scripted_hover.after(update_hover)).run_if(in_state(AppScreen::Galaxy)))
             .add_systems(Startup, setup_scene)
             .add_systems(OnEnter(AppScreen::Galaxy), spawn_galaxy)
             .add_systems(
@@ -1087,6 +1087,8 @@ fn update_lanes(
 
 /// Finds the planet under the mouse cursor (ray vs. a generous pick sphere).
 fn update_hover(
+    args: Res<crate::cli::Args>,
+    selection: Res<Selection>,
     window: Single<&Window, With<PrimaryWindow>>,
     camera: Single<(&Camera, &GlobalTransform)>,
     view: Res<GalaxyView>,
@@ -1095,7 +1097,11 @@ fn update_hover(
     mut sounds: MessageWriter<UiSound>,
 ) {
     let Some(cursor) = window.cursor_position() else {
-        hover.set_if_neq_none();
+        if args.hover_selected {
+            hover.0 = selection.0;
+        } else {
+            hover.set_if_neq_none();
+        }
         return;
     };
     let (camera, cam_tf) = *camera;
@@ -1470,5 +1476,12 @@ fn update_pip_colors(view: Res<GalaxyView>, mut pips: Query<(&PipIcon, &mut Imag
         if img.color != want {
             img.color = want;
         }
+    }
+}
+
+/// Offscreen `--hover`: hovers the selected planet (the real hover needs a cursor and a window).
+fn scripted_hover(args: Res<crate::cli::Args>, selection: Res<Selection>, mut hover: ResMut<Hover>) {
+    if args.hover_selected && hover.0 != selection.0 {
+        hover.0 = selection.0;
     }
 }
