@@ -73,9 +73,9 @@ pub(crate) struct BarState {
     /// Space production tab (ships, star base, tech) instead of the planet tab (structures).
     space_tab: bool,
     /// What each visible pad orders.
-    pads: Vec<Option<BuildTarget>>,
+    pub(crate) pads: Vec<Option<BuildTarget>>,
     /// Queue slots: lane, position in the lane and the credits a cancel gives back.
-    queue: Vec<(galaxy_sim::Lane, u32, f32)>,
+    pub(crate) queue: Vec<(galaxy_sim::Lane, u32, f32)>,
 }
 
 impl Default for BarState {
@@ -967,12 +967,26 @@ struct MoveMarkers(Vec<(galaxy_sim::PlanetId, f32)>);
 const MARKER_SECONDS: f32 = 1.6;
 
 /// A move order of the player leaves a pulsing ring on the destination planet.
-fn collect_move_markers(mut actions: MessageReader<PlayAction>, selection: Res<PlayerSelection>, mut markers: ResMut<MoveMarkers>) {
+fn collect_move_markers(
+    mut actions: MessageReader<PlayAction>,
+    selection: Res<PlayerSelection>,
+    state: Res<SimState>,
+    player: Res<PlayerFaction>,
+    mut markers: ResMut<MoveMarkers>,
+    mut toast: ResMut<Toast>,
+) {
     for a in actions.read() {
         if let PlayAction::MoveSelected(to) = a
             && !selection.fleets.is_empty()
         {
-            markers.0.push((*to, 0.0));
+            let g = state.galaxy();
+            if selection.fleets.iter().any(|id| g.fleets.get(id).is_some_and(|f| player.0 == Some(f.owner))) {
+                markers.0.push((*to, 0.0));
+            } else {
+                // Foreign fleets can be inspected but not commanded.
+                toast.0 = "Not your fleet - you cannot give it orders".to_owned();
+                toast.1 = 2.5;
+            }
         }
     }
 }
@@ -1928,6 +1942,7 @@ fn spawn_planet_panel(mut commands: Commands, existing: Query<(), With<PlanetPan
 #[allow(clippy::too_many_arguments)]
 fn update_planet_panel(
     hover: Res<crate::galaxy_map::Hover>,
+    (fleet_hover, selection, sim, bridge): (Option<Res<galaxy_play::PlayHover>>, Option<Res<PlayerSelection>>, Option<Res<SimState>>, Option<Res<PlayBridge>>),
     screen: Res<State<AppScreen>>,
     pv: Res<crate::planet_view::PlanetViewState>,
     view: Res<crate::galaxy_view::GalaxyView>,
@@ -1939,7 +1954,15 @@ fn update_planet_panel(
     mut pips: Query<(&PanelPip, &mut Node)>,
 ) {
     // In the planet view the viewed planet counts even when only a fleet is selected.
-    let planet = if pv.active { pv.planet } else { hover.0 }.and_then(|i| view.planets.get(i));
+    // Outside the planet view: the planet under a hovered fleet, else the hovered planet, else the planet of the
+    // selected fleet (the panel never keeps showing a stale hover).
+    let fleet_planet = |id: galaxy_sim::FleetId| -> Option<usize> {
+        let p = sim.as_ref()?.galaxy().fleets.get(&id)?.planet()?;
+        bridge.as_ref()?.sim_to_planet.get(p as usize).copied().flatten()
+    };
+    let hovered_fleet_planet = fleet_hover.as_ref().and_then(|h| h.fleet).and_then(fleet_planet);
+    let selected_fleet_planet = selection.as_ref().and_then(|s| s.fleets.iter().copied().find_map(fleet_planet));
+    let planet = if pv.active { pv.planet } else { hovered_fleet_planet.or(hover.0).or(selected_fleet_planet) }.and_then(|i| view.planets.get(i));
     if *screen.get() == AppScreen::SpaceBattle {
         panel.set_if_neq(Visibility::Hidden);
         return;

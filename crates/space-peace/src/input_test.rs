@@ -39,6 +39,14 @@ struct TestState {
     found_at: Option<u32>,
     /// Value of the filter under test before its click.
     before: bool,
+    /// Length of the production queue before the pad click.
+    queue_before: usize,
+    /// Pad slot (`b_create_NN`) under test and the entry it must show.
+    pad: Option<(usize, usize)>,
+    /// What that entry orders, read before the click.
+    pad_target: Option<galaxy_play::BuildTarget>,
+    /// Fleet used by the fleet-ring click phases.
+    ring_fleet: Option<galaxy_sim::FleetId>,
 }
 
 #[derive(Clone)]
@@ -80,11 +88,14 @@ fn drive(
     dialog: Option<Res<BattleDialogState>>,
     paused: Res<Paused>,
     slots: Res<SlotScreen>,
-    (options, toast): (Res<OptionsOpen>, Res<crate::play_ui::Toast>),
+    (options, toast, mut ring): (Res<OptionsOpen>, Res<crate::play_ui::Toast>, RingCtx),
     (filters, bar, frames): (Res<crate::galaxy_map::MapFilters>, Res<crate::play_ui::BarState>, Res<bevy::diagnostic::FrameCount>),
+    (mut pv, mut selection, bar_data, remap, model, (player, bridge)): (ResMut<crate::planet_view::PlanetViewState>, ResMut<crate::galaxy_map::Selection>, Res<eaw_ui::CommandBarData>, Res<eaw_ui::PadRemap>, Option<Res<galaxy_play::PlayUiModel>>, (Option<Res<galaxy_play::PlayerFaction>>, Option<Res<crate::play::PlayBridge>>)),
     sim: Option<Res<galaxy_play::SimState>>,
-    banner: Query<(&EawButton, &ComputedNode, &UiGlobalTransform, &InheritedVisibility)>,
-    menu: Query<(&MenuButton, &ComputedNode, &UiGlobalTransform, &InheritedVisibility)>,
+    (banner, menu): (
+        Query<(&EawButton, &ComputedNode, &UiGlobalTransform, &InheritedVisibility)>,
+        Query<(&MenuButton, &ComputedNode, &UiGlobalTransform, &InheritedVisibility)>,
+    ),
     diag: Query<(Entity, Option<&Name>, &ComputedNode, &UiGlobalTransform, &InheritedVisibility, Option<&Interaction>, Option<&GlobalZIndex>)>,
     window: Option<Single<(Entity, &mut Window), With<PrimaryWindow>>>,
     mut moved: MessageWriter<CursorMoved>,
@@ -118,7 +129,7 @@ fn drive(
         st.t = 0;
         st.found_at = None;
     };
-    if t > 1500 && st.phase > 0 && (st.phase < 10 || (100..115).contains(&st.phase)) {
+    if t > 1500 && st.phase > 0 && (st.phase < 10 || (100..115).contains(&st.phase) || (120..122).contains(&st.phase) || (130..132).contains(&st.phase)) {
         finish(&mut st, "phase timed out", false);
         return;
     }
@@ -180,8 +191,74 @@ fn drive(
                 let ok = bar.class == want;
                 finish(&mut st, label, ok);
                 if st.phase == 115 {
+                    st.phase = 130;
+                }
+            }
+        }
+        // Fleet ring click at two zoom levels: a click on the drawn ring (not its centre) must select the fleet.
+        130 | 131 => {
+            let near = st.phase == 130;
+            let mut verdict = None;
+            let target = fleet_ring_phase(&mut st, t, near, &mut ring, window.1.scale_factor(), &mut verdict);
+            act = click(&mut st, target);
+            if let Some(v) = verdict {
+                finish(&mut st, if near { "fleet-ring-click-near (setup)" } else { "fleet-ring-click-far (setup)" }, v);
+            } else if st.found_at.is_some_and(|f| t == f + 20) {
+                let id = st.ring_fleet;
+                let ok = id.is_some_and(|id| ring.selection.as_deref().is_some_and(|s| s.fleets.contains(&id)));
+                finish(&mut st, if near { "fleet-ring-click-near" } else { "fleet-ring-click-far" }, ok);
+                if st.phase == 132 {
+                    st.phase = 120;
+                }
+            }
+        }
+        // Planet view (the wheel path is covered elsewhere; here it is opened directly): the structure list fills the bottom
+        // pad row left to right, and a real click on a pad of that row queues exactly the structure the entry shows.
+        120 => {
+            if selection.0.is_none() && let (Some(me), Some(sim), Some(bridge)) = (player.as_ref().and_then(|p| p.0), sim.as_ref(), bridge.as_ref()) {
+                // The pending battle left no planet selected: take the first planet of the player.
+                selection.0 = bridge.sim_to_planet.iter().enumerate().find_map(|(s, v)| (sim.galaxy().planets.get(s)?.owner == Some(me)).then_some((*v)?));
+            }
+            if !pv.active && selection.0.is_some() {
+                pv.active = true;
+                pv.planet = selection.0;
+            }
+            if t % 300 == 100 {
+                info!("ui-test: planet view wait: active {} planet {:?} selection {:?} flag {} remap {} pads {}", pv.active, pv.planet, selection.0, bar_data.pads_bottom_row, remap.0.len(), bar_data.pads.len());
+            }
+            if t > 60 && bar_data.pads_bottom_row && !remap.0.is_empty() {
+                let mut row: Vec<(usize, usize)> = remap.0.iter().map(|(&s, &e)| (s, e)).collect();
+                row.sort_by_key(|r| r.1);
+                let ordered = row.iter().enumerate().all(|(i, r)| r.1 == i);
+                let pick = row.iter().find(|r| bar_data.pads.get(r.1).is_some_and(|p| !p.disabled)).copied();
+                info!("ui-test: planet view bottom row {} slots, {} entries, remap contiguous {ordered}, pick {pick:?}", row.len(), bar_data.pads.len());
+                if let (true, Some(p)) = (ordered, pick) {
+                    st.pad = Some(p);
+                    st.pad_target = bar.pads.get(p.1).copied().flatten();
+                    st.queue_before = bar.queue.len();
+                    st.phase = 121;
+                    st.t = 0;
+                    st.found_at = None;
+                } else {
+                    finish(&mut st, "planet-view-pad-click (no affordable structure or remap not contiguous)", false);
                     st.phase = 1;
                 }
+            }
+        }
+        121 => {
+            let Some((slot, entry)) = st.pad else { return };
+            let name = format!("b_create_{slot:02}");
+            let target = banner.iter().find(|(b, n, _, v)| b.name == name && v.get() && n.size().x > 4.0).map(|(_, _, g, _)| g.translation);
+            act = click(&mut st, target);
+            if st.found_at.is_some_and(|f| t == f + 40) {
+                let queued = bar.queue.len() > st.queue_before;
+                let want = st.pad_target;
+                let matches = want.is_some() && model.as_ref().and_then(|m| m.planet.as_ref()).is_some_and(|m| m.queue.iter().any(|q| Some(q.target) == want));
+                info!("ui-test: pad {name} -> entry {entry}, queue {} -> {}", st.queue_before, bar.queue.len());
+                info!("ui-test: wanted {want:?}, model queue {:?}", model.as_ref().and_then(|m| m.planet.as_ref()).map(|m| m.queue.iter().map(|q| q.target).collect::<Vec<_>>()));
+                finish(&mut st, "planet-view-pad-click-queues-structure", queued && matches);
+                pv.active = false;
+                st.phase = 1;
             }
         }
         // 2: Esc opens the pause menu.
@@ -323,4 +400,67 @@ fn drive(
 /// Registers the test when `SP_UI_TEST` is set.
 pub(crate) fn plugin(app: &mut App) {
     build(app);
+}
+
+/// Everything the fleet-ring click phases need.
+#[derive(bevy::ecs::system::SystemParam)]
+struct RingCtx<'w, 's> {
+    camera: Query<'w, 's, (&'static Camera, &'static GlobalTransform, &'static mut crate::camera::GalaxyCamera)>,
+    bounds: Option<Res<'w, crate::camera::CameraBounds>>,
+    fleets: Option<Res<'w, galaxy_play::FleetEntities>>,
+    visuals: Query<'w, 's, &'static Transform, With<galaxy_play::FleetVisual>>,
+    layout: Option<Res<'w, galaxy_play::GalaxyLayout>>,
+    cfg: Option<Res<'w, galaxy_play::PlayConfig>>,
+    selection: Option<ResMut<'w, galaxy_play::PlayerSelection>>,
+    sim: Option<Res<'w, galaxy_play::SimState>>,
+    player: Option<Res<'w, galaxy_play::PlayerFaction>>,
+}
+
+/// One fleet-ring click: zooms the galaxy camera onto a parked fleet, then clicks on its owner ring (not on its centre)
+/// and checks that the fleet got selected. Returns the pointer position to click (physical px), or `None` while waiting.
+/// `ok` is set once the verdict is known.
+fn fleet_ring_phase(st: &mut TestState, t: u32, near: bool, ctx: &mut RingCtx, scale: f32, ok: &mut Option<bool>) -> Option<Vec2> {
+    let (Some(bounds), Some(fleets), Some(layout), Some(cfg), Some(sim)) = (ctx.bounds.as_deref(), ctx.fleets.as_deref(), ctx.layout.as_deref(), ctx.cfg.as_deref(), ctx.sim.as_deref()) else {
+        *ok = Some(false);
+        return None;
+    };
+    let me = ctx.player.as_deref().and_then(|p| p.0);
+    if t == 0 {
+        // Prefer an own parked fleet.
+        let g = sim.galaxy();
+        let parked = |id: &&galaxy_sim::FleetId| g.fleets.get(*id).is_some_and(|f| f.planet().is_some());
+        let pick = fleets.0.keys().filter(parked).find(|id| g.fleets.get(*id).is_some_and(|f| Some(f.owner) == me)).or_else(|| fleets.0.keys().find(parked)).copied();
+        st.ring_fleet = pick;
+        if let Some(sel) = ctx.selection.as_deref_mut() {
+            sel.fleets.clear();
+        }
+    }
+    let Some(id) = st.ring_fleet else {
+        info!("ui-test: fleet-ring click: no parked fleet on the map");
+        *ok = Some(false);
+        return None;
+    };
+    let Some(pos) = fleets.0.get(&id).and_then(|&e| ctx.visuals.get(e).ok()).map(|t| t.translation) else {
+        *ok = Some(false);
+        return None;
+    };
+    let Ok((camera, cam_tf, mut gc)) = ctx.camera.single_mut() else {
+        *ok = Some(false);
+        return None;
+    };
+    if t <= 1 || (t < 400 && (gc.distance - gc.target_distance).abs() > 0.5) || gc.focus.distance(gc.target_focus) > 0.5 {
+        gc.target_distance = if near { bounds.min_distance * 1.5 } else { bounds.max_distance * 0.6 };
+        gc.target_focus = Vec3::new(pos.x, 0.0, pos.z);
+        return None;
+    }
+    // Aim at the ring's right edge, as a player clicking the ring would.
+    let ring = layout.unit * cfg.fleet_icon_scale * 1.5;
+    let center = Vec3::new(pos.x, pos.y - layout.unit * 0.1, pos.z);
+    let right = cam_tf.right();
+    let (Ok(c), Ok(e)) = (camera.world_to_viewport(cam_tf, center), camera.world_to_viewport(cam_tf, center + right * ring * 0.95)) else {
+        *ok = Some(false);
+        return None;
+    };
+    info!("ui-test: fleet-ring click ({}): camera distance {:.0}, ring radius {:.1} px, aiming {:.1} px from the centre", if near { "near" } else { "far" }, gc.distance, c.distance(e), c.distance(e));
+    Some(e * scale)
 }

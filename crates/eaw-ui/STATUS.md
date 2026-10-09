@@ -48,3 +48,7 @@ dials, and compare screenshots against the real game.
   Bars sit under the ship box, brackets are 7 px corners, own selected = green.
 - `b_droid_help*` is spawned first so the pause / fast-forward buttons stay above its big rectangle (real clicks used to hit the droid).
 - Re-exports: `TacticalOverlayRoot`, `TacticalOverlays`. `examples/ui_demo.rs` needs `CommandBarData { month_income, month_progress, planet_color }` (integrator's change) to compile.
+
+## Planet-view structure row (2026-10-09)
+- `CommandBarData::pads_bottom_row`: the pad entries fill only the bottom `b_create_NN` row, left to right (Remake planet view, v0260-v0450); other pads draw nothing. `PadRemap` (written by `widgets::slots`) maps slot to entry; the app uses `PadRemap::entry` for clicks. Space-tab galaxy bar unchanged.
+- App pointer test (`SP_UI_TEST`, smoke `windowed-ui-pointer`) opens the planet view, clicks the left-most affordable pad of the bottom row and checks the structure lands in the queue.
