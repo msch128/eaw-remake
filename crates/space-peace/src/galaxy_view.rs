@@ -81,6 +81,8 @@ pub struct PlanetView {
     pub max_ground_base: i32,
     /// `Terrain` (Temperate, Desert, Swamp, Volcanic, Arctic, Forest, Urban): picks the base-layout art of the planet view.
     pub terrain: Option<String>,
+    /// Ground structure slots (`Special_Structures_Land`): the trooper pip row of the planet label and panel.
+    pub land_slots: i32,
     /// Extra special structure slots in space.
     pub special_slots: i32,
     /// Planet ability as `(name, description)` in English, if the planet has one.
@@ -259,6 +261,7 @@ impl GalaxyView {
                     max_space_base: 3,
                     max_ground_base: 3,
                     terrain: None,
+                    land_slots: 4,
                     special_slots: 6,
                     ability: None,
                     starting_forces: Vec::new(),

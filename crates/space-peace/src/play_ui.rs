@@ -73,7 +73,7 @@ pub(crate) struct BarState {
     /// Space production tab (ships, star base, tech) instead of the planet tab (structures).
     space_tab: bool,
     /// What each visible pad orders.
-    pads: Vec<BuildTarget>,
+    pads: Vec<Option<BuildTarget>>,
     /// Queue slots: lane, position in the lane and the credits a cancel gives back.
     queue: Vec<(galaxy_sim::Lane, u32, f32)>,
 }
@@ -363,7 +363,16 @@ fn feed_bar(
                 tooltip: format!("{}\n{} left\n{cancel}", q.name, format_duration(q.remaining_seconds, week)),
             });
         }
-        for o in menu.options.iter().filter(|o| is_structure(o.target) != space_tab && (!space_tab || class.is_none_or(|c| c.matches(o.category)))).take(MAX_PADS) {
+        // The ground/structure tab lists only what can be ordered (or is short of credits, a full queue ...),
+        // like the Remake's single row: structures behind a missing requirement stay hidden (v0260-v0450).
+        let listed: Vec<_> = menu
+            .options
+            .iter()
+            .filter(|o| is_structure(o.target) != space_tab && (!space_tab || class.is_none_or(|c| c.matches(o.category))))
+            .filter(|o| space_tab || !matches!(o.availability, galaxy_play::Availability::Requires(_)))
+            .take(MAX_PADS)
+            .collect();
+        for o in listed {
             next.pads.push(BuildPadEntry {
                 icon: icon_for(&state, game, o.target),
                 price: Some(o.cost.max(0.0) as u32),
@@ -375,7 +384,7 @@ fn feed_bar(
                 locked: matches!(o.availability, galaxy_play::Availability::Requires(_)),
                 label: String::new(),
             });
-            bar.pads.push(o.target);
+            bar.pads.push(Some(o.target));
         }
     }
     if model.planet.is_none() && !selection.fleets.is_empty() {
@@ -418,7 +427,7 @@ fn bar_clicks(
     for c in clicks.read() {
         let name = c.name.as_str();
         if let Some(i) = name.strip_prefix("b_create_").and_then(|n| n.parse::<usize>().ok()) {
-            if let (Some(planet), Some(&target)) = (selection.planet, bar.pads.get(i)) {
+            if let (Some(planet), Some(target)) = (selection.planet, bar.pads.get(i).copied().flatten()) {
                 actions.write(PlayAction::Build { planet, target });
             }
             continue;
@@ -1052,7 +1061,7 @@ fn planet_text(i: usize, p: &crate::galaxy_view::PlanetView, sight: galaxy_sim::
         // Out of sight: the video shows name, owner colour and income of distant planets, nothing about their defences.
         return lines.join("\n");
     }
-    lines.push(format!("Space slots: {}   Ground slots: {}", p.max_space_base, p.max_ground_base));
+    lines.push(format!("Space slots: {}   Ground slots: {}", p.max_space_base, p.land_slots));
     if let Some((name, desc)) = &p.ability {
         lines.push(format!("Bonus: {name}"));
         if !desc.is_empty() {
@@ -1762,8 +1771,8 @@ fn locked_clicks(
 ) {
     for c in clicks.read() {
         let Some(index) = c.name.strip_prefix("b_create_").and_then(|n| n.parse::<usize>().ok()) else { continue };
-        let (Some(target), Some(menu)) = (bar.pads.get(index), model.planet.as_ref()) else { continue };
-        let Some(o) = menu.options.iter().find(|o| o.target == *target) else { continue };
+        let (Some(target), Some(menu)) = (bar.pads.get(index).copied().flatten(), model.planet.as_ref()) else { continue };
+        let Some(o) = menu.options.iter().find(|o| o.target == target) else { continue };
         toast.0 = format!("{}: {}", o.name, capitalize(&o.availability.reason()));
         toast.1 = 3.5;
     }
@@ -1876,7 +1885,7 @@ fn spawn_planet_panel(mut commands: Commands, existing: Query<(), With<PlanetPan
                 r.spawn((Text::new(""), font(12.0), TextColor(Color::srgb(0.3, 1.0, 0.4)), PlanetPanelText::Income));
             });
             p.spawn((Text::new(""), font(11.0), TextColor(Color::srgb(0.93, 0.96, 0.98)), PlanetPanelText::Body));
-            for (row, pip) in pips.iter().enumerate() {
+            for (row, pip) in pips.iter().enumerate().rev() {
                 p.spawn(Node { column_gap: Val::Px(4.0), margin: UiRect::top(Val::Px(8.0)), ..default() }).with_children(|r| {
                     for index in 0..8 {
                         r.spawn((
@@ -1964,7 +1973,7 @@ fn update_planet_panel(
         }
         _ => emblem.color = Color::NONE,
     }
-    let counts = [p.max_ground_base.clamp(0, 8) as usize, p.max_space_base.clamp(0, 8) as usize];
+    let counts = [p.land_slots.clamp(0, 8) as usize, p.max_space_base.clamp(0, 8) as usize];
     for (pip, mut node) in &mut pips {
         let want = if pip.index < counts[pip.row] { Display::Flex } else { Display::None };
         if node.display != want {
@@ -2087,6 +2096,26 @@ fn planet_view_ui(world: &mut World, mut last_key: Local<Option<(usize, u64)>>) 
     spec.offset = Vec2::new(0.0, -45.0);
     if let Some(root) = eaw_ui::spawn_shell(world, &spec) {
         world.entity_mut(root).insert((OrbitBoxes, GlobalZIndex(9)));
+        // The frame texture (`i_galactic_organize.dds`) carries a faint blue wash (alpha 2 of 255) over its whole quad
+        // outside and inside the rounded frame; through our compositing it shows as a dark band behind the three boxes
+        // that the game does not show. Clear it, keeping the frame line and its glow.
+        let handles: Vec<Handle<Image>> = world
+            .get::<Children>(root)
+            .map(|c| c.iter().collect::<Vec<_>>())
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|k| world.get::<Name>(k).is_some_and(|n| n.as_str().ends_with("_frame")).then(|| world.get::<ImageNode>(k).map(|i| i.image.clone())).flatten())
+            .collect();
+        let mut images = world.resource_mut::<Assets<Image>>();
+        for h in handles {
+            if let Some(mut img) = images.get_mut(&h)
+                && let Some(data) = img.data.as_mut()
+            {
+                for px in data.chunks_exact_mut(4).filter(|p| p[3] <= 3) {
+                    px[3] = 0;
+                }
+            }
+        }
     }
 }
 

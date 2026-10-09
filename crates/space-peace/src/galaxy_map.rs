@@ -503,7 +503,7 @@ fn spawn_galaxy(
         let owner = relation_color(&view, planet.owner);
         // The game prints the name in capitals in the full, saturated faction colour.
         let label_c = if planet.owner.is_some() { owner } else { [0.62, 0.62, 0.62] };
-        for (row, count) in [planet.max_ground_base, planet.max_space_base].into_iter().enumerate() {
+        for (row, count) in [planet.land_slots, planet.max_space_base].into_iter().enumerate() {
             let count = count.clamp(0, 8) as usize;
             if count == 0 {
                 continue;
@@ -789,7 +789,7 @@ fn update_labels(
         }
     }
 
-    // Structure slot pips: ground row, then space row, centred under the name.
+    // Structure slot pips: space row (towers) above the ground row (troopers), centred under the name, as in the game.
     let pip_h = (font_px * 0.95).round().max(6.0);
     let pip_w = pip_h;
     if (*last_font - font_px).abs() > 0.1 {
@@ -804,7 +804,7 @@ fn update_labels(
             Some(s) if visible[row.planet] && (filters.base_level || zoom_out < 0.3 || selection.0 == Some(row.planet) || hover.0 == Some(row.planet)) => {
                 let width = row.count as f32 * (pip_w + 1.0);
                 node.left = Val::Px((s.pos.x + (s.size.x - width) * 0.5) / us);
-                node.top = Val::Px((s.pos.y + font_px * 1.15 + row.row as f32 * (pip_h + 2.0)) / us);
+                node.top = Val::Px((s.pos.y + font_px * 1.15 + (1 - row.row) as f32 * (pip_h + 2.0)) / us);
                 *vis = Visibility::Inherited;
             }
             _ => *vis = Visibility::Hidden,

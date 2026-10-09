@@ -506,6 +506,7 @@ pub fn build_view(data: &GameData, campaign: &Campaign) -> (GalaxyView, Vec<Stri
             terrain: p.terrain.clone(),
             info: planet_info(data, p),
             population_bonus: p.fields.get("additional_population_capacity").and_then(|v| v.trim().parse().ok()).unwrap_or(0),
+            land_slots: p.special_structures_land,
             special_slots: p.special_structures_space,
             ability: planet_ability(data, p),
             starting_forces: forces

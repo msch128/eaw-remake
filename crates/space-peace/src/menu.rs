@@ -245,15 +245,17 @@ pub(crate) fn spawn_main_menu(mut commands: Commands, problem: Res<StartupProble
     }
 }
 
-/// The original main menu: the hex panel of `menuback_overlay_panel_4button` at the right screen edge, one hit area per
-/// blue bar. The art is read from the install at run time; the title is our own (the original logo plate is not used).
-/// Rectangles are texture pixels `(left, top, width, height)` of the four bars in the 512x1024 image.
-const PANEL_BARS: [(f32, f32, f32, f32); 4] = [(240.0, 338.0, 234.0, 40.0), (222.0, 382.0, 236.0, 40.0), (205.0, 426.0, 235.0, 40.0), (206.0, 470.0, 238.0, 40.0)];
-/// Panel texture to design pixels (the screen is 768 design px high, the texture 1024).
-const PANEL_SCALE: f32 = 0.75;
+/// The Remake's main menu: its `IDD_MAIN_MENU_DIALOG` blanks the hex panel of the vanilla game and the buttons are the
+/// dialogue buttons (`i_dialogue_button_large_*`, three slices) stacked at the lower right of the screen, over the attract
+/// scene. The art is read from the install at run time; the title is our own (the Remake's logo plate is not used) and sits
+/// where the logo does.
+const BUTTON_SLICES: [&str; 3] = ["i_dialogue_button_large_left.tga", "i_dialogue_button_large_middle.tga", "i_dialogue_button_large_right.tga"];
+/// Button size in design pixels (the screen is 768 design px high): 400 x 44 of the 1080p video, 56 px apart.
+const MENU_BUTTON_SIZE: Vec2 = Vec2::new(285.0, 31.0);
+const MENU_BUTTON_GAP: f32 = 9.0;
 
-fn spawn_original_main_menu(commands: &mut Commands, spec: &MenuSpec, panel: Handle<Image>) -> Entity {
-    let items: Vec<&MenuItem> = spec.columns.iter().flat_map(|c| c.items.iter()).take(PANEL_BARS.len()).collect();
+fn spawn_original_main_menu(commands: &mut Commands, spec: &MenuSpec, slices: [Handle<Image>; 3]) -> Entity {
+    let items: Vec<&MenuItem> = spec.columns.iter().flat_map(|c| c.items.iter()).collect();
     let font = |size: f32| TextFont { font: FontSource::Family("Bahnschrift".into()), font_size: FontSize::Px(size), ..default() };
     commands
         .spawn((
@@ -262,49 +264,58 @@ fn spawn_original_main_menu(commands: &mut Commands, spec: &MenuSpec, panel: Han
             GlobalZIndex(20),
         ))
         .with_children(|root| {
-            // Our own title, upper left.
-            root.spawn(Node { position_type: PositionType::Absolute, left: Val::Px(48.0), top: Val::Px(44.0), flex_direction: FlexDirection::Column, ..default() })
+            // Our own title, upper right where the Remake shows its logo.
+            root.spawn(Node { position_type: PositionType::Absolute, right: Val::Px(40.0), top: Val::Px(24.0), flex_direction: FlexDirection::Column, align_items: AlignItems::FlexEnd, ..default() })
                 .with_children(|t| {
                     t.spawn((Text::new(spec.title.to_uppercase()), font(40.0), TextColor(Color::srgb(0.95, 0.96, 0.98)), TextShadow { offset: Vec2::splat(2.0), color: Color::srgba(0.0, 0.0, 0.1, 0.9) }));
                     t.spawn((Text::new(spec.subtitle.to_uppercase()), font(18.0), TextColor(Color::srgb(0.55, 0.72, 1.0)), TextShadow { offset: Vec2::splat(1.5), color: Color::srgba(0.0, 0.0, 0.1, 0.9) }));
                 });
-            root.spawn((
-                ImageNode::new(panel),
-                Node { position_type: PositionType::Absolute, right: Val::Px(0.0), top: Val::Px(0.0), width: Val::Px(512.0 * PANEL_SCALE), height: Val::Px(1024.0 * PANEL_SCALE), ..default() },
-            ))
-            .with_children(|p| {
-                for (item, (x, y, w, h)) in items.iter().zip(PANEL_BARS) {
-                    p.spawn((
-                        Button,
-                        MenuButton(item.action.clone()),
-                        PanelBar,
-                        Node {
-                            position_type: PositionType::Absolute,
-                            left: Val::Px(x * PANEL_SCALE),
-                            top: Val::Px(y * PANEL_SCALE),
-                            width: Val::Px(w * PANEL_SCALE),
-                            height: Val::Px(h * PANEL_SCALE),
-                            justify_content: JustifyContent::Center,
-                            align_items: AlignItems::Center,
-                            ..default()
-                        },
-                        BackgroundColor(Color::NONE),
-                        children![(Text::new(item.label.to_uppercase()), font(15.0), TextColor(Color::WHITE), TextShadow { offset: Vec2::splat(1.0), color: Color::srgba(0.0, 0.05, 0.2, 0.9) })],
-                    ));
-                }
-            });
+            root.spawn(Node { position_type: PositionType::Absolute, right: Val::Px(43.0 * 0.711), bottom: Val::Px(27.0 * 0.711), flex_direction: FlexDirection::Column, row_gap: Val::Px(MENU_BUTTON_GAP), ..default() })
+                .with_children(|col| {
+                    for item in items {
+                        col.spawn((
+                            Button,
+                            MenuButton(item.action.clone()),
+                            PanelBar,
+                            Node {
+                                width: Val::Px(MENU_BUTTON_SIZE.x),
+                                height: Val::Px(MENU_BUTTON_SIZE.y),
+                                justify_content: JustifyContent::Center,
+                                align_items: AlignItems::Center,
+                                ..default()
+                            },
+                            BackgroundColor(Color::NONE),
+                        ))
+                        .with_children(|b| {
+                            // Art: left cap, stretched middle, right cap (behind the label).
+                            b.spawn(Node { position_type: PositionType::Absolute, width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() })
+                                .with_children(|art| {
+                                    art.spawn((ImageNode::new(slices[0].clone()).with_mode(NodeImageMode::Stretch), Node { width: Val::Px(MENU_BUTTON_SIZE.y), height: Val::Percent(100.0), ..default() }));
+                                    art.spawn((ImageNode::new(slices[1].clone()).with_mode(NodeImageMode::Stretch), Node { width: Val::Px(MENU_BUTTON_SIZE.x - 2.0 * MENU_BUTTON_SIZE.y), height: Val::Percent(100.0), ..default() }));
+                                    art.spawn((ImageNode::new(slices[2].clone()).with_mode(NodeImageMode::Stretch), Node { width: Val::Px(MENU_BUTTON_SIZE.y), height: Val::Percent(100.0), ..default() }));
+                                });
+                            b.spawn((Text::new(item.label.to_uppercase()), font(15.0), TextColor(Color::WHITE), bevy::text::LetterSpacing::Rem(0.08)));
+                        });
+                    }
+                });
         })
         .id()
 }
 
-/// The main menu in the original's panel when its art can be loaded, else the plain menu.
+/// The main menu with the dialogue-button art when it can be loaded, else the plain menu.
 fn spawn_main(commands: &mut Commands, spec: &MenuSpec, textures: Option<&mut eaw_ui::textures::UiTextures>, images: &mut Assets<Image>) {
-    let panel = textures.and_then(|t| t.get(images, "menuback_overlay_panel_4button.dds")).map(|t| t.handle);
-    match panel {
-        Some(handle) if spec.columns.iter().map(|c| c.items.len()).sum::<usize>() <= PANEL_BARS.len() => {
-            spawn_original_main_menu(commands, spec, handle);
+    let slices = textures.and_then(|t| {
+        let mut out = Vec::new();
+        for name in BUTTON_SLICES {
+            out.push(t.get(images, name)?.handle);
         }
-        _ => {
+        <[Handle<Image>; 3]>::try_from(out).ok()
+    });
+    match slices {
+        Some(slices) => {
+            spawn_original_main_menu(commands, spec, slices);
+        }
+        None => {
             spawn_menu(commands, spec, ScreenMenu);
         }
     }
@@ -554,7 +565,7 @@ fn button_interaction(
 ) {
     for (interaction, button, mut bg, on_panel) in &mut buttons {
         let (idle, hover, pressed) = if on_panel {
-            (Color::NONE, Color::srgba(1.0, 1.0, 1.0, 0.16), Color::srgba(1.0, 1.0, 1.0, 0.3))
+            (Color::NONE, Color::srgba(1.0, 1.0, 1.0, 0.14), Color::srgba(1.0, 1.0, 1.0, 0.28))
         } else {
             (BUTTON_IDLE, BUTTON_HOVER, BUTTON_PRESSED)
         };
