@@ -44,7 +44,7 @@ impl Plugin for TacticalUiPlugin {
                 spawn_bar.run_if(resource_exists::<crate::BattleSession>.and_then(not(resource_exists::<TacticalBarSpawned>))),
                 remove_reinforce.run_if(resource_removed::<BattleRuntime>),
                 remove_bar.run_if(resource_removed::<BattleRuntime>.or_eager(resource_removed::<crate::BattleSession>)),
-                (sync_data, sync_overlays, handle_clicks, ability_keys, autocast_toggle, autocast_rings, ability_at, hardpoint_clicks, reinforce_clicks, reinforce_place, reinforce_events, reinforce_panel, sync_minimap, minimap_pan, command_buttons_state).chain().run_if(resource_exists::<BattleRuntime>),
+                (sync_data, sync_overlays, handle_clicks, ability_keys, autocast_toggle, autocast_rings, ability_at, hardpoint_clicks, reinforce_clicks, reinforce_place, reinforce_events, reinforce_panel, sync_minimap, minimap_pan, command_buttons_state, retreat_banner).chain().run_if(resource_exists::<BattleRuntime>),
             )
                 .chain(),
         );
@@ -185,6 +185,9 @@ fn sync_data(
 
     let retreat = if status.over {
         RetreatState::Unavailable
+    } else if let Some(jump) = cur.retreat_jump_in.get(player as usize).copied().flatten() {
+        // The order was given: the jump countdown runs (pressed button look and m:ss under it).
+        RetreatState::Countdown(jump)
     } else if status.time >= rt.retreat_countdown {
         RetreatState::Ready
     } else {
@@ -1094,3 +1097,44 @@ fn command_buttons_state(
     }
 }
 
+
+/// The banner that shows the retreat jump countdown at the top of the screen after the Retreat order.
+#[derive(Component)]
+pub(crate) struct RetreatBanner;
+
+fn retreat_banner(
+    mut commands: Commands,
+    ui: Res<eaw_ui::EawUiSettings>,
+    tac: Res<TacticalData>,
+    mut banner: Query<(Entity, &mut Text), With<RetreatBanner>>,
+) {
+    let jump = match tac.retreat {
+        RetreatState::Countdown(s) if tac.active => Some(s),
+        _ => None,
+    };
+    match (jump, banner.single_mut()) {
+        (Some(s), Ok((_, mut t))) => {
+            let text = format!("RETREAT - JUMP TO HYPERSPACE IN {}:{:02}", s.ceil() as u32 / 60, s.ceil() as u32 % 60);
+            if t.0 != text {
+                t.0 = text;
+            }
+        }
+        (Some(s), Err(_)) => {
+            let mut e = commands.spawn((
+                RetreatBanner,
+                crate::hud::TacticalHud,
+                Name::new("retreat banner"),
+                Text::new(format!("RETREAT - JUMP TO HYPERSPACE IN {}:{:02}", s.ceil() as u32 / 60, s.ceil() as u32 % 60)),
+                TextFont::from_font_size(22.0),
+                TextColor(Color::srgb(1.0, 0.85, 0.4)),
+                Node { position_type: PositionType::Absolute, top: Val::Px(40.0), left: Val::Percent(50.0), margin: UiRect::left(Val::Px(-230.0)), ..default() },
+                GlobalZIndex(70),
+            ));
+            if let Some(cam) = ui.camera {
+                e.insert(UiTargetCamera(cam));
+            }
+        }
+        (None, Ok((e, _))) => commands.entity(e).despawn(),
+        (None, Err(_)) => {}
+    }
+}

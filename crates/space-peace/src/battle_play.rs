@@ -426,6 +426,7 @@ fn battle_menu(
     status: Res<BattleStatus>,
     mut scripted_esc: Local<bool>,
     ui: Option<Res<EawUiSettings>>,
+    runtime: Option<Res<battle_view::BattleRuntime>>,
 ) {
     // `--battle-esc-after <s>` scripts one Esc press for test runs.
     let scripted = !*scripted_esc && status.tick > 0 && args.battle_esc_after.is_some_and(|s| status.time >= s);
@@ -447,8 +448,13 @@ fn battle_menu(
         settings.paused = before;
     }
     if menu.retreat {
+        // The same order as the Retreat button: the jump timer runs and the survivors escape when it ends (refused during the lock).
         menu.retreat = false;
-        done.write(BattleFinished { id: pending.0.battle_id, outcome: BattleOutcome::Aborted });
+        menu.open = false;
+        if let Some(rt) = runtime.as_ref() {
+            rt.order_retreat(settings.player_side);
+        }
+        let _ = (&mut done, &pending);
     }
     match (menu.open, existing.is_empty()) {
         (true, true) => {

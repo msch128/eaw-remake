@@ -393,6 +393,11 @@ impl BattleRuntime {
     pub fn command(&self, side: u8, cmd: Command) {
         self.sim.command(side, cmd);
     }
+
+    /// The Retreat order (button and Esc menu): the sim refuses it before `retreat_countdown` and starts the jump timer otherwise.
+    pub fn order_retreat(&self, side: u8) {
+        self.sim.command(side, Command::Retreat);
+    }
 }
 
 /// Adds the battle view. Requires [`alamo_render::AlamoRenderPlugin`] to be added as well.

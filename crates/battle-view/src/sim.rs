@@ -90,6 +90,8 @@ pub struct Snapshot {
     pub result: Option<battle_sim::BattleResult>,
     /// Living ships per side (fighters included).
     pub alive: Vec<u32>,
+    /// Per side: seconds until its retreat jump (`None` when no retreat was ordered).
+    pub retreat_jump_in: Vec<Option<f32>>,
     /// Wall-clock milliseconds the worker needed for the step.
     pub step_ms: f32,
 }
@@ -159,6 +161,7 @@ fn snapshot(battle: &Battle, events: Vec<Event>, step_ms: f32) -> Snapshot {
         winner: result.as_ref().and_then(|r| r.winner),
         result,
         alive,
+        retreat_jump_in: (0..battle.side_count() as u8).map(|s| battle.retreat_jump_in(s)).collect(),
         step_ms,
     }
 }

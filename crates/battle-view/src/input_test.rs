@@ -67,6 +67,8 @@ enum Step {
     AutocastToggle,
     /// Esc: cancels the armed order first, then opens the (pausing) menu, then closes it.
     Escape(EscCheck),
+    /// Last step: after the 60 s lock a click on Retreat starts the jump countdown (state + banner), and when it runs out the battle ends with the ships retreated.
+    RetreatFlow,
     /// After an attack order the red line goes away again within a few seconds although the ship stays selected.
     AttackLineExpires,
     /// With an empty selection the order buttons are dimmed, the retreat button is dimmed before it is available and no text sits under it.
@@ -86,7 +88,7 @@ enum EscCheck {
     Paused(bool),
 }
 
-const STEPS: [Step; 32] = [
+const STEPS: [Step; 33] = [
     Step::SelectShip,
     Step::RightClickGround,
     Step::MoveLineVisible,
@@ -119,6 +121,7 @@ const STEPS: [Step; 32] = [
     Step::BarDimmedWithoutSelection,
     Step::MiddleDrag,
     Step::PageUpRotates,
+    Step::RetreatFlow,
 ];
 
 #[derive(Resource, Default)]
@@ -139,6 +142,9 @@ struct TestState {
     ability_clicks: u32,
     attack_line_seen: bool,
     attack_ship: Option<u32>,
+    retreat_phase: u8,
+    retreat_t0: u32,
+    retreat_seen: bool,
     hp_marker: Option<Vec2>,
     autocast: Option<(u32, usize, bool)>,
     hp_ship: Option<u32>,
@@ -163,7 +169,7 @@ enum Act {
 fn drive(
     mut st: ResMut<TestState>,
     status: Res<BattleStatus>,
-    settings: Res<BattleViewSettings>,
+    mut settings: ResMut<BattleViewSettings>,
     ships: Res<RenderedShips>,
     sel: Res<Selection>,
     rt: Res<BattleRuntime>,
@@ -693,6 +699,48 @@ fn drive(
             }
             _ => {}
         },
+        Step::RetreatFlow => {
+            match st.retreat_phase {
+                // Run the clock past the lock fast, then back to real time so that the countdown can be seen.
+                0 => {
+                    settings.speed = 30.0;
+                    if status.time >= rt.retreat_countdown + 1.0 {
+                        settings.speed = 1.0;
+                        st.retreat_phase = 1;
+                        st.retreat_t0 = t + 1;
+                    } else if t > 60_000 {
+                        verdict = Some(("retreat-flow (lock never ended)".into(), false));
+                    }
+                }
+                1 => {
+                    let p = bar.iter().find(|r| r.0.name == "b_retreat" && r.4.get()).map(|r| r.3.translation / sf);
+                    match (t - st.retreat_t0, p) {
+                        (0, Some(p)) => act = click_at(0, p, MouseButton::Left),
+                        (1 | 2, _) => act = click_at(t - st.retreat_t0, Vec2::ZERO, MouseButton::Left),
+                        (0, None) => verdict = Some(("retreat-flow (button not visible)".into(), false)),
+                        (30.., _) => {
+                            st.retreat_phase = 2;
+                            info!("input-test:   after the retreat click: state {:?}, time {:.1}, clicked {:?}", tactical.retreat, status.time, st.clicked);
+                        }
+                        _ => {}
+                    }
+                }
+                _ => {
+                    if matches!(tactical.retreat, eaw_ui::RetreatState::Countdown(_)) && !st.retreat_seen {
+                        st.retreat_seen = true;
+                        info!("input-test:   retreat countdown {:?}", tactical.retreat);
+                    }
+                    let outcome = rt.outcome();
+                    if let Some(o) = outcome {
+                        let escaped: u32 = o.retreated.get(settings.player_side as usize).map_or(0, |g| g.iter().sum());
+                        info!("input-test:   battle result after retreat: {escaped} units escaped, winner {:?}", o.winner);
+                        verdict = Some(("retreat-flow".into(), st.retreat_seen && escaped > 0));
+                    } else if t - st.retreat_t0 > 6000 {
+                        verdict = Some(("retreat-flow (no result after the jump)".into(), false));
+                    }
+                }
+            }
+        }
         Step::BarDimmedWithoutSelection => {
             if t == 4 {
                 let orders: Vec<bool> = bar.iter().filter(|(b, ..)| b.name.starts_with("c_button")).map(|(_, s, ..)| s.disabled).collect();
