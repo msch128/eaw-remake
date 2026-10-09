@@ -380,14 +380,14 @@ fn organizer_test(
     // One drag takes 3 frames per step: move to the source, press, move to the target, release.
     let mut drag = |st: &OrganizerTest, from: Vec2, to: Vec2| match st.t {
         2 => {
-            win.set_physical_cursor_position(Some(from.as_dvec2()));
+            win.bypass_change_detection().set_physical_cursor_position(Some(from.as_dvec2()));
             moved.write(CursorMoved { window: entity, position: from / win.scale_factor(), delta: None });
         }
         6 => {
             buttons.write(MouseButtonInput { button: MouseButton::Left, state: ButtonState::Pressed, window: entity });
         }
         10 => {
-            win.set_physical_cursor_position(Some(to.as_dvec2()));
+            win.bypass_change_detection().set_physical_cursor_position(Some(to.as_dvec2()));
             moved.write(CursorMoved { window: entity, position: to / win.scale_factor(), delta: None });
         }
         14 => {

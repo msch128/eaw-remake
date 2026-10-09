@@ -527,7 +527,8 @@ fn drive(
     let (entity, win) = &mut *window;
     match act {
         Some(Act::Move(p)) => {
-            win.set_physical_cursor_position(Some(p.as_dvec2()));
+            // Without change detection: bevy_winit would copy the position to the OS cursor and move the real mouse.
+            win.bypass_change_detection().set_physical_cursor_position(Some(p.as_dvec2()));
             moved.write(CursorMoved { window: *entity, position: p / win.scale_factor(), delta: None });
         }
         Some(Act::Down) => {
