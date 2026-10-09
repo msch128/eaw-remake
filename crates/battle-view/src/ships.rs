@@ -567,9 +567,11 @@ pub fn update_dying(
         let tumble = d.tumble * dt;
         tf.rotation = Quat::from_euler(EulerRot::XYZ, tumble.x, tumble.y, tumble.z) * tf.rotation;
         d.next_boom -= dt;
-        let progress = d.age / d.duration;
         if d.next_boom <= 0.0 && d.age < d.duration {
-            d.next_boom = 0.12 + 0.5 * (1.0 - progress);
+            // Ships without a `Death_Clone` have no keyed sequence in the data: one `Death_Explosions`
+            // effect (which already runs ~30 s with its own loops) every ~1.5 s while the hull burns
+            // (estimate); stacking a new one every 0.12-0.6 s made clouds 1.5x the hull.
+            d.next_boom = 1.5;
             let mut s = d.seed;
             d.seed = d.seed.wrapping_mul(747_796_405).wrapping_add(2_891_336_453);
             s ^= d.seed;
@@ -578,11 +580,7 @@ pub fn update_dying(
                 * 1.4;
             let local = tf.rotation * offset;
             commands.trigger(SpawnParticleEffect {
-                particle: if progress < 0.7 {
-                    "Large_Explosion_Space".into()
-                } else {
-                    d.effect.into()
-                },
+                particle: d.effect.into(),
                 position: tf.translation + local,
                 normal: Vec3::Y,
             });

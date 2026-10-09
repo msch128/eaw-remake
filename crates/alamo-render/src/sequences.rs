@@ -16,9 +16,9 @@
 use alamo_fs::FileSource;
 use bevy::prelude::*;
 
-use crate::animation::{AlamoAnimation, AnimationIndex, model_stem};
+use crate::animation::{AlamoAnimation, AnimationCache, AnimationIndex, model_stem};
 use crate::model::{AlamoFs, AlamoModel, AlamoModelLoaded};
-use crate::particles::{ExtraBatchGeometry, MeshBuf, ParticleView};
+use crate::particles::{AlamoParticles, ExtraBatchGeometry, MeshBuf, ParticleView};
 use crate::projectiles::SpawnParticleEffect;
 use crate::xmldata::XmlDefs;
 
@@ -218,6 +218,9 @@ pub struct DeathSequence {
     finale: Option<String>,
     rng: u32,
     final_done: bool,
+    /// The clone's own `DIE` animation drives the effects (proxy particles keyed on and off by
+    /// bone visibility); no scripted explosions are added.
+    data_driven: bool,
 }
 
 fn rand(s: &mut u32) -> f32 {
@@ -234,6 +237,7 @@ pub fn on_play_death(
     fs: Res<AlamoFs>,
     defs: Res<XmlDefs>,
     index: Res<AnimationIndex>,
+    mut clips: ResMut<AnimationCache>,
     roots: Query<(&AlamoModel, &AlamoModelLoaded, &GlobalTransform)>,
 ) {
     let Ok((model, loaded, gt)) = roots.get(ev.entity) else {
@@ -286,14 +290,22 @@ pub fn on_play_death(
         finale,
         rng: 0x9e37_79b9 ^ (ev.entity.to_bits() as u32),
         final_done: false,
+        data_driven: false,
     };
     let transform = gt.compute_transform();
     if let Some(clone) = clone_model {
         let clone_stem = model_stem(&clone);
         let mut anim = AlamoAnimation::once("DIE");
         if let Some(path) = index.find(&clone_stem, "DIE", None) {
-            let _ = path;
-            seq.duration = 7.0;
+            // The clone's DIE clip is the whole sequence (about 50 s for an ISD): its `pd_*` proxy
+            // bones are switched on at keyed frames (explosions, `P_Ship_Fire*` flames) and the
+            // hull is hidden at the last frame. No scripted explosions are added.
+            if let Some(d) = clips.duration(&fs, &path) {
+                seq.duration = d;
+            }
+            seq.data_driven = true;
+            seq.finale = None;
+            seq.explosions.clear();
         } else {
             anim.playing = false;
         }
@@ -313,11 +325,24 @@ pub fn on_play_death(
 pub fn run_death(
     mut commands: Commands,
     time: Res<Time>,
-    mut seqs: Query<(Entity, &mut DeathSequence, &GlobalTransform)>,
+    mut seqs: Query<(Entity, &mut DeathSequence, &GlobalTransform, Option<&AlamoModelLoaded>)>,
+    mut particles: Query<&mut AlamoParticles>,
 ) {
     let dt = time.delta_secs();
-    for (e, mut s, gt) in &mut seqs {
+    for (e, mut s, gt, loaded) in &mut seqs {
         s.elapsed += dt;
+        if s.data_driven
+            && let Some(loaded) = loaded
+        {
+            // Proxy particles spawn disabled; the DIE animation's visibility keys gate them.
+            for &p in &loaded.proxies {
+                if let Ok(mut ps) = particles.get_mut(p)
+                    && !ps.enabled
+                {
+                    ps.enabled = true;
+                }
+            }
+        }
         while s.elapsed >= s.next_boom && s.elapsed < s.duration && !s.explosions.is_empty() {
             let mut rng = s.rng;
             let dir = Vec3::new(
@@ -349,7 +374,8 @@ pub fn run_death(
                 });
             }
         }
-        if s.elapsed >= s.duration + 1.5 {
+        let tail = if s.data_driven { 30.0 } else { 1.5 };
+        if s.elapsed >= s.duration + tail {
             commands.entity(e).despawn();
         }
     }

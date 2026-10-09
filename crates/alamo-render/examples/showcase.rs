@@ -134,6 +134,15 @@ fn main() {
                 .id(),
             vec![2.2, 0.15, 2.4],
         ),
+        "death_mc" => (
+            app.world_mut()
+                .spawn((
+                    AlamoModel::new("Rebel_Mon_Calamari_MC_80.alo").with_bow_forward(),
+                    Transform::default(),
+                ))
+                .id(),
+            vec![0.5, 0.3, 2.2],
+        ),
         _ => (
             app.world_mut()
                 .spawn((
@@ -243,7 +252,7 @@ fn drive(
                 ..default()
             });
         }
-        "death" if !rig.scripted && now > 0.5 => {
+        "death" | "death_mc" if !rig.scripted && now > 0.5 => {
             rig.scripted = true;
             commands.trigger(PlayDeath {
                 entity: rig.root,

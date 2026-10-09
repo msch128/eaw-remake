@@ -184,6 +184,11 @@ pub struct AnimationCache {
 }
 
 impl AnimationCache {
+    /// Length in seconds of the clip at `path` (`None` if it cannot be read).
+    pub fn duration(&mut self, fs: &AlamoFs, path: &str) -> Option<f32> {
+        self.get(fs, path).map(|a| a.duration())
+    }
+
     fn get(&mut self, fs: &AlamoFs, path: &str) -> Option<Arc<Animation>> {
         self.clips
             .entry(path.to_ascii_lowercase())
