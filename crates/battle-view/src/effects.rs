@@ -7,7 +7,9 @@
 
 use std::collections::HashMap;
 
-use alamo_render::{AutoDespawn, ImpactKind, ProjectileImpact, ProjectileVisual, ShieldHit};
+use alamo_render::{
+    AlamoModelLoaded, AlamoPart, AutoDespawn, ImpactKind, ProjectileImpact, ProjectileVisual, ShieldFlash, ShieldHit,
+};
 use battle_sim::{Event, HitKind, ProjId};
 use bevy::prelude::*;
 
@@ -116,11 +118,14 @@ pub fn impact_effects(
         match kind {
             HitKind::Shield => {
                 // The shield flash is cheap (a material parameter); the particle is budgeted.
-                commands.trigger(ShieldHit {
-                    model: entity,
-                    position: at,
-                    intensity: 1.0,
-                });
+                // A shield that is down (or never existed) shows no bubble, only the hull impact.
+                if rt.cur.as_ref().and_then(|c| c.ship(*ship)).is_none_or(|s| s.shield > 0.0) {
+                    commands.trigger(ShieldHit {
+                        model: entity,
+                        position: at,
+                        intensity: 1.0,
+                    });
+                }
                 if budget > 0 {
                     budget -= 1;
                     commands.trigger(ProjectileImpact {
@@ -141,6 +146,31 @@ pub fn impact_effects(
                         normal,
                     });
                 }
+            }
+        }
+    }
+}
+
+/// Hides the shield meshes of ships whose shield is down, so a flash that was still fading when the shield
+/// broke does not outlive it.
+pub fn hide_downed_shields(
+    rt: Res<BattleRuntime>,
+    flashing: Query<&AlamoModelLoaded, With<ShieldFlash>>,
+    parts: Query<&AlamoPart>,
+    mut vis: Query<&mut Visibility>,
+) {
+    let Some(cur) = rt.cur.as_ref() else { return };
+    for (id, &entity) in &rt.entities {
+        let Ok(loaded) = flashing.get(entity) else { continue };
+        if cur.ship(*id).is_none_or(|s| s.shield > 0.0) {
+            continue;
+        }
+        for &p in &loaded.parts {
+            if parts.get(p).is_ok_and(|a| a.shield)
+                && let Ok(mut v) = vis.get_mut(p)
+                && *v != Visibility::Hidden
+            {
+                *v = Visibility::Hidden;
             }
         }
     }

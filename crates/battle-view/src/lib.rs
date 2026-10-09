@@ -443,7 +443,7 @@ impl Plugin for BattleViewPlugin {
                     (
                         control::read_pointer,
                         advance_clock,
-                        (effects::impact_effects, ships::ship_events),
+                        (effects::impact_effects, effects::hide_downed_shields, ships::ship_events).chain(),
                         ships::update_ships,
                         ships::update_arrival_flashes,
                         ships::update_dying,
