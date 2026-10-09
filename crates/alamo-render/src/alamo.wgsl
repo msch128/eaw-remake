@@ -79,6 +79,15 @@ fn perturb(tbn: mat3x3<f32>, sample_rgb: vec3<f32>) -> vec3<f32> {
     return normalize(tbn * vec3<f32>(t.x, g, t.z));
 }
 
+// Planet terrain bump, exaggerated: the Remake video shows crisper relief than the plain normal map gives.
+const PLANET_BUMP: f32 = 1.9;
+
+fn perturb_planet(tbn: mat3x3<f32>, sample_rgb: vec3<f32>) -> vec3<f32> {
+    let t = sample_rgb * 2.0 - 1.0;
+    let g = select(t.y, -t.y, has(FLAG_FLIP_GREEN));
+    return normalize(tbn * vec3<f32>(t.x * PLANET_BUMP, g * PLANET_BUMP, t.z));
+}
+
 fn sun_dir() -> vec3<f32> {
     if lights.n_directional_lights > 0u {
         return normalize(lights.directional_lights[0].direction_to_light);
@@ -224,7 +233,7 @@ fn shade(in: VertexOutput, front: bool) -> vec4<f32> {
             let nm = textureSample(normal_tex, normal_samp, uv);
             // Bump fades toward the geometric normal where the mip-filtered normals disagree (Toksvig length).
             let flat_len = clamp(length(nm.rgb * 2.0 - 1.0), 0.0, 1.0);
-            n = normalize(mix(N, perturb(tbn, nm.rgb), flat_len * flat_len));
+            n = normalize(mix(N, perturb_planet(tbn, nm.rgb), flat_len));
             tvar = toksvig_variance(nm.rgb);
             city_mask = nm.a;
         }
@@ -246,7 +255,7 @@ fn shade(in: VertexOutput, front: bool) -> vec4<f32> {
         let spec = mat.specular.rgb * spec_mask * pow(saturate(dot(n, H)), filtered_shininess(n, max(mat.shininess, 8.0), tvar)) * sun * step(0.0, dot(N, L));
         // The original renders land more saturated than the plain albedo product (video: vivid green on Byss).
         let grey = dot(surf, vec3<f32>(0.299, 0.587, 0.114));
-        var col = mix(vec3<f32>(grey), surf, 1.35) * 1.08 + spec;
+        var col = mix(vec3<f32>(grey), surf, 1.35) * 1.2 + spec;
         // Cloud layer, shaded with its own normal map.
         let cloud_lit = vec3<f32>(1.0) * (amb + sun * cdl);
         col = mix(col, cloud_lit, cloud_amount * 0.9);

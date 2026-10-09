@@ -48,7 +48,8 @@ impl Default for BattleCamera {
             target_distance: 4000.0,
             yaw: 0.0,
             target_yaw: 0.0,
-            pitch: 50f32.to_radians(),
+            // Estimate: the Remake video (Byss, b0640-b0760) looks about 70 degrees down; the engine value is not in the data.
+            pitch: 72f32.to_radians(),
             bounds_min: Vec2::splat(-10_000.0),
             bounds_max: Vec2::splat(10_000.0),
             min_distance: 500.0,
