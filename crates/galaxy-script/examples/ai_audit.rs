@@ -106,6 +106,11 @@ fn main() {
     type PendingInfo = (i32, Option<u32>, Vec<(u32, u32)>, u32);
     let mut pending: BTreeMap<u32, PendingInfo> = BTreeMap::new();
     let mut attacks: Vec<(u32, u32, u32, i32, bool)> = Vec::new();
+    // Planets per faction at weeks 0/10/20/30..., and escape moves (a fleet that keeps escaping is a loop).
+    let mut timeline: Vec<(u64, Vec<u32>)> = vec![(0, sim.with_sim(|s| s.galaxy().factions.iter().map(|f| f.planets_owned).collect()))];
+    let mut escape_starts: BTreeMap<u32, u32> = BTreeMap::new();
+    let mut escaping_seen: std::collections::BTreeSet<u32> = Default::default();
+    let mut escape_fleet_weeks = 0u32;
     let mut week = 0;
     while week < weeks {
         let prev_fleets = sim.with_sim(|s| s.galaxy().fleets.clone());
@@ -140,6 +145,20 @@ fn main() {
             }
             let Event::WeekEnded { week: w } = e else { continue };
             week = w;
+            if week % 10 == 0 {
+                timeline.push((week, sim.with_sim(|s| s.galaxy().factions.iter().map(|f| f.planets_owned).collect())));
+            }
+            sim.with_sim(|s| {
+                let esc = &s.galaxy().escaping;
+                escape_fleet_weeks += esc.len() as u32;
+                for &id in esc {
+                    if escaping_seen.insert(id) {
+                        let owner = s.galaxy().fleets.get(&id).map_or(u32::MAX, |f| f.owner);
+                        *escape_starts.entry(owner).or_default() += 1;
+                    }
+                }
+                escaping_seen.retain(|id| esc.contains(id));
+            });
             if week % 5 == 0 {
                 sim.with_sim(|s| {
                     let g = s.galaxy();
@@ -288,5 +307,11 @@ fn main() {
     for (f, n) in &lane_use {
         println!("  {f}: {:.0}% of fleet-weeks vs {:.0}% of lanes", 100.0 * f64::from(*n) / f64::from(total.max(1)), 100.0 * lane_share(*f));
     }
+    println!("AUDIT planets by week (factions {names:?}):");
+    for (w, v) in &timeline {
+        println!("AUDIT   week {w}: {v:?}");
+    }
+    println!("AUDIT attacks launched/won per major: {:?}", majors.iter().map(|&f| (names[f].clone(), attacks.iter().filter(|a| a.0 as usize == f).count(), attacks.iter().filter(|a| a.0 as usize == f && a.4).count())).collect::<Vec<_>>());
+    println!("AUDIT escape moves started per faction index {escape_starts:?}, fleet-weeks escaping {escape_fleet_weeks}");
     println!("border planet-weeks with ships next to a hostile planet: {border_fleet_weeks_next_to_enemy}");
 }

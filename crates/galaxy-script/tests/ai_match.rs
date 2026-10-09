@@ -92,6 +92,10 @@ fn remake_ai_is_the_default_and_the_stub_stays_available() {
 
 struct RunStats {
     enemy_captures: u32,
+    /// Captures of pirate or neutral planets (expansion).
+    expansion_captures: u32,
+    /// Planets of the largest non-pirate faction at the end.
+    max_planets: i64,
     max_gain_week10: i64,
     credits_week10: f64,
     week_ms: f64,
@@ -119,7 +123,7 @@ fn run_tier(tier: galaxy_script::DifficultyTier, strategy: bool, weeks_total: u6
     let pirates = sim.with_sim(|s| s.world().faction_id("Pirates"));
     let owned = |sim: &ScriptedSim| -> Vec<i64> { sim.with_sim(|s| (0..n as u32).map(|f| s.galaxy().factions[f as usize].planets_owned as i64).collect()) };
     let start = owned(&sim);
-    let (mut weeks, mut enemy_captures, mut max_gain, mut credits10) = (0, 0u32, 0i64, 0.0);
+    let (mut weeks, mut enemy_captures, mut expansion_captures, mut max_gain, mut credits10) = (0, 0u32, 0u32, 0i64, 0.0);
     let t0 = Instant::now();
     while weeks < weeks_total {
         for e in sim.step(1.0).sim_events {
@@ -133,12 +137,14 @@ fn run_tier(tier: galaxy_script::DifficultyTier, strategy: bool, weeks_total: u6
                     }
                 }
                 Event::PlanetCaptured { old_owner: Some(o), .. } if Some(o) != pirates => enemy_captures += 1,
+                Event::PlanetCaptured { .. } => expansion_captures += 1,
                 _ => {}
             }
         }
     }
     let strategy_ms = sim.ai_stats().map_or(0.0, |s| s.strategy_nanos as f64 / 1e6) / weeks as f64;
-    Some(RunStats { enemy_captures, max_gain_week10: max_gain, credits_week10: credits10, week_ms: t0.elapsed().as_secs_f64() * 1e3 / weeks as f64, strategy_ms_per_week: strategy_ms })
+    let max_planets = owned(&sim).iter().enumerate().filter(|(f, _)| Some(*f as u32) != pirates).map(|(_, p)| *p).max().unwrap_or(0);
+    Some(RunStats { enemy_captures, expansion_captures, max_planets, max_gain_week10: max_gain, credits_week10: credits10, week_ms: t0.elapsed().as_secs_f64() * 1e3 / weeks as f64, strategy_ms_per_week: strategy_ms })
 }
 
 #[test]
@@ -170,10 +176,11 @@ fn difficulty_tiers_scale_without_snowballing() {
 fn strategic_layer_captures_more_enemy_planets_over_several_seeds() {
     use galaxy_script::DifficultyTier::Normal;
     let (mut with, mut without) = (0, 0);
-    for seed in 1..=8 {
+    let seeds: u64 = std::env::var("AI_SEEDS").ok().and_then(|s| s.parse().ok()).unwrap_or(8);
+    for seed in 1..=seeds {
         let Some(a) = run_tier(Normal, true, 30, seed) else { return };
         let b = run_tier(Normal, false, 30, seed).unwrap();
-        println!("seed {seed}: strategy {} vs plain {} enemy captures (best faction +{} / +{} planets by week 10)", a.enemy_captures, b.enemy_captures, a.max_gain_week10, b.max_gain_week10);
+        println!("seed {seed}: strategy {} vs plain {} enemy captures, {} vs {} pirate/neutral captures, largest faction {} vs {} planets (best faction +{} / +{} planets by week 10)", a.enemy_captures, b.enemy_captures, a.expansion_captures, b.expansion_captures, a.max_planets, b.max_planets, a.max_gain_week10, b.max_gain_week10);
         with += a.enemy_captures;
         without += b.enemy_captures;
     }

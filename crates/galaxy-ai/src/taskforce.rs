@@ -161,6 +161,8 @@ pub struct TaskForces {
     accounts: HashMap<(PlayerId, String), f64>,
     /// Why the production of a plan failed, for the statistics (taken when the plan ends).
     failure_detail: HashMap<u64, String>,
+    /// Diagnostics per task force: what the last `Produce_Force` asked for and how it ended.
+    produce_note: HashMap<u64, String>,
     plan_category: HashMap<u64, String>,
     /// Believed hostile strength per player and planet (set by the engine from the strategic layer; empty = use AI power).
     pub(crate) believed: HashMap<PlayerId, Vec<f64>>,
@@ -474,7 +476,10 @@ impl TaskForces {
                 }
                 let t = self.forces.get(&tf_id)?;
                 let wanted = self.compose(sim, snap, t, rng);
-                HostValue::Bool(self.free_store_covers(sim, t.player, &wanted, t.target))
+                let safe = self.stage_safety(snap, t);
+                let covered = self.free_store_covers(sim, t.player, &wanted, t.target, safe.as_deref());
+                self.produce_note.insert(tf_id, format!("check: wanted {wanted:?} covers {covered}"));
+                HostValue::Bool(covered)
             }
             "Produce_Force" => {
                 let block = self.new_block();
@@ -555,6 +560,14 @@ impl TaskForces {
 
     // ---- composition ---------------------------------------------------------------------------------
 
+    /// Planets from which ships can reach the stage of a unit force without passing a blockade (`None`: no such restriction).
+    fn stage_safety(&self, snap: &Snapshot, t: &TaskForce) -> Option<Vec<bool>> {
+        if t.kind == ForceKind::Structure {
+            return None;
+        }
+        t.stage.or_else(|| self.choose_stage(snap, t)).map(|stage| safe_from(snap, t.player, stage))
+    }
+
     /// The list of unit types a force should consist of.
     fn compose(&self, sim: &dyn AiSim, snap: &Snapshot, t: &TaskForce, _rng: &mut u64) -> Vec<String> {
         // The composition is a function of (player, target, force) so that repeated asks (ready check, production, a later plan for
@@ -591,7 +604,7 @@ impl TaskForces {
         // so a force assembled by an earlier plan is recognised as ready.
         let mut avail: HashMap<String, u32> = HashMap::new();
         if t.reqs.allow_free_store {
-            for ((_, u), (_, c)) in self.free_ships(sim, t.player, t.target) {
+            for ((_, u), (_, c)) in self.free_ships(sim, t.player, t.target, self.stage_safety(snap, t).as_deref()) {
                 *avail.entry(u).or_default() += c;
             }
             let mut names: Vec<String> = avail.keys().cloned().collect();
@@ -690,10 +703,13 @@ impl TaskForces {
         wanted
     }
 
-    fn free_ships(&self, sim: &dyn AiSim, player: PlayerId, target: Option<PlanetId>) -> HashMap<(PlanetId, String), (FleetId, u32)> {
+    fn free_ships(&self, sim: &dyn AiSim, player: PlayerId, target: Option<PlanetId>, safe: Option<&[bool]>) -> HashMap<(PlanetId, String), (FleetId, u32)> {
         let mut out: HashMap<(PlanetId, String), (FleetId, u32)> = HashMap::new();
         for f in sim.fleets_of(player) {
             let Some(at) = f.at else { continue };
+            if safe.is_some_and(|s| !s.get(at as usize).copied().unwrap_or(false)) {
+                continue;
+            }
             if self.owned_fleets.contains(&f.id) {
                 continue;
             }
@@ -711,8 +727,8 @@ impl TaskForces {
         out
     }
 
-    fn free_store_covers(&self, sim: &dyn AiSim, player: PlayerId, wanted: &[String], target: Option<PlanetId>) -> bool {
-        let free = self.free_ships(sim, player, target);
+    fn free_store_covers(&self, sim: &dyn AiSim, player: PlayerId, wanted: &[String], target: Option<PlanetId>, safe: Option<&[bool]>) -> bool {
+        let free = self.free_ships(sim, player, target, safe);
         let mut have: HashMap<String, u32> = HashMap::new();
         for ((_, u), (_, c)) in &free {
             *have.entry(u.clone()).or_default() += c;
@@ -747,6 +763,11 @@ impl TaskForces {
                     return self.finish(block, false);
                 };
                 let wanted = self.compose(sim, snap, t, rng);
+                let safe = self.stage_safety(snap, t);
+                let free_cover = self.free_store_covers(sim, t.player, &wanted, t.target, safe.as_deref());
+                let free_now: Vec<String> = self.free_ships(sim, t.player, t.target, safe.as_deref()).iter().map(|((p, u), (_, c))| format!("{u}x{c}@{p}")).collect();
+                let note = format!(" | produce: stage {stage}, wanted {wanted:?}, covers {free_cover}, free {free_now:?}");
+                self.produce_note.entry(tf_id).or_default().push_str(&note);
                 if let Some(t) = self.forces.get_mut(&tf_id) {
                     t.stage = Some(stage);
                 }
@@ -770,13 +791,18 @@ impl TaskForces {
     }
 
     fn start_move(&mut self, sim: &mut dyn AiSim, tf_id: u64, to: PlanetId) -> bool {
-        let Some(t) = self.forces.get_mut(&tf_id) else { return false };
-        let Some(fleet) = t.fleet else {
-            let plan = t.plan;
-            self.failure_detail.insert(plan, "force has no fleet at launch (nothing assembled)".to_string());
+        let Some(t) = self.forces.get(&tf_id) else { return false };
+        let (plan, player, fleet) = (t.plan, t.player, t.fleet);
+        let Some(fleet) = fleet else {
+            let running = self.jobs.iter().find_map(|j| match j { Job::Units(u) if u.tf == tf_id => Some(format!("production still running (plan stopped waiting): wanted {} pending {}", u.wanted.len(), u.pending.len())), _ => None });
+            let note = self.produce_note.get(&tf_id).cloned().unwrap_or_else(|| "Produce_Force never ran".to_string());
+            if std::env::var("AI_TRACE_FORCE").is_ok() {
+                eprintln!("no fleet at launch: plan {plan} tf {tf_id}: {} | {note}", running.as_deref().unwrap_or("production ended without a fleet"));
+            }
+            let cause = running.map_or_else(|| if note.contains("produce: ") && note.contains(", covers true,") { "free store promised the force but production ended without a fleet" } else { "production ended without a fleet" }, |_| "production still running when the plan gave up waiting");
+            self.failure_detail.insert(plan, format!("force has no fleet at launch ({cause})"));
             return false;
         };
-        let player = t.player;
         if sim.fleet(fleet).is_some_and(|f| f.at == Some(to)) {
             return true;
         }
@@ -933,6 +959,10 @@ impl TaskForces {
         let name = t.name.clone();
         let allow_free = t.reqs.allow_free_store;
         let fail = |me: &mut Self, j: &UnitJob, unit: &str, why: &str, detail: String| {
+            if std::env::var("AI_TRACE_FORCE").is_ok() {
+                eprintln!("production failed: plan {plan} tf {} stage {} {why}: {detail}; wanted {:?} pending {}", j.tf, j.stage, j.wanted, j.pending.len());
+            }
+            me.produce_note.entry(j.tf).or_default().push_str(&format!(" | failed: {why}"));
             me.failure_detail.insert(plan, detail);
             me.stats.production_failures += 1;
             *me.stats.failure_reasons.entry(format!("{unit}: {why}")).or_default() += 1;
@@ -972,7 +1002,7 @@ impl TaskForces {
         let dist = hop_distances(snap, j.stage);
         let safe = safe_from(snap, player, j.stage);
         let mut remaining: Vec<String> = Vec::new();
-        let mut free = if allow_free { self.free_ships(sim, player, self.forces.get(&j.tf).and_then(|t| t.target)) } else { HashMap::new() };
+        let mut free = if allow_free { self.free_ships(sim, player, self.forces.get(&j.tf).and_then(|t| t.target), Some(&safe)) } else { HashMap::new() };
         for unit in std::mem::take(&mut j.wanted) {
             let key = unit.to_ascii_lowercase();
             let mut best: Option<(PlanetId, FleetId, u32)> = None;

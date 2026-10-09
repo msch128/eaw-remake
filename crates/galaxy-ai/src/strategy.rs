@@ -108,6 +108,8 @@ pub enum Phase {
 
 const HOPS: usize = 3;
 const DECAY: f64 = 0.5;
+/// Strength of the pull towards the average size on expansion targets (estimate): a faction at 1.6x the average planets sees neutral and pirate planets at exp(-0.6 x LEADER_BRAKE) of their value.
+const LEADER_BRAKE: f64 = 0.6;
 
 /// Shared strategic state of all AI players.
 #[derive(Debug, Default)]
@@ -129,6 +131,8 @@ pub struct Strategy {
     losing_until: Vec<f64>,
     owned_prev: Vec<(f64, u32)>,
     total: Vec<f64>,
+    /// Planets owned relative to the average of the established factions (1.0 = average).
+    share: Vec<f64>,
 }
 
 impl Strategy {
@@ -254,6 +258,10 @@ impl Strategy {
             // What an unseen planet is assumed to hold: the average of the occupied ones the faction has seen.
             self.prior[p] = if cnt > 0 { sum / f64::from(cnt) } else { 0.0 };
         }
+        // Relative size: planets owned against the average of the established factions (4+ planets, no pirates).
+        let established: Vec<f64> = (0..players).filter(|&p| snap.owned[p].len() >= 4 && !snap.names[p].eq_ignore_ascii_case("pirates")).map(|p| snap.owned[p].len() as f64).collect();
+        let average = if established.len() >= 2 { established.iter().sum::<f64>() / established.len() as f64 } else { 0.0 };
+        self.share = (0..players).map(|p| if average > 0.0 { snap.owned[p].len() as f64 / average } else { 1.0 }).collect();
         // Phases.
         for p in 0..players {
             let owned = snap.owned[p].len() as u32;
@@ -323,6 +331,11 @@ impl Strategy {
         let mut u = 0.9 * value * pers.aggression - 0.7 * pers.caution * risk.min(2.5) - 0.25 * (dist - 1.0).max(0.0);
         if dist <= 1.0 {
             u += 0.2; // frontier: cheap to reinforce and supply
+        }
+        // Measured expansion drive: the leader slows down on neutral and pirate planets, small factions catch up (estimate).
+        if owner.is_none_or(|o| snap.names[o as usize].eq_ignore_ascii_case("pirates")) {
+            let share = self.share.get(me as usize).copied().unwrap_or(1.0);
+            u += LEADER_BRAKE * pers.expansion * (1.0 - share).clamp(-1.0, 0.7);
         }
         match owner {
             None => {
