@@ -11,6 +11,10 @@
 //!   instantly "assembled" and `Launch_Units` / `Land_Units` / `Form_Units` succeed at once.
 //! * `Release_Forces()` returns the ships to the free store.
 
+/// Margin of predicted square-law strength a task force asks over what it believes defends the target (**estimate**). Tuned over 16 seeds of the all-AI match
+/// (`galaxy-script/tests/ai_match.rs`): 1.25 took 99 enemy-owner captures against 150 for the plain AI, 0.8 takes 141 (94%) at the same fleet size.
+pub const FORCE_MARGIN: f64 = 0.8;
+
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use alamo_lua::{HostValue, PlanEvent, TaskForceSpec};
@@ -643,11 +647,11 @@ impl TaskForces {
             let mut power = 0.0;
             let mut guard = 0;
             // Predicted-outcome sizing: what the player believes defends the target (square-law strength) times the margin it
-            // asks for (1.25 estimate x plan contrast scale x difficulty/personality sizing), shared between pincer forces.
+            // asks for (`FORCE_MARGIN` estimate x plan contrast scale x difficulty/personality sizing), shared between pincer forces.
             let believed = self.believed.get(&t.player).and_then(|v| t.target.map(|tp| v[tp as usize]));
             let strength_mode = believed.is_some() && candidates.first().is_some_and(|c| sim.force_strength(&[(c.0.clone(), 1)]) > 0.0);
             let split = t.target.and_then(|tp| self.split.get(&(t.player, tp))).copied().unwrap_or(1).max(1);
-            let needed_strength = believed.unwrap_or(0.0) * 1.25 * scale * self.sizing.get(&t.player).copied().unwrap_or(1.0) / f64::from(split);
+            let needed_strength = believed.unwrap_or(0.0) * FORCE_MARGIN * scale * self.sizing.get(&t.player).copied().unwrap_or(1.0) / f64::from(split);
             let strength_of = |w: &[String]| {
                 let mut counts: Vec<(String, u32)> = Vec::new();
                 for n in w {

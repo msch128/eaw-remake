@@ -73,3 +73,7 @@ The Remake's galactic AI on top of an abstract `AiSim` (implemented for galaxy-s
 - **Hoarding:** not a missing API. The AI spends 60-70% of its income (Fair tier: 250-560k credits at week 100 instead of 1-2M; the Normal/Hard credit multipliers of the data double/triple it). Spending is gated by the data's own desires: `Need_To_Build_Units_Space_GC` is
   `LowImportance (2) x Is_Player_Economically_Rich x shipyard`, loses to conquest goals for plan slots, and one plan builds 1-3 ships. Changes made: ships are queued at up to 40 planets (was 6, so units buildable only farther away were refused),
   `PLAN_LIMIT_FACTOR` named. Tried and rejected: shortening plan lifetime (no effect). Leave the rest to the data.
+
+## Strategy vs plain AI parity (tuned)
+Task force sizing margin `FORCE_MARGIN` (taskforce.rs) 1.25 -> 0.8 (estimate). Over 16 seeds of the all-AI match the strategic layer took 99 enemy-owner captures with 1.25 (plain AI: 150) and 141 with 0.8 (94%), at the same fleet size as the plain AI. The influence-map weights (risk 0.7, consolidation 0.7) were
+insensitive (0 to 0.7 gave 49 to 51 over seeds 1-8). The old margin made the layer hoard ships (about 1030 vs 909 ships at week 30) instead of attacking. `ai_match` now compares over 8 seeds with the 80% bar.

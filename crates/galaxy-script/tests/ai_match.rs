@@ -170,7 +170,7 @@ fn difficulty_tiers_scale_without_snowballing() {
 fn strategic_layer_captures_more_enemy_planets_over_several_seeds() {
     use galaxy_script::DifficultyTier::Normal;
     let (mut with, mut without) = (0, 0);
-    for seed in 1..=4 {
+    for seed in 1..=8 {
         let Some(a) = run_tier(Normal, true, 30, seed) else { return };
         let b = run_tier(Normal, false, 30, seed).unwrap();
         println!("seed {seed}: strategy {} vs plain {} enemy captures (best faction +{} / +{} planets by week 10)", a.enemy_captures, b.enemy_captures, a.max_gain_week10, b.max_gain_week10);
