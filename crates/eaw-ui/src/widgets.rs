@@ -576,10 +576,17 @@ impl Builder<'_> {
             .spawn((
                 Node {
                     position_type: PositionType::Absolute,
-                    left: Val::Px(offset.x),
+                    left: Val::Px(if def.right_justified { offset.x.min(0.0) } else { offset.x }),
                     top: Val::Px(-offset.y),
                     width: Val::Px(rect_size.x),
                     height: Val::Px(rect_size.y),
+                    padding: if def.right_justified {
+                        UiRect::right(Val::Px(7.0))
+                    } else if def.left_justified {
+                        UiRect::left(Val::Px(4.0))
+                    } else {
+                        UiRect::ZERO
+                    },
                     justify_content: justify,
                     align_items: AlignItems::Center,
                     ..default()
