@@ -51,8 +51,9 @@ enum Step {
     Button(&'static str, Check),
     /// Left click on open ground after a command button armed an order.
     ArmedGroundClick,
-    /// Click on the map to call in the picked reserve unit (needs `--battle-reserve`).
-    PlaceReinforcement,
+    /// Drag the first reserve unit from its slot onto a spot of this kind and release (needs `--battle-reserve`): refused spots must show a red ghost and
+    /// keep the unit in the reserve, an accepted one a green ghost and a call-in.
+    Drag(DropKind),
     BarAreaKeepsSelection,
     EmptyClickDeselects,
     /// Hold the middle button and move: left / right rotates, up / down tilts.
@@ -85,6 +86,17 @@ enum Step {
     MinimapMovesFocus,
 }
 
+/// Where a dragged reserve unit is dropped.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum DropKind {
+    /// Outside every sensor disc of the player (fog of war).
+    Fog,
+    /// Inside the no-spawn zone of an enemy structure (vacuous without one).
+    NoSpawn,
+    /// Next to an own ship.
+    Valid,
+}
+
 /// What an Esc press must have caused.
 #[derive(Clone, Copy, Debug)]
 enum EscCheck {
@@ -92,7 +104,7 @@ enum EscCheck {
     Paused(bool),
 }
 
-const STEPS: [Step; 35] = [
+const STEPS: [Step; 36] = [
     Step::ShipsInView,
     Step::MinimapMovesFocus,
     Step::SelectShip,
@@ -120,8 +132,9 @@ const STEPS: [Step; 35] = [
     Step::Escape(EscCheck::Paused(true)),
     Step::Escape(EscCheck::Paused(false)),
     Step::Button("b_reinforcement", Check::ReinforceWindow),
-    Step::Button("r_0000", Check::Armed(ArmedKind::Reinforce)),
-    Step::PlaceReinforcement,
+    Step::Drag(DropKind::Fog),
+    Step::Drag(DropKind::NoSpawn),
+    Step::Drag(DropKind::Valid),
     Step::BarAreaKeepsSelection,
     Step::EmptyClickDeselects,
     Step::BarDimmedWithoutSelection,
@@ -143,7 +156,6 @@ struct TestState {
     clicked: Vec<String>,
     probe_hover: bool,
     probe_press: bool,
-    place_world: Option<Vec3>,
     /// Camera yaw / pitch at the start and after the horizontal part of a drag.
     ability_clicks: u32,
     attack_line_seen: bool,
@@ -159,6 +171,9 @@ struct TestState {
     cam0: (f32, f32),
     cam1: (f32, f32),
     reserve_before: u32,
+    drag_target: Option<Vec2>,
+    drag_ghost: Option<crate::tactical_ui::Ghost>,
+    drag_cam: Option<Vec3>,
     results: Vec<(String, bool)>,
     done: bool,
 }
@@ -171,6 +186,11 @@ enum Act {
     Drag(Vec2),
     KeyDown(KeyCode, Key),
     KeyUp(KeyCode, Key),
+}
+
+/// Units left in the reserve (all rows).
+fn reserve_total(r: &crate::tactical_ui::ReinforceUi) -> u32 {
+    r.rows.iter().map(|x| x.2).sum()
 }
 
 fn drive(
@@ -411,37 +431,94 @@ fn drive(
             }
             _ => {}
         },
-        Step::PlaceReinforcement => {
-            let reserve = |r: &crate::tactical_ui::ReinforceUi| r.rows.iter().map(|x| x.2).sum::<u32>();
-            match t {
-                0 => {
-                    st.reserve_before = reserve(&reinforce);
-                    // A spot next to one of the player's ships that the zone rule accepts.
-                    let own = ships.0.values().filter(|s| s.side == player && !rt.catalog.ship(s.def).is_static).min_by_key(|s| s.id);
-                    let spot = own.and_then(|o| {
-                        [(300.0, 0.0), (-300.0, 0.0), (0.0, 300.0), (0.0, -300.0), (600.0, 0.0), (-600.0, 0.0), (0.0, 600.0), (0.0, -600.0)]
-                            .iter()
-                            .map(|(dx, dz)| o.pos + Vec3::new(*dx, 0.0, *dz))
-                            .find(|p| crate::tactical_ui::zone_check(&rt, player, crate::convert::bevy_to_sim(*p)).is_ok())
-                    });
-                    st.place_world = spot;
-                    if spot.is_none() {
-                        verdict = Some(("place-reinforcement (no valid spot found)".into(), false));
+        Step::Drag(kind) => {
+            let slot = bar.iter().find(|r| r.0.name == "r_0000" && r.4.get() && r.2.size().x > 4.0).map(|r| r.3.translation / sf);
+            let ship = reinforce.rows.first().map(|r| r.1);
+            let name = format!("reinforcement-drag-{kind:?}");
+            match (t, slot, ship) {
+                (0, None, _) | (0, _, None) => verdict = Some((format!("{name} (no reserve slot)"), false)),
+                (0, Some(_), Some(_)) => {
+                    st.reserve_before = reserve_total(&reinforce);
+                    st.drag_target = None;
+                    st.drag_ghost = None;
+                    // Look at the area of the test: the own ship, the enemy structure, or ground well away from the own fleet (fog).
+                    let own: Vec<Vec3> = ships.0.values().filter(|s| s.side == player && !rt.catalog.ship(s.def).is_static).map(|s| s.pos).collect();
+                    let centroid = own.iter().copied().sum::<Vec3>() / own.len().max(1) as f32;
+                    let focus = match kind {
+                        DropKind::Valid => ships.0.values().filter(|s| s.side == player && !rt.catalog.ship(s.def).is_static).min_by_key(|s| s.id).map(|s| s.pos),
+                        DropKind::NoSpawn => ships.0.values().find(|s| s.side != player && rt.catalog.ship(s.def).is_static).map(|s| s.pos),
+                        DropKind::Fog => {
+                            // The unexplored point of a coarse grid that lies farthest from the own fleet.
+                            let lim = rt.arena_half - 900.0;
+                            (0..9)
+                                .flat_map(|i| (0..9).map(move |j| Vec3::new(-lim + 2.0 * lim * i as f32 / 8.0, 0.0, -lim + 2.0 * lim * j as f32 / 8.0)))
+                                .filter(|p| crate::tactical_ui::zone_check(&rt, player, crate::convert::bevy_to_sim(*p)) == Err("Area not explored"))
+                                .max_by(|a, b| a.distance(centroid).total_cmp(&b.distance(centroid)))
+                        }
+                    };
+                    if let Some(f) = focus
+                        && let Ok(mut c) = cams.single_mut()
+                    {
+                        st.drag_cam = Some(c.target_focus);
+                        c.target_focus = Vec3::new(f.x, c.target_focus.y, f.z);
+                        c.focus = c.target_focus;
+                        c.snap = true;
                     }
                 }
-                3 => {
-                    if let Some(p) = st.place_world.and_then(|w| cam.world_to_viewport(gt, w).ok()) {
-                        act = Some(Act::Move(p));
+                (12, Some(_), Some(ship)) => {
+                    // The drop point: a refused one (fog or the zone of an enemy structure) or an accepted one next to an own ship.
+                    let to_sim = |w: Vec3| crate::convert::bevy_to_sim(w);
+                    let target = match kind {
+                        DropKind::Valid => ships.0.values().filter(|s| s.side == player && !rt.catalog.ship(s.def).is_static).min_by_key(|s| s.id).and_then(|o| {
+                            [(120.0, 0.0), (-120.0, 0.0), (0.0, 120.0), (0.0, -120.0), (200.0, 0.0), (-200.0, 0.0), (0.0, 200.0), (0.0, -200.0)]
+                                .iter()
+                                .map(|(dx, dz)| o.pos + Vec3::new(*dx, 0.0, *dz))
+                                .find(|p| crate::tactical_ui::place_check(&rt, player, to_sim(*p), ship, 1).is_ok() && cam.world_to_viewport(gt, *p).is_ok_and(on_screen))
+                        }),
+                        DropKind::NoSpawn => ships.0.values().find(|s| s.side != player && rt.catalog.ship(s.def).is_static).and_then(|s| {
+                            [(120.0, 0.0), (-120.0, 0.0), (0.0, 120.0), (0.0, -120.0)]
+                                .iter()
+                                .map(|(dx, dz)| s.pos + Vec3::new(*dx, 0.0, *dz))
+                                .find(|p| crate::tactical_ui::zone_check(&rt, player, to_sim(*p)) == Err("Too close to an enemy structure") && cam.world_to_viewport(gt, *p).is_ok_and(on_screen))
+                        }),
+                        DropKind::Fog => (0..12).flat_map(|i| (0..6).map(move |j| (i, j))).find_map(|(i, j)| {
+                            let p = Vec2::new(vp.x * (0.35 + 0.045 * i as f32), vp.y * (0.12 + 0.08 * j as f32));
+                            let ray = cam.viewport_to_world(gt, p).ok()?;
+                            let d = ray.intersect_plane(Vec3::ZERO, InfinitePlane3d::new(Vec3::Y))?;
+                            let w = ray.get_point(d);
+                            (crate::tactical_ui::zone_check(&rt, player, to_sim(w)) == Err("Area not explored")).then_some(w)
+                        }),
+                    };
+                    st.drag_target = target.and_then(|w| cam.world_to_viewport(gt, w).ok());
+                    if st.drag_target.is_none() && kind != DropKind::Valid {
+                        // No enemy structure or no unexplored spot in view: nothing to drag onto (reported as not judged).
+                        verdict = Some((format!("{name} (not judged: no such spot in view)"), true));
+                    } else if st.drag_target.is_none() {
+                        verdict = Some((format!("{name} (no valid spot found)"), false));
+                    } else {
+                        act = Some(Act::Move(slot.unwrap_or_default()));
                     }
                 }
-                4 | 5 => act = click_at(t - 3, Vec2::ZERO, MouseButton::Left),
-                90 => {
-                    let after = reserve(&reinforce);
-                    let ok = st.reserve_before > after && armed.0.is_none();
+                (13, Some(_), _) => act = Some(Act::Down(MouseButton::Left)),
+                (15, ..) => act = st.drag_target.map(Act::Move),
+                (17, ..) => act = st.drag_target.map(|p| Act::Move(p + Vec2::new(1.0, 0.0))),
+                (24, ..) => {
+                    st.drag_ghost = reinforce.ghost;
+                    act = Some(Act::Up(MouseButton::Left));
+                }
+                (110, ..) => {
+                    let after = reserve_total(&reinforce);
+                    let ghost = st.drag_ghost;
+                    let ok = match kind {
+                        DropKind::Valid => ghost.is_some_and(|g| g.why_not.is_none()) && after < st.reserve_before,
+                        DropKind::NoSpawn => ghost.is_some_and(|g| g.why_not == Some("Too close to an enemy structure")) && after == st.reserve_before,
+                        DropKind::Fog => ghost.is_some_and(|g| g.why_not == Some("Area not explored")) && after == st.reserve_before,
+                    } && armed.0.is_none()
+                        && reinforce.ghost.is_none();
                     if !ok {
-                        info!("input-test:   reserve {} -> {after}, armed {:?}, spot {:?}", st.reserve_before, armed.0, st.place_world);
+                        info!("input-test:   ghost {ghost:?}, reserve {} -> {after}, armed {:?}, target {:?}", st.reserve_before, armed.0, st.drag_target);
                     }
-                    verdict = Some(("place-reinforcement".into(), ok));
+                    verdict = Some((name, ok));
                 }
                 _ => {}
             }
@@ -799,6 +876,14 @@ fn drive(
             _ => {}
         },
     }
+    if verdict.is_some()
+        && let Some(f) = st.drag_cam.take()
+        && let Ok(mut c) = cams.single_mut()
+    {
+        c.target_focus = f;
+        c.focus = f;
+        c.snap = true;
+    }
     if let Some((name, ok)) = verdict {
         info!("input-test: {name} {}", if ok { "ok" } else { "FAILED" });
         if !ok {
@@ -820,7 +905,8 @@ fn drive(
     match act {
         Some(Act::Move(p)) => {
             let physical = (p * window.scale_factor()).as_dvec2();
-            window.set_physical_cursor_position(Some(physical));
+            // Not through `DerefMut`: a change to the window would be synced to the real OS cursor by bevy_winit.
+            window.bypass_change_detection().set_physical_cursor_position(Some(physical));
             moved.write(CursorMoved { window: *entity, position: p, delta: None });
         }
         Some(Act::Down(b)) => {

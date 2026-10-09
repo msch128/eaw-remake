@@ -221,7 +221,9 @@ fn losses_make_room_under_the_unit_cap() {
 
 #[test]
 fn reinforcements_can_be_called_to_a_chosen_position_inside_the_zone() {
-    let cat = Catalog::from_defs(vec![ship("a", 1.0e6, 0.0, vec![]), ship("b", 1.0e6, 0.0, vec![])], vec![laser()]);
+    let mut seer = ship("a", 1.0e6, 0.0, vec![]);
+    seer.sensor_range = 1250.0;
+    let cat = Catalog::from_defs(vec![seer, ship("b", 1.0e6, 0.0, vec![])], vec![laser()]);
     let mut c = cfg();
     c.unit_cap = 100;
     let mut b = Battle::new(setup(cat, "a", "b", 1, 1, c));
@@ -229,17 +231,17 @@ fn reinforcements_can_be_called_to_a_chosen_position_inside_the_zone() {
     let (own, foe) = (b.ships.iter().find(|s| s.side == 0).unwrap().pos, b.ships.iter().find(|s| s.side == 1).unwrap().pos);
     let toward_enemy = (foe - own).normalized();
     let beside = Vec3::new(own.x + 600.0, own.y + 300.0, own.z);
-    // Near an own ship, far from the enemy: accepted.
+    // Seen by an own ship and outside the enemy structure's no-spawn zone: accepted.
     assert_eq!(b.reinforcement_zone_check(0, beside), Ok(()));
-    // Far from everything of its own.
+    // Outside every own sensor disc (fog of war).
     let far = own - toward_enemy * 3500.0;
-    assert!(matches!(b.reinforcement_zone_check(0, far), Err(CommandError::NotNearOwnForces | CommandError::OutsideBattleArea)), "{:?}", b.reinforcement_zone_check(0, far));
-    // Within 2000 of the enemy.
+    assert!(matches!(b.reinforcement_zone_check(0, far), Err(CommandError::NotVisible | CommandError::OutsideBattleArea)), "{:?}", b.reinforcement_zone_check(0, far));
+    // Inside the no-spawn zone of the enemy structure (2000, the estimate: the data has none).
     let near_enemy = foe + Vec3::new(500.0, 0.0, 0.0);
-    assert_eq!(b.reinforcement_zone_check(0, near_enemy), Err(CommandError::TooCloseToEnemy));
+    assert_eq!(b.reinforcement_zone_check(0, near_enemy), Err(CommandError::InNoSpawnZone));
     // Outside the map.
     assert_eq!(b.reinforcement_zone_check(0, Vec3::new(1.0e6, 0.0, 0.0)), Err(CommandError::OutsideBattleArea));
-    assert_eq!(b.command(0, Command::ReinforceAt { ship: a, count: 1, pos: near_enemy }), Err(CommandError::TooCloseToEnemy));
+    assert_eq!(b.command(0, Command::ReinforceAt { ship: a, count: 1, pos: near_enemy }), Err(CommandError::InNoSpawnZone));
     // The accepted call arrives after the delay, at the chosen point (on free space), facing the enemy.
     b.command(0, Command::ReinforceAt { ship: a, count: 2, pos: beside }).unwrap();
     let mut arrived = false;

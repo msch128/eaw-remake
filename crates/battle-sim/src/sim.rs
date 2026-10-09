@@ -584,30 +584,17 @@ impl Battle {
         !self.config.fog_of_war || s.side == side || side >= 4 || self.catalog.ship(s.def).is_static || self.time <= s.seen_until[side as usize]
     }
 
-    /// Whether `side` may call in reinforcements at `pos`: inside the battle area, within `reinforce_zone` of one of its ships or structures that is alive,
-    /// and farther than `reinforce_zone` from every enemy ship or structure. The UI uses it to colour the reinforcement overlay.
+    /// Whether `side` may call in reinforcements at `pos` (see [`crate::placement_check`]): inside the battle area, outside the no-spawn zones of enemy
+    /// structures and in an area the side sees. The UI evaluates the same rule on the snapshot to colour the reinforcement ghost.
     pub fn reinforcement_zone_check(&self, side: u8, pos: Vec3) -> Result<(), CommandError> {
-        let zone = self.config.reinforce_zone;
-        let half = self.config.half_size - 300.0;
-        if pos.x.abs() > half || pos.y.abs() > half {
-            return Err(CommandError::OutsideBattleArea);
-        }
-        let (mut near_own, mut nearest_enemy) = (false, f32::MAX);
-        for s in self.ships.iter().filter(|s| s.alive && !s.retreated) {
-            let d = s.pos.dist(pos);
-            if s.side == side {
-                near_own |= d <= zone;
-            } else {
-                nearest_enemy = nearest_enemy.min(d);
-            }
-        }
-        if nearest_enemy <= zone {
-            return Err(CommandError::TooCloseToEnemy);
-        }
-        if !near_own {
-            return Err(CommandError::NotNearOwnForces);
-        }
-        Ok(())
+        let units: Vec<crate::PlacementUnit> = self
+            .ships
+            .iter()
+            .filter(|s| s.alive && !s.retreated)
+            .map(|s| crate::PlacementUnit::new(self.catalog.ship(s.def), s.side, s.pos, self.config.no_spawn_radius))
+            .collect();
+        let reveals: Vec<(Vec3, f32)> = self.reveals.iter().filter(|r| r.0 == side).map(|r| (r.1, r.2)).collect();
+        crate::placement_check(self.config.half_size - 300.0, self.config.fog_of_war, side, pos, &units, &reveals)
     }
 
     /// Population of everything of `side` that is alive (or on its way) now, counted per unit (a squadron once while any of its fighters lives).

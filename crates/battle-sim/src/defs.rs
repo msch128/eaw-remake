@@ -377,6 +377,8 @@ pub struct ShipDef {
     pub bonuses: Vec<BonusDef>,
     /// `Space_FOW_Reveal_Range`: how far this ship sees (fog of war); 1250 where the data gives none.
     pub sensor_range: f32,
+    /// `Reinforcement_Prevention_Radius` of a structure: enemy reinforcements may not arrive this close (0 = the data has none; `BattleConfig::no_spawn_radius` applies).
+    pub no_spawn_radius: f32,
     /// True for stations and structures (never move).
     pub is_static: bool,
     /// True for `Squadron` definitions, which expand into `members` when spawned.
@@ -1144,10 +1146,17 @@ impl Catalog {
             _ => false,
         };
 
+        let no_spawn_radius = match src {
+            Source::Unit(u) => u.fields.get("reinforcement_prevention_radius").and_then(|v| v.trim().parse::<f32>().ok()),
+            Source::Structure(s) => s.fields.get("reinforcement_prevention_radius").and_then(|v| v.trim().parse::<f32>().ok()),
+            Source::Base(b) => Some(b.reinforcement_prevention_radius),
+        }
+        .filter(|&r| r > 0.0)
+        .unwrap_or(0.0);
         let sensor_range = match src {
             Source::Unit(u) => u.fields.get("space_fow_reveal_range").and_then(|v| v.trim().parse::<f32>().ok()),
             Source::Structure(s) => s.fields.get("space_fow_reveal_range").and_then(|v| v.trim().parse::<f32>().ok()),
-            _ => None,
+            Source::Base(b) => Some(b.fow_reveal_range),
         }
         .filter(|&r| r > 0.0)
         .unwrap_or(1250.0);
@@ -1218,6 +1227,7 @@ impl Catalog {
             redirects,
             bonuses,
             sensor_range,
+            no_spawn_radius,
             class,
             is_static,
             is_squadron,

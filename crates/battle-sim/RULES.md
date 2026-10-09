@@ -165,9 +165,10 @@ Source: `XML/AI/GoalFunctions/Remake_SpaceCombat.xml`, `PerceptualEquations/Rema
 
 ## 7. Positional reinforcements, fog of war, more abilities (see ABILITIES.md)
 
-* `Command::ReinforceAt { ship, count, pos }`: allowed when `pos` is inside the battle area, within `BattleConfig::reinforce_zone` (2000) of one of the side's living ships or structures and farther than that from
-  every enemy (the 2000 comes from the Remake AI equations `Target_Is_Near_Friendly_Unit` / `Target_Is_Not_Close_To_Enemy_Units`; the engine's own zone is not in the data, so it is an estimate); errors
-  `OutsideBattleArea`, `NotNearOwnForces`, `TooCloseToEnemy`. `Battle::reinforcement_zone_check(side, pos)` is the same test for an overlay (green / red). The ships arrive after `reinforce_delay` (5 s) at free space
+* `Command::ReinforceAt { ship, count, pos }`: allowed when `pos` is inside the battle area, outside the no-spawn zone of every enemy structure and inside an area the side sees (`placement.rs`, shared with the UI).
+  The zone radius is the structure's `Reinforcement_Prevention_Radius` where the data has it (only the ground planet shield does), else `BattleConfig::no_spawn_radius` = 2000 (**estimate**, the number the Remake AI
+  equations `Target_Is_Near_Friendly_Unit` / `Target_Is_Not_Close_To_Enemy_Units` use for "near"); "seen" = within `Space_FOW_Reveal_Range` of an own ship or structure (or a ping area), always with fog of war off;
+  errors `OutsideBattleArea`, `InNoSpawnZone`, `NotVisible`, plus `UnitCap`. Enemy mobile ships do not block a spot. `Battle::reinforcement_zone_check(side, pos)` is the same test for an overlay (green / red). The ships arrive after `reinforce_delay` (5 s) at free space
   (nothing within `reinforce_clearance` = `Space_Reinforcement_Collision_Check_Distance` 150; they move out in rings when the spot is taken), facing the nearest enemy. `Reinforce` without a position still uses the side's point.
 * Fog of war (`BattleConfig::fog_of_war`, default on): a ship sees `Space_FOW_Reveal_Range` (`ShipDef::sensor_range`, 1250 where missing); an enemy it saw stays visible for `fog_linger` = `SpaceFOWRegrowTime` 15 s.
   Targeting (`scan`) only considers visible enemies, so idle and attack-moving ships no longer know where the enemy is; the AI respects it because it uses the same scan. `Battle::is_visible_to(side, ship)` for the renderer.

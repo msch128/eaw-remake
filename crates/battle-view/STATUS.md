@@ -220,3 +220,26 @@ Add `battle-view`, `galaxy-sim` (already there through galaxy-play) and `eaw-ui`
 - Autocast live proof: smoke scenario `windowed-battle-input-autocast` (`--grant-unit X4 --at "The Yavin System"`: the X4 has `SENSOR_JAMMING` with `Supports_Autofire`). `input_test` clicks that ship (`select-autocast-unit`), right-clicks its ability button and sees `ShipSnap::autocast` flip (`autocast-toggle`); 29 checks PASS. Without such a unit both steps pass vacuously (their log line says so).
 - The unit panel adds "Squadrons in reserve: N" for carriers / stations (`ShipSnap::reserve_squadrons`).
 - `input_test` (30 checks): `autocast-toggle-and-ring` also counts the gold `AutocastRing` on the bar (1 after switching on); `carrier-panel-shows-reserve` hovers a ship with squadrons in reserve (spot away from its reticles, 140 frames dwell) and expects "in reserve" in the unit panel (reads "not judged" when a neighbouring fighter wins the pick). Not proven: that an autocast ability then fires by itself (sensor jamming needs enemy missiles; that is a battle-sim check).
+
+## Tactical round 6 (2026-10-09): shield flash, hardpoint markers, reinforcement drag and drop
+- **U17 shield flash:** `effects::impact_effects` only triggers `ShieldHit` while the ship's shield in the displayed snapshot is above 0, and `effects::hide_downed_shields` hides the
+  shield meshes of a ship whose shield is down (a flash still fading when the shield broke). No shield, no bubble: only the hull impact particles remain.
+- **U15 hardpoint markers:** `control::hardpoint_world` used the sim offset (`HpDef::offset`, bone position in battle space) without the model's `Scale_Factor` and, for hardpoints whose bone is
+  missing in the model, a hash-spread guess. `update_ships` now stores `ShipRender::hp_pos`, the world position of every hardpoint's attachment bone from the loaded model
+  (`GlobalTransform` of the bone entity: includes scale, bank and the arrival animation); the sim offset times `ShipVisual::scale` is only the fallback while the model loads.
+  Check render: `SP_DEMO_PLAYER=1 SP_DEMO_FOCUS_TARGET=<dist> battle_demo --offscreen out.png --overlay ...` (player side 1 so the Empire ISD is the hovered enemy; `--station Rebel_Star_Base_2` with player 0 for a station).
+- **U14 reinforcements (drag and drop):** the `b_reinforcement` button next to the minimap opens the EaW reserve window top left (`I_Main_Reinforce`): population `N/max` (`Snapshot::pop` =
+  `Battle::pop_in_play`, the number the unit cap counts) and the reserve icons stacked `xN`. Pressing a slot picks the unit (`reinforce_drag`); holding the button and moving into the battle drags it:
+  a ghost of the unit (its model, team colour green or red, plus a ring and the reason) follows the cursor; releasing it over the map on an accepted spot sends `Command::ReinforceAt`, on a refused
+  spot the pick ends and the unit stays in the reserve; releasing over the interface cancels. A plain click on the slot still picks it for a later click on the map.
+  While a unit is carried the no-spawn zones of enemy structures are drawn as red hatched circles (`draw_no_spawn_zone`).
+- **Placement rule** (`battle_sim::placement_check`, shared by `Battle::reinforcement_zone_check` and the view's `tactical_ui::zone_check` / `place_check`): inside the battle area; outside the no-spawn
+  zone of every enemy structure (radius = the structure's `Reinforcement_Prevention_Radius` where the data has one, else `BattleConfig::no_spawn_radius` = 2000, an **estimate**: none of the space structures
+  in the data has the tag, only the ground planet shield (700)); inside an area the side sees (sensor disc `Space_FOW_Reveal_Range` of one of its ships or structures, or a revealed ping area; with fog of war
+  off everywhere); population: pop in play + cost <= unit cap. Enemy mobile ships no longer block a spot (the old 2000 radius around every enemy ship and the "near own ships" rule are gone; the sensor disc
+  replaces the latter). "Explored" = currently visible: the sim keeps no persistent explored map. The view does not know revealed ping areas, so the ghost can be red where the sim would accept.
+- **Hyperspace slot:** `battle_play::apply_hyperspace_slot` (only with `SP_HYPERSPACE_SLOT=1`, because the galaxy request has no slot yet): the first unit group of the player's side stays in the battle
+  (carried fighters launch with it), every other unit group moves to the reserve. Without the variable the start rule is unchanged (everything up to the faction's population cap, the rest is the
+  reserve). The galaxy side (drag into the slot, `TacticalSide` flag) is a later task; a stack of identical units counts as one slot.
+- `input_test` (36 checks): `reinforcement-drag-Fog` (drag onto ground outside every sensor disc: red ghost "Area not explored", unit stays in the reserve), `reinforcement-drag-NoSpawn` (into an enemy
+  structure's zone; reads "not judged" when the scenario has no enemy structure), `reinforcement-drag-Valid` (next to an own ship: green ghost, reserve count drops).

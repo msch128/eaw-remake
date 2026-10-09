@@ -28,6 +28,7 @@ mod arena;
 mod battle;
 mod defs;
 mod math;
+mod placement;
 pub mod nav;
 mod rng;
 mod sim;
@@ -42,5 +43,6 @@ pub use defs::{BonusDef, CombatMod, ModKind, HealDef, CorruptDef, RedirectDef, S
 };
 pub use arena::{Arena, Marker, Obstacle};
 pub use math::Vec3;
+pub use placement::{no_spawn_zones, placement_check, PlacementUnit};
 pub use rng::Rng;
 pub use sim::{setup, simulate};

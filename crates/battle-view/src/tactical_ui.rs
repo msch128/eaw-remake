@@ -44,7 +44,7 @@ impl Plugin for TacticalUiPlugin {
                 spawn_bar.run_if(resource_exists::<crate::BattleSession>.and_then(not(resource_exists::<TacticalBarSpawned>))),
                 remove_reinforce.run_if(resource_removed::<BattleRuntime>),
                 remove_bar.run_if(resource_removed::<BattleRuntime>.or_eager(resource_removed::<crate::BattleSession>)),
-                (sync_data, sync_overlays, handle_clicks, ability_keys, autocast_toggle, autocast_rings, ability_at, hardpoint_clicks, reinforce_clicks, reinforce_place, reinforce_events, reinforce_panel, sync_minimap, minimap_pan, command_buttons_state, retreat_banner).chain().run_if(resource_exists::<BattleRuntime>),
+                (sync_data, sync_overlays, handle_clicks, ability_keys, autocast_toggle, autocast_rings, ability_at, hardpoint_clicks, reinforce_drag, reinforce_clicks, reinforce_place, reinforce_events, reinforce_panel, sync_minimap, minimap_pan, command_buttons_state, retreat_banner).chain().run_if(resource_exists::<BattleRuntime>),
             )
                 .chain(),
         );
@@ -203,7 +203,7 @@ fn sync_data(
         focus: tac.focus.min(selection.len().saturating_sub(1)),
         selection,
         reinforcement_points: (!reinforce.rows.is_empty()).then(|| reinforce.rows.iter().map(|r| r.2).sum()),
-        pop: Some((status.alive.get(player as usize).copied().unwrap_or(0), rt.unit_cap.max(0) as u32)),
+        pop: Some((rt.cur.as_ref().and_then(|c| c.pop.get(player as usize).copied()).unwrap_or(0).max(0) as u32, rt.unit_cap.max(0) as u32)),
         retreat,
     };
     if *tac != new {
@@ -387,6 +387,23 @@ pub struct ReinforceUi {
     placing: Option<(usize, bool)>,
     /// The cursor label while placing.
     label: Option<Entity>,
+    /// Cursor position where the press on a reserve slot began while the button is still down (a drag from the slot into the battle).
+    drag_from: Option<Vec2>,
+    /// A drag from a slot was released over the map this frame: the unit is called in if the spot is allowed, and the pick ends either way.
+    dropped: bool,
+    /// What the ghost shows at the cursor this frame (`None` while no unit is being placed or the cursor is over the interface).
+    pub ghost: Option<Ghost>,
+    /// The ghost model: entity, whether it was built for an accepted spot (the team colour shows it), reserve row.
+    ghost_model: Option<(Entity, bool, usize)>,
+}
+
+/// Verdict of the placement rule at the cursor.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Ghost {
+    /// Battle plane point under the cursor (Bevy space).
+    pub ground: Vec3,
+    /// Placement is allowed: green ghost. Otherwise red, with the reason.
+    pub why_not: Option<&'static str>,
 }
 
 /// Reads the reserve of the player's side from the request.
@@ -410,7 +427,12 @@ fn remove_reinforce(mut commands: Commands, mut ui: ResMut<ReinforceUi>, mut pan
     }
     ui.rows.clear();
     ui.placing = None;
+    ui.drag_from = None;
+    ui.ghost = None;
     if let Some(e) = ui.label.take() {
+        commands.entity(e).try_despawn();
+    }
+    if let Some((e, ..)) = ui.ghost_model.take() {
         commands.entity(e).try_despawn();
     }
     panel.slots.retain(|k, _| !k.starts_with("r_"));
@@ -425,6 +447,47 @@ fn reserve_slot(name: &str) -> Option<usize> {
     }
     let (row, col): (usize, usize) = (digits[..2].parse().ok()?, digits[2..].parse().ok()?);
     Some(row * 4 + col)
+}
+
+/// Pressing a reserve slot picks its unit at once: holding the button and moving into the battle drags it (the ghost follows the cursor, the
+/// button released over the map places it); a plain click on the slot keeps it picked for a later click on the map. A drag released over the
+/// interface cancels.
+fn reinforce_drag(
+    mouse: Res<ButtonInput<MouseButton>>,
+    keys: Res<ButtonInput<KeyCode>>,
+    pointer: Res<control::Pointer>,
+    block: Res<control::UiBlock>,
+    slots: Query<(&eaw_ui::EawButton, &Interaction)>,
+    mut ui: ResMut<ReinforceUi>,
+    mut armed: ResMut<control::ArmedOrder>,
+) {
+    if ui.root.is_none() {
+        ui.drag_from = None;
+        return;
+    }
+    if mouse.just_pressed(MouseButton::Left) {
+        let hit = slots.iter().find_map(|(b, i)| (*i == Interaction::Pressed).then(|| reserve_slot(&b.name)).flatten());
+        if let Some(idx) = hit
+            && ui.rows.get(idx).is_some_and(|r| r.2 > 0)
+        {
+            let shift = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
+            ui.placing = Some((idx, shift));
+            ui.drag_from = pointer.cursor;
+            armed.0 = Some(control::ArmedKind::Reinforce);
+        }
+    }
+    if mouse.just_released(MouseButton::Left)
+        && let Some(from) = ui.drag_from.take()
+        && let Some(now) = pointer.cursor
+        && now.distance(from) > 12.0
+    {
+        if block.0 {
+            ui.placing = None;
+            armed.0 = None;
+        } else {
+            ui.dropped = true;
+        }
+    }
 }
 
 /// Opens and closes the window, and calls units in.
@@ -475,7 +538,6 @@ fn reinforce_clicks(
 fn reinforce_panel(
     ui: Res<ReinforceUi>,
     rt: Res<BattleRuntime>,
-    status: Res<BattleStatus>,
     settings: Res<BattleViewSettings>,
     assets: Option<Res<EawUiAssets>>,
     mut panel: ResMut<PanelData>,
@@ -490,7 +552,7 @@ fn reinforce_panel(
             Some((object, _, left)) => {
                 let slot = PanelSlot {
                     icon: game.as_deref().and_then(|g| eaw_ui::unit_icon(g, object)).unwrap_or_default(),
-                    label: left.to_string(),
+                    label: if *left > 1 { format!("x{left}") } else { String::new() },
                     disabled: *left == 0,
                     ..default()
                 };
@@ -505,9 +567,8 @@ fn reinforce_panel(
             }
         }
     }
-    let alive = status.alive.get(settings.player_side as usize).copied().unwrap_or(0);
-    let cap = rt.request.as_ref().and_then(|r| r.sides.get(settings.player_side as usize)).map_or(0, |s| s.unit_cap);
-    let text = format!("{alive}/{cap}");
+    let pop = rt.cur.as_ref().and_then(|c| c.pop.get(settings.player_side as usize).copied()).unwrap_or(0);
+    let text = format!("{pop}/{}", rt.unit_cap);
     if panel.texts.get("r_pop_text") != Some(&text) {
         panel.set_text("r_pop_text", text);
     }
@@ -964,35 +1025,80 @@ fn hardpoint_clicks(
     }
 }
 
-/// Why a reinforcement position is refused (the sim answers with these `CommandError`s; this is the same rule evaluated on the
-/// displayed snapshot so that the cursor can show it before the click): inside the battle area, within `reinforce_zone` of an own ship
-/// or structure, farther than `reinforce_zone` from every enemy.
+/// Why the placement rule refuses a position (the sim answers with these `CommandError`s).
+fn refusal_text(e: battle_sim::CommandError) -> &'static str {
+    use battle_sim::CommandError as E;
+    match e {
+        E::OutsideBattleArea => "Outside the battle area",
+        E::InNoSpawnZone => "Too close to an enemy structure",
+        E::NotVisible => "Area not explored",
+        _ => "Not allowed here",
+    }
+}
+
+/// Everything the placement rule looks at, taken from the displayed snapshot.
+fn placement_units(rt: &BattleRuntime) -> Vec<battle_sim::PlacementUnit> {
+    rt.cur
+        .as_ref()
+        .map(|c| c.ships.iter().map(|s| battle_sim::PlacementUnit::of(&rt.catalog, s.def, s.side, s.pos, rt.no_spawn_radius)).collect())
+        .unwrap_or_default()
+}
+
+/// The area rules of `Battle::reinforcement_zone_check` evaluated on the displayed snapshot so that the ghost can show them before the click: inside
+/// the battle area, outside the no-spawn zones of enemy structures, inside an area the side sees (sensor discs of its ships and structures).
 pub(crate) fn zone_check(rt: &BattleRuntime, side: u8, pos: battle_sim::Vec3) -> Result<(), &'static str> {
-    let Some(cur) = rt.cur.as_ref() else { return Err("Not ready") };
-    let half = rt.arena_half - 300.0;
-    if pos.x.abs() > half || pos.y.abs() > half {
-        return Err("Outside the battle area");
+    if rt.cur.is_none() {
+        return Err("Not ready");
     }
-    let (mut near_own, mut nearest_enemy) = (false, f32::MAX);
-    for s in &cur.ships {
-        let d = s.pos.dist(pos);
-        if s.side == side {
-            near_own |= d <= rt.reinforce_zone;
-        } else {
-            nearest_enemy = nearest_enemy.min(d);
-        }
-    }
-    if nearest_enemy <= rt.reinforce_zone {
-        return Err("Too close to the enemy");
-    }
-    if !near_own {
-        return Err("Must be near your own ships or structures");
+    battle_sim::placement_check(rt.arena_half - 300.0, rt.fog_of_war, side, pos, &placement_units(rt), &[]).map_err(refusal_text)
+}
+
+/// [`zone_check`] plus the population cap for `count` units of `ship` (what the sim checks in `Command::ReinforceAt`).
+pub(crate) fn place_check(rt: &BattleRuntime, side: u8, pos: battle_sim::Vec3, ship: u32, count: u32) -> Result<(), &'static str> {
+    zone_check(rt, side, pos)?;
+    let pop = rt.cur.as_ref().and_then(|c| c.pop.get(side as usize).copied()).unwrap_or(0);
+    if pop + rt.catalog.ship(ship).population * count as i32 > rt.unit_cap {
+        return Err("Population cap reached");
     }
     Ok(())
 }
 
-/// Reinforcement placement: after a click on a reserve slot the cursor shows where the wave may arrive (green ring, red when the position is
-/// refused, with the reason); a left click there calls the unit in (hyperspace arrival after the reinforcement delay), Right click / Esc cancels.
+/// The no-spawn zones (Bevy centre, radius) that enemy structures cast on `side`.
+pub(crate) fn no_spawn_zones(rt: &BattleRuntime, side: u8) -> Vec<(Vec3, f32)> {
+    let units = placement_units(rt);
+    battle_sim::no_spawn_zones(side, &units).into_iter().map(|(c, r)| (crate::convert::sim_to_bevy(c), r)).collect()
+}
+
+/// Draws a no-spawn zone as the original does: a red rim with diagonal hatching inside (`y` is the battle plane).
+fn draw_no_spawn_zone(gizmos: &mut Gizmos, centre: Vec3, radius: f32, y: f32) {
+    let red = Color::srgba(1.0, 0.2, 0.15, 0.9);
+    let faint = Color::srgba(1.0, 0.2, 0.15, 0.45);
+    let c = Vec3::new(centre.x, y, centre.z);
+    gizmos.circle(Isometry3d::new(c, Quat::from_rotation_x(std::f32::consts::FRAC_PI_2)), radius, red).resolution(96);
+    gizmos.circle(Isometry3d::new(c, Quat::from_rotation_x(std::f32::consts::FRAC_PI_2)), radius * 0.985, red).resolution(96);
+    // Hatching: lines at 45 degrees, spacing a twelfth of the radius, each cut at the rim.
+    let dir = Vec3::new(1.0, 0.0, 1.0).normalize();
+    let perp = Vec3::new(-dir.z, 0.0, dir.x);
+    let step = radius / 12.0;
+    let mut d = -radius + step * 0.5;
+    while d < radius {
+        let half = (radius * radius - d * d).max(0.0).sqrt();
+        let mid = c + perp * d;
+        gizmos.line(mid - dir * half, mid + dir * half, faint);
+        d += step;
+    }
+}
+
+/// Model of a reserve unit for its ghost (a squadron shows its first fighter type).
+fn ghost_model_path(rt: &BattleRuntime, ship: u32) -> Option<String> {
+    let def = rt.catalog.ship(ship);
+    def.model.clone().or_else(|| def.members.first().and_then(|m| rt.catalog.ship(m.0).model.clone()))
+}
+
+/// Reinforcement placement: after a press (drag) or click on a reserve slot the cursor carries a ghost of the unit (its model with a green team colour
+/// where the wave may arrive, red where the rule refuses, plus a ring and the reason); while it is carried the no-spawn zones of enemy structures are drawn
+/// as red hatched areas. Releasing the dragged button (or a left click) on an accepted spot calls the unit in (hyperspace arrival after the reinforcement
+/// delay). Right click / Esc cancels.
 #[allow(clippy::too_many_arguments)]
 fn reinforce_place(
     mut ui: ResMut<ReinforceUi>,
@@ -1012,7 +1118,12 @@ fn reinforce_place(
     let placing = ui.placing.filter(|_| armed.0 == Some(control::ArmedKind::Reinforce));
     let Some((idx, all)) = placing else {
         ui.placing = None;
+        ui.dropped = false;
+        ui.ghost = None;
         if let Some(e) = ui.label.take() {
+            commands.entity(e).try_despawn();
+        }
+        if let Some((e, ..)) = ui.ghost_model.take() {
             commands.entity(e).try_despawn();
         }
         return;
@@ -1022,6 +1133,7 @@ fn reinforce_place(
         return;
     };
     let player = settings.player_side;
+    let count = if all { row.2 } else { 1 };
     let label = match ui.label {
         Some(e) => e,
         None => {
@@ -1042,44 +1154,85 @@ fn reinforce_place(
         }
     };
     if settings.synthetic_pointer {
-        // Scripted offscreen runs have no mouse: the wave goes to the first spot next to an own ship that the zone rule accepts.
+        // Scripted offscreen runs have no mouse: the wave goes to the first spot next to an own ship that the placement rule accepts.
         let spot = ships.0.values().filter(|s| s.side == player && !rt.catalog.ship(s.def).is_static).min_by_key(|s| s.id).and_then(|o| {
             [(300.0, 0.0), (-300.0, 0.0), (0.0, 300.0), (0.0, -300.0), (600.0, 0.0), (-600.0, 0.0), (0.0, 600.0), (0.0, -600.0)]
                 .iter()
                 .map(|(dx, dz)| crate::convert::bevy_to_sim(o.pos + Vec3::new(*dx, 0.0, *dz)))
-                .find(|p| zone_check(&rt, player, *p).is_ok())
+                .find(|p| place_check(&rt, player, *p, row.1, count).is_ok())
         });
         if let Some(pos) = spot {
-            rt.command(player, Command::ReinforceAt { ship: row.1, count: if all { row.2 } else { 1 }, pos });
+            rt.command(player, Command::ReinforceAt { ship: row.1, count, pos });
             info!("reinforcements: placing {} at {pos:?} (scripted)", row.0);
             armed.0 = None;
         }
         return;
     }
+    let y = hover.ground.map_or(0.0, |g| g.y);
+    for (centre, radius) in no_spawn_zones(&rt, player) {
+        draw_no_spawn_zone(&mut gizmos, centre, radius, y);
+    }
     let (Some(ground), Some(cursor)) = (hover.ground, pointer.cursor) else { return };
     if block.0 {
+        ui.ghost = None;
         if let Ok((mut n, ..)) = labels.get_mut(label) {
             n.display = Display::None;
+        }
+        if let Some((e, ..)) = ui.ghost_model.take() {
+            commands.entity(e).try_despawn();
         }
         return;
     }
     let sim_pos = crate::convert::bevy_to_sim(ground);
-    let verdict = zone_check(&rt, player, sim_pos);
+    let verdict = place_check(&rt, player, sim_pos, row.1, count);
     let ok = verdict.is_ok();
+    ui.ghost = Some(Ghost { ground, why_not: verdict.err() });
     let colour = if ok { Color::srgb(0.3, 1.0, 0.4) } else { Color::srgb(1.0, 0.35, 0.3) };
-    gizmos.circle(Isometry3d::new(ground, Quat::from_rotation_x(std::f32::consts::FRAC_PI_2)), rt.reinforce_clearance.max(60.0), colour).resolution(48);
+    let def = rt.catalog.ship(row.1);
+    let ring = (def.radius * rt.visuals.ship(row.1).scale).max(rt.reinforce_clearance).max(60.0);
+    gizmos.circle(Isometry3d::new(ground, Quat::from_rotation_x(std::f32::consts::FRAC_PI_2)), ring, colour).resolution(48);
+    // The ghost model faces the nearest enemy (as the arriving wave will).
+    let facing = rt
+        .cur
+        .as_ref()
+        .and_then(|c| c.ships.iter().filter(|s| s.side != player).min_by(|a, b| a.pos.dist(sim_pos).total_cmp(&b.pos.dist(sim_pos))))
+        .map_or(0.0, |s| (s.pos.y - sim_pos.y).atan2(s.pos.x - sim_pos.x));
+    let rotation = crate::convert::ship_rotation(facing);
+    match ui.ghost_model {
+        Some((e, built_ok, built_idx)) if built_ok == ok && built_idx == idx => {
+            commands.queue(move |world: &mut World| {
+                if let Some(mut tf) = world.get_mut::<Transform>(e) {
+                    tf.translation = ground;
+                    tf.rotation = rotation;
+                }
+            });
+        }
+        old => {
+            if let Some((e, ..)) = old {
+                commands.entity(e).try_despawn();
+            }
+            ui.ghost_model = ghost_model_path(&rt, row.1).map(|path| {
+                let e = commands
+                    .spawn((
+                        crate::BattleEntity,
+                        Name::new("reinforcement ghost"),
+                        alamo_render::AlamoModel::new(path).with_team_color(colour),
+                        Transform { translation: ground, rotation, scale: Vec3::splat(rt.visuals.ship(row.1).scale) },
+                    ))
+                    .id();
+                (e, ok, idx)
+            });
+        }
+    }
     let name = assets
-        .and_then(|a| {
-            let def = rt.catalog.ship(row.1);
-            def.text_id.as_deref().and_then(|k| a.text.get(k)).filter(|t| !t.is_empty()).map(str::to_string)
-        })
+        .and_then(|a| def.text_id.as_deref().and_then(|k| a.text.get(k)).filter(|t| !t.is_empty()).map(str::to_string))
         .unwrap_or_else(|| row.0.clone());
     if let Ok((mut node, mut text, mut tc)) = labels.get_mut(label) {
         node.display = Display::Flex;
         node.left = Val::Px((cursor.x + 18.0) / scale.0);
         node.top = Val::Px((cursor.y + 14.0) / scale.0);
         let msg = match verdict {
-            Ok(()) => format!("{name}: click to call in{}", if all { " (all)" } else { "" }),
+            Ok(()) => format!("{name}: release to call in{}", if all { " (all)" } else { "" }),
             Err(why) => format!("{name}: {why}"),
         };
         if text.0 != msg {
@@ -1087,11 +1240,15 @@ fn reinforce_place(
         }
         tc.0 = colour;
     }
-    if pointer.left_released && ok {
-        let count = if all { row.2 } else { 1 };
-        // The count drops when the simulation reports the call (`ReinforcementsCalled`).
-        rt.command(player, Command::ReinforceAt { ship: row.1, count, pos: sim_pos });
-        info!("reinforcements: placing {count} x {} at {sim_pos:?}", row.0);
+    let dropped = std::mem::take(&mut ui.dropped);
+    if (pointer.left_released && ok) || dropped {
+        if let Err(why) = verdict {
+            info!("reinforcements: drop of {} refused: {why}", row.0);
+        } else {
+            // The count drops when the simulation reports the call (`ReinforcementsCalled`).
+            rt.command(player, Command::ReinforceAt { ship: row.1, count, pos: sim_pos });
+            info!("reinforcements: placing {count} x {} at {sim_pos:?}", row.0);
+        }
         armed.0 = None;
     }
 }

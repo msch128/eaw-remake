@@ -47,9 +47,10 @@ pub struct BattleConfig {
     pub stealth_detection: f32,
     /// Seconds before reinforcements arrive (`Skirmish_Reinforcement_Delay_Frames` 150 at 30 fps).
     pub reinforce_delay: f32,
-    /// A reinforcement position must be within this distance of an own ship or structure and farther than it from every enemy (the Remake AI equations
-    /// `Target_Is_Near_Friendly_Unit` / `Target_Is_Not_Close_To_Enemy_Units` use 2000; the engine zone itself is not in the data).
-    pub reinforce_zone: f32,
+    /// Radius of the no-spawn zone around every enemy structure when its data has no `Reinforcement_Prevention_Radius` (none of the space structures
+    /// has one; the Remake AI equations
+    /// `Target_Is_Near_Friendly_Unit` / `Target_Is_Not_Close_To_Enemy_Units` use 2000 for "near", so that number is the estimate).
+    pub no_spawn_radius: f32,
     /// Free space needed at the arrival point (`Space_Reinforcement_Collision_Check_Distance`).
     pub reinforce_clearance: f32,
     /// Use rayon for per-entity work.
@@ -92,7 +93,7 @@ impl Default for BattleConfig {
             fog_of_war: true,
             fog_linger: 15.0,
             stealth_detection: 500.0,
-            reinforce_zone: 2000.0,
+            no_spawn_radius: 2000.0,
             reinforce_clearance: 150.0,
             parallel: true,
             shield_regen_delay: 0.0,
@@ -277,10 +278,10 @@ pub enum CommandError {
     BattleOver,
     /// An enemy interdictor prevents retreating.
     RetreatBlocked,
-    /// The chosen reinforcement position is not near any own ship or structure.
-    NotNearOwnForces,
-    /// The chosen reinforcement position is too close to the enemy.
-    TooCloseToEnemy,
+    /// The chosen reinforcement position is not in an area the side can see (fog of war).
+    NotVisible,
+    /// The chosen reinforcement position lies inside the no-spawn zone of an enemy structure.
+    InNoSpawnZone,
     /// The chosen reinforcement position is outside the battle area.
     OutsideBattleArea,
 }

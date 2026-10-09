@@ -350,8 +350,8 @@ pub struct BattleRuntime {
     pub retreat_countdown: f32,
     /// Population cap per side.
     pub unit_cap: i32,
-    /// A reinforcement position must be within this distance of an own ship or structure and farther from every enemy.
-    pub reinforce_zone: f32,
+    /// Default radius of the no-spawn zone around an enemy structure (`BattleConfig::no_spawn_radius`).
+    pub no_spawn_radius: f32,
     /// Free space needed at the arrival point.
     pub reinforce_clearance: f32,
     /// Half the side of the battle area (sim units).
@@ -516,8 +516,8 @@ fn start_battle(
     let start_alive: Vec<u32> = (0..battle.side_count()).map(|s| battle.alive_count(s as u8) as u32).collect();
     let (retreat_countdown, unit_cap) = (battle.config().retreat_countdown, battle.config().unit_cap);
     let dt = battle.config().dt;
-    let (reinforce_zone, reinforce_clearance, arena_half, fog_of_war) =
-        (battle.config().reinforce_zone, battle.config().reinforce_clearance, battle.config().half_size, battle.config().fog_of_war);
+    let (no_spawn_radius, reinforce_clearance, arena_half, fog_of_war) =
+        (battle.config().no_spawn_radius, battle.config().reinforce_clearance, battle.config().half_size, battle.config().fog_of_war);
     let sim = SimHandle::spawn(battle);
     sim.request(2);
     let l = &session.scene.lights;
@@ -608,7 +608,7 @@ fn start_battle(
         start_alive,
         retreat_countdown,
         unit_cap,
-        reinforce_zone,
+        no_spawn_radius,
         reinforce_clearance,
         arena_half,
         fog_of_war,
