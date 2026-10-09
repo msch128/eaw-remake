@@ -397,6 +397,9 @@ pub struct ShipDef {
     pub radius: f32,
     /// Radius of the model (bones) before the class clamp; stations and big ships are larger than the collision radius.
     pub model_extent: f32,
+    /// Distance of the farthest destroyable hardpoint from the centre (x1.05): a projectile hits the unit within `max(radius, hardpoint_reach)` of its path, so shots aimed at an outlying hardpoint of a
+    /// tall station do not fly past it (the collision radius is clamped and was smaller than the model).
+    pub hardpoint_reach: f32,
     /// Maximum speed, units per second.
     pub max_speed: f32,
     /// Acceleration, units per second squared.
@@ -1265,6 +1268,7 @@ impl Catalog {
             shield_armor: sarmor.as_deref().and_then(|a| self.damage.armor_index(a)),
             radius,
             model_extent,
+            hardpoint_reach: hardpoints.iter().filter(|h| h.destroyable).map(|h| h.offset.len()).fold(0.0f32, f32::max) * 1.05,
             max_speed,
             accel,
             turn_rate,

@@ -24,6 +24,8 @@ struct Snap {
     vel: Vec3,
     yaw: f32,
     radius: f32,
+    /// Radius within which a projectile path hits the unit.
+    hit_radius: f32,
     side: u8,
     class: TargetClass,
     def: ShipId,
@@ -908,6 +910,7 @@ impl Battle {
                     vel: Vec3::from_yaw(s.yaw) * s.speed,
                     yaw: s.yaw,
                     radius,
+                    hit_radius: radius.max(d.hardpoint_reach),
                     side: s.side,
                     class: d.class,
                     def: s.def,
@@ -2568,7 +2571,7 @@ fn fly(p: &mut Projectile, snaps: &[Snap], grid: &Grid, cat: &Catalog, env: &Fly
                 continue;
             }
             let (d, t) = segment_point_distance(old, new, s.pos);
-            if d <= s.radius && best.is_none_or(|(bt, _)| t < bt) {
+            if d <= s.hit_radius && best.is_none_or(|(bt, _)| t < bt) {
                 best = Some((t, id));
             }
         }

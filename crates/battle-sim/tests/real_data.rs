@@ -230,3 +230,16 @@ fn hardpoint_offsets_follow_the_scaled_model_bones() {
     }
     assert!(scaled_checked > 0, "none of the checked objects has a Scale_Factor, the test would not prove the scaling");
 }
+
+#[test]
+fn shots_at_an_outlying_hardpoint_of_a_tall_station_can_hit_it() {
+    let Some((data, fs)) = load() else { return };
+    for n in ["Rebel_Star_Base_2", "Empire_Star_Base_3", "Pirate_Starbase_Lv1"] {
+        let cat = Catalog::build(&data, Some(&fs), &[n]);
+        let d = cat.ship(cat.ship_id(n).unwrap());
+        let far = d.hardpoints.iter().filter(|h| h.destroyable).map(|h| h.offset.len()).fold(0.0f32, f32::max);
+        // The collision radius is `radius * 0.75` for frigates and up; the hit radius is at least the farthest hardpoint, which lies beyond it on these stations.
+        assert!(far > d.radius * 0.75, "{n}: premise: farthest hardpoint {far:.0} lies beyond the collision radius {:.0}", d.radius * 0.75);
+        assert!(d.hardpoint_reach >= far, "{n}: hit reach {:.0} covers the farthest hardpoint {far:.0}", d.hardpoint_reach);
+    }
+}
