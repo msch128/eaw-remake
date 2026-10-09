@@ -158,6 +158,7 @@ fn main() {
         app.add_systems(Last, move |mut n: Local<u32>, mut exit: MessageWriter<bevy::app::AppExit>| {
             *n += 1;
             if *n >= frames {
+                info!("exit-after: {frames} frames reached");
                 exit.write(bevy::app::AppExit::Success);
             }
         });

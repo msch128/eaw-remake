@@ -81,7 +81,7 @@ fn drive(
     paused: Res<Paused>,
     slots: Res<SlotScreen>,
     options: Res<OptionsOpen>,
-    (filters, bar): (Res<crate::galaxy_map::MapFilters>, Res<crate::play_ui::BarState>),
+    (filters, bar, frames): (Res<crate::galaxy_map::MapFilters>, Res<crate::play_ui::BarState>, Res<bevy::diagnostic::FrameCount>),
     sim: Option<Res<galaxy_play::SimState>>,
     banner: Query<(&EawButton, &ComputedNode, &UiGlobalTransform, &InheritedVisibility)>,
     menu: Query<(&MenuButton, &ComputedNode, &UiGlobalTransform, &InheritedVisibility)>,
@@ -292,7 +292,7 @@ fn drive(
         }
         _ => {
             let pass = st.results.iter().all(|r| r.1);
-            info!("ui-test: {} checks {}", st.results.len(), if pass { "PASS" } else { "FAIL" });
+            info!("ui-test: {} checks {} (frame {})", st.results.len(), if pass { "PASS" } else { "FAIL" }, frames.0);
             st.done = true;
             if std::env::var("SP_UI_TEST").is_ok_and(|v| v == "exit") {
                 exit.write(AppExit::Success);

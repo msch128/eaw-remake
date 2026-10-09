@@ -599,6 +599,7 @@ fn apply_clicks(
             }
             MenuAction::CloseSlots => slots.0 = None,
             MenuAction::Quit => {
+                info!("menu: Quit clicked, leaving the app");
                 exit.write(AppExit::Success);
             }
         }
