@@ -772,22 +772,17 @@ fn a_fleet_arriving_at_a_pirate_planet_raises_a_battle_for_every_main_faction() 
 }
 
 #[test]
-fn a_pirate_star_base_has_real_strength_in_the_statistical_resolver() {
+fn auto_resolve_agrees_with_the_tactical_battle_on_pirate_bases() {
     let Some(ctx) = load() else { return };
-    let sim = new_sim(&ctx);
-    let w = sim.world();
-    // The resolver reads the galaxy catalog (hull, shield and weapons of the star base definition and its garrison), not the battle sim's hull pool.
-    let base = w.starbases.iter().find(|s| s.name == "Pirate_Starbase_Lv1").unwrap();
-    assert!(base.combat.durability() >= 20_000.0 && base.combat.raw_dps() > 100.0, "{:?}", base.combat);
-    let nebulon = w.units[w.unit_id("Nebulon_B_Frigate").unwrap() as usize].combat.clone();
-    let garrison: f32 = base.garrison.iter().map(|(u, c)| w.units[*u as usize].combat.raw_dps() * *c as f32).sum();
-    println!("pirate base durability {:.0}, dps {:.0} + garrison dps {garrison:.0}; Nebulon durability {:.0}, dps {:.0}", base.combat.durability(), base.combat.raw_dps(), nebulon.durability(), nebulon.raw_dps());
-    // One Nebulon cannot take it, a few MC-80s can.
+    // The tactical battle (3 seeds in the sweep that set `combat_base_factor`): a pirate star base with its garrison beats 1, 2, 3 and 5 Nebulons and 3 corvettes,
+    // and loses to an MC-80. The statistical resolver must say the same (it used to rate stations at 15% and let a lone Nebulon win without loss).
     let pirate_planet = |sim: &Sim, f: FactionId| {
         let (w, g) = (sim.world(), sim.galaxy());
         (0..w.planets.len() as u32).find(|&p| g.planets[p as usize].owner == Some(f) && g.fleets_at(p).next().is_none() && w.planets[p as usize].space_map.is_some())
     };
-    let one = auto_vs_planet(&ctx, "Nebulon_B_Frigate", 1, pirate_planet, "Pirates", None).unwrap();
-    println!("1 Nebulon vs a pirate base (auto-resolve): attacker {}/{} alive, wins {}", one.1, one.0, one.4);
-    assert!(!one.4 && one.1 == 0, "a lone Nebulon must lose: {one:?}");
+    for (unit, n, attacker_wins) in [("Nebulon_B_Frigate", 1u32, false), ("Nebulon_B_Frigate", 2, false), ("Nebulon_B_Frigate", 3, false), ("CR-90_Corvette", 3, false), ("MC-80_Star_Cruiser", 1, true), ("MC-80_Star_Cruiser", 2, true)] {
+        let r = auto_vs_planet(&ctx, unit, n, pirate_planet, "Pirates", None).unwrap();
+        println!("{n} x {unit} vs a pirate base (auto-resolve): attacker {}/{} alive, wins {}", r.1, r.0, r.4);
+        assert_eq!(r.4, attacker_wins, "{n} x {unit}: {r:?}");
+    }
 }

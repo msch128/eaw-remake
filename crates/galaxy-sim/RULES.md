@@ -156,7 +156,7 @@ tactical battles get them as `TacticalSide::{damage,health,shield}_mult` and `Ba
 
 The statistical resolver was compared with `run_headless` on random near-even battles (2-40+ ships a side, half at a star base, tactical 3 seeds, auto 40 seeds each).
 Tactical results are cached in `target/calibrate_cache.txt`; `OLD=1` reverts to the uncalibrated formula, `BASE/EF/EC/EFR/FOCUS/CK/CG` override single knobs.
-Calibrated knobs (all in `SimConfig`, named estimates): `combat_base_factor` 0.15 (star base, structures, garrison: hull, shield and damage; the tactical bases were far weaker than their raw numbers),
+Calibrated knobs (all in `SimConfig`, named estimates): `combat_base_factor` 1.5 (star base, structures, garrison: hull, shield and damage; was 0.15 when the tactical bases were far weaker than their raw numbers, re-measured 2026-10-09 after the hardpoint damage model (U47) and the station hit radius: pirate base + garrison beats 1, 2, 3, 5 Nebulons and 3 corvettes in the tactical battle, and loses to an MC-80; `auto_resolve_agrees_with_the_tactical_battle_on_pirate_bases`),
 `combat_efficiency` [0.5 fighters/bombers, 0.5 corvettes, 1 frigates, 1 capitals] (small craft lose time closing in), `combat_escape` 0.12 (share of a losing fleet that retreats alive when its faction
 owns more than one planet; the tactical AI does this, the old resolver killed everything). Tried and left off: `combat_focus` (focus fire, no gain), `combat_crowd` (damage cut for huge fleets, no gain).
 With 3 tactical seeds per scenario the comparison has a noise floor of about 0.2 in win share, so winner agreement above ~85 % cannot be demonstrated.

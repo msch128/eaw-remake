@@ -122,7 +122,7 @@ impl Default for SimConfig {
             ground_up: false,
             debug_commands: false,
             combat_focus: 1,
-            combat_base_factor: 0.15,
+            combat_base_factor: 1.5,
             combat_efficiency: [0.5, 0.5, 1.0, 1.0],
             combat_escape: 0.12,
             combat_crowd: (25.0, 0.0),
