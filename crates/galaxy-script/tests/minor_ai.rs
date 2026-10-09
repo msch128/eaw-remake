@@ -19,7 +19,7 @@ fn every_non_pirate_faction_spends_and_builds() {
     let data = Arc::new(data);
     let campaign = data.campaign("GC_Full_Web_Way_Rebel").unwrap().clone();
     let mut sim = ScriptedSim::new(
-        fs,
+        fs.clone(),
         data,
         &campaign,
         SimConfig { victory_enabled: false, ..SimConfig::default() },
@@ -36,17 +36,23 @@ fn every_non_pirate_faction_spends_and_builds() {
         }
     }
     let mut idle = Vec::new();
+    let mut no_ships = Vec::new();
     sim.with_sim(|s| {
         let w = s.world();
         for (i, f) in w.factions.iter().enumerate() {
             let st = &s.galaxy().factions[i];
             let owned = s.galaxy().owned_planets(i as u32).count();
-            println!("{:14} planets {owned:3} spent {:9.0} ships built {:3} structures {:3} credits {:.0}", f.name, st.stats.credits_spent, st.stats.ships_built, st.stats.structures_built, st.credits);
             let passive = ["neutral", "pirates", "hostile"].iter().any(|n| f.name.eq_ignore_ascii_case(n));
-            if !passive && owned > 0 && st.stats.credits_spent <= 0.0 {
-                idle.push(f.name.clone());
+            if !passive && owned > 0 {
+                if st.stats.credits_spent <= 0.0 {
+                    idle.push(f.name.clone());
+                }
+                if st.stats.ships_built == 0 {
+                    no_ships.push(f.name.clone());
+                }
             }
         }
     });
     assert!(idle.is_empty(), "factions that spent nothing in 20 weeks: {idle:?}");
+    assert!(no_ships.is_empty(), "factions that built no ships in 20 weeks: {no_ships:?}");
 }

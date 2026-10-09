@@ -1236,7 +1236,11 @@ impl TaskForces {
                 fail(self, &j, group.types.first().map_or("", String::as_str));
                 return None;
             };
-            let cost_hint = if starbase { 0.0 } else { sim.structure_info(ty).map_or(0.0, |s| s.cost) };
+            let cost_hint = if starbase {
+                sim.starbase_upgrade_cost(player, j.planet).unwrap_or(0.0)
+            } else {
+                sim.structure_info(ty).map_or(0.0, |s| s.cost)
+            };
             if self.allowance(player, plan).is_some_and(|a| a < cost_hint.max(1.0)) {
                 return Some(j);
             }

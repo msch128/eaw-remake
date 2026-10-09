@@ -151,6 +151,10 @@ pub trait AiSim {
     fn can_build_structure(&self, p: PlayerId, pl: PlanetId, structure: &str) -> Result<(), Refused>;
     /// The same for the next star base level.
     fn can_upgrade_starbase(&self, p: PlayerId, pl: PlanetId) -> Result<(), Refused>;
+    /// Cost to upgrade the star base at `pl` to the next level, `None` if max or cannot upgrade.
+    fn starbase_upgrade_cost(&self, _p: PlayerId, _pl: PlanetId) -> Option<f64> {
+        None
+    }
 
     // ---- actions -----------------------------------------------------------------------------------
     /// Queues a ship; cost is paid immediately. Returns the cost.

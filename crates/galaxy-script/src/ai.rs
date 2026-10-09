@@ -190,6 +190,10 @@ impl AiSim for SimAdapter<'_> {
     fn can_upgrade_starbase(&self, p: PlayerId, pl: PlanetId) -> Result<(), Refused> {
         self.world.check_upgrade_starbase(self.sim.galaxy(), p, pl).map(|_| ()).map_err(refuse)
     }
+    fn starbase_upgrade_cost(&self, p: PlayerId, pl: PlanetId) -> Option<f64> {
+        let next = self.world.check_upgrade_starbase(self.sim.galaxy(), p, pl).ok()?;
+        Some(f64::from(self.world.starbases[next as usize].cost))
+    }
     fn queue_unit(&mut self, p: PlayerId, pl: PlanetId, unit: &str) -> Result<f64, Refused> {
         let &u = self.world.unit_index.get(&unit.to_ascii_lowercase()).ok_or(Refused::Invalid)?;
         self.sim.apply(Command::BuildUnit { faction: p, planet: pl, unit: u }).map_err(refuse)?;
@@ -201,8 +205,9 @@ impl AiSim for SimAdapter<'_> {
         Ok(f64::from(self.world.structures[s as usize].cost))
     }
     fn queue_starbase(&mut self, p: PlayerId, pl: PlanetId) -> Result<f64, Refused> {
+        let cost = self.starbase_upgrade_cost(p, pl).unwrap_or(0.0);
         self.sim.apply(Command::UpgradeStarbase { faction: p, planet: pl }).map_err(refuse)?;
-        Ok(0.0)
+        Ok(cost)
     }
     fn queue_tech(&mut self, p: PlayerId, pl: PlanetId) -> Result<f64, Refused> {
         self.sim.apply(Command::UpgradeTech { faction: p, planet: pl }).map_err(refuse)?;
