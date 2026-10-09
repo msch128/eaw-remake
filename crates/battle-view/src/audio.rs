@@ -294,45 +294,64 @@ pub fn battle_audio(
         say(GalaxyEvent::ReinforcementsAvailable, &mut stats);
     }
 
-    // Unit responses of the player's own units.
+    // Unit responses of the player's own units: one voice for the whole selection. The ships are ranked (a named hero first, then
+    // population, then hull + shield) and the line falls through the ranking until a ship has one; the generic fallbacks
+    // (fleet move -> move, guard -> stop, hardpoint attack -> plain attack) are the default when no ship has the specific line.
+    let rank = |def| {
+        let d = rt.catalog.ship(def);
+        (visuals.ship(def).hero, d.population, (d.hull + d.shield) as i64)
+    };
+    let mut ranked: Vec<_> = sel.ships.iter().filter_map(|id| cur.ship(*id)).map(|s| s.def).collect();
+    ranked.sort_by(|&a, &b| rank(b).cmp(&rank(a)));
     if sel.is_changed() && sel.ships != mem.last_selection {
         mem.last_selection = sel.ships.clone();
-        // One voice for the whole selection: a named hero if any, else the highest ranked ship (as `control::voice_lead`).
-        let rank = |def| {
-            let d = rt.catalog.ship(def);
-            (visuals.ship(def).hero, d.population, (d.hull + d.shield) as i64)
-        };
-        let lead = sel.ships.iter().filter_map(|id| cur.ship(*id)).map(|s| s.def).max_by(|&a, &b| rank(a).cmp(&rank(b)));
-        if let Some(n) = lead.and_then(|def| visuals.ship(def).sfx.select.as_deref()) {
+        if let Some(n) = ranked.iter().find_map(|&def| visuals.ship(def).sfx.select.as_deref()) {
             send(n, None, &mut stats, &mut out);
         }
     }
-    // An attack on one hardpoint: the unit's `SFXEvent_Attack_Hardpoint` line of that hardpoint's type ("Instructions on taking out those laser cannons!"),
-    // instead of its plain attack line.
+    // An attack on one hardpoint: the `SFXEvent_Attack_Hardpoint` line of that hardpoint's type ("Instructions on taking out those laser cannons!"),
+    // instead of the plain attack line.
     let mut hardpoint_line = false;
     for o in hardpoint_orders.read() {
-        let (Some(me), Some(target)) = (cur.ship(o.lead), cur.ship(o.target)) else { continue };
+        let Some(target) = cur.ship(o.target) else { continue };
         let ty = visuals.ship(target.def).hardpoints.get(o.hardpoint as usize).map_or("", |h| h.hp_type.as_str());
-        let line = visuals.ship(me.def).sfx.attack_hardpoint_by_type.iter().find(|(t, _)| t == ty).map(|(_, e)| e.as_str());
+        let line = ranked.iter().find_map(|&def| visuals.ship(def).sfx.attack_hardpoint_by_type.iter().find(|(t, _)| t == ty).map(|(_, e)| e.as_str()));
         if let Some(n) = line {
             send(n, None, &mut stats, &mut out);
             hardpoint_line = true;
         }
     }
     for o in orders.read() {
-        let Some(s) = cur.ship(o.lead) else { continue };
-        let v = &visuals.ship(s.def).sfx;
         // `SFXEvent_Fleet_Move` answers a move order given to a group (estimate: the data does not say when the
         // engine prefers it; units without a fleet line use their single-unit move line).
         let group = sel.ships.len() > 1;
-        let name = match o.kind {
-            OrderKind::Move if group => v.fleet_move.as_deref().or(v.mv.as_deref()),
-            OrderKind::Move => v.mv.as_deref().or(v.fleet_move.as_deref()),
+        let specific = |def| {
+            let v = &visuals.ship(def).sfx;
+            match o.kind {
+            OrderKind::Move if group => v.fleet_move.as_deref(),
+            OrderKind::Move => v.mv.as_deref(),
             OrderKind::Attack if hardpoint_line => None,
             OrderKind::Attack => v.attack.as_deref(),
-            OrderKind::Guard => v.guard.as_deref().or(v.stop.as_deref()),
+            OrderKind::Guard => v.guard.as_deref(),
             OrderKind::Stop => v.stop.as_deref(),
+            }
         };
+        let fallback = |def| {
+            let v = &visuals.ship(def).sfx;
+            match o.kind {
+            OrderKind::Move if group => v.mv.as_deref(),
+            OrderKind::Move => v.fleet_move.as_deref(),
+            OrderKind::Guard => v.stop.as_deref(),
+            _ => None,
+            }
+        };
+        let mut lines = ranked.clone();
+        if lines.is_empty() {
+            if let Some(s) = cur.ship(o.lead) {
+                lines.push(s.def);
+            }
+        }
+        let name = lines.iter().find_map(|&def| specific(def)).or_else(|| lines.iter().find_map(|&def| fallback(def)));
         if let Some(n) = name {
             send(n, None, &mut stats, &mut out);
         }
