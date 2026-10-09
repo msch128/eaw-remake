@@ -435,7 +435,7 @@ pub(crate) fn unit_tooltip(
         .as_ref()
         .and_then(|r| r.get("encyclopedia_unit_class"))
         .and_then(|k| text(k.trim()))
-        .map(|c| format!("Class: {c}"))
+        .map(|c| if c.trim_start().to_ascii_lowercase().starts_with("class:") { c } else { format!("Class: {c}") })
         .unwrap_or_default();
     let desc = obj
         .as_ref()
