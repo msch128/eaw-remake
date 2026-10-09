@@ -242,6 +242,8 @@ pub enum Command {
     },
     /// Order the whole side to leave the battlefield.
     Retreat,
+    /// A cheat of the F2 menu (see [`crate::cheats`]).
+    Cheat(crate::cheats::BattleCheat),
     /// Call in reinforcements (limited by the unit cap, arrive after a delay) at the side's reinforcement point.
     Reinforce {
         /// Definition.
@@ -657,6 +659,8 @@ pub struct Battle {
     /// Events caused by commands; they are reported with the next step (a step starts with a clean event list).
     pub(crate) cmd_events: Vec<Event>,
     pub(crate) retreat_ordered: Vec<bool>,
+    /// Cheats in force (the F2 menu); see [`crate::cheats`].
+    pub cheats: crate::cheats::Cheats,
     /// Per side: battle time at which the retreat jump happens (`None` = no retreat ordered).
     pub(crate) retreat_jump_at: Vec<Option<f32>>,
     pub(crate) grid_cells: Vec<Vec<u32>>,

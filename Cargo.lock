@@ -4591,6 +4591,7 @@ dependencies = [
  "alamo-fs",
  "alamo-model",
  "alamo-render",
+ "battle-sim",
  "battle-view",
  "bevy",
  "eaw-ui",

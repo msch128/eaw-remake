@@ -26,6 +26,7 @@
 
 mod arena;
 mod battle;
+pub mod cheats;
 mod defs;
 mod math;
 mod placement;
@@ -46,3 +47,4 @@ pub use math::Vec3;
 pub use placement::{no_spawn_zones, placement_check, PlacementUnit};
 pub use rng::Rng;
 pub use sim::{setup, simulate};
+pub use cheats::{BattleCheat, Cheats};

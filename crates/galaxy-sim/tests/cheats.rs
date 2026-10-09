@@ -114,3 +114,15 @@ fn cheats_replay_deterministically() {
     };
     assert_eq!(play(), play());
 }
+
+#[test]
+fn mark_cheated_changes_nothing_else() {
+    let Some(data) = load() else { return };
+    let mut sim = new_sim(&data);
+    let empire = sim.world().faction_id("Empire").unwrap();
+    let before = sim.galaxy().factions[empire as usize].credits;
+    sim.apply(Command::Cheat { faction: empire, cheat: Cheat::MarkCheated }).unwrap();
+    assert!(sim.galaxy().cheated);
+    assert_eq!(sim.galaxy().factions[empire as usize].credits, before);
+    assert!(!sim.galaxy().ai_paused);
+}

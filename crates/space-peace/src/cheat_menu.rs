@@ -1,6 +1,8 @@
-//! The F2 cheat menu: a small panel in the cyan glass of the command bar. Every cheat is sent as a journaled sim command
-//! (`galaxy_sim::cheats`), so saves and replays stay consistent, and marks the game as cheated.
+//! The F2 cheat menu: a small panel in the cyan glass of the command bar, on the galaxy map and in space battles. Every
+//! cheat is a journaled sim command (`galaxy_sim::cheats`, `battle_sim::BattleCheat`), so saves and replays stay
+//! consistent; any cheat also marks the galaxy game as cheated.
 
+use battle_view::{BattleRuntime, BattleViewSettings};
 use bevy::prelude::*;
 use galaxy_play::{PlayAction, PlayerSelection, SimState};
 use galaxy_sim::cheats::Cheat;
@@ -14,19 +16,31 @@ const SPEEDS: [f32; 4] = [1.0, 2.0, 4.0, 10.0];
 
 /// Registers the menu.
 pub(crate) fn plugin(app: &mut App) {
-    app.init_resource::<CheatMenu>().add_systems(
-        Update,
-        (toggle, open_by_cli, rebuild, clicks, labels)
-            .chain()
-            .run_if(in_state(AppScreen::Galaxy).and_then(resource_exists::<SimState>)),
-    );
-    app.add_systems(OnExit(AppScreen::Galaxy), close);
+    let galaxy = in_state(AppScreen::Galaxy).and_then(resource_exists::<SimState>);
+    let battle = in_state(AppScreen::SpaceBattle).and_then(resource_exists::<BattleRuntime>);
+    app.init_resource::<CheatMenu>()
+        .init_resource::<BattleCheats>()
+        .add_systems(Update, (toggle, open_by_cli).chain().run_if(in_state(AppScreen::Galaxy).or_else(in_state(AppScreen::SpaceBattle))))
+        .add_systems(Update, (rebuild_galaxy, clicks_galaxy, labels_galaxy).chain().after(toggle).run_if(galaxy))
+        .add_systems(Update, (rebuild_battle, clicks_battle, labels_battle).chain().after(toggle).run_if(battle))
+        .add_systems(OnExit(AppScreen::Galaxy), close)
+        .add_systems(OnExit(AppScreen::SpaceBattle), close)
+        .add_systems(OnEnter(AppScreen::SpaceBattle), |mut b: ResMut<BattleCheats>| *b = BattleCheats::default());
 }
 
 /// Whether the panel is open.
 #[derive(Resource, Default)]
 pub(crate) struct CheatMenu {
     pub(crate) open: bool,
+}
+
+/// Which battle cheats are on (the sim has the truth; this drives the captions).
+#[derive(Resource, Default, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct BattleCheats {
+    invulnerable: bool,
+    no_cooldowns: bool,
+    no_pop_cap: bool,
+    ai_paused: bool,
 }
 
 #[derive(Component)]
@@ -40,20 +54,34 @@ pub(crate) enum CheatAction {
     TechUp,
     AiPause,
     Speed(f32),
+    WinNow,
+    Invulnerable,
+    NoCooldowns,
+    NoPopCap,
+    BattleAiPause,
 }
 
 /// A text that shows the state of a cheat.
 #[derive(Component)]
 struct CheatLabel(CheatAction);
 
-/// The text of a button (also the stable name used by tests).
-fn caption(action: CheatAction, state: &SimState) -> String {
+fn on_off(on: bool) -> &'static str {
+    if on { "ON" } else { "OFF" }
+}
+
+/// The text of a button.
+fn caption(action: CheatAction, galaxy_ai_paused: bool, battle: &BattleCheats) -> String {
     match action {
         CheatAction::Credits => format!("+{CREDIT_STEP} credits"),
         CheatAction::FinishBuild => "Finish current build".to_owned(),
         CheatAction::TechUp => "Tech level +1".to_owned(),
-        CheatAction::AiPause => format!("Pause AI: {}", if state.galaxy().ai_paused { "ON" } else { "OFF" }),
+        CheatAction::AiPause => format!("Pause AI: {}", on_off(galaxy_ai_paused)),
         CheatAction::Speed(s) => format!("{s}x"),
+        CheatAction::WinNow => "Win the battle now".to_owned(),
+        CheatAction::Invulnerable => format!("Own units invulnerable: {}", on_off(battle.invulnerable)),
+        CheatAction::NoCooldowns => format!("No ability cooldowns: {}", on_off(battle.no_cooldowns)),
+        CheatAction::NoPopCap => format!("No population limit: {}", on_off(battle.no_pop_cap)),
+        CheatAction::BattleAiPause => format!("Pause AI: {}", on_off(battle.ai_paused)),
     }
 }
 
@@ -67,16 +95,16 @@ fn toggle(keys: Res<ButtonInput<KeyCode>>, mut menu: ResMut<CheatMenu>) {
     }
 }
 
-fn rebuild(mut commands: Commands, menu: Res<CheatMenu>, existing: Query<Entity, With<CheatRoot>>, state: Res<SimState>) {
-    if !menu.is_changed() {
-        return;
+/// `--cheat-menu` opens the panel once per screen (offscreen renders).
+fn open_by_cli(args: Res<crate::cli::Args>, screen: Res<State<AppScreen>>, mut menu: ResMut<CheatMenu>, mut done: Local<Option<AppScreen>>) {
+    if args.cheat_menu && *done != Some(*screen.get()) {
+        *done = Some(*screen.get());
+        menu.open = true;
     }
-    for e in &existing {
-        commands.entity(e).despawn();
-    }
-    if !menu.open {
-        return;
-    }
+}
+
+/// Builds the panel with `sections` (title, buttons) and the speed row.
+fn spawn_panel(commands: &mut Commands, sections: &[(&str, &[CheatAction])], text: &dyn Fn(CheatAction) -> String) {
     let font = |size: f32| TextFont { font: FontSource::Family("Bahnschrift".into()), font_size: FontSize::Px(size), ..default() };
     let border = Color::srgb(0.0, 0.76, 0.99);
     let button = |p: &mut ChildSpawnerCommands, action: CheatAction, width: Val| {
@@ -87,7 +115,7 @@ fn rebuild(mut commands: Commands, menu: Res<CheatMenu>, existing: Query<Entity,
             BackgroundColor(Color::srgba(0.05, 0.16, 0.22, 0.95)),
             BorderColor::all(border),
         ))
-        .with_child((Text::new(caption(action, &state)), font(13.0), TextColor(Color::srgb(0.85, 0.93, 1.0)), CheatLabel(action)));
+        .with_child((Text::new(text(action)), font(13.0), TextColor(Color::srgb(0.85, 0.93, 1.0)), CheatLabel(action)));
     };
     commands
         .spawn((
@@ -112,9 +140,11 @@ fn rebuild(mut commands: Commands, menu: Res<CheatMenu>, existing: Query<Entity,
         .with_children(|p| {
             p.spawn((Text::new("CHEAT MENU  (F2)"), font(15.0), TextColor(Color::srgb(1.0, 0.86, 0.38))));
             p.spawn((Text::new("Using a cheat marks the game as cheated."), font(10.5), TextColor(Color::srgb(0.52, 0.68, 0.82))));
-            p.spawn((Text::new("GALAXY"), font(11.0), TextColor(Color::srgb(0.52, 0.68, 0.82))));
-            for a in [CheatAction::Credits, CheatAction::FinishBuild, CheatAction::TechUp, CheatAction::AiPause] {
-                button(p, a, Val::Percent(100.0));
+            for (title, actions) in sections {
+                p.spawn((Text::new(*title), font(11.0), TextColor(Color::srgb(0.52, 0.68, 0.82))));
+                for &a in *actions {
+                    button(p, a, Val::Percent(100.0));
+                }
             }
             p.spawn((Text::new("GAME SPEED"), font(11.0), TextColor(Color::srgb(0.52, 0.68, 0.82))));
             p.spawn(Node { column_gap: Val::Px(4.0), ..default() }).with_children(|row| {
@@ -125,7 +155,34 @@ fn rebuild(mut commands: Commands, menu: Res<CheatMenu>, existing: Query<Entity,
         });
 }
 
-fn clicks(
+fn rebuild_galaxy(mut commands: Commands, menu: Res<CheatMenu>, existing: Query<Entity, With<CheatRoot>>, state: Res<SimState>) {
+    if !menu.is_changed() {
+        return;
+    }
+    for e in &existing {
+        commands.entity(e).despawn();
+    }
+    if menu.open {
+        let ai = state.galaxy().ai_paused;
+        let galaxy = [CheatAction::Credits, CheatAction::FinishBuild, CheatAction::TechUp, CheatAction::AiPause];
+        spawn_panel(&mut commands, &[("GALAXY", &galaxy)], &|a| caption(a, ai, &BattleCheats::default()));
+    }
+}
+
+fn rebuild_battle(mut commands: Commands, menu: Res<CheatMenu>, existing: Query<Entity, With<CheatRoot>>, state: Res<BattleCheats>) {
+    if !menu.is_changed() {
+        return;
+    }
+    for e in &existing {
+        commands.entity(e).despawn();
+    }
+    if menu.open {
+        let battle = [CheatAction::WinNow, CheatAction::Invulnerable, CheatAction::NoCooldowns, CheatAction::NoPopCap, CheatAction::BattleAiPause];
+        spawn_panel(&mut commands, &[("BATTLE", &battle)], &|a| caption(a, false, &state));
+    }
+}
+
+fn clicks_galaxy(
     buttons: Query<(&Interaction, &CheatAction), Changed<Interaction>>,
     selection: Res<PlayerSelection>,
     state: Res<SimState>,
@@ -158,24 +215,72 @@ fn clicks(
             CheatAction::Speed(s) => {
                 actions.write(PlayAction::SetSpeedMultiplier(s));
             }
+            _ => {}
+        }
+    }
+}
+
+fn clicks_battle(
+    buttons: Query<(&Interaction, &CheatAction), Changed<Interaction>>,
+    rt: Res<BattleRuntime>,
+    mut settings: ResMut<BattleViewSettings>,
+    mut state: ResMut<BattleCheats>,
+    mut actions: MessageWriter<PlayAction>,
+) {
+    use battle_sim::{BattleCheat, Command};
+    let side = settings.player_side;
+    for (i, a) in &buttons {
+        if *i != Interaction::Pressed {
+            continue;
+        }
+        let cheat = match *a {
+            CheatAction::WinNow => Some(BattleCheat::WinNow),
+            CheatAction::Invulnerable => {
+                state.invulnerable = !state.invulnerable;
+                Some(BattleCheat::Invulnerable(state.invulnerable))
+            }
+            CheatAction::NoCooldowns => {
+                state.no_cooldowns = !state.no_cooldowns;
+                Some(BattleCheat::NoCooldowns(state.no_cooldowns))
+            }
+            CheatAction::NoPopCap => {
+                state.no_pop_cap = !state.no_pop_cap;
+                Some(BattleCheat::NoPopCap(state.no_pop_cap))
+            }
+            CheatAction::BattleAiPause => {
+                state.ai_paused = !state.ai_paused;
+                Some(BattleCheat::AiPaused(state.ai_paused))
+            }
+            CheatAction::Speed(s) => {
+                settings.speed = s;
+                settings.paused = false;
+                None
+            }
+            _ => None,
+        };
+        if let Some(c) = cheat {
+            rt.command(side, Command::Cheat(c));
+            // The galaxy game is marked as cheated as well.
+            actions.write(PlayAction::Cheat(Cheat::MarkCheated));
         }
     }
 }
 
 /// Keeps the toggle captions in line with the sim.
-fn labels(state: Res<SimState>, mut labels: Query<(&CheatLabel, &mut Text)>) {
+fn labels_galaxy(state: Res<SimState>, mut labels: Query<(&CheatLabel, &mut Text)>) {
     for (l, mut t) in &mut labels {
-        let c = caption(l.0, &state);
+        let c = caption(l.0, state.galaxy().ai_paused, &BattleCheats::default());
         if t.0 != c {
             t.0 = c;
         }
     }
 }
 
-/// `--cheat-menu` opens the panel once (offscreen renders).
-fn open_by_cli(args: Res<crate::cli::Args>, mut menu: ResMut<CheatMenu>, mut done: Local<bool>) {
-    if args.cheat_menu && !*done {
-        *done = true;
-        menu.open = true;
+fn labels_battle(state: Res<BattleCheats>, mut labels: Query<(&CheatLabel, &mut Text)>) {
+    for (l, mut t) in &mut labels {
+        let c = caption(l.0, false, &state);
+        if t.0 != c {
+            t.0 = c;
+        }
     }
 }

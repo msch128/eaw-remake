@@ -184,6 +184,7 @@ impl Battle {
             catalog,
             cmd_events: Vec::new(),
             retreat_ordered: vec![false; sides.len()],
+            cheats: crate::cheats::Cheats::new(sides.len()),
             retreat_jump_at: vec![None; sides.len()],
             reveals: Vec::new(),
             zones: Vec::new(),
@@ -556,7 +557,7 @@ impl Battle {
         let cat = self.catalog.clone();
         let (time, half) = (self.time, self.config.half_size);
         for side in 0..self.sides.len().min(4) as u8 {
-            if !self.sides[side as usize].ai {
+            if !self.is_ai(side) {
                 continue;
             }
             let sees_enemy = self.ships.iter().any(|s| s.alive && !s.retreated && s.side != side && !cat.ship(s.def).is_static && time <= s.seen_until[side as usize]);
@@ -776,10 +777,11 @@ impl Battle {
                     s.order = Order::Retreat;
                 }
             }
+            Command::Cheat(cheat) => self.apply_cheat(side, cheat),
             Command::ReinforceAt { ship, count, pos } => {
                 self.reinforcement_zone_check(side, pos)?;
                 let pop = self.catalog.ship(ship).population * count as i32;
-                if self.pop_in_play(side) + pop > self.config.unit_cap {
+                if self.pop_in_play(side) + pop > self.config.unit_cap && !self.cheats.has_no_pop_cap(side) {
                     return Err(CommandError::UnitCap);
                 }
                 if self.config.record_events {
@@ -789,7 +791,7 @@ impl Battle {
             }
             Command::Reinforce { ship, count } => {
                 let pop = self.catalog.ship(ship).population * count as i32;
-                if self.pop_in_play(side) + pop > self.config.unit_cap {
+                if self.pop_in_play(side) + pop > self.config.unit_cap && !self.cheats.has_no_pop_cap(side) {
                     if self.config.record_events {
                         self.cmd_events.push(Event::ReinforcementsRefused { side, ship, count });
                     }
@@ -857,10 +859,11 @@ impl Battle {
                 None => return false,
             }
         }
+        let no_cooldown = self.cheats.has_no_cooldowns(self.ships[ship as usize].side);
         let st = &mut self.ships[ship as usize].abilities[ability];
         st.target = target;
         st.active = a.duration;
-        st.cooldown = if a.toggle { 0.0 } else { a.recharge + a.duration };
+        st.cooldown = if a.toggle || no_cooldown { 0.0 } else { a.recharge + a.duration };
         if self.config.record_events {
             self.events.push(Event::AbilityActivated { ship, ability: ability as u16 });
         }
@@ -1106,9 +1109,10 @@ impl Battle {
                     ids.push(id);
                 }
             }
+            let ai_side = self.is_ai(r.side);
             for &i in &ids {
                 let s = &mut self.ships[i as usize];
-                s.order = if self.sides[r.side as usize].ai { Order::AttackMove(self.spawn_pos[(r.side as usize + 1) % self.sides.len()]) } else { Order::Idle };
+                s.order = if ai_side { Order::AttackMove(self.spawn_pos[(r.side as usize + 1) % self.sides.len()]) } else { Order::Idle };
             }
             if self.config.record_events {
                 self.events.push(Event::ReinforcementsArrived { side: r.side, ships: ids });
@@ -1192,6 +1196,9 @@ impl Battle {
 
     #[allow(clippy::too_many_arguments)]
     fn damage_ship(&mut self, id: u32, attacker: u32, pd: &ProjDef, proj: ProjId, raw: f32, pos: Vec3, aim_hp: u16) {
+        if self.cheats.is_invulnerable(self.ships[id as usize].side) {
+            return;
+        }
         let cat = self.catalog.clone();
         let record = self.config.record_events;
         let (atk_damage, _, _) = self.side_mult(self.ships.get(attacker as usize).map_or(u8::MAX, |a| a.side));
@@ -1378,7 +1385,7 @@ impl Battle {
     fn ai_retreat(&mut self) {
         let n = self.sides.len();
         for side in 0..n as u8 {
-            if !self.sides[side as usize].ai || self.retreat_ordered[side as usize] || !self.config.retreat_allowed.get(side as usize).copied().unwrap_or(true) {
+            if !self.is_ai(side) || self.retreat_ordered[side as usize] || !self.config.retreat_allowed.get(side as usize).copied().unwrap_or(true) {
                 continue;
             }
             if self.time < self.config.retreat_countdown.max(30.0) {
@@ -1462,7 +1469,7 @@ impl Battle {
             }
             // AI sides use weapon abilities when they have something to shoot at.
             let s = &self.ships[i];
-            let ai_side = self.sides[s.side as usize].ai;
+            let ai_side = self.is_ai(s.side);
             if (ai_side || s.abilities.iter().any(|a| a.autocast)) && s.target != NONE && s.stance != Stance::HoldFire && (tick + i as u64).is_multiple_of(15) {
                 let t = &self.ships[s.target as usize];
                 let dist = t.pos.dist(s.pos);
@@ -1547,7 +1554,7 @@ impl Battle {
         let cat = self.catalog.clone();
         let mut uses: Vec<(u8, u32, u16, Option<Vec3>)> = Vec::new();
         for side in 0..self.sides.len().min(4) as u8 {
-            let ai_side = self.sides[side as usize].ai;
+            let ai_side = self.is_ai(side);
             if !ai_side && !self.ships.iter().any(|s| s.side == side && s.alive && s.abilities.iter().any(|a| a.autocast)) {
                 continue;
             }

@@ -16,6 +16,8 @@ pub enum Cheat {
     },
     /// Raise the issuing faction's tech level by one (up to the maximum).
     TechUp,
+    /// Only mark the game as cheated (used by the battle cheats, which act inside the tactical sim).
+    MarkCheated,
     /// Stop (or resume) the galaxy AI.
     AiPaused(bool),
 }
@@ -47,6 +49,7 @@ pub(crate) fn apply(world: &World, g: &mut Galaxy, faction: FactionId, cheat: Ch
             f.tech += 1;
         }
         Cheat::AiPaused(on) => g.ai_paused = on,
+        Cheat::MarkCheated => {}
     }
     g.cheated = true;
     Ok(CommandOk::Done)

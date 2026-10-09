@@ -37,4 +37,5 @@ galaxy-play = { path = "../galaxy-play" }
 galaxy-script = { path = "../galaxy-script" }
 eaw-ui = { path = "../eaw-ui" }
 battle-view = { path = "../battle-view" }
+battle-sim = { path = "../battle-sim" }
 
