@@ -405,6 +405,7 @@ fn feed_bar(
             });
         }
     }
+    next.pads_bottom_row = !space_tab && model.planet.is_some();
     let level = (next.month_progress * 10.0).round() / 10.0;
     if panel.bars.get("fight_bar_g") != Some(&level) {
         panel.bars.insert("fight_bar_g".into(), level);
@@ -416,6 +417,7 @@ fn feed_bar(
 
 /// Bar buttons: build pads, tabs, pause and fast-forward.
 fn bar_clicks(
+    remap: Res<eaw_ui::PadRemap>,
     mut clicks: MessageReader<EawButtonClicked>,
     mut bar: ResMut<BarState>,
     selection: Res<PlayerSelection>,
@@ -427,7 +429,7 @@ fn bar_clicks(
     for c in clicks.read() {
         let name = c.name.as_str();
         if let Some(i) = name.strip_prefix("b_create_").and_then(|n| n.parse::<usize>().ok()) {
-            if let (Some(planet), Some(target)) = (selection.planet, bar.pads.get(i).copied().flatten()) {
+            if let (Some(planet), Some(target)) = (selection.planet, bar.pads.get(remap.entry(i)).copied().flatten()) {
                 actions.write(PlayAction::Build { planet, target });
             }
             continue;
@@ -1764,6 +1766,7 @@ fn required_level(a: &galaxy_play::Availability) -> u8 {
 
 /// A press on a greyed-out build pad: say why in the toast (the refusal sound is played by `ui_sounds`).
 fn locked_clicks(
+    remap: Res<eaw_ui::PadRemap>,
     mut clicks: MessageReader<eaw_ui::EawLockedClicked>,
     model: Res<PlayUiModel>,
     bar: Res<BarState>,
@@ -1771,7 +1774,7 @@ fn locked_clicks(
 ) {
     for c in clicks.read() {
         let Some(index) = c.name.strip_prefix("b_create_").and_then(|n| n.parse::<usize>().ok()) else { continue };
-        let (Some(target), Some(menu)) = (bar.pads.get(index).copied().flatten(), model.planet.as_ref()) else { continue };
+        let (Some(target), Some(menu)) = (bar.pads.get(remap.entry(index)).copied().flatten(), model.planet.as_ref()) else { continue };
         let Some(o) = menu.options.iter().find(|o| o.target == target) else { continue };
         toast.0 = format!("{}: {}", o.name, capitalize(&o.availability.reason()));
         toast.1 = 3.5;

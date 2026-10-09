@@ -13,7 +13,7 @@ use bevy::window::PrimaryWindow;
 use crate::EawUiAssets;
 use crate::EawUiSettings;
 use crate::components::{CommandBarComponent, CommandBarDb, ComponentKind};
-use crate::data::{CommandBarData, EawButtonClicked, EawButtonState, ForcedTooltip};
+use crate::data::{CommandBarData, PadRemap, EawButtonClicked, EawButtonState, ForcedTooltip};
 use crate::faction::UiFaction;
 use crate::panels::{
     MinimapKind, MinimapSurface, PanelBarName, PanelData, PanelSlotName, PanelText, is_panel_slot,
@@ -1190,11 +1190,22 @@ pub(crate) fn border_pieces(
     }
 }
 
+/// Pad entities of the bottom row (largest `top`), ordered left to right.
+fn bottom_row_order<'a>(pads: impl Iterator<Item = (Entity, usize, &'a Node)>) -> Vec<Entity> {
+    let px = |v: Val| if let Val::Px(x) = v { x } else { 0.0 };
+    let mut v: Vec<(Entity, usize, f32, f32)> = pads.map(|(e, i, n)| (e, i, px(n.left), px(n.top))).collect();
+    let Some(max_top) = v.iter().map(|p| p.3).reduce(f32::max) else { return Vec::new() };
+    v.retain(|p| (p.3 - max_top).abs() < 4.0);
+    v.sort_by(|a, b| a.2.total_cmp(&b.2).then(a.1.cmp(&b.1)));
+    v.into_iter().map(|p| p.0).collect()
+}
+
 /// Fills queue, pad, selection and ability slots from [`CommandBarData`].
 #[allow(clippy::type_complexity, clippy::too_many_arguments)]
 pub(crate) fn slots(
     fresh: Query<(), Added<Slot>>,
     data: Res<CommandBarData>,
+    mut remap: ResMut<PadRemap>,
     panel: Res<PanelData>,
     mut tex: ResMut<UiTextures>,
     mut images: ResMut<Assets<Image>>,
@@ -1219,7 +1230,26 @@ pub(crate) fn slots(
     if !data.is_changed() && !panel.is_changed() && fresh.is_empty() {
         return;
     }
+    // Structure list of the planet view: entries fill the bottom pad row left to right, other pads stay empty.
+    let bottom_row = if data.pads_bottom_row {
+        bottom_row_order(slots.iter().filter(|s| s.1.kind == SlotKind::Pad).map(|s| (s.0, s.1.index, &*s.3)))
+    } else {
+        Vec::new()
+    };
+    let map: std::collections::HashMap<usize, usize> = slots
+        .iter()
+        .filter(|s| s.1.kind == SlotKind::Pad)
+        .filter_map(|s| bottom_row.iter().position(|&b| b == s.0).map(|r| (s.1.index, r)))
+        .collect();
+    if remap.0 != map {
+        remap.0 = map;
+    }
     for (e, slot, pname, mut node, mut st, mut vis, mut button) in &mut slots {
+        let slot = &if data.pads_bottom_row && slot.kind == SlotKind::Pad {
+            Slot { kind: slot.kind, index: bottom_row.iter().position(|&b| b == e).unwrap_or(usize::MAX) }
+        } else {
+            *slot
+        };
         button.tooltip_literal = match slot.kind {
             SlotKind::Ability => data.abilities.get(slot.index).map(|a| a.tooltip.clone()),
             SlotKind::Pad => data.pads.get(slot.index).map(|p| p.tooltip.clone()).filter(|t| !t.is_empty()),

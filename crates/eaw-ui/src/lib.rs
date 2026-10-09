@@ -27,7 +27,7 @@ use bevy::prelude::*;
 
 pub use components::{CommandBarComponent, CommandBarDb, ComponentKind};
 pub use data::{
-    AbilityEntry, BuildPadEntry, CommandBarData, EawButtonClicked, EawButtonState, EawLockedClicked, ForcedTooltip,
+    AbilityEntry, BuildPadEntry, CommandBarData, PadRemap, EawButtonClicked, EawButtonState, EawLockedClicked, ForcedTooltip,
     QueueEntry, SelectionEntry,
 };
 pub use faction::UiFaction;
@@ -166,6 +166,7 @@ impl Plugin for EawUiPlugin {
             })
             .insert_resource(self.settings.clone())
             .init_resource::<CommandBarData>()
+            .init_resource::<PadRemap>()
             .init_resource::<ForcedTooltip>()
             .init_resource::<PanelData>()
             .init_resource::<TacticalData>()

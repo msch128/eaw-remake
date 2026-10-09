@@ -132,6 +132,8 @@ pub struct CommandBarData {
     pub ability_column: usize,
     /// Which build tab is open (`b_space_tab` / `b_planet_tab`): true for space production.
     pub space_tab: bool,
+    /// Planet-view structure list: pad entries fill only the bottom pad row, left to right (empty pads draw nothing).
+    pub pads_bottom_row: bool,
 }
 
 /// Programmatic override of a button's look (the application owns the state).
@@ -149,3 +151,14 @@ pub struct EawButtonState {
 #[derive(Resource, Debug, Clone, Default)]
 pub struct ForcedTooltip(pub Option<String>);
 
+
+/// Which `pads` entry each `b_create_NN` slot shows while [`CommandBarData::pads_bottom_row`] is set (written by the widgets).
+#[derive(Resource, Debug, Clone, Default)]
+pub struct PadRemap(pub std::collections::HashMap<usize, usize>);
+
+impl PadRemap {
+    /// Entry index behind pad slot `slot` (identity when no remap is active).
+    pub fn entry(&self, slot: usize) -> usize {
+        self.0.get(&slot).copied().unwrap_or(slot)
+    }
+}
