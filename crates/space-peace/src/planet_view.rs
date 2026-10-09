@@ -26,6 +26,8 @@ pub struct PlanetViewState {
     pub base_pads: Vec<Vec3>,
     /// World positions of the round ground-building slots of the lower plate, one per `Special_Structures_Land` (left to right).
     pub ground_slots: Vec<Vec3>,
+    /// World positions of the round orbital-building slots left of the platform, one per `Special_Structures_Space`.
+    pub orbital_slots: Vec<Vec3>,
 }
 
 /// Registers the planet view.
@@ -35,11 +37,11 @@ impl Plugin for PlanetViewPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<PlanetViewState>().add_systems(
             Update,
-            (view_input, view_scene, view_camera.after(crate::camera::apply_camera), view_fade, fit_models)
+            (view_input, view_scene, view_dynamic, view_camera.after(crate::camera::apply_camera), view_fade, fit_models)
                 .chain()
                 .run_if(in_state(AppScreen::Galaxy)),
         );
-        app.add_systems(Update, wheel_test.run_if(in_state(AppScreen::Galaxy)));
+        app.add_systems(Update, (wheel_test, rebuild_test).run_if(in_state(AppScreen::Galaxy)));
     }
 }
 
@@ -105,6 +107,18 @@ mod tests {
     use super::*;
 
     #[test]
+    fn orbital_slots_sit_left_of_the_platform_without_overlap() {
+        for n in 0..=10 {
+            let c = space_slots(n);
+            assert_eq!(c.len(), n);
+            assert!(c.iter().all(|o| o.x < -1.9), "left of the platform: {c:?}");
+            for (i, a) in c.iter().enumerate() {
+                assert!(c.iter().skip(i + 1).all(|b| a.distance(*b) > 0.25), "no overlap: {c:?}");
+            }
+        }
+    }
+
+    #[test]
     fn ground_circles_follow_the_planet_slot_count() {
         for n in 0..=8 {
             let c = circle_slots(n);
@@ -148,10 +162,7 @@ fn view_scene(
     time: Res<Time>,
     mut state: ResMut<PlanetViewState>,
     view: Res<GalaxyView>,
-    sim: Option<Res<SimState>>,
-    catalog: Option<Res<PlayCatalog>>,
     alamo: Option<Res<AlamoFs>>,
-    bridge: Option<Res<crate::play::PlayBridge>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut mats: ResMut<Assets<StandardMaterial>>,
     mut images: ResMut<Assets<Image>>,
@@ -196,53 +207,92 @@ fn view_scene(
     if let Some(model) = &p.1.model {
         commands.spawn((ViewEntity, AlamoModel::new(model.clone()), FitModel { radius: 24.0, spin: 0.01 }, Visibility::Hidden, Transform::from_translation(ORIGIN + Vec3::new(-15.8, -1.0, -15.0))));
     }
+    if let Some(tex) = textures.as_mut().and_then(|t| t.get(&mut images, "i_galactic_organize_land.dds")) {
+        spawn_platform(&mut commands, &mut meshes, &mut mats, tex.handle, land_cell(p.1.terrain.as_deref()), PLAT);
+    }
+    // The three rectangular frames of the upper pad stay empty (EaW's base pads; base editing is out of scope).
+    state.base_pads = [-0.9f32, 0.0, 0.95].iter().map(|x| PLAT + Vec3::new(*x, -0.07, 0.05)).collect();
+}
+
+/// Centre of the platform quad (3.8 x 1.9, facing +Z).
+const PLAT: Vec3 = Vec3::new(0.0, ORIGIN.y - 2.5, ORIGIN.z - 10.0);
+/// Where the star base model hangs, left of the platform (offset from [`PLAT`]).
+const STATION_AT: Vec3 = Vec3::new(-2.78, 1.2, 1.0);
+
+/// Offsets (from the platform centre) of the orbital building slots: two rows of up to five small circles under the station, on the left of the platform.
+fn space_slots(n: usize) -> Vec<Vec3> {
+    (0..n.min(10)).map(|k| Vec3::new(-3.5 + (k % 5) as f32 * 0.36, 0.45 - (k / 5) as f32 * 0.4, 0.05)).collect()
+}
+
+/// Everything that depends on what stands on the planet: the star base, the ground and orbital buildings and their slot circles. Rebuilt
+/// whenever that list changes, so a building finished while the view is open appears at once (the planet, platform and light stay).
+#[derive(Component)]
+struct DynEntity;
+
+#[allow(clippy::too_many_arguments)]
+fn view_dynamic(
+    mut commands: Commands,
+    mut state: ResMut<PlanetViewState>,
+    sim: Option<Res<SimState>>,
+    catalog: Option<Res<PlayCatalog>>,
+    bridge: Option<Res<crate::play::PlayBridge>>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut mats: ResMut<Assets<StandardMaterial>>,
+    scene: Query<(), (With<ViewEntity>, Without<DynEntity>)>,
+    dynamic: Query<Entity, With<DynEntity>>,
+    mut built: Local<Option<(usize, Option<u32>, Vec<u32>, i32, i32)>>,
+) {
+    let Some(view_planet) = state.planet.filter(|_| state.active && !scene.is_empty()) else {
+        *built = None;
+        return;
+    };
+    let (Some(sim), Some(cat)) = (sim.as_deref(), catalog.as_deref()) else { return };
+    let Some(sim_planet) = bridge.as_deref().and_then(|b| b.planet_to_sim.get(view_planet).copied().flatten()) else { return };
+    let Some(ps) = sim.galaxy().planets.get(sim_planet as usize) else { return };
+    let cap = sim.world.planet_capacity(sim.galaxy(), sim_planet);
+    let key = (view_planet, ps.starbase, ps.structures.clone(), cap.ground.total, cap.space.total);
+    if built.as_ref() == Some(&key) {
+        return;
+    }
+    *built = Some(key);
+    for e in &dynamic {
+        commands.entity(e).despawn();
+    }
     // Station: the model of the planet's star base level.
-    let (sim_for_structs, cat_for_structs) = (sim.as_deref(), catalog.as_deref());
-    if let (Some(sim), Some(cat)) = (sim_for_structs, cat_for_structs)
-        && let Some(sb) = sim.galaxy().planets.get(p.0).and_then(|s| s.starbase)
+    if let Some(sb) = ps.starbase
         && let Some(Some(m)) = cat.starbase_models.get(sb as usize)
     {
-        commands.spawn((ViewEntity, AlamoModel::new(m.clone()), FitModel { radius: 1.1, spin: 0.15 }, Visibility::Hidden, Transform::from_translation(ORIGIN + Vec3::new(-2.6, -1.5, -9.0))));
+        commands.spawn((ViewEntity, DynEntity, AlamoModel::new(m.clone()), FitModel { radius: 0.5, spin: 0.15 }, Visibility::Hidden, Transform::from_translation(PLAT + STATION_AT)));
     }
-    if let Some(tex) = textures.as_mut().and_then(|t| t.get(&mut images, "i_galactic_organize_land.dds")) {
-        spawn_platform(&mut commands, &mut meshes, &mut mats, tex.handle, land_cell(p.1.terrain.as_deref()), ORIGIN + Vec3::new(0.0, -2.5, -10.0));
-    }
-    // Slot positions on the platform quad (centre `plat`, 3.8 x 1.9, facing +Z): read off the art.
-    let plat = ORIGIN + Vec3::new(0.0, -2.5, -10.0);
-    // The three rectangular frames of the upper pad stay empty (EaW's base pads; base editing is out of scope).
-    state.base_pads = [-0.9f32, 0.0, 0.95].iter().map(|x| plat + Vec3::new(*x, -0.07, 0.05)).collect();
-    // The circles of the lower plate are the planet's ground building slots, as many as the data says (`planet_capacity`).
-    let sim_planet = bridge.as_deref().and_then(|b| b.planet_to_sim.get(p.0).copied().flatten());
-    let ground_total = match (sim_for_structs, sim_planet) {
-        (Some(sim), Some(sp)) => sim.world.planet_capacity(sim.galaxy(), sp).ground.total,
-        _ => 0,
-    };
-    state.ground_slots = circle_slots(ground_total.max(0) as usize).into_iter().map(|o| plat + o).collect();
-    // The art is an empty strip: the circles are drawn here.
+    // The circles are the slots of the planet, as many as the data says (`planet_capacity`): ground on the lower plate, orbital left of it.
+    state.ground_slots = circle_slots(cap.ground.total.max(0) as usize).into_iter().map(|o| PLAT + o).collect();
+    state.orbital_slots = space_slots(cap.space.total.max(0) as usize).into_iter().map(|o| PLAT + o).collect();
     let ring = mats.add(StandardMaterial { base_color: Color::srgb(0.85, 0.78, 0.55), unlit: true, depth_bias: 50.0, cull_mode: None, ..default() });
-    for at in &state.ground_slots {
+    let ground_ring = meshes.add(Annulus::new(0.125, 0.14));
+    let space_ring = meshes.add(Annulus::new(0.085, 0.1));
+    for (at, mesh, lift) in state.ground_slots.iter().map(|a| (a, &ground_ring, 0.1)).chain(state.orbital_slots.iter().map(|a| (a, &space_ring, 0.0))) {
         commands.spawn((
             ViewEntity,
-            Name::new("ground slot ring"),
-            Mesh3d(meshes.add(Annulus::new(0.125, 0.14))),
+            DynEntity,
+            Name::new("slot ring"),
+            Mesh3d(mesh.clone()),
             MeshMaterial3d(ring.clone()),
-            Transform::from_translation(*at + Vec3::new(0.0, 0.1, 0.03)).with_scale(Vec3::new(1.0, 0.8, 1.0)),
+            Transform::from_translation(*at + Vec3::new(0.0, lift, 0.03)).with_scale(Vec3::new(1.0, 0.8, 1.0)),
         ));
     }
-    if let Some(sim) = sim_for_structs {
-        let cat_for_structs = cat_for_structs;
-        let mut g = 0usize;
-        for &s in &sim_planet.and_then(|sp| sim.galaxy().planets.get(sp as usize)).map(|pl| pl.structures.clone()).unwrap_or_default() {
-            let Some(def) = sim.world.structures.get(s as usize) else { continue };
-            let Some(Some(model)) = cat_for_structs.and_then(|c| c.structure_models.get(s as usize)) else { continue };
-            // Orbital structures stand beside the star base (left side), see `orbital_layout`.
-            if def.orbital {
-                continue;
-            }
+    let (mut g, mut o) = (0usize, 0usize);
+    for &s in &ps.structures {
+        let Some(def) = sim.world.structures.get(s as usize) else { continue };
+        let Some(Some(model)) = cat.structure_models.get(s as usize) else { continue };
+        let (slot, radius) = if def.orbital {
+            o += 1;
+            (state.orbital_slots.get(o - 1), 0.17)
+        } else {
             g += 1;
-            if let Some(at) = state.ground_slots.get(g - 1) {
-                commands.spawn((ViewEntity, AlamoModel::new(model.clone()), FitModel { radius: 0.22, spin: 0.3 }, Visibility::Hidden, Transform::from_translation(*at + Vec3::new(0.0, 0.12, 0.06))));
-            }
+            (state.ground_slots.get(g - 1), 0.22)
+        };
+        if let Some(at) = slot {
+            commands.spawn((ViewEntity, DynEntity, AlamoModel::new(model.clone()), FitModel { radius, spin: 0.3 }, Visibility::Hidden, Transform::from_translation(*at + Vec3::new(0.0, 0.12, 0.06))));
         }
     }
 }
@@ -374,7 +424,7 @@ fn wheel_test(
     mut cam: Single<&mut GalaxyCamera>,
     mut wheel: MessageWriter<bevy::input::mouse::MouseWheel>,
 ) {
-    if st.done || std::env::var_os("SP_PLANET_VIEW_TEST").is_none() {
+    if st.done || std::env::var("SP_PLANET_VIEW_TEST").is_ok_and(|v| v == "rebuild") || std::env::var_os("SP_PLANET_VIEW_TEST").is_none() {
         return;
     }
     let Some(p) = selection.0 else { return };
@@ -434,5 +484,73 @@ fn wheel_test(
             info!("planet-view-test: view never fully opened FAIL");
         }
         _ => {}
+    }
+}
+
+#[derive(Default)]
+struct RebuildTest {
+    frame: u32,
+    models_before: Option<usize>,
+    structures_before: usize,
+    ordered: bool,
+    settle: u32,
+    done: bool,
+}
+
+/// Opt-in self test of the live rebuild (`SP_PLANET_VIEW_TEST=rebuild`, run with `SP_PLANET_VIEW=1 --select <owned planet> --frames 6000`): orders a structure
+/// through the normal build action, speeds the sim up and checks that its model appears in the open view without reopening.
+#[allow(clippy::too_many_arguments)]
+fn rebuild_test(
+    mut st: Local<RebuildTest>,
+    state: Res<PlanetViewState>,
+    sim: Option<Res<SimState>>,
+    catalog: Option<Res<PlayCatalog>>,
+    bridge: Option<Res<crate::play::PlayBridge>>,
+    model: Option<Res<galaxy_play::PlayUiModel>>,
+    mut actions: MessageWriter<galaxy_play::PlayAction>,
+    models: Query<&FitModel, With<DynEntity>>,
+) {
+    if st.done || std::env::var("SP_PLANET_VIEW_TEST").ok().as_deref() != Some("rebuild") {
+        return;
+    }
+    let (Some(sim), Some(cat), Some(bridge)) = (sim, catalog, bridge) else { return };
+    let Some(sp) = state.planet.and_then(|p| bridge.planet_to_sim.get(p).copied().flatten()).filter(|_| state.active && state.blend >= 1.0) else { return };
+    st.frame += 1;
+    let count = models.iter().count();
+    if st.models_before.is_none() && st.frame > 30 {
+        st.models_before = Some(count);
+        st.structures_before = sim.galaxy().planets[sp as usize].structures.len();
+        let pick = model.as_ref().and_then(|m| m.planet.as_ref()).and_then(|m| {
+            m.options.iter().find_map(|o| match o.target {
+                galaxy_play::BuildTarget::Structure(s)
+                    if o.availability.is_available() && !sim.world.structures[s as usize].orbital && matches!(cat.structure_models.get(s as usize), Some(Some(_))) =>
+                {
+                    Some(o.target)
+                }
+                _ => None,
+            })
+        });
+        let Some(target) = pick else {
+            info!("planet-view-test: rebuild: no orderable ground structure with a model FAIL");
+            st.done = true;
+            return;
+        };
+        info!("planet-view-test: rebuild: {} dynamic models, {} structures; ordering {target:?}", count, st.structures_before);
+        actions.write(galaxy_play::PlayAction::Build { planet: sp, target });
+        actions.write(galaxy_play::PlayAction::SetSpeedMultiplier(3000.0));
+        st.ordered = true;
+        return;
+    }
+    if st.ordered && sim.galaxy().planets[sp as usize].structures.len() > st.structures_before {
+        st.settle += 1;
+        if st.settle == 20 {
+            let before = st.models_before.unwrap_or(0);
+            let ok = count == before + 1;
+            info!("planet-view-test: rebuild: {before} -> {count} dynamic models with the view still open: {}", if ok { "PASS" } else { "FAIL" });
+            st.done = true;
+        }
+    } else if st.frame > 5000 {
+        info!("planet-view-test: rebuild: the structure never finished FAIL");
+        st.done = true;
     }
 }
