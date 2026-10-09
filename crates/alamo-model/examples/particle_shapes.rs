@@ -20,14 +20,14 @@ fn main() {
         }
         let Ok(s) = ParticleSystem::parse(&data) else { continue };
         for e in &s.emitters {
-            for (n, sh) in [("pos", &e.position), ("vel", &e.velocity), ("extra", &e.extra)] {
+            for (n, sh) in [("pos", &e.speed_group), ("vel", &e.lifetime_group), ("extra", &e.position_group)] {
                 *kinds.entry((n, sh.kind)).or_default() += 1;
                 examples.entry((n, sh.kind)).or_insert_with(|| {
                     format!("{} {}: min {:?} max {:?} params {:?}", s.name, e.name, sh.min, sh.max, sh.params)
                 });
             }
             let k = if e.speed == 0.0 { "0".to_string() } else if e.speed == 1.0 { "1".into() } else { "other".into() };
-            *speed.entry(format!("vel kind {} speed {k}", e.velocity.kind)).or_default() += 1;
+            *speed.entry(format!("vel kind {} speed {k}", e.lifetime_group.kind)).or_default() += 1;
         }
     }
     for (k, v) in &kinds {

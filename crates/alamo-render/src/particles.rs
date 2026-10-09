@@ -174,6 +174,7 @@ struct Particle {
     vel: Vec3,
     age: f32,
     life: f32,
+    size_mul: f32,
     frame: u32,
     rot: f32,
     spin: f32,
@@ -421,22 +422,25 @@ fn is_light_volume(e: &Emitter) -> bool {
             > MAX_CORONA_SIZE
 }
 
-/// Random point of an emitter position shape. Kind 3 is an ellipsoid volume and kind 4 an
-/// ellipsoid surface, both with the semi-axes in shape params 6..8 (they equal the min/max extents
-/// without the 0.8% padding; Inferred from `debre` 32.4 vs 32.67 and the `Ring` emitter name).
-/// Other kinds (0 point, 1 line, 2) use the min/max box.
-fn sample_position(rt: &mut EmitterRuntime, s: &alamo_model::particle::Shape) -> Vec3 {
-    if matches!(s.kind, 3 | 4) {
-        let axes = [s.params[6], s.params[7], s.params[8]];
-        let half = |i: usize| {
-            if axes[i].abs() > 1e-4 {
-                axes[i].abs()
-            } else {
-                (s.max[i] - s.min[i]).abs() * 0.5
+/// Random vector of a property group (`Emitter::speed_group` / `position_group`). Kinds follow the
+/// public format docs (modtools.petrolution.net, "Particle File Format"): 0 exact value, 3 sphere
+/// (radius `params[1]`, surface only when `params[2] != 0`), 4 cylinder (radius `params[3]`, surface
+/// when `params[4] != 0`, height `params[5]`, axis Y). In the shipped data kind 1 is a `min..max` box and
+/// kind 2 a cube of side `params[0]` (the doc has these two the other way round). The `min`/`max`
+/// floats of sphere and cylinder groups are stale editor values and must not be used there.
+fn sample_group(rt: &mut EmitterRuntime, s: &alamo_model::particle::Shape) -> Vec3 {
+    match s.kind {
+        1 => sample_box(rt, s.min, s.max),
+        2 => {
+            let h = s.params[0].abs() * 0.5;
+            sample_box(rt, [-h; 3], [h; 3])
+        }
+        3 => {
+            let r = s.params[1].abs();
+            if r <= 0.0 {
+                return Vec3::ZERO;
             }
-        };
-        let r = Vec3::new(half(0), half(1), half(2));
-        if r.max_element() > 0.0 {
+            let surface = s.params[2] != 0.0;
             let dir = loop {
                 let d = Vec3::new(
                     rt.range(-1.0, 1.0),
@@ -445,18 +449,30 @@ fn sample_position(rt: &mut EmitterRuntime, s: &alamo_model::particle::Shape) ->
                 );
                 let l = d.length();
                 if l > 1e-3 && l <= 1.0 {
-                    break if s.kind == 4 { d / l } else { d };
+                    break if surface { d / l } else { d };
                 }
             };
-            return dir * r;
+            dir * r
         }
+        4 => {
+            let (r, h) = (s.params[3].abs(), s.params[5].abs());
+            let surface = s.params[4] != 0.0;
+            let (x, z) = loop {
+                let (x, z) = (rt.range(-1.0, 1.0), rt.range(-1.0, 1.0));
+                let l = (x * x + z * z).sqrt();
+                if l > 1e-3 && l <= 1.0 {
+                    break if surface { (x / l, z / l) } else { (x, z) };
+                }
+            };
+            Vec3::new(x * r, rt.range(-0.5, 0.5) * h, z * r)
+        }
+        _ => Vec3::new(s.params[6], s.params[7], s.params[8]),
     }
-    sample_box(rt, s.min, s.max)
 }
 
 fn spawn_particle(e: &Emitter, rt: &mut EmitterRuntime, to_world: &Affine3A, scale: f32) {
-    let local_pos = sample_position(rt, &e.position);
-    let mut local_vel = sample_box(rt, e.velocity.min, e.velocity.max);
+    let local_pos = sample_group(rt, &e.position_group);
+    let mut local_vel = sample_group(rt, &e.speed_group);
     // `speed` (property 0x09) is a radial speed away from the emitter origin; negative values pull the
     // particles inward (`inwardsucking` has -350, explosion fire +135). Inferred from names and magnitudes.
     if e.speed != 0.0 {
@@ -485,11 +501,16 @@ fn spawn_particle(e: &Emitter, rt: &mut EmitterRuntime, to_world: &Affine3A, sca
     let spin = e.spin.at(rt.rand()).to_radians() * sign;
     let frame = 0;
     let _ = scale;
+    // `randomizedLifetime` (format docs): life in `lifetime * (1 - r) ..= lifetime`.
+    let life = e.lifetime * (1.0 - e.randomized_lifetime * rt.rand());
+    // `randomizedScale`: applied like the lifetime one, size in `(1 - r) ..= 1` of the track (Inferred, the docs do not say).
+    let size_mul = 1.0 - e.randomized_scale * rt.rand();
     rt.particles.push(Particle {
         pos,
         vel,
         age: 0.0,
-        life: e.lifetime,
+        life: life.max(0.001),
+        size_mul,
         frame,
         rot,
         spin,
@@ -614,7 +635,7 @@ fn build_quads(
             e.color[1].at(t) * color_gain,
             e.color[2].at(t) * color_gain,
         );
-        let size = e.size.at(t) * scale * size_gain;
+        let size = e.size.at(t) * scale * size_gain * p.size_mul;
         if a <= 0.001 || size <= 0.0 {
             continue;
         }

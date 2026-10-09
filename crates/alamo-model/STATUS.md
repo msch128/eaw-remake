@@ -11,6 +11,7 @@ Parses Alamo engine assets into engine-neutral data. Depends only on `alamo-fs`.
 - Particle systems (`ParticleSystem::parse`, `.alo` with root 0x900): emitters, shapes, 7 tracks
   (R,G,B,A,size,frame,spin), blend mode, flags. 1,505/1,505 parse. Format is reverse engineered;
   inferred fields are marked "Inferred" in doc comments. `light_*`/type-4 emitters are `BlendMode::Light`.
+- Particle property groups (chunk 0x29, three 0x1101 blocks) are, in file order, **initial speed, lifetime, position** (`Emitter::speed_group`, `lifetime_group`, `position_group`), per the public format doc https://modtools.petrolution.net/docs/ParticleFileFormat (Oct 2026). Earlier versions had speed/position swapped and used the lifetime group as a velocity. The doc also names props 0x12 = `randomizedScale` and 0x13 = `randomizedLifetime` (verified: lifetime group min.y = lifetime*(1-0x13) in the data). Shape kinds: 0 exact (`params[6..9]`), 3 sphere (`params[1]` radius, `params[2]` surface), 4 cylinder (`params[3]` radius, `params[4]` surface, `params[5]` height); in the data kind 1 is a min..max box and kind 2 a cube of side `params[0]` (the doc has 1/2 swapped). The doc's property id table is decimal (0x0b outwardAcceleration, 0x0c gravity); our `gravity` still reads 0x0b and `speed` 0x09, unverified.
 - Textures: `image::decode_texture` (DDS DXT1/3/5 + uncompressed, TGA, PNG via own inflate),
   `encode_png`.
 

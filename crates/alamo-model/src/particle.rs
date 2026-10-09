@@ -58,13 +58,16 @@ pub enum BlendMode {
 /// A position, velocity or extra distribution block (`0x1101`).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Shape {
-    /// Shape type: 0 none/box, 1 axis range, 3 box. Inferred.
+    /// Shape type (format docs): 0 exact value (`params[6..9]`), 1 cube of side `params[0]` centred on 0,
+    /// 2 box `min..max`, 3 sphere (radius `params[1]`, surface only if `params[2] != 0`), 4 cylinder
+    /// (radius `params[3]`, surface if `params[4] != 0`, height `params[5]`). The lifetime group is always
+    /// kind 1 with a `min..max` on Y only (redundant).
     pub kind: u32,
     /// Lower corner.
     pub min: [f32; 3],
     /// Upper corner.
     pub max: [f32; 3],
-    /// The remaining nine floats of the block (meaning unknown).
+    /// The remaining nine floats of the block: side length, sphere radius, sphere edge, cylinder radius, cylinder edge, cylinder height, exact value xyz.
     pub params: [f32; 9],
 }
 
@@ -166,12 +169,18 @@ pub struct Emitter {
     pub acceleration: [f32; 3],
     /// Property 0x0b: acceleration along the emitter up axis (mostly 0, otherwise -0.3 .. -145). Inferred (gravity).
     pub gravity: f32,
-    /// Spawn position distribution.
-    pub position: Shape,
-    /// Initial velocity distribution.
-    pub velocity: Shape,
-    /// Third distribution (random velocity / force); meaning inferred.
-    pub extra: Shape,
+    /// First property group: distribution of the particle's initial velocity (units per second). Per the
+    /// public format docs (modtools.petrolution.net ParticleFileFormat) the three groups are, in order,
+    /// initial speed, lifetime and position. Earlier versions of this crate had speed and position swapped.
+    pub speed_group: Shape,
+    /// Second group: lifetime. Always redundant: `min.y = lifetime * (1 - randomized_lifetime)`, `max.y = lifetime`.
+    pub lifetime_group: Shape,
+    /// Third group: distribution of the spawn position relative to the emitter.
+    pub position_group: Shape,
+    /// Property `0x12` (18), `randomizedScale` in the format docs. How it is applied is not documented. Inferred.
+    pub randomized_scale: f32,
+    /// Property `0x13` (19), `randomizedLifetime`: a particle lives `lifetime * (1 - randomized_lifetime * u)`.
+    pub randomized_lifetime: f32,
     /// Red, green, blue and alpha curves.
     pub color: [ColorTrack; 4],
     /// Particle size curve (world units).
@@ -394,9 +403,11 @@ fn parse_emitter(c: &Chunk) -> Result<Emitter> {
         speed: 1.0,
         acceleration: [0.0; 3],
         gravity: 0.0,
-        position: shapes[0],
-        velocity: shapes[1],
-        extra: shapes[2],
+        speed_group: shapes[0],
+        lifetime_group: shapes[1],
+        position_group: shapes[2],
+        randomized_scale: 0.0,
+        randomized_lifetime: 0.0,
         color,
         size: floats[0].clone(),
         frame: floats[1].clone(),
@@ -430,6 +441,8 @@ fn parse_emitter(c: &Chunk) -> Result<Emitter> {
         e.prop_f32(0x12).unwrap_or(0.0),
         e.prop_f32(0x13).unwrap_or(0.0),
     );
+    e.randomized_scale = e.unknown_fractions.0.clamp(0.0, 1.0);
+    e.randomized_lifetime = e.unknown_fractions.1.clamp(0.0, 1.0);
     e.initial_delay = e.prop_f32(0x24).unwrap_or(0.0).max(0.0);
     e.spawn_interval = e.prop_f32(0x25).unwrap_or(0.0).max(0.0);
     e.max_particles = e.prop_u32(0x26).unwrap_or(0);

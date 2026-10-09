@@ -33,12 +33,12 @@ fn main() {
             c(3),
             e.world_space,
             e.oriented,
-            e.position.kind,
-            e.position.min,
-            e.position.max,
-            e.velocity.kind,
-            e.velocity.min,
-            e.velocity.max,
+            e.speed_group.kind,
+            e.speed_group.min,
+            e.speed_group.max,
+            e.lifetime_group.kind,
+            e.lifetime_group.min,
+            e.lifetime_group.max,
         );
     }
 }
