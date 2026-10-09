@@ -105,11 +105,7 @@ fn small_button(parent: &mut ChildSpawnerCommands, text: &str, action: OptionBut
             action,
         ))
         .with_children(|b| {
-            b.spawn((
-                Text::new(text),
-                TextFont { font: FontSource::Family("Bahnschrift".into()), font_size: FontSize::Px(18.0), ..default() },
-                TextColor(Color::WHITE),
-            ));
+            crate::menu::small_caps_label(b, text, TextFont { font: FontSource::Family("Bahnschrift".into()), font_size: FontSize::Px(19.0), ..default() }, Color::WHITE, 0.04);
         });
 }
 

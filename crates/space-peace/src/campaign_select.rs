@@ -287,7 +287,9 @@ fn spawn_screen(commands: &mut Commands, state: &SetupState, options: &NewGameOp
                     Some(_) => (Color::srgb(0.01, 0.01, 0.03), Color::srgb(0.6, 0.65, 0.75), WHITE),
                     None => (Color::srgba(0.05, 0.07, 0.12, 0.8), Color::srgb(0.2, 0.25, 0.35), DIM),
                 };
-                let mut e = f.spawn((node, BackgroundColor(bg), BorderColor::all(border), children![tx(label.to_uppercase(), 15.0, color)]));
+                let mut e = f.spawn((node, BackgroundColor(bg), BorderColor::all(border)));
+                let font = TextFont { font: FontSource::Family("Bahnschrift".into()), font_size: FontSize::Px(16.0), ..default() };
+                e.with_children(|b| crate::menu::small_caps_label(b, &label, font, color, 0.04));
                 if let Some(c) = click {
                     e.insert((Button, c));
                 }

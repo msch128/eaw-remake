@@ -253,6 +253,8 @@ const BUTTON_SLICES: [&str; 3] = ["i_dialogue_button_large_left.tga", "i_dialogu
 /// Button size in design pixels (the screen is 768 design px high): 400 x 44 of the 1080p video, 56 px apart.
 const MENU_BUTTON_SIZE: Vec2 = Vec2::new(285.0, 31.0);
 const MENU_BUTTON_GAP: f32 = 9.0;
+/// Grey body of the Remake's buttons (the slice art only brings the bevel border and a faint shade).
+const MENU_FILL: Color = Color::srgba(0.15, 0.16, 0.17, 0.96);
 
 fn spawn_original_main_menu(commands: &mut Commands, spec: &MenuSpec, slices: [Handle<Image>; 3]) -> Entity {
     let items: Vec<&MenuItem> = spec.columns.iter().flat_map(|c| c.items.iter()).collect();
@@ -264,11 +266,15 @@ fn spawn_original_main_menu(commands: &mut Commands, spec: &MenuSpec, slices: [H
             GlobalZIndex(20),
         ))
         .with_children(|root| {
-            // Our own title, upper right where the Remake shows its logo.
-            root.spawn(Node { position_type: PositionType::Absolute, right: Val::Px(40.0), top: Val::Px(24.0), flex_direction: FlexDirection::Column, align_items: AlignItems::FlexEnd, ..default() })
+            // Our own title, upper right where the Remake shows its logo: gold, ruled like the plate (no logo art).
+            let gold = Color::srgb(0.82, 0.6, 0.24);
+            let serif = |size: f32| TextFont { font: FontSource::Family("Georgia".into()), font_size: FontSize::Px(size), ..default() };
+            root.spawn(Node { position_type: PositionType::Absolute, right: Val::Px(40.0), top: Val::Px(20.0), width: Val::Px(300.0), flex_direction: FlexDirection::Column, align_items: AlignItems::Center, ..default() })
                 .with_children(|t| {
-                    t.spawn((Text::new(spec.title.to_uppercase()), font(40.0), TextColor(Color::srgb(0.95, 0.96, 0.98)), TextShadow { offset: Vec2::splat(2.0), color: Color::srgba(0.0, 0.0, 0.1, 0.9) }));
-                    t.spawn((Text::new(spec.subtitle.to_uppercase()), font(18.0), TextColor(Color::srgb(0.55, 0.72, 1.0)), TextShadow { offset: Vec2::splat(1.5), color: Color::srgba(0.0, 0.0, 0.1, 0.9) }));
+                    t.spawn((Node { width: Val::Percent(100.0), height: Val::Px(2.0), margin: UiRect::bottom(Val::Px(4.0)), ..default() }, BackgroundColor(gold)));
+                    small_caps_label(t, &spec.title, serif(40.0), gold, 0.0);
+                    t.spawn((Node { width: Val::Percent(100.0), height: Val::Px(1.0), margin: UiRect::vertical(Val::Px(3.0)), ..default() }, BackgroundColor(gold)));
+                    t.spawn((Text::new(spec.subtitle.to_uppercase()), serif(14.0), TextColor(gold), bevy::text::LetterSpacing::Rem(0.35)));
                 });
             root.spawn(Node { position_type: PositionType::Absolute, right: Val::Px(43.0 * 0.711), bottom: Val::Px(27.0 * 0.711), flex_direction: FlexDirection::Column, row_gap: Val::Px(MENU_BUTTON_GAP), ..default() })
                 .with_children(|col| {
@@ -284,7 +290,7 @@ fn spawn_original_main_menu(commands: &mut Commands, spec: &MenuSpec, slices: [H
                                 align_items: AlignItems::Center,
                                 ..default()
                             },
-                            BackgroundColor(Color::NONE),
+                            BackgroundColor(MENU_FILL),
                         ))
                         .with_children(|b| {
                             // Art: left cap, stretched middle, right cap (behind the label).
@@ -294,7 +300,7 @@ fn spawn_original_main_menu(commands: &mut Commands, spec: &MenuSpec, slices: [H
                                     art.spawn((ImageNode::new(slices[1].clone()).with_mode(NodeImageMode::Stretch), Node { width: Val::Px(MENU_BUTTON_SIZE.x - 2.0 * MENU_BUTTON_SIZE.y), height: Val::Percent(100.0), ..default() }));
                                     art.spawn((ImageNode::new(slices[2].clone()).with_mode(NodeImageMode::Stretch), Node { width: Val::Px(MENU_BUTTON_SIZE.y), height: Val::Percent(100.0), ..default() }));
                                 });
-                            b.spawn((Text::new(item.label.to_uppercase()), font(15.0), TextColor(Color::WHITE), bevy::text::LetterSpacing::Rem(0.08)));
+                            small_caps_label(b, &item.label, font(17.0), Color::WHITE, 0.04);
                         });
                     }
                 });
@@ -565,7 +571,7 @@ fn button_interaction(
 ) {
     for (interaction, button, mut bg, on_panel) in &mut buttons {
         let (idle, hover, pressed) = if on_panel {
-            (Color::NONE, Color::srgba(1.0, 1.0, 1.0, 0.14), Color::srgba(1.0, 1.0, 1.0, 0.28))
+            (MENU_FILL, Color::srgba(0.27, 0.28, 0.3, 0.97), Color::srgba(0.4, 0.41, 0.44, 0.98))
         } else {
             (BUTTON_IDLE, BUTTON_HOVER, BUTTON_PRESSED)
         };
@@ -661,3 +667,22 @@ fn refresh_campaign_menu(
     }
 }
 
+
+/// A label in small caps like the Remake's buttons and titles (every word a full-size capital, the rest smaller capitals).
+pub(crate) fn small_caps_label(parent: &mut ChildSpawnerCommands, text: &str, font: TextFont, color: Color, spacing_rem: f32) {
+    let segs = eaw_ui::small_caps_segments(text);
+    let mut it = segs.into_iter();
+    let Some((first, _)) = it.next() else { return };
+    let rest: Vec<(String, bool)> = it.collect();
+    parent
+        .spawn((Text::new(first), font.clone(), TextColor(color), bevy::text::LetterSpacing::Rem(spacing_rem)))
+        .with_children(|t| {
+            for (s, small) in rest {
+                let mut f = font.clone();
+                if small && let FontSize::Px(px) = f.font_size {
+                    f.font_size = FontSize::Px(px * 0.78);
+                }
+                t.spawn((TextSpan::new(s), f, TextColor(color)));
+            }
+        });
+}
