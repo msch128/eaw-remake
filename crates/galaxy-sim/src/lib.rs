@@ -13,6 +13,7 @@
 //! ```
 
 pub mod ai;
+pub mod cheats;
 mod catalog;
 pub mod combat;
 mod api;

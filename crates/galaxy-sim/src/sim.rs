@@ -157,6 +157,7 @@ impl Sim {
                 let id = self.spawn_units(faction, planet, unit, count.clamp(1, 50));
                 Ok(CommandOk::NewFleet(id))
             }
+            Command::Cheat { faction, cheat } => crate::cheats::apply(&world, g, faction, cheat),
             Command::DestroyPlanet { faction, planet } => {
                 let fleet = g
                     .fleets
@@ -458,7 +459,7 @@ impl Sim {
         }
 
         // AI.
-        if !self.ai.is_empty() && self.galaxy.winner.is_none() {
+        if !self.ai.is_empty() && self.galaxy.winner.is_none() && !self.galaxy.ai_paused {
             self.galaxy.ai_timer += dt;
             if self.galaxy.ai_timer >= w.config.ai_interval_seconds {
                 self.galaxy.ai_timer = 0.0;

@@ -49,6 +49,9 @@ struct TestState {
     ring_fleet: Option<galaxy_sim::FleetId>,
     /// Phase clock value at which a multi-step phase saw its target (tooltip hover, objectives window).
     sub: Option<u32>,
+    /// Step of the cheat menu phase and the credits read before the credit click.
+    cheat_step: u32,
+    credits_before: f64,
 }
 
 #[derive(Clone)]
@@ -132,7 +135,7 @@ fn drive(
         st.t = 0;
         st.found_at = None;
     };
-    if t > 1500 && st.phase > 0 && (st.phase < 10 || (100..115).contains(&st.phase) || (120..122).contains(&st.phase) || (130..132).contains(&st.phase) || (140..144).contains(&st.phase)) {
+    if t > 1500 && st.phase > 0 && (st.phase < 10 || (100..115).contains(&st.phase) || (120..122).contains(&st.phase) || (130..132).contains(&st.phase) || (140..145).contains(&st.phase)) {
         finish(&mut st, "phase timed out", false);
         return;
     }
@@ -394,6 +397,65 @@ fn drive(
                 },
             }
         }
+        // The F2 cheat menu: opens, +5000 credits, AI pause toggles, closes.
+        144 => {
+            use crate::cheat_menu::CheatAction;
+            let centre = |a: CheatAction| tipctx.cheats.iter().find(|c| *c.0 == a && c.1.size().x > 4.0).map(|c| c.2.translation);
+            let credits = sim.as_ref().zip(player.as_ref().and_then(|p| p.0)).map_or(0.0, |(s, f)| s.galaxy().factions[f as usize].credits);
+            let paused_ai = sim.as_ref().is_some_and(|s| s.galaxy().ai_paused);
+            let t0 = *st.sub.get_or_insert(t);
+            let dt = t - t0;
+            match st.cheat_step {
+                0 if dt == 0 => act = Some(Act::Key(KeyCode::F2, Key::F2)),
+                0 if dt == 10 => {
+                    let open = centre(CheatAction::Credits).is_some();
+                    finish(&mut st, "f2-opens-cheat-menu", open);
+                    st.phase = 144;
+                    st.cheat_step = 1;
+                    st.sub = None;
+                    st.found_at = None;
+                    st.credits_before = credits;
+                }
+                1 => {
+                    act = click(&mut st, centre(CheatAction::Credits));
+                    if st.found_at.is_some_and(|f| t == f + 20) {
+                        // Income only adds on top of the 5000.
+                        let ok = credits >= st.credits_before + 5000.0 - 0.5;
+                        finish(&mut st, "cheat-credits-click-adds-5000", ok);
+                        st.phase = 144;
+                        st.cheat_step = 2;
+                        st.found_at = None;
+                    }
+                }
+                2 => {
+                    act = click(&mut st, centre(CheatAction::AiPause));
+                    if st.found_at.is_some_and(|f| t == f + 20) {
+                        finish(&mut st, "cheat-ai-pause-toggles-on", paused_ai);
+                        st.phase = 144;
+                        st.cheat_step = 3;
+                        st.found_at = None;
+                    }
+                }
+                3 => {
+                    act = click(&mut st, centre(CheatAction::AiPause));
+                    if st.found_at.is_some_and(|f| t == f + 20) {
+                        finish(&mut st, "cheat-ai-pause-toggles-off", !paused_ai);
+                        st.phase = 144;
+                        st.cheat_step = 4;
+                        st.sub = None;
+                        st.t = 0;
+                    }
+                }
+                4 if dt == 1 => act = Some(Act::Key(KeyCode::F2, Key::F2)),
+                4 if dt == 12 => {
+                    let closed = centre(CheatAction::Credits).is_none();
+                    finish(&mut st, "f2-closes-cheat-menu", closed);
+                    st.phase = 1;
+                    st.sub = None;
+                }
+                _ => {}
+            }
+        }
         // The "Main Menu" button of the left column opens the pause menu like Esc.
         143 => {
             if t < 20 {
@@ -405,7 +467,10 @@ fn drive(
                 let ok = paused.0;
                 finish(&mut st, "main-menu-button-opens-menu", ok);
                 paused.0 = false;
-                st.phase = 1;
+                st.phase = 144;
+                st.cheat_step = 0;
+                st.sub = None;
+                st.t = 0;
             }
         }
         // 2: Esc opens the pause menu.
@@ -625,6 +690,7 @@ struct TipCtx<'w, 's> {
     buttons: Query<'w, 's, (Entity, &'static EawButton, &'static ComputedNode, &'static UiGlobalTransform, &'static InheritedVisibility)>,
     scroll: Query<'w, 's, (&'static crate::play_ui::ObjectivesScroll, &'static ScrollPosition, &'static ComputedNode, &'static UiGlobalTransform)>,
     assets: Option<Res<'w, eaw_ui::EawUiAssets>>,
+    cheats: Query<'w, 's, (&'static crate::cheat_menu::CheatAction, &'static ComputedNode, &'static UiGlobalTransform)>,
     wheel: MessageWriter<'w, MouseWheel>,
     objectives: ResMut<'w, crate::play_ui::ObjectivesWindow>,
 }

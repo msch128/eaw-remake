@@ -236,6 +236,12 @@ pub struct Galaxy {
     /// the fleet waits as reserve. Absent = no slot ship chosen. Pruned by [`Galaxy::sync_ships`] when the ship leaves or dies; read it with [`Galaxy::hyperspace_ship`].
     #[serde(default)]
     pub hyperspace: BTreeMap<FleetId, (ShipId, UnitTypeId)>,
+    /// A cheat command was used in this game.
+    #[serde(default)]
+    pub cheated: bool,
+    /// The galaxy AI is stopped (cheat).
+    #[serde(default)]
+    pub ai_paused: bool,
     pub(crate) next_ship_id: u64,
     pub(crate) next_fleet_id: FleetId,
     pub(crate) next_battle_id: u32,
@@ -377,6 +383,13 @@ pub enum Command {
         faction: FactionId,
         /// Fleet.
         fleet: FleetId,
+    },
+    /// A cheat of the F2 menu (see [`crate::cheats`]); marks the game as cheated.
+    Cheat {
+        /// Issuing faction.
+        faction: FactionId,
+        /// What to do.
+        cheat: crate::cheats::Cheat,
     },
 }
 
@@ -563,6 +576,8 @@ impl Galaxy {
             rewarded: Default::default(),
             escaping: Default::default(),
             hyperspace: Default::default(),
+            cheated: false,
+            ai_paused: false,
             next_ship_id: 1,
             next_fleet_id: 1,
             next_battle_id: 1,
@@ -683,6 +698,7 @@ impl Galaxy {
             }
             self.hyperspace.get(id).map(|h| h.0).hash(&mut h);
         }
+        (self.cheated, self.ai_paused).hash(&mut h);
         h.finish()
     }
 }

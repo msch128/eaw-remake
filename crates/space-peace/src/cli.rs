@@ -102,6 +102,8 @@ pub struct Args {
     pub hover_selected: bool,
     /// Offscreen only: show the tooltip of this command bar button as if hovered (`--tooltip b_create_00`).
     pub tooltip: Option<String>,
+    /// Offscreen only: open the F2 cheat menu (`--cheat-menu`).
+    pub cheat_menu: bool,
 }
 
 impl Default for Args {
@@ -154,6 +156,7 @@ impl Default for Args {
             size: None,
             hover_selected: false,
             tooltip: None,
+            cheat_menu: false,
         }
     }
 }
@@ -202,6 +205,7 @@ OPTIONS:
   --size <WxH>          Offscreen: render target size (default 3840x2160)
   --hover               Offscreen: hover the selected planet (shows its hover panel)
   --tooltip <button>    Offscreen: show the tooltip of a command bar button (b_create_00, queue00, ...)
+  --cheat-menu          Offscreen: open the F2 cheat menu
   --no-vsync             Disable vertical sync
   --no-audio             Do not open the audio device (implied by --volume 0); the audio logic and SP_AUDIO_LOG still run
   --fullscreen           Start in borderless fullscreen
@@ -295,6 +299,7 @@ impl Args {
                 }
                 "--hover" => out.hover_selected = true,
                 "--tooltip" => out.tooltip = Some(it.next().ok_or("--tooltip needs a button name")?),
+                "--cheat-menu" => out.cheat_menu = true,
                 "--size" => {
                     let v = it.next().ok_or("--size needs WxH")?;
                     let (w, h) = v.split_once(['x', 'X']).ok_or("bad --size (use WxH)")?;
