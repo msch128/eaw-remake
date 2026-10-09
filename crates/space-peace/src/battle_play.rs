@@ -257,6 +257,8 @@ fn begin_session(world: &mut World) {
     let target = world.get_resource::<OffscreenTarget>().map(|t| (t.image.clone(), t.scale_factor));
     let (msaa, bloom, shadows, density) = world.get_resource::<crate::settings::Settings>().map_or((4, true, true, 1.0), |s| (s.msaa, s.bloom, s.shadows, s.particle_density));
     let Some(assets) = world.resource::<Game>().0.clone() else { return };
+    // Test scenario (`SP_TEST_DEFEND=1`): the player takes the defending side (the last one, with the structures) to check the defender HUD.
+    let player = if std::env::var_os("SP_TEST_DEFEND").is_some() { req.sides.last().map(|s| s.faction).or(player) } else { player };
     // Test scenario: pretend the planet cap is reached so the rest of the fleet waits in the reserve.
     if let Some(keep) = args.battle_reserve
         && let Some(side) = req.sides.iter_mut().find(|s| Some(s.faction) == player)

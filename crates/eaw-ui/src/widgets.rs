@@ -1021,12 +1021,13 @@ pub(crate) fn button_clicks(
 #[allow(clippy::type_complexity)]
 pub(crate) fn button_visuals(
     buttons: Query<
-        (&ButtonLayers, &Interaction, &EawButtonState),
+        (&ButtonLayers, &Interaction, &EawButtonState, &EawButton),
         Or<(Changed<Interaction>, Changed<EawButtonState>)>,
     >,
     mut nodes: Query<&mut Node>,
+    mut images: Query<&mut ImageNode>,
 ) {
-    for (l, i, st) in &buttons {
+    for (l, i, st, b) in &buttons {
         let hover = matches!(i, Interaction::Hovered | Interaction::Pressed) || st.force_hover;
         let pressed = matches!(i, Interaction::Pressed) || st.selected;
         let set = |nodes: &mut Query<&mut Node>, e: Option<Entity>, on: bool| {
@@ -1036,7 +1037,16 @@ pub(crate) fn button_visuals(
                 n.display = if on { Display::Flex } else { Display::None };
             }
         };
-        let show_disabled = st.disabled && l.disabled.is_some();
+        // The tactical side buttons (reinforcements, special weapon, beacon) stay a dimmed icon when unavailable, as in the original;
+        // everywhere else the disabled texture replaces the icon.
+        let dimmed_icon = matches!(b.name.as_str(), "b_reinforcement" | "b_special_weapon" | "b_special_weapon2") && l.icon.is_some();
+        if dimmed_icon
+            && let Some(e) = l.icon
+            && let Ok(mut img) = images.get_mut(e)
+        {
+            img.color = if st.disabled { Color::srgba(0.45, 0.5, 0.55, 0.6) } else { Color::WHITE };
+        }
+        let show_disabled = st.disabled && l.disabled.is_some() && !dimmed_icon;
         let show_selected = !st.disabled && pressed && l.selected.is_some();
         set(&mut nodes, l.disabled, show_disabled);
         set(&mut nodes, l.selected, show_selected);

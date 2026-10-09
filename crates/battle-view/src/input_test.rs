@@ -67,6 +67,8 @@ enum Step {
     AutocastToggle,
     /// Esc: cancels the armed order first, then opens the (pausing) menu, then closes it.
     Escape(EscCheck),
+    /// After an attack order the red line goes away again within a few seconds although the ship stays selected.
+    AttackLineExpires,
     /// After a move order the selected ship shows a line to its destination and a ring there.
     MoveLineVisible,
     /// Hover a carrier or station: its unit panel lists the squadrons still in reserve (vacuous without one).
@@ -82,13 +84,14 @@ enum EscCheck {
     Paused(bool),
 }
 
-const STEPS: [Step; 30] = [
+const STEPS: [Step; 31] = [
     Step::SelectShip,
     Step::RightClickGround,
     Step::MoveLineVisible,
     Step::HardpointTooltip,
     Step::CarrierPanel,
     Step::RightClickEnemyRim,
+    Step::AttackLineExpires,
     Step::PlainButton,
     Step::Button("b_fast_forward_t", Check::SpeedIs(2.0)),
     Step::Button("b_fast_forward_t", Check::SpeedIs(1.0)),
@@ -131,6 +134,8 @@ struct TestState {
     place_world: Option<Vec3>,
     /// Camera yaw / pitch at the start and after the horizontal part of a drag.
     ability_clicks: u32,
+    attack_line_seen: bool,
+    attack_ship: Option<u32>,
     hp_marker: Option<Vec2>,
     autocast: Option<(u32, usize, bool)>,
     hp_ship: Option<u32>,
@@ -190,9 +195,10 @@ fn drive(
         Res<eaw_ui::TacticalData>,
         MessageReader<eaw_ui::EawAbilityClicked>,
         Res<crate::control::MoveLines>,
+        ResMut<crate::control::RecentOrders>,
     ),
 ) {
-    let (block, pointer, hover, names, all_nodes, interactions, mut commands, action, armed, reinforce, mut motion, mut keyboard, tactical, mut ability_clicks, move_lines) = extra;
+    let (block, pointer, hover, names, all_nodes, interactions, mut commands, action, armed, reinforce, mut motion, mut keyboard, tactical, mut ability_clicks, move_lines, mut recent) = extra;
     st.ability_clicks += ability_clicks.read().count() as u32;
     let (hp_overlays, hp_tips, mut cams, autocast_rings, panel_stats) = hp_ui;
     let cam_pose = cams.single().map(|c| (c.target_yaw, c.pitch)).unwrap_or_default();
@@ -606,6 +612,37 @@ fn drive(
                     verdict = Some(("hardpoint-tooltip".into(), shown));
                 }
                 _ => {}
+            }
+        }
+        Step::AttackLineExpires => {
+            // Own attack order on the nearest enemy for the first selected ship, issued the way `orders` does (command + "just ordered" window).
+            if t == 0 {
+                let me = sel.ships.iter().copied().find(|id| ships.0.get(id).is_some_and(|s| s.side == player && s.squad == u32::MAX));
+                let from = me.and_then(|id| ships.0.get(&id));
+                let foe = from.and_then(|f| ships.0.values().filter(|s| s.side != player).min_by(|a, b| a.pos.distance(f.pos).total_cmp(&b.pos.distance(f.pos))));
+                match (me, foe) {
+                    (Some(id), Some(foe)) => {
+                        rt.sim.command(player, battle_sim::Command::Attack { ships: vec![id], target: foe.id });
+                        recent.0.insert(id, 3.3);
+                        st.attack_ship = Some(id);
+                    }
+                    _ => verdict = Some(("attack-line-expires (no own ship or no enemy)".into(), true)),
+                }
+            }
+            // The selected ship still has its attack order; only the "just ordered" window may draw the red line.
+            if t == 0 {
+                st.attack_line_seen = false;
+            }
+            if !move_lines.lines.is_empty() {
+                st.attack_line_seen = true;
+            }
+            if move_lines.lines.is_empty() && ((st.attack_line_seen && t >= 30) || t >= 300) {
+                // The order must still stand, otherwise the missing line proves nothing.
+                let still = st.attack_ship.and_then(|id| ships.0.get(&id)).is_none_or(|s| matches!(s.order, battle_sim::Order::Attack(_)));
+                info!("input-test:   attack line seen {} order still active {still}", st.attack_line_seen);
+                verdict = Some(("attack-line-expires".into(), still));
+            } else if t >= 2400 {
+                verdict = Some(("attack-line-expires".into(), false));
             }
         }
         Step::MoveLineVisible => {
