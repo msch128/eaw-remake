@@ -108,3 +108,52 @@ fn the_passive_faction_never_acts_but_the_other_ais_expand() {
     let unit = w.buildable_units[pirates as usize].first().copied().unwrap_or(0);
     assert_eq!(s.apply(Command::BuildUnit { faction: pirates, planet, unit }), Err(CommandError::NotAvailable));
 }
+
+/// The pirates' star base level (1-based, 0 = none) and units on a planet.
+fn pirate_state(sim: &Sim, p: usize) -> (usize, u32) {
+    let (w, g) = (sim.world(), sim.galaxy());
+    let pirates = w.faction_id("Pirates").unwrap();
+    let level = g.planets[p].starbase.map_or(0, |s| w.starbases[s as usize].level.max(0) as usize);
+    let units = g.fleets.values().filter(|f| f.owner == pirates && f.location == FleetLocation::AtPlanet(p as u32)).map(|f| f.unit_count()).sum();
+    (level, units)
+}
+
+#[test]
+fn the_pirates_rearm_with_the_players_tech_in_every_game_and_never_expand() {
+    let Some(data) = load() else { return };
+    for ground_up in [false, true] {
+        let mut s = sim(&data, ground_up);
+        let w = s.world().clone();
+        let pirates = w.faction_id("Pirates").unwrap();
+        let human = w.faction_id("Rebel").unwrap();
+        assert_eq!(w.passive_faction(), Some(pirates), "the pirates are passive in every game");
+        let planets: Vec<usize> = (0..w.planets.len()).filter(|&p| w.real[p] && s.galaxy().planets[p].owner == Some(pirates) && !s.galaxy().planets[p].destroyed).collect();
+        assert!(!planets.is_empty());
+        // Orders of the passive faction are refused.
+        assert!(s.apply(Command::UpgradeTech { faction: pirates, planet: planets[0] as u32 }).is_err());
+        let tech0 = s.galaxy().factions[human as usize].tech;
+        let before: Vec<(usize, u32)> = planets.iter().map(|&p| pirate_state(&s, p)).collect();
+        assert!(before.iter().all(|b| b.0 >= 1), "a base on every pirate planet from the start");
+        // The player reaches tech 4: after two weeks the bases follow and the garrisons grow by one per week up to 2 x tech.
+        s.galaxy_mut().factions[human as usize].tech = 4;
+        for _ in 0..2 {
+            s.step(w.config.week_seconds);
+        }
+        let held: Vec<usize> = planets.iter().copied().filter(|&p| s.galaxy().planets[p].owner == Some(pirates)).collect();
+        assert_eq!(held.len(), planets.len(), "without enemies the pirates neither lose nor gain planets (ground_up {ground_up})");
+        let top = w.starbases.iter().filter(|b| w.faction_id("Pirates").is_some_and(|_| b.name.to_ascii_lowercase().contains("pirate"))).map(|b| b.level).max().unwrap_or(1) as usize;
+        let want = 4.min(top);
+        let mut raised = 0;
+        let mut grew = 0;
+        for &p in &held {
+            let (lvl, units) = pirate_state(&s, p);
+            let idx = planets.iter().position(|&q| q == p).unwrap();
+            assert!(lvl >= before[idx].0, "a base is never lowered");
+            raised += usize::from(lvl >= want);
+            grew += usize::from(units > before[idx].1);
+        }
+        println!("ground_up {ground_up}: tech {tech0} -> 4, {} pirate planets, {raised} at base level >= {want}, {grew} with a bigger garrison", held.len());
+        assert!(raised * 10 >= held.len() * 9, "bases follow the player's tech");
+        assert!(grew > 0, "garrisons grow");
+    }
+}

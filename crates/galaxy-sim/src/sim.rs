@@ -60,6 +60,7 @@ impl Sim {
             let human = sim.world.victory.active_player;
             sim.apply_ground_up(human);
         }
+        sim.rearm_passive(false);
         sim.world.clone().refresh_economy(&mut sim.galaxy);
         Ok(sim)
     }
@@ -495,6 +496,7 @@ impl Sim {
         while self.galaxy.time >= (self.galaxy.week + 1) as f64 * w.config.week_seconds as f64 {
             self.galaxy.week += 1;
             events.push(Event::WeekEnded { week: self.galaxy.week });
+            self.rearm_passive(true);
             self.check_victory(events);
         }
 

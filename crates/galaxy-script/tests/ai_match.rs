@@ -75,7 +75,9 @@ fn remake_ai_builds_moves_and_attacks() {
     assert!(tf.ships_queued > 20, "the AI should build ships");
     assert!(tf.structures_queued > 20, "the AI should build structures");
     assert!(captures > 0, "the AI should conquer planets");
-    assert!(enemy_captures >= 1, "the AI should take planets from enemy owners");
+    // The pirates (the only "enemy" planets near the start) now rearm with the player's tech (level 3 star base and a garrison on every planet), so in 20 weeks the AI
+    // no longer takes planets from them for free; it must still fight.
+    assert!(battles > 0, "the AI should fight ({enemy_captures} captures from enemy owners)");
     // Every faction, the campaign's own Rebel included, started plans.
     let rebel = names.iter().position(|n| n == "Rebel").unwrap() as u32;
     assert!(st.plans_started.keys().any(|(p, _)| *p == rebel), "Rebel AI never acted");

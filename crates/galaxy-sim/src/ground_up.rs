@@ -7,7 +7,7 @@
 
 use crate::state::Command;
 use crate::sim::Sim;
-use crate::world::{FactionId, PlanetId, World};
+use crate::world::{FactionId, PlanetId, StarbaseTypeId, UnitTypeId, World};
 
 /// The playable main factions that get the reduced start.
 const MAIN_FACTIONS: [&str; 3] = ["Rebel", "Empire", "Underworld"];
@@ -15,9 +15,9 @@ const MAIN_FACTIONS: [&str; 3] = ["Rebel", "Empire", "Underworld"];
 const PASSIVE_FACTION: &str = "Pirates";
 
 impl World {
-    /// The passive faction of a "From the Ground Up" game (`None` in every other game).
+    /// The passive faction (the Pirates) in every game: it defends and rearms (see [`Sim::rearm_passive`]) but never builds, moves, attacks or expands.
     pub fn passive_faction(&self) -> Option<FactionId> {
-        if self.config.ground_up { self.faction_id(PASSIVE_FACTION) } else { None }
+        self.faction_id(PASSIVE_FACTION)
     }
 }
 
@@ -108,5 +108,81 @@ impl Sim {
         }
         self.galaxy.sync_ships();
         world.refresh_economy(&mut self.galaxy);
+    }
+}
+
+/// Garrison units per level of the human player's tech that a passive planet holds before it stops growing (estimate: the user's rule, "2 x player tech").
+pub const PASSIVE_GARRISON_PER_TECH: i32 = 2;
+
+impl Sim {
+    /// The tech level the passive faction rearms to: the human player's (`victory.active_player`), else the best of the playable main factions.
+    fn rearm_tech(&self) -> i32 {
+        let world = &self.world;
+        let tech = |f: FactionId| self.galaxy.factions.get(f as usize).map_or(1, |s| s.tech);
+        match world.victory.active_player.filter(|&p| Some(p) != world.passive_faction()) {
+            Some(p) => tech(p),
+            None => MAIN_FACTIONS.iter().filter_map(|n| world.faction_id(n)).map(tech).max().unwrap_or(1),
+        }
+        .max(1)
+    }
+
+    /// The passive faction (Pirates) never expands but rearms with the player's tech (user rule, estimates in `RULES.md`): every planet it holds gets the
+    /// star base of its own chain at level `clamp(player tech, 1, top level)` (raised, never lowered; applied at the start and every week), and
+    /// every week a planet with fewer than `2 x tech` passive units gets one more, picked deterministically from the ship types the passive faction fields
+    /// in the campaign (no heroes, no planet destroyers, cycling by planet and week). It costs nothing and the units never move because the faction
+    /// never gets orders.
+    pub(crate) fn rearm_passive(&mut self, with_garrison: bool) {
+        let world = self.world.clone();
+        let Some(passive) = world.passive_faction() else { return };
+        let tech = self.rearm_tech();
+        // The passive star base chain by level.
+        let mut chain: Vec<StarbaseTypeId> = Vec::new();
+        let mut cur = world.first_starbase.get(passive as usize).copied().flatten();
+        while let Some(id) = cur {
+            if chain.contains(&id) {
+                break;
+            }
+            chain.push(id);
+            cur = world.starbases[id as usize].next;
+        }
+        // The ship types the passive faction fields in the campaign (the data tags them with other factions' affiliations); without any, the neutral
+        // buildable ships.
+        let mut pool: Vec<UnitTypeId> = self.galaxy.fleets.values().filter(|f| f.owner == passive).flat_map(|f| f.units.keys().copied()).collect();
+        pool.sort_unstable();
+        pool.dedup();
+        pool.retain(|&u| {
+            let t = &world.units[u as usize];
+            t.role == crate::world::UnitRole::Ship && !t.hero && !t.planet_destroyer && t.population > 0
+        });
+        if pool.is_empty() {
+            pool = (0..world.units.len() as UnitTypeId)
+                .filter(|&u| {
+                    let t = &world.units[u as usize];
+                    t.role == crate::world::UnitRole::Ship && t.buildable && !t.hero && !t.planet_destroyer && t.population > 0 && t.affiliation.iter().any(|a| a == "neutral")
+                })
+                .collect();
+        }
+        let week = self.galaxy.week;
+        for p in 0..world.planets.len() as PlanetId {
+            let ps = &self.galaxy.planets[p as usize];
+            if ps.owner != Some(passive) || ps.destroyed || !world.real[p as usize] {
+                continue;
+            }
+            if !chain.is_empty() {
+                let want = (tech.clamp(1, chain.len() as i32) - 1) as usize;
+                let have = ps.starbase.and_then(|s| chain.iter().position(|&c| c == s));
+                if have.is_none_or(|h| h < want) {
+                    self.galaxy.planets[p as usize].starbase = Some(chain[want]);
+                }
+            }
+            if with_garrison && !pool.is_empty() {
+                let here: u32 = self.galaxy.fleets.values().filter(|f| f.owner == passive && f.location == crate::state::FleetLocation::AtPlanet(p)).map(|f| f.unit_count()).sum();
+                if (here as i32) < PASSIVE_GARRISON_PER_TECH * tech {
+                    let pick = pool[(p as usize + week as usize) % pool.len()];
+                    crate::sim::add_units(&mut self.galaxy, passive, p, pick, 1);
+                }
+            }
+        }
+        self.galaxy.sync_ships();
     }
 }
