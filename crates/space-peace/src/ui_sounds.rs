@@ -90,7 +90,11 @@ impl Plugin for UiSoundsPlugin {
             Update,
             (load_button_sfx, button_sounds, locked_button_sound, build_sounds, fleet_sounds, production_complete_sounds, capture_bonus_sound)
                 .chain()
-                .run_if(resource_exists::<AlamoAudio>),
+                .run_if(resource_exists::<AlamoAudio>)
+                .run_if(resource_exists::<Messages<PlayAction>>)
+                .run_if(resource_exists::<Messages<PlayEvent>>)
+                .run_if(resource_exists::<Messages<EawButtonClicked>>)
+                .run_if(resource_exists::<Messages<EawLockedClicked>>),
         );
     }
 }
@@ -224,13 +228,13 @@ fn fleet_sounds(
     mut actions: MessageReader<PlayAction>,
     mut st: ResMut<GalaxySoundState>,
     state: Option<Res<SimState>>,
-    player: Res<PlayerFaction>,
-    live: Res<PlayerSelection>,
+    player: Option<Res<PlayerFaction>>,
+    live: Option<Res<PlayerSelection>>,
     game: Res<Game>,
     audio: Res<AlamoAudio>,
     mut sfx: SfxCommands,
 ) {
-    let (Some(state), Some(me)) = (state, player.0) else {
+    let (Some(state), Some(me), Some(live)) = (state, player.and_then(|p| p.0), live) else {
         actions.clear();
         return;
     };
@@ -284,13 +288,13 @@ fn order_line(state: &SimState, game: &Game, fleets: &[FleetId], me: u32, sfx: &
 fn production_complete_sounds(
     mut events: MessageReader<PlayEvent>,
     state: Option<Res<SimState>>,
-    player: Res<PlayerFaction>,
+    player: Option<Res<PlayerFaction>>,
     current: Res<CurrentCampaign>,
     game: Res<Game>,
     mut sfx: SfxCommands,
     mut advisor: MessageWriter<GalaxyAudio>,
 ) {
-    let (Some(state), Some(me)) = (state, player.0) else {
+    let (Some(state), Some(me)) = (state, player.and_then(|p| p.0)) else {
         events.clear();
         return;
     };
@@ -321,8 +325,8 @@ fn production_complete_sounds(
 }
 
 /// `SFXEvent_Planet_Capture_Bonus_Reward` when the player takes a planet.
-fn capture_bonus_sound(mut events: MessageReader<PlayEvent>, player: Res<PlayerFaction>, audio: Res<AlamoAudio>, mut sfx: SfxCommands) {
-    let Some(me) = player.0 else {
+fn capture_bonus_sound(mut events: MessageReader<PlayEvent>, player: Option<Res<PlayerFaction>>, audio: Res<AlamoAudio>, mut sfx: SfxCommands) {
+    let Some(me) = player.and_then(|p| p.0) else {
         events.clear();
         return;
     };
