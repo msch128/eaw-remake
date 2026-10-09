@@ -79,3 +79,8 @@ Offscreen renders live outside the repo (scratch folders). Useful app flags: `--
 `--weeks`, `--build`, `--move`, `--battle-choice fight|auto`, `--battle-auto`, `--battle-seconds`, `--battle-orders`,
 `--via-menu`, `--screen`, `--slots`, `--difficulty`, `--classic-ai`, `--save-to`/`--load-from`.
 Soak: `cargo run --release -p galaxy-play --example soak`.
+
+## Late update 2026-10-09 (c194c85)
+- Done since the evening state: Q1 "Class: Class:" guard, Q2 "credits/week when built", U34 hardpoint attack lines, Q3 game font for refusal texts, U40 unit icons always visible (icon-only for unselected), U45 auto-resolve base factor 0.15 -> 1.5 (bases/garrisons were nearly free), ground-up pirate planets get star bases, Pirates passive in all campaigns and rearm with the player's tech (`Sim::rearm_passive`, RULES.md).
+- Not verified in a window: U34 voice lines (`windowed-battle-audio-victory-line` never run), U40 squadron-icon tweak, Q3 font.
+- Still open: U25 rest, U30, U31, U33, U36, U37, U38, U39, U41, U42, U43, U44, U46; U47 halving reading (remainder vs original hit) awaits the user; auto-resolve vs Empire bases still too optimistic for 2 MC-80.
