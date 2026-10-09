@@ -131,3 +131,26 @@ fn defenders_with_a_station_hold_against_a_small_raid_and_do_not_flee() {
     assert_eq!(r.winner, Some(1));
     assert!(r.groups.iter().filter(|g| g.side == 1).all(|g| g.retreated == 0));
 }
+
+#[test]
+fn player_idle_units_hold_position_and_do_not_automatically_charge() {
+    let Some((data, fs)) = load() else { return };
+    let cat = Arc::new(Catalog::build(&data, Some(&fs), &["Star_Destroyer", "MC-80_Star_Cruiser"]));
+    let mut sides = vec![
+        side(&cat, "Empire", &[("Star_Destroyer", 1)], &[]),
+        side(&cat, "Rebel", &[("MC-80_Star_Cruiser", 1)], &[]),
+    ];
+    sides[0].ai = false; // Player side
+    let mut b = Battle::new(BattleSetup {
+        catalog: cat.clone(),
+        sides,
+        config: BattleConfig { record_events: false, ..BattleConfig::default() },
+    });
+    let p_pos = b.ships.iter().find(|s| s.side == 0).unwrap().pos;
+    // Step forward 300 ticks (10 seconds): player ship with Order::Idle should stay put and not charge towards enemy
+    for _ in 0..300 {
+        b.step();
+    }
+    let p_pos2 = b.ships.iter().find(|s| s.side == 0).unwrap().pos;
+    assert!(p_pos.dist(p_pos2) < 50.0, "player idle unit must hold position: moved from {p_pos:?} to {p_pos2:?}");
+}

@@ -1,4 +1,4 @@
-﻿//! Battle setup, commands and the fixed-step simulation systems.
+//! Battle setup, commands and the fixed-step simulation systems.
 //!
 //! One [`Battle::step`] runs, in order: reinforcements, spatial snapshot, target scans (parallel),
 //! movement (parallel), weapons (parallel, producing fire requests), projectile flight and
@@ -2047,7 +2047,7 @@ fn mov(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, spawn: &
                 Goal::Point(p, def.radius.max(50.0))
             }
         }
-        Order::Attack(_) | Order::AttackMove(_) | Order::Idle if target.is_some() && (aggressive || matches!(s.order, Order::Attack(_))) => {
+        Order::Attack(_) | Order::AttackMove(_) if target.is_some() && (aggressive || matches!(s.order, Order::Attack(_))) => {
             let t = target.expect("checked");
             let d = t.pos.dist(s.pos);
             if fighter {

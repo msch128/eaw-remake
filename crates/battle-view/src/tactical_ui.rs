@@ -15,8 +15,8 @@ use bevy::prelude::*;
 use eaw_ui::textures::UiTextures;
 use eaw_ui::{
     AbilityState, CommandBarMode, CommandBarSpec, EawAbilityClicked, EawButtonClicked, EawCommandBar, EawHardpointClicked, EawMinimapClicked,
-    EawSelectionClicked, EawUiAssets, EawUiCommandsExt, HardpointMarker, MinimapData, MinimapDot, PanelData, PanelSlot, RetreatState,
-    ShellAnchor, ShellSpec, ShipOverlay, TacticalData, TacticalOverlays, TacticalUnit, UiFaction, spawn_shell,
+    EawSelectionClicked, EawUiAssets, EawUiCommandsExt, HardpointMarker, MinimapData, MinimapDot, MinimapSurface, PanelData, PanelSlot, RetreatState,
+    ShellAnchor, ShellSpec, ShipOverlay, TacticalData, TacticalOverlays, TacticalUnit, UiFaction, minimap_to_world, spawn_shell,
 };
 
 use crate::camera::BattleCamera;
@@ -365,8 +365,12 @@ fn sync_minimap(
     }
 }
 
-/// Click or drag on the minimap moves the battle camera.
-fn minimap_pan(mut clicks: MessageReader<EawMinimapClicked>, mut camera: Single<&mut BattleCamera>) {
+/// Click or drag on the minimap moves the battle camera (unless placing reinforcements).
+fn minimap_pan(mut clicks: MessageReader<EawMinimapClicked>, mut camera: Single<&mut BattleCamera>, armed: Res<control::ArmedOrder>) {
+    if armed.0 == Some(control::ArmedKind::Reinforce) {
+        clicks.read().for_each(|_| ());
+        return;
+    }
     if let Some(c) = clicks.read().last() {
         let y = camera.target_focus.y;
         camera.target_focus = Vec3::new(c.world.x, y, -c.world.y);
@@ -1123,6 +1127,8 @@ fn reinforce_place(
     mut commands: Commands,
     mut gizmos: Gizmos,
     ships: Res<RenderedShips>,
+    minimap_surfaces: Query<(&Interaction, &bevy::ui::RelativeCursorPosition), With<MinimapSurface>>,
+    minimap_data: Res<MinimapData>,
 ) {
     let placing = ui.placing.filter(|_| armed.0 == Some(control::ArmedKind::Reinforce));
     let Some((idx, all)) = placing else {
@@ -1181,18 +1187,32 @@ fn reinforce_place(
     for (centre, radius) in no_spawn_zones(&rt, player) {
         draw_no_spawn_zone(&mut gizmos, centre, radius, y);
     }
-    let (Some(ground), Some(cursor)) = (hover.ground, pointer.cursor) else { return };
-    if block.0 {
-        ui.ghost = None;
-        if let Ok((mut n, ..)) = labels.get_mut(label) {
-            n.display = Display::None;
+    let Some(cursor) = pointer.cursor else { return };
+    let minimap_hit = minimap_surfaces.iter().find_map(|(_, rel)| {
+        let n = rel.normalized?;
+        if !(-0.5..=0.5).contains(&n.x) || !(-0.5..=0.5).contains(&n.y) {
+            return None;
         }
-        if let Some((e, ..)) = ui.ghost_model.take() {
-            commands.entity(e).try_despawn();
+        let normalized = Vec2::new(n.x + 0.5, 0.5 - n.y);
+        let world = minimap_data.bounds.map_or(normalized, |b| minimap_to_world(b, normalized));
+        Some((Vec3::new(world.x, 0.0, -world.y), battle_sim::Vec3::new(world.x, world.y, 0.0)))
+    });
+    let (ground, sim_pos) = if let Some((m_ground, m_sim)) = minimap_hit {
+        (m_ground, m_sim)
+    } else {
+        let Some(ground) = hover.ground else { return };
+        if block.0 {
+            ui.ghost = None;
+            if let Ok((mut n, ..)) = labels.get_mut(label) {
+                n.display = Display::None;
+            }
+            if let Some((e, ..)) = ui.ghost_model.take() {
+                commands.entity(e).try_despawn();
+            }
+            return;
         }
-        return;
-    }
-    let sim_pos = crate::convert::bevy_to_sim(ground);
+        (ground, crate::convert::bevy_to_sim(ground))
+    };
     let verdict = place_check(&rt, player, sim_pos, row.1, count);
     let ok = verdict.is_ok();
     ui.ghost = Some(Ghost { ground, why_not: verdict.err() });

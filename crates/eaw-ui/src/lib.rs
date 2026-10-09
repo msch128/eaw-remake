@@ -1,4 +1,4 @@
-﻿//! Original Empire at War interface rebuilt in Bevy UI from the game's own data and textures.
+//! Original Empire at War interface rebuilt in Bevy UI from the game's own data and textures.
 //!
 //! * [`textures`]: the `MT_CommandBar` mega texture and loose UI textures as Bevy images.
 //! * [`components`]: `CommandBarComponents.xml` (look of every element).
@@ -33,7 +33,7 @@ pub use data::{
 pub use faction::UiFaction;
 pub use panels::{
     BANNER_AUTO, BANNER_BEGIN, BannerSide, BattleBannerSpec, DialogSpec, EawDialogResult, EawMinimapClicked, EawSlotDropped, MinimapData, MinimapDot,
-    MinimapKind, PanelData, PanelSlot, fleet_slot_name, spawn_battle_banner, spawn_dialog,
+    MinimapKind, MinimapSurface, PanelData, PanelSlot, fleet_slot_name, minimap_to_world, spawn_battle_banner, spawn_dialog,
 };
 pub use panels::MinimapFog;
 pub use tactical::{TacticalOverlayRoot, 
