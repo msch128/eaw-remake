@@ -118,6 +118,12 @@ pub enum DifficultyTier {
     Fair,
 }
 
+/// Minor factions (`GC_MinorAi`) expand and attack only cautiously (estimate, the user asked for it): they weigh attacks down, ask a larger force margin and
+/// keep more at home. The same strategic layer and attack logic as the major factions, with these multipliers.
+pub fn minor_personality() -> Personality {
+    Personality { aggression: 0.6, expansion: 0.7, caution: 1.4 }
+}
+
 /// Default personalities (estimates): the Empire presses harder, the Rebels expand and stay careful, the Underworld is cautious.
 pub fn default_personalities() -> std::collections::HashMap<String, Personality> {
     let p = |aggression, expansion, caution| Personality { aggression, expansion, caution };
@@ -369,7 +375,7 @@ impl ScriptedSim {
             if id == human || ["neutral", "hostile"].iter().any(|n| f.name.eq_ignore_ascii_case(n)) {
                 continue;
             }
-            let base = config.personalities.get(&f.name.to_ascii_lowercase()).copied().unwrap_or_default();
+            let base = config.personalities.get(&f.name.to_ascii_lowercase()).copied().unwrap_or_else(|| if minor.contains(&id) { minor_personality() } else { Personality::default() });
             let (pers, opening) = draw_character(seed, &f.name, base, config.variety);
             engine.strategy.config.personalities.insert(id, pers);
             engine.strategy.config.openings.insert(id, opening);
@@ -583,6 +589,21 @@ fn tier_settings(table: &alamo_data::DifficultyTable, tier: DifficultyTier, mino
         DifficultyTier::Fair => {
             let a = entry("Normal");
             (galaxy_sim::Difficulty::default(), ai("Fair", &a, false))
+        }
+    }
+}
+
+#[cfg(test)]
+mod minor_tests {
+    use super::*;
+
+    #[test]
+    fn minor_factions_are_more_cautious_than_the_defaults() {
+        let m = minor_personality();
+        let d = Personality::default();
+        assert!(m.aggression < d.aggression && m.expansion < d.expansion && m.caution > d.caution);
+        for (name, p) in default_personalities() {
+            assert!(m.aggression < p.aggression, "{name}");
         }
     }
 }
