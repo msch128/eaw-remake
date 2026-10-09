@@ -376,6 +376,18 @@ impl TurretAim {
     }
 }
 
+/// Yaw and pitch (radians from the rest pose) that make a turret face `v`, a point in the yaw bone's rest frame relative to its pivot (barrels point along +X,
+/// Z is up), clamped to the turret's limits. The pitch is measured after yawing.
+pub fn desired_angles(v: Vec3, yaw_limits: Option<(f32, f32)>, pitch_limits: (f32, f32)) -> (f32, f32) {
+    let yaw = v.y.atan2(v.x);
+    let yaw = match yaw_limits {
+        Some((lo, hi)) => yaw.clamp(lo, hi),
+        None => yaw,
+    };
+    let pitch = v.z.atan2(v.x.hypot(v.y)).clamp(pitch_limits.0, pitch_limits.1);
+    (yaw, pitch)
+}
+
 fn step_angle(current: f32, desired: f32, max: f32) -> f32 {
     let d = (desired - current + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU)
         - std::f32::consts::PI;
@@ -413,17 +425,9 @@ pub fn aim_turrets(
         // Target in the yaw bone's rest frame.
         let local = parent_gt.affine().inverse().transform_point3(aim.target) - pivot;
         let v = rest_y.rotation.inverse() * local;
-        let desired_yaw = v.y.atan2(v.x);
-        let desired_yaw = match aim.yaw_limits {
-            Some((lo, hi)) => desired_yaw.clamp(lo, hi),
-            None => desired_yaw,
-        };
+        let (desired_yaw, desired_pitch) = desired_angles(v, aim.yaw_limits, aim.pitch_limits);
         let step = aim.turn_rate * dt;
         aim.yaw = step_angle(aim.yaw, desired_yaw, step);
-        // Pitch is measured in the frame after yawing, relative to the barrel pivot.
-        let desired_pitch =
-            v.z.atan2(v.x.hypot(v.y))
-                .clamp(aim.pitch_limits.0, aim.pitch_limits.1);
         aim.pitch += (desired_pitch - aim.pitch).clamp(-step, step);
         let (yaw, pitch) = (aim.yaw, aim.pitch);
         if let Ok((mut t, _, _)) = bones.get_mut(ye) {
@@ -494,5 +498,52 @@ mod tests {
         let a = step_angle(3.0, -3.0, 1.0);
         assert!(a > 3.0, "takes the short way around: {a}");
         assert_eq!(step_angle(0.0, 0.5, 1.0), 0.5);
+    }
+}
+
+#[cfg(test)]
+mod aim_tests {
+    use super::*;
+    use std::f32::consts::{FRAC_PI_2, FRAC_PI_4, PI};
+
+    const FREE: Option<(f32, f32)> = None;
+    const PITCH: (f32, f32) = (-0.09, 1.48);
+
+    #[test]
+    fn faces_the_target_in_yaw_and_pitch() {
+        let (y, p) = desired_angles(Vec3::new(10.0, 0.0, 0.0), FREE, PITCH);
+        assert!(y.abs() < 1e-6 && p.abs() < 1e-6, "straight ahead");
+        let (y, _) = desired_angles(Vec3::new(0.0, 5.0, 0.0), FREE, PITCH);
+        assert!((y - FRAC_PI_2).abs() < 1e-6, "left");
+        let (y, _) = desired_angles(Vec3::new(-3.0, 0.0, 0.0), FREE, PITCH);
+        assert!((y.abs() - PI).abs() < 1e-6, "behind");
+        let (_, p) = desired_angles(Vec3::new(4.0, 0.0, 4.0), FREE, PITCH);
+        assert!((p - FRAC_PI_4).abs() < 1e-6, "45 degrees up");
+        // Two different targets give two different aims.
+        let a = desired_angles(Vec3::new(10.0, 10.0, 0.0), FREE, PITCH);
+        let b = desired_angles(Vec3::new(10.0, -10.0, 3.0), FREE, PITCH);
+        assert!(a.0 > 0.0 && b.0 < 0.0 && a != b);
+    }
+
+    #[test]
+    fn limits_clamp_the_aim() {
+        let limits = Some((-0.5, 0.5));
+        let (y, _) = desired_angles(Vec3::new(0.0, 5.0, 0.0), limits, PITCH);
+        assert!((y - 0.5).abs() < 1e-6, "a target to the side stops at the yaw limit");
+        let (_, p) = desired_angles(Vec3::new(0.1, 0.0, 9.0), FREE, PITCH);
+        assert!((p - 1.48).abs() < 1e-6, "pitch stops at the elevate limit");
+        let (_, p) = desired_angles(Vec3::new(5.0, 0.0, -9.0), FREE, PITCH);
+        assert!((p + 0.09).abs() < 1e-6, "and barely below the horizon");
+    }
+
+    #[test]
+    fn turning_is_rate_limited_and_takes_the_short_way() {
+        assert!((step_angle(0.0, 1.0, 0.2) - 0.2).abs() < 1e-6, "no more than the rate allows");
+        assert!((step_angle(0.0, 0.1, 0.2) - 0.1).abs() < 1e-6, "arrives exactly");
+        // From +170 degrees to -170 degrees: 20 degrees through 180, not 340 the other way.
+        let from = 170f32.to_radians();
+        let to = -170f32.to_radians();
+        let next = step_angle(from, to, 0.1);
+        assert!(next > from, "keeps turning the same way round: {next}");
     }
 }

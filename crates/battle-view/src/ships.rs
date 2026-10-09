@@ -256,6 +256,10 @@ pub fn update_ships(
             Some(&e) => e,
             None => {
                 let mut spec = AlamoModel::new(model).with_team_color(visuals.team_color(s.side));
+                // Turrets and art pieces of the unit's hardpoints hang on the hull's bones (see `turrets.rs`).
+                if !matches!(def.class, TargetClass::Fighter | TargetClass::Bomber) {
+                    spec = spec.with_unit(def.name.clone());
+                }
                 if matches!(def.class, TargetClass::Fighter | TargetClass::Bomber) {
                     spec = spec.with_lod(LodSelect::MostDetailed);
                 }

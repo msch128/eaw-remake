@@ -20,6 +20,10 @@ pub struct HpSnap {
     pub alive: bool,
     /// Remaining health.
     pub health: f32,
+    /// Ship id this hardpoint is shooting at (its current volley, else the ship's auto target); `u32::MAX` = none. Turrets turn toward it.
+    pub target: u32,
+    /// Hardpoint of the target being aimed at (`u16::MAX` = the ship's centre).
+    pub target_hp: u16,
 }
 
 /// One ship at the end of a step.
@@ -137,6 +141,8 @@ fn snapshot(battle: &Battle, events: Vec<Event>, step_ms: f32) -> Snapshot {
                     .map(|h| HpSnap {
                         alive: h.alive,
                         health: h.health,
+                        target: if h.pulses_left > 0 || s.target == battle_sim::NONE { h.target } else { s.target },
+                        target_hp: s.target_hp,
                     })
                     .collect(),
                 abilities: s.abilities.iter().map(|a| (a.active, a.cooldown)).collect(),
