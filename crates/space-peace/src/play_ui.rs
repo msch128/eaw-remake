@@ -39,7 +39,7 @@ pub(crate) enum BarClass {
     Frigate,
     /// `b_filters_capital`: capital and super capital ships.
     Capital,
-    /// `b_filters_station`: the star base upgrade.
+    /// `b_filters_station`: stations and freighters, with the star base, orbital structures, upgrades, tech and heroes.
     Station,
 }
 
@@ -54,15 +54,22 @@ impl BarClass {
         })
     }
 
-    /// Whether a build option of `category` belongs to this class.
-    fn matches(self, category: galaxy_play::BuildCategory) -> bool {
+    /// The class filter a build entry belongs to. Every entry belongs to exactly one: heroes, orbital structures, the star
+    /// base, tech and research items and transports go with the stations / freighters filter.
+    pub(crate) fn of(category: galaxy_play::BuildCategory, hero: bool) -> Self {
         use galaxy_play::BuildCategory as C;
-        match self {
-            Self::Corvette => matches!(category, C::Squadrons | C::Corvettes),
-            Self::Frigate => category == C::Frigates,
-            Self::Capital => category == C::Capitals,
-            Self::Station => category == C::Starbase,
+        match category {
+            _ if hero => Self::Station,
+            C::Squadrons | C::Corvettes => Self::Corvette,
+            C::Frigates => Self::Frigate,
+            C::Capitals => Self::Capital,
+            C::Starbase | C::Tech | C::Research | C::Structures | C::Other => Self::Station,
         }
+    }
+
+    /// Whether a build option belongs to this class.
+    fn matches(self, category: galaxy_play::BuildCategory, hero: bool) -> bool {
+        Self::of(category, hero) == self
     }
 }
 
@@ -469,7 +476,7 @@ fn feed_bar(
         let listed: Vec<_> = menu
             .options
             .iter()
-            .filter(|o| on_space_tab(&state.world, o.target) == space_tab && (!space_tab || class.is_none_or(|c| c.matches(o.category))))
+            .filter(|o| on_space_tab(&state.world, o.target) == space_tab && (!space_tab || class.is_none_or(|c| c.matches(o.category, is_hero(&state.world, o.target)))))
             .filter(|o| space_tab || !matches!(o.availability, galaxy_play::Availability::Requires(_)))
             .take(MAX_PADS)
             .collect();
@@ -1912,6 +1919,57 @@ mod tests {
         assert!(text.contains("@Space slots	"));
     }
 
+
+    #[test]
+    fn every_entry_of_a_real_space_menu_belongs_to_exactly_one_class_filter() {
+        use alamo_fs::{GameFs, GameInstall};
+        use galaxy_play::{BuildCategory, BuildMenu, BuildTarget, PlayCatalog};
+        let Some(install) = GameInstall::detect() else { return };
+        if !install.mod_data("1770851727").is_dir() {
+            eprintln!("skipping: Remake workshop mod not found");
+            return;
+        }
+        let data = alamo_data::load_galaxy(&GameFs::for_mod(&install, Some("1770851727")).unwrap()).0;
+        let campaign = data.campaign("GC_Full_Web_Way_Rebel").unwrap();
+        let mut sim = galaxy_sim::Sim::new(&data, campaign, galaxy_sim::SimConfig { victory_enabled: false, ..Default::default() }).unwrap();
+        let w = sim.world().clone();
+        let names = PlayCatalog::from_data(&w, &data);
+        let empire = w.faction_id("Empire").unwrap();
+        let p = w.planet_id("Coruscant_WW").unwrap();
+        sim.set_planet_owner(p, None);
+        sim.set_planet_owner(p, Some(empire));
+        let mut sb = w.first_starbase[empire as usize];
+        for _ in 1..3 {
+            sb = sb.and_then(|b| w.starbases[b as usize].next);
+        }
+        sim.set_starbase(p, sb);
+        sim.add_credits(empire, 1.0e9);
+        sim.set_tech_level(empire, 9);
+        for n in ["E_Shipyard_1", "E_Shipyard_2", "E_Shipyard_3"] {
+            assert!(sim.add_structure(p, w.structure_id(n).unwrap()));
+        }
+        let menu = BuildMenu::for_planet(&w, sim.galaxy(), &names, empire, p).expect("menu");
+        let all = [BarClass::Corvette, BarClass::Frigate, BarClass::Capital, BarClass::Station];
+        let mut per_class = [0usize; 4];
+        let (mut heroes, mut starbase, mut tech) = (0, 0, 0);
+        for o in menu.options.iter().filter(|o| crate::play::on_space_tab(&w, o.target)) {
+            let hero = is_hero(&w, o.target);
+            let hits: Vec<_> = all.iter().enumerate().filter(|(_, c)| c.matches(o.category, hero)).collect();
+            assert_eq!(hits.len(), 1, "{} ({:?}, hero {hero}) must belong to exactly one filter", o.name, o.category);
+            per_class[hits[0].0] += 1;
+            if hero {
+                heroes += 1;
+                assert_eq!(BarClass::of(o.category, hero), BarClass::Station, "hero {} goes with the stations filter", o.name);
+            }
+            starbase += usize::from(matches!(o.target, BuildTarget::Starbase(_)));
+            tech += usize::from(o.category == BuildCategory::Tech);
+        }
+        println!("space menu entries per filter (corvette, frigate, capital, station): {per_class:?}; heroes {heroes}, star base {starbase}, tech {tech}");
+        assert!(heroes > 0 && per_class.iter().all(|&n| n > 0), "the test planet should list entries of every filter and heroes: {per_class:?}");
+        assert_eq!(BarClass::of(BuildCategory::Starbase, false), BarClass::Station);
+        assert_eq!(BarClass::of(BuildCategory::Tech, false), BarClass::Station);
+        assert_eq!(BarClass::of(BuildCategory::Structures, false), BarClass::Station);
+    }
     #[test]
     fn capitalize_first_letter() {
         assert_eq!(capitalize("requires tech"), "Requires tech");
@@ -2367,4 +2425,9 @@ fn scripted_tooltip(args: Res<crate::cli::Args>, mut forced: ResMut<eaw_ui::Forc
     {
         forced.0 = Some(t.to_lowercase());
     }
+}
+
+/// Whether a build target is a named hero unit.
+fn is_hero(world: &galaxy_sim::World, target: BuildTarget) -> bool {
+    matches!(target, BuildTarget::Unit(u) if world.units[u as usize].hero)
 }

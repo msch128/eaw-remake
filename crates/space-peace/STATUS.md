@@ -68,3 +68,4 @@ runs it as `windowed-ui-pointer`. Source: `src/input_test.rs`.
 - Objectives window: both boxes scroll (`ObjectivesScroll(0|1)`, wheel on the hovered box, thumb follows).
 - `b_option_g` (the "Main Menu" button of the left column) opens the pause menu like Esc.
 - `SP_UI_TEST` phases 140-143 (pad tooltip lore + droid anchor, marker tooltip, tech tooltip, objectives wheel scroll, main menu button) and the ground-lane check in phase 121.
+- U20: `BarClass::of(category, hero)` maps every build entry to exactly one class filter; the stations / freighters filter holds the star base, structures, tech, research, transports and all heroes (test: `every_entry_of_a_real_space_menu_belongs_to_exactly_one_class_filter`).
