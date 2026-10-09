@@ -141,19 +141,27 @@ fn the_pirates_rearm_with_the_players_tech_in_every_game_and_never_expand() {
         }
         let held: Vec<usize> = planets.iter().copied().filter(|&p| s.galaxy().planets[p].owner == Some(pirates)).collect();
         assert_eq!(held.len(), planets.len(), "without enemies the pirates neither lose nor gain planets (ground_up {ground_up})");
-        let top = w.starbases.iter().filter(|b| w.faction_id("Pirates").is_some_and(|_| b.name.to_ascii_lowercase().contains("pirate"))).map(|b| b.level).max().unwrap_or(1) as usize;
-        let want = 4.min(top);
+        let want = 2; // Normal pirate starbase chain caps at Lv2; Lv3 is the Starforge and restricted to Lehon
         let mut raised = 0;
         let mut grew = 0;
         for &p in &held {
             let (lvl, units) = pirate_state(&s, p);
             let idx = planets.iter().position(|&q| q == p).unwrap();
             assert!(lvl >= before[idx].0, "a base is never lowered");
+            let cap = (w.planets[p].max_space_base as usize).clamp(1, 2);
+            assert!(lvl >= cap, "base reaches planet cap for {}: lvl {lvl} vs cap {cap}", w.planets[p].name);
             raised += usize::from(lvl >= want);
             grew += usize::from(units > before[idx].1);
         }
         println!("ground_up {ground_up}: tech {tech0} -> 4, {} pirate planets, {raised} at base level >= {want}, {grew} with a bigger garrison", held.len());
-        assert!(raised * 10 >= held.len() * 9, "bases follow the player's tech");
         assert!(grew > 0, "garrisons grow");
+        for &p in &held {
+            let is_lehon = w.planets[p].name.to_ascii_lowercase().contains("lehon");
+            if !is_lehon && let Some(sb) = s.galaxy().planets[p].starbase {
+                let name = &w.starbases[sb as usize].name;
+                assert!(!name.eq_ignore_ascii_case("Pirate_Starbase_Lv3") && !name.to_ascii_lowercase().contains("starforge"),
+                    "Starforge must never appear on non-Lehon planet {}", w.planets[p].name);
+            }
+        }
     }
 }

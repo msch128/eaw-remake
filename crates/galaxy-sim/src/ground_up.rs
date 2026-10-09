@@ -169,10 +169,27 @@ impl Sim {
                 continue;
             }
             if !chain.is_empty() {
-                let want = (tech.clamp(1, chain.len() as i32) - 1) as usize;
-                let have = ps.starbase.and_then(|s| chain.iter().position(|&c| c == s));
-                if have.is_none_or(|h| h < want) {
-                    self.galaxy.planets[p as usize].starbase = Some(chain[want]);
+                let is_lehon = world.planets[p as usize].name.to_ascii_lowercase().contains("lehon");
+                let max_sb = if is_lehon {
+                    world.planets[p as usize].max_space_base as usize
+                } else {
+                    // Non-Lehon pirate planets never get a Starforge (Pirate_Starbase_Lv3 is the Starforge model)
+                    (world.planets[p as usize].max_space_base as usize).min(2)
+                };
+                let effective_chain_len = chain.len().min(max_sb);
+                if effective_chain_len > 0 {
+                    let mut want = (tech.clamp(1, effective_chain_len as i32) - 1) as usize;
+                    let sb_name = &world.starbases[chain[want] as usize].name;
+                    if !is_lehon && (sb_name.eq_ignore_ascii_case("Pirate_Starbase_Lv3") || sb_name.to_ascii_lowercase().contains("starforge")) {
+                        want = want.min(1);
+                    }
+                    let have = ps.starbase.and_then(|s| chain.iter().position(|&c| c == s));
+                    if have.is_none_or(|h| h < want) {
+                        self.galaxy.planets[p as usize].starbase = Some(chain[want]);
+                    } else if !is_lehon && have.is_some_and(|h| h > 1) {
+                        // Downgrade any accidentally placed Starforge on non-Lehon planets
+                        self.galaxy.planets[p as usize].starbase = Some(chain[1.min(chain.len() - 1)]);
+                    }
                 }
             }
             if with_garrison && !pool.is_empty() {
