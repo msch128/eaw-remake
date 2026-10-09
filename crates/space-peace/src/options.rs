@@ -15,6 +15,14 @@ pub struct OptionsOpen(pub bool);
 #[derive(Component)]
 struct OptionsOverlay;
 
+/// The scrollable list of setting rows (the window can be shorter than the list, e.g. 1080p windowed).
+#[derive(Component)]
+struct OptionsList;
+
+/// Scroll offset of the list, kept across the rebuilds that follow every changed setting.
+#[derive(Resource, Default)]
+struct OptionsScroll(f32);
+
 /// What a button of the overlay does.
 #[derive(Component, Clone, Copy)]
 enum OptionButton {
@@ -34,10 +42,11 @@ pub struct OptionsPlugin;
 
 impl Plugin for OptionsPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<OptionsOpen>().add_systems(
+        app.init_resource::<OptionsOpen>().init_resource::<OptionsScroll>().add_systems(
             Update,
             (
                 option_buttons,
+                scroll_list,
                 rebuild_overlay.run_if(resource_changed::<OptionsOpen>.or_eager(resource_changed::<Settings>)),
             )
                 .chain(),
@@ -79,13 +88,14 @@ fn rebuild_overlay(
     mut commands: Commands,
     open: Res<OptionsOpen>,
     settings: Res<Settings>,
+    scroll: Res<OptionsScroll>,
     existing: Query<Entity, With<OptionsOverlay>>,
 ) {
     for e in &existing {
         commands.entity(e).despawn();
     }
     if open.0 {
-        spawn_overlay(&mut commands, &settings);
+        spawn_overlay(&mut commands, &settings, scroll.0);
     }
 }
 
@@ -109,7 +119,7 @@ fn small_button(parent: &mut ChildSpawnerCommands, text: &str, action: OptionBut
         });
 }
 
-fn spawn_overlay(commands: &mut Commands, settings: &Settings) {
+fn spawn_overlay(commands: &mut Commands, settings: &Settings, scroll: f32) {
     commands
         .spawn((
             Node {
@@ -133,6 +143,8 @@ fn spawn_overlay(commands: &mut Commands, settings: &Settings) {
                     padding: UiRect::all(Val::Px(22.0)),
                     border: UiRect::all(Val::Px(1.0)),
                     align_items: AlignItems::Center,
+                    // Never taller than the window: the rows scroll, title and Done stay visible.
+                    max_height: Val::Percent(96.0),
                     ..default()
                 },
                 BackgroundColor(PANEL_BG),
@@ -144,6 +156,7 @@ fn spawn_overlay(commands: &mut Commands, settings: &Settings) {
                     TextFont { font: FontSource::Family("Bahnschrift".into()), font_size: FontSize::Px(34.0), ..default() },
                     TextColor(Color::srgb(0.85, 0.93, 1.0)),
                 ));
+                panel.spawn((OptionsList, ScrollPosition(Vec2::new(0.0, scroll)), Node { flex_direction: FlexDirection::Column, align_items: AlignItems::Center, flex_shrink: 1.0, min_height: Val::Px(0.0), overflow: Overflow::scroll_y(), ..default() })).with_children(|panel| {
                 for key in OptionKey::ALL {
                     panel
                         .spawn(Node {
@@ -175,6 +188,7 @@ fn spawn_overlay(commands: &mut Commands, settings: &Settings) {
                             small_button(row, ">", OptionButton::Step(key, 1), 34.0);
                         });
                 }
+                });
                 panel
                     .spawn(Node {
                         column_gap: Val::Px(14.0),
@@ -187,4 +201,21 @@ fn spawn_overlay(commands: &mut Commands, settings: &Settings) {
                     });
             });
         });
+}
+
+/// Mouse wheel over the options scrolls the setting rows.
+fn scroll_list(
+    mut wheel: MessageReader<bevy::input::mouse::MouseWheel>,
+    mut list: Query<(&mut ScrollPosition, &ComputedNode), With<OptionsList>>,
+    mut keep: ResMut<OptionsScroll>,
+) {
+    let delta: f32 = wheel.read().map(|w| if matches!(w.unit, bevy::input::mouse::MouseScrollUnit::Line) { w.y * 40.0 } else { w.y }).sum();
+    for (mut pos, node) in &mut list {
+        let inv = node.inverse_scale_factor();
+        let max = ((node.content_size().y - node.size().y) * inv).max(0.0);
+        pos.y = (pos.y - delta).clamp(0.0, max);
+        if keep.0 != pos.y {
+            keep.0 = pos.y;
+        }
+    }
 }
