@@ -1,4 +1,4 @@
-﻿//! Widgets: spawning the command bars and keeping them in sync with [`CommandBarData`].
+//! Widgets: spawning the command bars and keeping them in sync with [`CommandBarData`].
 //!
 //! Layout is in *design pixels* of the original 1366x768 interface; [`crate::EawUiSettings`]
 //! turns that into real pixels through Bevy's [`UiScale`], so the bars scale with the screen
@@ -1596,6 +1596,7 @@ pub(crate) fn spawn_tooltip(mut commands: Commands, settings: Res<EawUiSettings>
             min_width: Val::Px(150.0),
             max_width: Val::Px(340.0),
             border_radius: BorderRadius::all(Val::Px(6.0)),
+            overflow: Overflow::clip_y(),
             display: Display::None,
             ..default()
         },
@@ -1759,15 +1760,45 @@ pub(crate) fn tooltip(
         },
     };
     // Bevy positions logical px; UiScale is applied to Val::Px so undo it.
-    node.left = Val::Px(anchor.x / scale.0);
-    match (hang, window.single()) {
-        (Some((_, bottom)), Ok(w)) => {
-            node.top = Val::Auto;
-            node.bottom = Val::Px(((w.height() - bottom) / scale.0).max(0.0));
+    let tip_w = own.size().x * inv;
+    let tip_h = own.size().y * inv;
+    match window.single() {
+        Ok(w) => {
+            node.max_height = Val::Px(((w.height() - 20.0) / scale.0).max(50.0));
+            let clamped_x = anchor.x.clamp(4.0, (w.width() - tip_w - 4.0).max(4.0));
+            node.left = Val::Px(clamped_x / scale.0);
+            match hang {
+                Some((_, bottom)) => {
+                    let space_above = bottom - 10.0;
+                    if tip_h > space_above {
+                        // Too tall to hang above droid without pushing off the top edge:
+                        // anchor to top of screen so title and top lines are never cut off.
+                        node.top = Val::Px(10.0 / scale.0);
+                        node.bottom = Val::Auto;
+                    } else {
+                        node.top = Val::Auto;
+                        node.bottom = Val::Px(((w.height() - bottom) / scale.0).max(0.0));
+                    }
+                }
+                None => {
+                    let clamped_y = anchor.y.clamp(10.0, (w.height() - tip_h - 10.0).max(10.0));
+                    node.top = Val::Px(clamped_y / scale.0);
+                    node.bottom = Val::Auto;
+                }
+            }
         }
-        _ => {
-            node.top = Val::Px(anchor.y / scale.0);
-            node.bottom = Val::Auto;
+        Err(_) => {
+            node.left = Val::Px(anchor.x / scale.0);
+            match hang {
+                Some((_, bottom)) => {
+                    node.top = Val::Auto;
+                    node.bottom = Val::Px(bottom / scale.0);
+                }
+                None => {
+                    node.top = Val::Px(anchor.y / scale.0);
+                    node.bottom = Val::Auto;
+                }
+            }
         }
     }
 }
@@ -1823,14 +1854,18 @@ pub(crate) fn panel_texts(
 
 
 /// Keeps a tooltip of `size` (logical px) on the screen: shifted left at the right edge, and flipped above the
-/// cursor when it would run over the bottom edge.
+/// cursor when it would run over the bottom edge. Also ensures top and left edges stay on-screen.
 pub fn clamp_to_screen(anchor: Vec2, cursor: Vec2, size: Vec2, screen: Vec2) -> Vec2 {
     let mut p = anchor;
     if p.x + size.x > screen.x - 4.0 {
-        p.x = (screen.x - size.x - 4.0).max(0.0);
+        p.x = (screen.x - size.x - 4.0).max(4.0);
+    } else {
+        p.x = p.x.max(4.0);
     }
     if p.y + size.y > screen.y - 4.0 {
-        p.y = (cursor.y - size.y - 12.0).max(0.0);
+        p.y = (cursor.y - size.y - 12.0).max(4.0);
+    } else {
+        p.y = p.y.max(4.0);
     }
     p
 }
@@ -1842,6 +1877,19 @@ fn roman(level: u8) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn clamp_to_screen_keeps_tooltip_on_screen() {
+        let screen = Vec2::new(1920.0, 1080.0);
+        let size = Vec2::new(300.0, 400.0);
+        // Anchor near top-left
+        let p = clamp_to_screen(Vec2::new(-10.0, -20.0), Vec2::new(100.0, 100.0), size, screen);
+        assert!(p.x >= 4.0 && p.y >= 4.0);
+        // Anchor near bottom-right
+        let p2 = clamp_to_screen(Vec2::new(1900.0, 1000.0), Vec2::new(1800.0, 950.0), size, screen);
+        assert!(p2.x + size.x <= screen.x);
+        assert!(p2.y >= 4.0 && p2.y + size.y <= screen.y);
+    }
 
     #[test]
     fn digits_are_grouped() {
