@@ -9,20 +9,30 @@
 //!   faction advisor line (`GalaxyEvent`).
 //! * Fleets: selecting fleets plays the lead unit's `SFXEvent_Select`; a move or retreat order its `SFXEvent_Fleet_Move`
 //!   (several ships) or `SFXEvent_Move` (the lead ship's unit XML).
+//! * Hyperspace: `Galactic_Fleet_Hyperspace` when one of the player's fleets leaves for hyperspace and when it drops out again
+//!   (the data names one event; using it for the arrival too is an estimate). `GUI_Drag_Fleet` / `GUI_Drop_Fleet` (not referenced
+//!   by any XML, engine-side names) stand for the original's drag-and-drop of a fleet: our galaxy has no drag gesture, so the
+//!   pick-up is the fleet selection and the drop the accepted move order.
+//! * Superweapon (`--fire`, Death Star): after the simulation accepted the order the unit's `TSW_SFXEvent_GUI_Bttton_Press`,
+//!   `TSW_SFXEvent_Activate_Voice` and `TSW_SFXEvent_Weapon_Power_Up` play and `TSW_MusicEvent_Activation_Start` plays once over
+//!   the map music; when the planet dies the unit's `SFXEvent_Fire` and the ability's `SFXEvent_Target_Affected` (`Planet_Death_SFX`)
+//!   play (any faction's planet destruction plays the latter).
+//! * "Start Game" on the campaign list plays the chosen faction's `SFXEvent_GUI_Start_Campaign` (`Factions.xml`).
 //! * A planet captured by the player plays `SFXEvent_Planet_Capture_Bonus_Reward` of `Audio.xml`.
 //!
 //! Everything is silent without `AlamoAudioPlugin`. `SP_AUDIO_LOG=1` logs each request as `audio sfx <name>`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use alamo_audio::plugin::{AlamoAudio, GalaxyAudio, PlaySfx};
-use alamo_audio::{GalaxyEvent, SfxCommands};
+use alamo_audio::{GalaxyEvent, MusicDirector, MusicScene, SfxCommands};
 use bevy::prelude::*;
 use eaw_ui::{EawButton, EawButtonClicked, EawLockedClicked};
 use galaxy_play::{BuildTarget, PlayAction, PlayEvent, PlayerFaction, PlayerSelection, SimState};
 use galaxy_sim::{Command, Event as SimEvent, FleetId, FleetLocation, PlanetId, ProductionKind, UnitTypeId};
 
-use crate::flow::CurrentCampaign;
+use crate::campaign_select::SetupState;
+use crate::flow::{CurrentCampaign, StartCampaign};
 use crate::game::Game;
 
 /// Click sound of command-bar components without a `Click_SFX` of their own (the value of 243 of 267 components).
@@ -32,6 +42,10 @@ const DEFAULT_HOVER: &str = "GUI_Highlight_Mouse_Over";
 /// Seconds a build order waits for the simulation's verdict before the "started" line plays (estimate: the answer of the
 /// simulation thread arrives within a few frames; a refusal inside the window plays the negative feedback instead).
 const BUILD_VERDICT_WINDOW: f64 = 0.3;
+/// Engine-side GUI events for a fleet in hyperspace and for dragging / dropping a fleet (`SFXEventsGUI.xml`).
+const FLEET_HYPERSPACE: &str = "Galactic_Fleet_Hyperspace";
+const DRAG_FLEET: &str = "GUI_Drag_Fleet";
+const DROP_FLEET: &str = "GUI_Drop_Fleet";
 
 /// `Click_SFX` / `Mouse_Over_SFX` per command-bar component (lower-case name).
 #[derive(Resource, Default, Debug)]
@@ -79,6 +93,20 @@ struct GalaxySoundState {
     pending: Vec<PendingBuild>,
     /// Fleet selection as the UI last sent it (the simulation's own copy updates a frame later).
     selected: Vec<FleetId>,
+    /// Player fleets that were in hyperspace last frame.
+    moving: HashSet<FleetId>,
+    /// Superweapon orders waiting for the simulation's verdict.
+    fire: Vec<PendingFire>,
+    /// Superweapon unit (object name) that fired last, for its fire sound when the planet dies.
+    last_unit: Option<String>,
+}
+
+/// A superweapon order waiting for the simulation's verdict.
+#[derive(Debug, Clone)]
+struct PendingFire {
+    at: f64,
+    planet: PlanetId,
+    unit: String,
 }
 
 /// Registers the button and galaxy sound systems.
@@ -88,7 +116,18 @@ impl Plugin for UiSoundsPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<ButtonSfx>().init_resource::<GalaxySoundState>().add_systems(
             Update,
-            (load_button_sfx, button_sounds, locked_button_sound, build_sounds, fleet_sounds, production_complete_sounds, capture_bonus_sound)
+            (
+                load_button_sfx,
+                button_sounds,
+                locked_button_sound,
+                build_sounds,
+                fleet_sounds,
+                hyperspace_sounds,
+                superweapon_sounds,
+                start_campaign_sound,
+                production_complete_sounds,
+                capture_bonus_sound,
+            )
                 .chain()
                 .run_if(resource_exists::<AlamoAudio>)
                 .run_if(resource_exists::<Messages<PlayAction>>)
@@ -242,6 +281,9 @@ fn fleet_sounds(
         match a {
             PlayAction::SelectFleets(list) => {
                 st.selected = list.clone();
+                if list.iter().any(|id| state.galaxy().fleets.get(id).is_some_and(|f| f.owner == me)) {
+                    sfx.play(DRAG_FLEET);
+                }
                 if let Some((u, _)) = lead_unit(&state, list, me)
                     && let Some(n) = object_sfx(&game, &state.world.units[u as usize].name, "sfxevent_select")
                 {
@@ -259,6 +301,7 @@ fn fleet_sounds(
                         negative(&audio, &mut sfx);
                     }
                 } else {
+                    sfx.play(DROP_FLEET);
                     order_line(&state, &game, &movable, me, &mut sfx);
                 }
             }
@@ -271,6 +314,152 @@ fn fleet_sounds(
             _ => {}
         }
     }
+}
+
+/// "Start Game" on the campaign list: `SFXEvent_GUI_Start_Campaign` of the chosen side (`GUI_Select_<Faction>_SFX`).
+fn start_campaign_sound(mut starts: MessageReader<StartCampaign>, setup: Option<Res<SetupState>>, audio: Res<AlamoAudio>, mut sfx: SfxCommands) {
+    for _ in starts.read() {
+        let faction = setup.as_ref().and_then(|s| s.rows.get(s.selected)?.sides.get(s.side?)).map(|(f, _)| f.clone());
+        if let Some(n) = faction.and_then(|f| audio.constants.start_campaign_sfx(&f).map(str::to_owned)) {
+            sfx.play(n);
+        }
+    }
+}
+
+/// `Galactic_Fleet_Hyperspace` when a fleet of the player jumps into hyperspace and when it arrives.
+fn hyperspace_sounds(mut st: ResMut<GalaxySoundState>, state: Option<Res<SimState>>, player: Option<Res<PlayerFaction>>, mut sfx: SfxCommands) {
+    let (Some(state), Some(me)) = (state, player.and_then(|p| p.0)) else { return };
+    let now: HashSet<FleetId> = state
+        .galaxy()
+        .fleets
+        .values()
+        .filter(|f| f.owner == me && matches!(f.location, FleetLocation::Moving { .. }))
+        .map(|f| f.id)
+        .collect();
+    let departed = now.difference(&st.moving).count();
+    let arrived = st.moving.difference(&now).count();
+    st.moving = now;
+    // One sound per frame and direction: a whole fleet group leaving together is one jump.
+    if departed > 0 {
+        sfx.play(FLEET_HYPERSPACE);
+    }
+    if arrived > 0 {
+        sfx.play(FLEET_HYPERSPACE);
+    }
+}
+
+/// Text of the first `tag` below `element` (any depth), lower-case tag names.
+fn descendant_text(element: &alamo_data::xml::Element, tag: &str) -> Option<String> {
+    if element.name == tag {
+        let t = element.text_trimmed();
+        return (!t.is_empty()).then(|| t.to_string());
+    }
+    element.children.iter().find_map(|c| descendant_text(c, tag))
+}
+
+/// `SFXEvent_Target_Affected` of the unit's `Planet_Destruction_Ability` (`Planet_Death_SFX`).
+fn planet_death_sfx(game: &Game, unit: &str) -> Option<String> {
+    let data = &game.0.as_ref()?.data;
+    let r = data.objects.resolve(unit)?;
+    let abilities = r.element("abilities")?;
+    let ability = abilities.children_named("planet_destruction_ability").next()?;
+    descendant_text(ability, "sfxevent_target_affected")
+}
+
+/// Whether a refused command is the pending superweapon order.
+fn rejects_fire(command: &Command, pending: &PendingFire) -> bool {
+    matches!(command, Command::DestroyPlanet { planet, .. } if *planet == pending.planet)
+}
+
+/// Superweapon orders: activation sounds once the simulation accepts the order, then the fire and planet-death sounds when the
+/// planet is destroyed. See the module docs for the tags.
+#[allow(clippy::too_many_arguments)]
+fn superweapon_sounds(
+    mut actions: MessageReader<PlayAction>,
+    mut events: MessageReader<PlayEvent>,
+    mut st: ResMut<GalaxySoundState>,
+    state: Option<Res<SimState>>,
+    player: Option<Res<PlayerFaction>>,
+    current: Res<CurrentCampaign>,
+    game: Res<Game>,
+    time: Res<Time>,
+    director: Option<ResMut<MusicDirector>>,
+    mut sfx: SfxCommands,
+) {
+    let now = time.elapsed_secs_f64();
+    let (Some(state), Some(me)) = (state, player.and_then(|p| p.0)) else {
+        actions.clear();
+        events.clear();
+        return;
+    };
+    let faction = current.faction.clone().unwrap_or_else(|| "Rebel".to_owned());
+    let mut director = director;
+    let mut activate = |st: &mut GalaxySoundState, unit: &str, sfx: &mut SfxCommands| {
+        st.last_unit = Some(unit.to_owned());
+        for tag in ["tsw_sfxevent_gui_bttton_press", "tsw_sfxevent_activate_voice", "tsw_sfxevent_weapon_power_up"] {
+            if let Some(n) = object_sfx(&game, unit, tag) {
+                sfx.play(n);
+            }
+        }
+        if let (Some(m), Some(d)) = (object_sfx(&game, unit, "tsw_musicevent_activation_start"), director.as_mut()) {
+            d.play_once_then(&m, MusicScene::Galactic(faction.clone()));
+        }
+    };
+    for a in actions.read() {
+        let PlayAction::DestroyPlanet(planet) = a else { continue };
+        let g = state.galaxy();
+        let unit = g
+            .fleets
+            .values()
+            .filter(|f| f.owner == me && matches!(f.location, FleetLocation::AtPlanet(p) if p == *planet))
+            .flat_map(|f| f.units.keys())
+            .filter_map(|u| state.world.units.get(*u as usize).map(|u| u.name.clone()))
+            .find(|n| object_sfx(&game, n, "tsw_sfxevent_weapon_power_up").is_some());
+        if let Some(unit) = unit {
+            st.fire.push(PendingFire { at: now, planet: *planet, unit });
+        }
+    }
+    for e in events.read() {
+        match e {
+            PlayEvent::CommandRejected { command, .. } => {
+                if let Some(i) = st.fire.iter().position(|p| rejects_fire(command, p)) {
+                    st.fire.remove(i);
+                }
+            }
+            PlayEvent::Sim(SimEvent::PlanetDestroyed { planet, by, .. }) => {
+                // The order is accepted: the activation sounds come first (even when the verdict window is still open).
+                let mine = *by == me;
+                let mut unit = None;
+                if mine && let Some(i) = st.fire.iter().position(|p| p.planet == *planet) {
+                    let p = st.fire.remove(i);
+                    activate(&mut st, &p.unit, &mut sfx);
+                }
+                if mine {
+                    unit = st.last_unit.clone();
+                }
+                if let Some(n) = unit.as_deref().and_then(|u| object_sfx(&game, u, "sfxevent_fire")) {
+                    sfx.play(n);
+                }
+                // Every faction's planet destruction is heard; the sound is the ability's `SFXEvent_Target_Affected`.
+                let death = unit.as_deref().and_then(|u| planet_death_sfx(&game, u)).or_else(|| find_planet_death_sfx(&game));
+                if let Some(n) = death {
+                    sfx.play(n);
+                }
+            }
+            _ => {}
+        }
+    }
+    let (due, waiting): (Vec<_>, Vec<_>) = std::mem::take(&mut st.fire).into_iter().partition(|p| now - p.at >= BUILD_VERDICT_WINDOW);
+    st.fire = waiting;
+    for p in due {
+        activate(&mut st, &p.unit, &mut sfx);
+    }
+}
+
+/// `Planet_Death_SFX` as defined by any superweapon unit (used when another faction destroys a planet).
+fn find_planet_death_sfx(game: &Game) -> Option<String> {
+    let data = &game.0.as_ref()?.data;
+    data.objects.iter().find_map(|o| planet_death_sfx(game, &o.name))
 }
 
 /// `SFXEvent_Fleet_Move` for a group of ships, `SFXEvent_Move` for a single ship (each falls back to the other).
@@ -360,6 +549,22 @@ mod tests {
         assert_eq!(t.hover("b_other"), "GUI_Text_SFX");
         assert_eq!(t.click("b_other"), DEFAULT_CLICK);
         assert_eq!(t.click("unknown_button"), DEFAULT_CLICK);
+    }
+
+    #[test]
+    fn planet_death_sound_is_found_below_the_ability() {
+        let mut w = Vec::new();
+        let root = alamo_data::xml::parse(b"<A><Planet_Destruction_Ability Name=\"x\"><Activation_Style>g</Activation_Style><SFXEvent_Target_Affected> Planet_Death_SFX </SFXEvent_Target_Affected></Planet_Destruction_Ability></A>", "t.xml", &mut w).unwrap();
+        let ability = root.children_named("planet_destruction_ability").next().unwrap();
+        assert_eq!(descendant_text(ability, "sfxevent_target_affected").as_deref(), Some("Planet_Death_SFX"));
+        assert_eq!(descendant_text(ability, "missing"), None);
+    }
+
+    #[test]
+    fn only_the_fired_planet_cancels_a_superweapon_order() {
+        let p = PendingFire { at: 0.0, planet: 3, unit: "Death_Star".into() };
+        assert!(rejects_fire(&Command::DestroyPlanet { faction: 0, planet: 3 }, &p));
+        assert!(!rejects_fire(&Command::DestroyPlanet { faction: 0, planet: 4 }, &p));
     }
 
     #[test]

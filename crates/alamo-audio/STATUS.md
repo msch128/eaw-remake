@@ -75,3 +75,27 @@ Empire at War audio: event data, sample resolution, decoding and a Bevy playback
   `SFXEvent_Select` / `_Fleet_Move` / `_Move`, planet capture bonus `SFXEvent_Planet_Capture_Bonus_Reward`.
 - Tests: `tests/pass2.rs` (silent), `ui_sounds::tests`; smoke scenarios `windowed-battle-audio-positional`, `windowed-ui-pointer-audio`, `windowed-galaxy-audio-build`
   (`SP_AUDIO_LOG` lines `audio sfx PLAY ... spatial=true dist=.. att=..`, `audio emitter`, `audio music track`, `audio music stinger done`).
+
+## Audio pass 3 (galaxy fleets, Death Star, menu start sound, battle reports, balance log)
+- **Galaxy fleets** (`ui_sounds.rs`): `Galactic_Fleet_Hyperspace` when one of the player's fleets leaves for hyperspace and when it drops out (the data has
+  one event; the arrival use is an estimate). Its data volume is `Min/Max_Volume 1`, i.e. nearly inaudible by design. `GUI_Drag_Fleet` / `GUI_Drop_Fleet`
+  are referenced by no XML (engine-side); our galaxy has no drag gesture, so pick-up = fleet selection, drop = accepted move order.
+- **Superweapon** (Death Star, `--fire`): order accepted -> the unit's `TSW_SFXEvent_GUI_Bttton_Press`, `TSW_SFXEvent_Activate_Voice`, `TSW_SFXEvent_Weapon_Power_Up`
+  (data predelay 2 s) and `TSW_MusicEvent_Activation_Start` (`Space_Map_Activate_Death_Star_Music_Event`, played once over the map music via
+  `MusicDirector::play_once_then`, then the galaxy theme returns); planet destroyed -> `SFXEvent_Fire` (`Unit_Superlaser_Fire`) and the ability's
+  `SFXEvent_Target_Affected` (`Planet_Death_SFX`, also for other factions' shots). The engine's 8 s power-up countdown / 4.75 s animation (`TSW_*`) are not
+  replayed: the sim destroys at once, the sounds follow the visuals. `EHD_Death_Star_Activate` is defined but its sample (`C000_DST0102_ENG.wav`) is not in
+  the install, so that voice stays silent (the Death Star II variant `EHD_Death_Star_2_Activate` resolves).
+- **Menus**: `SFXEvent_GUI_Start_Campaign` of `Factions.xml` (`GUI_Select_Rebel|Empire|Underworld_SFX`) on "Start Game". Main menu music (`Main_Menu_Music_Event`)
+  was already wired; no menu ambience loop and no menu-button SFX tags exist in the data (menu buttons keep `GUI_Common_Dialog_Button_*`).
+- **Battle**: `SFXEvent_Hardpoint_Destroyed` is a list of `HARD_POINT_<TYPE>, event` pairs; before, the first pair (laser) played for every hardpoint. Now the pair of the
+  destroyed hardpoint's `Type` plays (`Unit_Lost_Engines_<Ship>`, `_Bay_`, `_Shields_`, `_Ion_`, `_Laser_`; `SFX_NA` = silent), for the player's ships only (the unit's report).
+  `SFXEvent_Unit_Type_Spotted` (`Factions.xml`) is played the first time an enemy unit type of the list is seen; only 3 entries are active in the Remake
+  (`Star_Destroyer`/`AT_AT`; all hero lines are commented out). Not in the data: space turret rotation loops (`SFXEvent_Turret_Rotating_Loop` exists only for ground
+  structures/props), hero-arrival or hero-ability voice lines beyond the units' own `SFXEvent_GUI_Unit_Ability_Activated` (already played), an "engine damaged" line other than the hardpoint pair.
+- **Balance**: `SP_AUDIO_LOG=1` adds `bus=` / `eff=` (volume x distance x bus gain, master excluded) to each `audio sfx PLAY` line and logs
+  `audio balance music[n= peak= avg=] speech[..] sfx[..] ambient[..]` every 5 s. Typical battle (Yavin -> Hoth, bus defaults music 0.6 / sfx 1 / speech 1):
+  music 0.60, speech 0.7-1.0 per line, weapon shots 0.04-0.07 each (about 19 at once, sum <= 0.6), deaths 0.9-1.0. The data defines no category volumes
+  (`Audio.xml` has none), so the bus defaults stay an estimate; nothing drowns the speech, no change made.
+- Tests: `tests/pass3.rs` (one-shot theme resumes the map music, balance line, spotted lines), `real_audio::pass3_events_exist_and_resolve`, `constants` unit tests,
+  `ui_sounds::tests`, `battle-view audio::tests`; smoke scenarios `windowed-galaxy-audio-fleet`, `windowed-galaxy-audio-superweapon` and the balance line in `windowed-battle-audio-positional`.

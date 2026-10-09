@@ -24,6 +24,11 @@ pub struct AudioConstants {
     pub planet_revealed: Option<String>,
     /// `SFXEvent_Planet_Capture_Bonus_Reward` (Audio.xml): one-time reward when a planet is captured.
     pub planet_capture_bonus: Option<String>,
+    /// `SFXEvent_Unit_Type_Spotted` of `Xml/Factions.xml`: `(faction, unit type, event)`, faction and unit lower-case.
+    /// The faction's soldiers announce the first sighting of that enemy unit type (heroes, Star Destroyers ...).
+    pub unit_type_spotted: Vec<(String, String, String)>,
+    /// `SFXEvent_GUI_Start_Campaign` of `Xml/Factions.xml`: `(faction lower-case, event)`, played when "Start Game" is pressed.
+    pub start_campaign: Vec<(String, String)>,
 }
 
 impl Default for AudioConstants {
@@ -38,11 +43,59 @@ impl Default for AudioConstants {
             negative_feedback: Some("GUI_Bad_Sound".into()),
             planet_revealed: Some("GUI_Planet_Mouse_Over".into()),
             planet_capture_bonus: Some("Unit_Light_Saber_On".into()),
+            unit_type_spotted: Vec::new(),
+            start_campaign: Vec::new(),
         }
     }
 }
 
 impl AudioConstants {
+    /// Announcement `faction` makes when it first sees an enemy of unit type `unit` (`SFXEvent_Unit_Type_Spotted`).
+    pub fn spotted_line(&self, faction: &str, unit: &str) -> Option<&str> {
+        let (f, u) = (faction.to_ascii_lowercase(), unit.to_ascii_lowercase());
+        self.unit_type_spotted.iter().find(|(ff, uu, _)| *ff == f && *uu == u).map(|(_, _, e)| e.as_str())
+    }
+
+    /// Sound of the "Start Game" button for the side `faction` (`SFXEvent_GUI_Start_Campaign`).
+    pub fn start_campaign_sfx(&self, faction: &str) -> Option<&str> {
+        let f = faction.to_ascii_lowercase();
+        self.start_campaign.iter().find(|(ff, _)| *ff == f).map(|(_, e)| e.as_str())
+    }
+
+    /// `SFXEvent_GUI_Start_Campaign` of every faction in a `Factions.xml` file.
+    pub fn parse_start_campaign(bytes: &[u8]) -> Vec<(String, String)> {
+        let mut warnings = Vec::new();
+        let mut out = Vec::new();
+        if let Some(root) = alamo_data::xml::parse(bytes, "Factions.xml", &mut warnings) {
+            for f in root.children_named("faction") {
+                if let (Some(name), Some(e)) = (f.attr("name"), f.child_text("sfxevent_gui_start_campaign")) && !e.is_empty() {
+                    out.push((name.trim().to_ascii_lowercase(), e.to_string()));
+                }
+            }
+        }
+        out
+    }
+
+    /// `SFXEvent_Unit_Type_Spotted` entries of every faction in a `Factions.xml` file.
+    pub fn parse_spotted(bytes: &[u8]) -> Vec<(String, String, String)> {
+        let mut warnings = Vec::new();
+        let mut out = Vec::new();
+        if let Some(root) = alamo_data::xml::parse(bytes, "Factions.xml", &mut warnings) {
+            for f in root.children_named("faction") {
+                let Some(name) = f.attr("name") else { continue };
+                for e in f.children_named("sfxevent_unit_type_spotted") {
+                    if let Some((unit, event)) = e.text_trimmed().split_once(',') {
+                        let (unit, event) = (unit.trim(), event.trim());
+                        if !unit.is_empty() && !event.is_empty() {
+                            out.push((name.trim().to_ascii_lowercase(), unit.to_ascii_lowercase(), event.to_string()));
+                        }
+                    }
+                }
+            }
+        }
+        out
+    }
+
     /// Reads both files from `src`; missing files or tags keep the defaults.
     pub fn load(src: &dyn FileSource) -> Self {
         let mut c = Self::default();
@@ -63,6 +116,10 @@ impl AudioConstants {
             c.negative_feedback = tag_str(&t, "SFXEvent_GUI_Negative_Feedback").or(c.negative_feedback);
             c.planet_revealed = tag_str(&t, "SFXEvent_Planet_Revealed").or(c.planet_revealed);
             c.planet_capture_bonus = tag_str(&t, "SFXEvent_Planet_Capture_Bonus_Reward").or(c.planet_capture_bonus);
+        }
+        if let Ok(bytes) = src.read("Xml/Factions.xml") {
+            c.unit_type_spotted = Self::parse_spotted(&bytes);
+            c.start_campaign = Self::parse_start_campaign(&bytes);
         }
         if let Some(t) = read("Xml/Gameconstants.xml") {
             if let Some(v) = tag_f32(&t, "Health_Low_Percent_Threshold") {
@@ -116,5 +173,28 @@ mod tests {
         assert_eq!(tag_f32(&t, "A"), Some(2.0));
         assert_eq!(tag_f32(&t, "b"), Some(0.5));
         assert_eq!(tag_f32(&t, "C"), None);
+    }
+
+    #[test]
+    fn spotted_lines_per_faction() {
+        let t = AudioConstants::parse_spotted(
+            br#"<Factions><Faction Name="Rebel">
+            <!--<SFXEvent_Unit_Type_Spotted>Hidden, Nope</SFXEvent_Unit_Type_Spotted>-->
+            <SFXEvent_Unit_Type_Spotted>Darth_Vader,   Unit_Announce_Vader_Rebel_Soldier</SFXEvent_Unit_Type_Spotted>
+            </Faction><Faction Name="Empire"><SFXEvent_Unit_Type_Spotted>Yoda, Unit_Announce_Yoda_Empire_Soldier</SFXEvent_Unit_Type_Spotted></Faction></Factions>"#,
+        );
+        let c = AudioConstants { unit_type_spotted: t, ..Default::default() };
+        assert_eq!(c.spotted_line("Rebel", "darth_vader"), Some("Unit_Announce_Vader_Rebel_Soldier"));
+        assert_eq!(c.spotted_line("Empire", "Yoda"), Some("Unit_Announce_Yoda_Empire_Soldier"));
+        assert_eq!(c.spotted_line("Rebel", "Yoda"), None);
+        assert_eq!(c.spotted_line("Rebel", "Hidden"), None);
+    }
+
+    #[test]
+    fn start_campaign_sound_per_faction() {
+        let t = AudioConstants::parse_start_campaign(b"<F><Faction Name=\"Rebel\"><SFXEvent_GUI_Start_Campaign> GUI_Select_Rebel_SFX </SFXEvent_GUI_Start_Campaign></Faction><Faction Name=\"Neutral\"/></F>");
+        let c = AudioConstants { start_campaign: t, ..Default::default() };
+        assert_eq!(c.start_campaign_sfx("rebel"), Some("GUI_Select_Rebel_SFX"));
+        assert_eq!(c.start_campaign_sfx("Neutral"), None);
     }
 }

@@ -162,3 +162,42 @@ fn every_wav_in_the_file_system_decodes() {
     }
     eprintln!("all {n} WAV files decode; format tags: {tags:?}");
 }
+
+/// Audio pass 3: the events the galaxy, menu and Death Star hooks play exist in the Remake data and their samples resolve.
+#[test]
+fn pass3_events_exist_and_resolve() {
+    let Some(fs) = fs() else { return };
+    let mut w = Vec::new();
+    let sfx = SfxLibrary::load(&fs, &mut w);
+    let music = MusicLibrary::load(&fs, &mut w);
+    let resolver = SampleResolver::new(&fs);
+    let c = alamo_audio::AudioConstants::load(&fs);
+    let mut names: Vec<String> = [
+        "Galactic_Fleet_Hyperspace",
+        "GUI_Drag_Fleet",
+        "GUI_Drop_Fleet",
+        "GUI_Death_Star_Button_Press",
+        "GUI_Death_Star_Activate",
+        "EHD_Death_Star_2_Activate",
+        "Unit_Superlaser_Fire",
+        "Planet_Death_SFX",
+    ]
+    .map(String::from)
+    .to_vec();
+    for f in ["rebel", "empire", "underworld"] {
+        names.push(c.start_campaign_sfx(f).unwrap_or_else(|| panic!("no SFXEvent_GUI_Start_Campaign for {f}")).to_string());
+    }
+    for (_, _, e) in &c.unit_type_spotted {
+        names.push(e.clone());
+    }
+    // Only the Star Destroyer / AT-AT lines are active in the Remake; the hero lines are commented out.
+    assert!(c.spotted_line("Rebel", "Star_Destroyer").is_some(), "{:?}", c.unit_type_spotted);
+    for n in &names {
+        let e = sfx.get(n).unwrap_or_else(|| panic!("SFX event {n} missing"));
+        for s in &e.samples {
+            assert!(resolver.resolve(&fs, s).is_some(), "{n}: sample {s} does not resolve");
+        }
+    }
+    let ds = music.get("Space_Map_Activate_Death_Star_Music_Event").expect("Death Star activation music");
+    assert!(!ds.looping && ds.files.iter().all(|f| resolver.resolve(&fs, f).is_some()));
+}

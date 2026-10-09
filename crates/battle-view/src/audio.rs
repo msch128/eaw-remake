@@ -61,6 +61,8 @@ pub struct AudioMemory {
     last_flee: Option<f64>,
     last_retreat_ok: Option<f64>,
     heroes_seen: HashSet<u32>,
+    /// Enemy unit types already announced (`SFXEvent_Unit_Type_Spotted`).
+    types_spotted: HashSet<ShipId>,
     reserve_announced: bool,
     last_selection: Vec<u32>,
 }
@@ -231,11 +233,14 @@ pub fn battle_audio(
                     );
                 }
             }
-            Event::HardpointDestroyed { ship, .. } => {
+            // The unit's own report per hardpoint type (`SFXEvent_Hardpoint_Destroyed` lists `HARD_POINT_ENGINE, Unit_Lost_Engines_...`
+            // pairs; `SFX_NA` = silent). Only the player's ships report; a lost enemy hardpoint is not announced.
+            Event::HardpointDestroyed { ship, hardpoint, .. } => {
                 if let Some(s) = cur.ship(*ship)
-                    && let Some(n) = visuals.ship(s.def).sfx.hardpoint_destroyed.as_deref()
+                    && s.side == player
+                    && let Some(n) = hardpoint_destroyed_line(visuals.ship(s.def), *hardpoint)
                 {
-                    send(n, Some(sim_to_bevy(s.pos)), &mut stats, &mut out);
+                    send(n, None, &mut stats, &mut out);
                 }
             }
             Event::ReinforcementsCalled { side, .. } if *side == player => say(GalaxyEvent::ReinforcementsEnRoute, &mut stats),
@@ -269,6 +274,14 @@ pub fn battle_audio(
     for s in &cur.ships {
         if s.side != player && visuals.ship(s.def).hero && s.seen_by & (1 << player) != 0 && mem.heroes_seen.insert(s.id) {
             say(GalaxyEvent::EnemyHeroDetected, &mut stats);
+        }
+        // The faction's soldiers announce the first sight of certain enemy unit types (`SFXEvent_Unit_Type_Spotted` in Factions.xml:
+        // heroes, Star Destroyers, Executor ...).
+        if s.side != player && s.seen_by & (1 << player) != 0 && mem.types_spotted.insert(s.def) {
+            let line = faction.as_deref().and_then(|f| constants.spotted_line(f, &rt.catalog.ship(s.def).name)).map(str::to_owned);
+            if let Some(n) = line {
+                send(&n, None, &mut stats, &mut out);
+            }
         }
     }
     // Reserve groups of the player's side can be called in.
@@ -304,6 +317,12 @@ pub fn battle_audio(
             send(n, None, &mut stats, &mut out);
         }
     }
+}
+
+/// The unit's report for a destroyed hardpoint: the `SFXEvent_Hardpoint_Destroyed` entry of the hardpoint's `Type`.
+fn hardpoint_destroyed_line(v: &crate::visuals::ShipVisual, hardpoint: u16) -> Option<&str> {
+    let ty = v.hardpoints.get(hardpoint as usize).map_or("", |h| h.hp_type.as_str());
+    v.sfx.hardpoint_destroyed_by_type.iter().find(|(t, _)| t == ty).map(|(_, e)| e.as_str())
 }
 
 /// Starts the space music scene for the player's faction. Battle music plays while shots are being
@@ -402,3 +421,25 @@ pub struct BattleListener;
 
 /// Distance between the listener's ears in world units (the pan depends on the ratio to the distance of a sound).
 const EAR_GAP: f32 = 10.0;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::visuals::{HpVisual, ShipVisual};
+
+    #[test]
+    fn hardpoint_report_follows_the_hardpoint_type() {
+        let mut v = ShipVisual::default();
+        v.hardpoints = ["HARD_POINT_WEAPON_LASER", "HARD_POINT_ENGINE", "HARD_POINT_FIGHTER_BAY"]
+            .map(|t| HpVisual { hp_type: t.into(), ..Default::default() })
+            .to_vec();
+        v.sfx.hardpoint_destroyed_by_type = vec![
+            ("HARD_POINT_WEAPON_LASER".into(), "Unit_Lost_Laser_Star_Destroyer".into()),
+            ("HARD_POINT_ENGINE".into(), "Unit_Lost_Engines_Star_Destroyer".into()),
+        ];
+        assert_eq!(hardpoint_destroyed_line(&v, 0), Some("Unit_Lost_Laser_Star_Destroyer"));
+        assert_eq!(hardpoint_destroyed_line(&v, 1), Some("Unit_Lost_Engines_Star_Destroyer"));
+        assert_eq!(hardpoint_destroyed_line(&v, 2), None, "no entry (or SFX_NA) = silent");
+        assert_eq!(hardpoint_destroyed_line(&v, 9), None);
+    }
+}

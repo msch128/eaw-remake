@@ -18,6 +18,8 @@ pub struct HpVisual {
     pub death_effect: Option<String>,
     /// SFX event played when the hardpoint fires (`Fire_SFXEvent`).
     pub fire_sfx: Option<String>,
+    /// `Type`, e.g. `HARD_POINT_ENGINE` (upper-case); picks the unit's `SFXEvent_Hardpoint_Destroyed` line.
+    pub hp_type: String,
 }
 
 /// Sound events of a unit type (names of `SFXEvents.xml` entries).
@@ -33,6 +35,8 @@ pub struct UnitSfx {
     pub death: Option<String>,
     /// `SFXEvent_Hardpoint_Destroyed`.
     pub hardpoint_destroyed: Option<String>,
+    /// Every `SFXEvent_Hardpoint_Destroyed` entry as `(HARD_POINT_TYPE, event)`; `SFX_NA` entries are dropped.
+    pub hardpoint_destroyed_by_type: Vec<(String, String)>,
     /// `SFXEvent_GUI_Unit_Ability_Activated`.
     pub ability: Option<String>,
     /// `SFXEvent_Fire` (fighters, which have no hardpoints).
@@ -133,6 +137,7 @@ impl VisualCatalog {
                         damage_bone: field("damage_particles"),
                         death_effect: field("death_explosion_particles"),
                         fire_sfx: field("fire_sfxevent"),
+                        hp_type: hd.hp_type.trim().to_ascii_uppercase(),
                     }
                 })
                 .collect();
@@ -149,6 +154,17 @@ impl VisualCatalog {
                 // `Death_SFXEvent_Start_Die` is the common tag (375 unit files); `Death_Explosion_SFXEvent` the older one.
                 death: sfx("death_sfxevent_start_die").or_else(|| sfx("death_explosion_sfxevent")),
                 hardpoint_destroyed: sfx("sfxevent_hardpoint_destroyed"),
+                hardpoint_destroyed_by_type: r
+                    .as_ref()
+                    .map(|r| {
+                        r.get_all("sfxevent_hardpoint_destroyed")
+                            .into_iter()
+                            .filter_map(|v| v.split_once(','))
+                            .map(|(t, e)| (t.trim().to_ascii_uppercase(), e.trim().to_string()))
+                            .filter(|(_, e)| !e.is_empty() && !e.eq_ignore_ascii_case("sfx_na"))
+                            .collect()
+                    })
+                    .unwrap_or_default(),
                 ability: sfx("sfxevent_gui_unit_ability_activated"),
                 fire: sfx("sfxevent_fire"),
                 fleet_move: sfx("sfxevent_fleet_move"),

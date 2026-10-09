@@ -82,15 +82,19 @@ impl Default for AudioBuses {
 }
 
 impl AudioBuses {
+    /// Gain of a bus without the master volume (the balance between the buses, independent of `--volume`).
+    pub fn gain_no_master(&self, bus: Bus) -> f32 {
+        match bus {
+            Bus::Music => self.music,
+            Bus::Sfx => self.sfx,
+            Bus::Speech => self.speech,
+            Bus::Ambient => self.ambient * self.sfx,
+        }
+    }
+
     /// Combined gain of a bus including master.
     pub fn gain(&self, bus: Bus) -> f32 {
-        self.master
-            * match bus {
-                Bus::Music => self.music,
-                Bus::Sfx => self.sfx,
-                Bus::Speech => self.speech,
-                Bus::Ambient => self.ambient * self.sfx,
-            }
+        self.master * self.gain_no_master(bus)
     }
 }
 
@@ -505,6 +509,9 @@ impl Plugin for AlamoAudioPlugin {
                 )
                     .chain(),
             );
+        if audio_log() {
+            app.add_systems(Update, log_balance);
+        }
     }
 }
 
@@ -814,7 +821,7 @@ fn process_sfx_requests(
         };
         if audio_log() && first_try {
             info!(
-                "audio sfx PLAY {} (unit_response={} spatial={} dist={} att={:.3} vol={:.2})",
+                "audio sfx PLAY {} (unit_response={} spatial={} dist={} att={:.3} vol={:.2} bus={:?} eff={:.3})",
                 req.event,
                 ev.is_unit_response_vo,
                 spatial,
@@ -823,7 +830,9 @@ fn process_sfx_requests(
                     _ => "-".into(),
                 },
                 attenuation,
-                base_gain
+                base_gain,
+                bus_of(&ev),
+                base_gain * attenuation * buses.gain_no_master(bus_of(&ev))
             );
         }
         let mut ec = commands.spawn((AudioPlayer::<AudioSource>(handle), pb, voice));
@@ -1109,16 +1118,23 @@ impl MusicDirector {
     /// Switches to `scene` once a playing win / lose stinger has finished (the stinger is not cut off by the
     /// screen change that follows a battle). Without a stinger it is the same as [`set_scene`](Self::set_scene).
     pub fn resume_after_stinger(&mut self, scene: MusicScene) {
-        if matches!(self.planner.scene(), MusicScene::Result { tactical: true, .. }) {
+        if matches!(self.planner.scene(), MusicScene::Result { tactical: true, .. } | MusicScene::Event(_)) {
             self.resume = Some(scene);
         } else {
             self.set_scene(scene);
         }
     }
 
-    /// True while a result stinger is the scene.
+    /// Plays a music event once (it is not looped, whatever its `Loop` says) and then goes on with `resume`, e.g. the Death Star
+    /// activation theme over the galaxy map.
+    pub fn play_once_then(&mut self, event: &str, resume: MusicScene) {
+        self.set_scene(MusicScene::Event(event.to_owned()));
+        self.resume = Some(resume);
+    }
+
+    /// True while a result stinger or a one-shot event is the scene.
     pub fn stinger_playing(&self) -> bool {
-        matches!(self.planner.scene(), MusicScene::Result { .. }) && !self.oneshot_done
+        matches!(self.planner.scene(), MusicScene::Result { .. } | MusicScene::Event(_)) && !self.oneshot_done
     }
 
     /// Battle intensity in 0..1 (only used in [`MusicScene::Space`]).
@@ -1257,7 +1273,7 @@ fn music_system(
             }
         }
     }
-    let stinger = matches!(director.planner.scene(), MusicScene::Result { .. });
+    let stinger = matches!(director.planner.scene(), MusicScene::Result { .. } | MusicScene::Event(_));
     // A result stinger without a playable event must not hold the scene back.
     let playable = director.current.as_deref().and_then(|n| audio.music.get(n)).is_some_and(|e| !e.files.is_empty());
     if stinger && !playable {
@@ -1324,4 +1340,42 @@ fn update_music_gain(
 fn audio_log() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ON.get_or_init(|| std::env::var_os("SP_AUDIO_LOG").is_some())
+}
+
+/// Per-bus loudness of what is playing now, as the `audio balance` log line: `music=<n>x peak avg ...`.
+/// Gains are `volume x distance attenuation x bus` **without** the master volume, so the line shows the mix
+/// balance even in a `--volume 0` run.
+pub fn balance_line(items: &[(Bus, f32)]) -> String {
+    let mut out = String::from("audio balance");
+    for (name, bus) in [("music", Bus::Music), ("speech", Bus::Speech), ("sfx", Bus::Sfx), ("ambient", Bus::Ambient)] {
+        let g: Vec<f32> = items.iter().filter(|i| i.0 == bus).map(|i| i.1).collect();
+        let peak = g.iter().copied().fold(0.0_f32, f32::max);
+        let avg = if g.is_empty() { 0.0 } else { g.iter().sum::<f32>() / g.len() as f32 };
+        out.push_str(&format!(" {name}[n={} peak={peak:.2} avg={avg:.2}]", g.len()));
+    }
+    out
+}
+
+/// `SP_AUDIO_LOG=1`: every 5 s of game time logs the loudness of the playing music, speech, SFX and ambient sounds.
+fn log_balance(
+    time: Res<Time>,
+    buses: Res<AudioBuses>,
+    voices: Query<&SfxVoice>,
+    tracks: Query<&MusicTrack>,
+    mut next: Local<f64>,
+) {
+    let now = time.elapsed_secs_f64();
+    if now < *next {
+        return;
+    }
+    *next = now + 5.0;
+    let mut items: Vec<(Bus, f32)> = voices
+        .iter()
+        .filter(|v| v.stopping.is_none())
+        .map(|v| (v.bus, v.base_gain * v.attenuation * buses.gain_no_master(v.bus)))
+        .collect();
+    items.extend(tracks.iter().filter(|t| !t.outgoing).map(|t| (Bus::Music, t.volume * t.fade * buses.gain_no_master(Bus::Music))));
+    if !items.is_empty() {
+        info!("{}", balance_line(&items));
+    }
 }
