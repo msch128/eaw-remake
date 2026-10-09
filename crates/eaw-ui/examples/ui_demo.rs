@@ -209,6 +209,7 @@ fn sample_data(game: &alamo_data::GameData, faction: UiFaction) -> CommandBarDat
             })
             .collect(),
         abilities: Vec::new(),
+        ability_column: 0,
     }
 }
 

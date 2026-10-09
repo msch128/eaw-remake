@@ -128,6 +128,8 @@ pub struct CommandBarData {
     pub selection: Vec<SelectionEntry>,
     /// Special abilities.
     pub abilities: Vec<AbilityEntry>,
+    /// First bar column (two slots wide) the ability buttons are drawn above: the section of the focused unit.
+    pub ability_column: usize,
     /// Which build tab is open (`b_space_tab` / `b_planet_tab`): true for space production.
     pub space_tab: bool,
 }

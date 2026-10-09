@@ -75,6 +75,10 @@ pub struct ButtonLayers {
     disabled: Option<Entity>,
 }
 
+/// Left edge (design px) of an ability button in the shell; the button moves right by whole bar columns.
+#[derive(Component, Debug, Clone, Copy)]
+pub(crate) struct AbilityHome(f32);
+
 /// What a slot kind is bound to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SlotKind {
@@ -830,6 +834,9 @@ impl Builder<'_> {
             if s.kind == SlotKind::Panel {
                 self.world.entity_mut(button).insert(PanelSlotName(lname.clone()));
             }
+            if s.kind == SlotKind::Ability {
+                self.world.entity_mut(button).insert(AbilityHome(center.x - size.x * 0.5));
+            }
             // Slots stay invisible until data fills them.
             self.world.entity_mut(button).insert(Visibility::Hidden);
             self.hide(button);
@@ -1133,6 +1140,16 @@ fn group_digits(v: i64) -> String {
         out.push(c);
     }
     if v < 0 { format!("-{out}") } else { out }
+}
+
+/// Moves the ability buttons above the section of the focused unit.
+pub(crate) fn ability_columns(data: Res<CommandBarData>, mut buttons: Query<(&AbilityHome, &mut Node)>) {
+    if !data.is_changed() {
+        return;
+    }
+    for (home, mut node) in &mut buttons {
+        node.left = Val::Px(home.0 + data.ability_column as f32 * 55.0);
+    }
 }
 
 /// Joins the column frames (`special_border_NN`, two selected units each) of one bar section into one panel:

@@ -890,6 +890,7 @@ fn sync_overlays(
             continue;
         }
         let half = pts.iter().map(|(c, e)| (*c - centre).length() + e).fold(0.0f32, f32::max);
+        let edge_max = pts.iter().map(|(_, e)| *e).fold(0.0f32, f32::max);
         let live: Vec<&ShipRender> = members.iter().map(|id| &ships.0[id]).collect();
         let def = rt.catalog.ship(first.def);
         let single = members.len() == 1;
@@ -911,8 +912,9 @@ fn sync_overlays(
             enemy,
             name,
             always: !enemy && first.squad != u32::MAX,
-            // Fighters and other small units carry only a short hull bar (no brackets, no icon box), as in the Remake video.
-            icon: None,
+            // Far zoom (units a few pixels wide): a small box with the unit icon marks the unit, as in the Remake (video b0700).
+            // Close up, fighters keep only the short hull bar and the flag (ref 07).
+            icon: (edge_max < 9.0).then(|| assets.as_ref().and_then(|a| a.game.as_deref()).and_then(|g| eaw_ui::unit_icon(g, &def.name))).flatten(),
         });
     }
     // Hardpoint reticles with their health on the hovered ship, the selected enemy or a lone selected ship. They are clickable

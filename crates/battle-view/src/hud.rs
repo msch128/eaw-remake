@@ -533,7 +533,7 @@ pub(crate) fn heroes(
     mut state: ResMut<HudState>,
     row: Query<(Entity, Option<&Children>), With<HeroRow>>,
     mut portraits: Query<(&HeroPortrait, &Interaction, &mut BorderColor)>,
-    mut fills: Query<(&HeroHealth, &mut Node)>,
+    mut fills: Query<(&HeroHealth, &mut Node, &mut BackgroundColor)>,
     time: Res<Time>,
     mut focus: MessageWriter<FocusCamera>,
     mut selection: ResMut<Selection>,
@@ -638,9 +638,10 @@ pub(crate) fn heroes(
             state.last_click = Some((p.0, t));
         }
     }
-    for (h, mut node) in &mut fills {
+    for (h, mut node, mut bg) in &mut fills {
         if let Some(s) = ships.0.get(&h.0) {
             node.width = Val::Px(HERO_BAR_W * s.hull.clamp(0.0, 1.0));
+            bg.0 = eaw_ui::bar_color(s.hull);
         }
     }
 }

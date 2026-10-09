@@ -331,6 +331,10 @@ pub(crate) fn tactical_sync(tac: Res<TacticalData>, mut bar: ResMut<CommandBarDa
                 .collect()
         })
         .unwrap_or_default();
+    // Ability buttons sit above the section of the focused unit (Remake video b0700).
+    let first_of_section = tac.selection.get(tac.focus).and_then(|f| tac.selection.iter().position(|u| u.section == f.section)).unwrap_or(0);
+    let n_abilities = bar.abilities.len();
+    bar.ability_column = (first_of_section / 2).min(12usize.saturating_sub(n_abilities.div_ceil(2)));
     if let Some((cur, cap)) = tac.pop {
         bar.pop_current = cur;
         bar.pop_cap = cap;
@@ -465,7 +469,8 @@ pub(crate) fn spawn_overlay_layer(mut commands: Commands, settings: Res<EawUiSet
     }
 }
 
-fn bar_color(frac: f32) -> Color {
+/// Health colour of a bar: green, yellow below 60 %, red below 30 %.
+pub fn bar_color(frac: f32) -> Color {
     if frac > 0.6 {
         Color::srgb(0.2, 0.85, 0.25)
     } else if frac > 0.3 {
@@ -758,7 +763,7 @@ pub(crate) fn ship_overlays(
                 img.image = t.handle;
             }
             if let Some(mut bc) = bc {
-                *bc = BorderColor::all(accent);
+                *bc = BorderColor::all(if o.enemy { accent } else { Color::WHITE });
             }
         }
         let set = bar_set(&mut sets, &mut textures, &mut images, parts.class);
