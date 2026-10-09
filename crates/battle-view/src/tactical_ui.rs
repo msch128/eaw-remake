@@ -920,10 +920,6 @@ fn sync_overlays(
     // One overlay per unit: a squadron is one unit, so its fighters share a single bracket and bar pair.
     let mut groups: BTreeMap<u64, Vec<u32>> = BTreeMap::new();
     for (&id, s) in ships.0.iter().filter(|(_, s)| s.visible) {
-        let relevant = sel.ships.contains(&id) || sel.enemy == Some(id) || hover.ship == Some(id);
-        if s.squad == u32::MAX && !relevant {
-            continue;
-        }
         let key = if s.squad == u32::MAX { u64::from(id) } else { (1 << 40) | (u64::from(s.side) << 32) | u64::from(s.squad) };
         groups.entry(key).or_default().push(id);
     }
@@ -931,9 +927,8 @@ fn sync_overlays(
         let selected = members.iter().any(|id| sel.ships.contains(id) || sel.enemy == Some(*id));
         let hovered = members.iter().any(|id| hover.ship == Some(*id));
         let first = &ships.0[&members[0]];
-        if !selected && !hovered && (first.squad == u32::MAX || first.side != player) {
-            continue;
-        }
+        // Units nobody selected or hovers (and that are not own squadrons with their health line) show only their icon.
+        let icon_only = !selected && !hovered && (first.squad == u32::MAX || first.side != player);
         let enemy = first.side != player;
         let pts: Vec<(Vec2, f32)> = members
             .iter()
@@ -964,6 +959,11 @@ fn sync_overlays(
                 .filter(|t| !t.is_empty())
                 .map_or_else(|| def.name.clone(), str::to_string)
         });
+        // The icon marks tiny units, squadrons and every unit nobody has selected or hovered (so that no unit is invisible).
+        let icon = (icon_only || first.squad != u32::MAX || edge_max < 9.0).then(|| assets.as_ref().and_then(|a| a.game.as_deref()).and_then(|g| eaw_ui::unit_icon(g, &def.name))).flatten();
+        if icon_only && icon.is_none() {
+            continue;
+        }
         next.ships.push(ShipOverlay {
             id: key,
             screen_pos: centre,
@@ -977,7 +977,8 @@ fn sync_overlays(
             always: !enemy && first.squad != u32::MAX,
             // Far zoom (units a few pixels wide): a small box with the unit icon marks the unit, as in the Remake (video b0700).
             // Close up, fighters keep only the short hull bar and the flag (ref 07).
-            icon: (edge_max < 9.0).then(|| assets.as_ref().and_then(|a| a.game.as_deref()).and_then(|g| eaw_ui::unit_icon(g, &def.name))).flatten(),
+            icon,
+            icon_only,
         });
     }
     // Hardpoint reticles with their health on the hovered ship, the selected enemy or a lone selected ship. They are clickable

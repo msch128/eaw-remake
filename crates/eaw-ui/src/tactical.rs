@@ -222,6 +222,8 @@ pub struct ShipOverlay {
     /// Texture name of the unit icon: small units (fighters) are marked by a little icon box instead of brackets,
     /// like in the real game.
     pub icon: Option<String>,
+    /// Nobody selected or hovers the unit: only the icon box is drawn (no brackets, bars or flag).
+    pub icon_only: bool,
 }
 
 /// A hardpoint marker on a hovered capital ship.
@@ -734,16 +736,19 @@ pub(crate) fn ship_overlays(
             node.top = px(o.screen_pos.y - half, s);
             node.width = px(w, s);
             node.height = px(w, s);
-            node.display = if o.selected || o.hovered || o.enemy || o.always {
+            node.display = if o.selected || o.hovered || o.enemy || o.always || o.icon_only {
                 Display::Flex
             } else {
                 Display::None
             };
         }
         if let Ok((mut n, ..)) = styles.get_mut(parts.flag) {
-            n.display = if o.always && !o.enemy && o.half_size < 24.0 { Display::Flex } else { Display::None };
+            n.display = if o.always && !o.enemy && o.half_size < 24.0 && !o.icon_only { Display::Flex } else { Display::None };
         }
         let above = !icon_mode && o.half_size >= 40.0;
+        if let Ok((mut n, ..)) = styles.get_mut(parts.health_bar) {
+            n.display = if o.icon_only { Display::None } else { Display::Flex };
+        }
         for (bar, below, over) in [(parts.health_bar, 8.0, 4.0), (parts.shield_bg, 4.0, 8.0)] {
             if let Ok((mut n, ..)) = styles.get_mut(bar) {
                 if above {
@@ -780,7 +785,7 @@ pub(crate) fn ship_overlays(
             n.width = Val::Px(w / s.max(0.01));
         }
         if let Ok((mut n, ..)) = styles.get_mut(parts.shield_bg) {
-            n.display = if o.shield.is_some() { Display::Flex } else { Display::None };
+            n.display = if o.shield.is_some() && !o.icon_only { Display::Flex } else { Display::None };
         }
         if let Ok((.., Some(mut t))) = styles.get_mut(parts.label) {
             let name = o.name.clone().unwrap_or_default();
