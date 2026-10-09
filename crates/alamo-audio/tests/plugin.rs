@@ -64,11 +64,13 @@ fn fs() -> Arc<MemFs> {
         <SFXEvent Name="Never"><Samples>boom_a.wav</Samples><Probability>0</Probability></SFXEvent>
         <SFXEvent Name="Missing"><Samples>nope.wav</Samples></SFXEvent>
         <SFXEvent Name="Unit_Select_A"><Use_Preset>Preset_VO</Use_Preset><Samples>boom_a.wav</Samples><Overlap_Test>va</Overlap_Test></SFXEvent>
+        <SFXEvent Name="Unit_Move_A"><Use_Preset>Preset_VO</Use_Preset><Samples>boom_b.wav</Samples><Overlap_Test>va</Overlap_Test></SFXEvent>
         <SFXEvent Name="Unit_Select_B"><Use_Preset>Preset_VO</Use_Preset><Samples>boom_b.wav</Samples><Overlap_Test>vb</Overlap_Test></SFXEvent>
         <SFXEvent Name="Chain_1"><Samples>boom_a.wav</Samples><Is_2D>Yes</Is_2D><Chained_SFXEvent>Boom</Chained_SFXEvent></SFXEvent>
         </SFXEvents>"#
             .to_vec(),
     );
+    put("Xml/Audio.xml", b"<Audio><Music_Space_Battle_To_Ambient_Peace_Seconds> 7 </Music_Space_Battle_To_Ambient_Peace_Seconds><!-- <Delay_Between_Space_Base_Attack_Announcement_Seconds>1</Delay_Between_Space_Base_Attack_Announcement_Seconds> --></Audio>".to_vec());
     put("Audio/SFX/boom_a.wav", tone());
     put("Audio/SFX/boom_b.wav", tone());
     put("Audio/Music/rebel1.wav", tone());
@@ -127,24 +129,54 @@ fn plays_and_limits() {
     assert_eq!(voices(&mut app).len(), 1);
 }
 
+fn voice_events(app: &mut App) -> Vec<String> {
+    let mut q = app.world_mut().query::<&SfxVoice>();
+    let mut v: Vec<String> = q.iter(app.world()).map(|v| v.event().to_string()).collect();
+    v.sort();
+    v
+}
+
 #[test]
-fn unit_responses_do_not_spam() {
+fn move_line_plays_right_after_select_line() {
+    // EaW answers a move order with the move line even while the select line is still playing: the newer
+    // unit response cuts the older one (this used to be dropped by a 0.6 s global cooldown).
+    let mut app = app();
+    play(&mut app, "Unit_Select_A");
+    app.update();
+    assert_eq!(voice_events(&mut app), vec!["unit_select_a"]);
+    play(&mut app, "Unit_Move_A");
+    app.update();
+    assert_eq!(voice_events(&mut app), vec!["unit_move_a"]);
+}
+
+#[test]
+fn unit_responses_do_not_talk_over_each_other() {
     let mut app = app();
     play(&mut app, "Unit_Select_A");
     play(&mut app, "Unit_Select_B");
     app.update();
-    assert_eq!(
-        voices(&mut app).len(),
-        1,
-        "global speech cooldown must drop the second line"
-    );
+    assert_eq!(voice_events(&mut app), vec!["unit_select_b"], "one unit response at a time");
+}
+
+#[test]
+fn same_response_is_not_stacked() {
+    // Preset_UR has Max_Instances 1: a repeated select while it plays is dropped, not layered.
+    let mut app = app();
     play(&mut app, "Unit_Select_A");
     app.update();
-    assert_eq!(
-        voices(&mut app).len(),
-        1,
-        "same event inside the cooldown is dropped"
-    );
+    play(&mut app, "Unit_Select_A");
+    app.update();
+    assert_eq!(voice_events(&mut app), vec!["unit_select_a"]);
+}
+
+#[test]
+fn battle_music_peace_delay_comes_from_audio_xml() {
+    let app = app();
+    assert_eq!(app.world().resource::<MusicDirector>().planner.calm_seconds, 7.0);
+    let c = &app.world().resource::<alamo_audio::plugin::AlamoAudio>().constants;
+    assert_eq!(c.space_battle_to_ambient_seconds, 7.0);
+    // The commented-out tag is ignored.
+    assert_eq!(c.space_base_attack_announcement_delay, 60.0);
 }
 
 #[test]

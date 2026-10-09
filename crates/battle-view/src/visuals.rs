@@ -37,6 +37,24 @@ pub struct UnitSfx {
     pub ability: Option<String>,
     /// `SFXEvent_Fire` (fighters, which have no hardpoints).
     pub fire: Option<String>,
+    /// `SFXEvent_Fleet_Move` (a move order for several units).
+    pub fleet_move: Option<String>,
+    /// `SFXEvent_Guard`.
+    pub guard: Option<String>,
+    /// `SFXEvent_Stop`.
+    pub stop: Option<String>,
+    /// `SFXEvent_Unit_Lost` (this unit died).
+    pub unit_lost: Option<String>,
+    /// `SFXEvent_Unit_Under_Attack`.
+    pub under_attack: Option<String>,
+    /// `SFXEvent_Health_Low_Warning` (own unit below `Health_Low_Percent_Threshold`).
+    pub health_low: Option<String>,
+    /// `SFXEvent_Health_Critical_Warning`.
+    pub health_critical: Option<String>,
+    /// `SFXEvent_Enemy_Damaged_Health_Low_Warning` (an enemy of this unit type is nearly dead).
+    pub enemy_health_low: Option<String>,
+    /// `SFXEvent_Enemy_Damaged_Health_Critical_Warning`.
+    pub enemy_health_critical: Option<String>,
 }
 
 /// Visual description of one ship definition.
@@ -54,6 +72,8 @@ pub struct ShipVisual {
     pub hardpoints: Vec<HpVisual>,
     /// Sound events of the unit (`SFXEvent_Select`, `_Move`, `_Attack`, `Death_Explosion_SFXEvent`).
     pub sfx: UnitSfx,
+    /// `Is_Named_Hero`.
+    pub hero: bool,
 }
 
 /// Visual data for every ship definition of a [`Catalog`], plus the team colour per side.
@@ -125,6 +145,15 @@ impl VisualCatalog {
                 hardpoint_destroyed: sfx("sfxevent_hardpoint_destroyed"),
                 ability: sfx("sfxevent_gui_unit_ability_activated"),
                 fire: sfx("sfxevent_fire"),
+                fleet_move: sfx("sfxevent_fleet_move"),
+                guard: sfx("sfxevent_guard"),
+                stop: sfx("sfxevent_stop"),
+                unit_lost: sfx("sfxevent_unit_lost"),
+                under_attack: sfx("sfxevent_unit_under_attack"),
+                health_low: sfx("sfxevent_health_low_warning"),
+                health_critical: sfx("sfxevent_health_critical_warning"),
+                enemy_health_low: sfx("sfxevent_enemy_damaged_health_low_warning"),
+                enemy_health_critical: sfx("sfxevent_enemy_damaged_health_critical_warning"),
             };
             ships.push(ShipVisual {
                 model: def.model.clone(),
@@ -133,6 +162,7 @@ impl VisualCatalog {
                 death_clone_model,
                 hardpoints,
                 sfx: unit_sfx,
+                hero: r.as_ref().and_then(|r| r.flag("is_named_hero")).unwrap_or(false),
             });
         }
         let proj_detonate = catalog

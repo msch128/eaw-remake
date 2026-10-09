@@ -50,6 +50,9 @@ $scenarios = @(
     @('windowed-battle-f10-abandon', @('--hidden', '--no-vsync', '--exit-after', '6000', '--volume', '0', '--campaign', $camp, '--select', $yavin, '--weeks', '8', '--move', 'Hoth', '--battle-choice', 'fight', '--battle-auto', '--battle-speed', '30', '--battle-abort-after', '90'), 'abandoned at t=\d+s, units lost per side \[[0-9, ]*[1-9]'),
     # Autocast proof: an X4 (Sensor_Jamming with autofire) joins the fleet; input_test right-clicks its ability button.
     @('windowed-battle-input-autocast', @('--hidden', '--no-vsync', '--exit-after', '9000', '--volume', '0', '--campaign', $camp, '--select', $yavin, '--grant-unit', 'X4', '--at', $yavin, '--weeks', '8', '--move', 'Hoth', '--battle-choice', 'fight', '--battle-reserve', '3', '--battle-speed', '1'), 'input-test: [0-9]+ checks PASS'),
+    # Audio feel (SP_AUDIO_LOG event log, volume 0): a move order right after the select line cuts it and plays the move line; battle music follows the fight and the advisor reports losses.
+    @('windowed-battle-input-audio-orders', @('--hidden', '--no-vsync', '--exit-after', '9000', '--volume', '0', '--campaign', $camp, '--select', $yavin, '--weeks', '8', '--move', 'Hoth', '--battle-choice', 'fight', '--battle-reserve', '3', '--battle-speed', '1'), '(?s)(?=.*audio sfx CUT unit_select_w+ for Unit_Move_w+)(?=.*audio advisor ReinforcementsAvailable)'),
+    @('windowed-battle-audio-music-advisor', @('--hidden', '--no-vsync', '--exit-after', '5000', '--volume', '0', '--campaign', $camp, '--select', $yavin, '--weeks', '8', '--move', 'Hoth', '--battle-choice', 'fight', '--battle-speed', '30'), '(?s)(?=.*Space_Map_w+_Ambient_Music_Event)(?=.*Space_Map_w+_Battle_Music_Event)(?=.*audio advisor UnitDestroyed)'),
     # Esc in the real app path (no SP_INPUT_TEST): the battle menu opens above the HUD and pauses the battle clock.
     @('windowed-battle-esc-menu', @('--hidden', '--no-vsync', '--exit-after', '2500', '--volume', '0', '--campaign', $camp, '--select', $yavin, '--weeks', '8', '--move', 'Hoth', '--battle-choice', 'fight', '--battle-speed', '10', '--battle-esc-after', '5'), 'battle menu: open, clock paused=true'),
     @('battle-reinforce',    @('--campaign', $camp, '--select', $yavin, '--weeks', '8', '--move', 'Hoth', '--battle-choice', 'fight', '--battle-reserve', '3', '--battle-click', 'b_reinforcement,r_0000', '--battle-speed', '30', '--frames', '5'), 'simulation accepted')
@@ -66,6 +69,7 @@ foreach ($s in $scenarios) {
     $windowed = $name -like 'windowed-*'
     $base = if ($windowed) { @() } else { @('--offscreen', $png) }
     $args = ($base + $s[1]) | ForEach-Object { if ($_ -match '\s') { "`"$_`"" } else { $_ } }
+    if ($name -like '*audio*') { $env:SP_AUDIO_LOG = '1' } else { Remove-Item Env:SP_AUDIO_LOG -ErrorAction SilentlyContinue }
     if ($name -like '*input*') { $env:SP_INPUT_TEST = 'exit' } else { Remove-Item Env:SP_INPUT_TEST -ErrorAction SilentlyContinue }
     if ($name -like '*ui-pointer*') { $env:SP_UI_TEST = 'exit'; $env:SP_SAVES_DIR = Join-Path $Out 'ui-test-saves' } else { Remove-Item Env:SP_UI_TEST, Env:SP_SAVES_DIR -ErrorAction SilentlyContinue }
     $sw = [Diagnostics.Stopwatch]::StartNew()

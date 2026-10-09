@@ -63,6 +63,8 @@ pub enum OrderKind {
     Attack,
     /// Stop.
     Stop,
+    /// Guard (hold position, shoot what comes in range).
+    Guard,
 }
 
 /// The player gave an order; `lead` is the first ordered ship.
@@ -731,7 +733,8 @@ pub fn overlays(
         let (dest, base) = match s.order {
             battle_sim::Order::Move(d) | battle_sim::Order::Guard(d) => (crate::convert::sim_to_bevy(d), Color::srgb(0.35, 1.0, 0.4)),
             battle_sim::Order::AttackMove(d) => (crate::convert::sim_to_bevy(d), Color::srgb(0.95, 0.9, 0.3)),
-            battle_sim::Order::Attack(t) => match ships.0.get(&t) {
+            // Attack lines show only for a moment after the order, not for the plain selection (EaW draws none persistently).
+            battle_sim::Order::Attack(t) if recent.0.contains_key(&id) => match ships.0.get(&t) {
                 Some(target) => (target.pos, Color::srgb(1.0, 0.35, 0.3)),
                 None => continue,
             },

@@ -1,6 +1,7 @@
 //! Empire at War audio: event data (SFX, speech, music), sample path resolution, WAV/ADPCM decoding
 //! and (feature `bevy`) a Bevy plugin that plays everything with EaW-like rules.
 
+pub mod constants;
 pub mod galaxy;
 pub mod music;
 pub mod resolve;
@@ -8,6 +9,7 @@ pub mod sfx;
 pub mod speech;
 pub mod wav;
 
+pub use constants::AudioConstants;
 pub use galaxy::{GalaxyEvent, hud_prefix, resolve_galaxy_event};
 pub use music::{MusicEvent, MusicKind, MusicLibrary, MusicPlanner, MusicScene};
 pub use resolve::SampleResolver;

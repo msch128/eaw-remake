@@ -251,7 +251,8 @@ fn handle_clicks(
                         rt.command(player, Command::SetStance { ships: ships_ordered.clone(), stance: battle_sim::Stance::Defensive });
                     }
                     rt.command(player, Command::Stop { ships: ships_ordered });
-                    issued.write(control::OrderIssued { kind: control::OrderKind::Stop, lead });
+                    let kind = if b.name == "c_button05" { control::OrderKind::Guard } else { control::OrderKind::Stop };
+                    issued.write(control::OrderIssued { kind, lead });
                 }
             }
             _ => {}

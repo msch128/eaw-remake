@@ -15,7 +15,7 @@ Empire at War audio: event data, sample resolution, decoding and a Bevy playback
 
 ## Gaps / next steps
 - Not live-tested by ear (no audible playback in tests by project rule).
-- Not yet wired into battles (weapon SFX, unit responses, battle music intensity).
+- Battle wiring lives in `battle-view/src/audio.rs` (unit responses, advisor lines, music intensity); see "Audio feel pass" below.
 - Land music kinds are parsed but unused.
 
 ## Music and galaxy audio (data-driven)
@@ -41,3 +41,17 @@ Empire at War audio: event data, sample resolution, decoding and a Bevy playback
 4. Galaxy events: `MessageWriter<GalaxyAudio>`: `GalaxyAudio { faction: "Rebel".into(), event: GalaxyEvent::PlanetCaptured }`
    (unit built -> `UnitBuilt`, battle pending -> `BattlePending`, research done -> `ResearchComplete`, ...).
 5. Options menu: `ResMut<AudioBuses>`: `set_percent(VolumeCategory::Music, v)` etc., `percent()` to read sliders.
+
+## Audio feel pass (event-log verified)
+- `SP_AUDIO_LOG=1` logs `audio sfx <name>` (request), `audio sfx PLAY` (voice started), `audio sfx CUT a for b` (unit response replaced),
+  `audio advisor <Event> -> <HUD event>` and `audio music scene ... -> event ...`. With the log on, silent (volume 0) sounds still start so the voice rules run.
+- Unit responses (`Is_Unit_Response_VO`): one line at a time, a new response cuts the playing one (a move order right after a select
+  plays the move line); the same event is never stacked (`Max_Instances 1` of `Preset_UR`). The invented 0.6 s / 2.5 s cooldowns are now 0
+  (`AudioSettings`, still tunable).
+- `AudioConstants` (`constants.rs`): `Music_Space_Battle_To_Ambient_Peace_Seconds` = 15 and `Delay_Between_Space_Base_Attack_Announcement_Seconds` = 60
+  from `Audio.xml`, `Health_Low/Critical_Percent_Threshold` = 0.33 / 0.10 from `Gameconstants.xml`. The music planner uses the 15 s peace delay.
+- Battle music: ambient until a hostile shot/hit, battle while shots keep coming (3 s window, estimate), ambient again after the peace delay.
+  The data defines no hero-arrival, winning/losing or other intensity rules besides the win/lose stingers.
+- Data has none: speech ducking of music (no tag in Audio.xml / Gameconstants.xml), space ambience loops (`AmbientMapSounds.xml` / `SFXEventsAmbient.xml`
+  are land weather only), HUD lines for FleetArrived, HeroLost/Eliminated, EnemyUnit/StructureDestroyed, EnemyFleeing, EnemyHeroDetected, RetreatSucceeded
+  (commented out or sample-less for all three factions).

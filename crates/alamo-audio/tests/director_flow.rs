@@ -90,6 +90,10 @@ fn galaxy_events_resolve_to_files() {
         GalaxyEvent::PlanetLost,
         GalaxyEvent::BattlePending,
         GalaxyEvent::ResearchComplete,
+        GalaxyEvent::StationUnderAttack,
+        GalaxyEvent::UnitDestroyed,
+        GalaxyEvent::StructureDestroyed,
+        GalaxyEvent::ReinforcementsAvailable,
     ];
     for faction in ["Empire", "Rebel", "Underworld"] {
         for ev in GalaxyEvent::ALL {

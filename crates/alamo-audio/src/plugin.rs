@@ -101,9 +101,9 @@ pub struct AudioSettings {
     pub max_voices: usize,
     /// Sounds quieter than this (linear gain) at the start are not played.
     pub min_audible_gain: f32,
-    /// Seconds before the same unit-response event may play again.
+    /// Extra seconds before the same unit-response event may play again (0 = only the data's `Max_Instances` applies).
     pub speech_event_cooldown: f32,
-    /// Seconds between any two unit responses.
+    /// Extra seconds between any two unit responses (0 = a new response interrupts the one playing).
     pub speech_global_cooldown: f32,
     /// Decoded sample cache budget in bytes.
     pub cache_budget_bytes: usize,
@@ -116,8 +116,8 @@ impl Default for AudioSettings {
         Self {
             max_voices: 48,
             min_audible_gain: 0.01,
-            speech_event_cooldown: 2.5,
-            speech_global_cooldown: 0.6,
+            speech_event_cooldown: 0.0,
+            speech_global_cooldown: 0.0,
             cache_budget_bytes: 256 << 20,
             default_music_fade: 2.0,
         }
@@ -177,6 +177,9 @@ fn galaxy_audio_system(
     mut out: MessageWriter<PlaySfx>,
 ) {
     for g in events.read() {
+        if audio_log() {
+            info!("audio advisor {:?} ({}) -> {:?}", g.event, g.faction, crate::resolve_galaxy_event(&audio.sfx, &g.faction, g.event));
+        }
         if let Some(event) = crate::resolve_galaxy_event(&audio.sfx, &g.faction, g.event) {
             out.write(PlaySfx {
                 event,
@@ -282,6 +285,8 @@ pub struct AlamoAudio {
     pub speech: SpeechLibrary,
     /// Music events.
     pub music: MusicLibrary,
+    /// Audio constants from `Audio.xml` / `Gameconstants.xml`.
+    pub constants: crate::AudioConstants,
     resolver: SampleResolver,
     cache: HashMap<String, Handle<AudioSource>>,
     cache_bytes: usize,
@@ -296,6 +301,7 @@ impl AlamoAudio {
         let speech = SpeechLibrary::load(&*fs, &mut warnings);
         let music = MusicLibrary::load(&*fs, &mut warnings);
         let resolver = SampleResolver::new(&*fs);
+        let constants = crate::AudioConstants::load(&*fs);
         for w in warnings.iter().take(20) {
             warn!("audio data: {}: {}", w.file, w.message);
         }
@@ -304,6 +310,7 @@ impl AlamoAudio {
             sfx,
             speech,
             music,
+            constants,
             resolver,
             cache: HashMap::new(),
             cache_bytes: 0,
@@ -383,6 +390,14 @@ pub struct SfxVoice {
     follow: Vec<String>,
     chain: Option<String>,
     is_voice_over: bool,
+    unit_response: bool,
+}
+
+impl SfxVoice {
+    /// Lower-cased name of the SFX event this voice plays.
+    pub fn event(&self) -> &str {
+        &self.event
+    }
 }
 
 /// A request waiting for its predelay.
@@ -422,11 +437,14 @@ impl Plugin for AlamoAudioPlugin {
             audio.speech.len(),
             audio.music.len()
         );
+        // Battle music returns to the ambient playlist after the peace delay the data names (Audio.xml).
+        let mut director = MusicDirector::default();
+        director.planner.calm_seconds = audio.constants.space_battle_to_ambient_seconds;
         app.insert_resource(audio)
             .init_resource::<AudioBuses>()
             .init_resource::<AudioSettings>()
             .init_resource::<SfxState>()
-            .init_resource::<MusicDirector>()
+            .insert_resource(director)
             .add_message::<PlaySfx>()
             .add_message::<GalaxyAudio>()
             .add_message::<PlayFile>()
@@ -501,6 +519,7 @@ fn process_sfx_requests(
         f64,
         Option<Entity>,
         bool,
+        bool,
     )> = voices
         .iter()
         .map(|(e, v)| {
@@ -512,6 +531,7 @@ fn process_sfx_requests(
                 v.started,
                 v.source,
                 v.is_voice_over,
+                v.unit_response,
             )
         })
         .collect();
@@ -569,8 +589,10 @@ fn process_sfx_requests(
                 continue;
             }
         }
-        // Overlap groups.
-        if let Some(g) = &ev.overlap_group
+        // Overlap groups. A unit response is the exception: EaW plays the move line of an order right after the
+        // select line, so the newer response cuts the older one (below) instead of being dropped.
+        if !ev.is_unit_response_vo
+            && let Some(g) = &ev.overlap_group
             && live.iter().any(|v| v.2.as_deref() == Some(g.as_str()))
         {
             continue;
@@ -586,6 +608,17 @@ fn process_sfx_requests(
                     commands.entity(oldest).despawn();
                     live.retain(|v| v.0 != oldest);
                 }
+            }
+        }
+        // Unit responses never talk over each other: the new line replaces the one still playing.
+        if ev.is_unit_response_vo && first_try {
+            let cut: Vec<(Entity, String)> = live.iter().filter(|v| v.7).map(|v| (v.0, v.1.clone())).collect();
+            for (e, old) in cut {
+                if audio_log() {
+                    info!("audio sfx CUT {old} for {}", req.event);
+                }
+                commands.entity(e).despawn();
+                live.retain(|x| x.0 != e);
             }
         }
         // Global voice limit.
@@ -616,8 +649,10 @@ fn process_sfx_requests(
         }
         let volume = rng.random_range(ev.volume.0..=ev.volume.1) / 100.0;
         let base_gain = volume;
+        // With `SP_AUDIO_LOG` silent (volume 0) sounds still start, so audits see the real voice rules.
         if base_gain * attenuation * buses.gain(bus_of(&ev)) < settings.min_audible_gain
             && !ev.looping
+            && !audio_log()
         {
             continue;
         }
@@ -721,7 +756,11 @@ fn process_sfx_requests(
             follow,
             chain: chain_event.take(),
             is_voice_over: voice_over,
+            unit_response: ev.is_unit_response_vo,
         };
+        if audio_log() && first_try {
+            info!("audio sfx PLAY {} (unit_response={})", req.event, ev.is_unit_response_vo);
+        }
         let mut ec = commands.spawn((AudioPlayer::<AudioSource>(handle), pb, voice));
         if let Some(p) = req.position {
             ec.insert(Transform::from_translation(p));
@@ -741,6 +780,7 @@ fn process_sfx_requests(
             now,
             req.source,
             voice_over,
+            ev.is_unit_response_vo,
         ));
     }
 }

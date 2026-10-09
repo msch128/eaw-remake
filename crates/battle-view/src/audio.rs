@@ -1,14 +1,21 @@
 //! Battle sound hooks: weapon fire, impacts, explosions, ability and unit-response events are
-//! sent as [`alamo_audio::PlaySfx`] messages.
+//! sent as [`alamo_audio::PlaySfx`] messages; advisor lines (`EHD_*` HUD voice-over) as
+//! [`alamo_audio::plugin::GalaxyAudio`].
 //!
 //! The view never plays anything itself: without `AlamoAudioPlugin` the messages are consumed
 //! by Bevy's message cleanup and nothing is audible, which keeps tests and offscreen runs silent.
 //! [`BattleViewSettings::audio`] switches the hooks off completely.
+//!
+//! Data sources: the unit XML names the response events (`SFXEvent_Select`, `_Move`, `_Fleet_Move`, `_Attack`,
+//! `_Guard`, `_Stop`, `_Unit_Lost`, `_Unit_Under_Attack`, `_Health_Low_Warning`, `_Health_Critical_Warning`,
+//! `_Enemy_Damaged_Health_*_Warning`); `Gameconstants.xml` gives the health thresholds and `Audio.xml` the
+//! space-base announcement delay and the peace delay of the battle music.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
-use alamo_audio::{MusicDirector, MusicScene, PlaySfx};
-use battle_sim::{Event, HitKind};
+use alamo_audio::plugin::AlamoAudio;
+use alamo_audio::{AudioConstants, GalaxyEvent, MusicDirector, MusicScene, PlaySfx};
+use battle_sim::{Event, HitKind, ShipId, TargetClass};
 use bevy::prelude::*;
 
 use crate::control::{OrderIssued, OrderKind, Selection};
@@ -19,6 +26,15 @@ use crate::{BattleRuntime, BattleStatus, BattleViewSettings};
 const PER_NAME_PER_FRAME: u32 = 2;
 /// Most battle sounds per frame.
 const PER_FRAME: u32 = 24;
+/// Seconds before the same unit type reports "under attack" again (estimate; `Max_Instances 1` of the
+/// response events already stops overlapping lines).
+const UNDER_ATTACK_GAP: f64 = 12.0;
+/// Seconds between two "enemy fleeing" / "retreat succeeded" announcements (estimate).
+const RETREAT_GAP: f64 = 30.0;
+/// Battle seconds before "reinforcements available" is announced (estimate: the opening shots first).
+const REINFORCEMENTS_AVAILABLE_AT: f64 = 3.0;
+/// A hostile hit or shot within this many battle seconds keeps the music at battle intensity (estimate).
+const COMBAT_WINDOW: f64 = 3.0;
 
 /// Counters of what the hooks sent (for tests and diagnostics).
 #[derive(Resource, Debug, Default, Clone)]
@@ -27,6 +43,30 @@ pub struct BattleAudioStats {
     pub sent: u64,
     /// Last event names, newest last (at most 32).
     pub recent: Vec<String>,
+    /// Battle clock of the last shot or hit (drives the music intensity).
+    pub last_combat: Option<f64>,
+    /// Advisor lines requested so far (`GalaxyEvent` debug names).
+    pub advisor: Vec<String>,
+}
+
+/// Per-battle memory of the sound hooks.
+#[derive(Default)]
+pub struct AudioMemory {
+    /// Ship id -> (definition, side), kept after the ship died.
+    ships: HashMap<u32, (ShipId, u8)>,
+    /// Bit 0: low-health line played, bit 1: critical line played.
+    health_flags: HashMap<u32, u8>,
+    under_attack: HashMap<ShipId, f64>,
+    last_station_alarm: Option<f64>,
+    last_flee: Option<f64>,
+    last_retreat_ok: Option<f64>,
+    heroes_seen: HashSet<u32>,
+    reserve_announced: bool,
+    last_selection: Vec<u32>,
+}
+
+fn is_small(class: TargetClass) -> bool {
+    matches!(class, TargetClass::Fighter | TargetClass::Bomber)
 }
 
 /// Translates the events of the displayed steps and the player's input into sound requests.
@@ -35,12 +75,12 @@ pub fn battle_audio(
     settings: Res<BattleViewSettings>,
     rt: Res<BattleRuntime>,
     sel: Res<Selection>,
+    audio: Option<Res<AlamoAudio>>,
     mut orders: MessageReader<OrderIssued>,
     mut out: MessageWriter<PlaySfx>,
     mut stats: ResMut<BattleAudioStats>,
     mut voice: MessageWriter<alamo_audio::plugin::GalaxyAudio>,
-    mut last_selection: Local<Vec<u32>>,
-    mut defs: Local<HashMap<u32, battle_sim::ShipId>>,
+    mut mem: Local<AudioMemory>,
 ) {
     if !settings.audio {
         orders.clear();
@@ -48,36 +88,48 @@ pub fn battle_audio(
     }
     let Some(cur) = rt.cur.clone() else { return };
     let visuals = &rt.visuals;
-    defs.extend(cur.ships.iter().map(|s| (s.id, s.def)));
+    let player = settings.player_side;
+    let clock = rt.clock;
+    let constants = audio.as_ref().map(|a| a.constants.clone()).unwrap_or_default();
+    let AudioConstants { space_base_attack_announcement_delay, health_low, health_critical, .. } = constants;
+    mem.ships.extend(cur.ships.iter().map(|s| (s.id, (s.def, s.side))));
     let mut per_name: HashMap<String, u32> = HashMap::new();
     let mut budget = PER_FRAME;
     let mut send = |names: &str, pos: Option<Vec3>, stats: &mut BattleAudioStats, out: &mut MessageWriter<PlaySfx>| {
-      // Some tags hold a comma separated list of events (`HARD_POINT_WEAPON_LASER, Unit_Lost_...`): play each.
-      for name in names.split(',').map(str::trim).filter(|n| !n.is_empty() && !n.starts_with("HARD_POINT_")) {
-        if budget == 0 {
-            return;
+        // Some tags hold a comma separated list of events (`HARD_POINT_WEAPON_LASER, Unit_Lost_...`): play each.
+        for name in names.split(',').map(str::trim).filter(|n| !n.is_empty() && !n.starts_with("HARD_POINT_")) {
+            if budget == 0 {
+                return;
+            }
+            let n = match per_name.get_mut(name) {
+                Some(n) => n,
+                None => per_name.entry(name.to_string()).or_default(),
+            };
+            if *n >= PER_NAME_PER_FRAME {
+                return;
+            }
+            *n += 1;
+            budget -= 1;
+            out.write(PlaySfx { event: name.to_string(), position: pos, source: None });
+            stats.sent += 1;
+            if stats.recent.len() >= 32 {
+                stats.recent.remove(0);
+            }
+            stats.recent.push(name.to_string());
         }
-        let n = match per_name.get_mut(name) {
-            Some(n) => n,
-            None => per_name.entry(name.to_string()).or_default(),
-        };
-        if *n >= PER_NAME_PER_FRAME {
-            return;
+    };
+    let faction = rt.player_faction.clone();
+    let mut say = |event: GalaxyEvent, stats: &mut BattleAudioStats| {
+        if let Some(f) = &faction {
+            voice.write(alamo_audio::plugin::GalaxyAudio { faction: f.clone(), event });
+            stats.advisor.push(format!("{event:?}"));
         }
-        *n += 1;
-        budget -= 1;
-        out.write(PlaySfx { event: name.to_string(), position: pos, source: None });
-        stats.sent += 1;
-        if stats.recent.len() >= 32 {
-            stats.recent.remove(0);
-        }
-        stats.recent.push(name.to_string());
-      }
     };
 
     for ev in &rt.fresh_events {
         match ev {
             Event::ProjectileFired { ship, hardpoint, from, .. } => {
+                stats.last_combat = Some(clock);
                 let Some(s) = cur.ship(*ship) else { continue };
                 let v = visuals.ship(s.def);
                 let name = match hardpoint {
@@ -88,7 +140,54 @@ pub fn battle_audio(
                     send(n, Some(sim_to_bevy(*from)), &mut stats, &mut out);
                 }
             }
-            Event::Hit { projectile, pos, kind, .. } => {
+            Event::Hit { ship, attacker, projectile, pos, kind, .. } => {
+                let attacker_side = mem.ships.get(attacker).map(|a| a.1);
+                if let Some(v) = cur.ship(*ship) {
+                    let hostile = attacker_side.is_some_and(|a| a != v.side);
+                    if hostile {
+                        stats.last_combat = Some(clock);
+                    }
+                    let def = rt.catalog.ship(v.def);
+                    let sfx = &visuals.ship(v.def).sfx;
+                    // An own unit is shot at: the unit complains, a station raises the alarm.
+                    if v.side == player && hostile {
+                        if def.class == TargetClass::Structure {
+                            // `Delay_Between_Space_Base_Attack_Announcement_Seconds` (Audio.xml).
+                            if mem.last_station_alarm.is_none_or(|t| clock - t >= f64::from(space_base_attack_announcement_delay)) {
+                                mem.last_station_alarm = Some(clock);
+                                say(GalaxyEvent::StationUnderAttack, &mut stats);
+                            }
+                        } else if !is_small(def.class)
+                            && mem.under_attack.get(&v.def).is_none_or(|t| clock - t >= UNDER_ATTACK_GAP)
+                            && let Some(n) = sfx.under_attack.as_deref()
+                        {
+                            mem.under_attack.insert(v.def, clock);
+                            send(n, None, &mut stats, &mut out);
+                        }
+                    }
+                    // Health warnings at `Health_Low_Percent_Threshold` / `Health_Critical_Percent_Threshold`.
+                    let mine = v.side == player;
+                    if !def.is_squadron && !is_small(def.class) && def.hull > 0.0 && (mine || attacker_side == Some(player)) {
+                        let frac = v.hull / def.hull;
+                        let flags = mem.health_flags.entry(*ship).or_default();
+                        let (low, crit) = if mine {
+                            (sfx.health_low.as_deref(), sfx.health_critical.as_deref())
+                        } else {
+                            (sfx.enemy_health_low.as_deref(), sfx.enemy_health_critical.as_deref())
+                        };
+                        if frac <= health_critical && *flags & 2 == 0 {
+                            *flags |= 3;
+                            if let Some(n) = crit {
+                                send(n, None, &mut stats, &mut out);
+                            }
+                        } else if frac <= health_low && *flags & 1 == 0 {
+                            *flags |= 1;
+                            if let Some(n) = low {
+                                send(n, None, &mut stats, &mut out);
+                            }
+                        }
+                    }
+                }
                 // Shield hits are a separate effect in the game; only hull and hardpoint hits detonate audibly.
                 if matches!(kind, HitKind::Shield) {
                     continue;
@@ -98,8 +197,38 @@ pub fn battle_audio(
                 }
             }
             Event::ShipDestroyed { ship, pos } => {
-                if let Some(n) = defs.get(ship).and_then(|d| visuals.ship(*d).sfx.death.as_deref()) {
+                mem.health_flags.remove(ship);
+                let Some(&(def, side)) = mem.ships.get(ship) else { continue };
+                let vis = visuals.ship(def);
+                if let Some(n) = vis.sfx.death.as_deref() {
                     send(n, Some(sim_to_bevy(*pos)), &mut stats, &mut out);
+                }
+                let class = rt.catalog.ship(def).class;
+                if is_small(class) {
+                    continue;
+                }
+                let structure = class == TargetClass::Structure;
+                if side == player {
+                    if let Some(n) = vis.sfx.unit_lost.as_deref() {
+                        send(n, None, &mut stats, &mut out);
+                    }
+                    say(
+                        match (vis.hero, structure) {
+                            (true, _) => GalaxyEvent::HeroLost,
+                            (_, true) => GalaxyEvent::StructureDestroyed,
+                            _ => GalaxyEvent::UnitDestroyed,
+                        },
+                        &mut stats,
+                    );
+                } else {
+                    say(
+                        match (vis.hero, structure) {
+                            (true, _) => GalaxyEvent::HeroEliminated,
+                            (_, true) => GalaxyEvent::EnemyStructureDestroyed,
+                            _ => GalaxyEvent::EnemyUnitDestroyed,
+                        },
+                        &mut stats,
+                    );
                 }
             }
             Event::HardpointDestroyed { ship, .. } => {
@@ -109,14 +238,24 @@ pub fn battle_audio(
                     send(n, Some(sim_to_bevy(s.pos)), &mut stats, &mut out);
                 }
             }
-            Event::ReinforcementsCalled { side, .. } if *side == settings.player_side => {
-                if let Some(f) = &rt.player_faction {
-                    voice.write(alamo_audio::plugin::GalaxyAudio { faction: f.clone(), event: alamo_audio::GalaxyEvent::ReinforcementsEnRoute });
+            Event::ReinforcementsCalled { side, .. } if *side == player => say(GalaxyEvent::ReinforcementsEnRoute, &mut stats),
+            Event::ReinforcementsRefused { side, .. } if *side == player => say(GalaxyEvent::UnitCapReached, &mut stats),
+            Event::ReinforcementsArrived { side, .. } if *side != player => say(GalaxyEvent::EnemyReinforcements, &mut stats),
+            Event::ShipRetreated { ship } => {
+                let Some(&(_, side)) = mem.ships.get(ship) else { continue };
+                if side == player {
+                    if mem.last_retreat_ok.is_none_or(|t| clock - t >= RETREAT_GAP) {
+                        mem.last_retreat_ok = Some(clock);
+                        say(GalaxyEvent::RetreatSucceeded, &mut stats);
+                    }
+                } else if mem.last_flee.is_none_or(|t| clock - t >= RETREAT_GAP) {
+                    mem.last_flee = Some(clock);
+                    say(GalaxyEvent::EnemyFleeing, &mut stats);
                 }
             }
             Event::AbilityActivated { ship, .. } => {
                 if let Some(s) = cur.ship(*ship)
-                    && s.side == settings.player_side
+                    && s.side == player
                     && let Some(n) = visuals.ship(s.def).sfx.ability.as_deref()
                 {
                     send(n, None, &mut stats, &mut out);
@@ -126,9 +265,24 @@ pub fn battle_audio(
         }
     }
 
+    // An enemy hero entering the player's sight.
+    for s in &cur.ships {
+        if s.side != player && visuals.ship(s.def).hero && s.seen_by & (1 << player) != 0 && mem.heroes_seen.insert(s.id) {
+            say(GalaxyEvent::EnemyHeroDetected, &mut stats);
+        }
+    }
+    // Reserve groups of the player's side can be called in.
+    if !mem.reserve_announced
+        && clock >= REINFORCEMENTS_AVAILABLE_AT
+        && rt.request.as_ref().and_then(|r| r.sides.get(player as usize)).is_some_and(|s| !s.reserve.is_empty())
+    {
+        mem.reserve_announced = true;
+        say(GalaxyEvent::ReinforcementsAvailable, &mut stats);
+    }
+
     // Unit responses of the player's own units.
-    if sel.is_changed() && sel.ships != *last_selection {
-        *last_selection = sel.ships.clone();
+    if sel.is_changed() && sel.ships != mem.last_selection {
+        mem.last_selection = sel.ships.clone();
         if let Some(n) = sel.ships.first().and_then(|id| cur.ship(*id)).and_then(|s| visuals.ship(s.def).sfx.select.as_deref()) {
             send(n, None, &mut stats, &mut out);
         }
@@ -136,10 +290,15 @@ pub fn battle_audio(
     for o in orders.read() {
         let Some(s) = cur.ship(o.lead) else { continue };
         let v = &visuals.ship(s.def).sfx;
+        // `SFXEvent_Fleet_Move` answers a move order given to a group (estimate: the data does not say when the
+        // engine prefers it; units without a fleet line use their single-unit move line).
+        let group = sel.ships.len() > 1;
         let name = match o.kind {
-            OrderKind::Move => v.mv.as_deref(),
+            OrderKind::Move if group => v.fleet_move.as_deref().or(v.mv.as_deref()),
+            OrderKind::Move => v.mv.as_deref().or(v.fleet_move.as_deref()),
             OrderKind::Attack => v.attack.as_deref(),
-            OrderKind::Stop => None,
+            OrderKind::Guard => v.guard.as_deref().or(v.stop.as_deref()),
+            OrderKind::Stop => v.stop.as_deref(),
         };
         if let Some(n) = name {
             send(n, None, &mut stats, &mut out);
@@ -147,22 +306,27 @@ pub fn battle_audio(
     }
 }
 
-/// Starts the space music scene for the player's faction and scales the intensity with the share of ships still fighting.
+/// Starts the space music scene for the player's faction. Battle music plays while shots are being
+/// exchanged and ends after `Music_Space_Battle_To_Ambient_Peace_Seconds` (Audio.xml) without any.
 pub fn battle_music(
     settings: Res<BattleViewSettings>,
     status: Res<BattleStatus>,
     rt: Res<BattleRuntime>,
+    stats: Res<BattleAudioStats>,
     director: Option<ResMut<MusicDirector>>,
 ) {
     let Some(mut director) = director else { return };
     if !settings.audio {
         return;
     }
+    // Once the battle is over the result stinger (set by the flow) must not be replaced by the space scene.
+    if status.over {
+        director.set_battle_intensity(0.0);
+        return;
+    }
     if let Some(f) = &rt.player_faction {
         director.set_scene(MusicScene::Space(f.clone()));
     }
-    let total: u32 = status.alive.iter().sum();
-    let start = rt.start_alive.iter().sum::<u32>().max(1);
-    // Everything alive and shooting is intense; it eases when ships die off.
-    director.set_battle_intensity(if status.over || total == 0 { 0.0 } else { (total as f32 / start as f32).clamp(0.0, 1.0) });
+    let fighting = stats.last_combat.is_some_and(|t| rt.clock - t <= COMBAT_WINDOW);
+    director.set_battle_intensity(if fighting { 1.0 } else { 0.0 });
 }
