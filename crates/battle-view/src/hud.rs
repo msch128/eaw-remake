@@ -364,16 +364,23 @@ pub(crate) fn unit_tooltip(
                 .unwrap_or_else(|| hdef.name.replace('_', " "));
             let dmg = hdef.projectile.and_then(|p| rt.catalog.projectiles.get(p as usize)).map(|p| p.damage);
             let mut msg = name;
-            if let Some(d) = dmg {
+            // Data tooltips usually carry their own damage ("... - 100 DMG - ... - 65 DMG"); ours only fills the gap.
+            if let Some(d) = dmg.filter(|_| !msg.to_ascii_uppercase().contains("DMG")) {
                 msg.push_str(&format!(" - {d:.0} DMG"));
             }
             msg.push_str(&format!(" - {:.0}%", marker.health * 100.0));
+            let glyphs = msg.chars().count();
             if tip_text.0 != msg {
                 tip_text.0 = msg;
             }
             tip_node.display = Display::Flex;
-            tip_node.left = Val::Px((cursor.x + 16.0) / scale.0);
-            tip_node.top = Val::Px((cursor.y + 18.0) / scale.0);
+            // Keep the box on screen: the width is estimated from the text (11 px font, about 0.6 em per glyph, plus padding).
+            let est = (glyphs as f32 * 11.0 * 0.6 + 14.0) * scale.0;
+            let (vw, vh) = cam.physical_viewport_size().map(|v| (v.x as f32, v.y as f32)).unwrap_or((f32::MAX, f32::MAX));
+            let x = (cursor.x + 16.0).min(vw - est - 4.0).max(0.0);
+            let y = (cursor.y + 18.0).min(vh - 26.0 * scale.0).max(0.0);
+            tip_node.left = Val::Px(x / scale.0);
+            tip_node.top = Val::Px(y / scale.0);
             if panel.display != Display::None {
                 panel.display = Display::None;
             }

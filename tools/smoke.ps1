@@ -50,6 +50,8 @@ $scenarios = @(
     @('windowed-battle-f10-abandon', @('--hidden', '--no-vsync', '--exit-after', '6000', '--volume', '0', '--campaign', $camp, '--select', $yavin, '--weeks', '8', '--move', 'Hoth', '--battle-choice', 'fight', '--battle-auto', '--battle-speed', '30', '--battle-abort-after', '90'), 'abandoned at t=\d+s, units lost per side \[[0-9, ]*[1-9]'),
     # Autocast proof: an X4 (Sensor_Jamming with autofire) joins the fleet; input_test right-clicks its ability button.
     @('windowed-battle-input-autocast', @('--hidden', '--no-vsync', '--exit-after', '9000', '--volume', '0', '--campaign', $camp, '--select', $yavin, '--grant-unit', 'X4', '--at', $yavin, '--weeks', '8', '--move', 'Hoth', '--battle-choice', 'fight', '--battle-reserve', '3', '--battle-speed', '1'), 'input-test: [0-9]+ checks PASS'),
+    # Esc in the real app path (no SP_INPUT_TEST): the battle menu opens above the HUD and pauses the battle clock.
+    @('windowed-battle-esc-menu', @('--hidden', '--no-vsync', '--exit-after', '2500', '--volume', '0', '--campaign', $camp, '--select', $yavin, '--weeks', '8', '--move', 'Hoth', '--battle-choice', 'fight', '--battle-speed', '10', '--battle-esc-after', '5'), 'battle menu: open, clock paused=true'),
     @('battle-reinforce',    @('--campaign', $camp, '--select', $yavin, '--weeks', '8', '--move', 'Hoth', '--battle-choice', 'fight', '--battle-reserve', '3', '--battle-click', 'b_reinforcement,r_0000', '--battle-speed', '30', '--frames', '5'), 'simulation accepted')
 )
 

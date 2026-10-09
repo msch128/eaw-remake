@@ -420,8 +420,17 @@ fn battle_menu(
     existing: Query<Entity, With<BattleMenuRoot>>,
     mut commands: Commands,
     mut done: MessageWriter<BattleFinished>,
+    args: Res<Args>,
+    status: Res<BattleStatus>,
+    mut scripted_esc: Local<bool>,
+    ui: Option<Res<EawUiSettings>>,
 ) {
-    if keys.just_pressed(KeyCode::Escape) {
+    // `--battle-esc-after <s>` scripts one Esc press for test runs.
+    let scripted = !*scripted_esc && status.tick > 0 && args.battle_esc_after.is_some_and(|s| status.time >= s);
+    if scripted {
+        *scripted_esc = true;
+    }
+    if keys.just_pressed(KeyCode::Escape) || scripted {
         if armed.0.is_some() && !menu.open {
             armed.0 = None;
         } else {
@@ -441,7 +450,13 @@ fn battle_menu(
     }
     match (menu.open, existing.is_empty()) {
         (true, true) => {
-            crate::menu::spawn_menu(&mut commands, &crate::menu::battle_menu_spec(), BattleMenuRoot);
+            // Above every tactical HUD layer (they reach z 80); at z 60 the dim layer and buttons sat under the HUD.
+            let root = crate::menu::spawn_menu(&mut commands, &crate::menu::battle_menu_spec(), BattleMenuRoot);
+            commands.entity(root).insert(GlobalZIndex(600));
+            if let Some(cam) = ui.and_then(|u| u.camera) {
+                commands.entity(root).insert(UiTargetCamera(cam));
+            }
+            info!("battle menu: open, clock paused={}", settings.paused);
         }
         (false, false) => {
             for e in &existing {

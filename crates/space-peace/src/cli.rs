@@ -92,6 +92,8 @@ pub struct Args {
     pub battle_seconds: Option<f32>,
     /// Abandon the tactical battle (as F10 does) once its clock reaches this many seconds (`--battle-abort-after <s>`).
     pub battle_abort_after: Option<f32>,
+    /// Press Esc in the tactical battle once its clock reaches this many seconds (`--battle-esc-after <s>`); the menu opens and pauses the clock.
+    pub battle_esc_after: Option<f32>,
     /// Offscreen only: render target size in pixels (`--size 1920x1080`, default 3840x2160).
     pub size: Option<(u32, u32)>,
     /// Offscreen only: act as if the cursor hovered the selected planet (`--hover`).
@@ -143,6 +145,7 @@ impl Default for Args {
             battle_speed: None,
             battle_seconds: None,
             battle_abort_after: None,
+            battle_esc_after: None,
             size: None,
             hover_selected: false,
         }
@@ -189,6 +192,7 @@ OPTIONS:
   --battle-speed <x>     Tactical battle speed multiplier
   --battle-seconds <s>   Offscreen: battle time of the mid-battle capture (default 12)
   --battle-abort-after <s>  Abandon the tactical battle after s battle seconds (like F10)
+  --battle-esc-after <s>    Press Esc in the tactical battle after s battle seconds (opens the battle menu)
   --size <WxH>          Offscreen: render target size (default 3840x2160)
   --hover               Offscreen: hover the selected planet (shows its hover panel)
   --no-vsync             Disable vertical sync
@@ -289,6 +293,10 @@ impl Args {
                 "--battle-abort-after" => {
                     let v = it.next().ok_or("--battle-abort-after needs a value")?;
                     out.battle_abort_after = Some(v.parse().map_err(|e| format!("bad --battle-abort-after: {e}"))?);
+                }
+                "--battle-esc-after" => {
+                    let v = it.next().ok_or("--battle-esc-after needs a value")?;
+                    out.battle_esc_after = Some(v.parse().map_err(|e| format!("bad --battle-esc-after: {e}"))?);
                 }
                 "--battle-choice" => {
                     let v = it.next().ok_or("--battle-choice needs fight or auto")?;
