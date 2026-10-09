@@ -270,7 +270,7 @@ fn pick(projected: &[Projected], cursor: Vec2, accept: impl Fn(u32) -> bool) -> 
         .map(|(id, _)| id)
 }
 
-/// World position of a hardpoint of a rendered ship: its bone in the loaded model, else the sim offset scaled like the model.
+/// World position of a hardpoint of a rendered ship: its bone in the loaded model, else the sim offset (the sim scales the model bones by `Scale_Factor` itself).
 pub fn hardpoint_world(rt: &BattleRuntime, s: &ShipRender, hp: usize) -> Vec3 {
     if let Some(p) = s.hp_pos.get(hp).copied().flatten() {
         return p;

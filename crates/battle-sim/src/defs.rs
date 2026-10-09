@@ -741,6 +741,17 @@ impl Source {
         }
     }
 
+    /// `Scale_Factor` of the object: the renderer scales the whole model (and so every bone) by it, so the bone positions the simulation reads from the
+    /// model file must be scaled the same way (U48: a star base's hardpoints floated above its model before).
+    fn scale_factor(&self) -> f32 {
+        let fields = match self {
+            Source::Unit(u) => &u.fields,
+            Source::Base(b) => &b.fields,
+            Source::Structure(s) => &s.fields,
+        };
+        fields.get("scale_factor").and_then(|v| v.trim().parse::<f32>().ok()).filter(|s| *s > 0.0).unwrap_or(1.0)
+    }
+
     fn hardpoints(&self) -> &[String] {
         match self {
             Source::Unit(u) => &u.hardpoints,
@@ -893,6 +904,15 @@ impl Catalog {
         }
         for (i, s) in sources.iter().enumerate() {
             let model = s.model().and_then(|m| models.get(&m.to_ascii_lowercase()));
+            let scaled = model.map(|m| {
+                let k = s.scale_factor();
+                if (k - 1.0).abs() < 1e-4 {
+                    return m.clone();
+                }
+                let bones = m.bones.iter().map(|(n, &(p, x, z, mir, y))| (n.clone(), (Vec3::new(p.x * k, p.y * k, p.z * k), x, z, mir, y))).collect();
+                Arc::new(ModelInfo { bones, radius: m.radius * k })
+            });
+            let model = scaled.as_ref();
             let def = cat.ship_def(s, &hp_defs[i], model.map(|m| &**m), &attach);
             cat.ships.push(def);
         }

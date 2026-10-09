@@ -190,3 +190,43 @@ fn ships_ordered_to_attack_stop_at_their_weapon_range() {
     assert!(checked > 0, "no candidate ship found");
 }
 
+
+#[test]
+fn hardpoint_offsets_follow_the_scaled_model_bones() {
+    let Some((data, fs)) = load() else { return };
+    let mut names: Vec<String> = ["Star_Destroyer", "MC-80_Star_Cruiser", "Pirate_Starbase_Lv1"].iter().map(|s| s.to_string()).collect();
+    for f in ["Rebel", "Empire", "Underworld", "Pirate"] {
+        for l in 1..=5 {
+            names.push(format!("{f}_Star_Base_{l}"));
+        }
+    }
+    let names: Vec<&str> = names.iter().map(String::as_str).collect();
+    let cat = Catalog::build(&data, Some(&fs), &names);
+    let mut scaled_checked = 0;
+    for name in names {
+        let Some(id) = cat.ship_id(name) else { continue };
+        let def = cat.ship(id);
+        let scale = data.objects.resolve(name).and_then(|r| r.num::<f32>("scale_factor")).filter(|s| *s > 0.0).unwrap_or(1.0);
+        let model_path = def.model.clone().expect("model");
+        let model = alamo_model::Model::parse(&alamo_fs::FileSource::read(&fs, &format!("Art/Models/{model_path}")).unwrap()).unwrap();
+        // Bone positions in battle space (model (x, y, z) -> (-y, x, z)), times the Scale_Factor the renderer applies.
+        let bones: Vec<Vec3> = (0..model.bones.len()).map(|i| {
+            let t = model.world_transform(i);
+            Vec3::new(-t[1][3] * scale, t[0][3] * scale, t[2][3] * scale)
+        }).collect();
+        let placed: Vec<_> = def.hardpoints.iter().filter(|h| h.from_bone).collect();
+        if placed.is_empty() {
+            println!("{name}: no hardpoint placed from a bone");
+            continue;
+        }
+        for h in &placed {
+            let nearest = bones.iter().map(|b| b.dist(h.offset)).fold(f32::MAX, f32::min);
+            assert!(nearest < 1.0, "{name} {}: offset {:?} is {nearest:.1} from the nearest scaled bone (scale {scale})", h.name, h.offset);
+        }
+        println!("{name}: scale {scale}, {} of {} hardpoints on scaled bones", placed.len(), def.hardpoints.len());
+        if (scale - 1.0).abs() > 1e-3 {
+            scaled_checked += 1;
+        }
+    }
+    assert!(scaled_checked > 0, "none of the checked objects has a Scale_Factor, the test would not prove the scaling");
+}
