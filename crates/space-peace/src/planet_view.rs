@@ -22,10 +22,10 @@ pub struct PlanetViewState {
     pub planet: Option<usize>,
     /// 0 = galaxy map, 1 = fully in the planet view (eased).
     pub blend: f32,
-    /// World positions of the three rectangular ground-structure frames on the base layout (left to right).
+    /// World positions of the three rectangular frames of the upper pad (left to right); they stay empty.
+    pub base_pads: Vec<Vec3>,
+    /// World positions of the round ground-building slots of the lower plate, one per `Special_Structures_Land` (left to right).
     pub ground_slots: Vec<Vec3>,
-    /// World positions of the six round orbital/defence slots on the front strip (left to right).
-    pub orbital_slots: Vec<Vec3>,
 }
 
 /// Registers the planet view.
@@ -105,6 +105,19 @@ mod tests {
     use super::*;
 
     #[test]
+    fn ground_circles_follow_the_planet_slot_count() {
+        for n in 0..=8 {
+            let c = circle_slots(n);
+            assert_eq!(c.len(), n, "one circle per ground slot");
+            assert!(c.iter().all(|o| o.x.abs() <= 1.03), "inside the plate: {c:?}");
+            for (i, a) in c.iter().enumerate() {
+                assert!(c.iter().skip(i + 1).all(|b| a.distance(*b) > 0.25), "circles do not overlap: {c:?}");
+            }
+        }
+        assert!(circle_slots(4).iter().all(|o| (o.y + 0.74).abs() < 1e-6), "up to six sit in the strip");
+    }
+
+    #[test]
     fn a_small_wheel_zoom_near_the_planet_opens_the_view() {
         assert!(wheel_opens(1.0, 1.0, 0.0), "at the closest zoom");
         assert!(wheel_opens(1.0, 1.9, 0.3), "a few notches out, planet near the centre");
@@ -113,6 +126,20 @@ mod tests {
         assert!(!wheel_opens(-1.0, 1.0, 0.0), "wheel out never opens");
         assert!(!wheel_opens(0.0, 1.0, 0.0), "no wheel, no view");
     }
+}
+
+/// Offsets (from the platform centre) of the ground building circles on the lower plate: up to six in one row spread over the plate, extras
+/// (planets with 7 or 8 slots) in a second row just above it.
+fn circle_slots(n: usize) -> Vec<Vec3> {
+    let row = |count: usize, y: f32| -> Vec<Vec3> {
+        let spacing = if count > 1 { (2.05 / (count - 1) as f32).min(0.41) } else { 0.0 };
+        (0..count).map(|k| Vec3::new((k as f32 - (count as f32 - 1.0) * 0.5) * spacing, y, 0.05)).collect()
+    };
+    let mut out = row(n.min(6), -0.74);
+    if n > 6 {
+        out.extend(row(n - 6, -0.42));
+    }
+    out
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -124,6 +151,7 @@ fn view_scene(
     sim: Option<Res<SimState>>,
     catalog: Option<Res<PlayCatalog>>,
     alamo: Option<Res<AlamoFs>>,
+    bridge: Option<Res<crate::play::PlayBridge>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut mats: ResMut<Assets<StandardMaterial>>,
     mut images: ResMut<Assets<Image>>,
@@ -181,28 +209,39 @@ fn view_scene(
     }
     // Slot positions on the platform quad (centre `plat`, 3.8 x 1.9, facing +Z): read off the art.
     let plat = ORIGIN + Vec3::new(0.0, -2.5, -10.0);
-    state.ground_slots = [-0.9f32, 0.0, 0.95].iter().map(|x| plat + Vec3::new(*x, -0.07, 0.05)).collect();
-    state.orbital_slots = (0..6).map(|k| plat + Vec3::new((k as f32 - 2.5) * 0.62, -0.74, 0.05)).collect();
-    // Orbital slot circles of the second pad (the art is an empty strip).
+    // The three rectangular frames of the upper pad stay empty (EaW's base pads; base editing is out of scope).
+    state.base_pads = [-0.9f32, 0.0, 0.95].iter().map(|x| plat + Vec3::new(*x, -0.07, 0.05)).collect();
+    // The circles of the lower plate are the planet's ground building slots, as many as the data says (`planet_capacity`).
+    let sim_planet = bridge.as_deref().and_then(|b| b.planet_to_sim.get(p.0).copied().flatten());
+    let ground_total = match (sim_for_structs, sim_planet) {
+        (Some(sim), Some(sp)) => sim.world.planet_capacity(sim.galaxy(), sp).ground.total,
+        _ => 0,
+    };
+    state.ground_slots = circle_slots(ground_total.max(0) as usize).into_iter().map(|o| plat + o).collect();
+    // The art is an empty strip: the circles are drawn here.
     let ring = mats.add(StandardMaterial { base_color: Color::srgb(0.85, 0.78, 0.55), unlit: true, depth_bias: 50.0, cull_mode: None, ..default() });
-    for at in &state.orbital_slots {
+    for at in &state.ground_slots {
         commands.spawn((
             ViewEntity,
-            Name::new("orbital slot ring"),
+            Name::new("ground slot ring"),
             Mesh3d(meshes.add(Annulus::new(0.125, 0.14))),
             MeshMaterial3d(ring.clone()),
-            Transform::from_translation(plat + Vec3::new(at.x - plat.x, 0.0, 0.0) * 0.66 + Vec3::new(0.0, -0.64, 0.08)).with_scale(Vec3::new(1.0, 0.8, 1.0)),
+            Transform::from_translation(*at + Vec3::new(0.0, 0.1, 0.03)).with_scale(Vec3::new(1.0, 0.8, 1.0)),
         ));
     }
     if let Some(sim) = sim_for_structs {
         let cat_for_structs = cat_for_structs;
-        let (mut g, mut o) = (0usize, 0usize);
-        for &s in &sim.galaxy().planets.get(p.0).map(|pl| pl.structures.clone()).unwrap_or_default() {
+        let mut g = 0usize;
+        for &s in &sim_planet.and_then(|sp| sim.galaxy().planets.get(sp as usize)).map(|pl| pl.structures.clone()).unwrap_or_default() {
             let Some(def) = sim.world.structures.get(s as usize) else { continue };
             let Some(Some(model)) = cat_for_structs.and_then(|c| c.structure_models.get(s as usize)) else { continue };
-            let slot = if def.orbital { o += 1; state.orbital_slots.get(o - 1) } else { g += 1; state.ground_slots.get(g - 1) };
-            if let Some(at) = slot {
-                commands.spawn((ViewEntity, AlamoModel::new(model.clone()), FitModel { radius: if def.orbital { 0.22 } else { 0.5 }, spin: 0.3 }, Visibility::Hidden, Transform::from_translation(*at + Vec3::Y * 0.2)));
+            // Orbital structures stand beside the star base (left side), see `orbital_layout`.
+            if def.orbital {
+                continue;
+            }
+            g += 1;
+            if let Some(at) = state.ground_slots.get(g - 1) {
+                commands.spawn((ViewEntity, AlamoModel::new(model.clone()), FitModel { radius: 0.22, spin: 0.3 }, Visibility::Hidden, Transform::from_translation(*at + Vec3::new(0.0, 0.12, 0.06))));
             }
         }
     }
