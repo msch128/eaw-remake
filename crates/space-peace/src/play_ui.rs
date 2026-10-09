@@ -85,11 +85,13 @@ pub(crate) struct BarState {
     pub(crate) pads: Vec<Option<BuildTarget>>,
     /// Queue slots (empty ones are `None`): lane, position in the lane and the credits a cancel gives back.
     pub(crate) queue: Vec<Option<(galaxy_sim::Lane, u32, f32)>>,
+    /// Page of the build pads (see `MAX_PADS`).
+    page: usize,
 }
 
 impl Default for BarState {
     fn default() -> Self {
-        Self { class: None, spawned: false, space_tab: true, pads: Vec::new(), queue: Vec::new() }
+        Self { class: None, spawned: false, space_tab: true, pads: Vec::new(), queue: Vec::new(), page: 0 }
     }
 }
 
@@ -155,7 +157,7 @@ impl Plugin for PlayUiPlugin {
                     .chain()
                     .run_if(resource_exists::<PlayBridge>.and_then(resource_exists::<SimState>)),
             )
-            .add_systems(Update, (declutter_top, hero_bar, locked_clicks, spawn_planet_panel, update_planet_panel, place_planet_panel, planet_view_ui, planet_view_bar_tab, objectives_toggle, objectives_window, objectives_scroll).chain().run_if(resource_exists::<PlayBridge>.and_then(resource_exists::<SimState>)))
+            .add_systems(Update, (declutter_top, hero_bar, spawn_pad_arrows, pad_arrows, locked_clicks, spawn_planet_panel, update_planet_panel, place_planet_panel, planet_view_ui, planet_view_bar_tab, objectives_toggle, objectives_window, objectives_scroll).chain().run_if(resource_exists::<PlayBridge>.and_then(resource_exists::<SimState>)))
             .add_systems(Update, scripted_tooltip.run_if(resource_exists::<eaw_ui::ForcedTooltip>))
             .add_systems(Update, save_toast)
             .add_systems(Update, auto_resolve_summary.after(battle_dialog_result).run_if(resource_exists::<PlayBridge>.and_then(resource_exists::<SimState>)))
@@ -387,6 +389,7 @@ fn feed_bar(
     player: Res<PlayerFaction>,
     catalog: Res<galaxy_play::PlayCatalog>,
     mut last_focus: Local<Option<u32>>,
+    mut pad_context: Local<(Option<u32>, bool, Option<BarClass>)>,
 ) {
     if !model.is_changed() && !bar.is_changed() {
         return;
@@ -434,6 +437,11 @@ fn feed_bar(
     let week = state.world.config.week_seconds;
     let space_tab = bar.space_tab;
     let class = bar.class;
+    // Another planet, tab or class filter starts at the first page.
+    if *pad_context != (focus, space_tab, class) {
+        *pad_context = (focus, space_tab, class);
+        bar.page = 0;
+    }
     bar.queue.clear();
     bar.pads.clear();
     if let Some(menu) = &model.planet {
@@ -479,8 +487,15 @@ fn feed_bar(
             .iter()
             .filter(|o| on_space_tab(&state.world, o.target) == space_tab && (!space_tab || class.is_none_or(|c| c.matches(o.category, is_hero(&state.world, o.target)))))
             .filter(|o| space_tab || !matches!(o.availability, galaxy_play::Availability::Requires(_)))
-            .take(MAX_PADS)
             .collect();
+        // Pages of MAX_PADS entries (the shell has that many pad slots); the page arrows above the pads step through them.
+        let size = pad_page_size();
+        let pages = listed.len().div_ceil(size).max(1);
+        let page = bar.page.min(pages - 1);
+        bar.page = page;
+        next.pad_page = page;
+        next.pad_pages = pages;
+        let listed = listed.into_iter().skip(page * size).take(size);
         for o in listed {
             next.pads.push(BuildPadEntry {
                 icon: icon_for(&state, game, o.target),
@@ -570,6 +585,8 @@ fn bar_clicks(
         match name {
             "b_space_tab" => bar.space_tab = true,
             "b_planet_tab" => bar.space_tab = false,
+            "b_scroll_left" => bar.page = bar.page.saturating_sub(1),
+            "b_scroll_right" => bar.page += 1,
             "b_filters0" => filters.credits = !filters.credits,
             "b_filters1" => filters.base_level = !filters.base_level,
             "b_filters2" => filters.weather = !filters.weather,
@@ -2436,4 +2453,65 @@ fn scripted_tooltip(args: Res<crate::cli::Args>, mut forced: ResMut<eaw_ui::Forc
 /// Whether a build target is a named hero unit.
 fn is_hero(world: &galaxy_sim::World, target: BuildTarget) -> bool {
     matches!(target, BuildTarget::Unit(u) if world.units[u as usize].hero)
+}
+
+/// Build pads per page: one per `b_create_NN` slot of the shell. `SP_PAD_PAGE=<n>` shrinks it (offscreen checks of the page arrows).
+fn pad_page_size() -> usize {
+    std::env::var("SP_PAD_PAGE").ok().and_then(|v| v.parse::<usize>().ok()).map_or(MAX_PADS, |n| n.clamp(1, MAX_PADS))
+}
+
+/// A page arrow above the right end of the build pads (`-1` back, `1` forward). The shell has `b_scroll_left` / `b_scroll_right`
+/// bones, but the mod ships no art for them and they sit below the bar, so the arrows are drawn here.
+#[derive(Component, Clone, Copy)]
+struct PadArrow(i32);
+
+fn spawn_pad_arrows(mut commands: Commands, existing: Query<(), With<PadArrow>>) {
+    if !existing.is_empty() {
+        return;
+    }
+    for (step, label, left) in [(-1, "<", 1262.0), (1, ">", 1302.0)] {
+        commands
+            .spawn((
+                PlayHud,
+                GalaxyEntity,
+                PadArrow(step),
+                Button,
+                Node { position_type: PositionType::Absolute, left: Val::Px(left), bottom: Val::Px(123.0), width: Val::Px(32.0), height: Val::Px(20.0), justify_content: JustifyContent::Center, align_items: AlignItems::Center, border: UiRect::all(Val::Px(1.0)), display: Display::None, ..default() },
+                BackgroundColor(Color::srgba(0.05, 0.12, 0.2, 0.9)),
+                BorderColor::all(Color::srgb(0.25, 0.5, 0.9)),
+                GlobalZIndex(20),
+            ))
+            .with_child((Text::new(label), TextFont { font: FontSource::Family("Bahnschrift".into()), font_size: FontSize::Px(15.0), ..default() }, TextColor(Color::srgb(0.85, 0.93, 1.0))));
+    }
+}
+
+/// Shows the arrows when the pads fill more than one page, dims the end ones and turns the page on a click.
+fn pad_arrows(
+    data: Res<CommandBarData>,
+    mut bar: ResMut<BarState>,
+    pressed: Query<(&PadArrow, &Interaction), Changed<Interaction>>,
+    mut arrows: Query<(&PadArrow, &mut Node, &mut BorderColor, &Children)>,
+    mut texts: Query<&mut TextColor>,
+    mut sound: MessageWriter<crate::flow::UiSound>,
+) {
+    for (arrow, i) in &pressed {
+        let usable = if arrow.0 < 0 { data.pad_page > 0 } else { data.pad_page + 1 < data.pad_pages };
+        if *i == Interaction::Pressed && usable {
+            bar.page = if arrow.0 < 0 { bar.page.saturating_sub(1) } else { bar.page + 1 };
+            sound.write(crate::flow::UiSound("GUI_Unit_Scroll_SFX"));
+        }
+    }
+    for (arrow, mut node, mut border, kids) in &mut arrows {
+        let show = if data.pad_pages > 1 { Display::Flex } else { Display::None };
+        if node.display != show {
+            node.display = show;
+        }
+        let usable = if arrow.0 < 0 { data.pad_page > 0 } else { data.pad_page + 1 < data.pad_pages };
+        *border = BorderColor::all(if usable { Color::srgb(0.25, 0.5, 0.9) } else { Color::srgb(0.18, 0.22, 0.3) });
+        for &k in kids {
+            if let Ok(mut c) = texts.get_mut(k) {
+                c.0 = if usable { Color::srgb(0.85, 0.93, 1.0) } else { Color::srgb(0.35, 0.4, 0.5) };
+            }
+        }
+    }
 }

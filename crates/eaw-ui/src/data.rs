@@ -138,6 +138,10 @@ pub struct CommandBarData {
     pub space_tab: bool,
     /// Planet-view structure list: pad entries fill only the bottom pad row, left to right (empty pads draw nothing).
     pub pads_bottom_row: bool,
+    /// Page of the build pads shown (0-based) and the number of pages; the page arrows show up above one page.
+    pub pad_page: usize,
+    /// See [`CommandBarData::pad_page`].
+    pub pad_pages: usize,
 }
 
 /// Programmatic override of a button's look (the application owns the state).

@@ -179,6 +179,8 @@ fn sample_data(game: &alamo_data::GameData, faction: UiFaction) -> CommandBarDat
         pop_cap: 100,
         space_tab: true,
         pads_bottom_row: false,
+        pad_page: 0,
+        pad_pages: 3,
         queue: (0..4)
             .map(|i| QueueEntry {
                 icon: pick(i * 3),
