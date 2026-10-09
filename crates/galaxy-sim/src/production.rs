@@ -202,13 +202,14 @@ impl World {
                 .queued(galaxy, faction)
                 .filter(|i| i.kind == ProductionKind::Unit(unit))
                 .count() as u32;
-            if let Some(l) = ut.limit_current
-                && alive + queued >= l.max(0) as u32
+            // A negative limit (`-1`) means no limit.
+            if let Some(l) = ut.limit_current.filter(|l| *l >= 0)
+                && alive + queued >= l as u32
             {
                 return Err(CommandError::BuildLimit);
             }
-            if let Some(l) = ut.limit_lifetime
-                && fs.built_lifetime.get(&unit).copied().unwrap_or(0) + queued >= l.max(0) as u32
+            if let Some(l) = ut.limit_lifetime.filter(|l| *l >= 0)
+                && fs.built_lifetime.get(&unit).copied().unwrap_or(0) + queued >= l as u32
             {
                 return Err(CommandError::BuildLimit);
             }

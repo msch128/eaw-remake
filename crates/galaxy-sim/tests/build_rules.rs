@@ -231,3 +231,18 @@ fn capacity_api_reports_slots_per_planet() {
     let cap = w.planet_capacity(sim.galaxy(), cor);
     assert_eq!((cap.space.queued, cap.space.free(), cap.ground.free()), (1, 6, 6));
 }
+
+#[test]
+fn a_lifetime_limit_of_minus_one_means_unlimited() {
+    let Some(data) = load() else { return };
+    let mut sim = new_sim(&data);
+    let w = sim.world().clone();
+    let rep = w.faction_id("Republic").unwrap();
+    let p = w.planet_id("Corellia_WW").unwrap();
+    // `Build_Limit_Current_Per_Player` 10, `Build_Limit_Lifetime_Per_Player` -1 (no lifetime limit) in the Consular's data.
+    let u = w.unit_id("Consular_Rep").unwrap();
+    assert_eq!((w.units[u as usize].limit_current, w.units[u as usize].limit_lifetime), (Some(10), Some(-1)));
+    sim.add_credits(rep, 1.0e9);
+    let r = w.check_build_unit(sim.galaxy(), rep, p, u);
+    assert!(!matches!(r, Err(CommandError::BuildLimit)), "nothing alive, no lifetime limit: {r:?}");
+}
