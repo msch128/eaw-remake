@@ -22,9 +22,12 @@ Release gate green at 6866e81 (33/33 smoke, soak flat: battle 2.85 GB, galaxy 1.
 Balance rule (user): every area toward ~80 instead of a few at 100. Sound is the outlier and needs a live listening pass.
 
 ## Priorities
-1. **Galaxy map EaW feel:** yellow trade routes, 3D fleet / station / hero models, background, labels.
-2. **Battle controls:** action cam, reinforcement placement, ability buttons, shield + hull bars.
-3. Then battle depth, sound, balance.
+1. **Sound:** a live listening pass with the user (levels, response spam, music transitions), then fixes.
+2. **Real-mouse QA of the battle:** abilities, reinforcements, retreat, winning a battle — not covered yet. The playtest
+   driver must find the game window by title (winit's 0x0 helper window is reported as MainWindowHandle); needs the
+   user's OK because the foreground guard is involved.
+3. Open details from the QA reports and the video comparison (banner frame, ability icons per section, Coruscant fill
+   light colour, explosion cloud size at the late stage of a ship death).
 
 ## Regression guards (rule: no exe goes out without smoke + soak green)
 - `tools/smoke.ps1`: offscreen / hidden scenarios with a pass/fail table.
