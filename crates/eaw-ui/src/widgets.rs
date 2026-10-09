@@ -1730,12 +1730,15 @@ pub(crate) fn tooltip(
     };
     let droid = buttons.iter().find(|b| b.1.name == "b_droid_help").map(|b| (b.3, b.4));
     let inv = own.inverse_scale_factor();
+    // Droid-anchored tooltips hang from their lower edge (set below), so a stale panel height can never lift them.
+    let mut hang: Option<(f32, f32)> = None;
     let anchor = match (drop_anchor, droid) {
         (true, Some((dn, dg))) => {
             // Physical px per design px; the tooltip sits right of R2, its lower edge a little above the question-mark button.
             let ppd = scale.0 / dn.inverse_scale_factor().max(1e-6);
             let top_left = dg.translation - dn.size() * 0.5;
             let bottom = top_left.y - 12.0 * ppd;
+            hang = Some(((top_left.x + 62.0 * ppd) * inv, bottom * inv));
             Vec2::new(top_left.x + 62.0 * ppd, (bottom - own.size().y).max(4.0)) * inv
         }
         _ => match &button {
@@ -1757,7 +1760,16 @@ pub(crate) fn tooltip(
     };
     // Bevy positions logical px; UiScale is applied to Val::Px so undo it.
     node.left = Val::Px(anchor.x / scale.0);
-    node.top = Val::Px(anchor.y / scale.0);
+    match (hang, window.single()) {
+        (Some((_, bottom)), Ok(w)) => {
+            node.top = Val::Auto;
+            node.bottom = Val::Px(((w.height() - bottom) / scale.0).max(0.0));
+        }
+        _ => {
+            node.top = Val::Px(anchor.y / scale.0);
+            node.bottom = Val::Auto;
+        }
+    }
 }
 
 /// Keeps [`UiScale`] in sync with the target height (`Auto` mode).
