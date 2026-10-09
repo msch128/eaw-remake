@@ -19,6 +19,7 @@ public static class Win {
   [DllImport("user32.dll")] public static extern bool GetClientRect(IntPtr h, out RECT r);
   [DllImport("user32.dll")] public static extern bool ClientToScreen(IntPtr h, ref POINT p);
   [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
+  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
   [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
   [DllImport("user32.dll")] public static extern void mouse_event(uint f, int dx, int dy, int data, UIntPtr extra);
   [DllImport("user32.dll")] public static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extra);
@@ -56,7 +57,18 @@ function Stop-Game {
 function Test-GameAlive { [bool]($script:Proc -and -not $script:Proc.HasExited) }
 function Get-ClientSize { $r = New-Object Win+RECT; [void][Win]::GetClientRect($script:Proc.MainWindowHandle, [ref]$r); @($r.R, $r.B) }
 
+# Every input and capture first makes sure the game window is in front. If another window keeps the
+# foreground (the user came back, a notification popped up), stop instead of clicking or capturing it.
+function Assert-GameInFront {
+    $h = $script:Proc.MainWindowHandle
+    for ($i = 0; $i -lt 3; $i++) {
+        if ([Win]::GetForegroundWindow() -eq $h) { return }
+        [void][Win]::SetForegroundWindow($h); Start-Sleep -Milliseconds 150
+    }
+    if ([Win]::GetForegroundWindow() -ne $h) { throw 'game window is not in front: stopping so no input or capture reaches another app' }
+}
 function Move-Mouse([int]$x, [int]$y) {
+    Assert-GameInFront
     $p = New-Object Win+POINT; $p.X = $x; $p.Y = $y
     [void][Win]::ClientToScreen($script:Proc.MainWindowHandle, [ref]$p)
     [void][Win]::SetCursorPos($p.X, $p.Y); Start-Sleep -Milliseconds 60
@@ -80,11 +92,12 @@ function Drag-Box([double]$x1, [double]$y1, [double]$x2, [double]$y2, $Button = 
     foreach ($t in 1..8) { Move-Mouse ([int]($a[0] + ($b[0] - $a[0]) * $t / 8)) ([int]($a[1] + ($b[1] - $a[1]) * $t / 8)) }
     [Win]::mouse_event($f[1], 0, 0, 0, [UIntPtr]::Zero); Start-Sleep -Milliseconds 100
 }
-function Scroll-Wheel([int]$notches) { [Win]::mouse_event([Win]::WHEEL, 0, 0, 120 * $notches, [UIntPtr]::Zero); Start-Sleep -Milliseconds 100 }
+function Scroll-Wheel([int]$notches) { Assert-GameInFront; [Win]::mouse_event([Win]::WHEEL, 0, 0, 120 * $notches, [UIntPtr]::Zero); Start-Sleep -Milliseconds 100 }
 
 # Press-Key 'S' | Press-Key $VK.Esc | Press-Key '0' -Mods $VK.Ctrl
 $VK = @{ Esc = 0x1B; Space = 0x20; Enter = 0x0D; F3 = 0x72; F10 = 0x79; F11 = 0x7A; Shift = 0x10; Ctrl = 0x11 }
 function Press-Key($Key, [int[]]$Mods = @(), [int]$HoldMs = 60) {
+    Assert-GameInFront
     $vk = if ($Key -is [string]) { [byte][char]$Key.ToUpper() } else { [byte]$Key }
     foreach ($m in $Mods) { [Win]::keybd_event([byte]$m, 0, 0, [UIntPtr]::Zero) }
     [Win]::keybd_event($vk, 0, 0, [UIntPtr]::Zero); Start-Sleep -Milliseconds $HoldMs
@@ -95,6 +108,7 @@ function Press-Key($Key, [int[]]$Mods = @(), [int]$HoldMs = 60) {
 
 # Window-only screenshot (client area) into the scratch folder; returns the path to read.
 function Save-Shot([string]$Name = 'shot') {
+    Assert-GameInFront
     $script:Shot++; $path = '{0}\shots\{1:D3}-{2}.png' -f $script:Scratch, $script:Shot, $Name
     $bmp = [Win]::Capture($script:Proc.MainWindowHandle)
     $bmp.Save($path, [System.Drawing.Imaging.ImageFormat]::Png); $bmp.Dispose(); $path
