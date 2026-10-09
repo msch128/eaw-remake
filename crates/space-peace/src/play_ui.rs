@@ -1882,11 +1882,14 @@ fn locked_clicks(
     }
 }
 
-/// Minimap colours of the original: own green, at war red, everything else (neutral, allied) orange.
+/// Minimap colours of the original: own green, the main enemy factions (Rebel, Empire, Underworld) at war red, everything else
+/// (minor factions such as pirates or warlords, neutral, allied) orange. The minor factions are formally at war with everyone,
+/// so "hostile" alone painted the whole map red.
 fn relation_color(state: &SimState, me: Option<u32>, owner: Option<u32>) -> Color {
+    let main = |o: u32| ["Rebel", "Empire", "Underworld"].iter().any(|n| state.world.faction_id(n) == Some(o));
     match (me, owner) {
         (Some(m), Some(o)) if m == o => Color::srgb(0.2, 0.9, 0.25),
-        (Some(m), Some(o)) if state.galaxy().hostile(&state.world, m, o) => Color::srgb(0.95, 0.15, 0.12),
+        (Some(m), Some(o)) if main(o) && state.galaxy().hostile(&state.world, m, o) => Color::srgb(0.95, 0.15, 0.12),
         _ => Color::srgb(0.95, 0.55, 0.12),
     }
 }
