@@ -1130,8 +1130,9 @@ pub(crate) fn add_units(g: &mut Galaxy, owner: FactionId, planet: PlanetId, u: U
         *f.units.entry(u).or_default() += count;
         return f.id;
     }
-    let id = g.next_fleet_id;
-    g.next_fleet_id += 1;
+    // Never reuse the id of a fleet that exists (a host or test may have inserted fleets without moving the counter).
+    let id = g.next_fleet_id.max(g.fleets.keys().next_back().map_or(0, |m| m + 1));
+    g.next_fleet_id = id + 1;
     let mut units = BTreeMap::new();
     units.insert(u, count);
     g.fleets.insert(id, Fleet { id, owner, units, location: FleetLocation::AtPlanet(planet), previous_planet: planet });
