@@ -531,6 +531,11 @@ impl World {
                     chain.push(TechUpgrade { name: format!("Generic_Tech_{}", lvl + 1), cost: 3000.0 * (lvl + 1) as f32, time: 60.0 });
                 }
             }
+            // User rule (not from the data): tech levels get exponentially dearer for every faction, AI included.
+            let start = self.factions[fi].start_tech;
+            for (n, up) in chain.iter_mut().enumerate() {
+                up.cost = tech_level_cost(start + n as i32 + 1);
+            }
             self.factions[fi].tech_upgrades = chain;
         }
     }
@@ -603,4 +608,15 @@ fn base_stem(name: &str) -> String {
 fn is_plain_starbase(name: &str) -> bool {
     let n = name.to_ascii_lowercase();
     !["skirmish", "template", "default", "tutorial", "gate"].iter().any(|bad| n.contains(bad))
+}
+
+/// Price of reaching tech `level` (user rule, every faction): 5000, 10000, 20000, 50000 for levels 2 to 5, doubling beyond.
+pub fn tech_level_cost(level: i32) -> f32 {
+    match level {
+        ..=2 => 5000.0,
+        3 => 10000.0,
+        4 => 20000.0,
+        5 => 50000.0,
+        l => 50000.0 * 2f32.powi(l - 5),
+    }
 }

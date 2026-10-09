@@ -126,3 +126,8 @@ fn mark_cheated_changes_nothing_else() {
     assert_eq!(sim.galaxy().factions[empire as usize].credits, before);
     assert!(!sim.galaxy().ai_paused);
 }
+
+#[test]
+fn tech_levels_get_exponentially_dearer_for_every_faction() {
+    assert_eq!([2, 3, 4, 5].map(galaxy_sim::tech_level_cost), [5000.0, 10000.0, 20000.0, 50000.0]);
+}
