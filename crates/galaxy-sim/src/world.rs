@@ -36,7 +36,7 @@ pub struct SimConfig {
     pub build_time_scale: f32,
     /// Seconds an uncontested hostile fleet must stay in orbit before a planet changes hands.
     pub capture_delay_seconds: f32,
-    /// Credits cap per owned planet (`Credit_Cap_Per_Planet`).
+    /// Credits cap per owned planet (`Credit_Cap_Per_Planet`); 0 = no cap (the default: user rule, credits never expire).
     pub credit_cap_per_planet: f64,
     /// Resolve battles automatically at the end of the step instead of emitting
     /// `Event::BattlePending` and waiting for the caller.
@@ -111,7 +111,7 @@ impl Default for SimConfig {
             galactic_speed_scale: 6.0,
             build_time_scale: 1.0,
             capture_delay_seconds: 5.0,
-            credit_cap_per_planet: 400_000.0,
+            credit_cap_per_planet: 0.0,
             auto_resolve_battles: true,
             ai_interval_seconds: 10.0,
             combat_round_seconds: 4.0,

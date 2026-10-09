@@ -24,7 +24,7 @@ Paths below are relative to the mod's `Data` folder.
 | Structures and star bases change planet income through `Planet_Income_Bonus_Ability` (`Absolute_Income_Modifier`, `Percentage_Income_Modifier`) | e.g. `Buildings/Space/GC/Shipyard_*.xml` (upkeep -35), `Buildings/Ground/GC/**/Mining_*.xml` (+25) | `World::planet_income`: `base * (1 + sum(pct)) + sum(abs)` |
 | Ships cost upkeep through the same ability (Star Destroyer -800) | `Units/Space/Units_Space_Empire_Star_Destroyer_Imperial.xml` | summed over all ships of a faction, applied to faction income |
 | Faction multiplier `Credits_Accumulation_Factor` | `Xml/FACTIONS.XML` (Rebel 0.95) | multiplies the faction's total income |
-| Credit cap `Credit_Cap_Per_Planet` = 400000 per owned planet | `Xml/Gameconstants.xml` | enforced every tick |
+| Credit cap `Credit_Cap_Per_Planet` = 400000 per owned planet | `Xml/Gameconstants.xml` | off by default (user rule: credits never expire); `SimConfig::credit_cap_per_planet` > 0 enables it |
 | `Political_Income_Curve` 0,0 1,1 5,1 and `Income_Redistribution` 0.6 | `Xml/Gameconstants.xml` | **ignored** (political control is always 1 for owned planets) |
 | `Income_Stream_Ability` on mines | `Buildings/Ground/GC/**/Mining_Facility*.xml` | **ignored**: its comment says it only exists in tactical modes, not in the campaign |
 | Starting credits, tech levels, home planets | `Xml/Campaigns_Imperial_Web_Way_*.xml` | `FactionInfo` |

@@ -100,7 +100,7 @@ impl Sim {
             let before = fs.credits;
             fs.credits += amount;
             let cap = cap_per_planet * fs.planets_owned as f64;
-            if amount > 0.0 && fs.planets_owned > 0 && fs.credits > cap {
+            if cap_per_planet > 0.0 && amount > 0.0 && fs.planets_owned > 0 && fs.credits > cap {
                 fs.credits = cap.max(fs.credits - amount);
             }
             fs.credits = fs.credits.max(0.0);

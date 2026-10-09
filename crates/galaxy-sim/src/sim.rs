@@ -478,7 +478,7 @@ impl Sim {
             let income = if fs.income_per_week > 0.0 { fs.income_per_week * f64::from(fs.difficulty.credit) } else { fs.income_per_week };
             let before = fs.credits;
             fs.credits += income * dt as f64 / w.config.week_seconds as f64;
-            if fs.planets_owned > 0 && fs.credits > cap {
+            if w.config.credit_cap_per_planet > 0.0 && fs.planets_owned > 0 && fs.credits > cap {
                 fs.credits = cap;
             }
             fs.credits = fs.credits.max(0.0);
