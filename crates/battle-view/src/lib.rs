@@ -616,12 +616,27 @@ fn start_battle(
         framed: false,
         reported: false,
         minimap_planets: { let v: Vec<(Vec2, f32)> = session.scene.props.iter().filter(|p| p.backdrop && p.model.to_ascii_lowercase().contains("planet")).map(|p| (Vec2::new(p.position.x, -p.position.z), p.scale)).collect(); v },
-        minimap_props: session.scene.props.iter().filter(|p| !p.backdrop).map(|p| (Vec2::new(p.position.x, -p.position.z), p.scale)).collect(),
+        minimap_props: session.scene.props.iter().filter(|p| !p.backdrop && !is_ground_model(&p.model)).map(|p| (Vec2::new(p.position.x, -p.position.z), p.scale)).collect(),
         minimap_tint: {
-            let t = session.scene.ambient * 3.0 + session.scene.lights[0].color * 0.06;
-            Color::srgb((t.x * 0.2).clamp(0.0, 0.06), (t.y * 0.2).clamp(0.0, 0.06), (t.z * 0.2).clamp(0.01, 0.08))
+            if session.scene.props.iter().any(|p| is_ground_model(&p.model)) {
+                // Ground-terrain maps have no backdrop planet blob on the minimap, so the whole map shows the ground colour
+                // (fog colour when the map has fog, else the light colours) instead of the near-black space tint.
+                let c = match session.scene.fog {
+                    Some((c, _, _)) => Vec3::from(c) * 0.5,
+                    None => session.scene.ambient * 1.5 + session.scene.lights[0].color * 0.08,
+                };
+                Color::srgb(c.x.clamp(0.04, 0.3), c.y.clamp(0.04, 0.3), c.z.clamp(0.04, 0.3))
+            } else {
+                let t = session.scene.ambient * 3.0 + session.scene.lights[0].color * 0.06;
+                Color::srgb((t.x * 0.2).clamp(0.0, 0.06), (t.y * 0.2).clamp(0.0, 0.06), (t.z * 0.2).clamp(0.01, 0.08))
+            }
         },
     });
+}
+
+/// Ground terrain model (`W_Land_Terrain_*`): the map has a ground below the battle plane instead of a backdrop planet.
+fn is_ground_model(model: &str) -> bool {
+    model.to_ascii_lowercase().contains("terrain")
 }
 
 /// Writes [`BattleFinished`] once the displayed picture reached the end of a battle that came from a request.
