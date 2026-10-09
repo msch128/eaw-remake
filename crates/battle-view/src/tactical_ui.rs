@@ -31,7 +31,7 @@ pub struct TacticalUiPlugin;
 
 impl Plugin for TacticalUiPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<TacticalUiState>().init_resource::<ReinforceUi>().init_resource::<crate::hud::HudState>().insert_resource(OverlaysActive);
+        app.init_resource::<RetreatNotice>().init_resource::<TacticalUiState>().init_resource::<ReinforceUi>().init_resource::<crate::hud::HudState>().insert_resource(OverlaysActive);
         crate::input_test::build(app);
         app.add_systems(
             Update,
@@ -341,7 +341,20 @@ fn sync_minimap(
     let half_h = orbit.distance * (fov * 0.5).tan() / orbit.pitch.sin().max(0.3);
     let center = flip(orbit.focus);
     let half = Vec2::new(half_h * aspect, half_h);
-    let planets = rt.minimap_props.iter().map(|(pos, _)| MinimapDot { pos: *pos, color: Color::srgb(0.55, 0.5, 0.45), selected: false }).collect();
+    let mut planets: Vec<MinimapDot> = rt.minimap_props.iter().map(|(pos, _)| MinimapDot { pos: *pos, color: Color::srgb(0.55, 0.5, 0.45), selected: false }).collect();
+    // The backdrop planet lies far outside the arena (Remake minimap shows it as an orange blob): clamp it to the edge in its direction and
+    // draw a cluster of dots.
+    let mid = (bounds.0 + bounds.1) * 0.5;
+    let half_b = (bounds.1 - bounds.0) * 0.5;
+    for (p, _) in &rt.minimap_planets {
+        let d = *p - mid;
+        let k = (d.x.abs() / (half_b.x * 0.85)).max(d.y.abs() / (half_b.y * 0.85)).max(1.0);
+        let c = mid + d / k;
+        let r = half_b.x * 0.05;
+        for (ox, oy) in [(0.0, 0.0), (1.0, 0.0), (-1.0, 0.0), (0.5, 0.87), (-0.5, 0.87), (0.5, -0.87), (-0.5, -0.87)] {
+            planets.push(MinimapDot { pos: c + Vec2::new(ox, oy) * r, color: Color::srgb(0.85, 0.5, 0.2), selected: false });
+        }
+    }
     let next = MinimapData { bounds: Some(bounds), planets, units, camera: Some((center - half, center + half)), background: Some(rt.minimap_tint) };
     if *data != next {
         *data = next;
@@ -1102,32 +1115,47 @@ fn command_buttons_state(
 #[derive(Component)]
 pub(crate) struct RetreatBanner;
 
+/// Seconds a "retreat not possible yet" notice stays on screen (set by the Esc menu while the retreat lock runs).
+#[derive(Resource, Default)]
+pub struct RetreatNotice(pub f32);
+
 fn retreat_banner(
     mut commands: Commands,
     ui: Res<eaw_ui::EawUiSettings>,
+    time: Res<Time<Real>>,
+    rt: Res<BattleRuntime>,
+    status: Res<BattleStatus>,
+    mut notice: ResMut<RetreatNotice>,
     tac: Res<TacticalData>,
     mut banner: Query<(Entity, &mut Text), With<RetreatBanner>>,
 ) {
-    let jump = match tac.retreat {
-        RetreatState::Countdown(s) if tac.active => Some(s),
+    let mss = |s: f32| format!("{}:{:02}", s.ceil() as u32 / 60, s.ceil() as u32 % 60);
+    notice.0 = (notice.0 - time.delta_secs()).max(0.0);
+    let want = match tac.retreat {
+        RetreatState::Countdown(s) if tac.active => Some(format!("RETREAT - JUMP TO HYPERSPACE IN {}", mss(s))),
+        _ if notice.0 > 0.0 => Some(format!("RETREAT NOT POSSIBLE YET - AVAILABLE IN {}", mss((rt.retreat_countdown - status.time).max(0.0)))),
         _ => None,
     };
-    match (jump, banner.single_mut()) {
-        (Some(s), Ok((_, mut t))) => {
-            let text = format!("RETREAT - JUMP TO HYPERSPACE IN {}:{:02}", s.ceil() as u32 / 60, s.ceil() as u32 % 60);
+    match (want, banner.single_mut()) {
+        (Some(text), Ok((_, mut t))) => {
             if t.0 != text {
                 t.0 = text;
             }
         }
-        (Some(s), Err(_)) => {
+        (Some(text), Err(_)) => {
             let mut e = commands.spawn((
                 RetreatBanner,
                 crate::hud::TacticalHud,
                 Name::new("retreat banner"),
-                Text::new(format!("RETREAT - JUMP TO HYPERSPACE IN {}:{:02}", s.ceil() as u32 / 60, s.ceil() as u32 % 60)),
-                TextFont::from_font_size(22.0),
+                Text::new(text),
+                match &ui.font_family {
+                    Some(f) => TextFont { font: FontSource::Family(f.as_str().into()), font_size: FontSize::Px(22.0), ..default() },
+                    None => TextFont::from_font_size(22.0),
+                },
                 TextColor(Color::srgb(1.0, 0.85, 0.4)),
-                Node { position_type: PositionType::Absolute, top: Val::Px(40.0), left: Val::Percent(50.0), margin: UiRect::left(Val::Px(-230.0)), ..default() },
+                TextShadow { offset: Vec2::splat(1.0), color: Color::BLACK },
+                Node { position_type: PositionType::Absolute, top: Val::Px(40.0), width: Val::Percent(100.0), justify_content: JustifyContent::Center, ..default() },
+                TextLayout::justify(Justify::Center),
                 GlobalZIndex(70),
             ));
             if let Some(cam) = ui.camera {

@@ -412,6 +412,7 @@ pub struct ShipOverlayNode {
     shield_clip: Entity,
     shield_img: Entity,
     label: Entity,
+    flag: Entity,
     icon: Entity,
     brackets: [Entity; 4],
     /// Bar texture set: 0 small, 1 medium, 2 large.
@@ -674,8 +675,20 @@ pub(crate) fn ship_overlays(
                     ChildOf(id),
                 ))
                 .id();
+            // Squadron flag: a small white pennant at the right end of the bars of an own squadron (Remake video b0700-b0760).
+            let flag = commands
+                .spawn((
+                    Node { position_type: PositionType::Absolute, left: Val::Percent(100.0), margin: UiRect::left(Val::Px(3.0)), bottom: Val::Px(-12.0), width: Val::Px(8.0), height: Val::Px(10.0), display: Display::None, ..default() },
+                    FocusPolicy::Pass,
+                    ChildOf(id),
+                ))
+                .id();
+            let white = Color::srgba(0.92, 0.94, 0.96, 0.9);
+            commands.spawn((Node { position_type: PositionType::Absolute, left: Val::Px(0.0), top: Val::Px(0.0), width: Val::Px(1.5), height: Val::Px(10.0), ..default() }, BackgroundColor(white), FocusPolicy::Pass, ChildOf(flag)));
+            commands.spawn((Node { position_type: PositionType::Absolute, left: Val::Px(1.5), top: Val::Px(0.0), width: Val::Px(6.0), height: Val::Px(5.0), ..default() }, BackgroundColor(white), FocusPolicy::Pass, ChildOf(flag)));
             commands.entity(id).insert(ShipOverlayNode {
                 id: o.id,
+                flag,
                 health_img,
                 health_bar,
                 shield_bg,
@@ -703,6 +716,9 @@ pub(crate) fn ship_overlays(
             } else {
                 Display::None
             };
+        }
+        if let Ok((mut n, ..)) = styles.get_mut(parts.flag) {
+            n.display = if o.always && !o.enemy && o.half_size < 24.0 { Display::Flex } else { Display::None };
         }
         let above = !icon_mode && o.half_size >= 40.0;
         for (bar, below, over) in [(parts.health_bar, 8.0, 4.0), (parts.shield_bg, 4.0, 8.0)] {

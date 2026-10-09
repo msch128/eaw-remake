@@ -363,6 +363,8 @@ pub struct BattleRuntime {
     reported: bool,
     /// Map objects for the minimap: position (map x, -z), size and whether it is a backdrop object.
     pub(crate) minimap_props: Vec<(Vec2, f32)>,
+    /// Backdrop planets for the minimap: position (map x, -z) and scale.
+    pub(crate) minimap_planets: Vec<(Vec2, f32)>,
     /// Dark tint of the tactical minimap derived from the map lights.
     pub(crate) minimap_tint: Color,
 }
@@ -562,7 +564,8 @@ fn start_battle(
         ec.insert((
             Hdr,
             Bloom {
-                intensity: 0.03,
+                // Estimate from the Remake video (glow around bolts and fires); the engine post effect is not in the data.
+                intensity: 0.07,
                 ..Bloom::NATURAL
             },
         ));
@@ -597,6 +600,7 @@ fn start_battle(
         speed: 1.0,
         framed: false,
         reported: false,
+        minimap_planets: { let v: Vec<(Vec2, f32)> = session.scene.props.iter().filter(|p| p.backdrop && p.model.to_ascii_lowercase().contains("planet")).map(|p| (Vec2::new(p.position.x, -p.position.z), p.scale)).collect(); v },
         minimap_props: session.scene.props.iter().filter(|p| !p.backdrop).map(|p| (Vec2::new(p.position.x, -p.position.z), p.scale)).collect(),
         minimap_tint: {
             let t = session.scene.ambient * 3.0 + session.scene.lights[0].color * 0.06;

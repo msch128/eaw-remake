@@ -425,8 +425,10 @@ fn battle_menu(
     args: Res<Args>,
     status: Res<BattleStatus>,
     mut scripted_esc: Local<bool>,
+    mut scripted_retreat: Local<bool>,
     ui: Option<Res<EawUiSettings>>,
     runtime: Option<Res<battle_view::BattleRuntime>>,
+    mut notice: ResMut<battle_view::tactical_ui::RetreatNotice>,
 ) {
     // `--battle-esc-after <s>` scripts one Esc press for test runs.
     let scripted = !*scripted_esc && status.tick > 0 && args.battle_esc_after.is_some_and(|s| status.time >= s);
@@ -447,12 +449,22 @@ fn battle_menu(
     } else if !menu.open && let Some(before) = paused_before.take() {
         settings.paused = before;
     }
+    // Test hook: `SP_TEST_RETREAT=<battle seconds>` presses Retreat in the Esc menu once at that battle time.
+    if !*scripted_retreat && status.tick > 0 && std::env::var("SP_TEST_RETREAT").ok().and_then(|v| v.parse::<f32>().ok()).is_some_and(|s| status.time >= s) {
+        *scripted_retreat = true;
+        menu.retreat = true;
+    }
     if menu.retreat {
         // The same order as the Retreat button: the jump timer runs and the survivors escape when it ends (refused during the lock).
         menu.retreat = false;
         menu.open = false;
         if let Some(rt) = runtime.as_ref() {
-            rt.order_retreat(settings.player_side);
+            if status.time < rt.retreat_countdown {
+                // Locked at the start of a battle: say so instead of silently closing.
+                notice.0 = 3.5;
+            } else {
+                rt.order_retreat(settings.player_side);
+            }
         }
         let _ = (&mut done, &pending);
     }
