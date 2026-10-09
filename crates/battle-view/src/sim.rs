@@ -1,4 +1,4 @@
-﻿//! Runs the battle simulation on a worker thread and publishes one immutable snapshot per step.
+//! Runs the battle simulation on a worker thread and publishes one immutable snapshot per step.
 //!
 //! The render side keeps a virtual clock and asks for the snapshots around it; the worker only
 //! simulates a few ticks ahead of that clock, so the simulation cost never lands on the render
@@ -287,15 +287,18 @@ impl SimHandle {
             }
             let first = q.snaps.front().map(|s| s.tick);
             let have = |q: &Queue, t: u64| first.is_some_and(|f| t >= f && ((t - f) as usize) < q.snaps.len());
-            let ready = have(&q, tick + 1) || q.done && have(&q, tick);
+            let ready = have(&q, tick + 1) || q.done;
             if ready || !block || Instant::now() > deadline {
                 let get = |q: &Queue, t: u64| {
+                    if q.done && first.is_some_and(|f| t >= f + q.snaps.len() as u64) {
+                        return q.snaps.back().cloned();
+                    }
                     first
                         .filter(|&f| t >= f)
                         .and_then(|f| q.snaps.get((t - f) as usize))
                         .cloned()
                 };
-                return (get(&q, tick), get(&q, tick + 1));
+                return (get(&q, tick), if q.done && !have(&q, tick + 1) { None } else { get(&q, tick + 1) });
             }
             let (g, _) = self
                 .shared
@@ -354,4 +357,37 @@ fn lost_ships(battle: &Battle) -> Vec<Vec<(battle_sim::ShipId, u32)>> {
         }
     }
     out.into_iter().map(|m| m.into_iter().collect()).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fetch_after_done_returns_terminal_snapshot_without_blocking() {
+        let shared = Arc::new(Shared::default());
+        let (tx, _rx) = channel::<(u8, Command)>();
+        let handle = SimHandle {
+            shared: shared.clone(),
+            commands: tx,
+            join: None,
+            dt: 0.1,
+        };
+
+        {
+            let mut q = shared.state.lock().unwrap();
+            let mut snap = Snapshot::default();
+            snap.tick = 10;
+            snap.over = true;
+            q.snaps.push_back(Arc::new(snap));
+            q.done = true;
+        }
+
+        let t0 = Instant::now();
+        let (cur, next) = handle.fetch(20, true);
+        assert!(t0.elapsed().as_millis() < 500, "fetch must not block when done");
+        assert!(cur.is_some(), "terminal snapshot should be returned");
+        assert_eq!(cur.unwrap().tick, 10);
+        assert!(next.is_none());
+    }
 }

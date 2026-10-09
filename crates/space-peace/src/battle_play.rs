@@ -695,6 +695,15 @@ fn battle_orders(
                 shot.orders_at = Some(shot.frames);
             }
         }
+        190 => {
+            let my_ships: Vec<u32> = ships.0.values().filter(|s| s.side == player).map(|s| s.id).collect();
+            if let Some(target) = ships.0.values().find(|s| s.side != player) {
+                rt.sim.command(player, battle_sim::Command::AttackMove {
+                    ships: my_ships,
+                    to: battle_view::convert::bevy_to_sim(target.pos),
+                });
+            }
+        }
         _ => {}
     }
 }

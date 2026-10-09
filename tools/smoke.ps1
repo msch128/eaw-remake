@@ -70,7 +70,7 @@ $scenarios = @(
     @('windowed-galaxy-audio-superweapon', @('--hidden', '--no-vsync', '--exit-after', '6000', '--volume', '0', '--campaign', $camp, '--select', $yavin, '--zoom', '0.1', '--grant-unit', 'Death_Star', '--at', 'Arda', '--weeks', '0', '--fire', 'confirm'), '(?s)(?=.*audio sfx GUI_Death_Star_Button_Press)(?=.*audio music scene Event\("Space_Map_Activate_Death_Star_Music_Event"\))(?=.*audio sfx Unit_Superlaser_Fire)(?=.*audio sfx Planet_Death_SFX)'),
     # Esc in the real app path (no SP_INPUT_TEST): the battle menu opens above the HUD and pauses the battle clock.
     @('windowed-battle-esc-menu', @('--hidden', '--no-vsync', '--exit-after', '2500', '--volume', '0', '--campaign', $camp, '--select', $yavin, '--weeks', '8', '--move', 'Hoth', '--battle-choice', 'fight', '--battle-speed', '10', '--battle-esc-after', '5'), 'battle menu: open, clock paused=true'),
-    @('battle-reinforce',    @('--campaign', $camp, '--select', $yavin, '--weeks', '8', '--move', 'Hoth', '--battle-choice', 'fight', '--battle-reserve', '3', '--battle-click', 'b_reinforcement,r_0000', '--battle-speed', '30', '--frames', '5'), 'simulation accepted')
+    @('battle-reinforce',    @('--campaign', $camp, '--select', $yavin, '--weeks', '8', '--move', 'Hoth', '--battle-choice', 'fight', '--battle-reserve', '3', '--battle-click', 'b_reinforcement,r_0000', '--battle-speed', '30', '--battle-abort-after', '90', '--frames', '5'), 'simulation accepted')
 )
 
 $rows = @()

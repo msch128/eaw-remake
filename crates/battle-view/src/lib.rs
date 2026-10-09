@@ -1,4 +1,4 @@
-﻿//! Renders and drives a [`battle_sim`] space battle in Bevy with the Empire at War look and controls.
+//! Renders and drives a [`battle_sim`] space battle in Bevy with the Empire at War look and controls.
 //!
 //! ```ignore
 //! app.add_plugins(AlamoRenderPlugin::new(fs.clone()))   // required, provides models and particles
@@ -686,7 +686,7 @@ fn advance_clock(
     mut cam: Single<&mut BattleCamera>,
     mut auto_frame: Local<Option<(Vec3, f32)>>,
 ) {
-    rt.speed = if settings.paused { 0.0 } else { settings.speed };
+    rt.speed = if settings.paused || status.over { 0.0 } else { settings.speed };
     let step = rt.dt as f64;
     let dt_real = (time.delta_secs() as f64).min(0.1);
     rt.clock += dt_real * rt.speed as f64;
