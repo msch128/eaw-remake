@@ -247,7 +247,7 @@ fn sync_radii(radii: Res<PlanetRadii>, bridge: Res<PlayBridge>, layout: Option<R
     }
 }
 
-/// Mouse input of `galaxy-play` is off behind menus, over the command bar and outside the map.
+/// Mouse input of `galaxy-play` is off behind menus, over the command bar, in the planet close-up and outside the map.
 #[allow(clippy::too_many_arguments)]
 fn cursor_blocked(
     window: Option<Single<&Window, With<PrimaryWindow>>>,
@@ -255,13 +255,16 @@ fn cursor_blocked(
     screen: Res<State<AppScreen>>,
     paused: Res<Paused>,
     state: Option<Res<SimState>>,
+    planet_view: Option<Res<crate::planet_view::PlanetViewState>>,
     mut blocked: ResMut<PlayCursorBlocked>,
 ) {
+    // The planet close-up has its own pointer handling (slots, drag and drop); no map box selection behind it.
+    let in_planet_view = planet_view.is_some_and(|v| v.active);
     let over_bar = window
         .and_then(|w| w.physical_cursor_position())
         .is_some_and(|c| bar.iter().any(|(node, tf)| node.contains_point(*tf, c)));
     let loading = state.is_some_and(|s| s.current.loading);
-    let value = over_bar || loading || paused.0 || *screen.get() != AppScreen::Galaxy;
+    let value = over_bar || in_planet_view || loading || paused.0 || *screen.get() != AppScreen::Galaxy;
     if blocked.0 != value {
         blocked.0 = value;
     }
