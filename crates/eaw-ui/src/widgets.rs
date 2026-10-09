@@ -1581,8 +1581,7 @@ impl TooltipLayout {
 const TIP_BG: Color = Color::srgba(0.04, 0.09, 0.13, 0.95);
 const TIP_BORDER: Color = Color::srgb(0.0, 0.76, 0.99);
 
-/// Spawns the global tooltip panel: icon and title row, body text, stat rows and a warning line, plus the three dots of a
-/// thought bubble that lead to the advisor droid.
+/// Spawns the global tooltip panel: icon and title row, body text, stat rows and a warning line, anchored next to the advisor droid.
 pub(crate) fn spawn_tooltip(mut commands: Commands, settings: Res<EawUiSettings>) {
     let camera = settings.camera;
     let mut tip = commands.spawn((
@@ -1635,21 +1634,13 @@ fn fill_tooltip(p: &mut ChildSpawnerCommands, layout: &TooltipLayout, icon: Opti
     if !layout.warn.is_empty() {
         p.spawn((TipPart::Warn, Text::new(layout.warn.clone()), font(11.0), TextColor(Color::srgb(1.0, 0.5, 0.38)), FocusPolicy::Pass));
     }
-    // Thought-bubble dots towards the droid at the lower left.
-    for (x, y, d) in [(-9.0, 2.0, 9.0), (-18.0, -7.0, 6.0), (-25.0, -14.0, 4.0)] {
-        p.spawn((
-            Node { position_type: PositionType::Absolute, left: Val::Px(x - d * 0.5), bottom: Val::Px(y - d * 0.5), width: Val::Px(d), height: Val::Px(d), border_radius: BorderRadius::MAX, ..default() },
-            BackgroundColor(TIP_BORDER),
-            FocusPolicy::Pass,
-        ));
-    }
 }
 
 /// Shows the tooltip of the hovered (or forced) button, else the [`WorldTooltip`].
 ///
 /// Text format (see [`TooltipLayout::parse`]): first line title, `@Label<TAB>value` stat rows, `!` warnings, the rest
 /// wrapped body text. Build pad, queue and world tooltips are anchored next to the advisor droid (lower left, above the
-/// info panel) like a thought bubble; other buttons show next to the cursor.
+/// info panel); other buttons show next to the cursor.
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub(crate) fn tooltip(
     assets: Res<EawUiAssets>,
@@ -1741,7 +1732,7 @@ pub(crate) fn tooltip(
     let inv = own.inverse_scale_factor();
     let anchor = match (drop_anchor, droid) {
         (true, Some((dn, dg))) => {
-            // Physical px per design px; the bubble sits right of R2, its lower edge a little above the question-mark button.
+            // Physical px per design px; the tooltip sits right of R2, its lower edge a little above the question-mark button.
             let ppd = scale.0 / dn.inverse_scale_factor().max(1e-6);
             let top_left = dg.translation - dn.size() * 0.5;
             let bottom = top_left.y - 12.0 * ppd;
