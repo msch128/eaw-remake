@@ -297,7 +297,13 @@ pub fn battle_audio(
     // Unit responses of the player's own units.
     if sel.is_changed() && sel.ships != mem.last_selection {
         mem.last_selection = sel.ships.clone();
-        if let Some(n) = sel.ships.first().and_then(|id| cur.ship(*id)).and_then(|s| visuals.ship(s.def).sfx.select.as_deref()) {
+        // One voice for the whole selection: a named hero if any, else the highest ranked ship (as `control::voice_lead`).
+        let rank = |def| {
+            let d = rt.catalog.ship(def);
+            (visuals.ship(def).hero, d.population, (d.hull + d.shield) as i64)
+        };
+        let lead = sel.ships.iter().filter_map(|id| cur.ship(*id)).map(|s| s.def).max_by(|&a, &b| rank(a).cmp(&rank(b)));
+        if let Some(n) = lead.and_then(|def| visuals.ship(def).sfx.select.as_deref()) {
             send(n, None, &mut stats, &mut out);
         }
     }

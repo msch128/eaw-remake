@@ -1024,7 +1024,8 @@ fn hardpoint_clicks(
         let mine = control::selected_mobile(&rt, &ships, &sel, settings.player_side);
         let enemy = ships.0.get(&target).is_some_and(|s| s.side != settings.player_side);
         if enemy && !mine.is_empty() {
-            if let Some(&lead) = mine.first() {
+            if !mine.is_empty() {
+                let lead = control::voice_lead(&rt, &ships, &mine);
                 hardpoint_orders.write(control::HardpointOrderIssued { lead, target, hardpoint: hp });
             }
             rt.command(settings.player_side, Command::AttackHardpoint { ships: mine, target, hardpoint: hp });

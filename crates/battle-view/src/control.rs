@@ -481,7 +481,7 @@ pub fn orders(
     if mine.is_empty() {
         return;
     }
-    let lead = mine[0];
+    let lead = voice_lead(&rt, &ships, &mine);
     if keys.just_pressed(KeyCode::KeyS) && !keys.pressed(KeyCode::ControlLeft) {
         rt.sim.command(player, Command::Stop { ships: mine.clone() });
         issued.write(OrderIssued { kind: OrderKind::Stop, lead });
@@ -550,6 +550,17 @@ pub fn orders(
             }
         }
     }
+}
+
+/// The one unit that answers an order for the whole selection: a named hero if any, else the highest ranked ship (population,
+/// then hull + shield), so a group order plays one line instead of every unit talking at once.
+pub fn voice_lead(rt: &BattleRuntime, ships: &RenderedShips, mine: &[u32]) -> u32 {
+    let rank = |id: &u32| {
+        let Some(s) = ships.0.get(id) else { return (false, i32::MIN, 0) };
+        let d = rt.catalog.ship(s.def);
+        (rt.visuals.ship(s.def).hero, d.population, (d.hull + d.shield) as i64)
+    };
+    mine.iter().copied().max_by(|a, b| rank(a).cmp(&rank(b)).then(b.cmp(a))).unwrap_or(mine[0])
 }
 
 /// The selected ships of the player that can move (structures cannot).
