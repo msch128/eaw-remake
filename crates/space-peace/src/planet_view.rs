@@ -39,7 +39,7 @@ impl Plugin for PlanetViewPlugin {
                 .chain()
                 .run_if(in_state(AppScreen::Galaxy)),
         );
-        app.add_systems(Update, wheel_test.before(view_input).run_if(in_state(AppScreen::Galaxy)));
+        app.add_systems(Update, wheel_test.run_if(in_state(AppScreen::Galaxy)));
     }
 }
 
