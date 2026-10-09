@@ -1,4 +1,4 @@
-﻿//! Tests against the real game install (skipped when it is not found).
+//! Tests against the real game install (skipped when it is not found).
 
 use std::sync::Arc;
 
@@ -27,6 +27,25 @@ fn galactic_shell_layout() {
     for f in [UiFaction::Empire, UiFaction::Rebel, UiFaction::Underworld] {
         assert!(layout.art_for(f).any(|a| a.name.contains("Faceplate")));
     }
+}
+
+#[test]
+fn tactical_shell_layout() {
+    let Some(fs) = fs() else { return };
+    let Some(layout) = ShellLayout::load(&fs, "I_Tactical_Controls_New.ALO") else {
+        return;
+    };
+    // 12 columns: each column c has top slot s_select_{2*c} and ability buttons special_button_{2*c}, special_button_{2*c+1}
+    let btn00 = layout.item("special_button_00").expect("special_button_00");
+    let btn01 = layout.item("special_button_01").expect("special_button_01");
+    let btn02 = layout.item("special_button_02").expect("special_button_02");
+    assert!((btn00.center.x - 380.0).abs() < 2.0);
+    assert!((btn01.center.x - 407.6).abs() < 2.0);
+    assert!((btn02.center.x - 435.0).abs() < 2.0);
+    let sel00 = layout.item("s_select_00").expect("s_select_00");
+    let sel02 = layout.item("s_select_02").expect("s_select_02");
+    assert!((sel00.center.x - 380.0).abs() < 2.0 && (sel00.center.y - 93.0).abs() < 2.0);
+    assert!((sel02.center.x - 435.0).abs() < 2.0 && (sel02.center.y - 93.0).abs() < 2.0);
 }
 
 #[test]

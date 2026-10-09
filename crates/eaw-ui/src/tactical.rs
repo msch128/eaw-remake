@@ -1,4 +1,4 @@
-﻿//! Space tactical interface: selected unit panel, ability buttons, multi-selection grid,
+//! Space tactical interface: selected unit panel, ability buttons, multi-selection grid,
 //! world-space overlays (selection brackets, health/shield bars, hardpoint markers),
 //! reinforcement and retreat displays.
 //!
@@ -305,38 +305,38 @@ pub(crate) fn tactical_sync(tac: Res<TacticalData>, mut bar: ResMut<CommandBarDa
     if !tac.is_changed() || !tac.active {
         return;
     }
-    bar.selection = tac
-        .selection
-        .iter()
-        .map(|u| SelectionEntry {
+    // Selection cards: one per column, placed at s_select_{2*col}.
+    // Up to 12 columns (24 selection slots).
+    let mut selection = vec![SelectionEntry::default(); 24];
+    for (col, u) in tac.selection.iter().take(12).enumerate() {
+        selection[col * 2] = SelectionEntry {
             icon: u.icon.clone(),
             health: u.health,
             shield: u.shield,
             count: u.count,
             section: u.section,
-        })
-        .collect();
-    bar.abilities = tac
-        .selection
-        .get(tac.focus)
-        .map(|u| {
-            u.abilities
-                .iter()
-                .map(|a| AbilityEntry {
-                    icon: a.def.icon.clone(),
-                    ready: 1.0 - a.cooldown.clamp(0.0, 1.0),
-                    active: a.active,
-                    disabled: a.disabled,
-                    kind: a.def.kind.clone(),
-                    tooltip: a.def.tooltip(),
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-    // Ability buttons sit above the section of the focused unit (Remake video b0700).
-    let first_of_section = tac.selection.get(tac.focus).and_then(|f| tac.selection.iter().position(|u| u.section == f.section)).unwrap_or(0);
-    let n_abilities = bar.abilities.len();
-    bar.ability_column = (first_of_section / 2).min(12usize.saturating_sub(n_abilities.div_ceil(2)));
+            selected: col == tac.focus,
+        };
+    }
+    bar.selection = selection;
+
+    // Ability buttons: up to 2 per column (special_button_{2*col} and special_button_{2*col + 1}).
+    // Up to 12 columns (24 ability slots). Every unit's abilities show above its card in the group.
+    let mut abilities = vec![AbilityEntry::default(); 24];
+    for (col, u) in tac.selection.iter().take(12).enumerate() {
+        for (a_idx, a) in u.abilities.iter().take(2).enumerate() {
+            abilities[col * 2 + a_idx] = AbilityEntry {
+                icon: a.def.icon.clone(),
+                ready: 1.0 - a.cooldown.clamp(0.0, 1.0),
+                active: a.active,
+                disabled: a.disabled,
+                kind: a.def.kind.clone(),
+                tooltip: a.def.tooltip(),
+            };
+        }
+    }
+    bar.abilities = abilities;
+    bar.ability_column = 0;
     if let Some((cur, cap)) = tac.pop {
         bar.pop_current = cur;
         bar.pop_cap = cap;
@@ -396,23 +396,26 @@ pub(crate) fn tactical_clicks(
 ) {
     for c in clicks.read() {
         if let Some(i) = c.name.strip_prefix("special_button_").and_then(|n| n.parse::<usize>().ok())
-            && let Some(a) = bar.abilities.get(i)
+            && let Some(a) = bar.abilities.get(i).filter(|a| !a.icon.is_empty())
             && !a.disabled
-            && let Some(u) = tac.selection.get(tac.focus)
         {
-            abilities.write(EawAbilityClicked {
-                unit_type: u.unit_type.clone(),
-                ability: a.kind.clone(),
-            });
+            let group_idx = i / 2;
+            if let Some(u) = tac.selection.get(group_idx) {
+                abilities.write(EawAbilityClicked {
+                    unit_type: u.unit_type.clone(),
+                    ability: a.kind.clone(),
+                });
+            }
         }
-        if let Some(i) = c.name.strip_prefix("s_select_").and_then(|n| n.parse::<usize>().ok())
-            && let Some(u) = tac.selection.get(i)
-        {
-            selections.write(EawSelectionClicked {
-                index: i,
-                unit_type: u.unit_type.clone(),
-                shift: c.shift,
-            });
+        if let Some(i) = c.name.strip_prefix("s_select_").and_then(|n| n.parse::<usize>().ok()) {
+            let group_idx = i / 2;
+            if let Some(u) = tac.selection.get(group_idx) {
+                selections.write(EawSelectionClicked {
+                    index: group_idx,
+                    unit_type: u.unit_type.clone(),
+                    shift: c.shift,
+                });
+            }
         }
     }
 }
@@ -1159,12 +1162,123 @@ mod tests {
             .add_systems(Update, tactical_sync);
         app.update();
         let bar = app.world().resource::<CommandBarData>();
-        assert_eq!(bar.selection.len(), 1);
+        assert_eq!(bar.selection.len(), 24);
         assert_eq!(bar.selection[0].shield, Some(0.25));
+        assert!(bar.selection[0].selected);
         assert_eq!(bar.abilities[0].kind, "FULL_SALVO");
         assert!((bar.abilities[0].ready - 0.75).abs() < 1e-6);
         assert!(bar.abilities[0].active);
         assert_eq!((bar.pop_current, bar.pop_cap), (3, 9));
+    }
+
+    #[test]
+    fn sync_multi_selection_shows_abilities_for_all_selected_groups() {
+        let mut app = App::new();
+        app.init_resource::<CommandBarData>()
+            .insert_resource(TacticalData {
+                active: true,
+                focus: 0,
+                selection: vec![
+                    TacticalUnit {
+                        unit_type: "Thrawn_Victory".into(),
+                        icon: "I_THRAWN.TGA".into(),
+                        health: 1.0,
+                        shield: Some(1.0),
+                        count: 1,
+                        abilities: vec![
+                            AbilityState {
+                                def: AbilityDef {
+                                    kind: "POWER_TO_WEAPONS".into(),
+                                    icon: ability_icon("POWER_TO_WEAPONS"),
+                                    name: "Power to Weapons".into(),
+                                    ..default()
+                                },
+                                cooldown: 0.0,
+                                active: false,
+                                disabled: false,
+                            },
+                            AbilityState {
+                                def: AbilityDef {
+                                    kind: "TRACTOR_BEAM".into(),
+                                    icon: ability_icon("TRACTOR_BEAM"),
+                                    name: "Tractor Beam".into(),
+                                    ..default()
+                                },
+                                cooldown: 0.5,
+                                active: false,
+                                disabled: false,
+                            },
+                        ],
+                        ..default()
+                    },
+                    TacticalUnit {
+                        unit_type: "Generic_Victory".into(),
+                        icon: "I_VICTORY.TGA".into(),
+                        health: 0.8,
+                        shield: Some(0.6),
+                        count: 3,
+                        abilities: vec![
+                            AbilityState {
+                                def: AbilityDef {
+                                    kind: "FULL_SALVO".into(),
+                                    icon: ability_icon("FULL_SALVO"),
+                                    name: "Full Salvo".into(),
+                                    ..default()
+                                },
+                                cooldown: 0.0,
+                                active: false,
+                                disabled: false,
+                            },
+                        ],
+                        ..default()
+                    },
+                ],
+                ..default()
+            })
+            .add_systems(Update, (tactical_sync, tactical_clicks));
+        app.add_message::<EawButtonClicked>()
+            .add_message::<EawAbilityClicked>()
+            .add_message::<EawSelectionClicked>();
+        app.update();
+
+        let bar = app.world().resource::<CommandBarData>();
+        // Group 0 (Thrawn) is at column 0: slot 0 (card), abilities 0 and 1
+        assert_eq!(bar.selection[0].icon, "I_THRAWN.TGA");
+        assert!(bar.selection[0].selected);
+        assert_eq!(bar.abilities[0].kind, "POWER_TO_WEAPONS");
+        assert_eq!(bar.abilities[1].kind, "TRACTOR_BEAM");
+
+        // Group 1 (Victory) is at column 1: slot 2 (card), ability 2
+        assert_eq!(bar.selection[2].icon, "I_VICTORY.TGA");
+        assert!(!bar.selection[2].selected);
+        assert_eq!(bar.abilities[2].kind, "FULL_SALVO");
+        assert_eq!(bar.abilities[3].kind, "");
+
+        // Clicking special_button_02 fires ability for Generic_Victory
+        app.world_mut().resource_mut::<Messages<EawButtonClicked>>().write(EawButtonClicked {
+            entity: Entity::PLACEHOLDER,
+            name: "special_button_02".into(),
+            shift: false,
+        });
+        app.update();
+
+        let emitted: Vec<_> = app.world_mut().resource_mut::<Messages<EawAbilityClicked>>().drain().collect();
+        assert_eq!(emitted.len(), 1);
+        assert_eq!(emitted[0].unit_type, "Generic_Victory");
+        assert_eq!(emitted[0].ability, "FULL_SALVO");
+
+        // Clicking s_select_02 fires selection for Group 1
+        app.world_mut().resource_mut::<Messages<EawButtonClicked>>().write(EawButtonClicked {
+            entity: Entity::PLACEHOLDER,
+            name: "s_select_02".into(),
+            shift: false,
+        });
+        app.update();
+
+        let emitted_sel: Vec<_> = app.world_mut().resource_mut::<Messages<EawSelectionClicked>>().drain().collect();
+        assert_eq!(emitted_sel.len(), 1);
+        assert_eq!(emitted_sel[0].index, 1);
+        assert_eq!(emitted_sel[0].unit_type, "Generic_Victory");
     }
 
     #[test]

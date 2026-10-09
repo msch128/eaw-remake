@@ -1,4 +1,4 @@
-﻿//! Renders the Empire at War command bar offscreen (no window) to a PNG.
+//! Renders the Empire at War command bar offscreen (no window) to a PNG.
 //!
 //! ```text
 //! ui_demo --offscreen <out.png> [--faction Rebel|Empire|Underworld] [--mode galactic|space]
@@ -219,6 +219,7 @@ Provides +10% income on its home planet.
                 shield: (i % 2 == 0).then_some(0.8 - i as f32 * 0.1),
                 count: 1 + i as u32 % 3,
                 section: (i / 2) as u8,
+                selected: i == 0,
             })
             .collect(),
         abilities: Vec::new(),

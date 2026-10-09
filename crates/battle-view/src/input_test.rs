@@ -597,7 +597,8 @@ fn drive(
                 (0, None) => verdict = Some(("autocast-toggle (selected unit has no autocast ability)".into(), true)),
                 (0, Some((id, i, k, on))) => {
                     st.autocast = Some((id, i, on));
-                    let name = format!("special_button_{k:02}");
+                    let btn_idx = tactical.focus * 2 + k;
+                    let name = format!("special_button_{btn_idx:02}");
                     match bar.iter().find(|r| r.0.name == name && r.4.get()) {
                         Some(r) => act = Some(Act::Move(r.3.translation / sf)),
                         None => verdict = Some(("autocast-toggle: ability button not visible".into(), false)),

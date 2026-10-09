@@ -267,7 +267,12 @@ fn handle_clicks(
         }
     }
     for a in abilities.read() {
-        let Some(group) = tac.selection.get(tac.focus).and_then(|_| state.groups.get(tac.focus)) else { continue };
+        let group_idx = tac
+            .selection
+            .iter()
+            .position(|u| u.unit_type.eq_ignore_ascii_case(&a.unit_type))
+            .unwrap_or(tac.focus);
+        let Some(group) = state.groups.get(group_idx) else { continue };
         // Targeted abilities (reveal ping): the next click on the map is the target.
         let targeted = group.first().and_then(|&id| rt.cur.as_ref().and_then(|c| c.ship(id))).is_some_and(|s| {
             rt.catalog.ship(s.def).abilities.iter().any(|d| d.kind.eq_ignore_ascii_case(&a.ability) && is_targeted(d))
@@ -783,7 +788,7 @@ fn ability_keys(
         if keys.just_pressed(*key)
             && let Some(a) = unit.abilities.get(k).filter(|a| !a.disabled)
         {
-            clicks.write(EawAbilityClicked { unit_type: unit.name.clone(), ability: a.def.kind.clone() });
+            clicks.write(EawAbilityClicked { unit_type: unit.unit_type.clone(), ability: a.def.kind.clone() });
         }
     }
 }
@@ -792,12 +797,14 @@ fn ability_keys(
 #[derive(Component)]
 pub(crate) struct AutocastRing;
 
-/// The ability of the focused unit behind `special_button_NN`: (ship slot group, kind of the ability).
+/// The ability of the unit group behind `special_button_NN`: (ship slot group, kind of the ability).
 fn button_ability(name: &str, tac: &TacticalData, state: &TacticalUiState) -> Option<(Vec<u32>, String)> {
     let k: usize = name.strip_prefix("special_button_")?.parse().ok()?;
-    let unit = tac.selection.get(tac.focus)?;
-    let kind = unit.abilities.get(k)?.def.kind.clone();
-    Some((state.groups.get(tac.focus)?.clone(), kind))
+    let group_idx = k / 2;
+    let ability_idx = k % 2;
+    let unit = tac.selection.get(group_idx)?;
+    let kind = unit.abilities.get(ability_idx)?.def.kind.clone();
+    Some((state.groups.get(group_idx)?.clone(), kind))
 }
 
 /// Right click on an ability button turns its autocast on or off for every ship of the slot (only abilities that support it).
@@ -1364,5 +1371,69 @@ fn game_font(ui: &eaw_ui::EawUiSettings, size: f32) -> TextFont {
     match &ui.font_family {
         Some(f) => TextFont { font: FontSource::Family(f.as_str().into()), font_size: FontSize::Px(size), ..default() },
         None => TextFont::from_font_size(size),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn button_ability_maps_to_group_columns() {
+        let tac = TacticalData {
+            active: true,
+            focus: 0,
+            selection: vec![
+                eaw_ui::TacticalUnit {
+                    unit_type: "Thrawn".into(),
+                    abilities: vec![
+                        eaw_ui::AbilityState {
+                            def: eaw_ui::AbilityDef { kind: "POWER_TO_WEAPONS".into(), ..default() },
+                            ..default()
+                        },
+                        eaw_ui::AbilityState {
+                            def: eaw_ui::AbilityDef { kind: "TRACTOR_BEAM".into(), ..default() },
+                            ..default()
+                        },
+                    ],
+                    ..default()
+                },
+                eaw_ui::TacticalUnit {
+                    unit_type: "Victory".into(),
+                    abilities: vec![
+                        eaw_ui::AbilityState {
+                            def: eaw_ui::AbilityDef { kind: "FULL_SALVO".into(), ..default() },
+                            ..default()
+                        },
+                    ],
+                    ..default()
+                },
+            ],
+            ..default()
+        };
+        let state = TacticalUiState {
+            groups: vec![vec![101], vec![201, 202]],
+            ..default()
+        };
+
+        // Col 0: Thrawn (special_button_00 and 01)
+        assert_eq!(
+            button_ability("special_button_00", &tac, &state),
+            Some((vec![101], "POWER_TO_WEAPONS".into()))
+        );
+        assert_eq!(
+            button_ability("special_button_01", &tac, &state),
+            Some((vec![101], "TRACTOR_BEAM".into()))
+        );
+
+        // Col 1: Victory (special_button_02)
+        assert_eq!(
+            button_ability("special_button_02", &tac, &state),
+            Some((vec![201, 202], "FULL_SALVO".into()))
+        );
+        assert_eq!(button_ability("special_button_03", &tac, &state), None);
+
+        // Col 2: empty
+        assert_eq!(button_ability("special_button_04", &tac, &state), None);
     }
 }

@@ -1,4 +1,4 @@
-﻿//! Data binding: what the application tells the interface to show, and what the interface tells
+//! Data binding: what the application tells the interface to show, and what the interface tells
 //! the application back.
 //!
 //! The interface never owns game state. The application writes the [`CommandBarData`] resource
@@ -80,6 +80,8 @@ pub struct SelectionEntry {
     pub count: u32,
     /// Section of the bar (0 small ships, 1 fighters, 2 heroes, 3 capitals): neighbours of one section share one frame.
     pub section: u8,
+    /// Selected/focused card indicator.
+    pub selected: bool,
 }
 
 /// A special ability button of the tactical bar (`special_button_NN`).

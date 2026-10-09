@@ -1206,7 +1206,7 @@ pub(crate) fn border_pieces(
         "i_special_border_center.tga",
         "i_special_border_right.tga",
     ];
-    let section = |col: usize| data.selection.get(col * 2).map(|s| s.section);
+    let section = |col: usize| data.selection.get(col * 2).filter(|s| !s.icon.is_empty()).map(|s| s.section);
     for (slot, layers) in &borders {
         if slot.kind != SlotKind::Border {
             continue;
@@ -1287,13 +1287,13 @@ pub(crate) fn slots(
             *slot
         };
         button.tooltip_literal = match slot.kind {
-            SlotKind::Ability => data.abilities.get(slot.index).map(|a| a.tooltip.clone()),
+            SlotKind::Ability => data.abilities.get(slot.index).filter(|a| !a.icon.is_empty()).map(|a| a.tooltip.clone()).filter(|t| !t.is_empty()),
             SlotKind::Pad => data.pads.get(slot.index).map(|p| p.tooltip.clone()).filter(|t| !t.is_empty()),
             SlotKind::Queue => data.queue.get(slot.index).filter(|q| q.count > 0).map(|q| q.tooltip.clone()).filter(|t| !t.is_empty()),
             _ => None,
         };
         button.tooltip_icon = match slot.kind {
-            SlotKind::Ability => data.abilities.get(slot.index).map(|a| a.icon.clone()),
+            SlotKind::Ability => data.abilities.get(slot.index).filter(|a| !a.icon.is_empty()).map(|a| a.icon.clone()),
             SlotKind::Pad => data.pads.get(slot.index).map(|p| p.icon.clone()),
             SlotKind::Queue => data.queue.get(slot.index).filter(|q| q.count > 0).map(|q| q.icon.clone()),
             _ => None,
@@ -1327,21 +1327,21 @@ pub(crate) fn slots(
                     false,
                 )
             }),
-            SlotKind::Select => data.selection.get(slot.index).map(|s| {
+            SlotKind::Select => data.selection.get(slot.index).filter(|s| !s.icon.is_empty()).map(|s| {
                 (
                     s.icon.clone(),
                     0.0,
                     if s.count > 1 { s.count.to_string() } else { String::new() },
                     false,
-                    false,
+                    s.selected,
                 )
             }),
             SlotKind::Panel => pname.and_then(|n| panel.slots.get(&n.0)).map(|s| {
                 (s.icon.clone(), s.progress, s.label.clone(), s.disabled, s.selected)
             }),
-            SlotKind::Border => (data.selection.len() > slot.index * 2)
+            SlotKind::Border => data.selection.get(slot.index * 2).is_some_and(|s| !s.icon.is_empty())
                 .then(|| (String::new(), 0.0, String::new(), false, false)),
-            SlotKind::Ability => data.abilities.get(slot.index).map(|a| {
+            SlotKind::Ability => data.abilities.get(slot.index).filter(|a| !a.icon.is_empty()).map(|a| {
                 (a.icon.clone(), 1.0 - a.ready, String::new(), a.disabled, a.active)
             }),
         };
@@ -1440,7 +1440,7 @@ pub(crate) fn status_bars(
     for (e, bar, pname, tex, mut node) in &mut bars {
         let frac = match pname {
             Some(n) => panel.bars.get(&n.0).copied(),
-            None => data.selection.get(bar.index).and_then(|s| {
+            None => data.selection.get(bar.index).filter(|s| !s.icon.is_empty()).and_then(|s| {
                 if bar.shield { s.shield } else { Some(s.health) }
             }),
         };
