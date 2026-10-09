@@ -1242,54 +1242,69 @@ impl Battle {
         }
         if !shield_hit && pd.hull_damage && hull_part > 0.0 && (s.shield <= 0.0 || !pd.shield_damage) {
             let h = hull_part * cat.damage.multiplier(pd.damage_type, def.armor) / tgt_health * s.bonus.taken_hull / (1.0 + s.mods[ModKind::Health as usize].0);
-            s.hull -= h;
-            // Hardpoint: the aimed one, else the destroyable hardpoint nearest to the impact.
+            // User rule (U47): a unit with destroyable hardpoints has no hull pool of its own, its hit points are the sum of its hardpoints and it dies when
+            // the last one is destroyed. The hit goes to the aimed hardpoint, else the one nearest to the impact; damage beyond what the hardpoint had
+            // spills over to the next nearest ones, halving at every step (100000, 50000, 25000 ... until it is below 1), all in whole numbers. Units
+            // without destroyable hardpoints (fighters, small craft) keep a plain hull.
             let local = (pos - s.pos).rotate_yaw(-s.yaw);
-            let mut best: Option<(f32, usize)> = None;
-            for (i, hd) in def.hardpoints.iter().enumerate() {
-                if !s.hps[i].alive || !hd.destroyable {
-                    continue;
-                }
-                let d = if aim_hp == i as u16 { -1.0 } else { hd.offset.dist(local) };
-                if best.is_none_or(|(b, _)| d < b) {
-                    best = Some((d, i));
-                }
-            }
             let mut kind = HitKind::Hull;
-            if let Some((d, i)) = best
-                && (d < def.radius * 0.5 || aim_hp == i as u16)
-            {
-                kind = HitKind::Hardpoint(i as u16);
-                let hp = &mut s.hps[i];
-                hp.health -= h;
-                if hp.health <= 0.0 {
-                    hp.alive = false;
-                    hp.pulses_left = 0;
-                    let hk = def.hardpoints[i].kind;
-                    match hk {
-                        HpKind::ShieldGenerator => {
-                            s.shield_gen_ok = def
-                                .hardpoints
-                                .iter()
-                                .enumerate()
-                                .any(|(j, d)| d.kind == HpKind::ShieldGenerator && s.hps[j].alive);
-                            if !s.shield_gen_ok {
-                                s.shield = 0.0;
+            if !def.hardpoints.iter().any(|d| d.destroyable) {
+                s.hull -= h;
+            } else {
+                let mut order: Vec<(f32, usize)> = def
+                    .hardpoints
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, d)| d.destroyable && s.hps[*i].alive)
+                    .map(|(i, d)| (if aim_hp == i as u16 { -1.0 } else { d.offset.dist(local) }, i))
+                    .collect();
+                order.sort_by(|a, b| a.0.total_cmp(&b.0));
+                let mut incoming = h.round();
+                for (n, &(_, i)) in order.iter().enumerate() {
+                    if incoming < 1.0 {
+                        break;
+                    }
+                    if n == 0 {
+                        kind = HitKind::Hardpoint(i as u16);
+                    }
+                    let hp = &mut s.hps[i];
+                    let over = (incoming - hp.health.max(0.0)).max(0.0);
+                    hp.health -= incoming;
+                    if hp.health <= 0.0 {
+                        hp.alive = false;
+                        hp.pulses_left = 0;
+                        let hk = def.hardpoints[i].kind;
+                        match hk {
+                            HpKind::ShieldGenerator => {
+                                s.shield_gen_ok = def.hardpoints.iter().enumerate().any(|(j, d)| d.kind == HpKind::ShieldGenerator && s.hps[j].alive);
+                                if !s.shield_gen_ok {
+                                    s.shield = 0.0;
+                                }
                             }
+                            HpKind::Engine => {
+                                let (alive, total) = def.hardpoints.iter().enumerate().filter(|(_, d)| d.kind == HpKind::Engine).fold(
+                                    (0, 0),
+                                    |(a, t), (j, _)| (a + usize::from(s.hps[j].alive), t + 1),
+                                );
+                                s.engine_factor = if total == 0 { 1.0 } else { (alive as f32 / total as f32).max(0.25) };
+                            }
+                            _ => {}
                         }
-                        HpKind::Engine => {
-                            let (alive, total) = def.hardpoints.iter().enumerate().filter(|(_, d)| d.kind == HpKind::Engine).fold(
-                                (0, 0),
-                                |(a, t), (j, _)| (a + usize::from(s.hps[j].alive), t + 1),
-                            );
-                            s.engine_factor = if total == 0 { 1.0 } else { (alive as f32 / total as f32).max(0.25) };
+                        if record {
+                            self.events.push(Event::HardpointDestroyed { ship: id, hardpoint: i as u16, kind: hk });
                         }
-                        _ => {}
                     }
-                    if record {
-                        self.events.push(Event::HardpointDestroyed { ship: id, hardpoint: i as u16, kind: hk });
-                    }
+                    incoming = (over / 2.0).floor();
                 }
+                // The hull figure everything else reads (bars, retreat and targeting decisions) is the share of hardpoint health that is left.
+                let (left, total) = def
+                    .hardpoints
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, d)| d.destroyable)
+                    .fold((0.0f32, 0.0f32), |(l, t), (i, d)| (l + if s.hps[i].alive { s.hps[i].health.max(0.0) } else { 0.0 }, t + d.health));
+                let any_alive = def.hardpoints.iter().enumerate().any(|(i, d)| d.destroyable && s.hps[i].alive);
+                s.hull = if any_alive { (def.hull * left / total.max(1.0)).max(0.01) } else { 0.0 };
             }
             if record {
                 self.events.push(Event::Hit { ship: id, attacker, projectile: proj, pos, kind, damage: h });

@@ -1074,3 +1074,74 @@ fn a_side_stays_in_the_fight_while_anything_it_brought_lives_even_a_fighter() {
     assert!(b.time() >= 195.0 && died < 150.0, "the brought fighter keeps its side in the fight until the time limit: died {died:.0}, over {:.0}", b.time());
     assert_eq!(b.result().winner, None);
 }
+
+fn hardpoint_target(hp_health: f32, n: usize, hull: f32) -> (Battle, u32, u32) {
+    let mut gunner = ship("gunner", 1.0e6, 0.0, vec![gun("g", 0.0)]);
+    gunner.is_static = true;
+    let parts: Vec<HpDef> = (0..n)
+        .map(|k| HpDef {
+            name: format!("part{k}"),
+            kind: HpKind::Other,
+            health: hp_health,
+            destroyable: true,
+            targetable: true,
+            offset: Vec3::new(k as f32 * 20.0, 0.0, 0.0),
+            ..HpDef::default()
+        })
+        .collect();
+    let target = ship("target", hull, 0.0, parts);
+    let cat = Catalog::from_defs(vec![gunner, target], vec![laser()]);
+    let mut b = Battle::new(setup(cat, "gunner", "target", 1, 1, cfg()));
+    let (g, t) = (b.ships.iter().find(|s| s.side == 0).unwrap().id, b.ships.iter().find(|s| s.side == 1).unwrap().id);
+    b.command(0, Command::Attack { ships: vec![g], target: t }).unwrap();
+    (b, g, t)
+}
+
+/// Steps until the first hit on `target`; returns the damage of that hit.
+fn first_hit(b: &mut Battle, target: u32) -> f32 {
+    for _ in 0..30 * 60 {
+        for e in b.step() {
+            if let Event::Hit { ship, damage, .. } = e
+                && *ship == target
+            {
+                return *damage;
+            }
+        }
+    }
+    panic!("no hit");
+}
+
+#[test]
+fn a_unit_with_hardpoints_dies_when_the_last_hardpoint_is_destroyed_not_by_a_hull_pool() {
+    // The hull figure is huge (1e9) and no hit could ever empty it, yet four weak hardpoints (5 hp) die to the spill of a single 100 point hit: 100, 47, 21, 8.
+    let (mut b, _, t) = hardpoint_target(5.0, 4, 1.0e9);
+    let dmg = first_hit(&mut b, t);
+    assert!((dmg - 100.0).abs() < 0.5, "damage {dmg}");
+    assert!(b.ships[t as usize].hps.iter().all(|h| !h.alive), "{:?}", b.ships[t as usize].hps.iter().map(|h| h.health).collect::<Vec<_>>());
+    assert!(!b.ships[t as usize].alive, "destroyed with its last hardpoint");
+
+    // A unit that keeps hardpoints lives on whatever its hull number says: 5 hardpoints of 1000 hp take the first hit on one of them, nothing spills.
+    let (mut b, _, t) = hardpoint_target(1000.0, 5, 1.0);
+    let dmg = first_hit(&mut b, t);
+    let hps = &b.ships[t as usize].hps;
+    assert!(b.ships[t as usize].alive && hps.iter().all(|h| h.alive), "a hit under the health of one hardpoint destroys nothing");
+    assert!((hps.iter().map(|h| 1000.0 - h.health).sum::<f32>() - dmg.round()).abs() < 1.5, "the whole hit went into one hardpoint (no spill without overkill)");
+    assert!(hps.iter().filter(|h| h.health < 1000.0).count() == 1);
+}
+
+#[test]
+fn overkill_spills_to_the_next_hardpoints_halving_every_step_in_whole_numbers() {
+    // Hardpoints of 60 and a hit of 100: #1 is destroyed with 40 over, #2 gets 20, #3 and #4 are untouched (nothing over).
+    let (mut b, _, t) = hardpoint_target(60.0, 4, 1.0e9);
+    let d = first_hit(&mut b, t).round();
+    let over1 = (d - 60.0).max(0.0);
+    let in2 = (over1 / 2.0).floor();
+    let in3 = ((in2 - 60.0).max(0.0) / 2.0).floor();
+    let mut healths: Vec<f32> = b.ships[t as usize].hps.iter().map(|h| h.health).collect();
+    healths.sort_by(f32::total_cmp);
+    let mut expected = vec![60.0 - d, 60.0 - in2, 60.0 - in3, 60.0];
+    expected.sort_by(f32::total_cmp);
+    assert_eq!(healths, expected, "hit {d}, spill {in2} then {in3}");
+    // Whole numbers only.
+    assert!(healths.iter().all(|h| h.fract() == 0.0));
+}

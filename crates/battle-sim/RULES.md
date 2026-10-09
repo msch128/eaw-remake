@@ -190,3 +190,17 @@ A side stays in the fight while any unit it **brought** lives: the ships, squadr
 whose brought units are all destroyed or have retreated loses (a retreat of everything left is a win for the other side); a hand-made scenario without setup units counts any ship. (First attempt: all
 units counted with a 120 s grace for fighters; the user corrected it to "spawned units may be ignored".) Tests: `a_side_stays_in_the_fight_while_anything_it_brought_lives_even_a_fighter` (mechanics) and,
 with real data, `the_battle_ends_with_the_last_brought_unit_whatever_was_spawned_meanwhile` (galaxy-sim, pirate star base with its garrison).
+
+## Hit points are the hardpoints (U47, user rule)
+This is the user's damage model, not EaW data. A unit that has destroyable hardpoints (`HpDef::destroyable`: `Is_Destroyable` and health above 0) has **no hull pool of its own**: its hit points are the sum of its
+hardpoints and it is destroyed when the last one is destroyed (a star base cannot die while a laser or shield generator lives, a ship with 100 hp and 100 weapons survives 99 destroyed ones). `Ship::hull`
+stays as a derived figure for bars and decisions: `ShipDef::hull` times the share of hardpoint health that is left (never 0 while a hardpoint lives).
+* **Shield first:** the shield is a second health bar over the whole unit. Projectiles that do shield damage only hit it until it is down (the part of a hit that breaks it carries over to the hardpoints); projectiles without
+  shield damage (missiles, proton torpedoes: `ProjDef::shield_damage` is false in the data) bypass it. Unchanged from before.
+* **Targeted fire** (`AttackHardpoint`, `aim_hp`) hits the chosen hardpoint; **untargeted** fire hits the living destroyable hardpoint nearest to the impact point (in the ship's frame), not a separate hull pool.
+* **Overkill spills:** damage beyond what the hit hardpoint had left goes on to the next nearest hardpoints, **halving at every step**: the overkill of #1 halved is the hit on #2, the overkill of #2 halved is the hit on #3, and so on
+  until it is below 1. All numbers are rounded down to whole numbers (the incoming hit is rounded first). A hit that does not destroy its hardpoint spills nothing. (Reading of "100,000 on #1, then 50,000 on #2, 25,000 on #3": the
+  spill is what exceeded the previous hardpoint, halved; the user's example ignores the hardpoint health. Easy to change in `damage_ship`.)
+* **Units without destroyable hardpoints** (fighters, bombers, small craft) keep a plain hull that dies at 0.
+* Effects of a dying hardpoint are unchanged (shield generator down -> shield 0, engines -> speed, weapon stops firing, `Event::HardpointDestroyed`).
+Tests: `a_unit_with_hardpoints_dies_when_the_last_hardpoint_is_destroyed_not_by_a_hull_pool`, `overkill_spills_to_the_next_hardpoints_halving_every_step_in_whole_numbers` (mechanics).
