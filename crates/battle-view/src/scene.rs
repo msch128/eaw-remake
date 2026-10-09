@@ -3,7 +3,7 @@
 use alamo_data::GameData;
 use alamo_fs::FileSource;
 use alamo_map::{ObjectClass, SpaceMap};
-use alamo_render::{AlamoModel, spawn_sun};
+use alamo_render::{AlamoModel, AlamoModelLoaded, spawn_sun};
 use bevy::camera::Exposure;
 use bevy::light::GlobalAmbientLight;
 use bevy::prelude::*;
@@ -265,7 +265,7 @@ pub fn spawn_scene(commands: &mut Commands, scene: &SpaceScene, sky_radius: f32,
         ));
     }
     for p in &scene.props {
-        commands.spawn((
+        let mut e = commands.spawn((
             Name::new(p.name.clone()),
             BattleEntity,
             AlamoModel::new(p.model.clone()),
@@ -275,6 +275,28 @@ pub fn spawn_scene(commands: &mut Commands, scene: &SpaceScene, sky_radius: f32,
                 scale: Vec3::splat(p.scale),
             },
         ));
+        if p.backdrop && p.model.to_ascii_lowercase().contains("planet") {
+            e.insert(BackdropPlanet);
+        }
+    }
+}
+
+/// Marks a backdrop planet placed below the battle plane.
+#[derive(Component, Debug)]
+pub struct BackdropPlanet;
+
+/// Closest the top of a backdrop planet may come to the battle plane (world units below it). A planet whose scaled
+/// radius reaches up to the plane (or through it) fills the view behind the ships when the camera looks down.
+const PLANET_CLEARANCE: f32 = 4000.0;
+
+/// Pushes a loaded backdrop planet down until its top is [`PLANET_CLEARANCE`] below the battle plane.
+pub fn keep_planet_below(mut planets: Query<(&AlamoModelLoaded, &mut Transform), (With<BackdropPlanet>, Added<AlamoModelLoaded>)>) {
+    for (loaded, mut tf) in &mut planets {
+        let top = tf.translation.y + (loaded.center.y + loaded.radius) * tf.scale.y;
+        info!("battle backdrop planet: radius {} scale {} top {top}", loaded.radius, tf.scale.y);
+        if top > -PLANET_CLEARANCE {
+            tf.translation.y -= top + PLANET_CLEARANCE;
+        }
     }
 }
 

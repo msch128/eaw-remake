@@ -235,7 +235,10 @@ fn start_after_loading_art(world: &mut World) {
             .iter(world)
             .count();
         if art > 20 && pending == 0 {
-            info!("battle: longest frame while loading {:.0} ms", world.resource::<WorstFrame>().0 * 1000.0);
+            let first = !world.entity(e).contains::<WaitingForBegin>();
+            if first {
+                info!("battle: longest frame while loading {:.0} ms", world.resource::<WorstFrame>().0 * 1000.0);
+            }
             // Scripted, offscreen and test runs begin at once; a player confirms with the Begin button.
             let args = world.resource::<Args>();
             let auto = std::env::var_os("SP_HOLD_LOADING").is_none() && (args.offscreen.is_some() || args.battle_choice.is_some() || args.battle_auto || std::env::var_os("SP_UI_TEST").is_some() || std::env::var_os("SP_INPUT_TEST").is_some());

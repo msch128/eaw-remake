@@ -434,6 +434,7 @@ impl Plugin for BattleViewPlugin {
         if !app.world().contains_resource::<Messages<alamo_audio::plugin::GalaxyAudio>>() {
             app.add_message::<alamo_audio::plugin::GalaxyAudio>();
         }
+        app.add_systems(Update, scene::keep_planet_below.run_if(resource_exists::<BattleRuntime>));
         app.add_systems(
                 Update,
                 (
@@ -528,6 +529,9 @@ fn start_battle(
     render_settings.spawn_budget = Some(std::time::Duration::from_millis(8));
     if let Some(mut p) = particles {
         p.density = settings.particle_density;
+    }
+    for p in session.scene.props.iter().filter(|p| p.backdrop) {
+        info!("battle backdrop {} model {} pos {:?} scale {}", p.name, p.model, p.position, p.scale);
     }
     scene::spawn_scene(&mut commands, &session.scene, sky, settings.shadows);
 
@@ -690,6 +694,7 @@ fn advance_clock(
             .collect();
         if !pts.is_empty() {
             let center = pts.iter().copied().sum::<Vec3>() / pts.len() as f32;
+            info!("battle camera: fleet centre {center:?}, bounds {:?}..{:?}", cam.bounds_min, cam.bounds_max);
             cam.focus = center;
             cam.target_focus = center;
             cam.distance = settings.start_distance;

@@ -79,6 +79,10 @@ enum Step {
     CarrierPanel,
     /// Hover a ship, then one of its hardpoint reticles: the weapon tooltip must show.
     HardpointTooltip,
+    /// At battle start an own ship projects inside the view with a plausible size (the camera starts on the fleet, no backdrop hides it).
+    ShipsInView,
+    /// A minimap click moves the camera focus to that map point.
+    MinimapMovesFocus,
 }
 
 /// What an Esc press must have caused.
@@ -88,7 +92,9 @@ enum EscCheck {
     Paused(bool),
 }
 
-const STEPS: [Step; 33] = [
+const STEPS: [Step; 35] = [
+    Step::ShipsInView,
+    Step::MinimapMovesFocus,
     Step::SelectShip,
     Step::RightClickGround,
     Step::MoveLineVisible,
@@ -149,6 +155,7 @@ struct TestState {
     autocast: Option<(u32, usize, bool)>,
     hp_ship: Option<u32>,
     cam_saved: Option<(Vec3, f32)>,
+    mm_saved: Option<Vec3>,
     cam0: (f32, f32),
     cam1: (f32, f32),
     reserve_before: u32,
@@ -187,6 +194,7 @@ fn drive(
         Query<&mut BattleCamera>,
         Query<(), With<crate::tactical_ui::AutocastRing>>,
         Query<&Text, With<crate::hud::UnitPanelStats>>,
+        MessageWriter<eaw_ui::EawMinimapClicked>,
     ),
     extra: (
         Res<UiBlock>,
@@ -209,7 +217,7 @@ fn drive(
 ) {
     let (block, pointer, hover, names, all_nodes, interactions, mut commands, action, armed, reinforce, mut motion, mut keyboard, tactical, mut ability_clicks, move_lines, mut recent) = extra;
     st.ability_clicks += ability_clicks.read().count() as u32;
-    let (hp_overlays, hp_tips, mut cams, autocast_rings, panel_stats) = hp_ui;
+    let (hp_overlays, hp_tips, mut cams, autocast_rings, panel_stats, mut minimap) = hp_ui;
     let cam_pose = cams.single().map(|c| (c.target_yaw, c.pitch)).unwrap_or_default();
     let (cam_entity, cam, gt) = *camera;
     let sf = cam.target_scaling_factor().unwrap_or(1.0);
@@ -256,6 +264,38 @@ fn drive(
     };
     let on_screen = |p: Vec2| p.x > vp.x * 0.1 && p.x < vp.x * 0.9 && p.y > vp.y * 0.1 && p.y < vp.y * 0.6;
     match step {
+        Step::ShipsInView => {
+            // Own ships whose centre is in the part of the view above the command bar and whose radius covers 3..50 % of the view height.
+            let ok = ships.0.values().filter(|s| s.side == player).any(|s| {
+                let (Ok(c), Ok(e)) = (cam.world_to_viewport(gt, s.pos), cam.world_to_viewport(gt, s.pos + gt.up() * s.radius)) else { return false };
+                let px = (e - c).length();
+                c.x > 0.0 && c.x < vp.x && c.y > 0.0 && c.y < vp.y * 0.83 && px >= vp.y * 0.003 && px <= vp.y * 0.5
+            });
+            if t == 0 {
+                verdict = Some(("own-ship-in-view-at-start".into(), ok));
+            }
+        }
+        Step::MinimapMovesFocus => {
+            let Ok(mut c) = cams.single_mut() else { return };
+            match t {
+                0 => {
+                    let f = c.target_focus;
+                    st.mm_saved = Some(f);
+                    let mid = (c.bounds_min + c.bounds_max) * 0.5;
+                    let step = Vec2::new(mid.x - f.x, mid.y - f.z).normalize_or_zero() * 1500.0;
+                    let to = Vec3::new(f.x + step.x, f.y, f.z + step.y);
+                    minimap.write(eaw_ui::EawMinimapClicked { world: Vec2::new(to.x, -to.z), normalized: Vec2::splat(0.5), just_pressed: true });
+                }
+                6 => {
+                    let saved = st.mm_saved.unwrap_or_default();
+                    let moved = Vec2::new(c.target_focus.x - saved.x, c.target_focus.z - saved.z).length();
+                    verdict = Some(("minimap-click-moves-focus".into(), (moved - 1500.0).abs() < 50.0));
+                    c.target_focus = saved;
+                    c.focus = saved;
+                }
+                _ => {}
+            }
+        }
         Step::SelectShip => {
             let own = ships
                 .0
