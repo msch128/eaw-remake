@@ -736,3 +736,58 @@ fn best_defended_planet(sim: &Sim, f: FactionId) -> Option<PlanetId> {
         .filter(|&p| g.planets[p as usize].owner == Some(f) && g.planets[p as usize].starbase.is_some() && w.planets[p as usize].space_map.is_some())
         .max_by_key(|&p| (g.planets[p as usize].starbase.map_or(0, |s| w.starbases[s as usize].level), g.planets[p as usize].structures.len()))
 }
+
+#[test]
+fn a_fleet_arriving_at_a_pirate_planet_raises_a_battle_for_every_main_faction() {
+    let Some(ctx) = load() else { return };
+    for (fac, unit) in [("Rebel", "MC-80_Star_Cruiser"), ("Empire", "Star_Destroyer"), ("Underworld", "Pirate_Frigate_Placeholder")] {
+        let campaigns = ["GC_Full_Web_Way_Rebel", "GC_Full_Web_Way_Empire", "GC_Full_Web_Way_Underworld"];
+        for c in campaigns {
+            let Some(campaign) = ctx.data.campaign(c) else { continue };
+            let mut sim = Sim::new(&ctx.data, campaign, SimConfig { auto_resolve_battles: false, victory_enabled: false, ..SimConfig::default() }).unwrap();
+            let w = sim.world().clone();
+            let (Some(f), Some(pirates)) = (w.faction_id(fac), w.faction_id("Pirates")) else { continue };
+            let Some(u) = w.unit_id(unit).or_else(|| w.units.iter().position(|u| u.role == UnitRole::Ship && u.category == w.units[w.unit_id("Star_Destroyer").unwrap() as usize].category).map(|i| i as u32)) else { continue };
+            let g = sim.galaxy().clone();
+            let pair = w.routes.iter().find_map(|r| {
+                let own = |p: u32| g.planets[p as usize].owner == Some(f);
+                let pir = |p: u32| g.planets[p as usize].owner == Some(pirates) && w.real[p as usize];
+                if own(r.a) && pir(r.b) { Some((r.a, r.b)) } else if own(r.b) && pir(r.a) { Some((r.b, r.a)) } else { None }
+            });
+            let Some((from, to)) = pair else { println!("{c} / {fac}: no pirate planet next to an own one"); continue };
+            let fid = add_fleet(&mut sim, f, u, 2, from, from);
+            sim.apply(Command::MoveFleet { faction: f, fleet: fid, to }).unwrap();
+            let mut pending_at_arrival = false;
+            for _ in 0..4000 {
+                let ev = sim.step(1.0);
+                pending_at_arrival |= ev.iter().any(|e| matches!(e, Event::BattlePending(b) if b.planet == to));
+                if pending_at_arrival || sim.galaxy().planets[to as usize].owner != Some(pirates) {
+                    break;
+                }
+            }
+            println!("{c} / {fac} -> {}: battle pending {pending_at_arrival}, owner now {:?}", w.planets[to as usize].name, sim.galaxy().planets[to as usize].owner.map(|o| w.factions[o as usize].name.clone()));
+            assert!(pending_at_arrival && sim.galaxy().planets[to as usize].owner == Some(pirates), "{c}/{fac}: the planet must not flip without a battle");
+        }
+    }
+}
+
+#[test]
+fn a_pirate_star_base_has_real_strength_in_the_statistical_resolver() {
+    let Some(ctx) = load() else { return };
+    let sim = new_sim(&ctx);
+    let w = sim.world();
+    // The resolver reads the galaxy catalog (hull, shield and weapons of the star base definition and its garrison), not the battle sim's hull pool.
+    let base = w.starbases.iter().find(|s| s.name == "Pirate_Starbase_Lv1").unwrap();
+    assert!(base.combat.durability() >= 20_000.0 && base.combat.raw_dps() > 100.0, "{:?}", base.combat);
+    let nebulon = w.units[w.unit_id("Nebulon_B_Frigate").unwrap() as usize].combat.clone();
+    let garrison: f32 = base.garrison.iter().map(|(u, c)| w.units[*u as usize].combat.raw_dps() * *c as f32).sum();
+    println!("pirate base durability {:.0}, dps {:.0} + garrison dps {garrison:.0}; Nebulon durability {:.0}, dps {:.0}", base.combat.durability(), base.combat.raw_dps(), nebulon.durability(), nebulon.raw_dps());
+    // One Nebulon cannot take it, a few MC-80s can.
+    let pirate_planet = |sim: &Sim, f: FactionId| {
+        let (w, g) = (sim.world(), sim.galaxy());
+        (0..w.planets.len() as u32).find(|&p| g.planets[p as usize].owner == Some(f) && g.fleets_at(p).next().is_none() && w.planets[p as usize].space_map.is_some())
+    };
+    let one = auto_vs_planet(&ctx, "Nebulon_B_Frigate", 1, pirate_planet, "Pirates", None).unwrap();
+    println!("1 Nebulon vs a pirate base (auto-resolve): attacker {}/{} alive, wins {}", one.1, one.0, one.4);
+    assert!(!one.4 && one.1 == 0, "a lone Nebulon must lose: {one:?}");
+}
