@@ -162,7 +162,7 @@ impl Plugin for PlayUiPlugin {
             .add_systems(Update, save_toast)
             .add_systems(Update, auto_resolve_summary.after(battle_dialog_result).run_if(resource_exists::<PlayBridge>.and_then(resource_exists::<SimState>)))
             .add_systems(Update, show_battle_summary.run_if(in_state(AppScreen::Galaxy)).run_if(resource_exists::<crate::battle_play::BattleSummary>))
-            .add_systems(Update, result_return)
+            .add_systems(Update, (result_return, result_scroll))
             .add_systems(
                 Update,
                 (track_game_end, force_end_script, show_end_dialog, end_dialog_result, superweapon_button, superweapon_dialog, explode_on_destroy, expire_explosions)
@@ -1698,7 +1698,16 @@ fn spawn_result_screen(world: &mut World, s: &crate::battle_play::BattleSummary)
     world.spawn((text_bundle(&time, 20.0, Color::srgb(0.8, 0.9, 1.0)), ChildOf(root)));
     let columns = world
         .spawn((
-            Node { width: Val::Percent(80.0), flex_grow: 1.0, column_gap: Val::Px(40.0), margin: UiRect::top(Val::Px(16.0)), overflow: Overflow::clip(), ..default() },
+            Node {
+                width: Val::Percent(85.0),
+                flex_grow: 1.0,
+                flex_shrink: 1.0,
+                min_height: Val::Px(0.0),
+                column_gap: Val::Px(40.0),
+                margin: UiRect::vertical(Val::Px(12.0)),
+                overflow: Overflow::clip(),
+                ..default()
+            },
             ChildOf(root),
         ))
         .id();
@@ -1708,9 +1717,13 @@ fn spawn_result_screen(world: &mut World, s: &crate::battle_play::BattleSummary)
                 Node {
                     flex_direction: FlexDirection::Column,
                     flex_basis: Val::Percent(50.0),
+                    flex_grow: 1.0,
+                    flex_shrink: 1.0,
+                    min_height: Val::Px(0.0),
                     row_gap: Val::Px(4.0),
                     padding: UiRect::all(Val::Px(12.0)),
                     border: UiRect::all(Val::Px(1.0)),
+                    overflow: Overflow::clip(),
                     ..default()
                 },
                 BackgroundColor(Color::srgba(0.05, 0.1, 0.22, 0.8)),
@@ -1718,13 +1731,28 @@ fn spawn_result_screen(world: &mut World, s: &crate::battle_play::BattleSummary)
                 ChildOf(columns),
             ))
             .id();
-        world.spawn((text_bundle(title, 24.0, gold), ChildOf(col)));
+        world.spawn((text_bundle(title, 24.0, gold), Node { flex_shrink: 0.0, margin: UiRect::bottom(Val::Px(6.0)), ..default() }, ChildOf(col)));
         if rows[i].is_empty() {
             world.spawn((text_bundle("NONE", 18.0, Color::srgb(0.7, 0.8, 0.9)), ChildOf(col)));
         }
+        let scroll_box = world
+            .spawn((
+                ResultScroll(i),
+                ScrollPosition::default(),
+                Node {
+                    flex_direction: FlexDirection::Column,
+                    flex_grow: 1.0,
+                    flex_shrink: 1.0,
+                    min_height: Val::Px(0.0),
+                    overflow: Overflow::scroll_y(),
+                    ..default()
+                },
+                ChildOf(col),
+            ))
+            .id();
         // Rows sit in a wrapping grid so that a long list still fits.
-        let grid = world.spawn((Node { flex_wrap: FlexWrap::Wrap, column_gap: Val::Px(24.0), row_gap: Val::Px(4.0), ..default() }, ChildOf(col))).id();
-        for (icon, name, n) in rows[i].iter().take(40) {
+        let grid = world.spawn((Node { flex_wrap: FlexWrap::Wrap, column_gap: Val::Px(24.0), row_gap: Val::Px(6.0), ..default() }, ChildOf(scroll_box))).id();
+        for (icon, name, n) in rows[i].iter() {
             let row = world.spawn((Node { width: Val::Px(250.0), align_items: AlignItems::Center, column_gap: Val::Px(8.0), ..default() }, ChildOf(grid))).id();
             match icon {
                 Some(h) => {
@@ -1742,7 +1770,13 @@ fn spawn_result_screen(world: &mut World, s: &crate::battle_play::BattleSummary)
         .spawn((
             Button,
             ResultReturn(root),
-            Node { padding: UiRect::axes(Val::Px(30.0), Val::Px(10.0)), border: UiRect::all(Val::Px(2.0)), margin: UiRect::top(Val::Px(12.0)), ..default() },
+            Node {
+                padding: UiRect::axes(Val::Px(30.0), Val::Px(10.0)),
+                border: UiRect::all(Val::Px(2.0)),
+                margin: UiRect::vertical(Val::Px(12.0)),
+                flex_shrink: 0.0,
+                ..default()
+            },
             BackgroundColor(Color::srgb(0.01, 0.01, 0.03)),
             BorderColor::all(Color::srgb(0.42, 0.58, 0.88)),
             ChildOf(root),
@@ -1751,6 +1785,29 @@ fn spawn_result_screen(world: &mut World, s: &crate::battle_play::BattleSummary)
     world.spawn((text_bundle("RETURN TO GALACTIC", 22.0, Color::WHITE), ChildOf(button)));
     info!("play: battle result screen shown: {} | {headline} | {time} | lost {} / {} unit types", screen.planet, screen.yours.len(), screen.enemy.len());
     true
+}
+
+#[derive(Component)]
+struct ResultScroll(usize);
+
+fn result_scroll(
+    mut wheel: MessageReader<bevy::input::mouse::MouseWheel>,
+    window: Option<Single<&Window, With<PrimaryWindow>>>,
+    mut boxes: Query<(&ResultScroll, &mut ScrollPosition, &ComputedNode, &UiGlobalTransform)>,
+) {
+    let delta: f32 = wheel.read().map(|w| if matches!(w.unit, bevy::input::mouse::MouseScrollUnit::Line) { w.y * 36.0 } else { w.y }).sum();
+    if delta == 0.0 {
+        return;
+    }
+    let cursor = window.and_then(|w| w.physical_cursor_position());
+    let hovered = cursor.and_then(|c| boxes.iter().find(|(_, _, n, g)| n.contains_point(**g, c)).map(|(id, ..)| id.0));
+    for (id, mut pos, node, _) in &mut boxes {
+        if hovered.is_none() || hovered == Some(id.0) {
+            let inv = node.inverse_scale_factor();
+            let max = ((node.content_size().y - node.size().y) * inv).max(0.0);
+            pos.y = (pos.y - delta).clamp(0.0, max);
+        }
+    }
 }
 
 fn result_return(mut q: Query<(&ResultReturn, &Interaction, &mut BackgroundColor), Changed<Interaction>>, mut commands: Commands) {
