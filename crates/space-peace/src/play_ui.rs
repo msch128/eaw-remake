@@ -146,7 +146,7 @@ impl Plugin for PlayUiPlugin {
                     .chain()
                     .run_if(resource_exists::<PlayBridge>.and_then(resource_exists::<SimState>)),
             )
-            .add_systems(Update, (declutter_top, hero_bar, locked_clicks, spawn_planet_panel, update_planet_panel, place_planet_panel, base_layout_click, planet_view_ui, planet_view_bar_tab, objectives_toggle, objectives_window, objectives_scroll).chain().run_if(resource_exists::<PlayBridge>.and_then(resource_exists::<SimState>)))
+            .add_systems(Update, (declutter_top, hero_bar, locked_clicks, spawn_planet_panel, update_planet_panel, place_planet_panel, planet_view_ui, planet_view_bar_tab, objectives_toggle, objectives_window, objectives_scroll).chain().run_if(resource_exists::<PlayBridge>.and_then(resource_exists::<SimState>)))
             .add_systems(Update, save_toast)
             .add_systems(Update, auto_resolve_summary.after(battle_dialog_result).run_if(resource_exists::<PlayBridge>.and_then(resource_exists::<SimState>)))
             .add_systems(Update, show_battle_summary.run_if(in_state(AppScreen::Galaxy)).run_if(resource_exists::<crate::battle_play::BattleSummary>))
@@ -1861,10 +1861,6 @@ struct PanelPip {
     row: usize,
     index: usize,
 }
-/// The planet view's "BASE LAYOUT" button.
-#[derive(Component)]
-struct BaseLayoutButton;
-
 fn spawn_planet_panel(mut commands: Commands, existing: Query<(), With<PlanetPanel>>, mut images: ResMut<Assets<Image>>) {
     if !existing.is_empty() {
         return;
@@ -1914,29 +1910,6 @@ fn spawn_planet_panel(mut commands: Commands, existing: Query<(), With<PlanetPan
                 });
             }
         });
-    // The planet view's button under the platform.
-    commands
-        .spawn((
-            BaseLayoutButton,
-            PlayHud,
-            GalaxyEntity,
-            Button,
-            Node {
-                position_type: PositionType::Absolute,
-                left: Val::Percent(44.0),
-                top: Val::Percent(76.0),
-                width: Val::Px(250.0),
-                padding: UiRect::axes(Val::Px(14.0), Val::Px(5.0)),
-                border: UiRect::all(Val::Px(1.0)),
-                justify_content: JustifyContent::Center,
-                display: Display::None,
-                ..default()
-            },
-            BackgroundColor(Color::srgb(0.02, 0.04, 0.09)),
-            BorderColor::all(Color::srgb(0.55, 0.6, 0.7)),
-            GlobalZIndex(12),
-        ))
-        .with_child((Text::new("BASE LAYOUT"), font(13.0), TextColor(Color::srgb(0.9, 0.93, 0.98)), bevy::text::LetterSpacing::Rem(0.12)));
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2011,32 +1984,19 @@ fn update_planet_panel(
 /// Description panel placement: left in the galaxy view; in the planet view right of the platform, frameless.
 fn place_planet_panel(
     state: Res<crate::planet_view::PlanetViewState>,
-    mut panel: Single<(&mut Node, &mut BackgroundColor, &mut BorderColor), (With<PlanetPanel>, Without<BaseLayoutButton>)>,
-    mut button: Single<&mut Node, (With<BaseLayoutButton>, Without<PlanetPanel>)>,
+    mut panel: Single<(&mut Node, &mut BackgroundColor, &mut BorderColor), With<PlanetPanel>>,
 ) {
     let in_view = state.active && state.blend > 0.5;
     let (node, bg, border) = &mut *panel;
-    let want_left = if in_view { Val::Percent(66.0) } else { Val::Px(20.0) };
+    let want_left = if in_view { Val::Percent(63.75) } else { Val::Px(20.0) };
     if node.left != want_left {
         node.left = want_left;
         node.top = if in_view { Val::Percent(33.0) } else { Val::Percent(13.5) };
-        node.width = if in_view { Val::Percent(30.0) } else { Val::Px(420.0) };
+        node.width = if in_view { Val::Percent(23.25) } else { Val::Px(420.0) };
         node.max_height = if in_view { Val::Percent(52.0) } else { Val::Percent(46.0) };
         node.border = if in_view { UiRect::ZERO } else { UiRect::all(Val::Px(1.5)) };
         bg.0 = if in_view { Color::NONE } else { Color::srgba(0.13, 0.27, 0.31, 0.88) };
         **border = if in_view { BorderColor::all(Color::NONE) } else { BorderColor::all(Color::srgb(0.0, 0.76, 0.99)) };
-    }
-    let want = if in_view { Display::Flex } else { Display::None };
-    if button.display != want {
-        button.display = want;
-    }
-}
-
-/// "BASE LAYOUT" is shown like in the original; base editing is out of scope, the click only says so.
-fn base_layout_click(button: Query<&Interaction, (With<BaseLayoutButton>, Changed<Interaction>)>, mut toast: ResMut<Toast>) {
-    if button.iter().any(|i| *i == Interaction::Pressed) {
-        toast.0 = "Base layout editing is not available.".to_owned();
-        toast.1 = 3.0;
     }
 }
 

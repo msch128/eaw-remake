@@ -1,7 +1,7 @@
 //! The planet view: scrolling all the way in on the selected planet (or Esc / scrolling out to leave) flies the
 //! camera into a separate 3D scene far below the galaxy: a large planet sphere on the left, the planet's star
 //! base model, and the tan base-layout platform (`W_BuildBaseFOC.alo`). The 2D UI around it (orbit boxes,
-//! description, "Base layout" button) hangs off [`PlanetViewState`].
+//! description) hangs off [`PlanetViewState`].
 
 use alamo_render::{AlamoFs, AlamoModel, AlamoModelLoaded};
 use bevy::input::mouse::AccumulatedMouseScroll;
