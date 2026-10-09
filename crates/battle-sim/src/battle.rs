@@ -51,6 +51,9 @@ pub struct BattleConfig {
     /// has one; the Remake AI equations
     /// `Target_Is_Near_Friendly_Unit` / `Target_Is_Not_Close_To_Enemy_Units` use 2000 for "near", so that number is the estimate).
     pub no_spawn_radius: f32,
+    /// A side that lost its last ship that is not a fighter or bomber stays in the fight while its fighters live, for this many seconds (EaW ends the battle only when every
+    /// enemy unit is gone, spawned squadrons included; the grace keeps a battle with unreachable stragglers from running to the time limit; estimate).
+    pub straggler_grace: f32,
     /// Free space needed at the arrival point (`Space_Reinforcement_Collision_Check_Distance`).
     pub reinforce_clearance: f32,
     /// Use rayon for per-entity work.
@@ -94,6 +97,7 @@ impl Default for BattleConfig {
             fog_linger: 15.0,
             stealth_detection: 500.0,
             no_spawn_radius: 2000.0,
+            straggler_grace: 120.0,
             reinforce_clearance: 150.0,
             parallel: true,
             shield_regen_delay: 0.0,
@@ -659,6 +663,8 @@ pub struct Battle {
     /// Events caused by commands; they are reported with the next step (a step starts with a clean event list).
     pub(crate) cmd_events: Vec<Event>,
     pub(crate) retreat_ordered: Vec<bool>,
+    /// Per side: when its last non-fighter ship was gone (its remaining fighters then get `BattleConfig::straggler_grace` seconds to be hunted down).
+    pub(crate) big_gone_at: Vec<Option<f32>>,
     /// Cheats in force (the F2 menu); see [`crate::cheats`].
     pub cheats: crate::cheats::Cheats,
     /// Per side: battle time at which the retreat jump happens (`None` = no retreat ordered).

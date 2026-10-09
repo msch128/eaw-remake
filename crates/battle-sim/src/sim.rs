@@ -184,6 +184,7 @@ impl Battle {
             catalog,
             cmd_events: Vec::new(),
             retreat_ordered: vec![false; sides.len()],
+            big_gone_at: vec![None; sides.len()],
             cheats: crate::cheats::Cheats::new(sides.len()),
             retreat_jump_at: vec![None; sides.len()],
             reveals: Vec::new(),
@@ -1818,22 +1819,31 @@ impl Battle {
             return;
         }
         let n = self.sides.len();
-        // Fighters and bombers alone do not keep a side in the fight (Victory_Relevant ships do),
-        // unless the side never had anything else.
+        // A side is in the fight while anything of it lives: ships, stations and the squadrons they launched (EaW: the battle ends when every enemy
+        // unit is destroyed or has retreated). Once its last ship that is not a fighter or bomber is gone, the fighters left over only get
+        // `straggler_grace` more seconds, so that unreachable stragglers cannot keep the battle going to the time limit.
         let mut had_big = vec![false; n];
-        let mut active = vec![false; n];
+        let mut big_alive = vec![false; n];
+        let mut any_alive = vec![false; n];
         for s in &self.ships {
             let big = !matches!(self.catalog.ship(s.def).class, TargetClass::Fighter | TargetClass::Bomber);
             if big && s.group != NONE {
                 had_big[s.side as usize] = true;
             }
-            if s.alive && !s.retreated && big {
-                active[s.side as usize] = true;
+            if s.alive && !s.retreated {
+                any_alive[s.side as usize] = true;
+                big_alive[s.side as usize] |= big;
             }
         }
-        for s in &self.ships {
-            if s.alive && !s.retreated && !had_big[s.side as usize] {
-                active[s.side as usize] = true;
+        let time = self.time;
+        let mut active = vec![false; n];
+        for i in 0..n {
+            if big_alive[i] || !had_big[i] {
+                self.big_gone_at[i] = None;
+                active[i] = any_alive[i];
+            } else if any_alive[i] {
+                let since = *self.big_gone_at[i].get_or_insert(time);
+                active[i] = time - since < self.config.straggler_grace;
             }
         }
         for r in &self.pending {

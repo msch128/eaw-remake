@@ -602,3 +602,40 @@ fn an_occupied_hyperspace_slot_deploys_only_that_unit_and_an_empty_one_changes_n
     assert_eq!(run(Some(vsd)), (0, 1, 2, 0), "slot holds the Victory: only it jumps in");
     assert_eq!(run(Some(isd)), (1, 0, 1, 1), "slot holds one Star Destroyer of the stack: one deployed, the rest wait");
 }
+
+/// A pirate planet without a fleet (it has a star base and its garrison) attacked by `n` units of `unit`: (auto-resolve preview of the attacker: start, alive;
+/// tactical headless result: start, survived).
+fn pirate_planet_attack(ctx: &Ctx, unit: &str, n: u32) -> ((u32, u32), (u32, u32), bool) {
+    let mut sim = new_sim(ctx);
+    let w = sim.world().clone();
+    let (pirates, rebel) = (w.faction_id("Pirates").unwrap(), w.faction_id("Rebel").unwrap());
+    let target = {
+        let g = sim.galaxy();
+        (0..w.planets.len() as u32)
+            .find(|&p| g.planets[p as usize].owner == Some(pirates) && g.fleets_at(p).next().is_none() && w.planets[p as usize].space_map.is_some())
+            .expect("pirate planet without a fleet")
+    };
+    add_fleet(&mut sim, rebel, w.unit_id(unit).unwrap(), n, target, target);
+    let battle = pending(&mut sim);
+    let preview = sim.preview_auto_resolve(battle.id, 1).expect("preview");
+    let me = preview.sides.iter().find(|s| s.0 == rebel).unwrap();
+    let req = sim.tactical_setup(battle.id).unwrap();
+    let catalog = catalog_for(ctx, &req);
+    let result = run_headless(&req, &catalog, None).unwrap();
+    let rs = req.sides.iter().position(|s| s.faction == rebel).unwrap();
+    let survived: u32 = result.survived[rs].iter().sum();
+    ((me.1, me.2), (n, survived), preview.winner == Some(rebel))
+}
+
+#[test]
+fn a_pirate_star_base_with_its_garrison_counts_in_both_resolvers() {
+    let Some(ctx) = load() else { return };
+    // The star base, its spawned garrison squadrons (Hullcracker, Z-95) and structures are part of the defender in the request and in the statistical resolver:
+    // a lone corvette dies in both, while a real fleet beats the level 1 base without losses in both (the data's pirate bases are that weak).
+    let (auto, tactical, auto_win) = pirate_planet_attack(&ctx, "CR-90_Corvette", 1);
+    println!("1 x CR-90: auto alive {}/{} win {auto_win}, tactical survived {}/{}", auto.1, auto.0, tactical.1, tactical.0);
+    assert!(!auto_win && auto.1 == 0 && tactical.1 == 0, "a corvette alone cannot take a pirate base");
+    let (auto, tactical, auto_win) = pirate_planet_attack(&ctx, "MC-80_Star_Cruiser", 4);
+    println!("4 x MC-80: auto alive {}/{} win {auto_win}, tactical survived {}/{}", auto.1, auto.0, tactical.1, tactical.0);
+    assert!(auto_win && auto.1 == 4 && tactical.1 == 4);
+}

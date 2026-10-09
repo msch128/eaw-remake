@@ -183,3 +183,10 @@ Source: `XML/AI/GoalFunctions/Remake_SpaceCombat.xml`, `PerceptualEquations/Rema
 * **Other hulls**: big ships look 4 s ahead (at least two radii) and steer sideways around hulls in their way (head-on meetings pass on the right) and slow down when one is close ahead; the older push-out (85% of the two radii, now also against stations) stays as the hard limit. Estimates: lookahead, weights, 0.5 s replanning.
 * **Fighters** fly through rocks and along any line, but are pushed out of the core of every big hull (`0.45 x hull radius + own radius`), except their own carrier.
 * `navigation: false` gives the old behaviour for comparisons (`galaxy-sim/examples/navcheck`: Bilbringi 61 rocks and Hoth, 4 Star Destroyers + 3 Victory + fighters vs MC-80, Nebulon, CR-90 + fighters, 300 s, three seeds: no hull overlaps after the opening, no ship inside a rock, no planned path through a rock; fighters deep inside a hull 307 / 177 / 319 / 372 samples before, 0 after).
+
+## Battle end (U27)
+A side stays in the fight while any of its ships, stations or launched/spawned squadrons lives (EaW: the battle ends when every enemy unit is destroyed or retreated; `Victory_Relevant` only appears
+on one ground building in the data). Once its last ship that is not a fighter or bomber is gone (a station dying counts), its leftover fighters keep it in the fight for
+`BattleConfig::straggler_grace` = 120 s (estimate) so that unreachable stragglers cannot run the battle to the time limit; then it loses and they are removed. Before, the fighters were dropped the
+moment the last big ship died: a pirate base killed in the first minutes took its 16 Hullcrackers and 16 Z-95 with it, which looked like "victory with enemy units left". Test:
+`a_side_stays_in_the_fight_while_its_fighters_live_but_only_for_the_grace_time` (mechanics) and, with real data, `a_pirate_star_base_with_its_garrison_counts_in_both_resolvers` (galaxy-sim).
