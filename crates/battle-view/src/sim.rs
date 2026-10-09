@@ -100,6 +100,8 @@ pub struct Snapshot {
     pub losses: Vec<Vec<(battle_sim::ShipId, u32)>>,
     /// Per side: seconds until its retreat jump (`None` when no retreat was ordered).
     pub retreat_jump_in: Vec<Option<f32>>,
+    /// Initial spawn / arrival yaw for each side.
+    pub spawn_yaw: Vec<f32>,
     /// Wall-clock milliseconds the worker needed for the step.
     pub step_ms: f32,
 }
@@ -174,6 +176,7 @@ fn snapshot(battle: &Battle, events: Vec<Event>, step_ms: f32) -> Snapshot {
         pop: (0..battle.side_count() as u8).map(|s| battle.pop_in_play(s)).collect(),
         losses: if battle.is_over() { lost_ships(battle) } else { Vec::new() },
         retreat_jump_in: (0..battle.side_count() as u8).map(|s| battle.retreat_jump_in(s)).collect(),
+        spawn_yaw: (0..battle.side_count() as u8).map(|s| battle.spawn_yaw(s)).collect(),
         step_ms,
     }
 }

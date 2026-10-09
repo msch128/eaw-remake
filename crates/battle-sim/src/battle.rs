@@ -1,4 +1,4 @@
-﻿//! Battle state, setup, commands, events and results.
+//! Battle state, setup, commands, events and results.
 
 use std::sync::Arc;
 
@@ -712,6 +712,11 @@ impl Battle {
     /// Number of sides.
     pub fn side_count(&self) -> usize {
         self.sides.len()
+    }
+
+    /// Initial spawn / arrival yaw for `side` (from `side_places`).
+    pub fn spawn_yaw(&self, side: u8) -> f32 {
+        self.side_places.get(side as usize).and_then(|p| p.first()).map_or(if side == 0 { 0.0 } else { std::f32::consts::PI }, |p| p.1)
     }
 
     /// Alive ships (not retreated) of a side, optionally only those with weapons.

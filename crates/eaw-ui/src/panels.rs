@@ -1,4 +1,4 @@
-﻿//! Panels beyond the command bars: planet screen, fleet organizer, reinforcement and hero
+//! Panels beyond the command bars: planet screen, fleet organizer, reinforcement and hero
 //! frames, minimaps, story dialogs, and slot drag and drop.
 //!
 //! The shell panels (`ShellSpec`) are filled through [`PanelData`], keyed by the original
@@ -251,8 +251,8 @@ pub(crate) fn minimap_marks(
             }
         }
         if let Some(bg) = data.background {
-            // Fog: the whole map is dark, the discs of the player's sensors show the normal tint.
-            let base = if fog.enabled { bg.to_linear().with_alpha(1.0).to_vec3() * 0.3 } else { bg.to_linear().to_vec3() };
+            // Fog: unexplored areas read as clearly dark/hidden (0.08 tint), explored sensor discs show the lit background tint.
+            let base = if fog.enabled { bg.to_linear().with_alpha(1.0).to_vec3() * 0.08 } else { bg.to_linear().to_vec3() };
             let base = Color::linear_rgba(base.x, base.y, base.z, bg.alpha());
             commands.spawn((
                 MinimapMark,

@@ -1,4 +1,4 @@
-﻿//! Rule tests with hand-made definitions (no game data needed).
+//! Rule tests with hand-made definitions (no game data needed).
 
 use std::sync::Arc;
 
@@ -1144,4 +1144,11 @@ fn overkill_spills_to_the_next_hardpoints_halving_every_step_in_whole_numbers() 
     assert_eq!(healths, expected, "hit {d}, spill {in2} then {in3}");
     // Whole numbers only.
     assert!(healths.iter().all(|h| h.fract() == 0.0));
+}
+
+#[test]
+fn spawn_yaw_returns_arrival_yaw_for_each_side() {
+    let b = carrier_battle(8.0);
+    assert!((b.spawn_yaw(0) - 0.0).abs() < 1e-4);
+    assert!((b.spawn_yaw(1) - std::f32::consts::PI).abs() < 1e-4);
 }

@@ -404,6 +404,8 @@ pub struct ReinforceUi {
     pub ghost: Option<Ghost>,
     /// The ghost model: entity, whether it was built for an accepted spot (the team colour shows it), reserve row.
     ghost_model: Option<(Entity, bool, usize)>,
+    /// Mouse wheel rotation offset clamped to ±15 degrees.
+    pub ghost_yaw_offset: f32,
 }
 
 /// Verdict of the placement rule at the cursor.
@@ -1088,22 +1090,38 @@ pub(crate) fn no_spawn_zones(rt: &BattleRuntime, side: u8) -> Vec<(Vec3, f32)> {
     battle_sim::no_spawn_zones(side, &units).into_iter().map(|(c, r)| (crate::convert::sim_to_bevy(c), r)).collect()
 }
 
-/// Draws a no-spawn zone as the original does: a red rim with diagonal hatching inside (`y` is the battle plane).
+/// Draws a no-spawn zone as EaW does: a filled red translucent area with a red hatch texture and a soft edge (`y` is the battle plane).
 fn draw_no_spawn_zone(gizmos: &mut Gizmos, centre: Vec3, radius: f32, y: f32) {
-    let red = Color::srgba(1.0, 0.2, 0.15, 0.9);
-    let faint = Color::srgba(1.0, 0.2, 0.15, 0.45);
     let c = Vec3::new(centre.x, y, centre.z);
-    gizmos.circle(Isometry3d::new(c, Quat::from_rotation_x(std::f32::consts::FRAC_PI_2)), radius, red).resolution(96);
-    gizmos.circle(Isometry3d::new(c, Quat::from_rotation_x(std::f32::consts::FRAC_PI_2)), radius * 0.985, red).resolution(96);
-    // Hatching: lines at 45 degrees, spacing a twelfth of the radius, each cut at the rim.
+    let quat = Quat::from_rotation_x(std::f32::consts::FRAC_PI_2);
+
+    // 1. Filled translucent interior wash: concentric circles from center outward.
+    const FILL_RINGS: usize = 28;
+    for i in 1..=FILL_RINGS {
+        let frac = i as f32 / FILL_RINGS as f32;
+        let r = radius * frac * 0.96;
+        let alpha = 0.06 * (1.0 - frac * 0.3);
+        gizmos.circle(Isometry3d::new(c, quat), r, Color::srgba(0.9, 0.15, 0.12, alpha)).resolution(64);
+    }
+
+    // 2. Soft feathered edge (multiple concentric rings with decaying alpha instead of a sharp thin border).
+    let edge_alphas = [(0.92, 0.12), (0.95, 0.22), (0.975, 0.30), (1.0, 0.25), (1.015, 0.12), (1.03, 0.04)];
+    for (scale, alpha) in edge_alphas {
+        gizmos.circle(Isometry3d::new(c, quat), radius * scale, Color::srgba(0.95, 0.2, 0.15, alpha)).resolution(96);
+    }
+
+    // 3. Dense red hatch texture: 45-degree diagonal lines spaced closely (~50 units).
     let dir = Vec3::new(1.0, 0.0, 1.0).normalize();
     let perp = Vec3::new(-dir.z, 0.0, dir.x);
-    let step = radius / 12.0;
+    let step = 50.0f32.max(radius / 36.0);
     let mut d = -radius + step * 0.5;
     while d < radius {
         let half = (radius * radius - d * d).max(0.0).sqrt();
         let mid = c + perp * d;
-        gizmos.line(mid - dir * half, mid + dir * half, faint);
+        let edge_dist = 1.0 - (d / radius).abs();
+        let hatch_alpha = (0.35 * edge_dist.clamp(0.2, 1.0)).min(0.35);
+        let hatch_col = Color::srgba(0.95, 0.2, 0.15, hatch_alpha);
+        gizmos.line(mid - dir * half, mid + dir * half, hatch_col);
         d += step;
     }
 }
@@ -1114,34 +1132,41 @@ fn ghost_model_path(rt: &BattleRuntime, ship: u32) -> Option<String> {
     def.model.clone().or_else(|| def.members.first().and_then(|m| rt.catalog.ship(m.0).model.clone()))
 }
 
+#[derive(bevy::ecs::system::SystemParam)]
+struct ReinforcePlaceCtx<'w> {
+    fonts: Res<'w, eaw_ui::EawUiSettings>,
+    rt: Res<'w, BattleRuntime>,
+    settings: Res<'w, BattleViewSettings>,
+    hover: Res<'w, Hover>,
+    pointer: Res<'w, control::Pointer>,
+    block: Res<'w, control::UiBlock>,
+    assets: Option<Res<'w, EawUiAssets>>,
+    scale: Res<'w, UiScale>,
+    ships: Res<'w, RenderedShips>,
+    minimap_data: Res<'w, MinimapData>,
+}
+
 /// Reinforcement placement: after a press (drag) or click on a reserve slot the cursor carries a ghost of the unit (its model with a green team colour
 /// where the wave may arrive, red where the rule refuses, plus a ring and the reason); while it is carried the no-spawn zones of enemy structures are drawn
 /// as red hatched areas. Releasing the dragged button (or a left click) on an accepted spot calls the unit in (hyperspace arrival after the reinforcement
 /// delay). Right click / Esc cancels.
 #[allow(clippy::too_many_arguments)]
 fn reinforce_place(
-    fonts: Res<eaw_ui::EawUiSettings>,
+    ctx: ReinforcePlaceCtx,
     mut ui: ResMut<ReinforceUi>,
     mut armed: ResMut<control::ArmedOrder>,
-    rt: Res<BattleRuntime>,
-    settings: Res<BattleViewSettings>,
-    hover: Res<Hover>,
-    pointer: Res<control::Pointer>,
-    block: Res<control::UiBlock>,
-    assets: Option<Res<EawUiAssets>>,
-    scale: Res<UiScale>,
     mut labels: Query<(&mut Node, &mut Text, &mut TextColor)>,
     mut commands: Commands,
     mut gizmos: Gizmos,
-    ships: Res<RenderedShips>,
     minimap_surfaces: Query<(&Interaction, &bevy::ui::RelativeCursorPosition), With<MinimapSurface>>,
-    minimap_data: Res<MinimapData>,
+    mut scroll: MessageReader<bevy::input::mouse::MouseWheel>,
 ) {
     let placing = ui.placing.filter(|_| armed.0 == Some(control::ArmedKind::Reinforce));
     let Some((idx, all)) = placing else {
         ui.placing = None;
         ui.dropped = false;
         ui.ghost = None;
+        ui.ghost_yaw_offset = 0.0;
         if let Some(e) = ui.label.take() {
             commands.entity(e).try_despawn();
         }
@@ -1154,7 +1179,7 @@ fn reinforce_place(
         armed.0 = None;
         return;
     };
-    let player = settings.player_side;
+    let player = ctx.settings.player_side;
     let count = if all { row.2 } else { 1 };
     let label = match ui.label {
         Some(e) => e,
@@ -1163,7 +1188,7 @@ fn reinforce_place(
                 .spawn((
                     crate::BattleEntity,
                     Text::new(""),
-                    game_font(&fonts, 12.0),
+                    game_font(&ctx.fonts, 12.0),
                     TextColor(Color::WHITE),
                     TextShadow { offset: Vec2::splat(1.0), color: Color::BLACK },
                     Node { position_type: PositionType::Absolute, display: Display::None, ..default() },
@@ -1175,40 +1200,40 @@ fn reinforce_place(
             e
         }
     };
-    if settings.synthetic_pointer {
+    if ctx.settings.synthetic_pointer {
         // Scripted offscreen runs have no mouse: the wave goes to the first spot next to an own ship that the placement rule accepts.
-        let spot = ships.0.values().filter(|s| s.side == player && !rt.catalog.ship(s.def).is_static).min_by_key(|s| s.id).and_then(|o| {
+        let spot = ctx.ships.0.values().filter(|s| s.side == player && !ctx.rt.catalog.ship(s.def).is_static).min_by_key(|s| s.id).and_then(|o| {
             [(300.0, 0.0), (-300.0, 0.0), (0.0, 300.0), (0.0, -300.0), (600.0, 0.0), (-600.0, 0.0), (0.0, 600.0), (0.0, -600.0)]
                 .iter()
                 .map(|(dx, dz)| crate::convert::bevy_to_sim(o.pos + Vec3::new(*dx, 0.0, *dz)))
-                .find(|p| place_check(&rt, player, *p, row.1, count).is_ok())
+                .find(|p| place_check(&ctx.rt, player, *p, row.1, count).is_ok())
         });
         if let Some(pos) = spot {
-            rt.command(player, Command::ReinforceAt { ship: row.1, count, pos });
+            ctx.rt.command(player, Command::ReinforceAt { ship: row.1, count, pos });
             info!("reinforcements: placing {} at {pos:?} (scripted)", row.0);
             armed.0 = None;
         }
         return;
     }
-    let y = hover.ground.map_or(0.0, |g| g.y);
-    for (centre, radius) in no_spawn_zones(&rt, player) {
+    let y = ctx.hover.ground.map_or(0.0, |g| g.y);
+    for (centre, radius) in no_spawn_zones(&ctx.rt, player) {
         draw_no_spawn_zone(&mut gizmos, centre, radius, y);
     }
-    let Some(cursor) = pointer.cursor else { return };
+    let Some(cursor) = ctx.pointer.cursor else { return };
     let minimap_hit = minimap_surfaces.iter().find_map(|(_, rel)| {
         let n = rel.normalized?;
         if !(-0.5..=0.5).contains(&n.x) || !(-0.5..=0.5).contains(&n.y) {
             return None;
         }
         let normalized = Vec2::new(n.x + 0.5, 0.5 - n.y);
-        let world = minimap_data.bounds.map_or(normalized, |b| minimap_to_world(b, normalized));
+        let world = ctx.minimap_data.bounds.map_or(normalized, |b| minimap_to_world(b, normalized));
         Some((Vec3::new(world.x, 0.0, -world.y), battle_sim::Vec3::new(world.x, world.y, 0.0)))
     });
     let (ground, sim_pos) = if let Some((m_ground, m_sim)) = minimap_hit {
         (m_ground, m_sim)
     } else {
-        let Some(ground) = hover.ground else { return };
-        if block.0 {
+        let Some(ground) = ctx.hover.ground else { return };
+        if ctx.block.0 {
             ui.ghost = None;
             if let Ok((mut n, ..)) = labels.get_mut(label) {
                 n.display = Display::None;
@@ -1220,19 +1245,25 @@ fn reinforce_place(
         }
         (ground, crate::convert::bevy_to_sim(ground))
     };
-    let verdict = place_check(&rt, player, sim_pos, row.1, count);
+    let verdict = place_check(&ctx.rt, player, sim_pos, row.1, count);
     let ok = verdict.is_ok();
     ui.ghost = Some(Ghost { ground, why_not: verdict.err() });
     let colour = if ok { Color::srgb(0.3, 1.0, 0.4) } else { Color::srgb(1.0, 0.35, 0.3) };
-    let def = rt.catalog.ship(row.1);
-    let ring = (def.radius * rt.visuals.ship(row.1).scale).max(rt.reinforce_clearance).max(60.0);
+    let def = ctx.rt.catalog.ship(row.1);
+    let ring = (def.radius * ctx.rt.visuals.ship(row.1).scale).max(ctx.rt.reinforce_clearance).max(60.0);
     gizmos.circle(Isometry3d::new(ground, Quat::from_rotation_x(std::f32::consts::FRAC_PI_2)), ring, colour).resolution(48);
-    // The ghost model faces the nearest enemy (as the arriving wave will).
-    let facing = rt
+    // The ghost model faces the arrival direction (from the own spawn edge), not turning toward the enemy base;
+    // the mouse wheel may rotate it at most ±15°.
+    for ev in scroll.read() {
+        ui.ghost_yaw_offset = (ui.ghost_yaw_offset + ev.y * 0.05).clamp(-15.0f32.to_radians(), 15.0f32.to_radians());
+    }
+    let base_facing = ctx
+        .rt
         .cur
         .as_ref()
-        .and_then(|c| c.ships.iter().filter(|s| s.side != player).min_by(|a, b| a.pos.dist(sim_pos).total_cmp(&b.pos.dist(sim_pos))))
-        .map_or(0.0, |s| (s.pos.y - sim_pos.y).atan2(s.pos.x - sim_pos.x));
+        .and_then(|c| c.spawn_yaw.get(player as usize).copied())
+        .unwrap_or(if player == 0 { 0.0 } else { std::f32::consts::PI });
+    let facing = base_facing + ui.ghost_yaw_offset;
     let rotation = crate::convert::ship_rotation(facing);
     match ui.ghost_model {
         Some((e, built_ok, built_idx)) if built_ok == ok && built_idx == idx => {
@@ -1247,26 +1278,28 @@ fn reinforce_place(
             if let Some((e, ..)) = old {
                 commands.entity(e).try_despawn();
             }
-            ui.ghost_model = ghost_model_path(&rt, row.1).map(|path| {
+            ui.ghost_model = ghost_model_path(&ctx.rt, row.1).map(|path| {
                 let e = commands
                     .spawn((
                         crate::BattleEntity,
                         Name::new("reinforcement ghost"),
                         alamo_render::AlamoModel::new(path).with_team_color(colour),
-                        Transform { translation: ground, rotation, scale: Vec3::splat(rt.visuals.ship(row.1).scale) },
+                        Transform { translation: ground, rotation, scale: Vec3::splat(ctx.rt.visuals.ship(row.1).scale) },
                     ))
                     .id();
                 (e, ok, idx)
             });
         }
     }
-    let name = assets
+    let name = ctx
+        .assets
+        .as_ref()
         .and_then(|a| def.text_id.as_deref().and_then(|k| a.text.get(k)).filter(|t| !t.is_empty()).map(str::to_string))
         .unwrap_or_else(|| row.0.clone());
     if let Ok((mut node, mut text, mut tc)) = labels.get_mut(label) {
         node.display = Display::Flex;
-        node.left = Val::Px((cursor.x + 18.0) / scale.0);
-        node.top = Val::Px((cursor.y + 14.0) / scale.0);
+        node.left = Val::Px((cursor.x + 18.0) / ctx.scale.0);
+        node.top = Val::Px((cursor.y + 14.0) / ctx.scale.0);
         let msg = match verdict {
             Ok(()) => format!("{name}: release to call in{}", if all { " (all)" } else { "" }),
             Err(why) => format!("{name}: {why}"),
@@ -1277,12 +1310,12 @@ fn reinforce_place(
         tc.0 = colour;
     }
     let dropped = std::mem::take(&mut ui.dropped);
-    if (pointer.left_released && ok) || dropped {
+    if (ctx.pointer.left_released && ok) || dropped {
         if let Err(why) = verdict {
             info!("reinforcements: drop of {} refused: {why}", row.0);
         } else {
             // The count drops when the simulation reports the call (`ReinforcementsCalled`).
-            rt.command(player, Command::ReinforceAt { ship: row.1, count, pos: sim_pos });
+            ctx.rt.command(player, Command::ReinforceAt { ship: row.1, count, pos: sim_pos });
             info!("reinforcements: placing {count} x {} at {sim_pos:?}", row.0);
         }
         armed.0 = None;
