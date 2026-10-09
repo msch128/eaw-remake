@@ -1990,8 +1990,16 @@ fn mov(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, spawn: &
     let speed_mult = ability_product(def, s, |a| a.speed_mult) * (1.0 - s.stun_speed_cut) * (1.0 - s.tractor_cut) * s.engine_factor;
     let pinned = def.abilities.iter().zip(&s.abilities).any(|(a, st)| a.disable_movement && st.active > 0.0);
     let max_speed = if pinned { 0.0 } else { def.max_speed * speed_mult * s.bonus.speed * (1.0 + s.mods[ModKind::Speed as usize].0) };
-    let target = (s.target != NONE && snaps[s.target as usize].alive).then(|| snaps[s.target as usize]);
     let fighter = matches!(def.class, TargetClass::Fighter | TargetClass::Bomber);
+    let small = |c: TargetClass| matches!(c, TargetClass::Fighter | TargetClass::Bomber);
+    // Big ships position themselves against the best non-fighter target: fast fighters cannot be chased or tracked, the guns just fire at them
+    // while the ship keeps station (unless it was explicitly ordered to attack one).
+    let mover = if fighter || matches!(s.order, Order::Attack(_)) || s.target == NONE || !small(snaps[s.target as usize].class) {
+        s.target
+    } else {
+        s.candidates.iter().copied().find(|&c| !small(snaps[c as usize].class)).unwrap_or(NONE)
+    };
+    let target = (mover != NONE && snaps[mover as usize].alive).then(|| snaps[mover as usize]);
     let aggressive = s.stance == Stance::Aggressive;
 
     // (point, stop radius, face-target-when-arrived)
@@ -2048,13 +2056,16 @@ fn mov(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, spawn: &
                 }
             } else {
                 let stand = if def.preferred_range > 0.0 { def.preferred_range * cfg.engage_range_scale + t.radius * 0.5 } else { 0.0 };
-                if d > stand * 1.05 {
+                // Hysteresis: a ship that has stopped only starts closing again when the target is clearly out of its standoff.
+                let resume = if s.speed < 0.05 * def.max_speed.max(1.0) { 1.12 } else { 1.05 };
+                if d > stand * resume {
                     // Line abreast while the enemy is still far away (attack-move only).
                     let mut q = t.pos;
                     if s.lane != 0.0 && matches!(s.order, Order::AttackMove(_)) && d > 2500.0 {
                         let to = t.pos - s.pos;
                         q = t.pos + Vec3::new(-to.y, to.x, 0.0) * (s.lane / d);
                     }
+                    face = Some(t.pos);
                     Goal::Point(q, stand)
                 } else {
                     face = Some(t.pos);
@@ -2172,8 +2183,16 @@ fn mov(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, spawn: &
             let to_aim = aim - s.pos;
             let unit = to_aim.normalized();
             let desired = (unit.y + avoid.1).atan2(unit.x + avoid.0);
-            let err = turn_towards(s, desired, def.turn_rate, dt);
             let braking = s.speed * s.speed / (2.0 * def.accel.max(1.0));
+            // Closing on a target (capitals and frigates): in the last stretch before the standoff the ship already turns the bearing at which most weapons bear
+            // towards it (the speed profile below brakes it to a stop at the standoff), instead of pointing its bow at it until it has stopped.
+            let err = match face {
+                Some(f) if !fighter && aim == p && dist <= stop + braking * 2.0 + def.radius => {
+                    align_to_target(s, def, f, dt);
+                    0.0
+                }
+                _ => turn_towards(s, desired, def.turn_rate, dt),
+            };
             let mut want = max_speed * slow;
             if err > 1.2 {
                 want *= 0.35;
@@ -2184,8 +2203,17 @@ fn mov(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, spawn: &
                 // Formation keeping: match the leader's speed and close the gap at 2 units per second per unit of distance (estimate).
                 want = want.min(v + dist * 2.0);
             }
-            if dist <= stop + braking * 0.8 && (!fighter || settle) && aim == p {
-                want = 0.0;
+            if fighter {
+                if dist <= stop + braking * 0.8 && settle && aim == p {
+                    want = 0.0;
+                }
+            } else if aim == p {
+                // Arrival profile of a big ship: the speed that still stops exactly at the stop radius with the braking rate used below (no overshoot into the target).
+                let room = (dist - stop).max(0.0);
+                want = want.min((2.0 * def.accel.max(1.0) * 1.5 * 0.9 * room).sqrt());
+                if room <= 1.0 {
+                    want = 0.0;
+                }
             }
             s.speed += (want - s.speed).clamp(-def.accel * dt * 1.5, def.accel * dt);
             if want == 0.0

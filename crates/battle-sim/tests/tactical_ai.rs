@@ -56,10 +56,10 @@ fn clearly_outgunned_ai_retreats_unless_it_may_not() {
 
 #[test]
 fn even_fights_do_not_trigger_the_retreat() {
-    // Seed 16: most seeds of a 3 v 3 end with the last ship pulling out at 1 v 2 (the 2x rule at work); this one is fought out.
+    // A mirror match (3 Star Destroyers a side: ISD vs MC-80 is not even, the MC-80s win it) is fought down; most seeds of an uneven 3 v 3 end with the loser pulling out after the first loss (the 2x rule at work).
     let Some((data, fs)) = load() else { return };
-    let cat = Arc::new(Catalog::build(&data, Some(&fs), &["Star_Destroyer", "MC-80_Star_Cruiser"]));
-    let (r, _) = run(&cat, vec![side(&cat, "Empire", &[("Star_Destroyer", 3)], &[]), side(&cat, "Rebel", &[("MC-80_Star_Cruiser", 3)], &[])], BattleConfig { seed: 16, ..BattleConfig::default() });
+    let cat = Arc::new(Catalog::build(&data, Some(&fs), &["Star_Destroyer"]));
+    let (r, _) = run(&cat, vec![side(&cat, "Empire", &[("Star_Destroyer", 3)], &[]), side(&cat, "Rebel", &[("Star_Destroyer", 3)], &[])], BattleConfig { seed: 16, ..BattleConfig::default() });
     println!("even fight: winner {:?} after {:.0} s, groups {:?}", r.winner, r.duration, r.groups.iter().map(|g| (g.side, g.survived, g.retreated)).collect::<Vec<_>>());
     // With the real jump (10 s) a ship that the 2x rule sends away at 1 v 1 does get out, so an even fight may end with that retreat, but only once half of the six ships are gone.
     let left: u32 = r.groups.iter().map(|g| g.survived).sum();

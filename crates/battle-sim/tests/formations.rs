@@ -152,3 +152,135 @@ fn a_squadron_ordered_to_move_flies_there_in_formation() {
     println!("farthest leader from the goal {far:.0}");
     assert!(far < 150.0, "and the squadrons arrived: {far}");
 }
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Combat movement: ships with a target in weapon range hold position and turn their weapons to bear (no chasing, no orbiting).
+
+#[derive(Debug, Default, Clone, Copy)]
+#[allow(dead_code)] // all fields are printed (Debug) for the record
+struct CombatMove {
+    /// Samples (ship, step) of mobile non-fighter ships with a live target.
+    samples: u32,
+    /// Share of those samples with the target inside the longest weapon range.
+    in_range_share: f32,
+    /// Share of the in-range samples in which the ship moves faster than 10% of its top speed.
+    moving_share: f32,
+    /// Mean speed in range as a share of top speed.
+    mean_speed_share: f32,
+    /// Mean absolute yaw rate in range, degrees per second.
+    mean_turn_deg_s: f32,
+    /// Share of in-range samples with a yaw rate above 2 degrees per second.
+    turning_share: f32,
+    /// Samples with the target inside the standoff distance (preferred range): share moving faster than 10% of top speed, mean speed share.
+    inside_moving_share: f32,
+    inside_speed_share: f32,
+    inside_turn_deg_s: f32,
+    /// Settled = target inside the standoff for 10 s in a row (the approach and its braking are over): share of samples, moving share (> 10% of top speed), mean speed share, mean yaw rate.
+    settled_share: f32,
+    settled_moving_share: f32,
+    settled_speed_share: f32,
+    settled_turn_deg_s: f32,
+}
+
+fn combat_move(units: &[(&str, u32)], enemy: &[(&str, u32)], secs: f32, seed: u64) -> Option<CombatMove> {
+    let (data, fs) = real_data()?;
+    let names: Vec<&str> = units.iter().chain(enemy.iter()).map(|u| u.0).collect();
+    let cat = Arc::new(Catalog::build(&data, Some(&fs), &names));
+    let mk = |name: &str, u: &[(&str, u32)]| SideSetup { name: name.into(), units: u.iter().map(|&(n, c)| UnitSetup { ship: cat.ship_id(n).unwrap(), count: c, tag: 1 }).collect(), structures: vec![], ai: true };
+    let config = BattleConfig { record_events: false, seed, retreat_allowed: vec![false, false], ..BattleConfig::default() };
+    let mut b = Battle::new(BattleSetup { catalog: cat.clone(), sides: vec![mk("A", units), mk("B", enemy)], config });
+    let (mut n, mut in_range, mut moving, mut speed, mut turn, mut turning) = (0u32, 0u32, 0u32, 0.0f64, 0.0f64, 0u32);
+    let (mut inside, mut inside_moving, mut inside_speed, mut inside_turn) = (0u32, 0u32, 0.0f64, 0.0f64);
+    let (mut settled, mut settled_moving, mut settled_speed, mut settled_turn) = (0u32, 0u32, 0.0f64, 0.0f64);
+    let mut since: Vec<u32> = Vec::new();
+    let mut yaw: Vec<f32> = b.ships.iter().map(|s| s.yaw).collect();
+    for _ in 0..(secs * 30.0) as usize {
+        b.step();
+        for s in b.ships.iter().filter(|s| s.alive && !s.retreated) {
+            let def = cat.ship(s.def);
+            let dyaw = (s.yaw - yaw.get(s.id as usize).copied().unwrap_or(s.yaw) + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
+            if s.squad != u32::MAX || def.is_static || def.max_speed <= 0.0 {
+                continue;
+            }
+            // The target the ship positions itself against: the best non-fighter candidate.
+            let Some(tid) = s.candidates.iter().copied().find(|&c| !matches!(cat.ship(b.ships[c as usize].def).class, TargetClass::Fighter | TargetClass::Bomber)) else { continue };
+            if !b.ships[tid as usize].alive {
+                continue;
+            }
+            if matches!(def.class, TargetClass::Fighter | TargetClass::Bomber) {
+                continue;
+            }
+            n += 1;
+            let t = &b.ships[tid as usize];
+            if since.len() <= s.id as usize {
+                since.resize(b.ships.len(), 0);
+            }
+            since[s.id as usize] = if s.pos.dist(t.pos) - cat.ship(t.def).radius <= def.preferred_range { since[s.id as usize] + 1 } else { 0 };
+            if since[s.id as usize] > 300 {
+                settled += 1;
+                settled_moving += u32::from(s.speed > 0.1 * def.max_speed);
+                settled_speed += f64::from(s.speed / def.max_speed);
+                settled_turn += f64::from(dyaw.abs().to_degrees() * 30.0);
+            }
+            if s.pos.dist(t.pos) - cat.ship(t.def).radius > def.max_weapon_range {
+                continue;
+            }
+            in_range += 1;
+            let rate0 = dyaw.abs().to_degrees() * 30.0;
+            if s.pos.dist(t.pos) - cat.ship(t.def).radius <= def.preferred_range {
+                inside += 1;
+                inside_moving += u32::from(s.speed > 0.1 * def.max_speed);
+                inside_speed += f64::from(s.speed / def.max_speed);
+                inside_turn += f64::from(rate0);
+            }
+            speed += f64::from(s.speed / def.max_speed);
+            moving += u32::from(s.speed > 0.1 * def.max_speed);
+            let rate = dyaw.abs().to_degrees() * 30.0;
+            turn += f64::from(rate);
+            turning += u32::from(rate > 2.0);
+        }
+        yaw = b.ships.iter().map(|s| s.yaw).collect();
+        if b.result().winner.is_some() {
+            break;
+        }
+    }
+    let r = f64::from(in_range.max(1));
+    Some(CombatMove {
+        samples: n,
+        in_range_share: in_range as f32 / n.max(1) as f32,
+        moving_share: (f64::from(moving) / r) as f32,
+        mean_speed_share: (speed / r) as f32,
+        mean_turn_deg_s: (turn / r) as f32,
+        turning_share: (f64::from(turning) / r) as f32,
+        inside_moving_share: (f64::from(inside_moving) / f64::from(inside.max(1))) as f32,
+        inside_speed_share: (inside_speed / f64::from(inside.max(1))) as f32,
+        settled_share: settled as f32 / n.max(1) as f32,
+        settled_moving_share: (f64::from(settled_moving) / f64::from(settled.max(1))) as f32,
+        settled_speed_share: (settled_speed / f64::from(settled.max(1))) as f32,
+        settled_turn_deg_s: (settled_turn / f64::from(settled.max(1))) as f32,
+        inside_turn_deg_s: (inside_turn / f64::from(inside.max(1))) as f32,
+    })
+}
+
+#[test]
+fn ships_with_a_target_in_range_hold_position() {
+    type Fleet<'a> = &'a [(&'a str, u32)];
+    let matchups: [(&str, Fleet, Fleet); 3] = [
+        ("ISD vs MC-80", &[("Star_Destroyer", 3)], &[("MC-80_Star_Cruiser", 3)]),
+        ("Victory vs Nebulon-B", &[("Victory_Destroyer", 3)], &[("Nebulon_B_Frigate", 3)]),
+        ("Corvettes", &[("CR-90_Corvette", 4)], &[("Tartan_Patrol_Cruiser", 4)]),
+    ];
+    let mut failed = Vec::new();
+    for (name, a, b) in matchups {
+        let mut ok = true;
+        for seed in 1..=2 {
+            let Some(m) = combat_move(a, b, 240.0, seed) else { return };
+            println!("{name} seed {seed}: {m:?}");
+            ok &= m.settled_moving_share < 0.05 && m.settled_turn_deg_s < 4.0;
+        }
+        if !ok {
+            failed.push(name);
+        }
+    }
+    assert!(failed.is_empty(), "ships with a target inside their standoff keep station instead of chasing or orbiting: {failed:?}");
+}

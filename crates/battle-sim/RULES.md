@@ -64,6 +64,7 @@ Ion stun slows the target and its fire rate for `Projectile_Ion_Stun_Duration`.
 * Large ships close to the range that puts 80% of their weapon damage in reach (x0.95) and hold there, turning to the
   bearing (bow, broadside or stern) at which the largest share of their hardpoint damage can bear on the target
   (`ShipDef::bearing_dps`, computed from the arcs). Defender ships with a star base `Guard` the planet; attackers `AttackMove`.
+* Big ships stop at that range with an arrival speed profile (no overshoot), start turning to the weapon bearing in the last stretch of the approach, and position themselves against the best non-fighter target (fighters and bombers are fired at but not chased, unless explicitly ordered). Restart hysteresis 1.12 x standoff (estimate).
 * Orders: `Move`, `AttackMove`, `Attack(ship)`, `AttackHardpoint(ship, hardpoint)` (aims at the hardpoint and the hit
   routes to it), `Stop`, `Retreat`, stances Aggressive / Defensive / HoldFire.
 * No ship-ship collision or avoidance, no formation keeping for capital ships.
