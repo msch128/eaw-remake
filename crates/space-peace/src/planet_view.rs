@@ -74,7 +74,8 @@ fn view_input(
             state.active = true;
             state.planet = Some(p);
         }
-    } else if keys.just_pressed(KeyCode::Escape) || scroll.delta.y < 0.0 {
+    } else if keys.just_pressed(KeyCode::Escape) || (scroll.delta.y < 0.0 && state.blend >= 1.0) {
+        // Scrolling out only leaves once the view has fully opened: a trailing wheel tick must not close it mid-flight.
         state.active = false;
     }
 }
@@ -124,7 +125,7 @@ fn view_scene(
         Transform::from_translation(ORIGIN).looking_to(Vec3::new(-0.5, -0.25, -0.8), Vec3::Y),
     ));
     if let Some(model) = &p.1.model {
-        commands.spawn((ViewEntity, AlamoModel::new(model.clone()), FitModel { radius: 24.0, spin: 0.01 }, Transform::from_translation(ORIGIN + Vec3::new(-15.8, -1.0, -15.0))));
+        commands.spawn((ViewEntity, AlamoModel::new(model.clone()), FitModel { radius: 24.0, spin: 0.01 }, Visibility::Hidden, Transform::from_translation(ORIGIN + Vec3::new(-15.8, -1.0, -15.0))));
     }
     // Station: the model of the planet's star base level.
     let (sim_for_structs, cat_for_structs) = (sim.as_deref(), catalog.as_deref());
@@ -132,7 +133,7 @@ fn view_scene(
         && let Some(sb) = sim.galaxy().planets.get(p.0).and_then(|s| s.starbase)
         && let Some(Some(m)) = cat.starbase_models.get(sb as usize)
     {
-        commands.spawn((ViewEntity, AlamoModel::new(m.clone()), FitModel { radius: 1.1, spin: 0.15 }, Transform::from_translation(ORIGIN + Vec3::new(-2.6, -1.5, -9.0))));
+        commands.spawn((ViewEntity, AlamoModel::new(m.clone()), FitModel { radius: 1.1, spin: 0.15 }, Visibility::Hidden, Transform::from_translation(ORIGIN + Vec3::new(-2.6, -1.5, -9.0))));
     }
     if let Some(tex) = textures.as_mut().and_then(|t| t.get(&mut images, "i_galactic_organize_land.dds")) {
         spawn_platform(&mut commands, &mut meshes, &mut mats, tex.handle, land_cell(p.1.terrain.as_deref()), ORIGIN + Vec3::new(0.0, -2.5, -10.0));
@@ -160,7 +161,7 @@ fn view_scene(
             let Some(Some(model)) = cat_for_structs.and_then(|c| c.structure_models.get(s as usize)) else { continue };
             let slot = if def.orbital { o += 1; state.orbital_slots.get(o - 1) } else { g += 1; state.ground_slots.get(g - 1) };
             if let Some(at) = slot {
-                commands.spawn((ViewEntity, AlamoModel::new(model.clone()), FitModel { radius: if def.orbital { 0.22 } else { 0.5 }, spin: 0.3 }, Transform::from_translation(*at + Vec3::Y * 0.2)));
+                commands.spawn((ViewEntity, AlamoModel::new(model.clone()), FitModel { radius: if def.orbital { 0.22 } else { 0.5 }, spin: 0.3 }, Visibility::Hidden, Transform::from_translation(*at + Vec3::Y * 0.2)));
             }
         }
     }
@@ -176,12 +177,14 @@ fn view_camera(state: Res<PlanetViewState>, mut cam: Single<&mut Transform, With
     cam.rotation = cam.rotation.slerp(target.rotation, t);
 }
 
-fn fit_models(time: Res<Time>, mut models: Query<(&FitModel, &mut Transform, Option<Ref<AlamoModelLoaded>>)>) {
-    for (f, mut tf, loaded) in &mut models {
+fn fit_models(time: Res<Time>, mut models: Query<(&FitModel, &mut Transform, &mut Visibility, Option<Ref<AlamoModelLoaded>>)>) {
+    for (f, mut tf, mut vis, loaded) in &mut models {
         if let Some(m) = loaded
             && m.is_added()
         {
             tf.scale = Vec3::splat(if m.radius > 0.0 { f.radius / m.radius } else { 1.0 });
+            // Shown only now: before the fit a model is drawn at its raw size (a planet-sized flash while opening).
+            *vis = Visibility::Inherited;
         }
         if f.spin != 0.0 {
             tf.rotate_y(f.spin * time.delta_secs());
