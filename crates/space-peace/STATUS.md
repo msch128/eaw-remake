@@ -60,3 +60,11 @@ fullscreen, FPS cap).
 injects window events (cursor, mouse buttons, Esc) and checks the battle banner click, the pause menu, Save Game with a slot
 click, Options, Load Game with a slot click and Main Menu (10 checks, log line `ui-test: ... PASS`). `tools\smoke.ps1`
 runs it as `windowed-ui-pointer`. Source: `src/input_test.rs`.
+
+## Galaxy UI round (2026-10-09, QA U6-U12)
+- Build pad / queue / fleet-unit tooltips use `Encyclopedia_Text` (text ids, `TEXT_LINE` = line break; fallback `Tooltip_Text`) via `play_ui::lore`, plus cost / build time / population / upkeep rows and the availability reason. The tech upgrade pad lists the ships, structures and star bases that require the next tech level (`tech_unlocks`, from the sim catalog). Hovering the small red/green marker explains upkeep / income (`marker_tooltip`).
+- Planet and fleet hover text goes through `eaw_ui::WorldTooltip` (same panel and droid anchor); the old `FleetTip` entity is gone. `--tooltip <button>` shows a bar tooltip in offscreen renders.
+- Queue: `BarState::queue` has 10 slots (`None` = empty): 0..5 space lane (ships, star base, tech), 5..10 ground lane (structures).
+- Objectives window: both boxes scroll (`ObjectivesScroll(0|1)`, wheel on the hovered box, thumb follows).
+- `b_option_g` (the "Main Menu" button of the left column) opens the pause menu like Esc.
+- `SP_UI_TEST` phases 140-143 (pad tooltip lore + droid anchor, marker tooltip, tech tooltip, objectives wheel scroll, main menu button) and the ground-lane check in phase 121.

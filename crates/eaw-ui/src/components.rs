@@ -84,6 +84,8 @@ pub struct CommandBarComponent {
     pub text_color2: Option<[u8; 4]>,
     /// `<Icon_Offset>`.
     pub icon_offset: Vec2,
+    /// `<Mouse_Over_Offset>` (tab sheets hold two tiles; the offset picks the hover tile).
+    pub mouse_over_offset: Vec2,
     /// `<Offset>`.
     pub offset: Vec2,
     /// `<Size>`.
@@ -189,6 +191,7 @@ impl CommandBarComponent {
             text_color: rgba("text_color"),
             text_color2: rgba("text_color2"),
             icon_offset: vec2("icon_offset").unwrap_or_default(),
+            mouse_over_offset: vec2("mouse_over_offset").unwrap_or_default(),
             offset: vec2("offset").unwrap_or_default(),
             size: vec2("size"),
             color: rgba("color"),

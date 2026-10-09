@@ -27,6 +27,8 @@ pub(crate) struct BarBacking;
 
 /// Pads the galactic bar can show (`b_create_00..39`).
 const MAX_PADS: usize = 40;
+/// Queue slots per lane (left: space, right: ground).
+const QUEUE_LANE_SLOTS: usize = 5;
 
 /// Ship class filter of the left grid (the four class buttons of the galactic bar). A second click on the active button clears it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -74,8 +76,8 @@ pub(crate) struct BarState {
     space_tab: bool,
     /// What each visible pad orders.
     pub(crate) pads: Vec<Option<BuildTarget>>,
-    /// Queue slots: lane, position in the lane and the credits a cancel gives back.
-    pub(crate) queue: Vec<(galaxy_sim::Lane, u32, f32)>,
+    /// Queue slots (empty ones are `None`): lane, position in the lane and the credits a cancel gives back.
+    pub(crate) queue: Vec<Option<(galaxy_sim::Lane, u32, f32)>>,
 }
 
 impl Default for BarState {
@@ -147,6 +149,7 @@ impl Plugin for PlayUiPlugin {
                     .run_if(resource_exists::<PlayBridge>.and_then(resource_exists::<SimState>)),
             )
             .add_systems(Update, (declutter_top, hero_bar, locked_clicks, spawn_planet_panel, update_planet_panel, place_planet_panel, planet_view_ui, planet_view_bar_tab, objectives_toggle, objectives_window, objectives_scroll).chain().run_if(resource_exists::<PlayBridge>.and_then(resource_exists::<SimState>)))
+            .add_systems(Update, scripted_tooltip.run_if(resource_exists::<eaw_ui::ForcedTooltip>))
             .add_systems(Update, save_toast)
             .add_systems(Update, auto_resolve_summary.after(battle_dialog_result).run_if(resource_exists::<PlayBridge>.and_then(resource_exists::<SimState>)))
             .add_systems(Update, show_battle_summary.run_if(in_state(AppScreen::Galaxy)).run_if(resource_exists::<crate::battle_play::BattleSummary>))
@@ -158,6 +161,7 @@ impl Plugin for PlayUiPlugin {
             )
             .add_systems(Update, (live_info_panel.after(crate::ui::update_info_panel), publish_panel_rect, focus_start.run_if(in_state(AppScreen::Galaxy))).run_if(resource_exists::<SimState>))
             .add_systems(Update, fix_fleet_label_scale.after(galaxy_play::PlaySet::Visuals).run_if(resource_exists::<SimState>))
+            .add_systems(OnExit(AppScreen::Galaxy), |mut tip: ResMut<eaw_ui::WorldTooltip>| tip.text = None)
             .add_systems(OnEnter(AppScreen::SpaceBattle), hide_play_ui)
             .add_systems(OnExit(AppScreen::SpaceBattle), show_play_ui)
             .add_systems(Update, (reset_on_stop, reset_end_state).run_if(not(resource_exists::<SimState>)));
@@ -234,37 +238,113 @@ fn reset_on_stop(mut bar: ResMut<BarState>, data: Option<ResMut<CommandBarData>>
     }
 }
 
-/// Name, cost, build time and (when greyed out) the reason.
-fn pad_tooltip(o: &galaxy_play::BuildOption, week: f32, state: &SimState, game: Option<&alamo_data::GameData>) -> String {
-    let world = &state.world;
-    let object = match o.target {
+/// The object a build target creates.
+pub(crate) fn target_object<'a>(world: &'a galaxy_sim::World, target: BuildTarget) -> Option<&'a str> {
+    match target {
         BuildTarget::Unit(u) => Some(&world.units[u as usize].name),
         BuildTarget::Structure(s) => Some(&world.structures[s as usize].name),
         BuildTarget::Starbase(s) => Some(&world.starbases[s as usize].name),
         BuildTarget::Tech(_) => None,
+    }
+}
+
+/// The lore / description of an object: `Encyclopedia_Text` (text ids joined, `TEXT_LINE` is a line break), else its `Tooltip_Text`.
+pub(crate) fn lore(game: Option<&alamo_data::GameData>, object: &str) -> Option<String> {
+    let game = game?;
+    let r = game.objects.resolve(object)?;
+    let join = |ids: &str| {
+        let mut out = String::new();
+        for id in ids.split_whitespace() {
+            if id.eq_ignore_ascii_case("TEXT_LINE") {
+                out.push('\n');
+                continue;
+            }
+            if let Some(t) = game.text(id).map(str::trim).filter(|t| !t.is_empty()) {
+                if !out.is_empty() && !out.ends_with('\n') {
+                    out.push(' ');
+                }
+                out.push_str(t);
+            }
+        }
+        let out = out.trim().to_owned();
+        (!out.is_empty()).then_some(out)
     };
-    let description = object
-        .and_then(|n| game?.objects.resolve(n))
-        .and_then(|r| r.get("tooltip_text").map(str::to_owned))
-        .and_then(|id| game?.text(id.split_whitespace().next().unwrap_or("")).map(str::to_owned))
-        .filter(|t| !t.trim().is_empty());
+    r.get("encyclopedia_text").and_then(&join).or_else(|| r.get("tooltip_text").and_then(&join))
+}
+
+/// What reaching tech level `level` unlocks for `faction`, from the ships, structures and star bases that require it.
+fn tech_unlocks(state: &SimState, catalog: &galaxy_play::PlayCatalog, faction: Option<u32>, level: i32) -> String {
+    let world = &state.world;
+    let mut s = format!("Raises your tech level to {level}. Higher tech levels unlock stronger ships, buildings and star base upgrades.");
+    let Some(f) = faction.filter(|&f| (f as usize) < world.buildable_units.len()) else { return s };
+    let list = |names: Vec<&str>| {
+        let mut names: Vec<String> = names.into_iter().map(str::to_owned).collect();
+        names.sort();
+        names.dedup();
+        const SHOWN: usize = 14;
+        let more = names.len().saturating_sub(SHOWN);
+        names.truncate(SHOWN);
+        let mut out = names.join(", ");
+        if more > 0 {
+            out.push_str(&format!(" and {more} more"));
+        }
+        out
+    };
+    let units: Vec<&str> = world.buildable_units[f as usize].iter().filter(|&&u| world.units[u as usize].tech == level && !world.units[u as usize].hero).map(|&u| catalog.unit(u)).collect();
+    let structures: Vec<&str> = world.buildable_structures[f as usize].iter().filter(|&&b| world.structures[b as usize].tech == level && world.structures[b as usize].galactic).map(|&b| catalog.structure(b)).collect();
+    let faction_name = world.factions[f as usize].name.to_ascii_lowercase();
+    let bases: Vec<&str> = world.starbases.iter().enumerate().filter(|(_, b)| b.tech == level && b.affiliation.iter().any(|a| *a == faction_name)).map(|(i, _)| catalog.starbase(i as u32)).collect();
+    let mut any = false;
+    for (label, names) in [("Ships", units), ("Structures", structures), ("Star bases", bases)] {
+        if !names.is_empty() {
+            any = true;
+            s.push_str(&format!("\n\nUnlocks {label}: {}", list(names)));
+        }
+    }
+    if !any {
+        s.push_str("\n\nNo new ships or buildings are listed for this level.");
+    }
+    s
+}
+
+/// Tooltip of the small upkeep / income marker on a pad.
+fn marker_tooltip(upkeep: f32) -> String {
+    if upkeep < -0.5 {
+        format!("Upkeep\nThis unit costs {:.0} credits per week for as long as it exists. The upkeep is deducted from your income every week, so a big fleet lowers your income.\n", -upkeep)
+    } else if upkeep > 0.5 {
+        format!("Income bonus\nThis unit adds {upkeep:.0} credits per week to your income for as long as it exists.\n")
+    } else {
+        String::new()
+    }
+}
+
+/// Rich tooltip of a build pad (format: see `eaw_ui::TooltipLayout`): name, lore, cost, time, population, upkeep and the reason when greyed out.
+fn pad_tooltip(o: &galaxy_play::BuildOption, week: f32, state: &SimState, game: Option<&alamo_data::GameData>, catalog: &galaxy_play::PlayCatalog, faction: Option<u32>) -> String {
+    let description = match o.target {
+        BuildTarget::Tech(_) => {
+            let level = faction.and_then(|f| state.galaxy().factions.get(f as usize)).map_or(2, |f| f.tech + 1);
+            Some(tech_unlocks(state, catalog, faction, level))
+        }
+        target => target_object(&state.world, target).and_then(|n| lore(game, n)),
+    };
     let mut s = o.name.to_uppercase();
-    if let Some(d) = description {
+    if let Some(d) = &description {
         s.push('\n');
         s.push_str(d.trim());
     }
-    s.push_str(&format!("\nCost: {:.0} credits\nBuild time: {}", o.cost, format_duration(o.build_seconds, week)));
+    s.push_str(&format!("\n@Cost\t{:.0} credits\n@Build time\t{}", o.cost, format_duration(o.build_seconds, week)));
     if o.population > 0 {
-        s.push_str(&format!("\nPopulation: {}", o.population));
+        s.push_str(&format!("\n@Population\t{}", o.population));
     }
     let upkeep = pad_upkeep(state, o.target);
-    if upkeep < -0.5 {
-        s.push_str(&format!("\nUpkeep: {:.0} credits per week", -upkeep));
+    let mentioned = description.as_deref().is_some_and(|d| d.to_ascii_lowercase().contains("upkeep"));
+    if upkeep < -0.5 && !mentioned {
+        s.push_str(&format!("\n@Upkeep\t{:.0} credits per week", -upkeep));
     } else if upkeep > 0.5 {
-        s.push_str(&format!("\nIncome: {upkeep:.0} credits per week"));
+        s.push_str(&format!("\n@Income\t+{upkeep:.0} credits per week"));
     }
     if !o.availability.is_available() {
-        s.push_str(&format!("\n\n{}", capitalize(&o.availability.reason())));
+        s.push_str(&format!("\n!{}", capitalize(&o.availability.reason())));
     }
     s
 }
@@ -298,6 +378,7 @@ fn feed_bar(
     mut data: ResMut<CommandBarData>,
     mut panel: ResMut<eaw_ui::PanelData>,
     player: Res<PlayerFaction>,
+    catalog: Res<galaxy_play::PlayCatalog>,
     mut last_focus: Local<Option<u32>>,
 ) {
     if !model.is_changed() && !bar.is_changed() {
@@ -349,19 +430,39 @@ fn feed_bar(
     bar.queue.clear();
     bar.pads.clear();
     if let Some(menu) = &model.planet {
+        // Two lanes of five slots: space items (ships, star base, tech) left, ground structures right.
         let mut per_lane: std::collections::BTreeMap<u8, u32> = Default::default();
+        let mut shown = [0usize; 2];
+        next.queue = vec![QueueEntry::default(); QUEUE_LANE_SLOTS * 2];
+        bar.queue = vec![None; QUEUE_LANE_SLOTS * 2];
         for q in &menu.queue {
             let index = per_lane.entry(q.lane as u8).or_insert(0);
-            let refund = menu.options.iter().find(|o| o.target == q.target).map(|o| o.cost * (1.0 - q.progress) * state.world.config.cancel_refund);
-            let cancel = refund.map_or("Click to cancel".to_owned(), |r| format!("Click to cancel - refund {r:.0} credits"));
-            bar.queue.push((q.lane, *index, refund.unwrap_or(0.0)));
+            let side = usize::from(q.lane == galaxy_sim::Lane::Structures);
+            let (lane_index, cancel_index) = (shown[side], *index);
             *index += 1;
-            next.queue.push(QueueEntry {
+            if lane_index >= QUEUE_LANE_SLOTS {
+                continue;
+            }
+            shown[side] += 1;
+            let slot = side * QUEUE_LANE_SLOTS + lane_index;
+            let refund = menu.options.iter().find(|o| o.target == q.target).map(|o| o.cost * (1.0 - q.progress) * state.world.config.cancel_refund);
+            let cancel = refund.map_or("click".to_owned(), |r| format!("click, refunds {r:.0} credits"));
+            bar.queue[slot] = Some((q.lane, cancel_index, refund.unwrap_or(0.0)));
+            next.queue[slot] = QueueEntry {
                 icon: icon_for(&state, game, q.target),
                 progress: q.progress,
                 count: 1,
-                tooltip: format!("{}\n{} left\n{cancel}", q.name, format_duration(q.remaining_seconds, week)),
-            });
+                lane: side as u8,
+                tooltip: {
+                    let mut t = q.name.to_uppercase();
+                    if let Some(d) = target_object(&state.world, q.target).and_then(|n| lore(game, n)) {
+                        t.push('\n');
+                        t.push_str(d.trim());
+                    }
+                    t.push_str(&format!("\n@Progress\t{:.0}%\n@Time left\t{}\n@Cancel\t{}", q.progress * 100.0, format_duration(q.remaining_seconds, week), cancel));
+                    t
+                },
+            };
         }
         // The ground/structure tab lists only what can be ordered (or is short of credits, a full queue ...),
         // like the Remake's single row: structures behind a missing requirement stay hidden (v0260-v0450).
@@ -378,7 +479,8 @@ fn feed_bar(
                 price: Some(o.cost.max(0.0) as u32),
                 disabled: !o.availability.is_available(),
                 building: menu.queue.iter().any(|q| q.target == o.target),
-                tooltip: pad_tooltip(o, week, &state, game),
+                tooltip: pad_tooltip(o, week, &state, game, &catalog, player.0),
+                marker_tooltip: marker_tooltip(pad_upkeep(&state, o.target)),
                 upkeep: pad_upkeep(&state, o.target),
                 level: pad_level(&state, o.target).max(required_level(&o.availability)),
                 locked: matches!(o.availability, galaxy_play::Availability::Requires(_)),
@@ -400,7 +502,16 @@ fn feed_bar(
                 icon: icon_for(&state, game, BuildTarget::Unit(u)),
                 price: None,
                 label: if c > 1 { format!("x{c}") } else { String::new() },
-                tooltip: format!("{c}x {}", state.world.units[u as usize].name.replace('_', " ")),
+                tooltip: {
+                    let name = catalog.unit(u);
+                    let mut t = format!("{c}x {}", name.to_uppercase());
+                    if let Some(d) = lore(game, &state.world.units[u as usize].name) {
+                        t.push('\n');
+                        t.push_str(d.trim());
+                    }
+                    t.push_str(&format!("\n@In this fleet\t{c}"));
+                    t
+                },
                 ..default()
             });
         }
@@ -425,6 +536,7 @@ fn bar_clicks(
     mut actions: MessageWriter<PlayAction>,
     mut toast: ResMut<Toast>,
     mut filters: ResMut<crate::galaxy_map::MapFilters>,
+    mut paused: ResMut<crate::flow::Paused>,
 ) {
     for c in clicks.read() {
         let name = c.name.as_str();
@@ -435,7 +547,7 @@ fn bar_clicks(
             continue;
         }
         if let Some(i) = name.strip_prefix("queue").and_then(|n| n.parse::<usize>().ok()) {
-            if let (Some(planet), Some(&(lane, index, refund))) = (selection.planet, bar.queue.get(i)) {
+            if let (Some(planet), Some(&(lane, index, refund))) = (selection.planet, bar.queue.get(i).and_then(Option::as_ref)) {
                 actions.write(PlayAction::CancelProduction { planet, lane, index });
                 toast.0 = if refund > 0.0 { format!("Production cancelled - {refund:.0} credits refunded") } else { "Production cancelled".to_owned() };
                 toast.1 = 3.0;
@@ -454,6 +566,8 @@ fn bar_clicks(
             "b_filters1" => filters.base_level = !filters.base_level,
             "b_filters2" => filters.weather = !filters.weather,
             "b_filters3" => filters.heroes = !filters.heroes,
+            // The "Main Menu" button (`TEXT_BUTTON_MAIN_MENU`) opens the same pause menu as Esc.
+            "b_option_g" => paused.0 = true,
             "b_play_pause" => {
                 actions.write(PlayAction::TogglePause);
             }
@@ -519,22 +633,6 @@ fn spawn_hud(mut commands: Commands, existing: Query<(), With<PlayHud>>) {
         ToastText,
         text_bundle("", 18.0, Color::srgb(1.0, 0.9, 0.5)),
         Node { top: Val::Px(84.0), left: Val::Percent(40.0), ..abs.clone() },
-        Visibility::Hidden,
-        GalaxyEntity,
-    ));
-    commands.spawn((
-        PlayHud,
-        FleetTip,
-        text_bundle("", 14.0, Color::srgb(0.74, 0.85, 0.96)),
-        Node {
-            position_type: PositionType::Absolute,
-            padding: UiRect::axes(Val::Px(8.0), Val::Px(5.0)),
-            border: UiRect::all(Val::Px(1.0)),
-            ..default()
-        },
-        BackgroundColor(Color::srgba(0.13, 0.27, 0.31, 0.9)),
-        BorderColor::all(Color::srgb(0.0, 0.76, 0.99)),
-        GlobalZIndex(30),
         Visibility::Hidden,
         GalaxyEntity,
     ));
@@ -1007,12 +1105,9 @@ fn draw_move_markers(time: Res<Time>, layout: Res<galaxy_play::GalaxyLayout>, mu
     }
 }
 
-/// Mouse-follow tooltip of the fleet under the cursor.
-#[derive(Component)]
-struct FleetTip;
-
+/// Hover text of the fleet or planet under the cursor, shown by `eaw-ui`'s tooltip next to the advisor droid.
 #[allow(clippy::too_many_arguments)]
-fn fleet_tooltip(
+pub(crate) fn fleet_tooltip(
     hover: Res<galaxy_play::PlayHover>,
     state: Res<SimState>,
     catalog: Res<galaxy_play::PlayCatalog>,
@@ -1020,33 +1115,15 @@ fn fleet_tooltip(
     view: Res<crate::galaxy_view::GalaxyView>,
     fog: Res<galaxy_play::Fog>,
     window: Option<Single<&Window, With<PrimaryWindow>>>,
-    scale: Res<UiScale>,
-    mut tip: Single<(&mut Node, &mut Text, &mut Visibility, &ComputedNode), With<FleetTip>>,
+    mut tip: ResMut<eaw_ui::WorldTooltip>,
 ) {
-    let (node, text, vis, own) = &mut *tip;
     let cursor = window.as_ref().and_then(|w| w.cursor_position());
-    let screen = window.as_ref().map(|w| (w.size(), w.scale_factor()));
     let fleet = hover.fleet.and_then(|id| state.galaxy().fleets.get(&id).map(|f| (f, fog.fleet(id)))).filter(|(_, s)| *s != galaxy_sim::Sight::Hidden);
     let planet = hover.planet.and_then(|p| bridge.sim_to_planet.get(p as usize).copied().flatten().map(|i| (i, fog.planet(p)))).and_then(|(i, s)| view.planets.get(i).map(|pv| (i, pv, s)));
-    let (Some(cursor), Some(s)) = (
-        cursor,
-        fleet.map(|(f, s)| fleet_text(f, s, &state, &catalog)).or_else(|| planet.map(|(i, pv, s)| planet_text(i, pv, s, &view))),
-    ) else {
-        if **vis != Visibility::Hidden {
-            **vis = Visibility::Hidden;
-        }
-        return;
-    };
-    if text.0 != s {
-        text.0 = s;
+    let text = cursor.and_then(|_| fleet.map(|(f, s)| fleet_text(f, s, &state, &catalog)).or_else(|| planet.map(|(i, pv, s)| planet_text(i, pv, s, &view))));
+    if tip.text != text {
+        tip.text = text;
     }
-    let mut at = cursor + Vec2::new(16.0, 18.0);
-    if let Some((size, sf)) = screen {
-        at = eaw_ui::clamp_to_screen(at, cursor, own.size() / sf, size);
-    }
-    node.left = Val::Px(at.x / scale.0);
-    node.top = Val::Px(at.y / scale.0);
-    **vis = Visibility::Inherited;
 }
 
 fn fleet_text(f: &galaxy_sim::Fleet, sight: galaxy_sim::Sight, state: &SimState, catalog: &galaxy_play::PlayCatalog) -> String {
@@ -1054,35 +1131,37 @@ fn fleet_text(f: &galaxy_sim::Fleet, sight: galaxy_sim::Sight, state: &SimState,
     let mut lines = vec![if detailed { format!("{} fleet - {} ships", catalog.faction(f.owner), f.unit_count()) } else { format!("{} fleet - ? ships", catalog.faction(f.owner)) }];
     if detailed {
         for (&u, &c) in f.units.iter().take(8) {
-            lines.push(format!("  {c}x {}", catalog.unit(u)));
+            lines.push(format!("{c}x {}", catalog.unit(u)));
         }
         if f.units.len() > 8 {
-            lines.push(format!("  +{} more types", f.units.len() - 8));
+            lines.push(format!("+{} more types", f.units.len() - 8));
         }
     } else {
-        lines.push("  ?".to_owned());
+        lines.push("Strength unknown".to_owned());
     }
     lines.push(match &f.location {
-        galaxy_sim::FleetLocation::AtPlanet(p) => format!("In orbit of {}", state.world.planets[*p as usize].display_name),
-        galaxy_sim::FleetLocation::Moving { to, .. } => format!("Heading to {}", state.world.planets[*to as usize].display_name),
+        galaxy_sim::FleetLocation::AtPlanet(p) => format!("@Location\tIn orbit of {}", state.world.planets[*p as usize].display_name),
+        galaxy_sim::FleetLocation::Moving { to, .. } => format!("@Location\tHeading to {}", state.world.planets[*to as usize].display_name),
     });
     lines.join("\n")
 }
 
 fn planet_text(i: usize, p: &crate::galaxy_view::PlanetView, sight: galaxy_sim::Sight, view: &crate::galaxy_view::GalaxyView) -> String {
     let mut lines = vec![p.display_name.clone()];
-    lines.push(format!("Owner: {}", view.owner_of(i).map_or("Neutral", |f| f.name.as_str())));
-    lines.push(format!("Income: {} credits", crate::ui::thousands(i64::from(p.income))));
-    if sight == galaxy_sim::Sight::Hidden {
-        // Out of sight: the video shows name, owner colour and income of distant planets, nothing about their defences.
-        return lines.join("\n");
-    }
-    lines.push(format!("Space slots: {}   Ground slots: {}", p.max_space_base, p.land_slots));
-    if let Some((name, desc)) = &p.ability {
+    if sight != galaxy_sim::Sight::Hidden
+        && let Some((name, desc)) = &p.ability
+    {
         lines.push(format!("Bonus: {name}"));
         if !desc.is_empty() {
             lines.push(desc.clone());
         }
+    }
+    lines.push(format!("@Owner\t{}", view.owner_of(i).map_or("Neutral", |f| f.name.as_str())));
+    lines.push(format!("@Income\t{} credits", crate::ui::thousands(i64::from(p.income))));
+    // Out of sight: the video shows name, owner colour and income of distant planets, nothing about their defences.
+    if sight != galaxy_sim::Sight::Hidden {
+        lines.push(format!("@Space slots\t{}", p.max_space_base));
+        lines.push(format!("@Ground slots\t{}", p.land_slots));
     }
     lines.join("\n")
 }
@@ -1828,9 +1907,9 @@ mod tests {
         let view = crate::galaxy_view::GalaxyView::demo();
         let text = planet_text(0, &view.planets[0], galaxy_sim::Sight::Detailed, &view);
         assert!(text.starts_with(&view.planets[0].display_name));
-        assert!(text.contains("Owner: "));
-        assert!(text.contains("Income: "));
-        assert!(text.contains("Space slots: "));
+        assert!(text.contains("@Owner	"));
+        assert!(text.contains("@Income	"));
+        assert!(text.contains("@Space slots	"));
     }
 
     #[test]
@@ -2109,11 +2188,12 @@ fn planet_view_ui(world: &mut World, mut last_key: Local<Option<(usize, u64)>>) 
 /// The "Active Story Objectives" window (the holocron button of the bar): the campaign's story chapters read from the
 /// data ([`crate::objectives`]) with the advisor transmission of the selected one underneath.
 #[derive(Resource, Default)]
-struct ObjectivesWindow {
+pub(crate) struct ObjectivesWindow {
     open: bool,
     completed_tab: bool,
-    list: Option<Vec<crate::objectives::Objective>>,
+    pub(crate) list: Option<Vec<crate::objectives::Objective>>,
     selected: usize,
+    list_scroll: f32,
 }
 #[derive(Component)]
 struct ObjectivesRoot;
@@ -2184,6 +2264,7 @@ fn objectives_window(
     let font = |size: f32| TextFont { font: FontSource::Family("Bahnschrift".into()), font_size: FontSize::Px(size), ..default() };
     let rgb = |c: [u8; 3]| Color::srgb_u8(c[0], c[1], c[2]);
     let blue = Color::srgb(0.32, 0.52, 0.93);
+    let list_scroll = win.list_scroll;
     commands
         .spawn((
             ObjectivesRoot,
@@ -2201,17 +2282,21 @@ fn objectives_window(
                         .with_child((Text::new(label), font(14.0), TextColor(Color::srgb(0.02, 0.03, 0.06)), bevy::text::LetterSpacing::Rem(0.1)));
                 }
             });
-            r.spawn((Node { height: Val::Percent(22.0), margin: UiRect { left: Val::Px(12.0), right: Val::Px(54.0), ..default() }, padding: UiRect::all(Val::Px(4.0)), flex_direction: FlexDirection::Column, overflow: Overflow::clip(), ..default() }, BackgroundColor(Color::BLACK)))
-                .with_children(|l| {
-                    for (i, o) in list.iter().enumerate() {
-                        l.spawn((Button, ObjectivesClick::Row(i), Node { padding: UiRect::horizontal(Val::Px(6.0)), ..default() }, BackgroundColor(if i == selected { Color::srgba(0.6, 0.6, 0.65, 0.9) } else { Color::NONE })))
-                            .with_child((Text::new(o.title.clone()), font(17.0), TextColor(rgb(o.color))));
-                    }
-                });
+            // Objective list with its own scroll bar (wheel or thumb), like the transmission box below.
+            r.spawn(Node { height: Val::Percent(22.0), flex_shrink: 0.0, margin: UiRect::horizontal(Val::Px(12.0)), column_gap: Val::Px(2.0), ..default() }).with_children(|row| {
+                row.spawn((ObjectivesScroll(0), ScrollPosition(Vec2::new(0.0, list_scroll)), Node { flex_grow: 1.0, min_width: Val::Px(0.0), padding: UiRect::all(Val::Px(4.0)), flex_direction: FlexDirection::Column, overflow: Overflow::scroll_y(), ..default() }, BackgroundColor(Color::BLACK)))
+                    .with_children(|l| {
+                        for (i, o) in list.iter().enumerate() {
+                            l.spawn((Button, ObjectivesClick::Row(i), Node { padding: UiRect::horizontal(Val::Px(6.0)), flex_shrink: 0.0, ..default() }, BackgroundColor(if i == selected { Color::srgba(0.6, 0.6, 0.65, 0.9) } else { Color::NONE })))
+                                .with_child((Text::new(o.title.clone()), font(17.0), TextColor(rgb(o.color))));
+                        }
+                    });
+                scroll_bar(row, 0, &font);
+            });
             r.spawn((Text::new("INCOMING TRANSMISSION FROM ADVISOR"), Node { margin: UiRect::left(Val::Px(4.0)), ..default() }, font(13.0), TextColor(blue), bevy::text::LetterSpacing::Rem(0.08)));
             // Transmission box with its scroll bar (arrows, track and thumb) on the right.
             r.spawn(Node { flex_grow: 1.0, min_height: Val::Px(0.0), margin: UiRect::horizontal(Val::Px(12.0)), column_gap: Val::Px(2.0), ..default() }).with_children(|row| {
-                row.spawn((ObjectivesScroll, ScrollPosition::default(), Node { flex_grow: 1.0, min_width: Val::Px(0.0), padding: UiRect::all(Val::Px(10.0)), overflow: Overflow::scroll_y(), ..default() }, BackgroundColor(Color::BLACK)))
+                row.spawn((ObjectivesScroll(1), ScrollPosition::default(), Node { flex_grow: 1.0, min_width: Val::Px(0.0), padding: UiRect::all(Val::Px(10.0)), overflow: Overflow::scroll_y(), ..default() }, BackgroundColor(Color::BLACK)))
                     .with_children(|b| {
                         if let Some(o) = list.get(selected) {
                             let mut spans = o.text.iter();
@@ -2224,13 +2309,7 @@ fn objectives_window(
                             }
                         }
                     });
-                row.spawn((Node { width: Val::Px(26.0), flex_direction: FlexDirection::Column, align_items: AlignItems::Center, ..default() }, BackgroundColor(Color::srgb(0.01, 0.01, 0.03)), BorderColor::all(Color::srgb(0.25, 0.32, 0.5)))).with_children(|bar| {
-                    bar.spawn((Text::new("\u{25B2}"), font(12.0), TextColor(Color::WHITE)));
-                    bar.spawn(Node { flex_grow: 1.0, width: Val::Percent(100.0), min_height: Val::Px(0.0), ..default() }).with_children(|track| {
-                        track.spawn((ObjectivesThumb, Node { position_type: PositionType::Absolute, left: Val::Px(3.0), right: Val::Px(3.0), top: Val::Px(0.0), height: Val::Px(26.0), border: UiRect::all(Val::Px(1.0)), ..default() }, BackgroundColor(Color::srgb(0.2, 0.34, 0.6)), BorderColor::all(Color::srgb(0.7, 0.82, 1.0))));
-                    });
-                    bar.spawn((Text::new("\u{25BC}"), font(12.0), TextColor(Color::WHITE)));
-                });
+                scroll_bar(row, 1, &font);
             });
             r.spawn(Node { justify_content: JustifyContent::SpaceBetween, align_items: AlignItems::Center, ..default() }).with_children(|f| {
                 f.spawn((Text::new("HINT: THIS MENU RECALLS MISSION GOALS."), font(14.0), TextColor(blue), bevy::text::LetterSpacing::Rem(0.06)));
@@ -2248,35 +2327,67 @@ fn planet_view_bar_tab(pv: Res<crate::planet_view::PlanetViewState>, mut bar: Re
     }
 }
 
-/// The scrollable advisor text of the objectives window.
+/// A scrollable box of the objectives window (0 = objective list, 1 = advisor transmission).
 #[derive(Component)]
-struct ObjectivesScroll;
-/// Thumb of the objectives scroll bar.
+pub(crate) struct ObjectivesScroll(pub(crate) u8);
+/// Thumb of the scroll bar of the box with the same id.
 #[derive(Component)]
-struct ObjectivesThumb;
+struct ObjectivesThumb(u8);
 
-/// Mouse wheel over the objectives window scrolls the transmission; the thumb follows.
+/// Scroll bar (arrows, track, thumb) of the box `id`; [`objectives_scroll`] moves the thumb.
+fn scroll_bar(row: &mut ChildSpawnerCommands, id: u8, font: &dyn Fn(f32) -> TextFont) {
+    row.spawn((Node { width: Val::Px(26.0), flex_direction: FlexDirection::Column, align_items: AlignItems::Center, ..default() }, BackgroundColor(Color::srgb(0.01, 0.01, 0.03)), BorderColor::all(Color::srgb(0.25, 0.32, 0.5)))).with_children(|bar| {
+        bar.spawn((Text::new("\u{25B2}"), font(12.0), TextColor(Color::WHITE)));
+        bar.spawn(Node { flex_grow: 1.0, width: Val::Percent(100.0), min_height: Val::Px(0.0), ..default() }).with_children(|track| {
+            track.spawn((ObjectivesThumb(id), Node { position_type: PositionType::Absolute, left: Val::Px(3.0), right: Val::Px(3.0), top: Val::Px(0.0), height: Val::Px(26.0), border: UiRect::all(Val::Px(1.0)), ..default() }, BackgroundColor(Color::srgb(0.2, 0.34, 0.6)), BorderColor::all(Color::srgb(0.7, 0.82, 1.0))));
+        });
+        bar.spawn((Text::new("\u{25BC}"), font(12.0), TextColor(Color::WHITE)));
+    });
+}
+
+/// Mouse wheel scrolls the box under the cursor (the transmission when the cursor is elsewhere); the thumbs follow.
 fn objectives_scroll(
     mut wheel: MessageReader<bevy::input::mouse::MouseWheel>,
-    mut boxes: Query<(&mut ScrollPosition, &ComputedNode), With<ObjectivesScroll>>,
-    mut thumbs: Query<(&mut Node, &ChildOf), With<ObjectivesThumb>>,
+    window: Option<Single<&Window, With<PrimaryWindow>>>,
+    mut win: ResMut<ObjectivesWindow>,
+    mut boxes: Query<(&ObjectivesScroll, &mut ScrollPosition, &ComputedNode, &UiGlobalTransform)>,
+    mut thumbs: Query<(&ObjectivesThumb, &mut Node, &ChildOf)>,
     nodes: Query<&ComputedNode, Without<ObjectivesThumb>>,
 ) {
     let delta: f32 = wheel.read().map(|w| if matches!(w.unit, bevy::input::mouse::MouseScrollUnit::Line) { w.y * 36.0 } else { w.y }).sum();
-    let Ok((mut pos, node)) = boxes.single_mut() else { return };
-    let inv = node.inverse_scale_factor();
-    let max = ((node.content_size().y - node.size().y) * inv).max(0.0);
-    if delta != 0.0 {
-        pos.y = (pos.y - delta).clamp(0.0, max);
+    let cursor = window.and_then(|w| w.physical_cursor_position());
+    let hovered = cursor.and_then(|c| boxes.iter().find(|(_, _, n, g)| n.contains_point(**g, c)).map(|(id, ..)| id.0));
+    let target = hovered.unwrap_or(1);
+    for (id, mut pos, node, _) in &mut boxes {
+        let inv = node.inverse_scale_factor();
+        let max = ((node.content_size().y - node.size().y) * inv).max(0.0);
+        if delta != 0.0 && id.0 == target {
+            pos.y = (pos.y - delta).clamp(0.0, max);
+        }
+        if id.0 == 0 {
+            win.list_scroll = pos.y;
+        }
+        for (t_id, mut t, parent) in &mut thumbs {
+            if t_id.0 != id.0 {
+                continue;
+            }
+            let Ok(track) = nodes.get(parent.parent()) else { continue };
+            let track_h = track.size().y * track.inverse_scale_factor();
+            let view = node.size().y * inv;
+            let total = (node.content_size().y * inv).max(1.0);
+            let thumb = (track_h * (view / total)).clamp(22.0, track_h.max(22.0));
+            let top = if max > 0.0 { (track_h - thumb) * (pos.y / max) } else { 0.0 };
+            t.height = Val::Px(thumb);
+            t.top = Val::Px(top);
+        }
     }
-    for (mut t, parent) in &mut thumbs {
-        let Ok(track) = nodes.get(parent.parent()) else { continue };
-        let track_h = track.size().y * track.inverse_scale_factor();
-        let view = node.size().y * inv;
-        let total = (node.content_size().y * inv).max(1.0);
-        let thumb = (track_h * (view / total)).clamp(22.0, track_h.max(22.0));
-        let top = if max > 0.0 { (track_h - thumb) * (pos.y / max) } else { 0.0 };
-        t.height = Val::Px(thumb);
-        t.top = Val::Px(top);
+}
+
+/// `--tooltip <button>`: shows that button's tooltip as if hovered (offscreen verification).
+fn scripted_tooltip(args: Res<crate::cli::Args>, mut forced: ResMut<eaw_ui::ForcedTooltip>) {
+    if let Some(t) = args.tooltip.as_deref()
+        && forced.0.as_deref() != Some(t)
+    {
+        forced.0 = Some(t.to_lowercase());
     }
 }

@@ -11,7 +11,7 @@
 use bevy::input::ButtonState;
 use bevy::input::InputSystems;
 use bevy::input::keyboard::{Key, KeyboardInput};
-use bevy::input::mouse::MouseButtonInput;
+use bevy::input::mouse::{MouseButtonInput, MouseScrollUnit, MouseWheel};
 use bevy::prelude::*;
 use bevy::window::{CursorMoved, PrimaryWindow};
 use eaw_ui::EawButton;
@@ -47,6 +47,8 @@ struct TestState {
     pad_target: Option<galaxy_play::BuildTarget>,
     /// Fleet used by the fleet-ring click phases.
     ring_fleet: Option<galaxy_sim::FleetId>,
+    /// Phase clock value at which a multi-step phase saw its target (tooltip hover, objectives window).
+    sub: Option<u32>,
 }
 
 #[derive(Clone)]
@@ -55,6 +57,7 @@ enum Act {
     Down,
     Up,
     Key(KeyCode, Key),
+    Wheel(f32),
 }
 
 /// Presses a button: move, press, release at fixed frame offsets of the phase clock.
@@ -86,7 +89,7 @@ fn drive(
     mut st: ResMut<TestState>,
     screen: Res<State<AppScreen>>,
     dialog: Option<Res<BattleDialogState>>,
-    paused: Res<Paused>,
+    (mut paused, mut tipctx): (ResMut<Paused>, TipCtx),
     slots: Res<SlotScreen>,
     (options, toast, mut ring): (Res<OptionsOpen>, Res<crate::play_ui::Toast>, RingCtx),
     (filters, bar, frames): (Res<crate::galaxy_map::MapFilters>, Res<crate::play_ui::BarState>, Res<bevy::diagnostic::FrameCount>),
@@ -129,7 +132,7 @@ fn drive(
         st.t = 0;
         st.found_at = None;
     };
-    if t > 1500 && st.phase > 0 && (st.phase < 10 || (100..115).contains(&st.phase) || (120..122).contains(&st.phase) || (130..132).contains(&st.phase)) {
+    if t > 1500 && st.phase > 0 && (st.phase < 10 || (100..115).contains(&st.phase) || (120..122).contains(&st.phase) || (130..132).contains(&st.phase) || (140..144).contains(&st.phase)) {
         finish(&mut st, "phase timed out", false);
         return;
     }
@@ -235,7 +238,7 @@ fn drive(
                 if let (true, Some(p)) = (ordered, pick) {
                     st.pad = Some(p);
                     st.pad_target = bar.pads.get(p.1).copied().flatten();
-                    st.queue_before = bar.queue.len();
+                    st.queue_before = bar.queue.iter().flatten().count();
                     st.phase = 121;
                     st.t = 0;
                     st.found_at = None;
@@ -251,13 +254,157 @@ fn drive(
             let target = banner.iter().find(|(b, n, _, v)| b.name == name && v.get() && n.size().x > 4.0).map(|(_, _, g, _)| g.translation);
             act = click(&mut st, target);
             if st.found_at.is_some_and(|f| t == f + 40) {
-                let queued = bar.queue.len() > st.queue_before;
+                let queued = bar.queue.iter().flatten().count() > st.queue_before;
                 let want = st.pad_target;
                 let matches = want.is_some() && model.as_ref().and_then(|m| m.planet.as_ref()).is_some_and(|m| m.queue.iter().any(|q| Some(q.target) == want));
-                info!("ui-test: pad {name} -> entry {entry}, queue {} -> {}", st.queue_before, bar.queue.len());
+                info!("ui-test: pad {name} -> entry {entry}, queue {} -> {}", st.queue_before, bar.queue.iter().flatten().count());
                 info!("ui-test: wanted {want:?}, model queue {:?}", model.as_ref().and_then(|m| m.planet.as_ref()).map(|m| m.queue.iter().map(|q| q.target).collect::<Vec<_>>()));
-                finish(&mut st, "planet-view-pad-click-queues-structure", queued && matches);
+                let ground_lane = bar.queue.iter().enumerate().any(|(i, q)| q.is_some() && i >= 5);
+                info!("ui-test: structure sits in the ground lane (right slots 5..10): {ground_lane}");
+                finish(&mut st, "planet-view-pad-click-queues-structure", queued && matches && ground_lane);
                 pv.active = false;
+                st.phase = 140;
+                st.sub = None;
+            }
+        }
+        // Hover tooltip of a ship pad: the encyclopedia text of the unit, anchored right of the advisor droid above the info panel.
+        140 => {
+            let pick = bar.pads.iter().enumerate().find_map(|(i, p)| match p {
+                Some(galaxy_play::BuildTarget::Unit(u)) if bar_data.pads.get(i).is_some_and(|e| !e.tooltip.is_empty()) => Some((i, *u)),
+                _ => None,
+            });
+            let Some((entry, unit)) = pick else {
+                if t > 900 {
+                    finish(&mut st, "pad-tooltip-shows-lore (no ship pad on the bar)", false);
+                    st.phase = 141;
+                    st.sub = None;
+                }
+                return;
+            };
+            let name = format!("b_create_{entry:02}");
+            let target = tipctx.buttons.iter().find(|(_, b, n, _, v)| b.name == name && v.get() && n.size().x > 4.0).map(|(_, _, _, g, _)| g.translation);
+            let Some(target) = target else { return };
+            let t0 = *st.sub.get_or_insert(t);
+            match t - t0 {
+                0 => act = Some(Act::Move(target)),
+                20 => {
+                    let game = tipctx.assets.as_ref().and_then(|a| a.game.clone());
+                    let object = sim.as_ref().map(|s| s.world.units[unit as usize].name.clone());
+                    let expected = object.and_then(|o| crate::play_ui::lore(game.as_deref(), &o));
+                    let body = tipctx.parts.iter().find(|p| *p.0 == eaw_ui::TipPart::Body).map(|p| p.1.0.clone()).unwrap_or_default();
+                    let title = tipctx.parts.iter().find(|p| *p.0 == eaw_ui::TipPart::Title).map(|p| p.1.0.clone()).unwrap_or_default();
+                    let shown = tipctx.root.iter().next().is_some_and(|r| r.0.display != Display::None && *r.1 != Visibility::Hidden);
+                    let want_title = bar_data.pads[entry].tooltip.lines().next().unwrap_or("").to_owned();
+                    info!("ui-test: pad tooltip of {name}: shown {shown}, title {title:?}, body {} chars, lore from data {:?}", body.len(), expected.as_deref().map(|e| e.chars().take(60).collect::<String>()));
+                    let lore_ok = expected.as_deref().is_some_and(|e| !e.is_empty() && body.trim() == e.trim());
+                    // Anchor: the bubble sits above the droid's question-mark button, right of its left edge.
+                    let droid = tipctx.buttons.iter().find(|b| b.1.name == "b_droid_help").map(|b| (b.2.size(), b.3.translation));
+                    let anchored = match (tipctx.root.iter().next(), droid) {
+                        (Some(r), Some((dsize, dpos))) => {
+                            let (size, c) = (r.2.size(), r.3.translation);
+                            let (left, bottom) = (c.x - size.x * 0.5, c.y + size.y * 0.5);
+                            info!("ui-test: tooltip box left {left:.0} bottom {bottom:.0}; droid button left {:.0} top {:.0}", dpos.x - dsize.x * 0.5, dpos.y - dsize.y * 0.5);
+                            left >= dpos.x - dsize.x * 0.5 && bottom <= dpos.y - dsize.y * 0.5 + 2.0 && left < dpos.x + dsize.x * 8.0
+                        }
+                        _ => false,
+                    };
+                    finish(&mut st, "pad-tooltip-shows-lore-text", shown && lore_ok && title == want_title);
+                    st.results.push(("pad-tooltip-anchored-at-droid", shown && anchored));
+                    info!("ui-test: pad-tooltip-anchored-at-droid {}", if shown && anchored { "ok" } else { "FAILED" });
+                    // The tech upgrade entry explains what the next level unlocks.
+                    let tech = bar.pads.iter().enumerate().find_map(|(i, p)| matches!(p, Some(galaxy_play::BuildTarget::Tech(_))).then_some(i));
+                    match tech.and_then(|i| bar_data.pads.get(i)) {
+                        Some(p) => {
+                            info!("ui-test: tech pad tooltip: {:?}", p.tooltip);
+                            let ok = p.tooltip.contains("Raises your tech level") && p.tooltip.contains("Unlocks ");
+                            st.results.push(("tech-tooltip-lists-unlocks", ok));
+                            info!("ui-test: tech-tooltip-lists-unlocks {}", if ok { "ok" } else { "FAILED" });
+                        }
+                        None => info!("ui-test: no tech upgrade pad on the bar, tech tooltip not exercised"),
+                    }
+                    st.phase = 141;
+                    st.t = 0;
+                    st.sub = None;
+                }
+                _ => {}
+            }
+        }
+        // The small upkeep/income marker explains itself on hover.
+        141 => {
+            let pick = bar.pads.iter().enumerate().find_map(|(i, p)| match p {
+                Some(galaxy_play::BuildTarget::Unit(_)) if bar_data.pads.get(i).is_some_and(|e| e.upkeep.abs() > 0.5 && !e.marker_tooltip.is_empty()) => Some(i),
+                _ => None,
+            });
+            let Some(entry) = pick else {
+                info!("ui-test: no pad with an upkeep marker on the bar ({} pads, upkeeps {:?}), marker tooltip not exercised", bar_data.pads.len(), bar_data.pads.iter().map(|p| p.upkeep as i32).collect::<Vec<_>>());
+                st.phase = 142;
+                st.t = 0;
+                st.sub = None;
+                return;
+            };
+            let name = format!("b_create_{entry:02}");
+            let button = tipctx.buttons.iter().find(|(_, b, n, _, v)| b.name == name && v.get() && n.size().x > 4.0).map(|(e, ..)| e);
+            let marker = button.and_then(|b| tipctx.markers.iter().find(|m| *m.0 == eaw_ui::widgets::SlotPart::UpkeepIcon && m.3.parent() == b && m.1.size().x > 1.0).map(|m| m.2.translation));
+            let Some(marker) = marker else { return };
+            let t0 = *st.sub.get_or_insert(t);
+            match t - t0 {
+                0 => act = Some(Act::Move(marker)),
+                20 => {
+                    let title = tipctx.parts.iter().find(|p| *p.0 == eaw_ui::TipPart::Title).map(|p| p.1.0.clone()).unwrap_or_default();
+                    let body = tipctx.parts.iter().find(|p| *p.0 == eaw_ui::TipPart::Body).map(|p| p.1.0.clone()).unwrap_or_default();
+                    info!("ui-test: marker tooltip: {title:?} / {body:?}");
+                    let ok = (title == "Upkeep" || title == "Income bonus") && body.contains("credits per week");
+                    finish(&mut st, "upkeep-marker-tooltip-explains", ok);
+                    st.phase = 142;
+                    st.t = 0;
+                    st.sub = None;
+                }
+                _ => {}
+            }
+        }
+        // Active Story Objectives: the upper list scrolls with the wheel.
+        142 => {
+            let list = tipctx.scroll.iter().find(|s| s.0.0 == 0).map(|s| (s.1.y, s.2.content_size().y > s.2.size().y + 1.0, s.3.translation));
+            match (list, st.sub) {
+                (None, _) => {
+                    // The test campaign has a short list: pad it so that the list overflows its box and can scroll.
+                    if tipctx.objectives.list.as_ref().is_none_or(|l| l.len() < 25) {
+                        let rows = (0..25).map(|i| crate::objectives::Objective { title: format!("Test objective {i}"), color: [255, 255, 255], chapter: i, text: Vec::new() }).collect();
+                        tipctx.objectives.list = Some(rows);
+                    }
+                    let target = tipctx.buttons.iter().find(|(_, b, n, _, v)| b.name == "b_story_arc_g" && v.get() && n.size().x > 4.0).map(|(_, _, _, g, _)| g.translation);
+                    act = click(&mut st, target);
+                }
+                (Some((_, _, center)), None) => {
+                    st.sub = Some(t);
+                    act = Some(Act::Move(center));
+                }
+                (Some((y, scrollable, _)), Some(t0)) => match t - t0 {
+                    8 => act = Some(Act::Wheel(-3.0)),
+                    16 => {
+                        info!("ui-test: objectives list scroll {y:.0} px, scrollable {scrollable}");
+                        // The padded list overflows its box: the wheel must have moved it.
+                        finish(&mut st, "objectives-list-scrolls-with-wheel", scrollable && y > 0.5);
+                        act = Some(Act::Key(KeyCode::Escape, Key::Escape));
+                        st.phase = 143;
+                        st.t = 0;
+                        st.found_at = None;
+                    }
+                    _ => {}
+                },
+            }
+        }
+        // The "Main Menu" button of the left column opens the pause menu like Esc.
+        143 => {
+            if t < 20 {
+                return;
+            }
+            let target = tipctx.buttons.iter().find(|(_, b, n, _, v)| b.name == "b_option_g" && v.get() && n.size().x > 4.0).map(|(_, _, _, g, _)| g.translation);
+            act = click(&mut st, target);
+            if st.found_at.is_some_and(|f| t == f + 20) {
+                let ok = paused.0;
+                finish(&mut st, "main-menu-button-opens-menu", ok);
+                paused.0 = false;
                 st.phase = 1;
             }
         }
@@ -389,6 +536,9 @@ fn drive(
         Some(Act::Up) => {
             buttons.write(MouseButtonInput { button: MouseButton::Left, state: ButtonState::Released, window: *entity });
         }
+        Some(Act::Wheel(y)) => {
+            tipctx.wheel.write(MouseWheel { unit: MouseScrollUnit::Line, x: 0.0, y, window: *entity, phase: bevy::input::touch::TouchPhase::Moved });
+        }
         Some(Act::Key(code, key)) => {
             keys.write(KeyboardInput { key_code: code, logical_key: key.clone(), state: ButtonState::Pressed, text: None, repeat: false, window: *entity });
             keys.write(KeyboardInput { key_code: code, logical_key: key, state: ButtonState::Released, text: None, repeat: false, window: *entity });
@@ -463,4 +613,17 @@ fn fleet_ring_phase(st: &mut TestState, t: u32, near: bool, ctx: &mut RingCtx, s
     };
     info!("ui-test: fleet-ring click ({}): camera distance {:.0}, ring radius {:.1} px, aiming {:.1} px from the centre", if near { "near" } else { "far" }, gc.distance, c.distance(e), c.distance(e));
     Some(e * scale)
+}
+
+/// Queries of the tooltip, objectives and main menu button phases.
+#[derive(bevy::ecs::system::SystemParam)]
+struct TipCtx<'w, 's> {
+    root: Query<'w, 's, (&'static Node, &'static Visibility, &'static ComputedNode, &'static UiGlobalTransform), With<eaw_ui::Tooltip>>,
+    parts: Query<'w, 's, (&'static eaw_ui::TipPart, &'static Text)>,
+    markers: Query<'w, 's, (&'static eaw_ui::widgets::SlotPart, &'static ComputedNode, &'static UiGlobalTransform, &'static ChildOf)>,
+    buttons: Query<'w, 's, (Entity, &'static EawButton, &'static ComputedNode, &'static UiGlobalTransform, &'static InheritedVisibility)>,
+    scroll: Query<'w, 's, (&'static crate::play_ui::ObjectivesScroll, &'static ScrollPosition, &'static ComputedNode, &'static UiGlobalTransform)>,
+    assets: Option<Res<'w, eaw_ui::EawUiAssets>>,
+    wheel: MessageWriter<'w, MouseWheel>,
+    objectives: ResMut<'w, crate::play_ui::ObjectivesWindow>,
 }

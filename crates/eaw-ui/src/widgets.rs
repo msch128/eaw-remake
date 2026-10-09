@@ -13,7 +13,7 @@ use bevy::window::PrimaryWindow;
 use crate::EawUiAssets;
 use crate::EawUiSettings;
 use crate::components::{CommandBarComponent, CommandBarDb, ComponentKind};
-use crate::data::{CommandBarData, PadRemap, EawButtonClicked, EawButtonState, ForcedTooltip};
+use crate::data::{CommandBarData, PadRemap, EawButtonClicked, EawButtonState, ForcedTooltip, WorldTooltip};
 use crate::faction::UiFaction;
 use crate::panels::{
     MinimapKind, MinimapSurface, PanelBarName, PanelData, PanelSlotName, PanelText, is_panel_slot,
@@ -59,6 +59,10 @@ pub struct EawButton {
     pub tooltips: Vec<String>,
     /// Literal tooltip text that overrides `tooltips` (set for data driven slots).
     pub tooltip_literal: Option<String>,
+    /// Icon shown in the tooltip header (texture name; data driven slots).
+    pub tooltip_icon: Option<String>,
+    /// Tooltip of the small upkeep/income marker of a build pad (shown while the cursor is over the marker).
+    pub marker_tooltip: Option<String>,
     /// Keeps its pressed look after a click.
     pub toggle: bool,
     /// Can be dragged onto other draggable buttons ([`crate::panels::EawSlotDropped`]).
@@ -98,6 +102,11 @@ pub struct Slot {
     index: usize,
 }
 
+/// Space production lane (queue slots 0..5, left).
+const LANE_SPACE: Color = Color::srgb(0.25, 0.55, 1.0);
+/// Ground production lane (queue slots 5..10, right).
+const LANE_GROUND: Color = Color::srgb(1.0, 0.6, 0.15);
+
 /// Which part of a slot a child entity renders.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SlotPart {
@@ -110,6 +119,8 @@ pub enum SlotPart {
     UpkeepPlus,
     /// Roman level numeral (starbase levels).
     Level,
+    /// Coloured strip above a production queue slot: blue for the space lane, orange for the ground lane.
+    LaneMark,
 }
 
 /// Text label of a button (`b_retreat` countdown, `b_reinforcement` points); holds the button name.
@@ -807,6 +818,8 @@ impl Builder<'_> {
                     name: lname.clone(),
                     tooltips: def.tooltips.clone(),
                     tooltip_literal: None,
+                    tooltip_icon: None,
+                    marker_tooltip: None,
                     toggle: def.toggle,
                     drag: def.drag_and_drop,
                     armed: false,
@@ -892,7 +905,7 @@ impl Builder<'_> {
         }
         if let Some(t) = CommandBarComponent::pick(&def.mouse_over, fi).and_then(|n| self.tex(n)) {
             let sz = scaled(&t);
-            let e = self.layer(button, size, &t, sz, Vec2::ZERO, tint);
+            let e = self.layer(button, size, &t, sz, def.mouse_over_offset, tint);
             self.hide(e);
             layers.over = Some(e);
         }
@@ -936,6 +949,22 @@ impl Builder<'_> {
                 ))
                 .id();
             let _ = icon;
+            if s.kind == SlotKind::Queue {
+                self.world.spawn((
+                    SlotPart::LaneMark,
+                    Node {
+                        position_type: PositionType::Absolute,
+                        left: Val::Px(size.x * 0.5 - icon_px * 0.5),
+                        top: Val::Px(size.y * 0.5 - icon_px * 0.5 - 4.0),
+                        width: Val::Px(icon_px),
+                        height: Val::Px(3.0),
+                        ..default()
+                    },
+                    BackgroundColor(LANE_SPACE),
+                    FocusPolicy::Pass,
+                    ChildOf(button),
+                ));
+            }
             self.world.spawn((
                 SlotPart::Progress,
                 Node {
@@ -1223,7 +1252,7 @@ pub(crate) fn slots(
     >,
     children: Query<&Children>,
     mut parts: Query<
-        (&SlotPart, &mut Node, Option<&mut ImageNode>, Option<&mut Text>),
+        (&SlotPart, &mut Node, Option<&mut ImageNode>, Option<&mut Text>, Option<&mut BackgroundColor>),
         Without<Slot>,
     >,
 ) {
@@ -1253,12 +1282,23 @@ pub(crate) fn slots(
         button.tooltip_literal = match slot.kind {
             SlotKind::Ability => data.abilities.get(slot.index).map(|a| a.tooltip.clone()),
             SlotKind::Pad => data.pads.get(slot.index).map(|p| p.tooltip.clone()).filter(|t| !t.is_empty()),
-            SlotKind::Queue => data.queue.get(slot.index).map(|q| q.tooltip.clone()).filter(|t| !t.is_empty()),
+            SlotKind::Queue => data.queue.get(slot.index).filter(|q| q.count > 0).map(|q| q.tooltip.clone()).filter(|t| !t.is_empty()),
+            _ => None,
+        };
+        button.tooltip_icon = match slot.kind {
+            SlotKind::Ability => data.abilities.get(slot.index).map(|a| a.icon.clone()),
+            SlotKind::Pad => data.pads.get(slot.index).map(|p| p.icon.clone()),
+            SlotKind::Queue => data.queue.get(slot.index).filter(|q| q.count > 0).map(|q| q.icon.clone()),
+            _ => None,
+        }
+        .filter(|i| !i.is_empty());
+        button.marker_tooltip = match slot.kind {
+            SlotKind::Pad => data.pads.get(slot.index).map(|p| p.marker_tooltip.clone()).filter(|t| !t.is_empty()),
             _ => None,
         };
         // (icon, progress, label, disabled, selected)
         let content: Option<(String, f32, String, bool, bool)> = match slot.kind {
-            SlotKind::Queue => data.queue.get(slot.index).map(|q| {
+            SlotKind::Queue => data.queue.get(slot.index).filter(|q| q.count > 0).map(|q| {
                 (
                     q.icon.clone(),
                     q.progress,
@@ -1311,8 +1351,9 @@ pub(crate) fn slots(
         *vis = Visibility::Inherited;
         st.disabled = disabled;
         st.selected = selected;
+        let lane = if slot.kind == SlotKind::Queue { data.queue.get(slot.index).map_or(0, |q| q.lane) } else { 0 };
         for k in children.iter_descendants(e) {
-            let Ok((part, mut n, img, text)) = parts.get_mut(k) else {
+            let Ok((part, mut n, img, text, bg)) = parts.get_mut(k) else {
                 continue;
             };
             match part {
@@ -1337,6 +1378,14 @@ pub(crate) fn slots(
                 SlotPart::Progress => {
                     if let Val::Px(w) = n.width {
                         n.height = Val::Px(w * progress.clamp(0.0, 1.0));
+                    }
+                    if let Some(mut bg) = bg {
+                        bg.0 = if lane == 1 { Color::srgba(1.0, 0.55, 0.1, 0.45) } else { Color::srgba(0.1, 0.5, 0.9, 0.45) };
+                    }
+                }
+                SlotPart::LaneMark => {
+                    if let Some(mut bg) = bg {
+                        bg.0 = if lane == 1 { LANE_GROUND } else { LANE_SPACE };
                     }
                 }
                 SlotPart::Label => {
@@ -1464,113 +1513,256 @@ pub(crate) fn segment_bars(panel: Res<PanelData>, fresh: Query<(), Added<BarSegm
     }
 }
 
-/// Spawns the global tooltip panel.
-pub(crate) fn spawn_tooltip(mut commands: Commands, settings: Res<EawUiSettings>) {
-    let font = match &settings.tooltip_font_family {
-        Some(f) => TextFont {
-            font: FontSource::Family(f.as_str().into()),
-            font_size: FontSize::Px(10.5),
-            ..default()
-        },
-        None => TextFont::from_font_size(10.5),
-    };
-    let mut tip = commands.spawn((
-            Tooltip,
-            Name::new("EaW tooltip"),
-            Node {
-                position_type: PositionType::Absolute,
-                padding: UiRect::axes(Val::Px(7.0), Val::Px(4.0)),
-                border: UiRect::all(Val::Px(1.0)),
-                max_width: Val::Px(330.0),
-                display: Display::None,
-                ..default()
-            },
-            BackgroundColor(Color::srgba(0.13, 0.27, 0.31, 0.9)),
-            BorderColor::all(Color::srgb(0.0, 0.76, 0.99)),
-            GlobalZIndex(1000),
-            FocusPolicy::Pass,
-        ));
-    if let Some(c) = settings.camera {
-        tip.insert(UiTargetCamera(c));
-    }
-    tip.with_children(|p| {
-        p.spawn((
-            Text::new(""),
-            font,
-            TextColor(Color::srgb(0.74, 0.85, 0.96)),
-            FocusPolicy::Pass,
-        ));
-    });
+/// Parts of the tooltip panel (children of the [`Tooltip`] root).
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TipPart {
+    Icon,
+    Title,
+    Divider,
+    Body,
+    StatsRow,
+    StatLabels,
+    StatValues,
+    Warn,
 }
 
-/// Shows the tooltip of the hovered (or forced) button next to it.
-#[allow(clippy::too_many_arguments)]
+/// A tooltip text split into its panel parts.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct TooltipLayout {
+    /// First line.
+    pub title: String,
+    /// Wrapped paragraphs.
+    pub body: String,
+    /// Left column of the stat rows.
+    pub labels: String,
+    /// Right column of the stat rows.
+    pub values: String,
+    /// Warning lines (red).
+    pub warn: String,
+}
+
+impl TooltipLayout {
+    /// Splits `text`: the first line is the title; lines starting with `@` are stat rows (`@Label<TAB>value`), lines
+    /// starting with `!` are warnings, everything else is body text (blank lines separate paragraphs).
+    pub fn parse(text: &str) -> Self {
+        let mut out = Self::default();
+        let mut lines = text.lines();
+        out.title = lines.by_ref().find(|l| !l.trim().is_empty()).unwrap_or("").trim().to_owned();
+        let mut body: Vec<&str> = Vec::new();
+        for l in lines {
+            if let Some(rest) = l.strip_prefix('@') {
+                let (k, v) = rest.split_once('\t').unwrap_or((rest, ""));
+                if !out.labels.is_empty() {
+                    out.labels.push('\n');
+                    out.values.push('\n');
+                }
+                out.labels.push_str(k.trim());
+                out.values.push_str(v.trim());
+            } else if let Some(rest) = l.strip_prefix('!') {
+                if !out.warn.is_empty() {
+                    out.warn.push('\n');
+                }
+                out.warn.push_str(rest.trim());
+            } else {
+                body.push(l.trim_end());
+            }
+        }
+        while body.first().is_some_and(|l| l.trim().is_empty()) {
+            body.remove(0);
+        }
+        while body.last().is_some_and(|l| l.trim().is_empty()) {
+            body.pop();
+        }
+        out.body = body.join("\n");
+        out
+    }
+}
+
+const TIP_BG: Color = Color::srgba(0.04, 0.09, 0.13, 0.95);
+const TIP_BORDER: Color = Color::srgb(0.0, 0.76, 0.99);
+
+/// Spawns the global tooltip panel: icon and title row, body text, stat rows and a warning line, plus the three dots of a
+/// thought bubble that lead to the advisor droid.
+pub(crate) fn spawn_tooltip(mut commands: Commands, settings: Res<EawUiSettings>) {
+    let camera = settings.camera;
+    let mut tip = commands.spawn((
+        Tooltip,
+        Name::new("EaW tooltip"),
+        Node {
+            position_type: PositionType::Absolute,
+            flex_direction: FlexDirection::Column,
+            row_gap: Val::Px(4.0),
+            padding: UiRect::axes(Val::Px(9.0), Val::Px(6.0)),
+            border: UiRect::all(Val::Px(1.0)),
+            min_width: Val::Px(150.0),
+            max_width: Val::Px(340.0),
+            border_radius: BorderRadius::all(Val::Px(6.0)),
+            display: Display::None,
+            ..default()
+        },
+        BackgroundColor(TIP_BG),
+        BorderColor::all(TIP_BORDER),
+        Visibility::Hidden,
+        GlobalZIndex(1000),
+        FocusPolicy::Pass,
+    ));
+    if let Some(c) = camera {
+        tip.insert(UiTargetCamera(c));
+    }
+}
+
+/// Fills the (emptied) tooltip panel with the parts of `layout`. The panel is rebuilt on every change: a cached layout of
+/// reused text nodes kept the panel one row too short.
+fn fill_tooltip(p: &mut ChildSpawnerCommands, layout: &TooltipLayout, icon: Option<Handle<Image>>, font: &dyn Fn(f32) -> TextFont) {
+    p.spawn(Node { column_gap: Val::Px(7.0), align_items: AlignItems::Center, ..default() }).with_children(|h| {
+        if let Some(handle) = icon {
+            h.spawn((TipPart::Icon, ImageNode::new(handle), Node { width: Val::Px(36.0), height: Val::Px(36.0), flex_shrink: 0.0, ..default() }, FocusPolicy::Pass));
+        }
+        h.spawn((TipPart::Title, Text::new(layout.title.clone()), font(13.0), TextColor(Color::srgb(1.0, 0.86, 0.38)), FocusPolicy::Pass));
+    });
+    if !layout.body.is_empty() || !layout.labels.is_empty() || !layout.warn.is_empty() {
+        p.spawn((TipPart::Divider, Node { height: Val::Px(1.0), flex_shrink: 0.0, ..default() }, BackgroundColor(Color::srgba(0.0, 0.62, 0.85, 0.55))));
+    }
+    if !layout.body.is_empty() {
+        p.spawn((TipPart::Body, Text::new(layout.body.clone()), font(11.0), TextColor(Color::srgb(0.78, 0.88, 0.97)), FocusPolicy::Pass));
+    }
+    if !layout.labels.is_empty() {
+        p.spawn((TipPart::StatsRow, Node { column_gap: Val::Px(14.0), justify_content: JustifyContent::SpaceBetween, ..default() }, FocusPolicy::Pass)).with_children(|r| {
+            r.spawn((TipPart::StatLabels, Text::new(layout.labels.clone()), font(11.0), TextColor(Color::srgb(0.52, 0.68, 0.82)), FocusPolicy::Pass));
+            r.spawn((TipPart::StatValues, Text::new(layout.values.clone()), font(11.0), TextColor(Color::srgb(0.95, 0.97, 1.0)), TextLayout::justify(Justify::Right), FocusPolicy::Pass));
+        });
+    }
+    if !layout.warn.is_empty() {
+        p.spawn((TipPart::Warn, Text::new(layout.warn.clone()), font(11.0), TextColor(Color::srgb(1.0, 0.5, 0.38)), FocusPolicy::Pass));
+    }
+    // Thought-bubble dots towards the droid at the lower left.
+    for (x, y, d) in [(-9.0, 2.0, 9.0), (-18.0, -7.0, 6.0), (-25.0, -14.0, 4.0)] {
+        p.spawn((
+            Node { position_type: PositionType::Absolute, left: Val::Px(x - d * 0.5), bottom: Val::Px(y - d * 0.5), width: Val::Px(d), height: Val::Px(d), border_radius: BorderRadius::MAX, ..default() },
+            BackgroundColor(TIP_BORDER),
+            FocusPolicy::Pass,
+        ));
+    }
+}
+
+/// Shows the tooltip of the hovered (or forced) button, else the [`WorldTooltip`].
+///
+/// Text format (see [`TooltipLayout::parse`]): first line title, `@Label<TAB>value` stat rows, `!` warnings, the rest
+/// wrapped body text. Build pad, queue and world tooltips are anchored next to the advisor droid (lower left, above the
+/// info panel) like a thought bubble; other buttons show next to the cursor.
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub(crate) fn tooltip(
     assets: Res<EawUiAssets>,
     forced: Res<ForcedTooltip>,
-    buttons: Query<(&EawButton, &Interaction, &ComputedNode, &UiGlobalTransform)>,
-    mut tip: Query<(&mut Node, &Children, &ComputedNode), With<Tooltip>>,
-    mut texts: Query<&mut Text>,
+    world_tip: Res<WorldTooltip>,
+    buttons: Query<(Entity, &EawButton, &Interaction, &ComputedNode, &UiGlobalTransform)>,
+    markers: Query<(&SlotPart, &Node, &ComputedNode, &UiGlobalTransform, &ChildOf)>,
+    mut tip: Query<(Entity, &mut Node, &mut Visibility, &ComputedNode), (With<Tooltip>, Without<SlotPart>, Without<TipPart>)>,
     window: Query<&Window, With<PrimaryWindow>>,
     scale: Res<UiScale>,
+    mut tex: ResMut<UiTextures>,
+    mut images: ResMut<Assets<Image>>,
+    mut last: Local<(String, u8)>,
+    mut commands: Commands,
+    settings: Res<EawUiSettings>,
 ) {
-    let Ok((mut node, kids, own)) = tip.single_mut() else {
+    let Ok((root, mut node, mut vis, own)) = tip.single_mut() else {
         return;
     };
+    let cursor_phys = window.single().ok().and_then(Window::physical_cursor_position);
     let mut hit = None;
-    for (b, i, cn, gt) in &buttons {
+    for (e, b, i, cn, gt) in &buttons {
         let forced_hit = forced.0.as_deref().is_some_and(|f| f.eq_ignore_ascii_case(&b.name));
-        if (*i != Interaction::None || forced_hit)
-            && (!b.tooltips.is_empty() || b.tooltip_literal.is_some())
-        {
-            hit = Some((b, cn, gt, forced_hit));
+        if (*i != Interaction::None || forced_hit) && (!b.tooltips.is_empty() || b.tooltip_literal.is_some()) {
+            hit = Some((e, b, cn, gt, forced_hit));
             if !forced_hit {
                 break;
             }
         }
     }
-    let Some((b, cn, gt, forced_hit)) = hit else {
-        node.display = Display::None;
-        return;
+    // (text, icon, hovered bar button)
+    let (text, icon, button) = match hit {
+        Some((e, b, cn, gt, forced_hit)) => {
+            // The small upkeep/income marker of a pad has its own explanation.
+            let over_marker = cursor_phys.is_some_and(|c| {
+                b.marker_tooltip.is_some()
+                    && markers.iter().any(|(p, n, mn, mg, parent)| {
+                        *p == SlotPart::UpkeepIcon && parent.parent() == e && n.display != Display::None && {
+                            let half = mn.size() * 0.5 + Vec2::splat(4.0);
+                            let d = (c - mg.translation).abs();
+                            d.x <= half.x && d.y <= half.y
+                        }
+                    })
+            });
+            let text = if over_marker {
+                b.marker_tooltip.clone().unwrap_or_default()
+            } else {
+                b.tooltip_literal
+                    .clone()
+                    .or_else(|| b.tooltips.iter().find_map(|k| assets.text.get(k).filter(|t| !t.is_empty()).map(str::to_owned)))
+                    .unwrap_or_default()
+            };
+            let icon = if over_marker { None } else { b.tooltip_icon.clone() };
+            (text, icon, Some((b, cn, gt, forced_hit)))
+        }
+        None => (world_tip.text.clone().unwrap_or_default(), world_tip.icon.clone(), None),
     };
-    let text = b
-        .tooltip_literal
-        .as_deref()
-        .or_else(|| b.tooltips.iter().find_map(|k| assets.text.get(k).filter(|t| !t.is_empty())))
-        .unwrap_or("");
     if text.is_empty() {
         node.display = Display::None;
         return;
     }
-    if let Some(&k) = kids.first()
-        && let Ok(mut t) = texts.get_mut(k)
-    {
-        t.0 = text.to_string();
+    let key = format!("{text}\u{0}{}", icon.as_deref().unwrap_or(""));
+    if last.0 != key || node.display == Display::None {
+        let layout = TooltipLayout::parse(&text);
+        key.clone_into(&mut last.0);
+        last.1 = 0;
+        let icon_tex = icon.as_deref().and_then(|i| tex.get(&mut images, i)).map(|t| t.handle);
+        let font = |size: f32| match &settings.tooltip_font_family {
+            Some(f) => TextFont { font: FontSource::Family(f.as_str().into()), font_size: FontSize::Px(size), ..default() },
+            None => TextFont::from_font_size(size),
+        };
+        // A fixed width: text in a shrink-to-fit panel is measured on one line and the panel ends too short.
+        node.width = Val::Px(tooltip_width(&layout, icon_tex.is_some()));
+        commands.entity(root).despawn_children().with_children(|p| fill_tooltip(p, &layout, icon_tex, &font));
+        // The size is only known after the next layout passes: stay invisible for two frames so the panel does not jump.
+        *vis = Visibility::Hidden;
+    } else if last.1 < 2 {
+        last.1 += 1;
+        *vis = Visibility::Hidden;
+    } else {
+        *vis = Visibility::Inherited;
     }
     node.display = Display::Flex;
-    let inv = cn.inverse_scale_factor();
-    let anchor = if forced_hit {
-        // Above the button centre (physical px -> logical).
-        let c = gt.translation * inv;
-        Vec2::new(c.x - 10.0, c.y - cn.size().y * inv * 0.5 - 30.0 * scale.0)
-    } else {
-        window
-            .single()
-            .ok()
-            .and_then(Window::cursor_position)
-            .map_or(Vec2::ZERO, |p| p + Vec2::new(14.0, 18.0))
+    let drop_anchor = match &button {
+        Some((b, ..)) => b.name.starts_with("b_create") || b.name.starts_with("queue"),
+        None => true,
     };
-    let anchor = match window.single() {
-        Ok(w) if !forced_hit => clamp_to_screen(anchor, w.cursor_position().unwrap_or(anchor), own.size() / w.scale_factor(), w.size()),
-        _ => anchor,
-    };
-    // Build pad and queue tooltips sit fixed above the left of the bar, like the original.
-    let anchor = match window.single() {
-        Ok(w) if !forced_hit && (b.name.starts_with("b_create") || b.name.starts_with("queue")) => {
-            let h = own.size().y / w.scale_factor();
-            Vec2::new(16.0 * scale.0, (w.height() - 345.0 * scale.0 - h).max(0.0))
+    let droid = buttons.iter().find(|b| b.1.name == "b_droid_help").map(|b| (b.3, b.4));
+    let inv = own.inverse_scale_factor();
+    let anchor = match (drop_anchor, droid) {
+        (true, Some((dn, dg))) => {
+            // Physical px per design px; the bubble sits right of R2, its lower edge a little above the question-mark button.
+            let ppd = scale.0 / dn.inverse_scale_factor().max(1e-6);
+            let top_left = dg.translation - dn.size() * 0.5;
+            let bottom = top_left.y - 12.0 * ppd;
+            Vec2::new(top_left.x + 62.0 * ppd, (bottom - own.size().y).max(4.0)) * inv
         }
-        _ => anchor,
+        _ => match &button {
+            Some((_, cn, gt, true)) => {
+                // Above the button centre (physical px -> logical).
+                let inv = cn.inverse_scale_factor();
+                let c = gt.translation * inv;
+                Vec2::new(c.x - 10.0, c.y - cn.size().y * inv * 0.5 - 30.0 * scale.0)
+            }
+            _ => {
+                let cursor = window.single().ok().and_then(Window::cursor_position);
+                let at = cursor.map_or(Vec2::ZERO, |p| p + Vec2::new(14.0, 18.0));
+                match (window.single(), cursor) {
+                    (Ok(w), Some(c)) => clamp_to_screen(at, c, own.size() * inv, w.size()),
+                    _ => at,
+                }
+            }
+        },
     };
     // Bevy positions logical px; UiScale is applied to Val::Px so undo it.
     node.left = Val::Px(anchor.x / scale.0);
@@ -1737,4 +1929,12 @@ pub fn apply_small_caps(commands: &mut Commands, entity: Entity, text: &mut Text
         }
         commands.spawn((SmallCapsSpan, TextSpan::new(s), f, TextColor(color), ChildOf(entity)));
     }
+}
+
+/// Width (design px) of a tooltip: the longest line (estimated from the glyph count), within 170..340.
+fn tooltip_width(layout: &TooltipLayout, icon: bool) -> f32 {
+    let longest = |s: &str, per_char: f32| s.lines().map(|l| l.chars().count()).max().unwrap_or(0) as f32 * per_char;
+    let title = longest(&layout.title, 7.4) + if icon { 43.0 } else { 0.0 };
+    let stats = if layout.labels.is_empty() { 0.0 } else { longest(&layout.labels, 5.8) + longest(&layout.values, 5.8) + 16.0 };
+    (title.max(longest(&layout.body, 5.8)).max(stats).max(longest(&layout.warn, 5.8)) + 20.0).clamp(170.0, 340.0)
 }

@@ -34,7 +34,9 @@ pub struct QueueEntry {
     pub icon: String,
     /// Build progress 0..1 (the front entry is the one being built).
     pub progress: f32,
-    /// Number of queued items of this kind (shown when above 1).
+    /// Lane: 0 space (left, blue), 1 ground (right, orange).
+    pub lane: u8,
+    /// Number of queued items of this kind (shown when above 1); 0 leaves the slot empty.
     pub count: u32,
     /// Tooltip text (empty keeps the slot's engine text).
     pub tooltip: String,
@@ -59,6 +61,8 @@ pub struct BuildPadEntry {
     pub level: u8,
     /// A requirement is missing (star base level, structure ...): drawn dark with the required level.
     pub locked: bool,
+    /// Tooltip of the small upkeep/income marker (empty: none).
+    pub marker_tooltip: String,
     /// Text under the icon instead of the price (fleet unit counts).
     pub label: String,
 }
@@ -161,4 +165,15 @@ impl PadRemap {
     pub fn entry(&self, slot: usize) -> usize {
         self.0.get(&slot).copied().unwrap_or(slot)
     }
+}
+
+/// A tooltip of something outside the command bar (a planet or fleet under the cursor on the map). Shown with the same
+/// look and anchor as the bar's tooltips whenever no bar button is hovered; the format is described in
+/// [`crate::widgets::tooltip`].
+#[derive(Resource, Debug, Clone, Default, PartialEq)]
+pub struct WorldTooltip {
+    /// Tooltip text.
+    pub text: Option<String>,
+    /// Header icon (texture name).
+    pub icon: Option<String>,
 }

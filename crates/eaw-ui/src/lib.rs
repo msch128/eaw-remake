@@ -27,7 +27,7 @@ use bevy::prelude::*;
 
 pub use components::{CommandBarComponent, CommandBarDb, ComponentKind};
 pub use data::{
-    AbilityEntry, BuildPadEntry, CommandBarData, PadRemap, EawButtonClicked, EawButtonState, EawLockedClicked, ForcedTooltip,
+    AbilityEntry, BuildPadEntry, CommandBarData, PadRemap, EawButtonClicked, EawButtonState, EawLockedClicked, ForcedTooltip, WorldTooltip,
     QueueEntry, SelectionEntry,
 };
 pub use faction::UiFaction;
@@ -43,7 +43,7 @@ pub use tactical::{TacticalOverlayRoot,
 };
 pub use widgets::{
     CommandBarMode, CommandBarSpec, EawButton, EawCommandBar, EawPanel, ShellAnchor, ShellSpec,
-    SmallCapsSpan, apply_small_caps, clamp_to_screen, small_caps_segments, spawn_command_bar, spawn_shell,
+    SmallCapsSpan, TipPart, Tooltip, TooltipLayout, apply_small_caps, clamp_to_screen, small_caps_segments, spawn_command_bar, spawn_shell,
 };
 
 /// How design pixels (1366x768 reference) map to screen pixels.
@@ -168,6 +168,7 @@ impl Plugin for EawUiPlugin {
             .init_resource::<CommandBarData>()
             .init_resource::<PadRemap>()
             .init_resource::<ForcedTooltip>()
+            .init_resource::<WorldTooltip>()
             .init_resource::<PanelData>()
             .init_resource::<TacticalData>()
             .init_resource::<TacticalOverlays>()

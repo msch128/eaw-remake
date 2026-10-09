@@ -184,6 +184,7 @@ fn sample_data(game: &alamo_data::GameData, faction: UiFaction) -> CommandBarDat
                 icon: pick(i * 3),
                 progress: if i == 0 { 0.6 } else { 0.0 },
                 count: if i == 1 { 3 } else { 1 },
+                lane: 0,
                 tooltip: String::new(),
             })
             .collect(),
@@ -193,7 +194,16 @@ fn sample_data(game: &alamo_data::GameData, faction: UiFaction) -> CommandBarDat
                 price: Some(150 + 25 * i as u32),
                 disabled: i % 5 == 4,
                 building: false,
-                tooltip: String::new(),
+                tooltip: if i == 2 { "Victory Star Destroyer
+The Victory-class Star Destroyer is a rugged, heavily armed capital ship that anchors Imperial battle groups. It carries turbolasers, ion cannons and a small fighter wing.
+
+Provides +10% income on its home planet.
+@Cost	12000
+@Build time	45 s
+@Population	10
+@Upkeep	400 credits per week
+!Requires star base level 2".to_owned() } else { String::new() },
+                marker_tooltip: String::new(),
                 upkeep: if i == 2 { -5.0 } else if i == 3 { 5.0 } else { 0.0 },
                 level: if i == 5 { 2 } else { 0 },
                 locked: i == 7,

@@ -98,6 +98,8 @@ pub struct Args {
     pub size: Option<(u32, u32)>,
     /// Offscreen only: act as if the cursor hovered the selected planet (`--hover`).
     pub hover_selected: bool,
+    /// Offscreen only: show the tooltip of this command bar button as if hovered (`--tooltip b_create_00`).
+    pub tooltip: Option<String>,
 }
 
 impl Default for Args {
@@ -148,6 +150,7 @@ impl Default for Args {
             battle_esc_after: None,
             size: None,
             hover_selected: false,
+            tooltip: None,
         }
     }
 }
@@ -195,6 +198,7 @@ OPTIONS:
   --battle-esc-after <s>    Press Esc in the tactical battle after s battle seconds (opens the battle menu)
   --size <WxH>          Offscreen: render target size (default 3840x2160)
   --hover               Offscreen: hover the selected planet (shows its hover panel)
+  --tooltip <button>    Offscreen: show the tooltip of a command bar button (b_create_00, queue00, ...)
   --no-vsync             Disable vertical sync
   --fullscreen           Start in borderless fullscreen
   -h, --help             Show this help
@@ -281,6 +285,7 @@ impl Args {
                     out.battle_speed = Some(v.parse().map_err(|e| format!("bad --battle-speed: {e}"))?);
                 }
                 "--hover" => out.hover_selected = true,
+                "--tooltip" => out.tooltip = Some(it.next().ok_or("--tooltip needs a button name")?),
                 "--size" => {
                     let v = it.next().ok_or("--size needs WxH")?;
                     let (w, h) = v.split_once(['x', 'X']).ok_or("bad --size (use WxH)")?;
