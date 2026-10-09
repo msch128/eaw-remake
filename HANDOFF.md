@@ -5,8 +5,8 @@ Live test guide: `PLAYTEST.md`. Work list: `docs/ROADMAP-2026-10-09.md`. Unatten
 QA reports: `docs/QA-2026-10-08.md`, `docs/QA-2026-10-09-night.md`.
 
 ## Overall
-Roughly **70 / 100** of the goal "play Remake 4.0 Galactic Conquest with space battles, EaW look & feel, 60+ FPS in 4K".
-Release gate green at 6866e81 (33/33 smoke, soak flat: battle 2.85 GB, galaxy 1.96 GB). User exe: `target\release`.
+Roughly **72 / 100** (2026-10-09 evening) of the goal "play Remake 4.0 Galactic Conquest with space battles, EaW look & feel, 60+ FPS in 4K".
+User exe 2026-10-09 16:32 from 1a60be4 (U1-U24 of docs/QA-2026-10-09-user.md); offscreen smoke green. Open items U25-U36 (Remake look, voice lines, result screen, droid menu, weapon range, early victory) are described there. Other agents: read AGENTS.md.
 
 | Area | Score | Note |
 |---|---|---|
