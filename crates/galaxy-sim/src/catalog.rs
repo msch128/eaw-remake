@@ -10,6 +10,38 @@ fn key(s: &str) -> String {
     s.trim().to_ascii_lowercase()
 }
 
+/// `Required_Special_Structures` as groups: names separated by whitespace or commas are all required, names joined by `|` are alternatives.
+fn parse_requirement(raw: &str) -> Vec<Vec<String>> {
+    let mut groups: Vec<Vec<String>> = Vec::new();
+    let mut join = false;
+    for tok in raw.replace('|', " | ").split(|c: char| c.is_whitespace() || c == ',').filter(|t| !t.is_empty()) {
+        if tok == "|" {
+            join = true;
+            continue;
+        }
+        match groups.last_mut() {
+            Some(last) if join => last.push(tok.to_string()),
+            _ => groups.push(vec![tok.to_string()]),
+        }
+        join = false;
+    }
+    groups
+}
+
+/// A name list (`Required_Planets`): separated by whitespace, commas or `|`.
+fn name_list(raw: &str) -> Vec<String> {
+    raw.split(|c: char| c.is_whitespace() || c == ',' || c == '|').filter(|t| !t.is_empty()).map(str::to_string).collect()
+}
+
+/// Requirement data of a structure, kept until every name can be resolved.
+struct StructRaw {
+    groups: Vec<Vec<String>>,
+    planets: Vec<String>,
+    /// Has space-side weapons (hardpoints or a ground-to-space special weapon).
+    space_reach: bool,
+    unlocks: Vec<String>,
+}
+
 /// Memoizing converter from hardpoints/projectiles to [`CombatStats`].
 struct StatsBuilder<'a> {
     data: &'a GameData,
@@ -163,7 +195,7 @@ impl World {
 
         // Structures first: units and structures reference them.
         let struct_kinds = ["specialstructure", "spacestructure", "techbuilding", "secondarystructure"];
-        let mut struct_reqs: Vec<Vec<String>> = Vec::new();
+        let mut struct_raw: Vec<StructRaw> = Vec::new();
         for o in data.objects.iter().filter(|o| struct_kinds.contains(&o.kind.to_ascii_lowercase().as_str())) {
             let Some(def) = data.objects.structure(&o.name) else { continue };
             let combat = (!def.hardpoints.is_empty()).then(|| {
@@ -184,7 +216,13 @@ impl World {
                 || def.source_file.to_ascii_lowercase().contains("/space/");
             let id = self.structures.len() as StructureTypeId;
             self.structure_index.insert(key(&def.name), id);
-            struct_reqs.push(def.required_special_structures.clone());
+            struct_raw.push(StructRaw {
+                groups: parse_requirement(def.fields.get("required_special_structures").map_or("", String::as_str)),
+                planets: name_list(def.fields.get("required_planets").map_or("", String::as_str)),
+                // Space-side weapons: hardpoints, or a ground-to-space special weapon (hypervelocity gun, nuke launcher ...).
+                space_reach: !def.hardpoints.is_empty() || yes("is_special_weapon_in_space"),
+                unlocks: def.unlocks.clone(),
+            });
             self.structures.push(StructureType {
                 name: def.name.clone(),
                 text_id: def.text_id.clone(),
@@ -194,6 +232,8 @@ impl World {
                 tech: def.tech_level,
                 req_starbase: def.required_star_base_level,
                 req_structures: Vec::new(),
+                req_planets: Vec::new(),
+                galactic: orbital,
                 ancestors: Vec::new(),
                 income_abs: def.income_modifiers.iter().map(|m| m.absolute).sum(),
                 income_pct: def.income_modifiers.iter().map(|m| m.percentage).sum(),
@@ -220,19 +260,13 @@ impl World {
                 self.structures[i].ancestors = r.chain.iter().skip(1).filter_map(|o| self.structure_index.get(&key(&o.name)).copied()).collect();
             }
         }
-        for (i, reqs) in struct_reqs.iter().enumerate() {
-            let mut ids = Vec::new();
-            let mut missing = false;
-            for r in reqs {
-                match self.structure_index.get(&key(r)) {
-                    Some(&id) => ids.push(id),
-                    None => missing = true,
-                }
-            }
-            self.structures[i].req_structures = ids;
-            if missing {
-                self.structures[i].buildable = false;
-            }
+        for (i, raw) in struct_raw.iter().enumerate() {
+            let (groups, ok) = self.resolve_requirement(&raw.groups);
+            let (planets, planets_ok) = self.resolve_planets(&raw.planets);
+            let st = &mut self.structures[i];
+            st.req_structures = groups;
+            st.req_planets = planets;
+            st.buildable &= ok && planets_ok;
         }
 
         // Units: ships first, then squadrons (which sum their members).
@@ -255,15 +289,7 @@ impl World {
             let id = self.units.len() as UnitTypeId;
             self.unit_index.insert(key(&def.name), id);
             let mut u = unit_from_def(&def, combat);
-            u.req_structures = def.required_special_structures.iter().filter_map(|s| self.structure_index.get(&key(s)).copied()).collect();
-            if u.req_structures.len() != def.required_special_structures.len() {
-                u.buildable = false;
-            }
-            u.req_planets = def.required_planets.iter().filter_map(|p| self.planet_index.get(&key(p)).copied()).collect();
-            if u.req_planets.len() != def.required_planets.len() {
-                // Restricted to a planet that is not in this galaxy.
-                u.buildable = false;
-            }
+            self.resolve_unit_requirements(&mut u, &def);
             self.units.push(u);
         }
         for def in squadrons {
@@ -291,16 +317,10 @@ impl World {
             u.category = category;
             u.hyperspace_speed = if speed == f32::MAX { 0.5 } else { speed };
             u.buildable &= ok;
-            u.req_structures = def.required_special_structures.iter().filter_map(|s| self.structure_index.get(&key(s)).copied()).collect();
-            if u.req_structures.len() != def.required_special_structures.len() {
-                u.buildable = false;
-            }
-            u.req_planets = def.required_planets.iter().filter_map(|p| self.planet_index.get(&key(p)).copied()).collect();
-            if u.req_planets.len() != def.required_planets.len() {
-                u.buildable = false;
-            }
+            self.resolve_unit_requirements(&mut u, &def);
             self.units.push(u);
         }
+        self.classify_ground_structures(&struct_raw);
 
         // Star bases.
         let sbs = data.objects.star_bases();
@@ -370,7 +390,7 @@ impl World {
         self.structure_unlocks = vec![0; self.structures.len()];
         for u in &self.units {
             if u.buildable {
-                for &r in &u.req_structures {
+                for &r in u.req_structures.iter().flatten() {
                     self.structure_unlocks[r as usize] += 1;
                 }
             }
@@ -401,6 +421,79 @@ impl World {
             self.buildable_units.push(units);
             self.buildable_structures.push(structs);
             self.first_starbase.push(first);
+        }
+    }
+
+    /// Resolves `Required_Special_Structures` groups; the flag is false if a group has no structure that exists at all.
+    fn resolve_requirement(&self, groups: &[Vec<String>]) -> (Vec<Vec<StructureTypeId>>, bool) {
+        let mut out = Vec::new();
+        let mut ok = true;
+        for g in groups {
+            let ids: Vec<StructureTypeId> = g.iter().filter_map(|n| self.structure_index.get(&key(n)).copied()).collect();
+            if ids.is_empty() {
+                ok = false;
+            } else {
+                out.push(ids);
+            }
+        }
+        (out, ok)
+    }
+
+    /// Resolves `Required_Planets`: any one listed planet suffices, so only a list without a single planet of this galaxy blocks the item.
+    fn resolve_planets(&self, names: &[String]) -> (Vec<PlanetId>, bool) {
+        let ids: Vec<PlanetId> = names.iter().filter_map(|n| self.planet_index.get(&key(n)).copied()).collect();
+        let ok = names.is_empty() || !ids.is_empty();
+        (ids, ok)
+    }
+
+    fn resolve_unit_requirements(&self, u: &mut UnitType, def: &SpaceUnitDef) {
+        let (groups, ok) = self.resolve_requirement(&parse_requirement(def.fields.get("required_special_structures").map_or("", String::as_str)));
+        let (planets, planets_ok) = self.resolve_planets(&name_list(def.fields.get("required_planets").map_or("", String::as_str)));
+        u.req_structures = groups;
+        u.req_planets = planets;
+        u.buildable &= ok && planets_ok;
+    }
+
+    /// Decides which ground structures stay in the build menus (see `StructureType::galactic`).
+    fn classify_ground_structures(&mut self, raw: &[StructRaw]) {
+        let n = self.structures.len();
+        let reaches_ships = |w: &World, m: &ProductionMod| m.all || !m.categories.is_empty() || m.types.iter().any(|t| w.unit_index.contains_key(t));
+        let mut keep: Vec<bool> = (0..n)
+            .map(|i| {
+                let st = &self.structures[i];
+                st.orbital
+                    || raw[i].space_reach
+                    || st.income_abs > 0.0
+                    || st.income_pct > 0.0
+                    || st.income_abs_mining > 0.0
+                    || st.income_pct_mining > 0.0
+                    || st.gamble.is_some()
+                    || st.population_capacity > 0
+                    || st.prod_mods.iter().any(|m| reaches_ships(self, m))
+                    || raw[i].unlocks.iter().any(|u| self.unit_index.contains_key(&key(u)))
+            })
+            .collect();
+        // Prerequisites of a kept structure stay (outposts and base cores lead to mines, taxation agencies ...).
+        loop {
+            let mut changed = false;
+            for i in 0..n {
+                if !keep[i] {
+                    continue;
+                }
+                for &r in self.structures[i].req_structures.iter().flatten() {
+                    if !keep[r as usize] {
+                        keep[r as usize] = true;
+                        changed = true;
+                    }
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+        for (st, k) in self.structures.iter_mut().zip(keep) {
+            st.galactic = k;
+            st.buildable &= k;
         }
     }
 

@@ -42,15 +42,27 @@ Population: units have `Population_Value`; the cap is
   speed-up from star base level.
 * A ship may be queued when all of these hold (`World::check_build_unit`):
   `Affiliation` contains the faction, `Tech_Level` <= faction tech, `Required_Star_Base_Level` <= the planet's base level,
-  every `Required_Special_Structures` entry is present (a structure also satisfies the requirement of any object in its
-  `Variant_Of_Existing_Type` ancestry), `Required_Planets`, not `Build_Initially_Locked` unless unlocked,
+  every `Required_Special_Structures` group is met (see below; a structure also satisfies the requirement of any object in its
+  `Variant_Of_Existing_Type` ancestry), the planet is one of `Required_Planets` (any one listed; names that are not in the galaxy are ignored),
+  the planet can hold a star base of the required level (`Max_Space_Base`; otherwise the item is hidden for this planet), not `Build_Initially_Locked` unless unlocked,
   `Build_Limit_Current_Per_Player` / `Build_Limit_Lifetime_Per_Player`, population, credits.
   Objects with `Tech_Level` >= 90 (story-unlockable, terrain-specific templates) are never offered.
 * `Build_Initially_Locked` objects are unlocked by research items: completing `Research_<Name>`
   (see `Research/Units/_Default_Base.xml`, mirrored by `Scripts/Library/libResearchFunctions.lua`) unlocks `<Name>`.
 * Structures (`SpecialStructure`): slot limits come from the planet's `Special_Structures_Space` (orbital) and
-  `Special_Structures_Land` (ground); `Build_Max_Instances_Per_Planet`; `Required_Star_Base_Level` (shipyards need level 2).
-  Terrain-specific variants (`*_Urban`, `*_Barren`) are not filtered by planet terrain (gap).
+  `Special_Structures_Land` (ground), queued items take a slot already (`World::planet_capacity` -> `PlanetCapacity { space, ground, starbase_level, starbase_max }`,
+  each `SlotUse { built, queued, total }`; Coruscant_WW: 7 orbital, 6 ground, station up to level 3); `Build_Max_Instances_Per_Planet`;
+  `Required_Star_Base_Level` (shipyards need level 2), `Required_Special_Structures`, `Required_Planets` as for ships. Terrain variants
+  (`*_Urban`, `*_Barren`, `*_Sector`) and one-planet buildings (Starforge, refineries, fortresses) are selected by `Required_Planets`.
+* `Required_Special_Structures` syntax (checked against the XML, `catalog.rs::parse_requirement`): names separated by whitespace or commas are **all** required,
+  names joined by `|` are **alternatives** (`Empire_Outpost_Urban | Imperial_Palace_Urban`), and both mix (`U_Shipyard_1 U_Trade_Hub | U_Gas_Refinery`).
+  The refusal text lists every unmet group (`RequirementsNotMet("E_Shipyard_3, E_Uplink_Command")`, alternatives joined by ` | `); `galaxy-play` shows display names.
+* One star base per planet (`Lane::Base`, levels chain up to `Max_Space_Base`); orbital buildings and ground buildings are separate slot pools.
+* `Required_Ground_Base_Level` only occurs on `GroundBase` objects (ground base levels, not modelled: no ground battles). `Required_Orbiting_Units`
+  (hero upgrade items such as Piett's 25000 credit upgrade) is not enforced yet.
+* Heroes: `Build_Cost_Credits` of the hero ship itself is **1** in the Remake data (e.g. `Piett_Procursator`, `Strikefast`); the real investment is the follow-up upgrade item
+  (`Vessel_Upgrade_Template`, 25000+). The menu shows the data value.
+* Ground structures only appear if they matter for the galactic game (`StructureType::galactic`, no ground battles): see `STATUS.md` "Build menu split".
 * Star base levels are the chain `Prev_Level_Base` / `Next_Level_Base` (`Buildings/Space/GC/<Faction>/Colonies.xml`). Minor
   factions define their levels as unlinked objects (`Minor_Starbase_X`, `_2`, `_3`) which are chained by name and level.
 * Tech levels: `*_Level_N_Tech_Upgrade` upgrade objects (`Upgrades/Vanilla*.xml`, flag `Tactical_Build_Increments_Tech_Level`,

@@ -320,8 +320,8 @@ pub struct UnitType {
     pub population: i32,
     /// Required star base level at the building planet.
     pub req_starbase: i32,
-    /// Structures the building planet must have.
-    pub req_structures: Vec<StructureTypeId>,
+    /// `Required_Special_Structures`: every group must be met by one of its members (`A B` = both, `A | B` = either).
+    pub req_structures: Vec<Vec<StructureTypeId>>,
     /// If not empty, the unit can only be built on these planets.
     pub req_planets: Vec<PlanetId>,
     /// `Build_Initially_Locked`.
@@ -367,8 +367,13 @@ pub struct StructureType {
     pub tech: i32,
     /// Required star base level.
     pub req_starbase: i32,
-    /// Required other structures.
-    pub req_structures: Vec<StructureTypeId>,
+    /// `Required_Special_Structures`: every group must be met by one of its members (`A B` = both, `A | B` = either).
+    pub req_structures: Vec<Vec<StructureTypeId>>,
+    /// `Required_Planets`: if not empty, the structure can only be built on these planets (terrain variants, Starforge, refineries ...).
+    pub req_planets: Vec<PlanetId>,
+    /// Orbital structures always; a ground structure only if it affects the galactic game (income, population, space
+    /// weapons or hardpoints, ship discounts, gambling income) or is a prerequisite of one. See `galaxy-sim/STATUS.md`.
+    pub galactic: bool,
     /// Structure types this one counts as (its `Variant_Of_Existing_Type` ancestors), itself excluded.
     pub ancestors: Vec<StructureTypeId>,
     /// Absolute income change per week.

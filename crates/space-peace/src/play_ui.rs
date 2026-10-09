@@ -17,7 +17,7 @@ use crate::flow::AppScreen;
 use crate::battle_play::PendingTactical;
 use crate::galaxy_map::GalaxyEntity;
 use crate::offscreen::OffscreenTarget;
-use crate::play::{PlayBridge, is_structure};
+use crate::play::{PlayBridge, on_space_tab};
 use crate::settings::Settings;
 use crate::ui::InfoPanel;
 
@@ -368,7 +368,7 @@ fn feed_bar(
         let listed: Vec<_> = menu
             .options
             .iter()
-            .filter(|o| is_structure(o.target) != space_tab && (!space_tab || class.is_none_or(|c| c.matches(o.category))))
+            .filter(|o| on_space_tab(&state.world, o.target) == space_tab && (!space_tab || class.is_none_or(|c| c.matches(o.category))))
             .filter(|o| space_tab || !matches!(o.availability, galaxy_play::Availability::Requires(_)))
             .take(MAX_PADS)
             .collect();

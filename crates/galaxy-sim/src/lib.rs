@@ -33,6 +33,6 @@ pub use world::{IncomeGamble,
     BattleResolver, CombatStats, ObjectKind, FactionId, FactionInfo, FleetId, PlanetId, PlanetInfo, RouteInfo, SimConfig, SimError, StarbaseTypeId,
     StarbaseType, StructureType, StructureTypeId, UnitRole, UnitType, UnitTypeId, VictoryRules, Weapon, World,
 };
-pub use production::DestroyRefusal;
+pub use production::{DestroyRefusal, PlanetCapacity, SlotUse};
 pub use sight::Sight;
 pub use tactical::{GroupKind, TacticalError, TacticalGroup, TacticalRequest, TacticalResult, TacticalSide, run_headless};

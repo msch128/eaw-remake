@@ -149,6 +149,8 @@ pub struct BuildMenu {
     pub starbase_level: i32,
     /// Name of the current star base.
     pub starbase_name: Option<String>,
+    /// Highest star base level this planet can get (one star base per planet).
+    pub starbase_max: i32,
     /// Used and total orbital structure slots.
     pub space_slots: (i32, i32),
     /// Used and total ground structure slots.
@@ -188,6 +190,26 @@ fn availability(err: Result<(), CommandError>) -> Option<Availability> {
         Err(CommandError::RequirementsNotMet(r)) => Some(Availability::Requires(r)),
         Err(_) => None,
     }
+}
+
+/// A missing-structure requirement names objects (`E_Shipyard_3, E_Uplink_Command`, alternatives joined by ` | `); the menu shows their display names.
+fn shown_requirement(world: &World, names: &PlayCatalog, a: Availability) -> Availability {
+    let Availability::Requires(raw) = a else { return a };
+    let text = raw
+        .split(", ")
+        .map(|group| {
+            let mut shown: Vec<String> = Vec::new();
+            for n in group.split(" | ") {
+                let text = world.structure_id(n).map_or_else(|| n.to_owned(), |id| names.structure(id).to_owned());
+                if !shown.contains(&text) {
+                    shown.push(text);
+                }
+            }
+            shown.join(" or ")
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    Availability::Requires(text)
 }
 
 impl BuildMenu {
@@ -241,7 +263,7 @@ impl BuildMenu {
         }
         // Units.
         for &u in &world.buildable_units[faction as usize] {
-            let Some(a) = availability(world.check_build_unit(galaxy, faction, planet, u)) else { continue };
+            let Some(a) = availability(world.check_build_unit(galaxy, faction, planet, u)).map(|a| shown_requirement(world, names, a)) else { continue };
             let ut = &world.units[u as usize];
             options.push(BuildOption {
                 category: category_of(world, u),
@@ -255,7 +277,7 @@ impl BuildMenu {
         }
         // Structures.
         for &s in &world.buildable_structures[faction as usize] {
-            let Some(a) = availability(world.check_build_structure(galaxy, faction, planet, s)) else { continue };
+            let Some(a) = availability(world.check_build_structure(galaxy, faction, planet, s)).map(|a| shown_requirement(world, names, a)) else { continue };
             let st = &world.structures[s as usize];
             options.push(BuildOption {
                 category: BuildCategory::Structures,
@@ -302,6 +324,7 @@ impl BuildMenu {
             income: world.planet_income(galaxy, planet),
             starbase_level: sb.map_or(0, |b| world.starbases[b as usize].level),
             starbase_name: sb.map(|b| names.starbase(b).to_owned()),
+            starbase_max: world.max_starbase_level(planet),
             space_slots: slots(true, info.space_slots),
             ground_slots: slots(false, info.ground_slots),
             structures: ps.structures.iter().map(|&s| names.structure(s).to_owned()).collect(),

@@ -50,3 +50,27 @@ Headless, deterministic, `Send` Galactic Conquest simulation. Rules: `RULES.md`.
   Others' planets are refused (`NotOwner`), bad index `Invalid`. `PlayAction::CancelProduction { planet, lane, index }` in galaxy-play.
 
 - Retreat outcome (QA 2026-10-09 night P1-2, build before 0e9a86c where Esc->Retreat still sent Aborted): `Sim::retreat_tactical` applies an explicit retreat of a faction (opponent wins, survivors retreat along the escape route, planet defenses of a retreating defender are lost so no instant second battle). The app's Esc->Retreat takes the real retreat order and returns the normal result; F10 / End battle stay "abandon + auto-resolve from the current state". Tests in `tests/tactical.rs`: `attacker_retreating_from_a_defended_planet_captures_nothing_and_leaves`, `defender_retreating_leaves_the_planet_to_the_attacker_by_the_normal_rule`, `retreat_order_in_the_battle_ends_without_capture`.
+
+## Build menu split, prerequisites and slots (QA 2026-10-09 U1-U5)
+- Root causes: (1) the HUD put every structure on the ground tab; (2) `Required_Special_Structures` was flattened to "all of"
+  although the XML writes alternatives with `|` (`A | B | C`), so terrain variants and multi-faction ships were mis-evaluated; (3) `Required_Planets` was only
+  checked for ships (never for structures: Starforge, refineries, outposts of every terrain showed everywhere) and a list with one unknown planet name made the
+  whole item unbuildable; (4) items needing a station level the planet can never reach stayed listed as "requires star base level 3"; (5) the menu printed raw
+  object names (`E_Uplink_Command`). Hero cost 1 credit is the data value (`Build_Cost_Credits` 1, the upgrade items cost 25000+), not a bug.
+- Fixes: `catalog.rs` parses requirements into groups (`req_structures: Vec<Vec<StructureTypeId>>`), structures get `req_planets`; `production.rs` enforces groups,
+  planets and `Max_Space_Base` (item hidden via `RequirementsNotMet("planet")`) for ships and structures; `World::planet_capacity` exposes slot counts for the UI
+  (`PlanetCapacity`); `BuildMenu::starbase_max` + display names of requirements (`galaxy-play/build_menu.rs`); `space-peace/play.rs::on_space_tab` puts orbital
+  structures (`StructureType::orbital`: `Base_Position` Orbital / `Build_Tab_Space_Station` / `Buildings/Space/` source) on the space tab, ground structures on the ground tab.
+  The AI uses the same `check_build_*` calls, so it obeys all of it.
+- Ground structure rule (`classify_ground_structures`): a ground structure stays buildable (`galactic`) if it has positive income, a mining-colony income bonus,
+  gambling income, population capacity, space-side weapons (hardpoints or `Is_Special_Weapon_In_Space`), a production discount that applies to ships
+  (`Reduce_Production_*` with `All`, a ship category or a ship type), or unlocks a space unit; plus every prerequisite of a kept structure (outposts, base cores).
+  Everything else supports ground units only and is not offered. Resulting removals (Empire/Rebel/Underworld): `Barracks_Base_*`, `Factory_Base_*`,
+  `Factory_Heavy_Base_*`, `Factory_Advanced_Base_*`, `Hangar_Base_*`, `Support_Hangar_Base_*`, `Training_Grounds_Base_*`, `Proving_Grounds_Base_*`, `Workshop_Base_*`,
+  `Starport_*`, `Echo_Base_Hoth`, `Planet_Rocket_Tower_*`, `Tower_Defense_Grid_*`, `Flak_Tower_Defense_Grid_*` (upkeep only, no galactic effect in the data).
+  Kept: outposts, palaces, `*_Base_Core_*`, taxation agencies, agricultural communities, mining companies/facilities, cantinas, scrapyards, warehouses, casino, arena,
+  senate, fortresses and watchtowers (space hardpoints), `Hypervelocity_Gun`, `Nuke_Launcher`, `Seismic_Cannon` (ground-to-space), and all orbital structures.
+- Gaps: objects with `Tech_Level` 99 (`Planet_Shield_E`, `Communications_Array_E`, `Imperial_Command_Center` ...) are still never offered (story-unlocked, see RULES.md);
+  `Required_Orbiting_Units` and `Required_Ground_Base_Level` are not enforced; whether the Remake treats a missing planet name in `Required_Planets` as "ignore" is assumed (any one listed planet suffices).
+- Tests: `tests/build_rules.rs` (8 tests on the real data: yard 3 needs 2 needs 1, alternatives/groups parsing, hero needs the uplink + cost 1, Star_Destroyer_R only at Kuat/Fondor,
+  small planet limits, planet lists of structures, no army buildings/yards in the right menus, slot API) and `galaxy-play/tests/build_menu_rules.rs` (display name of the unmet requirement).

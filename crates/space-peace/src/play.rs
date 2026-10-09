@@ -455,10 +455,13 @@ fn run_script(
     }
 }
 
-/// Which build entries a pad list is made of: unit-like entries (ships, star base, tech,
-/// research) or structures.
-pub fn is_structure(menu_target: BuildTarget) -> bool {
-    matches!(menu_target, BuildTarget::Structure(_))
+/// True if the entry belongs to the space production tab: ships, star base, tech, research and orbital structures (shipyards, Major
+/// Construction Yards, refineries ...). Ground structures go to the ground tab. Decided by the structure data (`StructureType::orbital`).
+pub fn on_space_tab(world: &galaxy_sim::World, menu_target: BuildTarget) -> bool {
+    match menu_target {
+        BuildTarget::Structure(s) => world.structures.get(s as usize).is_some_and(|st| st.orbital),
+        _ => true,
+    }
 }
 
 /// Offscreen `--via-menu`: walks main menu -> campaign list -> campaign like a player (the clicks
