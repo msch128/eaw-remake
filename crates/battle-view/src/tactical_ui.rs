@@ -576,6 +576,7 @@ fn reinforce_panel(
 
 /// Follows the simulation: units leave the reserve when a call is accepted, a refusal shows a notice and plays a sound.
 fn reinforce_events(
+    fonts: Res<eaw_ui::EawUiSettings>,
     time: Res<Time>,
     rt: Res<BattleRuntime>,
     settings: Res<BattleViewSettings>,
@@ -601,7 +602,7 @@ fn reinforce_events(
                     .spawn((
                         crate::BattleEntity,
                         Text::new("Cannot call in reinforcements: unit cap reached"),
-                        TextFont { font_size: FontSize::Px(20.0), ..default() },
+                        game_font(&fonts, 20.0),
                         TextColor(Color::srgb(1.0, 0.6, 0.45)),
                         Node { position_type: PositionType::Absolute, top: Val::Px(40.0), left: Val::Percent(35.0), ..default() },
                     ))
@@ -646,6 +647,7 @@ const SUPER_LASER_AIM_RADIUS: f32 = 600.0;
 /// refuse (out of the storm's range, no enemy capital / frigate / structure near the super laser aim) shows the reason and keeps the mode.
 #[allow(clippy::too_many_arguments)]
 fn ability_at(
+    fonts: Res<eaw_ui::EawUiSettings>,
     mut state: ResMut<TacticalUiState>,
     mut armed: ResMut<control::ArmedOrder>,
     rt: Res<BattleRuntime>,
@@ -676,7 +678,7 @@ fn ability_at(
                 .spawn((
                     crate::BattleEntity,
                     Text::new(""),
-                    TextFont { font_size: FontSize::Px(12.0), ..default() },
+                    game_font(&fonts, 12.0),
                     TextColor(Color::WHITE),
                     TextShadow { offset: Vec2::splat(1.0), color: Color::BLACK },
                     Node { position_type: PositionType::Absolute, display: Display::None, ..default() },
@@ -1105,6 +1107,7 @@ fn ghost_model_path(rt: &BattleRuntime, ship: u32) -> Option<String> {
 /// delay). Right click / Esc cancels.
 #[allow(clippy::too_many_arguments)]
 fn reinforce_place(
+    fonts: Res<eaw_ui::EawUiSettings>,
     mut ui: ResMut<ReinforceUi>,
     mut armed: ResMut<control::ArmedOrder>,
     rt: Res<BattleRuntime>,
@@ -1145,7 +1148,7 @@ fn reinforce_place(
                 .spawn((
                     crate::BattleEntity,
                     Text::new(""),
-                    TextFont { font_size: FontSize::Px(12.0), ..default() },
+                    game_font(&fonts, 12.0),
                     TextColor(Color::WHITE),
                     TextShadow { offset: Vec2::splat(1.0), color: Color::BLACK },
                     Node { position_type: PositionType::Absolute, display: Display::None, ..default() },
@@ -1331,5 +1334,13 @@ fn retreat_banner(
         }
         (None, Ok((e, _))) => commands.entity(e).despawn(),
         (None, Err(_)) => {}
+    }
+}
+
+/// Text font of the battle HUD notices: the game font of the UI settings (like the retreat banner), the default font without one.
+fn game_font(ui: &eaw_ui::EawUiSettings, size: f32) -> TextFont {
+    match &ui.font_family {
+        Some(f) => TextFont { font: FontSource::Family(f.as_str().into()), font_size: FontSize::Px(size), ..default() },
+        None => TextFont::from_font_size(size),
     }
 }
