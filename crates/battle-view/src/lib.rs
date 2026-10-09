@@ -652,6 +652,7 @@ fn advance_clock(
     mut rt: ResMut<BattleRuntime>,
     mut status: ResMut<BattleStatus>,
     mut cam: Single<&mut BattleCamera>,
+    mut auto_frame: Local<Option<(Vec3, f32)>>,
 ) {
     rt.speed = if settings.paused { 0.0 } else { settings.speed };
     let step = rt.dt as f64;
@@ -699,6 +700,21 @@ fn advance_clock(
             cam.target_focus = center;
             cam.distance = settings.start_distance;
             cam.target_distance = settings.start_distance;
+            *auto_frame = Some((center, settings.start_distance));
+        }
+    }
+    // The fleet drifts while it arrives (staggered rows, jump-in): keep it centred for the first seconds unless the player touched the camera.
+    if let Some((last, dist)) = *auto_frame {
+        let touched = (cam.target_focus - last).length() > 1.0 || (cam.target_distance - dist).abs() > 1.0;
+        if touched || cur.time > 12.0 {
+            *auto_frame = None;
+        } else {
+            let own: Vec<Vec3> = cur.ships.iter().filter(|s| s.side == settings.player_side).map(|s| convert::sim_to_bevy(s.pos)).collect();
+            if !own.is_empty() {
+                let c = own.iter().copied().sum::<Vec3>() / own.len() as f32;
+                cam.target_focus = c;
+                *auto_frame = Some((c, dist));
+            }
         }
     }
     rt.cur = Some(cur);

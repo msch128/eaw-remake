@@ -527,7 +527,7 @@ fn drive(
                     }
                 }
                 (1 | 2, _) => act = click_at(t, Vec2::ZERO, MouseButton::Right),
-                (30, _) => {
+                (30..=150, _) => {
                     if let (Some((f, d)), Ok(mut c)) = (st.cam_saved.take(), cams.single_mut()) {
                         c.focus = f;
                         c.target_focus = f;
@@ -537,10 +537,13 @@ fn drive(
                     let ok = st.autocast.is_some_and(|(id, i, before)| rt.cur.as_ref().and_then(|c| c.ship(id)).is_some_and(|s| s.autocast.get(i).copied() == Some(!before)));
                     // The ring on the button follows the state.
                     let ring_ok = st.autocast.is_some_and(|(_, _, before)| autocast_rings.iter().count() == usize::from(!before));
-                    if !ring_ok {
-                        info!("input-test:   autocast rings on the bar: {}", autocast_rings.iter().count());
+                    // Command -> snapshot -> ring can take a while under load: poll for up to 150 frames before failing.
+                    if ok && ring_ok || t == 150 {
+                        if !ring_ok {
+                            info!("input-test:   autocast rings on the bar: {}", autocast_rings.iter().count());
+                        }
+                        verdict = Some(("autocast-toggle-and-ring".into(), ok && ring_ok));
                     }
-                    verdict = Some(("autocast-toggle-and-ring".into(), ok && ring_ok));
                 }
                 _ => {}
             }

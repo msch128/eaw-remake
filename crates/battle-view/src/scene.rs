@@ -275,26 +275,55 @@ pub fn spawn_scene(commands: &mut Commands, scene: &SpaceScene, sky_radius: f32,
                 scale: Vec3::splat(p.scale),
             },
         ));
-        if p.backdrop && p.model.to_ascii_lowercase().contains("planet") {
-            e.insert(BackdropPlanet);
+        if (p.backdrop && p.model.to_ascii_lowercase().contains("planet")) || p.model.to_ascii_lowercase().contains("terrain") {
+            e.insert(BackdropPlanet::default());
         }
     }
 }
 
-/// Marks a backdrop planet placed below the battle plane.
-#[derive(Component, Debug)]
-pub struct BackdropPlanet;
+/// Marks a backdrop planet or ground terrain placed below the battle plane; the value counts the frames since its model loaded
+/// ([`SETTLED`] once it was checked).
+#[derive(Component, Debug, Default)]
+pub struct BackdropPlanet(u8);
 
-/// Closest the top of a backdrop planet may come to the battle plane (world units below it). A planet whose scaled
-/// radius reaches up to the plane (or through it) fills the view behind the ships when the camera looks down.
-const PLANET_CLEARANCE: f32 = 4000.0;
+/// Closest the visible top of a backdrop planet or ground terrain (`W_Land_Terrain_*` props, e.g. the GrassyMountainsHuge on the Brentaal map at y -2500, whose peaks reach above the plane) may come to the battle plane (world units below it). The maps place the
+/// planet well below the plane (Byss: surface filling the picture under the ships, like the Remake video); a planet that
+/// reaches up to the plane or through it hides the ships (camera inside or right over the terrain), so only such a planet
+/// is moved down, by the needed amount plus this clearance.
+const PLANET_CLEARANCE: f32 = 500.0;
+const SETTLED: u8 = u8::MAX;
 
-/// Pushes a loaded backdrop planet down until its top is [`PLANET_CLEARANCE`] below the battle plane.
-pub fn keep_planet_below(mut planets: Query<(&AlamoModelLoaded, &mut Transform), (With<BackdropPlanet>, Added<AlamoModelLoaded>)>) {
-    for (loaded, mut tf) in &mut planets {
-        let top = tf.translation.y + (loaded.center.y + loaded.radius) * tf.scale.y;
-        info!("battle backdrop planet: radius {} scale {} top {top}", loaded.radius, tf.scale.y);
-        if top > -PLANET_CLEARANCE {
+/// Measures the real top of a loaded backdrop planet (world bounds of its mesh parts) and moves it down when it reaches
+/// the battle plane. Runs a few frames after loading so the transforms and bounds are up to date.
+pub fn keep_planet_below(
+    mut planets: Query<(&AlamoModelLoaded, &mut Transform, &mut BackdropPlanet)>,
+    parts: Query<(&bevy::camera::primitives::Aabb, &GlobalTransform)>,
+) {
+    for (loaded, mut tf, mut state) in &mut planets {
+        if state.0 == SETTLED {
+            continue;
+        }
+        state.0 += 1;
+        if state.0 < 4 {
+            continue;
+        }
+        let mut top = f32::MIN;
+        for e in &loaded.parts {
+            let Ok((aabb, gt)) = parts.get(*e) else { continue };
+            let m = gt.affine();
+            let c = m.transform_point3a(aabb.center);
+            let half_y = m.matrix3.row(1).abs().dot(aabb.half_extents);
+            top = top.max(c.y + half_y);
+        }
+        if top == f32::MIN {
+            if state.0 > 60 {
+                state.0 = SETTLED;
+            }
+            continue;
+        }
+        state.0 = SETTLED;
+        info!("battle ground below the plane: top at {top:.0} (plane 0), position y {}", tf.translation.y);
+        if top > -PLANET_CLEARANCE && std::env::var_os("SP_NO_PLANET_CLAMP").is_none() {
             tf.translation.y -= top + PLANET_CLEARANCE;
         }
     }
