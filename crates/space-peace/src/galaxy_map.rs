@@ -683,10 +683,12 @@ fn update_labels(
         }
         let planet = &view.planets[label.0];
         let radius = radii.0[label.0];
-        let below = galaxy_to_world(planet.position) + Vec3::new(0.0, 0.0, radius * 0.75);
-        let Ok(p) = camera.world_to_viewport(cam_tf, below) else {
+        // Straight under the sphere on the screen at any camera tilt: the sphere's centre plus its pixel radius downwards.
+        let centre = galaxy_to_world(planet.position);
+        let (Ok(a), Ok(b)) = (camera.world_to_viewport(cam_tf, centre), camera.world_to_viewport(cam_tf, centre + cam_tf.right() * radius)) else {
             continue;
         };
+        let p = a + Vec2::new(0.0, a.distance(b) * 0.95);
         let measured = computed.size() * computed.inverse_scale_factor() * us;
         let size = if measured.x > 1.0 {
             measured
@@ -744,10 +746,17 @@ fn update_labels(
         .collect();
     let mut placed: Vec<(Vec2, Vec2)> = Vec::with_capacity(order.len());
     const MARGIN: f32 = 2.0;
+    let close = zoom_out < 0.45;
     for i in order {
         let s = slots[i].expect("filtered above");
         let (lo, hi) = (s.pos - Vec2::splat(MARGIN), s.pos + s.size + Vec2::splat(MARGIN));
-        let on_screen = lo.x >= 0.0 && lo.y >= 0.0 && hi.x <= viewport.x && hi.y <= viewport.y - reserved.0;
+        // Close up every planet in view keeps its name: only its anchor has to be on screen, and crowding never hides it.
+        let anchor = s.pos + Vec2::new(s.size.x * 0.5, 0.0);
+        let on_screen = if close {
+            anchor.x >= 0.0 && anchor.y >= 0.0 && anchor.x <= viewport.x && anchor.y <= viewport.y - reserved.0
+        } else {
+            lo.x >= 0.0 && lo.y >= 0.0 && hi.x <= viewport.x && hi.y <= viewport.y - reserved.0
+        };
         let overlaps = placed
             .iter()
             .any(|&(plo, phi)| lo.x < phi.x && hi.x > plo.x && lo.y < phi.y && hi.y > plo.y);
@@ -761,7 +770,7 @@ fn update_labels(
         // The selected planet always keeps its label.
         let behind_panel = panel.0.iter().chain(panel.1.iter()).any(|(plo, phi)| lo.x < phi.x && hi.x > plo.x && lo.y < phi.y && hi.y > plo.y);
         let selected = selection.0 == Some(i);
-        if selected || (on_screen && !behind_panel && !overlaps && (!on_planet || slots[i].is_some_and(|s| s.score >= 1.0e6))) {
+        if selected || (on_screen && !behind_panel && (close || (!overlaps && (!on_planet || slots[i].is_some_and(|s| s.score >= 1.0e6))))) {
             placed.push((lo, hi));
             visible[i] = true;
         }
