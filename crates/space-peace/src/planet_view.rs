@@ -141,6 +141,17 @@ fn view_scene(
     let plat = ORIGIN + Vec3::new(0.0, -2.5, -10.0);
     state.ground_slots = [-0.9f32, 0.0, 0.95].iter().map(|x| plat + Vec3::new(*x, -0.07, 0.05)).collect();
     state.orbital_slots = (0..6).map(|k| plat + Vec3::new((k as f32 - 2.5) * 0.62, -0.74, 0.05)).collect();
+    // Orbital slot circles of the second pad (the art is an empty strip).
+    let ring = mats.add(StandardMaterial { base_color: Color::srgb(0.85, 0.78, 0.55), unlit: true, depth_bias: 50.0, cull_mode: None, ..default() });
+    for at in &state.orbital_slots {
+        commands.spawn((
+            ViewEntity,
+            Name::new("orbital slot ring"),
+            Mesh3d(meshes.add(Annulus::new(0.125, 0.14))),
+            MeshMaterial3d(ring.clone()),
+            Transform::from_translation(plat + Vec3::new(at.x - plat.x, 0.0, 0.0) * 0.66 + Vec3::new(0.0, -0.64, 0.08)).with_scale(Vec3::new(1.0, 0.8, 1.0)),
+        ));
+    }
     if let Some(sim) = sim_for_structs {
         let cat_for_structs = cat_for_structs;
         let (mut g, mut o) = (0usize, 0usize);

@@ -646,7 +646,7 @@ pub fn spawn_battle_banner(world: &mut World, spec: &BattleBannerSpec) -> Option
             ChildOf(root),
         ))
         .with_children(|p| {
-            p.spawn((Text::new(spec.title.clone()), font(15.0), TextColor(Color::srgb(0.95, 0.97, 1.0)), FocusPolicy::Pass));
+            p.spawn((Text::new(spec.title.clone()), font(19.0), TextColor(Color::srgb(0.95, 0.97, 1.0)), bevy::text::LetterSpacing::Rem(0.1), FocusPolicy::Pass));
         });
     // Disc centres sit on the button row, either side of the centre column.
     let row_y = height - 35.0;

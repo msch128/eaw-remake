@@ -61,7 +61,7 @@ impl GalaxyLayout {
 
     /// Radius of an orbit lane for parked fleets around `planet`.
     pub fn orbit_radius(&self, planet: PlanetId) -> f32 {
-        self.radii[planet as usize] * 1.85 + self.unit * 0.5
+        self.radii[planet as usize] * 1.2 + self.unit * 0.4
     }
 }
 

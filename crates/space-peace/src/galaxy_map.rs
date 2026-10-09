@@ -533,10 +533,10 @@ fn spawn_galaxy(
             TextFont {
                 font: FontSource::Family("Bahnschrift".into()),
                 font_size: FontSize::Px(14.0),
-                weight: FontWeight::LIGHT,
+                weight: FontWeight::NORMAL,
                 ..default()
             },
-            bevy::text::LetterSpacing::Rem(0.14),
+            bevy::text::LetterSpacing::Rem(0.04),
             TextColor(rgb(label_c)),
             TextShadow {
                 offset: Vec2::splat(1.5),
@@ -665,7 +665,7 @@ fn update_labels(
     };
     // Labels grow when zoomed in and shrink when zoomed out (whole pixel steps only).
     let zoom_out = zoom_fraction(&bounds, orbit.distance);
-    let font_px = (16.0 + (10.0 - 16.0) * smoothstep(0.0, 0.7, zoom_out)).round();
+    let font_px = (19.0 + (11.0 - 19.0) * smoothstep(0.0, 0.7, zoom_out)).round();
     // UI coordinates are multiplied by the UI scale; the layout below works in viewport pixels.
     let us = ui_scale.0.max(0.1);
     let font_node_px = (font_px / us).round().max(1.0);
@@ -678,7 +678,7 @@ fn update_labels(
         }
         let planet = &view.planets[label.0];
         let radius = radii.0[label.0];
-        let below = galaxy_to_world(planet.position) + Vec3::new(0.0, 0.0, radius * 2.3);
+        let below = galaxy_to_world(planet.position) + Vec3::new(0.0, 0.0, radius * 0.75);
         let Ok(p) = camera.world_to_viewport(cam_tf, below) else {
             continue;
         };
@@ -796,7 +796,7 @@ fn update_labels(
     }
     for (row, mut node, mut vis) in &mut pip_rows {
         match slots.get(row.planet).copied().flatten() {
-            Some(s) if visible[row.planet] && (filters.base_level || selection.0 == Some(row.planet) || hover.0 == Some(row.planet)) => {
+            Some(s) if visible[row.planet] && (filters.base_level || zoom_out < 0.3 || selection.0 == Some(row.planet) || hover.0 == Some(row.planet)) => {
                 let width = row.count as f32 * (pip_w + 1.0);
                 node.left = Val::Px((s.pos.x + (s.size.x - width) * 0.5) / us);
                 node.top = Val::Px((s.pos.y + font_px * 1.15 + row.row as f32 * (pip_h + 2.0)) / us);
@@ -1422,7 +1422,7 @@ fn territory_segments(view: &GalaxyView, radii: &PlanetRadii, selected: Option<u
 }
 
 /// Radius of a planet's territory disc in planet radii.
-const TERRITORY_RADIUS: f32 = 14.0;
+const TERRITORY_RADIUS: f32 = 20.0;
 
 /// Gizmo group of the thick dashed faction territory outline.
 #[derive(Default, Reflect, GizmoConfigGroup)]

@@ -146,7 +146,7 @@ impl Plugin for PlayUiPlugin {
                     .chain()
                     .run_if(resource_exists::<PlayBridge>.and_then(resource_exists::<SimState>)),
             )
-            .add_systems(Update, (declutter_top, hero_bar, locked_clicks, spawn_planet_panel, update_planet_panel, place_planet_panel, base_layout_click, planet_view_ui, objectives_toggle, objectives_window).chain().run_if(resource_exists::<PlayBridge>.and_then(resource_exists::<SimState>)))
+            .add_systems(Update, (declutter_top, hero_bar, locked_clicks, spawn_planet_panel, update_planet_panel, place_planet_panel, base_layout_click, planet_view_ui, planet_view_bar_tab, objectives_toggle, objectives_window).chain().run_if(resource_exists::<PlayBridge>.and_then(resource_exists::<SimState>)))
             .add_systems(Update, auto_resolve_summary.after(battle_dialog_result).run_if(resource_exists::<PlayBridge>.and_then(resource_exists::<SimState>)))
             .add_systems(Update, show_battle_summary.run_if(in_state(AppScreen::Galaxy)).run_if(resource_exists::<crate::battle_play::BattleSummary>))
             .add_systems(
@@ -1916,7 +1916,11 @@ fn update_planet_panel(
             PlanetPanelText::Title => p.display_name.to_uppercase(),
             PlanetPanelText::Income => format!("+{}", p.income),
             PlanetPanelText::Population => if p.population_bonus > 0 { p.population_bonus.to_string() } else { String::new() },
-            PlanetPanelText::Body => p.info.join("\n"),
+            PlanetPanelText::Body => {
+                // Planet view: a gap under the header and a blank line before the long description, as in the Remake.
+                let (facts, last) = p.info.split_at(p.info.len().saturating_sub(1));
+                if pv.active { format!("\n{}\n\n{}", facts.join("\n"), last.join("")) } else { p.info.join("\n") }
+            }
         };
         if t.0 != s {
             t.0 = s;
@@ -2149,7 +2153,7 @@ fn objectives_window(
             GlobalZIndex(600),
         ))
         .with_children(|r| {
-            r.spawn((Text::new("ACTIVE STORY OBJECTIVES"), font(26.0), TextColor(Color::WHITE), bevy::text::LetterSpacing::Rem(0.08)));
+            r.spawn((Text::new("ACTIVE STORY OBJECTIVES"), font(22.0), TextColor(Color::WHITE), bevy::text::LetterSpacing::Rem(0.08)));
             r.spawn(Node { column_gap: Val::Px(8.0), ..default() }).with_children(|t| {
                 for (label, click, on) in [("ACTIVE", ObjectivesClick::Active, !win.completed_tab), ("COMPLETED", ObjectivesClick::Completed, win.completed_tab)] {
                     t.spawn((Button, click, Node { width: Val::Percent(33.0), justify_content: JustifyContent::Center, padding: UiRect::vertical(Val::Px(3.0)), ..default() }, BackgroundColor(if on { Color::srgb(0.35, 0.42, 0.62) } else { Color::srgb(0.16, 0.19, 0.26) })))
@@ -2183,4 +2187,12 @@ fn objectives_window(
                     .with_child((Text::new("CLOSE"), font(16.0), TextColor(Color::WHITE), bevy::text::LetterSpacing::Rem(0.1)));
             });
         });
+}
+
+/// Opening the planet view switches the command bar to the ground/structure tab (v0260); leaving it goes back to space.
+fn planet_view_bar_tab(pv: Res<crate::planet_view::PlanetViewState>, mut bar: ResMut<BarState>, mut was: Local<bool>) {
+    if pv.active != *was {
+        *was = pv.active;
+        bar.space_tab = !pv.active;
+    }
 }
