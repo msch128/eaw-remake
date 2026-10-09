@@ -2103,38 +2103,18 @@ fn planet_view_ui(world: &mut World, mut last_key: Local<Option<(usize, u64)>>) 
     if world.get_resource::<EawUiAssets>().is_none() {
         return;
     }
-    // Forces in orbit, grouped by relation: box 1 the player's, box 2 others at war with the player, box 3 the rest.
+    // The three boxes hold the player's own fleets at the planet (the fleet organizer, see `planet_fleets`); other forces are one line above them.
     let Some(sim_planet) = world.resource::<PlayBridge>().planet_to_sim.get(view_index).copied().flatten() else { return };
     let faction = {
         let state = world.resource::<SimState>();
         ui_faction(state, world.resource::<PlayerFaction>())
     };
     let me = world.resource::<PlayerFaction>().0;
-    let mut boxes: [std::collections::BTreeMap<String, u32>; 3] = Default::default();
-    {
+    let org = {
         let state = world.resource::<SimState>();
-        let fog = world.resource::<galaxy_play::Fog>();
-        for f in state.galaxy().fleets.values().filter(|f| f.planet() == Some(sim_planet)) {
-            let sight = fog.fleet(f.id);
-            if sight == galaxy_sim::Sight::Hidden {
-                continue;
-            }
-            let b = match me {
-                Some(m) if f.owner == m => 0,
-                Some(m) if state.galaxy().hostile(&state.world, m, f.owner) => 1,
-                _ => 2,
-            };
-            if sight != galaxy_sim::Sight::Detailed {
-                // Seen only: composition unknown, shown as one "?" group with the ship count unknown (1).
-                *boxes[b].entry("?".to_owned()).or_default() += 1;
-                continue;
-            }
-            for (&u, &c) in &f.units {
-                *boxes[b].entry(state.world.units[u as usize].name.clone()).or_default() += c;
-            }
-        }
-    }
-    let key = (view_index, boxes.iter().flat_map(|b| b.iter()).fold(0u64, |h, (n, c)| h.wrapping_mul(31).wrapping_add(n.len() as u64 * 1000 + u64::from(*c))));
+        crate::planet_fleets::organizer(state, world.resource::<galaxy_play::Fog>(), me, sim_planet)
+    };
+    let key = (view_index, org.key);
     if *last_key == Some(key) && !existing.is_empty() {
         return;
     }
@@ -2143,19 +2123,16 @@ fn planet_view_ui(world: &mut World, mut last_key: Local<Option<(usize, u64)>>) 
     }
     *last_key = Some(key);
     let game = world.resource::<EawUiAssets>().game.clone();
+    let (slots, orbit_slots) = org.slots(&world.resource::<SimState>().world, game.as_deref());
     {
         let mut data = world.resource_mut::<eaw_ui::PanelData>();
         data.slots.retain(|k, _| !(k.starts_with("q1_") || k.starts_with("q2_") || k.starts_with("q3_")));
-        for (b, units) in boxes.iter().enumerate() {
-            for (k, (name, count)) in units.iter().take(35).enumerate() {
-                let icon = game.as_ref().and_then(|g| eaw_ui::unit_icon(g, name)).unwrap_or_default();
-                data.set_slot(
-                    &eaw_ui::fleet_slot_name(b as u32 + 1, k as u32 / 7, k as u32 % 7),
-                    eaw_ui::PanelSlot { icon, label: if *count > 1 { format!("x{count}") } else { String::new() }, ..default() },
-                );
-            }
+        for (name, slot) in slots {
+            data.set_slot(&name, slot);
         }
     }
+    world.insert_resource(crate::planet_view::OrbitSlots(orbit_slots));
+    world.insert_resource(crate::planet_fleets::OtherForces(org.others));
     let mut spec = eaw_ui::ShellSpec::new("I_Galactic_Organize_New.ALO", faction);
     spec.anchor = eaw_ui::ShellAnchor::TopCenter;
     spec.offset = Vec2::new(0.0, -45.0);

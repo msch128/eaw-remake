@@ -41,6 +41,7 @@ impl Plugin for PlanetViewPlugin {
                 .chain()
                 .run_if(in_state(AppScreen::Galaxy)),
         );
+        register_tooltip(app);
         app.add_systems(Update, (wheel_test, rebuild_test).run_if(in_state(AppScreen::Galaxy)));
     }
 }
@@ -552,5 +553,197 @@ fn rebuild_test(
     } else if st.frame > 5000 {
         info!("planet-view-test: rebuild: the structure never finished FAIL");
         st.done = true;
+    }
+}
+
+/// Unit object name behind each unit icon of the orbit boxes (`q1_0000` ...); filled by `play_ui::planet_view_ui`, read by the hover tooltip.
+#[derive(Resource, Default)]
+pub(crate) struct OrbitSlots(pub std::collections::HashMap<String, String>);
+
+/// What the cursor points at in the planet view's 3D part.
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum Hover {
+    Station,
+    Ground(usize),
+    Orbital(usize),
+}
+
+/// The pointed-at thing: the closest screen point within `radius`.
+fn pick(points: &[(Hover, Vec2)], cursor: Vec2, radius: f32) -> Option<Hover> {
+    points.iter().map(|(h, p)| (*h, p.distance(cursor))).filter(|(_, d)| *d <= radius).min_by(|a, b| a.1.total_cmp(&b.1)).map(|(h, _)| h)
+}
+
+/// Tooltip of a structure type: name, encyclopedia text, cost and what it does for the owner (same format as the build pads).
+fn structure_tip(world: &galaxy_sim::World, cat: &PlayCatalog, game: Option<&alamo_data::GameData>, s: u32) -> String {
+    let st = &world.structures[s as usize];
+    let mut t = cat.structure(s).to_uppercase();
+    let description = crate::play_ui::lore(game, &st.name);
+    if let Some(d) = &description {
+        t.push('\n');
+        t.push_str(d.trim());
+    }
+    t.push_str(&format!("\n@Cost\t{:.0} credits", st.cost));
+    let mentioned = description.as_deref().is_some_and(|d| d.to_ascii_lowercase().contains("upkeep"));
+    if st.income_abs < -0.5 && !mentioned {
+        t.push_str(&format!("\n@Upkeep\t{:.0} credits per week", -st.income_abs));
+    } else if st.income_abs > 0.5 {
+        t.push_str(&format!("\n@Income\t+{:.0} credits per week", st.income_abs));
+    }
+    if st.income_pct.abs() > 1e-4 {
+        t.push_str(&format!("\n@Planet income\t{:+.0}%", st.income_pct * 100.0));
+    }
+    if st.population_capacity > 0 {
+        t.push_str(&format!("\n@Population cap\t+{}", st.population_capacity));
+    }
+    t
+}
+
+/// Tooltip of a unit type shown by an orbit-box icon.
+fn unit_tip(world: &galaxy_sim::World, cat: &PlayCatalog, game: Option<&alamo_data::GameData>, name: &str) -> String {
+    if name == "!hyperspace" {
+        return "HYPERSPACE SLOT
+Drag a ship here: only this ship jumps into the battle first, the rest of the fleet waits as reserve.
+Drag it out to empty the slot.".to_owned();
+    }
+    let Some(id) = world.unit_id(name) else { return "UNKNOWN FORCES\nOnly seen from afar: strength and composition are not known.".to_owned() };
+    let ut = &world.units[id as usize];
+    let mut t = cat.unit(id).to_uppercase();
+    let description = crate::play_ui::lore(game, &ut.name);
+    if let Some(d) = &description {
+        t.push('\n');
+        t.push_str(d.trim());
+    }
+    t.push_str(&format!("\n@Cost\t{:.0} credits", ut.cost));
+    if ut.population > 0 {
+        t.push_str(&format!("\n@Population\t{}", ut.population));
+    }
+    let mentioned = description.as_deref().is_some_and(|d| d.to_ascii_lowercase().contains("upkeep"));
+    if ut.upkeep < -0.5 && !mentioned {
+        t.push_str(&format!("\n@Upkeep\t{:.0} credits per week", -ut.upkeep));
+    }
+    t
+}
+
+/// Hover tooltips of the planet view on the shared world tooltip (next to the advisor droid): the buildings, the station and the empty
+/// slots of the 3D scene, and the unit icons of the orbit boxes. `SP_PLANET_VIEW_HOVER=ground0|orbital0|station|unit:<Name>` forces a
+/// target without a cursor (offscreen checks).
+#[allow(clippy::too_many_arguments)]
+fn view_tooltip(
+    state: Res<PlanetViewState>,
+    sim: Option<Res<SimState>>,
+    catalog: Option<Res<PlayCatalog>>,
+    bridge: Option<Res<crate::play::PlayBridge>>,
+    assets: Option<Res<eaw_ui::EawUiAssets>>,
+    orbit: Option<Res<OrbitSlots>>,
+    window: Option<Single<&Window, With<bevy::window::PrimaryWindow>>>,
+    cam: Single<(&Camera, &GlobalTransform), With<GalaxyCamera>>,
+    slot_nodes: Query<(&eaw_ui::panels::PanelSlotName, &ComputedNode, &UiGlobalTransform, &InheritedVisibility)>,
+    mut tip: ResMut<eaw_ui::WorldTooltip>,
+) {
+    if !state.active || state.blend < 1.0 {
+        return;
+    }
+    let (Some(sim), Some(cat), Some(bridge)) = (sim, catalog, bridge) else { return };
+    let Some(sp) = state.planet.and_then(|p| bridge.planet_to_sim.get(p).copied().flatten()) else { return };
+    let game = assets.as_deref().and_then(|a| a.game.as_deref());
+    let forced = std::env::var("SP_PLANET_VIEW_HOVER").ok();
+    let mut text = None;
+
+    // Unit icons of the orbit boxes.
+    let unit_name = match (&forced, window.as_ref().and_then(|w| w.physical_cursor_position())) {
+        (Some(f), _) => f.strip_prefix("unit:").map(str::to_owned),
+        (None, Some(c)) => slot_nodes
+            .iter()
+            .find(|(_, n, g, v)| v.get() && n.size().x > 4.0 && n.contains_point(**g, c))
+            .and_then(|(name, ..)| orbit.as_ref().and_then(|o| o.0.get(&name.0.to_ascii_lowercase()).cloned())),
+        _ => None,
+    };
+    if let Some(n) = unit_name {
+        text = Some(unit_tip(&sim.world, &cat, game, &n));
+    }
+
+    // Buildings, station and free slots of the scene.
+    if text.is_none() {
+        let hover = match (&forced, window.as_ref().and_then(|w| w.cursor_position())) {
+            (Some(f), _) => match f.as_str() {
+                "station" => Some(Hover::Station),
+                s if s.starts_with("ground") => s[6..].parse().ok().map(Hover::Ground),
+                s if s.starts_with("orbital") => s[7..].parse().ok().map(Hover::Orbital),
+                _ => None,
+            },
+            (None, Some(c)) => {
+                let (camera, gt) = *cam;
+                let project = |p: Vec3| camera.world_to_viewport(gt, p).ok();
+                let mut points: Vec<(Hover, Vec2)> = Vec::new();
+                points.extend(state.ground_slots.iter().enumerate().filter_map(|(i, p)| project(*p + Vec3::new(0.0, 0.2, 0.0)).map(|v| (Hover::Ground(i), v))));
+                points.extend(state.orbital_slots.iter().enumerate().filter_map(|(i, p)| project(*p + Vec3::new(0.0, 0.15, 0.0)).map(|v| (Hover::Orbital(i), v))));
+                points.extend(project(PLAT + STATION_AT).map(|v| (Hover::Station, v)));
+                pick(&points, c, 30.0)
+            }
+            _ => None,
+        };
+        let ps = sim.galaxy().planets.get(sp as usize);
+        let cap = sim.world.planet_capacity(sim.galaxy(), sp);
+        let nth = |orbital: bool, n: usize| {
+            ps.and_then(|p| p.structures.iter().copied().filter(|&s| sim.world.structures.get(s as usize).is_some_and(|d| d.orbital == orbital)).nth(n))
+        };
+        text = match hover {
+            Some(Hover::Ground(i)) => Some(match nth(false, i) {
+                Some(s) => structure_tip(&sim.world, &cat, game, s),
+                None => format!(
+                    "FREE GROUND SLOT\nBuild a ground structure here from the production bar.\n@Ground slots\t{} of {} used",
+                    cap.ground.built + cap.ground.queued,
+                    cap.ground.total
+                ),
+            }),
+            Some(Hover::Orbital(i)) => Some(match nth(true, i) {
+                Some(s) => structure_tip(&sim.world, &cat, game, s),
+                None => format!(
+                    "FREE ORBITAL SLOT\nBuild a space structure here from the space production tab.\n@Space slots\t{} of {} used",
+                    cap.space.built + cap.space.queued,
+                    cap.space.total
+                ),
+            }),
+            Some(Hover::Station) => ps.and_then(|p| p.starbase).map(|sb| {
+                let b = &sim.world.starbases[sb as usize];
+                let mut t = cat.starbase(sb).to_uppercase();
+                if let Some(d) = crate::play_ui::lore(game, &b.name) {
+                    t.push('\n');
+                    t.push_str(d.trim());
+                }
+                t.push_str(&format!("\n@Level\t{} of {}", cap.starbase_level, cap.starbase_max));
+                if b.income_abs.abs() > 0.5 {
+                    t.push_str(&format!("\n@Income\t{:+.0} credits per week", b.income_abs));
+                }
+                if b.population_capacity > 0 {
+                    t.push_str(&format!("\n@Population cap\t+{}", b.population_capacity));
+                }
+                t
+            }),
+            None => None,
+        };
+    }
+    if let Some(t) = text
+        && tip.text.as_deref() != Some(t.as_str())
+    {
+        tip.text = Some(t);
+    }
+}
+
+/// Runs after the generic hover text, which clears the tooltip whenever the map has nothing under the cursor.
+fn register_tooltip(app: &mut App) {
+    app.init_resource::<OrbitSlots>().add_systems(Update, view_tooltip.after(crate::play_ui::fleet_tooltip).run_if(in_state(AppScreen::Galaxy)));
+}
+
+#[cfg(test)]
+mod tooltip_tests {
+    use super::*;
+
+    #[test]
+    fn the_closest_point_within_the_radius_is_picked() {
+        let pts = [(Hover::Ground(0), Vec2::new(100.0, 100.0)), (Hover::Ground(1), Vec2::new(140.0, 100.0)), (Hover::Station, Vec2::new(400.0, 100.0))];
+        assert_eq!(pick(&pts, Vec2::new(125.0, 100.0), 30.0), Some(Hover::Ground(1)));
+        assert_eq!(pick(&pts, Vec2::new(250.0, 100.0), 30.0), None, "between the things: no tooltip");
+        assert_eq!(pick(&pts, Vec2::new(420.0, 110.0), 30.0), Some(Hover::Station));
     }
 }

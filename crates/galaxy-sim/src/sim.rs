@@ -222,6 +222,9 @@ impl Sim {
                 g.sync_ships();
                 let b = g.fleets.remove(&from).expect("checked");
                 let moved = g.ships.remove(&from).unwrap_or_default();
+                if let Some(h) = g.hyperspace.remove(&from) {
+                    g.hyperspace.entry(into).or_insert(h);
+                }
                 g.ships.entry(into).or_default().extend(moved);
                 let a = g.fleets.get_mut(&into).expect("checked");
                 for (u, c) in b.units {
@@ -267,9 +270,102 @@ impl Sim {
                         }
                     }
                 }
+                if g.hyperspace.get(&fleet).is_some_and(|h| moved_ids.iter().any(|(s, _)| *s == h.0)) {
+                    g.hyperspace.remove(&fleet);
+                }
                 g.ships.insert(id, moved_ids);
                 g.fleets.insert(id, Fleet { id, owner: faction, units: taken, location: FleetLocation::AtPlanet(p), previous_planet: prev });
                 Ok(CommandOk::NewFleet(id))
+            }
+            Command::TransferUnits { faction, from, to, units, hyperspace } => {
+                g.sync_ships();
+                let src = g.fleets.get(&from).filter(|f| f.owner == faction).ok_or(CommandError::Invalid)?;
+                let FleetLocation::AtPlanet(p) = src.location else { return Err(CommandError::WrongState) };
+                if to == Some(from) {
+                    return Err(CommandError::Invalid);
+                }
+                if let Some(t) = to {
+                    let dst = g.fleets.get(&t).filter(|f| f.owner == faction).ok_or(CommandError::Invalid)?;
+                    if dst.location != FleetLocation::AtPlanet(p) {
+                        return Err(CommandError::WrongState);
+                    }
+                }
+                let mut taken: BTreeMap<UnitTypeId, u32> = BTreeMap::new();
+                for (u, c) in units {
+                    if c > 0 {
+                        *taken.entry(u).or_insert(0) += c;
+                    }
+                }
+                if hyperspace && taken.values().sum::<u32>() != 1 {
+                    return Err(CommandError::Invalid);
+                }
+                if taken.is_empty() || taken.iter().any(|(u, c)| src.units.get(u).copied().unwrap_or(0) < *c) {
+                    return Err(CommandError::Invalid);
+                }
+                // Ships of the hyperspace slot stay behind unless nothing else of that type is left.
+                let slot = g.hyperspace.get(&from).map(|h| h.0);
+                let mut moved = Vec::new();
+                for (u, c) in &taken {
+                    let list = g.ships.get_mut(&from).expect("synced");
+                    for _ in 0..*c {
+                        let pos = list.iter().rposition(|(s, t)| t == u && Some(*s) != slot).or_else(|| list.iter().rposition(|(_, t)| t == u));
+                        moved.push(list.remove(pos.expect("counts checked")));
+                    }
+                }
+                if slot.is_some_and(|s| moved.iter().any(|(m, _)| *m == s)) {
+                    g.hyperspace.remove(&from);
+                }
+                let src = g.fleets.get_mut(&from).expect("checked");
+                for (u, c) in &taken {
+                    let e = src.units.get_mut(u).expect("checked");
+                    *e -= c;
+                    if *e == 0 {
+                        src.units.remove(u);
+                    }
+                }
+                let prev = src.previous_planet;
+                let emptied = src.units.is_empty();
+                let target = match to {
+                    Some(t) => t,
+                    None => {
+                        let id = g.next_fleet_id;
+                        g.next_fleet_id += 1;
+                        g.fleets.insert(id, Fleet { id, owner: faction, units: BTreeMap::new(), location: FleetLocation::AtPlanet(p), previous_planet: prev });
+                        id
+                    }
+                };
+                let dst = g.fleets.get_mut(&target).expect("exists");
+                for (u, c) in &taken {
+                    *dst.units.entry(*u).or_default() += c;
+                }
+                if hyperspace {
+                    g.hyperspace.insert(target, moved[0]);
+                }
+                g.ships.entry(target).or_default().extend(moved);
+                if emptied {
+                    g.fleets.remove(&from);
+                    g.ships.remove(&from);
+                    g.hyperspace.remove(&from);
+                }
+                Ok(if to.is_none() { CommandOk::NewFleet(target) } else { CommandOk::Done })
+            }
+            Command::SetHyperspace { faction, fleet, unit } => {
+                g.sync_ships();
+                g.fleets.get(&fleet).filter(|f| f.owner == faction).ok_or(CommandError::Invalid)?;
+                match unit {
+                    Some(u) => {
+                        let list = g.ships.get(&fleet).map(|l| l.as_slice()).unwrap_or_default();
+                        if g.hyperspace.get(&fleet).is_some_and(|h| h.1 == u) {
+                            return Ok(CommandOk::Done);
+                        }
+                        let pick = list.iter().rev().find(|(_, t)| *t == u).copied().ok_or(CommandError::Invalid)?;
+                        g.hyperspace.insert(fleet, pick);
+                    }
+                    None => {
+                        g.hyperspace.remove(&fleet);
+                    }
+                }
+                Ok(CommandOk::Done)
             }
             Command::CancelProduction { faction, planet, lane, index } => {
                 let ps = g.planets.get_mut(planet as usize).ok_or(CommandError::Invalid)?;

@@ -232,6 +232,10 @@ pub struct Galaxy {
     /// Fleets on an escape move after a lost tactical battle: blockades do not stop them (see [`World::escape_path`]).
     #[serde(default)]
     pub escaping: std::collections::BTreeSet<FleetId>,
+    /// Hyperspace slot of a fleet (the brighter first slot of its panel in the planet view): the one ship that jumps into a battle first, the rest of
+    /// the fleet waits as reserve. Absent = no slot ship chosen. Pruned by [`Galaxy::sync_ships`] when the ship leaves or dies; read it with [`Galaxy::hyperspace_ship`].
+    #[serde(default)]
+    pub hyperspace: BTreeMap<FleetId, (ShipId, UnitTypeId)>,
     pub(crate) next_ship_id: u64,
     pub(crate) next_fleet_id: FleetId,
     pub(crate) next_battle_id: u32,
@@ -331,6 +335,29 @@ pub enum Command {
         fleet: FleetId,
         /// Units to move to the new fleet.
         units: Vec<(UnitTypeId, u32)>,
+    },
+    /// Move units between two fleets of the same owner in orbit of the same planet (drag and drop in the planet view); `to` `None` makes a new fleet.
+    /// A source left without ships disappears. Ships of the hyperspace slot move last.
+    TransferUnits {
+        /// Issuing faction.
+        faction: FactionId,
+        /// Fleet the units leave.
+        from: FleetId,
+        /// Receiving fleet, or `None` for a new one.
+        to: Option<FleetId>,
+        /// Units to move.
+        units: Vec<(UnitTypeId, u32)>,
+        /// Put the moved ship (exactly one unit) into the hyperspace slot of the receiving fleet.
+        hyperspace: bool,
+    },
+    /// Put a ship of the given type into the hyperspace slot of its fleet (`None` empties the slot).
+    SetHyperspace {
+        /// Issuing faction.
+        faction: FactionId,
+        /// Fleet.
+        fleet: FleetId,
+        /// Unit type of a ship of that fleet; the ship that already sits in the slot is kept if it has that type.
+        unit: Option<UnitTypeId>,
     },
     /// Send a fleet back to the planet it came from.
     /// Remove an entry from a planet's production queue and refund it (`SimConfig::cancel_refund`).
@@ -535,6 +562,7 @@ impl Galaxy {
             damage: BTreeMap::new(),
             rewarded: Default::default(),
             escaping: Default::default(),
+            hyperspace: Default::default(),
             next_ship_id: 1,
             next_fleet_id: 1,
             next_battle_id: 1,
@@ -567,10 +595,22 @@ impl Galaxy {
                 }
             }
         }
+        let ships = &self.ships;
+        self.hyperspace.retain(|f, (s, _)| ships.get(f).is_some_and(|l| l.iter().any(|(x, _)| x == s)));
         if !self.damage.is_empty() {
             let alive: std::collections::BTreeSet<ShipId> = self.ships.values().flatten().map(|(s, _)| *s).collect();
             self.damage.retain(|s, _| alive.contains(s));
         }
+    }
+
+    /// The ship in the hyperspace slot of `fleet`, if one is set (see [`Galaxy::hyperspace`]).
+    pub fn hyperspace_ship(&self, fleet: FleetId) -> Option<ShipId> {
+        self.hyperspace.get(&fleet).map(|h| h.0)
+    }
+
+    /// Unit type of the ship in the hyperspace slot of `fleet`.
+    pub fn hyperspace_unit(&self, fleet: FleetId) -> Option<UnitTypeId> {
+        self.hyperspace.get(&fleet).map(|h| h.1)
     }
 
     /// Removes and returns up to `count` ship ids of type `unit` from a fleet's id list (the units
@@ -641,6 +681,7 @@ impl Galaxy {
                 FleetLocation::AtPlanet(p) => (0u8, *p).hash(&mut h),
                 FleetLocation::Moving { to, progress, .. } => (1u8, *to, progress.to_bits()).hash(&mut h),
             }
+            self.hyperspace.get(id).map(|h| h.0).hash(&mut h);
         }
         h.finish()
     }

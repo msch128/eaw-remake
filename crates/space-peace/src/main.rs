@@ -11,6 +11,7 @@ mod flow;
 mod galaxy_map;
 mod hero_heads;
 mod ui_sounds;
+mod planet_fleets;
 mod planet_view;
 mod galaxy_models;
 mod input_test;
@@ -182,6 +183,7 @@ fn main() {
         .add_plugins(hero_heads::HeroHeadsPlugin)
         .add_plugins(ui_sounds::UiSoundsPlugin)
         .add_plugins(planet_view::PlanetViewPlugin)
+        .add_plugins(planet_fleets::plugin)
         .add_plugins(galaxy_models::GalaxyModelsPlugin)
         .add_plugins((
             FlowPlugin,
