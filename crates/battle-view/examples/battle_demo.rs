@@ -201,6 +201,9 @@ fn main() {
         shadows,
         ..default()
     };
+    if let Some(p) = std::env::var("SP_DEMO_PLAYER").ok().and_then(|v| v.parse::<u8>().ok()) {
+        settings.player_side = p;
+    }
     if let Some(q) = quality {
         settings.apply_quality(q);
     }
@@ -410,6 +413,14 @@ fn capture_driver(
         {
             // Offset the cursor a little so a hardpoint is picked rather than the ship centre.
             pointer.cursor = Some(p + Vec2::new(30.0, 6.0));
+        }
+        if let Some(t) = target
+            && let Some(d) = std::env::var("SP_DEMO_FOCUS_TARGET").ok().and_then(|v| v.parse::<f32>().ok())
+        {
+            // Close view of the hovered enemy (hardpoint marker checks).
+            bc.snap = true;
+            bc.target_focus = t.pos;
+            bc.target_distance = d;
         }
         let _ = &hover;
     }

@@ -270,11 +270,14 @@ fn pick(projected: &[Projected], cursor: Vec2, accept: impl Fn(u32) -> bool) -> 
         .map(|(id, _)| id)
 }
 
-/// World position of a hardpoint of a rendered ship.
+/// World position of a hardpoint of a rendered ship: its bone in the loaded model, else the sim offset scaled like the model.
 pub fn hardpoint_world(rt: &BattleRuntime, s: &ShipRender, hp: usize) -> Vec3 {
+    if let Some(p) = s.hp_pos.get(hp).copied().flatten() {
+        return p;
+    }
     let def = rt.catalog.ship(s.def);
     let off = def.hardpoints[hp].offset.rotate_yaw(s.yaw);
-    s.pos + sim_dir_to_bevy(off)
+    s.pos + sim_dir_to_bevy(off) * rt.visuals.ship(s.def).scale
 }
 
 /// Hover detection, click selection and box selection.

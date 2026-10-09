@@ -85,6 +85,8 @@ pub struct ShipRender {
     pub hp_alive: Vec<bool>,
     /// Hardpoint health fractions 0..1.
     pub hp_health: Vec<f32>,
+    /// World position of each hardpoint's bone in the loaded model (`None` until the model exists or when the bone is missing).
+    pub hp_pos: Vec<Option<Vec3>>,
 }
 
 /// All living ships by simulation id.
@@ -331,6 +333,7 @@ pub fn update_ships(
             .enumerate()
             .map(|(i, h)| def.hardpoints.get(i).map_or(1.0, |d| if d.health > 0.0 { (h.health / d.health).clamp(0.0, 1.0) } else { 1.0 }))
             .collect();
+        let mut hp_pos: Vec<Option<Vec3>> = vec![None; s.hps.len()];
         let mut radius = def.radius;
         if let Ok((mut view, mut tf)) = views.get_mut(entity) {
             if view.visual_radius == 0.0
@@ -376,6 +379,9 @@ pub fn update_ships(
                     vis.hardpoints.iter().map(|h| h.bone.clone()).collect();
                 touch.prepare(&mut view, entity, &bones);
                 if touch.ready(&view) {
+                    for (i, h) in vis.hardpoints.iter().enumerate().take(hp_pos.len()) {
+                        hp_pos[i] = h.bone.as_deref().and_then(|b| touch.bone_world(&view, b));
+                    }
                     for (i, h) in s.hps.iter().enumerate() {
                         if i < view.hp_applied.len() && view.hp_applied[i] && !h.alive {
                             view.hp_applied[i] = false;
@@ -403,6 +409,7 @@ pub fn update_ships(
                 path: if s.squad == u32::MAX { s.path.iter().map(|p| sim_to_bevy(*p)).collect() } else { Vec::new() },
                 hp_alive,
                 hp_health,
+                hp_pos,
             },
         );
     }
