@@ -14,6 +14,7 @@
 
 pub mod ai;
 pub mod cheats;
+mod ground_up;
 mod catalog;
 pub mod combat;
 mod api;

@@ -104,6 +104,8 @@ pub struct Args {
     pub tooltip: Option<String>,
     /// Offscreen only: open the F2 cheat menu (`--cheat-menu`).
     pub cheat_menu: bool,
+    /// "From the Ground Up" start (`--ground-up`).
+    pub ground_up: bool,
 }
 
 impl Default for Args {
@@ -157,6 +159,7 @@ impl Default for Args {
             hover_selected: false,
             tooltip: None,
             cheat_menu: false,
+            ground_up: false,
         }
     }
 }
@@ -206,6 +209,7 @@ OPTIONS:
   --hover               Offscreen: hover the selected planet (shows its hover panel)
   --tooltip <button>    Offscreen: show the tooltip of a command bar button (b_create_00, queue00, ...)
   --cheat-menu          Offscreen: open the F2 cheat menu
+  --ground-up           New game From the Ground Up (1 planet for you, 3 for the other great powers, the rest passive)
   --no-vsync             Disable vertical sync
   --no-audio             Do not open the audio device (implied by --volume 0); the audio logic and SP_AUDIO_LOG still run
   --fullscreen           Start in borderless fullscreen
@@ -300,6 +304,7 @@ impl Args {
                 "--hover" => out.hover_selected = true,
                 "--tooltip" => out.tooltip = Some(it.next().ok_or("--tooltip needs a button name")?),
                 "--cheat-menu" => out.cheat_menu = true,
+                "--ground-up" => out.ground_up = true,
                 "--size" => {
                     let v = it.next().ok_or("--size needs WxH")?;
                     let (w, h) = v.split_once(['x', 'X']).ok_or("bad --size (use WxH)")?;

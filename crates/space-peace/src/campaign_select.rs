@@ -30,6 +30,8 @@ pub struct SetRow {
     pub description: String,
     /// Playable sides: faction key (`Rebel`, `Empire`, `Underworld`) and campaign name. Empty for headers.
     pub sides: Vec<(String, String)>,
+    /// "From the Ground Up" start (see `galaxy_sim::SimConfig::ground_up`).
+    pub ground_up: bool,
 }
 
 /// Rows of the campaign list in the original's order.
@@ -55,9 +57,9 @@ pub fn rows_from_data(data: &GameData) -> Vec<SetRow> {
                 row.sides.push((side.to_owned(), c.name.clone()));
                 continue;
             }
-            rows.push((c.sort_order, SetRow { title, description, sides: vec![(side.to_owned(), c.name.clone())] }));
+            rows.push((c.sort_order, SetRow { title, description, sides: vec![(side.to_owned(), c.name.clone())], ground_up: false }));
         } else if !c.has_galaxy() {
-            rows.push((c.sort_order, SetRow { title, description, sides: Vec::new() }));
+            rows.push((c.sort_order, SetRow { title, description, sides: Vec::new(), ground_up: false }));
         }
     }
     rows.into_iter().map(|(_, r)| r).collect()
@@ -70,7 +72,7 @@ fn rows_from_entries(entries: &[crate::game::CampaignEntry]) -> Vec<SetRow> {
         let title = format!("{} ({} planets)", e.group_title, e.planets);
         match rows.iter_mut().find(|r| r.title == title) {
             Some(r) => r.sides.push((e.faction.clone(), e.name.clone())),
-            None => rows.push(SetRow { title, description: String::new(), sides: vec![(e.faction.clone(), e.name.clone())] }),
+            None => rows.push(SetRow { title, description: String::new(), sides: vec![(e.faction.clone(), e.name.clone())], ground_up: false }),
         }
     }
     rows
@@ -129,6 +131,15 @@ fn enter(mut state: ResMut<SetupState>, game: Res<Game>, campaigns: Res<Campaign
         None => Vec::new(),
     };
     let rows = if rows.iter().any(|r| !r.sides.is_empty()) { rows } else { rows_from_entries(&campaigns.0) };
+    // "From the Ground Up": the largest map (the Full campaigns) with the reduced start, right below its normal row.
+    let mut rows = rows;
+    if let Some(at) = rows.iter().position(|r| r.sides.iter().any(|(_, n)| n.starts_with("GC_Full_Web_Way"))) {
+        let mut row = rows[at].clone();
+        row.title = "From the Ground Up".to_owned();
+        row.description = "Every faction starts small: you with one planet, the other great powers with three. All other planets belong to the independent orange faction, which defends them but never expands. Minor factions keep their planets.".to_owned();
+        row.ground_up = true;
+        rows.insert(at + 1, row);
+    }
     let first = rows.iter().position(|r| !r.sides.is_empty()).unwrap_or(0);
     *state = SetupState { rows, selected: first, ..default() };
 }
@@ -335,6 +346,7 @@ fn clicks(
             Click::Cancel => next.set(AppScreen::MainMenu),
             Click::Advanced => state.advanced = !state.advanced,
             Click::Start => {
+                options.ground_up = state.rows.get(state.selected).is_some_and(|r| r.ground_up);
                 let name = state.rows.get(state.selected).and_then(|r| state.side.and_then(|s| r.sides.get(s))).map(|(_, n)| n.clone());
                 if let Some(name) = name {
                     start.write(StartCampaign(name));
@@ -401,7 +413,7 @@ mod tests {
             .add_message::<UiSound>()
             .init_resource::<NewGameOptions>()
             .insert_resource(SetupState {
-                rows: vec![SetRow { title: "A".into(), description: String::new(), sides: vec![("Rebel".into(), "c_rebel".into()), ("Empire".into(), "c_empire".into())] }],
+                rows: vec![SetRow { title: "A".into(), description: String::new(), sides: vec![("Rebel".into(), "c_rebel".into()), ("Empire".into(), "c_empire".into())], ground_up: false }],
                 ..default()
             })
             .insert_resource(State::new(AppScreen::CampaignSelect))

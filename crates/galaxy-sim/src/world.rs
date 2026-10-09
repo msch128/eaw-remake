@@ -53,6 +53,9 @@ pub struct SimConfig {
     pub max_queue_len: usize,
     /// Evaluate victory conditions (and end the game when one is met).
     pub victory_enabled: bool,
+    /// "From the Ground Up" start (see [`crate::ground_up`]): the main factions start with 1 or 3 planets, the rest is passive.
+    #[serde(default)]
+    pub ground_up: bool,
     /// Allow `Command::DebugGrant` (offscreen tests and debugging only; off by default).
     pub debug_commands: bool,
     /// Estimate (calibrated against the tactical simulation, `examples/calibrate.rs`): how many random enemies a weapon compares before firing at the weakest. 1 = spread at random.
@@ -116,6 +119,7 @@ impl Default for SimConfig {
             base_population_cap: 40,
             max_queue_len: 8,
             victory_enabled: true,
+            ground_up: false,
             debug_commands: false,
             combat_focus: 1,
             combat_base_factor: 0.15,

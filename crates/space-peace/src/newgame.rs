@@ -21,11 +21,13 @@ pub struct NewGameOptions {
     pub difficulty: DifficultyTier,
     /// Use galaxy-sim's built-in AI instead (no difficulty tiers).
     pub classic_ai: bool,
+    /// "From the Ground Up" start of the next game.
+    pub ground_up: bool,
 }
 
 impl Default for NewGameOptions {
     fn default() -> Self {
-        Self { difficulty: DifficultyTier::Normal, classic_ai: false }
+        Self { difficulty: DifficultyTier::Normal, classic_ai: false, ground_up: false }
     }
 }
 
@@ -50,7 +52,7 @@ impl NewGameOptions {
             Some("fair") => DifficultyTier::Fair,
             _ => DifficultyTier::Normal,
         };
-        Self { difficulty, classic_ai: args.classic_ai }
+        Self { difficulty, classic_ai: args.classic_ai, ground_up: args.ground_up }
     }
 }
 

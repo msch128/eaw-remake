@@ -56,6 +56,10 @@ impl Sim {
             }
         }
         let mut sim = Sim { world, galaxy, ai: Vec::new(), tactical: None, arenas: std::collections::HashMap::new(), tactical_requests: BTreeMap::new(), queued_events: Vec::new() };
+        if sim.world.config.ground_up {
+            let human = sim.world.victory.active_player;
+            sim.apply_ground_up(human);
+        }
         sim.world.clone().refresh_economy(&mut sim.galaxy);
         Ok(sim)
     }
@@ -89,6 +93,10 @@ impl Sim {
     pub fn apply(&mut self, cmd: Command) -> Result<CommandOk, CommandError> {
         let world = self.world.clone();
         let g = &mut self.galaxy;
+        // The passive faction of a "From the Ground Up" game never orders anything.
+        if world.passive_faction().is_some_and(|p| cmd.faction() == Some(p)) {
+            return Err(CommandError::NotAvailable);
+        }
         let around = matches!(cmd, Command::MoveFleetAround { .. });
         match cmd {
             Command::BuildUnit { faction, planet, unit } => {
@@ -501,7 +509,8 @@ impl Sim {
     }
 
     fn run_ai(&mut self) {
-        let ai = self.ai.clone();
+        let passive = self.world.passive_faction();
+        let ai: Vec<FactionId> = self.ai.iter().copied().filter(|&f| Some(f) != passive).collect();
         let world = self.world.clone();
         let mut rngs: Vec<_> = ai.iter().map(|&f| self.galaxy.rng.fork(f as u64 + 1)).collect();
         let galaxy = &self.galaxy;
