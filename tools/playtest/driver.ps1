@@ -23,6 +23,24 @@ public static class Win {
   [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
   [DllImport("user32.dll")] public static extern void mouse_event(uint f, int dx, int dy, int data, UIntPtr extra);
   [DllImport("user32.dll")] public static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extra);
+  public delegate bool EnumProc(IntPtr h, IntPtr l);
+  [DllImport("user32.dll")] public static extern bool EnumWindows(EnumProc f, IntPtr l);
+  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+  [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetWindowText(IntPtr h, System.Text.StringBuilder s, int n);
+  // The visible, titled top-level window of a process. winit also owns a hidden 0x0 helper window
+  // ("Winit Thread Event Target"), which .NET can report as MainWindowHandle.
+  public static IntPtr GameWindow(uint pid, string title) {
+    IntPtr found = IntPtr.Zero;
+    EnumWindows((h, l) => {
+      uint p; GetWindowThreadProcessId(h, out p);
+      if (p != pid || !IsWindowVisible(h)) return true;
+      var sb = new System.Text.StringBuilder(256); GetWindowText(h, sb, 256);
+      if (sb.ToString().StartsWith(title)) { found = h; return false; }
+      return true;
+    }, IntPtr.Zero);
+    return found;
+  }
   public const uint LD = 2, LU = 4, RD = 8, RU = 16, MD = 32, MU = 64, WHEEL = 0x800, KEYUP = 2;
   public static Bitmap Capture(IntPtr h) {
     RECT r; GetClientRect(h, out r); POINT p = new POINT(); ClientToScreen(h, ref p);
@@ -36,6 +54,8 @@ public static class Win {
 Add-Type -AssemblyName System.Drawing
 
 $script:Proc = $null
+$script:Hwnd = [IntPtr]::Zero
+$script:Title = "Space Peace"
 $script:Scratch = Join-Path $env:TEMP 'space-peace-qa'
 $script:Shot = 0
 
@@ -44,9 +64,13 @@ function Start-Game {
     New-Item -ItemType Directory -Force "$script:Scratch\appdata", "$script:Scratch\shots" | Out-Null
     $env:APPDATA = "$script:Scratch\appdata"   # scratch saves/settings/logs; the user's real ones stay untouched
     $script:Proc = Start-Process -FilePath $Exe -ArgumentList (@('--volume', '0') + $ExtraArgs) -PassThru
-    for ($i = 0; $i -lt 120 -and $script:Proc.MainWindowHandle -eq 0; $i++) { Start-Sleep -Milliseconds 500; $script:Proc.Refresh() }
-    if ($script:Proc.MainWindowHandle -eq 0) { throw 'no window appeared' }
-    [void][Win]::SetForegroundWindow($script:Proc.MainWindowHandle)
+    for ($i = 0; $i -lt 120 -and $script:Hwnd -eq [IntPtr]::Zero; $i++) {
+        Start-Sleep -Milliseconds 500
+        if ($script:Proc.HasExited) { throw "game exited during start (code $($script:Proc.ExitCode))" }
+        $script:Hwnd = [Win]::GameWindow([uint32]$script:Proc.Id, $script:Title)
+    }
+    if ($script:Hwnd -eq [IntPtr]::Zero) { throw "no visible window titled '$script:Title*' appeared" }
+    [void][Win]::SetForegroundWindow($script:Hwnd)
 }
 function Stop-Game {
     if ($script:Proc -and -not $script:Proc.HasExited) {
@@ -55,12 +79,12 @@ function Stop-Game {
     }
 }
 function Test-GameAlive { [bool]($script:Proc -and -not $script:Proc.HasExited) }
-function Get-ClientSize { $r = New-Object Win+RECT; [void][Win]::GetClientRect($script:Proc.MainWindowHandle, [ref]$r); @($r.R, $r.B) }
+function Get-ClientSize { $r = New-Object Win+RECT; [void][Win]::GetClientRect($script:Hwnd, [ref]$r); @($r.R, $r.B) }
 
 # Every input and capture first makes sure the game window is in front. If another window keeps the
 # foreground (the user came back, a notification popped up), stop instead of clicking or capturing it.
 function Assert-GameInFront {
-    $h = $script:Proc.MainWindowHandle
+    $h = $script:Hwnd
     for ($i = 0; $i -lt 3; $i++) {
         if ([Win]::GetForegroundWindow() -eq $h) { return }
         [void][Win]::SetForegroundWindow($h); Start-Sleep -Milliseconds 150
@@ -70,7 +94,7 @@ function Assert-GameInFront {
 function Move-Mouse([int]$x, [int]$y) {
     Assert-GameInFront
     $p = New-Object Win+POINT; $p.X = $x; $p.Y = $y
-    [void][Win]::ClientToScreen($script:Proc.MainWindowHandle, [ref]$p)
+    [void][Win]::ClientToScreen($script:Hwnd, [ref]$p)
     [void][Win]::SetCursorPos($p.X, $p.Y); Start-Sleep -Milliseconds 60
 }
 function Get-Px([double]$fx, [double]$fy) { $s = Get-ClientSize; @([int]($fx * $s[0]), [int]($fy * $s[1])) }
@@ -110,7 +134,7 @@ function Press-Key($Key, [int[]]$Mods = @(), [int]$HoldMs = 60) {
 function Save-Shot([string]$Name = 'shot') {
     Assert-GameInFront
     $script:Shot++; $path = '{0}\shots\{1:D3}-{2}.png' -f $script:Scratch, $script:Shot, $Name
-    $bmp = [Win]::Capture($script:Proc.MainWindowHandle)
+    $bmp = [Win]::Capture($script:Hwnd)
     $bmp.Save($path, [System.Drawing.Imaging.ImageFormat]::Png); $bmp.Dispose(); $path
 }
 function Get-LatestLog { Get-ChildItem "$script:Scratch\appdata\SpacePeace\logs" -Filter *.log -ErrorAction SilentlyContinue | Sort-Object LastWriteTime | Select-Object -Last 1 }
