@@ -57,6 +57,29 @@ fn owner_counts_follow_the_ground_up_rules() {
 }
 
 #[test]
+fn every_passive_planet_has_a_star_base_so_a_fleet_arrival_starts_a_battle() {
+    let Some(data) = load() else { return };
+    let mut s = sim(&data, true);
+    let w = s.world().clone();
+    let (rebel, pirates) = (w.faction_id("Rebel").unwrap(), w.faction_id("Pirates").unwrap());
+    let bare: Vec<_> = s.galaxy().owned_planets(pirates).filter(|&p| s.galaxy().planets[p as usize].starbase.is_none()).collect();
+    assert!(bare.is_empty(), "passive planets without a star base: {}", bare.len());
+    // A Rebel fleet sent to the nearest passive planet meets resistance instead of taking it by presence.
+    let (fleet, from) = s.galaxy().fleets.iter().find(|(_, f)| f.owner == rebel && f.planet().is_some()).map(|(&id, f)| (id, f.planet().unwrap())).expect("a rebel fleet");
+    let at = w.planets[from as usize].position;
+    let dist = |p: PlanetId| (0..3).map(|i| (w.planets[p as usize].position[i] - at[i]).powi(2)).sum::<f32>();
+    let target = s.galaxy().owned_planets(pirates).min_by(|&a, &b| dist(a).total_cmp(&dist(b))).expect("a passive planet");
+    s.apply(Command::MoveFleet { faction: rebel, fleet, to: target }).expect("move");
+    for _ in 0..600 {
+        s.step(1.0);
+        if s.galaxy().planets[target as usize].owner != Some(pirates) {
+            break;
+        }
+    }
+    assert_eq!(s.galaxy().planets[target as usize].owner, Some(pirates), "the passive planet is not taken without a battle");
+}
+
+#[test]
 fn the_passive_faction_never_acts_but_the_other_ais_expand() {
     let Some(data) = load() else { return };
     let mut s = sim(&data, true);

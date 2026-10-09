@@ -99,6 +99,13 @@ impl Sim {
                 self.set_planet_owner(p, Some(passive));
             }
         }
+        // The passive faction defends: every planet it holds gets its level 1 star base (the owner change above cleared the
+        // buildings), so arriving fleets meet a base and its garrison instead of taking the planet by presence.
+        if let Some(first) = world.first_starbase[passive as usize] {
+            for p in self.galaxy.planets.iter_mut().filter(|p| p.owner == Some(passive) && !p.destroyed && p.starbase.is_none()) {
+                p.starbase = Some(first);
+            }
+        }
         self.galaxy.sync_ships();
         world.refresh_economy(&mut self.galaxy);
     }
