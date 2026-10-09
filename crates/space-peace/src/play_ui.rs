@@ -353,6 +353,15 @@ fn pad_tooltip(o: &galaxy_play::BuildOption, week: f32, state: &SimState, game: 
     } else if upkeep > 0.5 {
         s.push_str(&format!("\n@Income\t+{upkeep:.0} credits per week"));
     }
+    // A structure that is not built yet: what it changes once it stands, worded so it is not mistaken for current income.
+    if let BuildTarget::Structure(id) = o.target {
+        let change = state.world.structures[id as usize].income_abs;
+        if change > 0.5 {
+            s.push_str(&format!("\n@Income\t+{change:.0} credits/week when built"));
+        } else if change < -0.5 && !mentioned {
+            s.push_str(&format!("\n@Upkeep\t{:.0} credits/week when built", -change));
+        }
+    }
     if !o.availability.is_available() {
         s.push_str(&format!("\n!{}", capitalize(&o.availability.reason())));
     }
