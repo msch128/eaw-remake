@@ -165,7 +165,8 @@ impl Default for BattleViewSettings {
             ui_scale: 1.0,
             sky_radius: 90_000.0,
             fov_degrees: 45.0,
-            start_distance: 2000.0,
+            // Estimate: matches the Remake Byss video (b0640-b0705), where a big Star Destroyer spans ~14% of the frame width at 45 deg fov.
+            start_distance: 3500.0,
             shadows: false,
             particle_density: 1.0,
             audio: true,
@@ -457,6 +458,7 @@ impl Plugin for BattleViewPlugin {
                         control::overlays,
                         audio::battle_audio,
                         audio::battle_music,
+                        audio::battle_sources,
                         report_outcome,
                     )
                         .chain()

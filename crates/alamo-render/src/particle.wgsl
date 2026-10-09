@@ -84,6 +84,16 @@ fn vertex(in: ParticleVertexInput) -> VertexOutput {
 }
 
 
+// The original engine blends in gamma space, where an additive sprite adds its sRGB value to the
+// backdrop; our framebuffer is linear, so a straight to_linear() makes fire, flashes and bolts far
+// weaker (0.5 -> 0.22). Additive sprites therefore use a flatter exponent. Estimate, tuned against
+// the Remake Byss video (white-hot explosion cores, bright bolts); 2.2 would be the exact gamma curve.
+const ADDITIVE_GAMMA: f32 = 1.5;
+
+fn to_additive(c: vec3<f32>) -> vec3<f32> {
+    return pow(max(c, vec3<f32>(0.0)), vec3<f32>(ADDITIVE_GAMMA));
+}
+
 fn to_linear(c: vec3<f32>) -> vec3<f32> {
     return pow(max(c, vec3<f32>(0.0)), vec3<f32>(2.2));
 }
@@ -98,10 +108,10 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
 #endif
     let rgb = t.rgb * c.rgb;
     if additive == 1u {
-        return vec4<f32>(to_linear(rgb * c.a * t.a), 0.0);
+        return vec4<f32>(to_additive(rgb * c.a * t.a), 0.0);
     }
     if additive == 2u {
-        return vec4<f32>(to_linear(rgb * t.a), 0.0);
+        return vec4<f32>(to_additive(rgb * t.a), 0.0);
     }
     return vec4<f32>(to_linear(rgb), t.a * c.a);
 }
