@@ -276,6 +276,10 @@ fn begin_session(world: &mut World) {
             }
         }
     }
+    if let Some(side) = req.sides.iter().find(|s| Some(s.faction) == player) {
+        let n = |l: &[galaxy_sim::TacticalGroup]| l.iter().filter(|g| g.kind == galaxy_sim::GroupKind::Unit).map(|g| g.count).sum::<u32>();
+        info!("battle: player side starts with {} units, {} in reserve (cap {})", n(&side.groups), n(&side.reserve), side.unit_cap);
+    }
     // `--battle-auto` lets the AI play both sides (headless scenarios).
     let side_player = if args.battle_auto { None } else { player };
     // The catalog, the map and the visuals take a moment: build them off the main thread while the loading screen runs.

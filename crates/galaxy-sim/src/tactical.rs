@@ -136,6 +136,33 @@ impl std::fmt::Display for TacticalError {
 
 impl std::error::Error for TacticalError {}
 
+/// Hyperspace slots (`Galaxy::hyperspace`): when a fleet of the side has a slot ship, only that unit of the fleet jumps in at the start and every other
+/// unit goes to the reserve (a stack of the slot's type keeps one unit in the battle). Without any slot the groups are unchanged.
+fn apply_hyperspace_slots(galaxy: &Galaxy, groups: Vec<TacticalGroup>) -> (Vec<TacticalGroup>, Vec<TacticalGroup>) {
+    let is_slot = |g: &TacticalGroup| g.kind == GroupKind::Unit && g.fleet.is_some_and(|f| galaxy.hyperspace_unit(f) == Some(g.type_id));
+    if !groups.iter().any(is_slot) {
+        return (groups, Vec::new());
+    }
+    let (mut deployed, mut reserve) = (Vec::new(), Vec::new());
+    for mut g in groups {
+        if g.kind != GroupKind::Unit {
+            deployed.push(g);
+        } else if is_slot(&g) {
+            if g.count > 1 {
+                let mut rest = g.clone();
+                rest.count = g.count - 1;
+                rest.unit_health = if g.unit_health.is_empty() { Vec::new() } else { g.unit_health.split_off(1.min(g.unit_health.len())) };
+                reserve.push(rest);
+                g.count = 1;
+            }
+            deployed.push(g);
+        } else {
+            reserve.push(g);
+        }
+    }
+    (deployed, reserve)
+}
+
 /// Units that fit under the population cap are deployed (in fleet order, a group is split where the cap falls), the rest goes to the reserve.
 fn split_reserve(world: &World, groups: Vec<TacticalGroup>, cap: i32) -> (Vec<TacticalGroup>, Vec<TacticalGroup>) {
     let (mut deployed, mut reserve, mut used) = (Vec::new(), Vec::new(), 0i32);
@@ -203,7 +230,9 @@ impl TacticalRequest {
                     })
                     .collect();
                 let cap = world.factions[side.faction as usize].space_unit_cap;
-                let (groups, reserve) = split_reserve(world, groups, cap);
+                let (groups, slot_reserve) = apply_hyperspace_slots(galaxy, groups);
+                let (groups, mut reserve) = split_reserve(world, groups, cap);
+                reserve.extend(slot_reserve);
                 TacticalSide {
                     reserve,
                     unit_cap: cap,

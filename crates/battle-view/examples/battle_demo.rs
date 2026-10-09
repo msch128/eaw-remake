@@ -174,6 +174,7 @@ fn main() {
         half_size: half,
         arena,
         seed,
+        fog_of_war: std::env::var_os("SP_DEMO_NOFOG").is_none(),
         ..BattleConfig::default()
     };
     let setup = battle_sim::setup(

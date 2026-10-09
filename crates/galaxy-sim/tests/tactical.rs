@@ -562,3 +562,43 @@ fn retreat_order_in_the_battle_ends_without_capture() {
     }
     assert_eq!(sim.galaxy().planets[target as usize].owner, Some(rebel));
 }
+
+#[test]
+fn an_occupied_hyperspace_slot_deploys_only_that_unit_and_an_empty_one_changes_nothing() {
+    let Some(ctx) = load() else { return };
+    let w = new_sim(&ctx).world().clone();
+    let (empire, rebel) = (w.faction_id("Empire").unwrap(), w.faction_id("Rebel").unwrap());
+    let (isd, vsd) = (w.unit_id("Star_Destroyer").unwrap(), w.unit_id("Victory_Destroyer").unwrap());
+    // The request is built once per pending battle, so every slot setting gets its own sim. Returns (deployed ISD, VSD, reserve ISD, VSD).
+    let run = |slot: Option<UnitTypeId>| -> (u32, u32, u32, u32) {
+        let mut sim = new_sim(&ctx);
+        let target = empty_planet(&sim);
+        let ef = add_fleet(&mut sim, empire, isd, 2, target, target);
+        sim.galaxy_mut().fleets.get_mut(&ef).unwrap().units.insert(vsd, 1);
+        add_fleet(&mut sim, rebel, w.unit_id("Nebulon_B_Frigate").unwrap(), 1, target, target);
+        if slot.is_some() {
+            sim.apply(Command::SetHyperspace { faction: empire, fleet: ef, unit: slot }).unwrap();
+        }
+        let battle = pending(&mut sim);
+        let req = sim.tactical_setup(battle.id).unwrap();
+        let es = req.sides.iter().position(|s| s.faction == empire).unwrap();
+        let count = |reserve: bool, unit: &str| -> u32 {
+            let list = if reserve { &req.sides[es].reserve } else { &req.sides[es].groups };
+            list.iter().filter(|g| g.name.eq_ignore_ascii_case(unit)).map(|g| g.count).sum()
+        };
+        let out = (count(false, "Star_Destroyer"), count(false, "Victory_Destroyer"), count(true, "Star_Destroyer"), count(true, "Victory_Destroyer"));
+        println!("slot {slot:?}: deployed ISD {} VSD {}, reserve ISD {} VSD {}", out.0, out.1, out.2, out.3);
+        if slot == Some(vsd) {
+            // The battle really starts with the slot unit only (plus what it carries): no Star Destroyer is in it.
+            let catalog = catalog_for(&ctx, &req);
+            let b = battle_sim::Battle::new(req.battle_setup(&catalog, req.battle_config(None), |_| true).unwrap());
+            let names: Vec<String> = b.ships.iter().filter(|s| s.side == es as u8).map(|s| catalog.ship(s.def).name.to_ascii_lowercase()).collect();
+            println!("battle starts with {names:?}");
+            assert!(names.iter().any(|n| n.contains("victory")) && !names.iter().any(|n| n.contains("star_destroyer")), "{names:?}");
+        }
+        out
+    };
+    assert_eq!(run(None), (2, 1, 0, 0), "empty slot: everything under the cap is deployed");
+    assert_eq!(run(Some(vsd)), (0, 1, 2, 0), "slot holds the Victory: only it jumps in");
+    assert_eq!(run(Some(isd)), (1, 0, 1, 1), "slot holds one Star Destroyer of the stack: one deployed, the rest wait");
+}
