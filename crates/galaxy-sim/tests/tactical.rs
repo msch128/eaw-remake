@@ -715,9 +715,24 @@ fn auto_even(ctx: &Ctx, a: (&str, &str, u32), b: (&str, &str, u32), seeds: u64) 
 }
 
 #[test]
-fn tmp_even() {
+fn auto_resolve_weighs_the_forces_of_both_sides() {
     let Some(ctx) = load() else { return };
-    for (a, b) in [(("Rebel", "Star_Destroyer", 3u32), ("Empire", "Star_Destroyer", 3u32)), (("Empire", "Star_Destroyer", 3), ("Rebel", "Star_Destroyer", 3)), (("Rebel", "MC-80_Star_Cruiser", 3), ("Empire", "Star_Destroyer", 3)), (("Rebel", "CR-90_Corvette", 1), ("Empire", "Star_Destroyer", 3)), (("Rebel", "Star_Destroyer", 6), ("Empire", "Star_Destroyer", 1))] {
-        println!("{a:?} vs {b:?}: {:?}", auto_even(&ctx, a, b, 20));
-    }
+    // Weak attacker against a defended planet (star base level 2, 12 structures, a Star Destroyer, hundreds of spawned fighters): it loses in both resolvers.
+    let weak = auto_vs_planet(&ctx, "CR-90_Corvette", 2, best_defended_planet, "Empire", None).unwrap();
+    println!("2 corvettes vs the best defended Empire planet: attacker {}/{} alive, defender {}/{} alive, attacker wins {}", weak.1, weak.0, weak.3, weak.2, weak.4);
+    assert!(!weak.4 && weak.1 == 0 && weak.3 == weak.2, "{weak:?}");
+    // Even forces: both sides lose ships, and over several seeds each side wins now and then.
+    let (wins, draws, a_alive, d_alive) = auto_even(&ctx, ("Rebel", "Star_Destroyer", 3), ("Empire", "Star_Destroyer", 3), 20);
+    println!("3 ISD vs 3 ISD over 20 seeds: attacker wins {wins}, draws {draws}, mean alive {a_alive:.2} / {d_alive:.2}");
+    assert!((4..=16).contains(&wins) && a_alive < 3.0 && d_alive < 3.0, "an even fight must be a toss-up with losses on both sides");
+    // Overwhelming force wins; the clearly outgunned side is wiped out.
+    let (wins, _, a_alive, d_alive) = auto_even(&ctx, ("Rebel", "Star_Destroyer", 6), ("Empire", "Star_Destroyer", 1), 20);
+    assert!(wins == 20 && a_alive >= 5.0 && d_alive == 0.0, "6 v 1: {wins} wins, alive {a_alive} / {d_alive}");
+}
+
+fn best_defended_planet(sim: &Sim, f: FactionId) -> Option<PlanetId> {
+    let (w, g) = (sim.world(), sim.galaxy());
+    (0..w.planets.len() as u32)
+        .filter(|&p| g.planets[p as usize].owner == Some(f) && g.planets[p as usize].starbase.is_some() && w.planets[p as usize].space_map.is_some())
+        .max_by_key(|&p| (g.planets[p as usize].starbase.map_or(0, |s| w.starbases[s as usize].level), g.planets[p as usize].structures.len()))
 }
