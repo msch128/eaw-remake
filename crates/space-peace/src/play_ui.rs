@@ -2076,7 +2076,9 @@ fn update_planet_panel(
     };
     let hovered_fleet_planet = fleet_hover.as_ref().and_then(|h| h.fleet).and_then(fleet_planet);
     let selected_fleet_planet = selection.as_ref().and_then(|s| s.fleets.iter().copied().find_map(fleet_planet));
-    let planet = if pv.active { pv.planet } else { hovered_fleet_planet.or(hover.0).or(selected_fleet_planet) }.and_then(|i| view.planets.get(i));
+    // The long description panel only belongs to the planet close-up (user); on the map the hover tooltip at R2 shows the short info.
+    let _ = (hovered_fleet_planet, selected_fleet_planet, &hover);
+    let planet = if pv.active { pv.planet } else { None }.and_then(|i| view.planets.get(i));
     if *screen.get() == AppScreen::SpaceBattle {
         panel.set_if_neq(Visibility::Hidden);
         return;
