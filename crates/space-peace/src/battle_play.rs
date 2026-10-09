@@ -611,6 +611,7 @@ fn battle_orders(
     args: Res<Args>,
     status: Res<BattleStatus>,
     ships: Res<battle_view::RenderedShips>,
+    rt: Option<Res<battle_view::BattleRuntime>>,
     settings: Res<BattleViewSettings>,
     mut sel: ResMut<battle_view::Selection>,
     mut pointer: ResMut<battle_view::Pointer>,
@@ -621,13 +622,22 @@ fn battle_orders(
     if !args.battle_orders || status.tick == 0 || ships.0.is_empty() {
         return;
     }
+    let Some(rt) = rt else { return };
     *frames += 1;
     let (cam, gt) = *camera;
     let player = settings.player_side;
     pointer.right_pressed = false;
     match *frames {
         120 => {
-            sel.ships = ships.0.iter().filter(|(_, s)| s.side == player).map(|(id, _)| *id).collect();
+            // `SP_SELECT_ONLY=<name part>` keeps only matching unit types (visual checks of one unit's ability buttons).
+            let only = std::env::var("SP_SELECT_ONLY").ok().map(|s| s.to_ascii_lowercase());
+            sel.ships = ships
+                .0
+                .iter()
+                .filter(|(_, s)| s.side == player)
+                .filter(|(_, s)| only.as_deref().is_none_or(|o| rt.catalog.ship(s.def).name.to_ascii_lowercase().contains(o)))
+                .map(|(id, _)| *id)
+                .collect();
             sel.ships.sort_unstable();
         }
         140 => {
