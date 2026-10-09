@@ -380,6 +380,26 @@ impl Sim {
                 let refund = f64::from(item.cost) * f64::from(unspent) * f64::from(world.config.cancel_refund);
                 g.factions[faction as usize].credits += refund;
                 g.factions[faction as usize].stats.credits_spent -= refund;
+                // Queued structures that needed the cancelled one (and nothing else provides it) cannot start any more: they go back too.
+                if lane == Lane::Structures {
+                    let mut refunded = refund;
+                    loop {
+                        let ps = &mut g.planets[planet as usize];
+                        let orphan = (0..ps.queues[Lane::Structures as usize].len()).find(|&i| {
+                            let ProductionKind::Structure(s) = ps.queues[Lane::Structures as usize][i].kind else { return false };
+                            let mut earlier = ps.clone();
+                            earlier.queues[Lane::Structures as usize].truncate(i);
+                            world.missing_structures_queued(&earlier, &world.structures[s as usize].req_structures).is_some()
+                        });
+                        let Some(i) = orphan else { break };
+                        let it = ps.queues[Lane::Structures as usize].remove(i).expect("index found above");
+                        let back = f64::from(it.cost) * f64::from(world.config.cancel_refund);
+                        g.factions[faction as usize].credits += back;
+                        g.factions[faction as usize].stats.credits_spent -= back;
+                        refunded += back;
+                    }
+                    return Ok(CommandOk::Refunded(refunded));
+                }
                 Ok(CommandOk::Refunded(refund))
             }
             Command::Retreat { faction, fleet } => {

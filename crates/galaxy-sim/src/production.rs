@@ -50,6 +50,25 @@ impl World {
         (!missing.is_empty()).then(|| missing.join(", "))
     }
 
+    /// Like [`World::missing_structures`], but structures waiting in the planet's structure queue count as present: the queue is
+    /// worked off in order, so a requirement queued before an item is built by the time the item starts.
+    pub fn missing_structures_queued(&self, ps: &PlanetState, groups: &[Vec<StructureTypeId>]) -> Option<String> {
+        let queued: Vec<StructureTypeId> = ps.queues[Lane::Structures as usize]
+            .iter()
+            .filter_map(|i| match i.kind {
+                ProductionKind::Structure(s) => Some(s),
+                _ => None,
+            })
+            .collect();
+        let met = |r: StructureTypeId| self.has_structure(ps, r) || queued.iter().any(|&s| s == r || self.structures[s as usize].ancestors.contains(&r));
+        let missing: Vec<String> = groups
+            .iter()
+            .filter(|g| !g.iter().any(|&r| met(r)))
+            .map(|g| g.iter().map(|&r| self.structures[r as usize].name.as_str()).collect::<Vec<_>>().join(" | "))
+            .collect();
+        (!missing.is_empty()).then(|| missing.join(", "))
+    }
+
     /// Highest star base level the planet can hold (`Max_Space_Base`; planets without the tag take every level in the catalog).
     pub fn max_starbase_level(&self, planet: PlanetId) -> i32 {
         match self.planets[planet as usize].max_space_base {
@@ -243,7 +262,7 @@ impl World {
         if self.starbase_level(galaxy, planet) < st.req_starbase {
             return Err(CommandError::RequirementsNotMet(format!("star base level {}", st.req_starbase)));
         }
-        if let Some(missing) = self.missing_structures(ps, &st.req_structures) {
+        if let Some(missing) = self.missing_structures_queued(ps, &st.req_structures) {
             return Err(CommandError::RequirementsNotMet(missing));
         }
         let queued_same = ps.queues[Lane::Structures as usize].iter().filter(|i| i.kind == ProductionKind::Structure(structure)).count();
