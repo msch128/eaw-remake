@@ -81,7 +81,7 @@ fn drive(
     paused: Res<Paused>,
     slots: Res<SlotScreen>,
     options: Res<OptionsOpen>,
-    filters: Res<crate::galaxy_map::MapFilters>,
+    (filters, bar): (Res<crate::galaxy_map::MapFilters>, Res<crate::play_ui::BarState>),
     sim: Option<Res<galaxy_play::SimState>>,
     banner: Query<(&EawButton, &ComputedNode, &UiGlobalTransform, &InheritedVisibility)>,
     menu: Query<(&MenuButton, &ComputedNode, &UiGlobalTransform, &InheritedVisibility)>,
@@ -118,7 +118,7 @@ fn drive(
         st.t = 0;
         st.found_at = None;
     };
-    if t > 1500 && st.phase > 0 && (st.phase < 10 || (100..104).contains(&st.phase)) {
+    if t > 1500 && st.phase > 0 && (st.phase < 10 || (100..115).contains(&st.phase)) {
         finish(&mut st, "phase timed out", false);
         return;
     }
@@ -160,6 +160,26 @@ fn drive(
                 let label: &'static str = ["filter-credits-click", "filter-base-level-click", "filter-ability-click", "filter-heroes-click"][i as usize];
                 finish(&mut st, label, ok);
                 if i == 3 {
+                    st.phase = 110;
+                }
+            }
+        }
+        // Class buttons of the left grid: each click sets the build-bar class filter, a second click on the same one clears it.
+        110..=114 => {
+            use crate::play_ui::BarClass::{Capital, Corvette, Frigate, Station};
+            let (name, want, label): (&str, Option<crate::play_ui::BarClass>, &'static str) = match st.phase {
+                110 => ("b_filters_corvette", Some(Corvette), "class-corvette-click"),
+                111 => ("b_filters_frigate", Some(Frigate), "class-frigate-click"),
+                112 => ("b_filters_capital", Some(Capital), "class-capital-click"),
+                113 => ("b_filters_station", Some(Station), "class-station-click"),
+                _ => ("b_filters_station", None, "class-station-second-click-clears"),
+            };
+            let target = banner.iter().find(|(b, n, _, v)| b.name == name && v.get() && n.size().x > 4.0).map(|(_, _, g, _)| g.translation);
+            act = click(&mut st, target);
+            if st.found_at.is_some_and(|f| t == f + 20) {
+                let ok = bar.class == want;
+                finish(&mut st, label, ok);
+                if st.phase == 115 {
                     st.phase = 1;
                 }
             }

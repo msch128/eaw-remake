@@ -47,7 +47,7 @@ pub use state::{
     PlayerSelection, SimState, SpeedModel, TopBarModel,
 };
 pub use ui::GalaxyPlayUiPlugin;
-pub use visuals::{FleetEntities, FleetVisual};
+pub use visuals::{FleetEntities, FleetVisual, Fog};
 
 /// Systems of the plugin run in this order every frame.
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -154,6 +154,7 @@ impl Plugin for GalaxyPlayPlugin {
             .init_resource::<PlayMapHidden>()
             .init_resource::<input::DragState>()
             .init_resource::<visuals::FleetEntities>()
+            .init_resource::<visuals::Fog>()
             .add_message::<PlayAction>()
             .add_message::<PlayEvent>()
             .init_gizmo_group::<visuals::RouteGizmos>()

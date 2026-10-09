@@ -45,6 +45,7 @@ fn update_hero_heads(
     layout: Res<GalaxyLayout>,
     player: Res<PlayerFaction>,
     filters: Res<crate::galaxy_map::MapFilters>,
+    fog: Res<galaxy_play::Fog>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut mats: ResMut<Assets<StandardMaterial>>,
     mut images: ResMut<Assets<Image>>,
@@ -58,7 +59,7 @@ fn update_hero_heads(
     let fake = std::env::var_os("SP_HERO_FAKE").is_some();
     let mut alive: Vec<(u32, u32)> = Vec::new();
     let mut per_planet: HashMap<u32, usize> = HashMap::new();
-    for f in g.fleets.values() {
+    for f in g.fleets.values().filter(|f| fog.fleet(f.id) == galaxy_sim::Sight::Detailed) {
         let Some(p) = f.planet() else { continue };
         let n_here = per_planet.entry(p).or_insert(0usize);
         let base = layout.positions[p as usize];

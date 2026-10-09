@@ -12,6 +12,43 @@ use crate::catalog::{FleetModelStyle, PlayCatalog};
 use crate::geometry::{FleetPlace, GalaxyLayout, fleet_place, flagship};
 use crate::state::{GameClock, PlayerFaction, PlayerSelection, SimState};
 
+/// The human faction's fog of war, computed once per snapshot (`Snapshot::sight`). Reference video: planets stay visible
+/// everywhere with their owner colour and name, but only own/allied fleets and fleets within sight are drawn (no enemy fleet
+/// markers far from the player's territory); a fleet that is only `Seen` shows no composition ("?").
+#[derive(Resource, Default)]
+pub struct Fog {
+    seq: Option<u64>,
+    /// `None` for a spectator (everything is visible in detail).
+    view: Option<crate::SightView>,
+}
+
+impl Fog {
+    /// What the player sees of a fleet (`Hidden` = not drawn).
+    pub fn fleet(&self, id: FleetId) -> galaxy_sim::Sight {
+        match &self.view {
+            None => galaxy_sim::Sight::Detailed,
+            Some(v) => v.fleets.get(&id).copied().unwrap_or(galaxy_sim::Sight::Hidden),
+        }
+    }
+
+    /// What the player sees of a planet (`Hidden` = owner and name only).
+    pub fn planet(&self, p: PlanetId) -> galaxy_sim::Sight {
+        match &self.view {
+            None => galaxy_sim::Sight::Detailed,
+            Some(v) => v.planets.get(p as usize).copied().unwrap_or(galaxy_sim::Sight::Hidden),
+        }
+    }
+
+    /// Recomputes the view when the snapshot changed.
+    pub fn refresh(&mut self, state: &SimState, player: Option<FactionId>) {
+        if self.seq == Some(state.current.seq) {
+            return;
+        }
+        self.seq = Some(state.current.seq);
+        self.view = player.map(|me| state.current.sight(&state.world, me));
+    }
+}
+
 /// Root entity of a fleet on the map.
 #[derive(Component, Debug)]
 pub struct FleetVisual {
@@ -101,12 +138,16 @@ pub fn sync_fleets(
     player: Res<PlayerFaction>,
     mut mats: ResMut<Assets<StandardMaterial>>,
     mut entities: ResMut<FleetEntities>,
+    mut fog: ResMut<Fog>,
     mut fleets: Query<(&mut FleetVisual, &mut Transform, &Children)>,
     models: Query<Entity, With<FleetModel>>,
     labels: Query<(Entity, &FleetLabel)>,
 ) {
     let world = &state.world;
     let g = state.galaxy();
+    fog.refresh(&state, player.0);
+    let fog = &*fog;
+    let shown = |id: &FleetId| fog.fleet(*id) != galaxy_sim::Sight::Hidden;
     let now = time.elapsed_secs_f64();
     let rate = if state.current.human_battles.is_empty() { clock.rate() } else { 0.0 };
     let extra = state.extrapolation(now, rate);
@@ -114,7 +155,7 @@ pub fn sync_fleets(
 
     // Removed fleets.
     entities.0.retain(|id, e| {
-        if g.fleets.contains_key(id) {
+        if g.fleets.contains_key(id) && shown(id) {
             true
         } else {
             commands.entity(*e).despawn();
@@ -122,14 +163,14 @@ pub fn sync_fleets(
         }
     });
     for (e, l) in &labels {
-        if !g.fleets.contains_key(&l.0) {
+        if !g.fleets.contains_key(&l.0) || !shown(&l.0) {
             commands.entity(e).despawn();
         }
     }
 
     // Orbit slots: fleets parked at the same planet share a ring.
     let mut parked: BTreeMap<PlanetId, Vec<FleetId>> = BTreeMap::new();
-    for f in g.fleets.values() {
+    for f in g.fleets.values().filter(|f| shown(&f.id)) {
         if let Some(p) = f.planet() {
             parked.entry(p).or_default().push(f.id);
         }
@@ -139,7 +180,7 @@ pub fn sync_fleets(
         (v.iter().position(|&x| x == id).unwrap_or(0), v.len())
     };
 
-    for f in g.fleets.values() {
+    for f in g.fleets.values().filter(|f| shown(&f.id)) {
         let flag = flagship(world, f);
         let model = catalog.fleet_model(cfg.fleet_model_style, f.units.keys().copied(), flag).map(str::to_owned);
         let bow = cfg.fleet_model_style == FleetModelStyle::Flagship;
@@ -427,5 +468,22 @@ pub fn draw_routes(
             }
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use galaxy_sim::Sight;
+
+    #[test]
+    fn fog_hides_unlisted_fleets_and_defaults_to_open_for_spectators() {
+        let spectator = Fog::default();
+        assert_eq!(spectator.fleet(7), Sight::Detailed);
+        assert_eq!(spectator.planet(3), Sight::Detailed);
+        let view = crate::SightView { planets: vec![Sight::Detailed, Sight::Seen, Sight::Hidden], fleets: [(1, Sight::Detailed), (2, Sight::Seen)].into_iter().collect() };
+        let fog = Fog { seq: Some(0), view: Some(view) };
+        assert_eq!((fog.fleet(1), fog.fleet(2), fog.fleet(3)), (Sight::Detailed, Sight::Seen, Sight::Hidden));
+        assert_eq!((fog.planet(1), fog.planet(2), fog.planet(9)), (Sight::Seen, Sight::Hidden, Sight::Hidden));
     }
 }

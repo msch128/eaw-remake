@@ -28,9 +28,47 @@ pub(crate) struct BarBacking;
 /// Pads the galactic bar can show (`b_create_00..39`).
 const MAX_PADS: usize = 40;
 
+/// Ship class filter of the left grid (the four class buttons of the galactic bar). A second click on the active button clears it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum BarClass {
+    /// `b_filters_corvette`: the small ships, fighter and bomber squadrons included (the grid has no extra fighter button).
+    Corvette,
+    /// `b_filters_frigate`.
+    Frigate,
+    /// `b_filters_capital`: capital and super capital ships.
+    Capital,
+    /// `b_filters_station`: the star base upgrade.
+    Station,
+}
+
+impl BarClass {
+    fn from_button(name: &str) -> Option<Self> {
+        Some(match name {
+            "b_filters_corvette" => Self::Corvette,
+            "b_filters_frigate" => Self::Frigate,
+            "b_filters_capital" => Self::Capital,
+            "b_filters_station" => Self::Station,
+            _ => return None,
+        })
+    }
+
+    /// Whether a build option of `category` belongs to this class.
+    fn matches(self, category: galaxy_play::BuildCategory) -> bool {
+        use galaxy_play::BuildCategory as C;
+        match self {
+            Self::Corvette => matches!(category, C::Squadrons | C::Corvettes),
+            Self::Frigate => category == C::Frigates,
+            Self::Capital => category == C::Capitals,
+            Self::Station => category == C::Starbase,
+        }
+    }
+}
+
 /// Command bar state of the running game.
 #[derive(Resource, Debug)]
-struct BarState {
+pub(crate) struct BarState {
+    /// Active class filter of the space tab (`None` = everything).
+    pub(crate) class: Option<BarClass>,
     spawned: bool,
     /// Space production tab (ships, star base, tech) instead of the planet tab (structures).
     space_tab: bool,
@@ -42,7 +80,7 @@ struct BarState {
 
 impl Default for BarState {
     fn default() -> Self {
-        Self { spawned: false, space_tab: true, pads: Vec::new(), queue: Vec::new() }
+        Self { class: None, spawned: false, space_tab: true, pads: Vec::new(), queue: Vec::new() }
     }
 }
 
@@ -294,6 +332,7 @@ fn feed_bar(
     }
     let week = state.world.config.week_seconds;
     let space_tab = bar.space_tab;
+    let class = bar.class;
     bar.queue.clear();
     bar.pads.clear();
     if let Some(menu) = &model.planet {
@@ -311,7 +350,7 @@ fn feed_bar(
                 tooltip: format!("{}\n{} left\n{cancel}", q.name, format_duration(q.remaining_seconds, week)),
             });
         }
-        for o in menu.options.iter().filter(|o| is_structure(o.target) != space_tab).take(MAX_PADS) {
+        for o in menu.options.iter().filter(|o| is_structure(o.target) != space_tab && (!space_tab || class.is_none_or(|c| c.matches(o.category)))).take(MAX_PADS) {
             next.pads.push(BuildPadEntry {
                 icon: icon_for(&state, game, o.target),
                 price: Some(o.cost.max(0.0) as u32),
@@ -379,6 +418,11 @@ fn bar_clicks(
             }
             continue;
         }
+        if let Some(class) = BarClass::from_button(name) {
+            bar.class = if bar.class == Some(class) { None } else { Some(class) };
+            bar.space_tab = true;
+            continue;
+        }
         match name {
             "b_space_tab" => bar.space_tab = true,
             "b_planet_tab" => bar.space_tab = false,
@@ -399,14 +443,18 @@ fn bar_clicks(
 }
 
 /// Keeps the pressed look of the four filter toggles in line with [`crate::galaxy_map::MapFilters`].
-fn sync_filter_buttons(filters: Res<crate::galaxy_map::MapFilters>, mut buttons: Query<(&eaw_ui::EawButton, &mut eaw_ui::EawButtonState)>) {
+fn sync_filter_buttons(filters: Res<crate::galaxy_map::MapFilters>, bar: Res<BarState>, mut buttons: Query<(&eaw_ui::EawButton, &mut eaw_ui::EawButtonState)>) {
     for (b, mut st) in &mut buttons {
         let on = match b.name.as_str() {
             "b_filters0" => filters.credits,
             "b_filters1" => filters.base_level,
             "b_filters2" => filters.weather,
             "b_filters3" => filters.heroes,
-            _ => continue,
+            n => match BarClass::from_button(n) {
+                Some(c) => bar.class == Some(c),
+                None => continue,
+            },
+
         };
         if st.selected != on {
             st.selected = on;
@@ -932,6 +980,7 @@ fn fleet_tooltip(
     catalog: Res<galaxy_play::PlayCatalog>,
     bridge: Res<PlayBridge>,
     view: Res<crate::galaxy_view::GalaxyView>,
+    fog: Res<galaxy_play::Fog>,
     window: Option<Single<&Window, With<PrimaryWindow>>>,
     scale: Res<UiScale>,
     mut tip: Single<(&mut Node, &mut Text, &mut Visibility, &ComputedNode), With<FleetTip>>,
@@ -939,9 +988,12 @@ fn fleet_tooltip(
     let (node, text, vis, own) = &mut *tip;
     let cursor = window.as_ref().and_then(|w| w.cursor_position());
     let screen = window.as_ref().map(|w| (w.size(), w.scale_factor()));
-    let fleet = hover.fleet.and_then(|id| state.galaxy().fleets.get(&id));
-    let planet = hover.planet.and_then(|p| bridge.sim_to_planet.get(p as usize).copied().flatten()).and_then(|i| view.planets.get(i).map(|pv| (i, pv)));
-    let (Some(cursor), Some(s)) = (cursor, fleet.map(|f| fleet_text(f, &state, &catalog)).or_else(|| planet.map(|(i, pv)| planet_text(i, pv, &view)))) else {
+    let fleet = hover.fleet.and_then(|id| state.galaxy().fleets.get(&id).map(|f| (f, fog.fleet(id)))).filter(|(_, s)| *s != galaxy_sim::Sight::Hidden);
+    let planet = hover.planet.and_then(|p| bridge.sim_to_planet.get(p as usize).copied().flatten().map(|i| (i, fog.planet(p)))).and_then(|(i, s)| view.planets.get(i).map(|pv| (i, pv, s)));
+    let (Some(cursor), Some(s)) = (
+        cursor,
+        fleet.map(|(f, s)| fleet_text(f, s, &state, &catalog)).or_else(|| planet.map(|(i, pv, s)| planet_text(i, pv, s, &view))),
+    ) else {
         if **vis != Visibility::Hidden {
             **vis = Visibility::Hidden;
         }
@@ -959,13 +1011,18 @@ fn fleet_tooltip(
     **vis = Visibility::Inherited;
 }
 
-fn fleet_text(f: &galaxy_sim::Fleet, state: &SimState, catalog: &galaxy_play::PlayCatalog) -> String {
-    let mut lines = vec![format!("{} fleet - {} ships", catalog.faction(f.owner), f.unit_count())];
-    for (&u, &c) in f.units.iter().take(8) {
-        lines.push(format!("  {c}x {}", catalog.unit(u)));
-    }
-    if f.units.len() > 8 {
-        lines.push(format!("  +{} more types", f.units.len() - 8));
+fn fleet_text(f: &galaxy_sim::Fleet, sight: galaxy_sim::Sight, state: &SimState, catalog: &galaxy_play::PlayCatalog) -> String {
+    let detailed = sight == galaxy_sim::Sight::Detailed;
+    let mut lines = vec![if detailed { format!("{} fleet - {} ships", catalog.faction(f.owner), f.unit_count()) } else { format!("{} fleet - ? ships", catalog.faction(f.owner)) }];
+    if detailed {
+        for (&u, &c) in f.units.iter().take(8) {
+            lines.push(format!("  {c}x {}", catalog.unit(u)));
+        }
+        if f.units.len() > 8 {
+            lines.push(format!("  +{} more types", f.units.len() - 8));
+        }
+    } else {
+        lines.push("  ?".to_owned());
     }
     lines.push(match &f.location {
         galaxy_sim::FleetLocation::AtPlanet(p) => format!("In orbit of {}", state.world.planets[*p as usize].display_name),
@@ -974,10 +1031,14 @@ fn fleet_text(f: &galaxy_sim::Fleet, state: &SimState, catalog: &galaxy_play::Pl
     lines.join("\n")
 }
 
-fn planet_text(i: usize, p: &crate::galaxy_view::PlanetView, view: &crate::galaxy_view::GalaxyView) -> String {
+fn planet_text(i: usize, p: &crate::galaxy_view::PlanetView, sight: galaxy_sim::Sight, view: &crate::galaxy_view::GalaxyView) -> String {
     let mut lines = vec![p.display_name.clone()];
     lines.push(format!("Owner: {}", view.owner_of(i).map_or("Neutral", |f| f.name.as_str())));
     lines.push(format!("Income: {} credits", crate::ui::thousands(i64::from(p.income))));
+    if sight == galaxy_sim::Sight::Hidden {
+        // Out of sight: the video shows name, owner colour and income of distant planets, nothing about their defences.
+        return lines.join("\n");
+    }
     lines.push(format!("Space slots: {}   Ground slots: {}", p.max_space_base, p.max_ground_base));
     if let Some((name, desc)) = &p.ability {
         lines.push(format!("Bonus: {name}"));
@@ -1218,6 +1279,7 @@ fn live_info_panel(
     model: Res<PlayUiModel>,
     state: Res<SimState>,
     catalog: Res<galaxy_play::PlayCatalog>,
+    fog: Res<galaxy_play::Fog>,
     mut lines: Query<(&crate::ui::InfoLine, &mut Text)>,
 ) {
     let Some(p) = selection.planet else { return };
@@ -1240,15 +1302,19 @@ fn live_info_panel(
             }
         }
     }
-    let mut orbit: std::collections::BTreeMap<u32, u32> = Default::default();
+    // Fog of war: fleets out of sight are not listed, fleets that are only `Seen` have an unknown size.
+    let mut orbit: std::collections::BTreeMap<u32, (u32, bool)> = Default::default();
     for f in state.galaxy().fleets.values() {
-        if f.planet() == Some(p) {
-            *orbit.entry(f.owner).or_default() += f.unit_count();
+        let sight = fog.fleet(f.id);
+        if f.planet() == Some(p) && sight != galaxy_sim::Sight::Hidden {
+            let e = orbit.entry(f.owner).or_default();
+            e.0 += f.unit_count();
+            e.1 |= sight != galaxy_sim::Sight::Detailed;
         }
     }
     if !orbit.is_empty() {
         rows.push("In orbit:".to_owned());
-        rows.extend(orbit.iter().map(|(&o, &n)| format!("  {}: {n} ships", catalog.faction(o))));
+        rows.extend(orbit.iter().map(|(&o, &(n, unknown))| if unknown { format!("  {}: ? ships", catalog.faction(o)) } else { format!("  {}: {n} ships", catalog.faction(o)) }));
     }
     let forces = rows.join("\n");
     for (line, mut text) in &mut lines {
@@ -1710,7 +1776,7 @@ mod tests {
     #[test]
     fn planet_tooltip_lists_owner_income_and_slots() {
         let view = crate::galaxy_view::GalaxyView::demo();
-        let text = planet_text(0, &view.planets[0], &view);
+        let text = planet_text(0, &view.planets[0], galaxy_sim::Sight::Detailed, &view);
         assert!(text.starts_with(&view.planets[0].display_name));
         assert!(text.contains("Owner: "));
         assert!(text.contains("Income: "));
@@ -1945,12 +2011,22 @@ fn planet_view_ui(world: &mut World, mut last_key: Local<Option<(usize, u64)>>) 
     let mut boxes: [std::collections::BTreeMap<String, u32>; 3] = Default::default();
     {
         let state = world.resource::<SimState>();
+        let fog = world.resource::<galaxy_play::Fog>();
         for f in state.galaxy().fleets.values().filter(|f| f.planet() == Some(sim_planet)) {
+            let sight = fog.fleet(f.id);
+            if sight == galaxy_sim::Sight::Hidden {
+                continue;
+            }
             let b = match me {
                 Some(m) if f.owner == m => 0,
                 Some(m) if state.galaxy().hostile(&state.world, m, f.owner) => 1,
                 _ => 2,
             };
+            if sight != galaxy_sim::Sight::Detailed {
+                // Seen only: composition unknown, shown as one "?" group with the ship count unknown (1).
+                *boxes[b].entry("?".to_owned()).or_default() += 1;
+                continue;
+            }
             for (&u, &c) in &f.units {
                 *boxes[b].entry(state.world.units[u as usize].name.clone()).or_default() += c;
             }
