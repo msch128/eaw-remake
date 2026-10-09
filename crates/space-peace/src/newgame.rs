@@ -94,9 +94,35 @@ pub fn saves_dir() -> Option<PathBuf> {
     std::env::var_os("APPDATA").map(|a| PathBuf::from(a).join("SpacePeace").join("saves"))
 }
 
-/// File of a slot.
+/// The three kinds of autosave slots (U43).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AutosaveKind {
+    /// Saved right before entering a space battle.
+    PreBattle,
+    /// Saved right after returning from a space battle.
+    PostBattle,
+    /// Saved every 5 minutes during galactic play.
+    Rolling,
+}
+
+pub fn autosave_path(kind: AutosaveKind) -> Option<PathBuf> {
+    let name = match kind {
+        AutosaveKind::PreBattle => "autosave_pre_battle.json",
+        AutosaveKind::PostBattle => "autosave_post_battle.json",
+        AutosaveKind::Rolling => "autosave_rolling.json",
+    };
+    saves_dir().map(|d| d.join(name))
+}
+
+/// File of a slot (1..=5 manual, 6 PreBattle autosave, 7 PostBattle autosave, 8 Rolling autosave).
 pub fn slot_path(slot: u8) -> Option<PathBuf> {
-    saves_dir().map(|d| d.join(format!("slot{slot}.json")))
+    match slot {
+        1..=5 => saves_dir().map(|d| d.join(format!("slot{slot}.json"))),
+        6 => autosave_path(AutosaveKind::PreBattle),
+        7 => autosave_path(AutosaveKind::PostBattle),
+        8 => autosave_path(AutosaveKind::Rolling),
+        _ => None,
+    }
 }
 
 /// What a slot file holds.
@@ -143,12 +169,62 @@ pub fn slot_spec(mode: SlotMode, only_campaign: Option<&str>, entries: &[crate::
         };
         items.push(MenuItem::new(label, MenuAction::Slot(mode, n)));
     }
+    if mode == SlotMode::Load {
+        for (n, name_prefix) in [
+            (6, "Autosave Pre-Battle"),
+            (7, "Autosave Post-Battle"),
+            (8, "Autosave Rolling (5 min)"),
+        ] {
+            let label = match slot_info(n) {
+                Some(i) => {
+                    let other = only_campaign.is_some_and(|c| !c.eq_ignore_ascii_case(&i.campaign));
+                    let name = campaign_label(&i.campaign, entries);
+                    let note = if other { " - different campaign" } else { "" };
+                    format!("{name_prefix} - {name}, week {}, {}{note}", i.week + 1, i.difficulty)
+                }
+                None => format!("{name_prefix} - empty"),
+            };
+            items.push(MenuItem::new(label, MenuAction::Slot(mode, n)));
+        }
+    }
     MenuSpec {
         title: if mode == SlotMode::Save { "Save Game".into() } else { "Load Game".into() },
         columns: vec![MenuColumn { items, ..default() }],
         footer: vec![MenuItem::new("Back", MenuAction::CloseSlots)],
         dim_background: true,
         ..default()
+    }
+}
+
+/// Periodic autosave timer (U43: rolling autosave every 5 minutes).
+#[derive(Resource)]
+pub struct AutosaveTimer(pub Timer);
+
+impl Default for AutosaveTimer {
+    fn default() -> Self {
+        Self(Timer::from_seconds(300.0, TimerMode::Repeating))
+    }
+}
+
+/// Saves the running game every 5 minutes while in the galaxy view.
+fn rolling_autosave(
+    time: Res<Time>,
+    screen: Res<State<AppScreen>>,
+    state: Option<Res<SimState>>,
+    mut timer: ResMut<AutosaveTimer>,
+    mut actions: MessageWriter<PlayAction>,
+) {
+    if *screen.get() != AppScreen::Galaxy || state.is_none_or(|s| s.current.loading) {
+        return;
+    }
+    if timer.0.tick(time.delta()).just_finished() {
+        if let Some(path) = autosave_path(AutosaveKind::Rolling) {
+            if let Some(dir) = path.parent() {
+                let _ = std::fs::create_dir_all(dir);
+            }
+            info!("saves: rolling 5-minute autosave -> {}", path.display());
+            actions.write(PlayAction::Save(path));
+        }
     }
 }
 
@@ -159,11 +235,12 @@ impl Plugin for NewGamePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<NewGameOptions>()
             .init_resource::<SlotScreen>()
+            .init_resource::<AutosaveTimer>()
             .add_message::<SlotChosen>()
             .add_message::<MenuRefresh>()
             .add_systems(OnEnter(AppScreen::MainMenu), reset_slots)
             .add_systems(OnEnter(AppScreen::Galaxy), reset_slots)
-            .add_systems(Update, (sync_slot_menu, handle_slot_chosen, report_events));
+            .add_systems(Update, (sync_slot_menu, handle_slot_chosen, report_events, rolling_autosave));
     }
 }
 
@@ -258,5 +335,45 @@ fn report_events(mut events: MessageReader<PlayEvent>) {
             },
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn autosave_paths_and_slot_mappings() {
+        assert_eq!(
+            autosave_path(AutosaveKind::PreBattle).unwrap().file_name().unwrap(),
+            "autosave_pre_battle.json"
+        );
+        assert_eq!(
+            autosave_path(AutosaveKind::PostBattle).unwrap().file_name().unwrap(),
+            "autosave_post_battle.json"
+        );
+        assert_eq!(
+            autosave_path(AutosaveKind::Rolling).unwrap().file_name().unwrap(),
+            "autosave_rolling.json"
+        );
+
+        assert_eq!(slot_path(6), autosave_path(AutosaveKind::PreBattle));
+        assert_eq!(slot_path(7), autosave_path(AutosaveKind::PostBattle));
+        assert_eq!(slot_path(8), autosave_path(AutosaveKind::Rolling));
+    }
+
+    #[test]
+    fn load_slot_spec_includes_autosaves() {
+        let spec = slot_spec(SlotMode::Load, None, &[]);
+        assert_eq!(spec.columns[0].items.len(), 5 + 3);
+        assert!(spec.columns[0].items[5].label.starts_with("Autosave Pre-Battle"));
+        assert!(spec.columns[0].items[6].label.starts_with("Autosave Post-Battle"));
+        assert!(spec.columns[0].items[7].label.starts_with("Autosave Rolling"));
+    }
+
+    #[test]
+    fn save_slot_spec_only_shows_manual_slots() {
+        let spec = slot_spec(SlotMode::Save, None, &[]);
+        assert_eq!(spec.columns[0].items.len(), 5);
     }
 }

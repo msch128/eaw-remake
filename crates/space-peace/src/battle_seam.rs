@@ -1,4 +1,4 @@
-﻿//! Integration seam for tactical space battles started from the galaxy map.
+//! Integration seam for tactical space battles started from the galaxy map.
 //!
 //! Nothing here depends on the unfinished `galaxy-play`, `galaxy-sim` or `battle-view` APIs; it
 //! only fixes the screen, the messages and the placeholder screen so those crates can be plugged
@@ -122,16 +122,35 @@ fn open_battle(
     mut requests: MessageReader<OpenBattle>,
     mut commands: Commands,
     mut next: ResMut<NextState<AppScreen>>,
+    mut actions: MessageWriter<galaxy_play::PlayAction>,
 ) {
     if let Some(OpenBattle(request)) = requests.read().last() {
         commands.insert_resource(request.clone());
+        if let Some(path) = crate::newgame::autosave_path(crate::newgame::AutosaveKind::PreBattle) {
+            if let Some(dir) = path.parent() {
+                let _ = std::fs::create_dir_all(dir);
+            }
+            info!("saves: pre-battle autosave -> {}", path.display());
+            actions.write(galaxy_play::PlayAction::Save(path));
+        }
         next.set(AppScreen::SpaceBattle);
     }
 }
 
 /// Leaves the battle screen when a result arrived.
-fn finish_battle(mut results: MessageReader<BattleFinished>, mut next: ResMut<NextState<AppScreen>>) {
+fn finish_battle(
+    mut results: MessageReader<BattleFinished>,
+    mut next: ResMut<NextState<AppScreen>>,
+    mut actions: MessageWriter<galaxy_play::PlayAction>,
+) {
     if results.read().last().is_some() {
+        if let Some(path) = crate::newgame::autosave_path(crate::newgame::AutosaveKind::PostBattle) {
+            if let Some(dir) = path.parent() {
+                let _ = std::fs::create_dir_all(dir);
+            }
+            info!("saves: post-battle autosave -> {}", path.display());
+            actions.write(galaxy_play::PlayAction::Save(path));
+        }
         next.set(AppScreen::Galaxy);
     }
 }
