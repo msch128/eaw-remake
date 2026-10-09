@@ -267,6 +267,7 @@ impl BuildMenu {
                 availability: a,
             });
         }
+        dedupe_options(world, &mut options);
         options.sort_by(|a, b| a.category.cmp(&b.category).then(a.cost.total_cmp(&b.cost)).then_with(|| a.name.cmp(&b.name)));
 
         // Queues.
@@ -313,6 +314,43 @@ impl BuildMenu {
     pub fn section(&self, category: BuildCategory) -> impl Iterator<Item = &BuildOption> {
         self.options.iter().filter(move |o| o.category == category)
     }
+}
+
+/// Object name of the thing a target builds (for telling same-named entries apart).
+fn object_name(world: &World, target: BuildTarget) -> String {
+    match target {
+        BuildTarget::Unit(u) => world.units[u as usize].name.clone(),
+        BuildTarget::Structure(s) => world.structures[s as usize].name.clone(),
+        BuildTarget::Starbase(b) => world.starbases[b as usize].name.clone(),
+        BuildTarget::Tech(t) => format!("tech {t}"),
+    }
+}
+
+/// Several game objects share one display name: terrain variants of a structure (`_Temperate` / `_Barren` / `_Urban` / `_Sector` / `_WW`),
+/// `_E` / `_2` spawners, and a star base level that also exists as a structure. The list shows each thing once: entries with the same
+/// name and cost collapse into one (an orderable variant wins over a blocked one, then the first), a structure named like a star base
+/// level is dropped, and entries that still share a name but differ in cost get their object name appended.
+fn dedupe_options(world: &World, options: &mut Vec<BuildOption>) {
+    let base_names: Vec<String> = options.iter().filter(|o| o.category == BuildCategory::Starbase).map(|o| o.name.clone()).collect();
+    options.retain(|o| !(o.category == BuildCategory::Structures && base_names.contains(&o.name)));
+    let mut kept: Vec<BuildOption> = Vec::new();
+    for o in options.drain(..) {
+        match kept.iter_mut().find(|k| k.name == o.name && k.cost == o.cost && k.category == o.category) {
+            Some(k) => {
+                if !k.availability.is_available() && o.availability.is_available() {
+                    *k = o;
+                }
+            }
+            None => kept.push(o),
+        }
+    }
+    let names: Vec<String> = kept.iter().map(|o| o.name.clone()).collect();
+    for o in &mut kept {
+        if names.iter().filter(|n| **n == o.name).count() > 1 {
+            o.name = format!("{} ({})", o.name, object_name(world, o.target).replace('_', " "));
+        }
+    }
+    *options = kept;
 }
 
 /// The sim command that orders `target` at `planet`.

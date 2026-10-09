@@ -102,12 +102,14 @@ impl Plugin for PlayUiPlugin {
                     battle_dialog,
                     scripted_battle_click,
                     battle_dialog_result,
+
                     move_info_panel,
                 )
                     .chain()
                     .run_if(resource_exists::<PlayBridge>.and_then(resource_exists::<SimState>)),
             )
             .add_systems(Update, (declutter_top, hero_bar, locked_clicks, spawn_planet_panel, update_planet_panel, place_planet_panel, base_layout_click, planet_view_ui, objectives_toggle, objectives_window).chain().run_if(resource_exists::<PlayBridge>.and_then(resource_exists::<SimState>)))
+            .add_systems(Update, auto_resolve_summary.after(battle_dialog_result).run_if(resource_exists::<PlayBridge>.and_then(resource_exists::<SimState>)))
             .add_systems(Update, show_battle_summary.run_if(in_state(AppScreen::Galaxy)).run_if(resource_exists::<crate::battle_play::BattleSummary>))
             .add_systems(
                 Update,
@@ -1303,6 +1305,75 @@ fn focus_start(
     }
 }
 
+/// Ships on each side of an auto-resolved battle, noted when the player decides.
+struct AutoBattle {
+    id: u32,
+    planet: galaxy_sim::PlanetId,
+    /// Per faction: id, ships before, ids of its fleets in the battle.
+    sides: Vec<(galaxy_sim::FactionId, u32, Vec<galaxy_sim::FleetId>)>,
+}
+
+/// Auto-resolve has no tactical result: the sides are counted from the galaxy fleets before the decision, the losses come from
+/// `BattleResolved`, and ships that fled are the units of the battle's fleets that now leave the planet.
+fn auto_resolve_summary(
+    mut actions: MessageReader<PlayAction>,
+    mut events: MessageReader<galaxy_play::PlayEvent>,
+    state: Res<SimState>,
+    player: Res<PlayerFaction>,
+    mut noted: Local<Vec<AutoBattle>>,
+    mut commands: Commands,
+) {
+    for a in actions.read() {
+        let PlayAction::ResolveBattle { id, choice: BattleChoice::AutoResolve } = a else { continue };
+        let Some(b) = state.current.human_battles.iter().find(|b| b.id == *id) else { continue };
+        let galaxy = state.galaxy();
+        let sides = b
+            .factions
+            .iter()
+            .map(|&f| {
+                let fleets: Vec<_> = b.fleets.iter().copied().filter(|fid| galaxy.fleets.get(fid).is_some_and(|fl| fl.owner == f)).collect();
+                let ships = fleets.iter().filter_map(|fid| galaxy.fleets.get(fid)).map(|fl| fl.unit_count()).sum();
+                (f, ships, fleets)
+            })
+            .collect();
+        noted.retain(|n| n.id != *id);
+        noted.push(AutoBattle { id: *id, planet: b.planet, sides });
+    }
+    for e in events.read() {
+        let galaxy_play::PlayEvent::Sim(galaxy_sim::Event::BattleResolved { id, winner, losses, .. }) = e else { continue };
+        let Some(pos) = noted.iter().position(|n| n.id == *id) else { continue };
+        let n = noted.remove(pos);
+        let galaxy = state.galaxy();
+        let planet = state.world.planets[n.planet as usize].display_name.trim_end_matches("_WW").replace('_', " ");
+        let mut lines = Vec::new();
+        for (f, total, fleets) in &n.sides {
+            let name = &state.world.factions[*f as usize].name;
+            let lost = losses.iter().find(|(lf, _)| lf == f).map_or(0, |&(_, l)| l).min(*total);
+            let fled: u32 = fleets
+                .iter()
+                .filter_map(|fid| galaxy.fleets.get(fid))
+                .filter(|fl| fl.location != galaxy_sim::FleetLocation::AtPlanet(n.planet))
+                .map(|fl| fl.unit_count())
+                .sum();
+            let mut line = if *total == 0 {
+                format!("{name}: planetary defenses")
+            } else {
+                format!("{name}: {} of {} units survived (lost {})", total - lost, total, lost)
+            };
+            if fled > 0 {
+                line.push_str(&format!(", {fled} escaped"));
+            }
+            lines.push(line);
+        }
+        let title = match winner {
+            Some(w) if Some(*w) == player.0 => format!("Victory at {planet}"),
+            Some(w) => format!("Defeat at {planet} - {} wins", state.world.factions[*w as usize].name),
+            None => format!("Battle at {planet} ends in a draw"),
+        };
+        commands.insert_resource(crate::battle_play::BattleSummary { title, text: format!("{}\nAuto-resolved", lines.join("\n")) });
+    }
+}
+
 /// The battle result dialog (EaW shows the losses of the fight when it ends).
 fn show_battle_summary(world: &mut World) {
     if world.get_resource::<EawUiAssets>().is_none() || world.contains_resource::<PendingTactical>() {
@@ -1317,6 +1388,8 @@ fn show_battle_summary(world: &mut World) {
     let spec = DialogSpec { title: s.title.clone(), text: s.text.clone(), portrait: None, faction, buttons: vec!["OK".into()] };
     if spawn_dialog(world, &spec).is_none() {
         world.insert_resource(s);
+    } else {
+        info!("play: battle result dialog shown: {} | {}", s.title, s.text.replace('\n', " | "));
     }
 }
 

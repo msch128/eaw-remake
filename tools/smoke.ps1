@@ -36,7 +36,7 @@ $scenarios = @(
     @('force-end-win',       @('--campaign', $camp, '--force-end', 'win', '--frames', '300'), ''),
     @('force-end-lose-menu', @('--campaign', $camp, '--force-end', 'lose-menu', '--frames', '500'), 'Main Menu'),
     @('superweapon',         @('--campaign', $camp, '--select', $yavin, '--zoom', '0.1', '--grant-unit', 'Death_Star', '--at', 'Arda', '--weeks', '0', '--fire', 'confirm', '--frames', '330'), 'destroyed'),
-    @('battle-auto-resolve', @('--campaign', $camp, '--select', $yavin, '--weeks', '8', '--move', 'Hoth', '--battle-choice', 'auto', '--frames', '200'), 'clicking .Auto'),
+    @('battle-auto-resolve', @('--campaign', $camp, '--select', $yavin, '--weeks', '8', '--move', 'Hoth', '--battle-choice', 'auto', '--frames', '200'), 'battle result dialog shown: .* at .* units survived [(]lost [0-9]+[)]'),
     @('battle-fight-orders', @('--campaign', $camp, '--select', $yavin, '--weeks', '8', '--move', 'Hoth', '--battle-choice', 'fight', '--battle-orders', '--battle-speed', '30', '--frames', '5'), 'battle: over'),
     # The real windowed plugin set (audio, window systems) with an invisible window and zero volume; no picture is made.
     @('windowed-menu',       @('--hidden', '--volume', '0', '--frames', '400'), 'install'),

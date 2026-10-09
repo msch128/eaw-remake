@@ -257,3 +257,34 @@ fn route_plans_to_the_fleets_own_planet_and_a_neighbour_do_not_panic() {
     assert_eq!(hop.path.len(), 2);
     assert!(hop.blockades.is_empty());
 }
+
+/// No build menu of a real planet may list the same display name twice (several Build_* sources or tech variants of one type).
+#[test]
+fn build_menus_have_no_duplicate_names() {
+    let Some(data) = load() else { return };
+    let sim = new_sim(&data, 3);
+    let (w, g) = (sim.world(), sim.galaxy());
+    let names = PlayCatalog::from_data(w, &data);
+    let mut dups: Vec<String> = Vec::new();
+    let mut menus = 0;
+    for f in 0..w.factions.len() as FactionId {
+        for p in 0..w.planets.len() as u32 {
+            // Pretend the faction owns the planet: the menu only needs ownership, and this covers every planet with every faction.
+            let mut g2 = g.clone();
+            g2.planets[p as usize].owner = Some(f);
+            let Some(menu) = BuildMenu::for_planet(w, &g2, &names, f, p) else { continue };
+            menus += 1;
+            let mut seen = std::collections::HashMap::new();
+            for o in &menu.options {
+                if let Some(prev) = seen.insert(o.name.clone(), o.target) {
+                    let d = |t: BuildTarget| match t { BuildTarget::Unit(u) => { let x = &w.units[u as usize]; format!("U {} cost {} tech {} aff {:?} role {:?}", x.name, x.cost, x.tech, x.affiliation, x.role) } BuildTarget::Structure(s) => { let x = &w.structures[s as usize]; format!("S {} cost {} tech {} aff {:?}", x.name, x.cost, x.tech, x.affiliation) } t => format!("{t:?}") };
+                    dups.push(format!("{}: [{}] / [{}] ({})", w.factions[f as usize].name, d(prev), d(o.target), o.name));
+                }
+            }
+        }
+    }
+    dups.sort();
+    dups.dedup();
+    assert!(menus > 0);
+    assert!(dups.is_empty(), "{} duplicate names in {menus} menus, e.g. {:#?}", dups.len(), &dups[..dups.len().min(60)]);
+}
