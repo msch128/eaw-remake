@@ -444,7 +444,8 @@ fn feed_bar(
         bar.queue = vec![None; QUEUE_LANE_SLOTS * 2];
         for q in &menu.queue {
             let index = per_lane.entry(q.lane as u8).or_insert(0);
-            let side = usize::from(q.lane == galaxy_sim::Lane::Structures);
+            // The lanes follow the tabs: space items and orbital structures left (blue), ground structures right (orange).
+            let side = usize::from(!on_space_tab(&state.world, q.target));
             let (lane_index, cancel_index) = (shown[side], *index);
             *index += 1;
             if lane_index >= QUEUE_LANE_SLOTS {
