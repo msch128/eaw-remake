@@ -49,6 +49,22 @@ How the coordinator runs unattended. The work list is `docs/ROADMAP-2026-10-09.m
 | galaxy UI | `eaw-ui/*`, `space-peace/src/{play_ui,galaxy_map,menu,input_test}.rs`, `galaxy-play/src/visuals.rs` | `target/ui` |
 | render | `alamo-render/*`, `battle-view/src/scene.rs`, `space-peace/src/planet_view.rs` | `target/render` |
 
+## Balance rule (user, 2026-10-09)
+Every area at about 80% is worth more than a few areas at 100% and the rest at 50%. The goal is EaW plus the
+Remake 4.0 in one, and it must FEEL like it: UI, feel, music and sound included. Always give one of the 3 agent
+slots to the currently lowest area. No area may stay below 60% while another goes past 85%.
+
+| Area | Estimate 2026-10-09 | Next steps |
+|---|---|---|
+| Sound / music | 45 | Hear-check by log; unit responses per order (select, move, attack); combat music intensity; advisor coverage; ambient; volume balance |
+| Battle look | 65 | Byss vs video (ships darker, no haze); explosions and fire in combat; capital-ship death look |
+| Battle controls | 65 | Esc, retreat, formations, attack lines, Botajef HUD, ability feel |
+| Battle depth | 65 | Retreat rules, escape route, auto-resolve result |
+| Galaxy look | 75 | Fog wiring after the video check; remaining video-frame diffs |
+| Galaxy controls | 75 | Duplicates plus class filter; filter buttons' real effect vs the original |
+| Stability / perf | 85 | Keep the gate green |
+| Simulation / AI | 88 | Nothing urgent |
+
 ## Night plan (order)
 1. **Verify #1:** run the Esc menu smoke scenario (`windowed-battle-esc-menu`); left buttons #5.
 2. **Sim:** #3 retreat per user rules, then #4 escape route, then #2 auto-resolve result data.
