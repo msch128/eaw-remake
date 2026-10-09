@@ -39,6 +39,7 @@ impl Plugin for PlanetViewPlugin {
                 .chain()
                 .run_if(in_state(AppScreen::Galaxy)),
         );
+        app.add_systems(Update, wheel_test.before(view_input).run_if(in_state(AppScreen::Galaxy)));
     }
 }
 
@@ -55,12 +56,23 @@ struct FitModel {
     spin: f32,
 }
 
+/// Wheel-in opens the planet view once the camera has already homed in on the selected planet: within [`OPEN_DISTANCE`] times the
+/// closest zoom (about four notches of the wheel) and with the planet near the view centre.
+const OPEN_DISTANCE: f32 = 2.0;
+
+/// True if a wheel tick toward the planet should open its view. `distance` is the camera's target distance in units of the closest
+/// allowed one, `offset` the focus-to-planet distance in units of the camera distance.
+fn wheel_opens(notches: f32, distance: f32, offset: f32) -> bool {
+    notches > 0.0 && distance <= OPEN_DISTANCE && offset <= 0.5
+}
+
 fn view_input(
     keys: Res<ButtonInput<KeyCode>>,
     scroll: Res<AccumulatedMouseScroll>,
     selection: Res<Selection>,
     bounds: Res<CameraBounds>,
-    cam: Single<&GalaxyCamera>,
+    view: Res<GalaxyView>,
+    mut cam: Single<&mut GalaxyCamera>,
     mut state: ResMut<PlanetViewState>,
 ) {
     if !state.active {
@@ -69,14 +81,37 @@ fn view_input(
             state.planet = selection.0;
             return;
         }
-        let at_min = cam.target_distance <= bounds.min_distance * 1.02;
-        if scroll.delta.y > 0.0 && at_min && let Some(p) = selection.0 {
-            state.active = true;
-            state.planet = Some(p);
+        if let Some(p) = selection.0.and_then(|i| view.planets.get(i).map(|pl| (i, pl))) {
+            let at = crate::galaxy_map::galaxy_to_world(p.1.position);
+            let at = Vec3::new(at.x, 0.0, at.z);
+            let offset = cam.focus.distance(at) / cam.distance.max(1e-3);
+            let distance = cam.target_distance / bounds.min_distance.max(1e-3);
+            if wheel_opens(scroll.delta.y, distance, offset) {
+                // The dive finishes while the view fades in: the camera keeps flying to the planet.
+                cam.target_focus = at;
+                cam.target_distance = bounds.min_distance;
+                state.active = true;
+                state.planet = Some(p.0);
+            }
         }
     } else if keys.just_pressed(KeyCode::Escape) || (scroll.delta.y < 0.0 && state.blend >= 1.0) {
         // Scrolling out only leaves once the view has fully opened: a trailing wheel tick must not close it mid-flight.
         state.active = false;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_small_wheel_zoom_near_the_planet_opens_the_view() {
+        assert!(wheel_opens(1.0, 1.0, 0.0), "at the closest zoom");
+        assert!(wheel_opens(1.0, 1.9, 0.3), "a few notches out, planet near the centre");
+        assert!(!wheel_opens(1.0, 6.0, 0.0), "far away: the wheel only zooms the map");
+        assert!(!wheel_opens(1.0, 1.0, 2.0), "the selected planet is not where the camera looks");
+        assert!(!wheel_opens(-1.0, 1.0, 0.0), "wheel out never opens");
+        assert!(!wheel_opens(0.0, 1.0, 0.0), "no wheel, no view");
     }
 }
 
@@ -97,7 +132,13 @@ fn view_scene(
 ) {
     let target = if state.active { 1.0 } else { 0.0 };
     let step = time.delta_secs() / 0.9;
-    state.blend = if target > state.blend { (state.blend + step).min(1.0) } else { (state.blend - step).max(0.0) };
+    state.blend = if target > state.blend {
+        (state.blend + step).min(1.0)
+    } else if target < state.blend {
+        (state.blend - step).max(0.0)
+    } else {
+        state.blend
+    };
     let building = state.active && existing.is_empty();
     if !state.active && state.blend == 0.0 {
         for e in &existing {
@@ -268,5 +309,91 @@ fn view_fade(
             ));
         }
         Err(_) => {}
+    }
+}
+
+/// Opt-in self test of the wheel path (`SP_PLANET_VIEW_TEST=1`, run with `--offscreen` and `--select <planet> --frames 900`): writes real
+/// `MouseWheel` messages that the input systems accumulate, like the window system would. Checks that a wheel tick far from the planet does
+/// not open the view, that one near it does (and flies the camera to the planet), and that a wheel tick out leaves once it is open.
+/// The verdict is one log line `planet-view-test: ... PASS|FAIL`.
+#[derive(Default)]
+struct WheelTest {
+    frame: u32,
+    opened: bool,
+    opened_at: u32,
+    results: Vec<(&'static str, bool)>,
+    done: bool,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn wheel_test(
+    mut st: Local<WheelTest>,
+    state: ResMut<PlanetViewState>,
+    selection: Res<Selection>,
+    bounds: Res<CameraBounds>,
+    view: Res<GalaxyView>,
+    mut cam: Single<&mut GalaxyCamera>,
+    mut wheel: MessageWriter<bevy::input::mouse::MouseWheel>,
+) {
+    if st.done || std::env::var_os("SP_PLANET_VIEW_TEST").is_none() {
+        return;
+    }
+    let Some(p) = selection.0 else { return };
+    let Some(pl) = view.planets.get(p) else { return };
+    let tick = |wheel: &mut MessageWriter<bevy::input::mouse::MouseWheel>, y: f32| {
+        wheel.write(bevy::input::mouse::MouseWheel { unit: bevy::input::mouse::MouseScrollUnit::Line, x: 0.0, y, window: Entity::PLACEHOLDER, phase: bevy::input::touch::TouchPhase::Moved });
+    };
+    st.frame += 1;
+    let at = crate::galaxy_map::galaxy_to_world(pl.position);
+    let at = Vec3::new(at.x, 0.0, at.z);
+    match st.frame {
+        // Far out the wheel only zooms the map.
+        20 => {
+            cam.target_distance = bounds.min_distance * 8.0;
+            cam.distance = cam.target_distance;
+            cam.target_focus = at;
+            cam.focus = at;
+            tick(&mut wheel, 1.0);
+        }
+        25 => {
+            let ok = !state.active;
+            st.results.push(("wheel-far-from-planet-keeps-the-map", ok));
+            // Close by: one notch opens the view and the camera dives onto the planet.
+            cam.target_distance = bounds.min_distance * 1.4;
+            cam.distance = cam.target_distance;
+            tick(&mut wheel, 1.0);
+        }
+        30 => {
+            let ok = state.active && state.planet == Some(p) && (cam.target_distance - bounds.min_distance).abs() < 1e-3;
+            st.results.push(("small-wheel-zoom-near-planet-opens-view", ok));
+        }
+        // Wheel out while the view is still flying in does not close it.
+        32 => tick(&mut wheel, -1.0),
+        36 => {
+            let ok = state.active;
+            st.results.push(("wheel-out-mid-flight-keeps-view", ok));
+        }
+        f if f > 36 && !st.opened && state.blend >= 1.0 => {
+            st.opened = true;
+            st.opened_at = f;
+            st.results.push(("view-fully-open", true));
+            tick(&mut wheel, -1.0);
+        }
+        f if st.opened && f == st.opened_at + 10 => {
+            let ok = !state.active;
+            st.results.push(("wheel-out-when-open-leaves", ok));
+            let pass = st.results.iter().all(|r| r.1);
+            for (n, ok) in &st.results {
+                info!("planet-view-test: {n} {}", if *ok { "ok" } else { "FAILED" });
+            }
+            info!("planet-view-test: {} checks {}", st.results.len(), if pass { "PASS" } else { "FAIL" });
+            st.done = true;
+        }
+        1400 if !st.opened => {
+            st.results.push(("view-fully-open", false));
+            st.done = true;
+            info!("planet-view-test: view never fully opened FAIL");
+        }
+        _ => {}
     }
 }
