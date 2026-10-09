@@ -1056,28 +1056,35 @@ impl Catalog {
             Source::Unit(u) => u.targeting_max_distance,
             _ => 0.0,
         };
-        // Engage at the range that puts 80% of the weapon damage output in reach.
-        let mut by_range: Vec<(f32, f32)> = Vec::new();
+        // Engage at the range that puts 80% of the weapon damage output in reach. A long-range specialist (its hull-damaging weapons that reach farthest,
+        // backed by at least 25% of the damage, out-range that by half again, e.g. a missile ship) holds at 0.8 of that longest range instead.
+        let mut by_range: Vec<(f32, f32, bool)> = Vec::new();
         for h in hardpoints.iter().filter(|h| h.kind == HpKind::Weapon) {
             if let Some(p) = h.projectile {
                 let pd = &self.projectiles[p as usize];
                 let cycle = ((h.recharge_min + h.recharge_max) * 0.5 + (h.pulses - 1) as f32 * h.pulse_delay).max(0.2);
-                by_range.push((h.range, pd.damage * h.pulses as f32 / cycle));
+                by_range.push((h.range, pd.damage * h.pulses as f32 / cycle, pd.hull_damage));
             }
         }
         by_range.sort_by(|a, b| b.0.total_cmp(&a.0));
-        let total: f32 = by_range.iter().map(|x| x.1).sum();
-        let mut acc = 0.0;
-        let mut cover = 0.0;
-        for &(range, dps) in &by_range {
-            acc += dps;
-            cover = range;
-            if acc >= 0.8 * total {
-                break;
+        let cover_at = |share: f32, hull_only: bool| {
+            let list: Vec<(f32, f32)> = by_range.iter().filter(|x| x.2 || !hull_only).map(|x| (x.0, x.1)).collect();
+            let total: f32 = list.iter().map(|x| x.1).sum();
+            let (mut acc, mut cover) = (0.0, 0.0);
+            for &(range, dps) in &list {
+                acc += dps;
+                cover = range;
+                if acc >= share * total {
+                    break;
+                }
             }
-        }
+            (total, cover)
+        };
+        let (total, cover) = cover_at(0.8, false);
+        let (_, long_cover) = cover_at(0.25, true);
         let preferred_range = if total > 0.0 {
-            cover * 0.95
+            let usual = cover * 0.95;
+            if long_cover * 0.8 > usual * 1.5 { long_cover * 0.8 } else { usual }
         } else if max_weapon_range > 0.0 {
             max_weapon_range * 0.8
         } else {

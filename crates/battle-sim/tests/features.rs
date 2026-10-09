@@ -133,6 +133,8 @@ fn tractor_beam_slows_its_target() {
     let corvette = b.ships.iter().find(|s| s.side == 1).unwrap().id;
     b.command(1, Command::Move { ships: vec![corvette], to: Vec3::new(-1000.0, 0.0, 0.0) }).unwrap();
     let isd = b.ships.iter().find(|s| s.side == 0).unwrap().id;
+    // The ISD holds at its weapon stand-off (beyond the beam), so the test closes in by hand.
+    b.command(0, Command::Move { ships: vec![isd], to: Vec3::new(-1000.0, 0.0, 0.0) }).unwrap();
     // Out of range: the beam cannot start.
     assert_eq!(b.command(0, Command::UseAbility { ship: isd, ability: idx as u16 }), Err(CommandError::AbilityUnavailable));
     for _ in 0..30 * 120 {

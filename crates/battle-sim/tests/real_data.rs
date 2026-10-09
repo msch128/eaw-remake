@@ -147,3 +147,46 @@ fn attack_hardpoint_and_abilities() {
     assert!(salvo as f32 > normal as f32 * 1.2, "full salvo fires faster: {normal} vs {salvo}");
 }
 
+
+#[test]
+fn ships_ordered_to_attack_stop_at_their_weapon_range() {
+    let Some((data, fs)) = load() else { return };
+    let candidates = ["Star_Destroyer", "Victory_Destroyer", "Nebulon_B_Frigate", "MC-80_Star_Cruiser", "CR-90_Corvette", "Assault_Frigate", "Acclamator_Assault_Ship", "Broadside_Class_Cruiser", "Quasar_Fire_Cruiser", "Imperial_Class_Star_Destroyer"];
+    let mut names: Vec<&str> = candidates.to_vec();
+    names.push("Rebel_Star_Base_2");
+    let cat = Arc::new(Catalog::build(&data, Some(&fs), &names));
+    let mut checked = 0;
+    for name in candidates {
+        let Some(id) = cat.ship_id(name) else { continue };
+        let def = cat.ship(id);
+        if def.preferred_range <= 0.0 || def.is_static {
+            continue;
+        }
+        let sides = vec![side(&cat, "Attacker", &[(name, 1)], &[], false), side(&cat, "Defender", &[], &["Rebel_Star_Base_2"], false)];
+        // The attacker is made very tough so that the star base cannot end the run before the stand-off shows.
+        let config = BattleConfig { record_events: false, seed: 3, fog_of_war: false, side_mults: vec![SideMult { damage: 1.0, health: 1000.0, shield: 1000.0 }, SideMult::default()], ..BattleConfig::default() };
+        let mut b = Battle::new(BattleSetup { catalog: cat.clone(), sides, config });
+        let (me, target) = (b.ships.iter().find(|s| s.side == 0).unwrap().id, b.ships.iter().find(|s| s.side == 1).unwrap().id);
+        b.command(0, Command::Attack { ships: vec![me], target }).unwrap();
+        let mut closest = f32::MAX;
+        for _ in 0..30 * 900 {
+            b.step();
+            if b.is_over() {
+                break;
+            }
+            let (s, t) = (&b.ships[me as usize], &b.ships[target as usize]);
+            closest = closest.min(s.pos.dist(t.pos));
+        }
+        let (s, t) = (&b.ships[me as usize], &b.ships[target as usize]);
+        let tdef = cat.ship(t.def);
+        let stand = def.preferred_range + tdef.radius * 0.5;
+        let d = s.pos.dist(t.pos);
+        println!("{name}: over {} at {:.0}s result {:?} order {:?} speed {:.1}", b.is_over(), b.time(), b.result().winner, s.order, s.speed);
+        println!("{name}: weapons reach {:.0}, stand-off {:.0}, stopped at {:.0}, closest {:.0}", def.max_weapon_range, stand, d, closest);
+        assert!(closest >= stand * 0.8, "{name} flew in to {closest:.0} (stand-off {stand:.0})");
+        assert!(d <= stand * 1.3 + 200.0, "{name} never got within range: {d:.0} vs {stand:.0}");
+        checked += 1;
+    }
+    assert!(checked > 0, "no candidate ship found");
+}
+

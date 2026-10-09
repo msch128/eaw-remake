@@ -61,7 +61,7 @@ Ion stun slows the target and its fire rate for `Projectile_Ion_Stun_Duration`.
   task forces, so `BattleConfig::attack_move_sets` (default off) enables them for AI attack-move orders. Classes missing from a set are only opportunity targets (lowest priority).
 * Each weapon fires at the first candidate that is in range, inside its arc and allowed. Heavy guns (damage >= 150) and
   shield-only weapons never fire at fighters or bombers.
-* Large ships close to the range that puts 80% of their weapon damage in reach (x0.95) and hold there, turning to the
+* Large ships close to the range that puts 80% of their weapon damage in reach (x0.95) and hold there; a long-range specialist (hull-damaging weapons backed by 25% of the damage that out-range that by 1.5x, e.g. a missile ship) holds at 0.8 of its longest range (estimate), plus half the target radius, turning to the
   bearing (bow, broadside or stern) at which the largest share of their hardpoint damage can bear on the target
   (`ShipDef::bearing_dps`, computed from the arcs). Defender ships with a star base `Guard` the planet; attackers `AttackMove`.
 * Big ships stop at that range with an arrival speed profile (no overshoot), start turning to the weapon bearing in the last stretch of the approach, and position themselves against the best non-fighter target (fighters and bombers are fired at but not chased, unless explicitly ordered). Restart hysteresis 1.12 x standoff (estimate).
