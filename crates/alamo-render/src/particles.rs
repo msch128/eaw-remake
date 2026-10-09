@@ -96,6 +96,10 @@ pub struct AlamoParticles {
     /// is applied.
     pub in_model_space: bool,
     /// Brightness and size multiplier (1 = as authored); engine exhausts follow [`EngineThrottle`].
+    /// Particles stay where they were emitted instead of following the emitter, whatever the emitter says: the smoke trail of a flying missile.
+    pub world_trail: bool,
+    /// Multiplier on the sprite size on top of the entity scale (1 = as is). A missile model is scaled down by its `Scale_Factor`, its smoke is not.
+    pub size_mul: f32,
     pub intensity: f32,
 }
 
@@ -107,6 +111,8 @@ impl AlamoParticles {
             enabled: true,
             in_model_space: false,
             intensity: 1.0,
+            world_trail: false,
+            size_mul: 1.0,
         }
     }
 
@@ -367,6 +373,8 @@ pub fn attach_proxy_particles(
             enabled,
             in_model_space: true,
             intensity: 1.0,
+            world_trail: false,
+            size_mul: 1.0,
         });
     }
 }
@@ -470,7 +478,7 @@ fn sample_group(rt: &mut EmitterRuntime, s: &alamo_model::particle::Shape) -> Ve
     }
 }
 
-fn spawn_particle(e: &Emitter, rt: &mut EmitterRuntime, to_world: &Affine3A, scale: f32) {
+fn spawn_particle(e: &Emitter, rt: &mut EmitterRuntime, to_world: &Affine3A, scale: f32, world: bool) {
     let local_pos = sample_group(rt, &e.position_group);
     let mut local_vel = sample_group(rt, &e.speed_group);
     // `speed` (property 0x09) is a radial speed away from the emitter origin; negative values pull the
@@ -484,7 +492,7 @@ fn spawn_particle(e: &Emitter, rt: &mut EmitterRuntime, to_world: &Affine3A, sca
         };
         local_vel += dir * e.speed;
     }
-    let (pos, vel) = if e.world_space {
+    let (pos, vel) = if world || e.world_space {
         (
             to_world.transform_point3(local_pos),
             to_world.transform_vector3(local_vel),
@@ -524,6 +532,7 @@ struct StepCtx<'a> {
     to_world: &'a Affine3A,
     scale: f32,
     density: f32,
+    world_trail: bool,
 }
 
 fn step_emitter(e: &Emitter, rt: &mut EmitterRuntime, cx: &StepCtx, budget: &mut usize) {
@@ -533,6 +542,7 @@ fn step_emitter(e: &Emitter, rt: &mut EmitterRuntime, cx: &StepCtx, budget: &mut
         to_world,
         scale,
         density,
+        world_trail,
     } = *cx;
     // Age and move.
     // Property 0x0b: gravity along the emitter's up axis (values 0 .. -145, a few +34; Inferred, most emitters 0).
@@ -552,13 +562,15 @@ fn step_emitter(e: &Emitter, rt: &mut EmitterRuntime, cx: &StepCtx, budget: &mut
     if rt.time < e.initial_delay {
         return;
     }
-    let cap = if e.max_particles > 0 {
+    // A flying missile's emitters loop forever with `max_particles` 1: read as a continuous stream at the emitter rate (the smoke trail), not one puff per cycle.
+    let stream = world_trail && e.loop_count == u32::MAX && (e.spawn_rate > 0.0 || e.spawn_interval > 0.0);
+    let cap = if e.max_particles > 0 && !stream {
         e.max_particles as usize
     } else {
         usize::MAX
     };
     let forever = e.loop_count == 0 || e.loop_count == u32::MAX;
-    if e.loop_count == 0 {
+    if e.loop_count == 0 || stream {
         // Continuous.
         let rate = if e.spawn_rate > 0.0 {
             e.spawn_rate
@@ -571,7 +583,7 @@ fn step_emitter(e: &Emitter, rt: &mut EmitterRuntime, cx: &StepCtx, budget: &mut
         while rt.spawn_acc >= 1.0 {
             rt.spawn_acc -= 1.0;
             if rt.particles.len() < cap && *budget > 0 {
-                spawn_particle(e, rt, to_world, scale);
+                spawn_particle(e, rt, to_world, scale, world_trail);
                 *budget -= 1;
             }
         }
@@ -592,7 +604,7 @@ fn step_emitter(e: &Emitter, rt: &mut EmitterRuntime, cx: &StepCtx, budget: &mut
             };
             while rt.burst_spawned < due {
                 if *budget > 0 {
-                    spawn_particle(e, rt, to_world, scale);
+                    spawn_particle(e, rt, to_world, scale, world_trail);
                     *budget -= 1;
                 }
                 rt.burst_spawned += 1;
@@ -613,6 +625,7 @@ fn build_quads(
     scale: f32,
     intensity: f32,
     cull: Option<(Vec3, f32)>,
+    world_trail: bool,
 ) {
     let color_gain = if intensity < 1.0 {
         0.25 + 0.75 * intensity.max(0.0)
@@ -639,7 +652,7 @@ fn build_quads(
         if a <= 0.001 || size <= 0.0 {
             continue;
         }
-        let center = if e.world_space {
+        let center = if world_trail || e.world_space {
             p.pos
         } else {
             to_world.transform_point3(p.pos)
@@ -722,7 +735,7 @@ pub fn simulate_particles(
                 // Particle space is Y-up; below a model it is mapped onto the bone's Z-up frame.
                 to_world *= Affine3A::from_quat(particle_to_alamo());
             }
-            scale = scale.max(1e-6);
+            scale = scale.max(1e-6) * spec.size_mul.max(1e-3);
             let mut local_budget = share;
             let sys = inst.system.clone();
             for (e, rt) in sys.emitters.iter().zip(inst.emitters.iter_mut()) {
@@ -735,10 +748,11 @@ pub fn simulate_particles(
                         to_world: &to_world,
                         scale,
                         density: settings.density,
+                        world_trail: spec.world_trail,
                     },
                     &mut local_budget,
                 );
-                build_quads(e, rt, &to_world, scale, spec.intensity, cull);
+                build_quads(e, rt, &to_world, scale, spec.intensity, cull, spec.world_trail);
             }
         });
     live_total = systems.iter().map(|(_, _, _, i)| i.live()).sum();

@@ -26,6 +26,7 @@ pub mod scene;
 pub mod ships;
 pub mod sim;
 pub mod tactical_ui;
+mod missiles;
 mod turrets;
 pub mod visuals;
 
@@ -437,6 +438,7 @@ impl Plugin for BattleViewPlugin {
         }
         app.add_systems(Update, scene::keep_planet_below.run_if(resource_exists::<BattleRuntime>));
         turrets::plugin(app);
+        missiles::plugin(app);
         app.add_systems(
                 Update,
                 (

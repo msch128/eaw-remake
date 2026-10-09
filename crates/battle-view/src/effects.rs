@@ -26,6 +26,7 @@ pub struct BoltPools {
 pub fn update_projectiles(
     mut commands: Commands,
     rt: Res<BattleRuntime>,
+    defs: Option<Res<alamo_render::XmlDefs>>,
     mut pools: ResMut<BoltPools>,
     mut bolts: Query<(&mut Transform, &mut Visibility), With<ProjectileVisual>>,
 ) {
@@ -34,6 +35,10 @@ pub fn update_projectiles(
     let t = rt.alpha * dt;
     let mut used: HashMap<ProjId, usize> = HashMap::new();
     for p in &cur.projectiles {
+        // Missiles and torpedoes are flown as models with their trails by `missiles.rs`.
+        if defs.as_deref().is_some_and(|d| crate::missiles::drawn_as_model(&rt, d, p.def)) {
+            continue;
+        }
         let Some(name) = rt.catalog.projectiles.get(p.def as usize).map(|d| d.name.clone()) else {
             continue;
         };
