@@ -445,3 +445,120 @@ fn lane_not_first(sim: &Sim) -> PlanetId {
         })
         .expect("a planet whose first lane is not its cheapest")
 }
+
+/// A defended, enemy-owned planet with a map and no star base: the Empire attacks with 2 ISD from a neighbour, the Rebels defend with a fleet.
+/// Returns the sim, the pending battle id, both fleets and the planet.
+fn defended_planet_battle(ctx: &Ctx) -> (Sim, u32, FleetId, FleetId, PlanetId) {
+    let mut sim = new_sim(ctx);
+    let w = sim.world().clone();
+    let (empire, rebel) = (w.faction_id("Empire").unwrap(), w.faction_id("Rebel").unwrap());
+    let target = (0..w.planets.len() as u32)
+        .find(|&p| {
+            let ps = &sim.galaxy().planets[p as usize];
+            w.real[p as usize] && w.planets[p as usize].space_map.is_some() && ps.owner == Some(rebel)
+        })
+        .expect("a rebel planet with a map");
+    let (isd, mc80) = (w.unit_id("Star_Destroyer").unwrap(), w.unit_id("MC-80_Star_Cruiser").unwrap());
+    sim.galaxy_mut().planets[target as usize].starbase = None;
+    let ef = add_fleet(&mut sim, empire, isd, 2, target, neighbour(&w, target));
+    let df = add_fleet(&mut sim, rebel, mc80, 1, target, target);
+    let battle = pending(&mut sim);
+    (sim, battle.id, ef, df, target)
+}
+
+/// The fight as it stood when the side was given up: nobody lost anything.
+fn untouched(req: &TacticalRequest) -> TacticalResult {
+    TacticalResult {
+        survived: req.sides.iter().map(|s| s.groups.iter().map(|g| g.count).collect()).collect(),
+        retreated: req.sides.iter().map(|s| vec![0; s.groups.len()]).collect(),
+        duration: 94.0,
+        ..TacticalResult::default()
+    }
+}
+
+#[test]
+fn attacker_retreating_from_a_defended_planet_captures_nothing_and_leaves() {
+    let Some(ctx) = load() else { return };
+    let (mut sim, id, ef, df, target) = defended_planet_battle(&ctx);
+    let (empire, rebel) = (sim.world().faction_id("Empire").unwrap(), sim.world().faction_id("Rebel").unwrap());
+    let req = sim.tactical_setup(id).unwrap();
+    let events = sim.retreat_tactical(id, empire, &untouched(&req)).expect("retreat");
+    assert!(events.iter().any(|e| matches!(e, Event::BattleResolved { winner: Some(f), .. } if *f == rebel)), "the defender wins: {events:?}");
+    assert!(sim.galaxy().battles.is_empty());
+    assert_eq!(sim.galaxy().planets[target as usize].owner, Some(rebel));
+    // The attacker is already on its way (not at the planet for a tick) to a friendly planet.
+    let g = sim.galaxy();
+    assert!(matches!(g.fleets[&ef].location, FleetLocation::Moving { .. }), "{:?}", g.fleets[&ef].location);
+    assert!(g.escaping.contains(&ef));
+    let (dest, _) = destination(&sim, ef);
+    assert_eq!(g.planets[dest as usize].owner, Some(empire), "the escape goes to a friendly planet");
+    assert_ne!(dest, target);
+    assert_eq!(g.fleets[&df].location, FleetLocation::AtPlanet(target));
+    // Time passes: no capture and no second battle at the planet; the fleet arrives at the friendly planet.
+    for _ in 0..400 {
+        let events = sim.step(5.0);
+        assert!(!events.iter().any(|e| matches!(e, Event::PlanetCaptured { planet, .. } if *planet == target)), "{events:?}");
+        assert!(!events.iter().any(|e| matches!(e, Event::BattlePending(b) if b.planet == target)), "{events:?}");
+        assert_eq!(sim.galaxy().planets[target as usize].owner, Some(rebel));
+        assert!(sim.galaxy().battles.iter().all(|b| b.planet != target));
+    }
+    assert_eq!(sim.galaxy().fleets[&ef].location, FleetLocation::AtPlanet(dest));
+}
+
+#[test]
+fn defender_retreating_leaves_the_planet_to_the_attacker_by_the_normal_rule() {
+    let Some(ctx) = load() else { return };
+    let (mut sim, id, ef, df, target) = defended_planet_battle(&ctx);
+    let (empire, rebel) = (sim.world().faction_id("Empire").unwrap(), sim.world().faction_id("Rebel").unwrap());
+    let req = sim.tactical_setup(id).unwrap();
+    let events = sim.retreat_tactical(id, rebel, &untouched(&req)).expect("retreat");
+    assert!(events.iter().any(|e| matches!(e, Event::BattleResolved { winner: Some(f), .. } if *f == empire)), "the attacker wins: {events:?}");
+    assert!(sim.galaxy().battles.is_empty());
+    let g = sim.galaxy();
+    assert!(matches!(g.fleets[&df].location, FleetLocation::Moving { .. }) && g.escaping.contains(&df), "the defender fleet escapes");
+    assert_eq!(g.fleets[&ef].location, FleetLocation::AtPlanet(target));
+    let (dest, _) = destination(&sim, df);
+    assert_eq!(g.planets[dest as usize].owner, Some(rebel));
+    for _ in 0..20 {
+        let events = sim.step(5.0);
+        assert!(!events.iter().any(|e| matches!(e, Event::BattlePending(b) if b.planet == target)), "{events:?}");
+    }
+    assert_eq!(sim.galaxy().planets[target as usize].owner, Some(empire), "the winner alone in orbit captures");
+}
+
+/// The app path of Esc -> Retreat: `Command::Retreat` once the countdown allows it, the jump timer runs, the battle ends and its normal result
+/// (winner = defender, `retreated` set) is applied. No capture, the attacker flees, no second battle.
+#[test]
+fn retreat_order_in_the_battle_ends_without_capture() {
+    let Some(ctx) = load() else { return };
+    let (mut sim, id, ef, _df, target) = defended_planet_battle(&ctx);
+    let (empire, rebel) = (sim.world().faction_id("Empire").unwrap(), sim.world().faction_id("Rebel").unwrap());
+    let req = sim.tactical_setup(id).unwrap();
+    let es = req.sides.iter().position(|s| s.faction == empire).unwrap();
+    let catalog = catalog_for(&ctx, &req);
+    let config = battle_sim::BattleConfig { record_events: false, retreat_countdown: 5.0, ..req.battle_config(None) };
+    let dt = config.dt;
+    let mut battle = battle_sim::Battle::new(req.battle_setup(&catalog, config, |si| si != es).expect("setup"));
+    let mut steps = 0u64;
+    let mut ordered = false;
+    while !battle.is_over() && steps < (900.0 / dt) as u64 {
+        battle.step();
+        steps += 1;
+        if !ordered && steps as f32 * dt > 6.0 {
+            battle.command(es as u8, battle_sim::Command::Retreat).expect("retreat allowed after the countdown");
+            ordered = true;
+        }
+    }
+    assert!(battle.is_over(), "the retreat ends the battle");
+    let result = req.result_from(&catalog, &battle.result()).expect("result");
+    assert_eq!(result.winner, Some(1 - es), "the defender wins a battle the attacker left: {result:?}");
+    assert!(result.retreated[es].iter().sum::<u32>() > 0, "{result:?}");
+    sim.apply_tactical_result(id, &result).unwrap();
+    assert!(matches!(sim.galaxy().fleets[&ef].location, FleetLocation::Moving { .. }), "the attacker is on its way out");
+    for _ in 0..200 {
+        let events = sim.step(5.0);
+        assert!(!events.iter().any(|e| matches!(e, Event::PlanetCaptured { planet, .. } if *planet == target)), "{events:?}");
+        assert!(!events.iter().any(|e| matches!(e, Event::BattlePending(b) if b.planet == target)), "{events:?}");
+    }
+    assert_eq!(sim.galaxy().planets[target as usize].owner, Some(rebel));
+}

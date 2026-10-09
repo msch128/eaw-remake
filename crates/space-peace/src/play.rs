@@ -280,7 +280,8 @@ fn forward_battles(mut commands: Commands, mut events: MessageReader<PlayEvent>,
     }
 }
 
-/// A battle left without a result is abandoned: the sim auto-resolves it. Real results are
+/// A battle left without a result (F10 / End battle) is handed to the sim: the losses so far count, then it auto-resolves what is left (the stronger side may win).
+/// The Esc menu Retreat is not abandoned: it orders the real retreat (jump) and the normal battle result comes back (winner = the other side, `retreated` set). Real results are
 /// applied by `battle_play`.
 fn finish_battles(
     mut finished: MessageReader<BattleFinished>,
@@ -290,7 +291,7 @@ fn finish_battles(
 ) {
     for f in finished.read() {
         if f.outcome == BattleOutcome::Aborted {
-            // Losses so far count: the sim auto-resolves from what is left of the fleets. Without a running
+            // Losses so far count, the sim auto-resolves the rest. Without a running
             // fight (it never started) the full forces are resolved.
             match runtime.as_ref().and_then(|r| r.partial_outcome()) {
                 Some(partial) => {

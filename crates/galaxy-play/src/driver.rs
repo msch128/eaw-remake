@@ -64,7 +64,7 @@ pub enum Request {
     },
     /// Abandon the tactical fight and auto-resolve the battle instead.
     CancelTactical(u32),
-    /// Abandon a half-fought tactical fight: its losses are applied, then the rest is auto-resolved.
+    /// Abandon a half-fought tactical fight (F10 / End battle): its losses are applied, then the rest is auto-resolved.
     AbandonTactical {
         /// Battle id.
         id: u32,
@@ -511,6 +511,7 @@ impl Core {
         }
     }
 
+    /// Hand-over to the auto-resolve from the current state (F10 / End battle): the losses so far count, the rest is fought out statistically.
     fn abandon_tactical(&mut self, id: u32, partial: &TacticalResult) -> Vec<Event> {
         let mut events = match self {
             Core::Plain(s) => s.abandon_tactical(id, partial).unwrap_or_default(),

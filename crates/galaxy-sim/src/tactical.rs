@@ -512,6 +512,31 @@ impl Sim {
         Ok(events)
     }
 
+    /// `faction` gives the fight up (Retreat / F10 / Esc menu) with the state `partial` of the fight: the losses so far count, every surviving unit of
+    /// that side leaves the battle by retreating and the opposing side (the defender if there is one) wins; planet defenses of a retreating defender are lost. The retreating fleets take the escape route
+    /// (see [`Sim::apply_tactical_result`]); nobody captures anything because of a retreat. A faction that is not part of the battle falls back to
+    /// [`Sim::abandon_tactical`] (the battle stays pending).
+    pub fn retreat_tactical(&mut self, battle_id: u32, faction: FactionId, partial: &TacticalResult) -> Result<Vec<Event>, TacticalError> {
+        let request = self.tactical_setup(battle_id).ok_or(TacticalError::UnknownBattle)?;
+        if !request.check_shape(partial) {
+            return Err(TacticalError::ShapeMismatch);
+        }
+        let Some(rs) = request.sides.iter().position(|s| s.faction == faction) else {
+            return self.abandon_tactical(battle_id, partial);
+        };
+        let winner = request.sides.iter().enumerate().filter(|&(i, _)| i != rs).max_by_key(|&(i, s)| (s.defender, std::cmp::Reverse(i))).map(|(i, _)| i);
+        let mut result = partial.clone();
+        result.winner = winner;
+        // Planet defenses (star base, structures, garrison) cannot flee: a defender who leaves the fight loses them, like in a lost battle.
+        for (gi, g) in request.sides[rs].groups.iter().enumerate() {
+            if g.fleet.is_none() {
+                result.survived[rs][gi] = 0;
+            }
+        }
+        result.retreated[rs] = result.survived[rs].clone();
+        self.apply_tactical_result(battle_id, &result)
+    }
+
     /// Abandons a tactical setup without a result (the battle stays pending, e.g. to auto-resolve it instead).
     pub fn cancel_tactical(&mut self, battle_id: u32) {
         self.tactical_requests.remove(&battle_id);
