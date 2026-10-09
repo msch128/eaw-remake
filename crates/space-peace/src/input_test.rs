@@ -37,6 +37,8 @@ struct TestState {
     done: bool,
     /// Phase clock value at which the phase's target was first on screen.
     found_at: Option<u32>,
+    /// Value of the filter under test before its click.
+    before: bool,
 }
 
 #[derive(Clone)]
@@ -79,6 +81,7 @@ fn drive(
     paused: Res<Paused>,
     slots: Res<SlotScreen>,
     options: Res<OptionsOpen>,
+    filters: Res<crate::galaxy_map::MapFilters>,
     sim: Option<Res<galaxy_play::SimState>>,
     banner: Query<(&EawButton, &ComputedNode, &UiGlobalTransform, &InheritedVisibility)>,
     menu: Query<(&MenuButton, &ComputedNode, &UiGlobalTransform, &InheritedVisibility)>,
@@ -115,7 +118,7 @@ fn drive(
         st.t = 0;
         st.found_at = None;
     };
-    if t > 1500 && st.phase > 0 && st.phase < 10 {
+    if t > 1500 && st.phase > 0 && (st.phase < 10 || (100..104).contains(&st.phase)) {
         finish(&mut st, "phase timed out", false);
         return;
     }
@@ -137,8 +140,28 @@ fn drive(
             }
             if st.started.is_some() && !open && dialog.as_ref().is_some_and(|d| d.decided.is_some()) {
                 finish(&mut st, "banner-auto-resolve-click", true);
+                st.phase = 100;
             } else if t > 3000 {
                 finish(&mut st, "banner-auto-resolve-click (no banner, or the click did not arrive)", false);
+            }
+        }
+        // Filter toggles next to the minimap: each click flips its map filter (credits, base level, ability, heroes).
+        100..=103 => {
+            let i = st.phase - 100;
+            let name = format!("b_filters{i}");
+            let read = |f: &crate::galaxy_map::MapFilters| [f.credits, f.base_level, f.weather, f.heroes][i as usize];
+            if st.found_at.is_none() {
+                st.before = read(&filters);
+            }
+            let target = banner.iter().find(|(b, n, _, v)| b.name == name && v.get() && n.size().x > 4.0).map(|(_, _, g, _)| g.translation);
+            act = click(&mut st, target);
+            if st.found_at.is_some_and(|f| t == f + 20) {
+                let ok = read(&filters) != st.before;
+                let label: &'static str = ["filter-credits-click", "filter-base-level-click", "filter-ability-click", "filter-heroes-click"][i as usize];
+                finish(&mut st, label, ok);
+                if i == 3 {
+                    st.phase = 1;
+                }
             }
         }
         // 2: Esc opens the pause menu.

@@ -39,6 +39,7 @@ impl Plugin for GalaxyMapPlugin {
             .init_resource::<Wrecks>()
             .init_resource::<DestroyedPlanets>()
             .init_resource::<MapScale>()
+            .init_resource::<MapFilters>()
             .init_gizmo_group::<RingGizmos>()
             .init_gizmo_group::<SelectGizmos>()
             .init_gizmo_group::<TerritoryGizmos>()
@@ -48,6 +49,7 @@ impl Plugin for GalaxyMapPlugin {
                 brightness: 2.0,
                 ..default()
             })
+            .add_systems(Update, apply_filter_spans)
             .add_systems(Update, (update_pip_colors, place_sector_fill, scripted_hover.after(update_hover)).run_if(in_state(AppScreen::Galaxy)))
             .add_systems(Startup, setup_scene)
             .add_systems(OnEnter(AppScreen::Galaxy), spawn_galaxy)
@@ -78,6 +80,42 @@ impl Plugin for GalaxyMapPlugin {
                 )
                     .run_if(in_state(AppScreen::Galaxy)),
             );
+    }
+}
+
+/// The four galactic information filters next to the minimap (`b_filters0..3` of the command bar).
+/// Each is a toggle: credit value of planets (`b_filters0`), space station level and ground slots (`b_filters1`),
+/// special ability / weather (`b_filters2`), heroes on top of the unit stack (`b_filters3`).
+#[derive(Resource, Debug, Clone, PartialEq, Eq)]
+pub struct MapFilters {
+    pub credits: bool,
+    pub base_level: bool,
+    pub weather: bool,
+    pub heroes: bool,
+}
+
+impl Default for MapFilters {
+    fn default() -> Self {
+        // Credits were always shown; the others start off.
+        Self { credits: true, base_level: false, weather: false, heroes: false }
+    }
+}
+
+/// Which filter shows a text span of a planet label.
+#[derive(Component, Clone, Copy, PartialEq, Eq)]
+enum FilterSpan {
+    Credits,
+    Ability,
+}
+
+/// Shows or hides the filtered parts of the planet labels (spans are made transparent).
+fn apply_filter_spans(filters: Res<MapFilters>, mut spans: Query<(&FilterSpan, &mut TextColor)>) {
+    for (kind, mut color) in &mut spans {
+        let (on, c) = match kind {
+            FilterSpan::Credits => (filters.credits, Color::srgb(0.6, 0.85, 1.0)),
+            FilterSpan::Ability => (filters.weather, Color::srgb(1.0, 0.85, 0.45)),
+        };
+        color.set_if_neq(TextColor(if on { c } else { Color::NONE }));
     }
 }
 
@@ -518,6 +556,16 @@ fn spawn_galaxy(
                 TextSpan::new(format!(" +{}", planet.income)),
                 TextFont { font: FontSource::Family("Bahnschrift".into()), font_size: FontSize::Px(9.0), ..default() },
                 TextColor(Color::srgb(0.6, 0.85, 1.0)),
+                FilterSpan::Credits,
+                ChildOf(label),
+            ));
+        }
+        if let Some((name, _)) = &planet.ability {
+            commands.spawn((
+                TextSpan::new(format!("  {name}")),
+                TextFont { font: FontSource::Family("Bahnschrift".into()), font_size: FontSize::Px(9.0), ..default() },
+                TextColor(Color::NONE),
+                FilterSpan::Ability,
                 ChildOf(label),
             ));
         }
@@ -597,7 +645,7 @@ fn update_labels(
     view: Res<GalaxyView>,
     radii: Res<PlanetRadii>,
     selection: Res<Selection>,
-    hover: Res<Hover>,
+    (hover, filters): (Res<Hover>, Res<MapFilters>),
     bounds: Res<CameraBounds>,
     ui_scale: Res<UiScale>,
     reserved: Res<ReservedBottom>,
@@ -617,7 +665,7 @@ fn update_labels(
     };
     // Labels grow when zoomed in and shrink when zoomed out (whole pixel steps only).
     let zoom_out = zoom_fraction(&bounds, orbit.distance);
-    let font_px = (16.0 + (8.0 - 16.0) * smoothstep(0.0, 0.7, zoom_out)).round();
+    let font_px = (16.0 + (10.0 - 16.0) * smoothstep(0.0, 0.7, zoom_out)).round();
     // UI coordinates are multiplied by the UI scale; the layout below works in viewport pixels.
     let us = ui_scale.0.max(0.1);
     let font_node_px = (font_px / us).round().max(1.0);
@@ -646,7 +694,9 @@ fn update_labels(
             1.0e8
         } else {
             let mine = planet.owner.is_some() && planet.owner == view.player_faction;
-            (if mine { 1.0e6 } else { 0.0 }) + planet.income as f32 + planet.size
+            // Planets near the screen centre (the camera target) win over far ones, so that names show at the default zoom.
+            let centre = (1.0 - ((p - viewport * 0.5).length() / (viewport.length() * 0.5)).min(1.0)).powi(2) * 4000.0;
+            (if mine { 1.0e6 } else { 0.0 }) + centre + planet.income as f32 + planet.size
         };
         slots[label.0] = Some(LabelSlot {
             pos: Vec2::new(p.x - size.x * 0.5, p.y),
@@ -746,7 +796,7 @@ fn update_labels(
     }
     for (row, mut node, mut vis) in &mut pip_rows {
         match slots.get(row.planet).copied().flatten() {
-            Some(s) if visible[row.planet] && (selection.0 == Some(row.planet) || hover.0 == Some(row.planet)) => {
+            Some(s) if visible[row.planet] && (filters.base_level || selection.0 == Some(row.planet) || hover.0 == Some(row.planet)) => {
                 let width = row.count as f32 * (pip_w + 1.0);
                 node.left = Val::Px((s.pos.x + (s.size.x - width) * 0.5) / us);
                 node.top = Val::Px((s.pos.y + font_px * 1.15 + row.row as f32 * (pip_h + 2.0)) / us);

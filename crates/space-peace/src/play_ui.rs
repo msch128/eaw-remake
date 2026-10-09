@@ -89,6 +89,7 @@ impl Plugin for PlayUiPlugin {
                     feed_minimap.run_if(resource_exists::<MinimapData>.and_then(in_state(AppScreen::Galaxy))),
                     minimap_pan.run_if(in_state(AppScreen::Galaxy)),
                     bar_clicks,
+                    sync_filter_buttons,
                     loading_overlay,
                     skin_panels,
                     collect_move_markers,
@@ -358,6 +359,7 @@ fn bar_clicks(
     clock: Res<GameClock>,
     mut actions: MessageWriter<PlayAction>,
     mut toast: ResMut<Toast>,
+    mut filters: ResMut<crate::galaxy_map::MapFilters>,
 ) {
     for c in clicks.read() {
         let name = c.name.as_str();
@@ -378,6 +380,10 @@ fn bar_clicks(
         match name {
             "b_space_tab" => bar.space_tab = true,
             "b_planet_tab" => bar.space_tab = false,
+            "b_filters0" => filters.credits = !filters.credits,
+            "b_filters1" => filters.base_level = !filters.base_level,
+            "b_filters2" => filters.weather = !filters.weather,
+            "b_filters3" => filters.heroes = !filters.heroes,
             "b_play_pause" => {
                 actions.write(PlayAction::TogglePause);
             }
@@ -386,6 +392,22 @@ fn bar_clicks(
                 actions.write(PlayAction::SetSpeedLevel(next));
             }
             _ => {}
+        }
+    }
+}
+
+/// Keeps the pressed look of the four filter toggles in line with [`crate::galaxy_map::MapFilters`].
+fn sync_filter_buttons(filters: Res<crate::galaxy_map::MapFilters>, mut buttons: Query<(&eaw_ui::EawButton, &mut eaw_ui::EawButtonState)>) {
+    for (b, mut st) in &mut buttons {
+        let on = match b.name.as_str() {
+            "b_filters0" => filters.credits,
+            "b_filters1" => filters.base_level,
+            "b_filters2" => filters.weather,
+            "b_filters3" => filters.heroes,
+            _ => continue,
+        };
+        if st.selected != on {
+            st.selected = on;
         }
     }
 }

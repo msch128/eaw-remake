@@ -44,6 +44,7 @@ fn update_hero_heads(
     catalog: Res<PlayCatalog>,
     layout: Res<GalaxyLayout>,
     player: Res<PlayerFaction>,
+    filters: Res<crate::galaxy_map::MapFilters>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut mats: ResMut<Assets<StandardMaterial>>,
     mut images: ResMut<Assets<Image>>,
@@ -79,7 +80,7 @@ fn update_hero_heads(
             *n_here += 1;
             let a = if slot.is_multiple_of(2) { -1.45 + 0.3 * (slot / 2) as f32 } else { -1.7 - 0.3 * (slot / 2) as f32 - 0.4 };
             let r = layout.orbit_radius(p) * 1.05;
-            let pos = base + Vec3::new(a.cos() * r, layout.unit * 0.25, a.sin() * r);
+            let pos = base + Vec3::new(a.cos() * r, layout.unit * if filters.heroes { 1.1 } else { 0.25 }, a.sin() * r);
             if let Some(&root) = heads.0.get(&key) {
                 if let Ok(mut t) = roots.get_mut(root) {
                     t.translation = pos;
