@@ -1209,6 +1209,7 @@ fn pick_planet(
     buttons: Res<ButtonInput<MouseButton>>,
     window: Single<&Window, With<PrimaryWindow>>,
     hover: Res<Hover>,
+    fleet_hover: Option<Res<galaxy_play::PlayHover>>,
     mut selection: ResMut<Selection>,
     mut press: Local<Option<Vec2>>,
     mut sounds: MessageWriter<UiSound>,
@@ -1224,6 +1225,10 @@ fn pick_planet(
     }
     // Ignore drags.
     if press.take().is_none_or(|p| p.distance(cursor) > 6.0) {
+        return;
+    }
+    // A fleet under the cursor wins over the planet beneath it: the click selects the fleet only.
+    if fleet_hover.is_some_and(|h| h.fleet.is_some()) {
         return;
     }
     if hover.0.is_some() && hover.0 != selection.0 {

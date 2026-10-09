@@ -296,6 +296,10 @@ fn fleet_sounds(
                 let owned = || list.iter().filter_map(|id| g.fleets.get(id)).filter(|f| f.owner == me);
                 let movable: Vec<FleetId> = owned().filter(|f| matches!(f.location, FleetLocation::AtPlanet(p) if p != *to)).map(|f| f.id).collect();
                 if movable.is_empty() {
+                    if !list.is_empty() && owned().next().is_none() {
+                        // Only foreign fleets selected: they cannot be commanded.
+                        negative(&audio, &mut sfx);
+                    }
                     // Fleets in hyperspace cannot be redirected; the order is refused.
                     if owned().any(|f| matches!(f.location, FleetLocation::Moving { .. })) {
                         negative(&audio, &mut sfx);

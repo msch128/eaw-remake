@@ -88,19 +88,26 @@ pub fn update_hover(
     layout: Res<GalaxyLayout>,
     entities: Res<FleetEntities>,
     transforms: Query<&Transform, With<FleetVisual>>,
+    cfg: Res<PlayConfig>,
     mut hover: ResMut<PlayHover>,
 ) {
     let new = (|| {
         let cursor = window?.cursor_position()?;
         let (camera, cam_tf) = camera.iter().next()?;
+        let right = cam_tf.right();
+        // The hit area follows the drawn owner ring (its on-screen radius at the current zoom, with a margin) and
+        // never drops below a fixed minimum, so clicking the ring works at every zoom level.
+        let ring = layout.unit * cfg.fleet_icon_scale * 1.5;
         let fleet = pick_nearest(
             cursor,
             entities.0.iter().filter_map(|(&id, &e)| {
-                let p = camera.world_to_viewport(cam_tf, transforms.get(e).ok()?.translation).ok()?;
-                Some((id, p, FLEET_PICK_PIXELS))
+                let t = transforms.get(e).ok()?.translation;
+                let center = Vec3::new(t.x, t.y - layout.unit * 0.1, t.z);
+                let p = camera.world_to_viewport(cam_tf, center).ok()?;
+                let edge = camera.world_to_viewport(cam_tf, center + right * ring * 1.2).ok()?;
+                Some((id, p, (p.distance(edge) * 1.1).max(FLEET_PICK_PIXELS)))
             }),
         );
-        let right = cam_tf.right();
         // The planet under the cursor is always known (also with a fleet icon next to it): orders need it as their target.
         let planet = pick_nearest(
                 cursor,

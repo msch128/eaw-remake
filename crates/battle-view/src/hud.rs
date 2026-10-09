@@ -320,7 +320,7 @@ pub(crate) fn unit_tooltip(
     overlays: Res<eaw_ui::TacticalOverlays>,
     mut state: ResMut<HudState>,
     mut panel: Query<&mut Node, (With<UnitPanel>, Without<HardpointTip>)>,
-    mut tip: Query<(&mut Node, &mut Text), (With<HardpointTip>, Without<UnitPanel>)>,
+    mut tip: Query<(&mut Node, &mut Text, &ComputedNode), (With<HardpointTip>, Without<UnitPanel>)>,
     mut parts: ParamSet<(
         Query<&mut ImageNode, With<UnitPanelIcon>>,
         Query<&mut Text, (With<UnitPanelName>, Without<HardpointTip>)>,
@@ -330,7 +330,7 @@ pub(crate) fn unit_tooltip(
     )>,
     mut bubble: Query<&mut Visibility, With<AdvisorBubble>>,
 ) {
-    let (Ok(mut panel), Ok((mut tip_node, mut tip_text))) = (panel.single_mut(), tip.single_mut()) else { return };
+    let (Ok(mut panel), Ok((mut tip_node, mut tip_text, tip_size))) = (panel.single_mut(), tip.single_mut()) else { return };
     let (hover, pointer, block) = inputs;
     let (cam, gt) = *camera;
     let now = time.elapsed_secs();
@@ -390,13 +390,21 @@ pub(crate) fn unit_tooltip(
                 tip_text.0 = msg;
             }
             tip_node.display = Display::Flex;
-            // Keep the box on screen: the width is estimated from the text (11 px font, about 0.6 em per glyph, plus padding).
-            let est = (glyphs as f32 * 11.0 * 0.6 + 14.0) * scale.0;
+            // Keep the box on screen using the width measured after layout (last frame; the text rarely changes size
+            // much between frames), with a generous estimate before the first layout. Near the right edge the box moves
+            // to the left of the cursor instead of covering it.
+            let measured = tip_size.size().x * tip_size.inverse_scale_factor();
+            let width = if measured > 1.0 { measured.max(glyphs as f32 * 11.0 * 0.55) } else { glyphs as f32 * 11.0 * 0.75 + 14.0 };
             let (vw, vh) = cam.physical_viewport_size().map(|v| (v.x as f32, v.y as f32)).unwrap_or((f32::MAX, f32::MAX));
-            let x = (cursor.x + 16.0).min(vw - est - 4.0).max(0.0);
-            let y = (cursor.y + 18.0).min(vh - 26.0 * scale.0).max(0.0);
-            tip_node.left = Val::Px(x / scale.0);
-            tip_node.top = Val::Px(y / scale.0);
+            let (cx, cy, vw, vh) = (cursor.x / scale.0, cursor.y / scale.0, vw / scale.0, vh / scale.0);
+            let mut x = cx + 16.0;
+            if x + width > vw - 4.0 {
+                x = cx - width - 10.0;
+            }
+            let x = x.min(vw - width - 4.0).max(0.0);
+            let y = (cy + 18.0).min(vh - 26.0).max(0.0);
+            tip_node.left = Val::Px(x);
+            tip_node.top = Val::Px(y);
             if panel.display != Display::None {
                 panel.display = Display::None;
             }

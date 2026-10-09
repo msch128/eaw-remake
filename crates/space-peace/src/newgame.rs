@@ -114,14 +114,28 @@ fn slot_info(slot: u8) -> Option<SlotInfo> {
     Some(SlotInfo { campaign: f.header.campaign.clone(), week: f.checkpoint.week, difficulty })
 }
 
+/// Readable campaign name for a save: the campaign group and the faction played, e.g. `Mini Standard (Empire)`.
+/// Falls back to the raw campaign key when the campaign is not in the list.
+fn campaign_label(campaign: &str, entries: &[crate::game::CampaignEntry]) -> String {
+    match entries.iter().find(|e| e.name.eq_ignore_ascii_case(campaign)) {
+        Some(e) => {
+            let title = if e.group_title.is_empty() { e.title.as_str() } else { e.group_title.as_str() };
+            format!("{title} ({})", e.faction)
+        }
+        None => campaign.to_owned(),
+    }
+}
+
 /// The slot list. `only_campaign`: in a running game only saves of this campaign can be loaded.
-pub fn slot_spec(mode: SlotMode, only_campaign: Option<&str>) -> MenuSpec {
+pub fn slot_spec(mode: SlotMode, only_campaign: Option<&str>, entries: &[crate::game::CampaignEntry]) -> MenuSpec {
     let mut items = Vec::new();
     for n in 1..=SLOTS {
         let label = match slot_info(n) {
             Some(i) => {
                 let other = mode == SlotMode::Load && only_campaign.is_some_and(|c| !c.eq_ignore_ascii_case(&i.campaign));
-                format!("Slot {n} - week {}, {}, {}{}", i.week + 1, i.campaign, i.difficulty, if other { " (other galaxy)" } else { "" })
+                let name = campaign_label(&i.campaign, entries);
+                let note = if other { " - different campaign (load it from the main menu)" } else { "" };
+                format!("Slot {n} - {name}, week {}, {}{note}", i.week + 1, i.difficulty)
             }
             None => format!("Slot {n} - empty"),
         };
@@ -161,6 +175,7 @@ fn sync_slot_menu(
     slots: Res<SlotScreen>,
     menus: Query<Entity, With<SlotMenu>>,
     state: Option<Res<SimState>>,
+    game: Res<crate::game::Game>,
     current: Res<CurrentCampaign>,
 ) {
     if !slots.is_changed() {
@@ -171,7 +186,8 @@ fn sync_slot_menu(
     }
     if let Some(mode) = slots.0 {
         let only = state.as_ref().and(current.name.as_deref());
-        spawn_menu(&mut commands, &slot_spec(mode, only), SlotMenu);
+        let entries = game.0.as_ref().map(|g| crate::game::campaign_entries(&g.data)).unwrap_or_default();
+        spawn_menu(&mut commands, &slot_spec(mode, only, &entries), SlotMenu);
     }
 }
 
