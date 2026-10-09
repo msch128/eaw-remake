@@ -222,6 +222,19 @@ fn build_sounds(
 ) {
     let now = time.elapsed_secs_f64();
     for a in actions.read() {
+        // A cancelled order: the object's own `SFXEvent_Build_Cancelled` ("Building cancelled", "Production cancelled").
+        if let (PlayAction::CancelProduction { planet, lane, index }, Some(state)) = (a, &state) {
+            let kind = state.galaxy().planets.get(*planet as usize).and_then(|p| p.queues.get(*lane as usize)).and_then(|q| q.get(*index as usize)).map(|i| i.kind.clone());
+            let object = match kind {
+                Some(ProductionKind::Unit(u)) => state.world.units.get(u as usize).map(|u| u.name.clone()),
+                Some(ProductionKind::Structure(s)) => state.world.structures.get(s as usize).map(|s| s.name.clone()),
+                Some(ProductionKind::Starbase(s)) => state.world.starbases.get(s as usize).map(|s| s.name.clone()),
+                _ => None,
+            };
+            if let Some(n) = object.and_then(|o| object_sfx(&game, &o, "sfxevent_build_cancelled")) {
+                sfx.play(n);
+            }
+        }
         if let PlayAction::Build { planet, target } = a {
             st.pending.push(PendingBuild { at: now, planet: *planet, target: *target });
         }
