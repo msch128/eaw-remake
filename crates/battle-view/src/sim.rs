@@ -96,6 +96,8 @@ pub struct Snapshot {
     pub alive: Vec<u32>,
     /// Population per side as the unit cap counts it (`Battle::pop_in_play`: what lives plus what is on its way).
     pub pop: Vec<i32>,
+    /// Once the battle is over: per side the ships it lost, by definition `(def, count)` (destroyed, not retreated; spawned squadrons and stations included).
+    pub losses: Vec<Vec<(battle_sim::ShipId, u32)>>,
     /// Per side: seconds until its retreat jump (`None` when no retreat was ordered).
     pub retreat_jump_in: Vec<Option<f32>>,
     /// Wall-clock milliseconds the worker needed for the step.
@@ -170,6 +172,7 @@ fn snapshot(battle: &Battle, events: Vec<Event>, step_ms: f32) -> Snapshot {
         result,
         alive,
         pop: (0..battle.side_count() as u8).map(|s| battle.pop_in_play(s)).collect(),
+        losses: if battle.is_over() { lost_ships(battle) } else { Vec::new() },
         retreat_jump_in: (0..battle.side_count() as u8).map(|s| battle.retreat_jump_in(s)).collect(),
         step_ms,
     }
@@ -341,3 +344,14 @@ impl Drop for SimHandle {
 
 
 
+
+/// The ships every side lost, by definition: everything that is dead and did not retreat.
+fn lost_ships(battle: &Battle) -> Vec<Vec<(battle_sim::ShipId, u32)>> {
+    let mut out: Vec<std::collections::BTreeMap<battle_sim::ShipId, u32>> = vec![Default::default(); battle.side_count()];
+    for s in battle.ships.iter().filter(|s| !s.alive && !s.retreated) {
+        if let Some(m) = out.get_mut(s.side as usize) {
+            *m.entry(s.def).or_default() += 1;
+        }
+    }
+    out.into_iter().map(|m| m.into_iter().collect()).collect()
+}

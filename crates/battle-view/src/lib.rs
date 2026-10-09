@@ -298,6 +298,8 @@ pub struct BattleFinished {
     pub battle_id: u32,
     /// Survivors and winner.
     pub result: TacticalResult,
+    /// Per battle side: the ships it lost as `(definition name, count)`, spawned squadrons and stations included.
+    pub losses: Vec<Vec<(String, u32)>>,
 }
 
 /// Live numbers of the running battle.
@@ -652,7 +654,8 @@ fn report_outcome(mut rt: ResMut<BattleRuntime>, status: Res<BattleStatus>, mut 
         return;
     };
     rt.reported = true;
-    out.write(BattleFinished { battle_id: request.battle_id, result });
+    let losses = rt.cur.as_ref().map(|c| c.losses.iter().map(|side| side.iter().map(|&(d, n)| (rt.catalog.ship(d).name.clone(), n)).collect()).collect()).unwrap_or_default();
+    out.write(BattleFinished { battle_id: request.battle_id, result, losses });
 }
 
 fn stop_battle(

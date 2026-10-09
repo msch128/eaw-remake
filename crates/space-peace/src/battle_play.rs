@@ -374,6 +374,7 @@ fn finish_battle_view(
     pending: Res<PendingTactical>,
     player: Res<PlayerFaction>,
     campaign: Res<crate::flow::CurrentCampaign>,
+    mut voice: MessageWriter<alamo_audio::plugin::GalaxyAudio>,
 ) {
     let mut music = music;
     for f in finished.read() {
@@ -381,6 +382,12 @@ fn finish_battle_view(
             let win = f.result.winner.and_then(|w| pending.0.sides.get(w)).is_some_and(|s| Some(s.faction) == player.0);
             let faction = campaign.faction.clone().unwrap_or_else(|| "Rebel".to_owned());
             m.set_scene(MusicScene::Result { faction, win, tactical: true });
+        }
+        // The advisor closes the battle: the faction's battle-end line on a win, its defeat line on a loss (not on a draw).
+        if let Some(w) = f.result.winner {
+            let won = pending.0.sides.get(w).is_some_and(|s| Some(s.faction) == player.0);
+            let faction = campaign.faction.clone().unwrap_or_else(|| "Rebel".to_owned());
+            voice.write(alamo_audio::plugin::GalaxyAudio { faction, event: if won { alamo_audio::GalaxyEvent::BattleEnded } else { alamo_audio::GalaxyEvent::Defeated } });
         }
         info!("battle: over after {:.0} s, winner side {:?}, survivors {:?}", f.result.duration, f.result.winner, f.result.survived);
         // Result screen: ships at the start and survivors per side.
@@ -397,9 +404,12 @@ fn finish_battle_view(
             (Some(w), _) => format!("Defeat at {} - {w} wins", planet),
             _ => format!("Battle at {} ends in a draw", planet),
         };
-        commands.insert_resource(BattleSummary { title, text: format!("{}
-Battle time: {:.0} s", lines.join("
-"), f.result.duration) });
+        let mine = pending.0.sides.iter().position(|s| Some(s.faction) == player.0);
+        let won = f.result.winner.map(|w| Some(w) == mine);
+        let side_losses = |i: Option<usize>| i.and_then(|i| f.losses.get(i)).cloned().unwrap_or_default();
+        let enemy = (0..pending.0.sides.len()).find(|i| Some(*i) != mine);
+        let screen = Some(ResultScreen { planet: planet.to_uppercase(), won, seconds: f.result.duration, yours: side_losses(mine), enemy: side_losses(enemy) });
+        commands.insert_resource(BattleSummary { title, text: format!("{}\nBattle time: {:.0} s", lines.join("\n"), f.result.duration), screen });
         let outcome = f.result.winner.map_or(BattleOutcome::Draw, BattleOutcome::Victory);
         actions.write(PlayAction::ApplyTactical { id: f.battle_id, result: Box::new(f.result.clone()) });
         done.write(BattleFinished { id: f.battle_id, outcome });
@@ -411,6 +421,22 @@ Battle time: {:.0} s", lines.join("
 pub struct BattleSummary {
     pub title: String,
     pub text: String,
+    /// Played battles: the full-screen result with the losses per side (`None` for auto-resolve, which shows the small dialog).
+    pub screen: Option<ResultScreen>,
+}
+
+/// Content of the full-screen battle result (EaW: planet, "YOU HAVE WON THE BATTLE!", battle time, your and the enemy's losses).
+pub struct ResultScreen {
+    /// Upper-case planet name.
+    pub planet: String,
+    /// `Some(true)` victory, `Some(false)` defeat, `None` draw.
+    pub won: Option<bool>,
+    /// Battle time in seconds.
+    pub seconds: f32,
+    /// Ships the player lost: definition name and count.
+    pub yours: Vec<(String, u32)>,
+    /// Ships the enemy lost.
+    pub enemy: Vec<(String, u32)>,
 }
 
 #[derive(Component)]
