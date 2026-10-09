@@ -1954,7 +1954,7 @@ fn place_planet_panel(
     let want_left = if in_view { Val::Percent(66.0) } else { Val::Px(20.0) };
     if node.left != want_left {
         node.left = want_left;
-        node.top = if in_view { Val::Percent(34.0) } else { Val::Percent(13.5) };
+        node.top = if in_view { Val::Percent(33.0) } else { Val::Percent(13.5) };
         node.width = if in_view { Val::Percent(30.0) } else { Val::Px(420.0) };
         node.max_height = if in_view { Val::Percent(52.0) } else { Val::Percent(46.0) };
         node.border = if in_view { UiRect::ZERO } else { UiRect::all(Val::Px(1.5)) };
@@ -2054,7 +2054,7 @@ fn planet_view_ui(world: &mut World, mut last_key: Local<Option<(usize, u64)>>) 
     }
     let mut spec = eaw_ui::ShellSpec::new("I_Galactic_Organize_New.ALO", faction);
     spec.anchor = eaw_ui::ShellAnchor::TopCenter;
-    spec.offset = Vec2::new(0.0, -20.0);
+    spec.offset = Vec2::new(0.0, -45.0);
     if let Some(root) = eaw_ui::spawn_shell(world, &spec) {
         world.entity_mut(root).insert((OrbitBoxes, GlobalZIndex(9)));
     }

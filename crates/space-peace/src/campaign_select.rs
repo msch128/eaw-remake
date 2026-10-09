@@ -144,7 +144,9 @@ fn font(size: f32) -> TextFont {
 }
 
 fn tx(text: impl Into<String>, size: f32, color: Color) -> impl Bundle {
-    (Text::new(text), font(size), TextColor(color))
+    // The original's small-caps menu font is widely tracked; the blue info text and white headings get that look.
+    let tracking = if color == WHITE && size < 20.0 { 0.0 } else { 0.1 };
+    (Text::new(text), font(size), TextColor(color), bevy::text::LetterSpacing::Rem(tracking))
 }
 
 fn abs(left: f32, top: f32, width: f32, height: f32) -> Node {
@@ -232,7 +234,7 @@ fn spawn_screen(commands: &mut Commands, state: &SetupState, options: &NewGameOp
             let side_text = row.and_then(|r| state.side.and_then(|s| r.sides.get(s))).map(|(k, _)| side_label(game, k)).unwrap_or_default();
             let drop_node = Node { padding: UiRect::axes(Val::Px(8.0), Val::Px(3.0)), border: UiRect::all(Val::Px(1.0)), align_items: AlignItems::Center, justify_content: JustifyContent::SpaceBetween, ..abs(38.9, 61.5, 22.7, 4.7) };
             if row.is_some_and(|r| !r.sides.is_empty()) {
-                f.spawn((Button, Click::SideToggle, drop_node, BackgroundColor(BOX), BorderColor::all(Color::srgb(0.25, 0.4, 0.85)), children![tx(side_text, 13.5, WHITE), tx("{25BC}", 11.0, BLUE)]));
+                f.spawn((Button, Click::SideToggle, drop_node, BackgroundColor(BOX), BorderColor::all(Color::srgb(0.25, 0.4, 0.85)), children![tx(side_text, 13.5, WHITE), tx("\u{25BC}", 11.0, BLUE)]));
             } else {
                 f.spawn((drop_node, BackgroundColor(BOX), BorderColor::all(Color::srgb(0.15, 0.2, 0.35))));
             }

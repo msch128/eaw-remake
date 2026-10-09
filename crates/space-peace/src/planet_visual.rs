@@ -100,7 +100,7 @@ pub fn spawn_planet_visual(
         (Some(model), true) => {
             commands.spawn((
                 AlamoModel::new(model.clone()).with_team_color(owner_c),
-                Transform::from_scale(Vec3::splat(planet.model_scale)),
+                Transform::from_scale(Vec3::splat(planet.model_scale * PLANET_VISUAL_BOOST)),
                 PlanetModel(index),
                 ChildOf(root),
             ));
@@ -163,3 +163,6 @@ fn on_model_failed(
         ));
     }
 }
+
+/// The Remake draws its planet globes about 1.7x larger relative to the sector rings and lanes than the raw model scale.
+const PLANET_VISUAL_BOOST: f32 = 1.7;

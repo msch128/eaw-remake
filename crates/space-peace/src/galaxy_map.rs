@@ -63,7 +63,7 @@ impl Plugin for GalaxyMapPlugin {
             )
             .add_systems(
                 Update,
-                (follow_camera_skybox, fix_star_dome.run_if(resource_exists::<AlamoFs>)),
+                (follow_camera_skybox, fade_nebula_plane.run_if(resource_exists::<CameraBounds>), fix_star_dome.run_if(resource_exists::<AlamoFs>)),
             )
             .add_systems(
                 Update,
@@ -866,7 +866,7 @@ fn draw_rings(
 }
 
 /// Radius of the notched selection ring in planet radii (about 10 in the reference).
-const NOTCH_RADIUS: f32 = 8.0;
+const NOTCH_RADIUS: f32 = 5.7;
 const NOTCH_SEGMENTS: usize = 360;
 
 /// Outer contour of the notched ring in units of the inner radius.
@@ -1422,7 +1422,7 @@ fn territory_segments(view: &GalaxyView, radii: &PlanetRadii, selected: Option<u
 }
 
 /// Radius of a planet's territory disc in planet radii.
-const TERRITORY_RADIUS: f32 = 17.6;
+const TERRITORY_RADIUS: f32 = 14.0;
 
 /// Gizmo group of the thick dashed faction territory outline.
 #[derive(Default, Reflect, GizmoConfigGroup)]
@@ -1466,7 +1466,7 @@ pub(crate) fn pip_image(space: bool) -> Image {
     img
 }
 
-const NEBULA_PLANE: bool = false;
+const NEBULA_PLANE: bool = true;
 
 /// The original lays a dense maroon nebula over the whole picture (not only over the galaxy disc art): a huge flat,
 /// unlit, additive plane under the map with a soft radial falloff and cloudy variation.
@@ -1512,7 +1512,7 @@ fn spawn_nebula_plane(commands: &mut Commands, view: &GalaxyView, meshes: &mut A
     img.sampler = bevy::image::ImageSampler::linear();
     let tex = images.add(img);
     let material = materials.add(StandardMaterial {
-        base_color: Color::linear_rgb(0.1, 0.02, 0.03),
+        base_color: Color::linear_rgb(0.2, 0.05, 0.06),
         base_color_texture: Some(tex),
         unlit: true,
         alpha_mode: AlphaMode::Add,
@@ -1523,8 +1523,33 @@ fn spawn_nebula_plane(commands: &mut Commands, view: &GalaxyView, meshes: &mut A
         Mesh3d(meshes.add(Plane3d::default().mesh().size(size, size))),
         MeshMaterial3d(material),
         Transform::from_xyz(centre.x, -8.0, centre.y),
+        NebulaPlane,
         GalaxyEntity,
     ));
+}
+
+/// The maroon nebula plane.
+#[derive(Component)]
+struct NebulaPlane;
+
+/// Fades the nebula with the zoom: dense when close (reference 04), black space when zoomed out (v0520).
+fn fade_nebula_plane(
+    bounds: Res<CameraBounds>,
+    camera: Option<Single<&GalaxyCamera>>,
+    plane: Query<&MeshMaterial3d<StandardMaterial>, With<NebulaPlane>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+) {
+    let Some(camera) = camera else { return };
+    let z = zoom_fraction(&bounds, camera.distance);
+    let k = 1.0 - smoothstep(0.12, 0.45, z);
+    for m in &plane {
+        if let Some(mut mat) = materials.get_mut(&m.0) {
+            let c = Color::linear_rgb(0.17 * k, 0.07 * k, 0.075 * k);
+            if mat.base_color != c {
+                mat.base_color = c;
+            }
+        }
+    }
 }
 
 /// Slot pips follow the owner colour of their planet (a captured planet changes it).

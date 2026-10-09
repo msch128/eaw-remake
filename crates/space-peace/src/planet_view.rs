@@ -160,7 +160,7 @@ fn view_camera(state: Res<PlanetViewState>, mut cam: Single<&mut Transform, With
         return;
     }
     let t = state.blend * state.blend * (3.0 - 2.0 * state.blend);
-    let target = Transform::from_translation(ORIGIN).looking_at(ORIGIN + Vec3::new(0.0, -1.6, -10.0), Vec3::Y);
+    let target = Transform::from_translation(ORIGIN + Vec3::new(0.0, 0.0, -1.8)).looking_at(ORIGIN + Vec3::new(0.0, -1.95, -10.0), Vec3::Y);
     cam.translation = cam.translation.lerp(target.translation, t);
     cam.rotation = cam.rotation.slerp(target.rotation, t);
 }
