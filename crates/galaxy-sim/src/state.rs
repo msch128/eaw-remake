@@ -384,6 +384,15 @@ pub enum Command {
         /// Fleet.
         fleet: FleetId,
     },
+    /// Sell a built structure for a third of its build cost (the slot becomes free again).
+    SellStructure {
+        /// Issuing faction.
+        faction: FactionId,
+        /// Planet.
+        planet: PlanetId,
+        /// Structure type to sell (one of the planet's built structures).
+        structure: StructureTypeId,
+    },
     /// A cheat of the F2 menu (see [`crate::cheats`]); marks the game as cheated.
     Cheat {
         /// Issuing faction.

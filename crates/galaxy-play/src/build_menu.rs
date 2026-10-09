@@ -276,7 +276,12 @@ impl BuildMenu {
             });
         }
         // Structures.
+        // A kind with no free slot (ground or orbital, queued items count) shows no structure entries at all until a slot is free again.
+        let capacity = world.planet_capacity(galaxy, planet);
         for &s in &world.buildable_structures[faction as usize] {
+            if (if world.structures[s as usize].orbital { capacity.space } else { capacity.ground }).free() <= 0 {
+                continue;
+            }
             let Some(a) = availability(world.check_build_structure(galaxy, faction, planet, s)).map(|a| shown_requirement(world, names, a)) else { continue };
             let st = &world.structures[s as usize];
             options.push(BuildOption {

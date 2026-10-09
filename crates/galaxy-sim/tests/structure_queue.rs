@@ -112,3 +112,28 @@ fn every_orderable_structure_of_a_start_planet_queues_up_to_its_slots() {
     println!("best: queued {} of {} orderable, {} free slots", best.0, best.1, best.2);
     assert!(best.0 >= 2, "some planet queues several structures at once");
 }
+
+#[test]
+fn selling_a_structure_refunds_a_third_and_frees_the_slot() {
+    let Some(data) = load() else { return };
+    let campaign = data.campaign("GC_Full_Web_Way_Rebel").expect("campaign");
+    let mut sim = Sim::new(&data, campaign, SimConfig { victory_enabled: false, ..SimConfig::default() }).expect("sim");
+    let w = sim.world().clone();
+    let empire = w.faction_id("Empire").unwrap();
+    let p = w.planet_id("Coruscant_WW").unwrap();
+    sim.set_planet_owner(p, None);
+    sim.set_planet_owner(p, Some(empire));
+    let palace = w.structure_id("Imperial_Palace_WW_Urban").unwrap();
+    assert!(sim.add_structure(p, palace));
+    let free_before = sim.world().planet_capacity(sim.galaxy(), p).ground.free();
+    let credits = sim.galaxy().factions[empire as usize].credits;
+    let r = sim.apply(Command::SellStructure { faction: empire, planet: p, structure: palace }).unwrap();
+    let cost = f64::from(w.structures[palace as usize].cost);
+    assert_eq!(r, CommandOk::Refunded(cost / 3.0));
+    assert_eq!(sim.galaxy().factions[empire as usize].credits, credits + cost / 3.0);
+    assert_eq!(sim.world().planet_capacity(sim.galaxy(), p).ground.free(), free_before + 1, "the slot is free again");
+    // Nothing left to sell, not the owner's, unknown planet.
+    assert_eq!(sim.apply(Command::SellStructure { faction: empire, planet: p, structure: palace }), Err(CommandError::Invalid));
+    let rebel = w.faction_id("Rebel").unwrap();
+    assert_eq!(sim.apply(Command::SellStructure { faction: rebel, planet: p, structure: palace }), Err(CommandError::NotOwner));
+}

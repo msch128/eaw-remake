@@ -732,7 +732,7 @@ fn view_tooltip(
 
 /// Runs after the generic hover text, which clears the tooltip whenever the map has nothing under the cursor.
 fn register_tooltip(app: &mut App) {
-    app.init_resource::<OrbitSlots>().add_systems(Update, view_tooltip.after(crate::play_ui::fleet_tooltip).run_if(in_state(AppScreen::Galaxy)));
+    app.init_resource::<OrbitSlots>().add_systems(Update, (view_tooltip.after(crate::play_ui::fleet_tooltip), sell_click).run_if(in_state(AppScreen::Galaxy)));
 }
 
 #[cfg(test)]
@@ -745,5 +745,43 @@ mod tooltip_tests {
         assert_eq!(pick(&pts, Vec2::new(125.0, 100.0), 30.0), Some(Hover::Ground(1)));
         assert_eq!(pick(&pts, Vec2::new(250.0, 100.0), 30.0), None, "between the things: no tooltip");
         assert_eq!(pick(&pts, Vec2::new(420.0, 110.0), 30.0), Some(Hover::Station));
+    }
+}
+
+/// Right click on a built ground / orbital structure in the planet view sells it for a third of its cost (a journaled sim command).
+#[allow(clippy::too_many_arguments)]
+fn sell_click(
+    mouse: Res<ButtonInput<MouseButton>>,
+    state: Res<PlanetViewState>,
+    sim: Option<Res<SimState>>,
+    catalog: Option<Res<PlayCatalog>>,
+    bridge: Option<Res<crate::play::PlayBridge>>,
+    window: Option<Single<&Window, With<bevy::window::PrimaryWindow>>>,
+    cam: Single<(&Camera, &GlobalTransform), With<GalaxyCamera>>,
+    mut actions: MessageWriter<galaxy_play::PlayAction>,
+    mut toast: ResMut<crate::play_ui::Toast>,
+) {
+    if !mouse.just_pressed(MouseButton::Right) || !state.active || state.blend < 1.0 {
+        return;
+    }
+    let (Some(sim), Some(cat), Some(bridge)) = (sim, catalog, bridge) else { return };
+    let Some(sp) = state.planet.and_then(|p| bridge.planet_to_sim.get(p).copied().flatten()) else { return };
+    let Some(c) = window.and_then(|w| w.cursor_position()) else { return };
+    let (camera, gt) = *cam;
+    let project = |p: Vec3| camera.world_to_viewport(gt, p).ok();
+    let mut points: Vec<(Hover, Vec2)> = Vec::new();
+    points.extend(state.ground_slots.iter().enumerate().filter_map(|(i, p)| project(*p + Vec3::new(0.0, 0.2, 0.0)).map(|v| (Hover::Ground(i), v))));
+    points.extend(state.orbital_slots.iter().enumerate().filter_map(|(i, p)| project(*p + Vec3::new(0.0, 0.15, 0.0)).map(|v| (Hover::Orbital(i), v))));
+    let (orbital, n) = match pick(&points, c, 30.0) {
+        Some(Hover::Ground(i)) => (false, i),
+        Some(Hover::Orbital(i)) => (true, i),
+        _ => return,
+    };
+    let Some(ps) = sim.galaxy().planets.get(sp as usize) else { return };
+    let built = ps.structures.iter().copied().filter(|&s| sim.world.structures.get(s as usize).is_some_and(|d| d.orbital == orbital)).nth(n);
+    if let Some(s) = built {
+        actions.write(galaxy_play::PlayAction::SellStructure { planet: sp, structure: s });
+        toast.0 = format!("{} sold for {:.0} credits", cat.structure(s), sim.world.structures[s as usize].cost / 3.0);
+        toast.1 = 3.0;
     }
 }

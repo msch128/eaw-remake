@@ -145,6 +145,11 @@ pub fn handle_actions(
                     warn!("debug grant: unknown unit name `{unit_name}` (or no player faction); nothing granted");
                 }
             }
+            PlayAction::SellStructure { planet, structure } => {
+                if let Some(h) = player.0 {
+                    state.driver.send_command(Command::SellStructure { faction: h, planet: *planet, structure: *structure });
+                }
+            }
             PlayAction::Cheat(cheat) => {
                 if let Some(h) = player.0 {
                     state.driver.send_command(Command::Cheat { faction: h, cheat: cheat.clone() });

@@ -158,6 +158,18 @@ impl Sim {
                 Ok(CommandOk::NewFleet(id))
             }
             Command::Cheat { faction, cheat } => crate::cheats::apply(&world, g, faction, cheat),
+            Command::SellStructure { faction, planet, structure } => {
+                let ps = g.planets.get_mut(planet as usize).ok_or(CommandError::Invalid)?;
+                if ps.owner != Some(faction) {
+                    return Err(CommandError::NotOwner);
+                }
+                let st = world.structures.get(structure as usize).ok_or(CommandError::Invalid)?;
+                let at = ps.structures.iter().position(|&s| s == structure).ok_or(CommandError::Invalid)?;
+                ps.structures.remove(at);
+                let refund = f64::from(st.cost) / 3.0;
+                g.factions[faction as usize].credits += refund;
+                Ok(CommandOk::Refunded(refund))
+            }
             Command::DestroyPlanet { faction, planet } => {
                 let fleet = g
                     .fleets
