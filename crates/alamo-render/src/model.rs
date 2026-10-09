@@ -72,12 +72,20 @@ pub struct AlamoModel {
     /// The model hangs below a bone of another model (a turret on a ship), so the Z-up to Y-up
     /// conversion of the parent already applies and none is added.
     pub attached: bool,
+    /// A sky or nebula model: drawn at the far plane depth, behind everything (see `FLAG_BACKGROUND`).
+    pub background: bool,
 }
 
 impl AlamoModel {
     /// Attaches the hardpoints of the XML unit `name` (see [`AlamoModel::unit`]).
     pub fn with_unit(mut self, name: impl Into<String>) -> Self {
         self.unit = Some(name.into());
+        self
+    }
+
+    /// Marks the model as a sky backdrop that must never occlude scene geometry.
+    pub fn as_background(mut self) -> Self {
+        self.background = true;
         self
     }
 
@@ -96,6 +104,7 @@ impl AlamoModel {
             bow_forward: false,
             unit: None,
             attached: false,
+            background: false,
         }
     }
 
@@ -258,6 +267,8 @@ impl ModelCache {
 }
 
 /// Resolves a model name to a game path.
+const ATMOSPHERE_RING_GAIN: f32 = 2.2;
+
 pub fn model_path(path: &str) -> String {
     let file = path.rsplit(['/', '\\']).next().unwrap_or(path);
     // Some XML references omit the extension.
@@ -636,6 +647,10 @@ fn load_model(p: &mut LoaderParams, key: &str) -> Result<Arc<CachedModel>, Strin
             if p.settings.shadows {
                 material.params.flags |= crate::material::FLAG_SHADOWS;
             }
+            if mesh.name.to_ascii_lowercase().starts_with("atmosphere") {
+                // The additive atmosphere ring is brighter in the original than the plain texture product (Remake video: wide pale-blue haze at the limb).
+                material.params.diffuse *= Vec4::new(ATMOSPHERE_RING_GAIN, ATMOSPHERE_RING_GAIN, ATMOSPHERE_RING_GAIN, 1.0);
+            }
             if material.base.is_none() && sub.material.texture("BaseTexture").is_some() {
                 // Additive shaders (sky, glows) get black, lit surfaces a neutral grey so a hull never turns black.
                 let additive = sub.material.shader.to_ascii_lowercase().contains("additive");
@@ -706,6 +721,7 @@ fn part_material(
     sub_idx: usize,
     part: &CachedPart,
     team: Color,
+    background: bool,
 ) -> Handle<AlamoMaterial> {
     let tk = if part.colorize {
         team_key(team)
@@ -714,9 +730,12 @@ fn part_material(
     };
     cache
         .materials
-        .entry((key.to_ascii_lowercase(), mesh_idx, sub_idx, tk))
+        .entry((if background { format!("{}#bg", key.to_ascii_lowercase()) } else { key.to_ascii_lowercase() }, mesh_idx, sub_idx, tk))
         .or_insert_with(|| {
             let mut m = part.material.clone();
+            if background {
+                m.params.flags |= crate::material::FLAG_BACKGROUND;
+            }
             if part.colorize {
                 m.params.colorization = team_vec(team);
             }
@@ -845,6 +864,7 @@ pub fn spawn_models(
                     si,
                     part,
                     spec.team_color,
+                    spec.background,
                 );
                 let parent = if mesh.skinned {
                     axis
@@ -1015,6 +1035,7 @@ pub fn update_team_colors(
                     part.sub,
                     cp,
                     spec.team_color,
+                    spec.background,
                 );
             }
         }

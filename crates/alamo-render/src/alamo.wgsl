@@ -29,6 +29,10 @@ const FLAG_FLIP_GREEN: u32 = 32u;
 const FLAG_SHIELD_HITS: u32 = 64u;
 const FLAG_SHADOWS: u32 = 128u;
 
+// Overbright of the lit hull term (modulate-2x style): the Remake video shows sunlit Star Destroyer hulls near white,
+// while hull albedo is mid grey (about 0.55 fully lit).
+const LIT_GAIN: f32 = 1.4;
+
 struct AlamoParams {
     diffuse: vec4<f32>,
     emissive: vec4<f32>,
@@ -128,8 +132,25 @@ fn toksvig_variance(rgb: vec3<f32>) -> f32 {
     return (1.0 - len) / len;
 }
 
+#ifdef ALAMO_BACKGROUND
+struct FragOut {
+    @location(0) color: vec4<f32>,
+    // Reverse-Z: 0 is the far plane. Sky models sit behind the whole scene whatever their radius.
+    @builtin(frag_depth) depth: f32,
+}
+
+@fragment
+fn fragment(in: VertexOutput, @builtin(front_facing) front: bool) -> FragOut {
+    return FragOut(shade(in, front), 0.0);
+}
+#else
 @fragment
 fn fragment(in: VertexOutput, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
+    return shade(in, front);
+}
+#endif
+
+fn shade(in: VertexOutput, front: bool) -> vec4<f32> {
     let uv = in.uv + mat.uv_offset.xy + mat.uv_offset.zw * globals.time;
     let base = textureSample(base_tex, base_samp, uv);
     let V = normalize(view.world_position - in.world_position.xyz);
@@ -274,7 +295,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) front: bool) -> @location(0
     let H = normalize(L + V);
     let spec = mat.specular.rgb * spec_mask * pow(saturate(dot(n, H)), filtered_shininess(n, max(mat.shininess, 1.0), tvar)) * sun * step(0.0, dot(N, L)) * shadow;
     // Emissive is the self-illumination of the base texture.
-    rgb = albedo * saturate3(amb + sun * ndl + fill_light(n)) + spec + mat.emissive.rgb * base.rgb;
+    rgb = min(albedo * saturate3(amb + sun * ndl + fill_light(n)) * LIT_GAIN, vec3<f32>(1.0)) + spec + mat.emissive.rgb * base.rgb;
     if mat.kind == KIND_ALPHA {
         alpha = mat.diffuse.a;
         if has(FLAG_ALPHA_FROM_BASE) {

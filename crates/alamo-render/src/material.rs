@@ -48,6 +48,8 @@ pub const FLAG_FLIP_GREEN: u32 = 32;
 pub const FLAG_SHADOWS: u32 = 128;
 /// Shield material that is only visible where it was hit (see `hits`).
 pub const FLAG_SHIELD_HITS: u32 = 64;
+/// Sky model: drawn at the far plane depth, behind everything, whatever its radius.
+pub const FLAG_BACKGROUND: u32 = 256;
 
 /// Uniform block of [`AlamoMaterial`]; mirrors `AlamoParams` in the shader.
 #[derive(Debug, Clone, Copy, ShaderType)]
@@ -116,12 +118,14 @@ impl Default for AlamoParams {
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct AlamoKey {
     kind: ShaderKind,
+    background: bool,
 }
 
 impl From<&AlamoMaterial> for AlamoKey {
     fn from(m: &AlamoMaterial) -> Self {
         AlamoKey {
             kind: m.shader_kind(),
+            background: m.params.flags & FLAG_BACKGROUND != 0,
         }
     }
 }
@@ -189,6 +193,14 @@ impl Material for AlamoMaterial {
             && key.bind_group_data.kind != ShaderKind::Planet
         {
             descriptor.primitive.cull_mode = None;
+        }
+        if key.bind_group_data.background {
+            if let Some(f) = descriptor.fragment.as_mut() {
+                f.shader_defs.push("ALAMO_BACKGROUND".into());
+            }
+            if let Some(d) = descriptor.depth_stencil.as_mut() {
+                d.depth_write_enabled = Some(false);
+            }
         }
         Ok(())
     }

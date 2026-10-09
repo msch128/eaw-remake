@@ -90,3 +90,10 @@ the first directional light. `battle-view` spawns the map's fill lights from the
   (bevy_render_macros `as_bind_group.rs`), so a particle material, and with it the draw, simply waits until the sprite texture and both storage buffers are on the GPU; there was never a white-fallback frame for a
   texture that is merely not uploaded yet. The white fallback only happens for a `None` handle (texture missing), so a batch whose texture failed to load is now never drawn (`Batch::texture_ok`; the loader already
   warns once). The squares in the old `sw4.png` predate the storage-buffer change; current builds render the planet explosion textured.
+
+## Byss look pass (Oct 2026)
+- Atmosphere haze was missing in battles because the opaque sky dome (radius 90000, centred on the camera) occluded the planet's `Atmosphere_Ring` mesh and the far part of the backdrop disc (backdrop planets are flat discs of radius ~72000 plus an additive ring
+  that flares up at the rim). Sky/nebula models are now `AlamoModel::as_background()`: `FLAG_BACKGROUND` -> pipeline def `ALAMO_BACKGROUND` writes `frag_depth = 0` (reverse-Z far) and no depth write, so the sky can never occlude scene geometry.
+  The ring gets `ATMOSPHERE_RING_GAIN` (2.2) in `model.rs`.
+- Lit hulls: `LIT_GAIN` (1.4, `alamo.wgsl`) overbrightens `albedo * light` (clamped to 1) because the sunlit Remake hulls are near white while the hull albedo is ~0.55 grey. 1.6 matched the video better on Byss but blew out Kuat.
+- Montages: `target/vis/final_hull_haze.png`, `haze_cmp.png`, `gain_kuat_kash.png`. Combat effects (death explosion, bolts) were compared, not changed: fire and dark smoke match, the video has more white smoke and hotter cores.

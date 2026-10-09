@@ -245,7 +245,7 @@ pub fn spawn_scene(commands: &mut Commands, scene: &SpaceScene, sky_radius: f32,
             Name::new("skydome"),
             BattleEntity,
             SkyFollow { radius: sky_radius },
-            AlamoModel::new(sky.clone()),
+            AlamoModel::new(sky.clone()).as_background(),
             Transform::from_rotation(sky_rot(scene.skydome_rotation)),
         ));
     }
@@ -256,7 +256,7 @@ pub fn spawn_scene(commands: &mut Commands, scene: &SpaceScene, sky_radius: f32,
             SkyFollow {
                 radius: sky_radius * 0.9,
             },
-            AlamoModel::new(neb.clone()),
+            AlamoModel::new(neb.clone()).as_background(),
             Transform::from_rotation(sky_rot([
                 scene.nebula_rotation[0],
                 scene.nebula_rotation[1],
