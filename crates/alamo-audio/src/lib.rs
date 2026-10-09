@@ -21,7 +21,7 @@ pub use wav::{AudioError, Pcm, Wav, WavFormat};
 pub mod plugin;
 #[cfg(feature = "bevy")]
 pub use plugin::{
-    AlamoAudioPlugin, AudioBuses, AudioSettings, Bus, GalaxyAudio, MusicDirector, MusicTrack, PlayFile,
+    AlamoAudioPlugin, AudioBuses, AudioSettings, Bus, GalaxyAudio, MusicDirector, MusicTrack, NoAudioDevice, PlayFile,
     PlaySfx, SfxCommands, SfxEmitter, SfxVoice, VolumeCategory,
 };
 pub use speech::UnitResponseKind;

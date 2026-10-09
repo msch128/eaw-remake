@@ -12,6 +12,8 @@ pub struct Args {
     pub loading_delay: f32,
     /// Disable vertical sync (`--no-vsync`).
     pub no_vsync: bool,
+    /// Never open the audio device; the audio logic still runs (`--no-audio`, implied by `--volume 0`).
+    pub no_audio: bool,
     /// Start in borderless fullscreen (`--fullscreen`).
     pub fullscreen: bool,
     /// Game root directory override (`--game-dir <path>`).
@@ -108,6 +110,7 @@ impl Default for Args {
             volume: None,
             loading_delay: 0.0,
             no_vsync: false,
+            no_audio: false,
             fullscreen: false,
             game_dir: None,
             mod_id: None,
@@ -200,11 +203,17 @@ OPTIONS:
   --hover               Offscreen: hover the selected planet (shows its hover panel)
   --tooltip <button>    Offscreen: show the tooltip of a command bar button (b_create_00, queue00, ...)
   --no-vsync             Disable vertical sync
+  --no-audio             Do not open the audio device (implied by --volume 0); the audio logic and SP_AUDIO_LOG still run
   --fullscreen           Start in borderless fullscreen
   -h, --help             Show this help
 ";
 
 impl Args {
+    /// True when no audio device is opened: `--no-audio` or `--volume 0`.
+    pub fn audio_off(&self) -> bool {
+        self.no_audio || self.volume == Some(0.0)
+    }
+
     /// True for scripted test runs (offscreen, hidden window, or a timed windowed run): the scenario flags apply.
     pub fn scripted(&self) -> bool {
         self.offscreen.is_some() || self.hidden || self.exit_after.is_some()
@@ -311,6 +320,7 @@ impl Args {
                     out.battle_choice = Some(v);
                 }
                 "--no-vsync" => out.no_vsync = true,
+                "--no-audio" => out.no_audio = true,
                 "--fullscreen" => out.fullscreen = true,
                 "-h" | "--help" => return Err(String::new()),
                 other => return Err(format!("unknown argument `{other}`")),

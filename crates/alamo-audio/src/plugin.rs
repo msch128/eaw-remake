@@ -893,6 +893,14 @@ fn pick(
     }
 }
 
+/// Marks a run without an audio output (`--no-audio`, `--volume 0`): Bevy's `AudioPlugin` is not added, so no sink ever
+/// exists. Voices then end by a fixed age instead of `AudioSink::empty`, and the request / log logic runs as usual.
+#[derive(Resource, Debug, Clone, Copy, Default)]
+pub struct NoAudioDevice;
+
+/// Age (seconds) at which a voice counts as finished when there is no audio device.
+const NO_DEVICE_VOICE_SECONDS: f32 = 2.0;
+
 /// Updates gains and positions, starts follow-ups and removes finished voices.
 #[allow(clippy::type_complexity, clippy::too_many_arguments)]
 fn update_voices(
@@ -910,6 +918,7 @@ fn update_voices(
     mut state: ResMut<SfxState>,
     buses: Res<AudioBuses>,
     time: Res<Time>,
+    no_device: Option<Res<NoAudioDevice>>,
 ) {
     let now = time.elapsed_secs_f64();
     let listener = listener_position(&listeners);
@@ -950,7 +959,7 @@ fn update_voices(
             }
             gain *= left.clamp(0.0, 1.0);
         }
-        let mut finished = false;
+        let mut finished = no_device.is_some() && plain.is_none() && spatial.is_none() && age >= NO_DEVICE_VOICE_SECONDS;
         if let Some(mut s) = plain {
             s.set_volume(Volume::Linear(gain));
             finished = s.empty();

@@ -134,7 +134,7 @@ fn main() {
         .add_plugins(RenderDiagnosticsPlugin);
         offscreen::configure(&mut app, &args, path.clone());
     } else {
-        app.add_plugins(DefaultPlugins.set(bevy::log::LogPlugin { custom_layer: logfile::file_layer, ..default() }).set(WindowPlugin {
+        let mut plugins = DefaultPlugins.set(bevy::log::LogPlugin { custom_layer: logfile::file_layer, ..default() }).set(WindowPlugin {
             primary_window: Some(Window {
                 title: "Space Peace: Not at War".into(),
                 visible: !args.hidden,
@@ -144,7 +144,16 @@ fn main() {
                 ..default()
             }),
             ..default()
-        }));
+        });
+        if args.audio_off() {
+            // No output stream is opened (it can crackle under CPU load); the audio logic runs against an empty device.
+            plugins = plugins.disable::<AudioPlugin>();
+        }
+        app.add_plugins(plugins);
+        if args.audio_off() {
+            app.init_asset::<bevy::audio::AudioSource>().insert_resource(alamo_audio::NoAudioDevice);
+            info!("audio: device not opened (--no-audio / --volume 0)");
+        }
     }
     if let Some(fs) = &fs {
         app.add_plugins(AlamoRenderPlugin::new(fs.clone()));

@@ -27,6 +27,10 @@ pub const MSAA_MODES: [u32; 4] = [1, 2, 4, 8];
 /// Selectable camera speed multipliers.
 pub const CAMERA_SPEEDS: [f32; 5] = [0.5, 0.75, 1.0, 1.5, 2.0];
 
+/// Stored master volume and the `--volume` value that replaced it for this run: the override must never be written back
+/// into the user's settings file (a `--volume 0` test run once left the real file silent).
+static CLI_MASTER: std::sync::OnceLock<(f32, f32)> = std::sync::OnceLock::new();
+
 /// All user-configurable options.
 #[derive(Resource, Debug, Clone, PartialEq)]
 pub struct Settings {
@@ -275,13 +279,24 @@ impl Settings {
             .unwrap_or_default()
     }
 
+    /// The settings as they go into the file: without the `--volume` override of this run.
+    fn stored(&self) -> Settings {
+        let mut s = self.clone();
+        if let Some(&(stored, over)) = CLI_MASTER.get()
+            && s.master == over
+        {
+            s.master = stored;
+        }
+        s
+    }
+
     /// Writes the settings file (errors are logged, not fatal).
     pub fn save(&self) {
         let Some(path) = Self::path() else { return };
         let result = path
             .parent()
             .map_or(Ok(()), std::fs::create_dir_all)
-            .and_then(|()| std::fs::write(&path, self.to_toml()));
+            .and_then(|()| std::fs::write(&path, self.stored().to_toml()));
         if let Err(e) = result {
             warn!("cannot save settings to {}: {e}", path.display());
         }
@@ -379,6 +394,7 @@ impl Settings {
             self.borderless = true;
         }
         if let Some(v) = args.volume {
+            let _ = CLI_MASTER.set((self.master, v));
             self.master = v;
         }
         self
