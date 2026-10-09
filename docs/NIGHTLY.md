@@ -54,16 +54,16 @@ Every area at about 80% is worth more than a few areas at 100% and the rest at 5
 Remake 4.0 in one, and it must FEEL like it: UI, feel, music and sound included. Always give one of the 3 agent
 slots to the currently lowest area. No area may stay below 60% while another goes past 85%.
 
-| Area | Estimate 2026-10-09 | Next steps |
-|---|---|---|
-| Sound / music | 45 | Hear-check by log; unit responses per order (select, move, attack); combat music intensity; advisor coverage; ambient; volume balance |
-| Battle look | 65 | Byss vs video (ships darker, no haze); explosions and fire in combat; capital-ship death look |
-| Battle controls | 65 | Esc, retreat, formations, attack lines, Botajef HUD, ability feel |
-| Battle depth | 65 | Retreat rules, escape route, auto-resolve result |
-| Galaxy look | 75 | Fog wiring after the video check; remaining video-frame diffs |
-| Galaxy controls | 75 | Duplicates plus class filter; filter buttons' real effect vs the original |
-| Stability / perf | 85 | Keep the gate green |
-| Simulation / AI | 88 | Nothing urgent |
+| Area | Evening 2026-10-08 | Morning 2026-10-09 | Next steps |
+|---|---|---|---|
+| Sound / music | 45 | 55 | Live listening pass with the user; then fix levels/spam/transitions |
+| Battle look | 65 | 70 | Late-stage death clouds, bolt glow, Coruscant fill colour (user) |
+| Battle controls | 65 | 72 | Real-mouse QA of abilities/reinforcements/retreat (driver window lookup needs user OK) |
+| Battle depth | 65 | 72 | Balance check by playing; ability icons per section |
+| Galaxy look | 75 | 78 | Remaining video diffs (banner frame) |
+| Galaxy controls | 75 | 78 | Real-mouse QA of the new fleet picking / planet view |
+| Stability / perf | 85 | 87 | Keep the gate green |
+| Simulation / AI | 88 | 88 | Nothing urgent |
 
 ## Night plan (order)
 1. **Verify #1:** run the Esc menu smoke scenario (`windowed-battle-esc-menu`); left buttons #5.

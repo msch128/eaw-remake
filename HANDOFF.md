@@ -1,26 +1,25 @@
-# Handoff – state as of 2026-10-08 (night session)
+# Handoff – state as of 2026-10-09 (morning after the first nightly run)
 
 Read `CLAUDE.md` (rules) first. Every crate has a `STATUS.md` with details, API and next steps.
-First live test guide for the user: `PLAYTEST.md`.
+Live test guide: `PLAYTEST.md`. Work list: `docs/ROADMAP-2026-10-09.md`. Unattended runbook: `docs/NIGHTLY.md`.
+QA reports: `docs/QA-2026-10-08.md`, `docs/QA-2026-10-09-night.md`.
 
 ## Overall
-Roughly **58 / 100** of the goal "play Remake 4.0 Galactic Conquest with space battles, EaW look & feel, 60+ FPS in 4K".
-The full loop runs (menu -> campaign -> galaxy with Remake scripts + AI -> battle pending -> Fight or Auto-resolve ->
-result applied -> galaxy; save/load; audio wired), but real-window play shows the feel is not there yet. Honest split:
+Roughly **70 / 100** of the goal "play Remake 4.0 Galactic Conquest with space battles, EaW look & feel, 60+ FPS in 4K".
+Release gate green at 6866e81 (33/33 smoke, soak flat: battle 2.85 GB, galaxy 1.96 GB). User exe: `target\release`.
 
 | Area | Score | Note |
 |---|---|---|
-| Simulation (galaxy, battle, AI, scripts) | ~85 | deterministic, tested against real data |
-| Stability / memory | ~80 | image leak fixed; soak: galaxy 10 min 1.8 GB flat, battle 5 min 2.5 GB flat (was 12-14 GB) |
-| Galaxy map look | ~60 | planets and discs good; routes, fleet/station/hero models, background, labels not EaW yet |
-| Galaxy controls | ~65 | select/build/move work; polish missing |
-| Battle look | ~50 | ships and effects fine; UI bars and feedback missing |
-| Battle controls | ~35 | no action cam, reinforcement placement, ability buttons, shield + hull bars |
-| Battle depth | ~45 | abilities and AI exist, balance unverified |
-| Sound | ~30 | wired, never heard live |
+| Simulation (galaxy, battle, AI, scripts) | ~88 | retreat rules + escape route, formations, capital movement, AI blockade/ready fixes, measured expansion brake |
+| Stability / memory | ~87 | gate green; 4K large battle ~6 ms mean / <10 ms p99, RAM ~1.3 GB, VRAM ~1.1 GB |
+| Galaxy map look | ~78 | compared with the user's refs and the Remake video; fog of war, heroes, planet view, labels/pips |
+| Galaxy controls | ~78 | filters, class filter, fleet picking, planet view build row, objectives, save/load |
+| Battle look | ~70 | camera like the video, lighting fixes, particle format fix, data-driven ship deaths, map fog |
+| Battle controls | ~72 | Esc menu, retreat UI, move lines, abilities + autocast, HUD vs video; real-mouse coverage incomplete |
+| Battle depth | ~72 | all space abilities, hangars by tech, fog, reinforcement placement, auto-resolve result dialog |
+| Sound | ~55 | music flow, positional SFX, unit responses, advisor lines — verified by logs only, never heard live |
 
-Measured (release, 3840x2160): galaxy ~5 ms/frame, battle with ~290 ships ~7 ms mean / 10 ms p99 (offscreen). Sim worker
-~150-210 ms per game week.
+Balance rule (user): every area toward ~80 instead of a few at 100. Sound is the outlier and needs a live listening pass.
 
 ## Priorities
 1. **Galaxy map EaW feel:** yellow trade routes, 3D fleet / station / hero models, background, labels.
