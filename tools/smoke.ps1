@@ -51,8 +51,13 @@ $scenarios = @(
     # Autocast proof: an X4 (Sensor_Jamming with autofire) joins the fleet; input_test right-clicks its ability button.
     @('windowed-battle-input-autocast', @('--hidden', '--no-vsync', '--exit-after', '9000', '--volume', '0', '--campaign', $camp, '--select', $yavin, '--grant-unit', 'X4', '--at', $yavin, '--weeks', '8', '--move', 'Hoth', '--battle-choice', 'fight', '--battle-reserve', '3', '--battle-speed', '1'), 'input-test: [0-9]+ checks PASS'),
     # Audio feel (SP_AUDIO_LOG event log, volume 0): a move order right after the select line cuts it and plays the move line; battle music follows the fight and the advisor reports losses.
-    @('windowed-battle-input-audio-orders', @('--hidden', '--no-vsync', '--exit-after', '9000', '--volume', '0', '--campaign', $camp, '--select', $yavin, '--weeks', '8', '--move', 'Hoth', '--battle-choice', 'fight', '--battle-reserve', '3', '--battle-speed', '1'), '(?s)(?=.*audio sfx CUT unit_select_w+ for Unit_Move_w+)(?=.*audio advisor ReinforcementsAvailable)'),
-    @('windowed-battle-audio-music-advisor', @('--hidden', '--no-vsync', '--exit-after', '5000', '--volume', '0', '--campaign', $camp, '--select', $yavin, '--weeks', '8', '--move', 'Hoth', '--battle-choice', 'fight', '--battle-speed', '30'), '(?s)(?=.*Space_Map_w+_Ambient_Music_Event)(?=.*Space_Map_w+_Battle_Music_Event)(?=.*audio advisor UnitDestroyed)'),
+    @('windowed-battle-input-audio-orders', @('--hidden', '--no-vsync', '--exit-after', '9000', '--volume', '0', '--campaign', $camp, '--select', $yavin, '--weeks', '8', '--move', 'Hoth', '--battle-choice', 'fight', '--battle-reserve', '3', '--battle-speed', '1'), '(?s)(?=.*audio sfx CUT unit_select_\w+ for Unit_Move_\w+)(?=.*audio advisor ReinforcementsAvailable)'),
+    @('windowed-battle-audio-music-advisor', @('--hidden', '--no-vsync', '--exit-after', '5000', '--volume', '0', '--campaign', $camp, '--select', $yavin, '--weeks', '8', '--move', 'Hoth', '--battle-choice', 'fight', '--battle-speed', '30'), '(?s)(?=.*Space_Map_\w+_Ambient_Music_Event)(?=.*Space_Map_\w+_Battle_Music_Event)(?=.*audio advisor UnitDestroyed)'),
+    # Audio pass 2 (SP_AUDIO_LOG, volume 0). Positional battle SFX: spatialized with a distance / attenuation, engine loops from the unit XML; music: loading loop -> ambient -> battle -> win stinger.
+    @('windowed-battle-audio-positional', @('--hidden', '--no-vsync', '--exit-after', '9000', '--volume', '0', '--campaign', $camp, '--select', $yavin, '--weeks', '8', '--move', 'Hoth', '--battle-choice', 'fight', '--battle-speed', '30'), '(?s)(?=.*audio sfx PLAY \w+ \(unit_response=false spatial=true dist=\d+ att=0\.\d+)(?=.*audio emitter \S+ -> Unit_\w+_Idle_Engine_Loop)(?=.*audio emitter \S+ -> Unit_\w+_Moving_Engine_Loop)(?=.*BattleLoading -> event Some\("Tactical_Battle_Loading_Loop_Event"\))(?=.*Space_Map_\w+_Ambient_Music_Event)(?=.*Space_Map_\w+_Battle_Music_Event)(?=.*Result \{[^}]*win: true[^}]*\} -> event Some\("\w+_Win_Tactical_Event"\))'),
+    # Galaxy UI sounds: tab / filter dials, button clicks, build started + complete of the ordered object, fleet select + move lines.
+    @('windowed-ui-pointer-audio', @('--hidden', '--no-vsync', '--exit-after', '8000', '--volume', '0', '--campaign', $camp, '--select', $yavin, '--weeks', '8', '--move', 'Hoth'), '(?s)(?=.*ui-test: [0-9]+ checks PASS)(?=.*audio sfx GUI_Dial_Switch_SFX)(?=.*audio sfx GUI_Button_Press_2_SFX)(?=.*audio sfx Unit_Select_\w+)(?=.*audio sfx Unit_(Retreat|Move|Fleet_Move)_\w+)'),
+    @('windowed-galaxy-audio-build', @('--hidden', '--no-vsync', '--exit-after', '15000', '--volume', '0', '--campaign', $camp, '--select', $yavin, '--build', 'a', '--weeks', '12'), '(?s)(?=.*audio sfx [RUE]HD_Build_\w+)(?=.*audio sfx [RUE]HD_\w*(UPGRADED|Complete)\w*)'),
     # Esc in the real app path (no SP_INPUT_TEST): the battle menu opens above the HUD and pauses the battle clock.
     @('windowed-battle-esc-menu', @('--hidden', '--no-vsync', '--exit-after', '2500', '--volume', '0', '--campaign', $camp, '--select', $yavin, '--weeks', '8', '--move', 'Hoth', '--battle-choice', 'fight', '--battle-speed', '10', '--battle-esc-after', '5'), 'battle menu: open, clock paused=true'),
     @('battle-reinforce',    @('--campaign', $camp, '--select', $yavin, '--weeks', '8', '--move', 'Hoth', '--battle-choice', 'fight', '--battle-reserve', '3', '--battle-click', 'b_reinforcement,r_0000', '--battle-speed', '30', '--frames', '5'), 'simulation accepted')
@@ -106,7 +111,18 @@ foreach ($s in $scenarios) {
         $bmp.Dispose()
         if ($hits -gt $n * 0.01) { $problems += "magenta picture ($hits of $n samples)" }
     }
-    if ($s[2] -and $text -notmatch $s[2]) { $problems += "missing '$($s[2])'" }
+    # A self-test that ends silently (no verdict) has to say why: the frame cap cut it off, or a click landed on Quit.
+    if ($windowed -and $name -like '*input*' -or $name -like '*ui-pointer*') {
+        if ($text -match 'exit-after: \d+ frames reached') { $problems += 'test cut off by the --exit-after frame cap' }
+        if ($text -match 'menu: Quit clicked') { $problems += 'a click hit the Quit button' }
+    }
+    # Lookahead patterns over a multi-MB log are quadratic when they fail: a match timeout turns a hang into a FAIL.
+    if ($s[2]) {
+        try {
+            $rx = [regex]::new($s[2], [Text.RegularExpressions.RegexOptions]::IgnoreCase, [TimeSpan]::FromSeconds(20))
+            if (-not $rx.IsMatch($text)) { $problems += "missing '$($s[2])'" }
+        } catch [System.Text.RegularExpressions.RegexMatchTimeoutException] { $problems += "check regex timed out (log $($text.Length) chars): '$($s[2])'" }
+    }
     $rows += [pscustomobject]@{ Scenario = $name; Result = $(if ($problems) { 'FAIL' } else { 'ok' }); Seconds = [math]::Round($sw.Elapsed.TotalSeconds); Notes = ($problems -join ', ') }
 }
 $rows | Format-Table -AutoSize

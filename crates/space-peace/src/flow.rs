@@ -156,7 +156,8 @@ fn menu_music(director: Option<ResMut<MusicDirector>>) {
 fn galaxy_music(director: Option<ResMut<MusicDirector>>, current: Res<CurrentCampaign>) {
     if let Some(mut d) = director {
         let faction = current.faction.clone().unwrap_or_else(|| "Rebel".to_owned());
-        d.set_scene(MusicScene::Galactic(faction));
+        // Returning from a battle: the win / lose stinger set by the battle flow plays out first, then the map music fades in.
+        d.resume_after_stinger(MusicScene::Galactic(faction));
     }
 }
 

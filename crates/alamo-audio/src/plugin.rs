@@ -109,6 +109,11 @@ pub struct AudioSettings {
     pub cache_budget_bytes: usize,
     /// Music crossfade length used when the new event does not specify one.
     pub default_music_fade: f32,
+    /// `Audio_Space_3D_Saturation_Distance_Mod` (Audio.xml): multiplies every event's `Volume_Saturation_Distance`.
+    pub saturation_scale: f32,
+    /// `Audio_Space_3D_Rolloff_Distance_Mod` (Audio.xml): exponent of the distance falloff (estimate: the data says only
+    /// "higher = quicker rolloff"; 1 is the plain `saturation / distance`).
+    pub rolloff: f32,
 }
 
 impl Default for AudioSettings {
@@ -120,6 +125,8 @@ impl Default for AudioSettings {
             speech_global_cooldown: 0.0,
             cache_budget_bytes: 256 << 20,
             default_music_fade: 2.0,
+            saturation_scale: 1.0,
+            rolloff: 1.0,
         }
     }
 }
@@ -391,12 +398,44 @@ pub struct SfxVoice {
     chain: Option<String>,
     is_voice_over: bool,
     unit_response: bool,
+    /// Falloff exponent (see [`AudioSettings::rolloff`]).
+    rolloff: f32,
+    /// Loops until stopped (`Play_Count -1`).
+    looping: bool,
+    /// Seconds of `Loop_Fade_Out_Seconds` used when the voice is stopped.
+    fade_out: f32,
+    /// Time the voice was told to stop; it fades out and is removed afterwards.
+    stopping: Option<f64>,
+    /// Distance to the listener at the last update (`None` without listener or position).
+    distance: Option<f32>,
+    /// Distance attenuation factor at the last update (1 = none).
+    attenuation: f32,
 }
 
 impl SfxVoice {
     /// Lower-cased name of the SFX event this voice plays.
     pub fn event(&self) -> &str {
         &self.event
+    }
+
+    /// Distance to the listener at the last update (`None` for 2D sounds and without a listener).
+    pub fn distance(&self) -> Option<f32> {
+        self.distance
+    }
+
+    /// Distance attenuation (1 = full volume; `Volume_Saturation_Distance / distance` beyond the saturation distance).
+    pub fn attenuation(&self) -> f32 {
+        self.attenuation
+    }
+
+    /// True while the voice fades out before it is removed.
+    pub fn is_stopping(&self) -> bool {
+        self.stopping.is_some()
+    }
+
+    /// Entity the sound belongs to.
+    pub fn source(&self) -> Option<Entity> {
+        self.source
     }
 }
 
@@ -438,11 +477,16 @@ impl Plugin for AlamoAudioPlugin {
             audio.music.len()
         );
         // Battle music returns to the ambient playlist after the peace delay the data names (Audio.xml).
+        let constants = audio.constants.clone();
         let mut director = MusicDirector::default();
         director.planner.calm_seconds = audio.constants.space_battle_to_ambient_seconds;
         app.insert_resource(audio)
             .init_resource::<AudioBuses>()
-            .init_resource::<AudioSettings>()
+            .insert_resource(AudioSettings {
+                saturation_scale: constants.space_saturation_mod,
+                rolloff: constants.space_rolloff_mod,
+                ..default()
+            })
             .init_resource::<SfxState>()
             .insert_resource(director)
             .add_message::<PlaySfx>()
@@ -451,6 +495,7 @@ impl Plugin for AlamoAudioPlugin {
             .add_systems(
                 Update,
                 (
+                    sync_emitters,
                     galaxy_audio_system,
                     process_sfx_requests,
                     process_file_requests,
@@ -478,6 +523,16 @@ fn bus_of(ev: &SfxEvent) -> Bus {
 
 fn is_voice_over(ev: &SfxEvent) -> bool {
     ev.is_unit_response_vo || ev.is_hud_vo || ev.is_ambient_vo
+}
+
+/// Volume factor of a 3D sound at `distance`: full volume inside the saturation distance, `(saturation / distance)^rolloff`
+/// outside (estimate of the engine's curve; the data gives the saturation distance and the rolloff modifier only).
+pub fn distance_attenuation(distance: f32, saturation: f32, rolloff: f32) -> f32 {
+    if distance <= saturation || saturation <= 0.0 {
+        1.0
+    } else {
+        (saturation / distance).powf(rolloff.max(0.01))
+    }
 }
 
 fn listener_position(listeners: &Query<&GlobalTransform, With<SpatialListener>>) -> Option<Vec3> {
@@ -522,6 +577,7 @@ fn process_sfx_requests(
         bool,
     )> = voices
         .iter()
+        .filter(|(_, v)| v.stopping.is_none())
         .map(|(e, v)| {
             (
                 e,
@@ -639,13 +695,9 @@ fn process_sfx_requests(
         // Distance / spatialization.
         let spatial = !ev.is_2d && req.position.is_some() && listener.is_some();
         let mut attenuation = 1.0;
-        if let (true, Some(pos), Some(l)) = (spatial, req.position, listener)
-            && let Some(sat) = ev.saturation_distance
-        {
-            let d = pos.distance(l);
-            if d > sat {
-                attenuation = sat / d;
-            }
+        let saturation = ev.saturation_distance.map(|s| s * settings.saturation_scale);
+        if let (true, Some(pos), Some(l), Some(sat)) = (spatial, req.position, listener, saturation) {
+            attenuation = distance_attenuation(pos.distance(l), sat, settings.rolloff);
         }
         let volume = rng.random_range(ev.volume.0..=ev.volume.1) / 100.0;
         let base_gain = volume;
@@ -745,11 +797,8 @@ fn process_sfx_requests(
             priority: ev.priority,
             bus: bus_of(&ev),
             base_gain,
-            saturation: if spatial {
-                ev.saturation_distance
-            } else {
-                None
-            },
+            saturation: if spatial { saturation } else { None },
+            rolloff: settings.rolloff,
             fade_in: ev.loop_fade.0,
             source: req.source,
             started: now,
@@ -757,9 +806,25 @@ fn process_sfx_requests(
             chain: chain_event.take(),
             is_voice_over: voice_over,
             unit_response: ev.is_unit_response_vo,
+            looping: ev.looping,
+            fade_out: ev.loop_fade.1,
+            stopping: None,
+            distance: None,
+            attenuation,
         };
         if audio_log() && first_try {
-            info!("audio sfx PLAY {} (unit_response={})", req.event, ev.is_unit_response_vo);
+            info!(
+                "audio sfx PLAY {} (unit_response={} spatial={} dist={} att={:.3} vol={:.2})",
+                req.event,
+                ev.is_unit_response_vo,
+                spatial,
+                match (spatial, req.position, listener) {
+                    (true, Some(p), Some(l)) => format!("{:.0}", p.distance(l)),
+                    _ => "-".into(),
+                },
+                attenuation,
+                base_gain
+            );
         }
         let mut ec = commands.spawn((AudioPlayer::<AudioSource>(handle), pb, voice));
         if let Some(p) = req.position {
@@ -844,21 +909,37 @@ fn update_voices(
         if let Some(src) = voice.source {
             match (sources.get(src), tf.as_deref_mut()) {
                 (Ok(t), Some(own)) => own.translation = t.translation(),
-                (Err(_), _) => voice.source = None,
+                (Err(_), _) => {
+                    voice.source = None;
+                    // A loop belongs to its object: when the object is gone the loop fades out.
+                    if voice.looping && voice.stopping.is_none() {
+                        voice.stopping = Some(now);
+                    }
+                }
                 _ => {}
             }
         }
         let pos = tf.as_deref().map(|t| t.translation);
         let mut gain = voice.base_gain * buses.gain(voice.bus);
+        voice.attenuation = 1.0;
+        voice.distance = None;
         if let (Some(sat), Some(l), Some(p)) = (voice.saturation, listener, pos) {
             let d = p.distance(l);
-            if d > sat {
-                gain *= sat / d;
-            }
+            voice.distance = Some(d);
+            voice.attenuation = distance_attenuation(d, sat, voice.rolloff);
         }
+        gain *= voice.attenuation;
         let age = (now - voice.started) as f32;
         if voice.fade_in > 0.0 && age < voice.fade_in {
             gain *= age / voice.fade_in;
+        }
+        let mut stopped = false;
+        if let Some(t0) = voice.stopping {
+            let left = 1.0 - (now - t0) as f32 / voice.fade_out.max(0.05);
+            if left <= 0.0 {
+                stopped = true;
+            }
+            gain *= left.clamp(0.0, 1.0);
         }
         let mut finished = false;
         if let Some(mut s) = plain {
@@ -869,7 +950,11 @@ fn update_voices(
             s.set_volume(Volume::Linear(gain));
             finished = s.empty();
         }
-        if !finished {
+        if stopped {
+            commands.entity(entity).despawn();
+            continue;
+        }
+        if !finished || voice.stopping.is_some() {
             continue;
         }
         let request = PlaySfx {
@@ -901,6 +986,100 @@ fn update_voices(
 }
 
 // ----------------------------------------------------------------------------------------------
+// Object loops (engine hum, ambient machinery)
+// ----------------------------------------------------------------------------------------------
+
+/// A world object that makes one looping sound at a time, e.g. a ship's `SFXEvent_Engine_Idle_Loop` /
+/// `SFXEvent_Engine_Moving_Loop` / `SFXEvent_Ambient_Loop`. Set [`event`](Self::event) to the loop the object
+/// should make now; the plugin starts it (at the object's position, following it), fades it out and starts
+/// the new one when the event changes, and stops sounds that are too far away to be heard. The loop's
+/// `Max_Instances` still applies, so a crowd of identical ships does not turn into a wall of hum.
+#[derive(Component, Debug, Clone, Default)]
+pub struct SfxEmitter {
+    /// Looping SFX event this object should make now (`None` = silent).
+    pub event: Option<String>,
+    playing: Option<String>,
+}
+
+impl SfxEmitter {
+    /// Emitter that starts out making `event`.
+    pub fn new(event: Option<String>) -> Self {
+        Self { event, playing: None }
+    }
+
+    /// The loop that is actually running (differs from [`event`](Self::event) for one frame, or while it is inaudible).
+    pub fn playing(&self) -> Option<&str> {
+        self.playing.as_deref()
+    }
+}
+
+/// Estimated linear gain of an event at `distance` (mean of its volume range, distance falloff, bus gain).
+fn estimated_gain(ev: &SfxEvent, distance: Option<f32>, buses: &AudioBuses, settings: &AudioSettings) -> f32 {
+    // With `SP_AUDIO_LOG` silent (volume 0) sounds still start so audits see the real voice rules.
+    let bus = if audio_log() { 1.0 } else { buses.gain(bus_of(ev)) };
+    let mut g = (ev.volume.0 + ev.volume.1) * 0.5 / 100.0 * bus;
+    if let (Some(d), Some(sat)) = (distance, ev.saturation_distance) {
+        g *= distance_attenuation(d, sat * settings.saturation_scale, settings.rolloff);
+    }
+    g
+}
+
+#[allow(clippy::too_many_arguments)]
+fn sync_emitters(
+    mut emitters: Query<(Entity, &mut SfxEmitter, &GlobalTransform)>,
+    mut voices: Query<&mut SfxVoice>,
+    listeners: Query<&GlobalTransform, With<SpatialListener>>,
+    audio: Res<AlamoAudio>,
+    buses: Res<AudioBuses>,
+    settings: Res<AudioSettings>,
+    time: Res<Time>,
+    mut out: MessageWriter<PlaySfx>,
+) {
+    let now = time.elapsed_secs_f64();
+    let listener = listener_position(&listeners);
+    // Nearest first: when an event has a `Max_Instances` cap, the objects closest to the listener get the voices.
+    let mut order: Vec<(Entity, Vec3, Option<f32>)> = emitters
+        .iter()
+        .map(|(e, _, tf)| (e, tf.translation(), listener.map(|l| tf.translation().distance(l))))
+        .collect();
+    order.sort_by(|a, b| a.2.unwrap_or(0.0).total_cmp(&b.2.unwrap_or(0.0)));
+    let mut taken: HashMap<String, u32> = HashMap::new();
+    for (entity, pos, distance) in order {
+        let Ok((_, mut em, _)) = emitters.get_mut(entity) else { continue };
+        // Hysteresis: a loop starts at twice the audible gain and stops below it.
+        let desired = em.event.clone().filter(|name| {
+            let Some(ev) = audio.sfx.get(name) else { return false };
+            let g = estimated_gain(ev, distance, &buses, &settings);
+            let floor = settings.min_audible_gain;
+            let audible = if em.playing.as_deref() == Some(name.as_str()) { g >= floor } else { g >= floor * 2.0 };
+            let n = taken.entry(name.to_ascii_lowercase()).or_default();
+            let free = ev.max_instances.is_none_or(|m| *n < m);
+            if audible && free {
+                *n += 1;
+            }
+            audible && free
+        });
+        if desired == em.playing {
+            continue;
+        }
+        if let Some(old) = em.playing.take() {
+            for mut v in &mut voices {
+                if v.source == Some(entity) && v.looping && v.event.eq_ignore_ascii_case(&old) && v.stopping.is_none() {
+                    v.stopping = Some(now);
+                }
+            }
+        }
+        if let Some(new) = desired {
+            if audio_log() {
+                info!("audio emitter {entity:?} -> {new}");
+            }
+            out.write(PlaySfx { event: new.clone(), position: Some(pos), source: Some(entity) });
+            em.playing = Some(new);
+        }
+    }
+}
+
+// ----------------------------------------------------------------------------------------------
 // Music
 // ----------------------------------------------------------------------------------------------
 
@@ -914,12 +1093,32 @@ pub struct MusicDirector {
     current: Option<String>,
     queue: Vec<String>,
     oneshot_done: bool,
+    /// Scene to switch to once the current result stinger has played to its end.
+    resume: Option<MusicScene>,
 }
 
 impl MusicDirector {
     /// Switches the scene; the change is applied (with crossfade) on the next frame.
     pub fn set_scene(&mut self, scene: MusicScene) {
+        if self.planner.scene() != &scene {
+            self.resume = None;
+        }
         self.planner.set_scene(scene);
+    }
+
+    /// Switches to `scene` once a playing win / lose stinger has finished (the stinger is not cut off by the
+    /// screen change that follows a battle). Without a stinger it is the same as [`set_scene`](Self::set_scene).
+    pub fn resume_after_stinger(&mut self, scene: MusicScene) {
+        if matches!(self.planner.scene(), MusicScene::Result { tactical: true, .. }) {
+            self.resume = Some(scene);
+        } else {
+            self.set_scene(scene);
+        }
+    }
+
+    /// True while a result stinger is the scene.
+    pub fn stinger_playing(&self) -> bool {
+        matches!(self.planner.scene(), MusicScene::Result { .. }) && !self.oneshot_done
     }
 
     /// Battle intensity in 0..1 (only used in [`MusicScene::Space`]).
@@ -949,6 +1148,19 @@ pub struct MusicTrack {
     /// Fade speed per second (positive in, negative out).
     fade_rate: f32,
     outgoing: bool,
+    forced_end: bool,
+}
+
+impl MusicTrack {
+    /// Ends the track as if its sample had played out. For tests that run without an audio device (no sink).
+    pub fn end_now(&mut self) {
+        self.forced_end = true;
+    }
+
+    /// True while the track fades out because another music event took over.
+    pub fn is_outgoing(&self) -> bool {
+        self.outgoing
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -960,11 +1172,15 @@ fn start_track(
     event: &MusicEvent,
     file: &str,
     fade_in: f32,
+    stinger: bool,
 ) -> bool {
     let Some((handle, _)) = audio.sample(file, budget, assets) else {
         return false;
     };
-    let single_loop = event.files.len() == 1 && event.looping;
+    let single_loop = event.files.len() == 1 && event.looping && !stinger;
+    if audio_log() {
+        info!("audio music track {} (event {}, fade_in {:.2}s, loop {})", file, event.name, fade_in, single_loop);
+    }
     let pb = if single_loop {
         PlaybackSettings::LOOP
     } else {
@@ -980,6 +1196,7 @@ fn start_track(
             fade: if fade_in > 0.0 { 0.0 } else { 1.0 },
             fade_rate: if fade_in > 0.0 { 1.0 / fade_in } else { 0.0 },
             outgoing: false,
+            forced_end: false,
         },
     ));
     true
@@ -1033,12 +1250,25 @@ fn music_system(
                 t.fade_rate = 0.0;
             }
             incoming_alive = true;
-            if sink.is_some_and(|s| s.empty()) {
+            if t.forced_end || sink.is_some_and(|s| s.empty()) {
                 commands.entity(entity).despawn();
                 incoming_alive = false;
                 need_next = true;
             }
         }
+    }
+    let stinger = matches!(director.planner.scene(), MusicScene::Result { .. });
+    // A result stinger without a playable event must not hold the scene back.
+    let playable = director.current.as_deref().and_then(|n| audio.music.get(n)).is_some_and(|e| !e.files.is_empty());
+    if stinger && !playable {
+        director.oneshot_done = true;
+    }
+    if stinger && director.oneshot_done && let Some(next) = director.resume.take() {
+        if audio_log() {
+            info!("audio music stinger done -> resume {:?}", next);
+        }
+        director.planner.set_scene(next);
+        return;
     }
     let Some(name) = director.current.clone() else {
         return;
@@ -1053,7 +1283,7 @@ fn music_system(
         return;
     }
     if director.queue.is_empty() {
-        if need_next && !event.looping {
+        if need_next && (!event.looping || stinger) {
             director.oneshot_done = true; // stinger or non-looping playlist finished
             return;
         }
@@ -1061,11 +1291,9 @@ fn music_system(
         order.shuffle(&mut rand::rng());
         director.queue = order;
     }
-    let fade_in = if changed {
-        event.fade_in.max(event.fade_out_previous).max(0.5)
-    } else {
-        0.5
-    };
+    // The event's own `Fade_In_Seconds` (the previous music fades out over its `Fade_Out_Previous_Seconds`); the
+    // floor only avoids a click. Following tracks of a playlist ease in over half a second.
+    let fade_in = if changed { event.fade_in.max(0.05) } else { 0.5 };
     while let Some(file) = director.queue.pop() {
         if start_track(
             &mut commands,
@@ -1075,6 +1303,7 @@ fn music_system(
             &event,
             &file,
             fade_in,
+            stinger,
         ) {
             break;
         }

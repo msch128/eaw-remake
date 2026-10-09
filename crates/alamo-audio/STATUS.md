@@ -55,3 +55,23 @@ Empire at War audio: event data, sample resolution, decoding and a Bevy playback
 - Data has none: speech ducking of music (no tag in Audio.xml / Gameconstants.xml), space ambience loops (`AmbientMapSounds.xml` / `SFXEventsAmbient.xml`
   are land weather only), HUD lines for FleetArrived, HeroLost/Eliminated, EnemyUnit/StructureDestroyed, EnemyFleeing, EnemyHeroDetected, RetreatSucceeded
   (commented out or sample-less for all three factions).
+
+## Audio pass 2 (positional SFX, object loops, music flow, galaxy UI)
+- **Listener** (was missing: nothing carried a `SpatialListener`, so every positioned sound played centered at full volume): the battle owns a
+  `BattleListener` (`battle-view/src/audio.rs::battle_sources`) at the camera focus point on the battle plane, turned like the camera
+  (`Audio_Space_3D_Listener_Z_Pullback_Dist` = 0 in `Audio.xml`). Pan = Bevy spatial audio; distance falloff is ours.
+- **Distance**: `Volume_Saturation_Distance` x `Audio_Space_3D_Saturation_Distance_Mod` (1.5, `AudioSettings::saturation_scale`), beyond it
+  `(sat / d)^rolloff` with `Audio_Space_3D_Rolloff_Distance_Mod` (1.0). The curve itself is an **estimate** (the data gives only these three numbers).
+  `Max_Instances` caps simultaneous copies per event (oldest cut); the view adds 2 per name and frame.
+- **Object loops**: `SfxEmitter` component (`event: Option<String>`): the plugin starts the loop at the object, follows it, fades the old one out
+  (`Loop_Fade_Out_Seconds`) on a change or when the object is gone, starts nothing that would be inaudible, and gives `Max_Instances` slots to the nearest
+  objects. Battle ships use `SFXEvent_Engine_Idle_Loop` / `_Moving_Loop`, else `SFXEvent_Ambient_Loop` (unit XML). Moving = route or move / attack / retreat order (estimate).
+  Still no data for space ambience beds; `SFXEvent_Turret_Rotating_Loop`, `_Engine_Cinematic_Focus_Loop`, `_Ambient_Moving` are not wired.
+- **Music**: result stingers play once (the data's `Loop = Yes` of the win events is ignored) and are not cut off by the return to the map:
+  `MusicDirector::resume_after_stinger(scene)` (used by `flow::galaxy_music`). New track fade-in is the event's own `Fade_In_Seconds`; the previous one
+  fades over `Fade_Out_Previous_Seconds`. Not defined in the data: peace / war variants of the galaxy theme, speech ducking.
+- **Galaxy UI** (`space-peace/src/ui_sounds.rs`): `Click_SFX` / `Mouse_Over_SFX` per component of `CommandBarComponents.xml`, locked click and rejected command ->
+  `SFXEvent_GUI_Negative_Feedback` (`GUI_Bad_Sound`), build queued/complete from the object's `SFXEvent_Build_Started/_Complete`, fleet select / move / retreat from the lead unit's
+  `SFXEvent_Select` / `_Fleet_Move` / `_Move`, planet capture bonus `SFXEvent_Planet_Capture_Bonus_Reward`.
+- Tests: `tests/pass2.rs` (silent), `ui_sounds::tests`; smoke scenarios `windowed-battle-audio-positional`, `windowed-ui-pointer-audio`, `windowed-galaxy-audio-build`
+  (`SP_AUDIO_LOG` lines `audio sfx PLAY ... spatial=true dist=.. att=..`, `audio emitter`, `audio music track`, `audio music stinger done`).

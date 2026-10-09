@@ -55,6 +55,12 @@ pub struct UnitSfx {
     pub enemy_health_low: Option<String>,
     /// `SFXEvent_Enemy_Damaged_Health_Critical_Warning`.
     pub enemy_health_critical: Option<String>,
+    /// `SFXEvent_Engine_Idle_Loop` (looping hum while the ship stands still).
+    pub engine_idle: Option<String>,
+    /// `SFXEvent_Engine_Moving_Loop`.
+    pub engine_moving: Option<String>,
+    /// `SFXEvent_Ambient_Loop` (constant machinery of stations and big ships).
+    pub ambient_loop: Option<String>,
 }
 
 /// Visual description of one ship definition.
@@ -154,6 +160,9 @@ impl VisualCatalog {
                 health_critical: sfx("sfxevent_health_critical_warning"),
                 enemy_health_low: sfx("sfxevent_enemy_damaged_health_low_warning"),
                 enemy_health_critical: sfx("sfxevent_enemy_damaged_health_critical_warning"),
+                engine_idle: sfx("sfxevent_engine_idle_loop"),
+                engine_moving: sfx("sfxevent_engine_moving_loop"),
+                ambient_loop: sfx("sfxevent_ambient_loop"),
             };
             ships.push(ShipVisual {
                 model: def.model.clone(),

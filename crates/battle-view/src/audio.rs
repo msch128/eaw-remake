@@ -330,3 +330,75 @@ pub fn battle_music(
     let fighting = stats.last_combat.is_some_and(|t| rt.clock - t <= COMBAT_WINDOW);
     director.set_battle_intensity(if fighting { 1.0 } else { 0.0 });
 }
+
+/// Sound sources of the battle scene: the listener sits where the battle camera looks (distance falloff and left / right
+/// pan of every positioned sound are relative to it) and every ship hums its engine loop: `SFXEvent_Engine_Moving_Loop`
+/// while it moves, `SFXEvent_Engine_Idle_Loop` while it stands, `SFXEvent_Ambient_Loop` for units that have no engine
+/// loop of the current kind. Loops of dead, retreated or unseen ships are silent. Does nothing without `AlamoAudioPlugin`.
+#[allow(clippy::type_complexity)]
+pub fn battle_sources(
+    mut commands: Commands,
+    settings: Res<BattleViewSettings>,
+    rt: Res<BattleRuntime>,
+    audio: Option<Res<AlamoAudio>>,
+    cameras: Query<(&crate::camera::BattleCamera, &Transform), Without<BattleListener>>,
+    mut listener: Query<&mut Transform, With<BattleListener>>,
+    mut ships: Query<(Entity, &crate::ships::ShipView, Option<&mut alamo_audio::SfxEmitter>)>,
+) {
+    if !settings.audio || audio.is_none() {
+        return;
+    }
+    // `Audio_Space_3D_Listener_Z_Pullback_Dist` = 0 (Audio.xml): the listener is not lifted above the map, it stands on the
+    // battle plane at the point the camera looks at (not at the camera's eye), turned like the camera for the left / right pan.
+    if let Ok((cam, tf)) = cameras.single() {
+        match listener.single_mut() {
+            Ok(mut l) => {
+                l.translation = cam.focus;
+                l.rotation = tf.rotation;
+            }
+            Err(_) => {
+                commands.spawn((
+                    Name::new("battle sound listener"),
+                    crate::BattleEntity,
+                    BattleListener,
+                    bevy::audio::SpatialListener::new(EAR_GAP),
+                    Transform { translation: cam.focus, rotation: tf.rotation, ..default() },
+                ));
+            }
+        }
+    }
+    let Some(cur) = rt.cur.as_ref() else { return };
+    let player = settings.player_side;
+    for (entity, view, emitter) in &mut ships {
+        let wanted = cur.ship(view.id).and_then(|s| {
+            let seen = s.side == player || (s.seen_by >> player.min(7)) & 1 == 1;
+            if !seen {
+                return None;
+            }
+            let v = &rt.visuals.ship(s.def).sfx;
+            // Estimate: the data names an idle and a moving loop but not the switch point. A ship with a route or a move / attack /
+            // retreat order is "moving"; the snapshot only holds living ships that have not retreated yet.
+            let moving = !s.path.is_empty() || matches!(s.order, battle_sim::Order::Move(_) | battle_sim::Order::AttackMove(_) | battle_sim::Order::Attack(_) | battle_sim::Order::Retreat);
+            let engine = if moving { v.engine_moving.as_ref() } else { v.engine_idle.as_ref() };
+            engine.or(v.ambient_loop.as_ref()).cloned()
+        });
+        match emitter {
+            Some(mut e) => {
+                if e.event != wanted {
+                    e.event = wanted;
+                }
+            }
+            None if wanted.is_some() => {
+                commands.entity(entity).insert(alamo_audio::SfxEmitter::new(wanted));
+            }
+            None => {}
+        }
+    }
+}
+
+/// The sound listener of the battle (see [`battle_sources`]).
+#[derive(Component)]
+pub struct BattleListener;
+
+/// Distance between the listener's ears in world units (the pan depends on the ratio to the distance of a sound).
+const EAR_GAP: f32 = 10.0;

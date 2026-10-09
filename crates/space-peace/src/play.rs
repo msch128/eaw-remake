@@ -486,7 +486,7 @@ fn galaxy_audio(
     mut out: MessageWriter<alamo_audio::plugin::GalaxyAudio>,
 ) {
     use alamo_audio::GalaxyEvent as G;
-    use galaxy_sim::{Event, ProductionKind};
+    use galaxy_sim::Event;
     let (Some(state), Some(me)) = (state, player.0) else { return };
     let faction = current.faction.clone().unwrap_or_else(|| "Rebel".to_owned());
     let mut say = |event: G| {
@@ -495,12 +495,7 @@ fn galaxy_audio(
     for e in events.read() {
         let PlayEvent::Sim(ev) = e else { continue };
         match ev {
-            Event::ConstructionComplete { faction, kind, .. } if *faction == me => say(match kind {
-                ProductionKind::Tech(_) => G::TechLevelGained,
-                ProductionKind::Unit(u) if matches!(state.world.units[*u as usize].role, galaxy_sim::UnitRole::Research(_)) => G::ResearchComplete,
-                ProductionKind::Unit(_) => G::UnitBuilt,
-                _ => G::StructureBuilt,
-            }),
+            // Finished production is announced by `ui_sounds` (the object's `SFXEvent_Build_Complete`, else the advisor line).
             Event::PlanetCaptured { old_owner, new_owner, .. } if *new_owner == me => {
                 let _ = old_owner;
                 say(G::PlanetCaptured);

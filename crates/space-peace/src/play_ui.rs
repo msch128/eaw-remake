@@ -1727,13 +1727,12 @@ fn required_level(a: &galaxy_play::Availability) -> u8 {
     }
 }
 
-/// A press on a greyed-out build pad: say why in the toast and play the refusal sound.
+/// A press on a greyed-out build pad: say why in the toast (the refusal sound is played by `ui_sounds`).
 fn locked_clicks(
     mut clicks: MessageReader<eaw_ui::EawLockedClicked>,
     model: Res<PlayUiModel>,
     bar: Res<BarState>,
     mut toast: ResMut<Toast>,
-    mut sound: MessageWriter<crate::flow::UiSound>,
 ) {
     for c in clicks.read() {
         let Some(index) = c.name.strip_prefix("b_create_").and_then(|n| n.parse::<usize>().ok()) else { continue };
@@ -1741,7 +1740,6 @@ fn locked_clicks(
         let Some(o) = menu.options.iter().find(|o| o.target == *target) else { continue };
         toast.0 = format!("{}: {}", o.name, capitalize(&o.availability.reason()));
         toast.1 = 3.5;
-        sound.write(crate::flow::UiSound(crate::menu::SFX_BACK));
     }
 }
 

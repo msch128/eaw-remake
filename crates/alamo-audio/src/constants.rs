@@ -14,6 +14,16 @@ pub struct AudioConstants {
     pub health_low: f32,
     /// `Health_Critical_Percent_Threshold` (Gameconstants.xml), fraction of max health.
     pub health_critical: f32,
+    /// `Audio_Space_3D_Saturation_Distance_Mod` (Audio.xml): scales every event's saturation distance in space battles.
+    pub space_saturation_mod: f32,
+    /// `Audio_Space_3D_Rolloff_Distance_Mod` (Audio.xml): higher = quicker rolloff over distance.
+    pub space_rolloff_mod: f32,
+    /// `SFXEvent_GUI_Negative_Feedback` (Audio.xml): the general "refused" sound.
+    pub negative_feedback: Option<String>,
+    /// `SFXEvent_Planet_Revealed` (Audio.xml).
+    pub planet_revealed: Option<String>,
+    /// `SFXEvent_Planet_Capture_Bonus_Reward` (Audio.xml): one-time reward when a planet is captured.
+    pub planet_capture_bonus: Option<String>,
 }
 
 impl Default for AudioConstants {
@@ -23,6 +33,11 @@ impl Default for AudioConstants {
             space_base_attack_announcement_delay: 60.0,
             health_low: 0.33,
             health_critical: 0.10,
+            space_saturation_mod: 1.5,
+            space_rolloff_mod: 1.0,
+            negative_feedback: Some("GUI_Bad_Sound".into()),
+            planet_revealed: Some("GUI_Planet_Mouse_Over".into()),
+            planet_capture_bonus: Some("Unit_Light_Saber_On".into()),
         }
     }
 }
@@ -39,6 +54,15 @@ impl AudioConstants {
             if let Some(v) = tag_f32(&t, "Delay_Between_Space_Base_Attack_Announcement_Seconds") {
                 c.space_base_attack_announcement_delay = v;
             }
+            if let Some(v) = tag_f32(&t, "Audio_Space_3D_Saturation_Distance_Mod") {
+                c.space_saturation_mod = v;
+            }
+            if let Some(v) = tag_f32(&t, "Audio_Space_3D_Rolloff_Distance_Mod") {
+                c.space_rolloff_mod = v;
+            }
+            c.negative_feedback = tag_str(&t, "SFXEvent_GUI_Negative_Feedback").or(c.negative_feedback);
+            c.planet_revealed = tag_str(&t, "SFXEvent_Planet_Revealed").or(c.planet_revealed);
+            c.planet_capture_bonus = tag_str(&t, "SFXEvent_Planet_Capture_Bonus_Reward").or(c.planet_capture_bonus);
         }
         if let Some(t) = read("Xml/Gameconstants.xml") {
             if let Some(v) = tag_f32(&t, "Health_Low_Percent_Threshold") {
@@ -64,6 +88,14 @@ fn strip_comments(s: &str) -> String {
     }
     out.push_str(rest);
     out
+}
+
+fn tag_str(text: &str, tag: &str) -> Option<String> {
+    let lower = text.to_ascii_lowercase();
+    let open = format!("<{}>", tag.to_ascii_lowercase());
+    let start = lower.find(&open)? + open.len();
+    let end = lower[start..].find('<')? + start;
+    Some(text[start..end].trim().to_string()).filter(|s| !s.is_empty())
 }
 
 fn tag_f32(text: &str, tag: &str) -> Option<f32> {
