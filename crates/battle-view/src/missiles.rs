@@ -9,6 +9,7 @@
 //! frame to frame by distance ([`match_tracks`]).
 
 use alamo_render::{AlamoModel, AlamoModelLoaded, AlamoParticles, XmlDefs};
+use bevy::gizmos::config::{GizmoConfigGroup, GizmoConfigStore};
 use bevy::prelude::*;
 
 use crate::convert::{sim_dir_to_bevy, sim_to_bevy};
@@ -60,6 +61,59 @@ pub(crate) fn nose_rotation(velocity: Vec3) -> Quat {
     if dir == Vec3::ZERO { Quat::IDENTITY } else { Quat::from_rotation_arc(Vec3::Y, dir) }
 }
 
+/// Seconds a smoke trail stays visible behind its missile (estimate from the Victory Star Destroyer video frames: the trails are several seconds long).
+const TRAIL_SECONDS: f64 = 5.0;
+/// Points closer than this to the last one are not added (keeps the polyline short).
+const TRAIL_STEP: f32 = 25.0;
+
+/// Gizmo group of the smoke trails (thicker lines than the overlays).
+#[derive(Default, Reflect, GizmoConfigGroup)]
+pub struct MissileTrailGizmos;
+
+/// The smoke of every missile: grey polylines of past positions with the battle time they were left at; they fade out after the missile is gone.
+#[derive(Resource, Default)]
+pub struct MissileTrails {
+    lines: std::collections::HashMap<u64, std::collections::VecDeque<(Vec3, f64)>>,
+    next: u64,
+    /// Heads of the missiles in flight this frame.
+    heads: Vec<Vec3>,
+}
+
+/// Thick smoke lines.
+fn configure_trail_gizmos(mut store: ResMut<GizmoConfigStore>) {
+    let (cfg, _) = store.config_mut::<MissileTrailGizmos>();
+    cfg.line.width = 4.0;
+    cfg.depth_bias = -0.5;
+}
+
+/// Draws the trails (grey, fading with age, wider near the head) and a small bright head per missile.
+fn draw_trails(rt: Res<BattleRuntime>, mut trails: ResMut<MissileTrails>, mut gizmos: Gizmos<MissileTrailGizmos>) {
+    let now = rt.clock;
+    // A new battle restarts the clock: trails of the old one are gone.
+    if trails.lines.values().any(|p| p.back().is_some_and(|b| b.1 > now + 1.0)) {
+        trails.lines.clear();
+    }
+    trails.lines.retain(|_, pts| {
+        while pts.front().is_some_and(|p| now - p.1 > TRAIL_SECONDS) {
+            pts.pop_front();
+        }
+        !pts.is_empty()
+    });
+    if std::env::var_os("SP_MISSILE_LOG").is_some() && now.fract() < 0.03 {
+        info!("missile-log: {} trails, longest {} points, now {now:.1}, heads {}", trails.lines.len(), trails.lines.values().map(|p| p.len()).max().unwrap_or(0), trails.heads.len());
+    }
+    for pts in trails.lines.values() {
+        for pair in pts.iter().zip(pts.iter().skip(1)) {
+            let age = ((now - pair.1.1) / TRAIL_SECONDS).clamp(0.0, 1.0) as f32;
+            let a = (1.0 - age) * 0.55;
+            gizmos.line(pair.0.0, pair.1.0, Color::srgba(0.78, 0.78, 0.8, a));
+        }
+    }
+    for &h in &trails.heads {
+        gizmos.sphere(Isometry3d::from_translation(h), 5.0, Color::srgb(1.0, 0.95, 0.75));
+    }
+}
+
 struct Track {
     entity: Entity,
     def: u32,
@@ -67,6 +121,8 @@ struct Track {
     /// `Scale_Factor` of the projectile model; its particles are not shrunk by it.
     scale: f32,
     particles_on: bool,
+    /// Key of this missile's smoke trail in [`MissileTrails`].
+    trail: u64,
 }
 
 /// Missiles in flight.
@@ -85,6 +141,7 @@ fn update_missiles(
     rt: Res<BattleRuntime>,
     defs: Option<Res<XmlDefs>>,
     mut tracks: ResMut<MissileTracks>,
+    mut trails: ResMut<MissileTrails>,
     mut transforms: Query<&mut Transform>,
     loaded: Query<&AlamoModelLoaded>,
     mut particles: Query<&mut AlamoParticles>,
@@ -119,6 +176,7 @@ fn update_missiles(
     }
     let tracked: Vec<Vec3> = tracks.items.iter().map(|t| t.pos).collect();
     let speed = now.iter().map(|m| m.2.length()).fold(0.0f32, f32::max);
+    trails.heads.clear();
     let matched = match_tracks(&tracked, &now.iter().map(|m| m.1).collect::<Vec<_>>(), speed * rt.dt * 2.0 + 5.0);
     let mut used = vec![false; tracks.items.len()];
     for (m, hit) in now.iter().zip(&matched) {
@@ -128,6 +186,11 @@ fn update_missiles(
                 used[i] = true;
                 let track = &mut tracks.items[i];
                 track.pos = m.1;
+                trails.heads.push(m.1);
+                let pts = trails.lines.entry(track.trail).or_default();
+                if pts.back().is_none_or(|p| p.0.distance(m.1) >= TRAIL_STEP) {
+                    pts.push_back((m.1, rt.clock));
+                }
                 if let Ok(mut tf) = transforms.get_mut(track.entity) {
                     tf.translation = m.1;
                     tf.rotation = rotation;
@@ -160,7 +223,11 @@ fn update_missiles(
                         Transform { translation: m.1, rotation, scale: Vec3::splat(m.4) },
                     ))
                     .id();
-                tracks.items.push(Track { entity, def: m.0, pos: m.1, scale: m.4, particles_on: false });
+                let trail = trails.next;
+                trails.next += 1;
+                trails.lines.entry(trail).or_default().push_back((m.1, rt.clock));
+                trails.heads.push(m.1);
+                tracks.items.push(Track { entity, def: m.0, pos: m.1, scale: m.4, particles_on: false, trail });
                 used.push(true);
             }
         }
@@ -195,7 +262,7 @@ fn burnout(mut commands: Commands, time: Res<Time>, mut q: Query<(Entity, &mut B
 }
 
 pub(crate) fn plugin(app: &mut App) {
-    app.init_resource::<MissileTracks>().add_systems(Update, (update_missiles, burnout).run_if(resource_exists::<BattleRuntime>));
+    app.init_resource::<MissileTracks>().init_resource::<MissileTrails>().init_gizmo_group::<MissileTrailGizmos>().add_systems(Startup, configure_trail_gizmos).add_systems(Update, draw_trails.run_if(resource_exists::<BattleRuntime>)).add_systems(Update, (update_missiles, burnout).run_if(resource_exists::<BattleRuntime>));
 }
 
 #[cfg(test)]
