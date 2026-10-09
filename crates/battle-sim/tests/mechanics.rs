@@ -1038,8 +1038,9 @@ fn squadrons_called_in_as_reinforcements_do_not_escape_on_their_own() {
 }
 
 #[test]
-fn a_side_stays_in_the_fight_while_its_fighters_live_but_only_for_the_grace_time() {
-    // Side 0 kills side 1's only capital ship at once; side 1 also has a harmless fighter that cannot be hurt (nothing can reach it: no weapon of side 0 hits fighters).
+fn a_side_stays_in_the_fight_while_anything_it_brought_lives_even_a_fighter() {
+    // Side 0 kills side 1's only capital ship at once; side 1 also brought a squadron fighter that nothing can hurt: the battle goes on to the time limit
+    // (units spawned during the battle do not count, units of the setup do; see the real-data pirate test for the spawned ones).
     let mut gunner = ship("gunner", 1.0e6, 0.0, vec![gun("g", 0.0)]);
     gunner.is_static = false;
     gunner.max_speed = 600.0;
@@ -1049,11 +1050,7 @@ fn a_side_stays_in_the_fight_while_its_fighters_live_but_only_for_the_grace_time
     let mut fighter = ship("fighter", 1.0e9, 0.0, vec![]);
     fighter.class = TargetClass::Fighter;
     fighter.is_static = false;
-    let cat = Arc::new(Catalog::from_defs(vec![gunner, weak, fighter], vec![{
-        let mut l = laser();
-        l.hull_damage = true;
-        l
-    }]));
+    let cat = Arc::new(Catalog::from_defs(vec![gunner, weak, fighter], vec![laser()]));
     let id = |n: &str| cat.ship_id(n).unwrap();
     let side = |n: &str, units: Vec<(&str, u32)>| SideSetup {
         name: n.into(),
@@ -1061,24 +1058,19 @@ fn a_side_stays_in_the_fight_while_its_fighters_live_but_only_for_the_grace_time
         structures: vec![],
         ai: false,
     };
-    let config = BattleConfig { half_size: 6000.0, straggler_grace: 90.0, fog_of_war: false, ..BattleConfig::default() };
+    let config = BattleConfig { half_size: 6000.0, max_time: 200.0, fog_of_war: false, ..BattleConfig::default() };
     let mut b = Battle::new(BattleSetup { sides: vec![side("a", vec![("gunner", 1)]), side("b", vec![("weak", 1), ("fighter", 1)])], catalog: cat.clone(), config });
     let weak_id = b.ships.iter().find(|s| s.side == 1 && s.def == id("weak")).unwrap().id;
     let gunner_id = b.ships.iter().find(|s| s.side == 0).unwrap().id;
     b.command(0, Command::Attack { ships: vec![gunner_id], target: weak_id }).unwrap();
     let mut died_at = None;
-    let mut over_at = None;
-    for _ in 0..30 * 400 {
+    while !b.is_over() && b.time() < 400.0 {
         b.step();
         if died_at.is_none() && !b.ships[weak_id as usize].alive {
             died_at = Some(b.time());
         }
-        if b.is_over() {
-            over_at = Some(b.time());
-            break;
-        }
     }
-    let (died, over) = (died_at.expect("the capital ship died"), over_at.expect("the battle ended"));
-    assert!(over - died >= 85.0 && over - died <= 100.0, "the fighter keeps its side in the fight for the grace time: died {died:.0}, over {over:.0}");
-    assert_eq!(b.result().winner, Some(0));
+    let died = died_at.expect("the capital ship died");
+    assert!(b.time() >= 195.0 && died < 150.0, "the brought fighter keeps its side in the fight until the time limit: died {died:.0}, over {:.0}", b.time());
+    assert_eq!(b.result().winner, None);
 }

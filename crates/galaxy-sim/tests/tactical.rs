@@ -639,3 +639,85 @@ fn a_pirate_star_base_with_its_garrison_counts_in_both_resolvers() {
     println!("4 x MC-80: auto alive {}/{} win {auto_win}, tactical survived {}/{}", auto.1, auto.0, tactical.1, tactical.0);
     assert!(auto_win && auto.1 == 4 && tactical.1 == 4);
 }
+
+#[test]
+fn the_battle_ends_with_the_last_brought_unit_whatever_was_spawned_meanwhile() {
+    let Some(ctx) = load() else { return };
+    let mut sim = new_sim(&ctx);
+    let w = sim.world().clone();
+    let (pirates, rebel) = (w.faction_id("Pirates").unwrap(), w.faction_id("Rebel").unwrap());
+    let target = {
+        let g = sim.galaxy();
+        (0..w.planets.len() as u32)
+            .find(|&p| g.planets[p as usize].owner == Some(pirates) && g.fleets_at(p).next().is_none() && w.planets[p as usize].space_map.is_some())
+            .expect("pirate planet without a fleet")
+    };
+    add_fleet(&mut sim, rebel, w.unit_id("MC-80_Star_Cruiser").unwrap(), 4, target, target);
+    let battle = pending(&mut sim);
+    let req = sim.tactical_setup(battle.id).unwrap();
+    let catalog = catalog_for(&ctx, &req);
+    let mut b = battle_sim::Battle::new(req.battle_setup(&catalog, req.battle_config(None), |_| true).unwrap());
+    let ps = req.sides.iter().position(|s| s.faction == pirates).unwrap() as u8;
+    let mut base_died = None;
+    let mut spawned_alive_then = 0;
+    let mut before = 0;
+    while !b.is_over() && b.time() < 600.0 {
+        before = b.ships.iter().filter(|s| s.side == ps && s.alive).count();
+        b.step();
+        let base_alive = b.ships.iter().any(|s| s.side == ps && s.alive && catalog.ship(s.def).is_static);
+        if base_died.is_none() && !base_alive {
+            base_died = Some(b.time());
+            spawned_alive_then = b.ships.iter().filter(|s| s.side == ps && s.alive).count();
+        }
+    }
+    let died = base_died.expect("the star base died");
+    println!("base died at {died:.1} s with {spawned_alive_then} spawned units alive, battle over at {:.1} s; side ships {:?}", b.time(), b.ships.iter().filter(|s| s.side == ps).map(|s| (catalog.ship(s.def).name.clone(), s.alive, s.group)).take(6).collect::<Vec<_>>());
+    // Whatever of the garrison is still alive when the last brought unit (the star base) dies is ignored: the battle ends with that step.
+    assert!(b.is_over() && b.time() - died < 2.0, "the battle ends with the last unit that was brought, not with the spawned ones");
+    assert_eq!(b.result().winner, Some(req.sides.iter().position(|s| s.faction == rebel).unwrap() as u8));
+}
+
+/// Auto-resolve preview of `n` units of `unit` (Rebel) attacking `defender` at a planet it holds with its starbase / structures / fleets: `(attacker start, alive, defender start, alive, attacker wins)`.
+fn auto_vs_planet(ctx: &Ctx, unit: &str, n: u32, planet_pick: impl Fn(&Sim, FactionId) -> Option<PlanetId>, defender: &str, extra_def: Option<(&str, u32)>) -> Option<(u32, u32, u32, u32, bool)> {
+    let mut sim = new_sim(ctx);
+    let w = sim.world().clone();
+    let (rebel, def) = (w.faction_id("Rebel").unwrap(), w.faction_id(defender).unwrap());
+    let target = planet_pick(&sim, def)?;
+    if let Some((u, c)) = extra_def {
+        add_fleet(&mut sim, def, w.unit_id(u).unwrap(), c, target, target);
+    }
+    add_fleet(&mut sim, rebel, w.unit_id(unit).unwrap(), n, target, target);
+    let battle = pending(&mut sim);
+    let p = sim.preview_auto_resolve(battle.id, 1)?;
+    let a = p.sides.iter().find(|s| s.0 == rebel)?;
+    let d = p.sides.iter().find(|s| s.0 == def)?;
+    Some((a.1, a.2, d.1, d.2, p.winner == Some(rebel)))
+}
+
+/// Two fleets meet at an empty planet; auto-resolve preview over several seeds: `(attacker wins, draws, mean attacker alive, mean defender alive)` out of `seeds` runs.
+fn auto_even(ctx: &Ctx, a: (&str, &str, u32), b: (&str, &str, u32), seeds: u64) -> (u32, u32, f32, f32) {
+    let mut sim = new_sim(ctx);
+    let w = sim.world().clone();
+    let (fa, fb) = (w.faction_id(a.0).unwrap(), w.faction_id(b.0).unwrap());
+    let target = empty_planet(&sim);
+    add_fleet(&mut sim, fb, w.unit_id(b.1).unwrap(), b.2, target, target);
+    add_fleet(&mut sim, fa, w.unit_id(a.1).unwrap(), a.2, target, target);
+    let battle = pending(&mut sim);
+    let (mut wins, mut draws, mut aa, mut ba) = (0, 0, 0.0, 0.0);
+    for seed in 1..=seeds {
+        let p = sim.preview_auto_resolve(battle.id, seed).unwrap();
+        wins += u32::from(p.winner == Some(fa));
+        draws += u32::from(p.winner.is_none());
+        aa += p.sides.iter().find(|s| s.0 == fa).unwrap().2 as f32;
+        ba += p.sides.iter().find(|s| s.0 == fb).unwrap().2 as f32;
+    }
+    (wins, draws, aa / seeds as f32, ba / seeds as f32)
+}
+
+#[test]
+fn tmp_even() {
+    let Some(ctx) = load() else { return };
+    for (a, b) in [(("Rebel", "Star_Destroyer", 3u32), ("Empire", "Star_Destroyer", 3u32)), (("Empire", "Star_Destroyer", 3), ("Rebel", "Star_Destroyer", 3)), (("Rebel", "MC-80_Star_Cruiser", 3), ("Empire", "Star_Destroyer", 3)), (("Rebel", "CR-90_Corvette", 1), ("Empire", "Star_Destroyer", 3)), (("Rebel", "Star_Destroyer", 6), ("Empire", "Star_Destroyer", 1))] {
+        println!("{a:?} vs {b:?}: {:?}", auto_even(&ctx, a, b, 20));
+    }
+}

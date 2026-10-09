@@ -184,7 +184,6 @@ impl Battle {
             catalog,
             cmd_events: Vec::new(),
             retreat_ordered: vec![false; sides.len()],
-            big_gone_at: vec![None; sides.len()],
             cheats: crate::cheats::Cheats::new(sides.len()),
             retreat_jump_at: vec![None; sides.len()],
             reveals: Vec::new(),
@@ -1819,33 +1818,24 @@ impl Battle {
             return;
         }
         let n = self.sides.len();
-        // A side is in the fight while anything of it lives: ships, stations and the squadrons they launched (EaW: the battle ends when every enemy
-        // unit is destroyed or has retreated). Once its last ship that is not a fighter or bomber is gone, the fighters left over only get
-        // `straggler_grace` more seconds, so that unreachable stragglers cannot keep the battle going to the time limit.
-        let mut had_big = vec![false; n];
-        let mut big_alive = vec![false; n];
+        // A side is in the fight while anything it brought into the battle lives: the ships, squadrons, star base and structures of the setup (and
+        // called-in reinforcements). Units spawned during the battle (a station's garrison, squadrons a carrier launches from its reserve) do not count: EaW
+        // ends the battle when everything the sides brought is destroyed or has retreated, and the spawned units are removed with the loser.
+        // A side without any setup unit (hand-made scenarios) is in the fight while any of its ships lives.
+        let mut had_brought = vec![false; n];
+        let mut brought_alive = vec![false; n];
         let mut any_alive = vec![false; n];
         for s in &self.ships {
-            let big = !matches!(self.catalog.ship(s.def).class, TargetClass::Fighter | TargetClass::Bomber);
-            if big && s.group != NONE {
-                had_big[s.side as usize] = true;
+            let i = s.side as usize;
+            if s.group != NONE {
+                had_brought[i] = true;
             }
             if s.alive && !s.retreated {
-                any_alive[s.side as usize] = true;
-                big_alive[s.side as usize] |= big;
+                any_alive[i] = true;
+                brought_alive[i] |= s.group != NONE;
             }
         }
-        let time = self.time;
-        let mut active = vec![false; n];
-        for i in 0..n {
-            if big_alive[i] || !had_big[i] {
-                self.big_gone_at[i] = None;
-                active[i] = any_alive[i];
-            } else if any_alive[i] {
-                let since = *self.big_gone_at[i].get_or_insert(time);
-                active[i] = time - since < self.config.straggler_grace;
-            }
-        }
+        let mut active: Vec<bool> = (0..n).map(|i| if had_brought[i] { brought_alive[i] } else { any_alive[i] }).collect();
         for r in &self.pending {
             active[r.side as usize] = true;
         }

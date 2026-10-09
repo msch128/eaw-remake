@@ -185,8 +185,8 @@ Source: `XML/AI/GoalFunctions/Remake_SpaceCombat.xml`, `PerceptualEquations/Rema
 * `navigation: false` gives the old behaviour for comparisons (`galaxy-sim/examples/navcheck`: Bilbringi 61 rocks and Hoth, 4 Star Destroyers + 3 Victory + fighters vs MC-80, Nebulon, CR-90 + fighters, 300 s, three seeds: no hull overlaps after the opening, no ship inside a rock, no planned path through a rock; fighters deep inside a hull 307 / 177 / 319 / 372 samples before, 0 after).
 
 ## Battle end (U27)
-A side stays in the fight while any of its ships, stations or launched/spawned squadrons lives (EaW: the battle ends when every enemy unit is destroyed or retreated; `Victory_Relevant` only appears
-on one ground building in the data). Once its last ship that is not a fighter or bomber is gone (a station dying counts), its leftover fighters keep it in the fight for
-`BattleConfig::straggler_grace` = 120 s (estimate) so that unreachable stragglers cannot run the battle to the time limit; then it loses and they are removed. Before, the fighters were dropped the
-moment the last big ship died: a pirate base killed in the first minutes took its 16 Hullcrackers and 16 Z-95 with it, which looked like "victory with enemy units left". Test:
-`a_side_stays_in_the_fight_while_its_fighters_live_but_only_for_the_grace_time` (mechanics) and, with real data, `a_pirate_star_base_with_its_garrison_counts_in_both_resolvers` (galaxy-sim).
+A side stays in the fight while any unit it **brought** lives: the ships, squadrons, star base and structures of the setup (the galaxy fleet and planet defences), and called-in reinforcements. Units
+**spawned during the battle** (a star base's garrison squadrons, squadrons a carrier launches from its reserve) do not count: they are ignored when the battle ends and removed with the loser. A side
+whose brought units are all destroyed or have retreated loses (a retreat of everything left is a win for the other side); a hand-made scenario without setup units counts any ship. (First attempt: all
+units counted with a 120 s grace for fighters; the user corrected it to "spawned units may be ignored".) Tests: `a_side_stays_in_the_fight_while_anything_it_brought_lives_even_a_fighter` (mechanics) and,
+with real data, `the_battle_ends_with_the_last_brought_unit_whatever_was_spawned_meanwhile` (galaxy-sim, pirate star base with its garrison).
