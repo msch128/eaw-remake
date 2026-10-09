@@ -255,6 +255,7 @@ fn organizer_drag(
     slots: Query<(&eaw_ui::panels::PanelSlotName, &ComputedNode, &UiGlobalTransform, &InheritedVisibility)>,
     frames: Query<(&Name, &ComputedNode, &UiGlobalTransform)>,
     mut ghost: Query<&mut Node, With<DragGhost>>,
+    ui_scale: Res<UiScale>,
 ) {
     let (Some(mut sim), Some(player), Some(bridge), Some(window)) = (sim, player, bridge, window) else { return };
     let Some(me) = player.0 else { return };
@@ -279,7 +280,8 @@ fn organizer_drag(
                 let unit = if k == 0 { boxes[b].hyper } else { boxes[b].stacks.get(k - 1).map(|s| s.0) };
                 let icon = unit.and_then(|u| assets.as_deref()?.game.as_deref().and_then(|g| eaw_ui::unit_icon(g, &sim.world.units[u as usize].name)));
                 if let Some(h) = icon.and_then(|i| textures.as_mut()?.get(&mut images, &i)).map(|t| t.handle) {
-                    let scale = window.scale_factor();
+                    // Val::Px is multiplied by UiScale: physical px / (DPI factor * UiScale).
+                    let scale = window.scale_factor() * ui_scale.0;
                     let e = commands
                         .spawn((
                             DragGhost,
@@ -295,7 +297,7 @@ fn organizer_drag(
         }
     }
     if let (Some(c), Ok(mut node)) = (cursor, ghost.single_mut()) {
-        let scale = window.scale_factor();
+        let scale = window.scale_factor() * ui_scale.0;
         node.left = Val::Px(c.x / scale - 22.0);
         node.top = Val::Px(c.y / scale - 22.0);
     }
