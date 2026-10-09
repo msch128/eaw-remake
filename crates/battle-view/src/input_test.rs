@@ -69,6 +69,8 @@ enum Step {
     Escape(EscCheck),
     /// After an attack order the red line goes away again within a few seconds although the ship stays selected.
     AttackLineExpires,
+    /// With an empty selection the order buttons are dimmed, the retreat button is dimmed before it is available and no text sits under it.
+    BarDimmedWithoutSelection,
     /// After a move order the selected ship shows a line to its destination and a ring there.
     MoveLineVisible,
     /// Hover a carrier or station: its unit panel lists the squadrons still in reserve (vacuous without one).
@@ -84,7 +86,7 @@ enum EscCheck {
     Paused(bool),
 }
 
-const STEPS: [Step; 31] = [
+const STEPS: [Step; 32] = [
     Step::SelectShip,
     Step::RightClickGround,
     Step::MoveLineVisible,
@@ -114,6 +116,7 @@ const STEPS: [Step; 31] = [
     Step::PlaceReinforcement,
     Step::BarAreaKeepsSelection,
     Step::EmptyClickDeselects,
+    Step::BarDimmedWithoutSelection,
     Step::MiddleDrag,
     Step::PageUpRotates,
 ];
@@ -690,6 +693,14 @@ fn drive(
             }
             _ => {}
         },
+        Step::BarDimmedWithoutSelection => {
+            if t == 4 {
+                let orders: Vec<bool> = bar.iter().filter(|(b, ..)| b.name.starts_with("c_button")).map(|(_, s, ..)| s.disabled).collect();
+                let retreat = bar.iter().find(|(b, ..)| b.name == "b_retreat").map(|(_, s, ..)| s.disabled);
+                info!("input-test:   order buttons disabled {orders:?}, retreat disabled {retreat:?}");
+                verdict = Some(("order-buttons-dimmed-without-selection".into(), sel.ships.is_empty() && !orders.is_empty() && orders.iter().all(|d| *d) && retreat != Some(false)));
+            }
+        }
         Step::EmptyClickDeselects => match t {
             0 => act = click_at(0, Vec2::new(vp.x * 0.5, vp.y * 0.12), MouseButton::Left),
             1 | 2 => act = click_at(t, Vec2::ZERO, MouseButton::Left),

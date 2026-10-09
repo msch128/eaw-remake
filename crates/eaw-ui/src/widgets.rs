@@ -1037,14 +1037,14 @@ pub(crate) fn button_visuals(
                 n.display = if on { Display::Flex } else { Display::None };
             }
         };
-        // The tactical side buttons (reinforcements, special weapon, beacon) stay a dimmed icon when unavailable, as in the original;
+        // The tactical side and command buttons (reinforcements, special weapon, beacon, orders) stay a dimmed icon when unavailable, as in the original;
         // everywhere else the disabled texture replaces the icon.
-        let dimmed_icon = matches!(b.name.as_str(), "b_reinforcement" | "b_special_weapon" | "b_special_weapon2") && l.icon.is_some();
+        let dimmed_icon = (matches!(b.name.as_str(), "b_reinforcement" | "b_special_weapon" | "b_special_weapon2" | "b_retreat") || b.name.starts_with("c_button")) && l.icon.is_some();
         if dimmed_icon
             && let Some(e) = l.icon
             && let Ok(mut img) = images.get_mut(e)
         {
-            img.color = if st.disabled { Color::srgba(0.45, 0.5, 0.55, 0.6) } else { Color::WHITE };
+            img.color = if st.disabled { Color::srgba(0.5, 0.5, 0.5, 1.0) } else { Color::WHITE };
         }
         let show_disabled = st.disabled && l.disabled.is_some() && !dimmed_icon;
         let show_selected = !st.disabled && pressed && l.selected.is_some();
@@ -1060,7 +1060,10 @@ pub(crate) fn button_visuals(
 pub(crate) fn bound_fields(
     fresh: Query<(), Added<BoundField>>,
     data: Res<CommandBarData>,
-    mut texts: Query<(&BoundField, &mut Text, Option<&mut TextColor>)>,
+    mut texts: Query<(Entity, &BoundField, &mut Text, Option<&mut TextColor>, Option<&Children>)>,
+    fonts: Query<&TextFont>,
+    spans: Query<(), With<SmallCapsSpan>>,
+    mut commands: Commands,
     mut icons: Query<(&BoundField, &mut ImageNode), Without<Text>>,
     mut tex: ResMut<UiTextures>,
     db: Res<CommandBarDb>,
@@ -1069,8 +1072,8 @@ pub(crate) fn bound_fields(
     if !data.is_changed() && fresh.is_empty() {
         return;
     }
-    for (f, mut t, color) in &mut texts {
-        if matches!(f.0, Field::PlanetName | Field::Income) && let (Some(c), Some(mut tc)) = (data.planet_color, color) {
+    for (entity, f, mut t, mut color, children) in &mut texts {
+        if matches!(f.0, Field::PlanetName | Field::Income) && let (Some(c), Some(tc)) = (data.planet_color, color.as_deref_mut()) {
             tc.0 = c;
         }
         t.0 = match f.0 {
@@ -1080,9 +1083,15 @@ pub(crate) fn bound_fields(
             Field::Day => format!("MONTH: {}", data.day),
             Field::MonthIncome => group_digits(data.month_income),
             Field::TechLevel => format!("TECH: {}", data.tech_level),
-            Field::Pop => format!("{} / {}", data.pop_current, data.pop_cap),
+            Field::Pop => format!("{}/{}", data.pop_current, data.pop_cap),
             Field::Allegiance => String::new(),
         };
+        if f.0 == Field::PlanetName
+            && let Ok(font) = fonts.get(entity)
+        {
+            let c = color.as_deref().map_or(Color::WHITE, |c| c.0);
+            apply_small_caps(&mut commands, entity, &mut t, font, c, children, &spans);
+        }
     }
     if let Some(alt) = db.get("Text_Allegiance_A") {
         for (f, mut img) in &mut icons {
@@ -1585,3 +1594,48 @@ mod tests {
 
 
 
+
+/// Marks the text spans that [`apply_small_caps`] adds below a text.
+#[derive(Component)]
+pub struct SmallCapsSpan;
+
+/// Splits a text into small-caps runs: every word starts with a full-size capital, the rest of the word is a smaller capital.
+/// Returns (text, is_small) with neighbouring runs of the same size merged; the first run is always full size.
+pub fn small_caps_segments(text: &str) -> Vec<(String, bool)> {
+    let mut out: Vec<(String, bool)> = Vec::new();
+    let mut start = true;
+    for c in text.chars() {
+        let small = !start && !c.is_whitespace();
+        // Spaces take the size of the run before them.
+        let small = if c.is_whitespace() { out.last().is_some_and(|l| l.1) } else { small };
+        for u in c.to_uppercase() {
+            match out.last_mut() {
+                Some(l) if l.1 == small => l.0.push(u),
+                _ => out.push((u.to_string(), small)),
+            }
+        }
+        start = c.is_whitespace();
+    }
+    out
+}
+
+/// Writes `text` in small caps into the `Text` of `entity`: the first run goes into the text itself, the others become [`SmallCapsSpan`]
+/// children (old ones, listed in `old`, are removed). Small runs use 78% of the font size.
+pub fn apply_small_caps(commands: &mut Commands, entity: Entity, text: &mut Text, font: &TextFont, color: Color, old: Option<&Children>, spans: &Query<(), With<SmallCapsSpan>>) {
+    if let Some(old) = old {
+        for &k in old {
+            if spans.contains(k) {
+                commands.entity(k).try_despawn();
+            }
+        }
+    }
+    let segs = small_caps_segments(text.0.as_str());
+    text.0 = segs.first().map(|s| s.0.clone()).unwrap_or_default();
+    for (s, small) in segs.into_iter().skip(1) {
+        let mut f = font.clone();
+        if small && let FontSize::Px(px) = f.font_size {
+            f.font_size = FontSize::Px(px * 0.78);
+        }
+        commands.spawn((SmallCapsSpan, TextSpan::new(s), f, TextColor(color), ChildOf(entity)));
+    }
+}

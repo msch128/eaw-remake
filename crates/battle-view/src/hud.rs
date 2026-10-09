@@ -210,7 +210,18 @@ pub fn spawn_hud(
     ));
     target(&mut boxed);
     let boxed = boxed.id();
-    commands.spawn((Text::new(header), font(&ui, 13.0), TextColor(Color::srgb(0.84, 0.9, 0.98)), ChildOf(boxed)));
+    // Small caps like the original heading: a full-size first letter per word, smaller capitals after it.
+    let head_font = font(&ui, 14.0);
+    let head_color = Color::srgb(0.84, 0.9, 0.98);
+    let segs = eaw_ui::small_caps_segments(&header);
+    let head = commands.spawn((Text::new(segs.first().map(|s| s.0.clone()).unwrap_or_default()), head_font.clone(), TextColor(head_color), ChildOf(boxed))).id();
+    for (s, small) in segs.into_iter().skip(1) {
+        let mut f = head_font.clone();
+        if small && let FontSize::Px(px) = f.font_size {
+            f.font_size = FontSize::Px(px * 0.78);
+        }
+        commands.spawn((TextSpan::new(s), f, TextColor(head_color), ChildOf(head)));
+    }
     commands.spawn((
         Text::new(format!("1. {body}")),
         font(&ui, 10.5),

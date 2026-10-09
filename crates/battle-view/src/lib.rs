@@ -595,7 +595,7 @@ fn start_battle(
         minimap_props: session.scene.props.iter().filter(|p| !p.backdrop).map(|p| (Vec2::new(p.position.x, -p.position.z), p.scale)).collect(),
         minimap_tint: {
             let t = session.scene.ambient * 3.0 + session.scene.lights[0].color * 0.06;
-            Color::srgb(t.x.clamp(0.02, 0.35), t.y.clamp(0.02, 0.35), t.z.clamp(0.03, 0.4))
+            Color::srgb((t.x * 0.2).clamp(0.0, 0.06), (t.y * 0.2).clamp(0.0, 0.06), (t.z * 0.2).clamp(0.01, 0.08))
         },
     });
 }

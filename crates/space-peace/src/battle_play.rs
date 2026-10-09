@@ -573,6 +573,14 @@ fn battle_header(pending: Res<PendingTactical>, state: Option<Res<galaxy_play::S
         data.planet_owner = None;
         data.planet_income = 0;
     }
+    // White name like the Remake tactical bar, and no galaxy build queue or pads leaking into the battle bar.
+    if data.planet_color != Some(Color::WHITE) {
+        data.planet_color = Some(Color::WHITE);
+    }
+    if !data.queue.is_empty() || !data.pads.is_empty() {
+        data.queue.clear();
+        data.pads.clear();
+    }
 }
 
 /// Offscreen `--battle-orders`: selects the player ships, orders a move and then an attack through the

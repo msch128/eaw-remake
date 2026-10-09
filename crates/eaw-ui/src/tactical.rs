@@ -750,7 +750,7 @@ pub(crate) fn ship_overlays(
             }
         }
         commands.entity(parts.label).try_insert(TextColor(accent));
-        let brackets = if !icon_mode && (o.selected || o.hovered || o.enemy) { accent } else { Color::NONE };
+        let brackets = if !icon_mode && (o.half_size >= 24.0 || o.enemy) && (o.selected || o.hovered || o.enemy) { accent } else { Color::NONE };
         for b in parts.brackets {
             if let Ok((_, _, Some(mut bc), _)) = styles.get_mut(b) {
                 *bc = BorderColor::all(brackets);

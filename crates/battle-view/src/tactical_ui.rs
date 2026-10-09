@@ -44,7 +44,7 @@ impl Plugin for TacticalUiPlugin {
                 spawn_bar.run_if(resource_exists::<crate::BattleSession>.and_then(not(resource_exists::<TacticalBarSpawned>))),
                 remove_reinforce.run_if(resource_removed::<BattleRuntime>),
                 remove_bar.run_if(resource_removed::<BattleRuntime>.or_eager(resource_removed::<crate::BattleSession>)),
-                (sync_data, sync_overlays, handle_clicks, ability_keys, autocast_toggle, autocast_rings, ability_at, hardpoint_clicks, reinforce_clicks, reinforce_place, reinforce_events, reinforce_panel, sync_minimap, minimap_pan).chain().run_if(resource_exists::<BattleRuntime>),
+                (sync_data, sync_overlays, handle_clicks, ability_keys, autocast_toggle, autocast_rings, ability_at, hardpoint_clicks, reinforce_clicks, reinforce_place, reinforce_events, reinforce_panel, sync_minimap, minimap_pan, command_buttons_state).chain().run_if(resource_exists::<BattleRuntime>),
             )
                 .chain(),
         );
@@ -188,7 +188,8 @@ fn sync_data(
     } else if status.time >= rt.retreat_countdown {
         RetreatState::Ready
     } else {
-        RetreatState::Countdown(rt.retreat_countdown - status.time)
+        // Not available yet: the original shows the button dimmed and without text (Remake video b0662).
+        RetreatState::Unavailable
     };
     let new = TacticalData {
         active: true,
@@ -846,10 +847,10 @@ fn sync_overlays(
     for (key, members) in groups {
         let selected = members.iter().any(|id| sel.ships.contains(id) || sel.enemy == Some(*id));
         let hovered = members.iter().any(|id| hover.ship == Some(*id));
-        if !selected && !hovered {
+        let first = &ships.0[&members[0]];
+        if !selected && !hovered && (first.squad == u32::MAX || first.side != player) {
             continue;
         }
-        let first = &ships.0[&members[0]];
         let enemy = first.side != player;
         let pts: Vec<(Vec2, f32)> = members
             .iter()
@@ -882,18 +883,16 @@ fn sync_overlays(
         next.ships.push(ShipOverlay {
             id: key,
             screen_pos: centre,
-            half_size: half.clamp(11.0, 220.0),
+            half_size: if first.squad != u32::MAX { 11.0 } else { half.clamp(11.0, 220.0) },
             health: live.iter().map(|s| s.hull).sum::<f32>() / n,
             shield: (def.shield > 0.0).then(|| live.iter().map(|s| s.shield).sum::<f32>() / n),
             selected,
             hovered,
             enemy,
             name,
-            always: false,
-            // Fighters and other small units are marked by their little icon box.
-            icon: (first.squad != u32::MAX || half < 24.0)
-                .then(|| assets.as_ref().and_then(|a| a.game.as_ref()).and_then(|g| eaw_ui::unit_icon(g, &def.name)))
-                .flatten(),
+            always: !enemy && first.squad != u32::MAX,
+            // Fighters and other small units carry only a short hull bar (no brackets, no icon box), as in the Remake video.
+            icon: None,
         });
     }
     // Hardpoint reticles with their health on the hovered ship, the selected enemy or a lone selected ship. They are clickable
@@ -1074,3 +1073,24 @@ fn reinforce_place(
         armed.0 = None;
     }
 }
+
+/// The order buttons are dimmed while nothing mobile is selected (as in the Remake video with an empty selection).
+fn command_buttons_state(
+    rt: Res<BattleRuntime>,
+    sel: Res<Selection>,
+    ships: Res<RenderedShips>,
+    settings: Res<BattleViewSettings>,
+    mut buttons: Query<(&eaw_ui::EawButton, &mut eaw_ui::EawButtonState, &mut Node)>,
+) {
+    let any = !control::selected_mobile(&rt, &ships, &sel, settings.player_side).is_empty();
+    for (b, mut st, mut node) in &mut buttons {
+        if b.name.starts_with("c_button") && st.disabled == any {
+            st.disabled = !any;
+        }
+        // Galaxy leftovers of the shared shell (superweapon / bombardment / landing panels) have no place in a space battle.
+        if matches!(b.name.as_str(), "sl_switch" | "pb_switch" | "deathstar_switch") && node.display != Display::None {
+            node.display = Display::None;
+        }
+    }
+}
+
