@@ -205,6 +205,7 @@ fn sample_data(game: &alamo_data::GameData, faction: UiFaction) -> CommandBarDat
                 health: 1.0 - i as f32 * 0.15,
                 shield: (i % 2 == 0).then_some(0.8 - i as f32 * 0.1),
                 count: 1 + i as u32 % 3,
+                section: (i / 2) as u8,
             })
             .collect(),
         abilities: Vec::new(),

@@ -854,7 +854,10 @@ impl Builder<'_> {
                 sz = t.size.as_vec2();
                 icon_px = sz.min_element() * 0.88;
             }
-            self.layer(button, size, &t, sz, Vec2::ZERO, tint);
+            // Tactical selection cards are flat in the Remake (unit icon over its bars): no pad frame.
+            if !slot.is_some_and(|s| s.kind == SlotKind::Select) {
+                self.layer(button, size, &t, sz, Vec2::ZERO, tint);
+            }
         }
         let icon_tex = CommandBarComponent::pick(&def.icon, fi)
             .or_else(|| {
@@ -863,7 +866,8 @@ impl Builder<'_> {
                     .flatten()
             })
             .and_then(|n| self.tex(n));
-        if let Some(t) = &icon_tex {
+        // The selection slot's own Icon_Texture_Name is the blue `defend` badge, which the engine never shows on cards.
+        if let Some(t) = icon_tex.as_ref().filter(|_| !slot.is_some_and(|s| s.kind == SlotKind::Select)) {
             let sz = scaled(t);
             layers.icon = Some(self.layer(button, size, t, sz, def.icon_offset, tint));
         }
@@ -1129,6 +1133,44 @@ fn group_digits(v: i64) -> String {
         out.push(c);
     }
     if v < 0 { format!("-{out}") } else { out }
+}
+
+/// Joins the column frames (`special_border_NN`, two selected units each) of one bar section into one panel:
+/// left / centre / right pieces at the ends and in between, the full frame for a lone column (Remake video b0700).
+pub(crate) fn border_pieces(
+    data: Res<CommandBarData>,
+    mut tex: ResMut<UiTextures>,
+    mut images: ResMut<Assets<Image>>,
+    borders: Query<(&Slot, &ButtonLayers)>,
+    mut nodes: Query<&mut ImageNode>,
+) {
+    if !data.is_changed() {
+        return;
+    }
+    const PIECES: [&str; 4] = [
+        "i_special_border_full.tga",
+        "i_special_border_left.tga",
+        "i_special_border_center.tga",
+        "i_special_border_right.tga",
+    ];
+    let section = |col: usize| data.selection.get(col * 2).map(|s| s.section);
+    for (slot, layers) in &borders {
+        if slot.kind != SlotKind::Border {
+            continue;
+        }
+        let (Some(layer), Some(mine)) = (layers.icon, section(slot.index)) else { continue };
+        let prev = slot.index.checked_sub(1).and_then(section) == Some(mine);
+        let next = section(slot.index + 1) == Some(mine);
+        let piece = match (prev, next) {
+            (false, false) => 0,
+            (false, true) => 1,
+            (true, true) => 2,
+            (true, false) => 3,
+        };
+        if let (Some(t), Ok(mut img)) = (tex.get(&mut images, PIECES[piece]), nodes.get_mut(layer)) {
+            img.image = t.handle;
+        }
+    }
 }
 
 /// Fills queue, pad, selection and ability slots from [`CommandBarData`].

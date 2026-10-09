@@ -127,8 +127,24 @@ pub struct TacticalUnit {
     pub shield_points: f32,
     /// Number of units of this type in the selection.
     pub count: u32,
+    /// Bar section (see [`SelectionEntry::section`]).
+    pub section: u8,
     /// Ability buttons (shown for the focused unit).
     pub abilities: Vec<AbilityState>,
+}
+
+/// Bar section of a unit type: 0 small ships, 1 fighters and bombers, 2 heroes, 3 capital ships.
+pub fn bar_section(def: &alamo_data::SpaceUnitDef) -> u8 {
+    use alamo_data::ShipCategory as C;
+    if def.kind.eq_ignore_ascii_case("UniqueUnit") {
+        2
+    } else if matches!(def.category, C::Fighter | C::Bomber) {
+        1
+    } else if def.category >= C::Capital {
+        3
+    } else {
+        0
+    }
 }
 
 impl TacticalUnit {
@@ -155,6 +171,7 @@ impl TacticalUnit {
             hull_points: def.hull,
             shield_points: def.shield_points,
             count: 1,
+            section: bar_section(&def),
             abilities: unit_abilities(game, text, textures, &def.name)
                 .into_iter()
                 .map(|def| AbilityState {
@@ -294,6 +311,7 @@ pub(crate) fn tactical_sync(tac: Res<TacticalData>, mut bar: ResMut<CommandBarDa
             health: u.health,
             shield: u.shield,
             count: u.count,
+            section: u.section,
         })
         .collect();
     bar.abilities = tac

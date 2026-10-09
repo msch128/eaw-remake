@@ -74,6 +74,8 @@ pub struct SelectionEntry {
     pub shield: Option<f32>,
     /// Number of selected units of this type (shown when above 1).
     pub count: u32,
+    /// Section of the bar (0 small ships, 1 fighters, 2 heroes, 3 capitals): neighbours of one section share one frame.
+    pub section: u8,
 }
 
 /// A special ability button of the tactical bar (`special_button_NN`).

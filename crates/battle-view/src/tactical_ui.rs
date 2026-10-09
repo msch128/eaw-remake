@@ -182,6 +182,10 @@ fn sync_data(
         selection.push(unit);
         groups.push(ids);
     }
+    // Bar sections in the Remake order (small ships, fighters, heroes, capitals); stable, so types keep their id order inside one.
+    let mut paired: Vec<_> = selection.into_iter().zip(groups).collect();
+    paired.sort_by_key(|(u, _)| u.section);
+    let (selection, groups): (Vec<_>, Vec<_>) = paired.into_iter().unzip();
 
     let retreat = if status.over {
         RetreatState::Unavailable

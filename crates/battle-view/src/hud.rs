@@ -37,6 +37,11 @@ pub(crate) struct AdvisorBubble;
 #[derive(Component)]
 pub(crate) struct AdvisorText;
 
+/// Portrait ring: dark when the hero is not selected, orange glow when selected (Remake ref 07 and video b0700).
+const HERO_RING_IDLE: Color = Color::srgba(0.25, 0.3, 0.36, 0.9);
+const HERO_RING_SELECTED: Color = Color::srgb(1.0, 0.58, 0.22);
+const HERO_BAR_W: f32 = 42.0;
+
 /// A hero portrait of the player's side.
 #[derive(Component)]
 pub(crate) struct HeroPortrait(u32);
@@ -292,7 +297,7 @@ pub fn spawn_hud(
             position_type: PositionType::Absolute,
             right: Val::Px(8.0),
             top: Val::Px(4.0),
-            column_gap: Val::Px(5.0),
+            column_gap: Val::Px(8.0),
             ..default()
         },
         GlobalZIndex(60),
@@ -563,13 +568,13 @@ pub(crate) fn heroes(
                     Name::new(format!("hero {name}")),
                     Button,
                     Node {
-                        width: Val::Px(36.0),
-                        height: Val::Px(36.0),
-                        border: UiRect::all(Val::Px(2.0)),
+                        width: Val::Px(46.0),
+                        height: Val::Px(46.0),
+                        border: UiRect::all(Val::Px(3.0)),
                         border_radius: BorderRadius::MAX,
                         ..default()
                     },
-                    BorderColor::all(Color::srgb(0.95, 0.6, 0.3)),
+                    BorderColor::all(HERO_RING_IDLE),
                     BackgroundColor(Color::srgba(0.0, 0.05, 0.1, 0.8)),
                     ChildOf(row),
                 ))
@@ -606,9 +611,9 @@ pub(crate) fn heroes(
                 HeroHealth(*id),
                 Node {
                     position_type: PositionType::Absolute,
-                    left: Val::Px(4.0),
-                    bottom: Val::Px(-5.0),
-                    width: Val::Px(26.0),
+                    left: Val::Px(2.0),
+                    bottom: Val::Px(-6.0),
+                    width: Val::Px(HERO_BAR_W),
                     height: Val::Px(2.0),
                     ..default()
                 },
@@ -622,7 +627,7 @@ pub(crate) fn heroes(
     let t = time.elapsed_secs();
     for (p, interaction, mut border) in &mut portraits {
         let selected = selection.ships.contains(&p.0);
-        *border = BorderColor::all(if selected { Color::WHITE } else { Color::srgb(0.95, 0.6, 0.3) });
+        *border = BorderColor::all(if selected { HERO_RING_SELECTED } else { HERO_RING_IDLE });
         if *interaction == Interaction::Pressed {
             let double = state.last_click.is_some_and(|(id, at)| id == p.0 && t - at < 0.4);
             selection.ships = vec![p.0];
@@ -635,7 +640,7 @@ pub(crate) fn heroes(
     }
     for (h, mut node) in &mut fills {
         if let Some(s) = ships.0.get(&h.0) {
-            node.width = Val::Px(26.0 * s.hull.clamp(0.0, 1.0));
+            node.width = Val::Px(HERO_BAR_W * s.hull.clamp(0.0, 1.0));
         }
     }
 }
