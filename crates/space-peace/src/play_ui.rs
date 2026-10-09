@@ -146,7 +146,7 @@ impl Plugin for PlayUiPlugin {
                     .chain()
                     .run_if(resource_exists::<PlayBridge>.and_then(resource_exists::<SimState>)),
             )
-            .add_systems(Update, (declutter_top, hero_bar, locked_clicks, spawn_planet_panel, update_planet_panel, place_planet_panel, base_layout_click, planet_view_ui, planet_view_bar_tab, objectives_toggle, objectives_window).chain().run_if(resource_exists::<PlayBridge>.and_then(resource_exists::<SimState>)))
+            .add_systems(Update, (declutter_top, hero_bar, locked_clicks, spawn_planet_panel, update_planet_panel, place_planet_panel, base_layout_click, planet_view_ui, planet_view_bar_tab, objectives_toggle, objectives_window, objectives_scroll).chain().run_if(resource_exists::<PlayBridge>.and_then(resource_exists::<SimState>)))
             .add_systems(Update, save_toast)
             .add_systems(Update, auto_resolve_summary.after(battle_dialog_result).run_if(resource_exists::<PlayBridge>.and_then(resource_exists::<SimState>)))
             .add_systems(Update, show_battle_summary.run_if(in_state(AppScreen::Galaxy)).run_if(resource_exists::<crate::battle_play::BattleSummary>))
@@ -2150,8 +2150,8 @@ fn objectives_window(
             .zip(campaign.name.as_deref().zip(campaign.faction.as_deref()))
             .map(|(g, (name, faction))| crate::objectives::load(&g.fs, &g.data, name, faction))
             .unwrap_or_default();
+        win.selected = list.iter().position(|o| o.title == "Welcome Guide").unwrap_or(0);
         win.list = Some(list);
-        win.selected = 0;
     }
     let state = (win.open, win.completed_tab, win.selected);
     if *last == Some(state) {
@@ -2180,33 +2180,43 @@ fn objectives_window(
         ))
         .with_children(|r| {
             r.spawn((Text::new("ACTIVE STORY OBJECTIVES"), font(22.0), TextColor(Color::WHITE), bevy::text::LetterSpacing::Rem(0.08)));
-            r.spawn(Node { column_gap: Val::Px(8.0), ..default() }).with_children(|t| {
+            r.spawn(Node { column_gap: Val::Px(8.0), margin: UiRect::horizontal(Val::Px(12.0)), ..default() }).with_children(|t| {
                 for (label, click, on) in [("ACTIVE", ObjectivesClick::Active, !win.completed_tab), ("COMPLETED", ObjectivesClick::Completed, win.completed_tab)] {
-                    t.spawn((Button, click, Node { width: Val::Percent(33.0), justify_content: JustifyContent::Center, padding: UiRect::vertical(Val::Px(3.0)), ..default() }, BackgroundColor(if on { Color::srgb(0.35, 0.42, 0.62) } else { Color::srgb(0.16, 0.19, 0.26) })))
-                        .with_child((Text::new(label), font(14.0), TextColor(Color::WHITE), bevy::text::LetterSpacing::Rem(0.1)));
+                    t.spawn((Button, click, Node { width: Val::Percent(32.0), justify_content: JustifyContent::Center, padding: UiRect::vertical(Val::Px(3.0)), border: UiRect::top(Val::Px(2.0)), ..default() }, BackgroundColor(if on { Color::srgb(0.58, 0.72, 0.92) } else { Color::srgb(0.38, 0.41, 0.48) }), BorderColor::all(if on { Color::srgb(0.85, 0.93, 1.0) } else { Color::srgb(0.5, 0.53, 0.6) })))
+                        .with_child((Text::new(label), font(14.0), TextColor(Color::srgb(0.02, 0.03, 0.06)), bevy::text::LetterSpacing::Rem(0.1)));
                 }
             });
-            r.spawn((Node { height: Val::Percent(22.0), padding: UiRect::all(Val::Px(4.0)), flex_direction: FlexDirection::Column, overflow: Overflow::clip(), ..default() }, BackgroundColor(Color::BLACK)))
+            r.spawn((Node { height: Val::Percent(22.0), margin: UiRect { left: Val::Px(12.0), right: Val::Px(54.0), ..default() }, padding: UiRect::all(Val::Px(4.0)), flex_direction: FlexDirection::Column, overflow: Overflow::clip(), ..default() }, BackgroundColor(Color::BLACK)))
                 .with_children(|l| {
                     for (i, o) in list.iter().enumerate() {
                         l.spawn((Button, ObjectivesClick::Row(i), Node { padding: UiRect::horizontal(Val::Px(6.0)), ..default() }, BackgroundColor(if i == selected { Color::srgba(0.6, 0.6, 0.65, 0.9) } else { Color::NONE })))
                             .with_child((Text::new(o.title.clone()), font(17.0), TextColor(rgb(o.color))));
                     }
                 });
-            r.spawn((Text::new("INCOMING TRANSMISSION FROM ADVISOR"), font(13.0), TextColor(blue), bevy::text::LetterSpacing::Rem(0.08)));
-            r.spawn((Node { flex_grow: 1.0, min_height: Val::Px(0.0), padding: UiRect::all(Val::Px(10.0)), overflow: Overflow::clip(), ..default() }, BackgroundColor(Color::BLACK)))
-                .with_children(|b| {
-                    if let Some(o) = list.get(selected) {
-                        let mut spans = o.text.iter();
-                        if let Some(first) = spans.next() {
-                            b.spawn((Text::new(first.text.clone()), font(14.0), TextColor(rgb(first.color)))).with_children(|t| {
-                                for s in spans {
-                                    t.spawn((TextSpan::new(s.text.clone()), font(14.0), TextColor(rgb(s.color))));
-                                }
-                            });
+            r.spawn((Text::new("INCOMING TRANSMISSION FROM ADVISOR"), Node { margin: UiRect::left(Val::Px(4.0)), ..default() }, font(13.0), TextColor(blue), bevy::text::LetterSpacing::Rem(0.08)));
+            // Transmission box with its scroll bar (arrows, track and thumb) on the right.
+            r.spawn(Node { flex_grow: 1.0, min_height: Val::Px(0.0), margin: UiRect::horizontal(Val::Px(12.0)), column_gap: Val::Px(2.0), ..default() }).with_children(|row| {
+                row.spawn((ObjectivesScroll, ScrollPosition::default(), Node { flex_grow: 1.0, min_width: Val::Px(0.0), padding: UiRect::all(Val::Px(10.0)), overflow: Overflow::scroll_y(), ..default() }, BackgroundColor(Color::BLACK)))
+                    .with_children(|b| {
+                        if let Some(o) = list.get(selected) {
+                            let mut spans = o.text.iter();
+                            if let Some(first) = spans.next() {
+                                b.spawn((Text::new(first.text.clone()), font(14.0), TextColor(rgb(first.color)))).with_children(|t| {
+                                    for s in spans {
+                                        t.spawn((TextSpan::new(s.text.clone()), font(14.0), TextColor(rgb(s.color))));
+                                    }
+                                });
+                            }
                         }
-                    }
+                    });
+                row.spawn((Node { width: Val::Px(26.0), flex_direction: FlexDirection::Column, align_items: AlignItems::Center, ..default() }, BackgroundColor(Color::srgb(0.01, 0.01, 0.03)), BorderColor::all(Color::srgb(0.25, 0.32, 0.5)))).with_children(|bar| {
+                    bar.spawn((Text::new("\u{25B2}"), font(12.0), TextColor(Color::WHITE)));
+                    bar.spawn(Node { flex_grow: 1.0, width: Val::Percent(100.0), min_height: Val::Px(0.0), ..default() }).with_children(|track| {
+                        track.spawn((ObjectivesThumb, Node { position_type: PositionType::Absolute, left: Val::Px(3.0), right: Val::Px(3.0), top: Val::Px(0.0), height: Val::Px(26.0), border: UiRect::all(Val::Px(1.0)), ..default() }, BackgroundColor(Color::srgb(0.2, 0.34, 0.6)), BorderColor::all(Color::srgb(0.7, 0.82, 1.0))));
+                    });
+                    bar.spawn((Text::new("\u{25BC}"), font(12.0), TextColor(Color::WHITE)));
                 });
+            });
             r.spawn(Node { justify_content: JustifyContent::SpaceBetween, align_items: AlignItems::Center, ..default() }).with_children(|f| {
                 f.spawn((Text::new("HINT: THIS MENU RECALLS MISSION GOALS."), font(14.0), TextColor(blue), bevy::text::LetterSpacing::Rem(0.06)));
                 f.spawn((Button, ObjectivesClick::Close, Node { width: Val::Px(220.0), padding: UiRect::vertical(Val::Px(7.0)), justify_content: JustifyContent::Center, border: UiRect::all(Val::Px(1.0)), ..default() }, BackgroundColor(Color::BLACK), BorderColor::all(Color::srgb(0.6, 0.65, 0.75))))
@@ -2220,5 +2230,38 @@ fn planet_view_bar_tab(pv: Res<crate::planet_view::PlanetViewState>, mut bar: Re
     if pv.active != *was {
         *was = pv.active;
         bar.space_tab = !pv.active;
+    }
+}
+
+/// The scrollable advisor text of the objectives window.
+#[derive(Component)]
+struct ObjectivesScroll;
+/// Thumb of the objectives scroll bar.
+#[derive(Component)]
+struct ObjectivesThumb;
+
+/// Mouse wheel over the objectives window scrolls the transmission; the thumb follows.
+fn objectives_scroll(
+    mut wheel: MessageReader<bevy::input::mouse::MouseWheel>,
+    mut boxes: Query<(&mut ScrollPosition, &ComputedNode), With<ObjectivesScroll>>,
+    mut thumbs: Query<(&mut Node, &ChildOf), With<ObjectivesThumb>>,
+    nodes: Query<&ComputedNode, Without<ObjectivesThumb>>,
+) {
+    let delta: f32 = wheel.read().map(|w| if matches!(w.unit, bevy::input::mouse::MouseScrollUnit::Line) { w.y * 36.0 } else { w.y }).sum();
+    let Ok((mut pos, node)) = boxes.single_mut() else { return };
+    let inv = node.inverse_scale_factor();
+    let max = ((node.content_size().y - node.size().y) * inv).max(0.0);
+    if delta != 0.0 {
+        pos.y = (pos.y - delta).clamp(0.0, max);
+    }
+    for (mut t, parent) in &mut thumbs {
+        let Ok(track) = nodes.get(parent.parent()) else { continue };
+        let track_h = track.size().y * track.inverse_scale_factor();
+        let view = node.size().y * inv;
+        let total = (node.content_size().y * inv).max(1.0);
+        let thumb = (track_h * (view / total)).clamp(22.0, track_h.max(22.0));
+        let top = if max > 0.0 { (track_h - thumb) * (pos.y / max) } else { 0.0 };
+        t.height = Val::Px(thumb);
+        t.top = Val::Px(top);
     }
 }

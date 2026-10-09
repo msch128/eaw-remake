@@ -646,7 +646,7 @@ pub fn spawn_battle_banner(world: &mut World, spec: &BattleBannerSpec) -> Option
             ChildOf(root),
         ))
         .with_children(|p| {
-            p.spawn((Text::new(spec.title.clone()), font(19.0), TextColor(Color::srgb(0.95, 0.97, 1.0)), bevy::text::LetterSpacing::Rem(0.1), FocusPolicy::Pass));
+            p.spawn((Text::new(spec.title.clone()), font(14.0), TextColor(Color::srgb(0.95, 0.97, 1.0)), bevy::text::LetterSpacing::Rem(0.08), FocusPolicy::Pass));
         });
     // Disc centres sit on the button row, either side of the centre column.
     let row_y = height - 35.0;
@@ -681,7 +681,7 @@ pub fn spawn_battle_banner(world: &mut World, spec: &BattleBannerSpec) -> Option
             image(world, t, Vec2::new(42.0, 52.5), Vec2::new(cx, row_y + 2.0), side.tint);
         }
         if let Some(t) = &discs.1 {
-            image(world, t, Vec2::splat(34.0), Vec2::new(cx, row_y - 9.0), Color::WHITE);
+            image(world, t, Vec2::splat(30.0), Vec2::new(cx, row_y - 3.0), Color::WHITE);
         }
     }
     Some(root)

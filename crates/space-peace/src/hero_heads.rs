@@ -52,17 +52,19 @@ fn update_hero_heads(
     textures: Option<ResMut<eaw_ui::textures::UiTextures>>,
     cameras: Query<&GlobalTransform, With<Camera3d>>,
     mut roots: Query<&mut Transform, With<HeroRoot>>,
+    fleet_entities: Res<galaxy_play::FleetEntities>,
+    fleet_tf: Query<&Transform, (With<galaxy_play::FleetVisual>, Without<HeroRoot>)>,
 ) {
     let mut textures = textures;
     let cam_rot = cameras.iter().next().map(|c| c.rotation());
     let g = state.galaxy();
     let fake = std::env::var_os("SP_HERO_FAKE").is_some();
     let mut alive: Vec<(u32, u32)> = Vec::new();
-    let mut per_planet: HashMap<u32, usize> = HashMap::new();
+    let cam_right = cam_rot.map_or(Vec3::X, |r| r * Vec3::X);
     for f in g.fleets.values().filter(|f| fog.fleet(f.id) == galaxy_sim::Sight::Detailed) {
         let Some(p) = f.planet() else { continue };
-        let n_here = per_planet.entry(p).or_insert(0usize);
-        let base = layout.positions[p as usize];
+        // Heroes stand left and right of the fleet itself (its slot above the planet).
+        let base = fleet_entities.0.get(&f.id).and_then(|&e| fleet_tf.get(e).ok()).map_or(layout.positions[p as usize], |t| t.translation);
         let heroes: Vec<u32> = f
             .units
             .iter()
@@ -73,15 +75,9 @@ fn update_hero_heads(
         for (k, &u) in heroes.iter().enumerate() {
             let key = (f.id, u);
             alive.push(key);
-            // Left and right of the fleet base, further out for more heroes.
-            let side = if k % 2 == 0 { 1.0 } else { -1.0 };
-            let _ = (side, k);
-            // Heroes stand right of the fleet slots above the planet, then on the left, lower each time.
-            let slot = *n_here;
-            *n_here += 1;
-            let a = if slot.is_multiple_of(2) { -1.45 + 0.3 * (slot / 2) as f32 } else { -1.7 - 0.3 * (slot / 2) as f32 - 0.4 };
-            let r = layout.orbit_radius(p) * 1.05;
-            let pos = base + Vec3::new(a.cos() * r, layout.unit * if filters.heroes { 1.1 } else { 0.25 }, a.sin() * r);
+            let side = if k % 2 == 0 { -1.0 } else { 1.0 };
+            let off = layout.unit * (0.62 + 0.5 * (k / 2) as f32);
+            let pos = base + cam_right * side * off + Vec3::Y * layout.unit * if filters.heroes { 0.0 } else { -0.15 };
             if let Some(&root) = heads.0.get(&key) {
                 if let Ok(mut t) = roots.get_mut(root) {
                     t.translation = pos;
@@ -98,31 +94,31 @@ fn update_hero_heads(
                 .spawn((Name::new("hero"), HeroRoot, Transform::from_translation(pos), Visibility::default()))
                 .id();
             commands.spawn((
-                Mesh3d(meshes.add(Circle::new(1.0).mesh().resolution(48))),
+                Mesh3d(meshes.add(Annulus::new(0.01, 0.92).mesh().resolution(48))),
                 MeshMaterial3d(mats.add(StandardMaterial {
-                    base_color: Color::LinearRgba(LinearRgba::new(lin.red * 0.03, lin.green * 0.06, lin.blue * 0.03, 0.92)),
+                    base_color: Color::srgb(0.0, 0.035, 0.01),
                     unlit: true,
-                    depth_bias: 400.0,
-                    alpha_mode: AlphaMode::Blend,
+                    depth_bias: 401.0,
+                    alpha_mode: AlphaMode::Opaque,
                     cull_mode: None,
                     ..default()
                 })),
                 Transform::from_xyz(0.0, -layout.unit * 0.12, 0.0)
                     .with_rotation(Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2))
-                    .with_scale(Vec3::splat(layout.unit * 0.55)),
+                    .with_scale(Vec3::splat(layout.unit * 0.3)),
                 ChildOf(root),
             ));
             // Bright rim around the dark disc.
             commands.spawn((
                 Mesh3d(meshes.add(Annulus::new(0.9, 1.0).mesh().resolution(48))),
-                MeshMaterial3d(mats.add(StandardMaterial { base_color: col, emissive: lin * 2.0, unlit: true, depth_bias: 401.0, cull_mode: None, ..default() })),
+                MeshMaterial3d(mats.add(StandardMaterial { base_color: col, emissive: lin * 2.0, unlit: true, depth_bias: 402.0, cull_mode: None, ..default() })),
                 Transform::from_xyz(0.0, -layout.unit * 0.11, 0.0)
                     .with_rotation(Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2))
-                    .with_scale(Vec3::splat(layout.unit * 0.55)),
+                    .with_scale(Vec3::splat(layout.unit * 0.3)),
                 ChildOf(root),
             ));
             // Upright cut-out portrait standing on the disc, facing the camera.
-            let h = layout.unit * 0.8;
+            let h = layout.unit * 0.5;
             commands.spawn((
                 Mesh3d(meshes.add(Rectangle::new(h, h))),
                 MeshMaterial3d(mats.add(StandardMaterial {
@@ -132,7 +128,7 @@ fn update_hero_heads(
                     cull_mode: None,
                     ..default()
                 })),
-                Transform::from_xyz(0.0, h * 0.5, 0.0).with_rotation(cam_rot.unwrap_or(Quat::IDENTITY)),
+                Transform::from_xyz(0.0, h * 0.42, 0.0).with_rotation(cam_rot.unwrap_or(Quat::IDENTITY)),
                 ChildOf(root),
                 HeroModel,
             ));
@@ -167,3 +163,4 @@ fn hide_in_planet_view(state: Res<crate::planet_view::PlanetViewState>, mut q: Q
         }
     }
 }
+

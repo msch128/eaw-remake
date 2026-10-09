@@ -890,6 +890,12 @@ impl Builder<'_> {
             // Labels of the battle banner buttons come from `PanelData::texts`.
             let color = def.text_color.map_or(Color::WHITE, rgba);
             let l = self.text_layer(button, size, def, "", Vec2::ZERO, color);
+            // The original's banner labels are large (about 60% of the button height).
+            if let Some(mut font) = self.world.entity_mut(l).get_mut::<TextFont>()
+                && let FontSize::Px(px) = font.font_size
+            {
+                font.font_size = FontSize::Px(px * 1.55);
+            }
             self.world.entity_mut(l).insert(PanelText(lname.clone()));
         }
         if matches!(lname.as_str(), "b_retreat" | "b_reinforcement") {
@@ -1167,7 +1173,11 @@ pub(crate) fn slots(
                 (
                     q.icon.clone(),
                     q.progress,
-                    if q.count > 1 { q.count.to_string() } else { String::new() },
+                    // Like the Remake: the production percentage under the icon (the count of a stack in front).
+                    {
+                        let pct = format!("{}%", (q.progress.clamp(0.0, 1.0) * 100.0).floor() as u32);
+                        if q.count > 1 { format!("{}x {pct}", q.count) } else { pct }
+                    },
                     false,
                     false,
                 )

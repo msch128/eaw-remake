@@ -96,8 +96,8 @@ pub struct MapFilters {
 
 impl Default for MapFilters {
     fn default() -> Self {
-        // Credits were always shown; the others start off.
-        Self { credits: true, base_level: false, weather: false, heroes: false }
+        // All filters start off like in the Remake frames (no "+income" next to the planet names until the credit filter is on).
+        Self { credits: false, base_level: false, weather: false, heroes: false }
     }
 }
 
@@ -109,13 +109,18 @@ enum FilterSpan {
 }
 
 /// Shows or hides the filtered parts of the planet labels (spans are made transparent).
-fn apply_filter_spans(filters: Res<MapFilters>, mut spans: Query<(&FilterSpan, &mut TextColor)>) {
-    for (kind, mut color) in &mut spans {
+fn apply_filter_spans(filters: Res<MapFilters>, mut spans: Query<(&FilterSpan, &mut TextColor, &mut TextFont)>) {
+    for (kind, mut color, mut font) in &mut spans {
         let (on, c) = match kind {
             FilterSpan::Credits => (filters.credits, Color::srgb(0.6, 0.85, 1.0)),
             FilterSpan::Ability => (filters.weather, Color::srgb(1.0, 0.85, 0.45)),
         };
         color.set_if_neq(TextColor(if on { c } else { Color::NONE }));
+        // The label's text shadow would still show a transparent span, so hidden spans shrink to nothing.
+        let size = FontSize::Px(if on { 9.0 } else { 0.01 });
+        if font.font_size != size {
+            font.font_size = size;
+        }
     }
 }
 
