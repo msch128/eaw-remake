@@ -147,6 +147,7 @@ impl Plugin for PlayUiPlugin {
                     .run_if(resource_exists::<PlayBridge>.and_then(resource_exists::<SimState>)),
             )
             .add_systems(Update, (declutter_top, hero_bar, locked_clicks, spawn_planet_panel, update_planet_panel, place_planet_panel, base_layout_click, planet_view_ui, planet_view_bar_tab, objectives_toggle, objectives_window).chain().run_if(resource_exists::<PlayBridge>.and_then(resource_exists::<SimState>)))
+            .add_systems(Update, save_toast)
             .add_systems(Update, auto_resolve_summary.after(battle_dialog_result).run_if(resource_exists::<PlayBridge>.and_then(resource_exists::<SimState>)))
             .add_systems(Update, show_battle_summary.run_if(in_state(AppScreen::Galaxy)).run_if(resource_exists::<crate::battle_play::BattleSummary>))
             .add_systems(
@@ -297,6 +298,7 @@ fn feed_bar(
     mut data: ResMut<CommandBarData>,
     mut panel: ResMut<eaw_ui::PanelData>,
     player: Res<PlayerFaction>,
+    mut last_focus: Local<Option<u32>>,
 ) {
     if !model.is_changed() && !bar.is_changed() {
         return;
@@ -315,7 +317,18 @@ fn feed_bar(
         ..default()
     };
     // With only a fleet selected the panel shows the planet it orbits.
-    let focus = selection.planet.or_else(|| selection.fleets.first().and_then(|id| state.galaxy().fleets.get(id)).and_then(|f| f.planet()));
+    let mut focus = selection.planet.or_else(|| selection.fleets.first().and_then(|id| state.galaxy().fleets.get(id)).and_then(|f| f.planet()));
+    // Nothing selected: keep showing the last planet, else the player's richest one (the capital), like the original.
+    if focus.is_some() {
+        *last_focus = focus;
+    } else {
+        focus = (*last_focus).or_else(|| {
+            let me = player.0?;
+            let income = |p: usize| bridge.sim_to_planet[p].and_then(|i| view.planets.get(i)).map_or(0, |pv| pv.income);
+            let capital = (0..state.galaxy().planets.len()).filter(|&p| state.galaxy().planets[p].owner == Some(me)).max_by_key(|&p| income(p))?;
+            u32::try_from(capital).ok()
+        });
+    }
     if let Some(p) = focus {
         next.planet_name = state.world.planets[p as usize].display_name.clone();
         next.planet_owner = state.galaxy().planets[p as usize].owner.map(|o| UiFaction::from_name(&state.world.factions[o as usize].name));
@@ -1069,10 +1082,23 @@ fn skin_panels(
 
 /// A short message under the speed read-out (order confirmations).
 #[derive(Resource, Default)]
-struct Toast(String, f32);
+pub(crate) struct Toast(pub(crate) String, pub(crate) f32);
 /// The toast text.
 #[derive(Component)]
 struct ToastText;
+
+/// "Game saved" confirmation after a save finished (or why it failed).
+fn save_toast(mut events: MessageReader<galaxy_play::PlayEvent>, mut toast: ResMut<Toast>) {
+    for e in events.read() {
+        if let galaxy_play::PlayEvent::SaveFinished { result, .. } = e {
+            toast.0 = match result {
+                Ok(()) => "Game saved".to_owned(),
+                Err(_) => "Could not save the game".to_owned(),
+            };
+            toast.1 = 3.0;
+        }
+    }
+}
 
 fn draw_toast(time: Res<Time>, mut toast: ResMut<Toast>, mut tip: Single<(&mut Text, &mut Visibility), With<ToastText>>) {
     let (text, vis) = &mut *tip;

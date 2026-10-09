@@ -226,6 +226,7 @@ impl Plugin for MenuPlugin {
                     sync_pause_menu
                         .run_if(resource_changed::<Paused>)
                         .run_if(in_state(AppScreen::Galaxy)),
+                    hide_pause_under_slots,
                     button_interaction,
                     apply_clicks,
                     refresh_campaign_menu,
@@ -385,6 +386,16 @@ fn sync_pause_menu(
     }
 }
 
+/// The save/load dialog replaces the pause menu while it is open (no title or Quit showing through).
+fn hide_pause_under_slots(slots: Res<SlotScreen>, mut menus: Query<&mut Node, With<PauseMenu>>) {
+    let display = if slots.0.is_some() { Display::None } else { Display::Flex };
+    for mut n in &mut menus {
+        if n.display != display {
+            n.display = display;
+        }
+    }
+}
+
 /// Builds the UI of `spec` below a full-screen root carrying `marker`.
 ///
 /// This is the single replacement point for a different menu look.
@@ -395,6 +406,8 @@ pub fn spawn_menu(commands: &mut Commands, spec: &MenuSpec, marker: impl Compone
     if title_inside {
         spec.columns[0].heading = std::mem::take(&mut spec.title);
     }
+    // A single-column dialog keeps its footer buttons (Back) inside the frame.
+    let footer_inside = if title_inside { std::mem::take(&mut spec.footer) } else { Vec::new() };
     let spec = &spec;
     let background = if spec.dim_background {
         Color::srgba(0.0, 0.0, 0.03, 0.6)
@@ -442,7 +455,7 @@ pub fn spawn_menu(commands: &mut Commands, spec: &MenuSpec, marker: impl Compone
             })
             .with_children(|row| {
                 for column in &spec.columns {
-                    spawn_column(row, column);
+                    spawn_column(row, column, &footer_inside);
                 }
             });
             if !spec.footer.is_empty() {
@@ -461,7 +474,7 @@ pub fn spawn_menu(commands: &mut Commands, spec: &MenuSpec, marker: impl Compone
         .id()
 }
 
-fn spawn_column(parent: &mut ChildSpawnerCommands, column: &MenuColumn) {
+fn spawn_column(parent: &mut ChildSpawnerCommands, column: &MenuColumn, footer: &[MenuItem]) {
     parent
         .spawn((
             Node {
@@ -495,6 +508,12 @@ fn spawn_column(parent: &mut ChildSpawnerCommands, column: &MenuColumn) {
             for item in &column.items {
                 spawn_button(col, item);
             }
+            for (i, item) in footer.iter().enumerate() {
+                if i == 0 {
+                    col.spawn(Node { height: Val::Px(6.0), ..default() });
+                }
+                spawn_button(col, item);
+            }
         });
 }
 
@@ -505,6 +524,7 @@ fn spawn_button(parent: &mut ChildSpawnerCommands, item: &MenuItem) {
             Button,
             Node {
                 min_width: Val::Px(190.0),
+                align_self: AlignSelf::Stretch,
                 padding: UiRect::axes(Val::Px(14.0), Val::Px(7.0)),
                 border: UiRect::all(Val::Px(1.0)),
                 justify_content: JustifyContent::Center,

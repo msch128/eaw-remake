@@ -233,7 +233,12 @@ pub fn build_campaign(
         })?;
     let (view, notes) = build_view(data, campaign);
     for n in &notes {
-        log.warn(format!("galaxy: {n}"));
+        // Routes to planets outside the campaign (e.g. Allanteen in the Mini/Standard galaxies) are data, not errors.
+        if n.starts_with("trade route") || n.contains("trade routes skipped") {
+            log.info(format!("galaxy: {n}"));
+        } else {
+            log.warn(format!("galaxy: {n}"));
+        }
     }
     let mut counts = vec![0usize; view.factions.len()];
     for p in &view.planets {

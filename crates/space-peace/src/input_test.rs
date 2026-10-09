@@ -80,7 +80,7 @@ fn drive(
     dialog: Option<Res<BattleDialogState>>,
     paused: Res<Paused>,
     slots: Res<SlotScreen>,
-    options: Res<OptionsOpen>,
+    (options, toast): (Res<OptionsOpen>, Res<crate::play_ui::Toast>),
     (filters, bar, frames): (Res<crate::galaxy_map::MapFilters>, Res<crate::play_ui::BarState>, Res<bevy::diagnostic::FrameCount>),
     sim: Option<Res<galaxy_play::SimState>>,
     banner: Query<(&EawButton, &ComputedNode, &UiGlobalTransform, &InheritedVisibility)>,
@@ -219,7 +219,8 @@ fn drive(
         // 5: back out of the slot list with its Back button.
         4 => {
             if slots.0.is_none() {
-                finish(&mut st, "slot-list-closes-after-save", true);
+                let ok = toast.0 == "Game saved";
+                finish(&mut st, "slot-list-closes-and-toasts-saved", ok);
             } else {
                 let target = menu_button(&menu, &MenuAction::CloseSlots);
                 act = click(&mut st, target);
