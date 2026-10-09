@@ -430,6 +430,7 @@ impl Plugin for BattleViewPlugin {
             .init_resource::<effects::BoltPools>()
             .init_resource::<audio::BattleAudioStats>()
             .add_message::<control::OrderIssued>()
+            .add_message::<control::HardpointOrderIssued>()
             .add_message::<BattleFinished>();
         // Sound requests need a message queue even when no audio plugin consumes them.
         if !app.world().contains_resource::<Messages<PlaySfx>>() {

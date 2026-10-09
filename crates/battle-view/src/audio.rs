@@ -79,6 +79,7 @@ pub fn battle_audio(
     sel: Res<Selection>,
     audio: Option<Res<AlamoAudio>>,
     mut orders: MessageReader<OrderIssued>,
+    mut hardpoint_orders: MessageReader<crate::control::HardpointOrderIssued>,
     mut out: MessageWriter<PlaySfx>,
     mut stats: ResMut<BattleAudioStats>,
     mut voice: MessageWriter<alamo_audio::plugin::GalaxyAudio>,
@@ -300,6 +301,18 @@ pub fn battle_audio(
             send(n, None, &mut stats, &mut out);
         }
     }
+    // An attack on one hardpoint: the unit's `SFXEvent_Attack_Hardpoint` line of that hardpoint's type ("Instructions on taking out those laser cannons!"),
+    // instead of its plain attack line.
+    let mut hardpoint_line = false;
+    for o in hardpoint_orders.read() {
+        let (Some(me), Some(target)) = (cur.ship(o.lead), cur.ship(o.target)) else { continue };
+        let ty = visuals.ship(target.def).hardpoints.get(o.hardpoint as usize).map_or("", |h| h.hp_type.as_str());
+        let line = visuals.ship(me.def).sfx.attack_hardpoint_by_type.iter().find(|(t, _)| t == ty).map(|(_, e)| e.as_str());
+        if let Some(n) = line {
+            send(n, None, &mut stats, &mut out);
+            hardpoint_line = true;
+        }
+    }
     for o in orders.read() {
         let Some(s) = cur.ship(o.lead) else { continue };
         let v = &visuals.ship(s.def).sfx;
@@ -309,6 +322,7 @@ pub fn battle_audio(
         let name = match o.kind {
             OrderKind::Move if group => v.fleet_move.as_deref().or(v.mv.as_deref()),
             OrderKind::Move => v.mv.as_deref().or(v.fleet_move.as_deref()),
+            OrderKind::Attack if hardpoint_line => None,
             OrderKind::Attack => v.attack.as_deref(),
             OrderKind::Guard => v.guard.as_deref().or(v.stop.as_deref()),
             OrderKind::Stop => v.stop.as_deref(),

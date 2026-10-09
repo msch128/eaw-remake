@@ -465,6 +465,7 @@ pub fn orders(
     hover: Res<Hover>,
     mut markers: ResMut<OrderMarkers>,
     mut issued: MessageWriter<OrderIssued>,
+    mut hardpoint_orders: MessageWriter<HardpointOrderIssued>,
     block: Res<UiBlock>,
     mut armed: ResMut<ArmedOrder>,
     mut recent: ResMut<RecentOrders>,
@@ -529,6 +530,7 @@ pub fn orders(
             // Right click: an enemy of any kind (ship, station, hardpoint) is attacked, open space is a move.
             if let Some((target, hp)) = hover.hardpoint {
                 rt.sim.command(player, Command::AttackHardpoint { ships: mine, target, hardpoint: hp });
+                hardpoint_orders.write(HardpointOrderIssued { lead, target, hardpoint: hp });
                 issued.write(OrderIssued { kind: OrderKind::Attack, lead });
                 mark_enemy(&mut markers, target);
             } else if let Some(target) = enemy_target {
@@ -822,3 +824,14 @@ pub fn overlays(
 
 
 
+
+/// The player ordered an attack on one hardpoint of an enemy ship (answered by the unit's `SFXEvent_Attack_Hardpoint` line of that hardpoint type).
+#[derive(Message, Debug, Clone, Copy)]
+pub struct HardpointOrderIssued {
+    /// First ordered ship.
+    pub lead: u32,
+    /// Targeted enemy ship.
+    pub target: u32,
+    /// Hardpoint index in the target's definition.
+    pub hardpoint: u16,
+}

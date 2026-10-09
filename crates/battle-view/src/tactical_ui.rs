@@ -1014,12 +1014,16 @@ fn hardpoint_clicks(
     settings: Res<BattleViewSettings>,
     sel: Res<Selection>,
     ships: Res<RenderedShips>,
+    mut hardpoint_orders: MessageWriter<control::HardpointOrderIssued>,
 ) {
     for c in clicks.read() {
         let Some((target, hp)) = c.id.split_once(':').and_then(|(a, b)| Some((a.parse::<u32>().ok()?, b.parse::<u16>().ok()?))) else { continue };
         let mine = control::selected_mobile(&rt, &ships, &sel, settings.player_side);
         let enemy = ships.0.get(&target).is_some_and(|s| s.side != settings.player_side);
         if enemy && !mine.is_empty() {
+            if let Some(&lead) = mine.first() {
+                hardpoint_orders.write(control::HardpointOrderIssued { lead, target, hardpoint: hp });
+            }
             rt.command(settings.player_side, Command::AttackHardpoint { ships: mine, target, hardpoint: hp });
         }
     }

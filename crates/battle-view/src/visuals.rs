@@ -37,6 +37,8 @@ pub struct UnitSfx {
     pub hardpoint_destroyed: Option<String>,
     /// Every `SFXEvent_Hardpoint_Destroyed` entry as `(HARD_POINT_TYPE, event)`; `SFX_NA` entries are dropped.
     pub hardpoint_destroyed_by_type: Vec<(String, String)>,
+    /// Every `SFXEvent_Attack_Hardpoint` entry as `(HARD_POINT_TYPE of the target, event)`: the line for an attack on one hardpoint.
+    pub attack_hardpoint_by_type: Vec<(String, String)>,
     /// `SFXEvent_GUI_Unit_Ability_Activated`.
     pub ability: Option<String>,
     /// `SFXEvent_Fire` (fighters, which have no hardpoints).
@@ -154,6 +156,17 @@ impl VisualCatalog {
                 // `Death_SFXEvent_Start_Die` is the common tag (375 unit files); `Death_Explosion_SFXEvent` the older one.
                 death: sfx("death_sfxevent_start_die").or_else(|| sfx("death_explosion_sfxevent")),
                 hardpoint_destroyed: sfx("sfxevent_hardpoint_destroyed"),
+                attack_hardpoint_by_type: r
+                    .as_ref()
+                    .map(|r| {
+                        r.get_all("sfxevent_attack_hardpoint")
+                            .into_iter()
+                            .filter_map(|v| v.split_once(','))
+                            .map(|(t, e)| (t.trim().to_ascii_uppercase(), e.trim().to_string()))
+                            .filter(|(_, e)| !e.is_empty() && !e.eq_ignore_ascii_case("sfx_na"))
+                            .collect()
+                    })
+                    .unwrap_or_default(),
                 hardpoint_destroyed_by_type: r
                     .as_ref()
                     .map(|r| {
