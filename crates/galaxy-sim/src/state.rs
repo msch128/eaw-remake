@@ -229,6 +229,9 @@ pub struct Galaxy {
     pub damage: BTreeMap<ShipId, UnitHealth>,
     /// `(planet, faction)` pairs that already received the planet's capture bonus.
     pub rewarded: std::collections::BTreeSet<(PlanetId, FactionId)>,
+    /// Fleets on an escape move after a lost tactical battle: blockades do not stop them (see [`World::escape_path`]).
+    #[serde(default)]
+    pub escaping: std::collections::BTreeSet<FleetId>,
     pub(crate) next_ship_id: u64,
     pub(crate) next_fleet_id: FleetId,
     pub(crate) next_battle_id: u32,
@@ -531,6 +534,7 @@ impl Galaxy {
             ships: BTreeMap::new(),
             damage: BTreeMap::new(),
             rewarded: Default::default(),
+            escaping: Default::default(),
             next_ship_id: 1,
             next_fleet_id: 1,
             next_battle_id: 1,

@@ -26,11 +26,11 @@ Headless, deterministic, `Send` Galactic Conquest simulation. Rules: `RULES.md`.
   type_id, name, count, fleet, health }`. The request is frozen in the sim until applied/cancelled. `health` is always 1.0 (no persistent damage).
 - `Sim::apply_tactical_result(battle_id, &TacticalResult) -> Result<Vec<Event>, TacticalError>`: `TacticalResult { winner: Option<side index>,
   survived/retreated: [side][group], duration }`. Removes losses, a destroyed star base/structures, emits `UnitsDestroyed/BattleWon/BattleLost/BattleResolved`,
-  makes retreated losers (and every attacker after a draw) fall back to `previous_planet` (a fleet built on the spot goes to a friendly neighbour).
+  makes retreated losers (and every attacker after a draw) fall back along `World::escape_path` (nearest friendly planet, blockades ignored; else the nearest neighbour system).
   Capture is then the normal rule. `Sim::cancel_tactical(id)` drops the frozen request.
 - `run_headless(&request, &catalog, arena)` plays a request without rendering; `resolve_battle_tactical` now uses the same request path.
   Helpers for front ends: `TacticalRequest::{battle_config, battle_setup, result_from}`.
-- Tests: `tests/tactical.rs` (full round trip incl. capture, star base defence, retreat fallback, bad results rejected).
+- Tests: `tests/tactical.rs` (full round trip incl. capture, star base defence, retreat fallback, escape routes, bad results rejected).
 
 ## Persistent damage (new)
 - `Galaxy::damage: BTreeMap<ShipId, UnitHealth>` (hull/shield fractions, absent = undamaged) and `PlanetState::base_health` carry damage between battles. `TacticalGroup::unit_health`

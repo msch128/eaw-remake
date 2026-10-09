@@ -90,8 +90,11 @@ Not implemented: stealth, sensor jamming, and every other ability type.
 * `Command::Reinforce` adds ships at the side's spawn after `reinforce_delay` (5 s = `Skirmish_Reinforcement_Delay_Frames` 150 at 30 fps)
   if `population` of everything in play plus the request is within `unit_cap` (150, the `Space_Tactical_Unit_Cap` value
   of the faction XML). Reinforcement points and the reinforcement zone are not modelled.
-* Retreat becomes available after `Space_Retreat_Allowed_Countdown_Seconds` (60 s). Retreating ships fly away from the centre and
-  leave the battle area; they count as survivors. `Space_Retreat_Attrition_Factor` is 0 in the data.
+* Retreat becomes available after `Space_Retreat_Allowed_Countdown_Seconds` (60 s, data) and is blocked by enemy interdictors. `Space_Retreat_Attrition_Factor` is 0 in the data.
+  On the order (player or AI) every mobile unit turns towards its own spawn point and heads there; stations stay. A jump timer `BattleConfig::retreat_jump_seconds`
+  (default 10 s, **estimate**: the user said 10 or 20 s and the data has no value; `Battle::retreat_jump_in(side)` gives the countdown) runs. At zero every living
+  unit with at least one living `HpKind::Engine` hardpoint (ships without engine hardpoints count as having drives) escapes and counts as retreated survivor; the others are lost.
+  Units spawned in the battle do not escape on their own: a carrier's launched squadrons escape only if the carrier does, squadrons called in as reinforcements are lost.
 * A side loses when it has no ship other than fighters/bombers left (a fighter-only side loses when its fighters are gone).
   The loser's remaining fighters are destroyed with it. Battles are a draw after `max_time` (60 min: the data has no battle time limit, this only guards headless runs). Mobile ships climb or sink towards their target's height at half top speed (flight is otherwise planar, and launch-bay or spawn height offsets used to keep ships out of weapon range for ever).
 * Arena: `BattleConfig::arena` (`Arena::load(data, fs, "<map>.ted")` via the `alamo-map` crate) gives the playable bounds,

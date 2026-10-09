@@ -32,6 +32,9 @@ pub struct BattleConfig {
     pub max_time: f32,
     /// Seconds before retreat becomes possible (`Space_Retreat_Allowed_Countdown_Seconds`).
     pub retreat_countdown: f32,
+    /// Seconds between a retreat order and the jump to hyperspace: ships turn to their spawn side and fly there meanwhile; when it runs out, units with a living drive
+    /// escape. **Estimate** (the user named 10 or 20 s; the data has no value).
+    pub retreat_jump_seconds: f32,
     /// Seconds between target scans per ship.
     pub retarget_interval: f32,
     /// Population cap per side for reinforcements (`Space_Tactical_Unit_Cap`).
@@ -82,6 +85,7 @@ impl Default for BattleConfig {
             record_events: true,
             max_time: 3600.0,
             retreat_countdown: 60.0,
+            retreat_jump_seconds: 10.0,
             retarget_interval: 0.4,
             unit_cap: 150,
             reinforce_delay: 5.0,
@@ -371,6 +375,13 @@ pub enum Event {
         /// New ships.
         ships: Vec<u32>,
     },
+    /// A side ordered the retreat; its units jump to hyperspace after `jump_in` seconds.
+    RetreatOrdered {
+        /// Side.
+        side: u8,
+        /// Seconds until the jump.
+        jump_in: f32,
+    },
     /// A ship left the battlefield.
     ShipRetreated {
         /// Ship.
@@ -645,6 +656,8 @@ pub struct Battle {
     /// Events caused by commands; they are reported with the next step (a step starts with a clean event list).
     pub(crate) cmd_events: Vec<Event>,
     pub(crate) retreat_ordered: Vec<bool>,
+    /// Per side: battle time at which the retreat jump happens (`None` = no retreat ordered).
+    pub(crate) retreat_jump_at: Vec<Option<f32>>,
     pub(crate) grid_cells: Vec<Vec<u32>>,
     /// Areas revealed to a side for a while: `(side, centre, radius, until)`.
     pub(crate) reveals: Vec<(u8, Vec3, f32, f32)>,

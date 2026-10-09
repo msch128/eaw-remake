@@ -184,6 +184,7 @@ impl Battle {
             catalog,
             cmd_events: Vec::new(),
             retreat_ordered: vec![false; sides.len()],
+            retreat_jump_at: vec![None; sides.len()],
             reveals: Vec::new(),
             zones: Vec::new(),
             lasers: Vec::new(),
@@ -776,7 +777,14 @@ impl Battle {
                 if interdicted {
                     return Err(CommandError::RetreatBlocked);
                 }
+                if self.retreat_jump_at[side as usize].is_some() {
+                    return Ok(());
+                }
                 self.retreat_ordered[side as usize] = true;
+                self.retreat_jump_at[side as usize] = Some(self.time + self.config.retreat_jump_seconds.max(0.0));
+                if self.config.record_events {
+                    self.cmd_events.push(Event::RetreatOrdered { side, jump_in: self.config.retreat_jump_seconds });
+                }
                 for s in self.ships.iter_mut().filter(|s| s.side == side && s.alive && !self.catalog.ship(s.def).is_static) {
                     s.order = Order::Retreat;
                 }
@@ -884,6 +892,7 @@ impl Battle {
         self.tick += 1;
         self.time += dt;
         self.spawn_reinforcements();
+        self.retreat_jumps();
 
         let cat = self.catalog.clone();
         let cfg = self.config.clone();
@@ -932,7 +941,6 @@ impl Battle {
 
         // Target scans, movement.
         let tick = self.tick;
-        let half = cfg.half_size;
         let spawn = self.spawn_pos.clone();
         let arena = cfg.arena.clone();
         let obstacles: &[crate::arena::Obstacle] = arena.as_ref().map_or(&[], |a| a.obstacles.as_slice());
@@ -1044,7 +1052,7 @@ impl Battle {
         }
 
         self.grid_cells = grid.cells;
-        self.upkeep(dt, half);
+        self.upkeep(dt);
         self.check_over();
         if self.over && cfg.record_events {
             self.events.push(Event::BattleOver { winner: self.winner });
@@ -1310,6 +1318,58 @@ impl Battle {
         }
     }
 
+    /// Seconds until the retreat jump of `side` (`None` when it has not ordered a retreat or the jump is done). For the countdown on the tactical screen.
+    pub fn retreat_jump_in(&self, side: u8) -> Option<f32> {
+        self.retreat_jump_at.get(side as usize).copied().flatten().map(|t| (t - self.time).max(0.0))
+    }
+
+    /// The retreat jump of every side whose timer ran out: each living mobile unit with at least one living engine hardpoint (or none by design)
+    /// escapes (`retreated`). Units launched by a carrier escape only with a carrier that escapes; squadrons called in as reinforcements, and everything
+    /// that cannot jump (dead drives, stations' fighters), are lost. Stations stay in the battle.
+    fn retreat_jumps(&mut self) {
+        let due: Vec<u8> = (0..self.retreat_jump_at.len() as u8).filter(|&k| self.retreat_jump_at[k as usize].is_some_and(|t| self.time >= t)).collect();
+        for side in due {
+            self.retreat_jump_at[side as usize] = None;
+            let cat = self.catalog.clone();
+            let has_drive = |s: &Ship| {
+                let d = cat.ship(s.def);
+                !d.is_static && s.alive && !s.retreated && {
+                    let engines: Vec<usize> = d.hardpoints.iter().enumerate().filter(|(_, h)| h.kind == HpKind::Engine).map(|(i, _)| i).collect();
+                    engines.is_empty() || engines.iter().any(|&i| s.hps[i].alive)
+                }
+            };
+            let fate: Vec<(u32, bool)> = self
+                .ships
+                .iter()
+                .filter(|s| s.side == side && s.alive && !s.retreated && !cat.ship(s.def).is_static)
+                .map(|s| {
+                    let reinforced_squadron = s.carrier == NONE && s.squad != NONE && self.groups.get(s.group as usize).is_some_and(|g| g.tag == REINFORCE_TAG);
+                    let escapes = if s.carrier != NONE {
+                        has_drive(&self.ships[s.carrier as usize])
+                    } else {
+                        !reinforced_squadron && has_drive(s)
+                    };
+                    (s.id, escapes)
+                })
+                .collect();
+            let record = self.config.record_events;
+            for (id, escapes) in fate {
+                let s = &mut self.ships[id as usize];
+                if escapes {
+                    s.retreated = true;
+                    if record {
+                        self.events.push(Event::ShipRetreated { ship: id });
+                    }
+                } else {
+                    s.alive = false;
+                    if record {
+                        self.events.push(Event::ShipDestroyed { ship: id, pos: s.pos });
+                    }
+                }
+            }
+        }
+    }
+
     /// Strength of a side for the retreat decision: sum of `sqrt((hull + shield) x damage rate)` over its living ships (estimate of the
     /// engine's `FriendlyForceUnnormalized`; the thresholds below come from `Retreat_From_Space`).
     fn side_power(&self, side: u8) -> f32 {
@@ -1353,9 +1413,8 @@ impl Battle {
         }
     }
 
-    fn upkeep(&mut self, dt: f32, half: f32) {
+    fn upkeep(&mut self, dt: f32) {
         let cat = self.catalog.clone();
-        let record = self.config.record_events;
         let tick = self.tick;
         if tick.is_multiple_of(60) {
             self.ai_retreat();
@@ -1413,15 +1472,6 @@ impl Battle {
                     let mult: f32 = def.abilities.iter().zip(&s.abilities).filter(|(_, st)| st.active > 0.0).map(|(a, _)| a.shield_regen_mult).product();
                     s.shield = (s.shield + def.shield_regen / cat.shield_interval * mult * dt).min(def.shield);
                 }
-                if s.pos.x.abs().max(s.pos.y.abs()) > half * 1.15 && matches!(s.order, Order::Retreat) {
-                    s.retreated = true;
-                }
-            }
-            if self.ships[i].retreated {
-                if record {
-                    self.events.push(Event::ShipRetreated { ship: i as u32 });
-                }
-                continue;
             }
             // AI sides use weapon abilities when they have something to shoot at.
             let s = &self.ships[i];
@@ -1951,13 +2001,31 @@ fn mov(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, spawn: &
         Hold,
     }
     let mut face: Option<Vec3> = None;
+    // Members of a squadron fly in formation: the slot is the leader's position plus the data offset (`Squadron_Offsets`) turned with the leader;
+    // the leader's speed is the speed to match.
+    let slot: Option<(Vec3, f32)> = if s.squad != NONE {
+        let l = leaders[s.squad as usize];
+        (l != NONE && l != s.id && snaps[l as usize].alive).then(|| (snaps[l as usize].pos + s.formation.rotate_yaw(snaps[l as usize].yaw), snaps[l as usize].vel.len()))
+    } else {
+        None
+    };
+    // A fighter that only holds a place (formation slot, carrier escort) stops there instead of flying past it for ever.
+    let mut settle = false;
+    let mut follow_speed: Option<f32> = None;
     let goal = match s.order {
         Order::Retreat => {
-            let away = Vec3::new(s.pos.x, s.pos.y, 0.0).normalized();
-            let away = if away.len_sq() < 0.5 { (spawn[s.side as usize]).normalized() } else { away };
-            Goal::Point(s.pos + away * cfg.half_size, 0.0)
+            // Turn round and head for the own spawn side (the jump happens when the timer runs out).
+            Goal::Point(spawn[s.side as usize], def.radius.max(50.0))
         }
-        Order::Move(p) => Goal::Point(p, def.radius.max(50.0)),
+        Order::Move(p) => {
+            if let Some((q, v)) = slot {
+                settle = true;
+                follow_speed = Some(v);
+                Goal::Point(q, 15.0)
+            } else {
+                Goal::Point(p, def.radius.max(50.0))
+            }
+        }
         Order::Attack(_) | Order::AttackMove(_) | Order::Idle if target.is_some() && (aggressive || matches!(s.order, Order::Attack(_))) => {
             let t = target.expect("checked");
             let d = t.pos.dist(s.pos);
@@ -1994,6 +2062,11 @@ fn mov(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, spawn: &
             }
         }
         Order::AttackMove(p) => {
+            if let Some((q, v)) = slot {
+                settle = true;
+                follow_speed = Some(v);
+                Goal::Point(q, 15.0)
+            } else {
             // Advance line abreast: keep the lane offset perpendicular to the line of advance until close to the goal.
             let mut q = p;
             let to = p - s.pos;
@@ -2002,6 +2075,7 @@ fn mov(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, spawn: &
                 q = p + Vec3::new(-to.y, to.x, 0.0) * (s.lane / dist);
             }
             Goal::Point(q, def.radius.max(100.0))
+            }
         }
         Order::Guard(p) => {
             if let Some(t) = target
@@ -2014,10 +2088,10 @@ fn mov(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, spawn: &
         Order::Idle | Order::Attack(_) => {
             // Fighters stay with their squadron leader or carrier.
             if fighter {
-                let leader = if s.squad != NONE { leaders[s.squad as usize] } else { NONE };
-                if leader != NONE && leader != s.id && snaps[leader as usize].alive {
-                    let l = snaps[leader as usize];
-                    Goal::Point(l.pos + s.formation.rotate_yaw(l.yaw), 20.0)
+                settle = true;
+                if let Some((q, v)) = slot {
+                    follow_speed = Some(v);
+                    Goal::Point(q, 15.0)
                 } else if s.carrier != NONE && snaps[s.carrier as usize].alive {
                     Goal::Point(snaps[s.carrier as usize].pos, 700.0)
                 } else {
@@ -2104,7 +2178,11 @@ fn mov(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, spawn: &
             } else if err > 0.5 {
                 want *= 0.7;
             }
-            if dist <= stop + braking * 0.8 && !fighter && aim == p {
+            if let Some(v) = follow_speed {
+                // Formation keeping: match the leader's speed and close the gap at 2 units per second per unit of distance (estimate).
+                want = want.min(v + dist * 2.0);
+            }
+            if dist <= stop + braking * 0.8 && (!fighter || settle) && aim == p {
                 want = 0.0;
             }
             s.speed += (want - s.speed).clamp(-def.accel * dt * 1.5, def.accel * dt);

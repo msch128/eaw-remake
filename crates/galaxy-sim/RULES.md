@@ -65,6 +65,7 @@ Population: units have `Population_Value`; the cap is
   (6.0, estimate) map units per second. Paths minimise travel time (Dijkstra). A fleet that passes a planet holding hostile
   fleets or a hostile star base is stopped there (blockade).
 * `Retreat` sends a fleet back to the planet it came from; a fleet in hyperspace turns around.
+* Escape after a lost tactical battle (retreated losers, attackers after a draw): the fleet flies the fastest path to the nearest friendly (own or allied) planet, passing other planets without a battle, and blockades do not stop it (`Galaxy::escaping`, cleared on arrival or a new move order). With no friendly planet left it takes the cheapest lane to the neighbour system (**estimate** for "the first route"; ties by lane index). `World::escape_path`.
 
 ## 5. Battles
 
@@ -125,7 +126,7 @@ neutral planet whose defense (Lanchester estimate `sqrt(durability x dps)`) it e
 ## 7. Tactical results
 A tactical battle (front end or `run_headless`) reports survivors per group; losses, the star base and structures are applied exactly like the
 statistical result. Units that left the battle by `Retreat` count as survivors and, when their side did not win (or the battle was a draw and they
-attack), their fleets fall back along the lane they came from (estimate: no attrition, `Space_Retreat_Attrition_Factor` is 0 in the data). Damage is
+attack), their fleets escape along the escape route above (estimate: no attrition, `Space_Retreat_Attrition_Factor` is 0 in the data). Damage is
 not carried over between battles (surviving ships are repaired), also an estimate.
 
 ## 8. Difficulty multipliers

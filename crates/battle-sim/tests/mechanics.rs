@@ -886,3 +886,151 @@ fn corrupt_systems_drains_the_shield_of_the_chosen_ship() {
     }
     assert!(b.ships[v as usize].shield > 3500.0, "the drain ended after 10 s and the shield starts to come back: {}", b.ships[v as usize].shield);
 }
+
+// ---- Retreat: turn to the spawn side, jump timer, drives, spawned units ----
+
+fn engine() -> HpDef {
+    HpDef { name: "engine".into(), kind: HpKind::Engine, health: 100.0, destroyable: true, targetable: true, ..HpDef::default() }
+}
+
+fn runner(name: &str, hps: Vec<HpDef>) -> ShipDef {
+    ShipDef { max_speed: 400.0, accel: 4000.0, turn_rate: 3.0, radius: 50.0, ..mobile(name, TargetClass::Frigate, 400.0, 5000.0, hps) }
+}
+
+fn retreat_battle(defs: Vec<ShipDef>, side0: &str, n: u32, jump: f32) -> Battle {
+    let cat = Arc::new(Catalog::from_defs(defs, vec![laser()]));
+    let mut c = cfg();
+    c.retreat_countdown = 0.0;
+    c.retreat_jump_seconds = jump;
+    let sides = vec![one_side(&cat, side0, n, false), one_side(&cat, "idle", 1, true)];
+    Battle::new(BattleSetup { sides, catalog: cat, config: c })
+}
+
+fn idle_target() -> ShipDef {
+    ship("idle", 1.0e6, 0.0, vec![])
+}
+
+#[test]
+fn retreating_ships_turn_towards_their_spawn_side_and_head_there() {
+    let mut b = retreat_battle(vec![runner("runner", vec![]), idle_target()], "runner", 1, 30.0);
+    let home = b.ships[0].pos;
+    // Fly away first, towards the enemy, so that "home" is behind the ship.
+    let enemy = b.ships.iter().find(|s| s.side == 1).unwrap().pos;
+    b.command(0, Command::Move { ships: vec![0], to: enemy }).unwrap();
+    for _ in 0..150 {
+        b.step();
+    }
+    let away = b.ships[0].pos.dist(home);
+    assert!(away > 1000.0, "the ship left its spawn: {away}");
+    b.command(0, Command::Retreat).unwrap();
+    for _ in 0..90 {
+        b.step();
+    }
+    let s = &b.ships[0];
+    let to_home = (home - s.pos).normalized();
+    let heading = Vec3::from_yaw(s.yaw);
+    assert!(heading.x * to_home.x + heading.y * to_home.y > 0.97, "the ship faces its spawn side after the turn");
+    assert!(s.pos.dist(home) < away - 300.0, "and flies back to it: {} -> {}", away, s.pos.dist(home));
+}
+
+#[test]
+fn the_jump_happens_when_the_timer_runs_out_and_not_before() {
+    let mut b = retreat_battle(vec![runner("runner", vec![]), idle_target()], "runner", 2, 10.0);
+    assert_eq!(b.retreat_jump_in(0), None);
+    b.command(0, Command::Retreat).unwrap();
+    assert_eq!(b.command(0, Command::Retreat), Ok(()), "a second order does not restart the timer");
+    assert!((b.retreat_jump_in(0).unwrap() - 10.0).abs() < 0.1);
+    for _ in 0..(9.5 * 30.0) as usize {
+        b.step();
+    }
+    assert!(b.ships.iter().filter(|s| s.side == 0).all(|s| s.alive && !s.retreated), "still on the battlefield before the timer ends");
+    assert!(b.retreat_jump_in(0).unwrap() < 1.0);
+    for _ in 0..30 {
+        b.step();
+    }
+    assert!(b.ships.iter().filter(|s| s.side == 0).all(|s| s.alive && s.retreated), "all escaped at the jump");
+    assert_eq!(b.retreat_jump_in(0), None);
+    assert!(b.is_over());
+    let g = b.result().groups.into_iter().find(|g| g.side == 0).unwrap();
+    assert_eq!((g.total, g.survived, g.retreated), (2, 2, 2));
+}
+
+#[test]
+fn a_ship_without_a_living_engine_is_lost_while_one_without_engine_hardpoints_escapes() {
+    let mut b = retreat_battle(vec![runner("runner", vec![engine(), engine()]), runner("plain", vec![]), idle_target()], "runner", 3, 3.0);
+    b.ships[0].hps[0].alive = false; // one of two engines left: still jumps
+    b.ships[1].hps[0].alive = false;
+    b.ships[1].hps[1].alive = false; // no engine left
+    b.command(0, Command::Retreat).unwrap();
+    for _ in 0..(3.2 * 30.0) as usize {
+        b.step();
+    }
+    assert!(b.ships[0].retreated && b.ships[0].alive, "one living engine is enough");
+    assert!(!b.ships[1].retreated && !b.ships[1].alive, "no living engine: the ship is lost");
+    assert!(b.ships[2].retreated && b.ships[2].alive);
+    let mut p = retreat_battle(vec![runner("plain", vec![]), idle_target()], "plain", 1, 1.0);
+    p.command(0, Command::Retreat).unwrap();
+    for _ in 0..40 {
+        p.step();
+    }
+    assert!(p.ships[0].retreated, "a ship without engine hardpoints counts as having drives");
+}
+
+fn carrier_battle(jump: f32) -> Battle {
+    let mut fighter = ship("fighter", 20.0, 0.0, vec![engine()]);
+    fighter.class = TargetClass::Fighter;
+    fighter.is_static = false;
+    fighter.max_speed = 600.0;
+    fighter.accel = 600.0;
+    fighter.turn_rate = 3.0;
+    fighter.radius = 10.0;
+    let squad = ShipDef { name: "squad".into(), is_squadron: true, members: vec![(0, 2)], class: TargetClass::Fighter, ..ShipDef::default() };
+    let mut carrier = runner("carrier", vec![engine(), HpDef { kind: HpKind::FighterBay, health: 100.0, ..HpDef::default() }]);
+    carrier.carried = vec![(1, 1)];
+    carrier.reserve = vec![(1, 1)];
+    carrier.spawn_delay = 1.0;
+    retreat_battle(vec![fighter, squad, carrier, idle_target()], "carrier", 1, jump)
+}
+
+#[test]
+fn squadrons_spawned_in_the_battle_escape_only_with_their_carrier() {
+    // The carrier escapes: its launched squadron comes along.
+    let mut b = carrier_battle(2.0);
+    let fighters: Vec<usize> = b.ships.iter().filter(|s| s.def == 0).map(|s| s.id as usize).collect();
+    assert_eq!(fighters.len(), 2, "the starting squadron was launched");
+    b.command(0, Command::Retreat).unwrap();
+    for _ in 0..70 {
+        b.step();
+    }
+    let carrier = b.ships.iter().find(|s| s.def == 2).unwrap();
+    assert!(carrier.retreated);
+    assert!(fighters.iter().all(|&f| b.ships[f].alive && b.ships[f].retreated), "squadron escaped with its carrier");
+
+    // The carrier cannot jump (engine destroyed): carrier and squadron are lost.
+    let mut b = carrier_battle(2.0);
+    let c = b.ships.iter().position(|s| s.def == 2).unwrap();
+    b.ships[c].hps[0].alive = false;
+    b.command(0, Command::Retreat).unwrap();
+    for _ in 0..70 {
+        b.step();
+    }
+    assert!(!b.ships[c].alive);
+    assert!(b.ships.iter().filter(|s| s.def == 0).all(|s| !s.alive && !s.retreated), "squadron stays behind and is lost");
+}
+
+#[test]
+fn squadrons_called_in_as_reinforcements_do_not_escape_on_their_own() {
+    let mut b = carrier_battle(8.0);
+    b.command(0, Command::Reinforce { ship: 1, count: 1 }).unwrap();
+    for _ in 0..(6.0 * 30.0) as usize {
+        b.step();
+    }
+    let reinforced: Vec<usize> = b.ships.iter().filter(|s| s.def == 0 && s.carrier == u32::MAX).map(|s| s.id as usize).collect();
+    assert_eq!(reinforced.len(), 2, "the reinforcement squadron arrived");
+    b.command(0, Command::Retreat).unwrap();
+    for _ in 0..(8.5 * 30.0) as usize {
+        b.step();
+    }
+    assert!(b.ships.iter().find(|s| s.def == 2).unwrap().retreated, "the carrier escaped");
+    assert!(reinforced.iter().all(|&f| !b.ships[f].alive && !b.ships[f].retreated), "reinforcement squadrons are lost");
+}

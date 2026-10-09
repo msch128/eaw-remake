@@ -349,3 +349,99 @@ fn a_sides_tech_index_counts_from_zero_at_the_games_start_level() {
     assert_eq!(side_techs(Some(3)).0, 2);
     assert_eq!(side_techs(Some(5)).0, 4);
 }
+
+/// A lost battle at an empty planet: the rebels (3 squadrons) all retreat, the Empire wins. Returns the sim, the rebel fleet and the battle planet.
+fn lost_battle(ctx: &Ctx, pick: impl FnOnce(&Sim) -> PlanetId, prepare: impl FnOnce(&mut Sim)) -> (Sim, FleetId, PlanetId, FactionId) {
+    let mut sim = new_sim(ctx);
+    let w = sim.world().clone();
+    let (empire, rebel) = (w.faction_id("Empire").unwrap(), w.faction_id("Rebel").unwrap());
+    let target = pick(&sim);
+    prepare(&mut sim);
+    let (isd, xw) = (w.unit_id("Star_Destroyer").unwrap(), w.unit_id("X-Wing_Squadron").unwrap());
+    add_fleet(&mut sim, empire, isd, 2, target, target);
+    let rf = add_fleet(&mut sim, rebel, xw, 3, target, neighbour(&w, target));
+    let battle = pending(&mut sim);
+    let req = sim.tactical_setup(battle.id).unwrap();
+    let rs = req.sides.iter().position(|s| s.faction == rebel).unwrap();
+    let mut result = TacticalResult { winner: Some(1 - rs), survived: vec![vec![0]; 2], retreated: vec![vec![0]; 2], duration: 90.0, ..Default::default() };
+    result.survived[1 - rs] = vec![2];
+    result.survived[rs] = vec![2];
+    result.retreated[rs] = vec![2];
+    sim.apply_tactical_result(battle.id, &result).unwrap();
+    (sim, rf, target, rebel)
+}
+
+fn destination(sim: &Sim, fleet: FleetId) -> (PlanetId, Vec<PlanetId>) {
+    match sim.galaxy().fleets[&fleet].location.clone() {
+        FleetLocation::Moving { to, rest, .. } => {
+            let last = rest.last().copied().unwrap_or(to);
+            (last, std::iter::once(to).chain(rest).collect())
+        }
+        FleetLocation::AtPlanet(p) => (p, vec![p]),
+    }
+}
+
+#[test]
+fn escapees_fly_to_the_nearest_friendly_planet_and_blockades_do_not_stop_them() {
+    let Some(ctx) = load() else { return };
+    let (mut sim, rf, target, rebel) = lost_battle(&ctx, empty_planet, |_| {});
+    let w = sim.world().clone();
+    let (dest, path) = destination(&sim, rf);
+    assert_eq!(sim.galaxy().planets[dest as usize].owner, Some(rebel), "the escape goes to a friendly planet");
+    assert!(sim.galaxy().escaping.contains(&rf));
+    // No other friendly planet is nearer (travel time of the fastest path).
+    let time = |p: PlanetId| w.find_path(target, p).map(|path| path.windows(2).map(|e| { let r = &w.routes[w.route_between(e[0], e[1]).unwrap() as usize]; r.length / r.hs_factor }).sum::<f32>()).unwrap_or(f32::MAX);
+    let best = sim.galaxy().owned_planets(rebel).filter(|&p| w.real[p as usize] && p != target).map(&time).fold(f32::MAX, f32::min);
+    assert!((time(dest) - best).abs() < 1e-3, "nearest friendly planet: {} vs {best}", time(dest));
+    // Put an Empire star base on a planet in the middle of the route (if it has one): the escapees still pass it, and nothing stops them on the way.
+    let empire = w.faction_id("Empire").unwrap();
+    let base = w.starbases.iter().position(|b| b.level >= 1).expect("a star base type") as u32;
+    if let Some(&mid) = path.iter().take(path.len().saturating_sub(1)).skip(1).next() {
+        let g = sim.galaxy_mut();
+        g.planets[mid as usize].owner = Some(empire);
+        g.planets[mid as usize].starbase = Some(base);
+    }
+    for _ in 0..4000 {
+        if matches!(sim.galaxy().fleets.get(&rf).map(|f| &f.location), Some(FleetLocation::AtPlanet(_))) {
+            break;
+        }
+        sim.step(5.0);
+    }
+    assert_eq!(sim.galaxy().fleets[&rf].location, FleetLocation::AtPlanet(dest), "no blockade stopped the escape move");
+    assert!(!sim.galaxy().escaping.contains(&rf), "the escape ends on arrival");
+}
+
+#[test]
+fn escapees_without_a_friendly_planet_take_the_nearest_neighbour_system() {
+    let Some(ctx) = load() else { return };
+    let (sim, rf, target, rebel) = lost_battle(&ctx, lane_not_first, |sim| {
+        let g = sim.galaxy_mut();
+        for p in g.planets.iter_mut() {
+            p.owner = None;
+            p.starbase = None;
+            p.structures.clear();
+        }
+    });
+    let w = sim.world().clone();
+    assert_eq!(sim.galaxy().owned_planets(rebel).count(), 0, "the setup leaves no friendly planet");
+    let (dest, path) = destination(&sim, rf);
+    assert_eq!(path.len(), 1, "one lane to the neighbour: {path:?}");
+    let cost = |r: &galaxy_sim::RouteInfo| r.length / r.hs_factor;
+    let lanes: Vec<f32> = w.routes.iter().filter(|r| (r.a == target || r.b == target) && w.real[if r.a == target { r.b } else { r.a } as usize]).map(cost).collect();
+    let used = w.routes[w.route_between(target, dest).unwrap() as usize].clone();
+    assert!(lanes.iter().all(|&c| cost(&used) <= c + 1e-3), "the nearest neighbour system");
+    assert!(sim.galaxy().escaping.contains(&rf));
+}
+
+/// An empty planet whose cheapest lane does not lead to the first lane's neighbour (so "the first route" and "the nearest neighbour" differ).
+fn lane_not_first(sim: &Sim) -> PlanetId {
+    let (w, g) = (sim.world(), sim.galaxy());
+    let cost = |r: u32| w.routes[r as usize].length / w.routes[r as usize].hs_factor;
+    (0..w.planets.len() as u32)
+        .filter(|&p| w.real[p as usize] && g.planets[p as usize].owner.is_none() && g.fleets_at(p).next().is_none())
+        .find(|&p| {
+            let cheapest = w.adjacency[p as usize].iter().filter(|&&(to, _)| w.real[to as usize]).min_by(|a, b| cost(a.1).total_cmp(&cost(b.1)));
+            cheapest.is_some_and(|&(to, r)| to != neighbour(w, p) && cost(r) + 1e-3 < cost(w.route_between(p, neighbour(w, p)).unwrap()))
+        })
+        .expect("a planet whose first lane is not its cheapest")
+}

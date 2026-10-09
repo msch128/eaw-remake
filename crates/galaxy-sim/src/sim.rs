@@ -205,6 +205,7 @@ impl Sim {
                     world.find_path_avoiding(from, to, |p| around && p != to && world.blockades(gal, p, faction))
                 }
                 .ok_or(CommandError::NoPath)?;
+                g.escaping.remove(&fleet);
                 start_move(&world, g, fleet, path);
                 Ok(CommandOk::Done)
             }
@@ -473,7 +474,10 @@ impl Sim {
                     0.0
                 };
                 let owner = f.owner;
-                let blocked = !rest.is_empty() && w.blockades(&self.galaxy, to, owner);
+                let blocked = !rest.is_empty() && !self.galaxy.escaping.contains(&id) && w.blockades(&self.galaxy, to, owner);
+                if rest.is_empty() {
+                    self.galaxy.escaping.remove(&id);
+                }
                 let f = self.galaxy.fleets.get_mut(&id).expect("fleet exists");
                 if rest.is_empty() || blocked {
                     f.location = FleetLocation::AtPlanet(to);
@@ -833,17 +837,10 @@ impl Sim {
             if f.location != FleetLocation::AtPlanet(p) {
                 continue;
             }
-            // Back where it came from; a fleet without a way back (it was built here) goes to a friendly neighbour.
-            let target = if f.previous_planet != p {
-                Some(f.previous_planet)
-            } else {
-                let owner = f.owner;
-                w.routes
-                    .iter()
-                    .filter_map(|r| if r.a == p { Some(r.b) } else if r.b == p { Some(r.a) } else { None })
-                    .find(|&n| self.galaxy.planets[n as usize].owner == Some(owner))
-            };
-            if let Some(path) = target.and_then(|t| w.find_path(p, t)) {
+            // Escape move: straight to the nearest friendly planet (other planets are passed without a battle and blockades do not stop it);
+            // with no friendly planet left, to the nearest neighbour system.
+            if let Some(path) = w.escape_path(&self.galaxy, p, f.owner) {
+                self.galaxy.escaping.insert(fid);
                 start_move(w, &mut self.galaxy, fid, path);
             }
         }
@@ -1045,6 +1042,23 @@ impl World {
             return true;
         }
         galaxy.fleets.values().any(|f| f.location == FleetLocation::AtPlanet(planet) && galaxy.hostile(self, owner, f.owner))
+    }
+
+    /// Escape route of a fleet of `owner` that lost the battle at `from`: the fastest path to the nearest friendly planet (own or allied, not `from`);
+    /// when none is left, to the nearest neighbour system (estimate for "the first route": the cheapest lane, ties by lane index). `None` without a lane.
+    pub fn escape_path(&self, galaxy: &Galaxy, from: PlanetId, owner: FactionId) -> Option<Vec<PlanetId>> {
+        let (dist, prev) = self.shortest_paths(from);
+        let friendly = |p: usize| galaxy.planets[p].owner.is_some_and(|o| o == owner || !galaxy.hostile(self, owner, o));
+        let best = (0..self.planets.len()).filter(|&p| p != from as usize && self.real[p] && dist[p] != u64::MAX && friendly(p)).min_by_key(|&p| (dist[p], p));
+        if let Some(p) = best {
+            return Self::walk_back(&prev, from, p as PlanetId);
+        }
+        let lane = |&&(to, r): &&(PlanetId, u32)| {
+            let route = &self.routes[r as usize];
+            (!self.real[to as usize], (route.length / route.hs_factor * 100.0) as u64, r)
+        };
+        let &(to, _) = self.adjacency[from as usize].iter().min_by_key(lane)?;
+        Some(vec![from, to])
     }
 
     /// Fastest lane path from `from` to `to` (inclusive), by travel time.

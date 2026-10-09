@@ -61,7 +61,9 @@ fn even_fights_do_not_trigger_the_retreat() {
     let cat = Arc::new(Catalog::build(&data, Some(&fs), &["Star_Destroyer", "MC-80_Star_Cruiser"]));
     let (r, _) = run(&cat, vec![side(&cat, "Empire", &[("Star_Destroyer", 3)], &[]), side(&cat, "Rebel", &[("MC-80_Star_Cruiser", 3)], &[])], BattleConfig { seed: 16, ..BattleConfig::default() });
     println!("even fight: winner {:?} after {:.0} s, groups {:?}", r.winner, r.duration, r.groups.iter().map(|g| (g.side, g.survived, g.retreated)).collect::<Vec<_>>());
-    assert!(r.groups.iter().all(|g| g.retreated == 0), "an even fight is fought out");
+    // With the real jump (10 s) a ship that the 2x rule sends away at 1 v 1 does get out, so an even fight may end with that retreat, but only in the endgame.
+    let left: u32 = r.groups.iter().map(|g| g.survived).sum();
+    assert!(left <= 2, "an even fight is fought down to the last ships before anyone pulls out: {:?}", r.groups.iter().map(|g| (g.side, g.survived, g.retreated)).collect::<Vec<_>>());
     assert!(r.winner.is_some());
 }
 

@@ -31,3 +31,8 @@ Deterministic, rayon-parallel space-battle simulation (fixed dt 1/30). Rules and
   defenders with a station do not flee. The ability rules have no dedicated test.
 - Known gaps: strength estimate for the retreat rule is ours; retreat orders at age 120 s often come too late to save slow ships; AI never calls reinforcements; no flank/escort goals.
 - Added bombing runs, fighter intercept near carriers, line-abreast advance with cohesion and a test for the ability rules (RULES.md 9b). Intercept is untested; flank/escort goals, AI reinforcements and stealth remain open.
+
+## Retreat as in EaW (new)
+`Command::Retreat` (player or AI) turns every mobile unit towards its own spawn side and starts the jump timer `BattleConfig::retreat_jump_seconds` (10 s, estimate; `Battle::retreat_jump_in(side)`,
+`Event::RetreatOrdered`). At zero, units with a living engine hardpoint (none by design counts as having one) escape; the rest, launched squadrons of a carrier that does not escape and reinforcement
+squadrons are lost. The old "fly out of the arena" rule is gone. Tests in `tests/mechanics.rs` (retreat_* / squadrons_*).
