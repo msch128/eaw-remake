@@ -2021,8 +2021,9 @@ fn mov(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, spawn: &
             if let Some((q, v)) = slot {
                 settle = true;
                 follow_speed = Some(v);
-                Goal::Point(q, 15.0)
+                Goal::Point(q, 50.0)
             } else {
+                settle = true;
                 Goal::Point(p, def.radius.max(50.0))
             }
         }
@@ -2065,8 +2066,9 @@ fn mov(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, spawn: &
             if let Some((q, v)) = slot {
                 settle = true;
                 follow_speed = Some(v);
-                Goal::Point(q, 15.0)
+                Goal::Point(q, 50.0)
             } else {
+                settle = true;
             // Advance line abreast: keep the lane offset perpendicular to the line of advance until close to the goal.
             let mut q = p;
             let to = p - s.pos;
@@ -2091,7 +2093,7 @@ fn mov(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, spawn: &
                 settle = true;
                 if let Some((q, v)) = slot {
                     follow_speed = Some(v);
-                    Goal::Point(q, 15.0)
+                    Goal::Point(q, 50.0)
                 } else if s.carrier != NONE && snaps[s.carrier as usize].alive {
                     Goal::Point(snaps[s.carrier as usize].pos, 700.0)
                 } else {

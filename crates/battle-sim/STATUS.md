@@ -36,3 +36,8 @@ Deterministic, rayon-parallel space-battle simulation (fixed dt 1/30). Rules and
 `Command::Retreat` (player or AI) turns every mobile unit towards its own spawn side and starts the jump timer `BattleConfig::retreat_jump_seconds` (10 s, estimate; `Battle::retreat_jump_in(side)`,
 `Event::RetreatOrdered`). At zero, units with a living engine hardpoint (none by design counts as having one) escape; the rest, launched squadrons of a carrier that does not escape and reinforcement
 squadrons are lost. The old "fly out of the arena" rule is gone. Tests in `tests/mechanics.rs` (retreat_* / squadrons_*).
+
+## Formations and idle behaviour (new)
+Squadron members follow the slot `leader position + Squadron_Offsets entry (rotated with the leader)` while idle, ordered to move or attack-move (and without a target), matching the leader's speed and closing the gap at 2 speed units per unit of distance (estimate).
+Fighters that only hold a place (slot, carrier escort, move goal) now stop within 50 units (estimate) instead of flying past it for ever (they used to circle: 2500 units/min idle, slot error 200). Idle capitals already held position and facing (0 units/min, 0 degrees).
+`tests/formations.rs` is the navcheck: idle capital path per minute, turn, squadron spread, fighter path, closest hull approach. Open: ships still chase and orbit enemies at standoff range in combat.
