@@ -566,6 +566,15 @@ fn start_battle(
         cam,
         Transform::default(),
     ));
+    if let Some((c, start, end)) = session.scene.fog {
+        // The Alamo shader reads the colour like its own output (linear, after the gamma-space `pow(c, 2.2)`).
+        let lin = |v: f32| v.max(0.0).powf(2.2);
+        ec.insert(bevy::pbr::DistanceFog {
+            color: Color::LinearRgba(LinearRgba::rgb(lin(c[0]), lin(c[1]), lin(c[2]))),
+            falloff: bevy::pbr::FogFalloff::Linear { start, end },
+            ..default()
+        });
+    }
     if settings.bloom {
         ec.insert((
             Hdr,

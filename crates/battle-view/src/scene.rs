@@ -60,6 +60,8 @@ pub struct SpaceScene {
     pub nebula_rotation: [f32; 2],
     /// Placed decorative objects.
     pub props: Vec<SceneProp>,
+    /// Linear distance fog of the map (`.ted` fog chunk): colour (stored gamma values), start and end distance; `None` when the map has it off.
+    pub fog: Option<([f32; 3], f32, f32)>,
 }
 
 impl SpaceScene {
@@ -89,6 +91,7 @@ impl SpaceScene {
             nebula: None,
             nebula_rotation: [0.0; 2],
             props: Vec::new(),
+            fog: None,
         }
     }
 
@@ -190,6 +193,7 @@ impl SpaceScene {
             nebula: name_or(&env.nebula),
             nebula_rotation: env.nebula_rotation_deg,
             props,
+            fog: (env.fog.enabled && env.fog.end > env.fog.start).then_some((env.fog.color, env.fog.start, env.fog.end)),
         }
     }
 }

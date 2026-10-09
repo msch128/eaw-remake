@@ -141,6 +141,22 @@ fn toksvig_variance(rgb: vec3<f32>) -> f32 {
     return (1.0 - len) / len;
 }
 
+// Map distance fog (the `.ted` fog chunk, camera `DistanceFog`, linear mode) for opaque lit surfaces. The sky never fogs, additive
+// glows and shields stay unfogged. The fog colour arrives as linear (already `pow(c, 2.2)`), like the output of `shade`.
+fn apply_map_fog(color: vec4<f32>, world_pos: vec3<f32>) -> vec4<f32> {
+#ifdef DISTANCE_FOG
+    if bevy_pbr::mesh_view_bindings::fog.mode != 1u || (mat.kind != KIND_LIT && mat.kind != KIND_PLANET && mat.kind != KIND_ALPHA) {
+        return color;
+    }
+    let d = distance(view.world_position, world_pos);
+    let fg = bevy_pbr::mesh_view_bindings::fog;
+    let f = clamp((d - fg.be.x) / max(fg.be.y - fg.be.x, 1.0), 0.0, 1.0) * fg.base_color.a;
+    return vec4<f32>(mix(color.rgb, fg.base_color.rgb, f), color.a);
+#else
+    return color;
+#endif
+}
+
 #ifdef ALAMO_BACKGROUND
 struct FragOut {
     @location(0) color: vec4<f32>,
@@ -155,7 +171,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) front: bool) -> FragOut {
 #else
 @fragment
 fn fragment(in: VertexOutput, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
-    return shade(in, front);
+    return apply_map_fog(shade(in, front), in.world_position.xyz);
 }
 #endif
 
