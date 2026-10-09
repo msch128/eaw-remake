@@ -277,7 +277,7 @@ pub fn hardpoint_world(rt: &BattleRuntime, s: &ShipRender, hp: usize) -> Vec3 {
     }
     let def = rt.catalog.ship(s.def);
     let off = def.hardpoints[hp].offset.rotate_yaw(s.yaw);
-    s.pos + sim_dir_to_bevy(off) * rt.visuals.ship(s.def).scale
+    s.pos + sim_dir_to_bevy(off)
 }
 
 /// Hover detection, click selection and box selection.
