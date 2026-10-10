@@ -1003,7 +1003,7 @@ fn feed_minimap(
     let half_h = orbit.distance * (fov * 0.5).tan() / orbit.pitch.sin().max(0.3);
     let center = galaxy(orbit.focus);
     let half = Vec2::new(half_h * aspect, half_h);
-    let next = MinimapData { bounds: Some((lo - margin, hi + margin)), planets, units, camera: Some((center - half, center + half)), background: None };
+    let next = MinimapData { bounds: Some((lo - margin, hi + margin)), planets, units, pings: Vec::new(), camera: Some((center - half, center + half)), background: None };
     if *data != next {
         *data = next;
     }

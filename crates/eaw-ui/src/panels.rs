@@ -184,10 +184,23 @@ pub struct MinimapData {
     pub planets: Vec<MinimapDot>,
     /// Units (tactical) or fleets (galactic).
     pub units: Vec<MinimapDot>,
+    /// Active expanding radar pings or scan waves.
+    pub pings: Vec<MinimapPing>,
     /// The camera's view rectangle in world coordinates: `(min, max)`.
     pub camera: Option<(Vec2, Vec2)>,
     /// Fill drawn behind the marks (covers the picture of the bar art, e.g. a tint for a tactical map).
     pub background: Option<Color>,
+}
+
+/// An expanding radar wave ring drawn on the minimap.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MinimapPing {
+    /// Position in minimap world coordinates.
+    pub pos: Vec2,
+    /// Ring radius in world units.
+    pub radius: f32,
+    /// Color and alpha transparency.
+    pub color: Color,
 }
 
 /// Fog of war on the tactical minimap: when `enabled`, the map is drawn dark except inside the `reveal` discs (world position, radius).
@@ -337,6 +350,27 @@ pub(crate) fn minimap_marks(
                     ..default()
                 },
                 BorderColor::all(Color::srgba(1.0, 1.0, 1.0, 0.9)),
+                FocusPolicy::Pass,
+                ChildOf(e),
+            ));
+        }
+        let size = (bounds.1 - bounds.0).max(Vec2::splat(1e-6));
+        for ping in &data.pings {
+            let n = world_to_minimap(bounds, ping.pos);
+            let (rw, rh) = (ping.radius / size.x * 100.0, ping.radius / size.y * 100.0);
+            commands.spawn((
+                MinimapMark,
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: Val::Percent(n.x * 100.0 - rw),
+                    bottom: Val::Percent(n.y * 100.0 - rh),
+                    width: Val::Percent(rw * 2.0),
+                    height: Val::Percent(rh * 2.0),
+                    border: UiRect::all(Val::Px(1.5)),
+                    border_radius: BorderRadius::MAX,
+                    ..default()
+                },
+                BorderColor::all(ping.color),
                 FocusPolicy::Pass,
                 ChildOf(e),
             ));

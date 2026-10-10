@@ -465,6 +465,8 @@ impl Plugin for BattleViewPlugin {
                             effects::update_deflector_waves,
                             effects::draw_engine_trails,
                             effects::draw_hull_damage_effects,
+                            effects::trigger_reveal_ping_effects,
+                            effects::draw_sensor_ping_waves,
                             ships::update_ships,
                             ships::update_arrival_flashes,
                             ships::update_departures,

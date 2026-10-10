@@ -312,10 +312,13 @@ fn sync_minimap(
     mut fog: ResMut<eaw_ui::MinimapFog>,
     sel: Res<Selection>,
     settings: Res<BattleViewSettings>,
+    pings: Query<&crate::effects::TacticalSensorPing>,
     mut since: Local<f32>,
 ) {
     *since += time.delta_secs();
-    if *since < 0.1 && data.bounds.is_some() {
+    let has_pings = !pings.is_empty();
+    let threshold = if has_pings { 0.03 } else { 0.1 };
+    if *since < threshold && data.bounds.is_some() {
         return;
     }
     *since = 0.0;
@@ -351,7 +354,20 @@ fn sync_minimap(
     let center = flip(orbit.focus);
     let half = Vec2::new(half_h * aspect, half_h);
     let planets: Vec<MinimapDot> = rt.minimap_props.iter().map(|(pos, _)| MinimapDot { pos: *pos, color: Color::srgb(0.55, 0.5, 0.45), selected: false }).collect();
-    let next = MinimapData { bounds: Some(bounds), planets, units, camera: Some((center - half, center + half)), background: Some(rt.minimap_tint) };
+    let minimap_pings: Vec<eaw_ui::MinimapPing> = pings
+        .iter()
+        .map(|p| {
+            let t = (p.elapsed / p.duration).clamp(0.0, 1.0);
+            let radius = p.max_radius * (1.0 - (1.0 - t).powi(2));
+            let alpha = (1.0 - t).powi(2) * 0.9;
+            eaw_ui::MinimapPing {
+                pos: Vec2::new(p.pos.x, -p.pos.z),
+                radius,
+                color: p.color.with_alpha(alpha),
+            }
+        })
+        .collect();
+    let next = MinimapData { bounds: Some(bounds), planets, units, pings: minimap_pings, camera: Some((center - half, center + half)), background: Some(rt.minimap_tint) };
     if *data != next {
         *data = next;
     }
@@ -757,6 +773,18 @@ fn ability_at(
     let casters: Vec<u32> = group.iter().copied().filter(|id| cur.ship(*id).is_some_and(|s| s.id == caster.id)).collect();
     if let Some(&id) = casters.first() {
         rt.command(settings.player_side, Command::UseAbilityAt { ship: id, ability: idx as u16, pos });
+        if def.reveal_radius > 0.0 || def.kind.eq_ignore_ascii_case("FOW_REVEAL_PING") {
+            commands.spawn((
+                crate::BattleEntity,
+                crate::effects::TacticalSensorPing {
+                    pos: ground,
+                    max_radius: def.reveal_radius.max(800.0),
+                    duration: 2.5,
+                    elapsed: 0.0,
+                    color: Color::srgb(0.25, 0.85, 1.0),
+                },
+            ));
+        }
     }
     state.pending_ability = None;
     armed.0 = None;

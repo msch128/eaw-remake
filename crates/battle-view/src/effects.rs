@@ -653,6 +653,94 @@ pub fn draw_hull_damage_effects(
     }
 }
 
+/// An expanding radar wave ring produced by a tactical sensor ping or reveal ability.
+#[derive(Component, Debug, Clone)]
+pub struct TacticalSensorPing {
+    /// Center on the tactical 3D plane (y = 0).
+    pub pos: Vec3,
+    /// Maximum wave radius.
+    pub max_radius: f32,
+    /// Total expansion and fade duration in seconds.
+    pub duration: f32,
+    /// Elapsed seconds.
+    pub elapsed: f32,
+    /// Base tint color.
+    pub color: Color,
+}
+
+/// Updates and draws expanding radar rings for active tactical sensor pings.
+pub fn draw_sensor_ping_waves(
+    time: Res<Time>,
+    mut pings: Query<(Entity, &mut TacticalSensorPing)>,
+    mut commands: Commands,
+    mut gizmos: Gizmos,
+) {
+    for (entity, mut ping) in &mut pings {
+        ping.elapsed += time.delta_secs();
+        if ping.elapsed >= ping.duration {
+            commands.entity(entity).try_despawn();
+            continue;
+        }
+        let t = (ping.elapsed / ping.duration).clamp(0.0, 1.0);
+        let radius = ping.max_radius * (1.0 - (1.0 - t).powi(2));
+        let alpha = (1.0 - t).powi(2) * 0.85;
+        let color = ping.color.with_alpha(alpha);
+        let inner_color = ping.color.with_alpha(alpha * 0.45);
+
+        // Draw primary expanding radar ring
+        gizmos.circle(
+            Isometry3d::new(ping.pos, Quat::from_rotation_x(std::f32::consts::FRAC_PI_2)),
+            radius,
+            color,
+        ).resolution(64);
+
+        // Trailing soft inner pulse ring
+        if radius > 15.0 {
+            gizmos.circle(
+                Isometry3d::new(ping.pos, Quat::from_rotation_x(std::f32::consts::FRAC_PI_2)),
+                radius * 0.94,
+                inner_color,
+            ).resolution(64);
+        }
+    }
+}
+
+/// Spawns sensor ping radar effects when reveal abilities are activated.
+pub fn trigger_reveal_ping_effects(
+    rt: Res<BattleRuntime>,
+    mut commands: Commands,
+    mut seen_tick: Local<u64>,
+) {
+    let Some(cur) = rt.cur.as_ref() else { return };
+    if cur.tick <= *seen_tick {
+        return;
+    }
+    *seen_tick = cur.tick;
+    for ev in &cur.events {
+        if let battle_sim::Event::AbilityActivated { ship, ability } = ev {
+            if let Some(s) = cur.ship(*ship) {
+                let def = &rt.catalog.ship(s.def);
+                if let Some(a) = def.abilities.get(*ability as usize) {
+                    if a.reveal_radius > 0.0 || a.kind.eq_ignore_ascii_case("FOW_REVEAL_PING") {
+                        let sim_pos = s.pos;
+                        let world_pos = crate::convert::sim_to_bevy(sim_pos);
+                        commands.spawn((
+                            crate::BattleEntity,
+                            TacticalSensorPing {
+                                pos: world_pos,
+                                max_radius: a.reveal_radius.max(800.0),
+                                duration: 2.5,
+                                elapsed: 0.0,
+                                color: Color::srgb(0.25, 0.85, 1.0),
+                            },
+                        ));
+                    }
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -731,6 +819,23 @@ mod tests {
         assert!(is_big && hull_below < 0.5, "persistent smoke triggers below 50% hull");
         let intensity = (1.0f32 - hull_below * 2.0).clamp(0.2, 1.0);
         assert!(intensity > 0.15, "smoke intensity increases as hull drops");
+    }
+
+    #[test]
+    fn test_sensor_ping_expansion_and_fade() {
+        let ping = TacticalSensorPing {
+            pos: Vec3::ZERO,
+            max_radius: 1200.0,
+            duration: 2.5,
+            elapsed: 0.0,
+            color: Color::srgb(0.25, 0.85, 1.0),
+        };
+        assert_eq!(ping.elapsed, 0.0);
+        let t_half = 1.25 / ping.duration;
+        let r_half = ping.max_radius * (1.0 - (1.0 - t_half).powi(2));
+        assert!(r_half > 0.6 * ping.max_radius, "ease-out expands quickly initially");
+        let alpha_half = (1.0 - t_half).powi(2) * 0.85;
+        assert!(alpha_half < 0.85, "alpha fades over time");
     }
 }
 
