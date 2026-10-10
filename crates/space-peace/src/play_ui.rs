@@ -1139,12 +1139,17 @@ fn collect_move_markers(
     mut toast: ResMut<Toast>,
 ) {
     for a in actions.read() {
-        if let PlayAction::MoveSelected(to) = a
+        let to = match a {
+            PlayAction::MoveSelected(to) => Some(*to),
+            PlayAction::MoveAndMerge { to, .. } => Some(*to),
+            _ => None,
+        };
+        if let Some(to) = to
             && !selection.fleets.is_empty()
         {
             let g = state.galaxy();
             if selection.fleets.iter().any(|id| g.fleets.get(id).is_some_and(|f| player.0 == Some(f.owner))) {
-                markers.0.push((*to, 0.0));
+                markers.0.push((to, 0.0));
             } else {
                 // Foreign fleets can be inspected but not commanded.
                 toast.0 = "Not your fleet - you cannot give it orders".to_owned();

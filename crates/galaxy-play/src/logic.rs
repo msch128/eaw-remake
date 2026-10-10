@@ -17,6 +17,10 @@ pub fn battle_holds_game(state: &SimState) -> bool {
     !state.current.human_battles.is_empty()
 }
 
+/// Tracks fleets ordered to merge into another fleet upon arrival.
+#[derive(Resource, Default, Debug)]
+pub struct PendingFleetMerges(pub std::collections::HashMap<FleetId, FleetId>);
+
 /// Receives snapshots from the worker, publishes events and notifications.
 pub fn pump_snapshots(
     mut state: ResMut<SimState>,
@@ -26,6 +30,7 @@ pub fn pump_snapshots(
     mut notes: ResMut<Notifications>,
     mut out: MessageWriter<PlayEvent>,
     cfg: Res<PlayConfig>,
+    mut pending_merges: Option<ResMut<PendingFleetMerges>>,
 ) {
     let now = time.elapsed_secs_f64();
     notes.expire(now, cfg.notification_seconds);
@@ -64,6 +69,18 @@ pub fn pump_snapshots(
             }
         }
         for ev in &s.events {
+            if let galaxy_sim::Event::FleetArrived { fleet, planet } = ev {
+                if let Some(ref mut pm) = pending_merges {
+                    if let Some(into) = pm.0.remove(fleet) {
+                        if let Some(h) = player.0 {
+                            let into_fleet = s.galaxy.fleets.get(&into);
+                            if into_fleet.is_some_and(|f| f.owner == h && f.planet() == Some(*planet)) {
+                                state.driver.send_command(Command::MergeFleets { faction: h, into, from: *fleet });
+                            }
+                        }
+                    }
+                }
+            }
             if let Some((kind, text, planet)) = describe_event(&state.world, &catalog, &s.galaxy, player.0, ev) {
                 notes.push(kind, text, planet, now);
             }
@@ -111,6 +128,7 @@ pub fn handle_actions(
     player: Res<PlayerFaction>,
     cfg: Res<PlayConfig>,
     time: Res<Time>,
+    mut pending_merges: Option<ResMut<PendingFleetMerges>>,
 ) {
     let now = time.elapsed_secs_f64();
     for action in actions.read() {
@@ -187,6 +205,36 @@ pub fn handle_actions(
                     }
                 }
                 let _ = sent;
+            }
+            PlayAction::MergeFleets { into, from } => {
+                let Some(h) = player.0 else { continue };
+                state.driver.send_command(Command::MergeFleets { faction: h, into: *into, from: *from });
+                selection.fleets.remove(from);
+                selection.fleets.insert(*into);
+            }
+            PlayAction::MoveAndMerge { fleets, into, to } => {
+                let Some(h) = player.0 else { continue };
+                for &fid in fleets {
+                    let Some(f) = state.current.galaxy.fleets.get(&fid).filter(|f| f.owner == h) else { continue };
+                    match f.location {
+                        FleetLocation::AtPlanet(p) if p == *to => {
+                            if fid != *into {
+                                state.driver.send_command(Command::MergeFleets { faction: h, into: *into, from: fid });
+                                selection.fleets.remove(&fid);
+                                selection.fleets.insert(*into);
+                            }
+                        }
+                        FleetLocation::AtPlanet(_) => {
+                            if let Some(ref mut pm) = pending_merges {
+                                pm.0.insert(fid, *into);
+                            }
+                            state.driver.send_command(Command::MoveFleet { faction: h, fleet: fid, to: *to });
+                        }
+                        FleetLocation::Moving { .. } => {
+                            notes.push(NotificationKind::Error, "Fleets in hyperspace cannot be redirected; order a retreat first.".into(), None, now);
+                        }
+                    }
+                }
             }
             PlayAction::MergeSelected => {
                 let Some(h) = player.0 else { continue };

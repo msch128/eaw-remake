@@ -265,9 +265,14 @@ fn cursor_blocked(
     // The planet close-up has its own pointer handling (slots, drag and drop); no map box selection behind it.
     let in_planet_view = planet_view.is_some_and(|v| v.active);
     let in_droid_menu = droid_menu.is_some_and(|d| d.open);
+    let cursor = window.as_ref().and_then(|w| w.cursor_position());
     let phys_cursor = window.as_ref().and_then(|w| w.physical_cursor_position());
-    let over_bar = phys_cursor.is_some_and(|c| bar.iter().any(|(node, tf)| node.contains_point(*tf, c)));
-    let over_cheat = phys_cursor.is_some_and(|c| cheat_panel.iter().any(|(node, tf)| node.contains_point(*tf, c)));
+    let over_bar = bar.iter().any(|(node, tf)| {
+        cursor.is_some_and(|c| node.contains_point(*tf, c)) || phys_cursor.is_some_and(|p| node.contains_point(*tf, p))
+    });
+    let over_cheat = cheat_panel.iter().any(|(node, tf)| {
+        cursor.is_some_and(|c| node.contains_point(*tf, c)) || phys_cursor.is_some_and(|p| node.contains_point(*tf, p))
+    });
     let loading = state.is_some_and(|s| s.current.loading);
     let value = over_bar || over_cheat || in_droid_menu || in_planet_view || loading || paused.0 || *screen.get() != AppScreen::Galaxy;
     if blocked.0 != value {
@@ -636,6 +641,8 @@ fn log_play_flow(
             PlayAction::SelectFleets(f) => info!("play: fleet selection {f:?}"),
             PlayAction::SelectPlanet(p) => info!("play: planet selected {:?}", p.map(name)),
             PlayAction::MoveSelected(to) => info!("play: order - move fleets {:?} to {}", selection.fleets, name(*to)),
+            PlayAction::MoveAndMerge { fleets, into, to } => info!("play: order - move fleets {fleets:?} to {} and merge into {into}", name(*to)),
+            PlayAction::MergeFleets { into, from } => info!("play: order - merge fleet {from} into {into}"),
             PlayAction::RetreatSelected => info!("play: order - retreat fleets {:?}", selection.fleets),
             PlayAction::ResolveBattle { id, choice } => info!("play: battle {id}: player chose {choice:?}"),
             PlayAction::CancelTactical(id) => info!("play: battle {id}: tactical fight abandoned"),

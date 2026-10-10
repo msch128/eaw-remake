@@ -1,4 +1,4 @@
-﻿//! Makes the galactic conquest map playable: runs `galaxy-sim` on a worker thread, shows fleets
+//! Makes the galactic conquest map playable: runs `galaxy-sim` on a worker thread, shows fleets
 //! on the map, handles selection and orders, planet build menus, notifications and battle
 //! prompts.
 //!
@@ -155,6 +155,7 @@ impl Plugin for GalaxyPlayPlugin {
             .init_resource::<input::DragState>()
             .init_resource::<visuals::FleetEntities>()
             .init_resource::<visuals::Fog>()
+            .init_resource::<logic::PendingFleetMerges>()
             .add_message::<PlayAction>()
             .add_message::<PlayEvent>()
             .init_gizmo_group::<visuals::RouteGizmos>()

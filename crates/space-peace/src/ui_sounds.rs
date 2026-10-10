@@ -324,7 +324,7 @@ fn fleet_sounds(
                     sfx.play(n);
                 }
             }
-            PlayAction::MoveSelected(to) => {
+            PlayAction::MoveSelected(to) | PlayAction::MoveAndMerge { to, .. } => {
                 let list: Vec<FleetId> = if st.selected.is_empty() { live.fleets.iter().copied().collect() } else { st.selected.clone() };
                 let g = state.galaxy();
                 let owned = || list.iter().filter_map(|id| g.fleets.get(id)).filter(|f| f.owner == me);
@@ -342,6 +342,9 @@ fn fleet_sounds(
                     sfx.play(DROP_FLEET);
                     order_line(&state, &game, &movable, me, &mut sfx);
                 }
+            }
+            PlayAction::MergeFleets { .. } => {
+                sfx.play(DROP_FLEET);
             }
             PlayAction::RetreatSelected => {
                 let list: Vec<FleetId> = if st.selected.is_empty() { live.fleets.iter().copied().collect() } else { st.selected.clone() };

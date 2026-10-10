@@ -1,4 +1,4 @@
-﻿//! Mouse interaction: click and box selection of fleets, drag-and-drop and right-click orders.
+//! Mouse interaction: click and box selection of fleets, drag-and-drop and right-click orders.
 
 use std::f32::consts::FRAC_PI_2;
 
@@ -110,12 +110,13 @@ pub fn update_hover(
         );
         // The planet under the cursor is always known (also with a fleet icon next to it): orders need it as their target.
         let planet = pick_nearest(
-                cursor,
-                layout.positions.iter().enumerate().filter_map(|(i, &c)| {
-                    let a = camera.world_to_viewport(cam_tf, c).ok()?;
-                    let b = camera.world_to_viewport(cam_tf, c + right * layout.radii[i]).ok()?;
-                    Some((i as PlanetId, a, (a.distance(b) * 1.3).max(14.0)))
-                }),
+            cursor,
+            layout.positions.iter().enumerate().filter_map(|(i, &c)| {
+                let a = camera.world_to_viewport(cam_tf, c).ok()?;
+                let r_world = (layout.radii[i] * 1.6).max(layout.orbit_radius(i as PlanetId) * 1.25);
+                let b = camera.world_to_viewport(cam_tf, c + right * r_world).ok()?;
+                Some((i as PlanetId, a, (a.distance(b) * 1.25).max(36.0)))
+            }),
         );
         Some(PlayHover { fleet, planet })
     })()
@@ -182,27 +183,48 @@ pub fn handle_mouse(
         }
         if drag.dragging {
             match press.fleet.filter(|&f| mine(f)) {
-                Some(_) => {
+                Some(src_fid) => {
                     // Drag-and-drop order: plan the route to the planet under the cursor.
                     drag.box_rect = None;
-                    let target = hover.planet;
+                    let target_fleet = hover.fleet.filter(|&f| f != src_fid);
+                    let target = hover.planet.or_else(|| target_fleet.and_then(|fid| g.fleets.get(&fid)).and_then(|f| f.planet()));
                     model.route_hint = None;
                     drag.preview = None;
                     if let Some(to) = target {
-                        let sel: Vec<FleetId> = selection.fleets.iter().copied().filter(|&f| mine(f)).collect();
-                        let plan = sel.first().and_then(|id| g.fleets.get(id)).and_then(|f| {
-                            let from = f.planet()?;
-                            let h = player.0?;
-                            plan_route(&state.world, g, h, state.world.fleet_speed(f), from, to)
-                        });
-                        if let Some(plan) = plan {
-                            let names: Vec<&str> = plan.path.iter().map(|&p| state.world.planets[p as usize].display_name.as_str()).collect();
-                            let mut hint = format!("{} - ETA {}", names.join(" > "), format_duration(plan.eta_seconds, state.world.config.week_seconds));
-                            if !plan.blockades.is_empty() {
-                                hint.push_str(" - blockade on the way");
+                        let from = g.fleets.get(&src_fid).and_then(|f| f.planet());
+                        let h = player.0;
+                        if let (Some(_dst_fid), true) = (target_fleet, target_fleet.is_some_and(mine)) {
+                            // Target is a friendly fleet -> show merge route hint!
+                            let dst_name = state.world.planets[to as usize].display_name.as_str();
+                            if from == Some(to) {
+                                model.route_hint = Some(format!("Merge into fleet at {}", dst_name));
+                            } else if let (Some(from), Some(h), Some(sf)) = (from, h, g.fleets.get(&src_fid)) {
+                                if let Some(plan) = plan_route(&state.world, g, h, state.world.fleet_speed(sf), from, to) {
+                                    let names: Vec<&str> = plan.path.iter().map(|&p| state.world.planets[p as usize].display_name.as_str()).collect();
+                                    let mut hint = format!("{} > Merge into fleet at {} - ETA {}", names.join(" > "), dst_name, format_duration(plan.eta_seconds, state.world.config.week_seconds));
+                                    if !plan.blockades.is_empty() {
+                                        hint.push_str(" - blockade on the way");
+                                    }
+                                    model.route_hint = Some(hint);
+                                    drag.preview = Some((to, plan));
+                                }
                             }
-                            model.route_hint = Some(hint);
-                            drag.preview = Some((to, plan));
+                        } else {
+                            let sel: Vec<FleetId> = selection.fleets.iter().copied().filter(|&f| mine(f)).collect();
+                            let plan = sel.first().and_then(|id| g.fleets.get(id)).and_then(|f| {
+                                let from = f.planet()?;
+                                let h = player.0?;
+                                plan_route(&state.world, g, h, state.world.fleet_speed(f), from, to)
+                            });
+                            if let Some(plan) = plan {
+                                let names: Vec<&str> = plan.path.iter().map(|&p| state.world.planets[p as usize].display_name.as_str()).collect();
+                                let mut hint = format!("{} - ETA {}", names.join(" > "), format_duration(plan.eta_seconds, state.world.config.week_seconds));
+                                if !plan.blockades.is_empty() {
+                                    hint.push_str(" - blockade on the way");
+                                }
+                                model.route_hint = Some(hint);
+                                drag.preview = Some((to, plan));
+                            }
                         }
                     }
                 }
@@ -237,7 +259,25 @@ pub fn handle_mouse(
                 }
             }
         } else if press.fleet.is_some_and(mine) {
-            if let Some(to) = hover.planet {
+            let src_fid = press.fleet.unwrap();
+            let target_fleet = hover.fleet.filter(|&f| f != src_fid);
+            let target_planet = hover.planet.or_else(|| target_fleet.and_then(|fid| g.fleets.get(&fid)).and_then(|f| f.planet()));
+            if let Some(dst_fid) = target_fleet.filter(|&f| mine(f)) {
+                let from = g.fleets.get(&src_fid).and_then(|f| f.planet());
+                let to = g.fleets.get(&dst_fid).and_then(|f| f.planet());
+                if from.is_some() && from == to {
+                    // Both fleets already at same planet: merge immediately!
+                    actions.write(PlayAction::MergeFleets { into: dst_fid, from: src_fid });
+                } else if let Some(to) = to {
+                    let mut sel: Vec<FleetId> = selection.fleets.iter().copied().filter(|&f| mine(f) && f != dst_fid).collect();
+                    if !sel.contains(&src_fid) {
+                        sel.push(src_fid);
+                    }
+                    actions.write(PlayAction::MoveAndMerge { fleets: sel, into: dst_fid, to });
+                } else if let Some(to) = target_planet {
+                    actions.write(PlayAction::MoveSelected(to));
+                }
+            } else if let Some(to) = target_planet {
                 actions.write(PlayAction::MoveSelected(to));
             }
         } else if let Some((lo, hi)) = rect {
@@ -260,10 +300,12 @@ pub fn handle_mouse(
     if buttons.just_released(MouseButton::Right)
         && let Some(pos) = drag.right.take()
         && pos.distance(cursor) <= DRAG_PIXELS
-        && let Some(to) = hover.planet
         && !selection.fleets.is_empty()
     {
-        actions.write(PlayAction::MoveSelected(to));
+        let target_planet = hover.planet.or_else(|| hover.fleet.and_then(|fid| g.fleets.get(&fid)).and_then(|f| f.planet()));
+        if let Some(to) = target_planet {
+            actions.write(PlayAction::MoveSelected(to));
+        }
     }
 }
 
@@ -291,6 +333,27 @@ pub fn draw_drag(
     {
         let c = layout.positions[p as usize];
         gizmos.circle(Isometry3d::new(c, Quat::from_rotation_x(-FRAC_PI_2)), layout.radii[p as usize] * 1.3, Color::srgb(0.4, 1.0, 0.6));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pick_nearest_selects_planet_within_extended_orbit_radius() {
+        let cursor = Vec2::new(100.0, 100.0);
+        let planets = vec![
+            (0 as PlanetId, Vec2::new(100.0, 125.0), 30.0), // within 30px reach
+            (1 as PlanetId, Vec2::new(300.0, 300.0), 20.0),
+        ];
+        assert_eq!(pick_nearest(cursor, planets.into_iter()), Some(0));
+
+        // Outside reach returns None
+        let far_planets = vec![
+            (0 as PlanetId, Vec2::new(100.0, 150.0), 30.0),
+        ];
+        assert_eq!(pick_nearest(cursor, far_planets.into_iter()), None);
     }
 }
 

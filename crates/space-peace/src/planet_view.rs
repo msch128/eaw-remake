@@ -29,6 +29,10 @@ pub struct PlanetViewState {
     pub ground_slots: Vec<Vec3>,
     /// World positions of the round orbital-building slots left of the platform, one per `Special_Structures_Space`.
     pub orbital_slots: Vec<Vec3>,
+    /// Initial camera position when zoom transition begins.
+    pub start_pos: Option<Vec3>,
+    /// Initial camera rotation when zoom transition begins.
+    pub start_rot: Option<Quat>,
 }
 
 /// Registers the planet view.
@@ -87,7 +91,6 @@ fn view_input(
         }
         if let Some(p) = selection.0.and_then(|i| view.planets.get(i).map(|pl| (i, pl))) {
             let at = crate::galaxy_map::galaxy_to_world(p.1.position);
-            let at = Vec3::new(at.x, 0.0, at.z);
             let offset = cam.focus.distance(at) / cam.distance.max(1e-3);
             let distance = cam.target_distance / bounds.min_distance.max(1e-3);
             if wheel_opens(scroll.delta.y, distance, offset) {
@@ -207,6 +210,8 @@ fn view_scene(
             commands.entity(e).despawn();
         }
         state.planet = None;
+        state.start_pos = None;
+        state.start_rot = None;
         return;
     }
     if !building || alamo.is_none() {
@@ -375,7 +380,7 @@ pub(crate) fn camera_transition_pose(
 }
 
 fn view_camera(
-    state: Res<PlanetViewState>,
+    mut state: ResMut<PlanetViewState>,
     view: Res<GalaxyView>,
     radii: Option<Res<PlanetRadii>>,
     mut cam: Single<&mut Transform, With<GalaxyCamera>>,
@@ -383,21 +388,28 @@ fn view_camera(
     if state.blend <= 0.0 {
         return;
     }
+    if state.active && state.start_pos.is_none() {
+        state.start_pos = Some(cam.translation);
+        state.start_rot = Some(cam.rotation);
+    }
     let overview_pose = Transform::from_translation(ORIGIN + Vec3::new(0.0, 0.0, -1.8))
         .looking_at(ORIGIN + Vec3::new(0.0, -1.95, -10.0), Vec3::Y);
 
     let Some((idx, p)) = state.planet.and_then(|i| view.planets.get(i).map(|p| (i, p))) else {
         let t = state.blend * state.blend * (3.0 - 2.0 * state.blend);
-        cam.translation = cam.translation.lerp(overview_pose.translation, t);
-        cam.rotation = cam.rotation.slerp(overview_pose.rotation, t);
+        let start_pos = state.start_pos.unwrap_or(cam.translation);
+        let start_rot = state.start_rot.unwrap_or(cam.rotation);
+        cam.translation = start_pos.lerp(overview_pose.translation, t);
+        cam.rotation = start_rot.slerp(overview_pose.rotation, t);
         return;
     };
 
-    let w = crate::galaxy_map::galaxy_to_world(p.position);
-    let planet_pos = Vec3::new(w.x, 0.0, w.z);
+    let planet_pos = crate::galaxy_map::galaxy_to_world(p.position);
     let r = radii.as_ref().and_then(|rad| rad.0.get(idx)).copied().unwrap_or(8.0).max(4.0);
 
-    let target = camera_transition_pose(cam.translation, cam.rotation, planet_pos, r, state.blend);
+    let start_pos = state.start_pos.unwrap_or(cam.translation);
+    let start_rot = state.start_rot.unwrap_or(cam.rotation);
+    let target = camera_transition_pose(start_pos, start_rot, planet_pos, r, state.blend);
     cam.translation = target.translation;
     cam.rotation = target.rotation;
 }

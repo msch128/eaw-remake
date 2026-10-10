@@ -1176,11 +1176,14 @@ fn update_hover(
         hover.set_if_neq_none();
         return;
     }
-    if let Some(phys) = window.physical_cursor_position() {
-        if cheat_panel.iter().any(|(n, t)| n.contains_point(*t, phys)) {
-            hover.set_if_neq_none();
-            return;
-        }
+    let log_cur = window.cursor_position();
+    let phys_cur = window.physical_cursor_position();
+    let in_cheat = cheat_panel.iter().any(|(n, t)| {
+        log_cur.is_some_and(|c| n.contains_point(*t, c)) || phys_cur.is_some_and(|p| n.contains_point(*t, p))
+    });
+    if in_cheat {
+        hover.set_if_neq_none();
+        return;
     }
     let Some(cursor) = window.cursor_position() else {
         if args.hover_selected {
@@ -1241,11 +1244,14 @@ fn pick_planet(
         press.take();
         return;
     }
-    if let Some(phys) = window.physical_cursor_position() {
-        if cheat_panel.iter().any(|(n, t)| n.contains_point(*t, phys)) {
-            press.take();
-            return;
-        }
+    let log_cur = window.cursor_position();
+    let phys_cur = window.physical_cursor_position();
+    let in_cheat = cheat_panel.iter().any(|(n, t)| {
+        log_cur.is_some_and(|c| n.contains_point(*t, c)) || phys_cur.is_some_and(|p| n.contains_point(*t, p))
+    });
+    if in_cheat {
+        press.take();
+        return;
     }
     let Some(cursor) = window.cursor_position() else {
         return;

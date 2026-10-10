@@ -1,4 +1,4 @@
-﻿//! Resources, messages and configuration shared by all systems of the plugin.
+//! Resources, messages and configuration shared by all systems of the plugin.
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -254,6 +254,22 @@ pub enum PlayAction {
     },
     /// Send the selected fleets to a planet.
     MoveSelected(PlanetId),
+    /// Send fleets to a destination planet and merge into `into` once arrived.
+    MoveAndMerge {
+        /// Fleets to send.
+        fleets: Vec<FleetId>,
+        /// Destination fleet to merge into.
+        into: FleetId,
+        /// Target planet.
+        to: PlanetId,
+    },
+    /// Merge `from` into `into` immediately (both at the same planet).
+    MergeFleets {
+        /// Surviving fleet.
+        into: FleetId,
+        /// Fleet to merge into `into`.
+        from: FleetId,
+    },
     /// Merge the selected fleets (per planet).
     MergeSelected,
     /// Split the selected fleet in half.
