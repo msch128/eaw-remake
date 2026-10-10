@@ -63,11 +63,27 @@ pub enum GalaxyEvent {
     EnemyHeroDetected,
     /// An enemy reinforcement wave arrived (estimate: `Enemy_Forces` is the closest HUD line).
     EnemyReinforcements,
+    /// A unit started production ("Production started").
+    ProductionStarted,
+    /// A unit production was cancelled ("Production cancelled").
+    ProductionCancelled,
+    /// A structure started construction ("Building under construction").
+    ConstructionStarted,
+    /// A structure construction was cancelled ("Building cancelled").
+    ConstructionCancelled,
+    /// A starbase upgrade started.
+    UpgradeStarted,
+    /// A starbase upgrade was cancelled.
+    UpgradeCancelled,
+    /// A tech upgrade started research.
+    TechUpgradeStarted,
+    /// A tech upgrade was cancelled.
+    TechUpgradeCancelled,
 }
 
 impl GalaxyEvent {
     /// All events, for tests and menus.
-    pub const ALL: [GalaxyEvent; 27] = [
+    pub const ALL: [GalaxyEvent; 35] = [
         Self::UnitBuilt,
         Self::StructureBuilt,
         Self::PlanetCaptured,
@@ -95,6 +111,14 @@ impl GalaxyEvent {
         Self::EnemyFleeing,
         Self::EnemyHeroDetected,
         Self::EnemyReinforcements,
+        Self::ProductionStarted,
+        Self::ProductionCancelled,
+        Self::ConstructionStarted,
+        Self::ConstructionCancelled,
+        Self::UpgradeStarted,
+        Self::UpgradeCancelled,
+        Self::TechUpgradeStarted,
+        Self::TechUpgradeCancelled,
     ];
 
     /// Event-name suffixes after the faction prefix, in order of preference.
@@ -127,6 +151,14 @@ impl GalaxyEvent {
             Self::EnemyFleeing => &["Enemy_Fleeing"],
             Self::EnemyHeroDetected => &["Enemy_Hero_Detected"],
             Self::EnemyReinforcements => &["Enemy_Forces", "Enemy_Sighted"],
+            Self::ProductionStarted => &["Build_Vehicle", "Build_Troops"],
+            Self::ProductionCancelled => &["Unit_Canceled", "Vehicle_Canceled", "Canceled"],
+            Self::ConstructionStarted => &["Build_Structure", "New_Construction"],
+            Self::ConstructionCancelled => &["Building_Canceled", "Canceled"],
+            Self::UpgradeStarted => &["Upgrade_Progress", "Build_Structure"],
+            Self::UpgradeCancelled => &["Upgrade_Canceled", "Building_Canceled"],
+            Self::TechUpgradeStarted => &["Tech_Upgrade_Progress", "Researching"],
+            Self::TechUpgradeCancelled => &["Tech_Upgrade_Canceled", "Research_Canceled"],
         }
     }
 }
@@ -143,10 +175,37 @@ pub fn hud_prefix(faction: &str) -> char {
 /// The SFX event to play for `event` as seen by `faction`: the first candidate that exists and has samples.
 pub fn resolve_galaxy_event(sfx: &SfxLibrary, faction: &str, event: GalaxyEvent) -> Option<String> {
     let prefix = hud_prefix(faction);
-    event.suffixes().iter().find_map(|s| {
+    if let Some(name) = event.suffixes().iter().find_map(|s| {
         let name = format!("{prefix}HD_{s}");
         sfx.get(&name)
             .filter(|e| !e.samples.is_empty())
             .map(|e| e.name.clone())
-    })
+    }) {
+        return Some(name);
+    }
+    if prefix != 'E' {
+        event.suffixes().iter().find_map(|s| {
+            let name = format!("EHD_{s}");
+            sfx.get(&name)
+                .filter(|e| !e.samples.is_empty())
+                .map(|e| e.name.clone())
+        })
+    } else {
+        None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn construction_and_production_suffixes() {
+        assert_eq!(GalaxyEvent::ConstructionStarted.suffixes(), &["Build_Structure", "New_Construction"]);
+        assert_eq!(GalaxyEvent::ConstructionCancelled.suffixes(), &["Building_Canceled", "Canceled"]);
+        assert_eq!(GalaxyEvent::ProductionStarted.suffixes(), &["Build_Vehicle", "Build_Troops"]);
+        assert_eq!(GalaxyEvent::ProductionCancelled.suffixes(), &["Unit_Canceled", "Vehicle_Canceled", "Canceled"]);
+        assert_eq!(GalaxyEvent::UpgradeStarted.suffixes(), &["Upgrade_Progress", "Build_Structure"]);
+        assert_eq!(GalaxyEvent::UpgradeCancelled.suffixes(), &["Upgrade_Canceled", "Building_Canceled"]);
+    }
 }

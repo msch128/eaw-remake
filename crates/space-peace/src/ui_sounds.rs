@@ -215,25 +215,39 @@ fn build_sounds(
     mut events: MessageReader<PlayEvent>,
     mut st: ResMut<GalaxySoundState>,
     state: Option<Res<SimState>>,
+    current: Option<Res<CurrentCampaign>>,
     game: Res<Game>,
     audio: Res<AlamoAudio>,
     time: Res<Time>,
     mut sfx: SfxCommands,
+    mut voice: MessageWriter<GalaxyAudio>,
 ) {
     let now = time.elapsed_secs_f64();
+    let faction = current.as_ref().and_then(|c| c.faction.clone()).unwrap_or_else(|| "Rebel".to_owned());
     for a in actions.read() {
         // A cancelled order: the object's own `SFXEvent_Build_Cancelled` ("Building cancelled", "Production cancelled").
         if let (PlayAction::CancelProduction { planet, lane, index }, Some(state)) = (a, &state) {
             let kind = state.galaxy().planets.get(*planet as usize).and_then(|p| p.queues.get(*lane as usize)).and_then(|q| q.get(*index as usize)).map(|i| i.kind.clone());
-            let object = match kind {
-                Some(ProductionKind::Unit(u)) => state.world.units.get(u as usize).map(|u| u.name.clone()),
-                Some(ProductionKind::Structure(s)) => state.world.structures.get(s as usize).map(|s| s.name.clone()),
-                Some(ProductionKind::Starbase(s)) => state.world.starbases.get(s as usize).map(|s| s.name.clone()),
+            let object = match &kind {
+                Some(ProductionKind::Unit(u)) => state.world.units.get(*u as usize).map(|u| u.name.clone()),
+                Some(ProductionKind::Structure(s)) => state.world.structures.get(*s as usize).map(|s| s.name.clone()),
+                Some(ProductionKind::Starbase(s)) => state.world.starbases.get(*s as usize).map(|s| s.name.clone()),
                 _ => None,
             };
-            if let Some(n) = object.and_then(|o| object_sfx(&game, &o, "sfxevent_build_cancelled")) {
+            if let Some(n) = object.as_ref().and_then(|o| object_sfx(&game, o, "sfxevent_build_cancelled")) {
                 sfx.play(n);
+            } else {
+                match kind {
+                    Some(ProductionKind::Unit(_)) => { voice.write(GalaxyAudio { faction: faction.clone(), event: GalaxyEvent::ProductionCancelled }); }
+                    Some(ProductionKind::Structure(_)) => { voice.write(GalaxyAudio { faction: faction.clone(), event: GalaxyEvent::ConstructionCancelled }); }
+                    Some(ProductionKind::Starbase(_)) => { voice.write(GalaxyAudio { faction: faction.clone(), event: GalaxyEvent::UpgradeCancelled }); }
+                    Some(ProductionKind::Tech(_)) => { voice.write(GalaxyAudio { faction: faction.clone(), event: GalaxyEvent::TechUpgradeCancelled }); }
+                    _ => {}
+                }
             }
+        }
+        if let PlayAction::SellStructure { .. } = a {
+            voice.write(GalaxyAudio { faction: faction.clone(), event: GalaxyEvent::ConstructionCancelled });
         }
         if let PlayAction::Build { planet, target } = a {
             st.pending.push(PendingBuild { at: now, planet: *planet, target: *target });
@@ -253,6 +267,13 @@ fn build_sounds(
     for p in due {
         if let Some(n) = target_object(&state, p.target).and_then(|o| object_sfx(&game, &o, "sfxevent_build_started")) {
             sfx.play(n);
+        } else {
+            match p.target {
+                BuildTarget::Unit(_) => { voice.write(GalaxyAudio { faction: faction.clone(), event: GalaxyEvent::ProductionStarted }); }
+                BuildTarget::Structure(_) => { voice.write(GalaxyAudio { faction: faction.clone(), event: GalaxyEvent::ConstructionStarted }); }
+                BuildTarget::Starbase(_) => { voice.write(GalaxyAudio { faction: faction.clone(), event: GalaxyEvent::UpgradeStarted }); }
+                BuildTarget::Tech(_) => { voice.write(GalaxyAudio { faction: faction.clone(), event: GalaxyEvent::TechUpgradeStarted }); }
+            }
         }
     }
 }
