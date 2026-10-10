@@ -68,8 +68,13 @@ impl BarClass {
     }
 
     /// Whether a build option belongs to this class.
+    /// In EaW Remake, heroes appear under their ship class (e.g. Capitals or Frigates)
+    /// AND always under the Stations / Freighters filter (tab 4).
     fn matches(self, category: galaxy_play::BuildCategory, hero: bool) -> bool {
-        Self::of(category, hero) == self
+        if hero && self == Self::Station {
+            return true;
+        }
+        Self::of(category, false) == self
     }
 }
 
@@ -2207,17 +2212,22 @@ mod tests {
         for o in menu.options.iter().filter(|o| crate::play::on_space_tab(&w, o.target)) {
             let hero = is_hero(&w, o.target);
             let hits: Vec<_> = all.iter().enumerate().filter(|(_, c)| c.matches(o.category, hero)).collect();
-            assert_eq!(hits.len(), 1, "{} ({:?}, hero {hero}) must belong to exactly one filter", o.name, o.category);
-            per_class[hits[0].0] += 1;
             if hero {
                 heroes += 1;
-                assert_eq!(BarClass::of(o.category, hero), BarClass::Station, "hero {} goes with the stations filter", o.name);
+                assert!(BarClass::Station.matches(o.category, hero), "hero {} must match Station filter", o.name);
+                assert!(!hits.is_empty() && hits.len() <= 2, "hero {} should match Station and at most its ship class", o.name);
+            } else {
+                assert_eq!(hits.len(), 1, "{} ({:?}, hero {hero}) must belong to exactly one filter", o.name, o.category);
+            }
+            for (idx, _) in hits {
+                per_class[idx] += 1;
             }
             starbase += usize::from(matches!(o.target, BuildTarget::Starbase(_)));
             tech += usize::from(o.category == BuildCategory::Tech);
         }
-        println!("space menu entries per filter (corvette, frigate, capital, station): {per_class:?}; heroes {heroes}, star base {starbase}, tech {tech}");
-        assert!(heroes > 0 && per_class.iter().all(|&n| n > 0), "the test planet should list entries of every filter and heroes: {per_class:?}");
+        assert!(starbase > 0 || tech > 0 || heroes > 0);
+        assert!(heroes >= 5, "expected multiple heroes (including 30k Hoytt and 40k Zaarin): got {heroes}");
+        assert!(per_class.iter().all(|&n| n > 0), "the test planet should list entries of every filter: {per_class:?}");
         assert_eq!(BarClass::of(BuildCategory::Starbase, false), BarClass::Station);
         assert_eq!(BarClass::of(BuildCategory::Tech, false), BarClass::Station);
         assert_eq!(BarClass::of(BuildCategory::Structures, false), BarClass::Station);

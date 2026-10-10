@@ -176,7 +176,7 @@ fn unit_from_def(def: &SpaceUnitDef, combat: CombatStats) -> UnitType {
         locked: def.build_initially_locked,
         limit_current: def.build_limit_current,
         limit_lifetime: def.build_limit_lifetime,
-        hero: yes("is_named_hero"),
+        hero: yes("is_named_hero") || yes("show_hero_head"),
         prod_mods: production_mods(&def.sub_abilities),
         planet_destroyer: def.sub_abilities.iter().any(|a| a.kind.eq_ignore_ascii_case("planet_destruction_ability")),
         galactic_stealth: def.sub_abilities.iter().any(|a| a.kind.eq_ignore_ascii_case("galactic_stealth_ability")),

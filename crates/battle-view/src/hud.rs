@@ -523,8 +523,11 @@ fn is_hero(game: &alamo_data::GameData, cache: &mut HashMap<String, bool>, name:
     *cache.entry(name.to_string()).or_insert_with(|| {
         game.objects
             .resolve(name)
-            .and_then(|r| r.get("is_named_hero").map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "true" | "yes" | "1")))
-            .unwrap_or(false)
+            .is_some_and(|r| {
+                let is_nh = r.get("is_named_hero").is_some_and(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "true" | "yes" | "1"));
+                let is_sh = r.get("show_hero_head").is_some_and(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "true" | "yes" | "1"));
+                is_nh || is_sh
+            })
     })
 }
 
