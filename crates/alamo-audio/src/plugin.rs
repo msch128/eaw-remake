@@ -1256,12 +1256,17 @@ fn music_system(
         }
         director.queue.clear();
         director.oneshot_done = false;
-        let fade_out = wanted
-            .as_deref()
-            .and_then(|n| audio.music.get(n))
-            .map(|e| e.fade_out_previous)
-            .filter(|f| *f > 0.0)
-            .unwrap_or(settings.default_music_fade);
+        let is_result_stinger = matches!(director.planner.scene(), MusicScene::Result { .. });
+        let fade_out = if is_result_stinger {
+            0.35 // Quick, punchy fade-out of battle music so the victory/defeat fanfare starts promptly
+        } else {
+            wanted
+                .as_deref()
+                .and_then(|n| audio.music.get(n))
+                .map(|e| e.fade_out_previous)
+                .filter(|f| *f > 0.0)
+                .unwrap_or(settings.default_music_fade)
+        };
         for (_, mut t, _) in &mut tracks {
             if !t.outgoing {
                 t.outgoing = true;
@@ -1326,7 +1331,15 @@ fn music_system(
     }
     // The event's own `Fade_In_Seconds` (the previous music fades out over its `Fade_Out_Previous_Seconds`); the
     // floor only avoids a click. Following tracks of a playlist ease in over half a second.
-    let fade_in = if changed { event.fade_in.max(0.05) } else { 0.5 };
+    let fade_in = if changed {
+        if matches!(director.planner.scene(), MusicScene::Result { .. }) {
+            0.05
+        } else {
+            event.fade_in.max(0.05)
+        }
+    } else {
+        0.5
+    };
     while let Some(file) = director.queue.pop() {
         if start_track(
             &mut commands,

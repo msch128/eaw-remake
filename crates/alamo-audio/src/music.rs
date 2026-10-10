@@ -319,8 +319,10 @@ impl MusicPlanner {
                 .or_else(|| named("Tactical_Battle_Loading_Loop_Event_1")),
             MusicScene::Space(f) => if self.in_battle {
                 faction_kind(f, &MusicKind::SpaceBattle)
+                    .or_else(|| faction_kind(f, &MusicKind::SpaceAmbient))
             } else {
                 faction_kind(f, &MusicKind::SpaceAmbient)
+                    .or_else(|| faction_kind(f, &MusicKind::SpaceBattle))
             }
             .map(|e| e.name.clone()),
             MusicScene::Result {
@@ -336,6 +338,22 @@ impl MusicPlanner {
                             win: *win,
                             tactical: *tactical,
                         }
+                })
+                .or_else(|| {
+                    // Fallback to Empire or Rebel stinger if specific faction doesn't have one
+                    lib.iter().find(|e| {
+                        e.kind
+                            == MusicKind::Result {
+                                faction: if *win { "Empire".into() } else { "Rebel".into() },
+                                win: *win,
+                                tactical: *tactical,
+                            }
+                    })
+                })
+                .or_else(|| {
+                    lib.iter().find(|e| {
+                        matches!(&e.kind, MusicKind::Result { win: w, tactical: t, .. } if *w == *win && *t == *tactical)
+                    })
                 })
                 .map(|e| e.name.clone()),
             MusicScene::Event(n) => named(n),
@@ -385,5 +403,50 @@ mod tests {
             MusicKind::TacticalLoop
         );
         assert_eq!(classify("Game_Credits_Music_Event"), MusicKind::Other);
+    }
+
+    #[test]
+    fn planner_intensity_hysteresis_and_stinger_fallback() {
+        let mut planner = MusicPlanner::default();
+        planner.set_scene(MusicScene::Space("Empire".into()));
+        assert!(!planner.in_battle());
+
+        // Above threshold -> in_battle becomes true
+        planner.set_battle_intensity(0.5);
+        planner.step(1.0);
+        assert!(planner.in_battle());
+
+        // Intensity drops below calm_threshold -> requires calm_seconds before switching back
+        planner.set_battle_intensity(0.05);
+        planner.step(10.0);
+        assert!(planner.in_battle(), "Must stay in battle music until calm_seconds elapse");
+        planner.step(16.0);
+        assert!(!planner.in_battle(), "Must return to ambient music after calm_seconds");
+
+        // Stinger fallback test with mock library
+        let mut lib = MusicLibrary::default();
+        let ev = MusicEvent {
+            name: "Empire_Win_Tactical_Event".into(),
+            files: vec!["emp_win.mp3".into()],
+            volume_percent: 100.0,
+            fade_in: 0.1,
+            fade_out_previous: 0.5,
+            looping: false,
+            internal_loop: false,
+            kind: MusicKind::Result {
+                faction: "Empire".into(),
+                win: true,
+                tactical: true,
+            },
+        };
+        lib.events.insert(ev.name.to_ascii_lowercase(), ev);
+
+        // Faction "Hutt" has no custom win tactical stinger, so it should fall back to Empire win
+        planner.set_scene(MusicScene::Result {
+            faction: "Hutt".into(),
+            win: true,
+            tactical: true,
+        });
+        assert_eq!(planner.wanted_event(&lib), Some("Empire_Win_Tactical_Event".into()));
     }
 }
