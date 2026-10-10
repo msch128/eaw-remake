@@ -71,21 +71,48 @@ impl GameFs {
     }
 
     /// Builds the file system for a Forces of Corruption game, optionally with the Workshop mod
-    /// `workshop_id` on top: `[[mod, corruption/Data], [GameData/Data]]`.
+    /// `workshop_id` on top. `workshop_id` may be a single ID, an alias like `"fft"`, comma/space/semicolon-separated
+    /// IDs, or a Steam launch string (e.g. `STEAMMOD=3229239424 STEAMMOD=2794270450 STEAMMOD=1770851727`).
     pub fn for_mod(install: &GameInstall, workshop_id: Option<&str>) -> io::Result<Self> {
-        let mut top = Vec::new();
-        if let Some(id) = workshop_id {
-            let dir = install.mod_data(id);
+        let Some(id) = workshop_id else {
+            return Self::for_mods(install, &[]);
+        };
+        let ids: Vec<&str> = id
+            .split([' ', ',', ';'])
+            .filter_map(|s| {
+                let s = s.trim();
+                if s.is_empty() {
+                    None
+                } else if let Some(rest) = s.strip_prefix("STEAMMOD=") {
+                    Some(rest.trim())
+                } else {
+                    Some(s)
+                }
+            })
+            .collect();
+        Self::for_mods(install, &ids)
+    }
+
+    /// Builds the file system for Forces of Corruption with multiple Workshop mods stacked on top,
+    /// highest priority first: `[[mod0], [mod1], ..., [corruption/Data], [GameData/Data]]`.
+    pub fn for_mods(install: &GameInstall, ids: &[&str]) -> io::Result<Self> {
+        if ids.len() == 1 && ids[0].eq_ignore_ascii_case("fft") {
+            return Self::for_mods(install, &["3229239424", "2794270450", "1770851727"]);
+        }
+        let mut stacks: Vec<Vec<PathBuf>> = Vec::new();
+        for &id in ids {
+            let dir = install.mod_data(id.trim());
             if !dir.is_dir() {
                 return Err(io::Error::new(
                     io::ErrorKind::NotFound,
                     format!("mod data not found: {}", dir.display()),
                 ));
             }
-            top.push(dir);
+            stacks.push(vec![dir]);
         }
-        top.push(install.foc_data.clone());
-        Self::from_stacks(&[top, vec![install.eaw_data.clone()]])
+        stacks.push(vec![install.foc_data.clone()]);
+        stacks.push(vec![install.eaw_data.clone()]);
+        Self::from_stacks(&stacks)
     }
 
     /// Builds from several stacks, highest priority first; each stack lists its roots highest first.

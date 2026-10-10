@@ -1,4 +1,4 @@
-﻿//! Loading of the real game data and mapping it onto the renderer's [`GalaxyView`].
+//! Loading of the real game data and mapping it onto the renderer's [`GalaxyView`].
 
 use std::{sync::Arc, time::Instant};
 
@@ -92,7 +92,16 @@ pub fn open_fs(args: &Args, log: &mut StartupLog) -> Result<(GameInstall, Arc<Ga
         None => GameInstall::detect(),
     }
     .ok_or("no Empire at War install found (use --game-dir <path> or set EAW_GAME_DIR)")?;
-    let mod_id = args.mod_id.as_deref().unwrap_or(DEFAULT_MOD_ID);
+    let mod_id = match args.mod_id.as_deref() {
+        Some(id) => id,
+        None => {
+            if install.mod_data("3229239424").is_dir() && install.mod_data("2794270450").is_dir() {
+                "fft"
+            } else {
+                DEFAULT_MOD_ID
+            }
+        }
+    };
     let fs = GameFs::for_mod(&install, Some(mod_id))
         .map_err(|e| format!("cannot open game files: {e}"))?;
     log.info(format!(

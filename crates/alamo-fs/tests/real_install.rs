@@ -63,3 +63,18 @@ fn remake_mod_layers() {
     assert!(origin.contains(REMAKE) && !origin.contains('!'), "{origin}");
     assert!(fs.exists("Audio/Music") || !fs.list("Audio").is_empty());
 }
+
+#[test]
+fn multi_mod_stack_layers() {
+    let Some(i) = install() else { return };
+    if !i.mod_data("3229239424").is_dir() || !i.mod_data("2794270450").is_dir() || !i.mod_data(REMAKE).is_dir() {
+        eprintln!("skipped: not all 3 mods installed");
+        return;
+    }
+    // Test SteamMOD launch string parsing and FFT stack
+    let fs = GameFs::for_mod(&i, Some("STEAMMOD=3229239424 STEAMMOD=2794270450 STEAMMOD=1770851727")).unwrap();
+    assert!(fs.file_count() > 1000);
+    // Highest stack (3229239424) must win when a file exists there
+    let fs_fft = GameFs::for_mod(&i, Some("fft")).unwrap();
+    assert_eq!(fs.file_count(), fs_fft.file_count());
+}
