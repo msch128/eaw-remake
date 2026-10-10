@@ -642,7 +642,7 @@ pub(crate) struct Group {
     pub members: Vec<u32>,
 }
 
-pub(crate) const NO_HP: u16 = u16::MAX;
+pub const NO_HP: u16 = u16::MAX;
 
 /// The battle simulation.
 pub struct Battle {

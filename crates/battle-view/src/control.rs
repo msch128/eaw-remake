@@ -1,4 +1,4 @@
-﻿//! Selection, orders and the overlays that go with them (EaW style): left click / drag box selects
+//! Selection, orders and the overlays that go with them (EaW style): left click / drag box selects
 //! own ships, right click moves, attacks a ship or a single hardpoint of an enemy ship.
 
 use battle_sim::{Command, HpKind};
@@ -320,33 +320,45 @@ pub fn selection(
         hover.ground = Some(ray.get_point(d));
     }
 
-    // Hardpoints of the enemy under the cursor (or the selected enemy).
-    let enemy = hover
-        .ship
-        .filter(|id| ships.0.get(id).is_some_and(|s| s.side != player))
-        .or(sel.enemy);
-    if let Some(eid) = enemy
-        && !sel.ships.is_empty()
-        && let Some(s) = ships.0.get(&eid)
-    {
-        let def = rt.catalog.ship(s.def);
-        let mut best: Option<(u16, f32)> = None;
-        for (i, h) in def.hardpoints.iter().enumerate() {
-            if !h.targetable || !h.destroyable || !is_markable(h.kind) {
-                continue;
+    // Hardpoints of any enemy under cursor, the hovered ship, or the selected enemy.
+    if !sel.ships.is_empty() {
+        let mut candidates = Vec::new();
+        if let Some(eid) = sel.enemy {
+            candidates.push(eid);
+        }
+        if let Some(hid) = hover.ship.filter(|id| ships.0.get(id).is_some_and(|s| s.side != player)) {
+            if !candidates.contains(&hid) {
+                candidates.push(hid);
             }
-            if !s.hp_alive.get(i).copied().unwrap_or(false) {
-                continue;
+        }
+        // Include any visible rendered enemy ship so outer hardpoints (e.g. Lucrehulk wings) are hoverable
+        for (&sid, s) in &ships.0 {
+            if s.side != player && !candidates.contains(&sid) {
+                candidates.push(sid);
             }
-            let w = hardpoint_world(&rt, s, i);
-            if let Ok(p) = cam.world_to_viewport(gt, w) {
-                let d = (p - cursor).length();
-                if d < 16.0 * scale && best.is_none_or(|(_, bd)| d < bd) {
-                    best = Some((i as u16, d));
+        }
+        let reach_px = 24.0 * scale;
+        let mut best: Option<(u32, u16, f32)> = None;
+        for &eid in &candidates {
+            let Some(s) = ships.0.get(&eid) else { continue };
+            let def = rt.catalog.ship(s.def);
+            for (i, h) in def.hardpoints.iter().enumerate() {
+                if !h.targetable || !h.destroyable || !is_markable(h.kind) {
+                    continue;
+                }
+                if !s.hp_alive.get(i).copied().unwrap_or(false) {
+                    continue;
+                }
+                let w = hardpoint_world(&rt, s, i);
+                if let Ok(p) = cam.world_to_viewport(gt, w) {
+                    let d = (p - cursor).length();
+                    if d < reach_px && best.as_ref().is_none_or(|(_, _, bd)| d < *bd) {
+                        best = Some((eid, i as u16, d));
+                    }
                 }
             }
         }
-        hover.hardpoint = best.map(|(i, _)| (eid, i));
+        hover.hardpoint = best.map(|(eid, i, _)| (eid, i));
     }
 
     // Control groups.
@@ -495,10 +507,14 @@ pub fn orders(
         recent.0.insert(id, ORDER_LINE_SECONDS + 0.3);
     }
     // Any enemy under the cursor, also when the click is on the outer part of a big model (station, capital ship).
-    let enemy_target = hover.ship.filter(|id| ships.0.get(id).is_some_and(|s| s.side != player)).or_else(|| {
-        let g = hover.ground?;
-        enemy_at(&ships, player, g)
-    });
+    let enemy_target = hover
+        .hardpoint
+        .map(|(target, _)| target)
+        .or_else(|| hover.ship.filter(|id| ships.0.get(id).is_some_and(|s| s.side != player)))
+        .or_else(|| {
+            let g = hover.ground?;
+            enemy_at(&ships, player, g)
+        });
     let mark_enemy = |markers: &mut OrderMarkers, target: u32| {
         if let Some(s) = ships.0.get(&target) {
             markers.0.push((s.pos, 1.0, Color::srgb(1.0, 0.25, 0.2)));
@@ -507,9 +523,21 @@ pub fn orders(
     match armed_click {
         Some(ArmedKind::Attack) => {
             let Some(target) = enemy_target else { return };
-            rt.sim.command(player, Command::Attack { ships: mine, target });
-            issued.write(OrderIssued { kind: OrderKind::Attack, lead });
-            mark_enemy(&mut markers, target);
+            if let Some((_, hp)) = hover.hardpoint.filter(|(t, _)| *t == target) {
+                rt.sim.command(player, Command::AttackHardpoint { ships: mine, target, hardpoint: hp });
+                hardpoint_orders.write(HardpointOrderIssued { lead, target, hardpoint: hp });
+                issued.write(OrderIssued { kind: OrderKind::Attack, lead });
+                if let Some(s) = ships.0.get(&target) {
+                    let hp_w = hardpoint_world(&rt, s, hp as usize);
+                    markers.0.push((hp_w, 1.0, Color::srgb(1.0, 0.25, 0.2)));
+                } else {
+                    mark_enemy(&mut markers, target);
+                }
+            } else {
+                rt.sim.command(player, Command::Attack { ships: mine, target });
+                issued.write(OrderIssued { kind: OrderKind::Attack, lead });
+                mark_enemy(&mut markers, target);
+            }
             armed.0 = None;
         }
         Some(ArmedKind::Reinforce | ArmedKind::AbilityAt) => {}
@@ -532,7 +560,12 @@ pub fn orders(
                 rt.sim.command(player, Command::AttackHardpoint { ships: mine, target, hardpoint: hp });
                 hardpoint_orders.write(HardpointOrderIssued { lead, target, hardpoint: hp });
                 issued.write(OrderIssued { kind: OrderKind::Attack, lead });
-                mark_enemy(&mut markers, target);
+                if let Some(s) = ships.0.get(&target) {
+                    let hp_w = hardpoint_world(&rt, s, hp as usize);
+                    markers.0.push((hp_w, 1.0, Color::srgb(1.0, 0.25, 0.2)));
+                } else {
+                    mark_enemy(&mut markers, target);
+                }
             } else if let Some(target) = enemy_target {
                 rt.sim.command(player, Command::Attack { ships: mine, target });
                 issued.write(OrderIssued { kind: OrderKind::Attack, lead });

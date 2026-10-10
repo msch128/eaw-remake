@@ -660,6 +660,9 @@ impl Battle {
                 if tdef.hardpoints.get(hardpoint as usize).is_none_or(|h| !h.targetable) {
                     return Err(CommandError::InvalidHardpoint);
                 }
+                if !self.ships[target as usize].hps.get(hardpoint as usize).is_some_and(|h| h.alive) {
+                    return Err(CommandError::InvalidHardpoint);
+                }
                 for i in ships {
                     let s = &mut self.ships[i as usize];
                     s.order = Order::Attack(target);
@@ -1234,6 +1237,7 @@ impl Battle {
         let dmg = raw * take * atk_damage / (1.0 + s.mods[ModKind::Defense as usize].0);
         let mut hull_part = 0.0;
         let mut shield_hit = false;
+        let mut dead_hps = Vec::new();
         if s.shield > 0.0 && pd.shield_damage {
             let sd = dmg * cat.damage.multiplier(pd.damage_type, def.shield_armor) / tgt_shield * s.bonus.taken_shield / (1.0 + s.mods[ModKind::Shield as usize].0);
             if sd <= s.shield {
@@ -1287,6 +1291,7 @@ impl Battle {
                     if hp.health <= 0.0 {
                         hp.alive = false;
                         hp.pulses_left = 0;
+                        dead_hps.push(i as u16);
                         let hk = def.hardpoints[i].kind;
                         match hk {
                             HpKind::ShieldGenerator => {
@@ -1338,6 +1343,13 @@ impl Battle {
             s.stun = s.stun.max(pd.ion_duration);
             s.stun_speed_cut = s.stun_speed_cut.max(pd.ion_speed_cut);
             s.stun_rate_cut = s.stun_rate_cut.max(pd.ion_rate_cut);
+        }
+        if !dead_hps.is_empty() {
+            for other in &mut self.ships {
+                if other.target == id && other.target_hp != NO_HP && dead_hps.contains(&other.target_hp) {
+                    other.target_hp = NO_HP;
+                }
+            }
         }
     }
 
@@ -2086,11 +2098,21 @@ fn mov(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, spawn: &
         }
         Order::Attack(_) | Order::AttackMove(_) if target.is_some() && (aggressive || matches!(s.order, Order::Attack(_))) => {
             let t = target.expect("checked");
-            let d = t.pos.dist(s.pos);
+            let tdef = cat.ship(t.def);
+            let hp_aim = if s.target_hp != NO_HP && t.hp_alive & (1u64 << s.target_hp) != 0 {
+                tdef.hardpoints.get(s.target_hp as usize).map(|h| t.pos + h.offset.rotate_yaw(t.yaw))
+            } else {
+                None
+            };
+            let (tgt_point, radius_slack) = match hp_aim {
+                Some(p) => (p, 0.0),
+                None => (t.pos, t.radius * 0.5),
+            };
+            let d = tgt_point.dist(s.pos);
             if fighter {
                 if s.phase > 0.0 {
                     Goal::Free(s.yaw + s.phase_turn * dt)
-                } else if d < 70.0 + t.radius * 0.5 {
+                } else if d < 70.0 + radius_slack {
                     if def.class == TargetClass::Bomber && (t.class as u8 >= TargetClass::Frigate as u8) {
                         // Bombing run: fly through, then straight away for a few seconds before the next pass (estimate: 3-5 s, almost no turn).
                         s.phase = rng.range(3.0, 5.0);
@@ -2101,23 +2123,23 @@ fn mov(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, spawn: &
                     }
                     Goal::Free(s.yaw)
                 } else {
-                    Goal::Point(t.pos, 0.0)
+                    Goal::Point(tgt_point, 0.0)
                 }
             } else {
-                let stand = if def.preferred_range > 0.0 { def.preferred_range * cfg.engage_range_scale + t.radius * 0.5 } else { 0.0 };
+                let stand = if def.preferred_range > 0.0 { def.preferred_range * cfg.engage_range_scale + radius_slack } else { 0.0 };
                 // Hysteresis: a ship that has stopped only starts closing again when the target is clearly out of its standoff.
                 let resume = if s.speed < 0.05 * def.max_speed.max(1.0) { 1.12 } else { 1.05 };
                 if d > stand * resume {
                     // Line abreast while the enemy is still far away (attack-move only).
-                    let mut q = t.pos;
+                    let mut q = tgt_point;
                     if s.lane != 0.0 && matches!(s.order, Order::AttackMove(_)) && d > 2500.0 {
-                        let to = t.pos - s.pos;
-                        q = t.pos + Vec3::new(-to.y, to.x, 0.0) * (s.lane / d);
+                        let to = tgt_point - s.pos;
+                        q = tgt_point + Vec3::new(-to.y, to.x, 0.0) * (s.lane / d);
                     }
-                    face = Some(t.pos);
+                    face = Some(tgt_point);
                     Goal::Point(q, stand)
                 } else {
-                    face = Some(t.pos);
+                    face = Some(tgt_point);
                     Goal::Hold
                 }
             }
@@ -2349,12 +2371,13 @@ fn mov(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, spawn: &
     }
 }
 
-/// Checks whether a hardpoint at `muzzle` could shoot at target `t`.
+/// Checks whether a hardpoint at `muzzle` could shoot at target `t`, optionally aiming at a specific point `aim`.
 #[allow(clippy::too_many_arguments)]
-fn can_fire(hp: &HpDef, ship_yaw: f32, range_mult: f32, muzzle: Vec3, t: &Snap, proj: &ProjDef) -> bool {
-    let to = t.pos - muzzle;
+fn can_fire(hp: &HpDef, ship_yaw: f32, range_mult: f32, muzzle: Vec3, t: &Snap, proj: &ProjDef, aim: Option<Vec3>) -> bool {
+    let target_pos = aim.unwrap_or(t.pos);
+    let to = target_pos - muzzle;
     let dist = to.len();
-    let reach = (dist - t.radius * 0.6).max(0.0);
+    let reach = if aim.is_some() { dist } else { (dist - t.radius * 0.6).max(0.0) };
     if reach > hp.range * range_mult || reach < hp.min_range {
         return false;
     }
@@ -2370,7 +2393,7 @@ fn can_fire(hp: &HpDef, ship_yaw: f32, range_mult: f32, muzzle: Vec3, t: &Snap, 
     }
     // Direction in the hardpoint's mount frame (forward, left, normal).
     let d = to.rotate_yaw(-ship_yaw).normalized();
-    let slack = (t.radius / dist.max(1.0)).atan();
+    let slack = if aim.is_some() { 0.05 } else { (t.radius / dist.max(1.0)).atan() };
     let yaw_off = d.dot(hp.left).atan2(d.dot(hp.forward)).abs();
     let pitch_off = d.dot(hp.normal).clamp(-1.0, 1.0).asin().abs();
     yaw_off <= lim_yaw + slack && pitch_off <= lim_pitch + slack
@@ -2465,15 +2488,27 @@ fn weapons(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, rng:
                 st.pulses_left = 0;
             } else {
                 let t = &snaps[tgt as usize];
-                if can_fire(hp, s.yaw, s.bonus.range, muzzle, t, pd) {
-                    let tdef = cat.ship(t.def);
-                    let aim_hp = if s.target_hp != NO_HP && tgt == s.target {
-                        s.target_hp
-                    } else if let Some(set) = hp_set {
-                        auto_hardpoint(set, tdef, t, muzzle)
-                    } else {
-                        NO_HP
-                    };
+                let tdef = cat.ship(t.def);
+                let targeted_hp = if s.target_hp != NO_HP && tgt == s.target && snaps[tgt as usize].hp_alive & (1u64 << s.target_hp) != 0 {
+                    s.target_hp
+                } else if let Some(set) = hp_set {
+                    auto_hardpoint(set, tdef, t, muzzle)
+                } else {
+                    NO_HP
+                };
+                let specific_aim = if targeted_hp != NO_HP && let Some(h) = tdef.hardpoints.get(targeted_hp as usize) {
+                    Some(t.pos + h.offset.rotate_yaw(t.yaw))
+                } else {
+                    None
+                };
+                let (allowed, aim_hp) = if can_fire(hp, s.yaw, s.bonus.range, muzzle, t, pd, specific_aim) {
+                    (true, targeted_hp)
+                } else if can_fire(hp, s.yaw, s.bonus.range, muzzle, t, pd, None) {
+                    (true, NO_HP)
+                } else {
+                    (false, NO_HP)
+                };
+                if allowed {
                     let mut aim = lead(muzzle, t, pd.speed);
                     if aim_hp != NO_HP
                         && let Some(h) = tdef.hardpoints.get(aim_hp as usize)
@@ -2525,7 +2560,14 @@ fn weapons(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, rng:
         let mut chosen = NONE;
         for &c in &s.candidates {
             let t = &snaps[c as usize];
-            if t.alive && can_fire(hp, s.yaw, s.bonus.range, muzzle, t, pd) {
+            let can_shoot = if s.target_hp != NO_HP && c == s.target && t.hp_alive & (1u64 << s.target_hp) != 0 {
+                let tdef = cat.ship(t.def);
+                let p = tdef.hardpoints.get(s.target_hp as usize).map(|h| t.pos + h.offset.rotate_yaw(t.yaw));
+                can_fire(hp, s.yaw, s.bonus.range, muzzle, t, pd, p) || can_fire(hp, s.yaw, s.bonus.range, muzzle, t, pd, None)
+            } else {
+                can_fire(hp, s.yaw, s.bonus.range, muzzle, t, pd, None)
+            };
+            if t.alive && can_shoot {
                 chosen = c;
                 break;
             }

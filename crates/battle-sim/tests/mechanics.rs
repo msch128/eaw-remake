@@ -1335,3 +1335,42 @@ fn orphaned_carrier_fighters_die_and_victory_resolves_cleanly() {
     assert_eq!(b.winner(), Some(0), "player should be victorious");
 }
 
+#[test]
+fn hardpoint_focus_fire_and_reset_on_destruction() {
+    let mut hp1 = gun("hp1", 50.0);
+    hp1.offset = Vec3::new(0.0, 50.0, 0.0);
+    let mut hp2 = gun("hp2", 50.0);
+    hp2.offset = Vec3::new(0.0, -50.0, 0.0);
+    let target_ship = ship("target", 200.0, 0.0, vec![hp1, hp2]);
+
+    let mut attacker_gun = gun("atk_gun", 0.0);
+    attacker_gun.range = 2000.0;
+    attacker_gun.health = 1000.0;
+    let attacker = mobile("attacker", TargetClass::Frigate, 200.0, 1000.0, vec![attacker_gun]);
+
+    let cat = Catalog::from_defs(vec![attacker, target_ship], vec![laser()]);
+    let mut b = Battle::new(setup(cat, "attacker", "target", 1, 1, cfg()));
+    b.ships[0].pos = Vec3::ZERO;
+    b.ships[1].pos = Vec3::new(300.0, 0.0, 0.0);
+
+    // Target hardpoint 0
+    b.command(0, Command::AttackHardpoint { ships: vec![0], target: 1, hardpoint: 0 }).unwrap();
+    assert_eq!(b.ships[0].target_hp, 0);
+
+    // Run until hardpoint 0 dies
+    for _ in 0..100 {
+        b.step();
+        if !b.ships[1].hps[0].alive {
+            break;
+        }
+    }
+    assert!(!b.ships[1].hps[0].alive, "hardpoint 0 should be destroyed");
+    assert_eq!(b.ships[0].target_hp, NO_HP, "attacker target_hp should reset to NO_HP after hardpoint is destroyed");
+
+    // Cannot order attack on already destroyed hardpoint
+    assert_eq!(
+        b.command(0, Command::AttackHardpoint { ships: vec![0], target: 1, hardpoint: 0 }),
+        Err(CommandError::InvalidHardpoint)
+    );
+}
+

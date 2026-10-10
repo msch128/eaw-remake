@@ -996,6 +996,9 @@ fn sync_overlays(
                 continue;
             }
             let alive = s.hp_alive.get(i).copied().unwrap_or(false);
+            if !alive {
+                continue;
+            }
             let Ok(p) = cam.world_to_viewport(gt, control::hardpoint_world(&rt, s, i)) else { continue };
             next.hardpoints.push(HardpointMarker {
                 id: hardpoint_id(s.id, i),
@@ -1003,8 +1006,8 @@ fn sync_overlays(
                 tracked: hover.hardpoint == Some((s.id, i as u16)),
                 screen_pos: p,
                 health: s.hp_health.get(i).copied().unwrap_or(1.0),
-                targetable: can_attack && h.targetable && alive,
-                destroyed: !alive,
+                targetable: can_attack && h.targetable,
+                destroyed: false,
             });
         }
     }
