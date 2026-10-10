@@ -41,6 +41,8 @@ struct Snap {
     jammed: bool,
     /// Ship that carries this one (`NONE` = none): carried ships dock with it and do not keep out of its hull.
     carrier: u32,
+    /// Special ground-to-space weapon on the planet surface.
+    special: bool,
 }
 
 /// Uniform grid of ship ids for projectile collision.
@@ -68,7 +70,7 @@ impl Grid {
             c.clear();
         }
         for (i, s) in snaps.iter().enumerate() {
-            if !s.alive {
+            if !s.alive || s.special {
                 continue;
             }
             let (x0, x1) = (self.coord(s.pos.x - s.radius), self.coord(s.pos.x + s.radius));
@@ -251,8 +253,12 @@ impl Battle {
         let (station_pos, station_yaw) = station.unwrap_or((origin, yaw));
         let n_struct = setup.structures.len();
         for (i, &sid) in setup.structures.iter().enumerate() {
-            let marker = self.config.arena.as_ref().and_then(|a| a.marker_for_structure(&cat.ship(sid).name)).map(|m| (m.pos, m.yaw));
-            let (pos, syaw) = if i == 0 {
+            let def = cat.ship(sid);
+            let marker = self.config.arena.as_ref().and_then(|a| a.marker_for_structure(&def.name)).map(|m| (m.pos, m.yaw));
+            let (pos, syaw) = if def.special_weapon.is_some() {
+                let back_dir = Vec3::new(-station_yaw.cos(), -station_yaw.sin(), 0.0);
+                (station_pos + back_dir * 1500.0 + Vec3::new(0.0, 0.0, -150.0), station_yaw)
+            } else if i == 0 {
                 (station_pos, station_yaw)
             } else if let Some(m) = marker {
                 m
@@ -427,6 +433,10 @@ impl Battle {
             direct_cd: rng.range(0.0, 1.0),
             direct_pulses: 0,
             direct_timer: 0.0,
+            special_cd: if let Some(sp) = &def.special_weapon { 15.0_f32.min(sp.recharge) } else { 0.0 },
+            special_pulses: 0,
+            special_timer: 0.0,
+            special_target: NONE,
             group,
             squad,
             formation,
@@ -926,6 +936,7 @@ impl Battle {
                     } else {
                         0xFF
                     },
+                    special: d.special_weapon.is_some(),
                 }
             })
             .collect();
@@ -1845,12 +1856,15 @@ impl Battle {
         let mut any_alive = vec![false; n];
         for s in &self.ships {
             let i = s.side as usize;
-            if s.group != NONE {
+            let vic = self.catalog.ship(s.def).special_weapon.as_ref().map_or(true, |sw| sw.victory_relevant);
+            if s.group != NONE && vic {
                 had_brought[i] = true;
             }
             if s.alive && !s.retreated {
                 any_alive[i] = true;
-                brought_alive[i] |= s.group != NONE;
+                if vic {
+                    brought_alive[i] |= s.group != NONE;
+                }
             }
         }
         let mut active: Vec<bool> = (0..n).map(|i| if had_brought[i] { brought_alive[i] } else { any_alive[i] }).collect();
@@ -1861,10 +1875,12 @@ impl Battle {
         if left.len() <= 1 {
             self.over = true;
             self.winner = left.first().map(|&i| i as u8);
-            // The defeated side's remaining fighters are lost with it.
+            // The defeated side's remaining fighters are lost with it (ground structures survive on the planet).
             if let Some(w) = self.winner {
                 for s in self.ships.iter_mut().filter(|s| s.side != w && !s.retreated) {
-                    s.alive = false;
+                    if self.catalog.ship(s.def).special_weapon.as_ref().map_or(true, |sw| sw.victory_relevant) {
+                        s.alive = false;
+                    }
                 }
             }
         } else if self.time >= self.config.max_time {
@@ -1918,7 +1934,7 @@ fn scan(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig) {
         .and_then(|i| cat.priority_sets.get(i as usize));
     let mut found: Vec<(f32, f32, u32)> = Vec::with_capacity(32);
     for (i, t) in snaps.iter().enumerate() {
-        if !t.alive || t.side == s.side || !sees(t) {
+        if !t.alive || t.side == s.side || t.special || !sees(t) {
             continue;
         }
         let d = t.pos.dist(me.pos) - t.radius;
@@ -2527,6 +2543,71 @@ fn weapons(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, rng:
                     }
                 } else {
                     s.direct_cd = 0.2;
+                }
+            }
+        }
+    }
+
+    // Ground-to-space special weapon (Hypervelocity gun, Seismic cannon, Ion cannon).
+    if let Some(sp) = &def.special_weapon {
+        let pd = &cat.projectiles[sp.projectile as usize];
+        if s.special_pulses > 0 {
+            s.special_timer -= dt;
+            if s.special_timer <= 0.0 {
+                let tgt = s.special_target;
+                if tgt != NONE && snaps[tgt as usize].alive {
+                    let t = &snaps[tgt as usize];
+                    let muzzle = s.pos;
+                    let aim = lead(muzzle, t, pd.speed);
+                    let dir = (aim - muzzle).normalized();
+                    out.push(FireReq { ship: s.id, hp: NO_HP, proj: sp.projectile, from: muzzle, vel: dir * pd.speed, target: tgt, aim_hp: NO_HP });
+                }
+                s.special_pulses -= 1;
+                if s.special_pulses == 0 {
+                    s.special_cd = sp.recharge;
+                } else {
+                    s.special_timer = sp.pulse_delay;
+                }
+            }
+        } else {
+            s.special_cd -= dt;
+            if s.special_cd <= 0.0 && may_start {
+                let mut best_target = NONE;
+                let mut best_score = -1.0f32;
+                for (other_id, other) in snaps.iter().enumerate() {
+                    if other.side != s.side && other.alive && !other.special {
+                        if (sp.valid_targets & other.class.bit()) != 0 {
+                            let class_weight = match other.class {
+                                TargetClass::Super => 10_000_000.0,
+                                TargetClass::Capital => 1_000_000.0,
+                                TargetClass::Frigate => 100_000.0,
+                                TargetClass::Corvette => 10_000.0,
+                                _ => 1_000.0,
+                            };
+                            let score = class_weight + other.health * 1000.0;
+                            if score > best_score {
+                                best_score = score;
+                                best_target = other_id as u32;
+                            }
+                        }
+                    }
+                }
+                if best_target != NONE {
+                    s.special_target = best_target;
+                    s.special_pulses = sp.pulse_count.max(1);
+                    let t = &snaps[best_target as usize];
+                    let muzzle = s.pos;
+                    let aim = lead(muzzle, t, pd.speed);
+                    let dir = (aim - muzzle).normalized();
+                    out.push(FireReq { ship: s.id, hp: NO_HP, proj: sp.projectile, from: muzzle, vel: dir * pd.speed, target: best_target, aim_hp: NO_HP });
+                    s.special_pulses -= 1;
+                    if s.special_pulses == 0 {
+                        s.special_cd = sp.recharge;
+                    } else {
+                        s.special_timer = sp.pulse_delay;
+                    }
+                } else {
+                    s.special_cd = 2.0;
                 }
             }
         }

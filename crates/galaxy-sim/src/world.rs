@@ -1,4 +1,4 @@
-﻿//! Static (immutable) world data derived once from the game data: planets, hyperspace lanes,
+//! Static (immutable) world data derived once from the game data: planets, hyperspace lanes,
 //! factions, unit/structure/star base catalogs and the damage matrix.
 //!
 //! Everything here is read-only during a match, so it can be shared freely between threads.
@@ -378,6 +378,8 @@ pub struct StructureType {
     /// Orbital structures always; a ground structure only if it affects the galactic game (income, population, space
     /// weapons or hardpoints, ship discounts, gambling income) or is a prerequisite of one. See `galaxy-sim/STATUS.md`.
     pub galactic: bool,
+    /// Space weapons or hardpoints (orbital structures with hardpoints, or ground-to-space special weapons).
+    pub space_reach: bool,
     /// Structure types this one counts as (its `Variant_Of_Existing_Type` ancestors), itself excluded.
     pub ancestors: Vec<StructureTypeId>,
     /// Absolute income change per week.

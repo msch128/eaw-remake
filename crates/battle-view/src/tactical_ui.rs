@@ -325,7 +325,7 @@ fn sync_minimap(
     let units = ships
         .0
         .values()
-        .filter(|s| s.visible)
+        .filter(|s| s.visible && rt.catalog.ship(s.def).special_weapon.is_none())
         .map(|s| MinimapDot { pos: flip(s.pos), color: rt.visuals.team_color(s.side), selected: sel.ships.contains(&s.id) })
         .collect();
     // Fog of war: the sensor discs (`Space_FOW_Reveal_Range`) of the player's ships, one per grid cell of a quarter radius.
@@ -964,6 +964,9 @@ fn sync_overlays(
         let edge_max = pts.iter().map(|(_, e)| *e).fold(0.0f32, f32::max);
         let live: Vec<&ShipRender> = members.iter().map(|id| &ships.0[id]).collect();
         let def = rt.catalog.ship(first.def);
+        if def.special_weapon.is_some() {
+            continue;
+        }
         let single = members.len() == 1;
         let name = (hovered || (selected && single && sel.ships.len() + usize::from(sel.enemy.is_some()) <= 1)).then(|| {
             def.text_id

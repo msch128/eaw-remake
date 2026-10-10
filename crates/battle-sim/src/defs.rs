@@ -1,4 +1,4 @@
-﻿//! Immutable battle definitions (ships, hardpoints, projectiles, damage matrix) built from the
+//! Immutable battle definitions (ships, hardpoints, projectiles, damage matrix) built from the
 //! game data and, optionally, the `.alo` models for hardpoint positions.
 //!
 //! # Units and conventions
@@ -448,6 +448,8 @@ pub struct ShipDef {
     pub golan: bool,
     /// Always prevents enemy retreat while alive (`Is_Interdictor`); ships with an `INTERDICT` ability do so while it is on.
     pub interdictor: bool,
+    /// Ground-to-space special weapon definition, if this structure fires into orbit.
+    pub special_weapon: Option<SpecialWeaponDef>,
 }
 
 /// Hull-mounted weapon of fighters.
@@ -465,6 +467,23 @@ pub struct DirectWeaponDef {
     pub range: f32,
     /// Half cone (`Turret_*_Extent_Degrees`) in radians.
     pub half_cone: f32,
+}
+
+/// Ground-to-space special weapon definition (Hypervelocity Gun, Ion Cannon, Seismic Cannon).
+#[derive(Debug, Clone, Default)]
+pub struct SpecialWeaponDef {
+    /// Fired projectile id.
+    pub projectile: ProjId,
+    /// Recharge between volleys in seconds.
+    pub recharge: f32,
+    /// Shots per volley.
+    pub pulse_count: u32,
+    /// Seconds between shots in a volley.
+    pub pulse_delay: f32,
+    /// Target classes mask (`Frigate | Capital | Super`).
+    pub valid_targets: u16,
+    /// True if losing this weapon/structure contributes to defeat in space (`Space_Victory_Relevant`).
+    pub victory_relevant: bool,
 }
 
 /// A projectile type.
@@ -880,6 +899,13 @@ impl Catalog {
                 {
                     proj_names.push(p.clone());
                 }
+                if let Source::Structure(st) = s {
+                    if let Some(pts) = st.fields.get("projectile_types") {
+                        for pt in alamo_data::xml::split_list(pts) {
+                            proj_names.push(pt);
+                        }
+                    }
+                }
                 hps
             })
             .collect();
@@ -1250,6 +1276,37 @@ impl Catalog {
                 .collect(),
             _ => Vec::new(),
         };
+        let special_weapon = match src {
+            Source::Structure(s) => {
+                let is_special = s.fields.get("is_special_weapon_in_space").is_some_and(|v| alamo_data::xml::parse_bool(v));
+                if is_special {
+                    let proj = s.fields.get("projectile_types").and_then(|pts| {
+                        alamo_data::xml::split_list(pts).first().and_then(|p| self.proj_index.get(&p.to_ascii_lowercase()).copied())
+                    });
+                    proj.map(|projectile| {
+                        let recharge = s.fields.get("projectile_fire_recharge_seconds").and_then(|v| v.trim().parse::<f32>().ok()).unwrap_or(80.0);
+                        let pulse_count = s.fields.get("projectile_fire_pulse_count").and_then(|v| v.trim().parse::<u32>().ok()).unwrap_or(1);
+                        let pulse_delay = s.fields.get("projectile_fire_pulse_delay_seconds").and_then(|v| v.trim().parse::<f32>().ok()).unwrap_or(0.5);
+                        let valid_targets = s.fields.get("special_weapon_valid_targets").map_or(
+                            TargetClass::Frigate.bit() | TargetClass::Capital.bit() | TargetClass::Super.bit(),
+                            |v| alamo_data::xml::split_list(v).iter().filter_map(|t| TargetClass::from_token(t)).fold(0u16, |m, c| m | c.bit()),
+                        );
+                        let victory_relevant = s.fields.get("space_victory_relevant").map_or(false, |v| alamo_data::xml::parse_bool(v));
+                        SpecialWeaponDef {
+                            projectile,
+                            recharge,
+                            pulse_count,
+                            pulse_delay,
+                            valid_targets,
+                            victory_relevant,
+                        }
+                    })
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        };
         ShipDef {
             name,
             text_id,
@@ -1292,6 +1349,7 @@ impl Catalog {
             priority_attack_move,
             golan,
             interdictor,
+            special_weapon,
         }
     }
 

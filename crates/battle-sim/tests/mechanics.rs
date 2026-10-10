@@ -1152,3 +1152,64 @@ fn spawn_yaw_returns_arrival_yaw_for_each_side() {
     assert!((b.spawn_yaw(0) - 0.0).abs() < 1e-4);
     assert!((b.spawn_yaw(1) - std::f32::consts::PI).abs() < 1e-4);
 }
+
+#[test]
+fn ground_to_space_special_weapon_fires_at_enemy_capital_ship() {
+    let mut cat = Catalog::default();
+    cat.projectiles.push(ProjDef {
+        name: "special_proj".into(),
+        damage: 1500.0,
+        speed: 10000.0,
+        max_distance: 99000.0,
+        shield_damage: true,
+        hull_damage: true,
+        ..ProjDef::default()
+    });
+    cat.ships.push(ShipDef {
+        name: "hypervelocity_gun".into(),
+        class: TargetClass::Structure,
+        is_static: true,
+        hull: 3000.0,
+        special_weapon: Some(SpecialWeaponDef {
+            projectile: 0,
+            recharge: 5.0,
+            pulse_count: 1,
+            pulse_delay: 0.5,
+            valid_targets: TargetClass::Capital.bit(),
+            victory_relevant: false,
+        }),
+        ..ShipDef::default()
+    });
+    cat.ships.push(ShipDef {
+        name: "enemy_capital".into(),
+        class: TargetClass::Capital,
+        is_static: true,
+        hull: 4000.0,
+        shield: 0.0,
+        radius: 200.0,
+        ..ShipDef::default()
+    });
+    let cat = Arc::new(cat);
+    let sides = vec![
+        SideSetup {
+            name: "defender".into(),
+            units: vec![],
+            structures: vec![0], // hypervelocity gun
+            ai: true,
+        },
+        SideSetup {
+            name: "attacker".into(),
+            units: vec![UnitSetup { ship: 1, count: 1, tag: 0 }], // enemy capital
+            structures: vec![],
+            ai: false,
+        },
+    ];
+    let mut b = Battle::new(BattleSetup { catalog: cat, sides, config: BattleConfig { dt: 0.1, ..BattleConfig::default() } });
+    b.ships[0].special_cd = 0.0;
+    let initial_hull = b.ships[1].hull;
+    for _ in 0..20 {
+        b.step();
+    }
+    assert!(b.ships[1].hull < initial_hull, "enemy capital should take damage from special ground-to-space weapon");
+}
+

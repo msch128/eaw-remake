@@ -1,4 +1,4 @@
-﻿//! Builds the unit, structure and star base catalogs from the object definitions.
+//! Builds the unit, structure and star base catalogs from the object definitions.
 
 use std::collections::HashMap;
 
@@ -216,11 +216,12 @@ impl World {
                 || def.source_file.to_ascii_lowercase().contains("/space/");
             let id = self.structures.len() as StructureTypeId;
             self.structure_index.insert(key(&def.name), id);
+            let reach = !def.hardpoints.is_empty() || yes("is_special_weapon_in_space");
             struct_raw.push(StructRaw {
                 groups: parse_requirement(def.fields.get("required_special_structures").map_or("", String::as_str)),
                 planets: name_list(def.fields.get("required_planets").map_or("", String::as_str)),
                 // Space-side weapons: hardpoints, or a ground-to-space special weapon (hypervelocity gun, nuke launcher ...).
-                space_reach: !def.hardpoints.is_empty() || yes("is_special_weapon_in_space"),
+                space_reach: reach,
                 unlocks: def.unlocks.clone(),
             });
             self.structures.push(StructureType {
@@ -234,6 +235,7 @@ impl World {
                 req_structures: Vec::new(),
                 req_planets: Vec::new(),
                 galactic: orbital,
+                space_reach: reach,
                 ancestors: Vec::new(),
                 income_abs: def.income_modifiers.iter().map(|m| m.absolute).sum(),
                 income_pct: def.income_modifiers.iter().map(|m| m.percentage).sum(),

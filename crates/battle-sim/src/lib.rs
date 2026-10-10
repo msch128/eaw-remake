@@ -39,7 +39,7 @@ pub use battle::{
     NONE, NO_TAG, REINFORCE_TAG, Order, Projectile, Ship, SideSetup, SquadSlot, Stance, UnitSetup,
 };
 pub use defs::{BonusDef, CombatMod, ModKind, HealDef, CorruptDef, RedirectDef, SuperLaserDef, ZoneDef, 
-    AbilityDef, Catalog, DamageMatrix, DirectWeaponDef, HpDef, HpKind, PrioritySet, ProjDef, ProjId, ShipDef, ShipId, TargetClass,
+    AbilityDef, Catalog, DamageMatrix, DirectWeaponDef, HpDef, HpKind, PrioritySet, ProjDef, ProjId, ShipDef, ShipId, SpecialWeaponDef, TargetClass,
     TractorDef,
 };
 pub use arena::{Arena, Marker, Obstacle};

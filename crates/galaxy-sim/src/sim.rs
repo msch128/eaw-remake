@@ -1,4 +1,4 @@
-﻿//! The simulation driver: initial state, commands, time stepping, movement, battles, capture.
+//! The simulation driver: initial state, commands, time stepping, movement, battles, capture.
 
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, BinaryHeap};
@@ -775,7 +775,7 @@ impl Sim {
         let w = &self.world;
         let mut v: Vec<String> = w.units.iter().filter(|u| matches!(u.role, UnitRole::Ship)).map(|u| u.name.clone()).collect();
         v.extend(w.starbases.iter().map(|s| s.name.clone()));
-        v.extend(w.structures.iter().filter(|s| s.combat.is_some()).map(|s| s.name.clone()));
+        v.extend(w.structures.iter().filter(|s| s.combat.is_some() || s.space_reach).map(|s| s.name.clone()));
         v
     }
 
@@ -805,7 +805,7 @@ impl Sim {
                 }
                 let mut counts: BTreeMap<StructureTypeId, u32> = BTreeMap::new();
                 for &s in &ps.structures {
-                    if w.structures[s as usize].combat.is_some() {
+                    if w.structures[s as usize].combat.is_some() || w.structures[s as usize].space_reach {
                         *counts.entry(s).or_default() += 1;
                     }
                 }
@@ -918,6 +918,10 @@ impl Sim {
                     }
                     (Source::Starbase(_), _) if !base_alive => self.galaxy.planets[p as usize].starbase = None,
                     (Source::Structure(s), _) => {
+                        // Ground structures (e.g. Hypervelocity Gun) are planetary and not destroyed in space battles.
+                        if !w.structures[s as usize].orbital {
+                            continue;
+                        }
                         let left = struct_alive.get(&s).copied().unwrap_or(0);
                         let mut to_remove = m.count - left.min(m.count);
                         self.galaxy.planets[p as usize].structures.retain(|&x| {

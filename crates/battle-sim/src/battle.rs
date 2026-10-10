@@ -523,6 +523,14 @@ pub struct Ship {
     pub direct_pulses: u32,
     /// Hull weapon pulse timer.
     pub direct_timer: f32,
+    /// Special ground-to-space weapon cooldown.
+    pub special_cd: f32,
+    /// Special weapon pulses left.
+    pub special_pulses: u32,
+    /// Special weapon pulse timer.
+    pub special_timer: f32,
+    /// Special weapon target.
+    pub special_target: u32,
     /// Setup group (for results), `NONE` for launched/reinforcement units.
     pub group: u32,
     /// Squadron index for fighters, `NONE` otherwise.
