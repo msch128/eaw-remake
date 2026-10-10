@@ -220,3 +220,45 @@ fn volume_categories_map_to_percent() {
     assert!((b.gain(Bus::Sfx) - 0.5).abs() < 1e-6);
     assert!((b.gain(Bus::Ambient) - 0.5 * b.ambient).abs() < 1e-6);
 }
+
+#[test]
+fn speech_ducks_music_gain() {
+    let mut app = app();
+    {
+        let mut d = app.world_mut().resource_mut::<MusicDirector>();
+        d.set_scene(MusicScene::Galactic("Rebel".into()));
+    }
+    app.update();
+    let initial_duck = {
+        let mut q = app.world_mut().query::<&MusicTrack>();
+        q.iter(app.world()).next().map(|t| t.duck_factor()).unwrap_or(1.0)
+    };
+    assert!((initial_duck - 1.0).abs() < 1e-4, "music starts at full gain");
+
+    // Play a voice-over speech sound.
+    play(&mut app, "Unit_Select_A");
+    std::thread::sleep(std::time::Duration::from_millis(80));
+    app.update();
+    let ducked = {
+        let mut q = app.world_mut().query::<&MusicTrack>();
+        q.iter(app.world()).next().map(|t| t.duck_factor()).unwrap_or(1.0)
+    };
+    assert!(ducked < 0.9, "speech ducks music gain while playing: {ducked}");
+
+    // Despawn speech voice to simulate the speech line finishing.
+    let speech_entities: Vec<Entity> = app.world_mut().query_filtered::<Entity, With<SfxVoice>>().iter(app.world()).collect();
+    for e in speech_entities {
+        app.world_mut().despawn(e);
+    }
+    std::thread::sleep(std::time::Duration::from_millis(150));
+    app.update();
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    app.update();
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    app.update();
+    let recovered = {
+        let mut q = app.world_mut().query::<&MusicTrack>();
+        q.iter(app.world()).next().map(|t| t.duck_factor()).unwrap_or(1.0)
+    };
+    assert!(recovered > ducked, "music recovers after speech finishes: {recovered} > {ducked}");
+}

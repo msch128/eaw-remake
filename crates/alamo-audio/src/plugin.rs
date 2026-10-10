@@ -1174,6 +1174,8 @@ pub struct MusicTrack {
     fade_rate: f32,
     outgoing: bool,
     forced_end: bool,
+    /// Ducking factor applied when speech is active (1.0 = normal, 0.45 = ducked).
+    pub duck: f32,
 }
 
 impl MusicTrack {
@@ -1185,6 +1187,11 @@ impl MusicTrack {
     /// True while the track fades out because another music event took over.
     pub fn is_outgoing(&self) -> bool {
         self.outgoing
+    }
+
+    /// Ducking factor applied when speech is active (1.0 = normal, < 1.0 = ducked).
+    pub fn duck_factor(&self) -> f32 {
+        self.duck
     }
 }
 
@@ -1222,6 +1229,7 @@ fn start_track(
             fade_rate: if fade_in > 0.0 { 1.0 / fade_in } else { 0.0 },
             outgoing: false,
             forced_end: false,
+            duck: 1.0,
         },
     ));
     true
@@ -1335,12 +1343,25 @@ fn music_system(
     }
 }
 fn update_music_gain(
+    time: Res<Time>,
     buses: Res<AudioBuses>,
-    mut tracks: Query<(&MusicTrack, Option<&mut AudioSink>)>,
+    voices: Query<&SfxVoice>,
+    mut tracks: Query<(&mut MusicTrack, Option<&mut AudioSink>)>,
+    mut duck_level: Local<f32>,
 ) {
-    for (t, sink) in &mut tracks {
+    if *duck_level <= 0.0 {
+        *duck_level = 1.0;
+    }
+    let speech_active = voices.iter().any(|v| v.bus == Bus::Speech && v.stopping.is_none());
+    let target_duck = if speech_active { 0.45 } else { 1.0 };
+    let dt = (time.delta_secs() as f32).min(0.1);
+    let rate = if target_duck < *duck_level { 4.0 } else { 1.25 };
+    *duck_level += (target_duck - *duck_level) * (dt * rate).min(1.0);
+
+    for (mut t, sink) in &mut tracks {
+        t.duck = *duck_level;
         if let Some(mut s) = sink {
-            s.set_volume(Volume::Linear(t.volume * t.fade * buses.gain(Bus::Music)));
+            s.set_volume(Volume::Linear(t.volume * t.fade * t.duck * buses.gain(Bus::Music)));
         }
     }
 }
