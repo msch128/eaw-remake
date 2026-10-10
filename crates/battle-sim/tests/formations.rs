@@ -284,3 +284,24 @@ fn ships_with_a_target_in_range_hold_position() {
     }
     assert!(failed.is_empty(), "ships with a target inside their standoff keep station instead of chasing or orbiting: {failed:?}");
 }
+
+#[test]
+fn reinforced_squadron_has_offsets_and_flies_in_formation() {
+    let Some((data, fs)) = real_data() else { return };
+    let cat = Arc::new(Catalog::build(&data, Some(&fs), &["X-Wing_Squadron", "CR-90_Corvette"]));
+    let mk = |name: &str| SideSetup { name: name.into(), units: vec![UnitSetup { ship: cat.ship_id("CR-90_Corvette").unwrap(), count: 1, tag: 1 }], structures: vec![], ai: false };
+    let config = BattleConfig { record_events: false, seed: 1, ..BattleConfig::default() };
+    let mut b = Battle::new(BattleSetup { catalog: cat.clone(), sides: vec![mk("Rebel"), mk("Empire")], config });
+    let x_def = cat.ship_id("X-Wing_Squadron").unwrap();
+    b.command(0, Command::Reinforce { ship: x_def, count: 1 }).unwrap();
+    for _ in 0..400 {
+        b.step();
+    }
+    let fighters: Vec<u32> = b.ships.iter().filter(|s| s.side == 0 && s.squad != u32::MAX).map(|s| s.id).collect();
+    assert_eq!(fighters.len(), 6, "6 X-wings in reinforced squadron");
+    for &m in &fighters[1..] {
+        let s = &b.ships[m as usize];
+        assert!(s.formation.len() > 5.0, "slot follower has non-zero offset: {:?}", s.formation);
+    }
+}
+

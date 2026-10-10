@@ -1142,9 +1142,12 @@ impl Battle {
                 if def.is_squadron {
                     let squad = self.squads.len() as u32;
                     self.squads.push(Vec::new());
-                    for (idx, &(m, c)) in def.members.iter().enumerate() {
+                    let mut s_idx = 0usize;
+                    for &(m, c) in &def.members {
                         for _ in 0..c {
-                            let id = self.spawn_ship(m, r.side, pos + Vec3::new(-20.0 * idx as f32, 25.0 * (idx % 2) as f32, 0.0), yaw, group, squad, Vec3::ZERO);
+                            let off = def.offsets.get(s_idx).copied().unwrap_or(Vec3::new(-20.0 * s_idx as f32, 25.0 * (s_idx % 2) as f32, 0.0));
+                            s_idx += 1;
+                            let id = self.spawn_ship(m, r.side, pos + off.rotate_yaw(yaw), yaw, group, squad, off);
                             self.squads[squad as usize].push(id);
                             self.groups[group as usize].members.push(id);
                             ids.push(id);
@@ -2154,9 +2157,11 @@ fn mov(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, spawn: &
             };
             let d = tgt_point.dist(s.pos);
             if fighter {
+                let is_dogfight = matches!(t.class, TargetClass::Fighter | TargetClass::Bomber) && d < 650.0;
+                let close_run = d < (70.0 + radius_slack).max(180.0);
                 if s.phase > 0.0 {
                     Goal::Free(s.yaw + s.phase_turn * dt)
-                } else if d < 70.0 + radius_slack {
+                } else if close_run {
                     if def.class == TargetClass::Bomber && (t.class as u8 >= TargetClass::Frigate as u8) {
                         // Bombing run: fly through, then straight away for a few seconds before the next pass (estimate: 3-5 s, almost no turn).
                         s.phase = rng.range(3.0, 5.0);
@@ -2166,6 +2171,11 @@ fn mov(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, spawn: &
                         s.phase_turn = rng.range(-0.8, 0.8);
                     }
                     Goal::Free(s.yaw)
+                } else if let Some((q, v)) = slot && !is_dogfight {
+                    // Members hold their formation slot while approaching or escorting
+                    settle = false;
+                    follow_speed = Some(v);
+                    Goal::Point(q, 30.0)
                 } else {
                     Goal::Point(tgt_point, 0.0)
                 }
@@ -2315,7 +2325,22 @@ fn mov(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, spawn: &
             }
             let to_aim = aim - s.pos;
             let unit = to_aim.normalized();
-            let desired = (unit.y + avoid.1).atan2(unit.x + avoid.0);
+            let desired = if fighter && follow_speed.is_some_and(|v| v > 15.0) && s.squad != NONE {
+                let l = leaders[s.squad as usize];
+                if l != NONE && snaps[l as usize].alive {
+                    let lyaw = snaps[l as usize].yaw;
+                    let ldir = Vec3::new(lyaw.cos(), lyaw.sin(), 0.0);
+                    let to_slot = aim - s.pos;
+                    let dist_slot = to_slot.len();
+                    let blend_weight = (dist_slot / 80.0).clamp(0.0, 1.0);
+                    let blend_dir = ldir * (1.0 - blend_weight * 0.6) + to_slot.normalized() * (blend_weight * 0.6 + 0.4);
+                    blend_dir.y.atan2(blend_dir.x)
+                } else {
+                    (unit.y + avoid.1).atan2(unit.x + avoid.0)
+                }
+            } else {
+                (unit.y + avoid.1).atan2(unit.x + avoid.0)
+            };
             let braking = s.speed * s.speed / (2.0 * def.accel.max(1.0));
             // Closing on a target (capitals and frigates): in the last stretch before the standoff the ship already turns the bearing at which most weapons bear
             // towards it (the speed profile below brakes it to a stop at the standoff), instead of pointing its bow at it until it has stopped.
@@ -2333,12 +2358,31 @@ fn mov(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, spawn: &
                 want *= 0.7;
             }
             if let Some(v) = follow_speed {
-                // Formation keeping: match the leader's speed and close the gap at 2 units per second per unit of distance (estimate).
-                want = want.min(v + dist * 2.0);
+                let target_speed = if v > 10.0 {
+                    let fwd = if s.squad != NONE && leaders[s.squad as usize] != NONE && snaps[leaders[s.squad as usize] as usize].alive {
+                        let lyaw = snaps[leaders[s.squad as usize] as usize].yaw;
+                        let ldir = Vec3::new(lyaw.cos(), lyaw.sin(), 0.0);
+                        to_aim.x * ldir.x + to_aim.y * ldir.y
+                    } else {
+                        dist
+                    };
+                    if fwd < -5.0 {
+                        (v + fwd * 1.5).max(v * 0.3)
+                    } else {
+                        v + dist * 2.0
+                    }
+                } else {
+                    dist * 2.0
+                };
+                want = want.min(target_speed);
             }
             if fighter {
                 if dist <= stop + braking * 0.8 && settle && aim == p {
-                    want = 0.0;
+                    if follow_speed.is_some_and(|v| v > 10.0) {
+                        want = follow_speed.unwrap();
+                    } else {
+                        want = 0.0;
+                    }
                 }
             } else if aim == p {
                 // Arrival profile of a big ship: the speed that still stops exactly at the stop radius with the braking rate used below (no overshoot into the target).
