@@ -1,4 +1,4 @@
-﻿//! Game logic systems: snapshot pump, game clock, player actions and the UI model.
+//! Game logic systems: snapshot pump, game clock, player actions and the UI model.
 
 use std::collections::BTreeMap;
 
@@ -277,7 +277,8 @@ pub fn update_ui_model(
 ) {
     *since += time.delta_secs();
     let dirty = selection.is_changed() && *last_sel != *selection;
-    if !dirty && (*since < cfg.ui_interval || *last_snapshot == state.current.seq) && model.version != 0 {
+    let clock_dirty = clock.is_changed();
+    if !dirty && !clock_dirty && (*since < cfg.ui_interval || *last_snapshot == state.current.seq) && model.version != 0 {
         // Keep ticker and speed fresh without recomputing the menus.
         if notes.is_changed() && model.notifications != notes.list {
             model.notifications = notes.list.clone();

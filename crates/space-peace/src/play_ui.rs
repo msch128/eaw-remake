@@ -104,6 +104,9 @@ struct Ticker;
 /// Speed and winner read-out.
 #[derive(Component)]
 struct SpeedText;
+/// Centered "PAUSED" banner shown at the top of the screen when galaxy game is paused.
+#[derive(Component)]
+pub(crate) struct PauseBanner;
 /// Selected fleets read-out.
 #[derive(Component)]
 struct FleetText;
@@ -665,6 +668,22 @@ fn spawn_hud(mut commands: Commands, existing: Query<(), With<PlayHud>>) {
     ));
     commands.spawn((
         PlayHud,
+        PauseBanner,
+        text_bundle("PAUSED", 26.0, Color::srgb(1.0, 0.85, 0.35)),
+        Node {
+            position_type: PositionType::Absolute,
+            top: Val::Px(46.0),
+            width: Val::Percent(100.0),
+            justify_content: JustifyContent::Center,
+            ..abs.clone()
+        },
+        TextLayout::justify(Justify::Center),
+        GlobalZIndex(80),
+        Visibility::Hidden,
+        GalaxyEntity,
+    ));
+    commands.spawn((
+        PlayHud,
         ToastText,
         text_bundle("", 18.0, Color::srgb(1.0, 0.9, 0.5)),
         Node { top: Val::Px(84.0), left: Val::Percent(40.0), ..abs.clone() },
@@ -717,20 +736,26 @@ fn refresh_ticker(mut commands: Commands, model: Res<PlayUiModel>, ticker: Singl
 #[allow(clippy::type_complexity)]
 fn refresh_texts(
     model: Res<PlayUiModel>,
+    clock: Res<GameClock>,
     state: Res<SimState>,
-    mut speed: Single<(&mut Text, &mut TextColor), (With<SpeedText>, Without<FleetText>)>,
-    mut fleets: Single<(&mut Text, &mut Visibility), (With<FleetText>, Without<SpeedText>)>,
+    mut speed: Single<(&mut Text, &mut TextColor), (With<SpeedText>, Without<FleetText>, Without<PauseBanner>)>,
+    mut fleets: Single<(&mut Text, &mut Visibility), (With<FleetText>, Without<SpeedText>, Without<PauseBanner>)>,
+    mut pause_banner: Query<&mut Visibility, (With<PauseBanner>, Without<FleetText>, Without<SpeedText>)>,
 ) {
-    if !model.is_changed() {
+    if !model.is_changed() && !clock.is_changed() {
         return;
+    }
+    let paused = clock.paused() || model.speed.rate <= 0.0;
+    for mut v in &mut pause_banner {
+        *v = if paused { Visibility::Inherited } else { Visibility::Hidden };
     }
     let (text, color) = &mut *speed;
     let (s, c) = if let Some(w) = &model.top.winner {
         (format!("{w} wins the galaxy"), Color::srgb(1.0, 0.9, 0.4))
     } else if model.speed.held_by_battle {
         ("Battle pending".to_owned(), Color::srgb(1.0, 0.8, 0.35))
-    } else if model.speed.rate <= 0.0 {
-        ("PAUSED".to_owned(), Color::srgb(1.0, 0.75, 0.4))
+    } else if paused {
+        (String::new(), Color::NONE)
     } else {
         (format!("Week {}   x{}", model.top.week + 1, model.speed.rate), Color::srgb(0.85, 0.92, 1.0))
     };
@@ -905,7 +930,7 @@ fn move_info_panel(mut panel: Single<&mut Node, With<InfoPanel>>, mut hint: Quer
 }
 
 #[allow(clippy::type_complexity)]
-fn hide_play_ui(mut bar: Query<&mut Visibility, Or<(With<EawCommandBar>, With<BarBacking>, With<HeroBar>, With<SpeedText>)>>) {
+fn hide_play_ui(mut bar: Query<&mut Visibility, Or<(With<EawCommandBar>, With<BarBacking>, With<HeroBar>, With<SpeedText>, With<PauseBanner>)>>) {
     for mut v in &mut bar {
         *v = Visibility::Hidden;
     }
@@ -2201,6 +2226,19 @@ mod tests {
     fn capitalize_first_letter() {
         assert_eq!(capitalize("requires tech"), "Requires tech");
         assert_eq!(capitalize(""), "");
+    }
+
+    #[test]
+    fn pause_banner_tracks_pause_state() {
+        let clock = GameClock { level: 0, resume_level: 1, speeds: vec![1.0], override_multiplier: None, hold: false, pending: 0.0 };
+        let model = PlayUiModel { speed: galaxy_play::SpeedModel { rate: 0.0, ..Default::default() }, ..Default::default() };
+        let is_paused = clock.paused() || model.speed.rate <= 0.0;
+        assert!(is_paused, "banner should be active when paused");
+
+        let clock = GameClock { level: 1, resume_level: 1, speeds: vec![1.0], override_multiplier: None, hold: false, pending: 0.0 };
+        let model = PlayUiModel { speed: galaxy_play::SpeedModel { rate: 1.0, ..Default::default() }, ..Default::default() };
+        let is_paused = clock.paused() || model.speed.rate <= 0.0;
+        assert!(!is_paused, "banner should be hidden when running");
     }
 }
 

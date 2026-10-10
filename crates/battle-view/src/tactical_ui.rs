@@ -44,7 +44,7 @@ impl Plugin for TacticalUiPlugin {
                 spawn_bar.run_if(resource_exists::<crate::BattleSession>.and_then(not(resource_exists::<TacticalBarSpawned>))),
                 remove_reinforce.run_if(resource_removed::<BattleRuntime>),
                 remove_bar.run_if(resource_removed::<BattleRuntime>.or_eager(resource_removed::<crate::BattleSession>)),
-                (sync_data, sync_overlays, handle_clicks, ability_keys, autocast_toggle, autocast_rings, ability_at, hardpoint_clicks, reinforce_drag, reinforce_clicks, reinforce_place, reinforce_events, reinforce_panel, sync_minimap, minimap_pan, command_buttons_state, retreat_banner, victory_banner).chain().run_if(resource_exists::<BattleRuntime>),
+                (sync_data, sync_overlays, handle_clicks, ability_keys, autocast_toggle, autocast_rings, ability_at, hardpoint_clicks, reinforce_drag, reinforce_clicks, reinforce_place, reinforce_events, reinforce_panel, sync_minimap, minimap_pan, command_buttons_state, retreat_banner, victory_banner, pause_banner).chain().run_if(resource_exists::<BattleRuntime>),
             )
                 .chain(),
         );
@@ -1440,6 +1440,56 @@ fn victory_banner(
                 Node {
                     position_type: PositionType::Absolute,
                     top: Val::Percent(35.0),
+                    width: Val::Percent(100.0),
+                    justify_content: JustifyContent::Center,
+                    ..default()
+                },
+                TextLayout::justify(Justify::Center),
+                GlobalZIndex(80),
+            ));
+            if let Some(cam) = ui.camera {
+                e.insert(UiTargetCamera(cam));
+            }
+        }
+        (None, Ok((e, _))) => commands.entity(e).despawn(),
+        (None, Err(_)) => {}
+    }
+}
+
+/// Title banner shown at top of the screen when a tactical battle is paused.
+#[derive(Component)]
+struct PauseBanner;
+
+fn pause_banner(
+    mut commands: Commands,
+    ui: Res<eaw_ui::EawUiSettings>,
+    settings: Res<BattleViewSettings>,
+    status: Res<BattleStatus>,
+    mut banner: Query<(Entity, &mut Text), With<PauseBanner>>,
+) {
+    let want = if settings.paused && !status.over {
+        Some("P A U S E D")
+    } else {
+        None
+    };
+    match (want, banner.single_mut()) {
+        (Some(text), Ok((_, mut t))) => {
+            if t.0 != text {
+                t.0 = text.to_string();
+            }
+        }
+        (Some(text), Err(_)) => {
+            let mut e = commands.spawn((
+                PauseBanner,
+                crate::hud::TacticalHud,
+                Name::new("pause banner"),
+                Text::new(text),
+                game_font(&ui, 26.0),
+                TextColor(Color::srgb(1.0, 0.85, 0.35)),
+                TextShadow { offset: Vec2::splat(1.5), color: Color::BLACK },
+                Node {
+                    position_type: PositionType::Absolute,
+                    top: Val::Px(42.0),
                     width: Val::Percent(100.0),
                     justify_content: JustifyContent::Center,
                     ..default()
