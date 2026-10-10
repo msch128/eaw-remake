@@ -339,7 +339,7 @@ pub fn battle_audio(
     for o in hardpoint_orders.read() {
         let Some(target) = cur.ship(o.target) else { continue };
         let ty = visuals.ship(target.def).hardpoints.get(o.hardpoint as usize).map_or("", |h| h.hp_type.as_str());
-        let line = ranked.iter().find_map(|&def| visuals.ship(def).sfx.attack_hardpoint_by_type.iter().find(|(t, _)| t == ty).map(|(_, e)| e.as_str()));
+        let line = attack_hardpoint_line(visuals, &ranked, ty, faction.as_deref());
         if let Some(n) = line {
             send(n, None, &mut stats, &mut out);
             hardpoint_line = true;
@@ -409,6 +409,70 @@ pub fn battle_audio(
 fn hardpoint_destroyed_line(v: &crate::visuals::ShipVisual, hardpoint: u16) -> Option<&str> {
     let ty = v.hardpoints.get(hardpoint as usize).map_or("", |h| h.hp_type.as_str());
     v.sfx.hardpoint_destroyed_by_type.iter().find(|(t, _)| t == ty).map(|(_, e)| e.as_str())
+}
+
+/// The unit's acknowledgment when targeted at a specific hardpoint: exact type match, category match, or faction fallback.
+pub fn attack_hardpoint_line<'a>(
+    visuals: &'a crate::visuals::VisualCatalog,
+    ranked: &[ShipId],
+    ty: &str,
+    faction: Option<&str>,
+) -> Option<&'a str> {
+    // 1. Exact hardpoint type match on ranked ships
+    if let Some(n) = ranked.iter().find_map(|&def| {
+        visuals.ship(def).sfx.attack_hardpoint_by_type.iter().find(|(t, _)| t.eq_ignore_ascii_case(ty)).map(|(_, e)| e.as_str())
+    }) {
+        return Some(n);
+    }
+    // 2. Category match on ranked ships
+    let category = if ty.contains("SHIELD") {
+        Some("SHIELD")
+    } else if ty.contains("ENGINE") {
+        Some("ENGINE")
+    } else if ty.contains("WEAPON") || ty.contains("LASER") || ty.contains("TURRET") || ty.contains("CANNON") || ty.contains("TORPEDO") || ty.contains("MISSILE") {
+        Some("WEAPON")
+    } else if ty.contains("BAY") || ty.contains("HANGAR") {
+        Some("BAY")
+    } else {
+        None
+    };
+
+    if let Some(cat) = category {
+        if let Some(n) = ranked.iter().find_map(|&def| {
+            visuals.ship(def).sfx.attack_hardpoint_by_type.iter().find(|(t, _)| t.to_ascii_uppercase().contains(cat)).map(|(_, e)| e.as_str())
+        }) {
+            return Some(n);
+        }
+    }
+
+    // 3. Category faction fallback
+    match category {
+        Some("SHIELD") => match faction {
+            Some(f) if f.eq_ignore_ascii_case("empire") => Some("Unit_Attack_Hardpoint_Shield_Empire"),
+            Some(f) if f.eq_ignore_ascii_case("rebel") => Some("Unit_Attack_Hardpoint_Shield_Rebel"),
+            Some(f) if f.eq_ignore_ascii_case("underworld") => Some("Unit_Attack_Hardpoint_Shield_Underworld"),
+            _ => None,
+        },
+        Some("ENGINE") => match faction {
+            Some(f) if f.eq_ignore_ascii_case("empire") => Some("Unit_Attack_Hardpoint_Engine_Empire"),
+            Some(f) if f.eq_ignore_ascii_case("rebel") => Some("Unit_Attack_Hardpoint_Engine_Rebel"),
+            Some(f) if f.eq_ignore_ascii_case("underworld") => Some("Unit_Attack_Hardpoint_Engine_Underworld"),
+            _ => None,
+        },
+        Some("WEAPON") => match faction {
+            Some(f) if f.eq_ignore_ascii_case("empire") => Some("Unit_Attack_Hardpoint_Weapon_Empire"),
+            Some(f) if f.eq_ignore_ascii_case("rebel") => Some("Unit_Attack_Hardpoint_Weapon_Rebel"),
+            Some(f) if f.eq_ignore_ascii_case("underworld") => Some("Unit_Attack_Hardpoint_Weapon_Underworld"),
+            _ => None,
+        },
+        Some("BAY") => match faction {
+            Some(f) if f.eq_ignore_ascii_case("empire") => Some("Unit_Attack_Hardpoint_Hangar_Empire"),
+            Some(f) if f.eq_ignore_ascii_case("rebel") => Some("Unit_Attack_Hardpoint_Hangar_Rebel"),
+            Some(f) if f.eq_ignore_ascii_case("underworld") => Some("Unit_Attack_Hardpoint_Hangar_Underworld"),
+            _ => None,
+        },
+        _ => None,
+    }
 }
 
 /// Starts the space music scene for the player's faction. Battle music plays while shots are being
@@ -576,5 +640,39 @@ mod tests {
         let hero_rank = (true, class_priority(TargetClass::Frigate), 2, 5000i64);
         let normal_capital_rank = (false, class_priority(TargetClass::Capital), 4, 12000i64);
         assert!(hero_rank > normal_capital_rank, "hero outranks any non-hero ship");
+    }
+
+    #[test]
+    fn test_attack_hardpoint_lines_by_type_and_category_fallback() {
+        let mut visuals = crate::visuals::VisualCatalog::default();
+        let mut v = ShipVisual::default();
+        v.sfx.attack_hardpoint_by_type = vec![
+            ("HARD_POINT_WEAPON_LASER".into(), "Unit_Attack_Laser_Star_Destroyer".into()),
+            ("HARD_POINT_ENGINE".into(), "Unit_Attack_Engine_Star_Destroyer".into()),
+        ];
+        visuals.ships.push(v);
+        let ranked = vec![0 as ShipId];
+
+        // 1. Exact match
+        assert_eq!(
+            attack_hardpoint_line(&visuals, &ranked, "HARD_POINT_WEAPON_LASER", Some("Empire")),
+            Some("Unit_Attack_Laser_Star_Destroyer")
+        );
+
+        // 2. Category match (e.g. sublight engine variation)
+        assert_eq!(
+            attack_hardpoint_line(&visuals, &ranked, "HARD_POINT_SUBLIGHT_ENGINE", Some("Empire")),
+            Some("Unit_Attack_Engine_Star_Destroyer")
+        );
+
+        // 3. Faction category fallback when ship has no shield line
+        assert_eq!(
+            attack_hardpoint_line(&visuals, &ranked, "HARD_POINT_SHIELD_GENERATOR", Some("Empire")),
+            Some("Unit_Attack_Hardpoint_Shield_Empire")
+        );
+        assert_eq!(
+            attack_hardpoint_line(&visuals, &ranked, "HARD_POINT_SHIELD_GENERATOR", Some("Rebel")),
+            Some("Unit_Attack_Hardpoint_Shield_Rebel")
+        );
     }
 }
