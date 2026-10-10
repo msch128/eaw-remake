@@ -1,4 +1,4 @@
-﻿//! Rendering and interaction of the galactic conquest map: starfield, planets, owner halos,
+//! Rendering and interaction of the galactic conquest map: starfield, planets, owner halos,
 //! trade routes, name labels and click selection.
 
 use bevy::{
@@ -1167,9 +1167,21 @@ fn update_hover(
     camera: Single<(&Camera, &GlobalTransform)>,
     view: Res<GalaxyView>,
     radii: Res<PlanetRadii>,
+    blocked: Option<Res<galaxy_play::PlayCursorBlocked>>,
+    cheat_panel: Query<(&ComputedNode, &UiGlobalTransform), With<crate::cheat_menu::CheatRoot>>,
     mut hover: ResMut<Hover>,
     mut sounds: MessageWriter<UiSound>,
 ) {
+    if blocked.is_some_and(|b| b.0) {
+        hover.set_if_neq_none();
+        return;
+    }
+    if let Some(phys) = window.physical_cursor_position() {
+        if cheat_panel.iter().any(|(n, t)| n.contains_point(*t, phys)) {
+            hover.set_if_neq_none();
+            return;
+        }
+    }
     let Some(cursor) = window.cursor_position() else {
         if args.hover_selected {
             hover.0 = selection.0;
@@ -1219,10 +1231,22 @@ fn pick_planet(
     window: Single<&Window, With<PrimaryWindow>>,
     hover: Res<Hover>,
     fleet_hover: Option<Res<galaxy_play::PlayHover>>,
+    blocked: Option<Res<galaxy_play::PlayCursorBlocked>>,
+    cheat_panel: Query<(&ComputedNode, &UiGlobalTransform), With<crate::cheat_menu::CheatRoot>>,
     mut selection: ResMut<Selection>,
     mut press: Local<Option<Vec2>>,
     mut sounds: MessageWriter<UiSound>,
 ) {
+    if blocked.is_some_and(|b| b.0) {
+        press.take();
+        return;
+    }
+    if let Some(phys) = window.physical_cursor_position() {
+        if cheat_panel.iter().any(|(n, t)| n.contains_point(*t, phys)) {
+            press.take();
+            return;
+        }
+    }
     let Some(cursor) = window.cursor_position() else {
         return;
     };

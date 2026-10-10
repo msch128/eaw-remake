@@ -44,7 +44,7 @@ pub(crate) struct BattleCheats {
 }
 
 #[derive(Component)]
-struct CheatRoot;
+pub(crate) struct CheatRoot;
 
 /// What a button does.
 #[derive(Component, Clone, Copy, PartialEq, Debug)]
@@ -110,6 +110,7 @@ fn spawn_panel(commands: &mut Commands, sections: &[(&str, &[CheatAction])], tex
     let button = |p: &mut ChildSpawnerCommands, action: CheatAction, width: Val| {
         p.spawn((
             Button,
+            galaxy_play::PlayUiBlock,
             action,
             Node { width, padding: UiRect::axes(Val::Px(8.0), Val::Px(5.0)), justify_content: JustifyContent::Center, border: UiRect::all(Val::Px(1.0)), border_radius: BorderRadius::all(Val::Px(3.0)), ..default() },
             BackgroundColor(Color::srgba(0.05, 0.16, 0.22, 0.95)),
@@ -120,6 +121,7 @@ fn spawn_panel(commands: &mut Commands, sections: &[(&str, &[CheatAction])], tex
     commands
         .spawn((
             CheatRoot,
+            galaxy_play::PlayUiBlock,
             Name::new("cheat menu"),
             Node {
                 position_type: PositionType::Absolute,

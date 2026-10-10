@@ -254,6 +254,8 @@ fn sync_radii(radii: Res<PlanetRadii>, bridge: Res<PlayBridge>, layout: Option<R
 fn cursor_blocked(
     window: Option<Single<&Window, With<PrimaryWindow>>>,
     bar: Query<(&ComputedNode, &UiGlobalTransform), With<EawCommandBar>>,
+    cheat_panel: Query<(&ComputedNode, &UiGlobalTransform), With<crate::cheat_menu::CheatRoot>>,
+    droid_menu: Option<Res<crate::droid_menu::DroidMenuState>>,
     screen: Res<State<AppScreen>>,
     paused: Res<Paused>,
     state: Option<Res<SimState>>,
@@ -262,11 +264,12 @@ fn cursor_blocked(
 ) {
     // The planet close-up has its own pointer handling (slots, drag and drop); no map box selection behind it.
     let in_planet_view = planet_view.is_some_and(|v| v.active);
-    let over_bar = window
-        .and_then(|w| w.physical_cursor_position())
-        .is_some_and(|c| bar.iter().any(|(node, tf)| node.contains_point(*tf, c)));
+    let in_droid_menu = droid_menu.is_some_and(|d| d.open);
+    let phys_cursor = window.as_ref().and_then(|w| w.physical_cursor_position());
+    let over_bar = phys_cursor.is_some_and(|c| bar.iter().any(|(node, tf)| node.contains_point(*tf, c)));
+    let over_cheat = phys_cursor.is_some_and(|c| cheat_panel.iter().any(|(node, tf)| node.contains_point(*tf, c)));
     let loading = state.is_some_and(|s| s.current.loading);
-    let value = over_bar || in_planet_view || loading || paused.0 || *screen.get() != AppScreen::Galaxy;
+    let value = over_bar || over_cheat || in_droid_menu || in_planet_view || loading || paused.0 || *screen.get() != AppScreen::Galaxy;
     if blocked.0 != value {
         blocked.0 = value;
     }
