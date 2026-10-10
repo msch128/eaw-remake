@@ -99,6 +99,7 @@ struct GalaxySoundState {
     fire: Vec<PendingFire>,
     /// Superweapon unit (object name) that fired last, for its fire sound when the planet dies.
     last_unit: Option<String>,
+    last_select_time: Option<f64>,
 }
 
 /// A superweapon order waiting for the simulation's verdict.
@@ -305,12 +306,14 @@ fn fleet_sounds(
     live: Option<Res<PlayerSelection>>,
     game: Res<Game>,
     audio: Res<AlamoAudio>,
+    time: Res<Time>,
     mut sfx: SfxCommands,
 ) {
     let (Some(state), Some(me), Some(live)) = (state, player.and_then(|p| p.0), live) else {
         actions.clear();
         return;
     };
+    let now = time.elapsed_secs_f64();
     for a in actions.read() {
         match a {
             PlayAction::SelectFleets(list) => {
@@ -318,10 +321,13 @@ fn fleet_sounds(
                 if list.iter().any(|id| state.galaxy().fleets.get(id).is_some_and(|f| f.owner == me)) {
                     sfx.play(DRAG_FLEET);
                 }
-                if let Some((u, _)) = lead_unit(&state, list, me)
-                    && let Some(n) = object_sfx(&game, &state.world.units[u as usize].name, "sfxevent_select")
-                {
-                    sfx.play(n);
+                if st.last_select_time.is_none_or(|t| now - t >= 2.0) {
+                    if let Some((u, _)) = lead_unit(&state, list, me)
+                        && let Some(n) = object_sfx(&game, &state.world.units[u as usize].name, "sfxevent_select")
+                    {
+                        st.last_select_time = Some(now);
+                        sfx.play(n);
+                    }
                 }
             }
             PlayAction::MoveSelected(to) | PlayAction::MoveAndMerge { to, .. } => {

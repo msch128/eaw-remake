@@ -35,6 +35,8 @@ const RETREAT_GAP: f64 = 30.0;
 const REINFORCEMENTS_AVAILABLE_AT: f64 = 3.0;
 /// A hostile hit or shot within this many battle seconds keeps the music at battle intensity (estimate).
 const COMBAT_WINDOW: f64 = 3.0;
+/// Minimum gap between unit selection acknowledgments to prevent click spam.
+pub const SELECT_VOICE_COOLDOWN: f64 = 2.0;
 
 /// Counters of what the hooks sent (for tests and diagnostics).
 #[derive(Resource, Debug, Default, Clone)]
@@ -65,6 +67,7 @@ pub struct AudioMemory {
     types_spotted: HashSet<ShipId>,
     reserve_announced: bool,
     last_selection: Vec<u32>,
+    last_select_voice: Option<f64>,
 }
 
 fn is_small(class: TargetClass) -> bool {
@@ -305,8 +308,18 @@ pub fn battle_audio(
     ranked.sort_by(|&a, &b| rank(b).cmp(&rank(a)));
     if sel.is_changed() && sel.ships != mem.last_selection {
         mem.last_selection = sel.ships.clone();
-        if let Some(n) = ranked.iter().find_map(|&def| visuals.ship(def).sfx.select.as_deref()) {
-            send(n, None, &mut stats, &mut out);
+        if mem.last_select_voice.is_none_or(|t| clock - t >= SELECT_VOICE_COOLDOWN) {
+            let line = ranked.iter().find_map(|&def| visuals.ship(def).sfx.select.as_deref())
+                .or_else(|| match faction.as_deref() {
+                    Some(f) if f.eq_ignore_ascii_case("empire") => Some("Unit_Select_Empire"),
+                    Some(f) if f.eq_ignore_ascii_case("rebel") => Some("Unit_Select_Rebel"),
+                    Some(f) if f.eq_ignore_ascii_case("underworld") => Some("Unit_Select_Underworld"),
+                    _ => None,
+                });
+            if let Some(n) = line {
+                mem.last_select_voice = Some(clock);
+                send(n, None, &mut stats, &mut out);
+            }
         }
     }
     // An attack on one hardpoint: the `SFXEvent_Attack_Hardpoint` line of that hardpoint's type ("Instructions on taking out those laser cannons!"),
@@ -480,5 +493,28 @@ mod tests {
         assert_eq!(hardpoint_destroyed_line(&v, 1), Some("Unit_Lost_Engines_Star_Destroyer"));
         assert_eq!(hardpoint_destroyed_line(&v, 2), None, "no entry (or SFX_NA) = silent");
         assert_eq!(hardpoint_destroyed_line(&v, 9), None);
+    }
+
+    #[test]
+    fn test_unit_selection_voice_cooldown_and_fallback() {
+        assert_eq!(SELECT_VOICE_COOLDOWN, 2.0);
+
+        let mut mem = AudioMemory::default();
+        let clock = 10.0;
+        assert!(mem.last_select_voice.is_none_or(|t| clock - t >= SELECT_VOICE_COOLDOWN));
+        mem.last_select_voice = Some(clock);
+
+        let clock_quick_click = 10.5;
+        assert!(!mem.last_select_voice.is_none_or(|t| clock_quick_click - t >= SELECT_VOICE_COOLDOWN));
+
+        let clock_later = 12.1;
+        assert!(mem.last_select_voice.is_none_or(|t| clock_later - t >= SELECT_VOICE_COOLDOWN));
+
+        // Faction fallback lines
+        let emp_fallback = match Some("Empire") {
+            Some(f) if f.eq_ignore_ascii_case("empire") => Some("Unit_Select_Empire"),
+            _ => None,
+        };
+        assert_eq!(emp_fallback, Some("Unit_Select_Empire"));
     }
 }
