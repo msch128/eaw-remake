@@ -49,9 +49,10 @@ fn vertex(in: ParticleVertexInput) -> VertexOutput {
     var p = quad_verts[ix * 3u];
     let t = quad_verts[ix * 3u + 1u];
     let c = quad_verts[ix * 3u + 2u];
-    // Keep thin quads (bolts, sparks, distant effects) at least about 2 px wide at 4K: each quad is
+    // Keep thin quads (sparks, distant effects) at least about 2 px wide at 4K: each quad is
     // (b, b+1, b+2, b+3) with corners p0 + {0,u} + {0,w}; widen an edge that projects below the minimum.
-    {
+    // Only applied to billboard quads (flagged with p.w > 0.5); 3D meshes (bolts) keep their true geometry.
+    if p.w > 0.5 {
         let qb = ix & 0xFFFFFFFCu;
         let p0 = quad_verts[qb * 3u].xyz;
         let u = quad_verts[(qb + 1u) * 3u].xyz - p0;

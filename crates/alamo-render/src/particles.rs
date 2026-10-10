@@ -975,8 +975,10 @@ pub fn update_particle_batches(
         }
         ib.resize((batch.cap_idx + 1) * 4, 0);
         let mut vb = Vec::with_capacity(batch.cap_vert * 48);
+        let quad_verts_count = quads.len() * 4;
         for i in 0..pos.len() {
-            for f in pos[i].iter().chain(&[0.0]).chain(&uv[i]).chain(&[0.0, 0.0]).chain(&col[i]) {
+            let is_quad = if i < quad_verts_count { 1.0f32 } else { 0.0f32 };
+            for f in pos[i].iter().chain(&[is_quad]).chain(&uv[i]).chain(&[0.0, 0.0]).chain(&col[i]) {
                 vb.extend_from_slice(&f.to_le_bytes());
             }
         }
@@ -1093,6 +1095,26 @@ mod tests {
         }
         let v = rt.range(2.0, 3.0);
         assert!((2.0..=3.0).contains(&v));
+    }
+
+    #[test]
+    fn billboard_quads_flagged_with_one_and_bolts_with_zero() {
+        let quads = vec![
+            Quad {
+                center: Vec3::ZERO,
+                size: 1.0,
+                rot: 0.0,
+                color: [1.0, 1.0, 1.0, 1.0],
+                cell: 0,
+                grid: 1,
+            }
+        ];
+        let quad_verts_count = quads.len() * 4;
+        let pos = vec![[0.0, 0.0, 0.0]; 8]; // 4 quad verts, 4 bolt verts
+        let flags: Vec<f32> = (0..pos.len())
+            .map(|i| if i < quad_verts_count { 1.0 } else { 0.0 })
+            .collect();
+        assert_eq!(flags, vec![1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0]);
     }
 }
 
