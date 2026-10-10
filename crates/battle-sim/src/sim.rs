@@ -2366,6 +2366,31 @@ fn mov(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, spawn: &
                 };
                 avoid = st.avoid;
                 slow = st.slow;
+                // Escorts calculate a repulsion vector around capital ships to glide around them (U65).
+                if matches!(def.class, TargetClass::Corvette | TargetClass::Frigate) {
+                    for &j in nav.hulls {
+                        if j == s.id || j == s.target || j == s.carrier {
+                            continue;
+                        }
+                        let oj = &snaps[j as usize];
+                        if !oj.alive || !matches!(oj.class, TargetClass::Capital | TargetClass::Super | TargetClass::Structure) {
+                            continue;
+                        }
+                        let cap_safe = oj.radius + def.radius + 150.0;
+                        let rx = s.pos.x - oj.pos.x;
+                        let ry = s.pos.y - oj.pos.y;
+                        let dist2 = rx * rx + ry * ry;
+                        if dist2 < cap_safe * cap_safe && dist2 > 1e-4 {
+                            let d = dist2.sqrt();
+                            let factor = ((cap_safe - d) / cap_safe).clamp(0.0, 1.0);
+                            avoid.0 += (rx / d) * factor * 3.5;
+                            avoid.1 += (ry / d) * factor * 3.5;
+                            if d < oj.radius + def.radius + 50.0 {
+                                slow = slow.min(0.5 + 0.5 * (d / (oj.radius + def.radius + 50.0)));
+                            }
+                        }
+                    }
+                }
             } else {
                 s.path.clear();
             }
@@ -2481,14 +2506,26 @@ fn mov(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, spawn: &
             if j == s.carrier || o.carrier == s.id {
                 continue;
             }
+            let is_escort = matches!(def.class, TargetClass::Corvette | TargetClass::Frigate);
+            let is_cap = matches!(o.class, TargetClass::Capital | TargetClass::Super | TargetClass::Structure);
+            let am_cap = matches!(def.class, TargetClass::Capital | TargetClass::Super | TargetClass::Structure);
+            let o_escort = matches!(o.class, TargetClass::Corvette | TargetClass::Frigate);
+            if am_cap && o_escort {
+                // Capital ships hold course; escorts yield to them
+                continue;
+            }
             let fixed = cat.ship(o.def).is_static;
-            let min = (me.radius + o.radius) * 0.85;
+            let min = if is_escort && is_cap {
+                (me.radius + o.radius + 150.0).max((me.radius + o.radius) * 0.85)
+            } else {
+                (me.radius + o.radius) * 0.85
+            };
             let (dx, dy) = (s.pos.x - o.pos.x, s.pos.y - o.pos.y);
             if dx.abs() < min && dy.abs() < min {
                 let d = (dx * dx + dy * dy).sqrt();
                 if d < min {
                     let (ux, uy) = if d > 1e-3 { (dx / d, dy / d) } else { (1.0 - 2.0 * f32::from(s.id as u8 & 1), 0.0) };
-                    let push = ((min - d) * if fixed { 1.0 } else { 0.5 }).min(cap);
+                    let push = ((min - d) * if fixed || (is_escort && is_cap) { 1.0 } else { 0.5 }).min(cap);
                     s.pos.x += ux * push;
                     s.pos.y += uy * push;
                 }

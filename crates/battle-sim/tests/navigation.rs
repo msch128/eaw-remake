@@ -151,3 +151,27 @@ fn real_maps_bilbringi_and_hoth_have_no_hull_overlaps_and_no_ships_in_rocks() {
         assert_eq!(hash, fleet_battle(&data, &fs, map, 1).2, "{map}: same seed, same battle");
     }
 }
+
+#[test]
+fn escort_corvette_steers_clear_of_capital_ship_with_buffer() {
+    let corvette = ship("corvette", TargetClass::Corvette, 200.0, 60.0, false);
+    let cap = ship("cap", TargetClass::Capital, 0.0, 400.0, true);
+    let cat = Arc::new(Catalog::from_defs(vec![corvette, cap], vec![]));
+    let config = BattleConfig { arena: Some(arena(&[])), record_events: false, ..BattleConfig::default() };
+    let mut b = Battle::new(BattleSetup { catalog: cat.clone(), sides: vec![side("a", "corvette", &cat, 1), side("b", "cap", &cat, 1)], config });
+    let (corv_id, cap_id) = (ids(&b, 0)[0], ids(&b, 1)[0]);
+
+    b.ships[cap_id as usize].pos = Vec3::new(0.0, 0.0, 0.0);
+    b.ships[corv_id as usize].pos = Vec3::new(-1200.0, 50.0, 0.0);
+    b.command(0, Command::Move { ships: vec![corv_id], to: Vec3::new(1200.0, 50.0, 0.0) }).unwrap();
+
+    let mut closest_dist = f32::MAX;
+    for _ in 0..30 * 40 {
+        b.step();
+        let d = b.ships[corv_id as usize].pos.dist(b.ships[cap_id as usize].pos);
+        closest_dist = closest_dist.min(d);
+    }
+    let cap_hull_radius = 400.0 * 0.75;
+    assert!(closest_dist > cap_hull_radius, "corvette glides around capital hull: {closest_dist} vs hull radius {cap_hull_radius}");
+    assert!(b.ships[corv_id as usize].pos.x > 800.0, "corvette reaches the other side: pos {:?}", b.ships[corv_id as usize].pos);
+}
