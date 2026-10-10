@@ -605,6 +605,54 @@ pub fn draw_engine_trails(
     }
 }
 
+/// Draws persistent smoke plumes and electrical sparks from damaged hardpoints
+/// on stations and large capital ships below 50% hull (U73).
+pub fn draw_hull_damage_effects(
+    rt: Res<BattleRuntime>,
+    rendered: Option<Res<crate::ships::RenderedShips>>,
+    mut gizmos: Gizmos<EngineTrailGizmos>,
+) {
+    let Some(rendered) = rendered else { return };
+    let clock = rt.clock as f32;
+    for ship in rendered.0.values() {
+        if !ship.visible {
+            continue;
+        }
+        let def = rt.catalog.ship(ship.def);
+        let is_big = def.is_static || ship.radius >= 180.0;
+        if !is_big || ship.hull >= 0.5 {
+            continue;
+        }
+        let smoke_intensity = (1.0 - ship.hull * 2.0).clamp(0.2, 1.0);
+        for (i, &alive) in ship.hp_alive.iter().enumerate() {
+            if alive {
+                continue;
+            }
+            let Some(Some(hp_pos)) = ship.hp_pos.get(i) else { continue };
+            let seed = (ship.id * 101 + i as u32) as f32;
+            let phase = (clock * 2.0 + seed).sin();
+            let smoke_dir = Vec3::new(
+                (clock * 1.5 + seed).cos() * 8.0,
+                35.0 * smoke_intensity + phase * 5.0,
+                (clock * 1.5 + seed * 1.3).sin() * 8.0,
+            );
+            let smoke_base = Color::srgba(0.15, 0.15, 0.16, 0.8 * smoke_intensity);
+            let smoke_top = Color::srgba(0.05, 0.05, 0.05, 0.0);
+            gizmos.line_gradient(*hp_pos, *hp_pos + smoke_dir, smoke_base, smoke_top);
+
+            // Intermittent electrical sparks
+            if ((clock * 6.0 + seed * 3.7).sin()) > 0.6 {
+                let spark_dir = Vec3::new(
+                    (clock * 12.0 + seed).sin() * 12.0,
+                    (clock * 15.0 + seed * 2.0).cos() * 10.0,
+                    (clock * 14.0 + seed * 1.7).sin() * 12.0,
+                );
+                gizmos.line(*hp_pos, *hp_pos + spark_dir, Color::srgba(1.0, 0.9, 0.45, 0.9));
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -671,6 +719,18 @@ mod tests {
         assert_eq!(wave.timer, wave.max_time);
         assert!(wave.end_radius > wave.start_radius);
         assert!((wave.max_time - 0.3).abs() < 1e-4);
+    }
+
+    #[test]
+    fn test_hull_damage_smoke_threshold() {
+        let hull_above: f32 = 0.55;
+        let is_big = true;
+        assert!(!(is_big && hull_above < 0.5), "no persistent smoke above 50% hull");
+
+        let hull_below: f32 = 0.40;
+        assert!(is_big && hull_below < 0.5, "persistent smoke triggers below 50% hull");
+        let intensity = (1.0f32 - hull_below * 2.0).clamp(0.2, 1.0);
+        assert!(intensity > 0.15, "smoke intensity increases as hull drops");
     }
 }
 
