@@ -68,6 +68,8 @@ pub struct AudioMemory {
     reserve_announced: bool,
     last_selection: Vec<u32>,
     last_select_voice: Option<f64>,
+    last_station_critical: Option<f64>,
+    shield_down_warned: HashSet<u32>,
 }
 
 fn is_small(class: TargetClass) -> bool {
@@ -157,9 +159,12 @@ pub fn battle_audio(
                     let sfx = &visuals.ship(v.def).sfx;
                     // An own unit is shot at: the unit complains, a station raises the alarm.
                     if v.side == player && hostile {
+                        let frac = if def.hull > 0.0 { v.hull / def.hull } else { 1.0 };
                         if def.class == TargetClass::Structure {
-                            // `Delay_Between_Space_Base_Attack_Announcement_Seconds` (Audio.xml).
-                            if mem.last_station_alarm.is_none_or(|t| clock - t >= f64::from(space_base_attack_announcement_delay)) {
+                            if frac <= 0.25 && mem.last_station_critical.is_none_or(|t| clock - t >= 30.0) {
+                                mem.last_station_critical = Some(clock);
+                                say(GalaxyEvent::StationCriticalDamage, &mut stats);
+                            } else if mem.last_station_alarm.is_none_or(|t| clock - t >= f64::from(space_base_attack_announcement_delay)) {
                                 mem.last_station_alarm = Some(clock);
                                 say(GalaxyEvent::StationUnderAttack, &mut stats);
                             }
@@ -169,6 +174,15 @@ pub fn battle_audio(
                         {
                             mem.under_attack.insert(v.def, clock);
                             send(n, None, &mut stats, &mut out);
+                        }
+
+                        // Shield collapse warning ("Shields are down!") for capital ships, supers and stations
+                        if matches!(def.class, TargetClass::Capital | TargetClass::Super | TargetClass::Structure) && def.shield > 0.0 {
+                            if v.shield <= 0.0 && mem.shield_down_warned.insert(*ship) {
+                                say(GalaxyEvent::ShieldsDown, &mut stats);
+                            } else if v.shield > def.shield * 0.25 {
+                                mem.shield_down_warned.remove(ship);
+                            }
                         }
                     }
                     // Health warnings at `Health_Low_Percent_Threshold` / `Health_Critical_Percent_Threshold`.
@@ -204,6 +218,7 @@ pub fn battle_audio(
             }
             Event::ShipDestroyed { ship, pos } => {
                 mem.health_flags.remove(ship);
+                mem.shield_down_warned.remove(ship);
                 let Some(&(def, side)) = mem.ships.get(ship) else { continue };
                 let vis = visuals.ship(def);
                 if let Some(n) = vis.sfx.death.as_deref() {
@@ -214,23 +229,25 @@ pub fn battle_audio(
                     continue;
                 }
                 let structure = class == TargetClass::Structure;
+                let capital = matches!(class, TargetClass::Capital | TargetClass::Super);
                 if side == player {
                     if let Some(n) = vis.sfx.unit_lost.as_deref() {
                         send(n, None, &mut stats, &mut out);
                     }
                     say(
-                        match (vis.hero, structure) {
-                            (true, _) => GalaxyEvent::HeroLost,
-                            (_, true) => GalaxyEvent::StructureDestroyed,
+                        match (vis.hero, structure, capital) {
+                            (true, _, _) => GalaxyEvent::HeroLost,
+                            (_, true, _) => GalaxyEvent::StructureDestroyed,
+                            (_, _, true) => GalaxyEvent::CapitalShipLost,
                             _ => GalaxyEvent::UnitDestroyed,
                         },
                         &mut stats,
                     );
                 } else {
                     say(
-                        match (vis.hero, structure) {
-                            (true, _) => GalaxyEvent::HeroEliminated,
-                            (_, true) => GalaxyEvent::EnemyStructureDestroyed,
+                        match (vis.hero, structure, capital) {
+                            (true, _, _) => GalaxyEvent::HeroEliminated,
+                            (_, true, _) => GalaxyEvent::EnemyStructureDestroyed,
                             _ => GalaxyEvent::EnemyUnitDestroyed,
                         },
                         &mut stats,
@@ -674,5 +691,28 @@ mod tests {
             attack_hardpoint_line(&visuals, &ranked, "HARD_POINT_SHIELD_GENERATOR", Some("Rebel")),
             Some("Unit_Attack_Hardpoint_Shield_Rebel")
         );
+    }
+
+    #[test]
+    fn test_advisor_emergency_and_capital_loss_events() {
+        // Verify GalaxyEvent suffixes for emergency events
+        assert_eq!(GalaxyEvent::CapitalShipLost.suffixes(), &["Capital_Ship_Destroyed", "Unit_Destroyed"]);
+        assert_eq!(GalaxyEvent::StationCriticalDamage.suffixes(), &["Space_Station_Damaged", "Space_Station_Under_Attack", "Base_Under_Attack"]);
+        assert_eq!(GalaxyEvent::ShieldsDown.suffixes(), &["Shields_Down", "Shields_Depleted", "Shield_Generator_Destroyed"]);
+
+        // Memory tracking for station critical damage cooldown and shield down warnings
+        let mut mem = AudioMemory::default();
+        let clock = 50.0;
+        assert!(mem.last_station_critical.is_none_or(|t| clock - t >= 30.0));
+        mem.last_station_critical = Some(clock);
+        assert!(!mem.last_station_critical.is_none_or(|t| 60.0 - t >= 30.0));
+        assert!(mem.last_station_critical.is_none_or(|t| 85.0 - t >= 30.0));
+
+        // Shield down deduplication
+        let ship_id = 42;
+        assert!(mem.shield_down_warned.insert(ship_id), "first shield collapse reports");
+        assert!(!mem.shield_down_warned.insert(ship_id), "already warned does not spam");
+        mem.shield_down_warned.remove(&ship_id);
+        assert!(mem.shield_down_warned.insert(ship_id), "recharged shield can report collapse again");
     }
 }

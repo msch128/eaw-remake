@@ -79,11 +79,17 @@ pub enum GalaxyEvent {
     TechUpgradeStarted,
     /// A tech upgrade was cancelled.
     TechUpgradeCancelled,
+    /// A capital ship was lost in battle.
+    CapitalShipLost,
+    /// An own space station is suffering critical damage (< 25% hull).
+    StationCriticalDamage,
+    /// An own capital ship or station lost all shield protection.
+    ShieldsDown,
 }
 
 impl GalaxyEvent {
     /// All events, for tests and menus.
-    pub const ALL: [GalaxyEvent; 35] = [
+    pub const ALL: [GalaxyEvent; 38] = [
         Self::UnitBuilt,
         Self::StructureBuilt,
         Self::PlanetCaptured,
@@ -119,6 +125,9 @@ impl GalaxyEvent {
         Self::UpgradeCancelled,
         Self::TechUpgradeStarted,
         Self::TechUpgradeCancelled,
+        Self::CapitalShipLost,
+        Self::StationCriticalDamage,
+        Self::ShieldsDown,
     ];
 
     /// Event-name suffixes after the faction prefix, in order of preference.
@@ -159,6 +168,9 @@ impl GalaxyEvent {
             Self::UpgradeCancelled => &["Upgrade_Canceled", "Building_Canceled"],
             Self::TechUpgradeStarted => &["Tech_Upgrade_Progress", "Researching"],
             Self::TechUpgradeCancelled => &["Tech_Upgrade_Canceled", "Research_Canceled"],
+            Self::CapitalShipLost => &["Capital_Ship_Destroyed", "Unit_Destroyed"],
+            Self::StationCriticalDamage => &["Space_Station_Damaged", "Space_Station_Under_Attack", "Base_Under_Attack"],
+            Self::ShieldsDown => &["Shields_Down", "Shields_Depleted", "Shield_Generator_Destroyed"],
         }
     }
 }
