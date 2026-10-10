@@ -2022,19 +2022,27 @@ fn scan(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig) {
         if d > range {
             continue;
         }
-        let weight = match set {
+        let mut weight = match set {
             Some(p) => {
                 if p.excluded & t.class.bit() != 0 && explicit != Some(i as u32) {
                     continue;
                 }
-                p.weight(t.class, t.golan).min(1000.0)
+                p.weight(t.class, t.golan).min(1000.0) + 1.0
             }
-            None => f32::from(target_priority(me.class, t.class)),
+            None => f32::from(target_priority(me.class, t.class)) * 10.0 + 1.0,
         };
         // Intercept: fighters near their carrier go for enemy bombers that come within 3500 units of it (estimate; the priority sets already rank bombers).
-        let weight = if me.class == TargetClass::Fighter && t.class == TargetClass::Bomber && s.carrier != NONE && snaps[s.carrier as usize].alive && snaps[s.carrier as usize].pos.dist(t.pos) < 3500.0 { weight * 0.3 } else { weight };
+        if me.class == TargetClass::Fighter && t.class == TargetClass::Bomber && s.carrier != NONE && snaps[s.carrier as usize].alive && snaps[s.carrier as usize].pos.dist(t.pos) < 3500.0 {
+            weight *= 0.3;
+        }
+        // U66: Interceptor doctrine: Interceptors (A-Wings, TIE Interceptors) heavily prioritize enemy bombers to screen capital ships.
+        if def.is_interceptor() && t.class == TargetClass::Bomber {
+            weight *= 0.15;
+        }
         // Finish off weak ships in reach first (AotR_Focus_Weak_Unit: health below 0.33; the factor 0.5 on the weight is an estimate).
-        let weight = if t.health < 0.33 && !matches!(t.class, TargetClass::Fighter | TargetClass::Bomber) && d <= def.max_weapon_range * 1.1 { weight * 0.5 } else { weight };
+        if t.health < 0.33 && !matches!(t.class, TargetClass::Fighter | TargetClass::Bomber) && d <= def.max_weapon_range * 1.1 {
+            weight *= 0.5;
+        }
         found.push((weight, d, i as u32));
     }
     found.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.total_cmp(&b.1)).then(a.2.cmp(&b.2)));
