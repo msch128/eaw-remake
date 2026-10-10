@@ -2383,6 +2383,19 @@ fn lead(muzzle: Vec3, t: &Snap, speed: f32) -> Vec3 {
     t.pos + t.vel * tt
 }
 
+/// Launch direction for homing missiles and torpedoes: launches with an upward loft and slight lateral spread
+/// so they arc in curved 3D trajectories toward their target (Remake / EaW hallmark, U25/U33).
+fn missile_launch_dir(base_dir: Vec3, dist: f32, rng: &mut Rng) -> Vec3 {
+    let dist_factor = (dist / 1500.0).clamp(0.2, 1.0);
+    let loft = 0.45 * dist_factor;
+    let mut perp = Vec3::new(-base_dir.y, base_dir.x, 0.0).normalized();
+    if perp.len_sq() < 0.5 {
+        perp = Vec3::new(0.0, 1.0, 0.0);
+    }
+    let side = (rng.unit() * 0.4 - 0.2) * dist_factor;
+    (base_dir + Vec3::new(0.0, 0.0, loft) + perp * side).normalized()
+}
+
 fn weapons(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, rng: &mut Rng, out: &mut Vec<FireReq>) {
     let dt = cfg.dt;
     let def = cat.ship(s.def);
@@ -2455,7 +2468,12 @@ fn weapons(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, rng:
                         aim += rng.in_ball() * (t.radius * 0.45);
                     }
                     aim += rng.in_ball() * hp.inaccuracy[t.class as usize];
-                    let dir = (aim - muzzle).normalized();
+                    let base_dir = (aim - muzzle).normalized();
+                    let dir = if pd.turn_rate > 0.0 && tgt != NONE && matches!(pd.category.as_str(), "missile" | "torpedo" | "rocket") {
+                        missile_launch_dir(base_dir, (aim - muzzle).len(), rng)
+                    } else {
+                        base_dir
+                    };
                     out.push(FireReq { ship: s.id, hp: i as u16, proj: pid, from: muzzle, vel: dir * pd.speed, target: tgt, aim_hp });
                 }
                 st.pulses_left -= 1;
@@ -2514,9 +2532,13 @@ fn weapons(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, rng:
                     let to = t.pos - muzzle;
                     let ang = wrap_angle(to.y.atan2(to.x) - s.yaw).abs();
                     if to.len() - t.radius * 0.6 <= d.range && ang <= d.half_cone + (t.radius / to.len().max(1.0)).atan() && (pd.hull_damage || pd.shield_damage) {
-                        let mut aim = lead(muzzle, t, pd.speed);
-                        aim += rng.in_ball() * (t.radius * 0.35 + 6.0);
-                        let dir = (aim - muzzle).normalized();
+                        let aim = lead(muzzle, t, pd.speed);
+                        let base_dir = (aim - muzzle).normalized();
+                        let dir = if pd.turn_rate > 0.0 && tgt != NONE && matches!(pd.category.as_str(), "missile" | "torpedo" | "rocket") {
+                            missile_launch_dir(base_dir, (aim - muzzle).len(), rng)
+                        } else {
+                            base_dir
+                        };
                         out.push(FireReq { ship: s.id, hp: NO_HP, proj: d.projectile, from: muzzle, vel: dir * pd.speed, target: tgt, aim_hp: NO_HP });
                     }
                 }

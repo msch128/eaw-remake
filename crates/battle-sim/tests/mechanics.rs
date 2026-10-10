@@ -613,6 +613,29 @@ fn sensor_jamming_breaks_missile_locks() {
 }
 
 #[test]
+fn homing_missile_launches_with_curved_arc_loft_and_tracks_target() {
+    let mut missile = laser();
+    missile.name = "concussion_missile".into();
+    missile.category = "missile".into();
+    missile.turn_rate = 2.0;
+    missile.speed = 400.0;
+    let shooter = ship("missile_ship", 1000.0, 0.0, vec![gun("missile_tube", 500.0)]);
+    let target = ship("target_ship", 1000.0, 0.0, vec![]);
+    let cat = Catalog::from_defs(vec![shooter, target], vec![missile]);
+    let mut b = Battle::new(setup(cat, "missile_ship", "target_ship", 1, 1, cfg()));
+    let mut launched_z = None;
+    for _ in 0..30 {
+        b.step();
+        if let Some(p) = b.projectiles.first() {
+            launched_z = Some(p.vel.z);
+            break;
+        }
+    }
+    let z = launched_z.expect("a missile was launched");
+    assert!(z > 50.0, "missile launches with an upward loft for curved trajectory: {z}");
+}
+
+#[test]
 fn buzz_droid_storm_damages_enemies_in_the_area_over_time() {
     let mut caster = ship("caster", 1.0e6, 0.0, vec![]);
     caster.abilities.push(AbilityDef { kind: "BUZZ_DROIDS".into(), zone: Some(ZoneDef { radius: 500.0, enemy_dps: 100.0, max_range: 50000.0 }), duration: 10.0, recharge: 75.0, speed_mult: 1.0, shield_regen_mult: 1.0, weapon_delay_mult: 1.0, take_damage_mult: 1.0, ..Default::default() });
