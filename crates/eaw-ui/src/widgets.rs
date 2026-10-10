@@ -1736,76 +1736,56 @@ pub(crate) fn tooltip(
         Some((b, ..)) => b.name.starts_with("b_create") || b.name.starts_with("queue"),
         None => true,
     };
-    let droid = buttons.iter().find(|b| b.1.name == "b_droid_help").map(|b| (b.3, b.4));
+    let droid = buttons.iter().find(|b| b.1.name.eq_ignore_ascii_case("b_droid_help")).map(|b| (b.3, b.4));
     let inv = own.inverse_scale_factor();
-    // Droid-anchored tooltips hang from their lower edge (set below), so a stale panel height can never lift them.
-    let mut hang: Option<(f32, f32)> = None;
-    let anchor = match (drop_anchor, droid) {
-        (true, Some((dn, dg))) => {
-            // Physical px per design px; the tooltip sits right of R2, its lower edge a little above the question-mark button.
-            let ppd = scale.0 / dn.inverse_scale_factor().max(1e-6);
-            let top_left = dg.translation - dn.size() * 0.5;
-            let bottom = top_left.y - 12.0 * ppd;
-            hang = Some(((top_left.x + 62.0 * ppd) * inv, bottom * inv));
-            Vec2::new(top_left.x + 62.0 * ppd, (bottom - own.size().y).max(4.0)) * inv
-        }
-        _ => match &button {
-            Some((_, cn, gt, true)) => {
-                // Above the button centre (physical px -> logical).
-                let inv = cn.inverse_scale_factor();
-                let c = gt.translation * inv;
-                Vec2::new(c.x - 10.0, c.y - cn.size().y * inv * 0.5 - 30.0 * scale.0)
-            }
-            _ => {
-                let cursor = window.single().ok().and_then(Window::cursor_position);
-                let at = cursor.map_or(Vec2::ZERO, |p| p + Vec2::new(14.0, 18.0));
-                match (window.single(), cursor) {
-                    (Ok(w), Some(c)) => clamp_to_screen(at, c, own.size() * inv, w.size()),
-                    _ => at,
-                }
-            }
-        },
-    };
-    // Bevy positions logical px; UiScale is applied to Val::Px so undo it.
     let tip_w = own.size().x * inv;
     let tip_h = own.size().y * inv;
+
     match window.single() {
         Ok(w) => {
-            node.max_height = Val::Px(((w.height() - 20.0) / scale.0).max(50.0));
-            let clamped_x = anchor.x.clamp(4.0, (w.width() - tip_w - 4.0).max(4.0));
-            node.left = Val::Px(clamped_x / scale.0);
-            match hang {
-                Some((_, bottom)) => {
-                    let space_above = bottom - 10.0;
-                    if tip_h > space_above {
-                        // Too tall to hang above droid without pushing off the top edge:
-                        // anchor to top of screen so title and top lines are never cut off.
-                        node.top = Val::Px(10.0 / scale.0);
-                        node.bottom = Val::Auto;
-                    } else {
-                        node.top = Val::Auto;
-                        node.bottom = Val::Px(((w.height() - bottom) / scale.0).max(0.0));
-                    }
-                }
-                None => {
-                    let clamped_y = anchor.y.clamp(10.0, (w.height() - tip_h - 10.0).max(10.0));
-                    node.top = Val::Px(clamped_y / scale.0);
+            let screen_w = w.physical_width() as f32 * inv;
+            let screen_h = w.physical_height() as f32 * inv;
+            node.max_height = Val::Px((screen_h - 20.0).max(50.0));
+
+            if drop_anchor && let Some((dn, dg)) = droid {
+                let ppd = scale.0 / dn.inverse_scale_factor().max(1e-6);
+                let top_left = dg.translation.xy() - dn.size() * 0.5;
+                let left_ui = (top_left.x + 62.0 * ppd) * inv;
+                let bottom_phys = top_left.y - 12.0 * ppd;
+                let dist_from_bottom_ui = ((w.physical_height() as f32 - bottom_phys) * inv).max(0.0);
+                let space_above = screen_h - dist_from_bottom_ui - 10.0;
+
+                let clamped_x = left_ui.clamp(4.0, (screen_w - tip_w - 4.0).max(4.0));
+                node.left = Val::Px(clamped_x);
+
+                if tip_h > space_above {
+                    node.top = Val::Px(10.0);
                     node.bottom = Val::Auto;
+                } else {
+                    node.top = Val::Auto;
+                    node.bottom = Val::Px(dist_from_bottom_ui);
                 }
+            } else if let Some((_, cn, gt, true)) = &button {
+                let c_ui = gt.translation.xy() * inv;
+                let clamped_x = (c_ui.x - 10.0).clamp(4.0, (screen_w - tip_w - 4.0).max(4.0));
+                let top_ui = c_ui.y - cn.size().y * inv * 0.5 - 30.0;
+                let clamped_y = top_ui.clamp(10.0, (screen_h - tip_h - 10.0).max(10.0));
+                node.left = Val::Px(clamped_x);
+                node.top = Val::Px(clamped_y);
+                node.bottom = Val::Auto;
+            } else {
+                let cursor_ui = w.physical_cursor_position().map(|p| p * inv);
+                let at = cursor_ui.map_or(Vec2::ZERO, |p| p + Vec2::new(14.0, 18.0));
+                let at = clamp_to_screen(at, cursor_ui.unwrap_or(at), Vec2::new(tip_w, tip_h), Vec2::new(screen_w, screen_h));
+                node.left = Val::Px(at.x);
+                node.top = Val::Px(at.y);
+                node.bottom = Val::Auto;
             }
         }
         Err(_) => {
-            node.left = Val::Px(anchor.x / scale.0);
-            match hang {
-                Some((_, bottom)) => {
-                    node.top = Val::Auto;
-                    node.bottom = Val::Px(bottom / scale.0);
-                }
-                None => {
-                    node.top = Val::Px(anchor.y / scale.0);
-                    node.bottom = Val::Auto;
-                }
-            }
+            node.left = Val::Px(10.0);
+            node.top = Val::Auto;
+            node.bottom = Val::Px(60.0);
         }
     }
 }
