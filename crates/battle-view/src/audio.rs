@@ -534,12 +534,16 @@ pub fn battle_sources(
     if !settings.audio || audio.is_none() {
         return;
     }
-    // `Audio_Space_3D_Listener_Z_Pullback_Dist` = 0 (Audio.xml): the listener is not lifted above the map, it stands on the
-    // battle plane at the point the camera looks at (not at the camera's eye), turned like the camera for the left / right pan.
     if let Ok((cam, tf)) = cameras.single() {
+        // Acoustic 3D perspective:
+        // Close camera (< 500m) places the listener right at the focus point on the battle plane
+        // for full bass and direct proximity; pulling back to high altitude (> 2000m) lifts and
+        // pulls the listener towards the camera eye to attenuate distant battle events realistically.
+        let pullback_frac = ((cam.distance - 500.0) / 4000.0).clamp(0.0, 0.45);
+        let listener_pos = cam.focus.lerp(tf.translation, pullback_frac);
         match listener.single_mut() {
             Ok(mut l) => {
-                l.translation = cam.focus;
+                l.translation = listener_pos;
                 l.rotation = tf.rotation;
             }
             Err(_) => {
@@ -548,7 +552,7 @@ pub fn battle_sources(
                     crate::BattleEntity,
                     BattleListener,
                     bevy::audio::SpatialListener::new(EAR_GAP),
-                    Transform { translation: cam.focus, rotation: tf.rotation, ..default() },
+                    Transform { translation: listener_pos, rotation: tf.rotation, ..default() },
                 ));
             }
         }
@@ -714,5 +718,30 @@ mod tests {
         assert!(!mem.shield_down_warned.insert(ship_id), "already warned does not spam");
         mem.shield_down_warned.remove(&ship_id);
         assert!(mem.shield_down_warned.insert(ship_id), "recharged shield can report collapse again");
+    }
+
+    #[test]
+    fn test_spatial_listener_acoustic_perspective() {
+        let focus = Vec3::new(100.0, 0.0, 200.0);
+        let cam_eye = Vec3::new(100.0, 1500.0, 3000.0);
+
+        // Near camera zoom (< 500m): listener stays exactly at focus for full bass
+        let dist_near: f32 = 400.0;
+        let pullback_near = ((dist_near - 500.0) / 4000.0).clamp(0.0, 0.45);
+        assert_eq!(pullback_near, 0.0);
+        let pos_near = focus.lerp(cam_eye, pullback_near);
+        assert_eq!(pos_near, focus);
+
+        // Mid-distance zoom (2500m)
+        let dist_mid: f32 = 2500.0;
+        let pullback_mid = ((dist_mid - 500.0) / 4000.0).clamp(0.0, 0.45);
+        assert!(pullback_mid > 0.4 && pullback_mid < 0.55);
+        let pos_mid = focus.lerp(cam_eye, pullback_mid);
+        assert!(pos_mid.y > 0.0, "listener is lifted and pulled back towards eye");
+
+        // Distant camera zoom (> 4000m): clamped to maximum pullback of 0.45
+        let dist_far: f32 = 8000.0;
+        let pullback_far = ((dist_far - 500.0) / 4000.0).clamp(0.0, 0.45);
+        assert_eq!(pullback_far, 0.45);
     }
 }
