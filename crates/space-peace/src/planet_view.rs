@@ -701,6 +701,7 @@ fn structure_tip(world: &galaxy_sim::World, cat: &PlayCatalog, game: Option<&ala
     if st.population_capacity > 0 {
         t.push_str(&format!("\n@Population cap\t+{}", st.population_capacity));
     }
+    t.push_str(&format!("\n@Action\tRight-click to sell for {:.0} credits", (st.cost / 3.0).floor()));
     t
 }
 
