@@ -38,7 +38,7 @@ pub use panels::{
 pub use panels::MinimapFog;
 pub use tactical::{TacticalOverlayRoot, 
     AbilityDef, AbilityState, EawAbilityClicked, EawHardpointClicked, EawSelectionClicked,
-    HardpointMarker, RetreatState, ShipOverlay, TacticalData, TacticalOverlays, TacticalUnit, ability_icon,
+    HardpointMarker, HardpointNode, RetreatState, ShipOverlay, ShipOverlayNode, TacticalData, TacticalOverlays, TacticalUnit, ability_icon,
     spawn_unit_panel, unit_abilities, hardpoint_reticle, bar_class, bar_color,
 };
 pub use widgets::{

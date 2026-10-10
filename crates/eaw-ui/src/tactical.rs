@@ -866,6 +866,23 @@ pub(crate) fn hardpoint_markers(
         };
         match existing.get(&h.id) {
             None => {
+                let e = commands
+                    .spawn((
+                        Name::new(format!("hardpoint {}", h.id)),
+                        Button,
+                        Node {
+                            position_type: PositionType::Absolute,
+                            left: px(h.screen_pos.x - SIZE * 0.5, s),
+                            top: px(h.screen_pos.y - SIZE * 0.5, s),
+                            width: Val::Px(SIZE),
+                            height: Val::Px(SIZE),
+                            ..default()
+                        },
+                        image(),
+                        FocusPolicy::Pass,
+                        ChildOf(root),
+                    ))
+                    .id();
                 let fill = commands
                     .spawn((
                         Node {
@@ -878,29 +895,13 @@ pub(crate) fn hardpoint_markers(
                         },
                         BackgroundColor(bar_color(h.health)),
                         FocusPolicy::Pass,
+                        ChildOf(e),
                     ))
                     .id();
-                let e = commands
-                    .spawn((
-                        Name::new(format!("hardpoint {}", h.id)),
-                        HardpointNode {
-                            id: h.id.clone(),
-                            fill,
-                        },
-                        Button,
-                        Node {
-                            position_type: PositionType::Absolute,
-                            left: px(h.screen_pos.x - SIZE * 0.5, s),
-                            top: px(h.screen_pos.y - SIZE * 0.5, s),
-                            width: Val::Px(SIZE),
-                            height: Val::Px(SIZE),
-                            ..default()
-                        },
-                        image(),
-                        ChildOf(root),
-                    ))
-                    .id();
-                commands.entity(fill).try_insert(ChildOf(e));
+                commands.entity(e).insert(HardpointNode {
+                    id: h.id.clone(),
+                    fill,
+                });
                 existing.insert(h.id.clone(), e);
             }
             Some(&e) => {

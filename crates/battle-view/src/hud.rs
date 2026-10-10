@@ -448,8 +448,13 @@ pub(crate) fn unit_tooltip(
     }
     // Carriers and stations: squadrons still waiting in the hangars.
     if let Some(n) = rt.cur.as_ref().and_then(|c| c.ship(s.id)).map(|ss| ss.reserve_squadrons).filter(|n| *n > 0) {
-        stats.push_str(&format!("
-Squadrons in reserve: {n}"));
+        stats.push_str(&format!("\nSquadrons in reserve: {n}"));
+    }
+    if let Some(snap) = rt.cur.as_ref().and_then(|c| c.ship(s.id)) {
+        let retreat_active = rt.cur.as_ref().and_then(|c| c.retreat_jump_in.get(s.side as usize).copied().flatten()).is_some();
+        if retreat_active && !snap.can_retreat {
+            stats.push_str("\n[ENGINES DISABLED - CANNOT JUMP]");
+        }
     }
     if let Ok(mut t) = parts.p1().single_mut()
         && t.0 != name.to_uppercase()

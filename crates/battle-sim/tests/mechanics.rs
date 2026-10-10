@@ -985,9 +985,13 @@ fn the_jump_happens_when_the_timer_runs_out_and_not_before() {
 #[test]
 fn a_ship_without_a_living_engine_is_lost_while_one_without_engine_hardpoints_escapes() {
     let mut b = retreat_battle(vec![runner("runner", vec![engine(), engine()]), runner("plain", vec![]), idle_target()], "runner", 3, 3.0);
+    assert!(b.can_retreat(0), "ship with intact engines can retreat");
     b.ships[0].hps[0].alive = false; // one of two engines left: still jumps
+    assert!(b.can_retreat(0), "ship with 1 of 2 engines intact can retreat");
     b.ships[1].hps[0].alive = false;
     b.ships[1].hps[1].alive = false; // no engine left
+    assert!(!b.can_retreat(1), "ship with all engines destroyed cannot retreat");
+    assert!(b.can_retreat(2), "ship with all engines intact can retreat");
     b.command(0, Command::Retreat).unwrap();
     for _ in 0..(3.2 * 30.0) as usize {
         b.step();
@@ -996,6 +1000,7 @@ fn a_ship_without_a_living_engine_is_lost_while_one_without_engine_hardpoints_es
     assert!(!b.ships[1].retreated && !b.ships[1].alive, "no living engine: the ship is lost");
     assert!(b.ships[2].retreated && b.ships[2].alive);
     let mut p = retreat_battle(vec![runner("plain", vec![]), idle_target()], "plain", 1, 1.0);
+    assert!(p.can_retreat(0), "ship without hardpoints can retreat");
     p.command(0, Command::Retreat).unwrap();
     for _ in 0..40 {
         p.step();

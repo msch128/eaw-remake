@@ -60,6 +60,16 @@ fn heroes_are_reported_when_they_die() {
 }
 
 #[test]
+fn underworld_ground_structures_and_outposts_are_buildable() {
+    let Some(data) = load() else { return };
+    let campaign = data.campaign("GC_Full_Web_Way_Criminal").or_else(|| data.campaign("GC_Full_Web_Way_Rebel")).unwrap();
+    let sim = Sim::new(&data, campaign, SimConfig { auto_resolve_battles: true, victory_enabled: false, ..SimConfig::default() }).unwrap();
+    let w = sim.world();
+    let outposts: Vec<_> = w.structures.iter().filter(|s| s.affiliation.iter().any(|a| a.eq_ignore_ascii_case("Underworld")) && s.name.contains("Underworld_Outpost") && s.buildable).collect();
+    assert!(!outposts.is_empty(), "Underworld outposts must be buildable: {:?}", outposts.iter().map(|s| &s.name).collect::<Vec<_>>());
+}
+
+#[test]
 fn hero_and_structure_discounts_follow_the_ability_data() {
     let Some(data) = load() else { return };
     let campaign = data.campaign("GC_Full_Web_Way_Rebel").unwrap();

@@ -87,6 +87,8 @@ pub struct ShipRender {
     pub hp_health: Vec<f32>,
     /// World position of each hardpoint's bone in the loaded model (`None` until the model exists or when the bone is missing).
     pub hp_pos: Vec<Option<Vec3>>,
+    /// Whether the ship has functional hyperdrive engines to retreat.
+    pub can_retreat: bool,
 }
 
 /// All living ships by simulation id.
@@ -414,6 +416,7 @@ pub fn update_ships(
                 hp_alive,
                 hp_health,
                 hp_pos,
+                can_retreat: s.can_retreat,
             },
         );
     }
@@ -432,10 +435,33 @@ pub fn update_ships(
         };
         if !rt.dying.contains(&id) {
             // A ship that leaves without dying retreated: `SFXEvent_Exit_Into_Hyperspace`.
-            if let Ok((_, t)) = views.get(e) {
+            if let Ok((view, t)) = views.get(e) {
                 sfx.write(alamo_audio::PlaySfx { event: "Unit_Ship_Hyperspace_Exit".into(), position: Some(t.translation), source: None });
+                let radius = rt.catalog.ship(view.def).radius.max(30.0);
+                let fwd = t.rotation * Vec3::Z;
+                let flash_mesh = meshes.add(Sphere::new(radius * 0.4).mesh().uv(24, 16));
+                let flash_mat = materials.add(StandardMaterial {
+                    base_color: Color::srgba(0.8, 0.95, 1.0, 0.7),
+                    unlit: true,
+                    ..default()
+                });
+                commands.spawn((
+                    Mesh3d(flash_mesh),
+                    MeshMaterial3d(flash_mat),
+                    Transform::from_translation(t.translation).with_scale(Vec3::splat(1.0)),
+                    ArrivalFlash { at: cur.time, radius: radius * 1.5 },
+                    Visibility::Inherited,
+                    Name::new("hyperspace departure flash"),
+                ));
+                commands.entity(e).insert(HyperspaceDeparture {
+                    start: cur.time,
+                    origin: t.translation,
+                    heading: fwd,
+                    radius,
+                });
+            } else {
+                commands.entity(e).try_despawn();
             }
-            commands.entity(e).try_despawn();
         }
     }
     let _ = &settings;
@@ -674,6 +700,39 @@ pub fn update_arrival_flashes(
         if let Some(mut m) = materials.get_mut(&mat.0) {
             m.base_color = Color::srgba(0.75, 0.88, 1.0, (1.0 - t) * (1.0 - t) * 0.55);
         }
+    }
+}
+
+/// A ship that jumped into hyperspace: it shoots forward along its heading, stretched,
+/// and despawns after a short streak animation.
+#[derive(Component)]
+pub struct HyperspaceDeparture {
+    pub start: f32,
+    pub origin: Vec3,
+    pub heading: Vec3,
+    pub radius: f32,
+}
+
+/// Updates departing ships: rapid acceleration forward into hyperspace with stretching.
+pub fn update_departures(
+    mut commands: Commands,
+    rt: Res<BattleRuntime>,
+    mut departures: Query<(Entity, &HyperspaceDeparture, &mut Transform)>,
+) {
+    let Some(cur) = rt.cur.as_ref() else { return };
+    for (e, dep, mut tf) in &mut departures {
+        let p = ((cur.time - dep.start) / 0.6).clamp(0.0, 1.0);
+        if p >= 1.0 {
+            commands.entity(e).try_despawn();
+            continue;
+        }
+        let surge = dep.radius * (12.0 + 120.0 * p * p * p);
+        tf.translation = dep.origin + dep.heading * surge;
+        tf.scale = Vec3::new(
+            (1.0 - p * 0.4).max(0.1),
+            (1.0 - p * 0.4).max(0.1),
+            1.0 + 16.0 * p * p,
+        );
     }
 }
 

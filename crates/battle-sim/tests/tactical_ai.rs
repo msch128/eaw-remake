@@ -154,3 +154,41 @@ fn player_idle_units_hold_position_and_do_not_automatically_charge() {
     let p_pos2 = b.ships.iter().find(|s| s.side == 0).unwrap().pos;
     assert!(p_pos.dist(p_pos2) < 50.0, "player idle unit must hold position: moved from {p_pos:?} to {p_pos2:?}");
 }
+
+#[test]
+fn ai_station_launches_active_fighters_and_defenders_engage_approaching_enemies() {
+    let Some((data, fs)) = load() else { return };
+    let Some(base) = data.objects.iter().map(|o| o.name.clone()).find(|n| n.eq_ignore_ascii_case("Empire_Star_Base_2")) else { return };
+    let cat = Arc::new(Catalog::build(&data, Some(&fs), &["Star_Destroyer", "Nebulon_B_Frigate", "TIE_Fighter_Squadron", &base]));
+    let setup = BattleSetup {
+        catalog: cat.clone(),
+        sides: vec![
+            side(&cat, "Rebel", &[("Nebulon_B_Frigate", 1)], &[]),
+            side(&cat, "Empire", &[("Star_Destroyer", 1)], &[&base]),
+        ],
+        config: BattleConfig { record_events: false, ..BattleConfig::default() },
+    };
+    let mut b = Battle::new(setup);
+    let mut fighters_launched = false;
+    for _ in 0..120 {
+        b.step();
+        let ai_fighters: Vec<_> = b.ships.iter().filter(|s| s.alive && s.side == 1 && matches!(cat.ship(s.def).class, TargetClass::Fighter | TargetClass::Bomber)).collect();
+        if !ai_fighters.is_empty() {
+            fighters_launched = true;
+            assert!(ai_fighters.iter().all(|f| matches!(f.order, Order::AttackMove(_))), "launched AI fighters have attack-move order: {:?}", ai_fighters.iter().map(|f| f.order).collect::<Vec<_>>());
+            break;
+        }
+    }
+    assert!(fighters_launched, "station should launch garrison fighters");
+
+    // Step until enemy approaches or is spotted:
+    for _ in 0..1200 {
+        b.step();
+        let isd = b.ships.iter().find(|s| s.alive && s.side == 1 && !cat.ship(s.def).is_static && !matches!(cat.ship(s.def).class, TargetClass::Fighter | TargetClass::Bomber)).unwrap();
+        if matches!(isd.order, Order::AttackMove(_) | Order::Attack(_)) {
+            break;
+        }
+    }
+    let isd = b.ships.iter().find(|s| s.alive && s.side == 1 && !cat.ship(s.def).is_static && !matches!(cat.ship(s.def).class, TargetClass::Fighter | TargetClass::Bomber)).unwrap();
+    assert!(matches!(isd.order, Order::AttackMove(_) | Order::Attack(_)), "defending capital ship engages incoming enemy: {:?}", isd.order);
+}

@@ -75,8 +75,6 @@ pub struct MissileTrailGizmos;
 pub struct MissileTrails {
     lines: std::collections::HashMap<u64, std::collections::VecDeque<(Vec3, f64)>>,
     next: u64,
-    /// Heads of the missiles in flight this frame.
-    heads: Vec<Vec3>,
 }
 
 /// Thick smoke lines.
@@ -100,7 +98,7 @@ fn draw_trails(rt: Res<BattleRuntime>, mut trails: ResMut<MissileTrails>, mut gi
         !pts.is_empty()
     });
     if std::env::var_os("SP_MISSILE_LOG").is_some() && now.fract() < 0.03 {
-        info!("missile-log: {} trails, longest {} points, now {now:.1}, heads {}", trails.lines.len(), trails.lines.values().map(|p| p.len()).max().unwrap_or(0), trails.heads.len());
+        info!("missile-log: {} trails, longest {} points, now {now:.1}", trails.lines.len(), trails.lines.values().map(|p| p.len()).max().unwrap_or(0));
     }
     for pts in trails.lines.values() {
         for pair in pts.iter().zip(pts.iter().skip(1)) {
@@ -108,9 +106,6 @@ fn draw_trails(rt: Res<BattleRuntime>, mut trails: ResMut<MissileTrails>, mut gi
             let a = (1.0 - age) * 0.55;
             gizmos.line(pair.0.0, pair.1.0, Color::srgba(0.78, 0.78, 0.8, a));
         }
-    }
-    for &h in &trails.heads {
-        gizmos.sphere(Isometry3d::from_translation(h), 5.0, Color::srgb(1.0, 0.95, 0.75));
     }
 }
 
@@ -176,7 +171,6 @@ fn update_missiles(
     }
     let tracked: Vec<Vec3> = tracks.items.iter().map(|t| t.pos).collect();
     let speed = now.iter().map(|m| m.2.length()).fold(0.0f32, f32::max);
-    trails.heads.clear();
     let matched = match_tracks(&tracked, &now.iter().map(|m| m.1).collect::<Vec<_>>(), speed * rt.dt * 2.0 + 5.0);
     let mut used = vec![false; tracks.items.len()];
     for (m, hit) in now.iter().zip(&matched) {
@@ -186,7 +180,6 @@ fn update_missiles(
                 used[i] = true;
                 let track = &mut tracks.items[i];
                 track.pos = m.1;
-                trails.heads.push(m.1);
                 let pts = trails.lines.entry(track.trail).or_default();
                 if pts.back().is_none_or(|p| p.0.distance(m.1) >= TRAIL_STEP) {
                     pts.push_back((m.1, rt.clock));
@@ -226,7 +219,6 @@ fn update_missiles(
                 let trail = trails.next;
                 trails.next += 1;
                 trails.lines.entry(trail).or_default().push_back((m.1, rt.clock));
-                trails.heads.push(m.1);
                 tracks.items.push(Track { entity, def: m.0, pos: m.1, scale: m.4, particles_on: false, trail });
                 used.push(true);
             }

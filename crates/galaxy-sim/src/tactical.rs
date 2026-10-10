@@ -573,28 +573,22 @@ impl Sim {
 }
 
 impl Sim {
-    /// Writes the survivors' hull and shield of a tactical result into the galaxy (ships by id, the star base on the planet).
+    /// Writes the outcome into the galaxy: in Empire at War, surviving ships and star bases heal back
+    /// to 100% hull and shields upon battle completion. Damage is removed from `galaxy.damage`.
     pub(crate) fn apply_health(&mut self, request: &TacticalRequest, result: &TacticalResult) {
         let planet = request.planet as usize;
         for (si, side) in request.sides.iter().enumerate() {
             for (gi, g) in side.groups.iter().enumerate() {
-                let list = result.health.get(si).and_then(|r| r.get(gi)).cloned().unwrap_or_default();
                 let survived = result.survived.get(si).and_then(|r| r.get(gi)).copied().unwrap_or(0) as usize;
                 match (g.kind, g.fleet) {
                     (GroupKind::Unit, Some(fleet)) if survived > 0 => {
                         let ships: Vec<ShipId> = self.galaxy.ships.get(&fleet).into_iter().flatten().filter(|(_, t)| *t == g.type_id).map(|(s, _)| *s).take(survived).collect();
-                        for (k, ship) in ships.into_iter().enumerate() {
-                            // Pad with full health if the report is shorter than the survivors.
-                            let h = list.get(k).copied().unwrap_or(UnitHealth::FULL);
-                            if h.is_full() {
-                                self.galaxy.damage.remove(&ship);
-                            } else {
-                                self.galaxy.damage.insert(ship, h);
-                            }
+                        for ship in ships {
+                            self.galaxy.damage.remove(&ship);
                         }
                     }
                     (GroupKind::Starbase, _) if survived > 0 => {
-                        self.galaxy.planets[planet].base_health = list.first().copied().filter(|h| !h.is_full());
+                        self.galaxy.planets[planet].base_health = None;
                     }
                     _ => {}
                 }

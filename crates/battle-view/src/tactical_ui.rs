@@ -955,13 +955,19 @@ fn sync_overlays(
             continue;
         }
         let single = members.len() == 1;
-        let name = (hovered || (selected && single && sel.ships.len() + usize::from(sel.enemy.is_some()) <= 1)).then(|| {
+        let mut name = (hovered || (selected && single && sel.ships.len() + usize::from(sel.enemy.is_some()) <= 1)).then(|| {
             def.text_id
                 .as_deref()
                 .and_then(|k| assets.as_ref().and_then(|a| a.text.get(k)))
                 .filter(|t| !t.is_empty())
                 .map_or_else(|| def.name.clone(), str::to_string)
         });
+        if let Some(n) = name.as_mut() {
+            let retreat_active = rt.cur.as_ref().and_then(|c| c.retreat_jump_in.get(first.side as usize).copied().flatten()).is_some();
+            if retreat_active && !live.iter().all(|s| s.can_retreat) {
+                n.push_str(" [ENGINES DISABLED]");
+            }
+        }
         // The icon marks tiny units, squadrons and every unit nobody has selected or hovered (so that no unit is invisible).
         let icon = (icon_only || first.squad != u32::MAX || edge_max < 9.0).then(|| assets.as_ref().and_then(|a| a.game.as_deref()).and_then(|g| eaw_ui::unit_icon(g, &def.name))).flatten();
         if icon_only && icon.is_none() {
@@ -1347,6 +1353,7 @@ pub struct RetreatNotice(pub f32);
 fn retreat_banner(
     mut commands: Commands,
     ui: Res<eaw_ui::EawUiSettings>,
+    settings: Res<BattleViewSettings>,
     time: Res<Time<Real>>,
     rt: Res<BattleRuntime>,
     status: Res<BattleStatus>,
@@ -1356,8 +1363,28 @@ fn retreat_banner(
 ) {
     let mss = |s: f32| format!("{}:{:02}", s.ceil() as u32 / 60, s.ceil() as u32 % 60);
     notice.0 = (notice.0 - time.delta_secs()).max(0.0);
+    let player = settings.player_side;
+    let enemy_retreat = rt.cur.as_ref().and_then(|c| {
+        c.retreat_jump_in.iter().enumerate().find_map(|(side, j)| {
+            if side as u8 != player { *j } else { None }
+        })
+    });
     let want = match tac.retreat {
-        RetreatState::Countdown(s) if tac.active => Some(format!("RETREAT - JUMP TO HYPERSPACE IN {}", mss(s))),
+        RetreatState::Countdown(s) if tac.active => {
+            if s <= 60.0 {
+                Some(format!("TACTICAL RETREAT - HYPERSPACE JUMP IN {:.0}s", s.ceil()))
+            } else {
+                Some(format!("TACTICAL RETREAT - HYPERSPACE JUMP IN {}", mss(s)))
+            }
+        }
+        _ if enemy_retreat.is_some() => {
+            let s = enemy_retreat.unwrap();
+            if s <= 60.0 {
+                Some(format!("ENEMY FLEET RETREATING - HYPERSPACE JUMP IN {:.0}s", s.ceil()))
+            } else {
+                Some(format!("ENEMY FLEET RETREATING - HYPERSPACE JUMP IN {}", mss(s)))
+            }
+        }
         _ if notice.0 > 0.0 => Some(format!("RETREAT NOT POSSIBLE YET - AVAILABLE IN {}", mss((rt.retreat_countdown - status.time).max(0.0)))),
         _ => None,
     };

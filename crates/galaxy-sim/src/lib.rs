@@ -1,4 +1,4 @@
-﻿//! Headless, deterministic galactic conquest simulation for Empire at War: Forces of Corruption
+//! Headless, deterministic galactic conquest simulation for Empire at War: Forces of Corruption
 //! (Remake 4.0 data), space only. See `RULES.md` for the rules and their sources.
 //!
 //! ```no_run
@@ -38,4 +38,4 @@ pub use world::{IncomeGamble,
 };
 pub use production::{DestroyRefusal, PlanetCapacity, SlotUse};
 pub use sight::Sight;
-pub use tactical::{GroupKind, TacticalError, TacticalGroup, TacticalRequest, TacticalResult, TacticalSide, run_headless};
+pub use tactical::{GroupKind, TacticalError, TacticalGroup, TacticalRequest, TacticalResult, TacticalSide, run_headless, run_headless_observed};

@@ -60,6 +60,8 @@ pub struct ShipSnap {
     pub reserve_squadrons: u32,
     /// Automatic use per ability (same order as `abilities`): the button shows the autocast state.
     pub autocast: Vec<bool>,
+    /// Whether this ship can jump to hyperspace during a retreat (has functional drives).
+    pub can_retreat: bool,
 }
 
 /// One projectile at the end of a step.
@@ -152,6 +154,7 @@ fn snapshot(battle: &Battle, events: Vec<Event>, step_ms: f32) -> Snapshot {
                 abilities: s.abilities.iter().map(|a| (a.active, a.cooldown)).collect(),
                 autocast: s.abilities.iter().map(|a| a.autocast).collect(),
                 reserve_squadrons: s.reserve.iter().map(|r| r.1).sum(),
+                can_retreat: battle.can_retreat(s.id),
             }
         })
         .collect();

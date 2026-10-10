@@ -161,17 +161,16 @@ fn retreating_loser_falls_back_and_bad_results_are_rejected() {
 }
 
 #[test]
-fn damage_persists_between_battles_and_is_repaired_at_owned_planets() {
+fn surviving_ships_heal_to_full_health_after_battle() {
     let Some(ctx) = load() else { return };
     let mut sim = new_sim(&ctx);
     let w = sim.world().clone();
     let (empire, rebel) = (w.faction_id("Empire").unwrap(), w.faction_id("Rebel").unwrap());
     let target = empty_planet(&sim);
     let (isd, xw) = (w.unit_id("Star_Destroyer").unwrap(), w.unit_id("X-Wing_Squadron").unwrap());
-    // Three ISDs against a handful of X-wings: the ISDs win but take some damage from the squadrons' bombs? use a fair fight instead.
+    let _ = xw;
     let ef = add_fleet(&mut sim, empire, isd, 2, target, target);
     add_fleet(&mut sim, rebel, w.unit_id("MC-80_Star_Cruiser").unwrap(), 1, target, target);
-    let _ = xw;
     let battle = pending(&mut sim);
     let req = sim.tactical_setup(battle.id).unwrap();
     assert!(req.sides.iter().flat_map(|s| &s.groups).all(|g| g.unit_health.is_empty()), "fresh ships are undamaged");
@@ -182,45 +181,19 @@ fn damage_persists_between_battles_and_is_repaired_at_owned_planets() {
     assert!(survivors >= 1, "2 ISD should beat 1 MC-80: {result:?}");
     let hp = &result.health[es][0];
     assert_eq!(hp.len() as u32, survivors);
-    assert!(hp.iter().any(|h| h.hull < 0.999 || h.shield < 0.999), "winners of a real fight are damaged: {hp:?}");
+    assert!(hp.iter().any(|h| h.hull < 0.999 || h.shield < 0.999), "winners of a real fight take some damage during combat: {hp:?}");
     sim.apply_tactical_result(battle.id, &result).unwrap();
-    let ships = sim.ships_of(ef);
-    let all_ships: Vec<ShipId> = sim.galaxy().ships.values().flat_map(|v| v.iter().map(|x| x.0)).collect();
-    assert!(sim.galaxy().damage.keys().all(|s| all_ships.contains(s)), "damage only for ships that still exist");
-    assert!(ships.iter().any(|(s, _)| sim.galaxy().damage.contains_key(s)), "the winner carries damage");
-    assert!(!sim.galaxy().damage.is_empty());
-    let missing = |s: &Sim| s.galaxy().damage.values().map(|h| 1.0 - h.hull).sum::<f32>();
-    let before = missing(&sim);
+    // In Empire at War, surviving ships heal back to 100% hull and shields upon battle completion:
+    assert!(sim.galaxy().damage.is_empty(), "surviving ships are fully healed in the galactic layer upon battle completion");
+    assert!(sim.galaxy().planets[target as usize].base_health.is_none(), "starbase health is also fully intact");
 
-    // The damaged fleet sits at a planet it now owns (captured after the battle): repairs run.
-    sim.step(10.0);
-    assert_eq!(sim.galaxy().planets[target as usize].owner, Some(empire));
-    sim.step(2.0 * 60.0);
-    let mid = missing(&sim);
-    assert!(mid < before, "repairs reduce the missing hull ({before} -> {mid})");
-    // A new battle starts the damaged ships damaged.
-    if !sim.galaxy().damage.is_empty() {
-        let rf2 = add_fleet(&mut sim, rebel, w.unit_id("MC-80_Star_Cruiser").unwrap(), 1, target, target);
-        let _ = rf2;
-        let b2 = pending(&mut sim);
-        let req2 = sim.tactical_setup(b2.id).unwrap();
-        let g = req2.sides.iter().flat_map(|s| &s.groups).find(|g| g.fleet == Some(ef)).unwrap();
-        assert!(!g.unit_health.is_empty() && g.unit_health.iter().any(|h| !h.is_full()), "the request carries the damage: group {g:?}, damage {:?}, ships {:?}", sim.galaxy().damage, sim.galaxy().ships.get(&ef));
-        // ... and battle-sim starts those ships damaged.
-        let cat2 = catalog_for(&ctx, &req2);
-        let setup = req2.battle_setup(&cat2, req2.battle_config(None), |_| true).unwrap();
-        let battle = battle_sim::Battle::new(setup);
-        let def = cat2.ship(cat2.ship_id(&g.name).unwrap());
-        assert!(battle.ships.iter().any(|s| s.def == cat2.ship_id(&g.name).unwrap() && (s.hull < def.hull * 0.999 || s.shield < def.shield * 0.999)), "a damaged ship starts below its maximum hull or shield");
-    }
-    // Long enough at an owned planet: fully repaired.
-    sim.cancel_tactical(0);
-    for _ in 0..30 {
-        sim.step(60.0);
-        if sim.galaxy().damage.is_empty() {
-            break;
-        }
-    }
+    // A subsequent battle starts the surviving ships completely undamaged:
+    let rf2 = add_fleet(&mut sim, rebel, w.unit_id("MC-80_Star_Cruiser").unwrap(), 1, target, target);
+    let _ = rf2;
+    let b2 = pending(&mut sim);
+    let req2 = sim.tactical_setup(b2.id).unwrap();
+    let g = req2.sides.iter().flat_map(|s| &s.groups).find(|g| g.fleet == Some(ef)).unwrap();
+    assert!(g.unit_health.is_empty(), "the new battle request has no damage for surviving ships");
 }
 
 #[test]

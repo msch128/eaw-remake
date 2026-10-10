@@ -513,8 +513,14 @@ impl Battle {
         let sq = cat.ship(sq_def);
         let squad = self.squads.len() as u32;
         self.squads.push(Vec::new());
-        let order = self.ships[carrier as usize].order;
-        let ai_order = if matches!(order, Order::Idle) { Order::Idle } else { order };
+        let ai_order = if self.is_ai(side) {
+            let enemy_pos = self.spawn_pos[(side as usize + 1) % self.sides.len()];
+            Order::AttackMove(enemy_pos)
+        } else if matches!(self.ships[carrier as usize].order, Order::Idle) {
+            Order::Idle
+        } else {
+            self.ships[carrier as usize].order
+        };
         let mut ids = Vec::new();
         let mut idx = 0usize;
         for &(m, n) in &sq.members {
@@ -562,9 +568,9 @@ impl Battle {
         }
     }
 
-    /// An AI side that sees no enemy ship searches for it: its attack-moving ships that have no target are sent to the next of a list of search points
-    /// (the enemy deployment area, then the centre and the four quarters of the map) every 30 s while nothing is in sight. Without this, fogged AI fleets
-    /// that reach the enemy spawn marker and find it empty would idle for ever (an estimate: the engine AI knows more than the fog lets it see).
+    /// An AI side searches for and engages enemy forces. Visible enemy ships (prioritizing mobile units,
+    /// then space stations/structures) are engaged by idle, guarding, and attack-moving ships.
+    /// When nothing is in sight, attack-moving ships sweep the map along search points.
     fn ai_search(&mut self) {
         let cat = self.catalog.clone();
         let (time, half) = (self.time, self.config.half_size);
@@ -572,28 +578,44 @@ impl Battle {
             if !self.is_ai(side) {
                 continue;
             }
+            let station_under_attack = self.ships.iter().any(|st| st.alive && !st.retreated && st.side == side && cat.ship(st.def).is_static && st.since_hit < 15.0);
             let visible_enemy = self.ships.iter()
-                .filter(|s| s.alive && !s.retreated && s.side != side && !cat.ship(s.def).is_static && (s.side >= 4 || !self.config.fog_of_war || time <= s.seen_until[side as usize]))
-                .max_by_key(|s| cat.ship(s.def).class as u8);
+                .filter(|s| s.alive && !s.retreated && s.side != side && (s.side >= 4 || !self.config.fog_of_war || time <= s.seen_until[side as usize]))
+                .max_by_key(|s| {
+                    let d = cat.ship(s.def);
+                    let mobile_bonus = if d.is_static { 0 } else { 100 };
+                    mobile_bonus + d.class as u8
+                });
             if let Some(target_enemy) = visible_enemy {
                 self.search[side as usize] = (0, time);
                 let enemy_pos = target_enemy.pos;
-                for s in self.ships.iter_mut().filter(|s| s.alive && !s.retreated && s.side == side && s.target == NONE && matches!(s.order, Order::AttackMove(_))) {
-                    if s.pos.dist(enemy_pos) > 1200.0 {
+                for s in self.ships.iter_mut().filter(|s| s.alive && !s.retreated && s.side == side && !cat.ship(s.def).is_static) {
+                    let should_order = match s.order {
+                        Order::AttackMove(_) => s.pos.dist(enemy_pos) > 1200.0,
+                        Order::Idle => true,
+                        Order::Guard(guard_pt) => {
+                            station_under_attack || s.pos.dist(enemy_pos) < 5000.0 || guard_pt.dist(enemy_pos) < 5000.0 || s.since_hit < 15.0
+                        }
+                        _ => false,
+                    };
+                    if should_order {
                         s.order = Order::AttackMove(enemy_pos);
                     }
                 }
                 continue;
             }
             let (idx, since) = self.search[side as usize];
-            if time - since < 30.0 {
+            let enemy = self.spawn_pos[(side as usize + 1) % self.sides.len()];
+            let cur_point = search_point(idx, enemy, half);
+            let reached = self.ships.iter().any(|s| s.alive && !s.retreated && s.side == side && !cat.ship(s.def).is_static && s.pos.dist(cur_point) < 2500.0);
+            let timeout = if idx == 0 { 90.0 } else { 45.0 };
+            if !reached && time - since < timeout {
                 continue;
             }
             let next = idx + 1;
-            let enemy = self.spawn_pos[(side as usize + 1) % self.sides.len()];
             let point = search_point(next, enemy, half);
             self.search[side as usize] = (next, time);
-            for s in self.ships.iter_mut().filter(|s| s.alive && !s.retreated && s.side == side && s.target == NONE && matches!(s.order, Order::AttackMove(_))) {
+            for s in self.ships.iter_mut().filter(|s| s.alive && !s.retreated && s.side == side && !cat.ship(s.def).is_static && s.target == NONE && matches!(s.order, Order::AttackMove(_))) {
                 s.order = Order::AttackMove(point);
             }
         }
@@ -914,7 +936,7 @@ impl Battle {
         if cfg.fog_of_war && self.tick % 15 == 1 {
             self.update_visibility();
         }
-        if cfg.fog_of_war && self.tick.is_multiple_of(300) {
+        if self.tick.is_multiple_of(30) {
             self.ai_search();
         }
         // Snapshot and grid.
@@ -1366,6 +1388,30 @@ impl Battle {
         self.retreat_jump_at.get(side as usize).copied().flatten().map(|t| (t - self.time).max(0.0))
     }
 
+    /// Returns whether the ship can escape during a retreat jump (has working hyperdrive engines,
+    /// or its carrier has them). Stations, garrison units, and ships with destroyed engines cannot jump.
+    pub fn can_retreat(&self, ship: u32) -> bool {
+        let Some(s) = self.ships.get(ship as usize) else { return false; };
+        let cat = &self.catalog;
+        let d = cat.ship(s.def);
+        if d.is_static || !s.alive || s.retreated {
+            return false;
+        }
+        let has_drive = |s: &Ship| {
+            let d = cat.ship(s.def);
+            !d.is_static && s.alive && !s.retreated && {
+                let engines: Vec<usize> = d.hardpoints.iter().enumerate().filter(|(_, h)| h.kind == HpKind::Engine).map(|(i, _)| i).collect();
+                engines.is_empty() || engines.iter().any(|&i| s.hps.get(i).map_or(false, |h| h.alive))
+            }
+        };
+        let reinforced_squadron = s.carrier == NONE && s.squad != NONE && self.groups.get(s.group as usize).is_some_and(|g| g.tag == REINFORCE_TAG);
+        if s.carrier != NONE {
+            self.ships.get(s.carrier as usize).map_or(false, has_drive)
+        } else {
+            !reinforced_squadron && has_drive(s)
+        }
+    }
+
     /// The retreat jump of every side whose timer ran out: each living mobile unit with at least one living engine hardpoint (or none by design)
     /// escapes (`retreated`). Units launched by a carrier escape only with a carrier that escapes; squadrons called in as reinforcements, and everything
     /// that cannot jump (dead drives, stations' fighters), are lost. Stations stay in the battle.
@@ -1374,26 +1420,11 @@ impl Battle {
         for side in due {
             self.retreat_jump_at[side as usize] = None;
             let cat = self.catalog.clone();
-            let has_drive = |s: &Ship| {
-                let d = cat.ship(s.def);
-                !d.is_static && s.alive && !s.retreated && {
-                    let engines: Vec<usize> = d.hardpoints.iter().enumerate().filter(|(_, h)| h.kind == HpKind::Engine).map(|(i, _)| i).collect();
-                    engines.is_empty() || engines.iter().any(|&i| s.hps[i].alive)
-                }
-            };
             let fate: Vec<(u32, bool)> = self
                 .ships
                 .iter()
                 .filter(|s| s.side == side && s.alive && !s.retreated && !cat.ship(s.def).is_static)
-                .map(|s| {
-                    let reinforced_squadron = s.carrier == NONE && s.squad != NONE && self.groups.get(s.group as usize).is_some_and(|g| g.tag == REINFORCE_TAG);
-                    let escapes = if s.carrier != NONE {
-                        has_drive(&self.ships[s.carrier as usize])
-                    } else {
-                        !reinforced_squadron && has_drive(s)
-                    };
-                    (s.id, escapes)
-                })
+                .map(|s| (s.id, self.can_retreat(s.id)))
                 .collect();
             let record = self.config.record_events;
             for (id, escapes) in fate {
@@ -1968,7 +1999,9 @@ fn scan(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig) {
     let def = cat.ship(s.def);
     let range = match (s.stance, s.order) {
         (Stance::Aggressive, Order::AttackMove(_) | Order::Idle) => f32::MAX,
-        _ => (def.max_weapon_range.max(def.targeting_range) * 1.15).max(400.0),
+        (Stance::Aggressive, Order::Guard(_)) => 5000.0,
+        (Stance::Defensive, Order::Guard(_)) => 4000.0,
+        _ => (def.max_weapon_range.max(def.targeting_range) * 1.25).max(400.0),
     };
     let me = snaps[s.id as usize];
     // Priority table: AI attack-move orders use the `<set>_Attack_Move` variant.
@@ -2092,8 +2125,10 @@ fn mov(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, spawn: &
     let mut follow_speed: Option<f32> = None;
     let goal = match s.order {
         Order::Retreat => {
-            // Turn round and head for the own spawn side (the jump happens when the timer runs out).
-            Goal::Point(spawn[s.side as usize], def.radius.max(50.0))
+            // Turn round and head for the own spawn side at full throttle past the boundary.
+            let spawn_pt = spawn.get(s.side as usize).copied().unwrap_or(Vec3::ZERO);
+            let dir = if spawn_pt.len() > 10.0 { spawn_pt.normalized() } else { Vec3::new(if s.side == 0 { -1.0 } else { 1.0 }, 0.0, 0.0) };
+            Goal::Point(spawn_pt + dir * 10000.0, 50.0)
         }
         Order::Move(p) => {
             if let Some((q, v)) = slot {
@@ -2175,12 +2210,26 @@ fn mov(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, spawn: &
             }
         }
         Order::Guard(p) => {
-            if let Some(t) = target
-                && t.pos.dist(s.pos) < def.max_weapon_range * 1.1
-            {
-                face = Some(t.pos);
+            if let Some(t) = target {
+                let dist = t.pos.dist(s.pos);
+                if dist < (def.max_weapon_range * 1.3).max(2500.0) || t.pos.dist(p) < 4500.0 {
+                    face = Some(t.pos);
+                    let stand = if def.preferred_range > 0.0 {
+                        (def.preferred_range * cfg.engage_range_scale).max(def.radius + t.radius + 50.0)
+                    } else {
+                        (def.max_weapon_range * 0.8).max(def.radius + t.radius + 50.0)
+                    };
+                    if dist > stand * 1.1 {
+                        Goal::Point(t.pos, stand)
+                    } else {
+                        Goal::Hold
+                    }
+                } else {
+                    Goal::Point(p, (def.radius + 300.0).max(200.0))
+                }
+            } else {
+                Goal::Point(p, (def.radius + 300.0).max(200.0))
             }
-            Goal::Point(p, 200.0)
         }
         Order::Idle | Order::Attack(_) => {
             // Fighters stay with their squadron leader or carrier.

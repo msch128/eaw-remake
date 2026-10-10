@@ -174,6 +174,7 @@ pub fn ui_block(
     camera: Single<&Camera, With<BattleCamera>>,
     parents: Query<&ChildOf>,
     overlay_roots: Query<(), With<eaw_ui::TacticalOverlayRoot>>,
+    overlay_nodes: Query<(), Or<(With<eaw_ui::ShipOverlayNode>, With<eaw_ui::HardpointNode>)>>,
 ) {
     // Node transforms are in physical pixels of the camera target (UI scale only changes node sizes).
     let target_scale = camera.target_scaling_factor().unwrap_or(1.0);
@@ -206,15 +207,14 @@ pub fn ui_block(
                 }
             }
             let mut cur = e;
-            let mut overlay = false;
-            for _ in 0..8 {
-                if overlay_roots.contains(cur) {
-                    overlay = true;
-                    break;
-                }
-                match parents.get(cur) {
-                    Ok(p) => cur = p.parent(),
-                    Err(_) => break,
+            let mut overlay = overlay_roots.contains(e) || overlay_nodes.contains(e);
+            if !overlay {
+                while let Ok(p) = parents.get(cur) {
+                    cur = p.parent();
+                    if overlay_roots.contains(cur) || overlay_nodes.contains(cur) {
+                        overlay = true;
+                        break;
+                    }
                 }
             }
             if !overlay {
