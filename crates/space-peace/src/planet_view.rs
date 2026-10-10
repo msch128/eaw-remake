@@ -12,6 +12,7 @@ use crate::camera::{CameraBounds, GalaxyCamera};
 use crate::flow::AppScreen;
 use crate::galaxy_map::Selection;
 use crate::galaxy_view::GalaxyView;
+use crate::planet_visual::PlanetRadii;
 
 /// Shared state of the planet view.
 #[derive(Resource, Debug, Default)]
@@ -141,6 +142,27 @@ mod tests {
         assert!(!wheel_opens(-1.0, 1.0, 0.0), "wheel out never opens");
         assert!(!wheel_opens(0.0, 1.0, 0.0), "no wheel, no view");
     }
+
+    #[test]
+    fn planet_zoom_camera_dives_onto_planet_before_overview() {
+        let orbit_pos = Vec3::new(50.0, 40.0, 80.0);
+        let orbit_rot = Quat::from_rotation_y(0.2);
+        let planet_pos = Vec3::new(50.0, 0.0, 50.0);
+        let planet_radius = 8.0;
+
+        let at_0 = camera_transition_pose(orbit_pos, orbit_rot, planet_pos, planet_radius, 0.0);
+        assert!((at_0.translation - orbit_pos).length() < 1e-4, "at blend 0 camera starts at orbit");
+
+        let at_quarter = camera_transition_pose(orbit_pos, orbit_rot, planet_pos, planet_radius, 0.25);
+        assert!(at_quarter.translation.y > 0.0, "during phase 1 camera stays in galaxy space");
+        assert!(at_quarter.translation.distance(planet_pos) < orbit_pos.distance(planet_pos), "camera moves closer to planet");
+
+        let at_1 = camera_transition_pose(orbit_pos, orbit_rot, planet_pos, planet_radius, 1.0);
+        let expected_overview = Transform::from_translation(ORIGIN + Vec3::new(0.0, 0.0, -1.8))
+            .looking_at(ORIGIN + Vec3::new(0.0, -1.95, -10.0), Vec3::Y);
+        assert!((at_1.translation - expected_overview.translation).length() < 1e-4, "at blend 1 camera is at overview pose");
+        assert!((at_1.rotation.dot(expected_overview.rotation)).abs() > 0.9999, "at blend 1 rotation matches overview");
+    }
 }
 
 /// Offsets (from the platform centre) of the ground building circles on the lower plate: up to six in one row spread over the plate, extras
@@ -207,6 +229,13 @@ fn view_scene(
     ));
     if let Some(model) = &p.1.model {
         commands.spawn((ViewEntity, AlamoModel::new(model.clone()), FitModel { radius: 24.0, spin: 0.01 }, Visibility::Hidden, Transform::from_translation(ORIGIN + Vec3::new(-15.8, -1.0, -15.0))));
+    } else {
+        commands.spawn((
+            ViewEntity,
+            Mesh3d(meshes.add(Sphere::new(24.0).mesh().uv(32, 16))),
+            MeshMaterial3d(mats.add(StandardMaterial { base_color: Color::srgb(0.5, 0.5, 0.55), perceptual_roughness: 0.75, ..default() })),
+            Transform::from_translation(ORIGIN + Vec3::new(-15.8, -1.0, -15.0)),
+        ));
     }
     if let Some(tex) = textures.as_mut().and_then(|t| t.get(&mut images, "i_galactic_organize_land.dds")) {
         spawn_platform(&mut commands, &mut meshes, &mut mats, tex.handle, land_cell(p.1.terrain.as_deref()), PLAT);
@@ -298,14 +327,79 @@ fn view_dynamic(
     }
 }
 
-fn view_camera(state: Res<PlanetViewState>, mut cam: Single<&mut Transform, With<GalaxyCamera>>) {
+/// Computes the camera transform for the planet view transition at a given blend (0.0 = galaxy orbit, 1.0 = full overview).
+///
+/// Phase 1 (0.0 .. 0.5): camera swoops from galaxy orbit down onto the planet globe, closing in so the 3D planet fills the screen.
+/// Phase 2 (0.5 .. 1.0): camera transitions from the planet close-up to the overview framing (platform & station).
+pub(crate) fn camera_transition_pose(
+    orbit_pos: Vec3,
+    orbit_rot: Quat,
+    planet_pos: Vec3,
+    planet_radius: f32,
+    blend: f32,
+) -> Transform {
+    let b = blend.clamp(0.0, 1.0);
+    let overview_pose = Transform::from_translation(ORIGIN + Vec3::new(0.0, 0.0, -1.8))
+        .looking_at(ORIGIN + Vec3::new(0.0, -1.95, -10.0), Vec3::Y);
+
+    let dir = (orbit_rot * Vec3::Z).normalize_or_zero();
+    let dir = if dir.length_squared() < 0.1 { Vec3::new(0.0, 0.707, 0.707) } else { dir };
+
+    // 1. Galaxy close-up: camera dives onto the planet sphere
+    let galaxy_close_dist = (planet_radius * 2.2).max(6.0);
+    let galaxy_close_pos = planet_pos + dir * galaxy_close_dist;
+    let galaxy_close_pose = Transform::from_translation(galaxy_close_pos).looking_at(planet_pos, Vec3::Y);
+
+    // 2. Planet view scene close-up: matches the planet scale & viewing direction
+    let pv_planet_pos = ORIGIN + Vec3::new(-15.8, -1.0, -15.0);
+    let pv_close_pos = pv_planet_pos + dir * (24.0 * 2.2);
+    let pv_close_pose = Transform::from_translation(pv_close_pos).looking_at(pv_planet_pos, Vec3::Y);
+
+    if b < 0.5 {
+        let t = b / 0.5;
+        let t = t * t * (3.0 - 2.0 * t);
+        Transform {
+            translation: orbit_pos.lerp(galaxy_close_pose.translation, t),
+            rotation: orbit_rot.slerp(galaxy_close_pose.rotation, t),
+            scale: Vec3::ONE,
+        }
+    } else {
+        let t = (b - 0.5) / 0.5;
+        let t = t * t * (3.0 - 2.0 * t);
+        Transform {
+            translation: pv_close_pose.translation.lerp(overview_pose.translation, t),
+            rotation: pv_close_pose.rotation.slerp(overview_pose.rotation, t),
+            scale: Vec3::ONE,
+        }
+    }
+}
+
+fn view_camera(
+    state: Res<PlanetViewState>,
+    view: Res<GalaxyView>,
+    radii: Option<Res<PlanetRadii>>,
+    mut cam: Single<&mut Transform, With<GalaxyCamera>>,
+) {
     if state.blend <= 0.0 {
         return;
     }
-    let t = state.blend * state.blend * (3.0 - 2.0 * state.blend);
-    let target = Transform::from_translation(ORIGIN + Vec3::new(0.0, 0.0, -1.8)).looking_at(ORIGIN + Vec3::new(0.0, -1.95, -10.0), Vec3::Y);
-    cam.translation = cam.translation.lerp(target.translation, t);
-    cam.rotation = cam.rotation.slerp(target.rotation, t);
+    let overview_pose = Transform::from_translation(ORIGIN + Vec3::new(0.0, 0.0, -1.8))
+        .looking_at(ORIGIN + Vec3::new(0.0, -1.95, -10.0), Vec3::Y);
+
+    let Some((idx, p)) = state.planet.and_then(|i| view.planets.get(i).map(|p| (i, p))) else {
+        let t = state.blend * state.blend * (3.0 - 2.0 * state.blend);
+        cam.translation = cam.translation.lerp(overview_pose.translation, t);
+        cam.rotation = cam.rotation.slerp(overview_pose.rotation, t);
+        return;
+    };
+
+    let w = crate::galaxy_map::galaxy_to_world(p.position);
+    let planet_pos = Vec3::new(w.x, 0.0, w.z);
+    let r = radii.as_ref().and_then(|rad| rad.0.get(idx)).copied().unwrap_or(8.0).max(4.0);
+
+    let target = camera_transition_pose(cam.translation, cam.rotation, planet_pos, r, state.blend);
+    cam.translation = target.translation;
+    cam.rotation = target.rotation;
 }
 
 fn fit_models(time: Res<Time>, mut models: Query<(&FitModel, &mut Transform, &mut Visibility, Option<Ref<AlamoModelLoaded>>)>) {
@@ -363,8 +457,8 @@ fn spawn_platform(
     commands.spawn((ViewEntity, Name::new("base layout"), Mesh3d(meshes.add(Rectangle::new(3.8, 1.9))), MeshMaterial3d(mat), Transform::from_translation(at)));
 }
 
-/// Black quad in front of the camera: the galaxy fades to black while the camera flies in, and the planet
-/// scene fades in (and the reverse when leaving).
+/// Soft vignette in front of the camera: smooths the handoff between the galaxy close-up and
+/// the planet-view scene without pitch-black void.
 #[derive(Component)]
 struct FadeQuad;
 
@@ -376,7 +470,7 @@ fn view_fade(
     mut mats: ResMut<Assets<StandardMaterial>>,
     mut quad: Query<(Entity, &mut Transform, &MeshMaterial3d<StandardMaterial>), (With<FadeQuad>, Without<GalaxyCamera>)>,
 ) {
-    let alpha = (std::f32::consts::PI * state.blend).sin().powi(2).powf(0.7);
+    let alpha = (std::f32::consts::PI * state.blend).sin().powi(4) * 0.25;
     let visible = state.blend > 0.0 && state.blend < 1.0;
     match quad.single_mut() {
         Ok((e, mut tf, mat)) => {
