@@ -551,7 +551,11 @@ fn production_complete_sounds(
             // The new tech level is announced by `TechAdvanced` (see `play::galaxy_audio`).
             ProductionKind::Tech(_) => continue,
         };
-        match object.and_then(|o| object_sfx(&game, &o, "sfxevent_build_complete")) {
+        match object.as_ref().and_then(|o| {
+            object_sfx(&game, o, "sfxevent_build_complete")
+                .or_else(|| object_sfx(&game, o, "sfxevent_unit_ready"))
+                .or_else(|| object_sfx(&game, o, "sfxevent_fleet_ready"))
+        }) {
             Some(n) => sfx.play(n),
             None => {
                 advisor.write(GalaxyAudio { faction: faction.clone(), event: fallback });

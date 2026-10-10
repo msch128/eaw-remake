@@ -133,7 +133,7 @@ impl GalaxyEvent {
     /// Event-name suffixes after the faction prefix, in order of preference.
     pub fn suffixes(self) -> &'static [&'static str] {
         match self {
-            Self::UnitBuilt => &["New_Units", "Construction_Complete"],
+            Self::UnitBuilt => &["New_Units", "Fleet_Ready", "Construction_Complete"],
             Self::StructureBuilt => &["Construction_Complete", "New_Construction"],
             Self::PlanetCaptured => &["Planet_Gained"],
             Self::PlanetLost => &["Planet_Lost"],
