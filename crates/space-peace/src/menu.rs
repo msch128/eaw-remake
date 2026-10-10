@@ -1,4 +1,4 @@
-﻿//! Menus: main menu, campaign selection and the in-game pause menu.
+//! Menus: main menu, campaign selection and the in-game pause menu.
 //!
 //! Screens are described as plain data ([`MenuSpec`]) and turned into Bevy UI by [`spawn_menu`];
 //! that function is the one place to replace when the EaW-styled `eaw-ui` crate takes over the look.
@@ -163,7 +163,15 @@ pub fn battle_menu_spec() -> MenuSpec {
     MenuSpec {
         title: "Space Battle".into(),
         columns: vec![MenuColumn {
-            items: vec![MenuItem::new("Resume", MenuAction::CloseBattleMenu), MenuItem::new("Retreat", MenuAction::RetreatBattle)],
+            items: vec![
+                MenuItem::new("Resume", MenuAction::CloseBattleMenu),
+                MenuItem::new("Save Game", MenuAction::OpenSlots(SlotMode::Save)),
+                MenuItem::new("Load Game", MenuAction::OpenSlots(SlotMode::Load)),
+                MenuItem::new("Options", MenuAction::Options),
+                MenuItem::new("Retreat", MenuAction::RetreatBattle),
+                MenuItem::new("Main Menu", MenuAction::MainMenu),
+                MenuItem::new("Quit", MenuAction::Quit),
+            ],
             ..default()
         }],
         dim_background: true,
@@ -404,7 +412,7 @@ fn sync_pause_menu(
 }
 
 /// The save/load dialog replaces the pause menu while it is open (no title or Quit showing through).
-fn hide_pause_under_slots(slots: Res<SlotScreen>, mut menus: Query<&mut Node, With<PauseMenu>>) {
+fn hide_pause_under_slots(slots: Res<SlotScreen>, mut menus: Query<&mut Node, Or<(With<PauseMenu>, With<crate::battle_play::BattleMenuRoot>)>>) {
     let display = if slots.0.is_some() { Display::None } else { Display::Flex };
     for mut n in &mut menus {
         if n.display != display {
@@ -612,6 +620,7 @@ fn apply_clicks(
             MenuAction::Options => options.0 = true,
             MenuAction::MainMenu => {
                 paused.0 = false;
+                battle_menu.open = false;
                 next.set(AppScreen::MainMenu);
             }
             MenuAction::Resume => paused.0 = false,
@@ -685,4 +694,29 @@ pub(crate) fn small_caps_label(parent: &mut ChildSpawnerCommands, text: &str, fo
                 t.spawn((TextSpan::new(s), f, TextColor(color)));
             }
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn battle_menu_spec_has_all_eaw_pause_actions() {
+        let spec = battle_menu_spec();
+        assert_eq!(spec.title, "Space Battle");
+        assert_eq!(spec.columns.len(), 1);
+        let items: Vec<(&str, &MenuAction)> = spec.columns[0].items.iter().map(|it| (it.label.as_str(), &it.action)).collect();
+        assert_eq!(
+            items,
+            vec![
+                ("Resume", &MenuAction::CloseBattleMenu),
+                ("Save Game", &MenuAction::OpenSlots(SlotMode::Save)),
+                ("Load Game", &MenuAction::OpenSlots(SlotMode::Load)),
+                ("Options", &MenuAction::Options),
+                ("Retreat", &MenuAction::RetreatBattle),
+                ("Main Menu", &MenuAction::MainMenu),
+                ("Quit", &MenuAction::Quit),
+            ]
+        );
+    }
 }

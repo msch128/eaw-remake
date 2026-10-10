@@ -256,6 +256,7 @@ fn sync_slot_menu(
     state: Option<Res<SimState>>,
     game: Res<crate::game::Game>,
     current: Res<CurrentCampaign>,
+    ui: Option<Res<eaw_ui::EawUiSettings>>,
 ) {
     if !slots.is_changed() {
         return;
@@ -266,7 +267,11 @@ fn sync_slot_menu(
     if let Some(mode) = slots.0 {
         let only = state.as_ref().and(current.name.as_deref());
         let entries = game.0.as_ref().map(|g| crate::game::campaign_entries(&g.data)).unwrap_or_default();
-        spawn_menu(&mut commands, &slot_spec(mode, only, &entries), SlotMenu);
+        let root = spawn_menu(&mut commands, &slot_spec(mode, only, &entries), SlotMenu);
+        commands.entity(root).insert(GlobalZIndex(650));
+        if let Some(cam) = ui.and_then(|u| u.camera) {
+            commands.entity(root).insert(UiTargetCamera(cam));
+        }
     }
 }
 
@@ -281,6 +286,9 @@ fn handle_slot_chosen(
     mut commands: Commands,
     state: Option<Res<SimState>>,
     current: Res<CurrentCampaign>,
+    mut battle_menu: ResMut<crate::menu::BattleMenu>,
+    screen: Res<State<AppScreen>>,
+    mut next: ResMut<NextState<AppScreen>>,
 ) {
     for SlotChosen(mode, n) in chosen.read() {
         let Some(path) = slot_path(*n) else {
@@ -298,6 +306,7 @@ fn handle_slot_chosen(
                 actions.write(PlayAction::Save(path));
                 slots.0 = None;
                 paused.0 = false;
+                battle_menu.open = false;
             }
             SlotMode::Load => {
                 let Ok(file) = SaveFile::read(&path) else { continue };
@@ -307,6 +316,10 @@ fn handle_slot_chosen(
                         actions.write(PlayAction::Load(path));
                         slots.0 = None;
                         paused.0 = false;
+                        battle_menu.open = false;
+                        if *screen.get() == AppScreen::SpaceBattle {
+                            next.set(AppScreen::Galaxy);
+                        }
                     }
                 } else {
                     commands.insert_resource(PendingLoad(path));

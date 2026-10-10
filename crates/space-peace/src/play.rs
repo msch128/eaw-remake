@@ -63,6 +63,8 @@ impl Plugin for PlayGluePlugin {
             .add_systems(OnEnter(AppScreen::Galaxy), begin_play)
             .add_systems(OnTransition { exited: AppScreen::Galaxy, entered: AppScreen::MainMenu }, end_play)
             .add_systems(OnTransition { exited: AppScreen::Galaxy, entered: AppScreen::CampaignSelect }, end_play)
+            .add_systems(OnTransition { exited: AppScreen::SpaceBattle, entered: AppScreen::MainMenu }, end_play)
+            .add_systems(OnTransition { exited: AppScreen::SpaceBattle, entered: AppScreen::CampaignSelect }, end_play)
             .add_systems(
                 Update,
                 (

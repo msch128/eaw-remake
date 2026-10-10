@@ -1,4 +1,4 @@
-﻿//! Application flow: screens (main menu, campaign selection, galaxy map), pause, campaign
+//! Application flow: screens (main menu, campaign selection, galaxy map), pause, campaign
 //! start, music scenes and UI sounds.
 
 use alamo_audio::{MusicDirector, MusicScene, SfxCommands, plugin::AlamoAudio};
@@ -89,6 +89,7 @@ fn escape_key(
     mut sound: MessageWriter<UiSound>,
     mut options: ResMut<OptionsOpen>,
     settings: Res<Settings>,
+    slots: Option<ResMut<crate::newgame::SlotScreen>>,
 ) {
     if !keys.just_pressed(KeyCode::Escape) {
         return;
@@ -98,6 +99,14 @@ fn escape_key(
         crate::options::close(&mut options, &settings);
         sound.write(UiSound(crate::menu::SFX_BACK));
         return;
+    }
+    // Esc also closes the save/load slots overlay.
+    if let Some(mut sl) = slots {
+        if sl.0.is_some() {
+            sl.0 = None;
+            sound.write(UiSound(crate::menu::SFX_BACK));
+            return;
+        }
     }
     match state.get() {
         AppScreen::Galaxy => {

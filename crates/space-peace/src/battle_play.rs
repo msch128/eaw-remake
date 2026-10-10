@@ -440,7 +440,16 @@ pub struct ResultScreen {
 }
 
 #[derive(Component)]
-struct BattleMenuRoot;
+pub struct BattleMenuRoot;
+
+#[derive(bevy::ecs::system::SystemParam)]
+struct BattleMenuContext<'w> {
+    ui: Option<Res<'w, EawUiSettings>>,
+    runtime: Option<Res<'w, battle_view::BattleRuntime>>,
+    notice: ResMut<'w, battle_view::tactical_ui::RetreatNotice>,
+    slots: Option<Res<'w, crate::newgame::SlotScreen>>,
+    options: Option<Res<'w, crate::options::OptionsOpen>>,
+}
 
 /// Esc cancels an armed order / targeting first; with nothing armed it opens the battle menu (Resume / Retreat), which pauses the battle while it is
 /// open. Retreat gives the fight up like F10.
@@ -459,17 +468,19 @@ fn battle_menu(
     status: Res<BattleStatus>,
     mut scripted_esc: Local<bool>,
     mut scripted_retreat: Local<bool>,
-    ui: Option<Res<EawUiSettings>>,
-    runtime: Option<Res<battle_view::BattleRuntime>>,
-    mut notice: ResMut<battle_view::tactical_ui::RetreatNotice>,
+    mut ctx: BattleMenuContext,
 ) {
     // `--battle-esc-after <s>` scripts one Esc press for test runs.
     let scripted = !*scripted_esc && status.tick > 0 && args.battle_esc_after.is_some_and(|s| status.time >= s);
     if scripted {
         *scripted_esc = true;
     }
+    let in_slots = ctx.slots.as_ref().is_some_and(|s| s.0.is_some());
+    let in_options = ctx.options.as_ref().is_some_and(|o| o.0);
     if keys.just_pressed(KeyCode::Escape) || scripted {
-        if armed.0.is_some() && !menu.open {
+        if in_slots || in_options {
+            // Esc closes slots / options overlay first; handled by escape_key
+        } else if armed.0.is_some() && !menu.open {
             armed.0 = None;
         } else {
             menu.open = !menu.open;
@@ -491,10 +502,10 @@ fn battle_menu(
         // The same order as the Retreat button: the jump timer runs and the survivors escape when it ends (refused during the lock).
         menu.retreat = false;
         menu.open = false;
-        if let Some(rt) = runtime.as_ref() {
+        if let Some(rt) = ctx.runtime.as_ref() {
             if status.time < rt.retreat_countdown {
                 // Locked at the start of a battle: say so instead of silently closing.
-                notice.0 = 3.5;
+                ctx.notice.0 = 3.5;
             } else {
                 rt.order_retreat(settings.player_side);
             }
@@ -506,7 +517,7 @@ fn battle_menu(
             // Above every tactical HUD layer (they reach z 80); at z 60 the dim layer and buttons sat under the HUD.
             let root = crate::menu::spawn_menu(&mut commands, &crate::menu::battle_menu_spec(), BattleMenuRoot);
             commands.entity(root).insert(GlobalZIndex(600));
-            if let Some(cam) = ui.and_then(|u| u.camera) {
+            if let Some(cam) = ctx.ui.and_then(|u| u.camera) {
                 commands.entity(root).insert(UiTargetCamera(cam));
             }
             info!("battle menu: open, clock paused={}", settings.paused);

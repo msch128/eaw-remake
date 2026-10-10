@@ -1,4 +1,4 @@
-﻿//! HUD: planet info panel, FPS counter, controls hint and fullscreen toggling.
+//! HUD: planet info panel, FPS counter, controls hint and fullscreen toggling.
 
 use bevy::{
     diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin},
@@ -25,6 +25,14 @@ impl Plugin for UiPlugin {
             )
             .add_systems(
                 OnTransition { exited: AppScreen::Galaxy, entered: AppScreen::CampaignSelect },
+                despawn_hud,
+            )
+            .add_systems(
+                OnTransition { exited: AppScreen::SpaceBattle, entered: AppScreen::MainMenu },
+                despawn_hud,
+            )
+            .add_systems(
+                OnTransition { exited: AppScreen::SpaceBattle, entered: AppScreen::CampaignSelect },
                 despawn_hud,
             )
             .add_systems(Update, (toggle_fullscreen, toggle_fps, update_fps))

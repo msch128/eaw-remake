@@ -1,4 +1,4 @@
-﻿//! Options menu: an overlay with one row per setting (`<` value `>`), shown over the main menu
+//! Options menu: an overlay with one row per setting (`<` value `>`), shown over the main menu
 //! or the pause menu. Changes apply live and are saved to the settings file on "Done".
 
 use bevy::{prelude::*, ui::FocusPolicy};
@@ -90,12 +90,16 @@ fn rebuild_overlay(
     settings: Res<Settings>,
     scroll: Res<OptionsScroll>,
     existing: Query<Entity, With<OptionsOverlay>>,
+    ui: Option<Res<eaw_ui::EawUiSettings>>,
 ) {
     for e in &existing {
         commands.entity(e).despawn();
     }
     if open.0 {
-        spawn_overlay(&mut commands, &settings, scroll.0);
+        let e = spawn_overlay(&mut commands, &settings, scroll.0);
+        if let Some(cam) = ui.and_then(|u| u.camera) {
+            commands.entity(e).insert(UiTargetCamera(cam));
+        }
     }
 }
 
@@ -119,7 +123,7 @@ fn small_button(parent: &mut ChildSpawnerCommands, text: &str, action: OptionBut
         });
 }
 
-fn spawn_overlay(commands: &mut Commands, settings: &Settings, scroll: f32) {
+fn spawn_overlay(commands: &mut Commands, settings: &Settings, scroll: f32) -> Entity {
     commands
         .spawn((
             Node {
@@ -132,7 +136,7 @@ fn spawn_overlay(commands: &mut Commands, settings: &Settings, scroll: f32) {
             },
             BackgroundColor(Color::srgba(0.0, 0.0, 0.03, 0.7)),
             FocusPolicy::Block,
-            GlobalZIndex(70),
+            GlobalZIndex(700),
             OptionsOverlay,
         ))
         .with_children(|root| {
@@ -200,7 +204,8 @@ fn spawn_overlay(commands: &mut Commands, settings: &Settings, scroll: f32) {
                         small_button(row, "Done", OptionButton::Done, 140.0);
                     });
             });
-        });
+        })
+        .id()
 }
 
 /// Mouse wheel over the options scrolls the setting rows.
