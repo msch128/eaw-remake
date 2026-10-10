@@ -2193,6 +2193,14 @@ fn mov(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, spawn: &
                     if s.lane != 0.0 && matches!(s.order, Order::AttackMove(_)) && d > 2500.0 {
                         let to = tgt_point - s.pos;
                         q = tgt_point + Vec3::new(-to.y, to.x, 0.0) * (s.lane / d);
+                    } else if d < stand * 2.2 && def.preferred_range > 0.0 {
+                        // Broadside maneuvering: if guns favour broadside angles, curve approach tangentially
+                        let rel = wrap_angle((tgt_point - s.pos).y.atan2((tgt_point - s.pos).x) - s.yaw);
+                        let flank_sign = if rel >= 0.0 { 1.0 } else { -1.0 };
+                        let to = tgt_point - s.pos;
+                        let tangent = Vec3::new(-to.y, to.x, 0.0).normalized() * flank_sign;
+                        let blend = ((stand * 2.2 - d) / (stand * 1.2)).clamp(0.0, 1.0);
+                        q = tgt_point + tangent * (stand * 0.45 * blend);
                     }
                     face = Some(tgt_point);
                     Goal::Point(q, stand)
@@ -2345,7 +2353,7 @@ fn mov(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, spawn: &
             // Closing on a target (capitals and frigates): in the last stretch before the standoff the ship already turns the bearing at which most weapons bear
             // towards it (the speed profile below brakes it to a stop at the standoff), instead of pointing its bow at it until it has stopped.
             let err = match face {
-                Some(f) if !fighter && aim == p && dist <= stop + braking * 2.0 + def.radius => {
+                Some(f) if !fighter && aim == p && dist <= stop + (braking * 2.5 + def.radius * 1.5).max(400.0) => {
                     align_to_target(s, def, f, dt);
                     0.0
                 }

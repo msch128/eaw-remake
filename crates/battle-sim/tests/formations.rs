@@ -305,3 +305,39 @@ fn reinforced_squadron_has_offsets_and_flies_in_formation() {
     }
 }
 
+#[test]
+fn capital_ship_approaches_and_aligns_broadside_weapons() {
+    let Some((data, fs)) = real_data() else { return };
+    let cat = Arc::new(Catalog::build(&data, Some(&fs), &["Star_Destroyer", "MC-80_Star_Cruiser"]));
+    let mk = |name: &str, ship: &str| SideSetup {
+        name: name.into(),
+        units: vec![UnitSetup { ship: cat.ship_id(ship).unwrap(), count: 1, tag: 1 }],
+        structures: vec![],
+        ai: false,
+    };
+    let config = BattleConfig { record_events: false, seed: 1, ..BattleConfig::default() };
+    let mut b = Battle::new(BattleSetup { catalog: cat.clone(), sides: vec![mk("Empire", "Star_Destroyer"), mk("Rebel", "MC-80_Star_Cruiser")], config });
+    let isd = b.ships.iter().find(|s| s.side == 0).map(|s| s.id).unwrap();
+    let mc80 = b.ships.iter().find(|s| s.side == 1).map(|s| s.id).unwrap();
+    b.ships[isd as usize].pos = b.ships[mc80 as usize].pos - Vec3::new(4500.0, 0.0, 0.0);
+    b.command(0, Command::Attack { ships: vec![isd], target: mc80 }).unwrap();
+    // Step forward until ISD reaches standoff and engages
+    for _ in 0..(40 * 30) {
+        b.step();
+    }
+    let isd_speed = b.ships[isd as usize].speed;
+    println!("isd speed: {:.1}", isd_speed);
+    // Order MC-80 to attack ISD
+    b.command(1, Command::Attack { ships: vec![mc80], target: isd }).unwrap();
+    for _ in 0..(20 * 30) {
+        b.step();
+    }
+    let mc80_ship = &b.ships[mc80 as usize];
+    let to_isd = b.ships[isd as usize].pos - mc80_ship.pos;
+    let bearing_to_isd = to_isd.y.atan2(to_isd.x);
+    let mc80_rel = (bearing_to_isd - mc80_ship.yaw + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
+    println!("MC-80 relative angle to target at standoff: {:.1} deg", mc80_rel.to_degrees());
+    assert!(mc80_rel.abs().to_degrees() > 50.0, "MC-80 presents broadside: angle is {:.1} deg", mc80_rel.to_degrees());
+    assert!(isd_speed < 80.0, "ISD brakes into standoff: speed {}", isd_speed);
+}
+
