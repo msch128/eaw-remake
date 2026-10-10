@@ -648,13 +648,28 @@ fn is_ground_model(model: &str) -> bool {
 }
 
 /// Writes [`BattleFinished`] once the displayed picture reached the end of a battle that came from a request.
-fn report_outcome(mut rt: ResMut<BattleRuntime>, status: Res<BattleStatus>, mut out: MessageWriter<BattleFinished>) {
+fn report_outcome(
+    mut rt: ResMut<BattleRuntime>,
+    time: Res<Time>,
+    keys: Option<Res<ButtonInput<KeyCode>>>,
+    mouse: Option<Res<ButtonInput<MouseButton>>>,
+    status: Res<BattleStatus>,
+    mut out: MessageWriter<BattleFinished>,
+    mut over_timer: Local<f32>,
+) {
     if rt.reported || !status.over {
+        *over_timer = 0.0;
         return;
     }
     let (Some(request), Some(result)) = (rt.request.clone(), rt.outcome()) else {
         return;
     };
+    *over_timer += time.delta_secs();
+    let skip = keys.as_ref().is_some_and(|k| k.just_pressed(KeyCode::Space) || k.just_pressed(KeyCode::Escape))
+        || mouse.as_ref().is_some_and(|m| m.just_pressed(MouseButton::Left));
+    if *over_timer < 5.0 && !skip {
+        return;
+    }
     rt.reported = true;
     let losses = rt.cur.as_ref().map(|c| c.losses.iter().map(|side| side.iter().map(|&(d, n)| (rt.catalog.ship(d).name.clone(), n)).collect()).collect()).unwrap_or_default();
     out.write(BattleFinished { battle_id: request.battle_id, result, losses });

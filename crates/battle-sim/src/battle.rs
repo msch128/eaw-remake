@@ -702,6 +702,11 @@ impl Battle {
         self.over
     }
 
+    /// The winning side (`None` if still ongoing or a draw).
+    pub fn winner(&self) -> Option<u8> {
+        self.winner
+    }
+
     /// Definitions used by this battle.
     pub fn catalog(&self) -> &Arc<Catalog> {
         &self.catalog

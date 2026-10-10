@@ -1564,6 +1564,18 @@ impl Battle {
             }
         }
         self.run_carriers(dt);
+        // Orphaned carrier and station squadrons are destroyed when their mother ship is lost
+        for i in 0..self.ships.len() {
+            let s = &self.ships[i];
+            if s.alive && !s.retreated && s.carrier != NONE {
+                if !self.ships[s.carrier as usize].alive || self.ships[s.carrier as usize].retreated {
+                    self.ships[i].alive = false;
+                    if self.config.record_events {
+                        self.events.push(Event::ShipDestroyed { ship: i as u32, pos: self.ships[i].pos });
+                    }
+                }
+            }
+        }
         if self.tick.is_multiple_of(15) {
             self.ai_special_abilities();
         }
@@ -1874,7 +1886,16 @@ impl Battle {
         let left: Vec<usize> = (0..n).filter(|&i| active[i]).collect();
         if left.len() <= 1 {
             self.over = true;
-            self.winner = left.first().map(|&i| i as u8);
+            self.winner = if let Some(&w) = left.first() {
+                Some(w as u8)
+            } else {
+                let any_survivors: Vec<usize> = (0..n).filter(|&i| any_alive[i]).collect();
+                if any_survivors.len() == 1 {
+                    Some(any_survivors[0] as u8)
+                } else {
+                    None
+                }
+            };
             // The defeated side's remaining fighters are lost with it (ground structures survive on the planet).
             if let Some(w) = self.winner {
                 for s in self.ships.iter_mut().filter(|s| s.side != w && !s.retreated) {

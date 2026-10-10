@@ -1236,3 +1236,64 @@ fn ground_to_space_special_weapon_fires_at_enemy_capital_ship() {
     assert!(b.ships[1].hull < initial_hull, "enemy capital should take damage from special ground-to-space weapon");
 }
 
+#[test]
+fn orphaned_carrier_fighters_die_and_victory_resolves_cleanly() {
+    let mut cat = Catalog::default();
+    cat.ships.push(ShipDef {
+        name: "carrier".into(),
+        class: TargetClass::Structure,
+        is_static: true,
+        hull: 100.0,
+        radius: 200.0,
+        carried: vec![(1, 1)],
+        ..ShipDef::default()
+    });
+    cat.ships.push(ShipDef {
+        name: "fighter_sq".into(),
+        is_squadron: true,
+        members: vec![(2, 2)],
+        ..ShipDef::default()
+    });
+    cat.ships.push(ShipDef {
+        name: "fighter".into(),
+        class: TargetClass::Fighter,
+        hull: 50.0,
+        radius: 10.0,
+        ..ShipDef::default()
+    });
+    cat.ships.push(ShipDef {
+        name: "player_ship".into(),
+        class: TargetClass::Frigate,
+        hull: 1000.0,
+        radius: 100.0,
+        ..ShipDef::default()
+    });
+    let cat = Arc::new(cat);
+    let sides = vec![
+        SideSetup {
+            name: "player".into(),
+            units: vec![UnitSetup { ship: 3, count: 1, tag: 0 }],
+            structures: vec![],
+            ai: false,
+        },
+        SideSetup {
+            name: "enemy".into(),
+            units: vec![],
+            structures: vec![0], // enemy station/carrier
+            ai: true,
+        },
+    ];
+    let mut b = Battle::new(BattleSetup { catalog: cat, sides, config: BattleConfig { dt: 0.1, ..BattleConfig::default() } });
+    assert_eq!(b.ships.len(), 4); // player frigate, enemy station, 2 fighters
+    let enemy_station = b.ships.iter().position(|s| s.side == 1 && s.carrier == NONE).unwrap();
+    // Kill the enemy station
+    b.ships[enemy_station].hull = 0.0;
+    b.ships[enemy_station].alive = false;
+    b.step();
+    // Orphaned fighters must be dead
+    let surviving_enemy: Vec<_> = b.ships.iter().filter(|s| s.side == 1 && s.alive).collect();
+    assert!(surviving_enemy.is_empty(), "all enemy fighters should be destroyed with the station");
+    assert!(b.is_over(), "battle should be over");
+    assert_eq!(b.winner(), Some(0), "player should be victorious");
+}
+
