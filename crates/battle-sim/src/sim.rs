@@ -43,6 +43,8 @@ struct Snap {
     carrier: u32,
     /// Special ground-to-space weapon on the planet surface.
     special: bool,
+    /// Targeted hardpoint index.
+    target_hp: u16,
 }
 
 /// Uniform grid of ship ids for projectile collision.
@@ -970,6 +972,7 @@ impl Battle {
                         0xFF
                     },
                     special: d.special_weapon.is_some(),
+                    target_hp: s.target_hp,
                 }
             })
             .collect();
@@ -2047,6 +2050,28 @@ fn scan(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig) {
     if explicit.is_none_or(|t| !snaps[t as usize].alive) && s.target_hp != NO_HP && s.target == NONE {
         s.target_hp = NO_HP;
     }
+    if def.class == TargetClass::Bomber && s.target != NONE && explicit.is_none() {
+        let tid = s.target as usize;
+        let t = snaps[tid];
+        if (t.class as u8 >= TargetClass::Frigate as u8 || cat.ship(t.def).is_static) && t.hp_alive != 0 {
+            if s.target_hp == NO_HP || (t.hp_alive & (1u64 << s.target_hp)) == 0 {
+                let tdef = cat.ship(t.def);
+                let hp_pri = |k: HpKind| match k {
+                    HpKind::ShieldGenerator => 0,
+                    HpKind::Engine => 1,
+                    HpKind::FighterBay => 2,
+                    HpKind::Weapon => 3,
+                    _ => 4,
+                };
+                let best_hp = tdef.hardpoints.iter().enumerate()
+                    .filter(|(idx, _)| t.hp_alive & (1u64 << idx) != 0)
+                    .min_by_key(|(_, h)| (hp_pri(h.kind), (h.offset.len() * 10.0) as u32));
+                if let Some((idx, _)) = best_hp {
+                    s.target_hp = idx as u16;
+                }
+            }
+        }
+    }
 }
 
 fn turn_towards(s: &mut Ship, desired: f32, rate: f32, dt: f32) -> f32 {
@@ -2123,6 +2148,15 @@ fn mov(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, spawn: &
     } else {
         None
     };
+    if def.class == TargetClass::Bomber && s.squad != NONE {
+        let l = leaders[s.squad as usize];
+        if l != NONE && l != s.id && snaps[l as usize].alive {
+            let l_hp = snaps[l as usize].target_hp;
+            if l_hp != NO_HP && (s.target_hp == NO_HP || target.is_some_and(|t| (t.hp_alive & (1u64 << s.target_hp)) == 0)) {
+                s.target_hp = l_hp;
+            }
+        }
+    }
     // A fighter that only holds a place (formation slot, carrier escort) stops there instead of flying past it for ever.
     let mut settle = false;
     let mut follow_speed: Option<f32> = None;
@@ -2285,8 +2319,12 @@ fn mov(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, spawn: &
         Goal::Free(yaw) => {
             let rate = def.turn_rate;
             turn_towards(s, yaw, rate, dt);
-            let want = max_speed;
-            s.speed += (want - s.speed).clamp(-def.accel * dt * 2.0, def.accel * dt);
+            let want = if def.class == TargetClass::Bomber && s.phase > 0.0 {
+                max_speed * 1.35
+            } else {
+                max_speed
+            };
+            s.speed += (want - s.speed).clamp(-def.accel * dt * 2.0, def.accel * dt * 1.5);
             if s.phase > 0.0 {
                 s.phase -= dt;
             }
@@ -2415,15 +2453,21 @@ fn mov(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, spawn: &
             }
         }
     }
-    s.speed = s.speed.clamp(0.0, max_speed.max(0.0));
+    let top_clamp = if def.class == TargetClass::Bomber && s.phase > 0.0 { max_speed * 1.35 } else { max_speed };
+    s.speed = s.speed.clamp(0.0, top_clamp.max(0.0));
     let fwd = Vec3::from_yaw(s.yaw);
     s.pos += fwd * (s.speed * dt);
     // Flight is planar (yaw only), so height differences from launch bays and spawn points would never close and ships could circle a target
     // out of weapon range for ever: mobile ships climb or sink towards their target's height (or the battle plane) at half their top speed.
     if !def.is_static {
-        let z_goal = target.map_or(0.0, |t| t.pos.z);
-        let step = def.max_speed * 0.5 * dt;
-        s.pos.z += (z_goal - s.pos.z).clamp(-step, step);
+        if def.class == TargetClass::Bomber && s.phase > 0.0 {
+            let z_dir = if s.id % 2 == 0 { 1.0 } else { -1.0 };
+            s.pos.z += z_dir * (def.max_speed * 0.7 * dt);
+        } else {
+            let z_goal = target.map_or(0.0, |t| t.pos.z);
+            let step = def.max_speed * 0.5 * dt;
+            s.pos.z += (z_goal - s.pos.z).clamp(-step, step);
+        }
     }
     // Separation: mobile big ships do not sit on top of each other (each pair is resolved by both, half each; estimate 0.85 of the radii).
     if !fighter {

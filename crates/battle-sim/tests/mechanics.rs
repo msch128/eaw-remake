@@ -497,6 +497,40 @@ fn bombers_make_straight_bombing_runs_on_big_ships() {
     assert!(passes >= 2, "the bomber comes back for more passes: {passes}");
 }
 
+#[test]
+fn bomber_targets_shield_generator_and_performs_evasive_vertical_climb() {
+    let mut bomber = mobile("bomber", TargetClass::Bomber, 400.0, 100.0, vec![]);
+    bomber.radius = 10.0;
+    let mut target = ship("capital", 1.0e7, 0.0, vec![]);
+    target.class = TargetClass::Capital;
+    // Hardpoint 0: Weapon, Hardpoint 1: ShieldGenerator
+    target.hardpoints = vec![
+        HpDef { name: "turbolaser".into(), kind: HpKind::Weapon, health: 500.0, offset: Vec3::new(100.0, 50.0, 0.0), ..HpDef::default() },
+        HpDef { name: "shield_gen".into(), kind: HpKind::ShieldGenerator, health: 500.0, offset: Vec3::new(-100.0, 0.0, 50.0), ..HpDef::default() },
+    ];
+    let cat = Arc::new(Catalog::from_defs(vec![bomber, target], vec![laser()]));
+    let mut b = Battle::new(BattleSetup {
+        catalog: cat.clone(),
+        sides: vec![one_side(&cat, "bomber", 1, true), one_side(&cat, "capital", 1, true)],
+        config: BattleConfig { half_size: 12000.0, record_events: false, ..BattleConfig::default() },
+    });
+    b.ships[0].pos = Vec3::new(1000.0, 0.0, 0.0);
+    let mut saw_vertical_evasion = false;
+    let mut saw_shield_gen_targeted = false;
+    for _ in 0..30 * 20 {
+        b.step();
+        let s = &b.ships[0];
+        if s.target_hp == 1 {
+            saw_shield_gen_targeted = true;
+        }
+        if s.pos.z.abs() > 30.0 {
+            saw_vertical_evasion = true;
+        }
+    }
+    assert!(saw_shield_gen_targeted, "bomber automatically targeted ShieldGenerator");
+    assert!(saw_vertical_evasion, "bomber climbed/dived during egress phase");
+}
+
 fn duel_loss(attacker: ShipDef, target: ShipDef, seconds: u32) -> (f32, f32) {
     let (a, t) = (attacker.name.clone(), target.name.clone());
     let cat = Catalog::from_defs(vec![attacker, target], vec![laser()]);
