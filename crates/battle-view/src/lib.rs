@@ -441,7 +441,7 @@ impl Plugin for BattleViewPlugin {
         if !app.world().contains_resource::<Messages<alamo_audio::plugin::GalaxyAudio>>() {
             app.add_message::<alamo_audio::plugin::GalaxyAudio>();
         }
-        app.add_systems(Update, scene::keep_planet_below.run_if(resource_exists::<BattleRuntime>));
+        app.add_systems(Update, (scene::keep_planet_below, scene::update_atmosphere_glow).run_if(resource_exists::<BattleRuntime>));
         turrets::plugin(app);
         missiles::plugin(app);
         app.init_gizmo_group::<effects::EngineTrailGizmos>()

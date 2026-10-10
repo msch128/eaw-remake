@@ -1,4 +1,4 @@
-﻿//! The static scene of a space map: sky, nebula, lights, ambient, bounds and placed props.
+//! The static scene of a space map: sky, nebula, lights, ambient, bounds and placed props.
 
 use alamo_data::GameData;
 use alamo_fs::FileSource;
@@ -300,10 +300,13 @@ const SETTLED: u8 = u8::MAX;
 /// Measures the real top of a loaded backdrop planet (world bounds of its mesh parts) and moves it down when it reaches
 /// the battle plane. Runs a few frames after loading so the transforms and bounds are up to date.
 pub fn keep_planet_below(
-    mut planets: Query<(&AlamoModelLoaded, &mut Transform, &mut BackdropPlanet)>,
+    mut commands: Commands,
+    mut planets: Query<(Entity, &AlamoModelLoaded, &mut Transform, &mut BackdropPlanet)>,
     parts: Query<(&bevy::camera::primitives::Aabb, &GlobalTransform)>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
-    for (loaded, mut tf, mut state) in &mut planets {
+    for (entity, loaded, mut tf, mut state) in &mut planets {
         if state.0 == SETTLED {
             continue;
         }
@@ -312,12 +315,16 @@ pub fn keep_planet_below(
             continue;
         }
         let mut top = f32::MIN;
+        let mut max_extent = 0.0f32;
         for e in &loaded.parts {
             let Ok((aabb, gt)) = parts.get(*e) else { continue };
             let m = gt.affine();
             let c = m.transform_point3a(aabb.center);
             let half_y = m.matrix3.row(1).abs().dot(aabb.half_extents);
             top = top.max(c.y + half_y);
+            let half = aabb.half_extents;
+            let ext = (half.x * half.x + half.y * half.y + half.z * half.z).sqrt() * gt.scale().max_element();
+            max_extent = max_extent.max(ext);
         }
         if top == f32::MIN {
             if state.0 > 60 {
@@ -330,10 +337,49 @@ pub fn keep_planet_below(
         if top > -PLANET_CLEARANCE && std::env::var_os("SP_NO_PLANET_CLAMP").is_none() {
             tf.translation.y -= top + PLANET_CLEARANCE;
         }
+
+        // U69: Spawn atmospheric rim glow halo around the backdrop planet sphere
+        if max_extent > 200.0 {
+            let atmo_mesh = meshes.add(Sphere::new(max_extent * 1.025).mesh().uv(36, 24));
+            let atmo_mat = materials.add(StandardMaterial {
+                base_color: Color::srgba(0.22, 0.62, 0.98, 0.38),
+                unlit: true,
+                alpha_mode: AlphaMode::Add,
+                ..default()
+            });
+            commands.spawn((
+                Name::new("planet_atmosphere_glow"),
+                BattleEntity,
+                Mesh3d(atmo_mesh),
+                MeshMaterial3d(atmo_mat),
+                Transform::from_translation(tf.translation),
+                AtmosphereGlow {
+                    planet: entity,
+                    radius: max_extent * 1.025,
+                },
+            ));
+        }
     }
 }
 
+/// Atmospheric rim glow halo around backdrop planet spheres (U69).
+#[derive(Component, Debug)]
+pub struct AtmosphereGlow {
+    pub planet: Entity,
+    pub radius: f32,
+}
 
+/// Keeps the atmosphere glow shell centered on its parent planet.
+pub fn update_atmosphere_glow(
+    planets: Query<&Transform, (With<BackdropPlanet>, Without<AtmosphereGlow>)>,
+    mut glows: Query<(&AtmosphereGlow, &mut Transform)>,
+) {
+    for (glow, mut tf) in &mut glows {
+        if let Ok(ptf) = planets.get(glow.planet) {
+            tf.translation = ptf.translation;
+        }
+    }
+}
 
 /// Brightness weight of a map light from its TED scalar (see [`SceneLight`]).
 fn light_gain(scalar: f32) -> f32 {
@@ -348,4 +394,22 @@ fn light_gain(scalar: f32) -> f32 {
 /// Keeps a faint ambient term on maps that define almost none, so unlit hulls and rocks stay readable.
 fn ambient_floor(a: Vec3) -> Vec3 {
     if std::env::var("SP_LIGHT_MODE").is_ok() { a } else { a.max(Vec3::splat(0.05)) }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_atmosphere_glow_radius_and_scattering_color() {
+        let planet_radius: f32 = 2500.0;
+        let atmo_radius: f32 = planet_radius * 1.025;
+        assert!(atmo_radius > planet_radius, "atmosphere shell is slightly larger than planet");
+        assert!(((atmo_radius / planet_radius) - 1.025).abs() < 1e-4);
+
+        let atmo_color = Color::srgba(0.22, 0.62, 0.98, 0.38);
+        let srgba = atmo_color.to_srgba();
+        assert!(srgba.blue > 0.9, "cyan-blue rayleigh scattering tint");
+        assert!(srgba.alpha > 0.3 && srgba.alpha < 0.5, "soft additive translucency");
+    }
 }
