@@ -1300,7 +1300,7 @@ impl Battle {
                                     (0, 0),
                                     |(a, t), (j, _)| (a + usize::from(s.hps[j].alive), t + 1),
                                 );
-                                s.engine_factor = if total == 0 { 1.0 } else { (alive as f32 / total as f32).max(0.25) };
+                                s.engine_factor = if total == 0 { 1.0 } else { 0.20 + 0.80 * (alive as f32 / total as f32) };
                             }
                             _ => {}
                         }

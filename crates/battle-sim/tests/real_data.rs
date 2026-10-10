@@ -1,4 +1,4 @@
-﻿//! Tests against the real Remake data; skipped when the game is not installed.
+//! Tests against the real Remake data; skipped when the game is not installed.
 
 use std::sync::Arc;
 
@@ -38,7 +38,9 @@ fn catalog_uses_model_bones() {
     // The bow lies along -Y in model space, i.e. +X in battle space: the bow cannon is ahead of the bridge.
     let bow = isd.hardpoints.iter().find(|h| h.name == "HP_ISD_1_New_TL_05").unwrap();
     let shield = isd.hardpoints.iter().find(|h| h.kind == HpKind::ShieldGenerator).unwrap();
+    let engine = isd.hardpoints.iter().find(|h| h.kind == HpKind::Engine).expect("ISD must have engine hardpoint");
     assert!(bow.offset.x > 300.0 && shield.offset.x < -100.0, "bow {:?} shield {:?}", bow.offset, shield.offset);
+    assert!(engine.offset.x < -200.0, "engine hardpoint should be at the rear: {:?}", engine.offset);
     assert!(isd.abilities.iter().any(|a| a.salvo));
     let xw = cat.ship(cat.ship_id("X-Wing_Squadron").unwrap());
     assert!(xw.is_squadron && xw.members.iter().map(|m| m.1).sum::<u32>() == 6);

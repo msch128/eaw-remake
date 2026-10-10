@@ -1055,6 +1055,28 @@ impl Catalog {
             hardpoints.push(self.hp_def(h, i, model, attach, radius, class));
         }
 
+        // Mobile warships with destroyable hardpoints have engine hitboxes at the rear.
+        // Remake XML omitted explicit engine hardpoints on some capitals (e.g. ISD);
+        // synthesize them so engines are always targetable and slow the ship by 80% when destroyed.
+        if !is_static && !is_squadron && hardpoints.iter().any(|h| h.destroyable) && !hardpoints.iter().any(|h| h.kind == HpKind::Engine) {
+            let total_hp: f32 = hardpoints.iter().filter(|h| h.destroyable).map(|h| h.health).sum();
+            let hp_health = (total_hp * 0.08).clamp(1000.0, 3000.0);
+            hardpoints.push(HpDef {
+                name: format!("{}_Engines", name),
+                kind: HpKind::Engine,
+                health: hp_health,
+                destroyable: true,
+                targetable: true,
+                offset: Vec3::new(-radius * 0.75, 0.0, 0.0),
+                forward: Vec3::new(-1.0, 0.0, 0.0),
+                normal: Vec3::new(0.0, 0.0, 1.0),
+                left: Vec3::new(0.0, -1.0, 0.0),
+                arc_yaw: std::f32::consts::PI,
+                arc_pitch: std::f32::consts::FRAC_PI_2,
+                ..HpDef::default()
+            });
+        }
+
         let (max_speed, turn_rate, accel) = match src {
             Source::Unit(u) if !is_squadron => {
                 let speed = u.max_speed * self.speed_scale;

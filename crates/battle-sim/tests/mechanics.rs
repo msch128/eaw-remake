@@ -1001,6 +1001,44 @@ fn a_ship_without_a_living_engine_is_lost_while_one_without_engine_hardpoints_es
     assert!(p.ships[0].retreated, "a ship without engine hardpoints counts as having drives");
 }
 
+#[test]
+fn destroying_engines_cuts_ship_speed_by_80_percent() {
+    let mut eng1 = engine();
+    eng1.health = 100.0;
+    let mut eng2 = engine();
+    eng2.health = 100.0;
+    let mut gun_hp = gun("g", 0.0);
+    gun_hp.range = 3000.0;
+    gun_hp.health = 1000.0;
+    let runner_ship = runner("runner", vec![eng1, eng2]);
+    let gunner = ship("gunner", 1000.0, 0.0, vec![gun_hp]);
+    let cat = Catalog::from_defs(vec![runner_ship, gunner], vec![laser()]);
+    let mut b = Battle::new(setup(cat, "runner", "gunner", 1, 1, cfg()));
+    b.ships[0].pos = Vec3::ZERO;
+    b.ships[1].pos = Vec3::new(200.0, 0.0, 0.0);
+    assert_eq!(b.ships[0].engine_factor, 1.0);
+
+    b.command(1, Command::AttackHardpoint { ships: vec![1], target: 0, hardpoint: 0 }).unwrap();
+    for _ in 0..100 {
+        b.step();
+        if !b.ships[0].hps[0].alive {
+            break;
+        }
+    }
+    assert!(!b.ships[0].hps[0].alive, "first engine should be destroyed");
+    assert!((b.ships[0].engine_factor - 0.60).abs() < 1e-3, "1 of 2 engines destroyed -> 60% speed remaining");
+
+    b.command(1, Command::AttackHardpoint { ships: vec![1], target: 0, hardpoint: 1 }).unwrap();
+    for _ in 0..100 {
+        b.step();
+        if !b.ships[0].hps[1].alive {
+            break;
+        }
+    }
+    assert!(!b.ships[0].hps[1].alive, "second engine should be destroyed");
+    assert!((b.ships[0].engine_factor - 0.20).abs() < 1e-3, "all engines destroyed -> 20% speed (80% cut)");
+}
+
 fn carrier_battle(jump: f32) -> Battle {
     let mut fighter = ship("fighter", 20.0, 0.0, vec![engine()]);
     fighter.class = TargetClass::Fighter;
