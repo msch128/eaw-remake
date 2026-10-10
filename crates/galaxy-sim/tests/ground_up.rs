@@ -165,3 +165,50 @@ fn the_pirates_rearm_with_the_players_tech_in_every_game_and_never_expand() {
         }
     }
 }
+
+#[test]
+fn passive_defense_scales_to_attacker_tech() {
+    let Some(data) = load() else { return };
+    let mut s = sim(&data, true);
+    let w = s.world().clone();
+    let pirates = w.passive_faction().expect("pirates");
+    let human = w.victory.active_player.expect("human");
+    let empire = w.faction_id("Empire").expect("empire");
+
+    // Human player reaches tech 5, so global pirate rearm builds bases and recruits garrisons.
+    s.galaxy_mut().factions[human as usize].tech = 5;
+    for _ in 0..4 {
+        s.step(w.config.week_seconds);
+    }
+
+    let planet = (0..w.planets.len() as u32)
+        .find(|&p| w.real[p as usize] && s.galaxy().planets[p as usize].owner == Some(pirates))
+        .expect("pirate planet");
+
+    // Empire attacker is at Tech 1.
+    s.galaxy_mut().factions[empire as usize].tech = 1;
+    let battle_low_tech = galaxy_sim::PendingBattle {
+        id: 100,
+        planet,
+        fleets: vec![],
+        factions: vec![empire, pirates],
+        defender: Some(pirates),
+    };
+    let sides_low = s.battle_sides(&battle_low_tech);
+    let pirate_side_low = sides_low.iter().find(|s| s.faction == pirates).unwrap();
+
+    // Human attacker is at Tech 5.
+    let battle_high_tech = galaxy_sim::PendingBattle {
+        id: 101,
+        planet,
+        fleets: vec![],
+        factions: vec![human, pirates],
+        defender: Some(pirates),
+    };
+    let sides_high = s.battle_sides(&battle_high_tech);
+    let pirate_side_high = sides_high.iter().find(|s| s.faction == pirates).unwrap();
+
+    let low_units: u32 = pirate_side_low.members.iter().map(|m| m.count).sum();
+    let high_units: u32 = pirate_side_high.members.iter().map(|m| m.count).sum();
+    assert!(low_units < high_units, "Low tech attacker faces smaller pirate forces: {low_units} vs {high_units}");
+}

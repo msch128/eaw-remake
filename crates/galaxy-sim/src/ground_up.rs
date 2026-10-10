@@ -19,6 +19,20 @@ impl World {
     pub fn passive_faction(&self) -> Option<FactionId> {
         self.faction_id(PASSIVE_FACTION)
     }
+
+    /// The star base upgrade chain of `faction` from level 1 upwards.
+    pub fn starbase_chain(&self, faction: FactionId) -> Vec<StarbaseTypeId> {
+        let mut chain = Vec::new();
+        let mut cur = self.first_starbase.get(faction as usize).copied().flatten();
+        while let Some(id) = cur {
+            if chain.contains(&id) {
+                break;
+            }
+            chain.push(id);
+            cur = self.starbases[id as usize].next;
+        }
+        chain
+    }
 }
 
 impl Command {
@@ -136,15 +150,7 @@ impl Sim {
         let Some(passive) = world.passive_faction() else { return };
         let tech = self.rearm_tech();
         // The passive star base chain by level.
-        let mut chain: Vec<StarbaseTypeId> = Vec::new();
-        let mut cur = world.first_starbase.get(passive as usize).copied().flatten();
-        while let Some(id) = cur {
-            if chain.contains(&id) {
-                break;
-            }
-            chain.push(id);
-            cur = world.starbases[id as usize].next;
-        }
+        let chain = world.starbase_chain(passive);
         // The ship types the passive faction fields in the campaign (the data tags them with other factions' affiliations); without any, the neutral
         // buildable ships.
         let mut pool: Vec<UnitTypeId> = self.galaxy.fleets.values().filter(|f| f.owner == passive).flat_map(|f| f.units.keys().copied()).collect();
@@ -201,5 +207,35 @@ impl Sim {
             }
         }
         self.galaxy.sync_ships();
+    }
+
+    /// For a battle where the passive faction is defending, scales its star base and garrison forces
+    /// to the attacker's tech level (so an AI at tech 1 is not blocked by a level 4 base scaled to the human player).
+    pub(crate) fn passive_defense_scaling(&self, battle: &crate::state::PendingBattle, passive: FactionId, current_sb: Option<StarbaseTypeId>) -> (Option<StarbaseTypeId>, u32) {
+        let attacker_tech = battle
+            .factions
+            .iter()
+            .filter(|&&f| f != passive)
+            .map(|&f| self.galaxy.factions.get(f as usize).map_or(1, |s| s.tech))
+            .max()
+            .unwrap_or(1)
+            .max(1);
+        let max_units = (PASSIVE_GARRISON_PER_TECH * attacker_tech) as u32;
+        let chain = self.world.starbase_chain(passive);
+        let p = battle.planet;
+        let is_lehon = self.world.planets.get(p as usize).is_some_and(|pl| pl.name.eq_ignore_ascii_case("Lehon"));
+        let eff_sb = if !chain.is_empty() {
+            let max_sb = if is_lehon { chain.len() } else { (self.world.planets[p as usize].max_space_base as usize).min(2) };
+            let effective_chain_len = chain.len().min(max_sb);
+            if effective_chain_len > 0 {
+                let want = (attacker_tech.clamp(1, effective_chain_len as i32) - 1) as usize;
+                Some(chain[want])
+            } else {
+                current_sb
+            }
+        } else {
+            current_sb
+        };
+        (eff_sb, max_units)
     }
 }

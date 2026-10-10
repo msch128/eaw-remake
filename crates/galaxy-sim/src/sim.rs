@@ -780,24 +780,46 @@ impl Sim {
     }
 
     /// The combatants of a pending battle, one side per faction.
-    pub(crate) fn battle_sides(&self, battle: &PendingBattle) -> Vec<SideInput> {
+    pub fn battle_sides(&self, battle: &PendingBattle) -> Vec<SideInput> {
         let w = &*self.world;
         let p = battle.planet;
         let ps = &self.galaxy.planets[p as usize];
+        let passive = self.world.passive_faction();
+        let passive_defense = if battle.defender.is_some() && battle.defender == passive {
+            passive.map(|pf| self.passive_defense_scaling(battle, pf, ps.starbase))
+        } else {
+            None
+        };
         let mut sides: Vec<SideInput> = Vec::new();
         for &fac in &battle.factions {
             let mut members = Vec::new();
+            let is_passive_defense = Some(fac) == passive && passive_defense.is_some();
+            let mut passive_units_left = passive_defense.map_or(u32::MAX, |(_, max_units)| max_units);
             for fid in &battle.fleets {
                 let Some(f) = self.galaxy.fleets.get(fid) else { continue };
                 if f.owner != fac || f.location != FleetLocation::AtPlanet(p) {
                     continue;
                 }
                 for (&u, &c) in &f.units {
-                    members.push(Member { source: Source::Unit(u), fleet: Some(f.id), count: c });
+                    let take = if is_passive_defense {
+                        let t = c.min(passive_units_left);
+                        passive_units_left = passive_units_left.saturating_sub(t);
+                        t
+                    } else {
+                        c
+                    };
+                    if take > 0 {
+                        members.push(Member { source: Source::Unit(u), fleet: Some(f.id), count: take });
+                    }
                 }
             }
             if battle.defender == Some(fac) {
-                if let Some(sb) = ps.starbase {
+                let effective_sb = if is_passive_defense {
+                    passive_defense.and_then(|(eff_sb, _)| eff_sb)
+                } else {
+                    ps.starbase
+                };
+                if let Some(sb) = effective_sb {
                     members.push(Member { source: Source::Starbase(sb), fleet: None, count: 1 });
                     for &(u, c) in &w.starbases[sb as usize].garrison {
                         members.push(Member { source: Source::Garrison(u), fleet: None, count: c });
