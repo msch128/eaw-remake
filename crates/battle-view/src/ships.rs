@@ -1,4 +1,4 @@
-﻿//! Ship entities: spawning, interpolation between simulation steps, hardpoint damage and death.
+//! Ship entities: spawning, interpolation between simulation steps, hardpoint damage and death.
 
 use std::collections::{HashMap, HashSet};
 
@@ -537,8 +537,9 @@ pub fn ship_events(
                     }
                 }
                 view.hp_applied.iter_mut().for_each(|a| *a = false);
-                let big = matches!(class, TargetClass::Capital | TargetClass::Super);
+                let big = matches!(class, TargetClass::Capital | TargetClass::Super | TargetClass::Structure);
                 let duration = match class {
+                    TargetClass::Structure => 10.0,
                     TargetClass::Super => 9.0,
                     TargetClass::Capital => 6.0,
                     TargetClass::Frigate => 3.5,
@@ -549,7 +550,7 @@ pub fn ship_events(
                     age: 0.0,
                     duration,
                     velocity: Vec3::ZERO,
-                    tumble: dir.normalize_or_zero() * if big { 0.06 } else { 0.25 },
+                    tumble: dir.normalize_or_zero() * if big { 0.03 } else { 0.25 },
                     next_boom: 0.0,
                     radius: def.radius,
                     effect,

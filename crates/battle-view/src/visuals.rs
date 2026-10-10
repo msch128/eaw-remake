@@ -237,7 +237,7 @@ pub fn ship_death_effect(class: TargetClass) -> &'static str {
         TargetClass::Transport | TargetClass::Corvette => "Large_Explosion_Space",
         TargetClass::Frigate => "Large_Explosion_Space_Empire_pd_medium_3_300",
         TargetClass::Capital => "Large_Explosion_Space_Empire_pd_medium_3_750",
-        TargetClass::Super => "Large_Explosion_Space_Empire_pd_medium_3_1250",
+        TargetClass::Super | TargetClass::Structure => "Large_Explosion_Space_Empire_pd_medium_3_1250",
         _ => "Large_Explosion_Space_Empire_pd_medium_3_300",
     }
 }

@@ -276,7 +276,7 @@ impl BattleSession {
             particles.push(n.to_string());
         }
         use battle_sim::TargetClass::*;
-        for class in [Fighter, Transport, Frigate, Capital, Super] {
+        for class in [Fighter, Transport, Frigate, Capital, Super, Structure] {
             particles.push(visuals::ship_death_effect(class).to_string());
         }
         let catalog = self.built.as_ref().map(|b| &b.1).or(self.setup.as_ref().map(|s| &s.catalog));
