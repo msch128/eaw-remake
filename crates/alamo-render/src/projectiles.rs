@@ -401,7 +401,7 @@ pub struct ShieldFlash {
     last_hit: f32,
 }
 
-const SHIELD_FLASH_SECS: f32 = 1.2;
+const SHIELD_FLASH_SECS: f32 = 0.35;
 
 /// Observer: [`ShieldHit`].
 pub fn on_shield_hit(
@@ -511,4 +511,14 @@ pub fn build(app: &mut App, fs: &Arc<alamo_fs::GameFs>) {
                 .after(bevy::transform::TransformSystems::Propagate)
                 .before(crate::particles::update_particle_batches),
         );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shield_flash_duration_is_short() {
+        assert!(SHIELD_FLASH_SECS <= 0.5, "shield flash must be short and crisp");
+    }
 }

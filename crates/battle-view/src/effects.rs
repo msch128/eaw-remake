@@ -8,7 +8,7 @@
 use std::collections::HashMap;
 
 use alamo_render::{
-    AlamoModelLoaded, AlamoPart, AutoDespawn, ImpactKind, ProjectileImpact, ProjectileVisual, ShieldFlash, ShieldHit,
+    AlamoModelLoaded, AlamoPart, AutoDespawn, ImpactKind, ProjectileImpact, ProjectileVisual, ShieldHit,
 };
 use battle_sim::{Event, HitKind, ProjId};
 use bevy::prelude::*;
@@ -89,6 +89,7 @@ pub fn update_projectiles(
 pub fn impact_effects(
     mut commands: Commands,
     rt: Res<BattleRuntime>,
+    rendered: Option<Res<crate::ships::RenderedShips>>,
     settings: Res<BattleViewSettings>,
     live_fx: Query<(), With<AutoDespawn>>,
 ) {
@@ -122,33 +123,60 @@ pub fn impact_effects(
         let normal = (at - center).normalize_or_zero();
         match kind {
             HitKind::Shield => {
-                // The shield flash is cheap (a material parameter); the particle is budgeted.
-                // A shield that is down (or never existed) shows no bubble, only the hull impact.
-                if rt.cur.as_ref().and_then(|c| c.ship(*ship)).is_none_or(|s| s.shield > 0.0) {
+                let shield_alive = rt.cur.as_ref().and_then(|c| c.ship(*ship)).map_or(true, |s| s.shield > 0.0);
+                if shield_alive {
                     commands.trigger(ShieldHit {
                         model: entity,
                         position: at,
                         intensity: 1.0,
                     });
-                }
-                if budget > 0 {
-                    budget -= 1;
-                    commands.trigger(ProjectileImpact {
-                        projectile: def.name.clone(),
-                        kind: ImpactKind::Shield,
-                        position: at,
-                        normal,
-                    });
+                    if budget > 0 {
+                        budget -= 1;
+                        commands.trigger(ProjectileImpact {
+                            projectile: def.name.clone(),
+                            kind: ImpactKind::Shield,
+                            position: at,
+                            normal,
+                        });
+                    }
                 }
             }
-            HitKind::Hull | HitKind::Hardpoint(_) => {
+            HitKind::Hardpoint(i) => {
+                let hp_world = rendered
+                    .as_ref()
+                    .and_then(|r| r.0.get(ship))
+                    .and_then(|s| s.hp_pos.get(*i as usize).copied().flatten());
+                let target_at = hp_world.unwrap_or_else(|| center + (at - center) * 0.4);
+                let hit_normal = (target_at - center).normalize_or_zero();
                 if budget > 0 {
                     budget -= 1;
                     commands.trigger(ProjectileImpact {
                         projectile: def.name.clone(),
                         kind: ImpactKind::Hull,
-                        position: at,
-                        normal,
+                        position: target_at,
+                        normal: if hit_normal.length_squared() > 1e-4 { hit_normal } else { normal },
+                    });
+                }
+            }
+            HitKind::Hull => {
+                let target_at = if let Some(s) = rendered.as_ref().and_then(|r| r.0.get(ship)) {
+                    s.hp_pos
+                        .iter()
+                        .flatten()
+                        .min_by(|p1, p2| p1.distance_squared(at).total_cmp(&p2.distance_squared(at)))
+                        .copied()
+                        .unwrap_or_else(|| center + (at - center) * 0.35)
+                } else {
+                    center + (at - center) * 0.35
+                };
+                let hit_normal = (target_at - center).normalize_or_zero();
+                if budget > 0 {
+                    budget -= 1;
+                    commands.trigger(ProjectileImpact {
+                        projectile: def.name.clone(),
+                        kind: ImpactKind::Hull,
+                        position: target_at,
+                        normal: if hit_normal.length_squared() > 1e-4 { hit_normal } else { normal },
                     });
                 }
             }
@@ -160,22 +188,21 @@ pub fn impact_effects(
 /// broke does not outlive it.
 pub fn hide_downed_shields(
     rt: Res<BattleRuntime>,
-    flashing: Query<&AlamoModelLoaded, With<ShieldFlash>>,
+    loaded_query: Query<&AlamoModelLoaded>,
     parts: Query<&AlamoPart>,
     mut vis: Query<&mut Visibility>,
 ) {
     let Some(cur) = rt.cur.as_ref() else { return };
     for (id, &entity) in &rt.entities {
-        let Ok(loaded) = flashing.get(entity) else { continue };
-        if cur.ship(*id).is_none_or(|s| s.shield > 0.0) {
-            continue;
-        }
-        for &p in &loaded.parts {
-            if parts.get(p).is_ok_and(|a| a.shield)
-                && let Ok(mut v) = vis.get_mut(p)
-                && *v != Visibility::Hidden
-            {
-                *v = Visibility::Hidden;
+        let Ok(loaded) = loaded_query.get(entity) else { continue };
+        if cur.ship(*id).is_some_and(|s| s.shield <= 0.0) {
+            for &p in &loaded.parts {
+                if parts.get(p).is_ok_and(|a| a.shield)
+                    && let Ok(mut v) = vis.get_mut(p)
+                    && *v != Visibility::Hidden
+                {
+                    *v = Visibility::Hidden;
+                }
             }
         }
     }

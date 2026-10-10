@@ -350,20 +350,7 @@ fn sync_minimap(
     let half_h = orbit.distance * (fov * 0.5).tan() / orbit.pitch.sin().max(0.3);
     let center = flip(orbit.focus);
     let half = Vec2::new(half_h * aspect, half_h);
-    let mut planets: Vec<MinimapDot> = rt.minimap_props.iter().map(|(pos, _)| MinimapDot { pos: *pos, color: Color::srgb(0.55, 0.5, 0.45), selected: false }).collect();
-    // The backdrop planet lies far outside the arena (Remake minimap shows it as an orange blob): clamp it to the edge in its direction and
-    // draw a cluster of dots.
-    let mid = (bounds.0 + bounds.1) * 0.5;
-    let half_b = (bounds.1 - bounds.0) * 0.5;
-    for (p, _) in &rt.minimap_planets {
-        let d = *p - mid;
-        let k = (d.x.abs() / (half_b.x * 0.85)).max(d.y.abs() / (half_b.y * 0.85)).max(1.0);
-        let c = mid + d / k;
-        let r = half_b.x * 0.05;
-        for (ox, oy) in [(0.0, 0.0), (1.0, 0.0), (-1.0, 0.0), (0.5, 0.87), (-0.5, 0.87), (0.5, -0.87), (-0.5, -0.87)] {
-            planets.push(MinimapDot { pos: c + Vec2::new(ox, oy) * r, color: Color::srgb(0.85, 0.5, 0.2), selected: false });
-        }
-    }
+    let planets: Vec<MinimapDot> = rt.minimap_props.iter().map(|(pos, _)| MinimapDot { pos: *pos, color: Color::srgb(0.55, 0.5, 0.45), selected: false }).collect();
     let next = MinimapData { bounds: Some(bounds), planets, units, camera: Some((center - half, center + half)), background: Some(rt.minimap_tint) };
     if *data != next {
         *data = next;
@@ -1575,5 +1562,13 @@ mod tests {
 
         // Col 2: empty
         assert_eq!(button_ability("special_button_04", &tac, &state), None);
+    }
+
+    #[test]
+    fn minimap_excludes_fake_backdrop_planets() {
+        let props = vec![(Vec2::new(10.0, 20.0), 5.0)];
+        let dots: Vec<eaw_ui::MinimapDot> = props.iter().map(|(pos, _)| eaw_ui::MinimapDot { pos: *pos, color: Color::srgb(0.55, 0.5, 0.45), selected: false }).collect();
+        assert_eq!(dots.len(), 1);
+        assert_eq!(dots[0].pos, Vec2::new(10.0, 20.0));
     }
 }

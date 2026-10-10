@@ -369,6 +369,7 @@ pub struct BattleRuntime {
     /// Map objects for the minimap: position (map x, -z), size and whether it is a backdrop object.
     pub(crate) minimap_props: Vec<(Vec2, f32)>,
     /// Backdrop planets for the minimap: position (map x, -z) and scale.
+    #[allow(dead_code)]
     pub(crate) minimap_planets: Vec<(Vec2, f32)>,
     /// Dark tint of the tactical minimap derived from the map lights.
     pub(crate) minimap_tint: Color,
