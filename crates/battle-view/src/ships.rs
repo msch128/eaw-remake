@@ -746,17 +746,30 @@ pub struct ArrivalFlash {
     radius: f32,
 }
 
-/// Applies the streak to ships that are still arriving.
+/// Applies the streak to ships that are still arriving (U71).
 fn apply_arrival(arrival: &HyperspaceArrival, now: f32, radius: f32, tf: &mut Transform) -> bool {
     let p = ((now - arrival.start) / ARRIVAL_SECONDS).clamp(0.0, 1.0);
     if p >= 1.0 {
         return false;
     }
     let fwd = tf.rotation * Vec3::Z;
-    let left = (1.0 - p).powi(3);
-    tf.translation -= fwd * (radius * 40.0 * left);
-    // Stretch along the heading (the model's local Z axis) while far away.
-    tf.scale *= Vec3::new(1.0, 1.0, 1.0 + 7.0 * left);
+    let arrival_dist = (800.0f32).max(radius * 3.5);
+    let t = (p / 0.8).clamp(0.0, 1.0);
+    let approach = (1.0 - t).powi(3);
+    let settle = if p >= 0.8 {
+        let st = (p - 0.8) / 0.2;
+        (st * std::f32::consts::PI).sin() * (radius * 0.08)
+    } else {
+        0.0
+    };
+    tf.translation -= fwd * (arrival_dist * approach - settle);
+    // Stretch along the heading (the model's local Z axis) while decelerating from hyperspace.
+    let stretch = (1.0 - p).powi(2) * 5.0;
+    tf.scale *= Vec3::new(
+        (1.0 - (1.0 - p) * 0.15).max(0.1),
+        (1.0 - (1.0 - p) * 0.15).max(0.1),
+        1.0 + stretch,
+    );
     true
 }
 
@@ -780,7 +793,7 @@ pub fn update_arrival_flashes(
         *vis = Visibility::Inherited;
         tf.scale = Vec3::splat(f.radius * (0.4 + 1.6 * t.sqrt()));
         if let Some(mut m) = materials.get_mut(&mat.0) {
-            m.base_color = Color::srgba(0.75, 0.88, 1.0, (1.0 - t) * (1.0 - t) * 0.55);
+            m.base_color = Color::srgba(0.85, 0.95, 1.0, (1.0 - t) * (1.0 - t) * 0.75);
         }
     }
 }
@@ -849,5 +862,18 @@ mod tests {
         assert!((cool_initial - 1.0).abs() < 1e-5);
         let cool_halfway = (15.0 / chunk.max_time).clamp(0.0, 1.0);
         assert!((cool_halfway - 0.5).abs() < 1e-5);
+    }
+
+    #[test]
+    fn test_hyperspace_arrival_displacement_and_stretch() {
+        let arrival = HyperspaceArrival { start: 0.0 };
+        let mut tf = Transform::IDENTITY;
+        let radius = 100.0;
+        assert!(apply_arrival(&arrival, 0.0, radius, &mut tf));
+        assert!(tf.translation.z <= -799.0, "initial translation offset is at least 800m behind: {:?}", tf.translation);
+        assert!(tf.scale.z > 5.0, "stretched along heading at entry: {:?}", tf.scale);
+
+        let mut tf_done = Transform::IDENTITY;
+        assert!(!apply_arrival(&arrival, ARRIVAL_SECONDS, radius, &mut tf_done));
     }
 }
