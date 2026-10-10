@@ -1,4 +1,4 @@
-﻿//! Space Peace: Not at War - Empire at War galactic conquest shell.
+//! Space Peace: Not at War - Empire at War galactic conquest shell.
 
 #![allow(clippy::type_complexity, clippy::too_many_arguments)]
 
@@ -6,6 +6,7 @@ mod battle_play;
 mod battle_seam;
 mod campaign_select;
 mod cheat_menu;
+mod droid_menu;
 mod camera;
 mod cli;
 mod flow;
@@ -195,6 +196,7 @@ fn main() {
         .add_plugins(planet_view::PlanetViewPlugin)
         .add_plugins(planet_fleets::plugin)
         .add_plugins(cheat_menu::plugin)
+        .add_plugins(droid_menu::plugin)
         .add_plugins(galaxy_models::GalaxyModelsPlugin)
         .add_plugins((
             FlowPlugin,
