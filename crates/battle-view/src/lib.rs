@@ -18,6 +18,7 @@ pub mod audio;
 pub mod camera;
 pub mod control;
 pub mod convert;
+pub(crate) mod fog;
 pub mod gpu_profile;
 pub(crate) mod hud;
 mod input_test;
@@ -443,6 +444,7 @@ impl Plugin for BattleViewPlugin {
         app.add_systems(Update, scene::keep_planet_below.run_if(resource_exists::<BattleRuntime>));
         turrets::plugin(app);
         missiles::plugin(app);
+        app.add_systems(Update, (fog::setup_fog_shroud, fog::update_fog_shroud).run_if(resource_exists::<BattleRuntime>));
         app.add_systems(
                 Update,
                 (
@@ -690,6 +692,7 @@ fn stop_battle(
     }
     ships.0.clear();
     *pools = effects::BoltPools::default();
+    commands.remove_resource::<fog::TacticalFogShroud>();
     commands.remove_resource::<BattleRuntime>();
 }
 
