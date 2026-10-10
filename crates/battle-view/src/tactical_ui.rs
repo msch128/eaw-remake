@@ -44,7 +44,7 @@ impl Plugin for TacticalUiPlugin {
                 spawn_bar.run_if(resource_exists::<crate::BattleSession>.and_then(not(resource_exists::<TacticalBarSpawned>))),
                 remove_reinforce.run_if(resource_removed::<BattleRuntime>),
                 remove_bar.run_if(resource_removed::<BattleRuntime>.or_eager(resource_removed::<crate::BattleSession>)),
-                (sync_data, sync_overlays, handle_clicks, ability_keys, autocast_toggle, autocast_rings, ability_at, hardpoint_clicks, reinforce_drag, reinforce_clicks, reinforce_place, reinforce_events, reinforce_panel, sync_minimap, minimap_pan, command_buttons_state, retreat_banner).chain().run_if(resource_exists::<BattleRuntime>),
+                (sync_data, sync_overlays, handle_clicks, ability_keys, autocast_toggle, autocast_rings, ability_at, hardpoint_clicks, reinforce_drag, reinforce_clicks, reinforce_place, reinforce_events, reinforce_panel, sync_minimap, minimap_pan, command_buttons_state, retreat_banner, victory_banner).chain().run_if(resource_exists::<BattleRuntime>),
             )
                 .chain(),
         );
@@ -1392,6 +1392,60 @@ fn retreat_banner(
                 Node { position_type: PositionType::Absolute, top: Val::Px(40.0), width: Val::Percent(100.0), justify_content: JustifyContent::Center, ..default() },
                 TextLayout::justify(Justify::Center),
                 GlobalZIndex(70),
+            ));
+            if let Some(cam) = ui.camera {
+                e.insert(UiTargetCamera(cam));
+            }
+        }
+        (None, Ok((e, _))) => commands.entity(e).despawn(),
+        (None, Err(_)) => {}
+    }
+}
+
+/// Title text shown in the middle of the screen when the battle ends (Remake/EaW victory banner).
+#[derive(Component)]
+struct VictoryBanner;
+
+fn victory_banner(
+    mut commands: Commands,
+    ui: Res<eaw_ui::EawUiSettings>,
+    settings: Res<BattleViewSettings>,
+    status: Res<BattleStatus>,
+    mut banner: Query<(Entity, &mut Text), With<VictoryBanner>>,
+) {
+    let want = if status.over {
+        match status.winner {
+            Some(w) if w == settings.player_side => Some("W E   A R E   V I C T O R I O U S !"),
+            Some(_) => Some("D E F E A T E D"),
+            None => Some("D R A W"),
+        }
+    } else {
+        None
+    };
+    match (want, banner.single_mut()) {
+        (Some(text), Ok((_, mut t))) => {
+            if t.0 != text {
+                t.0 = text.to_string();
+            }
+        }
+        (Some(text), Err(_)) => {
+            let mut e = commands.spawn((
+                VictoryBanner,
+                crate::hud::TacticalHud,
+                Name::new("victory banner"),
+                Text::new(text),
+                game_font(&ui, 34.0),
+                TextColor(Color::srgb(1.0, 0.85, 0.35)),
+                TextShadow { offset: Vec2::splat(2.0), color: Color::BLACK },
+                Node {
+                    position_type: PositionType::Absolute,
+                    top: Val::Percent(35.0),
+                    width: Val::Percent(100.0),
+                    justify_content: JustifyContent::Center,
+                    ..default()
+                },
+                TextLayout::justify(Justify::Center),
+                GlobalZIndex(80),
             ));
             if let Some(cam) = ui.camera {
                 e.insert(UiTargetCamera(cam));
