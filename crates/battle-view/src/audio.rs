@@ -300,9 +300,20 @@ pub fn battle_audio(
     // Unit responses of the player's own units: one voice for the whole selection. The ships are ranked (a named hero first, then
     // population, then hull + shield) and the line falls through the ranking until a ship has one; the generic fallbacks
     // (fleet move -> move, guard -> stop, hardpoint attack -> plain attack) are the default when no ship has the specific line.
+    let class_priority = |class: TargetClass| match class {
+        TargetClass::Super => 7,
+        TargetClass::Capital => 6,
+        TargetClass::Frigate => 5,
+        TargetClass::Corvette => 4,
+        TargetClass::Structure => 3,
+        TargetClass::Transport => 2,
+        TargetClass::Bomber => 1,
+        TargetClass::Fighter | TargetClass::Other => 0,
+    };
     let rank = |def| {
         let d = rt.catalog.ship(def);
-        (visuals.ship(def).hero, d.population, (d.hull + d.shield) as i64)
+        let hero = visuals.ship(def).hero;
+        (hero, class_priority(d.class), d.population, (d.hull + d.shield) as i64)
     };
     let mut ranked: Vec<_> = sel.ships.iter().filter_map(|id| cur.ship(*id)).map(|s| s.def).collect();
     ranked.sort_by(|&a, &b| rank(b).cmp(&rank(a)));
@@ -364,7 +375,30 @@ pub fn battle_audio(
                 lines.push(s.def);
             }
         }
-        let name = lines.iter().find_map(|&def| specific(def)).or_else(|| lines.iter().find_map(|&def| fallback(def)));
+        let faction_fallback = match o.kind {
+            OrderKind::Move if group => match faction.as_deref() {
+                Some(f) if f.eq_ignore_ascii_case("empire") => Some("Unit_Fleet_Move_Empire"),
+                Some(f) if f.eq_ignore_ascii_case("rebel") => Some("Unit_Fleet_Move_Rebel"),
+                Some(f) if f.eq_ignore_ascii_case("underworld") => Some("Unit_Fleet_Move_Underworld"),
+                _ => None,
+            },
+            OrderKind::Move => match faction.as_deref() {
+                Some(f) if f.eq_ignore_ascii_case("empire") => Some("Unit_Move_Empire"),
+                Some(f) if f.eq_ignore_ascii_case("rebel") => Some("Unit_Move_Rebel"),
+                Some(f) if f.eq_ignore_ascii_case("underworld") => Some("Unit_Move_Underworld"),
+                _ => None,
+            },
+            OrderKind::Attack if !hardpoint_line => match faction.as_deref() {
+                Some(f) if f.eq_ignore_ascii_case("empire") => Some("Unit_Attack_Empire"),
+                Some(f) if f.eq_ignore_ascii_case("rebel") => Some("Unit_Attack_Rebel"),
+                Some(f) if f.eq_ignore_ascii_case("underworld") => Some("Unit_Attack_Underworld"),
+                _ => None,
+            },
+            _ => None,
+        };
+        let name = lines.iter().find_map(|&def| specific(def))
+            .or_else(|| lines.iter().find_map(|&def| fallback(def)))
+            .or(faction_fallback);
         if let Some(n) = name {
             send(n, None, &mut stats, &mut out);
         }
@@ -516,5 +550,31 @@ mod tests {
             _ => None,
         };
         assert_eq!(emp_fallback, Some("Unit_Select_Empire"));
+    }
+
+    #[test]
+    fn test_order_voice_priority_ranking() {
+        let class_priority = |class: TargetClass| match class {
+            TargetClass::Super => 7,
+            TargetClass::Capital => 6,
+            TargetClass::Frigate => 5,
+            TargetClass::Corvette => 4,
+            TargetClass::Structure => 3,
+            TargetClass::Transport => 2,
+            TargetClass::Bomber => 1,
+            TargetClass::Fighter | TargetClass::Other => 0,
+        };
+        assert!(class_priority(TargetClass::Super) > class_priority(TargetClass::Capital));
+        assert!(class_priority(TargetClass::Capital) > class_priority(TargetClass::Frigate));
+        assert!(class_priority(TargetClass::Frigate) > class_priority(TargetClass::Corvette));
+        assert!(class_priority(TargetClass::Corvette) > class_priority(TargetClass::Structure));
+        assert!(class_priority(TargetClass::Structure) > class_priority(TargetClass::Transport));
+        assert!(class_priority(TargetClass::Transport) > class_priority(TargetClass::Bomber));
+        assert!(class_priority(TargetClass::Bomber) > class_priority(TargetClass::Fighter));
+
+        // Hero priority over normal capital
+        let hero_rank = (true, class_priority(TargetClass::Frigate), 2, 5000i64);
+        let normal_capital_rank = (false, class_priority(TargetClass::Capital), 4, 12000i64);
+        assert!(hero_rank > normal_capital_rank, "hero outranks any non-hero ship");
     }
 }
