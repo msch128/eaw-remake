@@ -462,6 +462,7 @@ impl Plugin for BattleViewPlugin {
                             effects::update_special_flashes,
                             effects::spawn_muzzle_flashes,
                             effects::update_muzzle_flashes,
+                            effects::update_deflector_waves,
                             effects::draw_engine_trails,
                             ships::update_ships,
                             ships::update_arrival_flashes,

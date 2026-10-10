@@ -113,6 +113,15 @@ pub struct MuzzleFlash {
     pub radius: f32,
 }
 
+/// An expanding deflector shield impact ripple ring (U72).
+#[derive(Component)]
+pub struct DeflectorWave {
+    pub timer: f32,
+    pub max_time: f32,
+    pub start_radius: f32,
+    pub end_radius: f32,
+}
+
 /// Spawns 0.08s muzzle flash flares at cannon barrels when weapons fire (U70).
 pub fn spawn_muzzle_flashes(
     mut commands: Commands,
@@ -278,6 +287,34 @@ pub fn impact_effects(
                         position: at,
                         intensity: 1.0,
                     });
+                    // U72: Deflector wave expanding ripple ring
+                    let ship_rad = rendered.as_ref().and_then(|r| r.0.get(ship)).map_or(80.0, |s| s.radius);
+                    let end_r = (ship_rad * 0.45).clamp(25.0, 140.0);
+                    let wave_rot = if normal.length_squared() > 1e-4 {
+                        Transform::IDENTITY.looking_to(normal, Vec3::Y).rotation * Quat::from_rotation_x(std::f32::consts::FRAC_PI_2)
+                    } else {
+                        Quat::IDENTITY
+                    };
+                    let wave_mesh = meshes.add(Torus::new(1.0, 0.06).mesh());
+                    let wave_mat = materials.add(StandardMaterial {
+                        base_color: Color::srgba(0.35, 0.8, 1.0, 0.95),
+                        unlit: true,
+                        alpha_mode: AlphaMode::Add,
+                        ..default()
+                    });
+                    commands.spawn((
+                        Name::new("deflector_wave"),
+                        BattleEntity,
+                        Mesh3d(wave_mesh),
+                        MeshMaterial3d(wave_mat),
+                        Transform::from_translation(at).with_rotation(wave_rot).with_scale(Vec3::splat(5.0)),
+                        DeflectorWave {
+                            timer: 0.3,
+                            max_time: 0.3,
+                            start_radius: 5.0,
+                            end_radius: end_r,
+                        },
+                    ));
                     if budget > 0 {
                         budget -= 1;
                         commands.trigger(ProjectileImpact {
@@ -434,6 +471,30 @@ pub fn update_muzzle_flashes(
                 let mut c = flash.initial_color.to_srgba();
                 c.alpha *= 1.0 - progress;
                 mat.base_color = Color::Srgba(c);
+            }
+        }
+    }
+}
+
+/// Updates deflector waves: expanding ring outward over 0.3s and fading alpha to 0 (U72).
+pub fn update_deflector_waves(
+    mut commands: Commands,
+    time: Res<Time>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut query: Query<(Entity, &mut DeflectorWave, &mut Transform, &MeshMaterial3d<StandardMaterial>)>,
+) {
+    let dt = time.delta_secs();
+    for (entity, mut wave, mut tf, mat_handle) in &mut query {
+        wave.timer -= dt;
+        if wave.timer <= 0.0 {
+            commands.entity(entity).try_despawn();
+        } else {
+            let progress = 1.0 - (wave.timer / wave.max_time).clamp(0.0, 1.0);
+            let radius = wave.start_radius + (wave.end_radius - wave.start_radius) * progress.sqrt();
+            tf.scale = Vec3::splat(radius);
+            if let Some(mut mat) = materials.get_mut(&mat_handle.0) {
+                let alpha = (1.0 - progress) * 0.95;
+                mat.base_color = Color::srgba(0.35, 0.8, 1.0, alpha);
             }
         }
     }
@@ -597,6 +658,19 @@ mod tests {
         assert_eq!(flash.timer, flash.max_time);
         assert!(flash.max_time <= 0.1, "muzzle flash is brief (<= 100ms)");
         assert!(flash.initial_color.to_srgba().red > 0.9);
+    }
+
+    #[test]
+    fn test_deflector_wave_expansion_and_timing() {
+        let wave = DeflectorWave {
+            timer: 0.3,
+            max_time: 0.3,
+            start_radius: 5.0,
+            end_radius: 80.0,
+        };
+        assert_eq!(wave.timer, wave.max_time);
+        assert!(wave.end_radius > wave.start_radius);
+        assert!((wave.max_time - 0.3).abs() < 1e-4);
     }
 }
 
