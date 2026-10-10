@@ -30,6 +30,8 @@ fn gun(name: &str, health: f32) -> HpDef {
         range: 6000.0,
         half_yaw: std::f32::consts::PI,
         half_pitch: std::f32::consts::FRAC_PI_2,
+        arc_yaw: std::f32::consts::PI,
+        arc_pitch: std::f32::consts::FRAC_PI_2,
         recharge_min: 0.5,
         recharge_max: 0.5,
         pulses: 1,

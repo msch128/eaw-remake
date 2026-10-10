@@ -572,9 +572,17 @@ impl Battle {
             if !self.is_ai(side) {
                 continue;
             }
-            let sees_enemy = self.ships.iter().any(|s| s.alive && !s.retreated && s.side != side && !cat.ship(s.def).is_static && time <= s.seen_until[side as usize]);
-            if sees_enemy {
+            let visible_enemy = self.ships.iter()
+                .filter(|s| s.alive && !s.retreated && s.side != side && !cat.ship(s.def).is_static && (s.side >= 4 || !self.config.fog_of_war || time <= s.seen_until[side as usize]))
+                .max_by_key(|s| cat.ship(s.def).class as u8);
+            if let Some(target_enemy) = visible_enemy {
                 self.search[side as usize] = (0, time);
+                let enemy_pos = target_enemy.pos;
+                for s in self.ships.iter_mut().filter(|s| s.alive && !s.retreated && s.side == side && s.target == NONE && matches!(s.order, Order::AttackMove(_))) {
+                    if s.pos.dist(enemy_pos) > 1200.0 {
+                        s.order = Order::AttackMove(enemy_pos);
+                    }
+                }
                 continue;
             }
             let (idx, since) = self.search[side as usize];
@@ -1520,7 +1528,8 @@ impl Battle {
                     if a.rocket && (cat.ship(t.def).class as u8) < TargetClass::Frigate as u8 {
                         continue;
                     }
-                    if boosts_weapons && (ai_side || s.abilities[k].autocast) && s.abilities[k].cooldown <= 0.0 && s.abilities[k].active <= 0.0 && dist < def.max_weapon_range {
+                    let effective_range = if a.salvo { (def.preferred_range * 1.15).min(3800.0).max(2500.0) } else { def.max_weapon_range };
+                    if boosts_weapons && (ai_side || s.abilities[k].autocast) && s.abilities[k].cooldown <= 0.0 && s.abilities[k].active <= 0.0 && dist <= effective_range {
                         auto_use.push(k);
                         break;
                     }
@@ -2126,7 +2135,11 @@ fn mov(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, spawn: &
                     Goal::Point(tgt_point, 0.0)
                 }
             } else {
-                let stand = if def.preferred_range > 0.0 { def.preferred_range * cfg.engage_range_scale + radius_slack } else { 0.0 };
+                let stand = if def.preferred_range > 0.0 {
+                    (def.preferred_range * cfg.engage_range_scale + radius_slack).max(def.radius + t.radius + 50.0)
+                } else {
+                    0.0
+                };
                 // Hysteresis: a ship that has stopped only starts closing again when the target is clearly out of its standoff.
                 let resume = if s.speed < 0.05 * def.max_speed.max(1.0) { 1.12 } else { 1.05 };
                 if d > stand * resume {
