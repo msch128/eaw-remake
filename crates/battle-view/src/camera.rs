@@ -211,36 +211,64 @@ pub struct ActionCam {
 
 /// Seconds of a full turn of the battle cam (estimate).
 const ACTION_CAM_TURN_SECONDS: f32 = 60.0;
-/// Pitch of the battle cam in radians (estimate).
-const ACTION_CAM_PITCH: f32 = 0.55;
+/// Pitch of the battle cam in radians.
+const ACTION_CAM_PITCH: f32 = 0.38;
 
 /// Runs the battle cam: C or the camera button toggles it, any scroll key or the space bar ends it.
 pub fn action_cam(
     time: Res<Time>,
     keys: Res<ButtonInput<KeyCode>>,
+    scroll: Res<AccumulatedMouseScroll>,
     settings: Res<crate::BattleViewSettings>,
     sel: Res<Selection>,
     ships: Res<RenderedShips>,
     mut action: ResMut<ActionCam>,
     mut cam: Single<&mut BattleCamera>,
 ) {
-    let toggle = std::mem::take(&mut action.request) || keys.just_pressed(KeyCode::KeyC);
+    let toggle = std::mem::take(&mut action.request)
+        || keys.just_pressed(KeyCode::KeyC)
+        || keys.just_pressed(KeyCode::Space);
     if toggle {
         action.active = !action.active;
-        action.focus = sel.ships.iter().copied().find(|id| ships.0.contains_key(id));
+        if action.active {
+            action.focus = sel.ships.iter().copied().find(|id| ships.0.contains_key(id));
+            if action.focus.is_none() {
+                // Focus intense combat zone / damaged ship
+                let in_combat = ships
+                    .0
+                    .values()
+                    .filter(|s| s.side == settings.player_side)
+                    .min_by(|a, b| (a.hull + a.shield).total_cmp(&(b.hull + b.shield)))
+                    .map(|s| s.id);
+                action.focus = in_combat.or_else(|| ships.0.keys().next().copied());
+            }
+        }
     }
     if !action.active {
         return;
     }
-    let moving = [KeyCode::KeyW, KeyCode::KeyA, KeyCode::KeyD, KeyCode::ArrowUp, KeyCode::ArrowDown, KeyCode::ArrowLeft, KeyCode::ArrowRight, KeyCode::Space]
-        .iter()
-        .any(|k| keys.pressed(*k));
+    let moving = [
+        KeyCode::KeyW, KeyCode::KeyA, KeyCode::KeyS, KeyCode::KeyD,
+        KeyCode::ArrowUp, KeyCode::ArrowDown, KeyCode::ArrowLeft, KeyCode::ArrowRight,
+    ]
+    .iter()
+    .any(|k| keys.pressed(*k))
+        || scroll.delta != Vec2::ZERO;
     if moving {
         action.active = false;
         return;
     }
-    let (centre, distance) = match action.focus.and_then(|id| ships.0.get(&id)) {
-        Some(s) => (s.pos, (s.radius * 4.5).max(cam.min_distance)),
+    let (centre, distance, target_yaw) = match action.focus.and_then(|id| ships.0.get(&id)) {
+        Some(s) => {
+            let fast = s.squad != u32::MAX || s.radius < 40.0;
+            let d = if fast {
+                (s.radius * 3.5).clamp(45.0, 180.0)
+            } else {
+                (s.radius * 1.8).clamp(220.0, 1200.0)
+            };
+            let behind_yaw = s.yaw + std::f32::consts::PI * 0.9;
+            (s.pos + Vec3::new(0.0, s.radius * 0.35, 0.0), d, Some(behind_yaw))
+        }
         None => {
             let own: Vec<&crate::ships::ShipRender> = ships.0.values().filter(|s| s.side == settings.player_side).collect();
             if own.is_empty() {
@@ -249,25 +277,34 @@ pub fn action_cam(
             }
             let c = own.iter().map(|s| s.pos).sum::<Vec3>() / own.len() as f32;
             let spread = own.iter().map(|s| (s.pos - c).length()).fold(0.0f32, f32::max);
-            (c, (spread * 2.2).max(cam.min_distance * 2.0))
+            (c, (spread * 2.2).max(cam.min_distance * 2.0), None)
         }
     };
     let dt = time.delta_secs().min(0.1);
-    cam.target_focus = Vec3::new(centre.x, cam.target_focus.y, centre.z);
+    cam.target_focus = centre;
     cam.target_distance = distance.clamp(cam.min_distance, cam.max_distance);
-    cam.target_yaw += std::f32::consts::TAU / ACTION_CAM_TURN_SECONDS * dt;
-    cam.pitch += (ACTION_CAM_PITCH - cam.pitch) * (1.0 - (-2.0 * dt).exp());
+    if let Some(tyaw) = target_yaw {
+        let diff = (tyaw - cam.target_yaw + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
+        cam.target_yaw += diff * (1.0 - (-3.0 * dt).exp()) + (std::f32::consts::TAU / ACTION_CAM_TURN_SECONDS * dt * 0.3);
+    } else {
+        cam.target_yaw += std::f32::consts::TAU / ACTION_CAM_TURN_SECONDS * dt;
+    }
+    cam.pitch += (ACTION_CAM_PITCH - cam.pitch) * (1.0 - (-3.0 * dt).exp());
 }
 
 /// Centres the camera on the selected ships (space bar or a [`FocusCamera`] request).
 pub fn focus_camera(
-    keys: Res<ButtonInput<KeyCode>>,
+    _keys: Res<ButtonInput<KeyCode>>,
     mut requests: MessageReader<FocusCamera>,
     sel: Res<Selection>,
     ships: Res<RenderedShips>,
+    action: Res<ActionCam>,
     mut cam: Single<&mut BattleCamera>,
 ) {
-    let asked = requests.read().count() > 0 || keys.just_pressed(KeyCode::Space);
+    if action.active {
+        return;
+    }
+    let asked = requests.read().count() > 0;
     if !asked {
         return;
     }
@@ -319,3 +356,20 @@ pub fn sky_follow(
         tf.translation = cam.translation - tf.rotation * (loaded.center * scale);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_battle_camera_eye_pitch_and_zoom() {
+        let mut cam = BattleCamera::default();
+        cam.snap = true;
+        let (eye_far, _) = cam.eye();
+        cam.target_distance = 1000.0;
+        cam.distance = 1000.0;
+        let (eye_near, _) = cam.eye();
+        assert!(eye_near.y < eye_far.y, "zoomed-in camera has lower elevation");
+    }
+}
+
