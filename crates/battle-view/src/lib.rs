@@ -460,6 +460,8 @@ impl Plugin for BattleViewPlugin {
                             effects::spawn_special_weapon_beams,
                             effects::update_special_beams,
                             effects::update_special_flashes,
+                            effects::spawn_muzzle_flashes,
+                            effects::update_muzzle_flashes,
                             effects::draw_engine_trails,
                             ships::update_ships,
                             ships::update_arrival_flashes,

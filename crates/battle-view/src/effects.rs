@@ -104,6 +104,65 @@ pub struct SpecialImpactFlash {
     pub initial_color: Color,
 }
 
+/// A short muzzle flash flare at a weapon barrel (U70).
+#[derive(Component)]
+pub struct MuzzleFlash {
+    pub timer: f32,
+    pub max_time: f32,
+    pub initial_color: Color,
+    pub radius: f32,
+}
+
+/// Spawns 0.08s muzzle flash flares at cannon barrels when weapons fire (U70).
+pub fn spawn_muzzle_flashes(
+    mut commands: Commands,
+    rt: Res<BattleRuntime>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+) {
+    for ev in &rt.fresh_events {
+        let Event::ProjectileFired { projectile, from, .. } = ev else { continue };
+        let muzzle_pos = sim_to_bevy(*from);
+        let p_name = rt.catalog.projectiles.get(*projectile as usize).map(|p| p.name.to_ascii_lowercase()).unwrap_or_default();
+        if p_name.contains("missile") || p_name.contains("torpedo") {
+            continue;
+        }
+        let is_ion = p_name.contains("ion");
+        let is_green = p_name.contains("green") || p_name.contains("rebel");
+        let is_yellow = p_name.contains("yellow") || p_name.contains("pirate");
+        let flash_color = if is_ion {
+            Color::srgba(0.3, 0.75, 1.0, 0.95)
+        } else if is_green {
+            Color::srgba(0.25, 1.0, 0.35, 0.95)
+        } else if is_yellow {
+            Color::srgba(1.0, 0.9, 0.25, 0.95)
+        } else {
+            Color::srgba(1.0, 0.35, 0.15, 0.95)
+        };
+        let sphere_mesh = meshes.add(Sphere::new(1.0).mesh().uv(16, 12));
+        let flash_mat = materials.add(StandardMaterial {
+            base_color: flash_color,
+            unlit: true,
+            alpha_mode: AlphaMode::Add,
+            ..default()
+        });
+        let radius = if p_name.contains("heavy") || p_name.contains("super") { 22.0 } else { 12.0 };
+        commands.spawn((
+            Name::new("muzzle_flash"),
+            BattleEntity,
+            Mesh3d(sphere_mesh),
+            MeshMaterial3d(flash_mat),
+            Transform::from_translation(muzzle_pos).with_scale(Vec3::splat(radius)),
+            MuzzleFlash {
+                timer: 0.08,
+                max_time: 0.08,
+                initial_color: flash_color,
+                radius,
+            },
+        ));
+    }
+}
+
 /// Spawns massive rising beam visual cylinders when a ground-to-space special weapon fires.
 pub fn spawn_special_weapon_beams(
     mut commands: Commands,
@@ -355,6 +414,31 @@ pub fn update_special_flashes(
     }
 }
 
+/// Updates muzzle flash flares, expanding radius slightly and fading out over 0.08s (U70).
+pub fn update_muzzle_flashes(
+    mut commands: Commands,
+    time: Res<Time>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut query: Query<(Entity, &mut MuzzleFlash, &mut Transform, &MeshMaterial3d<StandardMaterial>)>,
+) {
+    let dt = time.delta_secs();
+    for (entity, mut flash, mut tf, mat_handle) in &mut query {
+        flash.timer -= dt;
+        if flash.timer <= 0.0 {
+            commands.entity(entity).try_despawn();
+        } else {
+            let progress = 1.0 - (flash.timer / flash.max_time).clamp(0.0, 1.0);
+            let scale = flash.radius * (1.0 + progress * 0.4);
+            tf.scale = Vec3::splat(scale);
+            if let Some(mut mat) = materials.get_mut(&mat_handle.0) {
+                let mut c = flash.initial_color.to_srgba();
+                c.alpha *= 1.0 - progress;
+                mat.base_color = Color::Srgba(c);
+            }
+        }
+    }
+}
+
 /// Hides the shield meshes of ships whose shield is down, so a flash that was still fading when the shield
 /// broke does not outlive it.
 pub fn hide_downed_shields(
@@ -500,6 +584,19 @@ mod tests {
         let reb_tail = Color::srgba(1.0, 0.45, 0.1, 0.0);
         assert!(reb_core.to_srgba().red > 0.9);
         assert_eq!(reb_tail.to_srgba().alpha, 0.0);
+    }
+
+    #[test]
+    fn test_muzzle_flash_timing_and_colors() {
+        let flash = MuzzleFlash {
+            timer: 0.08,
+            max_time: 0.08,
+            initial_color: Color::srgba(1.0, 0.35, 0.15, 0.95),
+            radius: 12.0,
+        };
+        assert_eq!(flash.timer, flash.max_time);
+        assert!(flash.max_time <= 0.1, "muzzle flash is brief (<= 100ms)");
+        assert!(flash.initial_color.to_srgba().red > 0.9);
     }
 }
 
