@@ -465,6 +465,7 @@ impl Plugin for BattleViewPlugin {
                             ships::update_arrival_flashes,
                             ships::update_departures,
                             ships::update_dying,
+                            ships::update_debris_chunks,
                             ships::remove_after,
                             effects::update_projectiles,
                         )

@@ -590,12 +590,14 @@ pub fn ship_events(
     }
 }
 
-/// Drives the explosion sequence of destroyed capital ships.
+/// Drives the explosion sequence of destroyed capital ships, and spawns drifting debris chunks (U68).
 pub fn update_dying(
     mut commands: Commands,
     time: Res<Time>,
     mut rt: ResMut<BattleRuntime>,
     mut q: Query<(Entity, &ShipView, &mut Dying, &mut Transform)>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     let dt = time.delta_secs().min(0.1) * rt.speed_factor();
     for (e, view, mut d, mut tf) in &mut q {
@@ -629,8 +631,88 @@ pub fn update_dying(
                 position: tf.translation,
                 normal: Vec3::Y,
             });
+            // U68: Break capital ships and frigates into drifting debris chunks
+            if d.radius >= 40.0 {
+                let num_chunks = if d.radius > 200.0 { 4 } else { 2 };
+                let chunk_size = d.radius * if num_chunks == 4 { 0.35 } else { 0.45 };
+                let offsets = [
+                    Vec3::new(chunk_size * 0.8, chunk_size * 0.2, 0.0),
+                    Vec3::new(-chunk_size * 0.8, -chunk_size * 0.2, 0.0),
+                    Vec3::new(0.0, chunk_size * 0.3, chunk_size * 0.6),
+                    Vec3::new(0.0, -chunk_size * 0.3, -chunk_size * 0.6),
+                ];
+                let drift_dirs = [
+                    Vec3::new(0.8, 0.2, 0.3).normalize(),
+                    Vec3::new(-0.7, -0.3, -0.4).normalize(),
+                    Vec3::new(0.1, 0.9, -0.5).normalize(),
+                    Vec3::new(-0.2, -0.8, 0.6).normalize(),
+                ];
+                for i in 0..num_chunks {
+                    let mesh = meshes.add(Cuboid::new(chunk_size * 1.2, chunk_size * 0.6, chunk_size * 0.8));
+                    let mat = materials.add(StandardMaterial {
+                        base_color: Color::srgb(0.12, 0.12, 0.14),
+                        emissive: LinearRgba::new(0.8, 0.25, 0.05, 1.0),
+                        perceptual_roughness: 0.8,
+                        ..default()
+                    });
+                    let world_offset = tf.rotation * offsets[i];
+                    let drift = tf.rotation * drift_dirs[i] * (15.0 + (i as f32) * 5.0);
+                    let ang_vel = Vec3::new(
+                        (0.03 + (i as f32) * 0.01) * if i % 2 == 0 { 1.0 } else { -1.0 },
+                        (0.02 + (i as f32) * 0.015) * if i / 2 == 0 { 1.0 } else { -1.0 },
+                        0.025,
+                    );
+                    commands.spawn((
+                        Name::new("ship_debris_chunk"),
+                        BattleEntity,
+                        Mesh3d(mesh),
+                        MeshMaterial3d(mat),
+                        Transform::from_translation(tf.translation + world_offset).with_rotation(tf.rotation),
+                        DebrisChunk {
+                            timer: 30.0,
+                            max_time: 30.0,
+                            velocity: d.velocity + drift,
+                            angular_velocity: ang_vel,
+                        },
+                    ));
+                }
+            }
             commands.entity(e).try_despawn();
             rt.dying.remove(&view.id);
+        }
+    }
+}
+
+/// A drifting debris chunk from a destroyed ship hull (U68).
+#[derive(Component, Debug)]
+pub struct DebrisChunk {
+    pub timer: f32,
+    pub max_time: f32,
+    pub velocity: Vec3,
+    pub angular_velocity: Vec3,
+}
+
+/// Updates debris chunks: drifting, tumbling, and cooling emissive glow over 30s.
+pub fn update_debris_chunks(
+    mut commands: Commands,
+    time: Res<Time>,
+    rt: Res<BattleRuntime>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut q: Query<(Entity, &mut DebrisChunk, &mut Transform, &MeshMaterial3d<StandardMaterial>)>,
+) {
+    let dt = time.delta_secs().min(0.1) * rt.speed_factor();
+    for (entity, mut chunk, mut tf, mat_handle) in &mut q {
+        chunk.timer -= dt;
+        if chunk.timer <= 0.0 {
+            commands.entity(entity).try_despawn();
+        } else {
+            tf.translation += chunk.velocity * dt;
+            let ang = chunk.angular_velocity * dt;
+            tf.rotation = Quat::from_euler(EulerRot::XYZ, ang.x, ang.y, ang.z) * tf.rotation;
+            if let Some(mut mat) = materials.get_mut(&mat_handle.0) {
+                let cool = (chunk.timer / chunk.max_time).clamp(0.0, 1.0);
+                mat.emissive = LinearRgba::new(0.8 * cool, 0.25 * cool, 0.05 * cool, 1.0);
+            }
         }
     }
 }
@@ -747,5 +829,25 @@ pub fn remove_after(mut commands: Commands, time: Res<Time>, mut q: Query<(Entit
         if r.0 <= 0.0 {
             commands.entity(e).try_despawn();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_debris_chunk_cooling_and_drift() {
+        let chunk = DebrisChunk {
+            timer: 30.0,
+            max_time: 30.0,
+            velocity: Vec3::new(10.0, 5.0, -2.0),
+            angular_velocity: Vec3::new(0.04, 0.02, 0.01),
+        };
+        assert_eq!(chunk.timer, chunk.max_time);
+        let cool_initial = (chunk.timer / chunk.max_time).clamp(0.0, 1.0);
+        assert!((cool_initial - 1.0).abs() < 1e-5);
+        let cool_halfway = (15.0 / chunk.max_time).clamp(0.0, 1.0);
+        assert!((cool_halfway - 0.5).abs() < 1e-5);
     }
 }
