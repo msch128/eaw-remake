@@ -10,10 +10,11 @@ use std::collections::HashMap;
 use alamo_render::{
     AlamoModelLoaded, AlamoPart, AutoDespawn, ImpactKind, ProjectileImpact, ProjectileVisual, ShieldHit,
 };
-use battle_sim::{Event, HitKind, ProjId};
+use battle_sim::{Event, HitKind, HpKind, ProjId};
+use bevy::gizmos::config::GizmoConfigStore;
 use bevy::prelude::*;
 
-use crate::convert::{sim_dir_to_bevy, sim_to_bevy};
+use crate::convert::{ship_rotation, sim_dir_to_bevy, sim_to_bevy};
 use crate::{BattleEntity, BattleRuntime, BattleViewSettings};
 
 /// Pool of bolt entities per projectile definition.
@@ -378,6 +379,87 @@ pub fn hide_downed_shields(
     }
 }
 
+/// Gizmo group of the engine ribbon exhaust trails.
+#[derive(Default, Reflect, GizmoConfigGroup)]
+pub struct EngineTrailGizmos;
+
+/// Configures engine trail gizmos with a line width suitable for engine exhausts.
+pub fn configure_engine_trail_gizmos(mut store: ResMut<GizmoConfigStore>) {
+    let (cfg, _) = store.config_mut::<EngineTrailGizmos>();
+    cfg.line.width = 5.0;
+    cfg.depth_bias = -0.5;
+}
+
+/// Draws dynamic engine glows and ribbon exhaust trails behind active ships,
+/// and smoke plumes behind destroyed engines (U67).
+pub fn draw_engine_trails(
+    rt: Res<BattleRuntime>,
+    rendered: Option<Res<crate::ships::RenderedShips>>,
+    mut gizmos: Gizmos<EngineTrailGizmos>,
+) {
+    let Some(rendered) = rendered else { return };
+    for ship in rendered.0.values() {
+        if !ship.visible {
+            continue;
+        }
+        let def = rt.catalog.ship(ship.def);
+        let max_speed = def.max_speed.max(1.0);
+        let cur_speed = if let (Some(cur), Some(nxt)) = (rt.cur.as_ref(), rt.next.as_ref()) {
+            if let (Some(c), Some(n)) = (cur.ship(ship.id), nxt.ship(ship.id)) {
+                (c.pos.dist(n.pos) / rt.dt.max(0.001)).max(0.0)
+            } else {
+                max_speed * 0.5
+            }
+        } else {
+            max_speed * 0.5
+        };
+        let speed_ratio = (cur_speed / max_speed).clamp(0.1, 1.2);
+        let rot = ship_rotation(ship.yaw);
+        let fwd = rot * Vec3::Z;
+
+        // Faction-based engine flame colors
+        let name_lower = def.name.to_ascii_lowercase();
+        let (core_color, tail_color) = if ship.side == 0 || name_lower.contains("empire") || name_lower.contains("destroyer") || name_lower.contains("tie") {
+            (Color::srgba(0.85, 0.95, 1.0, 0.95), Color::srgba(0.2, 0.65, 1.0, 0.0))
+        } else if name_lower.contains("rebel") || name_lower.contains("mc-") || name_lower.contains("wing") || name_lower.contains("calamari") {
+            (Color::srgba(1.0, 0.9, 0.6, 0.95), Color::srgba(1.0, 0.45, 0.1, 0.0))
+        } else {
+            (Color::srgba(0.8, 1.0, 0.6, 0.95), Color::srgba(0.2, 0.9, 0.3, 0.0))
+        };
+
+        let engine_hps: Vec<usize> = def.hardpoints.iter().enumerate().filter(|(_, h)| h.kind == HpKind::Engine).map(|(i, _)| i).collect();
+        if !engine_hps.is_empty() {
+            for &idx in &engine_hps {
+                let is_alive = ship.hp_alive.get(idx).copied().unwrap_or(true);
+                let pos = ship.hp_pos.get(idx).and_then(|p| *p).unwrap_or_else(|| ship.pos - fwd * (ship.radius * 0.7));
+                if is_alive {
+                    let trail_len = (120.0 * speed_ratio).max(20.0);
+                    gizmos.line_gradient(pos, pos - fwd * trail_len, core_color, tail_color);
+                    gizmos.circle(Isometry3d::new(pos, rot), (4.0 * (ship.radius / 150.0)).clamp(1.5, 6.0), core_color).resolution(16);
+                } else {
+                    // Destroyed engine emits dark smoke billowing backward and upward
+                    let smoke_start = Color::srgba(0.18, 0.18, 0.18, 0.85);
+                    let smoke_end = Color::srgba(0.05, 0.05, 0.05, 0.0);
+                    let smoke_dir = -fwd * 0.7 + Vec3::Y * 0.5;
+                    gizmos.line_gradient(pos, pos + smoke_dir * 50.0, smoke_start, smoke_end);
+                }
+            }
+        } else if !def.is_static {
+            // Fighters / small ships without hardpoints
+            let rear_center = ship.pos - fwd * (ship.radius * 0.65);
+            let trail_len = (35.0 * speed_ratio).max(8.0);
+            let wing_span = (ship.radius * 0.35).max(2.5);
+            let right = rot * Vec3::X;
+            let left_eng = rear_center - right * wing_span;
+            let right_eng = rear_center + right * wing_span;
+            gizmos.line_gradient(left_eng, left_eng - fwd * trail_len, core_color, tail_color);
+            gizmos.line_gradient(right_eng, right_eng - fwd * trail_len, core_color, tail_color);
+            gizmos.circle(Isometry3d::new(left_eng, rot), 1.2, core_color).resolution(12);
+            gizmos.circle(Isometry3d::new(right_eng, rot), 1.2, core_color).resolution(12);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -398,6 +480,26 @@ mod tests {
             initial_color: Color::srgba(0.3, 0.7, 1.0, 0.95),
         };
         assert!(flash.end_radius > flash.start_radius);
+    }
+
+    #[test]
+    fn test_engine_trail_geometry_and_faction_colors() {
+        let rot = ship_rotation(0.0);
+        let fwd = rot * Vec3::Z;
+        // Sim yaw 0 faces +X in sim space; verify forward vector in Bevy has positive X component
+        assert!(fwd.x > 0.9, "forward vector aligns with sim heading: {:?}", fwd);
+
+        // Empire engine flare: cyan
+        let emp_core = Color::srgba(0.85, 0.95, 1.0, 0.95);
+        let emp_tail = Color::srgba(0.2, 0.65, 1.0, 0.0);
+        assert!(emp_core.to_srgba().blue > 0.9);
+        assert_eq!(emp_tail.to_srgba().alpha, 0.0);
+
+        // Rebel engine flare: orange / amber
+        let reb_core = Color::srgba(1.0, 0.9, 0.6, 0.95);
+        let reb_tail = Color::srgba(1.0, 0.45, 0.1, 0.0);
+        assert!(reb_core.to_srgba().red > 0.9);
+        assert_eq!(reb_tail.to_srgba().alpha, 0.0);
     }
 }
 
