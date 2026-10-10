@@ -660,9 +660,7 @@ fn the_battle_ends_with_the_last_brought_unit_whatever_was_spawned_meanwhile() {
     let ps = req.sides.iter().position(|s| s.faction == pirates).unwrap() as u8;
     let mut base_died = None;
     let mut spawned_alive_then = 0;
-    let mut before = 0;
     while !b.is_over() && b.time() < 600.0 {
-        before = b.ships.iter().filter(|s| s.side == ps && s.alive).count();
         b.step();
         let base_alive = b.ships.iter().any(|s| s.side == ps && s.alive && catalog.ship(s.def).is_static);
         if base_died.is_none() && !base_alive {
