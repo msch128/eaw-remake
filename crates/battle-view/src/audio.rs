@@ -70,6 +70,7 @@ pub struct AudioMemory {
     last_select_voice: Option<f64>,
     last_station_critical: Option<f64>,
     shield_down_warned: HashSet<u32>,
+    own_heroes_entered: HashSet<u32>,
 }
 
 fn is_small(class: TargetClass) -> bool {
@@ -282,12 +283,26 @@ pub fn battle_audio(
             Event::AbilityActivated { ship, .. } => {
                 if let Some(s) = cur.ship(*ship)
                     && s.side == player
-                    && let Some(n) = visuals.ship(s.def).sfx.ability.as_deref()
                 {
-                    send(n, None, &mut stats, &mut out);
+                    let vis = visuals.ship(s.def);
+                    let line = vis.sfx.ability.as_deref()
+                        .or_else(|| if vis.hero { vis.sfx.attack.as_deref() } else { None });
+                    if let Some(n) = line {
+                        send(n, None, &mut stats, &mut out);
+                    }
                 }
             }
             _ => {}
+        }
+    }
+
+    // An own hero entering the battle for the first time announces their presence ("Grand Admiral Thrawn reporting", etc.)
+    for s in &cur.ships {
+        if s.side == player && visuals.ship(s.def).hero && mem.own_heroes_entered.insert(s.id) {
+            let vis = visuals.ship(s.def);
+            if let Some(n) = vis.sfx.select.as_deref().or_else(|| vis.sfx.fleet_move.as_deref()) {
+                send(n, None, &mut stats, &mut out);
+            }
         }
     }
 

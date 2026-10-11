@@ -178,7 +178,9 @@ impl VisualCatalog {
                             .collect()
                     })
                     .unwrap_or_default(),
-                ability: sfx("sfxevent_gui_unit_ability_activated"),
+                ability: sfx("sfxevent_gui_unit_ability_activated")
+                    .or_else(|| sfx("sfxevent_ability_activated"))
+                    .or_else(|| sfx("sfxevent_special_ability")),
                 fire: sfx("sfxevent_fire"),
                 fleet_move: sfx("sfxevent_fleet_move"),
                 guard: sfx("sfxevent_guard"),

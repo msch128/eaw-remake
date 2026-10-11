@@ -279,21 +279,23 @@ fn build_sounds(
     }
 }
 
-/// The unit type that answers for a group of fleets: the most expensive ship.
+/// The unit type that answers for a group of fleets: a hero first, then the most expensive ship.
 fn lead_unit(state: &SimState, fleets: &[FleetId], me: u32) -> Option<(UnitTypeId, u32)> {
     let g = state.galaxy();
     let mut total = 0;
-    let mut best: Option<(UnitTypeId, f32)> = None;
+    let mut best: Option<(UnitTypeId, bool, f32)> = None;
     for f in fleets.iter().filter_map(|id| g.fleets.get(id)).filter(|f| f.owner == me) {
         total += f.unit_count();
         for u in f.units.keys() {
-            let cost = state.world.units.get(*u as usize).map_or(0.0, |u| u.cost);
-            if best.is_none_or(|(_, c)| cost > c) {
-                best = Some((*u, cost));
+            let ut = state.world.units.get(*u as usize);
+            let hero = ut.map_or(false, |u| u.hero);
+            let cost = ut.map_or(0.0, |u| u.cost);
+            if best.is_none_or(|(_, b_hero, b_cost)| (hero, cost) > (b_hero, b_cost)) {
+                best = Some((*u, hero, cost));
             }
         }
     }
-    best.map(|(u, _)| (u, total))
+    best.map(|(u, _, _)| (u, total))
 }
 
 /// Fleet selection and orders on the galaxy map answer with the lead unit's voice lines.
