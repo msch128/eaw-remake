@@ -1424,16 +1424,50 @@ fn show_end_dialog(world: &mut World) {
         world.resource::<PlayerFaction>().0.map(|h| state.current.stats(h)).unwrap_or_default()
     };
     let name = world.resource::<crate::flow::CurrentCampaign>().faction.clone().unwrap_or_else(|| "Rebel".into());
-    let text = format!(
-        "Weeks played: {weeks}\nPlanets held: {planets} of {total}\nBattles won: {}   lost: {}\nShips built: {}   lost: {}\nCredits: {}",
-        stats.battles_won,
-        stats.battles_lost,
-        stats.ships_built,
-        stats.ships_lost,
-        crate::ui::thousands(credits as i64)
-    );
+    let title = if win {
+        match name.to_ascii_lowercase().as_str() {
+            "empire" => "GALACTIC VICTORY — ORDER RESTORED".into(),
+            "rebel" => "GALACTIC VICTORY — LIBERTY RESTORED".into(),
+            "underworld" => "GALACTIC VICTORY — CRIME SYNDICATE SUPREMACY".into(),
+            _ => "VICTORY — GALACTIC CONQUEST COMPLETE".into(),
+        }
+    } else {
+        "CAMPAIGN DEFEAT".into()
+    };
+    let enemy_ships_lost: u32 = {
+        let state = world.resource::<SimState>();
+        let player = world.resource::<PlayerFaction>().0;
+        state.galaxy().factions.iter().enumerate()
+            .filter(|(id, _)| Some(*id as u32) != player)
+            .map(|(_, f)| f.stats.ships_lost)
+            .sum()
+    };
+    let text = if win {
+        format!(
+            "★ CAMPAIGN EPILOGUE & SUMMARY ★\n\n\
+            Strategic Dominance:\n  • Campaign Duration: {weeks} Galactic Weeks\n  • Systems Controlled: {planets} of {total} (100% Dominance)\n  • Planets Conquered: {}\n\n\
+            Military Record:\n  • Total Fleet Engagements: {} (Won: {} | Lost: {})\n  • Enemy Fleets Destroyed: {enemy_ships_lost} warships\n\n\
+            Logistics & Industry:\n  • Ships Commissioned: {}\n  • Friendly Casualties: {}\n  • Gross Treasury Revenue: {} Credits",
+            stats.planets_captured,
+            stats.battles_won + stats.battles_lost,
+            stats.battles_won,
+            stats.battles_lost,
+            stats.ships_built,
+            stats.ships_lost,
+            crate::ui::thousands(stats.credits_earned as i64)
+        )
+    } else {
+        format!(
+            "Weeks played: {weeks}\nPlanets held: {planets} of {total}\nBattles won: {}   lost: {}\nShips built: {}   lost: {}\nCredits: {}",
+            stats.battles_won,
+            stats.battles_lost,
+            stats.ships_built,
+            stats.ships_lost,
+            crate::ui::thousands(credits as i64)
+        )
+    };
     let spec = DialogSpec {
-        title: if win { "Victory".into() } else { "Defeat".into() },
+        title,
         text,
         portrait: None,
         faction,
