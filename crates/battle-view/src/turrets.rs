@@ -56,7 +56,8 @@ pub(crate) fn aim_ship_turrets(
             if let Ok((mut aim, tl)) = turrets.get_mut(turret) {
                 aim.active = true;
                 aim.target = aim_point(target, hp.target_hp);
-                let has_bones = tl.is_some_and(|l| l.bone_by_name.contains_key(&aim.yaw_bone.to_ascii_lowercase()) && l.bone_by_name.contains_key(&aim.pitch_bone.to_ascii_lowercase()));
+                let yaw_key = aim.yaw_bone.trim().to_ascii_lowercase();
+                let has_bones = tl.is_some_and(|l| l.bone_by_name.contains_key(&yaw_key) || ["turret", "b_turret", "barrel"].iter().any(|k| l.bone_by_name.contains_key(*k)));
                 if log && has_bones && view.id < 3 && sample < 2 {
                     sample += 1;
                     info!("turret-log t={:.1} ship {} at {:?} {} yaw {:.2} pitch {:.2} -> ship {} at {:?}", rt.clock, view.id, rendered.0.get(&view.id).map(|r| r.pos), name, aim.yaw, aim.pitch, hp.target, target.pos);

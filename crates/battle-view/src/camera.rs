@@ -62,7 +62,7 @@ impl Default for BattleCamera {
 impl BattleCamera {
     /// Centres the camera on a point and picks a distance that shows a sphere of `radius`.
     pub fn frame(&mut self, center: Vec3, radius: f32, fov: f32) {
-        let d = (radius * 1.15 / (fov * 0.5).tan() / self.pitch.sin().max(0.5))
+        let d = (radius * 1.15 / (fov * 0.5).tan() / self.pitch.sin().abs().max(0.3))
             .clamp(self.min_distance, self.max_distance);
         self.focus = center;
         self.target_focus = center;
@@ -75,7 +75,8 @@ impl BattleCamera {
         let zoom_t = ((self.distance - self.min_distance) / (self.max_distance - self.min_distance))
             .clamp(0.0, 1.0);
         // Zooming in tilts the view flatter, like the original game.
-        let pitch = (self.pitch - (1.0 - zoom_t) * 0.18).clamp(0.2, 1.45);
+        let pitch_adj = if self.pitch >= 0.0 { (1.0 - zoom_t) * 0.18 } else { -(1.0 - zoom_t) * 0.18 };
+        let pitch = (self.pitch - pitch_adj).clamp(-1.50, 1.50);
         let rot = Quat::from_rotation_y(self.yaw) * Quat::from_rotation_x(-pitch);
         (self.focus + rot * Vec3::Z * self.distance, rot)
     }
@@ -93,8 +94,8 @@ const PUSH_SCROLL_MODIFIER: f32 = 2.0;
 /// `Tactical_Edge_Scroll_Region` (Gameconstants.xml) in pixels.
 const EDGE_PIXELS: f32 = 2.0;
 const ROTATE_SPEED: f32 = 1.6;
-/// Tilt limits of the base pitch in radians, changed by middle-drag up / down (estimate; the engine's tactical camera limits are not in the data).
-const PITCH_RANGE: (f32, f32) = (0.55, 1.30);
+/// Tilt limits of the base pitch in radians, changed by middle-drag up / down: allows full orbit including viewing from below (-1.50 to 1.50).
+const PITCH_RANGE: (f32, f32) = (-1.50, 1.50);
 
 /// Reads keyboard, edge scrolling, wheel and drag input.
 #[allow(clippy::too_many_arguments)]
@@ -182,7 +183,7 @@ pub fn camera_input(
             // Ctrl + middle drag grabs the map instead.
             let per_px = 2.0 * cam.distance * (fov * 0.5).tan() / window_height.max(1.0);
             let grab = (-right * motion.delta.x + forward * motion.delta.y) * per_px
-                / cam.pitch.sin().max(0.3);
+                / cam.pitch.sin().abs().max(0.3);
             cam.target_focus += grab;
             cam.focus += grab;
         } else {

@@ -351,10 +351,10 @@ impl TurretAim {
     pub fn from_hardpoint(def: &crate::xmldata::HardpointDef) -> Self {
         let mut aim = Self::idle();
         if let Some(b) = &def.turret_bone {
-            aim.yaw_bone = b.clone();
+            aim.yaw_bone = b.trim().to_string();
         }
         if let Some(b) = &def.barrel_bone {
-            aim.pitch_bone = b.clone();
+            aim.pitch_bone = b.trim().to_string();
         }
         if def.rotate_extent_deg < 359.0 {
             let half = (def.rotate_extent_deg * 0.5).to_radians();
@@ -406,12 +406,19 @@ pub fn aim_turrets(
         if !aim.active {
             continue;
         }
-        let (Some(&ye), Some(&pe)) = (
-            loaded.bone_by_name.get(&aim.yaw_bone.to_ascii_lowercase()),
-            loaded
-                .bone_by_name
-                .get(&aim.pitch_bone.to_ascii_lowercase()),
-        ) else {
+        let yaw_key = aim.yaw_bone.trim().to_ascii_lowercase();
+        let pitch_key = aim.pitch_bone.trim().to_ascii_lowercase();
+        let ye = loaded.bone_by_name.get(&yaw_key).copied().or_else(|| {
+            ["turret", "b_turret", "root_turret", "turret_00", "turret_01"]
+                .iter()
+                .find_map(|k| loaded.bone_by_name.get(*k).copied())
+        });
+        let pe = loaded.bone_by_name.get(&pitch_key).copied().or_else(|| {
+            ["barrel", "b_barrel", "root_barrel", "barrel_00", "barrel_01"]
+                .iter()
+                .find_map(|k| loaded.bone_by_name.get(*k).copied())
+        });
+        let Some(ye) = ye else {
             continue;
         };
         let Ok((_, yaw_bone, parent)) = bones.get(ye) else {
@@ -433,8 +440,10 @@ pub fn aim_turrets(
         if let Ok((mut t, _, _)) = bones.get_mut(ye) {
             t.rotation = rest_y.rotation * Quat::from_rotation_z(yaw);
         }
-        if let Ok((mut t, b, _)) = bones.get_mut(pe) {
-            t.rotation = b.rest.rotation * Quat::from_rotation_y(-pitch);
+        if let Some(pe) = pe {
+            if let Ok((mut t, b, _)) = bones.get_mut(pe) {
+                t.rotation = b.rest.rotation * Quat::from_rotation_y(-pitch);
+            }
         }
     }
 }

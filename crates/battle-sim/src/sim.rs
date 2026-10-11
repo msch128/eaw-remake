@@ -920,6 +920,17 @@ impl Battle {
         st.target = target;
         st.active = a.duration;
         st.cooldown = if a.toggle || no_cooldown { 0.0 } else { a.recharge + a.duration };
+        if a.salvo
+            || a.kind.eq_ignore_ascii_case("FULL_SALVO")
+            || a.kind.eq_ignore_ascii_case("POWER_TO_WEAPONS")
+            || a.kind.eq_ignore_ascii_case("MAXIMUM_FIREPOWER")
+            || a.kind.eq_ignore_ascii_case("CONCENTRATE_FIRE")
+        {
+            for hp_st in &mut self.ships[ship as usize].hps {
+                hp_st.cooldown = 0.0;
+                hp_st.pulse_timer = 0.0;
+            }
+        }
         if self.config.record_events {
             self.events.push(Event::AbilityActivated { ship, ability: ability as u16 });
         }
@@ -1119,12 +1130,8 @@ impl Battle {
             let cat = self.catalog.clone();
             let def = cat.ship(r.ship);
             let origin = r.pos.unwrap_or(self.spawn_pos[r.side as usize]);
-            // Face the enemy: the nearest enemy ship for a chosen position, the battle centre for the side reinforcement point.
-            let heading = match r.pos {
-                Some(p) => self.ships.iter().filter(|s| s.alive && s.side != r.side).min_by(|a, b| a.pos.dist(p).total_cmp(&b.pos.dist(p))).map_or(Vec3::ZERO, |s| s.pos),
-                None => Vec3::ZERO,
-            };
-            let yaw = (heading - origin).y.atan2((heading - origin).x);
+            // Reinforcements jump in along the consistent hyperspace vector of their side.
+            let yaw = self.side_places.get(r.side as usize).and_then(|p| p.first()).map_or(if r.side == 0 { 0.0 } else { std::f32::consts::PI }, |p| p.1);
             let mut ids = Vec::new();
             for k in 0..r.count {
                 let mut rng = Rng::for_entity(self.config.seed, self.tick, k, 0x7E1F + r.ship as u64);
@@ -1265,6 +1272,18 @@ impl Battle {
         let record = self.config.record_events;
         let (atk_damage, _, _) = self.side_mult(self.ships.get(attacker as usize).map_or(u8::MAX, |a| a.side));
         let atk_damage = atk_damage * self.ships.get(attacker as usize).map_or(1.0, |a| a.bonus.damage);
+        let atk_cause_damage: f32 = if attacker != NONE && let Some(att) = self.ships.get(attacker as usize) {
+            let att_def = cat.ship(att.def);
+            att_def
+                .abilities
+                .iter()
+                .zip(&att.abilities)
+                .filter(|(_, st)| st.active > 0.0)
+                .map(|(a, _)| a.cause_damage_mult)
+                .product()
+        } else {
+            1.0
+        };
         let (_, tgt_health, tgt_shield) = self.side_mult(self.ships[id as usize].side);
         let s = &mut self.ships[id as usize];
         if !s.alive {
@@ -1279,7 +1298,7 @@ impl Battle {
             .map(|(a, _)| a.take_damage_mult)
             .product();
         s.since_hit = 0.0;
-        let dmg = raw * take * atk_damage / (1.0 + s.mods[ModKind::Defense as usize].0);
+        let dmg = raw * take * atk_damage * atk_cause_damage / (1.0 + s.mods[ModKind::Defense as usize].0);
         let mut hull_part = 0.0;
         let mut shield_hit = false;
         let mut dead_hps = Vec::new();
@@ -2117,6 +2136,9 @@ fn scan(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig) {
 
 fn turn_towards(s: &mut Ship, desired: f32, rate: f32, dt: f32) -> f32 {
     let diff = wrap_angle(desired - s.yaw);
+    if diff.abs() < 0.003 {
+        return 0.0;
+    }
     s.yaw = wrap_angle(s.yaw + diff.clamp(-rate * dt, rate * dt));
     diff.abs()
 }
@@ -2278,8 +2300,7 @@ fn mov(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, spawn: &
                         q = tgt_point + Vec3::new(-to.y, to.x, 0.0) * (s.lane / d);
                     } else if d < stand * 2.2 && def.preferred_range > 0.0 {
                         // Broadside maneuvering: if guns favour broadside angles, curve approach tangentially
-                        let rel = wrap_angle((tgt_point - s.pos).y.atan2((tgt_point - s.pos).x) - s.yaw);
-                        let flank_sign = if rel >= 0.0 { 1.0 } else { -1.0 };
+                        let flank_sign = if s.lane != 0.0 { s.lane.signum() } else if s.id % 2 == 0 { 1.0 } else { -1.0 };
                         let to = tgt_point - s.pos;
                         let tangent = Vec3::new(-to.y, to.x, 0.0).normalized() * flank_sign;
                         let blend = ((stand * 2.2 - d) / (stand * 1.2)).clamp(0.0, 1.0);
@@ -2438,8 +2459,8 @@ fn mov(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, spawn: &
                         if dist2 < cap_safe * cap_safe && dist2 > 1e-4 {
                             let d = dist2.sqrt();
                             let factor = ((cap_safe - d) / cap_safe).clamp(0.0, 1.0);
-                            avoid.0 += (rx / d) * factor * 3.5;
-                            avoid.1 += (ry / d) * factor * 3.5;
+                            avoid.0 += ((rx / d) * factor * 2.0).clamp(-1.5, 1.5);
+                            avoid.1 += ((ry / d) * factor * 2.0).clamp(-1.5, 1.5);
                             if d < oj.radius + def.radius + 50.0 {
                                 slow = slow.min(0.5 + 0.5 * (d / (oj.radius + def.radius + 50.0)));
                             }
@@ -2458,8 +2479,15 @@ fn mov(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, spawn: &
                     let ldir = Vec3::new(lyaw.cos(), lyaw.sin(), 0.0);
                     let to_slot = aim - s.pos;
                     let dist_slot = to_slot.len();
-                    let blend_weight = (dist_slot / 80.0).clamp(0.0, 1.0);
-                    let blend_dir = ldir * (1.0 - blend_weight * 0.6) + to_slot.normalized() * (blend_weight * 0.6 + 0.4);
+                    // Smooth slot attraction: smoothly align with leader heading when close,
+                    // without flip-flopping unit vectors near the slot.
+                    let slot_corr = if dist_slot > 1.0 {
+                        let w = (dist_slot / 60.0).clamp(0.0, 1.5);
+                        to_slot * (w / dist_slot)
+                    } else {
+                        Vec3::ZERO
+                    };
+                    let blend_dir = ldir + slot_corr;
                     blend_dir.y.atan2(blend_dir.x)
                 } else {
                     (unit.y + avoid.1).atan2(unit.x + avoid.0)
@@ -2783,7 +2811,7 @@ fn weapons(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, rng:
                     out.push(FireReq { ship: s.id, hp: i as u16, proj: pid, from: muzzle, vel: dir * pd.speed, target: tgt, aim_hp });
                 }
                 st.pulses_left -= 1;
-                st.pulse_timer = hp.pulse_delay;
+                st.pulse_timer = if salvo_active { hp.pulse_delay * hp.full_salvo_mult } else { hp.pulse_delay };
             }
             if st.pulses_left == 0 {
                 let mut m = delay_mult;

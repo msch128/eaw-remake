@@ -481,6 +481,8 @@ pub fn orders(
     block: Res<UiBlock>,
     mut armed: ResMut<ArmedOrder>,
     mut recent: ResMut<RecentOrders>,
+    minimap_surfaces: Query<(&Interaction, &bevy::ui::RelativeCursorPosition), With<eaw_ui::MinimapSurface>>,
+    minimap_data: Option<Res<eaw_ui::MinimapData>>,
 ) {
     let player = settings.player_side;
     // Esc is handled by the host (space-peace battle_menu): it cancels an armed order first and only opens the menu when none is armed.
@@ -498,28 +500,56 @@ pub fn orders(
         rt.sim.command(player, Command::Stop { ships: mine.clone() });
         issued.write(OrderIssued { kind: OrderKind::Stop, lead });
     }
-    let armed_click = armed.0.filter(|_| pointer.left_released && !block.0);
-    if armed_click.is_none() && (!pointer.right_pressed || block.0) {
+    let minimap_hit = minimap_data.as_deref().and_then(|m_data| {
+        minimap_surfaces.iter().find_map(|(_, rel)| {
+            let n = rel.normalized?;
+            if !(-0.5..=0.5).contains(&n.x) || !(-0.5..=0.5).contains(&n.y) {
+                return None;
+            }
+            let normalized = Vec2::new(n.x + 0.5, 0.5 - n.y);
+            let world = m_data.bounds.map_or(normalized, |b| eaw_ui::minimap_to_world(b, normalized));
+            Some((Vec3::new(world.x, 0.0, -world.y), battle_sim::Vec3::new(world.x, world.y, 0.0)))
+        })
+    });
+    let armed_click = armed.0.filter(|_| pointer.left_released && (!block.0 || minimap_hit.is_some()));
+    if armed_click.is_none() && (!pointer.right_pressed || (block.0 && minimap_hit.is_none())) {
         return;
     }
     // Every ship that gets an order shows its move line for a moment (the order reaches the sim next step, the line follows it).
     for &id in &mine {
         recent.0.insert(id, ORDER_LINE_SECONDS + 0.3);
     }
-    // Any enemy under the cursor, also when the click is on the outer part of a big model (station, capital ship).
-    let enemy_target = hover
-        .hardpoint
-        .map(|(target, _)| target)
-        .or_else(|| hover.ship.filter(|id| ships.0.get(id).is_some_and(|s| s.side != player)))
-        .or_else(|| {
-            let g = hover.ground?;
-            enemy_at(&ships, player, g)
-        });
+    // Any enemy under the cursor (including on the minimap), also when the click is on the outer part of a big model (station, capital ship).
+    let enemy_target = if let Some((_, m_sim)) = minimap_hit {
+        ships.0.values()
+            .filter(|s| s.side != player && s.visible)
+            .min_by(|a, b| {
+                let da = (a.pos.x - m_sim.x).hypot(a.pos.z - (-m_sim.y));
+                let db = (b.pos.x - m_sim.x).hypot(b.pos.z - (-m_sim.y));
+                da.total_cmp(&db)
+            })
+            .filter(|s| {
+                let dist = (s.pos.x - m_sim.x).hypot(s.pos.z - (-m_sim.y));
+                dist < (s.radius * 2.0).max(1200.0)
+            })
+            .map(|s| s.id)
+    } else {
+        hover
+            .hardpoint
+            .map(|(target, _)| target)
+            .or_else(|| hover.ship.filter(|id| ships.0.get(id).is_some_and(|s| s.side != player)))
+            .or_else(|| {
+                let g = hover.ground?;
+                enemy_at(&ships, player, g)
+            })
+    };
     let mark_enemy = |markers: &mut OrderMarkers, target: u32| {
         if let Some(s) = ships.0.get(&target) {
             markers.0.push((s.pos, 1.0, Color::srgb(1.0, 0.25, 0.2)));
         }
     };
+    let target_ground = minimap_hit.map(|(g, _)| g).or(hover.ground);
+    let target_sim = minimap_hit.map(|(_, s)| s).or_else(|| hover.ground.map(bevy_to_sim));
     match armed_click {
         Some(ArmedKind::Attack) => {
             let Some(target) = enemy_target else { return };
@@ -542,8 +572,7 @@ pub fn orders(
         }
         Some(ArmedKind::Reinforce | ArmedKind::AbilityAt) => {}
         Some(kind) => {
-            let Some(g) = hover.ground else { return };
-            let to = bevy_to_sim(g);
+            let (Some(g), Some(to)) = (target_ground, target_sim) else { return };
             if kind == ArmedKind::AttackMove {
                 rt.sim.command(player, Command::AttackMove { ships: mine, to });
                 issued.write(OrderIssued { kind: OrderKind::Attack, lead });
@@ -570,8 +599,7 @@ pub fn orders(
                 rt.sim.command(player, Command::Attack { ships: mine, target });
                 issued.write(OrderIssued { kind: OrderKind::Attack, lead });
                 mark_enemy(&mut markers, target);
-            } else if let Some(g) = hover.ground {
-                let to = bevy_to_sim(g);
+            } else if let (Some(g), Some(to)) = (target_ground, target_sim) {
                 if pointer.shift {
                     rt.sim.command(player, Command::AttackMove { ships: mine, to });
                     issued.write(OrderIssued { kind: OrderKind::Attack, lead });

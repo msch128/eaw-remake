@@ -31,6 +31,8 @@ pub struct ShipView {
     hp_parts: Vec<Vec<Entity>>,
     /// Previous heading for banking.
     last_yaw: f32,
+    /// Smoothed angular turn velocity.
+    smooth_yaw_rate: f32,
     /// Smoothed bank angle.
     bank: f32,
     /// Radius of the visible geometry in world units (0 until the model has loaded).
@@ -211,6 +213,7 @@ impl ModelTouch<'_, '_> {
 #[allow(clippy::too_many_arguments)]
 pub fn update_ships(
     mut commands: Commands,
+    time: Res<Time>,
     mut rt: ResMut<BattleRuntime>,
     settings: Res<BattleViewSettings>,
     mut rendered: ResMut<RenderedShips>,
@@ -225,6 +228,8 @@ pub fn update_ships(
     let (Some(cur), alpha) = (rt.cur.clone(), rt.alpha) else {
         return;
     };
+    let dt_frame = time.delta_secs().clamp(0.001, 0.1);
+    let sim_dt = rt.dt.max(0.01);
     let next = rt.next.clone();
     let visuals = rt.visuals.clone();
     let catalog = rt.catalog.clone();
@@ -283,6 +288,7 @@ pub fn update_ships(
                             bones: None,
                             hp_parts: Vec::new(),
                             last_yaw: yaw,
+                            smooth_yaw_rate: 0.0,
                             bank: 0.0,
                             visual_radius: 0.0,
                             shown: true,
@@ -350,26 +356,58 @@ pub fn update_ships(
             if view.visual_radius > 0.0 {
                 radius = view.visual_radius * 0.8;
             }
-            // Bank into turns a little, like the real ships do.
-            let fast = matches!(def.class, TargetClass::Fighter | TargetClass::Bomber);
-            let yaw_rate = {
-                let mut d = yaw - view.last_yaw;
+            // Angular velocity from simulation snapshots (noise-free, independent of frame rate)
+            let snap_yaw_rate = if let Some(n) = nxt {
+                let mut d = n.yaw - s.yaw;
                 while d > std::f32::consts::PI {
                     d -= std::f32::consts::TAU;
                 }
                 while d < -std::f32::consts::PI {
                     d += std::f32::consts::TAU;
                 }
-                d / 0.016
+                d / sim_dt
+            } else {
+                0.0
             };
+            // Low-pass filter angular velocity over time to avoid snap transitions
+            let yaw_filter = 1.0 - (-8.0 * dt_frame).exp();
+            view.smooth_yaw_rate += (snap_yaw_rate - view.smooth_yaw_rate) * yaw_filter;
             view.last_yaw = yaw;
+
             if view.shown != visible {
                 view.shown = visible;
                 commands.entity(entity).insert(if visible { Visibility::Inherited } else { Visibility::Hidden });
             }
-            let max_bank = if fast { 0.9 } else { 0.25 };
-            let want = (yaw_rate * if fast { 0.5 } else { 1.2 }).clamp(-max_bank, max_bank);
-            view.bank += (want - view.bank) * 0.08;
+
+            // Natural, weighted banking into turns
+            let max_bank = if vis.bank_turn_angle > 0.0 {
+                vis.bank_turn_angle
+            } else {
+                match def.class {
+                    TargetClass::Super | TargetClass::Structure => 0.0,
+                    TargetClass::Capital => 0.06, // ~3.5 degrees - stately, majestic, heavy
+                    TargetClass::Frigate => 0.12, // ~7 degrees
+                    TargetClass::Corvette => 0.20, // ~11 degrees
+                    TargetClass::Transport | TargetClass::Other => 0.08,
+                    TargetClass::Fighter | TargetClass::Bomber => 0.45, // ~26 degrees
+                }
+            };
+            let turn_fraction = if def.turn_rate > 1e-3 {
+                (view.smooth_yaw_rate / def.turn_rate).clamp(-1.0, 1.0)
+            } else {
+                0.0
+            };
+            let want = turn_fraction * max_bank;
+            let roll_speed = match def.class {
+                TargetClass::Super | TargetClass::Structure => 1.0,
+                TargetClass::Capital => 1.8,
+                TargetClass::Frigate => 2.4,
+                TargetClass::Corvette => 3.2,
+                TargetClass::Transport | TargetClass::Other => 2.0,
+                TargetClass::Fighter | TargetClass::Bomber => 5.5,
+            };
+            let roll_step = 1.0 - (-roll_speed * dt_frame).exp();
+            view.bank += (want - view.bank) * roll_step;
             tf.translation = pos;
             tf.rotation = ship_rotation(yaw) * Quat::from_rotation_z(view.bank);
             tf.scale = Vec3::splat(vis.scale);
@@ -763,13 +801,6 @@ fn apply_arrival(arrival: &HyperspaceArrival, now: f32, radius: f32, tf: &mut Tr
         0.0
     };
     tf.translation -= fwd * (arrival_dist * approach - settle);
-    // Stretch along the heading (the model's local Z axis) while decelerating from hyperspace.
-    let stretch = (1.0 - p).powi(2) * 5.0;
-    tf.scale *= Vec3::new(
-        (1.0 - (1.0 - p) * 0.15).max(0.1),
-        (1.0 - (1.0 - p) * 0.15).max(0.1),
-        1.0 + stretch,
-    );
     true
 }
 
@@ -871,7 +902,7 @@ mod tests {
         let radius = 100.0;
         assert!(apply_arrival(&arrival, 0.0, radius, &mut tf));
         assert!(tf.translation.z <= -799.0, "initial translation offset is at least 800m behind: {:?}", tf.translation);
-        assert!(tf.scale.z > 5.0, "stretched along heading at entry: {:?}", tf.scale);
+        assert_eq!(tf.scale, Vec3::ONE, "mesh scale remains undistorted: {:?}", tf.scale);
 
         let mut tf_done = Transform::IDENTITY;
         assert!(!apply_arrival(&arrival, ARRIVAL_SECONDS, radius, &mut tf_done));

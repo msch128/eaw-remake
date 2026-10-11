@@ -893,8 +893,8 @@ impl Builder<'_> {
                     .flatten()
             })
             .and_then(|n| self.tex(n));
-        // The selection slot's own Icon_Texture_Name is the blue `defend` badge, which the engine never shows on cards.
-        if let Some(t) = icon_tex.as_ref().filter(|_| !slot.is_some_and(|s| s.kind == SlotKind::Select)) {
+        // The selection and ability slots have dynamic icons driven by SlotPart::Icon, so skip static icon layer.
+        if let Some(t) = icon_tex.as_ref().filter(|_| !slot.is_some_and(|s| matches!(s.kind, SlotKind::Select | SlotKind::Ability))) {
             let sz = scaled(t);
             layers.icon = Some(self.layer(button, size, t, sz, def.icon_offset, tint));
         }
@@ -1184,7 +1184,7 @@ pub(crate) fn ability_columns(data: Res<CommandBarData>, mut buttons: Query<(&Ab
         return;
     }
     for (home, mut node) in &mut buttons {
-        node.left = Val::Px(home.0 + data.ability_column as f32 * 55.0);
+        node.left = Val::Px(home.0);
     }
 }
 

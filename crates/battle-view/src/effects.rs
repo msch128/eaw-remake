@@ -124,52 +124,12 @@ pub struct DeflectorWave {
 
 /// Spawns 0.08s muzzle flash flares at cannon barrels when weapons fire (U70).
 pub fn spawn_muzzle_flashes(
-    mut commands: Commands,
-    rt: Res<BattleRuntime>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    _commands: Commands,
+    _rt: Res<BattleRuntime>,
+    _meshes: ResMut<Assets<Mesh>>,
+    _materials: ResMut<Assets<StandardMaterial>>,
 ) {
-    for ev in &rt.fresh_events {
-        let Event::ProjectileFired { projectile, from, .. } = ev else { continue };
-        let muzzle_pos = sim_to_bevy(*from);
-        let p_name = rt.catalog.projectiles.get(*projectile as usize).map(|p| p.name.to_ascii_lowercase()).unwrap_or_default();
-        if p_name.contains("missile") || p_name.contains("torpedo") {
-            continue;
-        }
-        let is_ion = p_name.contains("ion");
-        let is_green = p_name.contains("green") || p_name.contains("rebel");
-        let is_yellow = p_name.contains("yellow") || p_name.contains("pirate");
-        let flash_color = if is_ion {
-            Color::srgba(0.3, 0.75, 1.0, 0.95)
-        } else if is_green {
-            Color::srgba(0.25, 1.0, 0.35, 0.95)
-        } else if is_yellow {
-            Color::srgba(1.0, 0.9, 0.25, 0.95)
-        } else {
-            Color::srgba(1.0, 0.35, 0.15, 0.95)
-        };
-        let sphere_mesh = meshes.add(Sphere::new(1.0).mesh().uv(16, 12));
-        let flash_mat = materials.add(StandardMaterial {
-            base_color: flash_color,
-            unlit: true,
-            alpha_mode: AlphaMode::Add,
-            ..default()
-        });
-        let radius = if p_name.contains("heavy") || p_name.contains("super") { 22.0 } else { 12.0 };
-        commands.spawn((
-            Name::new("muzzle_flash"),
-            BattleEntity,
-            Mesh3d(sphere_mesh),
-            MeshMaterial3d(flash_mat),
-            Transform::from_translation(muzzle_pos).with_scale(Vec3::splat(radius)),
-            MuzzleFlash {
-                timer: 0.08,
-                max_time: 0.08,
-                initial_color: flash_color,
-                radius,
-            },
-        ));
-    }
+    // Artificial 3D sphere meshes removed; lasers shoot authentic projectile bolts.
 }
 
 /// Spawns massive rising beam visual cylinders when a ground-to-space special weapon fires.
@@ -287,34 +247,7 @@ pub fn impact_effects(
                         position: at,
                         intensity: 1.0,
                     });
-                    // U72: Deflector wave expanding ripple ring
-                    let ship_rad = rendered.as_ref().and_then(|r| r.0.get(ship)).map_or(80.0, |s| s.radius);
-                    let end_r = (ship_rad * 0.45).clamp(25.0, 140.0);
-                    let wave_rot = if normal.length_squared() > 1e-4 {
-                        Transform::IDENTITY.looking_to(normal, Vec3::Y).rotation * Quat::from_rotation_x(std::f32::consts::FRAC_PI_2)
-                    } else {
-                        Quat::IDENTITY
-                    };
-                    let wave_mesh = meshes.add(Torus::new(1.0, 0.06).mesh());
-                    let wave_mat = materials.add(StandardMaterial {
-                        base_color: Color::srgba(0.35, 0.8, 1.0, 0.95),
-                        unlit: true,
-                        alpha_mode: AlphaMode::Add,
-                        ..default()
-                    });
-                    commands.spawn((
-                        Name::new("deflector_wave"),
-                        BattleEntity,
-                        Mesh3d(wave_mesh),
-                        MeshMaterial3d(wave_mat),
-                        Transform::from_translation(at).with_rotation(wave_rot).with_scale(Vec3::splat(5.0)),
-                        DeflectorWave {
-                            timer: 0.3,
-                            max_time: 0.3,
-                            start_radius: 5.0,
-                            end_radius: end_r,
-                        },
-                    ));
+
                     if budget > 0 {
                         budget -= 1;
                         commands.trigger(ProjectileImpact {
@@ -531,7 +464,7 @@ pub struct EngineTrailGizmos;
 /// Configures engine trail gizmos with a line width suitable for engine exhausts.
 pub fn configure_engine_trail_gizmos(mut store: ResMut<GizmoConfigStore>) {
     let (cfg, _) = store.config_mut::<EngineTrailGizmos>();
-    cfg.line.width = 5.0;
+    cfg.line.width = 2.2;
     cfg.depth_bias = -0.5;
 }
 
@@ -580,7 +513,6 @@ pub fn draw_engine_trails(
                 if is_alive {
                     let trail_len = (120.0 * speed_ratio).max(20.0);
                     gizmos.line_gradient(pos, pos - fwd * trail_len, core_color, tail_color);
-                    gizmos.circle(Isometry3d::new(pos, rot), (4.0 * (ship.radius / 150.0)).clamp(1.5, 6.0), core_color).resolution(16);
                 } else {
                     // Destroyed engine emits dark smoke billowing backward and upward
                     let smoke_start = Color::srgba(0.18, 0.18, 0.18, 0.85);
@@ -590,17 +522,15 @@ pub fn draw_engine_trails(
                 }
             }
         } else if !def.is_static {
-            // Fighters / small ships without hardpoints
+            // Fighters / small ships without hardpoints: scaled cleanly to fighter size
             let rear_center = ship.pos - fwd * (ship.radius * 0.65);
-            let trail_len = (35.0 * speed_ratio).max(8.0);
-            let wing_span = (ship.radius * 0.35).max(2.5);
+            let trail_len = ((ship.radius * 1.5 + 8.0) * speed_ratio).min(25.0);
+            let wing_span = (ship.radius * 0.25).max(1.0);
             let right = rot * Vec3::X;
             let left_eng = rear_center - right * wing_span;
             let right_eng = rear_center + right * wing_span;
             gizmos.line_gradient(left_eng, left_eng - fwd * trail_len, core_color, tail_color);
             gizmos.line_gradient(right_eng, right_eng - fwd * trail_len, core_color, tail_color);
-            gizmos.circle(Isometry3d::new(left_eng, rot), 1.2, core_color).resolution(12);
-            gizmos.circle(Isometry3d::new(right_eng, rot), 1.2, core_color).resolution(12);
         }
     }
 }

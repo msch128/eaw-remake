@@ -187,6 +187,8 @@ pub struct AbilityDef {
     pub weapon_delay_mult: f32,
     /// Incoming damage multiplier while active.
     pub take_damage_mult: f32,
+    /// Outgoing damage multiplier while active.
+    pub cause_damage_mult: f32,
     /// Seconds until reusable.
     pub recharge: f32,
     /// Seconds the effect lasts.
@@ -1420,7 +1422,7 @@ impl Catalog {
         let bone = [h.fire_bone_a.as_deref(), h.attachment_bone.as_deref()]
             .into_iter()
             .flatten()
-            .find_map(|b| model.and_then(|m| m.bones.get(&b.to_ascii_lowercase())));
+            .find_map(|b| model.and_then(|m| m.bones.get(b.trim().to_ascii_lowercase().as_str())));
         let mut mirrored = false;
         let mut y_axis = Vec3::ZERO;
         let (offset, forward, normal, from_bone) = match bone {
@@ -1443,9 +1445,9 @@ impl Catalog {
         let mut forward = forward;
         if from_bone
             && h.turret.is_some()
-            && let Some(info) = h.fields.get("model_to_attach").and_then(|n| attach.get(&n.to_ascii_lowercase()))
+            && let Some(info) = h.fields.get("model_to_attach").and_then(|n| attach.get(&n.trim().to_ascii_lowercase()))
         {
-            let fp = [h.fire_bone_a.as_deref(), Some("fp_01")].into_iter().flatten().find_map(|b| info.bones.get(&b.to_ascii_lowercase()));
+            let fp = [h.fire_bone_a.as_deref(), Some("fp_01")].into_iter().flatten().find_map(|b| info.bones.get(b.trim().to_ascii_lowercase().as_str()));
             let base = info.bones.get("barrel").or_else(|| info.bones.get("turret"));
             if let (Some(&fp), Some(&base)) = (fp, base) {
                 let dm = fp - base;
@@ -1600,12 +1602,48 @@ fn ability_defs(u: &SpaceUnitDef) -> Vec<AbilityDef> {
                 a.activated_ability.as_ref().and_then(|n| u.sub_abilities.iter().find(|s| s.name.eq_ignore_ascii_case(n))).and_then(|s| s.fields.get("defense_duration_in_secs")).and_then(|v| v.trim().parse::<f32>().ok()).unwrap_or(30.0)
             });
             let m = |k: &str| a.mod_multipliers.iter().find(|(n, _)| n == k).map(|&(_, v)| v);
+            let mut speed_mult = m("SPEED_MULTIPLIER").unwrap_or(1.0);
+            let mut shield_regen_mult = m("SHIELD_REGEN_MULTIPLIER").unwrap_or(1.0).max(0.0);
+            let mut weapon_delay_mult = m("WEAPON_DELAY_MULTIPLIER").unwrap_or(1.0);
+            let mut take_damage_mult = m("TAKE_DAMAGE_MULTIPLIER").unwrap_or(1.0);
+            let mut cause_damage_mult = m("CAUSE_DAMAGE_MULTIPLIER").unwrap_or(1.0);
+
+            let k = a.kind.to_ascii_uppercase();
+            match k.as_str() {
+                "POWER_TO_WEAPONS" => {
+                    if cause_damage_mult == 1.0 { cause_damage_mult = 1.35; }
+                    if weapon_delay_mult == 1.0 { weapon_delay_mult = 0.6; }
+                    if shield_regen_mult == 1.0 { shield_regen_mult = 0.0; }
+                    if speed_mult == 1.0 { speed_mult = 0.75; }
+                }
+                "DEFEND" => {
+                    if take_damage_mult == 1.0 { take_damage_mult = 0.65; }
+                    if shield_regen_mult == 1.0 { shield_regen_mult = 1.6; }
+                    if speed_mult == 1.0 { speed_mult = 0.65; }
+                }
+                "TURBO" | "SPRINT" => {
+                    if speed_mult == 1.0 { speed_mult = 1.8; }
+                    if weapon_delay_mult == 1.0 { weapon_delay_mult = 10.0; }
+                }
+                "CONCENTRATE_FIRE" => {
+                    if weapon_delay_mult == 1.0 { weapon_delay_mult = 0.65; }
+                    if cause_damage_mult == 1.0 { cause_damage_mult = 1.25; }
+                    if take_damage_mult == 1.0 { take_damage_mult = 1.25; }
+                }
+                "MAXIMUM_FIREPOWER" => {
+                    if weapon_delay_mult == 1.0 { weapon_delay_mult = 0.5; }
+                    if cause_damage_mult == 1.0 { cause_damage_mult = 1.35; }
+                }
+                _ => {}
+            }
+
             AbilityDef {
                 kind: a.kind.clone(),
-                speed_mult: m("SPEED_MULTIPLIER").unwrap_or(1.0),
-                shield_regen_mult: m("SHIELD_REGEN_MULTIPLIER").unwrap_or(1.0).max(0.0),
-                weapon_delay_mult: m("WEAPON_DELAY_MULTIPLIER").unwrap_or(1.0),
-                take_damage_mult: m("TAKE_DAMAGE_MULTIPLIER").unwrap_or(1.0),
+                speed_mult,
+                shield_regen_mult,
+                weapon_delay_mult,
+                take_damage_mult,
+                cause_damage_mult,
                 recharge: a.recharge_seconds.unwrap_or(30.0),
                 // A reveal ping has no expiration in the data: it shows the area for 5 s (estimate).
                 duration: if toggle { f32::MAX / 4.0 } else if ping { a.expiration_seconds.filter(|&x| x > 0.0).unwrap_or(5.0) } else if let Some(secs) = defence_secs { secs } else if a.kind.eq_ignore_ascii_case("CORRUPT_SYSTEMS") { a.activated_ability.as_ref().and_then(|n| u.sub_abilities.iter().find(|s| s.name.eq_ignore_ascii_case(n))).and_then(|s| s.fields.get("duration_in_seconds")).and_then(|v| v.trim().parse().ok()).unwrap_or(30.0) } else { a.expiration_seconds.unwrap_or(12.0) },

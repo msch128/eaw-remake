@@ -76,8 +76,12 @@ pub fn unit_abilities(
         {
             continue;
         }
-        let icon = ability_icon(&kind);
-        if !textures.library().in_mega_texture(&icon) {
+        let icon = a.fields.get("alternate_icon_name")
+            .or_else(|| a.fields.get("icon_name"))
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| ability_icon(&kind));
+        if !textures.library().in_mega_texture(&icon) && textures.library().load(&icon).is_none() {
             continue;
         }
         let key = |suffix: &str| format!("TEXT_TOOLTIP_ABILITY_{kind}_{suffix}");
@@ -796,8 +800,7 @@ pub(crate) fn ship_overlays(
                 t.0 = name;
             }
         }
-        commands.entity(parts.label).try_insert(TextColor(accent));
-        let brackets = if !icon_mode && (o.half_size >= 24.0 || o.enemy) && (o.selected || o.hovered || o.enemy) { accent } else { Color::NONE };
+        let brackets = if !icon_mode && (o.selected || o.hovered) { accent } else { Color::NONE };
         for b in parts.brackets {
             if let Ok((_, _, Some(mut bc), _)) = styles.get_mut(b) {
                 *bc = BorderColor::all(brackets);

@@ -86,6 +86,8 @@ pub struct ShipVisual {
     pub sfx: UnitSfx,
     /// `Is_Named_Hero`.
     pub hero: bool,
+    /// `Bank_Turn_Angle` in radians (0.0 if unspecified).
+    pub bank_turn_angle: f32,
 }
 
 /// Visual data for every ship definition of a [`Catalog`], plus the team colour per side.
@@ -195,6 +197,12 @@ impl VisualCatalog {
                 engine_moving: sfx("sfxevent_engine_moving_loop"),
                 ambient_loop: sfx("sfxevent_ambient_loop"),
             };
+            let bank_turn_angle = r
+                .as_ref()
+                .and_then(|r| r.get("bank_turn_angle"))
+                .and_then(|v| v.parse::<f32>().ok())
+                .map(|deg| deg.to_radians())
+                .unwrap_or(0.0);
             ships.push(ShipVisual {
                 model: def.model.clone(),
                 scale,
@@ -203,6 +211,7 @@ impl VisualCatalog {
                 hardpoints,
                 sfx: unit_sfx,
                 hero: r.as_ref().and_then(|r| r.flag("is_named_hero")).unwrap_or(false),
+                bank_turn_angle,
             });
         }
         let proj_detonate = catalog

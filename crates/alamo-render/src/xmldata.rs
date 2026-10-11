@@ -336,8 +336,8 @@ impl XmlDefs {
                     damage_particles: get("Damage_Particles"),
                     fire_bones: [get("Fire_Bone_A"), get("Fire_Bone_B")],
                     is_turret: yes("Is_Turret"),
-                    turret_bone: get("Turret_Bone_Name"),
-                    barrel_bone: get("Barrel_Bone_Name"),
+                    turret_bone: get("Turret_Bone_Name").map(|s| s.trim().to_string()),
+                    barrel_bone: get("Barrel_Bone_Name").map(|s| s.trim().to_string()),
                     rotate_speed: get("Turret_Rotate_Speed")
                         .and_then(|v| v.parse().ok())
                         .unwrap_or(0.0),
