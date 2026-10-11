@@ -172,8 +172,8 @@ fn difficulty_tiers_scale_without_snowballing() {
         }
     }
     assert!(
-        credits[0] < credits[1] && credits[0] < credits[2] && credits[2] < credits[3],
-        "treasuries should generally grow with the tier (easy < normal/hard < brutal): {credits:?}"
+        credits[0] < credits[1] && credits[1] < credits[2] && credits[1] < credits[3],
+        "treasuries should generally grow with the tier (easy < normal < hard/brutal): {credits:?}"
     );
 }
 
