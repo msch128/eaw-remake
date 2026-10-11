@@ -601,7 +601,16 @@ impl Battle {
                         _ => false,
                     };
                     if should_order {
-                        s.order = Order::AttackMove(enemy_pos);
+                        let sdef = cat.ship(s.def);
+                        let dest = if sdef.is_flanker() && s.pos.dist(enemy_pos) > 2500.0 {
+                            let to = enemy_pos - s.pos;
+                            let flank_sign = if s.id % 2 == 0 { 1.0 } else { -1.0 };
+                            let perp = Vec3::new(-to.y, to.x, 0.0).normalized() * flank_sign;
+                            enemy_pos + perp * (3200.0 + ((s.id % 3) as f32 * 600.0))
+                        } else {
+                            enemy_pos
+                        };
+                        s.order = Order::AttackMove(dest);
                     }
                 }
                 continue;
@@ -2039,6 +2048,13 @@ fn scan(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig) {
         if def.is_interceptor() && t.class == TargetClass::Bomber {
             weight *= 0.15;
         }
+        // U93: Flanking corvettes and gunships prioritize rear-echelon units: carriers and support vessels.
+        if def.is_flanker() {
+            let tdef = cat.ship(t.def);
+            if tdef.is_carrier() || tdef.is_support() {
+                weight *= 0.25;
+            }
+        }
         // Finish off weak ships in reach first (AotR_Focus_Weak_Unit: health below 0.33; the factor 0.5 on the weight is an estimate).
         if t.health < 0.33 && !matches!(t.class, TargetClass::Fighter | TargetClass::Bomber) && d <= def.max_weapon_range * 1.1 {
             weight *= 0.5;
@@ -2232,7 +2248,15 @@ fn mov(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, spawn: &
                 if d > stand * resume {
                     // Line abreast while the enemy is still far away (attack-move only).
                     let mut q = tgt_point;
-                    if s.lane != 0.0 && matches!(s.order, Order::AttackMove(_)) && d > 2500.0 {
+                    let is_flanker = def.is_flanker();
+                    if is_flanker && d > (stand * 1.5).max(1800.0) {
+                        // U93: Fast corvettes and gunships execute wide flanking maneuvers around the enemy line.
+                        let flank_sign = if s.id % 2 == 0 { 1.0 } else { -1.0 };
+                        let to = tgt_point - s.pos;
+                        let perp = Vec3::new(-to.y, to.x, 0.0).normalized() * flank_sign;
+                        let flank_dist = (3200.0 + ((s.id % 3) as f32 * 600.0)).min(d * 0.7);
+                        q = tgt_point + perp * flank_dist - to.normalized() * (stand * 0.5);
+                    } else if s.lane != 0.0 && matches!(s.order, Order::AttackMove(_)) && d > 2500.0 {
                         let to = tgt_point - s.pos;
                         q = tgt_point + Vec3::new(-to.y, to.x, 0.0) * (s.lane / d);
                     } else if d < stand * 2.2 && def.preferred_range > 0.0 {
@@ -2259,14 +2283,20 @@ fn mov(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, spawn: &
                 Goal::Point(q, 50.0)
             } else {
                 settle = true;
-            // Advance line abreast: keep the lane offset perpendicular to the line of advance until close to the goal.
-            let mut q = p;
-            let to = p - s.pos;
-            let dist = to.len();
-            if s.lane != 0.0 && !fighter && dist > 2500.0 {
-                q = p + Vec3::new(-to.y, to.x, 0.0) * (s.lane / dist);
-            }
-            Goal::Point(q, def.radius.max(100.0))
+                // Advance line abreast or along wide flanking vector:
+                let mut q = p;
+                let to = p - s.pos;
+                let dist = to.len();
+                if def.is_flanker() && dist > 2000.0 {
+                    // U93: Flankers advance along wide flanking vectors
+                    let flank_sign = if s.id % 2 == 0 { 1.0 } else { -1.0 };
+                    let perp = Vec3::new(-to.y, to.x, 0.0).normalized() * flank_sign;
+                    let flank_width = 3500.0 + ((s.id % 4) as f32 * 500.0);
+                    q = p + perp * flank_width;
+                } else if s.lane != 0.0 && !fighter && dist > 2500.0 {
+                    q = p + Vec3::new(-to.y, to.x, 0.0) * (s.lane / dist);
+                }
+                Goal::Point(q, def.radius.max(100.0))
             }
         }
         Order::Guard(p) => {

@@ -192,3 +192,43 @@ fn ai_station_launches_active_fighters_and_defenders_engage_approaching_enemies(
     let isd = b.ships.iter().find(|s| s.alive && s.side == 1 && !cat.ship(s.def).is_static && !matches!(cat.ship(s.def).class, TargetClass::Fighter | TargetClass::Bomber)).unwrap();
     assert!(matches!(isd.order, Order::AttackMove(_) | Order::Attack(_)), "defending capital ship engages incoming enemy: {:?}", isd.order);
 }
+
+#[test]
+fn corvette_flanking_maneuver_and_carrier_targeting() {
+    let Some((data, fs)) = load() else { return };
+    let cat = Arc::new(Catalog::build(&data, Some(&fs), &["CR-90_Corvette", "Star_Destroyer", "Nebulon_B_Frigate"]));
+    let cr90_id = cat.ship_id("CR-90_Corvette").unwrap();
+    let isd_id = cat.ship_id("Star_Destroyer").unwrap();
+    let neb_id = cat.ship_id("Nebulon_B_Frigate").unwrap();
+    assert!(cat.ship(cr90_id).is_flanker(), "CR-90 should be recognized as flanker");
+    assert!(!cat.ship(isd_id).is_flanker(), "ISD should not be a flanker");
+    assert!(!cat.ship(neb_id).is_flanker(), "Nebulon should not be a flanker");
+
+    let setup = BattleSetup {
+        catalog: cat.clone(),
+        sides: vec![
+            side(&cat, "Rebel", &[("CR-90_Corvette", 1)], &[]),
+            side(&cat, "Empire", &[("Star_Destroyer", 1), ("Nebulon_B_Frigate", 1)], &[]),
+        ],
+        config: BattleConfig { record_events: false, seed: 7, ..BattleConfig::default() },
+    };
+    let mut b = Battle::new(setup);
+    for s in &mut b.ships {
+        let name = &cat.ship(s.def).name;
+        if name.contains("CR-90") {
+            s.pos = Vec3::new(-4000.0, 0.0, 0.0);
+            s.order = Order::AttackMove(Vec3::new(3000.0, 0.0, 0.0));
+        } else if name.contains("Star_Destroyer") {
+            s.pos = Vec3::new(1000.0, 0.0, 0.0);
+            s.order = Order::Idle;
+        } else if name.contains("Nebulon") {
+            s.pos = Vec3::new(3500.0, 0.0, 0.0);
+            s.order = Order::Idle;
+        }
+    }
+    for _ in 0..120 {
+        b.step();
+    }
+    let cr90 = b.ships.iter().find(|s| cat.ship(s.def).name.contains("CR-90")).unwrap();
+    assert!(cr90.pos.y.abs() > 10.0, "corvette should maneuver sideways to execute a wide flank, pos={:?}", cr90.pos);
+}

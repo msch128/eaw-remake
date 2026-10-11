@@ -467,6 +467,30 @@ impl ShipDef {
             || n.contains("vwing")
             || n.contains("howlrunner")
     }
+
+    /// True if this ship acts as a carrier (has fighter bays, carried squadrons, or carrier designation).
+    pub fn is_carrier(&self) -> bool {
+        !self.carried.is_empty()
+            || !self.spawned_by_tech.is_empty()
+            || self.hardpoints.iter().any(|h| h.kind == HpKind::FighterBay)
+            || self.name.to_ascii_lowercase().contains("carrier")
+    }
+
+    /// True if this ship is a support/utility vessel (transports, healers, buff auras, tenders).
+    pub fn is_support(&self) -> bool {
+        self.class == TargetClass::Transport
+            || !self.heals.is_empty()
+            || !self.bonuses.is_empty()
+            || self.name.to_ascii_lowercase().contains("support")
+            || self.name.to_ascii_lowercase().contains("tender")
+    }
+
+    /// True if this unit is a fast corvette or gunship capable of wide tactical flanking maneuvers.
+    pub fn is_flanker(&self) -> bool {
+        !self.is_static
+            && !self.is_squadron
+            && (self.class == TargetClass::Corvette || (self.max_speed >= 250.0 && self.class != TargetClass::Fighter && self.class != TargetClass::Bomber))
+    }
 }
 
 /// Hull-mounted weapon of fighters.
