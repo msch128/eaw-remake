@@ -77,6 +77,7 @@ impl Plugin for GalaxyMapPlugin {
                     update_lanes,
                     draw_trade_route_pulses,
                     update_planet_captures,
+                    toggle_map_overlays_hotkey,
                     place_notch_fill,
                     fill_emblems,
                     log_props,
@@ -97,12 +98,38 @@ pub struct MapFilters {
     pub base_level: bool,
     pub weather: bool,
     pub heroes: bool,
+    pub military: bool,
 }
 
 impl Default for MapFilters {
     fn default() -> Self {
         // All filters start off like in the Remake frames (no "+income" next to the planet names until the credit filter is on).
-        Self { credits: false, base_level: false, weather: false, heroes: false }
+        Self { credits: false, base_level: false, weather: false, heroes: false, military: false }
+    }
+}
+
+impl MapFilters {
+    pub fn cycle_overlays(&mut self) {
+        if !self.credits && !self.military {
+            self.credits = true;
+            self.military = false;
+        } else if self.credits {
+            self.credits = false;
+            self.military = true;
+        } else {
+            self.credits = false;
+            self.military = false;
+        }
+    }
+}
+
+/// Hotkey `I` cycles through galactic information overlays: Normal -> Economic -> Military -> Normal.
+fn toggle_map_overlays_hotkey(
+    keys: Res<ButtonInput<KeyCode>>,
+    mut filters: ResMut<MapFilters>,
+) {
+    if keys.just_pressed(KeyCode::KeyI) {
+        filters.cycle_overlays();
     }
 }
 
@@ -899,6 +926,8 @@ fn draw_rings(
     selection: Res<Selection>,
     hover: Res<Hover>,
     anim: Res<CaptureAnimations>,
+    filters: Res<MapFilters>,
+    sim: Option<Res<galaxy_play::SimState>>,
     mut rings: Gizmos<RingGizmos>,
     mut select: Gizmos<SelectGizmos>,
     mut border: Gizmos<TerritoryGizmos>,
@@ -936,6 +965,47 @@ fn draw_rings(
             rings
                 .circle(Isometry3d::new(pos, flat), radii.0[i] * 1.3, color)
                 .resolution(48);
+        }
+
+        // Economic overlay: glow reflecting planet credit value
+        if filters.credits {
+            let income = p.income;
+            let econ_color = if income >= 100 {
+                Color::srgb(0.2, 0.95, 0.3) // rich (green)
+            } else if income >= 40 {
+                Color::srgb(0.95, 0.85, 0.2) // moderate (yellow)
+            } else {
+                Color::srgb(0.5, 0.5, 0.55) // poor (gray)
+            };
+            rings
+                .circle(Isometry3d::new(pos, flat), radii.0[i] * 1.55, econ_color.with_alpha(0.85))
+                .resolution(48);
+        }
+
+        // Military overlay: strength bars over systems showing friendly vs enemy fleet presence
+        if filters.military {
+            if let Some(sim) = sim.as_ref() {
+                let me = view.player_faction.unwrap_or(0) as u32;
+                let g = sim.galaxy();
+                let p_id = i as u32;
+                let own_ships: u32 = g.fleets.values().filter(|f| f.planet() == Some(p_id) && f.owner == me).map(|f| f.unit_count()).sum();
+                let enemy_ships: u32 = g.fleets.values().filter(|f| f.planet() == Some(p_id) && f.owner != me).map(|f| f.unit_count()).sum();
+                if own_ships > 0 || enemy_ships > 0 {
+                    let bar_pos = pos + Vec3::Y * (radii.0[i] * 1.8 + 0.8);
+                    let max_width = radii.0[i] * 2.2;
+                    let total = (own_ships + enemy_ships).max(1) as f32;
+                    let own_w = max_width * (own_ships as f32 / total);
+                    let enemy_w = max_width * (enemy_ships as f32 / total);
+
+                    let left = bar_pos - Vec3::X * (max_width * 0.5);
+                    if own_ships > 0 {
+                        border.line(left, left + Vec3::X * own_w, Color::srgb(0.2, 0.95, 0.3));
+                    }
+                    if enemy_ships > 0 {
+                        border.line(left + Vec3::X * own_w, left + Vec3::X * (own_w + enemy_w), Color::srgb(0.95, 0.25, 0.2));
+                    }
+                }
+            }
         }
     }
     if let Some(i) = selection.0.filter(|&i| i < view.planets.len()) {
@@ -1513,6 +1583,18 @@ mod tests {
         assert_eq!(route_relation(Some(1), Some(2), p), RouteRelation::Contested);
         assert_eq!(route_relation(None, Some(2), p), RouteRelation::Neutral);
         assert_eq!(route_relation(Some(1), Some(1), None), RouteRelation::Enemy);
+    }
+
+    #[test]
+    fn map_filters_cycle_overlays() {
+        let mut f = MapFilters::default();
+        assert!(!f.credits && !f.military);
+        f.cycle_overlays();
+        assert!(f.credits && !f.military);
+        f.cycle_overlays();
+        assert!(!f.credits && f.military);
+        f.cycle_overlays();
+        assert!(!f.credits && !f.military);
     }
 }
 /// A row of structure slot pips under a planet name: `row` 0 = ground slots, 1 = space slots.
