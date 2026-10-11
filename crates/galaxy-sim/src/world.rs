@@ -81,6 +81,8 @@ pub struct SimConfig {
     pub repair_base_per_week: f32,
     /// Estimate: extra share per week and star base level.
     pub repair_per_starbase_level_per_week: f32,
+    /// Estimate: extra share of hull restored per week at an owned shipyard planet (0.15 = 15%).
+    pub repair_shipyard_per_week: f32,
     /// Estimate: shields are restored this many times faster than hulls.
     pub repair_shield_factor: f32,
     /// Estimate: share of the unspent production cost returned when a queue entry is cancelled (1.0 = all of it; the data has no refund rule).
@@ -132,6 +134,7 @@ impl Default for SimConfig {
             tactical_resolver_max_ships: 16,
             repair_base_per_week: 0.05,
             repair_per_starbase_level_per_week: 0.10,
+            repair_shipyard_per_week: 0.15,
             repair_shield_factor: 4.0,
             cancel_refund: 1.0,
             capture_bonus_scale: 1.0,

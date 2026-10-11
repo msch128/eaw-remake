@@ -601,8 +601,21 @@ impl Sim {
         let world = self.world.clone();
         let cfg = &world.config;
         let weeks = dt / cfg.week_seconds;
-        let (base, per_level, shield_factor) = (cfg.repair_base_per_week, cfg.repair_per_starbase_level_per_week, cfg.repair_shield_factor);
-        let rate = |g: &Galaxy, p: usize| -> f32 { base + per_level * g.planets[p].starbase.map_or(0, |sb| world.starbases[sb as usize].level.max(0)) as f32 };
+        let (base, per_level, shield_factor, shipyard_rate) = (
+            cfg.repair_base_per_week,
+            cfg.repair_per_starbase_level_per_week,
+            cfg.repair_shield_factor,
+            cfg.repair_shipyard_per_week,
+        );
+        let rate = |g: &Galaxy, p: usize| -> f32 {
+            let sb_level = g.planets[p].starbase.map_or(0, |sb| world.starbases[sb as usize].level.max(0)) as f32;
+            let has_shipyard = g.planets[p].structures.iter().any(|&s| {
+                let name = world.structures[s as usize].name.to_ascii_lowercase();
+                name.contains("shipyard") || name.contains("dock")
+            }) || !world.planets[p].prod_mods.is_empty();
+            let yard = if has_shipyard { shipyard_rate } else { 0.0 };
+            base + per_level * sb_level + yard
+        };
         if !self.galaxy.damage.is_empty() {
             let mut heal: Vec<(ShipId, f32)> = Vec::new();
             for f in self.galaxy.fleets.values() {
