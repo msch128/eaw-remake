@@ -1474,9 +1474,10 @@ impl Battle {
     }
 
     /// `Retreat_From_Space` of the Remake AI (Remake_SpaceCombatEquations.xml): an AI side that is clearly outgunned orders the retreat. Attacker: enemy
-    /// force at least 2x its own after 120 s; defender: at least 3x (4x with a station) after 120 s, or after 30 s without any station. Not for sides
-    /// that may not retreat (`BattleConfig::retreat_allowed`, the galaxy says whether the faction holds more than one planet), not before
-    /// the retreat countdown, and not while an interdictor blocks it.
+    /// force at least 2x its own after 120 s; defender: at least 3x (4x with a station) after 120 s, or after 30 s without any station.
+    /// U94: Emergency tactical retreat when critical loss (< 25% survival chance, theirs >= 3x mine) threatens surviving capital ships and heroes.
+    /// Not for sides that may not retreat (`BattleConfig::retreat_allowed`, the galaxy says whether the faction holds more than one planet),
+    /// not before the retreat countdown, and not while an interdictor blocks it.
     fn ai_retreat(&mut self) {
         let n = self.sides.len();
         for side in 0..n as u8 {
@@ -1489,14 +1490,30 @@ impl Battle {
             let cat = self.catalog.clone();
             let stations = self.ships.iter().filter(|s| s.side == side && s.alive && cat.ship(s.def).is_static).count();
             let defender = !self.sides[side as usize].structures.is_empty();
-            let age_ok = if defender { if stations == 0 { self.time > 30.0 } else { self.time > 120.0 } } else { self.time > 120.0 };
+
+            let mine = self.side_power(side);
+            let theirs: f32 = (0..n as u8).filter(|&o| o != side).map(|o| self.side_power(o)).sum();
+
+            // U94: Emergency retreat when overwhelming superiority (< 25% survival chance) threatens to wipe out surviving capital ships
+            let has_valuable_ships = self.ships.iter().any(|s| {
+                s.side == side && s.alive && !s.retreated && !cat.ship(s.def).is_static
+                    && (cat.ship(s.def).class as u8 >= TargetClass::Capital as u8 || cat.ship(s.def).population >= 15)
+            });
+            let critical_loss = theirs > 0.0 && mine / (mine + theirs) < 0.25;
+            let emergency_retreat = has_valuable_ships && critical_loss && (stations == 0 || self.time > 60.0);
+
+            let age_ok = if emergency_retreat {
+                self.time >= self.config.retreat_countdown.max(30.0)
+            } else if defender {
+                if stations == 0 { self.time > 30.0 } else { self.time > 120.0 }
+            } else {
+                self.time > 120.0
+            };
             if !age_ok {
                 continue;
             }
-            let mine = self.side_power(side);
-            let theirs: f32 = (0..n as u8).filter(|&o| o != side).map(|o| self.side_power(o)).sum();
             let factor = if defender { 3.0 + f32::from(u8::from(stations > 0)) } else { 2.0 };
-            if theirs > 0.0 && theirs >= factor * mine {
+            if (theirs > 0.0 && theirs >= factor * mine) || emergency_retreat {
                 let _ = self.command(side, Command::Retreat);
             }
         }

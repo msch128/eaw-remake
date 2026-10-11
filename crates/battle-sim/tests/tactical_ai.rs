@@ -232,3 +232,18 @@ fn corvette_flanking_maneuver_and_carrier_targeting() {
     let cr90 = b.ships.iter().find(|s| cat.ship(s.def).name.contains("CR-90")).unwrap();
     assert!(cr90.pos.y.abs() > 10.0, "corvette should maneuver sideways to execute a wide flank, pos={:?}", cr90.pos);
 }
+
+#[test]
+fn emergency_retreat_saves_outgunned_capital_ship() {
+    let Some((data, fs)) = load() else { return };
+    let cat = Arc::new(Catalog::build(&data, Some(&fs), &["Star_Destroyer", "MC-80_Star_Cruiser"]));
+    let sides = vec![
+        side(&cat, "Empire", &[("Star_Destroyer", 1)], &[]),
+        side(&cat, "Rebel", &[("MC-80_Star_Cruiser", 4)], &[]),
+    ];
+    let (r, _) = run(&cat, sides, BattleConfig { seed: 15, retreat_countdown: 30.0, ..BattleConfig::default() });
+    let empire = r.groups.iter().find(|g| g.side == 0).unwrap();
+    println!("emergency retreat: winner {:?} after {:.0} s, empire survived {}/{} ({} retreated)", r.winner, r.duration, empire.survived, empire.total, empire.retreated);
+    assert_eq!(empire.retreated, 1, "outgunned ISD should retreat early under emergency retreat rule");
+    assert!(r.duration < 90.0, "should trigger before 120 s normal threshold, took {:.0} s", r.duration);
+}
