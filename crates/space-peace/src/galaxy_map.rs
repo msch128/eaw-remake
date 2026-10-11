@@ -72,6 +72,7 @@ impl Plugin for GalaxyMapPlugin {
                     update_labels,
                     draw_rings,
                     update_lanes,
+                    draw_trade_route_pulses,
                     place_notch_fill,
                     fill_emblems,
                     log_props,
@@ -1107,17 +1108,23 @@ fn spawn_lanes(
 /// Linear RGB of a lane for the relation of its ends at zoom `t`; `None` when the style hides it.
 /// The game's colours are dark additive teal (13, 31, 38) meant to be added on the backdrop; they give the
 /// hue, the peak brightness per width class gives the beam.
-fn lane_color(style: &LineStyleView, t: f32, class: usize) -> [f32; 4] {
+fn lane_color(relation: RouteRelation, style: &LineStyleView, t: f32, class: usize) -> [f32; 4] {
     let mix = |i: usize| style.color_near[i] + (style.color_far[i] - style.color_near[i]) * t;
     let alpha = mix(3);
     if style.width <= 0.0 || alpha <= 0.01 {
         return [0.0; 4];
     }
-    let rgb = Vec3::new(mix(0), mix(1), mix(2));
-    let rgb = rgb / rgb.max_element().max(1e-3);
-    // Washed towards light steel blue like the reference beams.
-    let rgb = rgb * 0.45 + Vec3::splat(0.55);
-    let l = Color::srgb(rgb.x, rgb.y, rgb.z).to_linear();
+    let base_rgb = match relation {
+        RouteRelation::Own => Vec3::new(0.18, 0.88, 0.60), // Soft cyan/green for free, friendly trade routes
+        RouteRelation::Contested => Vec3::new(0.88, 0.26, 0.18), // Reddish for blocked / contested routes
+        RouteRelation::Enemy => Vec3::new(0.68, 0.18, 0.24), // Enemy-controlled route
+        RouteRelation::Neutral => {
+            let rgb = Vec3::new(mix(0), mix(1), mix(2));
+            let rgb = rgb / rgb.max_element().max(1e-3);
+            rgb * 0.45 + Vec3::splat(0.55)
+        }
+    };
+    let l = Color::srgb(base_rgb.x, base_rgb.y, base_rgb.z).to_linear();
     let k = LANE_PEAK[class] * alpha;
     [l.red * k, l.green * k, l.blue * k, 1.0]
 }
@@ -1144,12 +1151,13 @@ fn update_lanes(
             let (a, b) = (&view.planets[r.a], &view.planets[r.b]);
             let style = &view.route_styles[r.style];
             let class = lane_class(style.neutral.width.max(style.own.width));
-            let line = match route_relation(a.owner, b.owner, view.player_faction) {
+            let relation = route_relation(a.owner, b.owner, view.player_faction);
+            let line = match relation {
                 RouteRelation::Own => &style.own,
                 RouteRelation::Enemy => &style.enemy,
                 RouteRelation::Contested | RouteRelation::Neutral => &style.neutral,
             };
-            let c = lane_color(line, t, class);
+            let c = lane_color(relation, line, t, class);
             col.extend([c; 4]);
         }
         if let Some(mut m) = meshes.get_mut(&lane.mesh) {
@@ -1157,6 +1165,49 @@ fn update_lanes(
         }
     }
     *state = LaneState { zoom_bucket: bucket, owners, built: true };
+}
+
+/// Animates light pulses along major trade routes.
+fn draw_trade_route_pulses(
+    mut gizmos: Gizmos,
+    view: Res<GalaxyView>,
+    time: Res<Time>,
+) {
+    let now = time.elapsed_secs();
+    let speed = 2.0;
+    for r in &view.routes {
+        let (Some(pa_info), Some(pb_info), Some(style)) = (view.planets.get(r.a), view.planets.get(r.b), view.route_styles.get(r.style)) else {
+            continue;
+        };
+        let class = lane_class(style.neutral.width.max(style.own.width));
+        if class > 1 {
+            continue;
+        }
+        let pa = galaxy_to_world(pa_info.position);
+        let pb = galaxy_to_world(pb_info.position);
+        let len = pa.distance(pb);
+        if len < 1.0 {
+            continue;
+        }
+        let dir = (pb - pa) / len;
+        let relation = route_relation(pa_info.owner, pb_info.owner, view.player_faction);
+        let color = match relation {
+            RouteRelation::Own => Color::srgba(0.25, 0.95, 0.65, 0.85),
+            RouteRelation::Contested => Color::srgba(0.95, 0.3, 0.2, 0.85),
+            RouteRelation::Enemy => Color::srgba(0.8, 0.2, 0.35, 0.75),
+            RouteRelation::Neutral => Color::srgba(0.4, 0.75, 1.0, 0.75),
+        };
+        let count = ((len / 14.0) as usize).clamp(1, 4);
+        let streak_len = (len * 0.08).clamp(0.4, 1.2);
+        for i in 0..count {
+            let offset = i as f32 / count as f32;
+            let phase = ((now * speed / len + offset) % 1.0 + 1.0) % 1.0;
+            let center = pa.lerp(pb, phase);
+            let p_head = center + dir * streak_len * 0.5;
+            let p_tail = center - dir * streak_len * 0.5;
+            gizmos.line_gradient(p_tail, p_head, color.with_alpha(0.0), color);
+        }
+    }
 }
 
 /// Finds the planet under the mouse cursor (ray vs. a generous pick sphere).
