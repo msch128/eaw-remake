@@ -91,6 +91,20 @@ pub struct SimConfig {
     pub capture_bonus_scale: f32,
     /// Estimate: seconds a faction's superweapons need to recharge after destroying a planet (the data has no galactic cooldown).
     pub superweapon_cooldown_seconds: f32,
+    /// Dynamic neutral pirate raids on undefended border worlds (Remake dynamic pressure).
+    #[serde(default = "default_pirate_raids")]
+    pub pirate_raids: bool,
+    /// Weeks between neutral pirate raid attempts (default: 4 weeks).
+    #[serde(default = "default_pirate_raid_interval")]
+    pub pirate_raid_interval: u32,
+}
+
+fn default_pirate_raids() -> bool {
+    true
+}
+
+fn default_pirate_raid_interval() -> u32 {
+    4
 }
 
 /// Algorithm used to settle battles.
@@ -139,6 +153,8 @@ impl Default for SimConfig {
             cancel_refund: 1.0,
             capture_bonus_scale: 1.0,
             superweapon_cooldown_seconds: 120.0,
+            pirate_raids: true,
+            pirate_raid_interval: 4,
         }
     }
 }

@@ -497,6 +497,7 @@ impl Sim {
             self.galaxy.week += 1;
             events.push(Event::WeekEnded { week: self.galaxy.week });
             self.rearm_passive(true);
+            self.pirate_raids(events);
             self.check_victory(events);
         }
 
@@ -1165,7 +1166,7 @@ pub(crate) fn add_units(g: &mut Galaxy, owner: FactionId, planet: PlanetId, u: U
     id
 }
 
-fn start_move(w: &World, g: &mut Galaxy, fleet: FleetId, path: Vec<PlanetId>) {
+pub(crate) fn start_move(w: &World, g: &mut Galaxy, fleet: FleetId, path: Vec<PlanetId>) {
     // `path[0]` is the current planet.
     if path.len() < 2 {
         return;

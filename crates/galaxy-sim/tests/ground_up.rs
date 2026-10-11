@@ -212,3 +212,27 @@ fn passive_defense_scales_to_attacker_tech() {
     let high_units: u32 = pirate_side_high.members.iter().map(|m| m.count).sum();
     assert!(low_units < high_units, "Low tech attacker faces smaller pirate forces: {low_units} vs {high_units}");
 }
+
+#[test]
+fn pirates_launch_raids_on_undefended_border_worlds() {
+    let Some(data) = load() else { return };
+    let mut s = sim(&data, true);
+    let w = s.world().clone();
+    let pirates = w.faction_id("Pirates").unwrap();
+
+    let mut raid_events = Vec::new();
+    for _ in 0..4 {
+        let evs = s.step(w.config.week_seconds);
+        for ev in evs {
+            if let Event::PirateRaidLaunched { target, from, fleet } = ev {
+                raid_events.push((target, from, fleet));
+            }
+        }
+    }
+    println!("pirate raids launched over 4 weeks: {raid_events:?}");
+    assert!(!raid_events.is_empty(), "pirates should launch raids on adjacent undefended border worlds");
+    for &(target, from, _) in &raid_events {
+        assert_eq!(s.galaxy().planets[from as usize].owner, Some(pirates), "raid must originate from a pirate world");
+        assert_ne!(s.galaxy().planets[target as usize].owner, Some(pirates), "target must not be a pirate world");
+    }
+}

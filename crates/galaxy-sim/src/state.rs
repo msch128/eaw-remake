@@ -559,6 +559,15 @@ pub enum Event {
         /// Winner.
         faction: FactionId,
     },
+    /// Neutral pirates launched a raid against an undefended border world.
+    PirateRaidLaunched {
+        /// Target planet being raided.
+        target: PlanetId,
+        /// Pirate base planet launching the raid.
+        from: PlanetId,
+        /// Fleet id of the raiding detachment.
+        fleet: FleetId,
+    },
 }
 
 impl Galaxy {
