@@ -619,14 +619,40 @@ impl TaskForces {
             }
         }
         let matches = |c: &(String, String, f64), types: &[String]| types.iter().any(|ty| ty.eq_ignore_ascii_case(&c.0) || (is_category(ty) && ty.eq_ignore_ascii_case(&c.1)));
-        let pick = |rng: &mut u64, pool: &[&(String, String, f64)]| -> Option<String> {
-            let total: f64 = pool.iter().map(|c| c.2.sqrt()).sum();
+        let role_of = |category: &str, name: &str| -> usize {
+            let cat = category.to_ascii_uppercase();
+            let n = name.to_ascii_lowercase();
+            if cat.contains("CAPITAL") || cat.contains("SUPER") || cat.contains("BATTLESHIP") || cat.contains("CRUISER") {
+                0 // 40% Capitals / Line
+            } else if cat.contains("FRIGATE") || cat.contains("CORVETTE") {
+                1 // 30% Frigates / Escorts
+            } else if cat.contains("CARRIER") || n.contains("carrier") {
+                2 // 30% Carriers / Strike / Fighters
+            } else {
+                2
+            }
+        };
+        let mut role_counts = [0usize; 3];
+        let role_targets = [0.40f64, 0.30f64, 0.30f64];
+        let role_weight = |c: &(String, String, f64), counts: &[usize; 3]| -> f64 {
+            let r = role_of(&c.1, &c.0);
+            let total = (counts[0] + counts[1] + counts[2]) as f64;
+            if total >= 2.0 {
+                let share = (counts[r] as f64) / total;
+                let mult = (role_targets[r] / share.max(0.05)).clamp(0.25, 4.0);
+                c.2.sqrt() * mult
+            } else {
+                c.2.sqrt() * role_targets[r] * 3.0
+            }
+        };
+        let pick = |rng: &mut u64, pool: &[&(String, String, f64)], counts: &[usize; 3]| -> Option<String> {
+            let total: f64 = pool.iter().map(|c| role_weight(c, counts)).sum();
             if pool.is_empty() || total <= 0.0 {
                 return None;
             }
             let mut r = next_rand(rng) * total;
             for c in pool {
-                r -= c.2.sqrt();
+                r -= role_weight(c, counts);
                 if r <= 0.0 {
                     return Some(c.0.clone());
                 }
@@ -638,7 +664,10 @@ impl TaskForces {
         for g in t.reqs.groups.iter().filter(|g| g.percent.is_none()) {
             let pool: Vec<_> = candidates.iter().filter(|c| matches(c, &g.types)).collect();
             for _ in 0..g.max.min(8) {
-                if let Some(n) = pick(rng, &pool) {
+                if let Some(n) = pick(rng, &pool, &role_counts) {
+                    if let Some(c) = candidates.iter().find(|c| c.0 == n) {
+                        role_counts[role_of(&c.1, &c.0)] += 1;
+                    }
                     wanted.push(n);
                 }
             }
@@ -689,7 +718,10 @@ impl TaskForces {
                 }
                 let free_pool: Vec<_> = candidates.iter().filter(|c| matches(c, &chosen.types) && avail.get(&c.0.to_ascii_lowercase()).copied().unwrap_or(0) > 0).collect();
                 let pool: Vec<_> = if free_pool.is_empty() { candidates.iter().filter(|c| matches(c, &chosen.types)).collect() } else { free_pool };
-                if let Some(n) = pick(rng, &pool) {
+                if let Some(n) = pick(rng, &pool, &role_counts) {
+                    if let Some(c) = candidates.iter().find(|c| c.0 == n) {
+                        role_counts[role_of(&c.1, &c.0)] += 1;
+                    }
                     power += candidates.iter().find(|c| c.0 == n).map_or(0.0, |c| c.2);
                     if let Some(a) = avail.get_mut(&n.to_ascii_lowercase()) {
                         *a = a.saturating_sub(1);
@@ -917,6 +949,15 @@ impl TaskForces {
             return None;
         };
         let (player, fleet) = (t.player, t.fleet);
+        if !t.pieces.is_empty() && Some(to) == t.target {
+            if let Some(stage) = t.stage {
+                self.gather(sim, player, tf, stage);
+                let t_ref = self.forces.get(&tf);
+                if t_ref.is_some_and(|tf_obj| !tf_obj.pieces.is_empty()) && now - started < 60.0 {
+                    return Some(Job::Move { block, tf, to, started, issued, retries });
+                }
+            }
+        }
         let Some(fleet) = fleet else {
             self.finish(block, false);
             return None;
@@ -1313,6 +1354,31 @@ impl TaskForces {
         self.sizing = m.sizing.iter().copied().collect();
         self.reserved = m.reserved.iter().map(|&(f, p, t)| (f, (p, t))).collect();
         self.clock = m.clock;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn role_doctrine_balances_capitals_frigates_and_carriers() {
+        let role_of = |category: &str, name: &str| -> usize {
+            let cat = category.to_ascii_uppercase();
+            let n = name.to_ascii_lowercase();
+            if cat.contains("CAPITAL") || cat.contains("SUPER") || cat.contains("BATTLESHIP") || cat.contains("CRUISER") {
+                0
+            } else if cat.contains("FRIGATE") || cat.contains("CORVETTE") {
+                1
+            } else if cat.contains("CARRIER") || n.contains("carrier") {
+                2
+            } else {
+                2
+            }
+        };
+        assert_eq!(role_of("CAPITAL", "ISD"), 0);
+        assert_eq!(role_of("FRIGATE", "Nebulon"), 1);
+        assert_eq!(role_of("CORVETTE", "CR90"), 1);
+        assert_eq!(role_of("FIGHTER", "X-Wing"), 2);
+        assert_eq!(role_of("OTHER", "Quasar_Carrier"), 2);
     }
 }
 
