@@ -1,6 +1,8 @@
 //! Rendering and interaction of the galactic conquest map: starfield, planets, owner halos,
 //! trade routes, name labels and click selection.
 
+use std::collections::HashMap;
+
 use bevy::{
     asset::RenderAssetUsages,
     camera::visibility::NoFrustumCulling,
@@ -49,6 +51,7 @@ impl Plugin for GalaxyMapPlugin {
                 brightness: 2.0,
                 ..default()
             })
+            .init_resource::<CaptureAnimations>()
             .add_systems(Update, apply_filter_spans)
             .add_systems(Update, (update_pip_colors, place_sector_fill, scripted_hover.after(update_hover)).run_if(in_state(AppScreen::Galaxy)))
             .add_systems(Startup, setup_scene)
@@ -73,6 +76,7 @@ impl Plugin for GalaxyMapPlugin {
                     draw_rings,
                     update_lanes,
                     draw_trade_route_pulses,
+                    update_planet_captures,
                     place_notch_fill,
                     fill_emblems,
                     log_props,
@@ -824,12 +828,77 @@ fn update_labels(
 
 /// Draws the owner ring under every planet and the pulsing selection ring. Gizmo lines keep a
 /// constant pixel width, so the rings stay thin at any zoom.
+/// Tracks planet ownership change animations and conquest celebration crests.
+#[derive(Resource, Default)]
+pub struct CaptureAnimations {
+    /// Planet index -> (old_color, new_color, start_time, duration)
+    pub transitions: HashMap<usize, (Color, Color, f32, f32)>,
+    /// Last seen owner per planet index
+    pub last_owners: HashMap<usize, Option<usize>>,
+    /// Planet index -> celebration start time
+    pub celebrations: HashMap<usize, f32>,
+}
+
+fn update_planet_captures(
+    view: Res<GalaxyView>,
+    time: Res<Time>,
+    mut anim: ResMut<CaptureAnimations>,
+    mut select: Gizmos<SelectGizmos>,
+    radii: Res<PlanetRadii>,
+) {
+    let now = time.elapsed_secs();
+    let flat = Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2);
+
+    for (i, p) in view.planets.iter().enumerate() {
+        let prev = anim.last_owners.get(&i).copied();
+        if let Some(old) = prev {
+            if old != p.owner {
+                let old_c = Color::from(rgb(relation_color(&view, old)));
+                let new_c = Color::from(rgb(relation_color(&view, p.owner)));
+                anim.transitions.insert(i, (old_c, new_c, now, 1.0));
+                anim.celebrations.insert(i, now);
+                anim.last_owners.insert(i, p.owner);
+            }
+        } else {
+            anim.last_owners.insert(i, p.owner);
+        }
+    }
+
+    anim.transitions.retain(|_, (_, _, start, dur)| now - *start < *dur);
+
+    anim.celebrations.retain(|&i, start| {
+        let age = now - *start;
+        if age >= 2.0 || i >= view.planets.len() {
+            return false;
+        }
+        let progress = age / 2.0;
+        let alpha = (1.0 - progress).powi(2);
+        let pos = galaxy_to_world(view.planets[i].position) + Vec3::Y * (0.8 + progress * 0.6);
+        let base_r = radii.0[i] * 1.6;
+        let r = base_r * (1.0 + progress * 0.8);
+        let gold = Color::srgba(1.0, 0.82, 0.18, alpha * 0.95);
+        let bright_gold = Color::srgba(1.0, 0.95, 0.5, alpha);
+
+        select.circle(Isometry3d::new(pos, flat), r, gold).resolution(48);
+        select.circle(Isometry3d::new(pos, flat), r * 0.7, bright_gold).resolution(36);
+
+        let spike_len = r * 0.35;
+        for k in 0..8 {
+            let theta = k as f32 / 8.0 * std::f32::consts::TAU + now * 1.5;
+            let dir = Vec3::new(theta.cos(), 0.0, theta.sin());
+            select.line(pos + dir * (r * 0.7), pos + dir * (r * 0.7 + spike_len), gold);
+        }
+        true
+    });
+}
+
 fn draw_rings(
     time: Res<Time>,
     view: Res<GalaxyView>,
     radii: Res<PlanetRadii>,
     selection: Res<Selection>,
     hover: Res<Hover>,
+    anim: Res<CaptureAnimations>,
     mut rings: Gizmos<RingGizmos>,
     mut select: Gizmos<SelectGizmos>,
     mut border: Gizmos<TerritoryGizmos>,
@@ -846,19 +915,28 @@ fn draw_rings(
     }
     for (i, p) in view.planets.iter().enumerate() {
         let pos = galaxy_to_world(p.position);
-        // The original has no rings: only a very faint owner halo, and a clear ring under the cursor.
         let hovered = hover.0 == Some(i);
-        let (c, alpha) = match p.owner {
-            Some(_) if hovered => (relation_color(&view, p.owner), 0.8),
-            Some(_) => continue,
-            None if hovered => (NEUTRAL, 0.7),
-            None => continue,
-        };
-        let l = rgb(c).to_linear();
-        let color = Color::LinearRgba(LinearRgba::new(l.red, l.green, l.blue, alpha));
-        rings
-            .circle(Isometry3d::new(pos, flat), radii.0[i] * 1.3, color)
-            .resolution(48);
+        let in_transition = anim.transitions.get(&i).map(|(c1, c2, start, dur)| {
+            let frac = ((time.elapsed_secs() - start) / dur).clamp(0.0, 1.0);
+            c1.mix(c2, frac)
+        });
+        if let Some(color) = in_transition {
+            rings
+                .circle(Isometry3d::new(pos, flat), radii.0[i] * 1.35, color.with_alpha(0.9))
+                .resolution(48);
+        } else {
+            let (c, alpha) = match p.owner {
+                Some(_) if hovered => (relation_color(&view, p.owner), 0.8),
+                Some(_) => continue,
+                None if hovered => (NEUTRAL, 0.7),
+                None => continue,
+            };
+            let l = rgb(c).to_linear();
+            let color = Color::LinearRgba(LinearRgba::new(l.red, l.green, l.blue, alpha));
+            rings
+                .circle(Isometry3d::new(pos, flat), radii.0[i] * 1.3, color)
+                .resolution(48);
+        }
     }
     if let Some(i) = selection.0.filter(|&i| i < view.planets.len()) {
         // The notched selection ring: a translucent band with raised teeth, bright inner and outer outline.
