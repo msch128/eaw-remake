@@ -50,6 +50,8 @@ pub(crate) struct CheatRoot;
 #[derive(Component, Clone, Copy, PartialEq, Debug)]
 pub(crate) enum CheatAction {
     Credits,
+    Credits50k,
+    Credits500k,
     FinishBuild,
     TechUp,
     AiPause,
@@ -73,6 +75,8 @@ fn on_off(on: bool) -> &'static str {
 fn caption(action: CheatAction, galaxy_ai_paused: bool, battle: &BattleCheats) -> String {
     match action {
         CheatAction::Credits => format!("+{CREDIT_STEP} credits"),
+        CheatAction::Credits50k => "+50,000 credits".to_owned(),
+        CheatAction::Credits500k => "+500,000 credits".to_owned(),
         CheatAction::FinishBuild => "Finish current build".to_owned(),
         CheatAction::TechUp => "Tech level +1".to_owned(),
         CheatAction::AiPause => format!("Pause AI: {}", on_off(galaxy_ai_paused)),
@@ -166,7 +170,14 @@ fn rebuild_galaxy(mut commands: Commands, menu: Res<CheatMenu>, existing: Query<
     }
     if menu.open {
         let ai = state.galaxy().ai_paused;
-        let galaxy = [CheatAction::Credits, CheatAction::FinishBuild, CheatAction::TechUp, CheatAction::AiPause];
+        let galaxy = [
+            CheatAction::Credits,
+            CheatAction::Credits50k,
+            CheatAction::Credits500k,
+            CheatAction::FinishBuild,
+            CheatAction::TechUp,
+            CheatAction::AiPause,
+        ];
         spawn_panel(&mut commands, &[("GALAXY", &galaxy)], &|a| caption(a, ai, &BattleCheats::default()));
     }
 }
@@ -198,6 +209,12 @@ fn clicks_galaxy(
         match *a {
             CheatAction::Credits => {
                 actions.write(PlayAction::Cheat(Cheat::Credits(CREDIT_STEP)));
+            }
+            CheatAction::Credits50k => {
+                actions.write(PlayAction::Cheat(Cheat::Credits(50_000)));
+            }
+            CheatAction::Credits500k => {
+                actions.write(PlayAction::Cheat(Cheat::Credits(500_000)));
             }
             CheatAction::FinishBuild => match selection.planet {
                 Some(planet) => {
