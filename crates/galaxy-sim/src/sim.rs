@@ -541,50 +541,96 @@ impl Sim {
         for pi in 0..self.galaxy.planets.len() {
             let Some(owner) = self.galaxy.planets[pi].owner else { continue };
             for lane in 0..3 {
-                let done = {
+                if lane == Lane::Structures as usize {
+                    // Ground and orbital structures build in parallel: the first of each kind progresses simultaneously.
+                    let mut first_orbital = None;
+                    let mut first_ground = None;
                     let q = &mut self.galaxy.planets[pi].queues[lane];
-                    match q.front_mut() {
-                        Some(item) => {
+                    for (idx, item) in q.iter_mut().enumerate() {
+                        if let ProductionKind::Structure(s) = item.kind {
+                            if w.structures[s as usize].orbital {
+                                if first_orbital.is_none() {
+                                    item.remaining -= dt;
+                                    first_orbital = Some((idx, item.remaining <= 0.0));
+                                }
+                            } else if first_ground.is_none() {
+                                item.remaining -= dt;
+                                first_ground = Some((idx, item.remaining <= 0.0));
+                            }
+                        } else if idx == 0 {
                             item.remaining -= dt;
-                            item.remaining <= 0.0
-                        }
-                        None => false,
-                    }
-                };
-                if !done {
-                    continue;
-                }
-                let item = self.galaxy.planets[pi].queues[lane].pop_front().expect("front exists");
-                let planet = pi as PlanetId;
-                match item.kind.clone() {
-                    ProductionKind::Unit(u) => {
-                        let fs = &mut self.galaxy.factions[owner as usize];
-                        *fs.built_lifetime.entry(u).or_default() += 1;
-                        match &w.units[u as usize].role {
-                            UnitRole::Ship => {
-                                add_units(&mut self.galaxy, owner, planet, u, 1);
-                            }
-                            UnitRole::Research(target) => {
-                                fs.unlocked.insert(target.to_ascii_lowercase());
-                            }
+                            first_orbital = Some((0, item.remaining <= 0.0));
+                            break;
                         }
                     }
-                    ProductionKind::Structure(s) => self.galaxy.planets[pi].structures.push(s),
-                    ProductionKind::Starbase(sb) => self.galaxy.planets[pi].starbase = Some(sb),
-                    ProductionKind::Tech(_) => {
-                        self.galaxy.factions[owner as usize].tech += 1;
-                        events.push(Event::TechAdvanced { faction: owner, level: self.galaxy.factions[owner as usize].tech });
+
+                    let mut completed = Vec::new();
+                    if let Some((idx, done)) = first_orbital {
+                        if done {
+                            completed.push(idx);
+                        }
                     }
+                    if let Some((idx, done)) = first_ground {
+                        if done && !completed.contains(&idx) {
+                            completed.push(idx);
+                        }
+                    }
+                    completed.sort_unstable_by(|a, b| b.cmp(a));
+                    for idx in completed {
+                        let item = self.galaxy.planets[pi].queues[lane].remove(idx).expect("completed index exists");
+                        let planet = pi as PlanetId;
+                        self.complete_production_item(owner, planet, pi, item, w, events);
+                    }
+                } else {
+                    let done = {
+                        let q = &mut self.galaxy.planets[pi].queues[lane];
+                        match q.front_mut() {
+                            Some(item) => {
+                                item.remaining -= dt;
+                                item.remaining <= 0.0
+                            }
+                            None => false,
+                        }
+                    };
+                    if !done {
+                        continue;
+                    }
+                    let item = self.galaxy.planets[pi].queues[lane].pop_front().expect("front exists");
+                    let planet = pi as PlanetId;
+                    self.complete_production_item(owner, planet, pi, item, w, events);
                 }
-                let st = &mut self.galaxy.factions[owner as usize].stats;
-                match item.kind {
-                    ProductionKind::Unit(_) => st.ships_built += 1,
-                    ProductionKind::Structure(_) | ProductionKind::Starbase(_) => st.structures_built += 1,
-                    ProductionKind::Tech(_) => {}
-                }
-                events.push(Event::ConstructionComplete { faction: owner, planet, kind: item.kind });
             }
         }
+    }
+
+    fn complete_production_item(&mut self, owner: FactionId, planet: PlanetId, pi: usize, item: ProductionItem, w: &World, events: &mut Vec<Event>) {
+        match item.kind.clone() {
+            ProductionKind::Unit(u) => {
+                let fs = &mut self.galaxy.factions[owner as usize];
+                *fs.built_lifetime.entry(u).or_default() += 1;
+                match &w.units[u as usize].role {
+                    UnitRole::Ship => {
+                        add_units(&mut self.galaxy, owner, planet, u, 1);
+                    }
+                    UnitRole::Research(target) => {
+                        fs.unlocked.insert(target.to_ascii_lowercase());
+                    }
+                }
+            }
+            ProductionKind::Structure(s) => self.galaxy.planets[pi].structures.push(s),
+            ProductionKind::Starbase(sb) => self.galaxy.planets[pi].starbase = Some(sb),
+            ProductionKind::Tech(_) => {
+                self.galaxy.factions[owner as usize].tech += 1;
+                events.push(Event::TechAdvanced { faction: owner, level: self.galaxy.factions[owner as usize].tech });
+            }
+        }
+        let st = &mut self.galaxy.factions[owner as usize].stats;
+        match item.kind {
+            ProductionKind::Unit(_) => st.ships_built += 1,
+            ProductionKind::Structure(_) | ProductionKind::Starbase(_) => st.structures_built += 1,
+            ProductionKind::Tech(_) => {}
+        }
+        events.push(Event::ConstructionComplete { faction: owner, planet, kind: item.kind });
     }
 
     fn move_fleets(&mut self, dt: f32, events: &mut Vec<Event>) {

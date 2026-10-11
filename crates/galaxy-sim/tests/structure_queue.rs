@@ -137,3 +137,42 @@ fn selling_a_structure_refunds_a_third_and_frees_the_slot() {
     let rebel = w.faction_id("Rebel").unwrap();
     assert_eq!(sim.apply(Command::SellStructure { faction: rebel, planet: p, structure: palace }), Err(CommandError::NotOwner));
 }
+
+#[test]
+fn orbital_and_ground_structures_build_in_parallel() {
+    let Some(data) = load() else { return };
+    let campaign = data.campaign("GC_Full_Web_Way_Rebel").expect("campaign");
+    let mut sim = Sim::new(&data, campaign, SimConfig { victory_enabled: false, ..SimConfig::default() }).expect("sim");
+    let w = sim.world().clone();
+    let empire = w.faction_id("Empire").unwrap();
+    let p = w.planet_id("Coruscant_WW").unwrap();
+    sim.set_planet_owner(p, None);
+    sim.set_planet_owner(p, Some(empire));
+    sim.add_credits(empire, 1.0e9);
+    sim.set_tech_level(empire, 9);
+    let mut sb = w.first_starbase[empire as usize];
+    for _ in 1..3 {
+        sb = sb.and_then(|b| w.starbases[b as usize].next);
+    }
+    sim.set_starbase(p, sb);
+
+    // Queue 1 ground structure and 1 orbital structure
+    let ground_s = (0..w.structures.len() as u32).find(|&s| !w.structures[s as usize].orbital && w.check_build_structure(sim.galaxy(), empire, p, s).is_ok()).expect("orderable ground");
+    let orbital_s = (0..w.structures.len() as u32).find(|&s| w.structures[s as usize].orbital && w.check_build_structure(sim.galaxy(), empire, p, s).is_ok()).expect("orderable orbital");
+
+    sim.apply(Command::BuildStructure { faction: empire, planet: p, structure: ground_s }).unwrap();
+    sim.apply(Command::BuildStructure { faction: empire, planet: p, structure: orbital_s }).unwrap();
+
+    let q = &sim.galaxy().planets[p as usize].queues[Lane::Structures as usize];
+    assert_eq!(q.len(), 2);
+    let g_rem_before = q[0].remaining;
+    let o_rem_before = q[1].remaining;
+
+    // Step 5 seconds
+    sim.step(5.0);
+
+    let q = &sim.galaxy().planets[p as usize].queues[Lane::Structures as usize];
+    assert_eq!(q.len(), 2, "both structures still building");
+    assert!((q[0].remaining - (g_rem_before - 5.0)).abs() < 0.1, "ground progressed by 5s");
+    assert!((q[1].remaining - (o_rem_before - 5.0)).abs() < 0.1, "orbital progressed by 5s in parallel");
+}
