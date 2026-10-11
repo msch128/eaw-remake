@@ -334,48 +334,33 @@ fn view_dynamic(
 
 /// Computes the camera transform for the planet view transition at a given blend (0.0 = galaxy orbit, 1.0 = full overview).
 ///
-/// Phase 1 (0.0 .. 0.5): camera swoops from galaxy orbit down onto the planet globe, closing in so the 3D planet fills the screen.
-/// Phase 2 (0.5 .. 1.0): camera transitions from the planet close-up to the overview framing (platform & station).
+/// Moves in one continuous fluid motion: swoops from orbit down towards the planet and into the
+/// overview pose without stopping or hinging midway.
 pub(crate) fn camera_transition_pose(
     orbit_pos: Vec3,
     orbit_rot: Quat,
-    planet_pos: Vec3,
-    planet_radius: f32,
+    _planet_pos: Vec3,
+    _planet_radius: f32,
     blend: f32,
 ) -> Transform {
     let b = blend.clamp(0.0, 1.0);
     let overview_pose = Transform::from_translation(ORIGIN + Vec3::new(0.0, 0.0, -1.8))
         .looking_at(ORIGIN + Vec3::new(0.0, -1.95, -10.0), Vec3::Y);
 
-    let dir = (orbit_rot * Vec3::Z).normalize_or_zero();
-    let dir = if dir.length_squared() < 0.1 { Vec3::new(0.0, 0.707, 0.707) } else { dir };
+    let t = b * b * (3.0 - 2.0 * b);
+    let y_progress = (b - 0.2).max(0.0) / 0.8;
+    let y_t = y_progress * y_progress * (3.0 - 2.0 * y_progress);
 
-    // 1. Galaxy close-up: camera dives onto the planet sphere
-    let galaxy_close_dist = (planet_radius * 2.2).max(6.0);
-    let galaxy_close_pos = planet_pos + dir * galaxy_close_dist;
-    let galaxy_close_pose = Transform::from_translation(galaxy_close_pos).looking_at(planet_pos, Vec3::Y);
+    let target_translation = Vec3::new(
+        orbit_pos.x.lerp(overview_pose.translation.x, t),
+        orbit_pos.y.lerp(overview_pose.translation.y, y_t),
+        orbit_pos.z.lerp(overview_pose.translation.z, t),
+    );
 
-    // 2. Planet view scene close-up: matches the planet scale & viewing direction
-    let pv_planet_pos = ORIGIN + Vec3::new(-15.8, -1.0, -15.0);
-    let pv_close_pos = pv_planet_pos + dir * (24.0 * 2.2);
-    let pv_close_pose = Transform::from_translation(pv_close_pos).looking_at(pv_planet_pos, Vec3::Y);
-
-    if b < 0.5 {
-        let t = b / 0.5;
-        let t = t * t * (3.0 - 2.0 * t);
-        Transform {
-            translation: orbit_pos.lerp(galaxy_close_pose.translation, t),
-            rotation: orbit_rot.slerp(galaxy_close_pose.rotation, t),
-            scale: Vec3::ONE,
-        }
-    } else {
-        let t = (b - 0.5) / 0.5;
-        let t = t * t * (3.0 - 2.0 * t);
-        Transform {
-            translation: pv_close_pose.translation.lerp(overview_pose.translation, t),
-            rotation: pv_close_pose.rotation.slerp(overview_pose.rotation, t),
-            scale: Vec3::ONE,
-        }
+    Transform {
+        translation: target_translation,
+        rotation: orbit_rot.slerp(overview_pose.rotation, t),
+        scale: Vec3::ONE,
     }
 }
 

@@ -92,20 +92,33 @@ pub fn open_fs(args: &Args, log: &mut StartupLog) -> Result<(GameInstall, Arc<Ga
         None => GameInstall::detect(),
     }
     .ok_or("no Empire at War install found (use --game-dir <path> or set EAW_GAME_DIR)")?;
-    let mod_id = match args.mod_id.as_deref() {
-        Some(id) => id,
-        None => {
-            if install.mod_data("3229239424").is_dir() && install.mod_data("2794270450").is_dir() {
-                "fft"
-            } else {
-                DEFAULT_MOD_ID
+    let explicit_mod = args.mod_dir.clone().or_else(|| std::env::var_os("EAW_MOD_DIR").map(std::path::PathBuf::from));
+    let (mod_desc, fs) = if let Some(dir) = explicit_mod {
+        let mod_data = if dir.join("Data").is_dir() { dir.join("Data") } else { dir.clone() };
+        let fs = alamo_fs::GameFs::from_stacks(&[
+            vec![mod_data],
+            vec![install.foc_data.clone()],
+            vec![install.eaw_data.clone()],
+        ])
+        .map_err(|e| format!("cannot open mod files from {}: {e}", dir.display()))?;
+        (dir.display().to_string(), fs)
+    } else {
+        let mod_id = match args.mod_id.as_deref() {
+            Some(id) => id,
+            None => {
+                if install.mod_data("3229239424").is_dir() && install.mod_data("2794270450").is_dir() {
+                    "fft"
+                } else {
+                    DEFAULT_MOD_ID
+                }
             }
-        }
+        };
+        let fs = GameFs::for_mod(&install, Some(mod_id))
+            .map_err(|e| format!("cannot open game files: {e}"))?;
+        (format!("mod {mod_id}"), fs)
     };
-    let fs = GameFs::for_mod(&install, Some(mod_id))
-        .map_err(|e| format!("cannot open game files: {e}"))?;
     log.info(format!(
-        "game: install {} | mod {mod_id} | {} files | opened in {:.2?}",
+        "game: install {} | {mod_desc} | {} files | opened in {:.2?}",
         install.game_root.display(),
         fs.file_count(),
         started.elapsed()
@@ -185,6 +198,8 @@ pub fn campaign_entries(data: &GameData) -> Vec<CampaignEntry> {
         "rebel" | "rebels" => Some("Rebel"),
         "imperial" | "empire" => Some("Empire"),
         "underworld" => Some("Underworld"),
+        "republic" => Some("Republic"),
+        "cis" => Some("CIS"),
         _ => None,
     };
     let mut out = Vec::new();
@@ -217,7 +232,10 @@ pub fn campaign_entries(data: &GameData) -> Vec<CampaignEntry> {
     let rank = |f: &str| match f {
         "Rebel" => 0,
         "Empire" => 1,
-        _ => 2,
+        "Underworld" => 2,
+        "Republic" => 3,
+        "CIS" => 4,
+        _ => 5,
     };
     out.sort_by(|a, b| {
         (a.planets, a.group_title.split(' ').count(), &a.group, rank(&a.faction))
@@ -698,9 +716,9 @@ mod tests {
         }
         assert!(entries.iter().any(|e| e.name == DEFAULT_CAMPAIGN && e.faction == "Rebel"));
         assert!(entries.iter().all(|e| !e.name.to_ascii_lowercase().contains("obs")));
-        // Every group offers the Rebel, Empire and Underworld variants.
+        // Every group offers the Rebel, Empire, Underworld, Republic and CIS variants.
         let full: Vec<_> = entries.iter().filter(|e| e.group_title == "Full").map(|e| e.faction.as_str()).collect();
-        assert_eq!(full, ["Rebel", "Empire", "Underworld"]);
+        assert_eq!(full, ["Rebel", "Empire", "Underworld", "Republic", "CIS"]);
     }
 
     #[test]

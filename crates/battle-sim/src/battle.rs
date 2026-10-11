@@ -73,6 +73,8 @@ pub struct BattleConfig {
     pub retreat_allowed: Vec<bool>,
     /// Damage carried over from earlier battles: ships of the group start with this share of hull and shield.
     pub start_health: Vec<StartHealth>,
+    /// Stage carried squadron launches sequentially from hangar bay doors over time (defaults to true).
+    pub staged_hangar_launch: bool,
 }
 
 impl Default for BattleConfig {
@@ -103,6 +105,7 @@ impl Default for BattleConfig {
             side_mults: Vec::new(),
             retreat_allowed: Vec::new(),
             start_health: Vec::new(),
+            staged_hangar_launch: true,
         }
     }
 }

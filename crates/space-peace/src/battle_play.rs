@@ -22,6 +22,7 @@ use crate::camera::GalaxyCamera;
 use crate::cli::Args;
 use crate::flow::AppScreen;
 use crate::galaxy_map::Skybox;
+use crate::galaxy_view::GalaxyView;
 use crate::game::Game;
 use crate::offscreen::OffscreenTarget;
 use crate::play::ScriptHold;
@@ -375,6 +376,9 @@ fn finish_battle_view(
     player: Res<PlayerFaction>,
     campaign: Res<crate::flow::CurrentCampaign>,
     mut voice: MessageWriter<alamo_audio::plugin::GalaxyAudio>,
+    mut view: Option<ResMut<GalaxyView>>,
+    bridge: Option<Res<crate::play::PlayBridge>>,
+    mut anim: Option<ResMut<crate::galaxy_map::CaptureAnimations>>,
 ) {
     let mut music = music;
     for f in finished.read() {
@@ -449,6 +453,19 @@ fn finish_battle_view(
         commands.insert_resource(BattleSummary { title, text: format!("{}\nBattle time: {:.0} s", lines.join("\n"), f.result.duration), screen });
         let outcome = f.result.winner.map_or(BattleOutcome::Draw, BattleOutcome::Victory);
         actions.write(PlayAction::ApplyTactical { id: f.battle_id, result: Box::new(f.result.clone()) });
+        if let (Some(view), Some(bridge), Some(w)) = (view.as_mut(), bridge.as_ref(), f.result.winner) {
+            if let Some(winner_side) = pending.0.sides.get(w) {
+                let sim_planet = pending.0.planet;
+                if let Some(Some(view_idx)) = bridge.sim_to_planet.get(sim_planet as usize) {
+                    let new_owner_view = bridge.faction_to_view.get(winner_side.faction as usize).copied().flatten();
+                    view.planets[*view_idx].owner = new_owner_view;
+                    if let Some(anim) = anim.as_deref_mut() {
+                        anim.transitions.remove(view_idx);
+                        anim.last_owners.insert(*view_idx, new_owner_view);
+                    }
+                }
+            }
+        }
         done.write(BattleFinished { id: f.battle_id, outcome });
     }
 }

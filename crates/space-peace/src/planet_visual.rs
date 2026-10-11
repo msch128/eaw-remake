@@ -138,8 +138,11 @@ fn update_radii(
 ) {
     for (planet, model, tf) in &loaded {
         if let Some(r) = radii.0.get_mut(planet.0) {
-            *r = model.radius * tf.scale.x;
-            debug!("planet {}: model radius {:.1} x scale {:.2} = {:.1}", planet.0, model.radius, tf.scale.x, *r);
+            let model_r = model.radius * tf.scale.x;
+            // Planet models should have a physical node radius around 2.0 .. 5.0.
+            // Giant decorative meshes (like nebulae or cosmic clouds) must not inflate the planet's pick/territory radius.
+            *r = model_r.clamp(1.5, 5.0);
+            debug!("planet {}: model radius {:.1} x scale {:.2} = {:.1} (clamped: {:.1})", planet.0, model.radius, tf.scale.x, model_r, *r);
         }
     }
 }

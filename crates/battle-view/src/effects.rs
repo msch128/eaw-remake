@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use alamo_render::{
     AlamoModelLoaded, AlamoPart, AutoDespawn, ImpactKind, ProjectileImpact, ProjectileVisual, ShieldHit,
 };
-use battle_sim::{Event, HitKind, HpKind, ProjId};
+use battle_sim::{Event, HitKind, HpKind, ProjId, TargetClass};
 use bevy::gizmos::config::GizmoConfigStore;
 use bevy::prelude::*;
 
@@ -510,10 +510,7 @@ pub fn draw_engine_trails(
             for &idx in &engine_hps {
                 let is_alive = ship.hp_alive.get(idx).copied().unwrap_or(true);
                 let pos = ship.hp_pos.get(idx).and_then(|p| *p).unwrap_or_else(|| ship.pos - fwd * (ship.radius * 0.7));
-                if is_alive {
-                    let trail_len = (120.0 * speed_ratio).max(20.0);
-                    gizmos.line_gradient(pos, pos - fwd * trail_len, core_color, tail_color);
-                } else {
+                if !is_alive {
                     // Destroyed engine emits dark smoke billowing backward and upward
                     let smoke_start = Color::srgba(0.18, 0.18, 0.18, 0.85);
                     let smoke_end = Color::srgba(0.05, 0.05, 0.05, 0.0);
@@ -521,10 +518,10 @@ pub fn draw_engine_trails(
                     gizmos.line_gradient(pos, pos + smoke_dir * 50.0, smoke_start, smoke_end);
                 }
             }
-        } else if !def.is_static {
-            // Fighters / small ships without hardpoints: scaled cleanly to fighter size
+        } else if !def.is_static && (def.class == TargetClass::Fighter || def.class == TargetClass::Bomber) {
+            // Fighters / bombers without hardpoints: short engine trails
             let rear_center = ship.pos - fwd * (ship.radius * 0.65);
-            let trail_len = ((ship.radius * 1.5 + 8.0) * speed_ratio).min(25.0);
+            let trail_len = ((ship.radius * 1.5 + 8.0) * speed_ratio).min(20.0);
             let wing_span = (ship.radius * 0.25).max(1.0);
             let right = rot * Vec3::X;
             let left_eng = rear_center - right * wing_span;

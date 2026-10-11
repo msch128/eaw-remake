@@ -236,3 +236,23 @@ fn pirates_launch_raids_on_undefended_border_worlds() {
         assert_ne!(s.galaxy().planets[target as usize].owner, Some(pirates), "target must not be a pirate world");
     }
 }
+
+#[test]
+fn ground_up_supports_faction_override_for_republic() {
+    let Some(data) = load() else { return };
+    let campaign = data.campaign("GC_Full_Web_Way_Rebel").unwrap();
+    let sim = Sim::new(
+        &data,
+        campaign,
+        SimConfig {
+            victory_enabled: false,
+            ground_up: true,
+            faction_override: Some("Republic".into()),
+            ..SimConfig::default()
+        },
+    )
+    .expect("sim with Republic override");
+    let rep = sim.world().faction_id("Republic").expect("Republic faction");
+    assert_eq!(sim.world().victory.active_player, Some(rep), "Republic is the active human player");
+    assert_eq!(sim.galaxy().owned_planets(rep).count(), 1, "Republic starts with 1 planet in From the Ground Up");
+}

@@ -97,6 +97,9 @@ pub struct SimConfig {
     /// Weeks between neutral pirate raid attempts (default: 4 weeks).
     #[serde(default = "default_pirate_raid_interval")]
     pub pirate_raid_interval: u32,
+    /// Override the human player faction (e.g. for playing any faction in From the Ground Up).
+    #[serde(default)]
+    pub faction_override: Option<String>,
 }
 
 fn default_pirate_raids() -> bool {
@@ -155,6 +158,7 @@ impl Default for SimConfig {
             superweapon_cooldown_seconds: 120.0,
             pirate_raids: true,
             pirate_raid_interval: 4,
+            faction_override: None,
         }
     }
 }

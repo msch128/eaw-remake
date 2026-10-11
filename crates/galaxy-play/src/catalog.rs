@@ -1,4 +1,4 @@
-﻿//! Display data for the simulation's catalogs: localized names and the galactic map models.
+//! Display data for the simulation's catalogs: localized names and the galactic map models.
 
 use alamo_data::GameData;
 use bevy::prelude::Resource;
@@ -83,11 +83,27 @@ impl PlayCatalog {
             let r = data.objects.resolve(&u.name);
             let get = |tag: &str| r.as_ref().and_then(|r| r.string(tag)).filter(|m| !m.is_empty() && !m.to_ascii_lowercase().contains("invisible"));
             unit_models.push(get("galactic_fleet_override_model_name"));
-            unit_space_models.push(get("space_model_name"));
+            let space_model = get("space_model_name")
+                .or_else(|| get("galactic_model_name"))
+                .or_else(|| {
+                    r.as_ref().and_then(|mr| {
+                        let members = mr.list("squadron_units");
+                        members.into_iter().find_map(|m| {
+                            data.objects.resolve(&m)
+                                .and_then(|sm| sm.string("space_model_name").or_else(|| sm.string("galactic_model_name")))
+                                .filter(|m| !m.is_empty() && !m.to_ascii_lowercase().contains("invisible"))
+                        })
+                    })
+                });
+            unit_space_models.push(space_model);
             unit_icons.push(r.as_ref().and_then(|r| r.string("icon_name")).filter(|n| !n.trim().is_empty()));
             unit_land_models.push(r.as_ref().and_then(|r| r.string("land_model_name")).filter(|n| !n.trim().is_empty()));
         }
-        let generic_fleet_model = data.objects.resolve("Galactic_Fleet").and_then(|r| r.string("galactic_model_name")).filter(|m| !m.is_empty());
+        let generic_fleet_model = data
+            .objects
+            .resolve("Galactic_Fleet")
+            .and_then(|r| r.string("galactic_model_name"))
+            .filter(|m| !m.is_empty() && !m.eq_ignore_ascii_case("w_planet_fleet.alo"));
         Self {
             units,
             unit_models,

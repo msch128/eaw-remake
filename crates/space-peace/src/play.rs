@@ -104,7 +104,12 @@ fn begin_play(
     let config = PlayConfig {
         pick_planets: false,
         tactical_hook: true,
-        sim: galaxy_sim::SimConfig { debug_commands: args.grant_unit.is_some(), ground_up: options.ground_up || args.ground_up, ..default() },
+        sim: galaxy_sim::SimConfig {
+            debug_commands: args.grant_unit.is_some(),
+            ground_up: options.ground_up || args.ground_up,
+            faction_override: options.faction_override.clone(),
+            ..default()
+        },
         // Scripted scenarios start paused and drive time themselves.
         initial_speed_level: if args.weeks.is_some() { 0 } else { 1 },
         difficulty: Some(options.difficulty),

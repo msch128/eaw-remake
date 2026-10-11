@@ -75,7 +75,9 @@ impl BattleCamera {
         let zoom_t = ((self.distance - self.min_distance) / (self.max_distance - self.min_distance))
             .clamp(0.0, 1.0);
         // Zooming in tilts the view flatter, like the original game.
-        let pitch_adj = if self.pitch >= 0.0 { (1.0 - zoom_t) * 0.18 } else { -(1.0 - zoom_t) * 0.18 };
+        // Smoothly fade out the pitch adjustment near horizontal (pitch 0) to avoid any discontinuity / hitch.
+        let pitch_factor = (self.pitch / 1.0).clamp(-1.0, 1.0);
+        let pitch_adj = (1.0 - zoom_t) * 0.18 * pitch_factor;
         let pitch = (self.pitch - pitch_adj).clamp(-1.50, 1.50);
         let rot = Quat::from_rotation_y(self.yaw) * Quat::from_rotation_x(-pitch);
         (self.focus + rot * Vec3::Z * self.distance, rot)
@@ -334,7 +336,8 @@ pub fn apply_camera(
         let zoom_k = 1.0 - (-ZOOM_SMOOTH * dt).exp();
         let pan_k = 1.0 - (-PAN_SMOOTH * dt).exp();
         cam.distance += (cam.target_distance - cam.distance) * zoom_k;
-        cam.yaw += (cam.target_yaw - cam.yaw) * pan_k;
+        let yaw_diff = (cam.target_yaw - cam.yaw + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
+        cam.yaw += yaw_diff * pan_k;
         let delta = cam.target_focus - cam.focus;
         cam.focus += delta * pan_k;
     }

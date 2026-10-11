@@ -77,6 +77,8 @@ pub struct ShipRender {
     pub shield: f32,
     /// Squadron index of a fighter (`u32::MAX` for other ships).
     pub squad: u32,
+    /// Setup group index.
+    pub group: u32,
     /// The player's side sees this ship (false for enemies in the fog of war).
     pub visible: bool,
     /// Current order (sim space).
@@ -371,7 +373,11 @@ pub fn update_ships(
             };
             // Low-pass filter angular velocity over time to avoid snap transitions
             let yaw_filter = 1.0 - (-8.0 * dt_frame).exp();
-            view.smooth_yaw_rate += (snap_yaw_rate - view.smooth_yaw_rate) * yaw_filter;
+            if settings.paused || rt.speed == 0.0 {
+                view.smooth_yaw_rate = 0.0;
+            } else {
+                view.smooth_yaw_rate += (snap_yaw_rate - view.smooth_yaw_rate) * yaw_filter;
+            }
             view.last_yaw = yaw;
 
             if view.shown != visible {
@@ -379,17 +385,19 @@ pub fn update_ships(
                 commands.entity(entity).insert(if visible { Visibility::Inherited } else { Visibility::Hidden });
             }
 
-            // Natural, weighted banking into turns
-            let max_bank = if vis.bank_turn_angle > 0.0 {
-                vis.bank_turn_angle
-            } else {
-                match def.class {
-                    TargetClass::Super | TargetClass::Structure => 0.0,
-                    TargetClass::Capital => 0.06, // ~3.5 degrees - stately, majestic, heavy
-                    TargetClass::Frigate => 0.12, // ~7 degrees
-                    TargetClass::Corvette => 0.20, // ~11 degrees
-                    TargetClass::Transport | TargetClass::Other => 0.08,
-                    TargetClass::Fighter | TargetClass::Bomber => 0.45, // ~26 degrees
+            // Natural, weighted banking into turns.
+            // Capital ships, frigates, structures and super weapons do NOT bank like atmospheric planes.
+            // In EaW only fighters and bombers bank into turns (and corvettes very slightly).
+            let max_bank = match def.class {
+                TargetClass::Super | TargetClass::Structure | TargetClass::Capital | TargetClass::Frigate => 0.0,
+                TargetClass::Corvette => 0.04, // ~2 degrees
+                TargetClass::Transport | TargetClass::Other => 0.02,
+                TargetClass::Fighter | TargetClass::Bomber => {
+                    if vis.bank_turn_angle > 0.0 {
+                        vis.bank_turn_angle.min(0.55) // max ~31 degrees
+                    } else {
+                        0.45 // ~26 degrees
+                    }
                 }
             };
             let turn_fraction = if def.turn_rate > 1e-3 {
@@ -397,11 +405,9 @@ pub fn update_ships(
             } else {
                 0.0
             };
-            let want = turn_fraction * max_bank;
+            let want = if settings.paused || rt.speed == 0.0 { 0.0 } else { turn_fraction * max_bank };
             let roll_speed = match def.class {
-                TargetClass::Super | TargetClass::Structure => 1.0,
-                TargetClass::Capital => 1.8,
-                TargetClass::Frigate => 2.4,
+                TargetClass::Super | TargetClass::Structure | TargetClass::Capital | TargetClass::Frigate => 5.0,
                 TargetClass::Corvette => 3.2,
                 TargetClass::Transport | TargetClass::Other => 2.0,
                 TargetClass::Fighter | TargetClass::Bomber => 5.5,
@@ -448,6 +454,7 @@ pub fn update_ships(
                 hull: hull_frac,
                 shield: shield_frac,
                 squad: s.squad,
+                group: s.group,
                 visible,
                 order: s.order,
                 path: if s.squad == u32::MAX { s.path.iter().map(|p| sim_to_bevy(*p)).collect() } else { Vec::new() },

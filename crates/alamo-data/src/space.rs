@@ -459,7 +459,7 @@ impl SpaceUnitDef {
 
     /// True for fighter/bomber squadrons (`Squadron` objects).
     pub fn is_squadron(&self) -> bool {
-        self.kind.eq_ignore_ascii_case("squadron")
+        self.kind.eq_ignore_ascii_case("squadron") || !self.squadron_units.is_empty()
     }
 
     /// Sum of absolute income modifiers (negative = upkeep).

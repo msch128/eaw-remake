@@ -45,6 +45,8 @@ pub struct ShipSnap {
     pub shield: f32,
     /// Squadron index for fighters, `u32::MAX` otherwise.
     pub squad: u32,
+    /// Setup group index.
+    pub group: u32,
     /// Bit s set = side s sees this ship (fog of war; everything is seen without it).
     pub seen_by: u8,
     /// Current order (destination of the move line).
@@ -138,6 +140,7 @@ fn snapshot(battle: &Battle, events: Vec<Event>, step_ms: f32) -> Snapshot {
                 hull: s.hull,
                 shield: s.shield,
                 squad: s.squad,
+                group: s.group,
                 order: s.order,
                 path: s.path.clone(),
                 seen_by: (0..battle.side_count().min(8)).filter(|&side| battle.is_visible_to(side as u8, s.id)).fold(0u8, |m, side| m | (1 << side)),

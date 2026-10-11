@@ -387,6 +387,13 @@ impl Battle {
                             self.ships[id as usize].order = order;
                         }
                     }
+                } else if def.class == TargetClass::Fighter || def.class == TargetClass::Bomber {
+                    let squad = self.squads.len() as u32;
+                    self.squads.push(Vec::new());
+                    let id = self.spawn_ship(sid, side, pos, yaw, group, squad, Vec3::ZERO);
+                    self.squads[squad as usize].push(id);
+                    self.groups[group as usize].members.push(id);
+                    self.ships[id as usize].order = order;
                 } else {
                     let id = self.spawn_ship(sid, side, pos, yaw, group, NONE, Vec3::ZERO);
                     self.ships[id as usize].lane = local.y.clamp(-1500.0, 1500.0);
@@ -481,21 +488,36 @@ impl Battle {
         pick.map_or((Vec::new(), Vec::new()), |t| (t.1.clone(), t.2.clone()))
     }
 
-    /// Launches the squadrons carried by ships and stations at the start of the battle.
+    /// Launches the squadrons carried by ships and stations. When staged_hangar_launch is true,
+    /// the first squadron launches immediately and subsequent squadrons launch sequentially from the hangar bay.
     fn launch_initial(&mut self) {
         let carriers: Vec<u32> = self.ships.iter().filter(|s| !self.spawned_for(self.catalog.ship(s.def), s.side).0.is_empty()).map(|s| s.id).collect();
         for c in carriers {
-            let carried = self.spawned_for(self.catalog.ship(self.ships[c as usize].def), self.ships[c as usize].side).0;
+            let def = self.catalog.ship(self.ships[c as usize].def);
+            let carried = self.spawned_for(def, self.ships[c as usize].side).0;
+            let delay = def.spawn_delay.max(0.5);
+            let mut first = true;
+            let mut launch_delay = delay;
             for (sq_def, count) in carried {
                 for _ in 0..count {
-                    let members = self.launch_squadron(c, sq_def);
-                    self.ships[c as usize].slots.push(SquadSlot { def: sq_def, members, respawn_in: -1.0 });
+                    if !self.config.staged_hangar_launch || first {
+                        let members = self.launch_squadron(c, sq_def);
+                        self.ships[c as usize].slots.push(SquadSlot { def: sq_def, members, respawn_in: -1.0 });
+                        first = false;
+                    } else {
+                        self.ships[c as usize].slots.push(SquadSlot {
+                            def: sq_def,
+                            members: Vec::new(),
+                            respawn_in: launch_delay,
+                        });
+                        launch_delay += delay;
+                    }
                 }
             }
         }
     }
 
-    /// Spawns the fighters of squadron definition `sq_def` next to `carrier`.
+    /// Spawns the fighters of squadron definition `sq_def` emerging from the hangar bay of `carrier`.
     fn launch_squadron(&mut self, carrier: u32, sq_def: ShipId) -> Vec<u32> {
         let cat = self.catalog.clone();
         let c = &self.ships[carrier as usize];
@@ -509,9 +531,9 @@ impl Battle {
             .find(|(i, _)| c.hps.get(*i).is_none_or(|s| s.alive))
             .or_else(|| cdef.hardpoints.iter().enumerate().find(|(_, h)| h.kind == HpKind::FighterBay))
             .map_or(Vec3::ZERO, |(_, h)| h.offset);
-        let spread = cdef.radius * 0.8;
         let mut rng = Rng::for_entity(self.config.seed, self.tick, carrier, 0x1A0C + self.ships.len() as u64);
-        let base = cpos + (bay + rng.in_ball() * spread).rotate_yaw(cyaw);
+        // Emerge tightly from the hangar bay opening (not scattered across a kilometer ball around the ship)
+        let base = cpos + (bay + rng.in_ball() * 25.0).rotate_yaw(cyaw);
         let sq = cat.ship(sq_def);
         let squad = self.squads.len() as u32;
         self.squads.push(Vec::new());
@@ -1932,6 +1954,17 @@ impl Battle {
                 bays.is_empty() || bays.iter().any(|&i| s.hps[i].alive)
             };
             for k in 0..self.ships[c].slots.len() {
+                // Initial staged launch from hangar:
+                if self.ships[c].slots[k].members.is_empty() {
+                    self.ships[c].slots[k].respawn_in -= dt;
+                    if self.ships[c].slots[k].respawn_in <= 0.0 && bay_ok {
+                        let sq = self.ships[c].slots[k].def;
+                        let members = self.launch_squadron(c as u32, sq);
+                        self.ships[c].slots[k].members = members;
+                        self.ships[c].slots[k].respawn_in = -1.0;
+                    }
+                    continue;
+                }
                 let dead = self.ships[c].slots[k].members.iter().all(|&m| !self.ships[m as usize].alive);
                 if !dead {
                     self.ships[c].slots[k].respawn_in = -1.0;

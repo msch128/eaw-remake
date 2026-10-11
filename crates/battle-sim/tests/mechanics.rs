@@ -875,7 +875,7 @@ fn carriers_launch_what_their_owners_tech_level_allows() {
     let dummy = ship("dummy", 1.0e6, 0.0, vec![]);
     let launched = |tech: Option<u8>| {
         let cat = Catalog::from_defs(vec![fighter.clone(), squad.clone(), carrier.clone(), dummy.clone()], vec![laser()]);
-        let config = BattleConfig { side_tech: tech.map(|t| vec![t, 0]).unwrap_or_default(), ..cfg() };
+        let config = BattleConfig { staged_hangar_launch: false, side_tech: tech.map(|t| vec![t, 0]).unwrap_or_default(), ..cfg() };
         let b = Battle::new(setup(cat, "carrier", "dummy", 1, 1, config));
         let c = b.ships.iter().find(|s| s.side == 0).unwrap();
         (b.ships.iter().filter(|s| s.def == 0).count() / 2, c.reserve.iter().map(|r| r.1).sum::<u32>())
@@ -884,6 +884,29 @@ fn carriers_launch_what_their_owners_tech_level_allows() {
     assert_eq!(launched(Some(1)), (1, 1), "the highest level at or below the owner's");
     assert_eq!(launched(Some(2)), (3, 2));
     assert_eq!(launched(Some(4)), (3, 2));
+}
+
+#[test]
+fn squadrons_launch_sequentially_from_hangar_over_time() {
+    let (fighter, squad) = hangar_defs();
+    let mut carrier = ship("carrier", 1.0e6, 0.0, vec![bay(0.0)]);
+    carrier.carried = vec![(1, 3)];
+    carrier.spawn_delay = 1.0;
+    let dummy = ship("dummy", 1.0e6, 0.0, vec![]);
+    let cat = Catalog::from_defs(vec![fighter, squad, carrier, dummy], vec![laser()]);
+    let mut b = Battle::new(setup(cat, "carrier", "dummy", 1, 1, cfg()));
+    // Initially at t=0, only the first squadron (2 fighters) is launched; the other 2 are staged in hangar
+    assert_eq!(b.ships.iter().filter(|s| s.def == 0).count() / 2, 1, "first squadron launched at start");
+    // After 1 second (30 steps), the second squadron launches from the hangar
+    for _ in 0..35 {
+        b.step();
+    }
+    assert_eq!(b.ships.iter().filter(|s| s.def == 0).count() / 2, 2, "second squadron launched after delay");
+    // After another second, the third squadron launches
+    for _ in 0..35 {
+        b.step();
+    }
+    assert_eq!(b.ships.iter().filter(|s| s.def == 0).count() / 2, 3, "third squadron launched after delay");
 }
 
 #[test]

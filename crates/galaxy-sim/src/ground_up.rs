@@ -65,7 +65,12 @@ impl Sim {
     pub(crate) fn apply_ground_up(&mut self, human: Option<FactionId>) {
         let world = self.world.clone();
         let Some(passive) = world.passive_faction() else { return };
-        let main: Vec<FactionId> = MAIN_FACTIONS.iter().filter_map(|n| world.faction_id(n)).collect();
+        let mut main: Vec<FactionId> = MAIN_FACTIONS.iter().filter_map(|n| world.faction_id(n)).collect();
+        if let Some(h) = human {
+            if !main.contains(&h) {
+                main.push(h);
+            }
+        }
         for &f in &main {
             let mut owned: Vec<PlanetId> = self.galaxy.owned_planets(f).collect();
             if owned.is_empty() {

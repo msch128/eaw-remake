@@ -243,7 +243,8 @@ fn project_ships(
     scale: f32,
 ) -> Vec<Projected> {
     let right = gt.right();
-    let mut out = Vec::with_capacity(ships.0.len());
+    let mut out = Vec::with_capacity(ships.0.len() + 16);
+    let mut squads: std::collections::HashMap<(u8, u32), (Vec2, usize, u32)> = std::collections::HashMap::new();
     for (&id, s) in ships.0.iter().filter(|(_, s)| s.visible) {
         let Ok(c) = camera.world_to_viewport(gt, s.pos) else {
             continue;
@@ -256,6 +257,21 @@ fn project_ships(
             screen: c,
             radius_px: edge.max(9.0 * scale),
         });
+        if s.squad != u32::MAX {
+            let entry = squads.entry((s.side, s.squad)).or_insert((Vec2::ZERO, 0, id));
+            entry.0 += c;
+            entry.1 += 1;
+        }
+    }
+    // Squadron icon badges: generous pick area so clicking the floating icon badge targets the squadron
+    for (_, (sum_c, count, lead_id)) in squads {
+        if count > 0 {
+            out.push(Projected {
+                id: lead_id,
+                screen: sum_c / (count as f32),
+                radius_px: 18.0 * scale,
+            });
+        }
     }
     out
 }

@@ -15,7 +15,7 @@ use crate::menu::{MenuAction, MenuColumn, MenuItem, MenuSpec, spawn_menu};
 pub const SLOTS: u8 = 5;
 
 /// Settings of the next new game.
-#[derive(Resource, Debug, Clone, Copy, PartialEq)]
+#[derive(Resource, Debug, Clone, PartialEq)]
 pub struct NewGameOptions {
     /// Difficulty of the Remake AI (Easy/Normal/Hard come from the mod, Brutal and Fair are custom).
     pub difficulty: DifficultyTier,
@@ -23,11 +23,13 @@ pub struct NewGameOptions {
     pub classic_ai: bool,
     /// "From the Ground Up" start of the next game.
     pub ground_up: bool,
+    /// Override faction for the next game (e.g. From the Ground Up or submods).
+    pub faction_override: Option<String>,
 }
 
 impl Default for NewGameOptions {
     fn default() -> Self {
-        Self { difficulty: DifficultyTier::Normal, classic_ai: false, ground_up: false }
+        Self { difficulty: DifficultyTier::Normal, classic_ai: false, ground_up: false, faction_override: None }
     }
 }
 
@@ -52,7 +54,7 @@ impl NewGameOptions {
             Some("fair") => DifficultyTier::Fair,
             _ => DifficultyTier::Normal,
         };
-        Self { difficulty, classic_ai: args.classic_ai, ground_up: args.ground_up }
+        Self { difficulty, classic_ai: args.classic_ai, ground_up: args.ground_up, faction_override: None }
     }
 }
 

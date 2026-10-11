@@ -560,7 +560,9 @@ impl World {
         };
         let has = |list: &[String], what: &str| list.iter().any(|c| c.eq_ignore_ascii_case(what));
         let v = VictoryRules {
-            active_player: campaign.starting_active_player.as_ref().and_then(|p| self.faction_index.get(&key(p)).copied()),
+            active_player: self.config.faction_override.as_deref()
+                .or(campaign.starting_active_player.as_deref())
+                .and_then(|p| self.faction_index.get(&key(p)).copied()),
             human_named_planets: if has(&campaign.human_victory_conditions, "Galactic_Control_Named_Planets") {
                 lookup(&campaign.human_victory_planets, self)
             } else {

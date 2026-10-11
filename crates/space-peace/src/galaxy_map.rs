@@ -520,7 +520,7 @@ fn spawn_galaxy(
     let scale = *scale;
 
     let assets = PlanetVisualAssets::new(&mut meshes, &mut materials);
-    let pip_images = [images.add(pip_image(false)), images.add(pip_image(true))];
+    let pip_images = [images.add(pip_image(true)), images.add(pip_image(false))];
     let use_models = alamo.is_some();
     // Radius estimates; models replace them with their real radius once loaded.
     let radii: Vec<f32> = view.planets.iter().map(|p| planet_radius(&scale, p.size)).collect();
@@ -535,8 +535,9 @@ fn spawn_galaxy(
         let owner = relation_color(&view, planet.owner);
         // The game prints the name in capitals in the full, saturated faction colour.
         let label_c = if planet.owner.is_some() { owner } else { [0.62, 0.62, 0.62] };
-        for (row, count) in [planet.land_slots, planet.max_space_base].into_iter().enumerate() {
-            let count = count.clamp(0, 8) as usize;
+        // Row 0 = orbital space station tiers (up to max tier of this planet); Row 1 = planetary ground slots.
+        for (row, count) in [planet.max_space_base.clamp(0, 5), planet.land_slots.clamp(0, 8)].into_iter().enumerate() {
+            let count = count as usize;
             if count == 0 {
                 continue;
             }
@@ -548,11 +549,11 @@ fn spawn_galaxy(
                     GalaxyEntity,
                 ))
                 .with_children(|p| {
-                    for _ in 0..count {
+                    for slot_idx in 0..count {
                         p.spawn((
                             ImageNode::new(pip_images[row].clone()).with_color(rgb(label_c).with_alpha(0.9)),
                             Node { width: Val::Px(8.0), height: Val::Px(8.0), ..default() },
-                            PipIcon { space: row == 1, planet: i },
+                            PipIcon { space: row == 0, planet: i, slot: slot_idx },
                         ));
                     }
                 });
@@ -1398,18 +1399,36 @@ fn update_hover(
     };
     let cam_pos = cam_tf.translation();
 
-    let mut best: Option<(usize, f32)> = None;
+    let mut best: Option<(usize, f32, f32)> = None; // (index, normalized_perp, dist_along)
     for (i, p) in view.planets.iter().enumerate() {
         let center = galaxy_to_world(p.position);
+        let oc = center - ray.origin;
+        let dist_along = oc.dot(*ray.direction);
+        if dist_along <= 0.0 {
+            continue;
+        }
+        let perp_sq = oc.length_squared() - dist_along * dist_along;
+        let d_perp = if perp_sq > 0.0 { perp_sq.sqrt() } else { 0.0 };
         // Generous pick radius that never gets smaller than a few pixels on screen.
-        let r = (radii.0[i] * 1.5).max(center.distance(cam_pos) * 0.012);
-        if let Some(t) = ray_sphere(ray.origin, *ray.direction, center, r)
-            && best.is_none_or(|(_, bt)| t < bt)
-        {
-            best = Some((i, t));
+        let r = (radii.0[i] * 1.35).max(center.distance(cam_pos) * 0.015);
+        if d_perp <= r {
+            let norm_perp = d_perp / r;
+            let is_better = match best {
+                None => true,
+                Some((_, best_norm, best_dist)) => {
+                    if (norm_perp - best_norm).abs() > 0.15 {
+                        norm_perp < best_norm
+                    } else {
+                        dist_along < best_dist
+                    }
+                }
+            };
+            if is_better {
+                best = Some((i, norm_perp, dist_along));
+            }
         }
     }
-    let new = best.map(|(i, _)| i);
+    let new = best.map(|(i, _, _)| i);
     if hover.0 != new {
         hover.0 = new;
         if new.is_some() {
@@ -1476,6 +1495,7 @@ fn pick_planet(
 }
 
 /// Distance along the ray to the first intersection with the sphere, if any.
+#[allow(dead_code)]
 fn ray_sphere(origin: Vec3, dir: Vec3, center: Vec3, radius: f32) -> Option<f32> {
     let oc = origin - center;
     let b = oc.dot(dir);
@@ -1608,9 +1628,9 @@ struct PipRow {
 /// One pip of a [`PipRow`].
 #[derive(Component)]
 struct PipIcon {
-    #[allow(dead_code)]
     space: bool,
     planet: usize,
+    slot: usize,
 }
 
 /// sRGB colour a planet owner is drawn in on the map. Like the game the player's own planets are green; the other
@@ -1672,7 +1692,7 @@ fn territory_segments(view: &GalaxyView, radii: &PlanetRadii, selected: Option<u
     let Some(i) = selected.filter(|&i| i < view.planets.len()) else { return Vec::new() };
     let p = &view.planets[i];
     let c = galaxy_to_world(p.position);
-    let r = radii.0[i] * TERRITORY_RADIUS;
+    let r = (radii.0[i] * TERRITORY_RADIUS).clamp(30.0, 85.0);
     let own = p.owner.is_some();
     let l = rgb(if own { relation_color(view, p.owner) } else { [0.1, 0.75, 1.0] }).to_linear();
     let color = Color::LinearRgba(LinearRgba::new(l.red, l.green, l.blue, 0.9));
@@ -1688,8 +1708,8 @@ const TERRITORY_RADIUS: f32 = 20.0;
 #[derive(Default, Reflect, GizmoConfigGroup)]
 struct TerritoryGizmos;
 
-/// Small white silhouettes for the slot pips under a planet name: a trooper (ground slots) and a turret tower
-/// (space slots), 16x16, tinted with the label colour.
+/// Small white silhouettes for the slot pips under a planet name: an orbital starbase (space slots)
+/// and a planetary bunker / garrison (ground slots), 16x16.
 pub(crate) fn pip_image(space: bool) -> Image {
     use bevy::asset::RenderAssetUsages;
     use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
@@ -1697,16 +1717,18 @@ pub(crate) fn pip_image(space: bool) -> Image {
     let inside = |x: i32, y: i32| -> bool {
         let (fx, fy) = (x as f32 + 0.5, y as f32 + 0.5);
         if space {
-            // Stepped tower: wide base, narrower body, small cap with a barrel.
-            ((11.0..15.0).contains(&fy) && (fx - 8.0).abs() <= 6.5)
-                || ((6.5..11.0).contains(&fy) && (fx - 8.0).abs() <= 4.0)
-                || ((3.0..6.5).contains(&fy) && (fx - 8.0).abs() <= 2.5)
-                || ((1.0..3.0).contains(&fy) && (fx - 10.5).abs() <= 1.2)
+            // Authentic EaW space station icon: communication mast, cupola dome, wide primary saucer, docking stalk
+            ((1.0..3.5).contains(&fy) && (fx - 8.0).abs() <= 1.0)
+                || ((3.5..6.0).contains(&fy) && (fx - 8.0).abs() <= 3.5)
+                || ((6.0..9.5).contains(&fy) && (fx - 8.0).abs() <= 6.5)
+                || ((9.5..13.5).contains(&fy) && (fx - 8.0).abs() <= 2.5)
+                || ((13.5..15.5).contains(&fy) && (fx - 8.0).abs() <= 1.2)
         } else {
-            // Trooper: round helmet, shoulders and torso, two legs.
-            ((fx - 8.0).powi(2) + (fy - 4.0).powi(2) <= 9.0)
-                || ((7.5..12.0).contains(&fy) && (fx - 8.0).abs() <= 5.5 - (fy - 7.5) * 0.35)
-                || ((12.0..15.5).contains(&fy) && ((fx - 5.8).abs() <= 1.5 || (fx - 10.2).abs() <= 1.5))
+            // Authentic EaW ground base bunker: rooftop antenna, fortified roof, central bunker walls, foundation base
+            ((1.0..3.5).contains(&fy) && (fx - 8.0).abs() <= 1.0)
+                || ((3.5..6.5).contains(&fy) && (fx - 8.0).abs() <= 5.5 - (6.5 - fy) * 0.7)
+                || ((6.5..12.5).contains(&fy) && (fx - 8.0).abs() <= 5.5 && !((8.5..10.5).contains(&fy) && (fx - 8.0).abs() >= 1.2 && (fx - 8.0).abs() <= 3.5))
+                || ((12.5..15.5).contains(&fy) && (fx - 8.0).abs() <= 6.5)
         }
     };
     let mut px = Vec::with_capacity((N * N * 4) as usize);
@@ -1812,12 +1834,46 @@ fn fade_nebula_plane(
     }
 }
 
-/// Slot pips follow the owner colour of their planet (a captured planet changes it).
-fn update_pip_colors(view: Res<GalaxyView>, mut pips: Query<(&PipIcon, &mut ImageNode)>) {
+/// Slot pips follow the built status and owner colour of their planet.
+/// Active built tiers/structures are brightly colored; empty unbuilt tiers/slots are dimmed/greyed out.
+fn update_pip_colors(
+    view: Res<GalaxyView>,
+    sim: Option<Res<galaxy_play::SimState>>,
+    bridge: Option<Res<crate::play::PlayBridge>>,
+    mut pips: Query<(&PipIcon, &mut ImageNode)>,
+) {
     for (pip, mut img) in &mut pips {
-        let owner = view.planets.get(pip.planet).and_then(|p| p.owner);
+        let planet_view = view.planets.get(pip.planet);
+        let owner = planet_view.and_then(|p| p.owner);
         let c = if owner.is_some() { relation_color(&view, owner) } else { [0.62, 0.62, 0.62] };
-        let want = rgb(c).with_alpha(0.9);
+        let active_color = Color::srgba(c[0].max(0.65), c[1].max(0.65), c[2].max(0.65), 0.95);
+        let dimmed_color = Color::srgba(0.22, 0.24, 0.28, 0.45);
+
+        let is_active = if let (Some(sim), Some(bridge)) = (sim.as_ref(), bridge.as_ref()) {
+            if let Some(Some(sim_p)) = bridge.planet_to_sim.get(pip.planet) {
+                if let Some(ps) = sim.galaxy().planets.get(*sim_p as usize) {
+                    if pip.space {
+                        let level = ps.starbase.map_or(0, |sb| sim.world.starbases.get(sb as usize).map_or(0, |b| b.level as usize));
+                        pip.slot < level
+                    } else {
+                        pip.slot < ps.structures.len()
+                    }
+                } else {
+                    false
+                }
+            } else {
+                false
+            }
+        } else {
+            // Outside of active campaign:
+            if pip.space {
+                owner.is_some() && pip.slot == 0
+            } else {
+                false
+            }
+        };
+
+        let want = if is_active { active_color } else { dimmed_color };
         if img.color != want {
             img.color = want;
         }
@@ -1846,7 +1902,7 @@ fn place_sector_fill(
     match enemy {
         Some(i) => {
             tf.translation = galaxy_to_world(view.planets[i].position) - Vec3::Y * 0.5;
-            tf.scale = Vec3::splat(radii.0[i] * TERRITORY_RADIUS);
+            tf.scale = Vec3::splat((radii.0[i] * TERRITORY_RADIUS).clamp(30.0, 85.0));
             vis.set_if_neq(Visibility::Inherited);
         }
         None => {

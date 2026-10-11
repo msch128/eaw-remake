@@ -685,7 +685,7 @@ pub(crate) fn ship_overlays(
                 .enumerate()
             {
                 brackets[i] = commands
-                    .spawn((corner(r, b), BorderColor::all(accent), FocusPolicy::Pass, ChildOf(id)))
+                    .spawn((corner(r, b), BorderColor::all(Color::NONE), FocusPolicy::Pass, ChildOf(id)))
                     .id();
             }
             let icon = commands
@@ -800,7 +800,7 @@ pub(crate) fn ship_overlays(
                 t.0 = name;
             }
         }
-        let brackets = if !icon_mode && (o.selected || o.hovered) { accent } else { Color::NONE };
+        let brackets = if !icon_mode && (o.selected || o.hovered) && o.half_size >= 16.0 { accent } else { Color::NONE };
         for b in parts.brackets {
             if let Ok((_, _, Some(mut bc), _)) = styles.get_mut(b) {
                 *bc = BorderColor::all(brackets);

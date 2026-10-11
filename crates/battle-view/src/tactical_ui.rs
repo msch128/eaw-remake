@@ -948,15 +948,24 @@ fn sync_overlays(
     // One overlay per unit: a squadron is one unit, so its fighters share a single bracket and bar pair.
     let mut groups: BTreeMap<u64, Vec<u32>> = BTreeMap::new();
     for (&id, s) in ships.0.iter().filter(|(_, s)| s.visible) {
-        let key = if s.squad == u32::MAX { u64::from(id) } else { (1 << 40) | (u64::from(s.side) << 32) | u64::from(s.squad) };
+        let def = rt.catalog.ship(s.def);
+        let key = if s.squad != u32::MAX {
+            (1 << 40) | (u64::from(s.side) << 32) | u64::from(s.squad)
+        } else if matches!(def.class, battle_sim::TargetClass::Fighter | battle_sim::TargetClass::Bomber) {
+            (2 << 40) | (u64::from(s.side) << 32) | (u64::from(s.group) << 16) | u64::from(s.def)
+        } else {
+            u64::from(id)
+        };
         groups.entry(key).or_default().push(id);
     }
     for (key, members) in groups {
         let selected = members.iter().any(|id| sel.ships.contains(id) || sel.enemy == Some(*id));
         let hovered = members.iter().any(|id| hover.ship == Some(*id));
         let first = &ships.0[&members[0]];
+        let def = rt.catalog.ship(first.def);
+        let is_squad = first.squad != u32::MAX || matches!(def.class, battle_sim::TargetClass::Fighter | battle_sim::TargetClass::Bomber);
         // Units nobody selected or hovers (and that are not own squadrons with their health line) show only their icon.
-        let icon_only = !selected && !hovered && (first.squad == u32::MAX || first.side != player);
+        let icon_only = !selected && !hovered && (!is_squad || first.side != player);
         let enemy = first.side != player;
         let pts: Vec<(Vec2, f32)> = members
             .iter()
@@ -978,7 +987,6 @@ fn sync_overlays(
         let half = pts.iter().map(|(c, e)| (*c - centre).length() + e).fold(0.0f32, f32::max);
         let edge_max = pts.iter().map(|(_, e)| *e).fold(0.0f32, f32::max);
         let live: Vec<&ShipRender> = members.iter().map(|id| &ships.0[id]).collect();
-        let def = rt.catalog.ship(first.def);
         if def.special_weapon.is_some() {
             continue;
         }
@@ -997,21 +1005,22 @@ fn sync_overlays(
             }
         }
         // The icon marks tiny units, squadrons and every unit nobody has selected or hovered (so that no unit is invisible).
-        let icon = (icon_only || first.squad != u32::MAX || edge_max < 9.0).then(|| assets.as_ref().and_then(|a| a.game.as_deref()).and_then(|g| eaw_ui::unit_icon(g, &def.name))).flatten();
+        let icon = (icon_only || is_squad || edge_max < 9.0).then(|| assets.as_ref().and_then(|a| a.game.as_deref()).and_then(|g| eaw_ui::unit_icon(g, &def.name))).flatten()
+            .or_else(|| is_squad.then(|| "I_BUTTON_UNIT_GENERIC_FIGHTER.TGA".to_string()));
         if icon_only && icon.is_none() {
             continue;
         }
         next.ships.push(ShipOverlay {
             id: key,
             screen_pos: centre,
-            half_size: if first.squad != u32::MAX { 11.0 } else { half.clamp(11.0, 220.0) },
+            half_size: if is_squad { 11.0 } else { half.clamp(11.0, 220.0) },
             health: live.iter().map(|s| s.hull).sum::<f32>() / n,
             shield: (def.shield > 0.0).then(|| live.iter().map(|s| s.shield).sum::<f32>() / n),
             selected,
             hovered,
             enemy,
             name,
-            always: !enemy && first.squad != u32::MAX,
+            always: !enemy && is_squad,
             // Far zoom (units a few pixels wide): a small box with the unit icon marks the unit, as in the Remake (video b0700).
             // Close up, fighters keep only the short hull bar and the flag (ref 07).
             icon,

@@ -45,12 +45,7 @@ pub fn rows_from_data(data: &GameData) -> Vec<SetRow> {
             continue;
         }
         let description = c.description_id.as_deref().and_then(|id| data.text(id)).unwrap_or("").to_owned();
-        let side = match c.starting_active_player.as_deref() {
-            Some("Rebel") => Some("Rebel"),
-            Some("Empire") => Some("Empire"),
-            Some("Underworld") => Some("Underworld"),
-            _ => None,
-        };
+        let side = c.starting_active_player.as_deref().filter(|s| !s.is_empty());
         let playable = c.has_galaxy().then_some(side).flatten();
         if let Some(side) = playable {
             if let Some((_, row)) = rows.iter_mut().find(|(s, r)| *s == c.sort_order && !r.sides.is_empty()) {
@@ -138,6 +133,12 @@ fn enter(mut state: ResMut<SetupState>, game: Res<Game>, campaigns: Res<Campaign
         row.title = "From the Ground Up".to_owned();
         row.description = "Every faction starts small: you with one planet, the other great powers with three. All other planets belong to the independent orange faction, which defends them but never expands. Minor factions keep their planets.".to_owned();
         row.ground_up = true;
+        let base_camp = row.sides.first().map(|(_, n)| n.clone()).unwrap_or_else(|| "GC_Full_Web_Way_Rebel".into());
+        for f in ["Rebel", "Empire", "Underworld", "Republic", "CIS"] {
+            if !row.sides.iter().any(|(s, _)| s.eq_ignore_ascii_case(f)) {
+                row.sides.push((f.to_owned(), base_camp.clone()));
+            }
+        }
         rows.insert(at + 1, row);
     }
     let first = rows.iter().position(|r| !r.sides.is_empty()).unwrap_or(0);
@@ -179,7 +180,13 @@ fn side_label(game: &Game, key: &str) -> String {
     match key {
         "Rebel" => game_text(game, "TEXT_FACTION_REBELS", "Rebellion"),
         "Empire" => "Empire".to_owned(),
-        _ => game_text(game, "TEXT_FACTION_UNDERWORLD_NICKNAME", "Criminal Underworld"),
+        "Underworld" => game_text(game, "TEXT_FACTION_UNDERWORLD_NICKNAME", "Criminal Underworld"),
+        "Republic" => game_text(game, "TEXT_FACTION_REPUBLIC", "Galactic Republic"),
+        "CIS" | "Cis" => game_text(game, "TEXT_FACTION_CIS", "Confederacy of Independent Systems (CIS)"),
+        _ => {
+            let text_key = format!("TEXT_FACTION_{}", key.to_ascii_uppercase());
+            game_text(game, &text_key, key)
+        }
     }
 }
 
@@ -346,10 +353,12 @@ fn clicks(
             Click::Cancel => next.set(AppScreen::MainMenu),
             Click::Advanced => state.advanced = !state.advanced,
             Click::Start => {
-                options.ground_up = state.rows.get(state.selected).is_some_and(|r| r.ground_up);
-                let name = state.rows.get(state.selected).and_then(|r| state.side.and_then(|s| r.sides.get(s))).map(|(_, n)| n.clone());
-                if let Some(name) = name {
-                    start.write(StartCampaign(name));
+                if let Some(r) = state.rows.get(state.selected) {
+                    options.ground_up = r.ground_up;
+                    if let Some(s) = state.side.and_then(|idx| r.sides.get(idx)) {
+                        options.faction_override = Some(s.0.clone());
+                        start.write(StartCampaign(s.1.clone()));
+                    }
                 }
             }
         }
