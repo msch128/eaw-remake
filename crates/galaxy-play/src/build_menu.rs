@@ -186,7 +186,7 @@ fn availability(err: Result<(), CommandError>) -> Option<Availability> {
         Err(CommandError::PopulationCap) => Some(Availability::PopulationCap),
         Err(CommandError::BuildLimit) => Some(Availability::Limit),
         Err(CommandError::NoSlot) => Some(Availability::Full),
-        Err(CommandError::RequirementsNotMet(r)) if r.starts_with("tech level") || r == "locked" || r == "planet" => None,
+        Err(CommandError::RequirementsNotMet(r)) if r.starts_with("tech level") || r == "locked" || r == "planet" || r.starts_with("this planet takes") => None,
         Err(CommandError::RequirementsNotMet(r)) => Some(Availability::Requires(r)),
         Err(_) => None,
     }
@@ -300,6 +300,8 @@ impl BuildMenu {
         // Queues.
         let mut queue = Vec::new();
         for (lane_idx, lane) in [Lane::Units, Lane::Structures, Lane::Base].into_iter().enumerate() {
+            let mut seen_orbital = false;
+            let mut seen_ground = false;
             for (i, item) in ps.queues[lane_idx].iter().enumerate() {
                 let (target, name) = match &item.kind {
                     ProductionKind::Unit(u) => (BuildTarget::Unit(*u), names.unit(*u).to_owned()),
@@ -307,13 +309,29 @@ impl BuildMenu {
                     ProductionKind::Starbase(b) => (BuildTarget::Starbase(*b), names.starbase(*b).to_owned()),
                     ProductionKind::Tech(t) => (BuildTarget::Tech(*t), format!("Tech level {}", finfo.start_tech + *t as i32 + 1)),
                 };
+                let active = if lane == Lane::Structures {
+                    match item.kind {
+                        ProductionKind::Structure(s) => {
+                            if world.structures[s as usize].orbital {
+                                if !seen_orbital { seen_orbital = true; true } else { false }
+                            } else if !seen_ground {
+                                seen_ground = true; true
+                            } else {
+                                false
+                            }
+                        }
+                        _ => i == 0,
+                    }
+                } else {
+                    i == 0
+                };
                 queue.push(QueueEntry {
                     lane,
                     target,
                     name,
                     progress: if item.total > 0.0 { (1.0 - item.remaining / item.total).clamp(0.0, 1.0) } else { 1.0 },
                     remaining_seconds: item.remaining.max(0.0),
-                    active: i == 0,
+                    active,
                 });
             }
         }

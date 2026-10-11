@@ -197,6 +197,12 @@ impl World {
         if (!ut.req_planets.is_empty() && !ut.req_planets.contains(&planet)) || !self.planet_takes_starbase(planet, ut.req_starbase) {
             return Err(CommandError::RequirementsNotMet("planet".into()));
         }
+        for group in &ut.req_structures {
+            let possible = group.iter().any(|&s| self.planet_takes_starbase(planet, self.structures[s as usize].req_starbase));
+            if !possible {
+                return Err(CommandError::RequirementsNotMet("planet".into()));
+            }
+        }
         if self.starbase_level(galaxy, planet) < ut.req_starbase {
             return Err(CommandError::RequirementsNotMet(format!("star base level {}", ut.req_starbase)));
         }
@@ -266,6 +272,12 @@ impl World {
         }
         if (!st.req_planets.is_empty() && !st.req_planets.contains(&planet)) || !self.planet_takes_starbase(planet, st.req_starbase) {
             return Err(CommandError::RequirementsNotMet("planet".into()));
+        }
+        for group in &st.req_structures {
+            let possible = group.iter().any(|&s| self.planet_takes_starbase(planet, self.structures[s as usize].req_starbase));
+            if !possible {
+                return Err(CommandError::RequirementsNotMet("planet".into()));
+            }
         }
         if self.starbase_level(galaxy, planet) < st.req_starbase {
             return Err(CommandError::RequirementsNotMet(format!("star base level {}", st.req_starbase)));

@@ -267,3 +267,40 @@ fn shipyard_planet_applies_production_modifiers() {
         assert!(kuat_time < cor_time, "Kuat shipyard reduces build time: kuat={kuat_time} < cor={cor_time}");
     }
 }
+
+#[test]
+fn planet_starbase_tier_limits_and_capital_production() {
+    let Some(data) = load() else { return };
+    let mut sim = new_sim(&data);
+    let w = sim.world().clone();
+    let empire = w.faction_id("Empire").unwrap();
+
+    // Kuat, Fondor, Coruscant and Mon Calamari are Tier 3 major shipyard hubs
+    for major in ["Kuat_WW", "Fondor_WW", "Coruscant_WW", "MonCalamari_WW"] {
+        let p = w.planet_id(major).unwrap();
+        assert_eq!(w.planets[p as usize].max_space_base, 3, "{major} must support level 3 starbase");
+    }
+
+    // Tatooine, Dantooine, Hoth, Yavin, Bespin are Tier 2 medium worlds
+    for med in ["Tatooine_WW", "Dantooine_WW", "Hoth_WW", "Yavin_WW", "Bespin_WW"] {
+        let p = w.planet_id(med).unwrap();
+        assert_eq!(w.planets[p as usize].max_space_base, 2, "{med} must be capped at level 2 starbase");
+    }
+
+    // Dagobah, Roche, Malachor V are Tier 1 barren / outpost worlds
+    for outpost in ["Dagobah_WW", "Roche_WW", "MalachorV_WW"] {
+        let p = w.planet_id(outpost).unwrap();
+        assert_eq!(w.planets[p as usize].max_space_base, 1, "{outpost} must be capped at level 1 starbase");
+    }
+
+    // On a Tier 2 world (e.g. Tatooine), Shipyard 3 and Star Destroyers cannot be built
+    let tatooine = w.planet_id("Tatooine_WW").unwrap();
+    bare_planet(&mut sim, empire, tatooine, 2);
+    let y3 = w.structure_id("E_Shipyard_3").unwrap();
+    assert_eq!(unmet(w.check_build_structure(sim.galaxy(), empire, tatooine, y3)), "planet", "Shipyard 3 impossible on Tier 2 planet");
+
+    if let Some(isd) = w.unit_id("Star_Destroyer") {
+        assert_eq!(unmet(w.check_build_unit(sim.galaxy(), empire, tatooine, isd)), "planet", "Star Destroyer impossible on Tier 2 planet");
+    }
+}
+

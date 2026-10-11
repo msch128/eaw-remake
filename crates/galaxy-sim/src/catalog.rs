@@ -231,7 +231,11 @@ impl World {
                 cost: def.build_cost,
                 build_time: def.build_time,
                 tech: def.tech_level,
-                req_starbase: def.required_star_base_level,
+                req_starbase: if def.name.ends_with("_Shipyard_3") || def.name.eq_ignore_ascii_case("Shipyard_3") {
+                    def.required_star_base_level.max(3)
+                } else {
+                    def.required_star_base_level
+                },
                 req_structures: Vec::new(),
                 req_planets: Vec::new(),
                 galactic: orbital,
