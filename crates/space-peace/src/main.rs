@@ -138,7 +138,7 @@ fn main() {
     } else {
         let mut plugins = DefaultPlugins.set(bevy::log::LogPlugin { custom_layer: logfile::file_layer, ..default() }).set(WindowPlugin {
             primary_window: Some(Window {
-                title: "Space Peace: Not at War".into(),
+                title: "EAW:Remake".into(),
                 visible: !args.hidden,
                 present_mode,
                 mode,

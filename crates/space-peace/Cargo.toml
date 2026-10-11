@@ -1,13 +1,13 @@
-﻿[package]
+[package]
 name = "space-peace"
-description = "Space Peace: Not at War - lightweight Empire at War engine shell"
+description = "EAW:Remake - modern clean-room Empire at War engine reimplementation"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
 [[bin]]
-name = "space-peace"
+name = "eaw-remake"
 path = "src/main.rs"
 
 [features]

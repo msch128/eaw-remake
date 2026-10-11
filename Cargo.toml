@@ -22,7 +22,7 @@ members = [
 version = "0.1.0"
 edition = "2024"
 license = "MIT"
-repository = "https://github.com/msch128/space-peace-not-at-war"
+repository = "https://github.com/msch128/eaw-remake"
 
 [profile.dev]
 opt-level = 1

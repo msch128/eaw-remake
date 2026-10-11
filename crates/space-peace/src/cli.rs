@@ -1,4 +1,4 @@
-﻿//! Minimal command line parsing (no external dependency).
+//! Minimal command line parsing (no external dependency).
 
 use bevy::prelude::Resource;
 use std::path::PathBuf;
@@ -18,6 +18,8 @@ pub struct Args {
     pub fullscreen: bool,
     /// Game root directory override (`--game-dir <path>`).
     pub game_dir: Option<PathBuf>,
+    /// Explicit mod directory override (`--mod-dir <path>`, or EAW_MOD_DIR).
+    pub mod_dir: Option<PathBuf>,
     /// Workshop mod id (`--mod <id>`).
     pub mod_id: Option<String>,
     /// Campaign to display (`--campaign <name>`).
@@ -117,6 +119,7 @@ impl Default for Args {
             no_audio: false,
             fullscreen: false,
             game_dir: None,
+            mod_dir: None,
             mod_id: None,
             campaign: None,
             list_campaigns: false,
@@ -255,6 +258,7 @@ impl Args {
                     out.loading_delay = v.parse().map_err(|e| format!("bad --loading-delay: {e}"))?;
                 }
                 "--game-dir" => out.game_dir = Some(it.next().ok_or("--game-dir needs a value")?.into()),
+                "--mod-dir" => out.mod_dir = Some(it.next().ok_or("--mod-dir needs a value")?.into()),
                 "--mod" => out.mod_id = Some(it.next().ok_or("--mod needs a value")?),
                 "--campaign" => out.campaign = Some(it.next().ok_or("--campaign needs a value")?),
                 "--list-campaigns" => out.list_campaigns = true,

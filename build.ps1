@@ -38,4 +38,8 @@ cargo @cargoArgs
 if ($LASTEXITCODE -ne 0) { Write-Host 'Build failed.' -ForegroundColor Red; exit $LASTEXITCODE }
 
 $profileDir = if ($Debug) { 'debug' } else { 'release' }
-Write-Host "Done. Output: $PSScriptRoot\target\$profileDir" -ForegroundColor Green
+$exe = "$PSScriptRoot\target\$profileDir\eaw-remake.exe"
+if (Test-Path $exe) {
+    Copy-Item $exe "$PSScriptRoot\target\$profileDir\space-peace.exe" -Force -ErrorAction SilentlyContinue
+}
+Write-Host "Done. Executable: $exe" -ForegroundColor Green
