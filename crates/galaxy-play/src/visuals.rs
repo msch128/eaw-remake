@@ -1,4 +1,4 @@
-﻿//! Fleets on the galactic map: the flagship's model parked next to the planet or moving along its
+//! Fleets on the galactic map: the flagship's model parked next to the planet or moving along its
 //! hyperspace lane with a streak, owner-coloured rings, selection highlight and count labels.
 
 use std::collections::{BTreeMap, HashMap};
@@ -311,6 +311,18 @@ pub fn draw_fleet_markers(
             gizmos.circle(Isometry3d::new(center, flat), ring * 1.5 * pulse, Color::srgb(0.6, 0.9, 1.0));
         } else if player.0 == Some(v.owner) {
             gizmos.circle(Isometry3d::new(center, flat), ring * 1.12, team.with_alpha(0.5));
+        }
+        let has_hero = f.units.keys().any(|&u| world.units.get(u as usize).is_some_and(|ut| ut.hero));
+        if has_hero {
+            let hero_pos = base + Vec3::Y * (layout.unit * 1.55);
+            let gold = Color::srgba(1.0, 0.84, 0.15, 0.95);
+            let s = layout.unit * 0.38;
+            // Four-pointed diamond star hero marker
+            gizmos.line(hero_pos + Vec3::new(0.0, 0.0, -s), hero_pos + Vec3::new(s * 0.65, 0.0, 0.0), gold);
+            gizmos.line(hero_pos + Vec3::new(s * 0.65, 0.0, 0.0), hero_pos + Vec3::new(0.0, 0.0, s), gold);
+            gizmos.line(hero_pos + Vec3::new(0.0, 0.0, s), hero_pos + Vec3::new(-s * 0.65, 0.0, 0.0), gold);
+            gizmos.line(hero_pos + Vec3::new(-s * 0.65, 0.0, 0.0), hero_pos + Vec3::new(0.0, 0.0, -s), gold);
+            gizmos.circle(Isometry3d::new(hero_pos, flat), s * 0.45, gold.with_alpha(0.6));
         }
         if let galaxy_sim::FleetLocation::Moving { .. } = f.location {
             // Hyperspace streak trailing behind the ship.

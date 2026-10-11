@@ -41,3 +41,31 @@ fn missing_requirements_show_display_names() {
     println!("hero requirement text: {text:?}");
     assert_eq!(menu.starbase_max, 3);
 }
+
+#[test]
+fn flagship_prefers_hero_ship() {
+    let Some(install) = GameInstall::detect() else { return };
+    if !install.mod_data("1770851727").is_dir() {
+        return;
+    }
+    let data = load_galaxy(&GameFs::for_mod(&install, Some("1770851727")).unwrap()).0;
+    let campaign = data.campaign("GC_Full_Web_Way_Rebel").unwrap();
+    let sim = Sim::new(&data, campaign, SimConfig { victory_enabled: false, ..SimConfig::default() }).unwrap();
+    let w = sim.world();
+
+    let piett = w.unit_id("Piett_Procursator").expect("Piett hero unit");
+    let isd = w.unit_id("Star_Destroyer").expect("Star Destroyer");
+
+    let mut units = std::collections::BTreeMap::new();
+    units.insert(isd, 2);
+    units.insert(piett, 1);
+    let fleet = galaxy_sim::Fleet {
+        id: 1,
+        owner: w.faction_id("Empire").unwrap(),
+        units,
+        location: galaxy_sim::FleetLocation::AtPlanet(0),
+        previous_planet: 0,
+    };
+
+    assert_eq!(galaxy_play::flagship(w, &fleet), Some(piett), "Hero ship Piett must be chosen as flagship over ISD");
+}

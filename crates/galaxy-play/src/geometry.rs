@@ -1,4 +1,4 @@
-﻿//! Map geometry: planet layout, fleet placement along lanes, ETAs and route planning.
+//! Map geometry: planet layout, fleet placement along lanes, ETAs and route planning.
 //!
 //! Everything here is pure (no Bevy systems) so it can be tested without an app.
 
@@ -79,8 +79,8 @@ fn category_rank(c: alamo_data::ShipCategory) -> u32 {
     }
 }
 
-/// The unit whose model represents the fleet on the map: largest ship class first, then the
-/// strongest (`AI_Combat_Power`, else durability times damage), then the lowest type id.
+/// The unit whose model represents the fleet on the map: hero units first, then largest ship class,
+/// then strongest (`AI_Combat_Power`, else durability times damage), then the lowest type id.
 pub fn flagship(world: &World, fleet: &Fleet) -> Option<UnitTypeId> {
     fleet
         .units
@@ -90,10 +90,10 @@ pub fn flagship(world: &World, fleet: &Fleet) -> Option<UnitTypeId> {
             let key = |u: UnitTypeId| {
                 let ut = &world.units[u as usize];
                 let power = if ut.ai_power > 0.0 { ut.ai_power } else { ut.combat.durability() * ut.combat.raw_dps().sqrt() };
-                (category_rank(ut.category), power)
+                (ut.hero, category_rank(ut.category), power)
             };
             let (ka, kb) = (key(a), key(b));
-            ka.0.cmp(&kb.0).then(ka.1.total_cmp(&kb.1)).then(b.cmp(&a))
+            ka.0.cmp(&kb.0).then(ka.1.cmp(&kb.1)).then(ka.2.total_cmp(&kb.2)).then(b.cmp(&a))
         })
 }
 
