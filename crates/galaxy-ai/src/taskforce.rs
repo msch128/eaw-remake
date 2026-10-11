@@ -414,6 +414,26 @@ impl TaskForces {
         match tf.target {
             Some(t) => {
                 let dist = hop_distances(snap, t);
+                let split = self.split.get(&(tf.player, t)).copied().unwrap_or(1);
+                if split > 1 {
+                    let other_stages: Vec<PlanetId> = self
+                        .forces
+                        .values()
+                        .filter(|other| other.id != tf.id && other.player == tf.player && other.target == Some(t))
+                        .filter_map(|other| other.stage)
+                        .collect();
+                    let candidate = owned
+                        .iter()
+                        .copied()
+                        .filter(|p| !other_stages.contains(p) && dist[*p as usize] <= 3)
+                        .min_by(|&a, &b| {
+                            let key = |p: PlanetId| (dist[p as usize], -(snap.structures[p as usize].len() as i64));
+                            key(a).cmp(&key(b))
+                        });
+                    if let Some(c) = candidate {
+                        return Some(c);
+                    }
+                }
                 owned
                     .iter()
                     .copied()
@@ -1359,6 +1379,8 @@ impl TaskForces {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     #[test]
     fn role_doctrine_balances_capitals_frigates_and_carriers() {
         let role_of = |category: &str, name: &str| -> usize {
@@ -1379,6 +1401,65 @@ mod tests {
         assert_eq!(role_of("CORVETTE", "CR90"), 1);
         assert_eq!(role_of("FIGHTER", "X-Wing"), 2);
         assert_eq!(role_of("OTHER", "Quasar_Carrier"), 2);
+    }
+
+    #[test]
+    fn pincer_attacks_choose_distinct_staging_planets() {
+        let mut tf_set = TaskForces::default();
+        tf_set.set_split(0, 10, 2);
+
+        let mut snap = Snapshot::default();
+        snap.owned = vec![vec![1, 2, 3]];
+        snap.real = vec![true; 20];
+        snap.real_count = 20;
+        snap.structures = vec![vec![]; 20];
+        snap.income = vec![100.0; 20];
+        snap.adjacency = vec![vec![]; 20];
+        snap.adjacency[10] = vec![1, 2];
+        snap.adjacency[1] = vec![10];
+        snap.adjacency[2] = vec![10];
+
+        let tf1 = TaskForce {
+            id: 1,
+            plan: 100,
+            player: 0,
+            name: "Pincer1".into(),
+            kind: ForceKind::Units,
+            reqs: Requirements::default(),
+            target: Some(10),
+            numbers: HashMap::new(),
+            fleet: None,
+            pieces: Vec::new(),
+            stage: None,
+            removable: false,
+            result: None,
+            worked: false,
+            had_units: false,
+        };
+        let stage1 = tf_set.choose_stage(&snap, &tf1).unwrap();
+        let mut tf1_registered = tf1;
+        tf1_registered.stage = Some(stage1);
+        tf_set.forces.insert(1, tf1_registered);
+
+        let tf2 = TaskForce {
+            id: 2,
+            plan: 101,
+            player: 0,
+            name: "Pincer2".into(),
+            kind: ForceKind::Units,
+            reqs: Requirements::default(),
+            target: Some(10),
+            numbers: HashMap::new(),
+            fleet: None,
+            pieces: Vec::new(),
+            stage: None,
+            removable: false,
+            result: None,
+            worked: false,
+            had_units: false,
+        };
+        let stage2 = tf_set.choose_stage(&snap, &tf2).unwrap();
+        assert_ne!(stage1, stage2, "pincer forces must choose distinct staging planets: stage1={stage1}, stage2={stage2}");
     }
 }
 

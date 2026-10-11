@@ -600,7 +600,13 @@ impl AiEngine {
                 Some(tp) if self.strategy.config.enabled && category.eq_ignore_ascii_case("offensive") && snap.owner[tp as usize].is_some_and(|o| snap.enemy[me][o as usize]) && self.brains[i].active.len() + 2 <= max_total => {
                     let need = self.strategy.believed_hostile_strength(snap, player, tp) * 1.25 * self.task_forces.sizing_of(player);
                     let own = self.strategy.total_strength(player);
-                    if need > 0.5 * own && need < 0.9 * own { 2 } else { 1 }
+                    let sb_level = snap.starbase[tp as usize].0;
+                    let heavy_defense = sb_level >= 3 || snap.structures[tp as usize].len() >= 3;
+                    if (need > 0.4 * own && need < 0.95 * own) || (heavy_defense && need > 0.25 * own) {
+                        2
+                    } else {
+                        1
+                    }
                 }
                 _ => 1,
             };
