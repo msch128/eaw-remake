@@ -570,6 +570,7 @@ fn feed_bar(
 /// Bar buttons: build pads, tabs, pause and fast-forward.
 fn bar_clicks(
     remap: Res<eaw_ui::PadRemap>,
+    mouse: Res<ButtonInput<MouseButton>>,
     mut clicks: MessageReader<EawButtonClicked>,
     mut bar: ResMut<BarState>,
     selection: Res<PlayerSelection>,
@@ -578,7 +579,21 @@ fn bar_clicks(
     mut toast: ResMut<Toast>,
     mut filters: ResMut<crate::galaxy_map::MapFilters>,
     mut paused: ResMut<crate::flow::Paused>,
+    queue_buttons: Query<(&eaw_ui::EawButton, &Interaction)>,
 ) {
+    if mouse.just_pressed(MouseButton::Right) {
+        for (b, inter) in &queue_buttons {
+            if *inter == Interaction::Hovered || *inter == Interaction::Pressed {
+                if let Some(i) = b.name.strip_prefix("queue").and_then(|n| n.parse::<usize>().ok()) {
+                    if let (Some(planet), Some(&(lane, index, refund))) = (selection.planet, bar.queue.get(i).and_then(Option::as_ref)) {
+                        actions.write(PlayAction::CancelProduction { planet, lane, index });
+                        toast.0 = if refund > 0.0 { format!("Production cancelled - {refund:.0} credits refunded") } else { "Production cancelled".to_owned() };
+                        toast.1 = 3.0;
+                    }
+                }
+            }
+        }
+    }
     for c in clicks.read() {
         let name = c.name.as_str();
         if let Some(i) = name.strip_prefix("b_create_").and_then(|n| n.parse::<usize>().ok()) {
