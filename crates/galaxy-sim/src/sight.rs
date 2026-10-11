@@ -50,6 +50,24 @@ impl Galaxy {
                 }
             }
         }
+        // Reconnaissance: Corvettes or scout ships with system_spy in orbit of a friendly system
+        // grant Detailed sight into adjacent neighbor systems.
+        for f in self.fleets.values() {
+            if let FleetLocation::AtPlanet(p) = f.location
+                && self.is_friend(viewer, f.owner)
+            {
+                let has_scout = f.units.iter().any(|(&u, &n)| {
+                    n > 0 && (world.units[u as usize].system_spy || world.units[u as usize].category == alamo_data::ShipCategory::Corvette)
+                });
+                if has_scout {
+                    for &(n, _) in &world.adjacency[p as usize] {
+                        if out[n as usize] < Sight::Detailed {
+                            out[n as usize] = Sight::Detailed;
+                        }
+                    }
+                }
+            }
+        }
         out
     }
 
@@ -71,8 +89,9 @@ impl Galaxy {
         match f.location {
             FleetLocation::AtPlanet(p) => {
                 if stealthy {
-                    // Only presence in the system (Detailed) finds a stealthy fleet.
-                    if map[p as usize] == Sight::Detailed { Sight::Detailed } else { Sight::Hidden }
+                    // Only actual presence in the system finds a stealthy fleet.
+                    let here = self.presence(viewer);
+                    if here[p as usize] { Sight::Detailed } else { Sight::Hidden }
                 } else {
                     map[p as usize]
                 }
