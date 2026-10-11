@@ -167,6 +167,7 @@ impl Plugin for PlayUiPlugin {
             )
             .add_systems(Update, (declutter_top, hero_bar, spawn_pad_arrows, pad_arrows, locked_clicks, spawn_planet_panel, update_planet_panel, place_planet_panel, planet_view_ui, planet_view_bar_tab, objectives_toggle, objectives_window, objectives_scroll).chain().run_if(resource_exists::<PlayBridge>.and_then(resource_exists::<SimState>)))
             .add_systems(Update, scripted_tooltip.run_if(resource_exists::<eaw_ui::ForcedTooltip>))
+            .add_systems(Update, galactic_hotkeys.run_if(in_state(AppScreen::Galaxy)).run_if(resource_exists::<SimState>))
             .add_systems(Update, save_toast)
             .add_systems(Update, auto_resolve_summary.after(battle_dialog_result).run_if(resource_exists::<PlayBridge>.and_then(resource_exists::<SimState>)))
             .add_systems(Update, show_battle_summary.run_if(in_state(AppScreen::Galaxy)).run_if(resource_exists::<crate::battle_play::BattleSummary>))
@@ -635,6 +636,26 @@ fn bar_clicks(
             }
             _ => {}
         }
+    }
+}
+
+/// Configurable hotkeys on the galactic map (pause and fast-forward).
+fn galactic_hotkeys(
+    keys: Res<ButtonInput<KeyCode>>,
+    settings: Res<crate::settings::Settings>,
+    clock: Res<GameClock>,
+    mut actions: MessageWriter<PlayAction>,
+    flow_paused: Res<crate::flow::Paused>,
+) {
+    if flow_paused.0 {
+        return;
+    }
+    if keys.just_pressed(settings.bindings.pause) {
+        actions.write(PlayAction::TogglePause);
+    }
+    if keys.just_pressed(settings.bindings.speed) {
+        let next = if clock.paused() || clock.level >= clock.speeds.len() { 1 } else { clock.level + 1 };
+        actions.write(PlayAction::SetSpeedLevel(next));
     }
 }
 

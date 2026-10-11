@@ -26,6 +26,111 @@ pub const UI_SCALES: [f32; 6] = [0.75, 1.0, 1.25, 1.5, 1.75, 2.0];
 pub const MSAA_MODES: [u32; 4] = [1, 2, 4, 8];
 /// Selectable camera speed multipliers.
 pub const CAMERA_SPEEDS: [f32; 5] = [0.5, 0.75, 1.0, 1.5, 2.0];
+/// Selectable bloom intensity multipliers.
+pub const BLOOM_INTENSITIES: [f32; 4] = [0.5, 1.0, 1.5, 2.0];
+/// Selectable key choices for pause.
+pub const PAUSE_KEYS: [KeyCode; 3] = [KeyCode::Space, KeyCode::KeyP, KeyCode::Pause];
+/// Selectable key choices for speed / fast-forward.
+pub const SPEED_KEYS: [KeyCode; 4] = [KeyCode::Tab, KeyCode::PageUp, KeyCode::NumpadAdd, KeyCode::BracketRight];
+/// Selectable key choices for attack-move.
+pub const ATTACK_MOVE_KEYS: [KeyCode; 3] = [KeyCode::KeyA, KeyCode::KeyQ, KeyCode::KeyX];
+/// Selectable key choices for stop.
+pub const STOP_KEYS: [KeyCode; 3] = [KeyCode::KeyS, KeyCode::KeyH, KeyCode::Backquote];
+/// Selectable key choices for retreat / abort.
+pub const RETREAT_KEYS: [KeyCode; 3] = [KeyCode::F10, KeyCode::KeyR, KeyCode::Delete];
+
+/// Configurable keybindings for common commands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct KeyBindings {
+    /// Pause toggle.
+    pub pause: KeyCode,
+    /// Fast-forward / game speed toggle.
+    pub speed: KeyCode,
+    /// Attack-move command.
+    pub attack_move: KeyCode,
+    /// Stop current orders.
+    pub stop: KeyCode,
+    /// Tactical retreat / abort battle.
+    pub retreat: KeyCode,
+}
+
+impl Default for KeyBindings {
+    fn default() -> Self {
+        Self {
+            pause: KeyCode::Space,
+            speed: KeyCode::Tab,
+            attack_move: KeyCode::KeyA,
+            stop: KeyCode::KeyS,
+            retreat: KeyCode::F10,
+        }
+    }
+}
+
+pub fn key_label(code: KeyCode) -> &'static str {
+    match code {
+        KeyCode::Space => "Space",
+        KeyCode::KeyP => "P",
+        KeyCode::Pause => "Pause",
+        KeyCode::Tab => "Tab",
+        KeyCode::PageUp => "Page Up",
+        KeyCode::NumpadAdd => "Num +",
+        KeyCode::BracketRight => "]",
+        KeyCode::KeyA => "A",
+        KeyCode::KeyQ => "Q",
+        KeyCode::KeyX => "X",
+        KeyCode::KeyS => "S",
+        KeyCode::KeyH => "H",
+        KeyCode::Backquote => "`",
+        KeyCode::F10 => "F10",
+        KeyCode::KeyR => "R",
+        KeyCode::Delete => "Delete",
+        _ => "Custom",
+    }
+}
+
+pub fn key_code_str(code: KeyCode) -> &'static str {
+    match code {
+        KeyCode::Space => "space",
+        KeyCode::KeyP => "p",
+        KeyCode::Pause => "pause",
+        KeyCode::Tab => "tab",
+        KeyCode::PageUp => "page_up",
+        KeyCode::NumpadAdd => "numpad_add",
+        KeyCode::BracketRight => "bracket_right",
+        KeyCode::KeyA => "a",
+        KeyCode::KeyQ => "q",
+        KeyCode::KeyX => "x",
+        KeyCode::KeyS => "s",
+        KeyCode::KeyH => "h",
+        KeyCode::Backquote => "backquote",
+        KeyCode::F10 => "f10",
+        KeyCode::KeyR => "r",
+        KeyCode::Delete => "delete",
+        _ => "unknown",
+    }
+}
+
+pub fn parse_key(s: &str) -> Option<KeyCode> {
+    match s.trim().to_lowercase().as_str() {
+        "space" => Some(KeyCode::Space),
+        "p" => Some(KeyCode::KeyP),
+        "pause" => Some(KeyCode::Pause),
+        "tab" => Some(KeyCode::Tab),
+        "page_up" | "pageup" => Some(KeyCode::PageUp),
+        "numpad_add" | "num_plus" | "+" => Some(KeyCode::NumpadAdd),
+        "bracket_right" | "]" => Some(KeyCode::BracketRight),
+        "a" => Some(KeyCode::KeyA),
+        "q" => Some(KeyCode::KeyQ),
+        "x" => Some(KeyCode::KeyX),
+        "s" => Some(KeyCode::KeyS),
+        "h" => Some(KeyCode::KeyH),
+        "backquote" | "`" => Some(KeyCode::Backquote),
+        "f10" => Some(KeyCode::F10),
+        "r" => Some(KeyCode::KeyR),
+        "delete" | "del" => Some(KeyCode::Delete),
+        _ => None,
+    }
+}
 
 /// Stored master volume and the `--volume` value that replaced it for this run: the override must never be written back
 /// into the user's settings file (a `--volume 0` test run once left the real file silent).
@@ -60,10 +165,14 @@ pub struct Settings {
     pub msaa: u32,
     /// Bloom around bright lights.
     pub bloom: bool,
+    /// Bloom intensity multiplier.
+    pub bloom_intensity: f32,
     /// Cascaded sun shadows in space battles.
     pub shadows: bool,
     /// Particle spawn rate multiplier of the battle view.
     pub particle_density: f32,
+    /// Configurable keybindings for common commands.
+    pub bindings: KeyBindings,
 }
 
 impl Default for Settings {
@@ -82,8 +191,10 @@ impl Default for Settings {
             camera_speed: 1.0,
             msaa: 4,
             bloom: true,
+            bloom_intensity: 1.0,
             shadows: true,
             particle_density: 1.0,
+            bindings: KeyBindings::default(),
         }
     }
 }
@@ -117,15 +228,27 @@ pub enum OptionKey {
     Msaa,
     /// Bloom.
     Bloom,
+    /// Bloom intensity multiplier.
+    BloomIntensity,
     /// Graphics quality preset (sets anti-aliasing, bloom, shadows and particle density).
     Quality,
     /// Sun shadows in battles.
     Shadows,
+    /// Keybinding for pause.
+    KeyPause,
+    /// Keybinding for game speed / fast-forward.
+    KeySpeed,
+    /// Keybinding for attack-move.
+    KeyAttackMove,
+    /// Keybinding for stop order.
+    KeyStop,
+    /// Keybinding for tactical retreat / abort.
+    KeyRetreat,
 }
 
 impl OptionKey {
     /// All rows in display order.
-    pub const ALL: [OptionKey; 15] = [
+    pub const ALL: [OptionKey; 21] = [
         OptionKey::WindowMode,
         OptionKey::Resolution,
         OptionKey::Vsync,
@@ -139,8 +262,14 @@ impl OptionKey {
         OptionKey::CameraSpeed,
         OptionKey::Msaa,
         OptionKey::Bloom,
+        OptionKey::BloomIntensity,
         OptionKey::Quality,
         OptionKey::Shadows,
+        OptionKey::KeyPause,
+        OptionKey::KeySpeed,
+        OptionKey::KeyAttackMove,
+        OptionKey::KeyStop,
+        OptionKey::KeyRetreat,
     ];
 
     /// Row label.
@@ -159,8 +288,14 @@ impl OptionKey {
             OptionKey::CameraSpeed => "Camera speed",
             OptionKey::Msaa => "Anti-aliasing",
             OptionKey::Bloom => "Bloom",
+            OptionKey::BloomIntensity => "Bloom intensity",
             OptionKey::Quality => "Graphics quality",
             OptionKey::Shadows => "Shadows",
+            OptionKey::KeyPause => "Key: Pause",
+            OptionKey::KeySpeed => "Key: Fast-forward",
+            OptionKey::KeyAttackMove => "Key: Attack-move",
+            OptionKey::KeyStop => "Key: Stop order",
+            OptionKey::KeyRetreat => "Key: Retreat / abort",
         }
     }
 }
@@ -202,8 +337,14 @@ impl Settings {
             OptionKey::CameraSpeed => format!("{:.2}x", self.camera_speed),
             OptionKey::Msaa => if self.msaa <= 1 { "Off".into() } else { format!("{}x", self.msaa) },
             OptionKey::Bloom => on(self.bloom),
+            OptionKey::BloomIntensity => format!("{:.1}x", self.bloom_intensity),
             OptionKey::Quality => self.quality().map_or("Custom", |q| q.label()).into(),
             OptionKey::Shadows => on(self.shadows),
+            OptionKey::KeyPause => key_label(self.bindings.pause).into(),
+            OptionKey::KeySpeed => key_label(self.bindings.speed).into(),
+            OptionKey::KeyAttackMove => key_label(self.bindings.attack_move).into(),
+            OptionKey::KeyStop => key_label(self.bindings.stop).into(),
+            OptionKey::KeyRetreat => key_label(self.bindings.retreat).into(),
         }
     }
 
@@ -240,6 +381,10 @@ impl Settings {
                 self.msaa = MSAA_MODES[cycle(i, dir, MSAA_MODES.len())];
             }
             OptionKey::Bloom => self.bloom = !self.bloom,
+            OptionKey::BloomIntensity => {
+                let i = nearest(&BLOOM_INTENSITIES, |b| (b - self.bloom_intensity).abs());
+                self.bloom_intensity = BLOOM_INTENSITIES[cycle(i, dir, BLOOM_INTENSITIES.len())];
+            }
             OptionKey::Quality => {
                 let next = match self.quality() {
                     Some(q) if dir >= 0 => q.next(),
@@ -249,6 +394,26 @@ impl Settings {
                 self.apply_quality(next);
             }
             OptionKey::Shadows => self.shadows = !self.shadows,
+            OptionKey::KeyPause => {
+                let i = PAUSE_KEYS.iter().position(|&k| k == self.bindings.pause).unwrap_or(0);
+                self.bindings.pause = PAUSE_KEYS[cycle(i, dir, PAUSE_KEYS.len())];
+            }
+            OptionKey::KeySpeed => {
+                let i = SPEED_KEYS.iter().position(|&k| k == self.bindings.speed).unwrap_or(0);
+                self.bindings.speed = SPEED_KEYS[cycle(i, dir, SPEED_KEYS.len())];
+            }
+            OptionKey::KeyAttackMove => {
+                let i = ATTACK_MOVE_KEYS.iter().position(|&k| k == self.bindings.attack_move).unwrap_or(0);
+                self.bindings.attack_move = ATTACK_MOVE_KEYS[cycle(i, dir, ATTACK_MOVE_KEYS.len())];
+            }
+            OptionKey::KeyStop => {
+                let i = STOP_KEYS.iter().position(|&k| k == self.bindings.stop).unwrap_or(0);
+                self.bindings.stop = STOP_KEYS[cycle(i, dir, STOP_KEYS.len())];
+            }
+            OptionKey::KeyRetreat => {
+                let i = RETREAT_KEYS.iter().position(|&k| k == self.bindings.retreat).unwrap_or(0);
+                self.bindings.retreat = RETREAT_KEYS[cycle(i, dir, RETREAT_KEYS.len())];
+            }
         }
     }
 
@@ -318,10 +483,15 @@ impl Settings {
              edge_scroll = {}\n\
              camera_speed = {}\n\
              msaa = {}\n\
-             bloom = {}
-\n             shadows = {}
-\n             particle_density = {}
-",
+             bloom = {}\n\
+             bloom_intensity = {}\n\
+             shadows = {}\n\
+             particle_density = {}\n\
+             key_pause = \"{}\"\n\
+             key_speed = \"{}\"\n\
+             key_attack_move = \"{}\"\n\
+             key_stop = \"{}\"\n\
+             key_retreat = \"{}\"\n",
             if self.borderless { "borderless" } else { "windowed" },
             self.resolution.0,
             self.resolution.1,
@@ -336,8 +506,14 @@ impl Settings {
             self.camera_speed,
             self.msaa,
             self.bloom,
+            self.bloom_intensity,
             self.shadows,
             self.particle_density,
+            key_code_str(self.bindings.pause),
+            key_code_str(self.bindings.speed),
+            key_code_str(self.bindings.attack_move),
+            key_code_str(self.bindings.stop),
+            key_code_str(self.bindings.retreat),
         )
     }
 
@@ -377,8 +553,14 @@ impl Settings {
                 "camera_speed" => s.camera_speed = float().unwrap_or(s.camera_speed).clamp(0.1, 4.0),
                 "msaa" => s.msaa = value.parse().ok().filter(|m| MSAA_MODES.contains(m)).unwrap_or(s.msaa),
                 "bloom" => s.bloom = boolean().unwrap_or(s.bloom),
+                "bloom_intensity" => s.bloom_intensity = float().unwrap_or(s.bloom_intensity).clamp(0.25, 3.0),
                 "shadows" => s.shadows = boolean().unwrap_or(s.shadows),
                 "particle_density" => s.particle_density = float().unwrap_or(s.particle_density).clamp(0.25, 1.0),
+                "key_pause" => if let Some(k) = parse_key(value.trim_matches('"')) { s.bindings.pause = k; },
+                "key_speed" => if let Some(k) = parse_key(value.trim_matches('"')) { s.bindings.speed = k; },
+                "key_attack_move" => if let Some(k) = parse_key(value.trim_matches('"')) { s.bindings.attack_move = k; },
+                "key_stop" => if let Some(k) = parse_key(value.trim_matches('"')) { s.bindings.stop = k; },
+                "key_retreat" => if let Some(k) = parse_key(value.trim_matches('"')) { s.bindings.retreat = k; },
                 _ => {}
             }
         }
@@ -418,7 +600,7 @@ impl Plugin for SettingsPlugin {
 fn apply_graphics(
     settings: Res<Settings>,
     mut commands: Commands,
-    mut cameras: Query<(Entity, &mut Msaa, Has<bevy::post_process::bloom::Bloom>), With<crate::camera::GalaxyCamera>>,
+    mut cameras: Query<(Entity, &mut Msaa, Has<bevy::post_process::bloom::Bloom>, Option<&mut bevy::post_process::bloom::Bloom>), With<crate::camera::GalaxyCamera>>,
 ) {
     let msaa = match settings.msaa {
         1 => Msaa::Off,
@@ -426,12 +608,19 @@ fn apply_graphics(
         8 => Msaa::Sample8,
         _ => Msaa::Sample4,
     };
-    for (e, mut current, has_bloom) in &mut cameras {
+    for (e, mut current, has_bloom, maybe_bloom) in &mut cameras {
         if *current != msaa {
             *current = msaa;
         }
+        let intensity = 0.12 * settings.bloom_intensity;
         if settings.bloom && !has_bloom {
-            commands.entity(e).insert(bevy::post_process::bloom::Bloom { intensity: 0.12, ..bevy::post_process::bloom::Bloom::NATURAL });
+            commands.entity(e).insert(bevy::post_process::bloom::Bloom { intensity, ..bevy::post_process::bloom::Bloom::NATURAL });
+        } else if settings.bloom && has_bloom {
+            if let Some(mut b) = maybe_bloom {
+                if (b.intensity - intensity).abs() > 0.001 {
+                    b.intensity = intensity;
+                }
+            }
         } else if !settings.bloom && has_bloom {
             commands.entity(e).remove::<bevy::post_process::bloom::Bloom>();
         }
@@ -514,8 +703,16 @@ mod tests {
             camera_speed: 1.5,
             msaa: 2,
             bloom: false,
+            bloom_intensity: 1.5,
             shadows: false,
             particle_density: 0.5,
+            bindings: KeyBindings {
+                pause: KeyCode::KeyP,
+                speed: KeyCode::PageUp,
+                attack_move: KeyCode::KeyQ,
+                stop: KeyCode::KeyH,
+                retreat: KeyCode::Delete,
+            },
         };
         assert_eq!(Settings::from_toml(&s.to_toml()), s);
     }
@@ -541,6 +738,10 @@ mod tests {
         assert_eq!(s.fps_cap, 240);
         s.step(OptionKey::WindowMode, 1);
         assert!(s.borderless);
+        s.step(OptionKey::KeyPause, 1);
+        assert_eq!(s.bindings.pause, KeyCode::KeyP);
+        s.step(OptionKey::BloomIntensity, 1);
+        assert_eq!(s.bloom_intensity, 1.5);
     }
 
     #[test]

@@ -70,7 +70,7 @@ impl Plugin for BattlePlayPlugin {
             .add_systems(OnExit(AppScreen::SpaceBattle), end_session)
             .add_systems(
                 Update,
-                (finish_battle_view, abort_key, begin_button, loading_shot, battle_menu, battle_ui_camera, battle_shot, battle_header, battle_orders)
+                (finish_battle_view, abort_key, begin_button, loading_shot, battle_menu, battle_ui_camera, battle_shot, battle_header, battle_orders, tactical_hotkeys)
                     .run_if(in_state(AppScreen::SpaceBattle).and_then(resource_exists::<PendingTactical>)),
             );
     }
@@ -594,6 +594,7 @@ fn battle_menu(
 /// F10 gives the fight up; the sim settles the battle with its auto-resolve.
 fn abort_key(
     keys: Res<ButtonInput<KeyCode>>,
+    settings: Res<crate::settings::Settings>,
     pending: Res<PendingTactical>,
     args: Res<Args>,
     status: Res<BattleStatus>,
@@ -606,8 +607,46 @@ fn abort_key(
         *fired = true;
         done.write(BattleFinished { id: pending.0.battle_id, outcome: BattleOutcome::Aborted });
     }
-    if keys.just_pressed(KeyCode::F10) {
+    if keys.just_pressed(KeyCode::F10) || keys.just_pressed(settings.bindings.retreat) {
         done.write(BattleFinished { id: pending.0.battle_id, outcome: BattleOutcome::Aborted });
+    }
+}
+
+/// Configurable hotkeys during tactical battles (pause, speed, attack-move, stop).
+#[allow(clippy::too_many_arguments)]
+fn tactical_hotkeys(
+    keys: Res<ButtonInput<KeyCode>>,
+    settings: Res<crate::settings::Settings>,
+    mut view_settings: ResMut<BattleViewSettings>,
+    mut armed: ResMut<battle_view::control::ArmedOrder>,
+    rt: Option<Res<battle_view::BattleRuntime>>,
+    ships: Option<Res<battle_view::RenderedShips>>,
+    sel: Option<Res<battle_view::Selection>>,
+    mut issued: MessageWriter<battle_view::control::OrderIssued>,
+    menu: Res<crate::menu::BattleMenu>,
+) {
+    if menu.open {
+        return;
+    }
+    if keys.just_pressed(settings.bindings.pause) {
+        view_settings.paused = !view_settings.paused;
+    }
+    if keys.just_pressed(settings.bindings.speed) {
+        view_settings.speed = if view_settings.speed > 1.5 { 1.0 } else { 2.0 };
+    }
+    if keys.just_pressed(settings.bindings.attack_move) {
+        armed.0 = (armed.0 != Some(battle_view::control::ArmedKind::AttackMove)).then_some(battle_view::control::ArmedKind::AttackMove);
+    }
+    if keys.just_pressed(settings.bindings.stop) && !keys.pressed(KeyCode::ControlLeft) {
+        if let (Some(rt), Some(ships), Some(sel)) = (&rt, &ships, &sel) {
+            let player = view_settings.player_side;
+            let mine = battle_view::control::selected_mobile(rt, ships, sel, player);
+            if !mine.is_empty() {
+                let lead = battle_view::control::voice_lead(rt, ships, &mine);
+                rt.sim.command(player, battle_sim::Command::Stop { ships: mine });
+                issued.write(battle_view::control::OrderIssued { kind: battle_view::control::OrderKind::Stop, lead });
+            }
+        }
     }
 }
 
