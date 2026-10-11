@@ -385,6 +385,11 @@ impl ScriptedSim {
                 engine.strategy.tiers.insert(id, ai_tier);
             }
         }
+        if let Some(tier) = config.difficulty
+            && human != u32::MAX
+        {
+            i.sim.set_faction_difficulty(human, player_difficulty(tier));
+        }
         i.sim.set_ai_factions(std::iter::empty());
         i.ai = Some(engine);
     }
@@ -569,16 +574,56 @@ impl ScriptedSim {
     }
 }
 
+/// Player difficulty adjustments (U95 and Remake conventions).
+pub fn player_difficulty(tier: DifficultyTier) -> galaxy_sim::Difficulty {
+    match tier {
+        DifficultyTier::Easy => galaxy_sim::Difficulty {
+            credit: 1.25, // Player +25% income on Easy
+            build_time: 1.0,
+            damage: 1.0,
+            health: 1.0,
+            shield: 1.0,
+        },
+        DifficultyTier::Normal | DifficultyTier::Fair => galaxy_sim::Difficulty::default(),
+        DifficultyTier::Hard => galaxy_sim::Difficulty {
+            credit: 1.0,
+            build_time: 1.0,
+            damage: 1.0,
+            health: 1.0,
+            shield: 1.0,
+        },
+        DifficultyTier::Brutal => galaxy_sim::Difficulty {
+            credit: 0.85,
+            build_time: 1.0,
+            damage: 1.0,
+            health: 1.0,
+            shield: 1.0,
+        },
+    }
+}
+
 /// Maps a tier to the sim multipliers and the AI tier (see [`DifficultyTier`]).
 fn tier_settings(table: &alamo_data::DifficultyTable, tier: DifficultyTier, minor: bool) -> (galaxy_sim::Difficulty, AiTier) {
     let suffix = if minor { "Minor" } else { "Default" };
     let entry = |name: &str| table.get(&format!("{name}_{suffix}")).cloned().unwrap_or_default();
     let ai = |name: &str, a: &alamo_data::DifficultyAdjustment, full: bool| AiTier { name: name.into(), contrast: f64::from(a.galactic_contrast), goal_sleep: f64::from(a.galactic_goal_sleep), full_map_knowledge: full };
     match tier {
-        DifficultyTier::Easy | DifficultyTier::Normal | DifficultyTier::Hard => {
-            let name = match tier { DifficultyTier::Easy => "Easy", DifficultyTier::Normal => "Normal", _ => "Hard" };
-            let a = entry(name);
-            (galaxy_sim::Difficulty::from_adjustment(&a), ai(name, &a, false))
+        DifficultyTier::Easy => {
+            let a = entry("Easy");
+            let mut d = galaxy_sim::Difficulty::from_adjustment(&a);
+            d.credit = (a.credit_multiplier * 0.80).min(0.80); // AI -20% income on Easy (U95)
+            (d, ai("Easy", &a, false))
+        }
+        DifficultyTier::Normal => {
+            let a = entry("Normal");
+            (galaxy_sim::Difficulty::from_adjustment(&a), ai("Normal", &a, false))
+        }
+        DifficultyTier::Hard => {
+            let a = entry("Hard");
+            let mut d = galaxy_sim::Difficulty::from_adjustment(&a);
+            d.credit = a.credit_multiplier * 1.35; // AI +35% income on Hard (U95)
+            d.build_time = (a.galactic_build_time * 0.85).min(0.85); // faster build times on Hard
+            (d, ai("Hard", &a, false))
         }
         DifficultyTier::Brutal => {
             let a = entry("Hard");
@@ -605,5 +650,22 @@ mod minor_tests {
         for (name, p) in default_personalities() {
             assert!(m.aggression < p.aggression, "{name}");
         }
+    }
+
+    #[test]
+    fn difficulty_adjustments_match_remake_spec() {
+        let p_easy = player_difficulty(DifficultyTier::Easy);
+        let p_norm = player_difficulty(DifficultyTier::Normal);
+        let p_hard = player_difficulty(DifficultyTier::Hard);
+        assert_eq!(p_easy.credit, 1.25, "player gets +25% income on Easy");
+        assert_eq!(p_norm.credit, 1.0);
+        assert_eq!(p_hard.credit, 1.0);
+
+        let table = alamo_data::DifficultyTable::default();
+        let (ai_easy, _) = tier_settings(&table, DifficultyTier::Easy, false);
+        let (ai_hard, _) = tier_settings(&table, DifficultyTier::Hard, false);
+        assert!(ai_easy.credit <= 0.80, "AI income reduced on Easy: {}", ai_easy.credit);
+        assert!(ai_hard.credit >= 1.35, "AI income boosted on Hard: {}", ai_hard.credit);
+        assert!(ai_hard.build_time < 1.0, "AI builds faster on Hard: {}", ai_hard.build_time);
     }
 }
