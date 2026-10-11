@@ -169,6 +169,8 @@ pub struct PlanetInfo {
     pub max_space_base: i32,
     /// `Planet_Is_Destroyable_By_TSW` (a superweapon may destroy it). Planets without the tag count as destroyable (estimate).
     pub destroyable: bool,
+    /// Innate production modifiers (shipyard bonuses from XML, e.g. Kuat, Rendili, Rothana).
+    pub prod_mods: Vec<ProductionMod>,
 }
 
 /// A hyperspace lane.
@@ -484,6 +486,8 @@ pub struct StarbaseType {
     pub combat: CombatStats,
     /// Fighter garrison spawned in battle (unit type, count).
     pub garrison: Vec<(UnitTypeId, u32)>,
+    /// Production modifiers of this star base level.
+    pub prod_mods: Vec<ProductionMod>,
 }
 
 /// Damage-type versus armor-type multipliers with dense indices.
@@ -673,6 +677,7 @@ impl World {
                 surface_accessible: p.surface_accessible,
                 capture_bonus: p.fields.get("planet_capture_bonus_reward").and_then(|v| v.trim().parse().ok()).unwrap_or(0.0),
                 destroyable: p.fields.get("planet_is_destroyable_by_tsw").is_none_or(|v| alamo_data::xml::parse_bool(v)),
+                prod_mods: Vec::new(),
             });
         }
         if planets.is_empty() {

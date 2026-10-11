@@ -362,6 +362,7 @@ impl World {
                 income_pct: def.income_modifiers.iter().map(|m| m.percentage).sum(),
                 combat,
                 garrison,
+                prod_mods: production_mods(&def.sub_abilities),
             });
         }
         // `next_names` may be shorter than starbases when duplicates were skipped; align by name.
@@ -423,6 +424,13 @@ impl World {
             self.buildable_units.push(units);
             self.buildable_structures.push(structs);
             self.first_starbase.push(first);
+        }
+
+        // Innate planet production modifiers (shipyards: Kuat, Rendili, Rothana, etc.)
+        for p in &mut self.planets {
+            if let Some(def) = data.planet(&p.name) {
+                p.prod_mods = production_mods(&def.sub_abilities);
+            }
         }
     }
 

@@ -1,4 +1,4 @@
-﻿//! Typed views of the object definitions that matter for galactic conquest and space combat:
+//! Typed views of the object definitions that matter for galactic conquest and space combat:
 //! ships and squadrons, hardpoints, projectiles, star bases and planetary structures.
 //!
 //! All views are built from an inheritance-resolved [`Resolved`] object, so values inherited via
@@ -757,6 +757,8 @@ pub struct StarBaseDef {
     pub unlocks: Vec<String>,
     /// Income changes (e.g. upkeep) applied to the planet.
     pub income_modifiers: Vec<IncomeModifier>,
+    /// Sub-abilities (e.g. production modifiers).
+    pub sub_abilities: Vec<SubAbility>,
     /// File the definition came from.
     pub source_file: String,
     /// Raw resolved tags.
@@ -767,7 +769,7 @@ impl StarBaseDef {
     fn from_resolved(r: &Resolved) -> Self {
         let f32_or = |t: &str| r.num::<f32>(t).unwrap_or(0.0);
         let i32_or = |t: &str| r.num::<i32>(t).unwrap_or(0);
-        let (_, income_modifiers) = parse_sub_abilities(r);
+        let (sub_abilities, income_modifiers) = parse_sub_abilities(r);
         // `Tactical_Buildable_Objects_Campaign = Faction, Obj1, Obj2, ...`
         let unlocks = r
             .get_all("tactical_buildable_objects_campaign")
@@ -813,6 +815,7 @@ impl StarBaseDef {
                 .collect(),
             unlocks,
             income_modifiers,
+            sub_abilities,
             source_file: r.object.source_file.clone(),
             fields: field_map(r),
         }

@@ -246,3 +246,24 @@ fn a_lifetime_limit_of_minus_one_means_unlimited() {
     let r = w.check_build_unit(sim.galaxy(), rep, p, u);
     assert!(!matches!(r, Err(CommandError::BuildLimit)), "nothing alive, no lifetime limit: {r:?}");
 }
+
+#[test]
+fn shipyard_planet_applies_production_modifiers() {
+    let Some(data) = load() else { return };
+    let mut sim = new_sim(&data);
+    let w = sim.world().clone();
+    let empire = w.faction_id("Empire").unwrap();
+    let kuat = w.planet_id("Kuat_WW").unwrap();
+    let cor = w.planet_id("Coruscant_WW").unwrap();
+    bare_planet(&mut sim, empire, kuat, 3);
+    bare_planet(&mut sim, empire, cor, 3);
+
+    // Kuat has innate shipyard production modifiers (25% time reduction on ships)
+    assert!(!w.planets[kuat as usize].prod_mods.is_empty(), "Kuat has innate production mods in Remake XML");
+
+    if let Some(isd) = w.unit_id("Generic_Star_Destroyer") {
+        let (_cor_cost, cor_time) = w.unit_cost(sim.galaxy(), empire, cor, isd);
+        let (_kuat_cost, kuat_time) = w.unit_cost(sim.galaxy(), empire, kuat, isd);
+        assert!(kuat_time < cor_time, "Kuat shipyard reduces build time: kuat={kuat_time} < cor={cor_time}");
+    }
+}

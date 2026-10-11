@@ -110,6 +110,8 @@ pub struct Planet {
     pub ability_description: Option<String>,
     /// `Abilities` list.
     pub abilities: Vec<String>,
+    /// Sub-abilities (e.g. `Reduce_Production_Time_Ability`).
+    pub sub_abilities: Vec<crate::space::SubAbility>,
     /// `Scale_Factor` of the galactic model.
     pub scale_factor: f32,
     /// `Show_Name`.
@@ -131,6 +133,21 @@ impl Planet {
             .map(|c| c.text_trimmed().to_string())
             .filter(|s| !s.is_empty())
             .collect();
+        let mut sub_abilities = Vec::new();
+        for abilities_el in el.children.iter().filter(|c| c.name == "abilities") {
+            for a in &abilities_el.children {
+                let sub_name = a.attr("name").unwrap_or_default().trim().to_string();
+                let mut sub_f = HashMap::new();
+                for c in &a.children {
+                    sub_f.entry(c.name.clone()).or_insert_with(|| c.text_trimmed().to_string());
+                }
+                sub_abilities.push(crate::space::SubAbility {
+                    name: sub_name,
+                    kind: a.raw_name.clone(),
+                    fields: sub_f,
+                });
+            }
+        }
         let legacy_structures: i32 = get_num(&f, "special_structures");
         let land = f
             .get("special_structures_land")
@@ -161,6 +178,7 @@ impl Planet {
             ability_name: get_string(&f, "planet_ability_name"),
             ability_description: get_string(&f, "planet_ability_description"),
             abilities: get_list(&f, "abilities"),
+            sub_abilities,
             scale_factor: get_num(&f, "scale_factor"),
             show_name: get_bool(&f, "show_name"),
             source_file: source_file.to_string(),

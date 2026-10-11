@@ -1,4 +1,4 @@
-﻿//! Build requirement checks, economy and population bookkeeping.
+//! Build requirement checks, economy and population bookkeeping.
 
 use crate::state::*;
 use crate::world::*;
@@ -157,6 +157,13 @@ impl World {
         }
         let ps = &galaxy.planets[planet as usize];
         if ps.owner == Some(faction) {
+            // Planet-specific shipyard abilities (Kuat, Rendili, Rothana, Sullust, Vergesso, etc.)
+            add(&self.planets[planet as usize].prod_mods);
+            // Orbiting star base modifiers
+            if let Some(sb) = ps.starbase {
+                add(&self.starbases[sb as usize].prod_mods);
+            }
+            // Planetary structures (docks, shipyards, academies)
             for &s in &ps.structures {
                 add(&self.structures[s as usize].prod_mods);
             }
