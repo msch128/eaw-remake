@@ -215,3 +215,20 @@ the Remake (Victory Destroyer missiles). The data has no launch angle for missil
 (44% without the offset) and 77% hit or are intercepted before their range runs out (82% without). Rockets (`ROCKET` category,
 `Projectile_Rocket_Curve_*` fields, `Max_Rate_Of_Turn` ~0) are unguided and keep their straight flight; the curve fields are not read yet.
 The viewer draws missiles at the simulated position and velocity, so the trails follow the arc.
+
+## Behaviour constants added in U52, U60-U66 and U93 (what is data, what is estimate)
+The Remake XML has no numbers for these movement and doctrine details; every value below is an **estimate**, kept in `sim.rs` / `defs.rs`, and only shapes how ships move, never damage, health, range or speed from the data.
+Squadron formation slots are data (`Squadron_Offsets`, `Starfighter_Formations.xml`); only the fallback `(-20 x i, 25 x (i % 2))` is an estimate.
+
+| Item | Value | Why it is an estimate |
+|---|---|---|
+| Engine hardpoint effect (U52) | speed x `0.20 + 0.80 x alive/total engines` (was a 0.25 floor) | the data has `HARD_POINT_ENGINE` hardpoints but no rule for what losing them does |
+| Synthesised engine hardpoint (U52) | ships with destroyable hardpoints and none of type engine get one 0.75 radii astern, health 8% of their destroyable hardpoint health clamped to 1000..3000 | some capitals (e.g. Star Destroyer) have no engine hardpoint in the XML |
+| Dogfight breakout (U60) | squadrons leave formation within 650 u of fighters/bombers, close-run distance `max(70 + slack, 180)`, slot blend radius 80 u (60%), speed catch-up 1.5 u/s per u behind, 2.0 per u ahead | engine steering is not in the data |
+| Broadside approach (U61) | curve starts at 2.2 x stand-off, tangential offset 0.45 x stand-off, stop distance `max(2.5 x braking + 1.5 x radius, 400)` | the data gives gun arcs (used) but not how the AI manoeuvres |
+| Bomber attack run (U62) | x1.35 speed and x1.5 acceleration while egressing, climb 0.7 x speed, hardpoint order shield generator, engine, fighter bay, weapon | engine behaviour; the order follows the in-game description of bombers, not a data table |
+| Escort avoidance (U65) | corvettes and frigates keep capital hull + own radius + 150 u, repulsion weight 3.5, slow-down inside +50 u; capitals never yield to escorts | collision handling is not in the data |
+| Interceptor doctrine (U66) | fighters whose name contains interceptor, a_wing, awing, tri_fighter, v_wing, vwing or howlrunner weigh enemy bombers x0.15 (more attractive) on top of their `Targeting_Priority_Set` | the priority sets are the data rule and stay in force; the extra weight and the name list are ours (`CategoryMask` `AntiFighter` is on all 71 standard fighters, so it cannot mark interceptors) |
+| Carrier screen (earlier) | fighters near their carrier prefer bombers within 3500 u of it, x0.3 | estimate, already labelled in the code |
+| Flanking (U93) | corvettes and units faster than 250 u/s swing 3200 + 600 x (id % 3) u (attack-move) or 3500 + 500 x (id % 4) u (move) to the side | the Remake has flanking behaviour but no distances in the XML |
+Visual-only effects of U67-U74 (ribbons, debris, glow, ripples, sensor rings, hyperspace tunnel) do not change simulation state.
