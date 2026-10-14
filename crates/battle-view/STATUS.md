@@ -241,3 +241,10 @@ Add `battle-view`, `galaxy-sim` (already there through galaxy-play) and `eaw-ui`
 - **Hyperspace slot:** `galaxy_sim::tactical::apply_hyperspace_slots` reads `Galaxy::hyperspace_unit(fleet)` when the request is built: with a slot ship in a fleet of the side only that unit (one of a stack) is deployed, every other unit goes to the reserve (carried fighters launch with the slot unit); star bases and structures stay. Without a slot the start rule is unchanged (everything up to the faction cap, the rest is the reserve). `battle_play` needs no switch.
 - `input_test` (36 checks): `reinforcement-drag-Fog` (drag onto ground outside every sensor disc: red ghost "Area not explored", unit stays in the reserve), `reinforcement-drag-NoSpawn` (into an enemy
   structure's zone; reads "not judged" when the scenario has no enemy structure), `reinforcement-drag-Valid` (next to an own ship: green ghost, reserve count drops).
+
+## Battle HUD round (2026-10-14)
+- Opening camera frames the median spread of the player's fleet (`START_DISTANCE_MIN` 700 .. `BattleViewSettings::start_distance` 1300), not a fixed 3500.
+- Offscreen `--battle-seconds T` is honoured, also together with `--battle-orders` (which used to capture ~1 s after the orders).
+- Bar: with nothing of ours selected the unit cards show the whole fleet per type (no abilities, no focus); a click selects that type.
+- Minimap: the camera footprint is a projected trapezoid (`eaw_ui::MinimapCameraQuad`), dots are green (own) / red (others).
+- Hero portrait click selects and centres the camera (single click).
