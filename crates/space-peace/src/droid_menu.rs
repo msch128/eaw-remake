@@ -16,11 +16,13 @@ use crate::flow::AppScreen;
 pub(crate) fn plugin(app: &mut App) {
     app.init_resource::<DroidMenuState>()
         .init_resource::<HistoryTracker>()
+        .init_resource::<AdvisorLog>()
         .add_systems(
             Update,
             (
                 toggle_menu,
                 track_history,
+                record_advisor_log,
                 update_window,
                 handle_clicks,
                 handle_scroll,
@@ -47,7 +49,13 @@ impl Default for DroidMenuState {
     fn default() -> Self {
         Self {
             open: false,
-            tab: DroidMenuTab::Log,
+            // SP_DROID_TAB=history|tech|summary opens another tab first (offscreen checks).
+            tab: match std::env::var("SP_DROID_TAB").as_deref() {
+                Ok("history") => DroidMenuTab::History,
+                Ok("tech") => DroidMenuTab::TechTree,
+                Ok("summary") => DroidMenuTab::Summary,
+                _ => DroidMenuTab::Log,
+            },
             enable_hints: true,
             history_metric: HistoryMetric::All,
             summary_view: SummaryView::Production,
@@ -125,6 +133,7 @@ pub(crate) struct FactionRecord {
     pub name: String,
     pub color: Color,
     pub credits: f64,
+    #[allow(dead_code)]
     pub income: f64,
     pub planets: u32,
     pub military: u32,
@@ -280,6 +289,7 @@ fn update_window(
     mut commands: Commands,
     state: Res<DroidMenuState>,
     history: Res<HistoryTracker>,
+    advisor_log: Res<AdvisorLog>,
     existing: Query<Entity, With<DroidMenuRoot>>,
     sim_opt: Option<Res<SimState>>,
     player: Res<PlayerFaction>,
@@ -437,7 +447,7 @@ fn update_window(
             ))
             .with_children(|content| {
                 match state.tab {
-                    DroidMenuTab::Log => render_log_tab(content, &state, &font, blue, cyan),
+                    DroidMenuTab::Log => render_log_tab(content, &state, &advisor_log, &font, blue, cyan),
                     DroidMenuTab::History => {
                         render_history_tab(content, &state, &history, &font, blue, cyan)
                     }
@@ -494,6 +504,7 @@ fn update_window(
 fn render_log_tab(
     content: &mut ChildSpawnerCommands,
     state: &DroidMenuState,
+    advisor_log: &AdvisorLog,
     font: &dyn Fn(f32) -> TextFont,
     blue: Color,
     cyan: Color,
@@ -689,18 +700,17 @@ fn render_log_tab(
                         },
                     ));
 
-                    let logs = [
-                        "[WEEK 01] Campaign initiated. Command nexus established.",
-                        "[WEEK 02] Starbase garrison readiness confirmed across core worlds.",
-                        "[WEEK 03] Hyperspace patrol vectors reported clear of enemy interdictors.",
-                    ];
-
-                    for l in logs {
-                        col.spawn((
-                            Text::new(l),
-                            font(12.0),
-                            TextColor(Color::srgb(0.7, 0.8, 0.9)),
-                        ));
+                    // The recorded advisor messages, newest first, grouped by month.
+                    if advisor_log.entries.is_empty() {
+                        col.spawn((Text::new("No advisor reports yet."), font(12.0), TextColor(Color::srgb(0.7, 0.8, 0.9))));
+                    }
+                    let mut month = u64::MAX;
+                    for (week, text) in advisor_log.entries.iter().rev().take(14) {
+                        if week / 4 != month {
+                            month = week / 4;
+                            col.spawn((Text::new(format!("MONTH {}", month + 1)), font(12.0), TextColor(blue)));
+                        }
+                        col.spawn((Text::new(format!("[WEEK {:02}] {text}", week + 1)), font(12.0), TextColor(Color::srgb(0.7, 0.8, 0.9))));
                     }
                 });
         });
@@ -808,103 +818,23 @@ fn render_history_tab(
                     }
                 });
 
-            // Data Table / Chart Representation
+            // Line charts of the recorded weekly samples: one chart per metric ("all" shows the three side by side).
             chart
-                .spawn(Node {
-                    flex_grow: 1.0,
-                    flex_direction: FlexDirection::Column,
-                    justify_content: JustifyContent::SpaceEvenly,
-                    padding: UiRect::all(Val::Px(8.0)),
-                    border: UiRect::all(Val::Px(1.0)),
-                    ..default()
-                })
-                .insert((
-                    BackgroundColor(Color::srgba(0.01, 0.02, 0.05, 0.9)),
-                    BorderColor::all(Color::srgb(0.2, 0.3, 0.45)),
-                ))
-                .with_children(|grid| {
-                    if let Some(latest) = history.samples.last() {
-                        for f in &latest.factions {
-                            grid.spawn(Node {
-                                flex_direction: FlexDirection::Column,
-                                row_gap: Val::Px(3.0),
-                                margin: UiRect::vertical(Val::Px(4.0)),
-                                ..default()
-                            })
-                            .with_children(|row| {
-                                row.spawn(Node {
-                                    justify_content: JustifyContent::SpaceBetween,
-                                    ..default()
-                                })
-                                .with_children(|lbls| {
-                                    lbls.spawn((
-                                        Text::new(format!("{}:", f.name.to_uppercase())),
-                                        font(14.0),
-                                        TextColor(f.color),
-                                    ));
-
-                                    let stat_txt = match state.history_metric {
-                                        HistoryMetric::All => format!(
-                                            "{:.0} cr | {} ships | {} planets",
-                                            f.credits, f.military, f.planets
-                                        ),
-                                        HistoryMetric::Economy => {
-                                            format!("{:.0} credits (+{:.0}/wk)", f.credits, f.income)
-                                        }
-                                        HistoryMetric::Military => {
-                                            format!("{} combat ships / squadrons", f.military)
-                                        }
-                                        HistoryMetric::Planets => {
-                                            format!("{} star systems controlled", f.planets)
-                                        }
-                                    };
-
-                                    lbls.spawn((
-                                        Text::new(stat_txt),
-                                        font(13.0),
-                                        TextColor(Color::srgb(0.85, 0.9, 1.0)),
-                                    ));
-                                });
-
-                                // Progress / Trend Bar
-                                let bar_pct = match state.history_metric {
-                                    HistoryMetric::All | HistoryMetric::Economy => {
-                                        ((f.credits / 100000.0) * 100.0).clamp(5.0, 100.0)
-                                    }
-                                    HistoryMetric::Military => {
-                                        ((f.military as f64 / 60.0) * 100.0).clamp(5.0, 100.0)
-                                    }
-                                    HistoryMetric::Planets => {
-                                        ((f.planets as f64 / 30.0) * 100.0).clamp(5.0, 100.0)
-                                    }
-                                } as f32;
-
-                                row.spawn(Node {
-                                    width: Val::Percent(100.0),
-                                    height: Val::Px(12.0),
-                                    border: UiRect::all(Val::Px(1.0)),
-                                    ..default()
-                                })
-                                .insert((
-                                    BackgroundColor(Color::srgb(0.05, 0.08, 0.12)),
-                                    BorderColor::all(Color::srgb(0.2, 0.25, 0.35)),
-                                ))
-                                .with_child((
-                                    Node {
-                                        width: Val::Percent(bar_pct),
-                                        height: Val::Percent(100.0),
-                                        ..default()
-                                    },
-                                    BackgroundColor(f.color),
-                                ));
-                            });
-                        }
+                .spawn(Node { flex_grow: 1.0, column_gap: Val::Px(14.0), align_items: AlignItems::Center, justify_content: JustifyContent::Center, ..default() })
+                .with_children(|charts| {
+                    if history.samples.len() < 2 {
+                        charts.spawn((Text::new("COLLECTING GALACTIC HISTORICAL DATA..."), font(14.0), TextColor(cyan)));
+                        return;
+                    }
+                    let all = state.history_metric == HistoryMetric::All;
+                    let kinds: &[HistoryMetric] = if all {
+                        &[HistoryMetric::Economy, HistoryMetric::Military, HistoryMetric::Planets]
                     } else {
-                        grid.spawn((
-                            Text::new("COLLECTING GALACTIC HISTORICAL DATA..."),
-                            font(14.0),
-                            TextColor(cyan),
-                        ));
+                        std::slice::from_ref(&state.history_metric)
+                    };
+                    let (w, h) = if all { (295.0, 250.0) } else { (860.0, 300.0) };
+                    for &kind in kinds {
+                        draw_line_chart(charts, history, kind, w, h, font, blue);
                     }
                 });
 
@@ -1430,3 +1360,96 @@ mod tests {
     }
 }
 
+
+/// Advisor messages of the campaign (the ticker lines), kept for the Droid Log archive.
+#[derive(Resource, Default, Debug)]
+pub(crate) struct AdvisorLog {
+    /// Highest notification id recorded so far.
+    last_id: u64,
+    /// (galactic week, text), oldest first.
+    pub entries: Vec<(u64, String)>,
+}
+
+/// Copies new ticker notifications into the [`AdvisorLog`].
+fn record_advisor_log(model: Option<Res<galaxy_play::PlayUiModel>>, mut log: ResMut<AdvisorLog>) {
+    let Some(model) = model else { return };
+    let log = &mut *log;
+    let seen = log.last_id;
+    for n in model.notifications.iter().filter(|n| n.id > seen) {
+        log.last_id = n.id;
+        // Weekly income lines would fill the archive without telling anything new.
+        if n.kind != galaxy_play::NotificationKind::Income {
+            log.entries.push((model.top.week, n.text.clone()));
+        }
+    }
+    let excess = log.entries.len().saturating_sub(200);
+    log.entries.drain(..excess);
+}
+
+/// One line chart of a history metric: a polyline per faction (rotated thin nodes), the maximum on the y axis and the
+/// recorded week range below.
+fn draw_line_chart(
+    parent: &mut ChildSpawnerCommands,
+    history: &HistoryTracker,
+    metric: HistoryMetric,
+    w: f32,
+    h: f32,
+    font: &dyn Fn(f32) -> TextFont,
+    blue: Color,
+) {
+    let value = |r: &FactionRecord| -> f32 {
+        match metric {
+            HistoryMetric::Planets => r.planets as f32,
+            HistoryMetric::Military => r.military as f32,
+            _ => r.credits as f32,
+        }
+    };
+    let (title, unit) = match metric {
+        HistoryMetric::Planets => ("TERRITORY (PLANETS)", ""),
+        HistoryMetric::Military => ("MILITARY (SHIPS)", ""),
+        _ => ("ECONOMY (CREDITS)", ""),
+    };
+    let samples = &history.samples;
+    let max = samples.iter().flat_map(|s| s.factions.iter()).map(value).fold(1.0f32, f32::max);
+    let n = samples.len();
+    let point = |i: usize, v: f32| Vec2::new(i as f32 / (n - 1) as f32 * w, h - (v / max).clamp(0.0, 1.0) * h);
+    parent
+        .spawn(Node { flex_direction: FlexDirection::Column, row_gap: Val::Px(4.0), ..default() })
+        .with_children(|col| {
+            col.spawn((Text::new(format!("{title}  MAX {max:.0}{unit}")), font(12.0), TextColor(blue)));
+            col.spawn((
+                Node { width: Val::Px(w), height: Val::Px(h), border: UiRect::left(Val::Px(1.0)).with_bottom(Val::Px(1.0)), ..default() },
+                BackgroundColor(Color::srgba(0.01, 0.02, 0.05, 0.9)),
+                BorderColor::all(Color::srgb(0.3, 0.4, 0.6)),
+            ))
+            .with_children(|plot| {
+                // Horizontal grid.
+                for k in 1..4 {
+                    plot.spawn((
+                        Node { position_type: PositionType::Absolute, left: Val::Px(0.0), top: Val::Px(h * k as f32 / 4.0), width: Val::Px(w), height: Val::Px(1.0), ..default() },
+                        BackgroundColor(Color::srgba(0.3, 0.4, 0.6, 0.25)),
+                    ));
+                }
+                let Some(last) = samples.last() else { return };
+                for (fi, rec) in last.factions.iter().enumerate() {
+                    for i in 1..n {
+                        let (Some(a), Some(b)) = (samples[i - 1].factions.get(fi), samples[i].factions.get(fi)) else { continue };
+                        let (pa, pb) = (point(i - 1, value(a)), point(i, value(b)));
+                        let d = pb - pa;
+                        let len = d.length() + 1.0;
+                        let c = (pa + pb) * 0.5;
+                        plot.spawn((
+                            Node { position_type: PositionType::Absolute, left: Val::Px(c.x - len * 0.5), top: Val::Px(c.y - 1.0), width: Val::Px(len), height: Val::Px(2.0), ..default() },
+                            UiTransform::from_rotation(Rot2::radians(d.y.atan2(d.x))),
+                            BackgroundColor(rec.color),
+                        ));
+                    }
+                }
+            });
+            col.spawn((
+                Text::new(format!("WEEK {} - WEEK {}", samples[0].week as u32, samples[n - 1].week as u32)),
+                font(11.0),
+                TextColor(Color::srgb(0.6, 0.7, 0.85)),
+            ));
+        });
+}
