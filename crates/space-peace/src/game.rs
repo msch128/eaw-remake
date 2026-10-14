@@ -851,6 +851,24 @@ mod problem_tests {
 /// The planet panel text of the original: the `Describe_*` lines (system, climate, population, minerals ...) followed by
 /// the history paragraph of the encyclopedia.
 fn planet_info(data: &GameData, p: &alamo_data::Planet) -> Vec<String> {
+    // The Remake panel (CS9VdxglewY f0009) prints the planet's `Encyclopedia_Text` list in order: "This is a System ...", climate, population,
+    // deposits, orbital capacity, then the history; `TEXT_LINE` is a blank line. Planets without that list keep the older description lines.
+    let mut ordered: Vec<String> = Vec::new();
+    for key in &p.encyclopedia_text {
+        if key.eq_ignore_ascii_case("TEXT_LINE") {
+            if ordered.last().is_some_and(|l| !l.is_empty()) {
+                ordered.push(String::new());
+            }
+        } else if let Some(t) = data.text(key) {
+            ordered.extend(t.replace("\\n", "\n").trim().lines().map(str::to_owned));
+        }
+    }
+    while ordered.last().is_some_and(|l| l.is_empty()) {
+        ordered.pop();
+    }
+    if ordered.len() > 1 {
+        return ordered;
+    }
     let mut lines: Vec<String> = p
         .description_ids
         .iter()
