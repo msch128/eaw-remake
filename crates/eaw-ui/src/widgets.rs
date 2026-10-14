@@ -13,7 +13,7 @@ use bevy::window::PrimaryWindow;
 use crate::EawUiAssets;
 use crate::EawUiSettings;
 use crate::components::{CommandBarComponent, CommandBarDb, ComponentKind};
-use crate::data::{CommandBarData, PadRemap, EawButtonClicked, EawButtonState, ForcedTooltip, WorldTooltip};
+use crate::data::{CommandBarData, PadRemap, EawButtonClicked, EawButtonState, ForcedTooltip, TooltipSuppress, WorldTooltip};
 use crate::faction::UiFaction;
 use crate::panels::{
     MinimapKind, MinimapSurface, PanelBarName, PanelData, PanelSlotName, PanelText, is_panel_slot,
@@ -1666,6 +1666,7 @@ fn fill_tooltip(p: &mut ChildSpawnerCommands, layout: &TooltipLayout, icon: Opti
 pub(crate) fn tooltip(
     assets: Res<EawUiAssets>,
     forced: Res<ForcedTooltip>,
+    suppress: Res<TooltipSuppress>,
     world_tip: Res<WorldTooltip>,
     buttons: Query<(Entity, &EawButton, &Interaction, &ComputedNode, &UiGlobalTransform)>,
     markers: Query<(&SlotPart, &Node, &ComputedNode, &UiGlobalTransform, &ChildOf)>,
@@ -1682,6 +1683,10 @@ pub(crate) fn tooltip(
     let Ok((root, mut node, mut vis, own)) = tip.single_mut() else {
         return;
     };
+    if suppress.0 && forced.0.is_none() {
+        node.display = Display::None;
+        return;
+    }
     let cursor_phys = window.single().ok().and_then(Window::physical_cursor_position);
     let mut hit = None;
     for (e, b, i, cn, gt) in &buttons {

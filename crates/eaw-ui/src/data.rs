@@ -161,6 +161,10 @@ pub struct EawButtonState {
 #[derive(Resource, Debug, Clone, Default)]
 pub struct ForcedTooltip(pub Option<String>);
 
+/// Set by the host while a menu or modal screen covers the bar: no button tooltip shows (a button under the overlay may still read as hovered).
+#[derive(Resource, Debug, Clone, Copy, Default)]
+pub struct TooltipSuppress(pub bool);
+
 
 /// Which `pads` entry each `b_create_NN` slot shows while [`CommandBarData::pads_bottom_row`] is set (written by the widgets).
 #[derive(Resource, Debug, Clone, Default)]

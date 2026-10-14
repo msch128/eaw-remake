@@ -75,7 +75,7 @@ impl Plugin for PlayGluePlugin {
                     galaxy_audio.run_if(resource_exists::<alamo_audio::plugin::AlamoAudio>.and_then(resource_exists::<PlayerFaction>)),
                     via_menu,
                     scripted_slots,
-                    (sync_selection, sync_view, sync_radii, cursor_blocked, forward_battles, finish_battles, run_script)
+                    (sync_selection, sync_view, sync_radii, cursor_blocked, tooltip_suppress, forward_battles, finish_battles, run_script)
                         .chain()
                         .run_if(resource_exists::<PlayBridge>),
                 )
@@ -284,6 +284,26 @@ fn cursor_blocked(
     let value = over_bar || over_cheat || in_droid_menu || in_planet_view || loading || paused.0 || *screen.get() != AppScreen::Galaxy;
     if blocked.0 != value {
         blocked.0 = value;
+    }
+}
+
+/// No button tooltip behind the pause menu, the options / slot overlays, the droid menu and the battle result screen: buttons under such an overlay
+/// can still read as hovered.
+fn tooltip_suppress(
+    paused: Res<Paused>,
+    options: Option<Res<crate::options::OptionsOpen>>,
+    slots: Option<Res<crate::newgame::SlotScreen>>,
+    droid_menu: Option<Res<crate::droid_menu::DroidMenuState>>,
+    result: Query<(), With<crate::play_ui::ResultRoot>>,
+    mut suppress: ResMut<eaw_ui::TooltipSuppress>,
+) {
+    let value = paused.0
+        || options.is_some_and(|o| o.0)
+        || slots.is_some_and(|s| s.0.is_some())
+        || droid_menu.is_some_and(|d| d.open)
+        || !result.is_empty();
+    if suppress.0 != value {
+        suppress.0 = value;
     }
 }
 
@@ -669,5 +689,23 @@ fn log_play_flow(
             PlayEvent::TacticalReady(r) => info!("play: tactical fight {} ready ({} sides)", r.battle_id, r.sides.len()),
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bevy::ecs::system::RunSystemOnce;
+
+    #[test]
+    fn button_tooltips_are_suppressed_behind_the_pause_menu() {
+        let mut world = World::new();
+        world.insert_resource(Paused(false));
+        world.init_resource::<eaw_ui::TooltipSuppress>();
+        world.run_system_once(tooltip_suppress).unwrap();
+        assert!(!world.resource::<eaw_ui::TooltipSuppress>().0);
+        world.resource_mut::<Paused>().0 = true;
+        world.run_system_once(tooltip_suppress).unwrap();
+        assert!(world.resource::<eaw_ui::TooltipSuppress>().0);
     }
 }
