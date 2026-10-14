@@ -437,6 +437,10 @@ pub struct ReinforceUi {
     ghost_model: Option<(Entity, bool, usize)>,
     /// Mouse wheel rotation offset clamped to ±15 degrees.
     pub ghost_yaw_offset: f32,
+    /// The no-spawn zone discs that are drawn while a unit is carried: entity, centre, radius.
+    zone_discs: Vec<(Entity, Vec3, f32)>,
+    /// Mesh and material shared by the zone discs.
+    zone_assets: Option<(Handle<Mesh>, Handle<StandardMaterial>)>,
 }
 
 /// Verdict of the placement rule at the cursor.
@@ -1157,39 +1161,61 @@ pub(crate) fn no_spawn_zones(rt: &BattleRuntime, side: u8) -> Vec<(Vec3, f32)> {
     battle_sim::no_spawn_zones(side, &units).into_iter().map(|(c, r)| (crate::convert::sim_to_bevy(c), r)).collect()
 }
 
-/// Draws a no-spawn zone as EaW does: a filled red translucent area with a red hatch texture and a soft edge (`y` is the battle plane).
-fn draw_no_spawn_zone(gizmos: &mut Gizmos, centre: Vec3, radius: f32, y: f32) {
-    let c = Vec3::new(centre.x, y, centre.z);
-    let quat = Quat::from_rotation_x(std::f32::consts::FRAC_PI_2);
-
-    // 1. Filled translucent interior wash: concentric circles from center outward.
-    const FILL_RINGS: usize = 28;
-    for i in 1..=FILL_RINGS {
-        let frac = i as f32 / FILL_RINGS as f32;
-        let r = radius * frac * 0.96;
-        let alpha = 0.06 * (1.0 - frac * 0.3);
-        gizmos.circle(Isometry3d::new(c, quat), r, Color::srgba(0.9, 0.15, 0.12, alpha)).resolution(64);
+/// Texture of a no-spawn zone disc (EaW look): a translucent red fill with a red hatch, a brighter rim and a soft edge.
+fn zone_texture() -> Image {
+    use bevy::asset::RenderAssetUsages;
+    use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
+    const N: usize = 512;
+    let mut px = Vec::with_capacity(N * N * 4);
+    for y in 0..N {
+        for x in 0..N {
+            let (u, v) = ((x as f32 + 0.5) / N as f32 * 2.0 - 1.0, (y as f32 + 0.5) / N as f32 * 2.0 - 1.0);
+            let r = (u * u + v * v).sqrt();
+            let hatch = if (x + y) % 20 < 5 { 0.22 } else { 0.0 };
+            let feather = ((1.0 - r) / 0.25).clamp(0.0, 1.0);
+            let rim = if (0.955..=1.0).contains(&r) { 0.55 } else { 0.0 };
+            let alpha = if r > 1.0 { 0.0 } else { ((0.14 + hatch) * (0.6 + 0.4 * feather) + rim * (1.0 - (r - 0.955).abs() / 0.05).clamp(0.0, 1.0)).min(0.9) };
+            px.extend_from_slice(&[245, 45, 35, (alpha * 255.0) as u8]);
+        }
     }
+    let mut img = Image::new(Extent3d { width: N as u32, height: N as u32, depth_or_array_layers: 1 }, TextureDimension::D2, px, TextureFormat::Rgba8UnormSrgb, RenderAssetUsages::RENDER_WORLD | RenderAssetUsages::MAIN_WORLD);
+    img.sampler = bevy::image::ImageSampler::linear();
+    img
+}
 
-    // 2. Soft feathered edge (multiple concentric rings with decaying alpha instead of a sharp thin border).
-    let edge_alphas = [(0.92, 0.12), (0.95, 0.22), (0.975, 0.30), (1.0, 0.25), (1.015, 0.12), (1.03, 0.04)];
-    for (scale, alpha) in edge_alphas {
-        gizmos.circle(Isometry3d::new(c, quat), radius * scale, Color::srgba(0.95, 0.2, 0.15, alpha)).resolution(96);
+/// Keeps one flat translucent disc per no-spawn zone on the battle plane (`y`), and removes the ones that are gone.
+fn sync_zone_discs(commands: &mut Commands, ui: &mut ReinforceUi, zones: &[(Vec3, f32)], y: f32, meshes: &mut Assets<Mesh>, images: &mut Assets<Image>, materials: &mut Assets<StandardMaterial>) {
+    let (mesh, material) = ui
+        .zone_assets
+        .get_or_insert_with(|| {
+            let tex = images.add(zone_texture());
+            let material = materials.add(StandardMaterial { base_color_texture: Some(tex), unlit: true, alpha_mode: AlphaMode::Blend, cull_mode: None, ..default() });
+            (meshes.add(Rectangle::new(2.0, 2.0)), material)
+        })
+        .clone();
+    for (i, (centre, radius)) in zones.iter().enumerate() {
+        let tf = Transform { translation: Vec3::new(centre.x, y + 0.5, centre.z), rotation: Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2), scale: Vec3::splat(*radius) };
+        match ui.zone_discs.get_mut(i) {
+            Some(d) => {
+                d.1 = *centre;
+                d.2 = *radius;
+                let e = d.0;
+                commands.queue(move |world: &mut World| {
+                    if let Some(mut t) = world.get_mut::<Transform>(e) {
+                        *t = tf;
+                    }
+                });
+            }
+            None => {
+                let e = commands.spawn((crate::BattleEntity, Name::new("no-spawn zone"), Mesh3d(mesh.clone()), MeshMaterial3d(material.clone()), tf, bevy::light::NotShadowCaster)).id();
+                ui.zone_discs.push((e, *centre, *radius));
+            }
+        }
     }
-
-    // 3. Dense red hatch texture: 45-degree diagonal lines spaced closely (~50 units).
-    let dir = Vec3::new(1.0, 0.0, 1.0).normalize();
-    let perp = Vec3::new(-dir.z, 0.0, dir.x);
-    let step = 50.0f32.max(radius / 36.0);
-    let mut d = -radius + step * 0.5;
-    while d < radius {
-        let half = (radius * radius - d * d).max(0.0).sqrt();
-        let mid = c + perp * d;
-        let edge_dist = 1.0 - (d / radius).abs();
-        let hatch_alpha = (0.35 * edge_dist.clamp(0.2, 1.0)).min(0.35);
-        let hatch_col = Color::srgba(0.95, 0.2, 0.15, hatch_alpha);
-        gizmos.line(mid - dir * half, mid + dir * half, hatch_col);
-        d += step;
+    while ui.zone_discs.len() > zones.len() {
+        if let Some((e, ..)) = ui.zone_discs.pop() {
+            commands.entity(e).try_despawn();
+        }
     }
 }
 
@@ -1227,6 +1253,10 @@ fn reinforce_place(
     mut gizmos: Gizmos,
     minimap_surfaces: Query<(&Interaction, &bevy::ui::RelativeCursorPosition), With<MinimapSurface>>,
     mut scroll: MessageReader<bevy::input::mouse::MouseWheel>,
+    mut hold_cam: Single<&mut crate::camera::BattleCamera>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut images: ResMut<Assets<Image>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     let placing = ui.placing.filter(|_| armed.0 == Some(control::ArmedKind::Reinforce));
     let Some((idx, all)) = placing else {
@@ -1234,6 +1264,9 @@ fn reinforce_place(
         ui.dropped = false;
         ui.ghost = None;
         ui.ghost_yaw_offset = 0.0;
+        for (e, ..) in ui.zone_discs.drain(..) {
+            commands.entity(e).try_despawn();
+        }
         if let Some(e) = ui.label.take() {
             commands.entity(e).try_despawn();
         }
@@ -1267,6 +1300,9 @@ fn reinforce_place(
             e
         }
     };
+    // Test hook `SP_PLACE_HOLD=1`: the scripted placement keeps the ghost armed on its spot (for an offscreen capture) instead of calling the wave in.
+    let mut hold_spot: Option<Vec3> = None;
+    let hold = ctx.settings.synthetic_pointer && std::env::var_os("SP_PLACE_HOLD").is_some();
     if ctx.settings.synthetic_pointer {
         // Scripted offscreen runs have no mouse: the wave goes to the first spot next to an own ship that the placement rule accepts.
         let spot = ctx.ships.0.values().filter(|s| s.side == player && !ctx.rt.catalog.ship(s.def).is_static).min_by_key(|s| s.id).and_then(|o| {
@@ -1276,17 +1312,37 @@ fn reinforce_place(
                 .find(|p| place_check(&ctx.rt, player, *p, row.1, count).is_ok())
         });
         if let Some(pos) = spot {
-            ctx.rt.command(player, Command::ReinforceAt { ship: row.1, count, pos, yaw_offset: 0.0 });
-            info!("reinforcements: placing {} at {pos:?} (scripted)", row.0);
-            armed.0 = None;
+            if hold {
+                hold_spot = Some(crate::convert::sim_to_bevy(pos));
+            } else {
+                ctx.rt.command(player, Command::ReinforceAt { ship: row.1, count, pos, yaw_offset: 0.0 });
+                info!("reinforcements: placing {} at {pos:?} (scripted)", row.0);
+                armed.0 = None;
+            }
         }
-        return;
+        if hold_spot.is_none() {
+            return;
+        }
     }
-    let y = ctx.hover.ground.map_or(0.0, |g| g.y);
-    for (centre, radius) in no_spawn_zones(&ctx.rt, player) {
-        draw_no_spawn_zone(&mut gizmos, centre, radius, y);
+    // Hold mode: show the first enemy no-spawn zone with the ghost inside it (red) so the zone look can be judged.
+    if hold_spot.is_some() {
+        if let Some((c, r)) = no_spawn_zones(&ctx.rt, player).first().copied() {
+            let spot = c + Vec3::X * (r * 0.7);
+            hold_spot = Some(spot);
+            hold_cam.focus = c + Vec3::X * (r * 0.3);
+            hold_cam.target_focus = hold_cam.focus;
+            hold_cam.distance = (r * 2.6).clamp(900.0, 9000.0);
+            hold_cam.target_distance = hold_cam.distance;
+        }
     }
-    let Some(cursor) = ctx.pointer.cursor else { return };
+    let y = hold_spot.or(ctx.hover.ground).map_or(0.0, |g| g.y);
+    let zones = no_spawn_zones(&ctx.rt, player);
+    sync_zone_discs(&mut commands, &mut ui, &zones, y, &mut meshes, &mut images, &mut materials);
+    let cursor = match (hold_spot, ctx.pointer.cursor) {
+        (Some(_), _) => Vec2::new(960.0, 540.0),
+        (None, Some(c)) => c,
+        (None, None) => return,
+    };
     let minimap_hit = minimap_surfaces.iter().find_map(|(_, rel)| {
         let n = rel.normalized?;
         if !(-0.5..=0.5).contains(&n.x) || !(-0.5..=0.5).contains(&n.y) {
@@ -1296,7 +1352,9 @@ fn reinforce_place(
         let world = ctx.minimap_data.bounds.map_or(normalized, |b| minimap_to_world(b, normalized));
         Some((Vec3::new(world.x, 0.0, -world.y), battle_sim::Vec3::new(world.x, world.y, 0.0)))
     });
-    let (ground, sim_pos) = if let Some((m_ground, m_sim)) = minimap_hit {
+    let (ground, sim_pos) = if let Some(h) = hold_spot {
+        (h, crate::convert::bevy_to_sim(h))
+    } else if let Some((m_ground, m_sim)) = minimap_hit {
         (m_ground, m_sim)
     } else {
         let Some(ground) = ctx.hover.ground else { return };
@@ -1377,6 +1435,9 @@ fn reinforce_place(
         tc.0 = colour;
     }
     let dropped = std::mem::take(&mut ui.dropped);
+    if hold {
+        return;
+    }
     if (ctx.pointer.left_released && ok) || dropped {
         if let Err(why) = verdict {
             info!("reinforcements: drop of {} refused: {why}", row.0);
