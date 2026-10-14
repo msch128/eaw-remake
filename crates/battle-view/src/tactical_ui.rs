@@ -238,17 +238,14 @@ fn handle_clicks(
     mut action: ResMut<crate::camera::ActionCam>,
     mut hud: ResMut<crate::hud::HudState>,
     mut issued: MessageWriter<control::OrderIssued>,
-    mut voice: MessageWriter<alamo_audio::plugin::GalaxyAudio>,
 ) {
     let player = settings.player_side;
     for b in buttons.read() {
         let mine = || control::selected_mobile(&rt, &ships, &sel, player);
         match b.name.as_str() {
             "b_retreat" => {
+                // The announcement follows the sim's `RetreatOrdered` event (`audio::battle_audio`), so a refused order is silent.
                 rt.command(player, Command::Retreat);
-                if let Some(f) = &rt.player_faction {
-                    voice.write(alamo_audio::plugin::GalaxyAudio { faction: f.clone(), event: alamo_audio::GalaxyEvent::RetreatStarted });
-                }
             }
             "b_play_pause_t" => settings.paused = !settings.paused,
             // 1x <-> 2x (the engine's list of speeds is not in the data; the galaxy bar uses the same toggle idea).

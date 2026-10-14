@@ -99,6 +99,10 @@ pub struct VisualCatalog {
     pub team_colors: Vec<Color>,
     /// `Projectile_SFXEvent_Detonate` per projectile definition.
     pub proj_detonate: Vec<Option<String>>,
+    /// `Projectile_SFXEvent_Detonate_Reduced_By_Armor` per projectile definition (most laser bolts name only this one).
+    pub proj_detonate_armor: Vec<Option<String>>,
+    /// `Projectile_SFXEvent_Detonate_Shield` / `_Shield_Detonate` / `_Detonate_Reduced_By_Shield` per projectile definition.
+    pub proj_detonate_shield: Vec<Option<String>>,
 }
 
 impl VisualCatalog {
@@ -214,17 +218,24 @@ impl VisualCatalog {
                 bank_turn_angle,
             });
         }
-        let proj_detonate = catalog
-            .projectiles
-            .iter()
-            .map(|p| {
-                data.objects
-                    .resolve(&p.name)
-                    .and_then(|r| r.get("projectile_sfxevent_detonate").map(|v| v.trim().to_string()))
-                    .filter(|v| !v.is_empty())
-            })
-            .collect();
-        Self { ships, team_colors, proj_detonate }
+        let proj_tag = |tags: &[&str]| -> Vec<Option<String>> {
+            catalog
+                .projectiles
+                .iter()
+                .map(|p| {
+                    let r = data.objects.resolve(&p.name)?;
+                    tags.iter().find_map(|t| r.get(t).map(|v| v.trim().to_string()).filter(|v| !v.is_empty()))
+                })
+                .collect()
+        };
+        let proj_detonate = proj_tag(&["projectile_sfxevent_detonate"]);
+        let proj_detonate_armor = proj_tag(&["projectile_sfxevent_detonate_reduced_by_armor"]);
+        let proj_detonate_shield = proj_tag(&[
+            "projectile_sfxevent_detonate_shield",
+            "projectile_sfxevent_shield_detonate",
+            "projectile_sfxevent_detonate_reduced_by_shield",
+        ]);
+        Self { ships, team_colors, proj_detonate, proj_detonate_armor, proj_detonate_shield }
     }
 
     /// Visual data of a ship definition.

@@ -110,6 +110,13 @@ pub fn battle_audio(
             if budget == 0 {
                 return;
             }
+            // An event the data leaves blank (the shield absorb detonation) is silent by design: it must not use up the frame's budget.
+            // The static hook audit (`alamo_audio::hooks`) reports such events.
+            if audio.as_ref().and_then(|a| a.sfx.get(name)).is_some_and(|e| {
+                !e.is_preset && e.samples.is_empty() && e.pre_samples.is_empty() && e.post_samples.is_empty() && e.chained.is_none()
+            }) {
+                continue;
+            }
             let n = match per_name.get_mut(name) {
                 Some(n) => n,
                 None => per_name.entry(name.to_string()).or_default(),
@@ -209,11 +216,18 @@ pub fn battle_audio(
                         }
                     }
                 }
-                // Shield hits are a separate effect in the game; only hull and hardpoint hits detonate audibly.
-                if matches!(kind, HitKind::Shield) {
-                    continue;
-                }
-                if let Some(Some(n)) = visuals.proj_detonate.get(*projectile as usize) {
+                // A shield hit plays the projectile's shield-absorb event, a hull / hardpoint hit its detonation. Most laser bolts
+                // name only `Projectile_SFXEvent_Detonate_Reduced_By_Armor`, which then stands in for the plain detonation
+                // (estimate: the sim does not report armor reduction).
+                let pi = *projectile as usize;
+                let name = if matches!(kind, HitKind::Shield) {
+                    visuals.proj_detonate_shield.get(pi)
+                } else if matches!(visuals.proj_detonate.get(pi), Some(Some(_))) {
+                    visuals.proj_detonate.get(pi)
+                } else {
+                    visuals.proj_detonate_armor.get(pi)
+                };
+                if let Some(Some(n)) = name {
                     send(n, Some(sim_to_bevy(*pos)), &mut stats, &mut out);
                 }
             }
@@ -268,6 +282,20 @@ pub fn battle_audio(
             Event::ReinforcementsCalled { side, .. } if *side == player => say(GalaxyEvent::ReinforcementsEnRoute, &mut stats),
             Event::ReinforcementsRefused { side, .. } if *side == player => say(GalaxyEvent::UnitCapReached, &mut stats),
             Event::ReinforcementsArrived { side, .. } if *side != player => say(GalaxyEvent::EnemyReinforcements, &mut stats),
+            // A missile shield destroys a missile: the projectile's own detonation.
+            Event::ProjectileIntercepted { projectile, pos } => {
+                if let Some(Some(n)) = visuals.proj_detonate.get(*projectile as usize) {
+                    send(n, Some(sim_to_bevy(*pos)), &mut stats, &mut out);
+                }
+            }
+            // The retreat order was accepted (button, Esc menu or the AI): the own announcement, or the enemy's `Space_Retreat_Enemy_Begin_SFXEvent`.
+            Event::RetreatOrdered { side, .. } => {
+                if *side == player {
+                    say(GalaxyEvent::RetreatStarted, &mut stats);
+                } else if let Some(n) = faction.as_deref().and_then(|f| constants.faction_sfx(f, "space_retreat_enemy_begin_sfxevent")) {
+                    send(n, None, &mut stats, &mut out);
+                }
+            }
             Event::ShipRetreated { ship } => {
                 let Some(&(_, side)) = mem.ships.get(ship) else { continue };
                 if side == player {
