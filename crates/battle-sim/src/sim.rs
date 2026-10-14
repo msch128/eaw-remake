@@ -856,7 +856,7 @@ impl Battle {
                 }
             }
             Command::Cheat(cheat) => self.apply_cheat(side, cheat),
-            Command::ReinforceAt { ship, count, pos } => {
+            Command::ReinforceAt { ship, count, pos, yaw_offset } => {
                 self.reinforcement_zone_check(side, pos)?;
                 let pop = self.catalog.ship(ship).population * count as i32;
                 if self.pop_in_play(side) + pop > self.config.unit_cap && !self.cheats.has_no_pop_cap(side) {
@@ -865,7 +865,7 @@ impl Battle {
                 if self.config.record_events {
                     self.cmd_events.push(Event::ReinforcementsCalled { side, ship, count });
                 }
-                self.pending.push(Reinforcement { at: self.time + self.config.reinforce_delay, side, ship, count, pos: Some(pos) });
+                self.pending.push(Reinforcement { at: self.time + self.config.reinforce_delay, side, ship, count, pos: Some(pos), yaw_offset: yaw_offset.clamp(-0.27, 0.27) });
             }
             Command::Reinforce { ship, count } => {
                 let pop = self.catalog.ship(ship).population * count as i32;
@@ -878,7 +878,7 @@ impl Battle {
                 if self.config.record_events {
                     self.cmd_events.push(Event::ReinforcementsCalled { side, ship, count });
                 }
-                self.pending.push(Reinforcement { at: self.time + self.config.reinforce_delay, side, ship, count, pos: None });
+                self.pending.push(Reinforcement { at: self.time + self.config.reinforce_delay, side, ship, count, pos: None, yaw_offset: 0.0 });
             }
         }
         Ok(())
@@ -1164,6 +1164,7 @@ impl Battle {
             let origin = r.pos.unwrap_or(self.spawn_pos[r.side as usize]);
             // Reinforcements jump in along the consistent hyperspace vector of their side.
             let yaw = self.side_places.get(r.side as usize).and_then(|p| p.first()).map_or(if r.side == 0 { 0.0 } else { std::f32::consts::PI }, |p| p.1);
+            let yaw = yaw + r.yaw_offset;
             let mut ids = Vec::new();
             for k in 0..r.count {
                 let mut rng = Rng::for_entity(self.config.seed, self.tick, k, 0x7E1F + r.ship as u64);

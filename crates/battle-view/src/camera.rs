@@ -108,6 +108,7 @@ pub fn camera_input(
     motion: Res<AccumulatedMouseMotion>,
     scroll: Res<AccumulatedMouseScroll>,
     window: Option<Single<&Window, With<PrimaryWindow>>>,
+    armed: Res<crate::control::ArmedOrder>,
     mut cam: Single<(&mut BattleCamera, &Projection)>,
 ) {
     let dt = time.delta_secs().min(0.1);
@@ -117,7 +118,8 @@ pub fn camera_input(
         MouseScrollUnit::Line => scroll.delta.y,
         MouseScrollUnit::Pixel => scroll.delta.y / 40.0,
     };
-    if notches != 0.0 {
+    // While a reinforcement ghost is carried the wheel turns it (+-15 degrees) instead of zooming.
+    if notches != 0.0 && armed.0 != Some(crate::control::ArmedKind::Reinforce) {
         cam.target_distance =
             (cam.target_distance * ZOOM_STEP.powf(notches)).clamp(cam.min_distance, cam.max_distance);
     }

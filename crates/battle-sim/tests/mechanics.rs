@@ -243,9 +243,9 @@ fn reinforcements_can_be_called_to_a_chosen_position_inside_the_zone() {
     assert_eq!(b.reinforcement_zone_check(0, near_enemy), Err(CommandError::InNoSpawnZone));
     // Outside the map.
     assert_eq!(b.reinforcement_zone_check(0, Vec3::new(1.0e6, 0.0, 0.0)), Err(CommandError::OutsideBattleArea));
-    assert_eq!(b.command(0, Command::ReinforceAt { ship: a, count: 1, pos: near_enemy }), Err(CommandError::InNoSpawnZone));
+    assert_eq!(b.command(0, Command::ReinforceAt { ship: a, count: 1, pos: near_enemy, yaw_offset: 0.0 }), Err(CommandError::InNoSpawnZone));
     // The accepted call arrives after the delay, at the chosen point (on free space), facing the enemy.
-    b.command(0, Command::ReinforceAt { ship: a, count: 2, pos: beside }).unwrap();
+    b.command(0, Command::ReinforceAt { ship: a, count: 2, pos: beside, yaw_offset: 0.0 }).unwrap();
     let mut arrived = false;
     for _ in 0..400 {
         arrived |= b.step().iter().any(|e| matches!(e, Event::ReinforcementsArrived { side: 0, .. }));
@@ -1439,3 +1439,28 @@ fn hardpoint_focus_fire_and_reset_on_destruction() {
 }
 
 
+
+#[test]
+fn a_placed_reinforcement_arrives_turned_by_the_ghost_rotation() {
+    let mut seer = ship("a", 1.0e6, 0.0, vec![]);
+    seer.sensor_range = 1250.0;
+    let cat = Catalog::from_defs(vec![seer, ship("b", 1.0e6, 0.0, vec![])], vec![laser()]);
+    let mut c = cfg();
+    c.unit_cap = 100;
+    let mut b = Battle::new(setup(cat, "a", "b", 1, 1, c));
+    let a = b.catalog().ship_id("a").unwrap();
+    let own = b.ships.iter().find(|s| s.side == 0).unwrap().pos;
+    let beside = Vec3::new(own.x + 600.0, own.y + 300.0, own.z);
+    let base = b.spawn_yaw(0);
+    b.command(0, Command::ReinforceAt { ship: a, count: 1, pos: beside, yaw_offset: 0.2 }).unwrap();
+    // The rule clamps the turn to about 15 degrees.
+    b.command(0, Command::ReinforceAt { ship: a, count: 1, pos: Vec3::new(own.x + 900.0, own.y + 300.0, own.z), yaw_offset: 2.0 }).unwrap();
+    for _ in 0..400 {
+        b.step();
+    }
+    let new: Vec<_> = b.ships.iter().filter(|s| s.side == 0 && s.id > 1).collect();
+    assert_eq!(new.len(), 2);
+    let turns: Vec<f32> = new.iter().map(|s| s.yaw - base).collect();
+    assert!(turns.iter().any(|t| (t - 0.2).abs() < 0.01), "{turns:?}");
+    assert!(turns.iter().all(|t| *t <= 0.28), "{turns:?}");
+}

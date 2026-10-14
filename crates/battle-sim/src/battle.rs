@@ -263,6 +263,8 @@ pub enum Command {
         count: u32,
         /// Where they arrive (battle-sim coordinates).
         pos: Vec3,
+        /// Turn of the arrival heading against the side's hyperspace vector in radians (the placement ghost's rotation).
+        yaw_offset: f32,
     },
 }
 
@@ -634,6 +636,8 @@ pub(crate) struct Reinforcement {
     pub count: u32,
     /// Chosen arrival position (`None` = the side reinforcement point).
     pub pos: Option<Vec3>,
+    /// Turn of the arrival heading against the side's hyperspace vector.
+    pub yaw_offset: f32,
 }
 
 /// Group bookkeeping for results.

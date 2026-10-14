@@ -1276,7 +1276,7 @@ fn reinforce_place(
                 .find(|p| place_check(&ctx.rt, player, *p, row.1, count).is_ok())
         });
         if let Some(pos) = spot {
-            ctx.rt.command(player, Command::ReinforceAt { ship: row.1, count, pos });
+            ctx.rt.command(player, Command::ReinforceAt { ship: row.1, count, pos, yaw_offset: 0.0 });
             info!("reinforcements: placing {} at {pos:?} (scripted)", row.0);
             armed.0 = None;
         }
@@ -1322,7 +1322,7 @@ fn reinforce_place(
     // The ghost model faces the arrival direction (from the own spawn edge), not turning toward the enemy base;
     // the mouse wheel may rotate it at most ±15°.
     for ev in scroll.read() {
-        ui.ghost_yaw_offset = (ui.ghost_yaw_offset + ev.y * 0.05).clamp(-15.0f32.to_radians(), 15.0f32.to_radians());
+        ui.ghost_yaw_offset = (ui.ghost_yaw_offset + ev.y * 5.0f32.to_radians()).clamp(-15.0f32.to_radians(), 15.0f32.to_radians());
     }
     let base_facing = ctx
         .rt
@@ -1382,7 +1382,7 @@ fn reinforce_place(
             info!("reinforcements: drop of {} refused: {why}", row.0);
         } else {
             // The count drops when the simulation reports the call (`ReinforcementsCalled`).
-            ctx.rt.command(player, Command::ReinforceAt { ship: row.1, count, pos: sim_pos });
+            ctx.rt.command(player, Command::ReinforceAt { ship: row.1, count, pos: sim_pos, yaw_offset: ui.ghost_yaw_offset });
             info!("reinforcements: placing {count} x {} at {sim_pos:?}", row.0);
         }
         armed.0 = None;
