@@ -208,7 +208,7 @@ impl Default for AutosaveTimer {
     }
 }
 
-/// Saves the running game every 5 minutes while in the galaxy view.
+/// Saves the running game every 5 minutes of play (galaxy view and space battle).
 fn rolling_autosave(
     time: Res<Time>,
     screen: Res<State<AppScreen>>,
@@ -216,7 +216,7 @@ fn rolling_autosave(
     mut timer: ResMut<AutosaveTimer>,
     mut actions: MessageWriter<PlayAction>,
 ) {
-    if *screen.get() != AppScreen::Galaxy || state.is_none_or(|s| s.current.loading) {
+    if !matches!(*screen.get(), AppScreen::Galaxy | AppScreen::SpaceBattle) || state.is_none_or(|s| s.current.loading) {
         return;
     }
     if timer.0.tick(time.delta()).just_finished() {
