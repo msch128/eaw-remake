@@ -1526,6 +1526,16 @@ fn force_end_script(
     }
 }
 
+/// The faction the player fought for the strategic win / lose theme: on a defeat the rival holding the most planets, on a victory the rival
+/// that lost the most ships (the one fought most). `rivals` is `(faction, planets held, ships lost)` for every faction.
+fn end_opponent(player: Option<u32>, win: bool, rivals: &[(u32, usize, u32)]) -> Option<u32> {
+    rivals
+        .iter()
+        .filter(|(f, planets, lost)| Some(*f) != player && (*planets > 0 || *lost > 0))
+        .max_by_key(|&&(f, planets, lost)| (if win { lost as usize } else { planets }, std::cmp::Reverse(f)))
+        .map(|r| r.0)
+}
+
 /// Victory / defeat dialog with the game statistics, music stinger and advisor line.
 fn show_end_dialog(world: &mut World) {
     let Some(win) = world.resource::<EndState>().pending else { return };
@@ -1603,8 +1613,19 @@ fn show_end_dialog(world: &mut World) {
         let mut end = world.resource_mut::<EndState>();
         end.pending = None;
         end.dialog = Some(e);
+        let opponent = {
+            let state = world.resource::<SimState>();
+            let player = world.resource::<PlayerFaction>().0;
+            let g = state.galaxy();
+            let rivals: Vec<(u32, usize, u32)> = (0..g.factions.len() as u32)
+                .map(|f| (f, g.owned_planets(f).count(), g.factions[f as usize].stats.ships_lost))
+                .collect();
+            end_opponent(player, win, &rivals).map(|f| world.resource::<galaxy_play::PlayCatalog>().faction(f).to_owned())
+        };
         if let Some(mut music) = world.get_resource_mut::<alamo_audio::MusicDirector>() {
+            // `Music_Event_Strategic_*_Vs_Faction`: the stinger depends on who the player fought (set after the scene: `set_scene` clears it).
             music.set_scene(alamo_audio::MusicScene::Result { faction: name.clone(), win, tactical: false });
+            music.set_opponent(opponent);
         }
         if win && world.contains_resource::<alamo_audio::plugin::AlamoAudio>() {
             // The announcer line of the faction (`<FACTION>_VICTORY_NN.WAV`), picked from the game state so a replay says the same.
@@ -2375,6 +2396,14 @@ pub(crate) fn design_scale(window: Option<Vec2>, offscreen: Option<&OffscreenTar
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn strategic_opponent_is_the_main_rival() {
+        let rivals = [(0, 5, 2), (1, 40, 3), (2, 10, 90)];
+        assert_eq!(end_opponent(Some(0), false, &rivals), Some(1), "defeat: the rival holding most planets");
+        assert_eq!(end_opponent(Some(0), true, &rivals), Some(2), "victory: the rival that lost most ships");
+        assert_eq!(end_opponent(Some(1), true, &[(1, 3, 0)]), None);
+    }
 
     #[test]
     fn map_hover_card_is_suppressed_behind_modals_and_the_planet_view() {
