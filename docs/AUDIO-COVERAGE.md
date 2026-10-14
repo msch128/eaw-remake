@@ -65,9 +65,9 @@ playable.
 | Battle music (ambient / battle, 15 s peace delay) | yes | `Space_Map_<F>_Ambient|Battle_Music_Event`, `Music_Space_Battle_To_Ambient_Peace_Seconds` | `MusicPlanner` |
 | Battle load screen music | yes (new, per faction) | `Music_Event_Battle_Load_Screen` (Rebel: `..._Loop_Event_2`, Empire `_1`); before the generic event was used | `AudioConstants::battle_load_music` |
 | Victory / defeat stinger, tactical | yes (new: per opponent) | `Music_Event_Tactical_Win/Lose` plus `_Vs_Faction`; a defeat by the Empire plays `Lose_To_Empire_Event`; the Underworld one points to `Lose_To_Zann_1.MP3` which is not installed, so the plain defeat theme plays | `MusicDirector::set_opponent` |
-| Victory / defeat stinger, strategic (campaign end) | plain event only | `Music_Event_Strategic_Win/Lose`; the `_Vs_Faction` variant needs the opponent at `play_ui.rs:1588` (not touched here) | open |
+| Victory / defeat stinger, strategic (campaign end) | yes (opponent: defeat = rival with most planets, victory = rival that lost most ships) | `Music_Event_Strategic_Win/Lose` plus `_Vs_Faction` | `show_end_dialog` + `MusicDirector::set_opponent` |
 | Tension music (intensity levels) | two states only | the data has ambient and battle lists, nothing else | - |
-| Death Star battle theme | no | `Music_Event_Space_Battle_Super_Weapon` (`Space_Map_<F>_Battle_Death_Star_Music_Event`); parsed (`super_weapon_battle_music`), no trigger because the battle view does not flag a super weapon in the fight | open |
+| Death Star battle theme | yes (test only) | `Music_Event_Space_Battle_Super_Weapon`; plays instead of the battle theme while a ship with a `SUPER_LASER` ability is alive (`battle_music` -> `MusicDirector::set_super_weapon`) | `plugin.rs::super_weapon_theme` |
 | Land music, weather, ground units | out of scope (space only) | - | - |
 
 ## Broken data (the Remake references sounds that are not in the install)

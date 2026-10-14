@@ -599,6 +599,9 @@ pub fn battle_music(
     if let Some(f) = &rt.player_faction {
         director.set_scene(MusicScene::Space(f.clone()));
     }
+    // A Death Star (any ship with a super laser) in the fight switches to the faction's `Music_Event_Space_Battle_Super_Weapon` theme.
+    let super_weapon = rt.cur.as_ref().is_some_and(|c| c.ships.iter().any(|s| rt.catalog.ship(s.def).abilities.iter().any(|a| a.super_laser.is_some())));
+    director.set_super_weapon(super_weapon);
     let fighting = stats.last_combat.is_some_and(|t| rt.clock - t <= COMBAT_WINDOW);
     director.set_battle_intensity(if fighting { 1.0 } else { 0.0 });
 }

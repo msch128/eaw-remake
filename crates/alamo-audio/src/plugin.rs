@@ -1202,6 +1202,12 @@ fn sync_emitters(
 // Music
 // ----------------------------------------------------------------------------------------------
 
+/// `Music_Event_Space_Battle_Super_Weapon` of the faction: the battle theme while a super weapon (Death Star) is in the fight and the battle
+/// playlist is selected; `None` otherwise (the normal ambient / battle themes apply).
+fn super_weapon_theme<'a>(c: &'a crate::constants::AudioConstants, faction: &str, in_battle: bool, super_weapon: bool) -> Option<&'a str> {
+    if in_battle && super_weapon { c.super_weapon_battle_music(faction) } else { None }
+}
+
 /// The event `Xml/Factions.xml` names for the current scene (battle load screen, win / lose themes incl. the versus-faction variants),
 /// when it exists and at least one of its files is in the file system; otherwise the planner's naming convention applies.
 fn faction_music_event(director: &MusicDirector, audio: &AlamoAudio) -> Option<String> {
@@ -1209,6 +1215,7 @@ fn faction_music_event(director: &MusicDirector, audio: &AlamoAudio) -> Option<S
     let candidates: Vec<&str> = match director.planner.scene() {
         MusicScene::BattleLoading => c.battle_load_music(director.faction.as_deref()?).into_iter().collect(),
         MusicScene::Result { faction, win, tactical } => c.result_music(faction, director.versus.as_deref(), *win, *tactical),
+        MusicScene::Space(f) => super_weapon_theme(c, f, director.planner.in_battle(), director.super_weapon).into_iter().collect(),
         _ => return None,
     };
     candidates.into_iter().find_map(|n| {
@@ -1233,6 +1240,8 @@ pub struct MusicDirector {
     faction: Option<String>,
     /// Faction the player fought, for the `Music_Event_*_Vs_Faction` win / lose themes.
     versus: Option<String>,
+    /// A super weapon (Death Star) is in the space battle: its faction theme replaces the battle playlist.
+    super_weapon: bool,
 }
 
 impl MusicDirector {
@@ -1243,6 +1252,9 @@ impl MusicDirector {
         }
         if !matches!(scene, MusicScene::Result { .. }) {
             self.versus = None;
+        }
+        if !matches!(scene, MusicScene::Space(_)) {
+            self.super_weapon = false;
         }
         if self.planner.scene() != &scene {
             self.resume = None;
@@ -1280,6 +1292,11 @@ impl MusicDirector {
     /// Battle intensity in 0..1 (only used in [`MusicScene::Space`]).
     pub fn set_battle_intensity(&mut self, intensity: f32) {
         self.planner.set_battle_intensity(intensity);
+    }
+
+    /// A super weapon is in the space battle (`Music_Event_Space_Battle_Super_Weapon` plays instead of the battle theme).
+    pub fn set_super_weapon(&mut self, present: bool) {
+        self.super_weapon = present;
     }
 
     /// The scene currently set.
@@ -1603,5 +1620,26 @@ fn log_balance(
     items.extend(tracks.iter().filter(|t| !t.outgoing).map(|t| (Bus::Music, t.volume * t.fade * buses.gain_no_master(Bus::Music))));
     if !items.is_empty() {
         info!("{}", balance_line(&items));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::constants::AudioConstants;
+
+    #[test]
+    fn death_star_theme_only_in_the_battle_playlist_with_a_super_weapon() {
+        let xml = br#"<F><Faction Name="Empire"><Music_Event_Space_Battle_Super_Weapon> Space_Map_Empire_Battle_Death_Star_Music_Event </Music_Event_Space_Battle_Super_Weapon></Faction></F>"#;
+        let c = AudioConstants { faction_music: AudioConstants::parse_faction_music(xml), ..Default::default() };
+        assert_eq!(super_weapon_theme(&c, "Empire", true, true), Some("Space_Map_Empire_Battle_Death_Star_Music_Event"));
+        assert_eq!(super_weapon_theme(&c, "Empire", false, true), None, "ambient phase keeps the ambient theme");
+        assert_eq!(super_weapon_theme(&c, "Empire", true, false), None, "no super weapon in the fight");
+        assert_eq!(super_weapon_theme(&c, "Rebel", true, true), None, "faction without the tag");
+        let mut d = MusicDirector::default();
+        d.set_scene(MusicScene::Space("Empire".into()));
+        d.set_super_weapon(true);
+        d.set_scene(MusicScene::Galactic("Empire".into()));
+        assert!(!d.super_weapon, "leaving the space scene clears the flag");
     }
 }
