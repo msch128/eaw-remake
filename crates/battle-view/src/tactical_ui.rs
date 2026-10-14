@@ -150,6 +150,13 @@ fn sync_data(
             by_def.entry(s.def).or_default().push(id);
         }
     }
+    // Nothing of ours selected: the bar shows the whole fleet as cards (no abilities); a click on a card selects that type.
+    let overview = by_def.is_empty();
+    if overview {
+        for s in cur.ships.iter().filter(|s| s.side == player) {
+            by_def.entry(s.def).or_default().push(s.id);
+        }
+    }
     let mut selection = Vec::new();
     let mut groups = Vec::new();
     for (def, ids) in by_def {
@@ -166,6 +173,9 @@ fn sync_data(
         unit.health = hull / n;
         unit.shield = unit.shield.map(|_| shield / n);
         unit.count = ids.len() as u32;
+        if overview {
+            unit.abilities.clear();
+        }
         // Ability buttons follow the first ship of the slot.
         if let Some(first) = cur.ship(ids[0]) {
             for a in &mut unit.abilities {
@@ -200,7 +210,7 @@ fn sync_data(
     };
     let new = TacticalData {
         active: true,
-        focus: tac.focus.min(selection.len().saturating_sub(1)),
+        focus: if overview { usize::MAX } else { tac.focus.min(selection.len().saturating_sub(1)) },
         selection,
         reinforcement_points: (!reinforce.rows.is_empty()).then(|| reinforce.rows.iter().map(|r| r.2).sum()),
         pop: Some((rt.cur.as_ref().and_then(|c| c.pop.get(player as usize).copied()).unwrap_or(0).max(0) as u32, rt.unit_cap.max(0) as u32)),
@@ -307,8 +317,9 @@ fn sync_minimap(
     time: Res<Time>,
     rt: Res<BattleRuntime>,
     ships: Res<RenderedShips>,
-    camera: Single<(&Camera, &BattleCamera, &Projection)>,
+    camera: Single<(&Camera, &GlobalTransform, &BattleCamera, &Projection)>,
     mut data: ResMut<MinimapData>,
+    mut quad: ResMut<eaw_ui::MinimapCameraQuad>,
     mut fog: ResMut<eaw_ui::MinimapFog>,
     sel: Res<Selection>,
     settings: Res<BattleViewSettings>,
@@ -322,14 +333,14 @@ fn sync_minimap(
         return;
     }
     *since = 0.0;
-    let (cam, orbit, projection) = *camera;
+    let (cam, cam_tf, orbit, projection) = *camera;
     let flip = |p: Vec3| Vec2::new(p.x, -p.z);
     let bounds = (Vec2::new(orbit.bounds_min.x, -orbit.bounds_max.y), Vec2::new(orbit.bounds_max.x, -orbit.bounds_min.y));
     let units = ships
         .0
         .values()
         .filter(|s| s.visible && rt.catalog.ship(s.def).special_weapon.is_none())
-        .map(|s| MinimapDot { pos: flip(s.pos), color: rt.visuals.team_color(s.side), selected: sel.ships.contains(&s.id) })
+        .map(|s| MinimapDot { pos: flip(s.pos), color: relation_color(s.side, settings.player_side), selected: sel.ships.contains(&s.id) })
         .collect();
     // Fog of war: the sensor discs (`Space_FOW_Reveal_Range`) of the player's ships, one per grid cell of a quarter radius.
     let mut cells: std::collections::BTreeMap<(i32, i32, i32), (Vec2, f32)> = Default::default();
@@ -367,6 +378,23 @@ fn sync_minimap(
             }
         })
         .collect();
+    // Footprint of the view on the battle plane: the screen corners cast onto it (far corners are limited so a flat camera stays on the map).
+    let footprint = cam.logical_viewport_size().and_then(|vp| {
+        let corners = [Vec2::ZERO, Vec2::new(vp.x, 0.0), vp, Vec2::new(0.0, vp.y)];
+        let mut out = [Vec2::ZERO; 4];
+        for (o, c) in out.iter_mut().zip(corners) {
+            let ray = cam.viewport_to_world(cam_tf, c).ok()?;
+            let dir = *ray.direction;
+            let limit = orbit.distance * 4.0;
+            let t = if dir.y < -1e-3 { ((orbit.focus.y - ray.origin.y) / dir.y).min(limit) } else { limit };
+            *o = flip(ray.origin + dir * t);
+        }
+        Some(out)
+    });
+    let footprint = footprint.map(|q| q.map(|p| p.clamp(bounds.0, bounds.1)));
+    if quad.0 != footprint {
+        quad.0 = footprint;
+    }
     let next = MinimapData { bounds: Some(bounds), planets, units, pings: minimap_pings, camera: Some((center - half, center + half)), background: Some(rt.minimap_tint) };
     if *data != next {
         *data = next;
@@ -1638,4 +1666,9 @@ mod tests {
         assert_eq!(dots.len(), 1);
         assert_eq!(dots[0].pos, Vec2::new(10.0, 20.0));
     }
+}
+
+/// Minimap dot colour by relation to the player (Remake: own green, enemies red).
+fn relation_color(side: u8, player: u8) -> Color {
+    if side == player { Color::srgb(0.25, 0.95, 0.3) } else { Color::srgb(0.95, 0.25, 0.2) }
 }

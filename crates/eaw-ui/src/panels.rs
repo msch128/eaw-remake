@@ -212,6 +212,11 @@ pub struct MinimapFog {
     pub reveal: Vec<(Vec2, f32)>,
 }
 
+/// Footprint of the camera view on the battle plane (tactical minimap): four world corners in the order
+/// top-left, top-right, bottom-right, bottom-left of the screen. Drawn as a trapezoid instead of `MinimapData::camera`.
+#[derive(Resource, Debug, Clone, Copy, Default, PartialEq)]
+pub struct MinimapCameraQuad(pub Option<[Vec2; 4]>);
+
 /// The minimap click target of a command bar.
 #[derive(Component, Debug, Clone, Copy)]
 pub struct MinimapSurface {
@@ -248,16 +253,18 @@ pub fn minimap_to_world(bounds: (Vec2, Vec2), n: Vec2) -> Vec2 {
 pub(crate) fn minimap_marks(
     data: Res<MinimapData>,
     fog: Res<MinimapFog>,
+    quad: Res<MinimapCameraQuad>,
     fresh: Query<(), Added<MinimapSurface>>,
-    surfaces: Query<(Entity, &MinimapSurface, Option<&Children>)>,
+    surfaces: Query<(Entity, &MinimapSurface, Option<&Children>, &ComputedNode)>,
     marks: Query<(), With<MinimapMark>>,
     mut commands: Commands,
 ) {
-    if !data.is_changed() && !fog.is_changed() && fresh.is_empty() {
+    if !data.is_changed() && !fog.is_changed() && !quad.is_changed() && fresh.is_empty() {
         return;
     }
     let Some(bounds) = data.bounds else { return };
-    for (e, surf, kids) in &surfaces {
+    for (e, surf, kids, computed) in &surfaces {
+        let panel = computed.size() * computed.inverse_scale_factor();
         for k in kids.into_iter().flatten() {
             if marks.contains(*k) {
                 commands.entity(*k).despawn();
@@ -327,7 +334,7 @@ pub(crate) fn minimap_marks(
         };
         let (psize, usize_) = match surf.kind {
             MinimapKind::Galactic => (4.0, 3.0),
-            MinimapKind::Tactical => (5.0, 2.0),
+            MinimapKind::Tactical => (5.0, 3.0),
         };
         for p in &data.planets {
             dot(&mut commands, p, psize);
@@ -335,7 +342,36 @@ pub(crate) fn minimap_marks(
         for u in &data.units {
             dot(&mut commands, u, usize_);
         }
-        if let Some((lo, hi)) = data.camera {
+        if let Some(quad) = quad.0.filter(|_| surf.kind == MinimapKind::Tactical) {
+            // The view footprint is a trapezoid (perspective): four rotated line nodes in logical pixels, y down.
+            let px = |w: Vec2| {
+                let n = world_to_minimap(bounds, w);
+                Vec2::new(n.x * panel.x, (1.0 - n.y) * panel.y)
+            };
+            for i in 0..4 {
+                let (a, b) = (px(quad[i]), px(quad[(i + 1) % 4]));
+                let (mid, d) = ((a + b) * 0.5, b - a);
+                let len = d.length();
+                if len < 0.5 {
+                    continue;
+                }
+                commands.spawn((
+                    MinimapMark,
+                    Node {
+                        position_type: PositionType::Absolute,
+                        left: Val::Px(mid.x - len * 0.5),
+                        top: Val::Px(mid.y - 0.75),
+                        width: Val::Px(len),
+                        height: Val::Px(1.5),
+                        ..default()
+                    },
+                    UiTransform::from_rotation(Rot2::radians(d.y.atan2(d.x))),
+                    BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.9)),
+                    FocusPolicy::Pass,
+                    ChildOf(e),
+                ));
+            }
+        } else if let Some((lo, hi)) = data.camera {
             let (a, b) = (world_to_minimap(bounds, lo), world_to_minimap(bounds, hi));
             let (min, max) = (a.min(b), a.max(b));
             commands.spawn((
