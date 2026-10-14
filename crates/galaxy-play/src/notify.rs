@@ -124,13 +124,17 @@ pub fn describe_event(
             Some((NotificationKind::BattleResolved, format!("{verdict} at {} ({lost} ships lost).", planet(*p)), Some(*p)))
         }
         Event::PlanetCaptured { planet: p, old_owner, new_owner } => {
-            if me(*new_owner) {
-                Some((NotificationKind::PlanetCaptured, format!("{} captured.", planet(*p)), Some(*p)))
+            // The Remake's advisor line: "Arda: Control changed from Neutral to Rebellion".
+            let old = old_owner.map_or_else(|| "Neutral".to_owned(), |o| names.faction(o).to_owned());
+            let text = format!("{}: Control changed from {old} to {}.", planet(*p), names.faction(*new_owner));
+            let kind = if me(*new_owner) {
+                NotificationKind::PlanetCaptured
             } else if old_owner.is_some_and(me) {
-                Some((NotificationKind::PlanetLost, format!("{} was captured by {}!", planet(*p), names.faction(*new_owner)), Some(*p)))
+                NotificationKind::PlanetLost
             } else {
-                None
-            }
+                NotificationKind::Campaign
+            };
+            Some((kind, text, Some(*p)))
         }
         Event::FleetArrived { fleet, planet: p } => {
             let f = galaxy.fleets.get(fleet)?;

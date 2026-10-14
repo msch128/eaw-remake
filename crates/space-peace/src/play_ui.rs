@@ -708,7 +708,7 @@ fn spawn_hud(mut commands: Commands, existing: Query<(), With<Ticker>>) {
     let abs = Node { position_type: PositionType::Absolute, ..default() };
     commands.spawn((
         PlayHud,
-        Node { top: Val::Px(52.0), left: Val::Px(16.0), width: Val::Px(440.0), padding: UiRect::all(Val::Px(6.0)), flex_direction: FlexDirection::Column, row_gap: Val::Px(2.0), ..abs.clone() },
+        Node { bottom: Val::Px(268.0), left: Val::Px(62.0), width: Val::Px(420.0), padding: UiRect::all(Val::Px(2.0)), flex_direction: FlexDirection::Column, row_gap: Val::Px(1.0), ..abs.clone() },
         BackgroundColor(Color::NONE),
         Ticker,
         GalaxyEntity,
@@ -739,12 +739,12 @@ fn spawn_hud(mut commands: Commands, existing: Query<(), With<Ticker>>) {
                     flex_direction: FlexDirection::Column,
                     align_items: AlignItems::Center,
                     padding: UiRect::axes(Val::Px(26.0), Val::Px(5.0)),
-                    border: UiRect::bottom(Val::Px(2.0)),
+                    border: UiRect::all(Val::Px(2.0)),
                     row_gap: Val::Px(1.0),
                     ..default()
                 },
-                BackgroundColor(Color::srgba(0.03, 0.05, 0.10, 0.88)),
-                BorderColor::all(Color::srgb(0.25, 0.55, 0.85)),
+                BackgroundColor(Color::srgba(0.16, 0.18, 0.22, 0.92)),
+                BorderColor::all(Color::srgb(0.55, 0.6, 0.68)),
             ))
             .with_children(|t| {
                 t.spawn((
@@ -754,11 +754,18 @@ fn spawn_hud(mut commands: Commands, existing: Query<(), With<Ticker>>) {
                     TextColor(Color::srgb(0.85, 0.92, 1.0)),
                 ));
                 t.spawn((
-                    Text::new("RESUME GAME"),
-                    TextFont { font: FontSource::Family("Bahnschrift".into()), font_size: FontSize::Px(12.0), ..default() },
-                    bevy::text::LetterSpacing::Rem(0.12),
-                    TextColor(Color::srgb(0.4, 0.8, 1.0)),
-                ));
+                    Node { padding: UiRect::axes(Val::Px(18.0), Val::Px(2.0)), border: UiRect::all(Val::Px(1.0)), margin: UiRect::top(Val::Px(2.0)), ..default() },
+                    BackgroundColor(Color::srgb(0.42, 0.07, 0.07)),
+                    BorderColor::all(Color::srgb(0.85, 0.25, 0.2)),
+                ))
+                .with_children(|b| {
+                    b.spawn((
+                        Text::new("RESUME GAME"),
+                        TextFont { font: FontSource::Family("Bahnschrift".into()), font_size: FontSize::Px(12.0), ..default() },
+                        bevy::text::LetterSpacing::Rem(0.12),
+                        TextColor(Color::srgb(1.0, 0.85, 0.8)),
+                    ));
+                });
             });
         });
     commands.spawn((
@@ -798,17 +805,41 @@ fn kind_color(kind: NotificationKind) -> Color {
     }
 }
 
-fn refresh_ticker(mut commands: Commands, model: Res<PlayUiModel>, ticker: Single<Entity, With<Ticker>>, mut last: Local<Vec<u64>>) {
-    let ids: Vec<u64> = model.notifications.iter().map(|n| n.id).collect();
+/// Advisor tips shown next to the droid while nothing else is going on (when hints are enabled).
+const ADVISOR_TIPS: [&str; 4] = [
+    "The more planets you control, the more credits you will earn.",
+    "Build a space station to strengthen the defence of a planet.",
+    "Select a fleet and click a connected planet to send it there.",
+    "Click a hero portrait at the top right to find that hero's fleet.",
+];
+
+fn refresh_ticker(
+    mut commands: Commands,
+    model: Res<PlayUiModel>,
+    hints: Option<Res<crate::droid_menu::DroidMenuState>>,
+    ticker: Single<Entity, With<Ticker>>,
+    mut last: Local<Vec<u64>>,
+) {
+    let tip = hints.is_none_or(|h| h.enable_hints).then(|| (model.top.week / 2) as usize % ADVISOR_TIPS.len());
+    let mut ids: Vec<u64> = model.notifications.iter().map(|n| n.id).collect();
+    if model.notifications.is_empty() {
+        ids.extend(tip.map(|t| u64::MAX - t as u64));
+    }
     if ids == *last {
         return;
     }
     *last = ids;
-    let backing = if model.notifications.is_empty() { Color::NONE } else { Color::srgba(0.02, 0.04, 0.09, 0.55) };
-    commands.entity(*ticker).insert(BackgroundColor(backing));
     commands.entity(*ticker).despawn_children();
-    for n in model.notifications.iter().rev().take(6) {
-        commands.spawn((text_bundle(&n.text, 13.0, kind_color(n.kind)), ChildOf(*ticker)));
+    // Advisor lines sit next to the droid, oldest above the newest, without a backing box.
+    let mut lines: Vec<(String, Color)> = model.notifications.iter().rev().take(3).map(|n| (n.text.clone(), kind_color(n.kind))).collect();
+    lines.reverse();
+    if lines.is_empty()
+        && let Some(t) = tip
+    {
+        lines.push((ADVISOR_TIPS[t].to_owned(), Color::srgb(0.55, 0.85, 1.0)));
+    }
+    for (text, color) in lines {
+        commands.spawn((text_bundle(&text, 9.5, color), ChildOf(*ticker)));
     }
 }
 
@@ -1261,10 +1292,13 @@ pub(crate) fn fleet_tooltip(
     fog: Res<galaxy_play::Fog>,
     window: Option<Single<&Window, With<PrimaryWindow>>>,
     mut tip: ResMut<eaw_ui::WorldTooltip>,
+    args: Res<crate::cli::Args>,
+    selection: Res<PlayerSelection>,
 ) {
-    let cursor = window.as_ref().and_then(|w| w.cursor_position());
+    let cursor = window.as_ref().and_then(|w| w.cursor_position()).or_else(|| args.hover_selected.then_some(Vec2::ZERO));
     let fleet = hover.fleet.and_then(|id| state.galaxy().fleets.get(&id).map(|f| (f, fog.fleet(id)))).filter(|(_, s)| *s != galaxy_sim::Sight::Hidden);
-    let planet = hover.planet.and_then(|p| bridge.sim_to_planet.get(p as usize).copied().flatten().map(|i| (i, fog.planet(p)))).and_then(|(i, s)| view.planets.get(i).map(|pv| (i, pv, s)));
+    let hovered_planet = hover.planet.or_else(|| args.hover_selected.then_some(selection.planet).flatten());
+    let planet = hovered_planet.and_then(|p| bridge.sim_to_planet.get(p as usize).copied().flatten().map(|i| (i, fog.planet(p)))).and_then(|(i, s)| view.planets.get(i).map(|pv| (i, pv, s)));
     let text = cursor.and_then(|_| fleet.map(|(f, s)| fleet_text(f, s, &state, &catalog)).or_else(|| planet.map(|(i, pv, s)| planet_text(i, pv, s, &view))));
     if tip.text != text {
         tip.text = text;
