@@ -57,6 +57,11 @@ pub fn ability_icon(kind: &str) -> String {
     format!("I_SA_{}.TGA", kind.to_uppercase())
 }
 
+/// Sort key of an ability's `Activation_Style`: 0 = the player triggers it, 1 = everything else (automatic effects).
+fn activation_priority(style: &str) -> u8 {
+    u8::from(!style.trim().eq_ignore_ascii_case("User_Input"))
+}
+
 /// The ability buttons of a unit type (those with a known icon), in XML order.
 pub fn unit_abilities(
     game: &GameData,
@@ -68,6 +73,7 @@ pub fn unit_abilities(
         return Vec::new();
     };
     let mut out: Vec<AbilityDef> = Vec::new();
+    let mut priority: Vec<u8> = Vec::new();
     for a in &def.abilities {
         let kind = a.kind.trim().to_uppercase();
         if kind.is_empty()
@@ -85,6 +91,7 @@ pub fn unit_abilities(
             continue;
         }
         let key = |suffix: &str| format!("TEXT_TOOLTIP_ABILITY_{kind}_{suffix}");
+        priority.push(activation_priority(a.fields.get("activation_style").map_or("", String::as_str)));
         out.push(AbilityDef {
             name: text
                 .get(&key("NAME"))
@@ -96,7 +103,10 @@ pub fn unit_abilities(
             kind,
         });
     }
-    out
+    // The bar has two buttons per card: abilities the player triggers come before automatic ones (stable, so XML order holds inside a group).
+    let mut keyed: Vec<(u8, AbilityDef)> = priority.into_iter().zip(out).collect();
+    keyed.sort_by_key(|(p, _)| *p);
+    keyed.into_iter().map(|(_, d)| d).collect()
 }
 
 /// State of one ability of a selected unit.
@@ -1134,6 +1144,16 @@ pub(crate) fn unit_panel(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn player_triggered_abilities_sort_before_automatic_ones() {
+        assert_eq!(activation_priority(" User_Input "), 0);
+        assert_eq!(activation_priority("Space_Automatic"), 1);
+        assert_eq!(activation_priority(""), 1);
+        let mut v = vec![(activation_priority("Space_Automatic"), "a"), (activation_priority("User_Input"), "b"), (activation_priority("User_Input"), "c")];
+        v.sort_by_key(|(p, _)| *p);
+        assert_eq!(v.iter().map(|x| x.1).collect::<String>(), "bca");
+    }
 
     #[test]
     fn sync_copies_selection_and_abilities() {
