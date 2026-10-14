@@ -128,6 +128,7 @@ impl Plugin for UiSoundsPlugin {
                 start_campaign_sound,
                 production_complete_sounds,
                 capture_bonus_sound,
+                story_dialog_sounds,
             )
                 .chain()
                 .run_if(resource_exists::<AlamoAudio>)
@@ -531,6 +532,7 @@ fn production_complete_sounds(
     game: Res<Game>,
     mut sfx: SfxCommands,
     mut advisor: MessageWriter<GalaxyAudio>,
+    mut director: Option<ResMut<MusicDirector>>,
 ) {
     let (Some(state), Some(me)) = (state, player.and_then(|p| p.0)) else {
         events.clear();
@@ -553,6 +555,10 @@ fn production_complete_sounds(
             // The new tech level is announced by `TechAdvanced` (see `play::galaxy_audio`).
             ProductionKind::Tech(_) => continue,
         };
+        // `Build_Music_Completed` (Death Star, Starforge): a one-shot theme over the map music.
+        if let (Some(m), Some(d)) = (object.as_ref().and_then(|o| object_sfx(&game, o, "build_music_completed")), director.as_mut()) {
+            d.play_once_then(&m, MusicScene::Galactic(faction.clone()));
+        }
         match object.as_ref().and_then(|o| {
             object_sfx(&game, o, "sfxevent_build_complete")
                 .or_else(|| object_sfx(&game, o, "sfxevent_unit_ready"))
@@ -562,6 +568,36 @@ fn production_complete_sounds(
             None => {
                 advisor.write(GalaxyAudio { faction: faction.clone(), event: fallback });
             }
+        }
+    }
+}
+
+/// Story dialogs (transmissions, intro, hero respawn notes): the dialog's `SFX` event (all 52 chapters of the Remake name
+/// `Button_Press`, "used by Story Arcs") and, when a chapter names one, its `SPEECH` line from `SpeechEvents.xml`, for the
+/// player's own plots.
+fn story_dialog_sounds(
+    mut events: MessageReader<PlayEvent>,
+    current: Res<CurrentCampaign>,
+    audio: Res<AlamoAudio>,
+    mut sfx: SfxCommands,
+    mut files: MessageWriter<alamo_audio::PlayFile>,
+) {
+    for e in events.read() {
+        let PlayEvent::Script(galaxy_script::ScriptEvent::Dialog { sfx: sound, speech, faction, .. }) = e else { continue };
+        let mine = match (faction.as_deref(), current.faction.as_deref()) {
+            (Some(f), Some(me)) => f.eq_ignore_ascii_case(me),
+            _ => true,
+        };
+        if !mine {
+            continue;
+        }
+        if let Some(n) = sound.as_deref().filter(|n| !n.is_empty()) {
+            sfx.play(n.to_owned());
+        }
+        if let Some(line) = speech.as_deref().and_then(|s| audio.speech.get(s))
+            && let Some(file) = line.files.first()
+        {
+            files.write(alamo_audio::PlayFile { name: file.clone(), bus: alamo_audio::Bus::Speech });
         }
     }
 }
