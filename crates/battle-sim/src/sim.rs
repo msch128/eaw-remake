@@ -2123,10 +2123,6 @@ fn scan(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig) {
         if me.class == TargetClass::Fighter && t.class == TargetClass::Bomber && s.carrier != NONE && snaps[s.carrier as usize].alive && snaps[s.carrier as usize].pos.dist(t.pos) < 3500.0 {
             weight *= 0.3;
         }
-        // U66: Interceptor doctrine: Interceptors (A-Wings, TIE Interceptors) heavily prioritize enemy bombers to screen capital ships.
-        if def.is_interceptor() && t.class == TargetClass::Bomber {
-            weight *= 0.15;
-        }
         // U93: Flanking corvettes and gunships prioritize rear-echelon units: carriers and support vessels.
         if def.is_flanker() {
             let tdef = cat.ship(t.def);

@@ -313,3 +313,31 @@ fn victory_missiles_fly_curved_arcs_and_still_hit() {
     assert!(curved * 2 >= long.len(), "most missiles leave the straight line: {curved}/{}", long.len());
     assert!(hits * 10 >= long.len() * 6, "and still hit: {hits}/{}", long.len());
 }
+
+/// Interceptors hunt bombers because the data says so: the A-Wing has `Targeting_Priority_Set` `Fighter` (Bomber 1.0, Fighter 2.0), the X-Wing the `Bomber` set (capital ships first,
+/// fighters and bombers unlisted). So at equal reach the A-Wing takes the bomber behind the closer fighter and the X-Wing does not. No name-based doctrine is involved.
+#[test]
+fn fighter_vs_bomber_targeting_follows_the_priority_set_of_the_unit() {
+    let Some((data, fs)) = load() else { return };
+    let cat = Arc::new(Catalog::build(&data, Some(&fs), &["A-Wing_Squadron", "X-Wing_Squadron", "TIE_Fighter_Squadron", "TIE_Bomber_Squadron"]));
+    for (mine, wants_bomber) in [("A-Wing_Squadron", true), ("X-Wing_Squadron", false)] {
+        let sides = vec![side(&cat, "Rebel", &[(mine, 1)], &[], false), side(&cat, "Empire", &[("TIE_Fighter_Squadron", 1), ("TIE_Bomber_Squadron", 1)], &[], false)];
+        let mut b = Battle::new(BattleSetup { catalog: cat.clone(), sides, config: BattleConfig { fog_of_war: false, record_events: false, ..BattleConfig::default() } });
+        let class_of = |b: &Battle, i: usize| cat.ship(b.ships[i].def).class;
+        for i in 0..b.ships.len() {
+            let x = if b.ships[i].side == 0 { 0.0 } else if class_of(&b, i) == TargetClass::Bomber { 800.0 } else { 300.0 };
+            b.ships[i].pos = Vec3::new(x, 0.0, 0.0);
+        }
+        let mut picked = Vec::new();
+        for _ in 0..40 {
+            b.step();
+            picked = (0..b.ships.len()).filter(|&i| b.ships[i].side == 0 && b.ships[i].target != NONE).map(|i| class_of(&b, b.ships[i].target as usize)).collect();
+            if !picked.is_empty() {
+                break;
+            }
+        }
+        assert!(!picked.is_empty(), "{mine} found a target");
+        let bombers = picked.iter().filter(|c| **c == TargetClass::Bomber).count();
+        assert_eq!(bombers == picked.len(), wants_bomber, "{mine}: {picked:?}");
+    }
+}

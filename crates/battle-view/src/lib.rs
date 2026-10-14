@@ -671,6 +671,9 @@ fn is_ground_model(model: &str) -> bool {
 }
 
 /// Writes [`BattleFinished`] once the displayed picture reached the end of a battle that came from a request.
+/// Seconds the victory/defeat banner stays up with the battle camera still running before the summary opens (user rule U49, "~5 seconds"; a click, Space or Esc skips it).
+const OUTCOME_HOLD_SECONDS: f32 = 5.0;
+
 fn report_outcome(
     mut rt: ResMut<BattleRuntime>,
     time: Res<Time>,
@@ -690,7 +693,7 @@ fn report_outcome(
     *over_timer += time.delta_secs();
     let skip = keys.as_ref().is_some_and(|k| k.just_pressed(KeyCode::Space) || k.just_pressed(KeyCode::Escape))
         || mouse.as_ref().is_some_and(|m| m.just_pressed(MouseButton::Left));
-    if *over_timer < 5.0 && !skip {
+    if *over_timer < OUTCOME_HOLD_SECONDS && !skip {
         return;
     }
     rt.reported = true;

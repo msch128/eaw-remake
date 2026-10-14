@@ -455,21 +455,6 @@ pub struct ShipDef {
 }
 
 impl ShipDef {
-    /// True if this fighter is specialized for anti-bomber/anti-fighter interception (e.g. A-Wing, TIE Interceptor).
-    pub fn is_interceptor(&self) -> bool {
-        if self.class != TargetClass::Fighter {
-            return false;
-        }
-        let n = self.name.to_ascii_lowercase();
-        n.contains("interceptor")
-            || n.contains("a_wing")
-            || n.contains("awing")
-            || n.contains("tri_fighter")
-            || n.contains("v_wing")
-            || n.contains("vwing")
-            || n.contains("howlrunner")
-    }
-
     /// True if this ship acts as a carrier (has fighter bays, carried squadrons, or carrier designation).
     pub fn is_carrier(&self) -> bool {
         !self.carried.is_empty()
