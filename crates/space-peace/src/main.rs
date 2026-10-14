@@ -1,4 +1,4 @@
-//! Space Peace: Not at War - Empire at War galactic conquest shell.
+//! EAW:Remake - Empire at War galactic conquest shell.
 
 #![allow(clippy::type_complexity, clippy::too_many_arguments)]
 

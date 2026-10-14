@@ -174,9 +174,9 @@ impl Default for Args {
 }
 
 const USAGE: &str = "\
-Space Peace: Not at War
+EAW:Remake - Galactic Conquest for Empire at War Remake 4.0
 
-USAGE: space-peace [OPTIONS]
+USAGE: eaw-remake [OPTIONS]
 
 OPTIONS:
   --volume <0..1>        Master volume (overrides the stored setting)

@@ -100,8 +100,8 @@ pub struct MenuSpec {
 /// The title screen.
 pub fn main_menu_spec() -> MenuSpec {
     MenuSpec {
-        title: "SPACE PEACE".into(),
-        subtitle: "Not at War".into(),
+        title: "EAW:REMAKE".into(),
+        subtitle: "Galactic Conquest".into(),
         columns: vec![MenuColumn {
             items: vec![
                 MenuItem::new("Galactic Conquest", MenuAction::OpenCampaigns),
