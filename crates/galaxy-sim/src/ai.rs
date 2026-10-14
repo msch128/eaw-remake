@@ -4,7 +4,7 @@
 //! [`plan`] only reads the world and state, so the plans of several factions can be computed in
 //! parallel; the simulation applies the resulting commands in faction order.
 
-use crate::combat::Source;
+use crate::combat::{Member, SideInput, Source};
 use crate::rng::Rng;
 use crate::state::*;
 use crate::world::*;
@@ -124,26 +124,64 @@ fn plan_economy(world: &World, galaxy: &Galaxy, faction: FactionId, rng: &mut Rn
 }
 
 fn fleet_strength(world: &World, f: &Fleet) -> f32 {
-    world.strength(f.units.iter().map(|(&u, &c)| (Source::Unit(u), c)))
+    world.tuned_strength(f.units.iter().map(|(&u, &c)| (Source::Unit(u), c)))
 }
 
-/// Estimated defensive strength of a planet from the point of view of an attacker.
-fn defense_strength(world: &World, galaxy: &Galaxy, planet: PlanetId, attacker: FactionId) -> f32 {
+/// What defends a planet against `attacker`, as the battle would field it: the owner's star base with its garrison and armed structures, and the
+/// hostile fleets in orbit. The passive faction's base and garrison scale to the attacker's tech level like in `Sim::battle_sides`.
+fn defense_parts(world: &World, galaxy: &Galaxy, planet: PlanetId, attacker: FactionId) -> Vec<(Source, u32)> {
     let ps = &galaxy.planets[planet as usize];
     let mut parts: Vec<(Source, u32)> = Vec::new();
+    let passive = world.passive_faction();
+    let mut units_left = u32::MAX;
+    let mut starbase = ps.starbase;
+    if ps.owner.is_some() && ps.owner == passive {
+        let tech = galaxy.factions.get(attacker as usize).map_or(1, |s| s.tech);
+        let (sb, max_units) = world.passive_defense_at(planet, ps.owner.unwrap_or(0), tech, ps.starbase);
+        starbase = sb;
+        units_left = max_units;
+    }
     if let Some(o) = ps.owner
         && galaxy.hostile(world, attacker, o)
     {
-        if let Some(sb) = ps.starbase {
+        if let Some(sb) = starbase {
             parts.push((Source::Starbase(sb), 1));
             parts.extend(world.starbases[sb as usize].garrison.iter().map(|&(u, c)| (Source::Garrison(u), c)));
         }
         parts.extend(ps.structures.iter().filter(|&&s| { let st = &world.structures[s as usize]; st.combat.is_some() || st.space_reach }).map(|&s| (Source::Structure(s), 1)));
     }
     for f in galaxy.fleets_at(planet).filter(|f| galaxy.hostile(world, attacker, f.owner)) {
-        parts.extend(f.units.iter().map(|(&u, &c)| (Source::Unit(u), c)));
+        for (&u, &c) in &f.units {
+            let take = if Some(f.owner) == passive { c.min(units_left) } else { c };
+            if Some(f.owner) == passive {
+                units_left -= take;
+            }
+            if take > 0 {
+                parts.push((Source::Unit(u), take));
+            }
+        }
     }
-    world.strength(parts)
+    parts
+}
+
+/// Estimated defensive strength of a planet from the point of view of an attacker.
+fn defense_strength(world: &World, galaxy: &Galaxy, planet: PlanetId, attacker: FactionId) -> f32 {
+    world.tuned_strength(defense_parts(world, galaxy, planet, attacker))
+}
+
+/// Plays the battle on `fleet` against the planet's defence with the statistical resolver (fixed seed) and says whether the attacker wins. The
+/// Lanchester estimate alone can be far off against star bases and swarms of small craft: a fleet that "outguns" a base 2 to 1 may still lose it all.
+fn wins_battle(world: &World, galaxy: &Galaxy, faction: FactionId, fleet: &Fleet, planet: PlanetId) -> bool {
+    let defence = defense_parts(world, galaxy, planet, faction);
+    if defence.is_empty() {
+        return true;
+    }
+    let side = |faction: FactionId, parts: Vec<(Source, u32)>| SideInput { faction, members: parts.into_iter().map(|(source, count)| Member { source, fleet: None, count }).collect() };
+    let owner = galaxy.planets[planet as usize].owner.unwrap_or(faction);
+    let sides = [side(faction, fleet.units.iter().map(|(&u, &c)| (Source::Unit(u), c)).collect()), side(owner, defence)];
+    let mut rng = Rng::new(0xA1_5EED ^ (u64::from(planet) << 16) ^ u64::from(faction));
+    let result = crate::combat::resolve_allied(world, &sides, &mut rng, &galaxy.allied, &[]);
+    result.winner == Some(0)
 }
 
 fn plan_military(world: &World, galaxy: &Galaxy, faction: FactionId, rng: &mut Rng, cmds: &mut Vec<Command>) {
@@ -177,7 +215,7 @@ fn plan_military(world: &World, galaxy: &Galaxy, faction: FactionId, rng: &mut R
             continue;
         }
         let (dist, _) = world.shortest_paths(p);
-        let mut best: Option<(f32, PlanetId)> = None;
+        let mut candidates: Vec<(f32, PlanetId)> = Vec::new();
         for t in 0..world.planets.len() as PlanetId {
             if !world.real[t as usize] || t == p || dist[t as usize] == u64::MAX {
                 continue;
@@ -196,10 +234,15 @@ fn plan_military(world: &World, galaxy: &Galaxy, faction: FactionId, rng: &mut R
             }
             let value = world.planets[t as usize].credit_value + 50.0;
             let score = value / (1.0 + hops_cost / 60.0) * (0.9 + 0.2 * rng.unit());
-            if best.is_none_or(|(b, _)| score > b) {
-                best = Some((score, t));
-            }
+            candidates.push((score, t));
         }
+        // Best score first; a target is only worth it when the fleet can also fight through the blockades on its way (it stops at the first hostile
+        // star base or fleet; going the long way round is tried first, like `MoveFleetAround`).
+        candidates.sort_by(|a, b| b.0.total_cmp(&a.0).then(a.1.cmp(&b.1)));
+        let best = candidates.into_iter().find(|&(_, t)| {
+            let Some(path) = world.find_path_avoiding(p, t, |q| q != t && world.blockades(galaxy, q, faction)) else { return false };
+            path.iter().filter(|&&q| q != p && q != t).all(|&q| !world.blockades(galaxy, q, faction) || wins_battle(world, galaxy, faction, &total, q)) && wins_battle(world, galaxy, faction, &total, t)
+        });
         if let Some((_, t)) = best {
             cmds.push(Command::MoveFleetAround { faction, fleet: main.id, to: t });
         }

@@ -84,6 +84,31 @@ impl World {
         }
         (ehp * dps).sqrt()
     }
+
+    /// [`World::strength`] with the statistical resolver's calibration ([`Tuning`]): star bases, structures and garrisons are `base_factor` times
+    /// tougher and deadlier, small craft deal `efficiency` of their damage. The built-in AI compares these, so "2 to 1" means roughly what the
+    /// battle makes of it; the plain estimate is kept for the scripted AI.
+    pub fn tuned_strength(&self, members: impl IntoIterator<Item = (Source, u32)>) -> f32 {
+        let tuning = Tuning::of(self);
+        let (mut ehp, mut dps) = (0.0f32, 0.0f32);
+        for (src, n) in members {
+            if let Some(s) = self.stats_of(src) {
+                let base = if matches!(src, Source::Unit(_)) { 1.0 } else { tuning.base_factor };
+                let eff = match src {
+                    Source::Unit(u) | Source::Garrison(u) => match self.units[u as usize].category {
+                        alamo_data::ShipCategory::Fighter | alamo_data::ShipCategory::Bomber => tuning.efficiency[0],
+                        alamo_data::ShipCategory::Corvette | alamo_data::ShipCategory::Transport => tuning.efficiency[1],
+                        alamo_data::ShipCategory::Frigate => tuning.efficiency[2],
+                        _ => tuning.efficiency[3],
+                    },
+                    _ => 1.0,
+                };
+                ehp += s.durability() * n as f32 * base;
+                dps += s.raw_dps() * n as f32 * base * eff;
+            }
+        }
+        (ehp * dps).sqrt()
+    }
 }
 
 /// Resolves a battle between the given sides.

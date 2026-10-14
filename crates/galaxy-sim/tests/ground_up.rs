@@ -256,3 +256,271 @@ fn ground_up_supports_faction_override_for_republic() {
     assert_eq!(sim.world().victory.active_player, Some(rep), "Republic is the active human player");
     assert_eq!(sim.galaxy().owned_planets(rep).count(), 1, "Republic starts with 1 planet in From the Ground Up");
 }
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Main factions from the campaign data, start conditions per faction, build rules, long AI runs, base and Clone Wars stacks.
+// ---------------------------------------------------------------------------------------------------------------------
+
+/// The base Remake (`base`) or the Clone Wars stack (`fft`: 3229239424 + 2794270450 + 1770851727), skipped when a folder is missing.
+fn load_stack(stack: &str) -> Option<GameData> {
+    let install = GameInstall::detect()?;
+    let needed: &[&str] = if stack == "fft" { &["3229239424", "2794270450", "1770851727"] } else { &["1770851727"] };
+    if let Some(missing) = needed.iter().find(|id| !install.mod_data(id).is_dir()) {
+        eprintln!("skipping: workshop mod {missing} not found");
+        return None;
+    }
+    let alias = if stack == "fft" { "fft" } else { "1770851727" };
+    Some(load_galaxy(&GameFs::for_mod(&install, Some(alias)).ok()?).0)
+}
+
+fn ground_up_sim(data: &GameData, campaign: &str, ground_up: bool) -> Sim {
+    let c = data.campaign(campaign).unwrap_or_else(|| panic!("campaign {campaign}"));
+    Sim::new(data, c, SimConfig { victory_enabled: false, ground_up, ..SimConfig::default() }).expect("sim")
+}
+
+fn names(w: &World, list: &[FactionId]) -> Vec<String> {
+    let mut v: Vec<String> = list.iter().map(|&f| w.factions[f as usize].name.clone()).collect();
+    v.sort();
+    v
+}
+
+/// Planets owned by a faction.
+fn owned(sim: &Sim, f: FactionId) -> Vec<PlanetId> {
+    sim.galaxy().owned_planets(f).collect()
+}
+
+#[test]
+fn main_factions_come_from_the_campaign_data() {
+    if let Some(data) = load_stack("base") {
+        for (camp, human) in [("GC_Full_Web_Way_Rebel", "Rebel"), ("GC_Full_Web_Way_Imperial", "Empire"), ("GC_Full_Web_Way_Underworld", "Underworld")] {
+            let s = ground_up_sim(&data, camp, true);
+            let w = s.world();
+            assert_eq!(names(w, &w.main_factions), ["Empire", "Rebel", "Underworld"], "{camp}");
+            assert_eq!(w.victory.active_player, w.faction_id(human), "{camp}");
+            assert!(!w.main_factions.contains(&w.passive_faction().unwrap()), "the passive faction is no main faction");
+        }
+    }
+    if let Some(data) = load_stack("fft") {
+        // In the Clone Wars campaigns the played side is a great power; the other of Republic / CIS is a minor (`GC_MinorAi`) and keeps its planets.
+        for (camp, human, minor) in [("GC_Full_Web_Way_Republic", "Republic", "CIS"), ("GC_Full_Web_Way_CIS", "CIS", "Republic")] {
+            let s = ground_up_sim(&data, camp, true);
+            let w = s.world();
+            let main = names(w, &w.main_factions);
+            println!("{camp}: main {main:?}");
+            assert!(main.iter().any(|n| n == human), "{camp}: {human} is a main faction");
+            assert!(!main.iter().any(|n| n == minor), "{camp}: {minor} stays a minor");
+            assert!(main.len() >= 3, "{camp}: {main:?}");
+        }
+    }
+}
+
+#[test]
+fn start_conditions_per_main_faction() {
+    for (stack, campaigns) in [
+        ("base", vec!["GC_Full_Web_Way_Rebel", "GC_Full_Web_Way_Imperial", "GC_Full_Web_Way_Underworld"]),
+        ("fft", vec!["GC_Full_Web_Way_Republic", "GC_Full_Web_Way_CIS"]),
+    ] {
+        let Some(data) = load_stack(stack) else { continue };
+        for camp in campaigns {
+            let normal = ground_up_sim(&data, camp, false);
+            let s = ground_up_sim(&data, camp, true);
+            let (w, g) = (s.world().clone(), s.galaxy());
+            let human = w.victory.active_player.expect("human");
+            let pirates = w.passive_faction().expect("pirates");
+            for &f in &w.main_factions {
+                let name = &w.factions[f as usize].name;
+                let planets = owned(&s, f);
+                let want = if f == human { 1 } else { 3 };
+                assert_eq!(planets.len(), want.min(owned(&normal, f).len()), "{camp}: {name} planets");
+                // Credits and tech are the campaign's (`Starting_Credits`, `Starting_Tech_Level`): Ground Up reduces planets, not money.
+                assert_eq!(g.factions[f as usize].credits, normal.galaxy().factions[f as usize].credits, "{camp}: {name} start credits");
+                assert_eq!(g.factions[f as usize].tech, normal.galaxy().factions[f as usize].tech, "{camp}: {name} start tech");
+                assert!(g.factions[f as usize].credits > 0.0, "{camp}: {name} has start credits");
+                // The home planet is kept, with a level 1 star base.
+                if let Some(home) = w.factions[f as usize].home.filter(|h| owned(&normal, f).contains(h)) {
+                    assert!(planets.contains(&home), "{camp}: {name} keeps its home {}", w.planets[home as usize].name);
+                }
+                for &p in &planets {
+                    assert_eq!(w.starbase_level(g, p), 1, "{camp}: {name} star base level on {}", w.planets[p as usize].name);
+                }
+                // Fleets stay only on kept planets.
+                let ships: u32 = g.fleets.values().filter(|fl| fl.owner == f).map(|fl| fl.unit_count()).sum();
+                assert!(g.fleets.values().filter(|fl| fl.owner == f).all(|fl| fl.planet().is_some_and(|p| planets.contains(&p))), "{camp}: {name} fleets only at kept planets");
+                println!("{camp}: {name}: {} planets, {ships} ships, {:.0} credits, tech {}", planets.len(), g.factions[f as usize].credits, g.factions[f as usize].tech);
+            }
+            // Minors keep their planets.
+            for p in 0..w.planets.len() {
+                let (a, b) = (normal.galaxy().planets[p].owner, g.planets[p].owner);
+                if let Some(o) = a.filter(|o| !w.main_factions.contains(o) && *o != pirates) {
+                    assert_eq!(b, Some(o), "{camp}: minor planet {} keeps its owner", w.planets[p].name);
+                }
+            }
+            // The player can act at once: something is queueable at the start planet with the start credits.
+            let home = owned(&s, human)[0];
+            let ship = w.buildable_units[human as usize].iter().any(|&u| w.check_build_unit(g, human, home, u).is_ok());
+            let building = w.buildable_structures[human as usize].iter().any(|&st| w.check_build_structure(g, human, home, st).is_ok());
+            let upgrade = w.check_upgrade_starbase(g, human, home).is_ok() || w.check_upgrade_tech(g, human, home).is_ok();
+            assert!(ship || building || upgrade, "{camp}: nothing to do at the start planet {}", w.planets[home as usize].name);
+        }
+    }
+}
+
+#[test]
+fn what_the_player_can_build_follows_the_data_rules_on_one_planet() {
+    let Some(data) = load_stack("base") else { return };
+    let s = ground_up_sim(&data, "GC_Full_Web_Way_Rebel", true);
+    let (w, g) = (s.world().clone(), s.galaxy());
+    let human = w.victory.active_player.unwrap();
+    let home = owned(&s, human)[0];
+    let tech = g.factions[human as usize].tech;
+    let mut offered = 0;
+    for &u in &w.buildable_units[human as usize] {
+        let ut = &w.units[u as usize];
+        let ok = w.check_build_unit(g, human, home, u).is_ok();
+        if ok {
+            offered += 1;
+            assert!(ut.tech <= tech, "{} needs tech {} (have {tech})", ut.name, ut.tech);
+            assert!(ut.req_starbase <= w.starbase_level(g, home), "{} needs star base {}", ut.name, ut.req_starbase);
+            assert!(ut.req_planets.is_empty() || ut.req_planets.contains(&home), "{} is tied to other planets", ut.name);
+            assert!(!ut.locked || g.factions[human as usize].unlocked.contains(&ut.name.to_ascii_lowercase()), "{} is locked", ut.name);
+        }
+        // Objects of tech >= 90 (story-only) are never offered, and nothing above the start tech is.
+        if ut.tech >= 90 || ut.tech > tech {
+            assert!(!ok, "{} (tech {}) must not be offered", ut.name, ut.tech);
+        }
+    }
+    println!("{offered} ships queueable at the start planet {} (tech {tech}, base level {})", w.planets[home as usize].name, w.starbase_level(g, home));
+}
+
+/// Start of a main faction in an all-AI run.
+struct Start {
+    faction: FactionId,
+    planets: usize,
+    ships_built: u32,
+    /// `income_per_week` at the start.
+    income: f64,
+}
+
+/// A sim with every main faction under the built-in AI (the passive faction and the minors are not run) and the factions' start values.
+fn start_ai_run(data: &GameData, campaign: &str) -> (Sim, Vec<Start>) {
+    let mut s = ground_up_sim(data, campaign, true);
+    let w = s.world().clone();
+    s.set_ai_factions(w.main_factions.iter().copied());
+    let g = s.galaxy();
+    let before = w
+        .main_factions
+        .iter()
+        .map(|&f| Start { faction: f, planets: owned(&s, f).len(), ships_built: g.factions[f as usize].stats.ships_built, income: g.factions[f as usize].income_per_week })
+        .collect();
+    (s, before)
+}
+
+/// Advances the sim by `weeks` more weeks, resolving every battle at once.
+fn advance_weeks(s: &mut Sim, weeks: u32) {
+    let end = weeks as f32 * s.world().config.week_seconds;
+    let tick = s.world().config.tick_seconds.max(1.0);
+    let mut t = 0.0;
+    while t < end {
+        s.step(tick);
+        t += tick;
+        for b in s.pending_battles().iter().map(|b| b.id).collect::<Vec<_>>() {
+            let _ = s.resolve_battle(b);
+        }
+    }
+}
+
+/// Income per week below which a start does not carry an expansion (estimate for "too poor to outgrow the pirates' tech-scaled defence within 90 weeks":
+/// the Underworld's three planets earn 185, every other start earns 1200 or more; a home with negative income cannot build at all).
+const POOR_INCOME: f64 = 300.0;
+
+fn assert_all_ai_build_and_expand(stack: &str, campaign: &str) {
+    let Some(data) = load_stack(stack) else { return };
+    let (mut s, before) = start_ai_run(&data, campaign);
+    let report = |s: &Sim, label: &str| {
+        let (w, g) = (s.world(), s.galaxy());
+        for b in &before {
+            let st = &g.factions[b.faction as usize].stats;
+            println!(
+                "{campaign} {label}: {} (start income {:.0}/week): planets {} -> {}, ships built {}, structures {}, tech {}, captured {}, lost {}",
+                w.factions[b.faction as usize].name, b.income, b.planets, g.owned_planets(b.faction).count(), st.ships_built, st.structures_built, g.factions[b.faction as usize].tech, st.planets_captured, st.planets_lost
+            );
+        }
+    };
+    // Every main faction that starts with income builds ships, structures or tech within 30 weeks.
+    advance_weeks(&mut s, 30);
+    report(&s, "week 30");
+    for b in before.iter().filter(|b| b.income > 0.0) {
+        let (w, g) = (s.world(), s.galaxy());
+        let st = &g.factions[b.faction as usize].stats;
+        let name = &w.factions[b.faction as usize].name;
+        assert!(st.ships_built > b.ships_built, "{campaign}: {name} built no ships in 30 weeks");
+        assert!(st.structures_built > 0 || g.factions[b.faction as usize].tech > 1, "{campaign}: {name} neither built structures nor raised tech");
+    }
+    // Every faction that is not poor has expanded by week 90 (the pirates' defence scales with the attackers' tech, so it takes a while).
+    advance_weeks(&mut s, 60);
+    report(&s, "week 90");
+    let (w, g) = (s.world(), s.galaxy());
+    for b in before.iter().filter(|b| b.income >= POOR_INCOME) {
+        let st = &g.factions[b.faction as usize].stats;
+        let now = g.owned_planets(b.faction).count();
+        assert!(now > b.planets || st.planets_captured > 0, "{campaign}: {} did not expand in 90 weeks ({} -> {now})", w.factions[b.faction as usize].name, b.planets);
+    }
+    let pirates = w.passive_faction().unwrap();
+    assert_eq!(g.factions[pirates as usize].stats.credits_spent, 0.0, "the passive faction spends nothing");
+    assert!(g.planets.iter().all(|p| p.owner != Some(pirates) || p.queues.iter().all(|q| q.is_empty())), "no passive production");
+}
+
+#[test]
+fn thirty_week_all_ai_run_every_main_faction_builds_and_expands() {
+    for camp in ["GC_Full_Web_Way_Rebel", "GC_Full_Web_Way_Imperial", "GC_Full_Web_Way_Underworld"] {
+        assert_all_ai_build_and_expand("base", camp);
+    }
+}
+
+#[test]
+fn thirty_week_all_ai_run_with_republic_and_cis_as_the_played_side() {
+    for camp in ["GC_Full_Web_Way_Republic", "GC_Full_Web_Way_CIS"] {
+        assert_all_ai_build_and_expand("fft", camp);
+    }
+}
+
+#[test]
+fn the_all_ai_run_is_deterministic() {
+    let Some(data) = load_stack("base") else { return };
+    let run = || {
+        let (mut s, _) = start_ai_run(&data, "GC_Full_Web_Way_Rebel");
+        advance_weeks(&mut s, 6);
+        s
+    };
+    let (a, b) = (run(), run());
+    assert_eq!(a.galaxy().state_hash(), b.galaxy().state_hash());
+}
+
+#[test]
+fn passive_faction_choice_works_in_the_clone_wars_stack() {
+    let Some(data) = load_stack("fft") else { return };
+    for camp in ["GC_Full_Web_Way_Republic", "GC_Full_Web_Way_CIS", "GC_Full_Web_Way_Rebel"] {
+        let mut s = ground_up_sim(&data, camp, true);
+        let w = s.world().clone();
+        let pirates = w.passive_faction().unwrap_or_else(|| panic!("{camp}: no Pirates faction"));
+        assert_eq!(w.factions[pirates as usize].name, "Pirates");
+        assert!(s.galaxy().owned_planets(pirates).count() > 0, "{camp}: the pirates hold the released planets");
+        assert!(s.galaxy().planets.iter().all(|p| p.owner.is_some() || p.destroyed), "{camp}: no planet is unowned");
+        assert!(!w.main_factions.contains(&pirates));
+        let planet = s.galaxy().owned_planets(pirates).next().unwrap();
+        let unit = w.buildable_units[pirates as usize].first().copied().unwrap_or(0);
+        assert_eq!(s.apply(Command::BuildUnit { faction: pirates, planet, unit }), Err(CommandError::NotAvailable), "{camp}: passive faction refused");
+    }
+}
+
+#[test]
+fn the_sim_config_keeps_ground_up_in_saves() {
+    // The save header stores the whole `SimConfig`; the flag must survive the round trip, and old headers without it load as a normal game.
+    let cfg = SimConfig { ground_up: true, faction_override: Some("Republic".into()), ..SimConfig::default() };
+    let back: SimConfig = serde_json::from_str(&serde_json::to_string(&cfg).unwrap()).unwrap();
+    assert!(back.ground_up);
+    assert_eq!(back.faction_override.as_deref(), Some("Republic"));
+    let mut v = serde_json::to_value(SimConfig::default()).unwrap();
+    v.as_object_mut().unwrap().remove("ground_up");
+    assert!(!serde_json::from_value::<SimConfig>(v).unwrap().ground_up);
+}

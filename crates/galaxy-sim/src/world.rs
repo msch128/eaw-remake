@@ -626,6 +626,9 @@ pub struct World {
     pub damage: DamageMatrix,
     /// Victory conditions.
     pub victory: VictoryRules,
+    /// The main (great power) factions: the human player and every faction a full AI plays, not the minors or the passive faction
+    /// (see [`World::build_main_factions`]).
+    pub main_factions: Vec<FactionId>,
     /// Ground units, heroes and other objects that are named in the data but not simulated
     /// (lower-case name to kind). Ships, structures and star bases are looked up in their catalogs.
     pub unsimulated: HashMap<String, ObjectKind>,
@@ -785,6 +788,7 @@ impl World {
             first_starbase: Vec::new(),
             damage,
             victory: VictoryRules::default(),
+            main_factions: Vec::new(),
             unsimulated: data
                 .objects
                 .iter()
@@ -804,6 +808,7 @@ impl World {
         world.build_catalogs(data);
         world.build_tech_upgrades(data);
         world.build_victory(campaign);
+        world.build_main_factions(campaign);
         Ok(world)
     }
 }

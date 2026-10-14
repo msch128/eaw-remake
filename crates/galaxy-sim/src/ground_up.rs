@@ -1,6 +1,6 @@
 //! "From the Ground Up": a setup transform over the loaded campaign (`SimConfig::ground_up`, applied by [`Sim::new`]).
 //!
-//! The player's faction starts with one planet (its home), every other playable main faction (Rebel, Empire, Underworld) with
+//! The player's faction starts with one planet (its home), every other main faction ([`World::main_factions`]: the ones a full AI plays in the campaign, e.g. Rebel, Empire, Underworld) with
 //! three (home plus the two nearest it owns in the campaign). The planets they give up and every planet nobody owns belong to
 //! the passive faction (the Remake's orange `Pirates`): it defends but never builds, moves or expands. Minor factions keep their
 //! planets as in the campaign. Star bases of the start planets are reset to level 1; fleets stay only where a planet is kept.
@@ -9,12 +9,34 @@ use crate::state::Command;
 use crate::sim::Sim;
 use crate::world::{FactionId, PlanetId, StarbaseTypeId, UnitTypeId, World};
 
-/// The playable main factions that get the reduced start.
-const MAIN_FACTIONS: [&str; 3] = ["Rebel", "Empire", "Underworld"];
+/// Fallback main factions for a campaign that names no AI plots.
+const DEFAULT_MAIN_FACTIONS: [&str; 3] = ["Rebel", "Empire", "Underworld"];
 /// The passive owner of everything else.
 const PASSIVE_FACTION: &str = "Pirates";
 
 impl World {
+    /// Fills [`World::main_factions`] from the campaign: the human player plus every faction whose `AI_Player_Control` is a full AI plot
+    /// (`GC_EmpireAi`, `GC_RebelAi`, `GC_UnderworldAi`, `SandboxHuman`, ...), not `GC_MinorAi` / `GC_PiratesAi`. In the Remake that is Rebel, Empire and
+    /// Underworld; in the Clone Wars campaigns Republic or CIS is the human and the other stays a minor (`Campaigns_Imperial_Web_Way_4Grand.xml`).
+    /// A campaign with no AI plots falls back to the three base factions.
+    pub(crate) fn build_main_factions(&mut self, campaign: &alamo_data::Campaign) {
+        let mut main: Vec<FactionId> = campaign
+            .factions
+            .iter()
+            .filter(|cf| cf.ai_player_control.as_deref().is_some_and(|ai| !ai.eq_ignore_ascii_case("GC_MinorAi") && !ai.eq_ignore_ascii_case("GC_PiratesAi")))
+            .filter_map(|cf| self.faction_id(&cf.name))
+            .collect();
+        if main.is_empty() {
+            main = DEFAULT_MAIN_FACTIONS.iter().filter_map(|n| self.faction_id(n)).collect();
+        }
+        main.extend(self.victory.active_player);
+        let passive = self.passive_faction();
+        main.retain(|&f| Some(f) != passive);
+        main.sort_unstable();
+        main.dedup();
+        self.main_factions = main;
+    }
+
     /// The passive faction (the Pirates) in every game: it defends and rearms (see [`Sim::rearm_passive`]) but never builds, moves, attacks or expands.
     pub fn passive_faction(&self) -> Option<FactionId> {
         self.faction_id(PASSIVE_FACTION)
@@ -69,7 +91,9 @@ impl Sim {
     pub(crate) fn apply_ground_up(&mut self, human: Option<FactionId>) {
         let world = self.world.clone();
         let Some(passive) = world.passive_faction() else { return };
-        let mut main: Vec<FactionId> = MAIN_FACTIONS.iter().filter_map(|n| world.faction_id(n)).collect();
+        // The reduction is a setup, not a war: it must not show up as captured / lost planets on the end-of-game screen.
+        let stats: Vec<_> = self.galaxy.factions.iter().map(|f| (f.stats.planets_captured, f.stats.planets_lost)).collect();
+        let mut main = world.main_factions.clone();
         if let Some(h) = human {
             if !main.contains(&h) {
                 main.push(h);
@@ -130,6 +154,10 @@ impl Sim {
             }
         }
         self.galaxy.sync_ships();
+        for (f, (captured, lost)) in self.galaxy.factions.iter_mut().zip(stats) {
+            f.stats.planets_captured = captured;
+            f.stats.planets_lost = lost;
+        }
         world.refresh_economy(&mut self.galaxy);
     }
 }
@@ -144,7 +172,7 @@ impl Sim {
         let tech = |f: FactionId| self.galaxy.factions.get(f as usize).map_or(1, |s| s.tech);
         match world.victory.active_player.filter(|&p| Some(p) != world.passive_faction()) {
             Some(p) => tech(p),
-            None => MAIN_FACTIONS.iter().filter_map(|n| world.faction_id(n)).map(tech).max().unwrap_or(1),
+            None => world.main_factions.iter().copied().map(tech).max().unwrap_or(1),
         }
         .max(1)
     }
@@ -229,12 +257,21 @@ impl Sim {
             .max()
             .unwrap_or(1)
             .max(1);
+        self.world.passive_defense_at(battle.planet, passive, attacker_tech, current_sb)
+    }
+}
+
+impl World {
+    /// The star base and the garrison cap (units) the passive faction fields on `planet` against an attacker of tech level `attacker_tech`: the base
+    /// of its own chain at level `clamp(tech, 1, planet cap)` (never above level 2 off Lehon), `2 x tech` units.
+    pub(crate) fn passive_defense_at(&self, planet: PlanetId, passive: FactionId, attacker_tech: i32, current_sb: Option<StarbaseTypeId>) -> (Option<StarbaseTypeId>, u32) {
+        let attacker_tech = attacker_tech.max(1);
         let max_units = (PASSIVE_GARRISON_PER_TECH * attacker_tech) as u32;
-        let chain = self.world.starbase_chain(passive);
-        let p = battle.planet;
-        let is_lehon = self.world.planets.get(p as usize).is_some_and(|pl| pl.name.eq_ignore_ascii_case("Lehon"));
+        let chain = self.starbase_chain(passive);
+        let p = planet;
+        let is_lehon = self.planets.get(p as usize).is_some_and(|pl| pl.name.eq_ignore_ascii_case("Lehon"));
         let eff_sb = if !chain.is_empty() {
-            let max_sb = if is_lehon { chain.len() } else { (self.world.planets[p as usize].max_space_base as usize).min(2) };
+            let max_sb = if is_lehon { chain.len() } else { (self.planets[p as usize].max_space_base as usize).min(2) };
             let effective_chain_len = chain.len().min(max_sb);
             if effective_chain_len > 0 {
                 let want = (attacker_tech.clamp(1, effective_chain_len as i32) - 1) as usize;
