@@ -88,7 +88,7 @@ pub struct BattleViewSettings {
     pub sky_radius: f32,
     /// Vertical field of view in degrees.
     pub fov_degrees: f32,
-    /// Camera distance when the battle starts.
+    /// Farthest camera distance the opening framing of the player's fleet picks.
     pub start_distance: f32,
     /// Cascaded sun shadows on ships (costs a depth pass per cascade).
     pub shadows: bool,
@@ -169,7 +169,7 @@ impl Default for BattleViewSettings {
             sky_radius: 90_000.0,
             fov_degrees: 45.0,
             // Estimate: matches the Remake Byss video (b0640-b0705), where a big Star Destroyer spans ~14% of the frame width at 45 deg fov.
-            start_distance: 3500.0,
+            start_distance: 1300.0,
             shadows: false,
             particle_density: 1.0,
             audio: true,
@@ -716,6 +716,9 @@ fn stop_battle(
     commands.remove_resource::<BattleRuntime>();
 }
 
+/// Closest distance the opening framing of the player's fleet picks.
+const START_DISTANCE_MIN: f32 = 700.0;
+
 /// Advances the battle clock and fetches the snapshots around it.
 fn advance_clock(
     time: Res<Time>,
@@ -766,12 +769,19 @@ fn advance_clock(
             .collect();
         if !pts.is_empty() {
             let center = pts.iter().copied().sum::<Vec3>() / pts.len() as f32;
-            info!("battle camera: fleet centre {center:?}, bounds {:?}..{:?}", cam.bounds_min, cam.bounds_max);
             cam.focus = center;
             cam.target_focus = center;
-            cam.distance = settings.start_distance;
-            cam.target_distance = settings.start_distance;
-            *auto_frame = Some((center, settings.start_distance));
+            // Close enough that the ships are models, not icons: the core (median spread) of the fleet fills the view.
+            let mut spread: Vec<f32> = pts.iter().map(|p| (*p - center).length()).collect();
+            spread.sort_by(f32::total_cmp);
+            let radius = spread[spread.len() / 2] + 150.0;
+            let fov = settings.fov_degrees.to_radians();
+            let wanted = radius * 1.2 / (fov * 0.5).tan() / cam.pitch.sin().abs().max(0.3);
+            let distance = wanted.clamp(START_DISTANCE_MIN, settings.start_distance.max(START_DISTANCE_MIN));
+            cam.distance = distance;
+            cam.target_distance = distance;
+            info!("battle camera: fleet centre {center:?}, median spread {:.0}, start distance {distance:.0}", spread[spread.len() / 2]);
+            *auto_frame = Some((center, distance));
         }
     }
     // The fleet drifts while it arrives (staggered rows, jump-in): keep it centred for the first seconds unless the player touched the camera.

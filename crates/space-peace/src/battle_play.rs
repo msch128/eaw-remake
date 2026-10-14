@@ -681,7 +681,7 @@ fn battle_shot(
     shot.frames += 1;
     let at = args.battle_seconds.unwrap_or(12.0);
     // Models and textures load asynchronously: wait a couple of hundred frames.
-    let ready = if args.battle_orders { shot.orders_at.is_some_and(|f| shot.frames >= f + 12) } else { status.time >= at && shot.frames >= 200 };
+    let ready = if args.battle_orders { shot.orders_at.is_some_and(|f| shot.frames >= f + 12) && args.battle_seconds.is_none_or(|t| status.time >= t) } else { status.time >= at && shot.frames >= 200 };
     if shot.taken || status.tick == 0 || !ready {
         return;
     }
