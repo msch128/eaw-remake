@@ -484,7 +484,7 @@ fn setup_scene(
 
     // Route line widths in pixels per width tier.
     gizmo_store.config_mut::<RingGizmos>().0.line.width = 1.6;
-    gizmo_store.config_mut::<SelectGizmos>().0.line.width = 2.6;
+    gizmo_store.config_mut::<SelectGizmos>().0.line.width = 1.5;
     gizmo_store.config_mut::<TerritoryGizmos>().0.line.width = 9.0;
 }
 
@@ -571,10 +571,10 @@ fn spawn_galaxy(
             TextFont {
                 font: FontSource::Family("Bahnschrift".into()),
                 font_size: FontSize::Px(14.0),
-                weight: FontWeight::NORMAL,
+                weight: FontWeight::LIGHT,
                 ..default()
             },
-            bevy::text::LetterSpacing::Rem(0.04),
+            bevy::text::LetterSpacing::Rem(0.14),
             TextColor(rgb(label_c)),
             TextShadow {
                 offset: Vec2::splat(1.5),
@@ -703,7 +703,7 @@ fn update_labels(
     };
     // Labels grow when zoomed in and shrink when zoomed out (whole pixel steps only).
     let zoom_out = zoom_fraction(&bounds, orbit.distance);
-    let font_px = (19.0 + (11.0 - 19.0) * smoothstep(0.0, 0.7, zoom_out)).round();
+    let font_px = (15.0 + (10.0 - 15.0) * smoothstep(0.0, 0.7, zoom_out)).round();
     // UI coordinates are multiplied by the UI scale; the layout below works in viewport pixels.
     let us = ui_scale.0.max(0.1);
     let font_node_px = (font_px / us).round().max(1.0);
@@ -822,7 +822,7 @@ fn update_labels(
 
     for (e, mut node, mut vis) in &mut emblems {
         match slots.get(e.planet_index()).copied().flatten() {
-            Some(s) if visible[e.planet_index()] => {
+            Some(s) if visible[e.planet_index()] && (zoom_out < 0.3 || selection.0 == Some(e.planet_index())) => {
                 node.left = Val::Px((s.pos.x - 14.0 * us) / us);
                 node.top = Val::Px((s.pos.y - font_px * 0.4) / us);
                 *vis = Visibility::Inherited;
@@ -933,8 +933,34 @@ fn draw_rings(
     mut select: Gizmos<SelectGizmos>,
     mut border: Gizmos<TerritoryGizmos>,
     mut territory: Local<(u64, Vec<(Vec3, Vec3, Color)>)>,
+    bounds: Res<CameraBounds>,
+    camera: Single<&GalaxyCamera>,
 ) {
     let flat = Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2);
+    // Faint blue grid around the selected planet that fades in when zoomed in.
+    let grid_fade = 1.0 - smoothstep(0.15, 0.5, zoom_fraction(&bounds, camera.distance));
+    if let (Some(i), true) = (selection.0.filter(|&i| i < view.planets.len()), grid_fade > 0.01) {
+        let c = galaxy_to_world(view.planets[i].position);
+        let step = radii.0[i] * 2.0;
+        let n = 7i32;
+        let ext = step * n as f32;
+        let clear = Color::srgba(0.45, 0.7, 1.0, 0.0);
+        let line = Color::srgba(0.45, 0.7, 1.0, 0.10 * grid_fade);
+        for k in -n..=n {
+            let o = k as f32 * step;
+            // Each line fades from the middle towards both ends.
+            select.linestrip_gradient([
+                (c + Vec3::new(o, 0.0, -ext), clear),
+                (c + Vec3::new(o, 0.0, 0.0), line),
+                (c + Vec3::new(o, 0.0, ext), clear),
+            ]);
+            select.linestrip_gradient([
+                (c + Vec3::new(-ext, 0.0, o), clear),
+                (c + Vec3::new(0.0, 0.0, o), line),
+                (c + Vec3::new(ext, 0.0, o), clear),
+            ]);
+        }
+    }
     let owners_hash = view.planets.iter().enumerate().fold(selection.0.map_or(0, |s| s as u64 + 7), |h, (i, p)| h.wrapping_mul(1_000_003).wrapping_add(p.owner.map_or(0, |o| o as u64 + 1) + i as u64));
     if territory.0 != owners_hash {
         territory.1 = territory_segments(&view, &radii, selection.0);
@@ -1016,9 +1042,8 @@ fn draw_rings(
         let r = radii.0[i] * NOTCH_RADIUS * pulse;
         // Own planets get the green ring, everything else the cool cyan of the original.
         let owner = view.planets[i].owner;
-        let color = if owner.is_some() { rgb(relation_color(&view, owner)) } else { rgb([0.1, 0.75, 1.0]) };
-        let l = color.to_linear();
-        let bright = Color::LinearRgba(LinearRgba::new(l.red * 1.3 + 0.1, l.green * 1.3 + 0.1, l.blue * 1.3 + 0.1, 1.0));
+        let l = rgb(select_tint(&view, owner)).to_linear();
+        let bright = Color::LinearRgba(LinearRgba::new(l.red, l.green, l.blue, 0.85));
         select.circle(Isometry3d::new(pos, flat), r, bright).resolution(96);
         let outer = (0..=NOTCH_SEGMENTS).map(|k| {
             let th = k as f32 / NOTCH_SEGMENTS as f32 * std::f32::consts::TAU;
@@ -1040,7 +1065,7 @@ fn notch_outer(theta: f32) -> f32 {
     let within = deg % 10.0;
     let tooth = if slot.is_multiple_of(2) && within > 2.0 && within < 8.0 { 1.0 } else { 0.0 };
     let big = if slot.is_multiple_of(6) { 1.7 } else { 1.0 };
-    1.06 + 0.035 * tooth * big
+    1.05 + 0.02 * tooth * big
 }
 
 /// Translucent fill of the notched ring (unit radius, flat in the XZ plane).
@@ -1090,8 +1115,7 @@ fn place_notch_fill(
                     && let Some(mut m) = materials.get_mut(&mat.0)
                 {
                     let owner = view.planets[i].owner;
-                    let c = if owner.is_some() { rgb(relation_color(&view, owner)) } else { rgb([0.1, 0.75, 1.0]) };
-                    m.base_color = c.with_alpha(0.38);
+                    m.base_color = rgb(select_tint(&view, owner)).with_alpha(0.13);
                     *last = Some(i);
                 }
             }
@@ -1145,7 +1169,7 @@ struct LaneState {
 /// shows wide soft light-blue beams of about 0.7 planet radii, thinner inter lanes and hair lines.
 const LANE_HALF_WIDTH: [f32; 3] = [0.12, 0.05, 0.022];
 /// Peak brightness (linear) of the beams.
-const LANE_PEAK: [f32; 3] = [0.3, 0.24, 0.18];
+const LANE_PEAK: [f32; 3] = [0.34, 0.27, 0.2];
 
 fn lane_class(width: f32) -> usize {
     if width >= 4.0 {
@@ -1264,9 +1288,10 @@ fn lane_color(relation: RouteRelation, style: &LineStyleView, t: f32, class: usi
         return [0.0; 4];
     }
     let base_rgb = match relation {
-        RouteRelation::Own => Vec3::new(0.18, 0.88, 0.60), // Soft cyan/green for free, friendly trade routes
-        RouteRelation::Contested => Vec3::new(0.88, 0.26, 0.18), // Reddish for blocked / contested routes
-        RouteRelation::Enemy => Vec3::new(0.68, 0.18, 0.24), // Enemy-controlled route
+        // The Remake draws every hyperspace lane as a pale-blue beam; only the hue shifts a little with the relation.
+        RouteRelation::Own => Vec3::new(0.45, 0.92, 0.95),
+        RouteRelation::Contested => Vec3::new(0.62, 0.70, 1.0),
+        RouteRelation::Enemy => Vec3::new(0.55, 0.72, 1.0),
         RouteRelation::Neutral => {
             let rgb = Vec3::new(mix(0), mix(1), mix(2));
             let rgb = rgb / rgb.max_element().max(1e-3);
@@ -1646,6 +1671,15 @@ fn relation_color(view: &GalaxyView, owner: Option<usize>) -> [f32; 3] {
     }
 }
 
+/// Tint of the selection ring and influence circle by relation to the player: green own, red enemy, orange neutral.
+fn select_tint(view: &GalaxyView, owner: Option<usize>) -> [f32; 3] {
+    match owner {
+        Some(o) if Some(o) == view.player_faction => [0.2, 1.0, 0.3],
+        Some(_) => [1.0, 0.2, 0.15],
+        None => [1.0, 0.62, 0.15],
+    }
+}
+
 /// Faction emblem icon next to an owned planet (screen space, positioned with the label).
 #[derive(Component)]
 struct Emblem(usize);
@@ -1693,9 +1727,8 @@ fn territory_segments(view: &GalaxyView, radii: &PlanetRadii, selected: Option<u
     let p = &view.planets[i];
     let c = galaxy_to_world(p.position);
     let r = (radii.0[i] * TERRITORY_RADIUS).clamp(30.0, 85.0);
-    let own = p.owner.is_some();
-    let l = rgb(if own { relation_color(view, p.owner) } else { [0.1, 0.75, 1.0] }).to_linear();
-    let color = Color::LinearRgba(LinearRgba::new(l.red, l.green, l.blue, 0.9));
+    let l = rgb(select_tint(view, p.owner)).to_linear();
+    let color = Color::LinearRgba(LinearRgba::new(l.red, l.green, l.blue, 0.8));
     let a = |k: usize| k as f32 / SAMPLES as f32 * std::f32::consts::TAU;
     let pt = |k: usize| c + Vec3::new(a(k).cos() * r, 0.0, a(k).sin() * r);
     (0..SAMPLES).filter(|k| (k / DASH).is_multiple_of(2)).map(|k| (pt(k), pt(k + 1), color)).collect()
@@ -1846,8 +1879,9 @@ fn update_pip_colors(
         let planet_view = view.planets.get(pip.planet);
         let owner = planet_view.and_then(|p| p.owner);
         let c = if owner.is_some() { relation_color(&view, owner) } else { [0.62, 0.62, 0.62] };
-        let active_color = Color::srgba(c[0].max(0.65), c[1].max(0.65), c[2].max(0.65), 0.95);
-        let dimmed_color = Color::srgba(0.22, 0.24, 0.28, 0.45);
+        let active_color = Color::srgba(c[0], c[1], c[2], 0.95);
+        // Empty slots are not drawn: the Remake shows icons only for what is built.
+        let dimmed_color = Color::NONE;
 
         let is_active = if let (Some(sim), Some(bridge)) = (sim.as_ref(), bridge.as_ref()) {
             if let Some(Some(sim_p)) = bridge.planet_to_sim.get(pip.planet) {
@@ -1865,12 +1899,8 @@ fn update_pip_colors(
                 false
             }
         } else {
-            // Outside of active campaign:
-            if pip.space {
-                owner.is_some() && pip.slot == 0
-            } else {
-                false
-            }
+            // Outside of an active campaign nothing is built.
+            false
         };
 
         let want = if is_active { active_color } else { dimmed_color };
@@ -1898,7 +1928,7 @@ fn place_sector_fill(
     mut fill: Single<(&mut Transform, &mut Visibility), With<SectorFill>>,
 ) {
     let (tf, vis) = &mut *fill;
-    let enemy = selection.0.filter(|&i| i < view.planets.len()).filter(|&i| view.planets[i].owner.is_some_and(|o| Some(o) != view.player_faction));
+    let enemy = selection.0.filter(|&i| i < view.planets.len()).filter(|_| false); // the Remake draws no red wash over an enemy sector, only the dashed circle
     match enemy {
         Some(i) => {
             tf.translation = galaxy_to_world(view.planets[i].position) - Vec3::Y * 0.5;
