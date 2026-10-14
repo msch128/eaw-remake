@@ -442,8 +442,8 @@ fn setup_scene(
         0.0,
     ) * Vec3::NEG_Z;
     if alamo.is_some() {
-        // The Alamo shaders take a unit-less 0..1 sun strength.
-        spawn_sun(&mut commands, direction, view.light.level.clamp(0.3, 1.0) * 0.55, Color::WHITE);
+        // The Alamo shaders take a unit-less 0..1 sun strength (0.55 left the ships on the fleet pads dark next to the Remake frames; 0.7 is a guess).
+        spawn_sun(&mut commands, direction, view.light.level.clamp(0.3, 1.0) * 0.7, Color::WHITE);
     } else {
         commands.spawn((
             DirectionalLight {
@@ -1646,11 +1646,11 @@ fn relation_color(view: &GalaxyView, owner: Option<usize>) -> [f32; 3] {
     }
 }
 
-/// Tint of the selection ring and influence circle by relation to the player: green own, red enemy, orange neutral.
+/// Tint of the selection ring and influence circle: the owner's map colour (green own, the data colour of any other faction; the
+/// Remake frames show orange and red rings for different owners, CS9VdxglewY f0018/f0019), orange for an unowned planet.
 fn select_tint(view: &GalaxyView, owner: Option<usize>) -> [f32; 3] {
     match owner {
-        Some(o) if Some(o) == view.player_faction => [0.2, 1.0, 0.3],
-        Some(_) => [1.0, 0.2, 0.15],
+        Some(o) => relation_color(view, Some(o)),
         None => [1.0, 0.62, 0.15],
     }
 }
