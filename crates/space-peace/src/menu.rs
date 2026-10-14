@@ -169,6 +169,7 @@ pub fn battle_menu_spec() -> MenuSpec {
                 MenuItem::new("Load Game", MenuAction::OpenSlots(SlotMode::Load)),
                 MenuItem::new("Options", MenuAction::Options),
                 MenuItem::new("Retreat", MenuAction::RetreatBattle),
+                MenuItem::new("Abandon Battle", MenuAction::EndBattle),
                 MenuItem::new("Main Menu", MenuAction::MainMenu),
                 MenuItem::new("Quit", MenuAction::Quit),
             ],
@@ -630,6 +631,7 @@ fn apply_clicks(
                 battle_menu.retreat = true;
             }
             MenuAction::EndBattle => {
+                battle_menu.open = false;
                 finished.write(crate::battle_seam::BattleFinished {
                     id: request.as_ref().map_or(0, |r| r.id),
                     outcome: crate::battle_seam::BattleOutcome::Aborted,
@@ -714,6 +716,7 @@ mod tests {
                 ("Load Game", &MenuAction::OpenSlots(SlotMode::Load)),
                 ("Options", &MenuAction::Options),
                 ("Retreat", &MenuAction::RetreatBattle),
+                ("Abandon Battle", &MenuAction::EndBattle),
                 ("Main Menu", &MenuAction::MainMenu),
                 ("Quit", &MenuAction::Quit),
             ]
