@@ -88,8 +88,9 @@ fn stealth_fleets_are_only_found_by_those_in_their_system() {
     assert_eq!(sim.galaxy().fleet_sight(&w, rebel, hidden_friend), Sight::Detailed);
 }
 
+/// The data has no corvette scouting rule: a `System_Spy_Ability` shows the system its unit is in (presence), so a corvette next door reveals nothing.
 #[test]
-fn corvette_provides_detailed_reconnaissance_sight_to_neighbor_systems() {
+fn a_corvette_next_door_does_not_reveal_the_neighbouring_system() {
     let Some(data) = load() else { return };
     let campaign = data.campaign("GC_Full_Web_Way_Rebel").unwrap();
     let mut sim = Sim::new(&data, campaign, SimConfig::default()).unwrap();
@@ -99,19 +100,11 @@ fn corvette_provides_detailed_reconnaissance_sight_to_neighbor_systems() {
     let own: Vec<PlanetId> = sim.galaxy().owned_planets(rebel).collect();
     let map_before = sim.galaxy().sight_map(&w, rebel);
     let neighbour = (0..w.planets.len() as u32).find(|&p| map_before[p as usize] == Sight::Seen).expect("a neighbour");
-
-    // An enemy fleet at the neighbour is only Seen without reconnaissance
     let isd = w.unit_id("Star_Destroyer").unwrap();
     let enemy_fleet = fleet(&mut sim, empire, isd, FleetLocation::AtPlanet(neighbour));
-    assert_eq!(sim.galaxy().fleet_sight(&w, rebel, enemy_fleet), Sight::Seen);
-
-    // Park a Corvette at a neighboring own planet
     let home = w.adjacency[neighbour as usize].iter().find(|&&(p, _)| own.contains(&p)).map(|&(p, _)| p).expect("home neighbor");
     let corvette = (0..w.units.len() as u32).find(|&u| w.units[u as usize].category == alamo_data::ShipCategory::Corvette).expect("corvette unit");
     fleet(&mut sim, rebel, corvette, FleetLocation::AtPlanet(home));
-
-    // Now sight on the neighbour system and enemy fleet is Detailed
-    let map_after = sim.galaxy().sight_map(&w, rebel);
-    assert_eq!(map_after[neighbour as usize], Sight::Detailed);
-    assert_eq!(sim.galaxy().fleet_sight(&w, rebel, enemy_fleet), Sight::Detailed);
+    assert_eq!(sim.galaxy().sight_map(&w, rebel)[neighbour as usize], Sight::Seen);
+    assert_eq!(sim.galaxy().fleet_sight(&w, rebel, enemy_fleet), Sight::Seen);
 }
