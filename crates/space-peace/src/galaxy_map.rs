@@ -1263,14 +1263,14 @@ fn lane_color(relation: RouteRelation, style: &LineStyleView, t: f32, class: usi
         return [0.0; 4];
     }
     let base_rgb = match relation {
-        // The Remake draws every hyperspace lane as a pale-blue beam; only the hue shifts a little with the relation.
-        RouteRelation::Own => Vec3::new(0.45, 0.92, 0.95),
-        RouteRelation::Contested => Vec3::new(0.62, 0.70, 1.0),
-        RouteRelation::Enemy => Vec3::new(0.55, 0.72, 1.0),
+        // The Remake draws every hyperspace lane as a thin cyan beam (f0007/f0019); only the hue shifts a little with the relation.
+        RouteRelation::Own => Vec3::new(0.30, 0.95, 0.95),
+        RouteRelation::Contested => Vec3::new(0.35, 0.78, 1.0),
+        RouteRelation::Enemy => Vec3::new(0.32, 0.78, 1.0),
         RouteRelation::Neutral => {
             let rgb = Vec3::new(mix(0), mix(1), mix(2));
             let rgb = rgb / rgb.max_element().max(1e-3);
-            rgb * 0.45 + Vec3::splat(0.55)
+            rgb * 0.3 + Vec3::new(0.18, 0.62, 0.72)
         }
     };
     let l = Color::srgb(base_rgb.x, base_rgb.y, base_rgb.z).to_linear();
@@ -1773,7 +1773,8 @@ pub(crate) fn pip_image(space: bool) -> Image {
     img
 }
 
-const NEBULA_PLANE: bool = true;
+/// Off: the Remake galaxy is black deep space (yt CS9VdxglewY f0007/f0018/f0019); the maroon wash is vanilla FoC.
+const NEBULA_PLANE: bool = false;
 
 /// The original lays a dense maroon nebula over the whole picture (not only over the galaxy disc art): a huge flat,
 /// unlit, additive plane under the map with a soft radial falloff and cloudy variation.
