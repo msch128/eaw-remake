@@ -680,6 +680,7 @@ fn battle_shot(
     mut shot: ResMut<BattleShot>,
     settings: Res<BattleViewSettings>,
     mut cam: Single<&mut BattleCamera>,
+    pulses: Res<battle_view::BloomPulses>,
 ) {
     let (Some(out), Some(target)) = (args.offscreen.as_ref(), target) else { return };
     shot.frames += 1;
@@ -707,7 +708,8 @@ fn battle_shot(
                 }
                 best
             };
-            if let Some((_, mid)) = closest(40.0).or_else(|| closest(0.0)) {
+            // The last big explosion wins, then the closest pair of big ships.
+            if let Some(mid) = pulses.last_big.or_else(|| closest(40.0).or_else(|| closest(0.0)).map(|(_, m)| m)) {
                 let y = cam.focus.y;
                 cam.focus = Vec3::new(mid.x, y, mid.z);
                 cam.target_focus = cam.focus;

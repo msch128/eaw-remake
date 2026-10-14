@@ -683,6 +683,7 @@ pub fn update_dying(
             });
             if d.radius >= 40.0 {
                 pulses.flash(tf.translation, if d.radius >= 150.0 { 1.0 } else { 0.6 });
+                info!("battle: final explosion of a radius {:.0} ship at t={:.1}s, wreck stays {WRECK_SECONDS:.0}s", d.radius, rt.cur.as_ref().map_or(0.0, |c| c.time));
             }
             // U68: Break capital ships and frigates into drifting debris chunks
             if d.radius >= 40.0 {

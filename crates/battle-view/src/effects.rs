@@ -773,6 +773,8 @@ mod tests {
 #[derive(Resource, Default)]
 pub struct BloomPulses {
     queued: Vec<(Vec3, f32)>,
+    /// Where the last big explosion happened (offscreen captures aim the camera there).
+    pub last_big: Option<Vec3>,
     strength: f32,
     base: Option<f32>,
 }
@@ -780,30 +782,73 @@ pub struct BloomPulses {
 impl BloomPulses {
     /// Queues a flash at a world position (1.0 = a capital ship's final explosion right in front of the camera).
     pub fn flash(&mut self, at: Vec3, strength: f32) {
+        if strength >= 0.5 {
+            self.last_big = Some(at);
+        }
         self.queued.push((at, strength));
     }
 }
 
 /// Distance from the camera beyond which an explosion adds no flash.
 const BLOOM_PULSE_RANGE: f32 = 5000.0;
-/// Extra bloom intensity at full strength (the camera's resting intensity is estimated at 0.07).
-const BLOOM_PULSE_BOOST: f32 = 0.8;
+/// Extra bloom intensity at full strength (the camera's resting intensity is estimated at 0.07). Small: the UI is drawn into the same HDR camera and would wash out too.
+const BLOOM_PULSE_BOOST: f32 = 0.12;
 /// Strength lost per second: a flash lasts about 0.7 s.
 const BLOOM_PULSE_DECAY: f32 = 1.4;
 
-/// Raises the camera bloom for a moment when something big blows up (the Remake whites out the screen, n93 f0006).
-pub fn bloom_pulse(time: Res<Time>, mut pulses: ResMut<BloomPulses>, mut cam: Query<(&Transform, Option<&mut Bloom>), With<crate::camera::BattleCamera>>) {
+
+/// Full-screen white layer of the explosion flash.
+#[derive(Component)]
+pub struct FlashOverlay;
+
+/// Peak opacity of the white flash layer.
+const FLASH_OVERLAY_ALPHA: f32 = 0.8;
+
+/// Raises the camera bloom and a white layer for a moment when something big blows up (the Remake whites out the screen, n93 f0006).
+pub fn bloom_pulse(
+    mut commands: Commands,
+    time: Res<Time>,
+    mut pulses: ResMut<BloomPulses>,
+    ui: Option<Res<eaw_ui::EawUiSettings>>,
+    mut overlay: Query<(&mut BackgroundColor, &mut Node), With<FlashOverlay>>,
+    mut cam: Query<(&Transform, Option<&mut Bloom>), With<crate::camera::BattleCamera>>,
+) {
     let Ok((tf, bloom)) = cam.single_mut() else { return };
     let queued = std::mem::take(&mut pulses.queued);
     for (at, s) in queued {
         let near = (1.0 - tf.translation.distance(at) / BLOOM_PULSE_RANGE).clamp(0.0, 1.0);
         pulses.strength = pulses.strength.max(s * near);
     }
-    let Some(mut bloom) = bloom else { return };
-    let base = *pulses.base.get_or_insert(bloom.intensity);
     pulses.strength = (pulses.strength - BLOOM_PULSE_DECAY * time.delta_secs()).max(0.0);
-    let want = base + BLOOM_PULSE_BOOST * pulses.strength;
-    if (bloom.intensity - want).abs() > 1e-4 {
-        bloom.intensity = want;
+    // Test hook: `SP_FLASH_HOLD=<0..1>` keeps the flash at that strength so an offscreen capture can judge its look.
+    static HOLD: std::sync::OnceLock<Option<f32>> = std::sync::OnceLock::new();
+    if let Some(hold) = *HOLD.get_or_init(|| std::env::var("SP_FLASH_HOLD").ok().and_then(|v| v.parse::<f32>().ok())) {
+        pulses.strength = hold.clamp(0.0, 1.0);
+    }
+    if let Some(mut bloom) = bloom {
+        let base = *pulses.base.get_or_insert(bloom.intensity);
+        let want = base + BLOOM_PULSE_BOOST * pulses.strength;
+        if (bloom.intensity - want).abs() > 1e-4 {
+            bloom.intensity = want;
+        }
+    }
+    let alpha = pulses.strength.powi(2) * FLASH_OVERLAY_ALPHA;
+    if let Ok((mut bg, mut node)) = overlay.single_mut() {
+        node.display = if alpha > 0.005 { Display::Flex } else { Display::None };
+        bg.0 = Color::srgba(1.0, 0.99, 0.95, alpha);
+    } else if alpha > 0.005 {
+        let mut e = commands.spawn((
+            BattleEntity,
+            FlashOverlay,
+            Name::new("explosion flash"),
+            Node { position_type: PositionType::Absolute, width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() },
+            BackgroundColor(Color::srgba(1.0, 0.99, 0.95, alpha)),
+            // Under the tactical bar and the HUD (they sit at z >= 0).
+            GlobalZIndex(-1000),
+            bevy::ui::FocusPolicy::Pass,
+        ));
+        if let Some(c) = ui.and_then(|u| u.camera) {
+            e.insert(UiTargetCamera(c));
+        }
     }
 }

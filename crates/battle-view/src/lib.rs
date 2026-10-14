@@ -23,6 +23,7 @@ pub mod gpu_profile;
 pub(crate) mod hud;
 mod input_test;
 mod effects;
+pub use effects::BloomPulses;
 pub mod scene;
 pub mod ships;
 pub mod sim;
