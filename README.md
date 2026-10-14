@@ -10,40 +10,39 @@ An unofficial, high-performance open-source Rust/Bevy reimplementation of **Gala
 
 ![Space Tactical Combat](docs/screenshots/tactical_battle.png)
 
-## Current Status: ~80–85% Complete
+## Current Status: playable, not finished (audit ~70 / 100)
 
-The core game loop is fully functional, stable, and playable from campaign start to galactic victory.
+An audit on 2026-10-14 put the project at roughly 70 out of 100 against the goal of playing Remake 4.0 Galactic Conquest with
+space battles. The campaign loop runs from start to galactic victory, but fidelity to the Remake is partial.
 
-### What Works Today
-* **Galactic Conquest (~90%):**
-  * Full 145-planet galaxy maps with authentic 3D planet models, space station tiers, and ground structure pips matching Remake XML specs.
-  * Complete campaign loop across multiple scenarios: *From the Ground Up*, *Twilight Struggle*, *Imperial Web Way*, *Shatterpoint*, and more.
-  * **5 Playable Factions:** Rebellion, Galactic Empire, Criminal Underworld, Galactic Republic, and Confederacy of Independent Systems (CIS).
-  * Planet fleet management, fleet transfers, unit production queues with full cancellation & refunds, hyperlane navigation, and superweapon orbital bombardments.
-  * Seamless continuous camera zoom from the galactic map directly into the planet overview.
-  * Full save and load system (manual save slots and automatic autosaves).
-* **Space Tactical Battles (~85%):**
-  * Real-time 3D tactical combat powered by Bevy PBR rendering.
-  * Multi-hardpoint damage simulation, directional shield arcs, authentic weapon ballistics, and laser effects.
-  * Staged sequential hangar bay launches for fighter and bomber craft.
-  * Cohesive squadron badge targeting (clean interface without cluttering per-fighter bounding boxes).
-  * Authentic capital ship physics with heavy, non-rolling flight mechanics.
-  * Tactical pause, speed controls, tactical abilities, retreat mechanics, and instant post-battle victory resolutions.
-* **Audio & Music (~85%):**
-  * Dynamic adaptive galactic music with faction-specific playlists.
-  * Contextual combat music transitions and victory/defeat stingers.
-  * Positional 3D sound effects (lasers, ion cannons, proton torpedos, explosions, engine hums).
-  * Authentic unit speech responses and UI interaction sounds.
-* **Engine Architecture & Performance (95%):**
-  * 60+ FPS at 4K resolution.
-  * Fully deterministic, headless simulations (`galaxy-sim`, `battle-sim`) decoupled from the render thread.
-  * Automatic detection of Steam install and Workshop mod folders.
-  * Zero memory leaks and flat memory footprint (~2 GB).
+| Area | Audit score |
+|---|---|
+| Galaxy UI | 74 |
+| Galaxy rules / AI | 66 |
+| Battle UI | 68 |
+| Battle behaviour | 70 |
+| Visuals | 72 |
+| Audio | 45 (implemented, not yet heard live) |
+| Stability | 78 |
 
-### Remaining Work (~15–20% Polish)
-* **In-Game Settings Menu:** An interactive GUI options menu (settings are currently configured via `%APPDATA%\SpacePeace\settings.toml` and CLI flags).
-* **Tactical AI Edge-Case Tuning:** Further refinement of battle AI positioning and target prioritization under extreme fleet compositions.
-* **Extended Visual Polish:** Additional hero-specific ability effects, shield impact sparks, and hyperspace arrival visual fx.
+### What exists
+* **Galactic Conquest:** 145-planet maps with planet models, star base tiers and structures, five playable factions, three fleet
+  slots per planet, production queues with cancel and refund, hyperlanes, superweapons, droid advisor menu, save slots and autosaves.
+* **Space battles:** real-time 3D tactical combat with hardpoint damage, shield arcs, hangar launches, abilities, retreat,
+  reinforcements, a unit-card bar, minimap and camera hotkeys.
+* **Audio:** adaptive music, positional effects, unit speech and advisor lines are implemented but have not been verified by
+  listening in a live session.
+* **Engine:** deterministic headless sims (`galaxy-sim`, `battle-sim`) separate from rendering; Steam install and Workshop mod are
+  found automatically. Performance numbers (4K, ~2 GB) predate the latest changes.
+
+### Not verified
+No sound has been heard live and no real mouse or keyboard input has been tested in the latest round; visual changes were
+checked only in offscreen renders.
+
+### Known gaps
+Invented numbers still being replaced by data values, no source for the superweapon gauge art, missile arcs, ground-to-space
+special weapons in battle, reinforcement placement polish, laser bolt look, per-group ability buttons, battle Esc menu and the
+three autosave slots. The full list is in `HANDOFF.md` and `docs/QA-2026-10-09-user.md`.
 
 ---
 

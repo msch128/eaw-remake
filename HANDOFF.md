@@ -1,83 +1,74 @@
-# Handoff – state as of 2026-10-11 (Golden Master – U100 Milestone Complete)
+# Handoff - state as of 2026-10-14
 
-Read `CLAUDE.md` (rules) first. Every crate has a `STATUS.md` with details, API and next steps.
-Live test guide: `PLAYTEST.md`. Work list: `docs/QA-2026-10-09-user.md` & Master Roadmap U1-U100.
+Read `CLAUDE.md` (rules) first. Every crate has a `STATUS.md` with details and next steps. Work list: `docs/QA-2026-10-09-user.md`.
+Live test guide: `PLAYTEST.md`.
 
-## Overall
-**100 / 100 (Golden Master – 100% Remake 4.0 Fidelity)** of the goal "play Remake 4.0 Galactic Conquest with space battles, EaW look & feel, 60+ FPS in 4K".
-All items U1 through U100 are completed, tested, and integrated.
+## Honest status
+An audit on 2026-10-14 scored the project at roughly **70 / 100** against the goal "play Remake 4.0 Galactic Conquest with space
+battles, EaW look and feel". The earlier "U100 / 100% fidelity" claim was a documentation statement only and is withdrawn.
 
-| Area | Score | Note |
-|---|---|---|
-| Simulation (galaxy, battle, AI, scripts) | 100 | Deterministic, Remake XML fidelity, tactical AI, retreat, pincer movements, difficulty scaling |
-| Stability / memory | 100 | Clean memory footprint, 4K 60+ FPS, zero OOM, robust state transitions |
-| Galaxy map look | 100 | Authentic Remake 4.0 shaders, trade routes, planet capture animations, flagship miniatures |
-| Galaxy controls | 100 | Filter bars, fleet drag & drop, planet view build queues, responsive hotkeys |
-| Battle look | 100 | Cinematic follow cam, weapon range docking, engine glow trails, shield deflector waves, debris physics |
-| Battle controls | 100 | Configurable keybindings, attack-move, stop, retreat, reinforcement placement |
-| Battle depth | 100 | All space abilities, hardpoint focus fire, hypervelocity beams, tactical AI doctrines |
-| Sound | 100 | Dynamic music transitions, 3D spatial audio, unit responses, advisor announcements, hero voices |
+| Area | Score (audit) |
+|---|---|
+| Galaxy UI | 74 |
+| Galaxy rules / AI | 66 |
+| Battle UI | 68 |
+| Battle behaviour | 70 |
+| Visuals | 72 |
+| Audio | 45 (implemented, never heard live) |
+| Stability | 78 |
 
-## Priorities
-All roadmap items U1–U100 are fully realized and verified. Release binary built via `.\build.ps1`.
+## Done since the audit
+- F2/F3: default mod is always Remake 4.0; scripted battle abort waits for scripted clicks.
+- Pirate raids removed (Pirates are passive, garrison capped at 2 x player tech per planet; verified ~615 units on 68 planets).
+- Galaxy look G1-G11: pale-blue lanes and grid, small owner-coloured labels, thin relation-tinted selection ring, hero portraits,
+  pause tab, advisor text next to R2, hover card, battle banner with enemy star base disc, droid menu (log, history line charts,
+  tech tree, summary), corrected military history.
+- Three fleet slots per planet (S1-S5) in the sim, planet view and AI.
+- Battle UI B1-B8: opening camera, unit-card bar and minimap, hero click, camera hotkeys (C, Page Up, Home, End; Space = Movie Mode
+  like the original readme), objectives box, death bloom and wrecks. P pauses.
 
-## Regression guards (rule: no exe goes out without smoke + soak green)
-- `tools/smoke.ps1`: offscreen / hidden scenarios with a pass/fail table.
-- `tools/soak.ps1`: hidden 5 min battle + 10 min galaxy with `SP_ASSET_LOG=1`; fails on memory > 8 GB, growth > 5 % / min,
-  linearly rising asset counts, ERROR / panic / OOM / validation failures, WARN spam, p99 frame time >= 33 ms.
-- Input tests: `SP_UI_TEST=1` (galaxy screens, `space-peace/src/input_test.rs`) and `SP_INPUT_TEST` (tactical screen,
-  `battle-view/src/input_test.rs`) inject window events; real-mouse driver for manual QA: `tools/playtest/driver.ps1`.
-- QA findings: `docs/QA-2026-10-08.md`.
+## Verified vs not verified
+- Verified: offscreen renders of each item above, `cargo check --workspace --all-targets`, headless sim runs and unit tests.
+- Not verified: any sound in a live session (nothing heard since the audio rewrite); real mouse/keyboard input this round (no
+  `SP_UI_TEST` / `SP_INPUT_TEST` / windowed smoke runs); B8 bloom flash and wrecks were not seen in a capture; 4K 60 FPS and
+  memory numbers predate the recent work.
+
+## Open items
+- Invented numbers (X1/X2) are being replaced by data values; remaining estimates are named in each crate's RULES.md.
+- Superweapon gauge: no asset source found for the original gauge art.
+- Missile arcs need sim work (trajectories are not simulated).
+- U37 ground-to-space special weapons (Hypervelocity Gun, ion cannon) do not fire in space battles.
+- U38 reinforcement placement: fog readability, ghost facing and +-15 degree wheel rotation.
+- U39 laser bolt look (short bright bolts) vs the Remake.
+- U41 abilities of every unit visible above a group card.
+- U42 space battle Esc menu equal to the galaxy menu, saving during battle.
+- U43 three autosave slots (pre-battle, post-battle, rolling 5 minutes).
+- Also open from the QA list: U25 rest, U31, U33, U46 (Republic/Warlords build no ships with the scripted AI), U47 reading; see
+  `docs/QA-2026-10-09-user.md` for the full text.
+
+## Regression guards
+- `tools/smoke.ps1`: offscreen / hidden scenarios with a pass/fail table (`windowed-*` open a real window: only when the user is away).
+- `tools/soak.ps1`: hidden battle and galaxy soak with memory, asset-count, log-spam and frame-time checks.
+- Input tests: `SP_UI_TEST=1` (galaxy screens) and `SP_INPUT_TEST` (tactical screen) inject window events.
 
 ## Crates
-| Crate | What it is | State |
-|---|---|---|
-| `alamo-fs` | MEG archives, layered GameFs, install detection | done |
-| `alamo-data` | XML, text, campaigns, game objects, difficulty table | done |
-| `alamo-model` | ALO/ALA/particles/DDS | done |
-| `alamo-render` | Bevy renderer, reconstructed EaW shaders, particles, LDR light saturation, Toksvig | good |
-| `alamo-map` | .ted space maps | done |
-| `alamo-audio` | SFX/speech/music, MusicPlanner/Director from MusicEvents.xml, advisor hooks, volume buses | done (not heard live) |
-| `alamo-lua` | Lua 5.0-compatible runtime, story engine (incl. *_Auto triggers), bytecode cache | done |
-| `galaxy-sim` | headless deterministic GC: economy, builds (+cancel), fleets, capture, tactical setup/result, damage + repair, reinforcement reserve | good |
-| `battle-sim` | deterministic space battles; tactical AI (retreat, focus, abilities, bombing runs, intercept, formations) | good |
-| `galaxy-script` | Remake GC scripts on galaxy-sim, ScriptedSim, save/load (input journal) | good |
-| `galaxy-ai` | Remake galactic AI + modern strategy layer (influence maps, utility, flanks, pincers, fog) + difficulty tiers | good |
-| `galaxy-play` | sim worker thread (ScriptedSim), fleets, orders, save/load, soak harness | good |
-| `battle-view` | tactical battle view, TacticalUiPlugin, tactical minimap, audio hooks | good |
-| `eaw-ui` | original EaW UI from game data | good |
-| `space-peace` | the app: menus, new-game options, galaxy, battles, save slots, options, first-run problem screen, log file | good |
+`alamo-fs`, `alamo-data`, `alamo-model`, `alamo-map`, `alamo-audio`, `alamo-lua` (parsers and runtime); `galaxy-sim`, `battle-sim`
+(headless deterministic sims); `galaxy-ai`, `galaxy-script`; `alamo-render`, `battle-view`, `eaw-ui`, `galaxy-play` (Bevy plugins);
+`space-peace` (the app). Per-crate state is in each `STATUS.md`.
 
 ## Key decisions (don't silently revert)
-- Planet capture (space-only Remake): hostile faction alone in orbit + no enemy starbase → owner changes (inferred).
-- Shields: continuous regen + `Depleted_Shield_Disable_Time`. No attack-move hardpoint sniping by default.
-- Battle speed scale 30. Dummy planets filtered (145 real planets in the Full GC).
-- Default AI = Remake AI + strategy layer, difficulty Normal. Easy/Normal/Hard from `DIFFICULTYADJUSTMENTS.XML`;
-  Brutal and Fair are our own tiers (estimates). Classic stub AI optional (it snowballs).
-- Save = real state snapshot (user decision): sim state, story engine, Lua script globals, AI memory. Lua coroutines
-  restart idle with restored globals; continuation is not bit-identical (galaxy-sim part is). Load ~0.6 s flat.
-- AI-vs-AI battles use auto-resolve (tactical resolver ~0.7 s per battle is too slow); player battles may be tactical.
+- Planet capture (space-only Remake): hostile faction alone in orbit and no enemy starbase changes the owner (inferred).
+- Shields: continuous regen plus `Depleted_Shield_Disable_Time`. No attack-move hardpoint sniping by default.
+- Default AI = Remake AI plus strategy layer, difficulty Normal; Brutal and Fair are our own tiers (estimates).
+- Save = real state snapshot (sim, story engine, Lua globals, AI memory). AI-vs-AI battles use auto-resolve.
 - All invented numbers are named estimates in the RULES.md / STATUS.md of their crate.
 
-## Next steps (older list, see Priorities above)
-1. **First live playtest with the user** (`PLAYTEST.md`), then fix what they find (input feel, camera, sound, balance).
-2. In progress: GC feature gaps (`galaxy-sim/GC-GAPS.md`: heroes, structures/bonuses, station levels, Underworld mechanics
-   if the Remake GC uses them); reinforcement window + queue cancel in the UI; particle fidelity (explosions too dim).
-3. AI goals (user): smart rather than aggressive – measured expansion, flanking; more variety per match if it feels predictable.
-4. Polish: fonts, galaxy label LOD, command bar opacity, shadows/quality options.
+## Verification flags
+`--offscreen out.png`, `--campaign`, `--select`, `--zoom`, `--weeks`, `--build`, `--move`, `--hover`, `--stop-on-battle`,
+`--battle-choice fight|auto`, `--battle-auto`, `--battle-seconds`, `--battle-orders`, `--planet-view`, `--via-menu`, `--screen`,
+`--click`, `--grant-unit/--at`, `--save-to` / `--load-from`; `SP_DROID_TAB=history|tech|summary` opens a droid menu tab.
 
-## Verification assets
-Offscreen renders live outside the repo (scratch folders). Useful app flags: `--offscreen out.png`, `--campaign`, `--select`,
-`--weeks`, `--build`, `--move`, `--battle-choice fight|auto`, `--battle-auto`, `--battle-seconds`, `--battle-orders`,
-`--via-menu`, `--screen`, `--slots`, `--difficulty`, `--classic-ai`, `--save-to`/`--load-from`.
-Soak: `cargo run --release -p galaxy-play --example soak`.
-
-## Late update 2026-10-09 (c194c85)
-- Done since the evening state: Q1 "Class: Class:" guard, Q2 "credits/week when built", U34 hardpoint attack lines, Q3 game font for refusal texts, U40 unit icons always visible (icon-only for unselected), U45 auto-resolve base factor 0.15 -> 1.5 (bases/garrisons were nearly free), ground-up pirate planets get star bases, Pirates passive in all campaigns and rearm with the player's tech (`Sim::rearm_passive`, RULES.md).
-- Not verified in a window: U34 voice lines (`windowed-battle-audio-victory-line` never run), U40 squadron-icon tweak, Q3 font.
-- Still open: U25 rest, U30, U31, U33, U36, U37, U38, U39, U41, U42, U43, U44, U46; U47 halving reading (remainder vs original hit) awaits the user; auto-resolve vs Empire bases still too optimistic for 2 MC-80.
-- Open (user, fairness): pirates rearm with the HUMAN player's tech, so an AI behind in tech meets harder pirates. Proposal: scale the pirate base/garrison to the attacker's tech when a battle starts, and restore the `remake_ai_builds_moves_and_attacks` assertion as "the AI takes at least one pirate planet within 40 weeks" (it was loosened to `battles > 0` in 28a5cf1; the AI took 7 unowned planets in 20 weeks).
-- Unit responses: one voice per selection/order, ranked hero > population > hull+shield, falling through until a ship has the line, generic fallbacks last (753bdb4 and follow-up).
-- U46 open part: with the scripted Remake AI the Republic (and Warlords without a human) build no ships in 20 weeks - cheap ships refuse with `BuildLimit`, dear ones with `InsufficientCredits`, only planets with `Minor_Shipyard_Republic` can build ships. Check the BuildLimit accounting and the `GC_MinorAi` / `Build_Units_Space.lua` lists for the Republic block.
-- Credit cap per planet is off by default (user: credits never expire). Tech levels cost 5000/10000/20000/50000 for everyone.
-- U46 Republic/Warlords ships, ruled out: build limits (c3cc92d), shipyards (Corellia/Kamino/Kashyyyk have them), orderable units (12-15 Ok), Build_Units_Space.lua exclusion list. Hypotheses: Lua goal functions pick from unit tables that exist only for Empire/Rebel/Underworld; or `safe_planets` excludes the shipyard planets so `compose` has no candidates. Next: `ai_stats()` plans per faction, Republic vs Hapan.
+U46 notes (Republic/Warlords build no ships with the scripted Remake AI): ruled out build limits (c3cc92d), missing shipyards
+(Corellia/Kamino/Kashyyyk have them), orderable units (12-15 Ok) and the Build_Units_Space.lua exclusion list. Hypotheses: the Lua
+goal functions pick ships from unit tables that exist only for Empire/Rebel/Underworld (LIBUNITTABLE*.LUA), or `safe_planets`
+excludes the shipyard planets so `compose` has no candidates. Next: `ai_stats()` plans per faction, Republic vs Hapan.
