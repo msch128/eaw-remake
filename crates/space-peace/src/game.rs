@@ -80,6 +80,11 @@ pub fn describe_problem(error: &str, mod_id: &str) -> String {
     format!("{advice}\n\nDetails: {error}")
 }
 
+/// The mod to load: only an explicit `--mod` selects anything but Remake 4.0, whatever else is installed.
+pub fn default_mod_id(explicit: Option<&str>) -> &str {
+    explicit.unwrap_or(DEFAULT_MOD_ID)
+}
+
 /// The installed game, or `None` when only the demo galaxy is available.
 #[derive(Resource, Clone, Default)]
 pub struct Game(pub Option<GameAssets>);
@@ -103,16 +108,7 @@ pub fn open_fs(args: &Args, log: &mut StartupLog) -> Result<(GameInstall, Arc<Ga
         .map_err(|e| format!("cannot open mod files from {}: {e}", dir.display()))?;
         (dir.display().to_string(), fs)
     } else {
-        let mod_id = match args.mod_id.as_deref() {
-            Some(id) => id,
-            None => {
-                if install.mod_data("3229239424").is_dir() && install.mod_data("2794270450").is_dir() {
-                    "fft"
-                } else {
-                    DEFAULT_MOD_ID
-                }
-            }
-        };
+        let mod_id = default_mod_id(args.mod_id.as_deref());
         let fs = GameFs::for_mod(&install, Some(mod_id))
             .map_err(|e| format!("cannot open game files: {e}"))?;
         (format!("mod {mod_id}"), fs)
@@ -742,7 +738,13 @@ mod tests {
 
 #[cfg(test)]
 mod problem_tests {
-    use super::describe_problem;
+    use super::{DEFAULT_MOD_ID, default_mod_id, describe_problem};
+
+    #[test]
+    fn default_selection_is_remake_only_and_never_a_stack() {
+        assert_eq!(default_mod_id(None), DEFAULT_MOD_ID);
+        assert_eq!(default_mod_id(Some("fft")), "fft");
+    }
 
     #[test]
     fn problems_get_actionable_advice() {
