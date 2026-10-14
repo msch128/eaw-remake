@@ -1163,6 +1163,19 @@ pub(crate) fn bound_fields(
 }
 
 /// Numbers like the original bar: plain up to four digits, dot-grouped from five ("4634", "40.000").
+/// Hover text of an info card number (title line, then the explanation).
+fn field_tip(f: Field) -> Option<&'static str> {
+    Some(match f {
+        Field::Credits => "Credits\nYour treasury: the credits you can spend right now.",
+        Field::MonthIncome => "Income per month\nCredits your empire earns per galactic month (4 weeks), upkeep already deducted.",
+        Field::Income => "Planet income\nCredits per week the selected planet yields.",
+        Field::Day => "Galactic month\nThe bar shows how far the current month has progressed.",
+        Field::TechLevel => "Tech level\nYour current technology level.",
+        Field::Pop => "Population\nUnits you field, out of the population cap.",
+        Field::PlanetName | Field::Allegiance => return None,
+    })
+}
+
 fn group_digits(v: i64) -> String {
     let s = v.abs().to_string();
     if s.len() <= 4 {
@@ -1664,6 +1677,7 @@ pub(crate) fn tooltip(
     mut last: Local<(String, u8)>,
     mut commands: Commands,
     settings: Res<EawUiSettings>,
+    fields: Query<(&BoundField, &ComputedNode, &UiGlobalTransform, &InheritedVisibility)>,
 ) {
     let Ok((root, mut node, mut vis, own)) = tip.single_mut() else {
         return;
@@ -1704,7 +1718,11 @@ pub(crate) fn tooltip(
             let icon = if over_marker { None } else { b.tooltip_icon.clone() };
             (text, icon, Some((b, cn, gt, forced_hit)))
         }
-        None => (world_tip.text.clone().unwrap_or_default(), world_tip.icon.clone(), None),
+        // A number of the info card (credits, income, tech, population) explains itself while the cursor is on it.
+        None => match cursor_phys.and_then(|c| fields.iter().find(|(_, n, g, v)| v.get() && n.contains_point(**g, c)).and_then(|(f, ..)| field_tip(f.0))) {
+            Some(t) => (t.to_owned(), None, None),
+            None => (world_tip.text.clone().unwrap_or_default(), world_tip.icon.clone(), None),
+        },
     };
     if text.is_empty() {
         node.display = Display::None;
@@ -1876,6 +1894,15 @@ mod tests {
         let p2 = clamp_to_screen(Vec2::new(1900.0, 1000.0), Vec2::new(1800.0, 950.0), size, screen);
         assert!(p2.x + size.x <= screen.x);
         assert!(p2.y >= 4.0 && p2.y + size.y <= screen.y);
+    }
+
+    #[test]
+    fn every_card_number_has_a_hover_text() {
+        for f in [Field::Credits, Field::MonthIncome, Field::Income, Field::Day, Field::TechLevel, Field::Pop] {
+            let t = field_tip(f).expect("number field has a tip");
+            assert!(t.contains('\n'), "{f:?}: title line plus explanation");
+        }
+        assert!(field_tip(Field::PlanetName).is_none());
     }
 
     #[test]
