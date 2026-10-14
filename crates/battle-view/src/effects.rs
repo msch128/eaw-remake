@@ -12,6 +12,7 @@ use alamo_render::{
 };
 use battle_sim::{Event, HitKind, HpKind, ProjId, TargetClass};
 use bevy::gizmos::config::GizmoConfigStore;
+use bevy::post_process::bloom::Bloom;
 use bevy::prelude::*;
 
 use crate::convert::{ship_rotation, sim_dir_to_bevy, sim_to_bevy};
@@ -766,3 +767,43 @@ mod tests {
     }
 }
 
+
+/// Bloom flash of big explosions (capital / station death): `(position, strength)` entries wait here until
+/// [`bloom_pulse`] folds them into the camera's bloom.
+#[derive(Resource, Default)]
+pub struct BloomPulses {
+    queued: Vec<(Vec3, f32)>,
+    strength: f32,
+    base: Option<f32>,
+}
+
+impl BloomPulses {
+    /// Queues a flash at a world position (1.0 = a capital ship's final explosion right in front of the camera).
+    pub fn flash(&mut self, at: Vec3, strength: f32) {
+        self.queued.push((at, strength));
+    }
+}
+
+/// Distance from the camera beyond which an explosion adds no flash.
+const BLOOM_PULSE_RANGE: f32 = 5000.0;
+/// Extra bloom intensity at full strength (the camera's resting intensity is estimated at 0.07).
+const BLOOM_PULSE_BOOST: f32 = 0.8;
+/// Strength lost per second: a flash lasts about 0.7 s.
+const BLOOM_PULSE_DECAY: f32 = 1.4;
+
+/// Raises the camera bloom for a moment when something big blows up (the Remake whites out the screen, n93 f0006).
+pub fn bloom_pulse(time: Res<Time>, mut pulses: ResMut<BloomPulses>, mut cam: Query<(&Transform, Option<&mut Bloom>), With<crate::camera::BattleCamera>>) {
+    let Ok((tf, bloom)) = cam.single_mut() else { return };
+    let queued = std::mem::take(&mut pulses.queued);
+    for (at, s) in queued {
+        let near = (1.0 - tf.translation.distance(at) / BLOOM_PULSE_RANGE).clamp(0.0, 1.0);
+        pulses.strength = pulses.strength.max(s * near);
+    }
+    let Some(mut bloom) = bloom else { return };
+    let base = *pulses.base.get_or_insert(bloom.intensity);
+    pulses.strength = (pulses.strength - BLOOM_PULSE_DECAY * time.delta_secs()).max(0.0);
+    let want = base + BLOOM_PULSE_BOOST * pulses.strength;
+    if (bloom.intensity - want).abs() > 1e-4 {
+        bloom.intensity = want;
+    }
+}

@@ -417,6 +417,7 @@ impl Plugin for BattleViewPlugin {
         app.init_resource::<BattleViewSettings>()
             .init_resource::<BattleStatus>()
             .init_resource::<RenderedShips>()
+            .init_resource::<effects::BloomPulses>()
             .init_resource::<Selection>()
             .init_resource::<ControlGroups>()
             .init_resource::<Pointer>()
@@ -470,7 +471,7 @@ impl Plugin for BattleViewPlugin {
                             ships::update_ships,
                             ships::update_arrival_flashes,
                             ships::update_departures,
-                            ships::update_dying,
+                            (ships::update_dying, ships::update_wrecks, effects::bloom_pulse).chain(),
                             ships::update_debris_chunks,
                             ships::remove_after,
                             effects::update_projectiles,

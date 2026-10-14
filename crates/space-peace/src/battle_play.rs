@@ -52,6 +52,8 @@ struct BattleShot {
     taken: bool,
     /// Frame of the attack order of `--battle-orders` (the capture follows a few frames later).
     orders_at: Option<u32>,
+    /// Frame the `--battle-fightcam` camera was placed (the capture follows a few frames later).
+    fight_at: Option<u32>,
 }
 
 /// Wires the battle screen to `battle-view`.
@@ -676,6 +678,8 @@ fn battle_shot(
     target: Option<Res<OffscreenTarget>>,
     ships: Res<battle_view::RenderedShips>,
     mut shot: ResMut<BattleShot>,
+    settings: Res<BattleViewSettings>,
+    mut cam: Single<&mut BattleCamera>,
 ) {
     let (Some(out), Some(target)) = (args.offscreen.as_ref(), target) else { return };
     shot.frames += 1;
@@ -684,6 +688,37 @@ fn battle_shot(
     let ready = if args.battle_orders { shot.orders_at.is_some_and(|f| shot.frames >= f + 12) && args.battle_seconds.is_none_or(|t| status.time >= t) } else { status.time >= at && shot.frames >= 200 };
     if shot.taken || status.tick == 0 || !ready {
         return;
+    }
+    if args.battle_fightcam {
+        let frames = shot.frames;
+        let placed = *shot.fight_at.get_or_insert_with(|| {
+            // Closest pair of opposing ships: that is where the shooting is.
+            let player = settings.player_side;
+            // Prefer big ships (capitals show the fires, shields and wrecks); fall back to anything.
+            let closest = |min_radius: f32| {
+                let mut best: Option<(f32, Vec3)> = None;
+                for a in ships.0.values().filter(|s| s.side == player && s.radius >= min_radius) {
+                    for b in ships.0.values().filter(|s| s.side != player && s.radius >= min_radius) {
+                        let d = a.pos.distance(b.pos);
+                        if best.is_none_or(|(bd, _)| d < bd) {
+                            best = Some((d, (a.pos + b.pos) * 0.5));
+                        }
+                    }
+                }
+                best
+            };
+            if let Some((_, mid)) = closest(40.0).or_else(|| closest(0.0)) {
+                let y = cam.focus.y;
+                cam.focus = Vec3::new(mid.x, y, mid.z);
+                cam.target_focus = cam.focus;
+                cam.distance = 900.0;
+                cam.target_distance = 900.0;
+            }
+            frames
+        });
+        if shot.frames < placed + 4 {
+            return;
+        }
     }
     shot.taken = true;
     let mut path = out.clone();

@@ -56,6 +56,8 @@ pub struct Args {
     pub battle_auto: bool,
     /// Offscreen only: select the player ships and give a move and an attack order (`--battle-orders`).
     pub battle_orders: bool,
+    /// Offscreen only: before the mid-battle capture, put the camera on the closest pair of opposing ships (`--battle-fightcam`).
+    pub battle_fightcam: bool,
     /// Offscreen only: reach the map the way a player does, main menu -> campaign list -> campaign (`--via-menu`).
     pub via_menu: bool,
     /// Open the real window but keep it invisible, run `--frames` frames and exit (`--hidden`; with `--volume 0`): checks the windowed plugin set.
@@ -139,6 +141,7 @@ impl Default for Args {
             battle_choice: None,
             battle_auto: false,
             battle_orders: false,
+            battle_fightcam: false,
             via_menu: false,
             hidden: false,
             exit_after: None,
@@ -288,6 +291,7 @@ impl Args {
                 "--stop-on-battle" => out.stop_on_battle = true,
                 "--battle-auto" => out.battle_auto = true,
                 "--battle-orders" => out.battle_orders = true,
+                "--battle-fightcam" => out.battle_fightcam = true,
                 "--via-menu" => out.via_menu = true,
                 "--hidden" => out.hidden = true,
                 "--exit-after" => out.exit_after = Some(it.next().ok_or("--exit-after needs a number")?.parse().map_err(|e| format!("bad --exit-after: {e}"))?),

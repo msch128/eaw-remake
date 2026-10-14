@@ -551,6 +551,7 @@ fn apply_hardpoint_death(
 /// Reacts to events of newly reached steps: ship deaths and hardpoint explosions.
 pub fn ship_events(
     mut commands: Commands,
+    mut pulses: ResMut<crate::effects::BloomPulses>,
     defs: Option<Res<alamo_render::XmlDefs>>,
     mut rt: ResMut<BattleRuntime>,
     mut touch: ModelTouch,
@@ -616,6 +617,9 @@ pub fn ship_events(
                     TargetClass::Frigate => 3.5,
                     _ => 2.0,
                 };
+                if big {
+                    pulses.flash(sim_to_bevy(*pos), 0.35);
+                }
                 let dir = Vec3::new(lcg(&mut s) - 0.5, lcg(&mut s) - 0.5, lcg(&mut s) - 0.5);
                 commands.entity(e).insert(Dying {
                     age: 0.0,
@@ -638,6 +642,7 @@ pub fn ship_events(
 /// Drives the explosion sequence of destroyed capital ships, and spawns drifting debris chunks (U68).
 pub fn update_dying(
     mut commands: Commands,
+    mut pulses: ResMut<crate::effects::BloomPulses>,
     time: Res<Time>,
     mut rt: ResMut<BattleRuntime>,
     mut q: Query<(Entity, &ShipView, &mut Dying, &mut Transform)>,
@@ -676,6 +681,9 @@ pub fn update_dying(
                 position: tf.translation,
                 normal: Vec3::Y,
             });
+            if d.radius >= 40.0 {
+                pulses.flash(tf.translation, if d.radius >= 150.0 { 1.0 } else { 0.6 });
+            }
             // U68: Break capital ships and frigates into drifting debris chunks
             if d.radius >= 40.0 {
                 let num_chunks = if d.radius > 200.0 { 4 } else { 2 };
@@ -722,9 +730,34 @@ pub fn update_dying(
                     ));
                 }
             }
-            commands.entity(e).try_despawn();
+            if d.radius >= 40.0 {
+                // The hull stays behind as a burning wreck (its own damage fires keep playing), drifting and tumbling slowly.
+                commands.entity(e).remove::<Dying>().insert((Wreck { velocity: d.velocity * 0.5, tumble: d.tumble }, RemoveAfter(WRECK_SECONDS)));
+            } else {
+                commands.entity(e).try_despawn();
+            }
             rt.dying.remove(&view.id);
         }
+    }
+}
+
+/// Seconds a burning wreck stays on the battlefield.
+const WRECK_SECONDS: f32 = 45.0;
+
+/// The hull of a destroyed capital ship, burning on after the final explosion.
+#[derive(Component, Debug)]
+pub struct Wreck {
+    velocity: Vec3,
+    tumble: Vec3,
+}
+
+/// Lets wrecks drift and tumble.
+pub fn update_wrecks(time: Res<Time>, rt: Res<BattleRuntime>, mut q: Query<(&Wreck, &mut Transform)>) {
+    let dt = time.delta_secs().min(0.1) * rt.speed_factor();
+    for (w, mut tf) in &mut q {
+        tf.translation += w.velocity * dt;
+        let t = w.tumble * dt;
+        tf.rotation = Quat::from_euler(EulerRot::XYZ, t.x, t.y, t.z) * tf.rotation;
     }
 }
 

@@ -248,3 +248,4 @@ Add `battle-view`, `galaxy-sim` (already there through galaxy-play) and `eaw-ui`
 - Bar: with nothing of ours selected the unit cards show the whole fleet per type (no abilities, no focus); a click selects that type.
 - Minimap: the camera footprint is a projected trapezoid (`eaw_ui::MinimapCameraQuad`), dots are green (own) / red (others).
 - Hero portrait click selects and centres the camera (single click).
+- B8 effects: capital/station deaths queue a bloom flash (`effects::BloomPulses`, camera-distance weighted, ~0.7 s, boosts `Bloom::intensity`); the hull of a destroyed capital stays 45 s as a burning wreck (`ships::Wreck`, the data's damage fires keep playing). Shield ripples, muzzle flashes, tracer bolts, death explosions and debris chunks already existed. Offscreen: `--battle-fightcam` puts the camera on the closest opposing big-ship pair before the `--battle-seconds` capture.
