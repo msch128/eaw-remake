@@ -166,6 +166,11 @@ fn content_label(name: String, content: crate::game::Content) -> String {
     }
 }
 
+/// One list line. The week is the galaxy's own counter, the number the game shows and logs while playing.
+fn slot_line(prefix: &str, name: &str, i: &SlotInfo, note: &str) -> String {
+    format!("{prefix} - {name}, week {}, {}{note}", i.week, i.difficulty)
+}
+
 /// The slot list. `only_campaign`: in a running game only saves of this campaign can be loaded.
 pub fn slot_spec(mode: SlotMode, only_campaign: Option<&str>, entries: &[crate::game::CampaignEntry], active: crate::game::Content) -> MenuSpec {
     let mut items = Vec::new();
@@ -175,7 +180,7 @@ pub fn slot_spec(mode: SlotMode, only_campaign: Option<&str>, entries: &[crate::
                 let other = mode == SlotMode::Load && only_campaign.is_some_and(|c| !c.eq_ignore_ascii_case(&i.campaign) || i.content != active);
                 let name = content_label(campaign_label(&i.campaign, entries), i.content);
                 let note = if other { " - different campaign or content (load it from the main menu)" } else { "" };
-                format!("Slot {n} - {name}, week {}, {}{note}", i.week + 1, i.difficulty)
+                slot_line(&format!("Slot {n}"), &name, &i, note)
             }
             None => format!("Slot {n} - empty"),
         };
@@ -192,7 +197,7 @@ pub fn slot_spec(mode: SlotMode, only_campaign: Option<&str>, entries: &[crate::
                     let other = only_campaign.is_some_and(|c| !c.eq_ignore_ascii_case(&i.campaign) || i.content != active);
                     let name = content_label(campaign_label(&i.campaign, entries), i.content);
                     let note = if other { " - different campaign or content" } else { "" };
-                    format!("{name_prefix} - {name}, week {}, {}{note}", i.week + 1, i.difficulty)
+                    slot_line(name_prefix, &name, &i, note)
                 }
                 None => format!("{name_prefix} - empty"),
             };
@@ -386,6 +391,12 @@ fn report_events(mut events: MessageReader<PlayEvent>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn slot_line_shows_the_in_game_week() {
+        let i = SlotInfo { campaign: "X".into(), content: crate::game::Content::Remake, week: 1, difficulty: "Brutal".into() };
+        assert_eq!(slot_line("Slot 2", "Ground Up", &i, ""), "Slot 2 - Ground Up, week 1, Brutal");
+    }
 
     #[test]
     fn autosave_paths_and_slot_mappings() {
