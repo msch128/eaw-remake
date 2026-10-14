@@ -655,58 +655,6 @@ fn key(s: &str) -> String {
     s.trim().to_ascii_lowercase()
 }
 
-/// Classifies a planet's maximum star base tier (1 = outpost only, 2 = frigate/medium, 3 = major capital shipyard).
-fn classify_planet_max_starbase(p: &alamo_data::Planet, min_from_start: i32) -> i32 {
-    if !p.is_real_planet() {
-        return p.max_space_base;
-    }
-    let name = p.name.to_ascii_lowercase();
-    let enc = p.encyclopedia_text.join(" ");
-    let tech: i32 = p.fields.get("planet_tech_availability_rating").and_then(|v| v.parse().ok()).unwrap_or(0);
-    let credit = p.credit_value;
-    let space_slots = p.special_structures_space;
-
-    // Tier 3: Major shipyard hubs & capital production
-    let is_major_named = name.contains("kuat")
-        || name.contains("fondor")
-        || name.contains("coruscant")
-        || name.contains("corellia")
-        || name.contains("moncalamari")
-        || name.contains("sullust")
-        || name.contains("rendili")
-        || name.contains("rothana")
-        || name.contains("bilbringi")
-        || name.contains("anaxes")
-        || name.contains("carida")
-        || name.contains("ringo")
-        || name.contains("mandalore")
-        || name.contains("hapes")
-        || name.contains("eriadu")
-        || name.contains("muunilinst")
-        || name.contains("allanteen")
-        || name.contains("celanon")
-        || name.contains("botajef");
-
-    let has_sd_allow = enc.contains("PLANET_ALLOW_SD");
-    let has_major_boost = enc.contains("PLANET_BOOST_KUAT")
-        || enc.contains("PLANET_BOOST_MC")
-        || enc.contains("PLANET_BOOST_CORELLIA")
-        || enc.contains("PLANET_BOOST_ROTHANA")
-        || enc.contains("PLANET_BOOST_SULLUST")
-        || enc.contains("PLANET_BOOST_OFFICER")
-        || enc.contains("PLANET_BOOST_MUUNILINST");
-
-    let tier = if is_major_named || has_sd_allow || has_major_boost || (space_slots >= 7 && (credit >= 400 || tech >= 4)) {
-        3
-    } else if credit >= 50 || tech >= 2 || space_slots >= 7 {
-        2
-    } else {
-        1
-    };
-
-    tier.max(min_from_start).min(p.max_space_base.max(3))
-}
-
 impl World {
     /// True if the fleet slot rules (see [`crate::FLEET_SLOTS`]) bind `faction`: the human player always, the AI factions with `SimConfig::fleet_slot_cap_ai`.
     pub fn slot_limited(&self, faction: FactionId) -> bool {
@@ -720,26 +668,6 @@ impl World {
         }
         let damage = DamageMatrix::build(data);
 
-        // Minimum starbase tier implied by campaign starting forces (e.g. starting shipyards / stations).
-        let mut min_sb_from_start: HashMap<String, i32> = HashMap::new();
-        for sf in &campaign.starting_forces {
-            let k = key(&sf.planet);
-            let obj = sf.object.to_ascii_lowercase();
-            let lvl = if obj.contains("star_base_3") || obj.contains("shipyard_3") {
-                3
-            } else if obj.contains("star_base_2") || obj.contains("shipyard_2") || obj.contains("shipyard_1") || obj.contains("minor_shipyard") {
-                2
-            } else if obj.contains("star_base_1") {
-                1
-            } else {
-                0
-            };
-            if lvl > 0 {
-                let entry = min_sb_from_start.entry(k).or_insert(0);
-                *entry = (*entry).max(lvl);
-            }
-        }
-
         // Planets, in `Locations` order so ids are stable.
         let mut planets = Vec::new();
         let mut real = Vec::new();
@@ -752,15 +680,13 @@ impl World {
             planet_index.insert(key(&p.name), planets.len() as PlanetId);
             real.push(p.is_real_planet());
             let pop = p.fields.get("additional_population_capacity").and_then(|v| v.parse().ok()).unwrap_or(0);
-            let min_sb = min_sb_from_start.get(&key(&p.name)).copied().unwrap_or(0);
-            let max_space_base = classify_planet_max_starbase(p, min_sb);
             planets.push(PlanetInfo {
                 name: p.name.clone(),
                 display_name: data.planet_display_name(p).to_string(),
                 position: p.position,
                 credit_value: p.credit_value as f32,
                 space_slots: p.special_structures_space,
-                max_space_base,
+                max_space_base: p.max_space_base,
                 mining_colony: p.fields.get("planet_is_mining_colony").is_some_and(|v| alamo_data::xml::parse_bool(v)),
                 ground_slots: p.special_structures_land,
                 population_capacity: pop,

@@ -268,39 +268,31 @@ fn shipyard_planet_applies_production_modifiers() {
     }
 }
 
+/// The star base cap of every planet is the `Max_Space_Base` of the planet XML, and the build checks follow it.
 #[test]
-fn planet_starbase_tier_limits_and_capital_production() {
+fn planet_star_base_caps_come_from_the_planet_data() {
     let Some(data) = load() else { return };
     let mut sim = new_sim(&data);
     let w = sim.world().clone();
     let empire = w.faction_id("Empire").unwrap();
-
-    // Kuat, Fondor, Coruscant and Mon Calamari are Tier 3 major shipyard hubs
-    for major in ["Kuat_WW", "Fondor_WW", "Coruscant_WW", "MonCalamari_WW"] {
-        let p = w.planet_id(major).unwrap();
-        assert_eq!(w.planets[p as usize].max_space_base, 3, "{major} must support level 3 starbase");
+    let mut checked = 0;
+    for (i, p) in w.planets.iter().enumerate() {
+        let xml = data.planet(&p.name).expect("planet in the data").max_space_base;
+        assert_eq!(p.max_space_base, xml, "{} takes the Max_Space_Base of its XML", p.name);
+        checked += (w.real[i] && xml == 3) as u32;
     }
+    assert!(checked > 50, "the Remake's real planets say 3: {checked}");
 
-    // Tatooine, Dantooine, Hoth, Yavin, Bespin are Tier 2 medium worlds
-    for med in ["Tatooine_WW", "Dantooine_WW", "Hoth_WW", "Yavin_WW", "Bespin_WW"] {
-        let p = w.planet_id(med).unwrap();
-        assert_eq!(w.planets[p as usize].max_space_base, 2, "{med} must be capped at level 2 starbase");
-    }
-
-    // Dagobah, Roche, Malachor V are Tier 1 barren / outpost worlds
-    for outpost in ["Dagobah_WW", "Roche_WW", "MalachorV_WW"] {
-        let p = w.planet_id(outpost).unwrap();
-        assert_eq!(w.planets[p as usize].max_space_base, 1, "{outpost} must be capped at level 1 starbase");
-    }
-
-    // On a Tier 2 world (e.g. Tatooine), Shipyard 3 and Star Destroyers cannot be built
-    let tatooine = w.planet_id("Tatooine_WW").unwrap();
-    bare_planet(&mut sim, empire, tatooine, 2);
+    // A structure that needs a star base level above a planet's cap cannot be built there; below it the check does not say "planet".
     let y3 = w.structure_id("E_Shipyard_3").unwrap();
-    assert_eq!(unmet(w.check_build_structure(sim.galaxy(), empire, tatooine, y3)), "planet", "Shipyard 3 impossible on Tier 2 planet");
-
-    if let Some(isd) = w.unit_id("Star_Destroyer") {
-        assert_eq!(unmet(w.check_build_unit(sim.galaxy(), empire, tatooine, isd)), "planet", "Star Destroyer impossible on Tier 2 planet");
+    let need = w.structures[y3 as usize].req_starbase;
+    let real: Vec<PlanetId> = (0..w.planets.len() as PlanetId).filter(|&p| w.real[p as usize]).collect();
+    let capped = real.iter().copied().find(|&p| w.planets[p as usize].max_space_base < need);
+    if let Some(p) = capped {
+        bare_planet(&mut sim, empire, p, 1);
+        assert_eq!(unmet(w.check_build_structure(sim.galaxy(), empire, p, y3)), "planet");
     }
+    let open = real.iter().copied().find(|&p| w.planets[p as usize].max_space_base >= need && w.structures[y3 as usize].req_planets.is_empty()).expect("a planet that can take it");
+    bare_planet(&mut sim, empire, open, 1);
+    assert_ne!(w.check_build_structure(sim.galaxy(), empire, open, y3), Err(CommandError::RequirementsNotMet("planet".into())));
 }
-
