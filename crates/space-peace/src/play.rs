@@ -95,6 +95,7 @@ fn begin_play(
     args: Res<Args>,
     options: Res<crate::newgame::NewGameOptions>,
     pending_load: Option<Res<crate::newgame::PendingLoad>>,
+    content: Option<Res<crate::game::ContentChoice>>,
 ) {
     let (Some(name), Some(assets)) = (current.name.clone(), game.0.as_ref()) else { return };
     if name == DEMO_CAMPAIGN || bridge.is_some_and(|b| b.campaign == name) {
@@ -114,6 +115,7 @@ fn begin_play(
         initial_speed_level: if args.weeks.is_some() { 0 } else { 1 },
         difficulty: Some(options.difficulty),
         classic_ai: options.classic_ai,
+        content: content.map(|c| c.active.key().to_owned()),
         ..default()
     };
     let data = assets.data.clone();

@@ -200,7 +200,11 @@ fn track_history(
                 "REBEL" | "REBELLION" => Color::srgb(0.2, 0.9, 0.3),
                 "UNDERWORLD" => Color::srgb(0.95, 0.85, 0.2),
                 "PIRATES" | "INDEPENDENT" => Color::srgb(0.95, 0.55, 0.15),
-                _ => Color::srgb(0.6, 0.7, 0.9),
+                // Every other faction (Republic, CIS, minor factions) uses its own data colour, lifted so dark ones stay readable on the chart.
+                _ => sim.world.factions.get(i).map_or(Color::srgb(0.6, 0.7, 0.9), |f| {
+                    let lift = |c: u8| 0.35 + 0.65 * f32::from(c) / 255.0;
+                    Color::srgb(lift(f.color[0]), lift(f.color[1]), lift(f.color[2]))
+                }),
             };
 
             // Ships and squadrons in fleets (not population points: a capital ship counts for several of those).

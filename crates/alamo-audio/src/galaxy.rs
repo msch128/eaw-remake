@@ -175,11 +175,11 @@ impl GalaxyEvent {
     }
 }
 
-/// HUD event prefix of a faction: `E` Empire, `R` Rebel, `U` Underworld (unknown factions use Empire).
+/// HUD event prefix of a faction: `E` Empire, `R` Rebel (and Republic), `U` Underworld (and CIS), after the faction icons of `FACTIONS.XML` (unknown factions use Empire).
 pub fn hud_prefix(faction: &str) -> char {
     match faction.trim().to_ascii_lowercase().as_str() {
-        "rebel" | "rebellion" | "rebel_alliance" => 'R',
-        "underworld" | "hutts" | "zann_consortium" => 'U',
+        "rebel" | "rebellion" | "rebel_alliance" | "republic" => 'R',
+        "underworld" | "hutts" | "zann_consortium" | "cis" => 'U',
         _ => 'E',
     }
 }

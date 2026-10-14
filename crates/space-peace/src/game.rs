@@ -85,6 +85,92 @@ pub fn default_mod_id(explicit: Option<&str>) -> &str {
     explicit.unwrap_or(DEFAULT_MOD_ID)
 }
 
+/// `--mod` alias of the Clone Wars stack (see `alamo_fs::GameFs::for_mods`: 3229239424, 2794270450, 1770851727).
+pub const CLONE_WARS_ALIAS: &str = "fft";
+/// Workshop ids the Clone Wars stack needs; all of them must be installed.
+pub const CLONE_WARS_IDS: [&str; 3] = ["3229239424", "2794270450", DEFAULT_MOD_ID];
+
+/// Which game content a session runs on. The choice is explicit (new-game screen or `--mod`), never implicit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Content {
+    /// Empire at War Remake 4.0 alone (the default).
+    Remake,
+    /// Remake Clone Wars submod on top of Remake 4.0: Republic and CIS are playable.
+    CloneWars,
+}
+
+impl Content {
+    /// Content selected by `--mod` (or a save's recorded key): the Clone Wars alias selects the submod, anything else the plain Remake files.
+    pub fn from_mod_arg(mod_id: Option<&str>) -> Self {
+        match mod_id {
+            Some(m) if m.eq_ignore_ascii_case(CLONE_WARS_ALIAS) => Content::CloneWars,
+            _ => Content::Remake,
+        }
+    }
+
+    /// Key written into save files and passed to `--mod` when the game restarts on this content.
+    pub fn key(self) -> &'static str {
+        match self {
+            Content::Remake => DEFAULT_MOD_ID,
+            Content::CloneWars => CLONE_WARS_ALIAS,
+        }
+    }
+
+    /// Name shown on the new-game screen.
+    pub fn label(self) -> &'static str {
+        match self {
+            Content::Remake => "Remake 4.0",
+            Content::CloneWars => "Clone Wars (submod)",
+        }
+    }
+}
+
+/// The running content and whether the submod can be offered (all its workshop folders exist).
+#[derive(Resource, Debug, Clone, Copy)]
+pub struct ContentChoice {
+    /// Content this session was started with.
+    pub active: Content,
+    /// The Clone Wars folders are installed.
+    pub clone_wars_available: bool,
+}
+
+impl Default for ContentChoice {
+    fn default() -> Self {
+        Self { active: Content::Remake, clone_wars_available: false }
+    }
+}
+
+/// True when every workshop folder of the Clone Wars stack exists.
+pub fn clone_wars_installed(install: &GameInstall) -> bool {
+    CLONE_WARS_IDS.iter().all(|id| install.mod_data(id).is_dir())
+}
+
+/// Starts this program again on `content` (the layered file system is fixed at start-up). The original arguments are passed on
+/// except the ones that pick the content, the screen and the campaign; `extra` is appended. Returns false if the start failed.
+pub fn restart_with(content: Content, extra: &[String]) -> bool {
+    let Ok(exe) = std::env::current_exe() else { return false };
+    let mut args: Vec<String> = Vec::new();
+    let mut it = std::env::args().skip(1);
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--mod" | "--screen" | "--campaign" | "--load-from" => {
+                it.next();
+            }
+            "--via-menu" => {}
+            _ => args.push(a),
+        }
+    }
+    args.extend(["--mod".to_owned(), content.key().to_owned()]);
+    args.extend(extra.iter().cloned());
+    match std::process::Command::new(exe).args(&args).spawn() {
+        Ok(_) => true,
+        Err(e) => {
+            warn!("cannot restart on {}: {e}", content.label());
+            false
+        }
+    }
+}
+
 /// The installed game, or `None` when only the demo galaxy is available.
 #[derive(Resource, Clone, Default)]
 pub struct Game(pub Option<GameAssets>);
@@ -744,6 +830,10 @@ mod problem_tests {
     fn default_selection_is_remake_only_and_never_a_stack() {
         assert_eq!(default_mod_id(None), DEFAULT_MOD_ID);
         assert_eq!(default_mod_id(Some("fft")), "fft");
+        assert_eq!(super::Content::from_mod_arg(None), super::Content::Remake);
+        assert_eq!(super::Content::from_mod_arg(Some("fft")), super::Content::CloneWars);
+        assert_eq!(super::Content::from_mod_arg(Some("1770851727")), super::Content::Remake);
+        assert_eq!(super::Content::CloneWars.key(), "fft");
     }
 
     #[test]

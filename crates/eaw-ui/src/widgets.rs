@@ -1916,6 +1916,8 @@ mod tests {
         assert_eq!(UiFaction::Rebel.mesh_alt(), 1);
         assert_eq!(UiFaction::from_name(" REBEL "), UiFaction::Rebel);
         assert_eq!(UiFaction::from_name("Hutts"), UiFaction::Underworld);
+        assert_eq!(UiFaction::from_name("Republic"), UiFaction::Rebel);
+        assert_eq!(UiFaction::from_name("CIS"), UiFaction::Underworld);
     }
 }
 

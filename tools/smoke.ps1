@@ -22,6 +22,10 @@ $save = Join-Path $Out 'smoke-save.json'
 # name, argument list, regex that must appear in the log (empty = none)
 $scenarios = @(
     @('via-menu-to-galaxy',  @('--via-menu', '--campaign', $camp, '--frames', '300'), 'human faction'),
+    # Clone Wars submod (explicit --mod fft, the stack the new-game screen's Content choice restarts on): campaign screen with the Content row, and the Republic / CIS galaxies. Skipped by hand when the submod is not installed.
+    @('clonewars-campaign-select', @('--mod', 'fft', '--screen', 'campaigns', '--frames', '60'), ''),
+    @('clonewars-republic-galaxy', @('--mod', 'fft', '--campaign', 'GC_Full_Web_Way_Republic', '--weeks', '4', '--frames', '120'), 'human faction Republic'),
+    @('clonewars-cis-galaxy', @('--mod', 'fft', '--campaign', 'GC_Full_Web_Way_CIS', '--weeks', '4', '--frames', '120'), 'human faction CIS'),
     @('menu-title-scene',    @('--screen', 'menu', '--frames', '100'), 'title scene'),
     @('campaign-select',     @('--screen', 'campaigns', '--frames', '60'), ''),
     @('options-screen',      @('--screen', 'options', '--frames', '60'), ''),

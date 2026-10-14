@@ -1068,6 +1068,7 @@ fn feed_minimap(
     fleets: Query<(&galaxy_play::FleetVisual, &Transform)>,
     camera: Single<(&Camera, &crate::camera::GalaxyCamera, &Projection)>,
     data: Option<ResMut<MinimapData>>,
+    game: Res<crate::game::Game>,
     mut since: Local<f32>,
 ) {
     let Some(mut data) = data else { return };
@@ -1076,6 +1077,7 @@ fn feed_minimap(
         return;
     }
     *since = 0.0;
+    let main_factions: Vec<u32> = game.0.as_ref().map(|g| g.data.playable_factions().iter().filter_map(|f| state.world.faction_id(&f.name)).collect()).unwrap_or_default();
     let galaxy = |w: Vec3| Vec2::new(w.x, -w.z);
     let mut lo = Vec2::splat(f32::MAX);
     let mut hi = Vec2::splat(f32::MIN);
@@ -1088,7 +1090,7 @@ fn feed_minimap(
             lo = lo.min(pos);
             hi = hi.max(pos);
             let owner = bridge.planet_to_sim.get(i).copied().flatten().and_then(|p| state.galaxy().planets[p as usize].owner);
-            MinimapDot { pos, color: relation_color(&state, player.0, owner), selected: selection.0 == Some(i) }
+            MinimapDot { pos, color: relation_color(&state, &main_factions, player.0, owner), selected: selection.0 == Some(i) }
         })
         .collect();
     if planets.is_empty() {
@@ -1098,7 +1100,7 @@ fn feed_minimap(
     let units = fleets
         .iter()
         .map(|(f, t)| {
-            MinimapDot { pos: galaxy(t.translation), color: relation_color(&state, player.0, Some(f.owner)), selected: false }
+            MinimapDot { pos: galaxy(t.translation), color: relation_color(&state, &main_factions, player.0, Some(f.owner)), selected: false }
         })
         .collect();
     let (cam, orbit, projection) = *camera;
@@ -1587,10 +1589,11 @@ fn show_end_dialog(world: &mut World) {
         }
         if win && world.contains_resource::<alamo_audio::plugin::AlamoAudio>() {
             // The announcer line of the faction (`<FACTION>_VICTORY_NN.WAV`), picked from the game state so a replay says the same.
-            let (upper, lines) = match name.to_ascii_lowercase().as_str() {
-                "rebel" => ("REBEL", 3),
-                "underworld" => ("UNDERWORLD", 3),
-                _ => ("EMPIRE", 8),
+            // Republic and CIS use the announcer of the skin their faction icon belongs to (see `UiFaction::from_name`).
+            let (upper, lines) = match UiFaction::from_name(&name) {
+                UiFaction::Rebel => ("REBEL", 3),
+                UiFaction::Underworld => ("UNDERWORLD", 3),
+                UiFaction::Empire => ("EMPIRE", 8),
             };
             let n = (weeks + u64::from(planets)) % lines;
             world.write_message(alamo_audio::PlayFile { name: format!("{upper}_VICTORY_{n:02}.WAV"), bus: alamo_audio::Bus::Speech });
@@ -2341,11 +2344,11 @@ fn locked_clicks(
     }
 }
 
-/// Minimap colours of the original: own green, the main enemy factions (Rebel, Empire, Underworld) at war red, everything else
+/// Minimap colours of the original: own green, the main enemy factions (the playable ones of the loaded game: Rebel, Empire, Underworld, with the Clone Wars stack also Republic and CIS) at war red, everything else
 /// (minor factions such as pirates or warlords, neutral, allied) orange. The minor factions are formally at war with everyone,
 /// so "hostile" alone painted the whole map red.
-fn relation_color(state: &SimState, me: Option<u32>, owner: Option<u32>) -> Color {
-    let main = |o: u32| ["Rebel", "Empire", "Underworld"].iter().any(|n| state.world.faction_id(n) == Some(o));
+fn relation_color(state: &SimState, main_factions: &[u32], me: Option<u32>, owner: Option<u32>) -> Color {
+    let main = |o: u32| main_factions.contains(&o);
     match (me, owner) {
         (Some(m), Some(o)) if m == o => Color::srgb(0.2, 0.9, 0.25),
         (Some(m), Some(o)) if main(o) && state.galaxy().hostile(&state.world, m, o) => Color::srgb(0.95, 0.15, 0.12),

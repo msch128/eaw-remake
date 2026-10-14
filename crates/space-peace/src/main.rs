@@ -79,12 +79,16 @@ fn main() {
     // loading screen is shown. Without an install the demo galaxy is used.
     let mut log = StartupLog::default();
     let mut problem = game::StartupProblem::default();
+    let mut content = game::ContentChoice { active: game::Content::from_mod_arg(args.mod_id.as_deref()), ..default() };
     let fs = if args.demo {
         log.info("using the built-in demo galaxy (--demo)".into());
         None
     } else {
         match game::open_fs(&args, &mut log) {
-            Ok((_, fs)) => Some(fs),
+            Ok((install, fs)) => {
+                content.clone_wars_available = game::clone_wars_installed(&install);
+                Some(fs)
+            }
             Err(e) => {
                 log.warn(format!("FALLING BACK TO DEMO GALAXY: {e}"));
                 problem.0 = Some(game::describe_problem(&e, args.mod_id.as_deref().unwrap_or(game::DEFAULT_MOD_ID)));
@@ -183,6 +187,7 @@ fn main() {
         .insert_resource(flow::Paused(args.screen.as_deref() == Some("pause")))
         .insert_resource(options::OptionsOpen(args.screen.as_deref() == Some("options")))
         .insert_resource(settings)
+        .insert_resource(content)
         .insert_resource(newgame::NewGameOptions::from_args(&args))
         .insert_resource(args)
         .insert_resource(log)

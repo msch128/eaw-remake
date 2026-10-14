@@ -14,11 +14,12 @@ pub enum UiFaction {
 
 impl UiFaction {
     /// Parses a faction object name (`Empire`, `Rebel`, `Underworld` ...), case-insensitive.
-    /// Unknown factions use the Empire skin.
+    /// The Clone Wars factions take the skin of the faction icon their `FACTIONS.XML` entry names: Republic `i_icon_rebel.tga` (Rebel skin),
+    /// CIS `i_icon_pirate.tga` (Underworld skin). Unknown factions use the Empire skin.
     pub fn from_name(name: &str) -> Self {
         match name.trim().to_lowercase().as_str() {
-            "rebel" | "rebels" | "alliance" => Self::Rebel,
-            "underworld" | "zann" | "pirates" | "hutts" => Self::Underworld,
+            "rebel" | "rebels" | "alliance" | "republic" => Self::Rebel,
+            "underworld" | "zann" | "pirates" | "hutts" | "cis" => Self::Underworld,
             _ => Self::Empire,
         }
     }

@@ -354,9 +354,9 @@ pub fn battle_audio(
         if mem.last_select_voice.is_none_or(|t| clock - t >= SELECT_VOICE_COOLDOWN) {
             let line = ranked.iter().find_map(|&def| visuals.ship(def).sfx.select.as_deref())
                 .or_else(|| match faction.as_deref() {
-                    Some(f) if f.eq_ignore_ascii_case("empire") => Some("Unit_Select_Empire"),
-                    Some(f) if f.eq_ignore_ascii_case("rebel") => Some("Unit_Select_Rebel"),
-                    Some(f) if f.eq_ignore_ascii_case("underworld") => Some("Unit_Select_Underworld"),
+                    Some(f) if voice_faction(f) == Some("Empire") => Some("Unit_Select_Empire"),
+                    Some(f) if voice_faction(f) == Some("Rebel") => Some("Unit_Select_Rebel"),
+                    Some(f) if voice_faction(f) == Some("Underworld") => Some("Unit_Select_Underworld"),
                     _ => None,
                 });
             if let Some(n) = line {
@@ -409,21 +409,21 @@ pub fn battle_audio(
         }
         let faction_fallback = match o.kind {
             OrderKind::Move if group => match faction.as_deref() {
-                Some(f) if f.eq_ignore_ascii_case("empire") => Some("Unit_Fleet_Move_Empire"),
-                Some(f) if f.eq_ignore_ascii_case("rebel") => Some("Unit_Fleet_Move_Rebel"),
-                Some(f) if f.eq_ignore_ascii_case("underworld") => Some("Unit_Fleet_Move_Underworld"),
+                Some(f) if voice_faction(f) == Some("Empire") => Some("Unit_Fleet_Move_Empire"),
+                Some(f) if voice_faction(f) == Some("Rebel") => Some("Unit_Fleet_Move_Rebel"),
+                Some(f) if voice_faction(f) == Some("Underworld") => Some("Unit_Fleet_Move_Underworld"),
                 _ => None,
             },
             OrderKind::Move => match faction.as_deref() {
-                Some(f) if f.eq_ignore_ascii_case("empire") => Some("Unit_Move_Empire"),
-                Some(f) if f.eq_ignore_ascii_case("rebel") => Some("Unit_Move_Rebel"),
-                Some(f) if f.eq_ignore_ascii_case("underworld") => Some("Unit_Move_Underworld"),
+                Some(f) if voice_faction(f) == Some("Empire") => Some("Unit_Move_Empire"),
+                Some(f) if voice_faction(f) == Some("Rebel") => Some("Unit_Move_Rebel"),
+                Some(f) if voice_faction(f) == Some("Underworld") => Some("Unit_Move_Underworld"),
                 _ => None,
             },
             OrderKind::Attack if !hardpoint_line => match faction.as_deref() {
-                Some(f) if f.eq_ignore_ascii_case("empire") => Some("Unit_Attack_Empire"),
-                Some(f) if f.eq_ignore_ascii_case("rebel") => Some("Unit_Attack_Rebel"),
-                Some(f) if f.eq_ignore_ascii_case("underworld") => Some("Unit_Attack_Underworld"),
+                Some(f) if voice_faction(f) == Some("Empire") => Some("Unit_Attack_Empire"),
+                Some(f) if voice_faction(f) == Some("Rebel") => Some("Unit_Attack_Rebel"),
+                Some(f) if voice_faction(f) == Some("Underworld") => Some("Unit_Attack_Underworld"),
                 _ => None,
             },
             _ => None,
@@ -480,27 +480,27 @@ pub fn attack_hardpoint_line<'a>(
     // 3. Category faction fallback
     match category {
         Some("SHIELD") => match faction {
-            Some(f) if f.eq_ignore_ascii_case("empire") => Some("Unit_Attack_Hardpoint_Shield_Empire"),
-            Some(f) if f.eq_ignore_ascii_case("rebel") => Some("Unit_Attack_Hardpoint_Shield_Rebel"),
-            Some(f) if f.eq_ignore_ascii_case("underworld") => Some("Unit_Attack_Hardpoint_Shield_Underworld"),
+            Some(f) if voice_faction(f) == Some("Empire") => Some("Unit_Attack_Hardpoint_Shield_Empire"),
+            Some(f) if voice_faction(f) == Some("Rebel") => Some("Unit_Attack_Hardpoint_Shield_Rebel"),
+            Some(f) if voice_faction(f) == Some("Underworld") => Some("Unit_Attack_Hardpoint_Shield_Underworld"),
             _ => None,
         },
         Some("ENGINE") => match faction {
-            Some(f) if f.eq_ignore_ascii_case("empire") => Some("Unit_Attack_Hardpoint_Engine_Empire"),
-            Some(f) if f.eq_ignore_ascii_case("rebel") => Some("Unit_Attack_Hardpoint_Engine_Rebel"),
-            Some(f) if f.eq_ignore_ascii_case("underworld") => Some("Unit_Attack_Hardpoint_Engine_Underworld"),
+            Some(f) if voice_faction(f) == Some("Empire") => Some("Unit_Attack_Hardpoint_Engine_Empire"),
+            Some(f) if voice_faction(f) == Some("Rebel") => Some("Unit_Attack_Hardpoint_Engine_Rebel"),
+            Some(f) if voice_faction(f) == Some("Underworld") => Some("Unit_Attack_Hardpoint_Engine_Underworld"),
             _ => None,
         },
         Some("WEAPON") => match faction {
-            Some(f) if f.eq_ignore_ascii_case("empire") => Some("Unit_Attack_Hardpoint_Weapon_Empire"),
-            Some(f) if f.eq_ignore_ascii_case("rebel") => Some("Unit_Attack_Hardpoint_Weapon_Rebel"),
-            Some(f) if f.eq_ignore_ascii_case("underworld") => Some("Unit_Attack_Hardpoint_Weapon_Underworld"),
+            Some(f) if voice_faction(f) == Some("Empire") => Some("Unit_Attack_Hardpoint_Weapon_Empire"),
+            Some(f) if voice_faction(f) == Some("Rebel") => Some("Unit_Attack_Hardpoint_Weapon_Rebel"),
+            Some(f) if voice_faction(f) == Some("Underworld") => Some("Unit_Attack_Hardpoint_Weapon_Underworld"),
             _ => None,
         },
         Some("BAY") => match faction {
-            Some(f) if f.eq_ignore_ascii_case("empire") => Some("Unit_Attack_Hardpoint_Hangar_Empire"),
-            Some(f) if f.eq_ignore_ascii_case("rebel") => Some("Unit_Attack_Hardpoint_Hangar_Rebel"),
-            Some(f) if f.eq_ignore_ascii_case("underworld") => Some("Unit_Attack_Hardpoint_Hangar_Underworld"),
+            Some(f) if voice_faction(f) == Some("Empire") => Some("Unit_Attack_Hardpoint_Hangar_Empire"),
+            Some(f) if voice_faction(f) == Some("Rebel") => Some("Unit_Attack_Hardpoint_Hangar_Rebel"),
+            Some(f) if voice_faction(f) == Some("Underworld") => Some("Unit_Attack_Hardpoint_Hangar_Underworld"),
             _ => None,
         },
         _ => None,
@@ -646,7 +646,7 @@ mod tests {
 
         // Faction fallback lines
         let emp_fallback = match Some("Empire") {
-            Some(f) if f.eq_ignore_ascii_case("empire") => Some("Unit_Select_Empire"),
+            Some(f) if voice_faction(f) == Some("Empire") => Some("Unit_Select_Empire"),
             _ => None,
         };
         assert_eq!(emp_fallback, Some("Unit_Select_Empire"));
@@ -758,5 +758,17 @@ mod tests {
         let dist_far: f32 = 8000.0;
         let pullback_far = ((dist_far - 500.0) / 4000.0).clamp(0.0, 0.45);
         assert_eq!(pullback_far, 0.45);
+    }
+}
+
+/// The classic voice set (`Empire`, `Rebel`, `Underworld`) a faction speaks with. The Clone Wars factions have no own `Unit_Select_*` /
+/// `Unit_Move_*` sets in the unit-response data, so they use the set of the faction icon their `FACTIONS.XML` entry names:
+/// Republic `i_icon_rebel.tga` (Rebel), CIS `i_icon_pirate.tga` (Underworld).
+fn voice_faction(name: &str) -> Option<&'static str> {
+    match name.trim().to_ascii_lowercase().as_str() {
+        "empire" => Some("Empire"),
+        "rebel" | "republic" => Some("Rebel"),
+        "underworld" | "cis" => Some("Underworld"),
+        _ => None,
     }
 }

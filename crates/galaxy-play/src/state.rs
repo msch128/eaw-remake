@@ -45,6 +45,8 @@ pub struct PlayConfig {
     pub difficulty: Option<galaxy_script::DifficultyTier>,
     /// Use galaxy-sim's built-in (classic) AI instead of the Remake AI with strategy ([`PlayInit::scripted`]).
     pub classic_ai: bool,
+    /// Game content the match runs on (see `galaxy_script::ScriptedConfig::content`), recorded in saves.
+    pub content: Option<String>,
 }
 
 impl Default for PlayConfig {
@@ -62,6 +64,7 @@ impl Default for PlayConfig {
             ui_interval: 0.2,
             difficulty: Some(galaxy_script::DifficultyTier::Normal),
             classic_ai: false,
+            content: None,
         }
     }
 }
@@ -98,6 +101,7 @@ impl PlayInit {
             human: Some(human_name),
             remake_ai: !config.classic_ai,
             difficulty: if config.classic_ai { None } else { config.difficulty },
+            content: config.content.clone(),
             ..Default::default()
         };
         let script = ScriptSetup { fs, data, campaign: campaign.name.clone(), config: script_config, load: None, load_path: None, tactical: None };

@@ -199,3 +199,9 @@ Fog of war, U89 correction: a corvette (or any unit with `System_Spy_Ability`) d
 
 ## Difficulty estimates (`galaxy_script::BRUTAL_*`)
 Easy/Normal/Hard are the `DifficultyAdjustments.xml` entries. Brutal has no XML entry: it is Hard (battle multipliers, AI behaviour) plus full map knowledge and two **estimates** (user decision 2026-10-14): AI credit multiplier `BRUTAL_CREDIT_MULTIPLIER` 4.0 (Hard 3.0) and galactic build-time multiplier `BRUTAL_BUILD_TIME_MULTIPLIER` 0.8 (Hard 0.9).
+
+## Clone Wars stack (Republic, CIS)
+- Content is an explicit choice (new-game screen "Content" row or `--mod fft`); default is Remake 4.0. The sim has no faction-specific code: Republic and CIS are ordinary data factions (see `galaxy-sim/tests/clone_wars.rs`).
+- Story plots: besides the three `*_Story_Name` tags, every playable faction's `Story_Name` entry of the campaign is started (`galaxy-script`).
+- UI skin, announcer and HUD voice set of Republic / CIS follow the faction icon named in `FACTIONS.XML` (Republic `i_icon_rebel.tga` -> Rebel set, CIS `i_icon_pirate.tga` -> Underworld set). Data-derived; whether the original submod uses the same frame art is unverified.
+- Estimate: history chart line colours of non-classic factions are the XML faction colour lifted (`0.35 + 0.65 * c`) so dark colours stay readable.

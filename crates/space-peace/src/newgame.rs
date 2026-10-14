@@ -130,6 +130,8 @@ pub fn slot_path(slot: u8) -> Option<PathBuf> {
 /// What a slot file holds.
 struct SlotInfo {
     campaign: String,
+    /// Game content the save needs.
+    content: crate::game::Content,
     week: u64,
     difficulty: String,
 }
@@ -141,7 +143,7 @@ fn slot_info(slot: u8) -> Option<SlotInfo> {
     }
     let f = SaveFile::read(&path).ok()?;
     let difficulty = if f.header.config.remake_ai { f.header.config.difficulty.map_or("Normal", tier_name).to_owned() } else { "classic AI".to_owned() };
-    Some(SlotInfo { campaign: f.header.campaign.clone(), week: f.checkpoint.week, difficulty })
+    Some(SlotInfo { campaign: f.header.campaign.clone(), content: crate::game::Content::from_mod_arg(f.header.config.content.as_deref()), week: f.checkpoint.week, difficulty })
 }
 
 /// Readable campaign name for a save: the campaign group and the faction played, e.g. `Mini Standard (Empire)`.
@@ -156,15 +158,23 @@ fn campaign_label(campaign: &str, entries: &[crate::game::CampaignEntry]) -> Str
     }
 }
 
+/// Adds the content of a Clone Wars save to its readable name; Remake 4.0 saves stay unmarked.
+fn content_label(name: String, content: crate::game::Content) -> String {
+    match content {
+        crate::game::Content::Remake => name,
+        c => format!("{name} [{}]", c.label()),
+    }
+}
+
 /// The slot list. `only_campaign`: in a running game only saves of this campaign can be loaded.
-pub fn slot_spec(mode: SlotMode, only_campaign: Option<&str>, entries: &[crate::game::CampaignEntry]) -> MenuSpec {
+pub fn slot_spec(mode: SlotMode, only_campaign: Option<&str>, entries: &[crate::game::CampaignEntry], active: crate::game::Content) -> MenuSpec {
     let mut items = Vec::new();
     for n in 1..=SLOTS {
         let label = match slot_info(n) {
             Some(i) => {
-                let other = mode == SlotMode::Load && only_campaign.is_some_and(|c| !c.eq_ignore_ascii_case(&i.campaign));
-                let name = campaign_label(&i.campaign, entries);
-                let note = if other { " - different campaign (load it from the main menu)" } else { "" };
+                let other = mode == SlotMode::Load && only_campaign.is_some_and(|c| !c.eq_ignore_ascii_case(&i.campaign) || i.content != active);
+                let name = content_label(campaign_label(&i.campaign, entries), i.content);
+                let note = if other { " - different campaign or content (load it from the main menu)" } else { "" };
                 format!("Slot {n} - {name}, week {}, {}{note}", i.week + 1, i.difficulty)
             }
             None => format!("Slot {n} - empty"),
@@ -179,9 +189,9 @@ pub fn slot_spec(mode: SlotMode, only_campaign: Option<&str>, entries: &[crate::
         ] {
             let label = match slot_info(n) {
                 Some(i) => {
-                    let other = only_campaign.is_some_and(|c| !c.eq_ignore_ascii_case(&i.campaign));
-                    let name = campaign_label(&i.campaign, entries);
-                    let note = if other { " - different campaign" } else { "" };
+                    let other = only_campaign.is_some_and(|c| !c.eq_ignore_ascii_case(&i.campaign) || i.content != active);
+                    let name = content_label(campaign_label(&i.campaign, entries), i.content);
+                    let note = if other { " - different campaign or content" } else { "" };
                     format!("{name_prefix} - {name}, week {}, {}{note}", i.week + 1, i.difficulty)
                 }
                 None => format!("{name_prefix} - empty"),
@@ -259,6 +269,7 @@ fn sync_slot_menu(
     game: Res<crate::game::Game>,
     current: Res<CurrentCampaign>,
     ui: Option<Res<eaw_ui::EawUiSettings>>,
+    content: Option<Res<crate::game::ContentChoice>>,
 ) {
     if !slots.is_changed() {
         return;
@@ -269,7 +280,7 @@ fn sync_slot_menu(
     if let Some(mode) = slots.0 {
         let only = state.as_ref().and(current.name.as_deref());
         let entries = game.0.as_ref().map(|g| crate::game::campaign_entries(&g.data)).unwrap_or_default();
-        let root = spawn_menu(&mut commands, &slot_spec(mode, only, &entries), SlotMenu);
+        let root = spawn_menu(&mut commands, &slot_spec(mode, only, &entries, content.map_or(crate::game::Content::Remake, |c| c.active)), SlotMenu);
         commands.entity(root).insert(GlobalZIndex(650));
         if let Some(cam) = ui.and_then(|u| u.camera) {
             commands.entity(root).insert(UiTargetCamera(cam));
@@ -291,6 +302,9 @@ fn handle_slot_chosen(
     mut battle_menu: ResMut<crate::menu::BattleMenu>,
     screen: Res<State<AppScreen>>,
     mut next: ResMut<NextState<AppScreen>>,
+    content: Option<Res<crate::game::ContentChoice>>,
+    args: Res<crate::cli::Args>,
+    mut exit: MessageWriter<AppExit>,
 ) {
     for SlotChosen(mode, n) in chosen.read() {
         let Some(path) = slot_path(*n) else {
@@ -312,9 +326,11 @@ fn handle_slot_chosen(
             }
             SlotMode::Load => {
                 let Ok(file) = SaveFile::read(&path) else { continue };
+                let saved = crate::game::Content::from_mod_arg(file.header.config.content.as_deref());
+                let active = content.as_ref().map_or(crate::game::Content::Remake, |c| c.active);
                 if state.is_some() {
                     // Inside a game only the same galaxy can be replaced.
-                    if current.name.as_deref().is_some_and(|c| c.eq_ignore_ascii_case(&file.header.campaign)) {
+                    if current.name.as_deref().is_some_and(|c| c.eq_ignore_ascii_case(&file.header.campaign)) && saved == active {
                         actions.write(PlayAction::Load(path));
                         slots.0 = None;
                         paused.0 = false;
@@ -324,6 +340,20 @@ fn handle_slot_chosen(
                         }
                     }
                 } else {
+                    if saved != active {
+                        // The save needs the other stack and the file system is fixed at start-up: start again on it, straight into the save.
+                        let available = content.as_ref().is_some_and(|c| saved == crate::game::Content::Remake || c.clone_wars_available);
+                        let extra = ["--campaign".to_owned(), file.header.campaign.clone(), "--load-from".to_owned(), path.display().to_string()];
+                        if !available {
+                            warn!("saves: {} needs {}, which is not installed", path.display(), saved.label());
+                        } else if args.offscreen.is_some() {
+                            warn!("saves: {} needs {}: restart skipped (offscreen run, use --mod)", path.display(), saved.label());
+                        } else if crate::game::restart_with(saved, &extra) {
+                            info!("saves: restarting on {} for {}", saved.label(), path.display());
+                            exit.write(AppExit::Success);
+                        }
+                        continue;
+                    }
                     commands.insert_resource(PendingLoad(path));
                     start.write(StartCampaign(file.header.campaign.clone()));
                     slots.0 = None;
@@ -379,7 +409,7 @@ mod tests {
 
     #[test]
     fn load_slot_spec_includes_autosaves() {
-        let spec = slot_spec(SlotMode::Load, None, &[]);
+        let spec = slot_spec(SlotMode::Load, None, &[], crate::game::Content::Remake);
         assert_eq!(spec.columns[0].items.len(), 5 + 3);
         assert!(spec.columns[0].items[5].label.starts_with("Autosave Pre-Battle"));
         assert!(spec.columns[0].items[6].label.starts_with("Autosave Post-Battle"));
@@ -388,7 +418,7 @@ mod tests {
 
     #[test]
     fn save_slot_spec_only_shows_manual_slots() {
-        let spec = slot_spec(SlotMode::Save, None, &[]);
+        let spec = slot_spec(SlotMode::Save, None, &[], crate::game::Content::Remake);
         assert_eq!(spec.columns[0].items.len(), 5);
     }
 }

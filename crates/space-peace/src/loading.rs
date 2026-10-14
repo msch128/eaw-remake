@@ -307,9 +307,9 @@ pub fn decode_art(fs: &GameFs, faction: Option<&str>, preferred: Option<&str>) -
     use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
     let seed = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.subsec_nanos() as usize);
     let prefix = match faction.map(str::to_ascii_lowercase).as_deref() {
-        Some("rebel") => Some("SPACE_REBEL"),
+        Some("rebel" | "republic") => Some("SPACE_REBEL"),
         Some("empire") => Some("SPACE_EMPIRE"),
-        Some("underworld") => Some("SPACE_UNDERWORLD"),
+        Some("underworld" | "cis") => Some("SPACE_UNDERWORLD"),
         _ => None,
     };
     let mut candidates: Vec<String> = Vec::new();

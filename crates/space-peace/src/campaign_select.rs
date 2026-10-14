@@ -9,7 +9,7 @@ use bevy::prelude::*;
 use galaxy_script::DifficultyTier;
 
 use crate::flow::{AppScreen, StartCampaign, UiSound};
-use crate::game::Game;
+use crate::game::{Content, ContentChoice, Game};
 use crate::menu::Campaigns;
 use crate::newgame::NewGameOptions;
 
@@ -101,6 +101,7 @@ enum Click {
     Advanced,
     Start,
     ClassicAi,
+    Content(Content),
 }
 
 /// The set-up screen.
@@ -190,14 +191,14 @@ fn side_label(game: &Game, key: &str) -> String {
     }
 }
 
-fn respawn(mut commands: Commands, roots: Query<Entity, With<SetupRoot>>, state: Res<SetupState>, options: Res<NewGameOptions>, game: Res<Game>) {
+fn respawn(mut commands: Commands, roots: Query<Entity, With<SetupRoot>>, state: Res<SetupState>, options: Res<NewGameOptions>, game: Res<Game>, content: Option<Res<ContentChoice>>) {
     for e in &roots {
         commands.entity(e).despawn();
     }
-    spawn_screen(&mut commands, &state, &options, &game);
+    spawn_screen(&mut commands, &state, &options, &game, content.as_deref().copied().unwrap_or_default());
 }
 
-fn spawn_screen(commands: &mut Commands, state: &SetupState, options: &NewGameOptions, game: &Game) {
+fn spawn_screen(commands: &mut Commands, state: &SetupState, options: &NewGameOptions, game: &Game, content: ContentChoice) {
     let row = state.rows.get(state.selected);
     let can_start = row.is_some_and(|r| state.side.is_some_and(|s| s < r.sides.len()));
     commands
@@ -215,6 +216,16 @@ fn spawn_screen(commands: &mut Commands, state: &SetupState, options: &NewGameOp
                 Node { position_type: PositionType::Absolute, left: Val::Px(0.0), right: Val::Px(0.0), top: Val::Percent(4.0), justify_content: JustifyContent::Center, ..default() },
                 children![tx("GALACTIC CONQUEST", 21.0, WHITE)],
             ));
+            // Content: Remake 4.0 or the Clone Wars submod (only offered when its folders exist; the choice restarts the game on that content).
+            if content.clone_wars_available {
+                f.spawn((Node { align_items: AlignItems::Center, column_gap: Val::Px(14.0), ..abs(4.4, 5.2, 50.0, 5.0) }, children![tx("CONTENT", 13.0, WHITE)]))
+                    .with_children(|row| {
+                        for c in [Content::Remake, Content::CloneWars] {
+                            let on = content.active == c;
+                            row.spawn((Button, Click::Content(c), children![tx(format!("{}{}", if on { "[x] " } else { "[ ] " }, c.label().to_uppercase()), 13.0, if on { WHITE } else { BLUE })]));
+                        }
+                    });
+            }
             // Campaign list.
             f.spawn((BackgroundColor(BOX), Node { flex_direction: FlexDirection::Column, padding: UiRect::all(Val::Px(3.0)), overflow: Overflow::clip_y(), ..abs(4.4, 12.1, 24.6, 59.9) }))
                 .with_children(|list| {
@@ -326,6 +337,9 @@ fn clicks(
     mut start: MessageWriter<StartCampaign>,
     mut next: ResMut<NextState<AppScreen>>,
     mut sound: MessageWriter<UiSound>,
+    args: Option<Res<crate::cli::Args>>,
+    content: Option<Res<ContentChoice>>,
+    mut exit: MessageWriter<AppExit>,
 ) {
     for (i, click) in &pressed {
         if *i != Interaction::Pressed {
@@ -350,6 +364,16 @@ fn clicks(
                 options.classic_ai = false;
             }
             Click::ClassicAi => options.classic_ai = !options.classic_ai,
+            Click::Content(c) => {
+                if content.as_ref().is_some_and(|k| k.active != c) {
+                    if args.as_ref().is_some_and(|a| a.offscreen.is_some()) {
+                        warn!("content: restart on {} skipped (offscreen run, use --mod)", c.label());
+                    } else if crate::game::restart_with(c, &["--screen".to_owned(), "campaigns".to_owned()]) {
+                        info!("content: restarting on {}", c.label());
+                        exit.write(AppExit::Success);
+                    }
+                }
+            }
             Click::Cancel => next.set(AppScreen::MainMenu),
             Click::Advanced => state.advanced = !state.advanced,
             Click::Start => {
