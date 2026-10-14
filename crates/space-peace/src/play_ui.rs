@@ -1849,7 +1849,7 @@ pub(crate) struct ResultRoot;
 #[derive(Component)]
 struct ResultReturn(Entity);
 
-/// The full-screen battle result of a played battle (EaW: planet name, "YOU HAVE WON THE BATTLE!", battle time, two columns of losses with unit
+/// The full-screen battle result of a played battle (EaW: planet name, "You have won the battle!", battle time, two columns of losses with unit
 /// icon, name and count, RETURN TO GALACTIC). Returns false when the interface assets are not ready yet.
 fn spawn_result_screen(world: &mut World, s: &crate::battle_play::BattleSummary) -> bool {
     let Some(screen) = s.screen.as_ref() else { return false };
@@ -1864,12 +1864,12 @@ fn spawn_result_screen(world: &mut World, s: &crate::battle_play::BattleSummary)
             .unwrap_or_else(|| object.replace('_', " "))
     };
     let headline = match screen.won {
-        Some(true) => "YOU HAVE WON THE BATTLE!",
-        Some(false) => "YOU HAVE LOST THE BATTLE!",
-        None => "THE BATTLE ENDED IN A DRAW.",
+        Some(true) => "You have won the battle!",
+        Some(false) => "You have lost the battle!",
+        None => "The battle ended in a draw.",
     };
     let secs = screen.seconds.max(0.0) as u32;
-    let time = format!("BATTLE TIME: {:02}:{:02}:{:02}", secs / 3600, secs / 60 % 60, secs % 60);
+    let time = format!("Battle Time: {:02}:{:02}:{:02}", secs / 3600, secs / 60 % 60, secs % 60);
     let mut rows: [Vec<(Option<Handle<Image>>, String, u32)>; 2] = [Vec::new(), Vec::new()];
     if let Some(mut textures) = world.remove_resource::<eaw_ui::textures::UiTextures>() {
         if let Some(mut images) = world.get_resource_mut::<Assets<Image>>() {
@@ -1885,7 +1885,6 @@ fn spawn_result_screen(world: &mut World, s: &crate::battle_play::BattleSummary)
     for r in &mut rows {
         r.sort_by(|a, b| b.2.cmp(&a.2).then_with(|| a.1.cmp(&b.1)));
     }
-    let gold = Color::srgb(1.0, 0.85, 0.35);
     let root = world
         .spawn((
             Name::new("Battle result"),
@@ -1896,22 +1895,42 @@ fn spawn_result_screen(world: &mut World, s: &crate::battle_play::BattleSummary)
                 top: Val::Px(0.0),
                 width: Val::Percent(100.0),
                 height: Val::Percent(100.0),
-                flex_direction: FlexDirection::Column,
                 align_items: AlignItems::Center,
-                padding: UiRect::all(Val::Px(30.0)),
-                row_gap: Val::Px(8.0),
+                justify_content: JustifyContent::Center,
                 ..default()
             },
-            BackgroundColor(Color::srgba(0.01, 0.03, 0.09, 0.97)),
+            BackgroundColor(Color::srgba(0.0, 0.01, 0.04, 0.55)),
             GlobalZIndex(600),
         ))
         .id();
     if let Some(c) = camera {
         world.entity_mut(root).insert(UiTargetCamera(c));
     }
-    world.spawn((text_bundle(&screen.planet, 44.0, Color::WHITE), ChildOf(root)));
-    world.spawn((text_bundle(headline, 30.0, gold), ChildOf(root)));
-    world.spawn((text_bundle(&time, 20.0, Color::srgb(0.8, 0.9, 1.0)), ChildOf(root)));
+    // Remake: a framed dark panel over the galaxy, title-case planet name, sentence-case headline, blue column headers.
+    let panel = world
+        .spawn((
+            Node {
+                width: Val::Percent(90.0),
+                height: Val::Percent(90.0),
+                flex_direction: FlexDirection::Column,
+                align_items: AlignItems::Center,
+                padding: UiRect::all(Val::Px(24.0)),
+                row_gap: Val::Px(6.0),
+                border: UiRect::all(Val::Px(3.0)),
+                ..default()
+            },
+            BackgroundColor(Color::srgba(0.03, 0.05, 0.1, 0.94)),
+            BorderColor::all(Color::srgb(0.72, 0.8, 0.95)),
+            ChildOf(root),
+        ))
+        .id();
+    let title: String = screen.planet.split(' ').map(|w| {
+        let mut c = w.chars();
+        c.next().map_or(String::new(), |f| f.to_uppercase().chain(c.flat_map(char::to_lowercase)).collect())
+    }).collect::<Vec<_>>().join(" ");
+    world.spawn((text_bundle(&title, 26.0, Color::WHITE), ChildOf(panel)));
+    world.spawn((text_bundle(headline, 18.0, Color::WHITE), ChildOf(panel)));
+    world.spawn((text_bundle(&time, 18.0, Color::WHITE), ChildOf(panel)));
 
     let columns = world
         .spawn((
@@ -1925,10 +1944,10 @@ fn spawn_result_screen(world: &mut World, s: &crate::battle_play::BattleSummary)
                 overflow: Overflow::clip(),
                 ..default()
             },
-            ChildOf(root),
+            ChildOf(panel),
         ))
         .id();
-    for (i, title) in ["YOUR LOSSES", "ENEMY LOSSES"].into_iter().enumerate() {
+    for (i, title) in ["Your losses:", "Enemy losses:"].into_iter().enumerate() {
         let col = world
             .spawn((
                 Node {
@@ -1939,18 +1958,19 @@ fn spawn_result_screen(world: &mut World, s: &crate::battle_play::BattleSummary)
                     min_height: Val::Px(0.0),
                     row_gap: Val::Px(4.0),
                     padding: UiRect::all(Val::Px(12.0)),
-                    border: UiRect::all(Val::Px(1.0)),
+                    border: UiRect::ZERO,
                     overflow: Overflow::clip(),
                     ..default()
                 },
-                BackgroundColor(Color::srgba(0.05, 0.1, 0.22, 0.8)),
+                BackgroundColor(Color::NONE),
                 BorderColor::all(Color::srgb(0.42, 0.58, 0.88)),
                 ChildOf(columns),
             ))
             .id();
-        world.spawn((text_bundle(title, 24.0, gold), Node { flex_shrink: 0.0, margin: UiRect::bottom(Val::Px(6.0)), ..default() }, ChildOf(col)));
+        world.spawn((text_bundle(title, 20.0, Color::srgb(0.42, 0.58, 0.95)), Node { flex_shrink: 0.0, margin: UiRect::bottom(Val::Px(6.0)), ..default() }, ChildOf(col)));
+        world.spawn((Node { height: Val::Px(1.0), width: Val::Percent(100.0), flex_shrink: 0.0, margin: UiRect::bottom(Val::Px(10.0)), ..default() }, BackgroundColor(Color::srgba(0.42, 0.58, 0.95, 0.5)), ChildOf(col)));
         if rows[i].is_empty() {
-            world.spawn((text_bundle("NONE", 18.0, Color::srgb(0.7, 0.8, 0.9)), ChildOf(col)));
+            world.spawn((text_bundle("None", 14.0, Color::srgb(0.7, 0.8, 0.9)), ChildOf(col)));
         }
         let scroll_box = world
             .spawn((
@@ -1980,7 +2000,9 @@ fn spawn_result_screen(world: &mut World, s: &crate::battle_play::BattleSummary)
                 }
             }
             world.spawn((text_bundle(&format!("{name}"), 16.0, Color::WHITE), Node { flex_grow: 1.0, ..default() }, ChildOf(row)));
-            world.spawn((text_bundle(&format!("x{n}"), 16.0, gold), ChildOf(row)));
+            if *n > 1 {
+                world.spawn((text_bundle(&format!("x{n}"), 16.0, Color::WHITE), ChildOf(row)));
+            }
         }
     }
     let button = world
@@ -1992,14 +2014,15 @@ fn spawn_result_screen(world: &mut World, s: &crate::battle_play::BattleSummary)
                 border: UiRect::all(Val::Px(2.0)),
                 margin: UiRect::vertical(Val::Px(12.0)),
                 flex_shrink: 0.0,
+                align_self: AlignSelf::FlexEnd,
                 ..default()
             },
             BackgroundColor(Color::srgb(0.01, 0.01, 0.03)),
             BorderColor::all(Color::srgb(0.42, 0.58, 0.88)),
-            ChildOf(root),
+            ChildOf(panel),
         ))
         .id();
-    world.spawn((text_bundle("RETURN TO GALACTIC", 22.0, Color::WHITE), ChildOf(button)));
+    world.spawn((text_bundle("Return to Galactic", 16.0, Color::WHITE), ChildOf(button)));
     info!("play: battle result screen shown: {} | {headline} | {time} | lost {} / {} unit types", screen.planet, screen.yours.len(), screen.enemy.len());
     true
 }
