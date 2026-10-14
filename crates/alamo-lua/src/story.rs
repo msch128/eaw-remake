@@ -410,7 +410,9 @@ impl StoryEngine {
                         || (!ev.prereqs.is_empty()
                             && !r.done[ei]
                             && (ev.name.to_ascii_lowercase().ends_with("_auto")
-                                || (!ev.rewards.is_empty() && ev.rewards.iter().all(|w| matches!(w.kind.as_str(), "RESET_BRANCH" | "REMOVE_STORY_GOAL")))))
+                                || (!ev.rewards.is_empty() && ev.rewards.iter().all(|w| matches!(w.kind.as_str(), "RESET_BRANCH" | "REMOVE_STORY_GOAL"))
+                                // Era locks of the Clone Wars plots (`Story_SandBox_Minors_*_WW_CW*.xml`): `LOCK_UNIT` at `Universal_Story_Start`, nothing triggers them by name (inferred).
+                                || (!ev.rewards.is_empty() && ev.rewards.iter().all(|w| w.kind == "LOCK_UNIT")))))
                 }
                 "STORY_WIN_BATTLES" | "STORY_LOSE_BATTLES" => {
                     let need: u32 = ev.params.first().and_then(|p| p.parse().ok()).unwrap_or(1);

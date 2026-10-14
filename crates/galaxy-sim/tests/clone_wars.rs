@@ -82,3 +82,23 @@ fn republic_and_cis_build_and_expand_in_twenty_weeks() {
         }
     }
 }
+
+#[test]
+fn a_story_lock_blocks_a_unit_the_data_does_not_lock_and_an_unlock_frees_it() {
+    let Some(data) = load() else { return };
+    let campaign = data.campaign("GC_Full_Web_Way_Republic").expect("campaign");
+    let mut sim = Sim::new(&data, campaign, SimConfig { victory_enabled: false, ..SimConfig::default() }).expect("sim");
+    let w = sim.world().clone();
+    let f = w.faction_id("Republic").unwrap();
+    let home = w.factions[f as usize].home.expect("home");
+    let u = w.unit_id("Retaliation").expect("unit");
+    assert!(!w.units[u as usize].locked, "the data does not lock it");
+    let before = w.check_build_unit(sim.galaxy(), f, home, u);
+    assert!(!matches!(&before, Err(CommandError::RequirementsNotMet(m)) if m == "locked"), "{before:?}");
+    sim.set_unlocked(f, "Retaliation", false);
+    let locked = w.check_build_unit(sim.galaxy(), f, home, u);
+    assert!(matches!(&locked, Err(CommandError::RequirementsNotMet(m)) if m == "locked"), "{locked:?}");
+    sim.set_unlocked(f, "Retaliation", true);
+    let after = w.check_build_unit(sim.galaxy(), f, home, u);
+    assert!(!matches!(&after, Err(CommandError::RequirementsNotMet(m)) if m == "locked"), "{after:?}");
+}

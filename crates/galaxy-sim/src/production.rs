@@ -191,7 +191,7 @@ impl World {
         if ut.tech > fs.tech {
             return Err(CommandError::RequirementsNotMet(format!("tech level {}", ut.tech)));
         }
-        if ut.locked && !fs.unlocked.contains(&ut.name.to_ascii_lowercase()) {
+        if fs.story_locked.contains(&ut.name.to_ascii_lowercase()) || (ut.locked && !fs.unlocked.contains(&ut.name.to_ascii_lowercase())) {
             return Err(CommandError::RequirementsNotMet("locked".into()));
         }
         if (!ut.req_planets.is_empty() && !ut.req_planets.contains(&planet)) || !self.planet_takes_starbase(planet, ut.req_starbase) {
@@ -267,7 +267,7 @@ impl World {
         if st.tech > fs.tech {
             return Err(CommandError::RequirementsNotMet(format!("tech level {}", st.tech)));
         }
-        if st.locked && !fs.unlocked.contains(&st.name.to_ascii_lowercase()) {
+        if fs.story_locked.contains(&st.name.to_ascii_lowercase()) || (st.locked && !fs.unlocked.contains(&st.name.to_ascii_lowercase())) {
             return Err(CommandError::RequirementsNotMet("locked".into()));
         }
         if (!st.req_planets.is_empty() && !st.req_planets.contains(&planet)) || !self.planet_takes_starbase(planet, st.req_starbase) {

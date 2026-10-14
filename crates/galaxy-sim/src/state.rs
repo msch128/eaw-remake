@@ -155,6 +155,9 @@ pub struct FactionState {
     pub tech: i32,
     /// Objects unlocked by research (lower-cased names).
     pub unlocked: BTreeSet<String>,
+    /// Objects a story plot locked (`LOCK_UNIT`, lower-cased names): unbuildable until a story unlocks them again, whatever the data says.
+    #[serde(default)]
+    pub story_locked: BTreeSet<String>,
     /// Units built over the whole game, for lifetime build limits.
     pub built_lifetime: BTreeMap<UnitTypeId, u32>,
     /// True once the faction has no planets and no fleets.

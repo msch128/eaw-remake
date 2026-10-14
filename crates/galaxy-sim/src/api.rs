@@ -133,9 +133,11 @@ impl Sim {
         if let Some(fs) = self.galaxy.factions.get_mut(faction as usize) {
             let key = object.trim().to_ascii_lowercase();
             if unlocked {
+                fs.story_locked.remove(&key);
                 fs.unlocked.insert(key);
             } else {
                 fs.unlocked.remove(&key);
+                fs.story_locked.insert(key);
             }
         }
     }
