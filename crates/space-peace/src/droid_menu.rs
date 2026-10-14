@@ -203,8 +203,8 @@ fn track_history(
                 _ => Color::srgb(0.6, 0.7, 0.9),
             };
 
-            let military = f_state.stats.ships_built.saturating_sub(f_state.stats.ships_lost)
-                + (f_state.population_used.max(0) as u32);
+            // Ships and squadrons in fleets (not population points: a capital ship counts for several of those).
+            let military: u32 = sim.current.galaxy.fleets.values().filter(|fl| fl.owner == f_id).map(|fl| fl.unit_count()).sum();
 
             records.push(FactionRecord {
                 id: f_id,
