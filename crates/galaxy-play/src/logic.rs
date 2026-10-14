@@ -416,7 +416,10 @@ pub fn update_ui_model(
                     .filter(|f| f.owner == fac)
                     .max_by_key(|f| f.unit_count())
                     .and_then(|f| flagship(world, f))
-                    .map_or_else(String::new, |u| world.units[u as usize].name.clone()),
+                    .map(|u| world.units[u as usize].name.clone())
+                    // A defender without a fleet is represented by the star base of the planet.
+                    .or_else(|| (b.defender == Some(fac)).then(|| g.planets[b.planet as usize].starbase).flatten().map(|sb| world.starbases[sb as usize].name.clone()))
+                    .unwrap_or_default(),
                 defender: b.defender == Some(fac),
                 mine: human == Some(fac),
             })
