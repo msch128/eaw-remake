@@ -134,6 +134,8 @@ struct SlotInfo {
     content: crate::game::Content,
     week: u64,
     difficulty: String,
+    /// Saved from a "From the Ground Up" start.
+    ground_up: bool,
 }
 
 fn slot_info(slot: u8) -> Option<SlotInfo> {
@@ -143,15 +145,15 @@ fn slot_info(slot: u8) -> Option<SlotInfo> {
     }
     let f = SaveFile::read(&path).ok()?;
     let difficulty = if f.header.config.remake_ai { f.header.config.difficulty.map_or("Normal", tier_name).to_owned() } else { "classic AI".to_owned() };
-    Some(SlotInfo { campaign: f.header.campaign.clone(), content: crate::game::Content::from_mod_arg(f.header.config.content.as_deref()), week: f.checkpoint.week, difficulty })
+    Some(SlotInfo { campaign: f.header.campaign.clone(), content: crate::game::Content::from_mod_arg(f.header.config.content.as_deref()), week: f.checkpoint.week, difficulty, ground_up: f.header.sim_config.ground_up })
 }
 
 /// Readable campaign name for a save: the campaign group and the faction played, e.g. `Mini Standard (Empire)`.
 /// Falls back to the raw campaign key when the campaign is not in the list.
-fn campaign_label(campaign: &str, entries: &[crate::game::CampaignEntry]) -> String {
+fn campaign_label(campaign: &str, ground_up: bool, entries: &[crate::game::CampaignEntry]) -> String {
     match entries.iter().find(|e| e.name.eq_ignore_ascii_case(campaign)) {
         Some(e) => {
-            let title = if e.group_title.is_empty() { e.title.as_str() } else { e.group_title.as_str() };
+            let title = if ground_up { "From the Ground Up" } else if e.group_title.is_empty() { e.title.as_str() } else { e.group_title.as_str() };
             format!("{title} ({})", e.faction)
         }
         None => campaign.to_owned(),
@@ -178,7 +180,7 @@ pub fn slot_spec(mode: SlotMode, only_campaign: Option<&str>, entries: &[crate::
         let label = match slot_info(n) {
             Some(i) => {
                 let other = mode == SlotMode::Load && only_campaign.is_some_and(|c| !c.eq_ignore_ascii_case(&i.campaign) || i.content != active);
-                let name = content_label(campaign_label(&i.campaign, entries), i.content);
+                let name = content_label(campaign_label(&i.campaign, i.ground_up, entries), i.content);
                 let note = if other { " - different campaign or content (load it from the main menu)" } else { "" };
                 slot_line(&format!("Slot {n}"), &name, &i, note)
             }
@@ -195,7 +197,7 @@ pub fn slot_spec(mode: SlotMode, only_campaign: Option<&str>, entries: &[crate::
             let label = match slot_info(n) {
                 Some(i) => {
                     let other = only_campaign.is_some_and(|c| !c.eq_ignore_ascii_case(&i.campaign) || i.content != active);
-                    let name = content_label(campaign_label(&i.campaign, entries), i.content);
+                    let name = content_label(campaign_label(&i.campaign, i.ground_up, entries), i.content);
                     let note = if other { " - different campaign or content" } else { "" };
                     slot_line(name_prefix, &name, &i, note)
                 }
@@ -393,8 +395,22 @@ mod tests {
     use super::*;
 
     #[test]
+    fn ground_up_save_is_labelled_as_such() {
+        let e = crate::game::CampaignEntry {
+            name: "GC_Full_Web_Way_Underworld".into(),
+            title: "Full".into(),
+            group: "full".into(),
+            group_title: "Full".into(),
+            faction: "Underworld".into(),
+            planets: 100,
+        };
+        assert_eq!(campaign_label("GC_Full_Web_Way_Underworld", false, std::slice::from_ref(&e)), "Full (Underworld)");
+        assert_eq!(campaign_label("GC_Full_Web_Way_Underworld", true, std::slice::from_ref(&e)), "From the Ground Up (Underworld)");
+    }
+
+    #[test]
     fn slot_line_shows_the_in_game_week() {
-        let i = SlotInfo { campaign: "X".into(), content: crate::game::Content::Remake, week: 1, difficulty: "Brutal".into() };
+        let i = SlotInfo { campaign: "X".into(), content: crate::game::Content::Remake, week: 1, difficulty: "Brutal".into(), ground_up: false };
         assert_eq!(slot_line("Slot 2", "Ground Up", &i, ""), "Slot 2 - Ground Up, week 1, Brutal");
     }
 
