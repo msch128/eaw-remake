@@ -89,13 +89,16 @@ pub struct SimConfig {
     pub capture_bonus_scale: f32,
     /// Estimate: seconds a faction's superweapons need to recharge after destroying a planet (the data has no galactic cooldown).
     pub superweapon_cooldown_seconds: f32,
-    /// Fleet slot rules (at most `FLEET_SLOTS` fleets per planet, arrivals merge, splits need a free slot) also bind the AI factions. Off by default: the Remake
-    /// task force AI builds its forces out of many single-ship fleets at one planet, which the cap would merge back together.
-    #[serde(default)]
+    /// Fleet slot rules (at most `FLEET_SLOTS` fleets per planet, arrivals merge, splits need a free slot) also bind the AI factions (the AI task forces work within it).
+    #[serde(default = "default_true")]
     pub fleet_slot_cap_ai: bool,
     /// Override the human player faction (e.g. for playing any faction in From the Ground Up).
     #[serde(default)]
     pub faction_override: Option<String>,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 /// Algorithm used to settle battles.
@@ -143,7 +146,7 @@ impl Default for SimConfig {
             cancel_refund: 1.0,
             capture_bonus_scale: 1.0,
             superweapon_cooldown_seconds: 120.0,
-            fleet_slot_cap_ai: false,
+            fleet_slot_cap_ai: true,
             faction_override: None,
         }
     }

@@ -908,6 +908,32 @@ impl TaskForces {
         // Forces whose fleet vanished.
         let mut ids: Vec<u64> = self.forces.keys().copied().collect();
         ids.sort_unstable();
+        // Fleets merged into another fleet (three fleets per planet) live on under the survivor's id.
+        for id in &ids {
+            let Some(t) = self.forces.get_mut(id) else { continue };
+            let follow = |f: FleetId| sim.fleet(f).map_or(f, |v| v.id);
+            if let Some(f) = t.fleet {
+                let n = follow(f);
+                if n != f {
+                    self.owned_fleets.remove(&f);
+                    self.owned_fleets.insert(n);
+                    t.fleet = Some(n);
+                }
+            }
+            let main = t.fleet;
+            let mut pieces = Vec::new();
+            for p in std::mem::take(&mut t.pieces) {
+                let n = follow(p);
+                if n != p {
+                    self.owned_fleets.remove(&p);
+                }
+                if Some(n) != main && !pieces.contains(&n) {
+                    self.owned_fleets.insert(n);
+                    pieces.push(n);
+                }
+            }
+            t.pieces = pieces;
+        }
         for id in ids {
             let (gone, plan, name) = {
                 let t = &self.forces[&id];
@@ -1168,13 +1194,34 @@ impl TaskForces {
             .find(|f| f.units.iter().any(|(u, c)| u.eq_ignore_ascii_case(unit) && *c > 0));
         let Some(src) = candidate else { return false };
         let exact = src.units.iter().find(|(u, _)| u.eq_ignore_ascii_case(unit)).map(|(u, _)| u.clone()).unwrap_or_else(|| unit.to_string());
+        // With the main fleet of the force right here the ship simply changes fleets: three fleets per planet leave no room for piece fleets.
+        let main_here = self.forces.get(&tf).and_then(|t| t.fleet).filter(|&m| m != src.id && sim.fleet(m).is_some_and(|f| f.at == Some(planet)));
+        if let Some(m) = main_here
+            && sim.transfer_unit(player, src.id, m, &exact).is_ok()
+        {
+            if let Some(t) = self.forces.get_mut(&tf) {
+                t.had_units = true;
+            }
+            return true;
+        }
         let whole = src.units.len() == 1 && src.units[0].1 == 1;
         let piece = if whole {
             src.id
         } else {
-            match sim.split_fleet(player, src.id, &[(exact, 1)]) {
+            match sim.split_fleet(player, src.id, &[(exact.clone(), 1)]) {
                 Ok(f) => f,
-                Err(_) => return false,
+                // Every slot of the planet is taken: unused fleets are interchangeable, so merge two of them to free a slot and try again.
+                Err(_) => {
+                    let free: Vec<FleetId> = sim.fleets_at(planet).into_iter().filter(|f| f.owner == player && !self.owned_fleets.contains(&f.id)).map(|f| f.id).collect();
+                    if free.len() < 2 || sim.merge_fleets(player, free[0], free[1]).is_err() {
+                        return false;
+                    }
+                    let src_now = sim.fleet(src.id).map_or(src.id, |v| v.id);
+                    match sim.split_fleet(player, src_now, &[(exact, 1)]) {
+                        Ok(f) => f,
+                        Err(_) => return false,
+                    }
+                }
             }
         };
         let Some(t) = self.forces.get_mut(&tf) else { return false };
@@ -1186,7 +1233,11 @@ impl TaskForces {
             t.pieces.push(piece);
         }
         if planet != stage {
-            let _ = sim.move_fleet(player, piece, stage);
+            let main = self.forces.get(&tf).and_then(|t| t.fleet).filter(|&m| m != piece);
+            let _ = match main {
+                Some(m) => sim.move_fleet_into(player, piece, stage, m),
+                None => sim.move_fleet(player, piece, stage),
+            };
         }
         true
     }
@@ -1220,7 +1271,7 @@ impl TaskForces {
                             continue;
                         }
                     } else if f.at.is_some() && f.heading_to.is_none() && f.at != Some(stage) {
-                        let _ = sim.move_fleet(player, p, stage);
+                        let _ = sim.move_fleet_into(player, p, stage, main);
                     }
                     left.push(p);
                 }

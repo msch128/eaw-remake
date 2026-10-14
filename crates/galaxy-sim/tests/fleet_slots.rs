@@ -257,10 +257,11 @@ fn battles_deploy_in_slot_order_and_only_a_pathfinder_fleet_holds_back_units() {
     assert_eq!((d, r), (vec![(vic, 1), (star.clone(), 1)], vec![(star, 1)]));
 }
 
-/// By default the rule binds the human only: the Remake task force AI builds its forces out of many fleets at one planet.
+/// The cap binds the AI by default; `fleet_slot_cap_ai: false` lifts it for the AI factions, the human always keeps it.
 #[test]
 fn ai_factions_are_not_capped_unless_configured_but_the_human_is() {
     let Some(data) = load() else { return };
+    assert!(SimConfig::default().fleet_slot_cap_ai, "the AI is capped by default");
     let mut s = setup_with(&data, false);
     let a = s.sim.spawn_units(s.empire, s.home, s.isd, 8);
     for _ in 0..4 {

@@ -137,7 +137,9 @@ impl AiSim for SimAdapter<'_> {
         self.sim.galaxy().fleets_at(pl).map(|f| self.view(f)).collect()
     }
     fn fleet(&self, id: u32) -> Option<FleetView> {
-        self.sim.galaxy().fleets.get(&id).map(|f| self.view(f))
+        // A fleet that was merged into another (the three-slot rule) is seen as the fleet it became, with that fleet's id.
+        let g = self.sim.galaxy();
+        g.successor(id).and_then(|s| g.fleets.get(&s)).map(|f| self.view(f))
     }
     fn fleets_of(&self, p: PlayerId) -> Vec<FleetView> {
         self.sim.galaxy().fleets.values().filter(|f| f.owner == p).map(|f| self.view(f)).collect()
@@ -214,9 +216,26 @@ impl AiSim for SimAdapter<'_> {
         Ok(0.0)
     }
     fn move_fleet(&mut self, p: PlayerId, fleet: u32, to: PlanetId) -> Result<(), Refused> {
+        let fleet = self.sim.galaxy().successor(fleet).unwrap_or(fleet);
         self.sim.apply(Command::MoveFleetAround { faction: p, fleet, to }).map(|_| ()).map_err(refuse)
     }
+    fn move_fleet_into(&mut self, p: PlayerId, fleet: u32, to: PlanetId, into: u32) -> Result<(), Refused> {
+        let g = self.sim.galaxy();
+        let (fleet, into) = (g.successor(fleet).unwrap_or(fleet), g.successor(into).unwrap_or(into));
+        let slot = g.fleets.get(&into).filter(|f| f.planet() == Some(to)).map(|f| f.slot).filter(|s| (1..=galaxy_sim::FLEET_SLOTS).contains(s));
+        match slot {
+            Some(slot) => self.sim.apply(Command::MoveFleetAroundToSlot { faction: p, fleet, to, slot }).map(|_| ()).map_err(refuse),
+            None => self.sim.apply(Command::MoveFleetAround { faction: p, fleet, to }).map(|_| ()).map_err(refuse),
+        }
+    }
+    fn transfer_unit(&mut self, p: PlayerId, from: u32, to: u32, unit: &str) -> Result<(), Refused> {
+        let &u = self.world.unit_index.get(&unit.to_ascii_lowercase()).ok_or(Refused::Invalid)?;
+        let g = self.sim.galaxy();
+        let (from, to) = (g.successor(from).unwrap_or(from), g.successor(to).unwrap_or(to));
+        self.sim.apply(Command::TransferUnits { faction: p, from, to: Some(to), units: vec![(u, 1)], hyperspace: false }).map(|_| ()).map_err(refuse)
+    }
     fn split_fleet(&mut self, p: PlayerId, fleet: u32, units: &[(String, u32)]) -> Result<u32, Refused> {
+        let fleet = self.sim.galaxy().successor(fleet).unwrap_or(fleet);
         let mut list = Vec::new();
         for (n, c) in units {
             let &u = self.world.unit_index.get(&n.to_ascii_lowercase()).ok_or(Refused::Invalid)?;
@@ -228,6 +247,8 @@ impl AiSim for SimAdapter<'_> {
         }
     }
     fn merge_fleets(&mut self, p: PlayerId, into: u32, from: u32) -> Result<(), Refused> {
+        let g = self.sim.galaxy();
+        let (into, from) = (g.successor(into).unwrap_or(into), g.successor(from).unwrap_or(from));
         self.sim.apply(Command::MergeFleets { faction: p, into, from }).map(|_| ()).map_err(refuse)
     }
     fn capture_planet(&mut self, p: PlayerId, pl: PlanetId) -> Result<(), Refused> {

@@ -247,6 +247,9 @@ pub struct Galaxy {
     /// Slot a moving fleet was ordered to take at its destination `(planet, slot)` (`Command::MoveFleetToSlot`): it merges into the fleet there on arrival.
     #[serde(default)]
     pub dest_slots: BTreeMap<FleetId, (PlanetId, u8)>,
+    /// Fleets that were merged into another fleet (absorbed id -> surviving id), so a host that tracks fleet ids (the AI task forces) can follow them. Newest 4096 kept.
+    #[serde(default)]
+    pub merged_into: BTreeMap<FleetId, FleetId>,
     /// A cheat command was used in this game.
     #[serde(default)]
     pub cheated: bool,
@@ -392,6 +395,17 @@ pub enum Command {
     /// Like [`Command::MoveFleet`], but names the fleet slot (`1..=FLEET_SLOTS`) the fleet takes at `to`: it merges into the fleet that holds the slot
     /// when it arrives (the pathfinder of the receiving fleet stays), else it takes the slot. Within the same planet the fleet changes slot at once.
     MoveFleetToSlot {
+        /// Issuing faction.
+        faction: FactionId,
+        /// Fleet.
+        fleet: FleetId,
+        /// Destination planet.
+        to: PlanetId,
+        /// Target slot at the destination.
+        slot: u8,
+    },
+    /// [`Command::MoveFleetToSlot`] along a route around blockades (like [`Command::MoveFleetAround`]; the AI's).
+    MoveFleetAroundToSlot {
         /// Issuing faction.
         faction: FactionId,
         /// Fleet.
@@ -634,6 +648,7 @@ impl Galaxy {
             escaping: Default::default(),
             hyperspace: Default::default(),
             dest_slots: Default::default(),
+            merged_into: Default::default(),
             cheated: false,
             ai_paused: false,
             next_ship_id: 1,
@@ -711,6 +726,18 @@ impl Galaxy {
         self.fleets.values().filter(move |f| f.location == FleetLocation::AtPlanet(planet))
     }
 
+    /// The fleet `id` became: itself, or the fleet it was merged into (followed through repeated merges); `None` if it is gone.
+    pub fn successor(&self, id: FleetId) -> Option<FleetId> {
+        let mut cur = id;
+        for _ in 0..16 {
+            if self.fleets.contains_key(&cur) {
+                return Some(cur);
+            }
+            cur = *self.merged_into.get(&cur)?;
+        }
+        None
+    }
+
     /// The fleet of `owner` that holds `slot` at `planet`.
     pub fn fleet_in_slot(&self, owner: FactionId, planet: PlanetId, slot: u8) -> Option<FleetId> {
         self.fleets.values().find(|f| f.owner == owner && f.slot == slot && f.location == FleetLocation::AtPlanet(planet)).map(|f| f.id)
@@ -732,6 +759,10 @@ impl Galaxy {
         }
         self.escaping.remove(&from);
         self.dest_slots.remove(&from);
+        self.merged_into.insert(from, into);
+        if self.merged_into.len() > 4096 {
+            self.merged_into.pop_first();
+        }
         self.ships.entry(into).or_default().extend(moved);
         let a = self.fleets.get_mut(&into).expect("target exists");
         for (u, c) in b.units {

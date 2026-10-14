@@ -81,9 +81,10 @@ Headless, deterministic, `Send` Galactic Conquest simulation. Rules: `RULES.md`.
 ## Fleet slots (QA 2026-10-09 U18/U14/U31)
 - `Fleet::slot` (`1..=FLEET_SLOTS`, serde default 0 = unassigned) is the stable slot of a fleet at the planet it orbits: the planet view's three boxes and the three circles in the galaxy view.
   `Galaxy::normalize_slots(&World)` (every tick after movement and before any fleet command) assigns slots and merges surplus fleets into slot 1; `Galaxy::settle_fleet` places an arriving fleet.
-- Rules (only for factions where `World::slot_limited` is true: the human, plus the AI with `SimConfig::fleet_slot_cap_ai`, off by default because the Remake task force AI builds forces out of many single-ship fleets and the cap merges them back, see `galaxy-script` `ai_match`):
+- Rules (bind every faction; `SimConfig::fleet_slot_cap_ai = false` lifts them for the AI, the human always keeps them, see `World::slot_limited`):
   arrival merges into the named slot (`Command::MoveFleetToSlot`, kept in `Galaxy::dest_slots`), else the lowest free slot, else slot 1; `SplitFleet`/`TransferUnits{to: None}` take the lowest free slot and are refused with `NoSlot` when all three are held;
   `TransferUnitsToSlot` drops units on a slot (merge into its fleet or a new fleet in exactly that slot); merging keeps the target's pathfinder, else takes the incoming one. `DebugGrantToSlot` is the debug/offscreen variant.
   The galaxy-play client-side `PendingFleetMerges` is gone; `PlayAction::MoveAndMerge` and the new `PlayAction::MoveToSlot` send `MoveFleetToSlot`.
 - Battle start: `battle_sides`/reserve follow the slot order 1, 2, 3; the pathfinder rule is per fleet (a fleet with a pathfinder deploys only that unit first, a fleet without deploys fully up to the cap).
 - Tests: `tests/fleet_slots.rs`.
+- AI: `Galaxy::merged_into`/`Galaxy::successor` let the AI follow merged fleet ids (the `galaxy-script` adapter resolves ids). The task forces (`galaxy-ai` `taskforce.rs`) move pieces into the main fleet's slot (`AiSim::move_fleet_into`), move ships between fleets instead of splitting when the main fleet is at the planet (`AiSim::transfer_unit`), and merge two unused fleets to free a slot before a split.

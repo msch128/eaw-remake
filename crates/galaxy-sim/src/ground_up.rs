@@ -50,6 +50,7 @@ impl Command {
             | MoveFleet { faction, .. }
             | MoveFleetAround { faction, .. }
             | MoveFleetToSlot { faction, .. }
+            | MoveFleetAroundToSlot { faction, .. }
             | TransferUnitsToSlot { faction, .. }
             | MergeFleets { faction, .. }
             | SplitFleet { faction, .. }

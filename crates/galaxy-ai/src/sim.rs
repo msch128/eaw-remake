@@ -167,6 +167,14 @@ pub trait AiSim {
     fn queue_tech(&mut self, p: PlayerId, pl: PlanetId) -> Result<f64, Refused>;
     /// Orders a fleet to a planet.
     fn move_fleet(&mut self, p: PlayerId, fleet: FleetId, to: PlanetId) -> Result<(), Refused>;
+    /// Orders a fleet to a planet and into the fleet slot that `into` (a fleet at that planet) holds, so it merges into `into` on arrival.
+    fn move_fleet_into(&mut self, p: PlayerId, fleet: FleetId, to: PlanetId, _into: FleetId) -> Result<(), Refused> {
+        self.move_fleet(p, fleet, to)
+    }
+    /// Moves one ship of type `unit` from fleet `from` into fleet `to` (same planet, same owner); no new fleet is needed.
+    fn transfer_unit(&mut self, _p: PlayerId, _from: FleetId, _to: FleetId, _unit: &str) -> Result<(), Refused> {
+        Err(Refused::Invalid)
+    }
     /// Splits units off a fleet; returns the new fleet.
     fn split_fleet(&mut self, p: PlayerId, fleet: FleetId, units: &[(String, u32)]) -> Result<FleetId, Refused>;
     /// Merges `from` into `into` (same planet, same owner).

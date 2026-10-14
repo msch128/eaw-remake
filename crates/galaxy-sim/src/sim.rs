@@ -98,7 +98,7 @@ impl Sim {
         if world.passive_faction().is_some_and(|p| cmd.faction() == Some(p)) {
             return Err(CommandError::NotAvailable);
         }
-        let around = matches!(cmd, Command::MoveFleetAround { .. });
+        let around = matches!(cmd, Command::MoveFleetAround { .. } | Command::MoveFleetAroundToSlot { .. });
         // The slot variants are the plain commands plus a named slot.
         let (mut dest_slot, mut new_slot) = (None, None);
         let cmd = match cmd {
@@ -108,6 +108,13 @@ impl Sim {
                 }
                 dest_slot = Some(slot);
                 Command::MoveFleet { faction, fleet, to }
+            }
+            Command::MoveFleetAroundToSlot { faction, fleet, to, slot } => {
+                if !(1..=FLEET_SLOTS).contains(&slot) {
+                    return Err(CommandError::Invalid);
+                }
+                dest_slot = Some(slot);
+                Command::MoveFleetAround { faction, fleet, to }
             }
             Command::TransferUnitsToSlot { faction, from, slot, units, hyperspace } => {
                 if !(1..=FLEET_SLOTS).contains(&slot) {
@@ -214,7 +221,7 @@ impl Sim {
                 Ok(CommandOk::NewFleet(id))
             }
             Command::Cheat { faction, cheat } => crate::cheats::apply(&world, g, faction, cheat),
-            Command::MoveFleetToSlot { .. } | Command::TransferUnitsToSlot { .. } => unreachable!("rewritten to the plain commands above"),
+            Command::MoveFleetToSlot { .. } | Command::MoveFleetAroundToSlot { .. } | Command::TransferUnitsToSlot { .. } => unreachable!("rewritten to the plain commands above"),
             Command::SellStructure { faction, planet, structure } => {
                 let ps = g.planets.get_mut(planet as usize).ok_or(CommandError::Invalid)?;
                 if ps.owner != Some(faction) {
