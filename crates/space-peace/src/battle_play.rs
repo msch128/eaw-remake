@@ -421,41 +421,7 @@ fn finish_battle_view(
         let yours = side_losses(mine);
         let enemy_losses = side_losses(enemy);
 
-        // U97: Detailed MVP and combat performance metrics
-        let mut squadrons_downed = 0u32;
-        let mut enemy_ships_destroyed = 0u32;
-        for (name, count) in &enemy_losses {
-            let nl = name.to_ascii_lowercase();
-            if nl.contains("squadron") || nl.contains("fighter") || nl.contains("bomber") {
-                squadrons_downed += count;
-            } else {
-                enemy_ships_destroyed += count;
-            }
-        }
-        let hardpoints_destroyed = enemy_ships_destroyed * 6 + squadrons_downed;
-        let total_damage = (enemy_ships_destroyed as f32 * 28000.0) + (squadrons_downed as f32 * 1200.0);
-        let shield_damage = total_damage * 0.45;
-        let hull_damage = total_damage * 0.55;
-
-        let player_side = mine.and_then(|idx| pending.0.sides.get(idx));
-        let player_groups = player_side.map(|s| s.groups.as_slice()).unwrap_or(&[]);
-        let top_ship = player_groups.iter().max_by_key(|g| g.count).map(|g| g.name.clone());
-        let metrics = top_ship.map(|ship_name| {
-            let kills = (enemy_ships_destroyed / 2).max(1);
-            let dmg = (total_damage * 0.65).max(1500.0);
-            BattleMetrics {
-                mvp_name: ship_name,
-                mvp_title: if won == Some(true) { "Fleet Flagship".into() } else { "Valiant Defender".into() },
-                mvp_kills: kills,
-                mvp_damage: dmg,
-                hardpoints_destroyed,
-                squadrons_downed,
-                shield_damage_dealt: shield_damage,
-                hull_damage_dealt: hull_damage,
-            }
-        });
-
-        let screen = Some(ResultScreen { planet: planet.to_uppercase(), won, seconds: f.result.duration, yours, enemy: enemy_losses, metrics });
+        let screen = Some(ResultScreen { planet: planet.to_uppercase(), won, seconds: f.result.duration, yours, enemy: enemy_losses });
         commands.insert_resource(BattleSummary { title, text: format!("{}\nBattle time: {:.0} s", lines.join("\n"), f.result.duration), screen });
         let outcome = f.result.winner.map_or(BattleOutcome::Draw, BattleOutcome::Victory);
         actions.write(PlayAction::ApplyTactical { id: f.battle_id, result: Box::new(f.result.clone()) });
@@ -485,27 +451,6 @@ pub struct BattleSummary {
     pub screen: Option<ResultScreen>,
 }
 
-/// Detailed combat end-of-battle performance metrics (U97).
-#[derive(Debug, Clone, Default)]
-pub struct BattleMetrics {
-    /// MVP ship name (e.g. "Imperial I-class Star Destroyer")
-    pub mvp_name: String,
-    /// MVP ship role / title (e.g. "Fleet Flagship" or "Apex Hunter")
-    pub mvp_title: String,
-    /// MVP kills / hardpoint kills
-    pub mvp_kills: u32,
-    /// MVP total damage dealt
-    pub mvp_damage: f32,
-    /// Hardpoints destroyed by the player fleet
-    pub hardpoints_destroyed: u32,
-    /// Fighter/bomber squadrons downed
-    pub squadrons_downed: u32,
-    /// Total shield damage inflicted
-    pub shield_damage_dealt: f32,
-    /// Total hull damage inflicted
-    pub hull_damage_dealt: f32,
-}
-
 /// Content of the full-screen battle result (EaW: planet, "YOU HAVE WON THE BATTLE!", battle time, your and the enemy's losses).
 pub struct ResultScreen {
     /// Upper-case planet name.
@@ -518,8 +463,6 @@ pub struct ResultScreen {
     pub yours: Vec<(String, u32)>,
     /// Ships the enemy lost.
     pub enemy: Vec<(String, u32)>,
-    /// U97: Detailed MVP & Kill statistics.
-    pub metrics: Option<BattleMetrics>,
 }
 
 #[derive(Component)]

@@ -1889,52 +1889,6 @@ fn spawn_result_screen(world: &mut World, s: &crate::battle_play::BattleSummary)
     world.spawn((text_bundle(headline, 30.0, gold), ChildOf(root)));
     world.spawn((text_bundle(&time, 20.0, Color::srgb(0.8, 0.9, 1.0)), ChildOf(root)));
 
-    // U97: MVP unit banner and combat statistics
-    if let Some(m) = &screen.metrics {
-        let mvp_box = world
-            .spawn((
-                Node {
-                    flex_direction: FlexDirection::Row,
-                    align_items: AlignItems::Center,
-                    column_gap: Val::Px(16.0),
-                    padding: UiRect::axes(Val::Px(24.0), Val::Px(8.0)),
-                    border: UiRect::all(Val::Px(1.5)),
-                    margin: UiRect::vertical(Val::Px(4.0)),
-                    ..default()
-                },
-                BackgroundColor(Color::srgba(0.08, 0.16, 0.35, 0.9)),
-                BorderColor::all(gold),
-                ChildOf(root),
-            ))
-            .id();
-        world.spawn((text_bundle(&format!("★ MVP: {} ★", display(&m.mvp_name)), 20.0, gold), ChildOf(mvp_box)));
-        world.spawn((text_bundle(&format!("{} | Kills: {} | Damage: {:.0}", m.mvp_title, m.mvp_kills, m.mvp_damage), 15.0, Color::srgb(0.85, 0.92, 1.0)), ChildOf(mvp_box)));
-
-        let stats_row = world
-            .spawn((
-                Node {
-                    flex_direction: FlexDirection::Row,
-                    column_gap: Val::Px(32.0),
-                    padding: UiRect::axes(Val::Px(16.0), Val::Px(2.0)),
-                    margin: UiRect::bottom(Val::Px(6.0)),
-                    ..default()
-                },
-                ChildOf(root),
-            ))
-            .id();
-        let stat_items = [
-            ("HARDPOINTS DESTROYED", format!("{}", m.hardpoints_destroyed)),
-            ("SQUADRONS DOWNED", format!("{}", m.squadrons_downed)),
-            ("SHIELD DAMAGE", format!("{:.0}", m.shield_damage_dealt)),
-            ("HULL DAMAGE", format!("{:.0}", m.hull_damage_dealt)),
-        ];
-        for (lbl, val) in stat_items {
-            let item = world.spawn((Node { flex_direction: FlexDirection::Column, align_items: AlignItems::Center, ..default() }, ChildOf(stats_row))).id();
-            world.spawn((text_bundle(&val, 16.0, Color::WHITE), ChildOf(item)));
-            world.spawn((text_bundle(lbl, 12.0, Color::srgb(0.65, 0.75, 0.9)), ChildOf(item)));
-        }
-    }
-
     let columns = world
         .spawn((
             Node {

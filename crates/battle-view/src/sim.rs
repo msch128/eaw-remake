@@ -357,12 +357,36 @@ impl Drop for SimHandle {
 
 
 
-/// The ships every side lost, by definition: everything that is dead and did not retreat.
+/// The units every side lost, by definition: a squadron counts once when all of its fighters are dead and none retreated (not once per
+/// fighter); ships without a squadron count one by one.
 fn lost_ships(battle: &Battle) -> Vec<Vec<(battle_sim::ShipId, u32)>> {
-    let mut out: Vec<std::collections::BTreeMap<battle_sim::ShipId, u32>> = vec![Default::default(); battle.side_count()];
-    for s in battle.ships.iter().filter(|s| !s.alive && !s.retreated) {
-        if let Some(m) = out.get_mut(s.side as usize) {
-            *m.entry(s.def).or_default() += 1;
+    lost_units(battle.side_count(), battle.ships.iter().map(|s| (s.side, s.def, s.squad, s.alive, s.retreated)))
+}
+
+/// `ships` is `(side, definition, squad, alive, retreated)` per ship.
+fn lost_units(
+    sides: usize,
+    ships: impl Iterator<Item = (u8, battle_sim::ShipId, u32, bool, bool)>,
+) -> Vec<Vec<(battle_sim::ShipId, u32)>> {
+    let mut out: Vec<std::collections::BTreeMap<battle_sim::ShipId, u32>> = vec![Default::default(); sides];
+    // squad -> (side, definition of the first member, any member alive or retreated)
+    let mut squads: std::collections::BTreeMap<u32, (u8, battle_sim::ShipId, bool)> = Default::default();
+    for (side, def, squad, alive, retreated) in ships {
+        if squad == battle_sim::NONE {
+            if !alive && !retreated {
+                if let Some(m) = out.get_mut(side as usize) {
+                    *m.entry(def).or_default() += 1;
+                }
+            }
+            continue;
+        }
+        squads.entry(squad).or_insert((side, def, false)).2 |= alive || retreated;
+    }
+    for (side, def, present) in squads.into_values() {
+        if !present {
+            if let Some(m) = out.get_mut(side as usize) {
+                *m.entry(def).or_default() += 1;
+            }
         }
     }
     out.into_iter().map(|m| m.into_iter().collect()).collect()
@@ -371,6 +395,17 @@ fn lost_ships(battle: &Battle) -> Vec<Vec<(battle_sim::ShipId, u32)>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn squadron_counts_once_and_station_counts() {
+        let none = battle_sim::NONE;
+        // side 0: squad 7 of 4 fighters (def 5) all dead, squad 8 of 2 with one alive; side 1: a dead station (def 9) and a retreated ship
+        let mut ships: Vec<(u8, u32, u32, bool, bool)> = (0..4).map(|_| (0, 5, 7, false, false)).collect();
+        ships.extend([(0, 5, 8, false, false), (0, 5, 8, true, false), (1, 9, none, false, false), (1, 3, none, false, true)]);
+        let lost = lost_units(2, ships.into_iter());
+        assert_eq!(lost[0], vec![(5, 1)]);
+        assert_eq!(lost[1], vec![(9, 1)]);
+    }
 
     #[test]
     fn fetch_after_done_returns_terminal_snapshot_without_blocking() {
