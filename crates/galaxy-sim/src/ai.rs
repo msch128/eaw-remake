@@ -13,6 +13,8 @@ use crate::world::*;
 const RESERVE: f64 = 1500.0;
 /// Attack only if own strength exceeds the defense estimate by this factor.
 const ATTACK_RATIO: f32 = 1.5;
+/// The AI saves at most this many weeks of income for a ship (estimate).
+const SAVING_WEEKS: f64 = 4.0;
 
 /// Computes the commands `faction` wants to issue right now.
 pub fn plan(world: &World, galaxy: &Galaxy, faction: FactionId, rng: &mut Rng) -> Vec<Command> {
@@ -30,12 +32,16 @@ fn plan_economy(world: &World, galaxy: &Galaxy, faction: FactionId, rng: &mut Rn
     let mut budget = fs.credits - RESERVE;
     let owned: Vec<PlanetId> = galaxy.owned_planets(faction).collect();
 
+    // A faction that cannot build a single ship anywhere saves for the cheapest shipyard it could build next instead of spending its credits on cheaper
+    // things: shipyards are expensive in the data, and an AI that never saves for one never fields a ship.
+    let saving = shipyard_goal(world, galaxy, faction, &owned);
+
     // Tech: buy the next level at the best developed planet.
     if let Some(&p) = owned.iter().max_by_key(|&&p| (world.starbase_level(galaxy, p), std::cmp::Reverse(p)))
         && let Ok(idx) = world.check_upgrade_tech(galaxy, faction, p)
     {
         let cost = world.factions[faction as usize].tech_upgrades[idx].cost as f64;
-        if cost <= budget {
+        if cost <= budget && saving.is_none_or(|(goal, _)| budget - cost >= goal) {
             budget -= cost;
             cmds.push(Command::UpgradeTech { faction, planet: p });
         }
@@ -61,7 +67,7 @@ fn plan_economy(world: &World, galaxy: &Galaxy, faction: FactionId, rng: &mut Rn
                 || (value >= 100.0 && sb.level <= 4)
                 || world.factions[faction as usize].home == Some(p)
                 || rich;
-            if wanted && (sb.cost as f64) <= budget {
+            if wanted && (sb.cost as f64) <= budget && saving.is_none_or(|(goal, level)| sb.level <= level || budget - (sb.cost as f64) >= goal) {
                 budget -= sb.cost as f64;
                 cmds.push(Command::UpgradeStarbase { faction, planet: p });
             }
@@ -77,6 +83,9 @@ fn plan_economy(world: &World, galaxy: &Galaxy, faction: FactionId, rng: &mut Rn
             for &s in &world.buildable_structures[faction as usize] {
                 let st = &world.structures[s as usize];
                 if (st.cost as f64) > budget || world.check_build_structure(galaxy, faction, p, s).is_err() {
+                    continue;
+                }
+                if saving.is_some_and(|(goal, _)| !needed_for_ships(world, galaxy, faction, s) && budget - (st.cost as f64) < goal) {
                     continue;
                 }
                 let unlocks = world.structure_unlocks[s as usize] as f32;
@@ -97,25 +106,27 @@ fn plan_economy(world: &World, galaxy: &Galaxy, faction: FactionId, rng: &mut Rn
         }
 
         // Units.
+        let crowded = fs.population_used * 2 >= fs.population_cap;
         // A rich faction keeps several ships in the queue.
         let allowed = 1 + (budget.max(0.0) / 40_000.0) as usize;
         if ps.queues[Lane::Units as usize].len() < allowed.min(world.config.max_queue_len) && budget > 0.0 {
             let mut best: Option<(f32, UnitTypeId)> = None;
             for &u in &world.buildable_units[faction as usize] {
                 let ut = &world.units[u as usize];
-                if !matches!(ut.role, UnitRole::Ship) || ut.cost <= 0.0 || (ut.cost as f64) > budget {
+                if !matches!(ut.role, UnitRole::Ship) || ut.cost <= 0.0 || f64::from(ut.cost) > budget.max(0.0) + if crowded { SAVING_WEEKS * fs.income_per_week.max(0.0) } else { 0.0 } {
                     continue;
                 }
-                if world.check_build_unit(galaxy, faction, p, u).is_err() {
+                if !matches!(world.check_build_unit(galaxy, faction, p, u), Ok(()) | Err(CommandError::InsufficientCredits)) {
                     continue;
                 }
                 let eff = ut.combat.durability() * ut.combat.raw_dps();
-                let score = eff.sqrt() / ut.cost * (0.8 + 0.4 * rng.unit());
+                // Once the population cap is half used, strong ships come first: cheap squadrons are the best per credit but fill the cap and cannot take a defended planet; the AI saves for the best ship it can build.
+                let score = if crowded { eff.sqrt() / ut.cost.sqrt() } else { eff.sqrt() / ut.cost } * (0.8 + 0.4 * rng.unit());
                 if best.is_none_or(|(b, _)| score > b) {
                     best = Some((score, u));
                 }
             }
-            if let Some((_, u)) = best {
+            if let Some((_, u)) = best.filter(|&(_, u)| f64::from(world.units[u as usize].cost) <= budget) {
                 budget -= world.units[u as usize].cost as f64;
                 cmds.push(Command::BuildUnit { faction, planet: p, unit: u });
             }
@@ -247,4 +258,61 @@ fn plan_military(world: &World, galaxy: &Galaxy, faction: FactionId, rng: &mut R
             cmds.push(Command::MoveFleetAround { faction, fleet: main.id, to: t });
         }
     }
+}
+
+/// When the faction cannot build any shipyard-built ship (a ship that lists `Required_Special_Structures`, i.e. more than a fighter squadron) at any owned planet now: the credits it needs to change that on the cheapest planet (the next shipyard, a structure
+/// some ship lists in `Required_Special_Structures`, plus the star base upgrades up to its `Required_Star_Base_Level`) and the star base level that path needs.
+/// `None` if it can build a ship, or no shipyard is within reach.
+fn shipyard_goal(world: &World, galaxy: &Galaxy, faction: FactionId, owned: &[PlanetId]) -> Option<(f64, i32)> {
+    let credit_only = |r: Result<(), CommandError>| matches!(r, Ok(()) | Err(CommandError::InsufficientCredits));
+    let can_ship = owned.iter().any(|&p| {
+        world.buildable_units[faction as usize]
+            .iter()
+            .any(|&u| matches!(world.units[u as usize].role, UnitRole::Ship) && !world.units[u as usize].req_structures.is_empty() && credit_only(world.check_build_unit(galaxy, faction, p, u)))
+    });
+    if can_ship {
+        return None;
+    }
+    let tech = galaxy.factions[faction as usize].tech;
+    let mut best: Option<(f64, i32)> = None;
+    for &p in owned {
+        let ps = &galaxy.planets[p as usize];
+        for &s in &world.buildable_structures[faction as usize] {
+            let st = &world.structures[s as usize];
+            if !needed_for_ships(world, galaxy, faction, s)
+                || st.tech > tech
+                || (!st.req_planets.is_empty() && !st.req_planets.contains(&p))
+                || !world.planet_takes_starbase(p, st.req_starbase)
+                || world.missing_structures(ps, &st.req_structures).is_some()
+            {
+                continue;
+            }
+            // Star base upgrades on the way (a planet whose chain ends below the requirement is skipped).
+            let (mut cost, mut level) = (f64::from(st.cost), world.starbase_level(galaxy, p));
+            let mut cur = ps.starbase;
+            while level < st.req_starbase {
+                let next = match cur {
+                    None => world.first_starbase[faction as usize],
+                    Some(c) => world.starbases[c as usize].next,
+                };
+                let Some(n) = next else { break };
+                cost += f64::from(world.starbases[n as usize].cost);
+                level = world.starbases[n as usize].level;
+                cur = Some(n);
+            }
+            if level >= st.req_starbase && best.is_none_or(|(c, _)| cost < c) {
+                best = Some((cost, st.req_starbase));
+            }
+        }
+    }
+    best
+}
+
+/// True if a ship the faction can field at its tech lists `s` in its `Required_Special_Structures`.
+fn needed_for_ships(world: &World, galaxy: &Galaxy, faction: FactionId, s: StructureTypeId) -> bool {
+    let tech = galaxy.factions[faction as usize].tech;
+    world.buildable_units[faction as usize].iter().any(|&u| {
+        let ut = &world.units[u as usize];
+        matches!(ut.role, UnitRole::Ship) && ut.tech <= tech && ut.req_structures.iter().any(|g| g.contains(&s))
+    })
 }

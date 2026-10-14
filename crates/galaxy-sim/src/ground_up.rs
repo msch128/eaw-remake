@@ -11,6 +11,8 @@ use crate::world::{FactionId, PlanetId, StarbaseTypeId, UnitTypeId, World};
 
 /// Fallback main factions for a campaign that names no AI plots.
 const DEFAULT_MAIN_FACTIONS: [&str; 3] = ["Rebel", "Empire", "Underworld"];
+/// `Tech_Level` from which an object is story-only (never in a build menu, spawned by scripts or the campaign): the tech rule does not apply to it.
+pub(crate) const STORY_TECH: i32 = 90;
 /// The passive owner of everything else.
 const PASSIVE_FACTION: &str = "Pirates";
 
@@ -133,11 +135,22 @@ impl Sim {
             for id in gone {
                 self.galaxy.fleets.remove(&id);
             }
-            // Star base level 1 on every start planet.
+            // Start planets keep the campaign's star base level (clamped to what the planet takes, `Max_Space_Base`); a planet without one gets level 1.
             if let Some(first) = world.first_starbase[f as usize] {
                 for &p in &kept {
-                    self.galaxy.planets[p as usize].starbase = Some(first);
+                    let cap = world.max_starbase_level(p);
+                    let ps = &mut self.galaxy.planets[p as usize];
+                    let mut sb = ps.starbase.unwrap_or(first);
+                    while world.starbases[sb as usize].level > cap {
+                        let Some(prev) = world.starbase_chain(f).into_iter().rev().find(|&c| world.starbases[c as usize].level < world.starbases[sb as usize].level) else { break };
+                        sb = prev;
+                    }
+                    ps.starbase = Some(sb);
                 }
+            }
+            // Space and ground structures the build rules refuse in this state (tech, star base level, planet, special structures) are dropped; RULES.md lists them.
+            for &p in &kept {
+                self.drop_invalid_structures(f, p);
             }
         }
         // Everything nobody owns goes to the passive faction too.
@@ -159,6 +172,30 @@ impl Sim {
             f.stats.planets_lost = lost;
         }
         world.refresh_economy(&mut self.galaxy);
+    }
+}
+
+impl Sim {
+    /// Removes every structure on `planet` whose build requirements (the ones `check_build_structure` applies: tech, star base level, special structures,
+    /// planet) are not met at the planet's current state, until stable (dependants of a removed structure go too). Returns the removed types.
+    pub(crate) fn drop_invalid_structures(&mut self, faction: FactionId, planet: PlanetId) -> Vec<crate::world::StructureTypeId> {
+        let world = self.world.clone();
+        let tech = self.galaxy.factions[faction as usize].tech;
+        let level = world.starbase_level(&self.galaxy, planet);
+        let mut removed = Vec::new();
+        loop {
+            let ps = &self.galaxy.planets[planet as usize];
+            let bad = ps.structures.iter().position(|&s| {
+                let st = &world.structures[s as usize];
+                (st.tech > tech && st.tech < STORY_TECH)
+                    || st.req_starbase > level
+                    || (!st.req_planets.is_empty() && !st.req_planets.contains(&planet))
+                    || world.missing_structures(ps, &st.req_structures).is_some()
+            });
+            let Some(i) = bad else { break };
+            removed.push(self.galaxy.planets[planet as usize].structures.remove(i));
+        }
+        removed
     }
 }
 

@@ -50,7 +50,7 @@ fn owner_counts_follow_the_ground_up_rules() {
     let w = s.world();
     let rebel = w.faction_id("Rebel").unwrap();
     for p in s.galaxy().owned_planets(rebel) {
-        assert_eq!(w.starbase_level(s.galaxy(), p), 1);
+        assert!(w.starbase_level(s.galaxy(), p) >= 1);
     }
     // Deterministic.
     assert_eq!(s.galaxy().state_hash(), sim(&data, true).galaxy().state_hash());
@@ -341,7 +341,7 @@ fn start_conditions_per_main_faction() {
                     assert!(planets.contains(&home), "{camp}: {name} keeps its home {}", w.planets[home as usize].name);
                 }
                 for &p in &planets {
-                    assert_eq!(w.starbase_level(g, p), 1, "{camp}: {name} star base level on {}", w.planets[p as usize].name);
+                    assert!(w.starbase_level(g, p) >= 1, "{camp}: {name} star base level on {}", w.planets[p as usize].name);
                 }
                 // Fleets stay only on kept planets.
                 let ships: u32 = g.fleets.values().filter(|fl| fl.owner == f).map(|fl| fl.unit_count()).sum();
@@ -430,7 +430,7 @@ fn advance_weeks(s: &mut Sim, weeks: u32) {
 }
 
 /// Income per week below which a start does not carry an expansion (estimate for "too poor to outgrow the pirates' tech-scaled defence within 90 weeks":
-/// the Underworld's three planets earn 185, every other start earns 1200 or more; a home with negative income cannot build at all).
+/// the Underworld's one-planet start earns 204 and takes none in 90 weeks (measured); its three-planet start earns 508 and does expand; every other start earns 497 or more and expands; a home with negative income cannot build at all).
 const POOR_INCOME: f64 = 300.0;
 
 fn assert_all_ai_build_and_expand(stack: &str, campaign: &str) {
@@ -523,4 +523,75 @@ fn the_sim_config_keeps_ground_up_in_saves() {
     let mut v = serde_json::to_value(SimConfig::default()).unwrap();
     v.as_object_mut().unwrap().remove("ground_up");
     assert!(!serde_json::from_value::<SimConfig>(v).unwrap().ground_up);
+}
+/// Every start structure of every main faction passes the build rules (requirements only: tech, star base level, special structures, planet), and the start
+/// income is not negative, or selling start structures (the player's `SellStructure` command, worst upkeep first) brings it to 0 or more. Run over every
+/// galactic campaign of the base Remake and the Clone Wars stack (whose data lowers some star base requirements).
+#[test]
+fn ground_up_starts_are_valid_and_not_bankrupt() {
+    let mut negative = Vec::new();
+    let mut unfixable = Vec::new();
+    for stack in ["base", "fft"] {
+        let Some(data) = load_stack(stack) else { continue };
+        let names: Vec<String> = data.campaigns.iter().filter(|c| c.has_galaxy()).map(|c| c.name.clone()).collect();
+        for camp in names {
+            let mut s = ground_up_sim(&data, &camp, true);
+            let normal = ground_up_sim(&data, &camp, false);
+            for &f in &s.world().main_factions {
+                for p in owned(&s, f) {
+                    let (now, before) = (&s.galaxy().planets[p as usize].structures, &normal.galaxy().planets[p as usize].structures);
+                    let mut gone: Vec<&str> = before.iter().filter(|st| now.iter().filter(|x| x == st).count() < before.iter().filter(|x| x == st).count()).map(|&st| s.world().structures[st as usize].name.as_str()).collect();
+                    gone.dedup();
+                    if !gone.is_empty() {
+                        println!("DROPPED {stack}/{camp}: {} on {} (star base {}): {gone:?}", s.world().factions[f as usize].name, s.world().planets[p as usize].name, s.world().starbase_level(s.galaxy(), p));
+                    }
+                }
+            }
+            let w = s.world().clone();
+            for &f in &w.main_factions {
+                let fname = &w.factions[f as usize].name;
+                let g = s.galaxy();
+                for p in owned(&s, f) {
+                    for (i, &st) in g.planets[p as usize].structures.iter().enumerate() {
+                        let mut probe = g.clone();
+                        probe.planets[p as usize].structures.remove(i);
+                        probe.factions[f as usize].credits = 1e12;
+                        let r = w.check_build_structure(&probe, f, p, st);
+                        assert!(
+                            !matches!(&r, Err(CommandError::RequirementsNotMet(m)) if !(m.starts_with("tech level") && w.structures[st as usize].tech >= 90)),
+                            "{stack}/{camp}: {fname} starts on {} with {} which the build rules refuse: {r:?}",
+                            w.planets[p as usize].name,
+                            w.structures[st as usize].name
+                        );
+                    }
+                }
+                let start = g.factions[f as usize].income_per_week;
+                println!("{stack}/{camp}: {fname} start income {start:.0}/week");
+                if start >= 0.0 {
+                    continue;
+                }
+                negative.push(format!("{stack}/{camp}/{fname}: {start:.0}"));
+                // The compensation: sell the structure with the worst upkeep until the income is not negative.
+                let mut sold = 0;
+                while s.galaxy().factions[f as usize].income_per_week < 0.0 {
+                    let worst = owned(&s, f)
+                        .into_iter()
+                        .flat_map(|p| s.galaxy().planets[p as usize].structures.iter().map(move |&st| (p, st)).collect::<Vec<_>>())
+                        .filter(|&(_, st)| w.structures[st as usize].income_abs < 0.0)
+                        .min_by(|a, b| w.structures[a.1 as usize].income_abs.total_cmp(&w.structures[b.1 as usize].income_abs));
+                    let Some((planet, structure)) = worst else { break };
+                    s.apply(Command::SellStructure { faction: f, planet, structure }).expect("sell");
+                    s.step(1.0);
+                    sold += 1;
+                }
+                let end = s.galaxy().factions[f as usize].income_per_week;
+                println!("  -> {sold} sold, income {end:.0}/week");
+                if end < 0.0 {
+                    unfixable.push(format!("{stack}/{camp}/{fname}: {end:.0}"));
+                }
+            }
+        }
+    }
+    println!("negative at the start (fixable by selling): {negative:?}");
+    assert!(unfixable.is_empty(), "negative start income that selling cannot fix: {unfixable:?}");
 }
