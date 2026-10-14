@@ -148,7 +148,7 @@ fn hostile_fleets_trigger_battle_and_auto_resolve() {
     for (owner, unit, n) in [(empire, strong, 3u32), (rebel, weak, 2u32)] {
         let g = sim.galaxy_mut();
         let id = g.fleets.keys().max().copied().unwrap_or(0) + 1;
-        g.fleets.insert(id, Fleet { id, owner, units: [(unit, n)].into(), location: FleetLocation::AtPlanet(target), previous_planet: target });
+        g.fleets.insert(id, Fleet { id, owner, units: [(unit, n)].into(), location: FleetLocation::AtPlanet(target), previous_planet: target, slot: 0 });
     }
     let events = sim.step(1.0);
     let battle = events
@@ -227,7 +227,7 @@ fn tactical_resolver_settles_a_battle() {
     for (owner, unit, n) in [(empire, isd, 2u32), (rebel, xw, 3u32)] {
         let g = sim.galaxy_mut();
         let id = g.fleets.keys().max().copied().unwrap_or(0) + 1;
-        g.fleets.insert(id, Fleet { id, owner, units: [(unit, n)].into(), location: FleetLocation::AtPlanet(target), previous_planet: target });
+        g.fleets.insert(id, Fleet { id, owner, units: [(unit, n)].into(), location: FleetLocation::AtPlanet(target), previous_planet: target, slot: 0 });
     }
     let battle = sim.step(1.0).into_iter().find_map(|e| if let Event::BattlePending(b) = e { Some(b) } else { None }).expect("pending");
     let events = sim.resolve_battle(battle.id).expect("resolved");

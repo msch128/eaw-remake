@@ -45,9 +45,12 @@ impl Command {
             | BuildStructure { faction, .. }
             | UpgradeTech { faction, .. }
             | DebugGrant { faction, .. }
+            | DebugGrantToSlot { faction, .. }
             | DestroyPlanet { faction, .. }
             | MoveFleet { faction, .. }
             | MoveFleetAround { faction, .. }
+            | MoveFleetToSlot { faction, .. }
+            | TransferUnitsToSlot { faction, .. }
             | MergeFleets { faction, .. }
             | SplitFleet { faction, .. }
             | TransferUnits { faction, .. }
@@ -242,100 +245,5 @@ impl Sim {
             current_sb
         };
         (eff_sb, max_units)
-    }
-
-    /// U96: Dynamic neutral pirate border raids on undefended border worlds.
-    pub(crate) fn pirate_raids(&mut self, events: &mut Vec<crate::state::Event>) {
-        if !self.world.config.pirate_raids || self.world.config.pirate_raid_interval == 0 {
-            return;
-        }
-        if self.galaxy.week % self.world.config.pirate_raid_interval as u64 != 0 {
-            return;
-        }
-        let world = self.world.clone();
-        let Some(passive) = world.passive_faction() else { return };
-
-        // Pool of pirate combat ships
-        let mut pool: Vec<UnitTypeId> = self.galaxy.fleets.values()
-            .filter(|f| f.owner == passive)
-            .flat_map(|f| f.units.keys().copied())
-            .collect();
-        pool.sort_unstable();
-        pool.dedup();
-        pool.retain(|&u| {
-            let t = &world.units[u as usize];
-            t.role == crate::world::UnitRole::Ship && !t.hero && !t.planet_destroyer && t.population > 0
-        });
-        if pool.is_empty() {
-            pool = (0..world.units.len() as UnitTypeId)
-                .filter(|&u| {
-                    let t = &world.units[u as usize];
-                    t.role == crate::world::UnitRole::Ship && t.buildable && !t.hero && !t.planet_destroyer && t.population > 0 && t.affiliation.iter().any(|a| a == "neutral")
-                })
-                .collect();
-        }
-        if pool.is_empty() {
-            return;
-        }
-
-        // Candidate targets: real, non-destroyed, active-faction border worlds adjacent to pirate worlds
-        let mut raid_candidates: Vec<(PlanetId, PlanetId)> = Vec::new(); // (from_pirate_base, target_world)
-        for p in 0..world.planets.len() as PlanetId {
-            let ps = &self.galaxy.planets[p as usize];
-            if ps.owner != Some(passive) || ps.destroyed || !world.real[p as usize] {
-                continue;
-            }
-            for &(adj, _) in &world.adjacency[p as usize] {
-                if !world.real[adj as usize] {
-                    continue;
-                }
-                let adj_ps = &self.galaxy.planets[adj as usize];
-                if adj_ps.owner.is_none() || adj_ps.owner == Some(passive) || adj_ps.destroyed {
-                    continue;
-                }
-                let defender = adj_ps.owner.unwrap();
-                // Check if target world is weakly defended:
-                // No starbase or level <= 1, AND <= 1 defending units present
-                let weak_base = adj_ps.starbase.is_none()
-                    || adj_ps.starbase.is_some_and(|sb| world.starbases[sb as usize].level <= 1);
-                let def_units: u32 = self.galaxy.fleets.values()
-                    .filter(|f| f.owner == defender && f.location == crate::state::FleetLocation::AtPlanet(adj))
-                    .map(|f| f.unit_count())
-                    .sum();
-                if weak_base && def_units <= 1 {
-                    let already_raiding = self.galaxy.fleets.values().any(|f| {
-                        f.owner == passive && match &f.location {
-                            crate::state::FleetLocation::Moving { to, .. } => *to == adj,
-                            crate::state::FleetLocation::AtPlanet(pl) => *pl == adj,
-                        }
-                    });
-                    if !already_raiding && !self.galaxy.battles.iter().any(|b| b.planet == adj) {
-                        raid_candidates.push((p, adj));
-                    }
-                }
-            }
-        }
-
-        if raid_candidates.is_empty() {
-            return;
-        }
-
-        let seed = self.galaxy.week.wrapping_mul(0x9e3779b97f4a7c15);
-        let mut rng = self.galaxy.rng.fork(seed);
-        for i in (1..raid_candidates.len()).rev() {
-            let j = rng.below(i as u64 + 1) as usize;
-            raid_candidates.swap(i, j);
-        }
-        let raid_count = (raid_candidates.len().min(2)).max(1);
-
-        for &(from, to) in &raid_candidates[..raid_count] {
-            let ship_type = pool[(from as usize + self.galaxy.week as usize) % pool.len()];
-            let fid = crate::sim::add_units(&mut self.galaxy, passive, from, ship_type, 2);
-            if let Some(path) = world.find_path(from, to) {
-                crate::sim::start_move(&world, &mut self.galaxy, fid, path);
-                events.push(crate::state::Event::PirateRaidLaunched { target: to, from, fleet: fid });
-            }
-        }
-        self.galaxy.sync_ships();
     }
 }

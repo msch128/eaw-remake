@@ -36,6 +36,8 @@ pub struct Args {
     pub screen: Option<String>,
     /// Offscreen only: select and frame this planet (`--select <id or name>`).
     pub select: Option<String>,
+    /// Offscreen only: open the planet view (fleet boxes, system text, ground board) of this planet once the scenario flags have run (`--planet-view <id or name>`).
+    pub planet_view: Option<String>,
     /// Offscreen only: camera zoom from 0 (closest) to 1 (farthest) (`--zoom <f>`).
     pub zoom: Option<f32>,
     /// Offscreen only: advance the galaxy by this many weeks before the capture (`--weeks <n>`).
@@ -128,6 +130,7 @@ impl Default for Args {
             frames: 60,
             screen: None,
             select: None,
+            planet_view: None,
             zoom: None,
             weeks: None,
             build: None,
@@ -184,6 +187,7 @@ OPTIONS:
   --frames <n>           Frames to render in offscreen mode (default 60)
   --screen <name>        Start screen: menu, campaigns or galaxy
   --select <planet>      Offscreen: select and frame a planet (id or name)
+  --planet-view <planet> Offscreen: open the planet view of a planet (id or name) after the other scenario flags ran
   --zoom <0..1>          Offscreen: camera zoom, 0 closest, 1 farthest
   --weeks <n>            Offscreen: advance n galactic weeks before the capture
   --build <text>         Offscreen: queue the first build option matching text at the selected planet
@@ -270,6 +274,7 @@ impl Args {
                 }
                 "--screen" => out.screen = Some(it.next().ok_or("--screen needs a value")?),
                 "--select" => out.select = Some(it.next().ok_or("--select needs a value")?),
+                "--planet-view" => out.planet_view = Some(it.next().ok_or("--planet-view needs a value")?),
                 "--zoom" => {
                     let v = it.next().ok_or("--zoom needs a value")?;
                     out.zoom = Some(v.parse().map_err(|e| format!("bad --zoom: {e}"))?);

@@ -77,3 +77,13 @@ Headless, deterministic, `Send` Galactic Conquest simulation. Rules: `RULES.md`.
 
 ## From the Ground Up (2026-10-09, U21)
 `SimConfig::ground_up` (journaled in saves through the header's sim config) makes `Sim::new` apply `ground_up.rs`: the player's faction keeps its home planet, the other main factions (Rebel, Empire, Underworld) keep home + the two nearest planets they own; released planets and all unowned ones go to the passive faction `Pirates` (the orange independent faction, which defends but never builds / moves / expands: `World::passive_faction`, its commands are refused and `run_ai` skips it). Minor factions keep their planets. Start planets get star base level 1; fleets of the main factions stay only at kept planets. Menu: "From the Ground Up" row below the Full campaign (`campaign_select.rs`); CLI `--ground-up`. Tests: `tests/ground_up.rs`.
+
+## Fleet slots (QA 2026-10-09 U18/U14/U31)
+- `Fleet::slot` (`1..=FLEET_SLOTS`, serde default 0 = unassigned) is the stable slot of a fleet at the planet it orbits: the planet view's three boxes and the three circles in the galaxy view.
+  `Galaxy::normalize_slots(&World)` (every tick after movement and before any fleet command) assigns slots and merges surplus fleets into slot 1; `Galaxy::settle_fleet` places an arriving fleet.
+- Rules (only for factions where `World::slot_limited` is true: the human, plus the AI with `SimConfig::fleet_slot_cap_ai`, off by default because the Remake task force AI builds forces out of many single-ship fleets and the cap merges them back, see `galaxy-script` `ai_match`):
+  arrival merges into the named slot (`Command::MoveFleetToSlot`, kept in `Galaxy::dest_slots`), else the lowest free slot, else slot 1; `SplitFleet`/`TransferUnits{to: None}` take the lowest free slot and are refused with `NoSlot` when all three are held;
+  `TransferUnitsToSlot` drops units on a slot (merge into its fleet or a new fleet in exactly that slot); merging keeps the target's pathfinder, else takes the incoming one. `DebugGrantToSlot` is the debug/offscreen variant.
+  The galaxy-play client-side `PendingFleetMerges` is gone; `PlayAction::MoveAndMerge` and the new `PlayAction::MoveToSlot` send `MoveFleetToSlot`.
+- Battle start: `battle_sides`/reserve follow the slot order 1, 2, 3; the pathfinder rule is per fleet (a fleet with a pathfinder deploys only that unit first, a fleet without deploys fully up to the cap).
+- Tests: `tests/fleet_slots.rs`.

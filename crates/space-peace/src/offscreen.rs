@@ -46,6 +46,9 @@ struct OffscreenState {
     frames: u32,
     warmup: u32,
     select: Option<String>,
+    /// Planet whose view to open once the scenario has settled, and the frame it was opened at.
+    planet_view: Option<String>,
+    planet_view_opened: Option<u32>,
     zoom: Option<f32>,
     frame: u32,
     created: Instant,
@@ -75,6 +78,8 @@ pub fn configure(app: &mut App, args: &Args, path: PathBuf) {
             frames,
             warmup: 30.min(frames / 2),
             select: args.select.clone(),
+            planet_view: args.planet_view.clone(),
+            planet_view_opened: None,
             zoom: args.zoom,
             frame: 0,
             created: Instant::now(),
@@ -101,6 +106,7 @@ fn drive(
     diagnostics: Res<DiagnosticsStore>,
     hold: Res<crate::play::ScriptHold>,
     mut selection: ResMut<Selection>,
+    mut planet_view: ResMut<crate::planet_view::PlanetViewState>,
     mut cam: Single<&mut GalaxyCamera>,
     screen: Res<State<AppScreen>>,
     mut exit: MessageWriter<AppExit>,
@@ -146,6 +152,26 @@ fn drive(
         }
     }
 
+    // `--planet-view`: open the view once the scenario flags have run, and give it time to fly in before the capture.
+    if let Some(name) = st.planet_view.clone()
+        && st.planet_view_opened.is_none()
+        && st.galaxy_frames > 3
+        && hold.settled()
+    {
+        match view.planets.iter().position(|p| p.id.eq_ignore_ascii_case(&name) || p.display_name.eq_ignore_ascii_case(&name)) {
+            Some(i) => {
+                selection.0 = Some(i);
+                planet_view.active = true;
+                planet_view.planet = Some(i);
+                st.planet_view_opened = Some(frame);
+            }
+            None => {
+                warn!("offscreen: planet `{name}` not found");
+                st.planet_view = None;
+            }
+        }
+    }
+
     if frame == st.warmup {
         st.started = Some(now);
     }
@@ -168,7 +194,8 @@ fn drive(
     } else {
         st.ready_at.is_some_and(|t| now.duration_since(t).as_secs_f32() > 3.0) && hold.settled()
     };
-    if frame >= st.frames && st.frame_ms.len() as u32 >= st.frames / 2 && settled && !st.capture_requested {
+    let view_ready = st.planet_view.is_none() || st.planet_view_opened.is_some_and(|f| frame >= f + 150);
+    if frame >= st.frames && st.frame_ms.len() as u32 >= st.frames / 2 && settled && view_ready && !st.capture_requested {
         st.capture_requested = true;
         st.capture_time = Some(now);
         let path = st.path.clone();

@@ -1,7 +1,8 @@
-//! The fleet organizer of the planet view (U13g): the three framed boxes at the top hold the player's own fleets at the planet (box n = n-th fleet),
+//! The fleet organizer of the planet view (U13g): the three framed boxes at the top hold the player's own fleets at the planet (box n = the fleet in slot n,
+//! an empty slot is an empty box),
 //! the first, brighter slot of each box is its hyperspace slot, and units are dragged between the boxes (and into a hyperspace slot) with the mouse.
 //!
-//! * Dropping a stack on another box moves the stack (Shift: one ship) with `Command::TransferUnits`; an empty box receives a new fleet.
+//! * Dropping a stack on another box moves the stack (Shift: one ship) with `Command::TransferUnits`; an empty box receives a new fleet in its slot (`Command::TransferUnitsToSlot`).
 //! * Dropping a stack (or the hyperspace ship of another box) on a hyperspace slot puts one ship there: `Command::TransferUnits { hyperspace: true }` across
 //!   boxes, `Command::SetHyperspace` inside one box. The choice lives in the sim fleet (`Galaxy::hyperspace`), where the battle setup can read it later.
 //! * Forces of other factions in orbit are not in the boxes; they are listed in one line above them ([`OtherForces`]).
@@ -21,6 +22,9 @@ use galaxy_sim::{Command, FactionId, FleetId, PlanetId, UnitTypeId};
 use crate::flow::AppScreen;
 use crate::planet_view::PlanetViewState;
 
+/// Icon of an empty pathfinder (hyperspace) slot (`TEXT_TOOLTIP_PATHFINDER`).
+const PATHFINDER_ICON: &str = "i_button_pathfinder.tga";
+
 /// Slots of a box (5 rows of 7); slot 0 is the hyperspace slot.
 const BOX_SLOTS: usize = 35;
 
@@ -35,11 +39,24 @@ pub(crate) struct BoxContent {
     pub stacks: Vec<(UnitTypeId, u32)>,
 }
 
-/// The player's fleets at `planet` in fleet id order, one per box (at most three).
+/// The player's fleets at `planet`, box n holding the fleet of slot n+1. A fleet the sim has not given a slot yet (a few ticks at most) takes the first empty box.
 pub(crate) fn box_contents(galaxy: &galaxy_sim::Galaxy, me: FactionId, planet: PlanetId) -> [BoxContent; 3] {
     let mut out: [BoxContent; 3] = Default::default();
-    let fleets = galaxy.fleets.values().filter(|f| f.owner == me && f.planet() == Some(planet));
-    for (b, f) in fleets.take(3).enumerate() {
+    let mut placed: [Option<&galaxy_sim::Fleet>; 3] = [None; 3];
+    let mut loose = Vec::new();
+    for f in galaxy.fleets.values().filter(|f| f.owner == me && f.planet() == Some(planet)) {
+        match (f.slot as usize).checked_sub(1).filter(|&i| i < 3 && placed[i].is_none()) {
+            Some(i) => placed[i] = Some(f),
+            None => loose.push(f),
+        }
+    }
+    for f in loose {
+        if let Some(i) = placed.iter().position(Option::is_none) {
+            placed[i] = Some(f);
+        }
+    }
+    for (b, f) in placed.into_iter().enumerate() {
+        let Some(f) = f else { continue };
         let hyper = galaxy.hyperspace_unit(f.id).filter(|u| f.units.get(u).copied().unwrap_or(0) > 0);
         out[b] = BoxContent {
             fleet: Some(f.id),
@@ -93,7 +110,11 @@ pub(crate) fn drop_commands(me: FactionId, boxes: &[BoxContent; 3], from: (usize
             None => return Vec::new(),
         }
     };
-    let transfer = |to: usize, count: u32, hyperspace: bool| Command::TransferUnits { faction: me, from: f1, to: boxes[to].fleet, units: vec![(unit, count)], hyperspace };
+    // An empty box gets a new fleet in exactly its slot.
+    let transfer = |to: usize, count: u32, hyperspace: bool| match boxes[to].fleet {
+        Some(_) => Command::TransferUnits { faction: me, from: f1, to: boxes[to].fleet, units: vec![(unit, count)], hyperspace },
+        None => Command::TransferUnitsToSlot { faction: me, from: f1, slot: to as u8 + 1, units: vec![(unit, count)], hyperspace },
+    };
     match target {
         Target::Hyperspace(b2) if b2 == b1 => {
             if k1 == 0 {
@@ -178,7 +199,7 @@ impl Organizer {
         let mut names = HashMap::new();
         for (b, content) in self.boxes.iter().enumerate() {
             // The hyperspace slot is always there (brighter than the rest); an empty box has just this slot.
-            let hyper = PanelSlot { icon: content.hyper.map(icon).unwrap_or_default(), selected: true, ..default() };
+            let hyper = PanelSlot { icon: content.hyper.map(icon).unwrap_or_else(|| PATHFINDER_ICON.to_owned()), selected: true, ..default() };
             slots.push((slot_name(b, 0), hyper));
             names.insert(slot_name(b, 0), content.hyper.map_or_else(|| "!hyperspace".to_owned(), |u| world.units[u as usize].name.clone()));
             for (i, &(u, c)) in content.stacks.iter().enumerate() {
@@ -493,8 +514,8 @@ mod tests {
         let t = |count| Command::TransferUnits { faction: 4, from: 10, to: Some(11), units: vec![(1, count)], hyperspace: false };
         assert_eq!(drop_commands(4, &boxes(), (0, 1), Target::Box(1), false), vec![t(3)]);
         assert_eq!(drop_commands(4, &boxes(), (0, 1), Target::Box(1), true), vec![t(1)]);
-        // Into an empty box: a new fleet (`to: None`).
-        assert_eq!(drop_commands(4, &boxes(), (0, 2), Target::Box(2), false), vec![Command::TransferUnits { faction: 4, from: 10, to: None, units: vec![(2, 1)], hyperspace: false }]);
+        // Into an empty box: a new fleet in that box's slot.
+        assert_eq!(drop_commands(4, &boxes(), (0, 2), Target::Box(2), false), vec![Command::TransferUnitsToSlot { faction: 4, from: 10, slot: 3, units: vec![(2, 1)], hyperspace: false }]);
         // Dropped on its own box: nothing.
         assert!(drop_commands(4, &boxes(), (0, 1), Target::Box(0), false).is_empty());
     }

@@ -183,7 +183,7 @@ fn main() {
         g.fleets.clear();
         g.battles.clear();
         for (id, (owner, counts)) in (1..).zip([(d, &counts_d), (a, &counts_a)]) {
-            g.fleets.insert(id, Fleet { id, owner, units: counts.iter().copied().collect(), location: FleetLocation::AtPlanet(planet), previous_planet: planet });
+            g.fleets.insert(id, Fleet { id, owner, units: counts.iter().copied().collect(), location: FleetLocation::AtPlanet(planet), previous_planet: planet, slot: 0 });
         }
         g.planets[planet as usize].owner = if defended { Some(d) } else { None };
         let battle = sim.step(1.0).into_iter().find_map(|e| if let Event::BattlePending(b) = e { Some(b) } else { None });

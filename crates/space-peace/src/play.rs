@@ -406,10 +406,13 @@ fn run_script(
                 return;
             };
             if let (Some(units), Some(at)) = (args.grant_unit.as_deref(), args.at.as_deref().and_then(find).and_then(|i| bridge.planet_to_sim[i])) {
-                // Several units may be granted at once, comma separated.
+                // Several units may be granted at once, comma separated; `Name@2` puts the unit into fleet slot 2 of the planet.
                 for unit in units.split(',').map(str::trim).filter(|u| !u.is_empty()) {
                     info!("script: granting {unit} at {}", world.planets[at as usize].display_name);
-                    actions.write(PlayAction::DebugGrant { unit_name: unit.to_owned(), planet: at, count: 1 });
+                    match unit.split_once('@').and_then(|(n, s)| Some((n, s.parse::<u8>().ok()?))) {
+                        Some((name, slot)) => actions.write(PlayAction::DebugGrantToSlot { unit_name: name.to_owned(), planet: at, count: 1, slot }),
+                        None => actions.write(PlayAction::DebugGrant { unit_name: unit.to_owned(), planet: at, count: 1 }),
+                    };
                 }
             }
             if let Some(text) = &args.build {
@@ -619,7 +622,7 @@ fn select_granted(
     if !selection.fleets.is_empty() || state.current.loading {
         return;
     }
-    let Some(uid) = state.world.unit_id(unit.split(',').next().unwrap_or(unit).trim()) else { return };
+    let Some(uid) = state.world.unit_id(unit.split(',').next().unwrap_or(unit).split('@').next().unwrap_or(unit).trim()) else { return };
     let found = state.galaxy().fleets.values().find(|f| f.owner == me && f.units.get(&uid).is_some_and(|n| *n > 0) && f.planet().is_some());
     if let Some(f) = found {
         // Fleet only, like a click on a fleet icon: the bar shows the fleet.

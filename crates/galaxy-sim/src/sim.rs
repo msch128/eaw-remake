@@ -99,6 +99,37 @@ impl Sim {
             return Err(CommandError::NotAvailable);
         }
         let around = matches!(cmd, Command::MoveFleetAround { .. });
+        // The slot variants are the plain commands plus a named slot.
+        let (mut dest_slot, mut new_slot) = (None, None);
+        let cmd = match cmd {
+            Command::MoveFleetToSlot { faction, fleet, to, slot } => {
+                if !(1..=FLEET_SLOTS).contains(&slot) {
+                    return Err(CommandError::Invalid);
+                }
+                dest_slot = Some(slot);
+                Command::MoveFleet { faction, fleet, to }
+            }
+            Command::TransferUnitsToSlot { faction, from, slot, units, hyperspace } => {
+                if !(1..=FLEET_SLOTS).contains(&slot) {
+                    return Err(CommandError::Invalid);
+                }
+                g.normalize_slots(&world);
+                let p = g.fleets.get(&from).filter(|f| f.owner == faction).and_then(Fleet::planet).ok_or(CommandError::Invalid)?;
+                let to = match g.fleet_in_slot(faction, p, slot) {
+                    Some(o) if o == from => return Err(CommandError::Invalid),
+                    Some(o) => Some(o),
+                    None => {
+                        new_slot = Some(slot);
+                        None
+                    }
+                };
+                Command::TransferUnits { faction, from, to, units, hyperspace }
+            }
+            c => c,
+        };
+        if matches!(cmd, Command::MoveFleet { .. } | Command::MoveFleetAround { .. } | Command::MergeFleets { .. } | Command::SplitFleet { .. } | Command::TransferUnits { .. }) {
+            g.normalize_slots(&world);
+        }
         match cmd {
             Command::BuildUnit { faction, planet, unit } => {
                 world.check_build_unit(g, faction, planet, unit)?;
@@ -166,7 +197,24 @@ impl Sim {
                 let id = self.spawn_units(faction, planet, unit, count.clamp(1, 50));
                 Ok(CommandOk::NewFleet(id))
             }
+            Command::DebugGrantToSlot { faction, planet, unit, count, slot } => {
+                if !world.config.debug_commands {
+                    return Err(CommandError::NotAvailable);
+                }
+                if g.factions.get(faction as usize).is_none_or(|f| f.eliminated) || planet as usize >= world.planets.len() || unit as usize >= world.units.len() || !(1..=FLEET_SLOTS).contains(&slot) {
+                    return Err(CommandError::Invalid);
+                }
+                g.normalize_slots(&world);
+                let id = g.next_fleet_id.max(g.fleets.keys().next_back().map_or(0, |m| m + 1));
+                g.next_fleet_id = id + 1;
+                g.fleets.insert(id, Fleet { id, owner: faction, units: [(unit, count.clamp(1, 50))].into(), location: FleetLocation::AtPlanet(planet), previous_planet: planet, slot: 0 });
+                g.settle_fleet(&world, id, Some(slot));
+                g.sync_ships();
+                world.refresh_economy(g);
+                Ok(CommandOk::NewFleet(id))
+            }
             Command::Cheat { faction, cheat } => crate::cheats::apply(&world, g, faction, cheat),
+            Command::MoveFleetToSlot { .. } | Command::TransferUnitsToSlot { .. } => unreachable!("rewritten to the plain commands above"),
             Command::SellStructure { faction, planet, structure } => {
                 let ps = g.planets.get_mut(planet as usize).ok_or(CommandError::Invalid)?;
                 if ps.owner != Some(faction) {
@@ -215,11 +263,14 @@ impl Sim {
                 if to as usize >= world.planets.len() {
                     return Err(CommandError::Invalid);
                 }
-                if from == to {
-                    return Ok(CommandOk::Done);
-                }
                 if g.battles.iter().any(|b| b.fleets.contains(&fleet)) {
                     return Err(CommandError::WrongState);
+                }
+                if from == to {
+                    if dest_slot.is_some() {
+                        g.settle_fleet(&world, fleet, dest_slot);
+                    }
+                    return Ok(CommandOk::Done);
                 }
                 // `MoveFleetAround` goes around systems that would stop the fleet, when there is a way around; `MoveFleet` takes the fastest route.
                 let path = {
@@ -229,6 +280,10 @@ impl Sim {
                 .ok_or(CommandError::NoPath)?;
                 g.escaping.remove(&fleet);
                 start_move(&world, g, fleet, path);
+                match dest_slot {
+                    Some(s) => g.dest_slots.insert(fleet, (to, s)),
+                    None => g.dest_slots.remove(&fleet),
+                };
                 Ok(CommandOk::Done)
             }
             Command::MergeFleets { faction, into, from } => {
@@ -241,21 +296,15 @@ impl Sim {
                     (FleetLocation::AtPlanet(x), FleetLocation::AtPlanet(y)) if x == y => {}
                     _ => return Err(CommandError::WrongState),
                 }
-                g.sync_ships();
-                let b = g.fleets.remove(&from).expect("checked");
-                let moved = g.ships.remove(&from).unwrap_or_default();
-                if let Some(h) = g.hyperspace.remove(&from) {
-                    g.hyperspace.entry(into).or_insert(h);
-                }
-                g.ships.entry(into).or_default().extend(moved);
-                let a = g.fleets.get_mut(&into).expect("checked");
-                for (u, c) in b.units {
-                    *a.units.entry(u).or_default() += c;
-                }
+                g.merge_fleet_into(into, from);
                 Ok(CommandOk::Done)
             }
             Command::SplitFleet { faction, fleet, units } => {
                 g.sync_ships();
+                let free_slot = match g.fleets.get(&fleet).filter(|f| f.owner == faction).map(|f| f.location.clone()) {
+                    Some(FleetLocation::AtPlanet(p)) => g.free_slot(faction, p, None),
+                    _ => None,
+                };
                 let f = g.fleets.get_mut(&fleet).filter(|f| f.owner == faction).ok_or(CommandError::Invalid)?;
                 let FleetLocation::AtPlanet(p) = f.location else { return Err(CommandError::WrongState) };
                 let mut taken = BTreeMap::new();
@@ -272,6 +321,11 @@ impl Sim {
                     return Err(CommandError::Invalid);
                 }
                 let prev = f.previous_planet;
+                let slot = match free_slot {
+                    Some(s) => s,
+                    None if world.slot_limited(faction) => return Err(CommandError::NoSlot),
+                    None => 0,
+                };
                 for (u, c) in &taken {
                     let e = f.units.get_mut(u).expect("checked");
                     *e -= c;
@@ -296,7 +350,7 @@ impl Sim {
                     g.hyperspace.remove(&fleet);
                 }
                 g.ships.insert(id, moved_ids);
-                g.fleets.insert(id, Fleet { id, owner: faction, units: taken, location: FleetLocation::AtPlanet(p), previous_planet: prev });
+                g.fleets.insert(id, Fleet { id, owner: faction, units: taken, location: FleetLocation::AtPlanet(p), previous_planet: prev, slot });
                 Ok(CommandOk::NewFleet(id))
             }
             Command::TransferUnits { faction, from, to, units, hyperspace } => {
@@ -312,6 +366,15 @@ impl Sim {
                         return Err(CommandError::WrongState);
                     }
                 }
+                // A new fleet needs a free slot (checked before anything moves).
+                let new_slot = match to {
+                    Some(_) => None,
+                    None => Some(match new_slot.or_else(|| g.free_slot(faction, p, None)) {
+                        Some(s) => s,
+                        None if world.slot_limited(faction) => return Err(CommandError::NoSlot),
+                        None => 0,
+                    }),
+                };
                 let mut taken: BTreeMap<UnitTypeId, u32> = BTreeMap::new();
                 for (u, c) in units {
                     if c > 0 {
@@ -352,7 +415,7 @@ impl Sim {
                     None => {
                         let id = g.next_fleet_id;
                         g.next_fleet_id += 1;
-                        g.fleets.insert(id, Fleet { id, owner: faction, units: BTreeMap::new(), location: FleetLocation::AtPlanet(p), previous_planet: prev });
+                        g.fleets.insert(id, Fleet { id, owner: faction, units: BTreeMap::new(), location: FleetLocation::AtPlanet(p), previous_planet: prev, slot: new_slot.expect("checked") });
                         id
                     }
                 };
@@ -488,6 +551,7 @@ impl Sim {
         self.gamble_income();
         self.produce(dt, events);
         self.move_fleets(dt, events);
+        self.galaxy.normalize_slots(w);
         self.detect_battles(events);
         self.capture(dt, events);
         self.check_elimination(events);
@@ -497,7 +561,6 @@ impl Sim {
             self.galaxy.week += 1;
             events.push(Event::WeekEnded { week: self.galaxy.week });
             self.rearm_passive(true);
-            self.pirate_raids(events);
             self.check_victory(events);
         }
 
@@ -669,6 +732,8 @@ impl Sim {
                 if rest.is_empty() || blocked {
                     f.location = FleetLocation::AtPlanet(to);
                     f.previous_planet = from;
+                    let want = self.galaxy.dest_slots.remove(&id).filter(|&(p, _)| p == to).map(|(_, s)| s);
+                    self.galaxy.settle_fleet(w, id, want);
                     events.push(Event::FleetArrived { fleet: id, planet: to });
                     break;
                 }
@@ -842,7 +907,10 @@ impl Sim {
             let mut members = Vec::new();
             let is_passive_defense = Some(fac) == passive && passive_defense.is_some();
             let mut passive_units_left = passive_defense.map_or(u32::MAX, |(_, max_units)| max_units);
-            for fid in &battle.fleets {
+            // Deployment and reinforcement order follows the fleet slots 1, 2, 3.
+            let mut order: Vec<FleetId> = battle.fleets.clone();
+            order.sort_by_key(|id| self.galaxy.fleets.get(id).map_or((u8::MAX, *id), |f| (if f.slot == 0 { u8::MAX } else { f.slot }, *id)));
+            for fid in &order {
                 let Some(f) = self.galaxy.fleets.get(fid) else { continue };
                 if f.owner != fac || f.location != FleetLocation::AtPlanet(p) {
                     continue;
@@ -1195,10 +1263,12 @@ impl Sim {
 
 /// Adds `count` units of type `u` to the faction's idle fleet at `planet` (creating one if needed).
 pub(crate) fn add_units(g: &mut Galaxy, owner: FactionId, planet: PlanetId, u: UnitTypeId, count: u32) -> FleetId {
+    // New ships join the fleet in the lowest slot; a new fleet only starts where the faction has none, so slot 1 is free.
     let existing = g
         .fleets
         .values_mut()
-        .find(|f| f.owner == owner && f.location == FleetLocation::AtPlanet(planet));
+        .filter(|f| f.owner == owner && f.location == FleetLocation::AtPlanet(planet))
+        .min_by_key(|f| (if f.slot == 0 { u8::MAX } else { f.slot }, f.id));
     if let Some(f) = existing {
         *f.units.entry(u).or_default() += count;
         return f.id;
@@ -1208,7 +1278,7 @@ pub(crate) fn add_units(g: &mut Galaxy, owner: FactionId, planet: PlanetId, u: U
     g.next_fleet_id = id + 1;
     let mut units = BTreeMap::new();
     units.insert(u, count);
-    g.fleets.insert(id, Fleet { id, owner, units, location: FleetLocation::AtPlanet(planet), previous_planet: planet });
+    g.fleets.insert(id, Fleet { id, owner, units, location: FleetLocation::AtPlanet(planet), previous_planet: planet, slot: 1 });
     id
 }
 

@@ -31,7 +31,7 @@ fn new_sim(ctx: &Ctx) -> Sim {
 fn add_fleet(sim: &mut Sim, owner: FactionId, unit: UnitTypeId, n: u32, at: PlanetId, from: PlanetId) -> FleetId {
     let g = sim.galaxy_mut();
     let id = g.fleets.keys().max().copied().unwrap_or(0) + 1;
-    g.fleets.insert(id, Fleet { id, owner, units: [(unit, n)].into(), location: FleetLocation::AtPlanet(at), previous_planet: from });
+    g.fleets.insert(id, Fleet { id, owner, units: [(unit, n)].into(), location: FleetLocation::AtPlanet(at), previous_planet: from, slot: 0 });
     id
 }
 
@@ -755,29 +755,5 @@ fn auto_resolve_agrees_with_the_tactical_battle_on_pirate_bases() {
         let r = auto_vs_planet(&ctx, unit, n, pirate_planet, "Pirates", None).unwrap();
         println!("{n} x {unit} vs a pirate base (auto-resolve): attacker {}/{} alive, wins {}", r.1, r.0, r.4);
         assert_eq!(r.4, attacker_wins, "{n} x {unit}: {r:?}");
-    }
-}
-
-#[test]
-fn shipyard_repairs_damaged_fleet_in_orbit() {
-    let Some(ctx) = load() else { return };
-    let mut sim = new_sim(&ctx);
-    let w = sim.world().clone();
-    let empire = w.faction_id("Empire").unwrap();
-    let kuat = w.planet_id("Kuat_WW").unwrap();
-    let isd = w.unit_id("Star_Destroyer").unwrap();
-
-    let fid = sim.spawn_units(empire, kuat, isd, 1);
-    let ship_id = sim.galaxy().ships.get(&fid).unwrap()[0].0;
-
-    // Damage ship to 50% hull
-    sim.galaxy_mut().damage.insert(ship_id, UnitHealth { hull: 0.5, shield: 0.5 });
-
-    // Step 1 galactic week
-    let dt = sim.world().config.week_seconds;
-    sim.step(dt);
-
-    if let Some(h) = sim.galaxy().damage.get(&ship_id) {
-        assert!(h.hull >= 0.70, "hull should be at least 0.70 after 1 week at shipyard, got {}", h.hull);
     }
 }

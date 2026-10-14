@@ -155,7 +155,6 @@ impl Plugin for GalaxyPlayPlugin {
             .init_resource::<input::DragState>()
             .init_resource::<visuals::FleetEntities>()
             .init_resource::<visuals::Fog>()
-            .init_resource::<logic::PendingFleetMerges>()
             .add_message::<PlayAction>()
             .add_message::<PlayEvent>()
             .init_gizmo_group::<visuals::RouteGizmos>()

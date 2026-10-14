@@ -29,7 +29,7 @@ pub mod world;
 
 pub use sim::{AutoPreview, Sim, SimSnapshot};
 pub use state::{
-    Command, CommandError, CommandOk, Event, FactionState, FactionStats, ShipId, Fleet, FleetLocation, Galaxy, Lane, PendingBattle, PlanetState,
+    Command, CommandError, CommandOk, Event, FactionState, FactionStats, ShipId, Fleet, FleetLocation, FLEET_SLOTS, Galaxy, Lane, PendingBattle, PlanetState,
     ProductionItem, ProductionKind, Difficulty, UnitHealth,
 };
 pub use world::{IncomeGamble, 

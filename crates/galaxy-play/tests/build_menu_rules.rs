@@ -65,6 +65,7 @@ fn flagship_prefers_hero_ship() {
         units,
         location: galaxy_sim::FleetLocation::AtPlanet(0),
         previous_planet: 0,
+        slot: 0,
     };
 
     assert_eq!(galaxy_play::flagship(w, &fleet), Some(piett), "Hero ship Piett must be chosen as flagship over ISD");

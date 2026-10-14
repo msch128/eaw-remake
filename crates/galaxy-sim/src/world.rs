@@ -81,8 +81,6 @@ pub struct SimConfig {
     pub repair_base_per_week: f32,
     /// Estimate: extra share per week and star base level.
     pub repair_per_starbase_level_per_week: f32,
-    /// Estimate: extra share of hull restored per week at an owned shipyard planet (0.15 = 15%).
-    pub repair_shipyard_per_week: f32,
     /// Estimate: shields are restored this many times faster than hulls.
     pub repair_shield_factor: f32,
     /// Estimate: share of the unspent production cost returned when a queue entry is cancelled (1.0 = all of it; the data has no refund rule).
@@ -91,23 +89,13 @@ pub struct SimConfig {
     pub capture_bonus_scale: f32,
     /// Estimate: seconds a faction's superweapons need to recharge after destroying a planet (the data has no galactic cooldown).
     pub superweapon_cooldown_seconds: f32,
-    /// Dynamic neutral pirate raids on undefended border worlds (Remake dynamic pressure).
-    #[serde(default = "default_pirate_raids")]
-    pub pirate_raids: bool,
-    /// Weeks between neutral pirate raid attempts (default: 4 weeks).
-    #[serde(default = "default_pirate_raid_interval")]
-    pub pirate_raid_interval: u32,
+    /// Fleet slot rules (at most `FLEET_SLOTS` fleets per planet, arrivals merge, splits need a free slot) also bind the AI factions. Off by default: the Remake
+    /// task force AI builds its forces out of many single-ship fleets at one planet, which the cap would merge back together.
+    #[serde(default)]
+    pub fleet_slot_cap_ai: bool,
     /// Override the human player faction (e.g. for playing any faction in From the Ground Up).
     #[serde(default)]
     pub faction_override: Option<String>,
-}
-
-fn default_pirate_raids() -> bool {
-    true
-}
-
-fn default_pirate_raid_interval() -> u32 {
-    4
 }
 
 /// Algorithm used to settle battles.
@@ -151,13 +139,11 @@ impl Default for SimConfig {
             tactical_resolver_max_ships: 16,
             repair_base_per_week: 0.05,
             repair_per_starbase_level_per_week: 0.10,
-            repair_shipyard_per_week: 0.15,
             repair_shield_factor: 4.0,
             cancel_refund: 1.0,
             capture_bonus_scale: 1.0,
             superweapon_cooldown_seconds: 120.0,
-            pirate_raids: true,
-            pirate_raid_interval: 4,
+            fleet_slot_cap_ai: false,
             faction_override: None,
         }
     }
@@ -719,6 +705,11 @@ fn classify_planet_max_starbase(p: &alamo_data::Planet, min_from_start: i32) -> 
 }
 
 impl World {
+    /// True if the fleet slot rules (see [`crate::FLEET_SLOTS`]) bind `faction`: the human player always, the AI factions with `SimConfig::fleet_slot_cap_ai`.
+    pub fn slot_limited(&self, faction: FactionId) -> bool {
+        self.config.fleet_slot_cap_ai || self.victory.active_player == Some(faction)
+    }
+
     /// Builds the world for `campaign`.
     pub fn build(data: &GameData, campaign: &Campaign, config: SimConfig) -> Result<World, SimError> {
         if !campaign.has_galaxy() {

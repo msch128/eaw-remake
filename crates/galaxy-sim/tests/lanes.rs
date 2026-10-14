@@ -119,7 +119,7 @@ fn the_player_takes_the_fastest_route_and_the_ai_goes_around_blockades() {
         g.planets[mid as usize].starbase = Some(base);
         let id = g.fleets.keys().max().copied().unwrap_or(0) + 1;
         let unit = *w.units.iter().position(|u| u.name == "Star_Destroyer").map(|i| i as u32).as_ref().unwrap();
-        g.fleets.insert(id, Fleet { id, owner: empire, units: [(unit, 1)].into(), location: FleetLocation::AtPlanet(a), previous_planet: a });
+        g.fleets.insert(id, Fleet { id, owner: empire, units: [(unit, 1)].into(), location: FleetLocation::AtPlanet(a), previous_planet: a, slot: 0 });
         let cmd = if around { Command::MoveFleetAround { faction: empire, fleet: id, to: b } } else { Command::MoveFleet { faction: empire, fleet: id, to: b } };
         sim.apply(cmd).unwrap();
         let FleetLocation::Moving { to, rest, .. } = sim.galaxy().fleets[&id].location.clone() else { panic!("moving") };

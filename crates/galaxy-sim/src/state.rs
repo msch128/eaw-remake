@@ -42,7 +42,15 @@ pub struct Fleet {
     pub location: FleetLocation,
     /// Planet the fleet came from (retreat target).
     pub previous_planet: PlanetId,
+    /// Fleet slot (`1..=`[`FLEET_SLOTS`]) of the owner at the planet the fleet orbits: the army box of the planet view and the circle around the planet.
+    /// 0 = not assigned yet (old saves, fleets inserted by hosts); [`Galaxy::normalize_slots`] assigns it. Meaningless while the fleet is in hyperspace.
+    #[serde(default)]
+    pub slot: u8,
 }
+
+/// Fleet slots per faction and planet (the three circles around a planet in the galaxy view, the three army boxes of the planet view). More fleets
+/// of one faction never stay at a planet: a fleet that finds every slot taken merges into slot 1.
+pub const FLEET_SLOTS: u8 = 3;
 
 impl Fleet {
     /// Planet the fleet is orbiting, if any.
@@ -236,6 +244,9 @@ pub struct Galaxy {
     /// the fleet waits as reserve. Absent = no slot ship chosen. Pruned by [`Galaxy::sync_ships`] when the ship leaves or dies; read it with [`Galaxy::hyperspace_ship`].
     #[serde(default)]
     pub hyperspace: BTreeMap<FleetId, (ShipId, UnitTypeId)>,
+    /// Slot a moving fleet was ordered to take at its destination `(planet, slot)` (`Command::MoveFleetToSlot`): it merges into the fleet there on arrival.
+    #[serde(default)]
+    pub dest_slots: BTreeMap<FleetId, (PlanetId, u8)>,
     /// A cheat command was used in this game.
     #[serde(default)]
     pub cheated: bool,
@@ -297,6 +308,19 @@ pub enum Command {
         unit: UnitTypeId,
         /// Number of ships.
         count: u32,
+    },
+    /// Like [`Command::DebugGrant`], but the ships appear as a fresh fleet that takes `slot` (merging into the fleet holding it) instead of joining the lowest one.
+    DebugGrantToSlot {
+        /// Receiving faction.
+        faction: FactionId,
+        /// Planet to appear at.
+        planet: PlanetId,
+        /// Unit type.
+        unit: UnitTypeId,
+        /// Number of ships.
+        count: u32,
+        /// Fleet slot (`1..=FLEET_SLOTS`).
+        slot: u8,
     },
     /// Fire a superweapon (a unit with `Planet_Destruction_Ability`, e.g. the Death Star) of a fleet in orbit at the planet it orbits.
     DestroyPlanet {
@@ -365,7 +389,31 @@ pub enum Command {
         /// Unit type of a ship of that fleet; the ship that already sits in the slot is kept if it has that type.
         unit: Option<UnitTypeId>,
     },
-    /// Send a fleet back to the planet it came from.
+    /// Like [`Command::MoveFleet`], but names the fleet slot (`1..=FLEET_SLOTS`) the fleet takes at `to`: it merges into the fleet that holds the slot
+    /// when it arrives (the pathfinder of the receiving fleet stays), else it takes the slot. Within the same planet the fleet changes slot at once.
+    MoveFleetToSlot {
+        /// Issuing faction.
+        faction: FactionId,
+        /// Fleet.
+        fleet: FleetId,
+        /// Destination planet.
+        to: PlanetId,
+        /// Target slot at the destination.
+        slot: u8,
+    },
+    /// Like [`Command::TransferUnits`] into a slot: the units go into the fleet that holds `slot`, or into a new fleet taking the empty slot.
+    TransferUnitsToSlot {
+        /// Issuing faction.
+        faction: FactionId,
+        /// Fleet the units leave.
+        from: FleetId,
+        /// Target slot at the planet of `from`.
+        slot: u8,
+        /// Units to move.
+        units: Vec<(UnitTypeId, u32)>,
+        /// Put the moved ship (exactly one unit) into the hyperspace slot of the receiving fleet.
+        hyperspace: bool,
+    },
     /// Remove an entry from a planet's production queue and refund it (`SimConfig::cancel_refund`).
     CancelProduction {
         /// Issuing faction.
@@ -559,15 +607,6 @@ pub enum Event {
         /// Winner.
         faction: FactionId,
     },
-    /// Neutral pirates launched a raid against an undefended border world.
-    PirateRaidLaunched {
-        /// Target planet being raided.
-        target: PlanetId,
-        /// Pirate base planet launching the raid.
-        from: PlanetId,
-        /// Fleet id of the raiding detachment.
-        fleet: FleetId,
-    },
 }
 
 impl Galaxy {
@@ -594,6 +633,7 @@ impl Galaxy {
             rewarded: Default::default(),
             escaping: Default::default(),
             hyperspace: Default::default(),
+            dest_slots: Default::default(),
             cheated: false,
             ai_paused: false,
             next_ship_id: 1,
@@ -671,6 +711,102 @@ impl Galaxy {
         self.fleets.values().filter(move |f| f.location == FleetLocation::AtPlanet(planet))
     }
 
+    /// The fleet of `owner` that holds `slot` at `planet`.
+    pub fn fleet_in_slot(&self, owner: FactionId, planet: PlanetId, slot: u8) -> Option<FleetId> {
+        self.fleets.values().find(|f| f.owner == owner && f.slot == slot && f.location == FleetLocation::AtPlanet(planet)).map(|f| f.id)
+    }
+
+    /// Lowest of the [`FLEET_SLOTS`] slots of `owner` at `planet` that no fleet other than `except` holds.
+    pub fn free_slot(&self, owner: FactionId, planet: PlanetId, except: Option<FleetId>) -> Option<u8> {
+        (1..=FLEET_SLOTS).find(|&s| self.fleet_in_slot(owner, planet, s).is_none_or(|f| Some(f) == except))
+    }
+
+    /// Merges fleet `from` into `into` (both in orbit of one planet): ships and units move, the pathfinder of `into` stays and `from`'s becomes the one
+    /// of `into` when `into` has none.
+    pub(crate) fn merge_fleet_into(&mut self, into: FleetId, from: FleetId) {
+        self.sync_ships();
+        let Some(b) = self.fleets.remove(&from) else { return };
+        let moved = self.ships.remove(&from).unwrap_or_default();
+        if let Some(h) = self.hyperspace.remove(&from) {
+            self.hyperspace.entry(into).or_insert(h);
+        }
+        self.escaping.remove(&from);
+        self.dest_slots.remove(&from);
+        self.ships.entry(into).or_default().extend(moved);
+        let a = self.fleets.get_mut(&into).expect("target exists");
+        for (u, c) in b.units {
+            *a.units.entry(u).or_default() += c;
+        }
+    }
+
+    /// Puts a fleet that sits in orbit of a planet into a slot: `want` if named (merging into the fleet that holds it), else the lowest free slot, else
+    /// it merges into slot 1. At a planet with a pending battle nothing merges; the fleet only takes a free slot (see [`Galaxy::normalize_slots`]).
+    pub(crate) fn settle_fleet(&mut self, world: &World, fleet: FleetId, want: Option<u8>) {
+        let Some(f) = self.fleets.get(&fleet) else { return };
+        let FleetLocation::AtPlanet(p) = f.location else { return };
+        let owner = f.owner;
+        let limited = world.slot_limited(owner);
+        // The slot it had at the planet it left says nothing here.
+        self.fleets.get_mut(&fleet).expect("exists").slot = 0;
+        let frozen = self.battles.iter().any(|b| b.planet == p);
+        let holder = |g: &Galaxy, s: u8| g.fleet_in_slot(owner, p, s).filter(|&o| o != fleet);
+        let target = want.filter(|s| (1..=FLEET_SLOTS).contains(s));
+        let slot = match target {
+            Some(s) => match holder(self, s) {
+                Some(o) if !frozen && limited => return self.merge_fleet_into(o, fleet),
+                Some(_) => self.free_slot(owner, p, Some(fleet)),
+                None => Some(s),
+            },
+            None => self.free_slot(owner, p, Some(fleet)),
+        };
+        match slot {
+            Some(s) => self.fleets.get_mut(&fleet).expect("exists").slot = s,
+            None => match holder(self, 1) {
+                Some(o) if !frozen && limited => self.merge_fleet_into(o, fleet),
+                _ => {}
+            },
+        }
+    }
+
+    /// Gives every fleet in orbit a unique slot in `1..=`[`FLEET_SLOTS`] per owner and planet: fleets with a valid free slot keep it (lowest id first),
+    /// the others take the lowest free slot or, when all are held, merge into slot 1 (only for factions the rule applies to, see [`World::slot_limited`]).
+    /// Planets with a pending battle are left alone.
+    pub fn normalize_slots(&mut self, world: &World) {
+        let mut groups: BTreeMap<(FactionId, PlanetId), Vec<FleetId>> = BTreeMap::new();
+        for f in self.fleets.values() {
+            if let FleetLocation::AtPlanet(p) = f.location {
+                groups.entry((f.owner, p)).or_default().push(f.id);
+            }
+        }
+        for ((owner, p), ids) in groups {
+            let limited = world.slot_limited(owner);
+            if self.battles.iter().any(|b| b.planet == p) {
+                continue;
+            }
+            let mut held: [Option<FleetId>; FLEET_SLOTS as usize] = [None; FLEET_SLOTS as usize];
+            let mut loose = Vec::new();
+            for id in ids {
+                let s = self.fleets[&id].slot as usize;
+                if (1..=FLEET_SLOTS as usize).contains(&s) && held[s - 1].is_none() {
+                    held[s - 1] = Some(id);
+                } else {
+                    loose.push(id);
+                }
+            }
+            for id in loose {
+                match held.iter().position(Option::is_none) {
+                    Some(i) => {
+                        held[i] = Some(id);
+                        self.fleets.get_mut(&id).expect("exists").slot = i as u8 + 1;
+                    }
+                    None if limited => self.merge_fleet_into(held[0].expect("all slots held"), id),
+                    // An AI faction keeps its extra fleets (the task force logic builds forces out of many fleets); they simply have no slot.
+                    None => self.fleets.get_mut(&id).expect("exists").slot = 0,
+                }
+            }
+        }
+    }
+
     /// Planets owned by `faction`.
     pub fn owned_planets(&self, faction: FactionId) -> impl Iterator<Item = PlanetId> + '_ {
         self.planets.iter().enumerate().filter(move |(_, p)| p.owner == Some(faction)).map(|(i, _)| i as PlanetId)
@@ -715,6 +851,7 @@ impl Galaxy {
                 FleetLocation::Moving { to, progress, .. } => (1u8, *to, progress.to_bits()).hash(&mut h),
             }
             self.hyperspace.get(id).map(|h| h.0).hash(&mut h);
+            fl.slot.hash(&mut h);
         }
         (self.cheated, self.ai_paused).hash(&mut h);
         h.finish()

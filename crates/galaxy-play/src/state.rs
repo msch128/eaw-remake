@@ -263,6 +263,15 @@ pub enum PlayAction {
         /// Target planet.
         to: PlanetId,
     },
+    /// Send fleets to a planet and into one of its fleet slots (`1..=FLEET_SLOTS`): they merge into the fleet holding the slot on arrival, or take it.
+    MoveToSlot {
+        /// Fleets to send.
+        fleets: Vec<FleetId>,
+        /// Target planet (may be the planet they are at: they change slot at once).
+        to: PlanetId,
+        /// Target slot.
+        slot: u8,
+    },
     /// Merge `from` into `into` immediately (both at the same planet).
     MergeFleets {
         /// Surviving fleet.
@@ -319,6 +328,17 @@ pub enum PlayAction {
         planet: PlanetId,
         /// Number of ships (1..=50).
         count: u32,
+    },
+    /// Like [`PlayAction::DebugGrant`], but the ships form a fleet in the given slot (`1..=3`) of the planet.
+    DebugGrantToSlot {
+        /// Unit object name.
+        unit_name: String,
+        /// Planet.
+        planet: PlanetId,
+        /// Number of ships (1..=50).
+        count: u32,
+        /// Fleet slot.
+        slot: u8,
     },
     /// Sell a built structure of the player's planet for a third of its cost (right click on its slot in the planet view).
     SellStructure {

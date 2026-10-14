@@ -214,26 +214,21 @@ fn passive_defense_scales_to_attacker_tech() {
 }
 
 #[test]
-fn pirates_launch_raids_on_undefended_border_worlds() {
+fn pirates_never_raid_or_expand_over_many_weeks() {
     let Some(data) = load() else { return };
     let mut s = sim(&data, true);
     let w = s.world().clone();
     let pirates = w.faction_id("Pirates").unwrap();
-
-    let mut raid_events = Vec::new();
-    for _ in 0..4 {
-        let evs = s.step(w.config.week_seconds);
-        for ev in evs {
-            if let Event::PirateRaidLaunched { target, from, fleet } = ev {
-                raid_events.push((target, from, fleet));
-            }
+    let worlds_before = s.galaxy().owned_planets(pirates).count();
+    for _ in 0..12 {
+        for ev in s.step(w.config.week_seconds) {
+            assert!(!format!("{ev:?}").contains("Raid"), "pirates never launch raids: {ev:?}");
         }
     }
-    println!("pirate raids launched over 4 weeks: {raid_events:?}");
-    assert!(!raid_events.is_empty(), "pirates should launch raids on adjacent undefended border worlds");
-    for &(target, from, _) in &raid_events {
-        assert_eq!(s.galaxy().planets[from as usize].owner, Some(pirates), "raid must originate from a pirate world");
-        assert_ne!(s.galaxy().planets[target as usize].owner, Some(pirates), "target must not be a pirate world");
+    let g = s.galaxy();
+    assert!(g.owned_planets(pirates).count() <= worlds_before, "pirates never expand");
+    for (id, f) in g.fleets.iter().filter(|(_, f)| f.owner == pirates) {
+        assert!(matches!(f.location, FleetLocation::AtPlanet(_)), "pirate fleet {id} never moves");
     }
 }
 

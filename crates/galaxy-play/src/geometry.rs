@@ -209,7 +209,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     fn fleet(units: &[(UnitTypeId, u32)]) -> Fleet {
-        Fleet { id: 1, owner: 0, units: units.iter().copied().collect::<BTreeMap<_, _>>(), location: FleetLocation::AtPlanet(0), previous_planet: 0 }
+        Fleet { id: 1, owner: 0, units: units.iter().copied().collect::<BTreeMap<_, _>>(), location: FleetLocation::AtPlanet(0), previous_planet: 0, slot: 0 }
     }
 
     #[test]

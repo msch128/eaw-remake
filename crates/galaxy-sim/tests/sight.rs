@@ -16,7 +16,7 @@ fn load() -> Option<GameData> {
 fn fleet(sim: &mut Sim, owner: FactionId, unit: UnitTypeId, location: FleetLocation) -> FleetId {
     let g = sim.galaxy_mut();
     let id = g.fleets.keys().max().copied().unwrap_or(0) + 1;
-    g.fleets.insert(id, Fleet { id, owner, units: [(unit, 1)].into(), location, previous_planet: 0 });
+    g.fleets.insert(id, Fleet { id, owner, units: [(unit, 1)].into(), location, previous_planet: 0, slot: 0 });
     id
 }
 
