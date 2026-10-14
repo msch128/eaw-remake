@@ -574,32 +574,10 @@ impl ScriptedSim {
     }
 }
 
-/// Player difficulty adjustments (U95 and Remake conventions).
-pub fn player_difficulty(tier: DifficultyTier) -> galaxy_sim::Difficulty {
-    match tier {
-        DifficultyTier::Easy => galaxy_sim::Difficulty {
-            credit: 1.25, // Player +25% income on Easy
-            build_time: 1.0,
-            damage: 1.0,
-            health: 1.0,
-            shield: 1.0,
-        },
-        DifficultyTier::Normal | DifficultyTier::Fair => galaxy_sim::Difficulty::default(),
-        DifficultyTier::Hard => galaxy_sim::Difficulty {
-            credit: 1.0,
-            build_time: 1.0,
-            damage: 1.0,
-            health: 1.0,
-            shield: 1.0,
-        },
-        DifficultyTier::Brutal => galaxy_sim::Difficulty {
-            credit: 0.85,
-            build_time: 1.0,
-            damage: 1.0,
-            health: 1.0,
-            shield: 1.0,
-        },
-    }
+/// The human player's multipliers. `DifficultyAdjustments.xml` only describes the AI players (credit multiplier, build times, battle multipliers), so the
+/// player always plays with neutral multipliers.
+pub fn player_difficulty(_tier: DifficultyTier) -> galaxy_sim::Difficulty {
+    galaxy_sim::Difficulty::default()
 }
 
 /// Maps a tier to the sim multipliers and the AI tier (see [`DifficultyTier`]).
@@ -607,12 +585,12 @@ fn tier_settings(table: &alamo_data::DifficultyTable, tier: DifficultyTier, mino
     let suffix = if minor { "Minor" } else { "Default" };
     let entry = |name: &str| table.get(&format!("{name}_{suffix}")).cloned().unwrap_or_default();
     let ai = |name: &str, a: &alamo_data::DifficultyAdjustment, full: bool| AiTier { name: name.into(), contrast: f64::from(a.galactic_contrast), goal_sleep: f64::from(a.galactic_goal_sleep), full_map_knowledge: full };
+    // Easy, Normal and Hard are the `<Tier>_Default` / `<Tier>_Minor` entries of `DifficultyAdjustments.xml` unchanged. The data has no Brutal or Fair entry:
+    // Brutal uses the Hard entry and gives the AI full map knowledge, Fair plays the Normal AI behaviour with neutral multipliers (no income, build time or battle bonus).
     match tier {
         DifficultyTier::Easy => {
             let a = entry("Easy");
-            let mut d = galaxy_sim::Difficulty::from_adjustment(&a);
-            d.credit = (a.credit_multiplier * 0.80).min(0.80); // AI -20% income on Easy (U95)
-            (d, ai("Easy", &a, false))
+            (galaxy_sim::Difficulty::from_adjustment(&a), ai("Easy", &a, false))
         }
         DifficultyTier::Normal => {
             let a = entry("Normal");
@@ -620,16 +598,11 @@ fn tier_settings(table: &alamo_data::DifficultyTable, tier: DifficultyTier, mino
         }
         DifficultyTier::Hard => {
             let a = entry("Hard");
-            let mut d = galaxy_sim::Difficulty::from_adjustment(&a);
-            d.credit = a.credit_multiplier * 1.35; // AI +35% income on Hard (U95)
-            d.build_time = (a.galactic_build_time * 0.85).min(0.85); // faster build times on Hard
-            (d, ai("Hard", &a, false))
+            (galaxy_sim::Difficulty::from_adjustment(&a), ai("Hard", &a, false))
         }
         DifficultyTier::Brutal => {
             let a = entry("Hard");
-            let mut d = galaxy_sim::Difficulty::from_adjustment(&a);
-            d.credit = 4.0;
-            (d, ai("Brutal", &a, true))
+            (galaxy_sim::Difficulty::from_adjustment(&a), ai("Brutal", &a, true))
         }
         DifficultyTier::Fair => {
             let a = entry("Normal");
@@ -652,20 +625,27 @@ mod minor_tests {
         }
     }
 
+    /// The AI multipliers of Easy, Normal and Hard are the entries of the Remake's `DifficultyAdjustments.xml`, not our own numbers.
     #[test]
-    fn difficulty_adjustments_match_remake_spec() {
-        let p_easy = player_difficulty(DifficultyTier::Easy);
-        let p_norm = player_difficulty(DifficultyTier::Normal);
-        let p_hard = player_difficulty(DifficultyTier::Hard);
-        assert_eq!(p_easy.credit, 1.25, "player gets +25% income on Easy");
-        assert_eq!(p_norm.credit, 1.0);
-        assert_eq!(p_hard.credit, 1.0);
+    fn ai_tiers_take_the_values_of_the_difficulty_xml() {
+        let Some(install) = alamo_fs::GameInstall::detect().filter(|i| i.mod_data("1770851727").is_dir()) else { return };
+        let fs = alamo_fs::GameFs::for_mod(&install, Some("1770851727")).unwrap();
+        let table = alamo_data::DifficultyTable::load(&fs, &mut Vec::new());
+        for (tier, name) in [(DifficultyTier::Easy, "Easy"), (DifficultyTier::Normal, "Normal"), (DifficultyTier::Hard, "Hard"), (DifficultyTier::Brutal, "Hard")] {
+            for (minor, suffix) in [(false, "Default"), (true, "Minor")] {
+                let want = table.get(&format!("{name}_{suffix}")).expect("entry in the data");
+                let (d, _) = tier_settings(&table, tier, minor);
+                assert_eq!((d.credit, d.build_time, d.damage, d.health, d.shield), (want.credit_multiplier, want.galactic_build_time, want.damage, want.health, want.shield), "{name}_{suffix}");
+            }
+        }
+        let (hard, easy) = (table.get("Hard_Default").unwrap(), table.get("Easy_Default").unwrap());
+        assert!(hard.credit_multiplier > easy.credit_multiplier && hard.galactic_build_time < easy.galactic_build_time);
+    }
 
-        let table = alamo_data::DifficultyTable::default();
-        let (ai_easy, _) = tier_settings(&table, DifficultyTier::Easy, false);
-        let (ai_hard, _) = tier_settings(&table, DifficultyTier::Hard, false);
-        assert!(ai_easy.credit <= 0.80, "AI income reduced on Easy: {}", ai_easy.credit);
-        assert!(ai_hard.credit >= 1.35, "AI income boosted on Hard: {}", ai_hard.credit);
-        assert!(ai_hard.build_time < 1.0, "AI builds faster on Hard: {}", ai_hard.build_time);
+    #[test]
+    fn the_player_plays_with_neutral_multipliers() {
+        for tier in [DifficultyTier::Easy, DifficultyTier::Normal, DifficultyTier::Hard, DifficultyTier::Brutal, DifficultyTier::Fair] {
+            assert_eq!(player_difficulty(tier), galaxy_sim::Difficulty::default());
+        }
     }
 }
