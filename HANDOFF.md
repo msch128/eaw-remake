@@ -43,7 +43,7 @@ battles, EaW look and feel". The earlier "U100 / 100% fidelity" claim was a docu
 - U41 abilities of every unit visible above a group card.
 - U42 space battle Esc menu equal to the galaxy menu, saving during battle.
 - U43 three autosave slots (pre-battle, post-battle, rolling 5 minutes).
-- Also open from the QA list: U25 rest, U31, U33, U46 (Republic/Warlords build no ships with the scripted AI), U47 reading; see
+- Also open from the QA list: U25 rest, U31, U33, U47 reading; see
   `docs/QA-2026-10-09-user.md` for the full text.
 
 ## Regression guards
@@ -67,8 +67,3 @@ battles, EaW look and feel". The earlier "U100 / 100% fidelity" claim was a docu
 `--offscreen out.png`, `--campaign`, `--select`, `--zoom`, `--weeks`, `--build`, `--move`, `--hover`, `--stop-on-battle`,
 `--battle-choice fight|auto`, `--battle-auto`, `--battle-seconds`, `--battle-orders`, `--planet-view`, `--via-menu`, `--screen`,
 `--click`, `--grant-unit/--at`, `--save-to` / `--load-from`; `SP_DROID_TAB=history|tech|summary` opens a droid menu tab.
-
-U46 notes (Republic/Warlords build no ships with the scripted Remake AI): ruled out build limits (c3cc92d), missing shipyards
-(Corellia/Kamino/Kashyyyk have them), orderable units (12-15 Ok) and the Build_Units_Space.lua exclusion list. Hypotheses: the Lua
-goal functions pick ships from unit tables that exist only for Empire/Rebel/Underworld (LIBUNITTABLE*.LUA), or `safe_planets`
-excludes the shipyard planets so `compose` has no candidates. Next: `ai_stats()` plans per faction, Republic vs Hapan.
