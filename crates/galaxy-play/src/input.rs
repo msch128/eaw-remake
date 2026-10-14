@@ -130,7 +130,7 @@ pub fn update_hover(
                     let a = crate::visuals::slot_angle(s as usize);
                     let at = c + Vec3::new(a.cos() * r, 0.0, a.sin() * r);
                     let sp = camera.world_to_viewport(cam_tf, at).ok()?;
-                    let edge = camera.world_to_viewport(cam_tf, at + right * layout.unit * 0.95).ok()?;
+                    let edge = camera.world_to_viewport(cam_tf, at + right * layout.pad_radius(p)).ok()?;
                     Some((s + 1, sp, sp.distance(edge).max(10.0)))
                 }),
             )

@@ -71,7 +71,8 @@ fn sync_stations(
                 }
                 let c = layout.positions[i];
                 let r = layout.orbit_radius(i as u32);
-                let pos = c + Vec3::new(STATION_ANGLE.cos() * r, layout.unit * 0.25, STATION_ANGLE.sin() * r);
+                let pad = layout.pad_radius(i as u32);
+                let pos = c + Vec3::new(STATION_ANGLE.cos() * r, pad * 0.3, STATION_ANGLE.sin() * r);
                 let own = p.owner.is_some() && p.owner == player.0;
                 let col = if own { Color::srgb(0.1, 0.9, 0.2) } else if p.owner.is_some() { Color::srgb(0.9, 0.2, 0.15) } else { Color::srgb(0.5, 0.5, 0.5) };
                 let lin = col.to_linear();
@@ -87,9 +88,9 @@ fn sync_stations(
                         ..default()
                     })),
                     // The disc stays flat: it is a sibling of the turning root, not a child.
-                    Transform::from_translation(pos - Vec3::Y * layout.unit * 0.12)
+                    Transform::from_translation(pos - Vec3::Y * pad * 0.26)
                         .with_rotation(Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2))
-                        .with_scale(Vec3::splat(layout.unit * 0.5)),
+                        .with_scale(Vec3::splat(pad)),
                     StationDisc(root),
                 ));
                 if let Some(m) = model {

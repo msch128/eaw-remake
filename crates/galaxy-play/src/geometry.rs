@@ -29,6 +29,11 @@ pub struct GalaxyLayout {
     pub index: HashMap<String, PlanetId>,
 }
 
+/// `radii` is the model's bounding radius, which includes the atmosphere glow: the visible globe measures about 0.54 of it in our
+/// renders. Vanilla 05 puts the pad orbit at 2.2 and the pad radius at 0.6 visible globe radii, hence these two factors.
+const ORBIT_PER_RADIUS: f32 = 2.2 * 0.54;
+const PAD_PER_RADIUS: f32 = 0.6 * 0.54;
+
 impl GalaxyLayout {
     /// Layout derived from the planet positions of `world`.
     pub fn from_world(world: &World) -> Self {
@@ -59,9 +64,15 @@ impl GalaxyLayout {
         }
     }
 
-    /// Radius of an orbit lane for parked fleets around `planet`.
+    /// Radius of the orbit the three fleet pads sit on, in the planet plane. Measured from the vanilla close-up
+    /// (`05_galaxy_closeup_fleet_heroes`, the Remake frames are too small to read): pad centres are about 2.2 planet radii out.
     pub fn orbit_radius(&self, planet: PlanetId) -> f32 {
-        self.radii[planet as usize] * 1.2 + self.unit * 0.4
+        self.radii[planet as usize] * ORBIT_PER_RADIUS
+    }
+
+    /// Radius of one fleet pad (the dark green ellipse a fleet stands on): about 0.6 planet radii (same source as `orbit_radius`).
+    pub fn pad_radius(&self, planet: PlanetId) -> f32 {
+        self.radii[planet as usize] * PAD_PER_RADIUS
     }
 }
 

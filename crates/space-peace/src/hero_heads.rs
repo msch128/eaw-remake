@@ -76,8 +76,9 @@ fn update_hero_heads(
             let key = (f.id, u);
             alive.push(key);
             let side = if k % 2 == 0 { -1.0 } else { 1.0 };
-            let off = layout.unit * (0.62 + 0.5 * (k / 2) as f32);
-            let pos = base + cam_right * side * off + Vec3::Y * layout.unit * if filters.heroes { 0.0 } else { -0.15 };
+            let pad = layout.pad_radius(p);
+            let off = pad * (1.45 + 0.9 * (k / 2) as f32);
+            let pos = base + cam_right * side * off + Vec3::Y * pad * if filters.heroes { 0.0 } else { -0.25 };
             if let Some(&root) = heads.0.get(&key) {
                 if let Ok(mut t) = roots.get_mut(root) {
                     t.translation = pos;
@@ -103,22 +104,22 @@ fn update_hero_heads(
                     cull_mode: None,
                     ..default()
                 })),
-                Transform::from_xyz(0.0, -layout.unit * 0.12, 0.0)
+                Transform::from_xyz(0.0, -pad * 0.25, 0.0)
                     .with_rotation(Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2))
-                    .with_scale(Vec3::splat(layout.unit * 0.3)),
+                    .with_scale(Vec3::splat(pad * 0.55)),
                 ChildOf(root),
             ));
             // Bright rim around the dark disc.
             commands.spawn((
                 Mesh3d(meshes.add(Annulus::new(0.9, 1.0).mesh().resolution(48))),
                 MeshMaterial3d(mats.add(StandardMaterial { base_color: col, emissive: lin * 2.0, unlit: true, depth_bias: 402.0, cull_mode: None, ..default() })),
-                Transform::from_xyz(0.0, -layout.unit * 0.11, 0.0)
+                Transform::from_xyz(0.0, -pad * 0.24, 0.0)
                     .with_rotation(Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2))
-                    .with_scale(Vec3::splat(layout.unit * 0.3)),
+                    .with_scale(Vec3::splat(pad * 0.55)),
                 ChildOf(root),
             ));
             // Upright cut-out portrait standing on the disc, facing the camera.
-            let h = layout.unit * 0.5;
+            let h = pad * 1.5;
             commands.spawn((
                 Mesh3d(meshes.add(Rectangle::new(h, h))),
                 MeshMaterial3d(mats.add(StandardMaterial {

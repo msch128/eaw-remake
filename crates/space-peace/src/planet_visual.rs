@@ -141,7 +141,7 @@ fn update_radii(
             let model_r = model.radius * tf.scale.x;
             // Planet models should have a physical node radius around 2.0 .. 5.0.
             // Giant decorative meshes (like nebulae or cosmic clouds) must not inflate the planet's pick/territory radius.
-            *r = model_r.clamp(1.5, 5.0);
+            *r = model_r.clamp(1.0, 5.0);
             debug!("planet {}: model radius {:.1} x scale {:.2} = {:.1} (clamped: {:.1})", planet.0, model.radius, tf.scale.x, model_r, *r);
         }
     }
@@ -167,5 +167,7 @@ fn on_model_failed(
     }
 }
 
-/// The Remake draws its planet globes about 1.7x larger relative to the sector rings and lanes than the raw model scale.
-const PLANET_VISUAL_BOOST: f32 = 1.7;
+/// Planet globe scale on top of the model scale. 1.7 made the globes far too big next to labels, ring and lanes; the Remake frames
+/// (yt CS9VdxglewY f0018/f0019: globe about 14 px wide on a 1024 px frame, label caps about 5 px) put the globe at roughly
+/// two to three label cap heights. 1.15 is measured from those frames (an estimate, the engine value is unknown).
+const PLANET_VISUAL_BOOST: f32 = 1.15;

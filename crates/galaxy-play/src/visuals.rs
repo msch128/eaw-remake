@@ -60,7 +60,13 @@ pub struct FleetVisual {
     pub model: Option<String>,
     /// Where the fleet is drawn, in world space (read by picking).
     pub heading: Vec3,
+    /// Radius of the pad the fleet stands on (follows the planet radius, see `GalaxyLayout::pad_radius`).
+    pub pad: f32,
 }
+
+/// The flat disc or rim of a fleet pad (unit radius, scaled to `FleetVisual::pad`).
+#[derive(Component)]
+pub struct FleetPad;
 
 /// The model child of a [`FleetVisual`].
 #[derive(Component)]
@@ -85,7 +91,7 @@ pub struct FleetAssets {
 }
 
 pub(crate) fn setup_assets(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>) {
-    commands.insert_resource(FleetAssets { cone: meshes.add(Cone::new(0.5, 1.4)), disc: meshes.add(Circle::new(1.0).mesh().resolution(48)), rim: meshes.add(Annulus::new(0.92, 1.0).mesh().resolution(48)) });
+    commands.insert_resource(FleetAssets { cone: meshes.add(Cone::new(0.5, 1.4)), disc: meshes.add(Circle::new(1.0).mesh().resolution(48)), rim: meshes.add(Annulus::new(0.9, 1.0).mesh().resolution(48)) });
 }
 
 /// Colour of a faction on the map: the player's own is green like in the game, the others use their data colour.
@@ -136,13 +142,13 @@ pub fn sync_fleets(
     time: Res<Time>,
     assets: Res<FleetAssets>,
     alamo: Option<Res<AlamoFs>>,
-    cfg: Res<crate::state::PlayConfig>,
-    player: Res<PlayerFaction>,
+    (cfg, player): (Res<crate::state::PlayConfig>, Res<PlayerFaction>),
     mut mats: ResMut<Assets<StandardMaterial>>,
     mut entities: ResMut<FleetEntities>,
     mut fog: ResMut<Fog>,
     mut fleets: Query<(&mut FleetVisual, &mut Transform, &Children)>,
     models: Query<Entity, With<FleetModel>>,
+    mut pads: Query<&mut Transform, (With<FleetPad>, Without<FleetVisual>)>,
     labels: Query<(Entity, &FleetLabel)>,
 ) {
     let world = &state.world;
@@ -196,16 +202,20 @@ pub fn sync_fleets(
                 // The fleet's own slot (the sim keeps three per faction and planet); fleets without one share by index.
                 let (s, k) = if (1..=3).contains(&f.slot) { (f.slot as usize - 1, 0) } else { (i % 3, i / 3) };
                 let a = slot_angle(s);
-                let r = layout.orbit_radius(p) + k as f32 * layout.unit * 0.35;
+                let r = layout.orbit_radius(p) + k as f32 * layout.pad_radius(p) * 0.9;
                 let c = layout.positions[p as usize];
-                let pos = c + Vec3::new(a.cos() * r, layout.unit * 0.25, a.sin() * r);
+                let pos = c + Vec3::new(a.cos() * r, layout.pad_radius(p) * PAD_LIFT, a.sin() * r);
                 let _ = t;
                 (pos, Vec3::new(1.0, 0.0, 0.0))
             }
             FleetPlace::Lane { from, to, t, .. } => {
                 let (a, b) = (layout.positions[from as usize], layout.positions[to as usize]);
-                (a.lerp(b, t) + Vec3::Y * layout.unit * 0.25, (b - a).normalize_or_zero())
+                (a.lerp(b, t) + Vec3::Y * layout.pad_radius(from) * PAD_LIFT, (b - a).normalize_or_zero())
             }
+        };
+        let pad = match place {
+            FleetPlace::Orbit(p) => layout.pad_radius(p),
+            FleetPlace::Lane { from, .. } => layout.pad_radius(from),
         };
         let tf = Transform::from_translation(pos).looking_to(if heading == Vec3::ZERO { Vec3::NEG_Z } else { heading }, Vec3::Y);
         match entities.0.get(&f.id) {
@@ -214,6 +224,12 @@ pub fn sync_fleets(
                     t.translation = tf.translation;
                     t.rotation = tf.rotation;
                     v.heading = heading;
+                    v.pad = pad;
+                    for &c in children {
+                        if let Ok(mut pt) = pads.get_mut(c) {
+                            pt.scale = Vec3::splat(pad);
+                        }
+                    }
                     if v.model != model {
                         v.model = model.clone();
                         for &c in children {
@@ -227,7 +243,7 @@ pub fn sync_fleets(
             }
             None => {
                 let root = commands
-                    .spawn((tf, Visibility::default(), FleetVisual { id: f.id, owner: f.owner, model: model.clone(), heading }))
+                    .spawn((tf, Visibility::default(), FleetVisual { id: f.id, owner: f.owner, model: model.clone(), heading, pad }))
                     .id();
                 spawn_model(&mut commands, &assets, &mut mats, alamo.is_some(), model.as_deref(), bow, team, root);
                 // The flat translucent base disc the fleet stands on (faction coloured, like the original).
@@ -242,7 +258,8 @@ pub fn sync_fleets(
                         cull_mode: None,
                         ..default()
                     })),
-                    Transform::from_xyz(0.0, -layout.unit * 0.12, 0.0).with_rotation(Quat::from_rotation_x(-FRAC_PI_2)).with_scale(Vec3::splat(layout.unit * 0.6)),
+                    Transform::from_xyz(0.0, -pad * (PAD_LIFT - 0.04), 0.0).with_rotation(Quat::from_rotation_x(-FRAC_PI_2)).with_scale(Vec3::splat(pad)),
+                    FleetPad,
                     ChildOf(root),
                 ));
                 commands.spawn((
@@ -256,7 +273,8 @@ pub fn sync_fleets(
                         cull_mode: None,
                         ..default()
                     })),
-                    Transform::from_xyz(0.0, -layout.unit * 0.11, 0.0).with_rotation(Quat::from_rotation_x(-FRAC_PI_2)).with_scale(Vec3::splat(layout.unit * 0.6)),
+                    Transform::from_xyz(0.0, -pad * (PAD_LIFT - 0.05), 0.0).with_rotation(Quat::from_rotation_x(-FRAC_PI_2)).with_scale(Vec3::splat(pad)),
+                    FleetPad,
                     ChildOf(root),
                 ));
                 entities.0.insert(f.id, root);
@@ -274,19 +292,26 @@ pub fn sync_fleets(
     }
 }
 
+/// Height of a fleet root above the planet plane in pad radii.
+const PAD_LIFT: f32 = 0.3;
+
 /// Scales freshly loaded fleet models to the icon size and centers them.
 #[allow(clippy::type_complexity)]
 pub fn fit_fleet_models(
     layout: Res<GalaxyLayout>,
     cfg: Res<crate::state::PlayConfig>,
-    mut loaded: Query<(&AlamoModelLoaded, &mut Transform), (With<FleetModel>, Added<AlamoModelLoaded>)>,
+    parents: Query<&FleetVisual>,
+    mut loaded: Query<(&AlamoModelLoaded, &mut Transform, &ChildOf), (With<FleetModel>, Added<AlamoModelLoaded>)>,
 ) {
-    for (m, mut tf) in &mut loaded {
-        // Clearly larger than the base disc and floating above it, like the original.
-        let target = layout.unit * cfg.fleet_icon_scale * 1.9;
+    for (m, mut tf, parent) in &mut loaded {
+        // The ship stands on its pad: about 2 pad radii of model radius (vanilla 05 shows a Star Destroyer about 1.25 pad diameters long;
+        // our first render at 1.3 was too small to see). Measured on
+        // vanilla 05 only. `fleet_icon_scale` 0.5 is the default and stays the tuning knob.
+        let pad = parents.get(parent.parent()).map_or(layout.unit * 0.6, |v| v.pad);
+        let target = pad * 2.0 * cfg.fleet_icon_scale * 2.0;
         let s = if m.radius > 0.0 { target / m.radius } else { 1.0 };
         tf.scale = Vec3::splat(s);
-        tf.translation = -m.center * s + Vec3::Y * layout.unit * 0.9;
+        tf.translation = -m.center * s + Vec3::Y * pad * 0.75;
     }
 }
 
@@ -304,43 +329,41 @@ pub fn draw_fleet_markers(
 ) {
     let world = &state.world;
     let g = state.galaxy();
-    let ring = layout.unit * cfg.fleet_icon_scale * 1.5;
-    if let Some(p) = selection.planet {
-        // Empty fleet slots of the selected planet stay visible as thin base circles.
-        let c = layout.positions[p as usize];
+    let _ = &cfg;
+    let flat = Quat::from_rotation_x(-FRAC_PI_2);
+    let me = player.0;
+    // Thin orbit ellipse through the pads of every planet with a parked fleet of ours, and of the selected planet; its
+    // empty pads are outlined (vanilla 05: dim green ellipse through the pads, empty pads only on the player's planet).
+    let mut orbits: Vec<PlanetId> = g.fleets.values().filter(|f| Some(f.owner) == me).filter_map(|f| f.planet()).collect();
+    if let Some(p) = selection.planet.filter(|&p| g.planets.get(p as usize).is_some_and(|pl| pl.owner == me)) {
+        orbits.push(p);
+        let (c, r, pad) = (layout.positions[p as usize], layout.orbit_radius(p), layout.pad_radius(p));
         for s in 0..3 {
             let a = slot_angle(s);
-            let r = layout.orbit_radius(p);
             let at = c + Vec3::new(a.cos() * r, 0.0, a.sin() * r);
-            gizmos.circle(Isometry3d::new(at, Quat::from_rotation_x(-FRAC_PI_2)), layout.unit * 0.95, Color::srgba(0.4, 0.9, 0.5, 0.35));
+            gizmos.circle(Isometry3d::new(at, Quat::from_rotation_x(-FRAC_PI_2)), pad, Color::srgba(0.3, 0.85, 0.4, 0.45));
         }
     }
-    let flat = Quat::from_rotation_x(-FRAC_PI_2);
+    orbits.sort_unstable();
+    orbits.dedup();
+    for p in orbits {
+        let c = layout.positions[p as usize];
+        let col = map_color(world, me, me.unwrap_or(0)).with_alpha(0.3);
+        gizmos.circle(Isometry3d::new(c, flat), layout.orbit_radius(p), col).resolution(64);
+    }
     let pulse = 1.0 + 0.08 * (time.elapsed_secs() * 4.0).sin();
     for (v, tf) in &fleets {
         let Some(f) = g.fleets.get(&v.id) else { continue };
         let team = map_color(world, player.0, v.owner);
         let base = tf.translation;
-        let center = Vec3::new(base.x, base.y - layout.unit * 0.1, base.z);
-        gizmos.circle(Isometry3d::new(center, flat), ring, team.with_alpha(1.0));
+        let ring = v.pad;
+        let center = Vec3::new(base.x, base.y - ring * (PAD_LIFT - 0.06), base.z);
+        // The pad itself is the `FleetPad` mesh pair; a selected fleet gets a second, pulsing outer rim.
         if selection.fleets.contains(&v.id) {
-            gizmos.circle(Isometry3d::new(center, flat), ring * 1.35 * pulse, Color::WHITE);
-            gizmos.circle(Isometry3d::new(center, flat), ring * 1.5 * pulse, Color::srgb(0.6, 0.9, 1.0));
-        } else if player.0 == Some(v.owner) {
-            gizmos.circle(Isometry3d::new(center, flat), ring * 1.12, team.with_alpha(0.5));
+            gizmos.circle(Isometry3d::new(center, flat), ring * 1.18 * pulse, Color::WHITE);
+            gizmos.circle(Isometry3d::new(center, flat), ring * 1.3 * pulse, team);
         }
-        let has_hero = f.units.keys().any(|&u| world.units.get(u as usize).is_some_and(|ut| ut.hero));
-        if has_hero {
-            let hero_pos = base + Vec3::Y * (layout.unit * 1.55);
-            let gold = Color::srgba(1.0, 0.84, 0.15, 0.95);
-            let s = layout.unit * 0.38;
-            // Four-pointed diamond star hero marker
-            gizmos.line(hero_pos + Vec3::new(0.0, 0.0, -s), hero_pos + Vec3::new(s * 0.65, 0.0, 0.0), gold);
-            gizmos.line(hero_pos + Vec3::new(s * 0.65, 0.0, 0.0), hero_pos + Vec3::new(0.0, 0.0, s), gold);
-            gizmos.line(hero_pos + Vec3::new(0.0, 0.0, s), hero_pos + Vec3::new(-s * 0.65, 0.0, 0.0), gold);
-            gizmos.line(hero_pos + Vec3::new(-s * 0.65, 0.0, 0.0), hero_pos + Vec3::new(0.0, 0.0, -s), gold);
-            gizmos.circle(Isometry3d::new(hero_pos, flat), s * 0.45, gold.with_alpha(0.6));
-        }
+        // Heroes are drawn by the app as portraits on their own discs (hero_heads), no extra marker here.
         if let galaxy_sim::FleetLocation::Moving { .. } = f.location {
             // Hyperspace streak trailing behind the ship.
             let tail = base - v.heading * layout.unit * 5.0;

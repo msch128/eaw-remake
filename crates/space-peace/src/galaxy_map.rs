@@ -80,6 +80,7 @@ impl Plugin for GalaxyMapPlugin {
                     toggle_map_overlays_hotkey,
                     place_notch_fill,
                     fill_emblems,
+                    fill_pip_icons,
                     log_props,
                     sync_wrecks,
                     fade_galaxy_disc,
@@ -485,7 +486,7 @@ fn setup_scene(
     // Route line widths in pixels per width tier.
     gizmo_store.config_mut::<RingGizmos>().0.line.width = 1.6;
     gizmo_store.config_mut::<SelectGizmos>().0.line.width = 1.5;
-    gizmo_store.config_mut::<TerritoryGizmos>().0.line.width = 9.0;
+    gizmo_store.config_mut::<TerritoryGizmos>().0.line.width = 7.0;
 }
 
 /// Spawns planets, labels and the selection ring from the [`GalaxyView`] resource.
@@ -571,10 +572,8 @@ fn spawn_galaxy(
             TextFont {
                 font: FontSource::Family("Bahnschrift".into()),
                 font_size: FontSize::Px(14.0),
-                weight: FontWeight::LIGHT,
-                ..default()
+                    ..default()
             },
-            bevy::text::LetterSpacing::Rem(0.14),
             TextColor(rgb(label_c)),
             TextShadow {
                 offset: Vec2::splat(1.5),
@@ -933,34 +932,9 @@ fn draw_rings(
     mut select: Gizmos<SelectGizmos>,
     mut border: Gizmos<TerritoryGizmos>,
     mut territory: Local<(u64, Vec<(Vec3, Vec3, Color)>)>,
-    bounds: Res<CameraBounds>,
-    camera: Single<&GalaxyCamera>,
 ) {
     let flat = Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2);
-    // Faint blue grid around the selected planet that fades in when zoomed in.
-    let grid_fade = 1.0 - smoothstep(0.15, 0.5, zoom_fraction(&bounds, camera.distance));
-    if let (Some(i), true) = (selection.0.filter(|&i| i < view.planets.len()), grid_fade > 0.01) {
-        let c = galaxy_to_world(view.planets[i].position);
-        let step = radii.0[i] * 2.0;
-        let n = 7i32;
-        let ext = step * n as f32;
-        let clear = Color::srgba(0.45, 0.7, 1.0, 0.0);
-        let line = Color::srgba(0.45, 0.7, 1.0, 0.10 * grid_fade);
-        for k in -n..=n {
-            let o = k as f32 * step;
-            // Each line fades from the middle towards both ends.
-            select.linestrip_gradient([
-                (c + Vec3::new(o, 0.0, -ext), clear),
-                (c + Vec3::new(o, 0.0, 0.0), line),
-                (c + Vec3::new(o, 0.0, ext), clear),
-            ]);
-            select.linestrip_gradient([
-                (c + Vec3::new(-ext, 0.0, o), clear),
-                (c + Vec3::new(0.0, 0.0, o), line),
-                (c + Vec3::new(ext, 0.0, o), clear),
-            ]);
-        }
-    }
+    // The Remake draws no grid around the selected planet (CS9VdxglewY f0019), only the notched ring and the dashed territory.
     let owners_hash = view.planets.iter().enumerate().fold(selection.0.map_or(0, |s| s as u64 + 7), |h, (i, p)| h.wrapping_mul(1_000_003).wrapping_add(p.owner.map_or(0, |o| o as u64 + 1) + i as u64));
     if territory.0 != owners_hash {
         territory.1 = territory_segments(&view, &radii, selection.0);
@@ -1054,8 +1028,9 @@ fn draw_rings(
     }
 }
 
-/// Radius of the notched selection ring in planet radii (about 10 in the reference).
-const NOTCH_RADIUS: f32 = 5.7;
+/// Radius of the notched selection ring in planet radii. Planets shrank by 1/1.5 (`PLANET_VISUAL_BOOST`) while the ring keeps its
+/// size, so this is about 5.7 x 1.1 of the model radius (the visible globe is about 0.54 of it): about 12 visible globe radii, the Remake ring is about 13 (yt CS9VdxglewY f0019), vanilla 05 about 10.5.
+const NOTCH_RADIUS: f32 = 6.3;
 const NOTCH_SEGMENTS: usize = 360;
 
 /// Outer contour of the notched ring in units of the inner radius.
@@ -1717,12 +1692,29 @@ fn fill_emblems(
     }
 }
 
+/// Swaps the hand-drawn pip silhouettes for the game's own row icons once the UI textures are decoded: `i_bar_icons_space` (the
+/// pod tower, space station tiers) and `i_bar_icons_land` (the turret, ground slots), both 14x14 in the command bar mega texture.
+/// Which texture the galaxy map rows use in the engine is not documented; both match vanilla 05 (pod row above turret row).
+fn fill_pip_icons(textures: Option<ResMut<eaw_ui::textures::UiTextures>>, mut images: ResMut<Assets<Image>>, mut pips: Query<(&PipIcon, &mut ImageNode)>) {
+    let Some(mut textures) = textures else { return };
+    let space = textures.get(&mut images, "i_bar_icons_space.tga");
+    let land = textures.get(&mut images, "i_bar_icons_land.tga");
+    for (pip, mut node) in &mut pips {
+        if let Some(t) = if pip.space { space.as_ref() } else { land.as_ref() }
+            && node.image != t.handle
+        {
+            node.image = t.handle.clone();
+        }
+    }
+}
+
 /// Territory outline: the union boundary of discs around the planets of each faction, sampled as
 /// dashes (only the parts of a circle that no other disc of the same faction covers).
 fn territory_segments(view: &GalaxyView, radii: &PlanetRadii, selected: Option<usize>) -> Vec<(Vec3, Vec3, Color)> {
     // Like the original: one dashed ring, around the selected planet's sector, in the colour of its relation.
-    const SAMPLES: usize = 240;
-    const DASH: usize = 6;
+    const SAMPLES: usize = 360;
+    // Remake f0007/f0019: about 63 dashes round the circle, dash about twice the gap: 4 samples on, 2 off.
+    const DASH: usize = 4;
     let Some(i) = selected.filter(|&i| i < view.planets.len()) else { return Vec::new() };
     let p = &view.planets[i];
     let c = galaxy_to_world(p.position);
@@ -1731,11 +1723,11 @@ fn territory_segments(view: &GalaxyView, radii: &PlanetRadii, selected: Option<u
     let color = Color::LinearRgba(LinearRgba::new(l.red, l.green, l.blue, 0.8));
     let a = |k: usize| k as f32 / SAMPLES as f32 * std::f32::consts::TAU;
     let pt = |k: usize| c + Vec3::new(a(k).cos() * r, 0.0, a(k).sin() * r);
-    (0..SAMPLES).filter(|k| (k / DASH).is_multiple_of(2)).map(|k| (pt(k), pt(k + 1), color)).collect()
+    (0..SAMPLES).filter(|k| k % (DASH + 2) < DASH).map(|k| (pt(k), pt(k + 1), color)).collect()
 }
 
 /// Radius of a planet's territory disc in planet radii.
-const TERRITORY_RADIUS: f32 = 20.0;
+const TERRITORY_RADIUS: f32 = 22.5;
 
 /// Gizmo group of the thick dashed faction territory outline.
 #[derive(Default, Reflect, GizmoConfigGroup)]
