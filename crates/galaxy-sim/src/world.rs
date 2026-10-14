@@ -808,7 +808,7 @@ impl World {
         world.build_catalogs(data);
         world.build_tech_upgrades(data);
         world.build_victory(campaign);
-        world.build_main_factions(campaign);
+        world.build_main_factions(data, campaign);
         Ok(world)
     }
 }

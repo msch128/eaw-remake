@@ -19,9 +19,9 @@ const PASSIVE_FACTION: &str = "Pirates";
 impl World {
     /// Fills [`World::main_factions`] from the campaign: the human player plus every faction whose `AI_Player_Control` is a full AI plot
     /// (`GC_EmpireAi`, `GC_RebelAi`, `GC_UnderworldAi`, `SandboxHuman`, ...), not `GC_MinorAi` / `GC_PiratesAi`. In the Remake that is Rebel, Empire and
-    /// Underworld; in the Clone Wars campaigns Republic or CIS is the human and the other stays a minor (`Campaigns_Imperial_Web_Way_4Grand.xml`).
+    /// Underworld; in the Clone Wars campaigns Republic or CIS is the human and the other is a minor (`Campaigns_Imperial_Web_Way_4Grand.xml`) that still counts as a main side (sibling campaigns of the set).
     /// A campaign with no AI plots falls back to the three base factions.
-    pub(crate) fn build_main_factions(&mut self, campaign: &alamo_data::Campaign) {
+    pub(crate) fn build_main_factions(&mut self, data: &alamo_data::GameData, campaign: &alamo_data::Campaign) {
         let mut main: Vec<FactionId> = campaign
             .factions
             .iter()
@@ -30,6 +30,12 @@ impl World {
             .collect();
         if main.is_empty() {
             main = DEFAULT_MAIN_FACTIONS.iter().filter_map(|n| self.faction_id(n)).collect();
+        }
+        // The other sides of the galaxy: the faction every sibling campaign of the set is played as (Republic against CIS, Sith in the Standard set).
+        // A side the campaign gives no planets is skipped by the setup.
+        if let Some(set) = campaign.set.as_deref() {
+            let sides = data.campaign_sets().into_iter().filter(|s| s.name.eq_ignore_ascii_case(set)).flat_map(|s| s.campaigns).map(|p| p.faction.name.clone());
+            main.extend(sides.filter_map(|n| self.faction_id(&n)));
         }
         main.extend(self.victory.active_player);
         let passive = self.passive_faction();

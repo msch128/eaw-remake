@@ -1,4 +1,4 @@
-//! "From the Ground Up" on the largest Remake map (real data, skipped without the game).
+//! "From the Grouassert!(main.iter().any(|n| n == minor), "{camp}: {minor} is the opposing side");d Up" on the largest Remake map (real data, skipped without the game).
 
 use std::collections::BTreeMap;
 
@@ -301,14 +301,14 @@ fn main_factions_come_from_the_campaign_data() {
         }
     }
     if let Some(data) = load_stack("fft") {
-        // In the Clone Wars campaigns the played side is a great power; the other of Republic / CIS is a minor (`GC_MinorAi`) and keeps its planets.
+        // The other of Republic / CIS is a minor (`GC_MinorAi`) in the mixed galaxies but a playable side of the set, so it is a main faction too.
         for (camp, human, minor) in [("GC_Full_Web_Way_Republic", "Republic", "CIS"), ("GC_Full_Web_Way_CIS", "CIS", "Republic")] {
             let s = ground_up_sim(&data, camp, true);
             let w = s.world();
             let main = names(w, &w.main_factions);
             println!("{camp}: main {main:?}");
             assert!(main.iter().any(|n| n == human), "{camp}: {human} is a main faction");
-            assert!(!main.iter().any(|n| n == minor), "{camp}: {minor} stays a minor");
+            assert!(main.iter().any(|n| n == minor), "{camp}: {minor} is the opposing side");
             assert!(main.len() >= 3, "{camp}: {main:?}");
         }
     }
@@ -594,4 +594,19 @@ fn ground_up_starts_are_valid_and_not_bankrupt() {
     }
     println!("negative at the start (fixable by selling): {negative:?}");
     assert!(unfixable.is_empty(), "negative start income that selling cannot fix: {unfixable:?}");
+}
+
+/// The opposing Clone Wars side starts with at most three planets in a mixed galaxy, like every other main faction; the human keeps one.
+#[test]
+fn the_opposing_republic_or_cis_side_is_cut_to_three_planets() {
+    let Some(data) = load_stack("fft") else { return };
+    for (camp, human, other) in [("GC_Full_Web_Way_CIS", "CIS", "Republic"), ("GC_Full_Web_Way_Republic", "Republic", "CIS"), ("GC_Full_Web_Way_Shatterpoint_Republic", "Republic", "CIS")] {
+        let normal = ground_up_sim(&data, camp, false);
+        let s = ground_up_sim(&data, camp, true);
+        let w = s.world();
+        let (h, o) = (w.faction_id(human).unwrap(), w.faction_id(other).unwrap());
+        println!("{camp}: {other} {} -> {} planets", owned(&normal, o).len(), owned(&s, o).len());
+        assert_eq!(owned(&s, h).len(), 1, "{camp}: the human keeps one planet");
+        assert_eq!(owned(&s, o).len(), owned(&normal, o).len().min(3), "{camp}: {other} keeps at most three planets");
+    }
 }
