@@ -136,6 +136,7 @@ impl Plugin for PlayUiPlugin {
             .init_resource::<SuperweaponAsk>()
             .init_resource::<Toast>()
             .init_resource::<EndState>()
+            .init_resource::<crate::battle_play::ScriptedClicksDone>()
             .add_systems(PreUpdate, drive_ui_scale.run_if(resource_exists::<EawUiSettings>).run_if(not(in_state(AppScreen::CampaignSelect).or_else(in_state(AppScreen::MainMenu)))))
             .add_systems(
                 Update,
@@ -1333,6 +1334,7 @@ fn scripted_clicks(
     mut out: MessageWriter<EawButtonClicked>,
     mut galaxy_frames: Local<u32>,
     mut battle_frames: Local<u32>,
+    mut clicks_done: ResMut<crate::battle_play::ScriptedClicksDone>,
     runtime: Option<Res<battle_view::BattleRuntime>>,
 ) {
     if !args.scripted() {
@@ -1354,6 +1356,15 @@ fn scripted_clicks(
             out.write(EawButtonClicked { name: name.trim().to_lowercase(), entity: Entity::PLACEHOLDER, shift: false });
         }
     }
+    // The scripted battle abort (battle seconds) waits for the last click (frames), so a slow machine cannot end the battle first.
+    if matches!(screen.get(), AppScreen::SpaceBattle) && *frames >= scripted_clicks_end_frame(list.split(',').count()) {
+        clicks_done.0 = true;
+    }
+}
+
+/// The battle frame by which every scripted click has been sent and the simulation had 20 frames to answer.
+pub(crate) fn scripted_clicks_end_frame(clicks: usize) -> u32 {
+    60 + 40 * clicks.saturating_sub(1) as u32 + 20
 }
 
 /// The campaign result and its dialog.

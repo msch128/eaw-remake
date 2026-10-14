@@ -615,11 +615,12 @@ fn abort_key(
     pending: Res<PendingTactical>,
     args: Res<Args>,
     status: Res<BattleStatus>,
+    clicks_done: Res<ScriptedClicksDone>,
     mut done: MessageWriter<BattleFinished>,
     mut fired: Local<bool>,
 ) {
     // `--battle-abort-after <s>` scripts the F10 press for test runs.
-    let scripted = !*fired && status.tick > 0 && args.battle_abort_after.is_some_and(|s| status.time >= s);
+    let scripted = !*fired && status.tick > 0 && abort_due(args.battle_abort_after, status.time, args.battle_click.is_none() || clicks_done.0);
     if scripted {
         *fired = true;
         done.write(BattleFinished { id: pending.0.battle_id, outcome: BattleOutcome::Aborted });
@@ -890,4 +891,28 @@ fn loading_shot(
     commands
         .spawn(Screenshot(RenderTarget::Image(ImageRenderTarget { handle: target.image.clone(), scale_factor: target.scale_factor })))
         .observe(save_to_disk(path));
+}
+
+/// Set once the scripted `--battle-click` list has been played out (see `play_ui::scripted_clicks`).
+#[derive(Resource, Default)]
+pub(crate) struct ScriptedClicksDone(pub bool);
+
+/// Whether the scripted `--battle-abort-after` press is due: the battle clock ran out and no scripted click is still waiting.
+fn abort_due(after: Option<f32>, battle_time: f32, clicks_done: bool) -> bool {
+    clicks_done && after.is_some_and(|s| battle_time >= s)
+}
+
+#[cfg(test)]
+mod script_tests {
+    use super::abort_due;
+
+    #[test]
+    fn scripted_abort_waits_for_the_scripted_clicks() {
+        // A slow machine at 30x speed reaches the abort time before the frame-counted clicks: it must wait.
+        assert!(!abort_due(Some(90.0), 91.0, false));
+        assert!(abort_due(Some(90.0), 91.0, true));
+        assert!(!abort_due(Some(90.0), 10.0, true));
+        assert!(!abort_due(None, 1000.0, true));
+        assert_eq!(crate::play_ui::scripted_clicks_end_frame(1), 80);
+    }
 }
