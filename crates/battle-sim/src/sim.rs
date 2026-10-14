@@ -1078,9 +1078,19 @@ impl Battle {
                 });
             }
             let pd = cat.projectiles.get(r.proj as usize);
+            // Homing missiles leave the launcher off the target line and curve in (`ProjDef::arc_offset`); the side is drawn per shot.
+            let mut vel = r.vel;
+            if let Some(pd) = pd
+                && pd.arc_offset > 0.0
+                && r.target != NONE
+            {
+                let mut arc_rng = Rng::for_entity(cfg.seed, tick, r.ship, 0xA4C0 ^ self.projectiles.len() as u64);
+                let side = if arc_rng.next_u64() & 1 == 0 { 1.0 } else { -1.0 };
+                vel = vel.rotate_yaw(side * pd.arc_offset * (0.6 + 0.4 * arc_rng.unit()));
+            }
             self.projectiles.push(Projectile {
                 pos: r.from,
-                vel: r.vel,
+                vel,
                 def: r.proj,
                 side: self.ships[r.ship as usize].side,
                 owner: r.ship,

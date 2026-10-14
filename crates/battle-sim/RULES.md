@@ -204,3 +204,14 @@ stays as a derived figure for bars and decisions: `ShipDef::hull` times the shar
 * **Units without destroyable hardpoints** (fighters, bombers, small craft) keep a plain hull that dies at 0.
 * Effects of a dying hardpoint are unchanged (shield generator down -> shield 0, engines -> speed, weapon stops firing, `Event::HardpointDestroyed`).
 Tests: `a_unit_with_hardpoints_dies_when_the_last_hardpoint_is_destroyed_not_by_a_hull_pool`, `overkill_spills_to_the_next_hardpoints_halving_every_step_in_whole_numbers` (mechanics).
+
+## Missile launch arcs (estimate)
+Homing missiles (`Projectile_Category` MISSILE with `Max_Rate_Of_Turn` > 0) no longer leave the launcher on the straight target line:
+the launch heading is rotated left or right (drawn per shot from the battle seed, deterministic) by
+`min(0.6 rad, 0.17 x Max_Rate_Of_Turn)` x 0.6..1.0, and the existing homing turn brings the missile in, which gives the curved arc of
+the Remake (Victory Destroyer missiles). The data has no launch angle for missiles, so both factors (`MISSILE_ARC_PER_TURN_RATE`,
+`MISSILE_ARC_MAX` in `defs.rs`) are estimates. Damage, blast, hit and interception rules are unchanged. Real-data check
+(`real_data.rs`, 2 Victory vs 2 Star Destroyers): 66% of the missiles deviate more than 10 units from the launch-to-impact line
+(44% without the offset) and 77% hit or are intercepted before their range runs out (82% without). Rockets (`ROCKET` category,
+`Projectile_Rocket_Curve_*` fields, `Max_Rate_Of_Turn` ~0) are unguided and keep their straight flight; the curve fields are not read yet.
+The viewer draws missiles at the simulated position and velocity, so the trails follow the arc.

@@ -546,6 +546,9 @@ pub struct ProjDef {
     pub speed: f32,
     /// Homing turn rate in radians per second (0 = straight).
     pub turn_rate: f32,
+    /// Estimate: homing missiles leave the launcher this many radians off the target line (left or right, per shot) and
+    /// curve in with their turn rate; 0 for everything else.
+    pub arc_offset: f32,
     /// Maximum flight distance.
     pub max_distance: f32,
     /// Hurts shields.
@@ -1002,6 +1005,7 @@ impl Catalog {
             damage: p.damage.max(p.blast_damage),
             speed: speed.max(1.0),
             turn_rate: p.max_rate_of_turn.max(0.0),
+            arc_offset: if p.category.as_deref().is_some_and(|c| c.eq_ignore_ascii_case("missile")) { (p.max_rate_of_turn * MISSILE_ARC_PER_TURN_RATE).clamp(0.0, MISSILE_ARC_MAX) } else { 0.0 },
             max_distance,
             shield_damage: p.does_shield_damage,
             hull_damage: p.does_hitpoint_damage,
@@ -1708,3 +1712,9 @@ pub fn dps_estimate(d: &ShipDef, cat: &Catalog) -> f32 {
     }
     d.members.iter().map(|(m, c)| dps_estimate(cat.ship(*m), cat) * *c as f32).sum()
 }
+
+/// Estimate: launch offset in radians per radian/second of a missile's `Max_Rate_Of_Turn` (a fast-turning missile can afford a wider arc and
+/// still reach its target; the data has no launch angle for missiles).
+const MISSILE_ARC_PER_TURN_RATE: f32 = 0.17;
+/// Estimate: widest launch offset of a missile in radians (about 34 degrees).
+const MISSILE_ARC_MAX: f32 = 0.6;

@@ -245,3 +245,71 @@ fn shots_at_an_outlying_hardpoint_of_a_tall_station_can_hit_it() {
         assert!(d.hardpoint_reach >= far, "{n}: hit reach {:.0} covers the farthest hardpoint {far:.0}", d.hardpoint_reach);
     }
 }
+
+/// One missile followed through its flight.
+struct Flight {
+    start: Vec3,
+    pos: Vec3,
+    vel: Vec3,
+    range_left: f32,
+    path: Vec<Vec3>,
+}
+
+#[test]
+fn victory_missiles_fly_curved_arcs_and_still_hit() {
+    let Some((data, fs)) = load() else { return };
+    let cat = Arc::new(Catalog::build(&data, Some(&fs), &["Victory_Destroyer", "Star_Destroyer"]));
+    let arcs: Vec<bool> = cat.projectiles.iter().map(|p| p.arc_offset > 0.0).collect();
+    assert!(arcs.iter().any(|&a| a), "the missiles of the Victory Destroyer get a launch arc");
+    let sides = vec![side(&cat, "Empire", &[("Victory_Destroyer", 2)], &[], true), side(&cat, "Rebel", &[("Star_Destroyer", 2)], &[], true)];
+    let mut b = Battle::new(BattleSetup { catalog: cat.clone(), sides, config: BattleConfig { record_events: false, seed: 9, ..BattleConfig::default() } });
+    let dt = BattleConfig::default().dt;
+    let (mut live, mut done): (Vec<Flight>, Vec<Flight>) = (Vec::new(), Vec::new());
+    for _ in 0..(30 * 240) {
+        b.step();
+        let mut matched = vec![false; live.len()];
+        for p in b.projectiles.iter().filter(|p| arcs[p.def as usize]) {
+            let found = (0..live.len()).find(|&i| !matched[i] && live[i].pos.dist(p.pos) <= live[i].vel.len() * dt * 2.0 + 1.0);
+            match found {
+                Some(i) => {
+                    matched[i] = true;
+                    let f = &mut live[i];
+                    f.pos = p.pos;
+                    f.vel = p.vel;
+                    f.range_left = p.range_left;
+                    f.path.push(p.pos);
+                }
+                None => {
+                    live.push(Flight { start: p.pos, pos: p.pos, vel: p.vel, range_left: p.range_left, path: vec![p.pos] });
+                    matched.push(true);
+                }
+            }
+        }
+        let mut i = 0;
+        while i < live.len() {
+            if matched[i] {
+                i += 1;
+            } else {
+                matched.remove(i);
+                done.push(live.remove(i));
+            }
+        }
+        if b.is_over() {
+            break;
+        }
+    }
+    done.extend(live);
+    let long: Vec<&Flight> = done.iter().filter(|f| f.path.len() > 20).collect();
+    assert!(long.len() >= 6, "missiles were fired: {}", long.len());
+    // Deviation of the path from the straight line between launch and impact, and how many ended before running out of range (hits).
+    let dev = |f: &Flight| {
+        let end = *f.path.last().unwrap();
+        let axis = (end - f.start).normalized();
+        f.path.iter().map(|&p| (p - f.start).cross(axis).len()).fold(0.0f32, f32::max)
+    };
+    let curved = long.iter().filter(|f| dev(f) > 10.0).count();
+    let hits = long.iter().filter(|f| f.range_left > 100.0).count();
+    eprintln!("missiles {} curved {} ended early (hit) {}", long.len(), curved, hits);
+    assert!(curved * 2 >= long.len(), "most missiles leave the straight line: {curved}/{}", long.len());
+    assert!(hits * 10 >= long.len() * 6, "and still hit: {hits}/{}", long.len());
+}
