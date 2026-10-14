@@ -173,9 +173,6 @@ pub fn camera_input(
         rot += 1.0;
     }
     cam.target_yaw += rot * ROTATE_SPEED * dt;
-    // Page Up / Page Down rotate the view around the focus point like Q / E.
-    let turn = f32::from(keys.pressed(KeyCode::PageUp)) - f32::from(keys.pressed(KeyCode::PageDown));
-    cam.target_yaw += turn * ROTATE_SPEED * dt;
     if buttons.pressed(MouseButton::Middle) && motion.delta != Vec2::ZERO {
         let fov = match projection {
             Projection::Perspective(p) => p.fov,
@@ -208,6 +205,8 @@ pub struct ActionCam {
     pub active: bool,
     /// The followed ship; the whole fleet when `None`.
     pub focus: Option<u32>,
+    /// Cinematic mode (C): lower, faster orbit than the Space battle cam.
+    pub cinematic: bool,
     /// A button asked to toggle it.
     pub request: bool,
 }
@@ -228,11 +227,20 @@ pub fn action_cam(
     mut action: ResMut<ActionCam>,
     mut cam: Single<&mut BattleCamera>,
 ) {
-    let toggle = std::mem::take(&mut action.request)
-        || keys.just_pressed(KeyCode::KeyC)
-        || keys.just_pressed(KeyCode::Space);
+    // Space = Movie Mode (battle cam), C = cinematic camera; the same key again ends it, the other key switches mode.
+    let want = if keys.just_pressed(KeyCode::KeyC) {
+        Some(true)
+    } else if std::mem::take(&mut action.request) || keys.just_pressed(KeyCode::Space) {
+        Some(false)
+    } else {
+        None
+    };
+    let toggle = want.is_some();
+    if let Some(cinematic) = want {
+        action.active = !action.active || action.cinematic != cinematic;
+        action.cinematic = cinematic;
+    }
     if toggle {
-        action.active = !action.active;
         if action.active {
             action.focus = sel.ships.iter().copied().find(|id| ships.0.contains_key(id));
             if action.focus.is_none() {
@@ -290,25 +298,45 @@ pub fn action_cam(
         let diff = (tyaw - cam.target_yaw + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
         cam.target_yaw += diff * (1.0 - (-3.0 * dt).exp()) + (std::f32::consts::TAU / ACTION_CAM_TURN_SECONDS * dt * 0.3);
     } else {
-        cam.target_yaw += std::f32::consts::TAU / ACTION_CAM_TURN_SECONDS * dt;
+        cam.target_yaw += std::f32::consts::TAU / ACTION_CAM_TURN_SECONDS * dt * if action.cinematic { 2.0 } else { 1.0 };
     }
-    cam.pitch += (ACTION_CAM_PITCH - cam.pitch) * (1.0 - (-3.0 * dt).exp());
+    let pitch = if action.cinematic { ACTION_CAM_PITCH * 0.5 } else { ACTION_CAM_PITCH };
+    cam.pitch += (pitch - cam.pitch) * (1.0 - (-3.0 * dt).exp());
 }
 
-/// Centres the camera on the selected ships (space bar or a [`FocusCamera`] request).
+/// Camera hotkeys on the battle plane: Page Up centres on the selection (also a [`FocusCamera`] request), Home on the fleet, End resets the view.
 pub fn focus_camera(
-    _keys: Res<ButtonInput<KeyCode>>,
+    keys: Res<ButtonInput<KeyCode>>,
     mut requests: MessageReader<FocusCamera>,
     sel: Res<Selection>,
     ships: Res<RenderedShips>,
     action: Res<ActionCam>,
+    settings: Res<crate::BattleViewSettings>,
     mut cam: Single<&mut BattleCamera>,
 ) {
+    let asked = requests.read().count() > 0;
     if action.active {
         return;
     }
-    let asked = requests.read().count() > 0;
-    if !asked {
+    // Page Up: centre on the selection. Home: centre on the player's fleet. End: reset the view (heading, tilt, zoom) over the fleet.
+    let page_up = keys.just_pressed(KeyCode::PageUp);
+    let home = keys.just_pressed(KeyCode::Home);
+    let end = keys.just_pressed(KeyCode::End);
+    if end {
+        let d = BattleCamera::default();
+        cam.target_yaw = d.target_yaw;
+        cam.yaw = d.yaw;
+        cam.pitch = d.pitch;
+        cam.target_distance = cam.target_distance.min(1300.0).max(cam.min_distance);
+    }
+    if home || end {
+        let own: Vec<Vec3> = ships.0.values().filter(|s| s.side == settings.player_side).map(|s| s.pos).collect();
+        if !own.is_empty() {
+            let c = own.iter().copied().sum::<Vec3>() / own.len() as f32;
+            cam.target_focus = Vec3::new(c.x, cam.target_focus.y, c.z);
+        }
+    }
+    if !(asked || page_up) {
         return;
     }
     let pts: Vec<Vec3> = sel.ships.iter().filter_map(|id| ships.0.get(id)).map(|s| s.pos).collect();
