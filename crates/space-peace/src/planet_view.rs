@@ -303,15 +303,18 @@ fn view_dynamic(
     state.ground_slots = circle_slots(cap.ground.total.max(0) as usize).into_iter().map(|o| PLAT + o).collect();
     state.orbital_slots = space_slots(cap.space.total.max(0) as usize).into_iter().map(|o| PLAT + o).collect();
     let ring = mats.add(StandardMaterial { base_color: Color::srgb(0.85, 0.78, 0.55), unlit: true, depth_bias: 50.0, cull_mode: None, ..default() });
+    // The Remake planet scene (CS9VdxglewY f0009) shows no rings next to the station, only the board; the orbital slot rings stay as a
+    // faint hint because they are the drop targets of orbital structures.
+    let faint_ring = mats.add(StandardMaterial { base_color: Color::srgba(0.85, 0.78, 0.55, 0.16), unlit: true, alpha_mode: AlphaMode::Blend, depth_bias: 50.0, cull_mode: None, ..default() });
     let ground_ring = meshes.add(Annulus::new(0.125, 0.14));
     let space_ring = meshes.add(Annulus::new(0.085, 0.1));
-    for (at, mesh, lift) in state.ground_slots.iter().map(|a| (a, &ground_ring, 0.1)).chain(state.orbital_slots.iter().map(|a| (a, &space_ring, 0.0))) {
+    for (at, mesh, lift, material) in state.ground_slots.iter().map(|a| (a, &ground_ring, 0.1, &ring)).chain(state.orbital_slots.iter().map(|a| (a, &space_ring, 0.0, &faint_ring))) {
         commands.spawn((
             ViewEntity,
             DynEntity,
             Name::new("slot ring"),
             Mesh3d(mesh.clone()),
-            MeshMaterial3d(ring.clone()),
+            MeshMaterial3d(material.clone()),
             Transform::from_translation(*at + Vec3::new(0.0, lift, 0.03)).with_scale(Vec3::new(1.0, 0.8, 1.0)),
         ));
     }
