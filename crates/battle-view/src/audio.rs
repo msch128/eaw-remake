@@ -71,7 +71,14 @@ pub struct AudioMemory {
     last_station_critical: Option<f64>,
     shield_down_warned: HashSet<u32>,
     own_heroes_entered: HashSet<u32>,
+    /// `(ship, ability index)` of the player's abilities that were active last frame (their end plays the deactivation sounds).
+    abilities_on: HashSet<(u32, usize)>,
+    /// `Death_SFXEvent_End_Die` waiting for the end of the death sequence: (battle clock when due, event, position).
+    end_die: Vec<(f64, String, Vec3)>,
 }
+
+/// Seconds from `Death_SFXEvent_Start_Die` to `Death_SFXEvent_End_Die` (estimate: the view has no death timeline of its own).
+const DEATH_SEQUENCE_SECONDS: f64 = 1.5;
 
 fn is_small(class: TargetClass) -> bool {
     matches!(class, TargetClass::Fighter | TargetClass::Bomber)
@@ -239,6 +246,9 @@ pub fn battle_audio(
                 if let Some(n) = vis.sfx.death.as_deref() {
                     send(n, Some(sim_to_bevy(*pos)), &mut stats, &mut out);
                 }
+                if let Some(n) = vis.sfx.death_end.as_deref() {
+                    mem.end_die.push((clock + DEATH_SEQUENCE_SECONDS, n.to_string(), sim_to_bevy(*pos)));
+                }
                 let class = rt.catalog.ship(def).class;
                 if is_small(class) {
                     continue;
@@ -308,19 +318,49 @@ pub fn battle_audio(
                     say(GalaxyEvent::EnemyFleeing, &mut stats);
                 }
             }
-            Event::AbilityActivated { ship, .. } => {
+            Event::AbilityActivated { ship, ability } => {
                 if let Some(s) = cur.ship(*ship)
                     && s.side == player
                 {
                     let vis = visuals.ship(s.def);
-                    let line = vis.sfx.ability.as_deref()
+                    let kind = rt.catalog.ship(s.def).abilities.get(*ability as usize).map(|a| a.kind.to_ascii_uppercase()).unwrap_or_default();
+                    let own = vis.sfx.abilities.iter().find(|a| a.kind == kind);
+                    let line = own.and_then(|a| a.activated.as_deref()).or(vis.sfx.ability.as_deref())
                         .or_else(|| if vis.hero { vis.sfx.attack.as_deref() } else { None });
                     if let Some(n) = line {
+                        send(n, None, &mut stats, &mut out);
+                    }
+                    // A non-hero ability switched on also plays the faction's GUI toggle sound (`SFXEvent_GUI_Toggle_Non_Hero_Ability_On`).
+                    if !vis.hero && let Some(n) = faction.as_deref().and_then(|f| constants.toggle_sfx(f, &kind, true)) {
                         send(n, None, &mut stats, &mut out);
                     }
                 }
             }
             _ => {}
+        }
+    }
+
+    // End of a death sequence.
+    let (due, waiting): (Vec<_>, Vec<_>) = std::mem::take(&mut mem.end_die).into_iter().partition(|d| d.0 <= clock);
+    mem.end_die = waiting;
+    for (_, name, at) in due {
+        send(&name, Some(at), &mut stats, &mut out);
+    }
+    // An ability of the player's ships ran out: its deactivation sound and the faction's toggle-off sound.
+    for s in cur.ships.iter().filter(|s| s.side == player) {
+        for (i, st) in s.abilities.iter().enumerate() {
+            if st.0 > 0.0 {
+                mem.abilities_on.insert((s.id, i));
+            } else if mem.abilities_on.remove(&(s.id, i)) {
+                let vis = visuals.ship(s.def);
+                let kind = rt.catalog.ship(s.def).abilities.get(i).map(|a| a.kind.to_ascii_uppercase()).unwrap_or_default();
+                if let Some(n) = vis.sfx.abilities.iter().find(|a| a.kind == kind).and_then(|a| a.deactivated.as_deref()) {
+                    send(n, None, &mut stats, &mut out);
+                }
+                if !vis.hero && let Some(n) = faction.as_deref().and_then(|f| constants.toggle_sfx(f, &kind, false)) {
+                    send(n, None, &mut stats, &mut out);
+                }
+            }
         }
     }
 
@@ -412,9 +452,10 @@ pub fn battle_audio(
         let specific = |def| {
             let v = &visuals.ship(def).sfx;
             match o.kind {
-            OrderKind::Move if group => v.fleet_move.as_deref(),
+            OrderKind::Move if group => v.fleet_move.as_deref().or(v.group_move.as_deref()),
             OrderKind::Move => v.mv.as_deref(),
             OrderKind::Attack if hardpoint_line => None,
+            OrderKind::Attack if group => v.attack.as_deref().or(v.group_attack.as_deref()),
             OrderKind::Attack => v.attack.as_deref(),
             OrderKind::Guard => v.guard.as_deref(),
             OrderKind::Stop => v.stop.as_deref(),
@@ -423,9 +464,11 @@ pub fn battle_audio(
         let fallback = |def| {
             let v = &visuals.ship(def).sfx;
             match o.kind {
-            OrderKind::Move if group => v.mv.as_deref(),
-            OrderKind::Move => v.fleet_move.as_deref(),
+            // `Assist_*` lines are the last resort of units that have no line of their own (estimate: the data does not say when they play).
+            OrderKind::Move if group => v.mv.as_deref().or(v.assist_move.as_deref()),
+            OrderKind::Move => v.fleet_move.as_deref().or(v.assist_move.as_deref()),
             OrderKind::Guard => v.stop.as_deref(),
+            OrderKind::Attack if !hardpoint_line => v.assist_attack.as_deref(),
             _ => None,
             }
         };

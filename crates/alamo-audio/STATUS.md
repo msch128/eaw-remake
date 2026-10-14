@@ -116,3 +116,8 @@ Empire at War audio: event data, sample resolution, decoding and a Bevy playback
 - Galaxy: `Build_Music_Completed` (Death Star / Starforge) plays over the map music; story dialog `SFX` (and `SPEECH`, none in the data) plays.
 - Still open: ability toggle / deactivate / target-ability voices, nebula / asteroid / assist / group lines, death end sound, Death Star battle theme, retreat cancel /
   not allowed, reinforcement panel lines, strategic win / lose per opponent (`play_ui.rs`), Lua `Play_Music` / `Play_SFX_Event`.
+
+## Audio pass 5
+- Per-ability sounds (`AbilitySfx` in `battle-view/visuals.rs`: activated / deactivated / target line of each `Unit_Ability`; the old top-level lookup missed these nested tags), faction ability
+  toggle sounds (`AudioConstants::toggle_sfx`), group / assist fallbacks, `Death_SFXEvent_End_Die` (1.5 s after the start sound, estimate), retreat-not-allowed before the countdown,
+  reinforcement window selection / cancelled lines. Lua audio calls are not needed (only ground bombing runs use them). Still open: see `docs/AUDIO-COVERAGE.md`.

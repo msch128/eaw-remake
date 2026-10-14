@@ -238,6 +238,8 @@ fn handle_clicks(
     mut action: ResMut<crate::camera::ActionCam>,
     mut hud: ResMut<crate::hud::HudState>,
     mut issued: MessageWriter<control::OrderIssued>,
+    audio: Option<Res<alamo_audio::plugin::AlamoAudio>>,
+    mut sfx: MessageWriter<alamo_audio::PlaySfx>,
 ) {
     let player = settings.player_side;
     for b in buttons.read() {
@@ -245,6 +247,12 @@ fn handle_clicks(
         match b.name.as_str() {
             "b_retreat" => {
                 // The announcement follows the sim's `RetreatOrdered` event (`audio::battle_audio`), so a refused order is silent.
+                // Before the retreat countdown ran out the sim refuses: the faction's `Space_Retreat_Not_Allowed_SFXEvent` instead.
+                if rt.cur.as_ref().is_some_and(|c| c.time < rt.retreat_countdown)
+                    && let Some(n) = rt.player_faction.as_deref().zip(audio.as_ref()).and_then(|(f, a)| a.constants.faction_sfx(f, "space_retreat_not_allowed_sfxevent"))
+                {
+                    sfx.write(alamo_audio::PlaySfx { event: n.to_string(), position: None, source: None });
+                }
                 rt.command(player, Command::Retreat);
             }
             "b_play_pause_t" => settings.paused = !settings.paused,
@@ -285,6 +293,12 @@ fn handle_clicks(
             rt.catalog.ship(s.def).abilities.iter().any(|d| d.kind.eq_ignore_ascii_case(&a.ability) && is_targeted(d))
         });
         if targeted {
+            // The unit's `SFXEvent_Target_Ability` line when the player is asked for a target.
+            if let Some(def) = group.first().and_then(|&id| rt.cur.as_ref().and_then(|c| c.ship(id))).map(|s| s.def)
+                && let Some(n) = rt.visuals.ship(def).sfx.abilities.iter().find(|x| x.kind.eq_ignore_ascii_case(&a.ability)).and_then(|x| x.target.as_deref())
+            {
+                sfx.write(alamo_audio::PlaySfx { event: n.to_string(), position: None, source: None });
+            }
             state.pending_ability = Some((group.clone(), a.ability.clone()));
             armed.0 = Some(control::ArmedKind::AbilityAt);
             continue;
@@ -540,13 +554,25 @@ fn reinforce_clicks(
     rt: Res<BattleRuntime>,
     mut ui: ResMut<ReinforceUi>,
     mut commands: Commands,
+    audio: Option<Res<alamo_audio::plugin::AlamoAudio>>,
+    mut sfx: MessageWriter<alamo_audio::PlaySfx>,
 ) {
+    // Faction announcements of `Factions.xml`: `Reinforcements_Selection_SFXEvent` (window opens) and `_Cancelled_` (closed while a unit was picked).
+    let mut say = |tag: &str| {
+        if let Some(n) = rt.player_faction.as_deref().zip(audio.as_ref()).and_then(|(f, a)| a.constants.faction_sfx(f, tag)) {
+            sfx.write(alamo_audio::PlaySfx { event: n.to_string(), position: None, source: None });
+        }
+    };
     for c in clicks.read() {
         match c.name.as_str() {
             "b_reinforcement" | "r_close" => {
                 if let Some(e) = ui.root.take() {
                     commands.entity(e).try_despawn();
+                    if ui.placing.is_some() {
+                        say("reinforcements_cancelled_sfxevent");
+                    }
                 } else if c.name == "b_reinforcement" && !ui.rows.is_empty() {
+                    say("reinforcements_selection_sfxevent");
                     info!("reinforcements: opening the window ({} unit types in the reserve)", ui.rows.len());
                     let faction = UiFaction::from_name(rt.player_faction.as_deref().unwrap_or("Empire"));
                     // `reinforcement_window_ALTn` is the frame for n + 1 rows.

@@ -67,6 +67,31 @@ pub struct UnitSfx {
     pub engine_moving: Option<String>,
     /// `SFXEvent_Ambient_Loop` (constant machinery of stations and big ships).
     pub ambient_loop: Option<String>,
+    /// `SFXEvent_Group_Move` (heroes: the line for a move order given to a group; estimate, the data does not say when).
+    pub group_move: Option<String>,
+    /// `SFXEvent_Group_Attack`.
+    pub group_attack: Option<String>,
+    /// `SFXEvent_Assist_Move` (units without own move line; `SFX_NA` / blank dropped).
+    pub assist_move: Option<String>,
+    /// `SFXEvent_Assist_Attack`.
+    pub assist_attack: Option<String>,
+    /// `Death_SFXEvent_End_Die` (end of the death sequence).
+    pub death_end: Option<String>,
+    /// Sounds of each `Unit_Ability` of `Unit_Abilities_Data`.
+    pub abilities: Vec<AbilitySfx>,
+}
+
+/// Sound events of one `Unit_Ability` block.
+#[derive(Debug, Clone, Default)]
+pub struct AbilitySfx {
+    /// `Type`, upper-case (`TURBO`, `TRACTOR_BEAM` ...); matches `AbilityDef::kind`.
+    pub kind: String,
+    /// `SFXEvent_GUI_Unit_Ability_Activated`.
+    pub activated: Option<String>,
+    /// `SFXEvent_GUI_Unit_Ability_Deactivated`.
+    pub deactivated: Option<String>,
+    /// `SFXEvent_Target_Ability` (the unit's line when the player picks a target for the ability).
+    pub target: Option<String>,
 }
 
 /// Visual description of one ship definition.
@@ -200,6 +225,30 @@ impl VisualCatalog {
                 engine_idle: sfx("sfxevent_engine_idle_loop"),
                 engine_moving: sfx("sfxevent_engine_moving_loop"),
                 ambient_loop: sfx("sfxevent_ambient_loop"),
+                group_move: sfx("sfxevent_group_move").filter(|n| !n.eq_ignore_ascii_case("sfx_na")),
+                group_attack: sfx("sfxevent_group_attack").filter(|n| !n.eq_ignore_ascii_case("sfx_na")),
+                assist_move: sfx("sfxevent_assist_move").filter(|n| !n.eq_ignore_ascii_case("sfx_na")),
+                assist_attack: sfx("sfxevent_assist_attack").filter(|n| !n.eq_ignore_ascii_case("sfx_na")),
+                death_end: sfx("death_sfxevent_end_die"),
+                abilities: r
+                    .as_ref()
+                    .and_then(|r| r.element("unit_abilities_data"))
+                    .map(|data| {
+                        data.children_named("unit_ability")
+                            .map(|a| {
+                                let tag = |t: &str| {
+                                    a.child_text(t).map(|v| v.trim().to_string()).filter(|v| !v.is_empty() && !v.eq_ignore_ascii_case("sfx_na"))
+                                };
+                                AbilitySfx {
+                                    kind: a.child_text("type").unwrap_or_default().trim().to_ascii_uppercase(),
+                                    activated: tag("sfxevent_gui_unit_ability_activated"),
+                                    deactivated: tag("sfxevent_gui_unit_ability_deactivated"),
+                                    target: tag("sfxevent_target_ability"),
+                                }
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default(),
             };
             let bank_turn_angle = r
                 .as_ref()

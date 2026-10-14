@@ -6,6 +6,8 @@ Fighters_Rebel_Losing_2: missing file Data\Audio\Voiceovers\BattleChatter\Space\
 Ion_Cannon_Fighter_Fire: unknown event
 Preset_Unit_Vehicle_Light_Fire: no samples
 SFX_Shield_Absorb_Detonation: no samples
+Unit_Assist_Move_Missile_Launcher: missing file U000_MAL0503_ENG.wav
+Unit_Assist_Move_Tie_Mauler: missing file U000_TMC0212_ENG.wav
 Unit_Attack_Angler: missing file Data\Audio\Voiceovers\GuP\voice_message_attack_A_0_1.wav
 Unit_Attack_Bellator_Star_Destroyer: missing file Data\Audio\Voiceovers\NeutralBellator\Empire_Bellator_Attack5.wav
 Unit_Attack_Engines_MandatorII: missing file Data\Audio\Voiceovers\NeutralMandator\mandator_engines.wav

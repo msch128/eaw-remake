@@ -71,6 +71,18 @@ pub const WIRED_TAGS: &[&str] = &[
     "tsw_sfxevent_weapon_power_up",
     "tsw_musicevent_activation_start",
     "space_retreat_enemy_begin_sfxevent",
+    "space_retreat_not_allowed_sfxevent",
+    "reinforcements_selection_sfxevent",
+    "reinforcements_cancelled_sfxevent",
+    "sfxevent_gui_unit_ability_deactivated",
+    "sfxevent_target_ability",
+    "sfxevent_gui_toggle_non_hero_ability_on",
+    "sfxevent_gui_toggle_non_hero_ability_off",
+    "sfxevent_group_move",
+    "sfxevent_group_attack",
+    "sfxevent_assist_move",
+    "sfxevent_assist_attack",
+    "death_sfxevent_end_die",
     "build_music_completed",
 ];
 
@@ -131,6 +143,10 @@ fn strip_comments(text: &str) -> String {
 /// Tags that hold `Key, Event` pairs (music environment, unit type, weather, ...) return only the event.
 fn event_names(tag: &str, value: &str) -> Vec<String> {
     let mut tokens: Vec<&str> = value.split(',').map(str::trim).filter(|t| !t.is_empty()).collect();
+    // `KEY,` with a blank event: the key alone is not an event.
+    if value.trim_end().ends_with(',') {
+        tokens.pop();
+    }
     // `Key, Event` pairs: music environment, unit type, weather, control-point type, versus-faction.
     let pair = tag.starts_with("music_event_list")
         || tag.ends_with("_control")
@@ -329,6 +345,7 @@ mod tests {
               <Play_SFXEvent_On_Sighting>True</Play_SFXEvent_On_Sighting>
               <Music_Event_List_Battle> Space, Space_Map_Rebel_Battle_Music_Event </Music_Event_List_Battle>
               <Click_SFX/>
+              <SFXEvent_GUI_Toggle_Non_Hero_Ability_On>SPREAD_OUT, </SFXEvent_GUI_Toggle_Non_Hero_Ability_On>
             </Unit></Root>"#;
         let refs = scan_text("t.xml", xml);
         let got: Vec<_> = refs.iter().map(|r| (r.tag.as_str(), r.event.as_str())).collect();

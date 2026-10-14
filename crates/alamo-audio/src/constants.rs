@@ -62,6 +62,8 @@ pub struct AudioConstants {
     pub faction_music: Vec<FactionMusic>,
     /// Per-faction battle announcement events of `Xml/Factions.xml`: `(faction, tag, event)`, see [`AudioConstants::parse_faction_sfx`].
     pub faction_sfx: Vec<(String, String, String)>,
+    /// Ability toggle sounds per faction, see [`AudioConstants::parse_toggle_sfx`].
+    pub faction_toggle: Vec<(String, bool, String, String)>,
 }
 
 impl Default for AudioConstants {
@@ -80,6 +82,7 @@ impl Default for AudioConstants {
             start_campaign: Vec::new(),
             faction_music: Vec::new(),
             faction_sfx: Vec::new(),
+            faction_toggle: Vec::new(),
         }
     }
 }
@@ -167,6 +170,35 @@ impl AudioConstants {
     pub fn faction_sfx(&self, faction: &str, tag: &str) -> Option<&str> {
         let f = faction.to_ascii_lowercase();
         self.faction_sfx.iter().find(|(ff, t, _)| *ff == f && t == tag).map(|(_, _, e)| e.as_str())
+    }
+
+
+    /// `SFXEvent_GUI_Toggle_Non_Hero_Ability_On` / `_Off` entries of every faction: `(faction lower-case, on, ability key upper-case, event)`.
+    pub fn parse_toggle_sfx(bytes: &[u8]) -> Vec<(String, bool, String, String)> {
+        let mut warnings = Vec::new();
+        let mut out = Vec::new();
+        if let Some(root) = alamo_data::xml::parse(bytes, "Factions.xml", &mut warnings) {
+            for f in root.children_named("faction") {
+                let Some(name) = f.attr("name") else { continue };
+                for (tag, on) in [("sfxevent_gui_toggle_non_hero_ability_on", true), ("sfxevent_gui_toggle_non_hero_ability_off", false)] {
+                    for e in f.children_named(tag) {
+                        if let Some((key, event)) = e.text_trimmed().split_once(',') {
+                            let (key, event) = (key.trim(), event.trim());
+                            if !key.is_empty() && !event.is_empty() {
+                                out.push((name.trim().to_ascii_lowercase(), on, key.to_ascii_uppercase(), event.to_string()));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// The GUI sound when `faction` switches the non-hero ability `kind` (`AbilityDef::kind`) on or off.
+    pub fn toggle_sfx(&self, faction: &str, kind: &str, on: bool) -> Option<&str> {
+        let (f, k) = (faction.to_ascii_lowercase(), kind.to_ascii_uppercase());
+        self.faction_toggle.iter().find(|(ff, o, kk, _)| *ff == f && *o == on && *kk == k).map(|(_, _, _, e)| e.as_str())
     }
 
     /// `Music_Event_*` tags of every faction in a `Factions.xml` file.
@@ -259,6 +291,7 @@ impl AudioConstants {
             c.start_campaign = Self::parse_start_campaign(&bytes);
             c.faction_music = Self::parse_faction_music(&bytes);
             c.faction_sfx = Self::parse_faction_sfx(&bytes);
+            c.faction_toggle = Self::parse_toggle_sfx(&bytes);
         }
         if let Some(t) = read("Xml/Gameconstants.xml") {
             if let Some(v) = tag_f32(&t, "Health_Low_Percent_Threshold") {
