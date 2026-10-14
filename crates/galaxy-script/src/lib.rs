@@ -55,6 +55,9 @@ pub struct ScriptedConfig {
     /// match seed (`SimConfig::seed`), so a seed replays exactly.
     #[serde(default = "default_variety")]
     pub variety: f64,
+    /// Game content the match needs (`--mod` value of the stack, e.g. `fft`); `None` = Remake 4.0 or not recorded. Written into saves so loading starts the right stack.
+    #[serde(default)]
+    pub content: Option<String>,
 }
 
 fn default_variety() -> f64 {
@@ -142,6 +145,7 @@ impl Default for ScriptedConfig {
             strategy: true,
             personalities: default_personalities(),
             variety: default_variety(),
+            content: None,
         }
     }
 }
@@ -266,6 +270,7 @@ impl ScriptedSim {
         );
         let mut start_errors = Vec::new();
 
+        let mut plots: Vec<(String, String)> = Vec::new();
         for (faction, key) in [
             ("Rebel", "rebel_story_name"),
             ("Empire", "empire_story_name"),
@@ -278,8 +283,24 @@ impl ScriptedSim {
             if let Some(file) = value
                 .map(|v| v.trim().to_string())
                 .filter(|v| !v.is_empty())
-                && let Err(e) = runtime.load_story_plots(&file, Some(faction))
             {
+                plots.push((faction.to_string(), file));
+            }
+        }
+        // Every other playable faction of the game (the Clone Wars stack: Republic, CIS) has its plot as `Story_Name` of its campaign entry.
+        // Minor factions that are not playable keep running without one, as before.
+        for cf in &campaign.factions {
+            if plots.iter().any(|(f, _)| f.eq_ignore_ascii_case(&cf.name))
+                || !data.playable_factions().iter().any(|p| p.name.eq_ignore_ascii_case(&cf.name))
+            {
+                continue;
+            }
+            if let Some(file) = cf.story_name.as_deref().map(str::trim).filter(|v| !v.is_empty()) {
+                plots.push((cf.name.clone(), file.to_string()));
+            }
+        }
+        for (faction, file) in plots {
+            if let Err(e) = runtime.load_story_plots(&file, Some(&faction)) {
                 start_errors.push(format!("{faction} story {file}: {e}"));
             }
         }
@@ -580,13 +601,20 @@ pub fn player_difficulty(_tier: DifficultyTier) -> galaxy_sim::Difficulty {
     galaxy_sim::Difficulty::default()
 }
 
+/// Brutal AI income multiplier (Hard is 3.0 in the data).
+/// estimate: user decision 2026-10-14, no XML value.
+pub const BRUTAL_CREDIT_MULTIPLIER: f32 = 4.0;
+/// Brutal AI galactic build-time multiplier (Hard is 0.9 in the data).
+/// estimate: user decision 2026-10-14, no XML value.
+pub const BRUTAL_BUILD_TIME_MULTIPLIER: f32 = 0.8;
+
 /// Maps a tier to the sim multipliers and the AI tier (see [`DifficultyTier`]).
 fn tier_settings(table: &alamo_data::DifficultyTable, tier: DifficultyTier, minor: bool) -> (galaxy_sim::Difficulty, AiTier) {
     let suffix = if minor { "Minor" } else { "Default" };
     let entry = |name: &str| table.get(&format!("{name}_{suffix}")).cloned().unwrap_or_default();
     let ai = |name: &str, a: &alamo_data::DifficultyAdjustment, full: bool| AiTier { name: name.into(), contrast: f64::from(a.galactic_contrast), goal_sleep: f64::from(a.galactic_goal_sleep), full_map_knowledge: full };
     // Easy, Normal and Hard are the `<Tier>_Default` / `<Tier>_Minor` entries of `DifficultyAdjustments.xml` unchanged. The data has no Brutal or Fair entry:
-    // Brutal uses the Hard entry and gives the AI full map knowledge, Fair plays the Normal AI behaviour with neutral multipliers (no income, build time or battle bonus).
+    // Brutal uses the Hard entry with the stronger income and build time above and gives the AI full map knowledge, Fair plays the Normal AI behaviour with neutral multipliers (no income, build time or battle bonus).
     match tier {
         DifficultyTier::Easy => {
             let a = entry("Easy");
@@ -602,7 +630,8 @@ fn tier_settings(table: &alamo_data::DifficultyTable, tier: DifficultyTier, mino
         }
         DifficultyTier::Brutal => {
             let a = entry("Hard");
-            (galaxy_sim::Difficulty::from_adjustment(&a), ai("Brutal", &a, true))
+            let d = galaxy_sim::Difficulty { credit: BRUTAL_CREDIT_MULTIPLIER, build_time: BRUTAL_BUILD_TIME_MULTIPLIER, ..galaxy_sim::Difficulty::from_adjustment(&a) };
+            (d, ai("Brutal", &a, true))
         }
         DifficultyTier::Fair => {
             let a = entry("Normal");
@@ -631,7 +660,7 @@ mod minor_tests {
         let Some(install) = alamo_fs::GameInstall::detect().filter(|i| i.mod_data("1770851727").is_dir()) else { return };
         let fs = alamo_fs::GameFs::for_mod(&install, Some("1770851727")).unwrap();
         let table = alamo_data::DifficultyTable::load(&fs, &mut Vec::new());
-        for (tier, name) in [(DifficultyTier::Easy, "Easy"), (DifficultyTier::Normal, "Normal"), (DifficultyTier::Hard, "Hard"), (DifficultyTier::Brutal, "Hard")] {
+        for (tier, name) in [(DifficultyTier::Easy, "Easy"), (DifficultyTier::Normal, "Normal"), (DifficultyTier::Hard, "Hard")] {
             for (minor, suffix) in [(false, "Default"), (true, "Minor")] {
                 let want = table.get(&format!("{name}_{suffix}")).expect("entry in the data");
                 let (d, _) = tier_settings(&table, tier, minor);
@@ -640,6 +669,15 @@ mod minor_tests {
         }
         let (hard, easy) = (table.get("Hard_Default").unwrap(), table.get("Easy_Default").unwrap());
         assert!(hard.credit_multiplier > easy.credit_multiplier && hard.galactic_build_time < easy.galactic_build_time);
+        // Brutal is Hard plus our estimates: more income, faster builds, same battle multipliers.
+        for minor in [false, true] {
+            let (h, _) = tier_settings(&table, DifficultyTier::Hard, minor);
+            let (b, ai) = tier_settings(&table, DifficultyTier::Brutal, minor);
+            assert!(b.credit > h.credit && b.build_time < h.build_time, "brutal {b:?} vs hard {h:?}");
+            assert_eq!((b.credit, b.build_time), (BRUTAL_CREDIT_MULTIPLIER, BRUTAL_BUILD_TIME_MULTIPLIER));
+            assert_eq!((b.damage, b.health, b.shield), (h.damage, h.health, h.shield));
+            assert!(ai.full_map_knowledge);
+        }
     }
 
     #[test]

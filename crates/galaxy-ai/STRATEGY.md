@@ -37,7 +37,7 @@ If the needed strength is 50-90% of everything the player owns, two plans attack
 on positive income, build time, and damage/health/shield in statistical battles and (via `TacticalSide`, `BattleConfig::side_mults`) tactical ones.
 The AI reads `Galactic_AI_Contrast_Multiplier` (force margin) and `Galactic_AI_Goal_Cycle_Sleep_Duration` (extra wait between evaluations as a fraction
 of the interval; the unit is an estimate). Tiers (`galaxy_script::DifficultyTier`): Easy/Normal/Hard = mod data (`*_Default`, `*_Minor` for minor
-factions); **Brutal** (estimate): Hard with credits x4 and full map knowledge; **Fair** (estimate): no multipliers at all, Normal contrast, fog.
+factions); **Brutal** (estimate): Hard with credits x4, build time x0.8 and full map knowledge; **Fair** (estimate): no multipliers at all, Normal contrast, fog.
 Personalities (aggression, expansion, caution; default 1) per faction; defaults in `galaxy_script::default_personalities` are estimates.
 
 ## Match variety and heroes

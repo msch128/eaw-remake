@@ -196,3 +196,6 @@ They do rearm, in `Sim::rearm_passive` (once at the start, and on every week tic
 Tests: `the_pirates_rearm_with_the_players_tech_in_every_game_and_never_expand` (tests/ground_up.rs, normal GC and ground up; without enemies the pirate planet count stays the same). Other AIs still conquer pirate planets.
 
 Fog of war, U89 correction: a corvette (or any unit with `System_Spy_Ability`) does **not** reveal the neighbouring systems. The data gives `System_Spy_Ability` the *system its unit is in* (`See_Base_Levels`, `See_Credit_Income`, `See_Num_Fleets` ...), which presence already covers; the only ranges in the XML are `Galactic_Influence_Range` of the Spy Network (350, Rebel `Spy_Center`, not modelled) and of a few hero abilities (200). The earlier rule "any corvette gives Detailed sight of all neighbours" had no source and was removed (test `a_corvette_next_door_does_not_reveal_the_neighbouring_system`).
+
+## Difficulty estimates (`galaxy_script::BRUTAL_*`)
+Easy/Normal/Hard are the `DifficultyAdjustments.xml` entries. Brutal has no XML entry: it is Hard (battle multipliers, AI behaviour) plus full map knowledge and two **estimates** (user decision 2026-10-14): AI credit multiplier `BRUTAL_CREDIT_MULTIPLIER` 4.0 (Hard 3.0) and galactic build-time multiplier `BRUTAL_BUILD_TIME_MULTIPLIER` 0.8 (Hard 0.9).

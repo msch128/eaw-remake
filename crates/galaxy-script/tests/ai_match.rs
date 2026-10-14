@@ -171,9 +171,9 @@ fn difficulty_tiers_scale_without_snowballing() {
             credits.push(r.credits_week10);
         }
     }
-    // The multipliers are the data's (Easy 1.0, Normal 2.0, Hard 3.0 income): Easy ends poorest. The data has no Brutal entry (Brutal = Hard plus full map knowledge), so Brutal
-    // cannot out-earn Hard by a multiplier, and a richer Hard AI also spends more than Normal: only the ordering the data implies is asserted.
-    assert!(credits[0] < credits[1] && credits[0] < credits[2] && credits[2] <= credits[3], "easy must end poorest, brutal not below hard: {credits:?}");
+    // The multipliers are the data's (Easy 1.0, Normal 2.0, Hard 3.0 income): Easy ends poorest. Brutal is Hard with our estimates (income 4.0, build time 0.8, full map knowledge),
+    // so it must end richer than Hard; a richer Hard AI also spends more than Normal, so Normal vs Hard is not asserted.
+    assert!(credits[0] < credits[1] && credits[0] < credits[2] && credits[2] < credits[3], "easy must end poorest, brutal above hard: {credits:?}");
 }
 
 #[test]
