@@ -828,11 +828,14 @@ fn ability_keys(
         return;
     }
     const DIGITS: [KeyCode; 6] = [KeyCode::Digit1, KeyCode::Digit2, KeyCode::Digit3, KeyCode::Digit4, KeyCode::Digit5, KeyCode::Digit6];
-    let Some(unit) = tac.selection.get(tac.focus) else { return };
+    // The focused group first; in a mixed selection the first group that has that ability slot answers (U41).
+    let focus = tac.selection.get(tac.focus).into_iter();
+    let order: Vec<_> = focus.chain(tac.selection.iter().enumerate().filter(|(i, _)| *i != tac.focus).map(|(_, u)| u)).collect();
     for (k, key) in DIGITS.iter().enumerate() {
-        if keys.just_pressed(*key)
-            && let Some(a) = unit.abilities.get(k).filter(|a| !a.disabled)
-        {
+        if !keys.just_pressed(*key) {
+            continue;
+        }
+        if let Some((unit, a)) = order.iter().find_map(|u| u.abilities.get(k).filter(|a| !a.disabled).map(|a| (*u, a))) {
             clicks.write(EawAbilityClicked { unit_type: unit.unit_type.clone(), ability: a.def.kind.clone() });
         }
     }
