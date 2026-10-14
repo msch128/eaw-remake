@@ -35,7 +35,7 @@ struct Station;
 
 /// The model child of a station.
 #[derive(Component)]
-struct StationModel;
+struct StationModel(f32);
 
 /// Angle (XZ plane) of the station slot around a planet: left of the three fleet slots.
 const STATION_ANGLE: f32 = -3.45;
@@ -94,7 +94,7 @@ fn sync_stations(
                     StationDisc(root),
                 ));
                 if let Some(m) = model {
-                    commands.spawn((AlamoModel::new(m).with_team_color(col), Transform::default(), StationModel, ChildOf(root)));
+                    commands.spawn((AlamoModel::new(m).with_team_color(col), Transform::default(), StationModel(pad), ChildOf(root)));
                 }
                 stations.0.insert(id, (root, w));
             }
@@ -114,13 +114,13 @@ struct StationDisc(Entity);
 /// Scales freshly loaded station models to a fixed size and centres them.
 fn fit_stations(
     mut commands: Commands,
-    layout: Res<GalaxyLayout>,
-    mut loaded: Query<(&AlamoModelLoaded, &mut Transform), (With<StationModel>, Added<AlamoModelLoaded>)>,
+    mut loaded: Query<(&AlamoModelLoaded, &mut Transform, &StationModel), Added<AlamoModelLoaded>>,
     discs: Query<(Entity, &StationDisc)>,
     roots: Query<(), With<Station>>,
 ) {
-    for (m, mut tf) in &mut loaded {
-        let s = if m.radius > 0.0 { layout.unit * 0.6 / m.radius } else { 1.0 };
+    for (m, mut tf, station) in &mut loaded {
+        // About 1.6 pad radii of model radius: the station stands on its pad like the ships (it was 0.6 `unit`, far bigger than the pads).
+        let s = if m.radius > 0.0 { station.0 * 1.6 / m.radius } else { 1.0 };
         tf.scale = Vec3::splat(s);
         tf.translation = -m.center * s;
     }
