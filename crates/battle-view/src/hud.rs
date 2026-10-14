@@ -645,12 +645,10 @@ pub(crate) fn heroes(
         let selected = selection.ships.contains(&p.0);
         *border = BorderColor::all(if selected { HERO_RING_SELECTED } else { HERO_RING_IDLE });
         if *interaction == Interaction::Pressed {
-            let double = state.last_click.is_some_and(|(id, at)| id == p.0 && t - at < 0.4);
+            // A click on a face selects the hero and brings the camera to it (the Remake does both).
             selection.ships = vec![p.0];
             selection.enemy = None;
-            if double {
-                focus.write(FocusCamera);
-            }
+            focus.write(FocusCamera);
             state.last_click = Some((p.0, t));
         }
     }
