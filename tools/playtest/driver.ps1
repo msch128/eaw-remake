@@ -1,4 +1,4 @@
-# Real-input playtest helpers for Space Peace (Windows PowerShell 5.1).
+﻿# Real-input playtest helpers for Space Peace (Windows PowerShell 5.1).
 # Dot-source it:  . .\tools\playtest\driver.ps1
 # Usage:
 #   Start-Game -Exe 'target\playfix\release\space-peace.exe'   # windowed, --volume 0 (muted; the flag overrides the stored setting), scratch APPDATA
@@ -55,7 +55,7 @@ Add-Type -AssemblyName System.Drawing
 
 $script:Proc = $null
 $script:Hwnd = [IntPtr]::Zero
-$script:Title = "Space Peace"
+$script:Title = "EAW:Remake"
 $script:Scratch = Join-Path $env:TEMP 'space-peace-qa'
 $script:Shot = 0
 
@@ -87,6 +87,8 @@ function Assert-GameInFront {
     $h = $script:Hwnd
     for ($i = 0; $i -lt 3; $i++) {
         if ([Win]::GetForegroundWindow() -eq $h) { return }
+        # Windows only lets the process with the last input take the foreground; a tapped Alt counts as our input.
+        [Win]::keybd_event(0x12, 0, 0, [UIntPtr]::Zero); [Win]::keybd_event(0x12, 0, [Win]::KEYUP, [UIntPtr]::Zero)
         [void][Win]::SetForegroundWindow($h); Start-Sleep -Milliseconds 150
     }
     if ([Win]::GetForegroundWindow() -ne $h) { throw 'game window is not in front: stopping so no input or capture reaches another app' }
