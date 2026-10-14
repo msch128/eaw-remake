@@ -28,8 +28,8 @@ pub const MSAA_MODES: [u32; 4] = [1, 2, 4, 8];
 pub const CAMERA_SPEEDS: [f32; 5] = [0.5, 0.75, 1.0, 1.5, 2.0];
 /// Selectable bloom intensity multipliers.
 pub const BLOOM_INTENSITIES: [f32; 4] = [0.5, 1.0, 1.5, 2.0];
-/// Selectable key choices for pause.
-pub const PAUSE_KEYS: [KeyCode; 3] = [KeyCode::Space, KeyCode::KeyP, KeyCode::Pause];
+/// Selectable key choices for pause (EaW has no default pause key; Space is Movie Mode).
+pub const PAUSE_KEYS: [KeyCode; 2] = [KeyCode::KeyP, KeyCode::Pause];
 /// Selectable key choices for speed / fast-forward.
 pub const SPEED_KEYS: [KeyCode; 4] = [KeyCode::Tab, KeyCode::PageUp, KeyCode::NumpadAdd, KeyCode::BracketRight];
 /// Selectable key choices for attack-move.
@@ -57,7 +57,7 @@ pub struct KeyBindings {
 impl Default for KeyBindings {
     fn default() -> Self {
         Self {
-            pause: KeyCode::Space,
+            pause: KeyCode::KeyP,
             speed: KeyCode::Tab,
             attack_move: KeyCode::KeyA,
             stop: KeyCode::KeyS,
@@ -568,7 +568,7 @@ impl Settings {
                 "bloom_intensity" => s.bloom_intensity = float().unwrap_or(s.bloom_intensity).clamp(0.25, 3.0),
                 "shadows" => s.shadows = boolean().unwrap_or(s.shadows),
                 "particle_density" => s.particle_density = float().unwrap_or(s.particle_density).clamp(0.25, 1.0),
-                "key_pause" => if let Some(k) = parse_key(value.trim_matches('"')) { s.bindings.pause = k; },
+                "key_pause" => if let Some(k) = parse_key(value.trim_matches('"')) { s.bindings.pause = if k == KeyCode::Space { KeyCode::KeyP } else { k }; },
                 "key_speed" => if let Some(k) = parse_key(value.trim_matches('"')) { s.bindings.speed = k; },
                 "key_attack_move" => if let Some(k) = parse_key(value.trim_matches('"')) { s.bindings.attack_move = k; },
                 "key_stop" => if let Some(k) = parse_key(value.trim_matches('"')) { s.bindings.stop = k; },
@@ -752,7 +752,7 @@ mod tests {
         s.step(OptionKey::WindowMode, 1);
         assert!(s.borderless);
         s.step(OptionKey::KeyPause, 1);
-        assert_eq!(s.bindings.pause, KeyCode::KeyP);
+        assert_eq!(s.bindings.pause, KeyCode::Pause);
         s.step(OptionKey::BloomIntensity, 1);
         assert_eq!(s.bloom_intensity, 1.5);
     }
