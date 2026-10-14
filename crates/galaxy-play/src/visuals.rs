@@ -80,10 +80,12 @@ pub struct FleetAssets {
     cone: Handle<Mesh>,
     /// Unit disc (flat in XZ after the child rotation) used as the base under fleets.
     disc: Handle<Mesh>,
+    /// Thin coloured rim around the disc.
+    rim: Handle<Mesh>,
 }
 
 pub(crate) fn setup_assets(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>) {
-    commands.insert_resource(FleetAssets { cone: meshes.add(Cone::new(0.5, 1.4)), disc: meshes.add(Circle::new(1.0).mesh().resolution(48)) });
+    commands.insert_resource(FleetAssets { cone: meshes.add(Cone::new(0.5, 1.4)), disc: meshes.add(Circle::new(1.0).mesh().resolution(48)), rim: meshes.add(Annulus::new(0.92, 1.0).mesh().resolution(48)) });
 }
 
 /// Colour of a faction on the map: the player's own is green like in the game, the others use their data colour.
@@ -240,6 +242,20 @@ pub fn sync_fleets(
                         ..default()
                     })),
                     Transform::from_xyz(0.0, -layout.unit * 0.12, 0.0).with_rotation(Quat::from_rotation_x(-FRAC_PI_2)).with_scale(Vec3::splat(layout.unit * 0.6)),
+                    ChildOf(root),
+                ));
+                commands.spawn((
+                    Mesh3d(assets.rim.clone()),
+                    MeshMaterial3d(mats.add(StandardMaterial {
+                        base_color: map_color(world, player.0, f.owner).with_alpha(0.85),
+                        emissive: LinearRgba::new(tl.red, tl.green, tl.blue, 1.0) * 1.5,
+                        unlit: true,
+                        depth_bias: 402.0,
+                        alpha_mode: AlphaMode::Blend,
+                        cull_mode: None,
+                        ..default()
+                    })),
+                    Transform::from_xyz(0.0, -layout.unit * 0.11, 0.0).with_rotation(Quat::from_rotation_x(-FRAC_PI_2)).with_scale(Vec3::splat(layout.unit * 0.6)),
                     ChildOf(root),
                 ));
                 entities.0.insert(f.id, root);
