@@ -2545,8 +2545,9 @@ fn update_planet_panel(
     mut panel: Single<&mut Visibility, With<PlanetPanel>>,
     mut texts: Query<(&PlanetPanelText, &mut Text)>,
     mut emblem: Single<&mut ImageNode, With<PanelEmblem>>,
-    mut pips: Query<(&PanelPip, &mut Node)>,
+    mut pips: Query<(&PanelPip, &mut Node, &mut ImageNode), Without<PanelEmblem>>,
 ) {
+    let mut textures = textures;
     // In the planet view the viewed planet counts even when only a fleet is selected.
     // Outside the planet view: the planet under a hovered fleet, else the hovered planet, else the planet of the
     // selected fleet (the panel never keeps showing a stale hover).
@@ -2584,8 +2585,8 @@ fn update_planet_panel(
         }
     }
     let icon = p.owner.and_then(|o| view.factions.get(o)).and_then(|f| f.icon.clone());
-    match (icon, textures) {
-        (Some(name), Some(mut tex)) => {
+    match (icon, textures.as_mut()) {
+        (Some(name), Some(tex)) => {
             if let Some(t) = tex.get(&mut images, &name) {
                 if emblem.image != t.handle {
                     emblem.image = t.handle;
@@ -2596,7 +2597,22 @@ fn update_planet_panel(
         _ => emblem.color = Color::NONE,
     }
     let counts = [p.land_slots.clamp(0, 8) as usize, p.max_space_base.clamp(0, 8) as usize];
-    for (pip, mut node) in &mut pips {
+    // The game's own row icons (`i_bar_icons_land` turret, `i_bar_icons_space` pod tower), tinted in the owner's faction colour
+    // (the Remake panel shows them in the faction colour, red for the Rebels: CS9VdxglewY f0009).
+    let tint = p.owner.and_then(|o| view.factions.get(o)).map_or(Color::srgb(0.75, 0.9, 1.0), |f| {
+        let m = f.color[0].max(f.color[1]).max(f.color[2]).max(1e-3);
+        Color::srgb((f.color[0] / m).powf(1.4), (f.color[1] / m).powf(1.4), (f.color[2] / m).powf(1.4))
+    });
+    let real = textures.as_mut().map(|t| [t.get(&mut images, "i_bar_icons_land.tga"), t.get(&mut images, "i_bar_icons_space.tga")]);
+    for (pip, mut node, mut img) in &mut pips {
+        if let Some(Some(t)) = real.as_ref().map(|r| &r[pip.row])
+            && img.image != t.handle
+        {
+            img.image = t.handle.clone();
+        }
+        if img.color != tint {
+            img.color = tint;
+        }
         let want = if pip.index < counts[pip.row] { Display::Flex } else { Display::None };
         if node.display != want {
             node.display = want;
@@ -2680,6 +2696,29 @@ fn planet_view_ui(world: &mut World, mut last_key: Local<Option<(usize, u64)>>) 
     let mut spec = eaw_ui::ShellSpec::new("I_Galactic_Organize_New.ALO", faction);
     spec.anchor = eaw_ui::ShellAnchor::TopCenter;
     spec.offset = Vec2::new(0.0, -45.0);
+    // "BASE LAYOUT" button under the ground board (CS9VdxglewY f0009). Look only: editing the base layout is not implemented.
+    world.spawn((
+        OrbitBoxes,
+        GlobalZIndex(9),
+        Node {
+            position_type: PositionType::Absolute,
+            left: Val::Percent(44.3),
+            top: Val::Percent(75.0),
+            width: Val::Percent(11.5),
+            height: Val::Percent(3.2),
+            border: UiRect::all(Val::Px(1.0)),
+            justify_content: JustifyContent::Center,
+            align_items: AlignItems::Center,
+            ..default()
+        },
+        BackgroundColor(Color::srgba(0.02, 0.03, 0.05, 0.85)),
+        BorderColor::all(Color::srgb(0.62, 0.68, 0.74)),
+        children![(
+            Text::new("BASE LAYOUT"),
+            TextFont { font: FontSource::Family("Bahnschrift".into()), font_size: FontSize::Px(13.0), ..default() },
+            TextColor(Color::srgb(0.92, 0.95, 1.0)),
+        )],
+    ));
     if let Some(root) = eaw_ui::spawn_shell(world, &spec) {
         world.entity_mut(root).insert((OrbitBoxes, GlobalZIndex(9)));
         // The frame texture (`i_galactic_organize.dds`) carries a faint blue wash (alpha 2 of 255) over its whole quad
