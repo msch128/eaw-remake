@@ -23,6 +23,8 @@ pub struct PlayHover {
     pub fleet: Option<FleetId>,
     /// Planet under the cursor.
     pub planet: Option<PlanetId>,
+    /// Fleet slot circle (`1..=3`) of that planet under the cursor: a fleet dropped there takes (or merges into) that slot.
+    pub slot: Option<u8>,
 }
 
 /// Set by the host while the cursor is over its own UI or the map is not active; the plugin then
@@ -118,7 +120,22 @@ pub fn update_hover(
                 Some((i as PlanetId, a, (a.distance(b) * 1.25).max(36.0)))
             }),
         );
-        Some(PlayHover { fleet, planet })
+        // The three slot circles around the hovered planet (the ones `visuals` draws).
+        let slot = planet.and_then(|p| {
+            let c = layout.positions[p as usize];
+            let r = layout.orbit_radius(p);
+            pick_nearest(
+                cursor,
+                (0..3u8).filter_map(|s| {
+                    let a = crate::visuals::slot_angle(s as usize);
+                    let at = c + Vec3::new(a.cos() * r, 0.0, a.sin() * r);
+                    let sp = camera.world_to_viewport(cam_tf, at).ok()?;
+                    let edge = camera.world_to_viewport(cam_tf, at + right * layout.unit * 0.95).ok()?;
+                    Some((s + 1, sp, sp.distance(edge).max(10.0)))
+                }),
+            )
+        });
+        Some(PlayHover { fleet, planet, slot })
     })()
     .unwrap_or_default();
     if *hover != new {
@@ -277,6 +294,13 @@ pub fn handle_mouse(
                 } else if let Some(to) = target_planet {
                     actions.write(PlayAction::MoveSelected(to));
                 }
+            } else if let (Some(to), Some(slot)) = (hover.planet, hover.slot) {
+                // Dropped on a slot circle: the dragged fleet (and the rest of the selection) goes into that slot.
+                let mut sel: Vec<FleetId> = selection.fleets.iter().copied().filter(|&f| mine(f)).collect();
+                if !sel.contains(&src_fid) {
+                    sel.push(src_fid);
+                }
+                actions.write(PlayAction::MoveToSlot { fleets: sel, to, slot });
             } else if let Some(to) = target_planet {
                 actions.write(PlayAction::MoveSelected(to));
             }

@@ -193,7 +193,8 @@ pub fn sync_fleets(
                 let (i, n) = slot_of(p, f.id);
                 // Three fixed GUI fleet slots above the planet (no fleet limit in the data); extra fleets share a slot.
                 let _ = n;
-                let (s, k) = (i % 3, i / 3);
+                // The fleet's own slot (the sim keeps three per faction and planet); fleets without one share by index.
+                let (s, k) = if (1..=3).contains(&f.slot) { (f.slot as usize - 1, 0) } else { (i % 3, i / 3) };
                 let a = slot_angle(s);
                 let r = layout.orbit_radius(p) + k as f32 * layout.unit * 0.35;
                 let c = layout.positions[p as usize];
