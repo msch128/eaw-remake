@@ -138,7 +138,7 @@ fn defense_strength(world: &World, galaxy: &Galaxy, planet: PlanetId, attacker: 
             parts.push((Source::Starbase(sb), 1));
             parts.extend(world.starbases[sb as usize].garrison.iter().map(|&(u, c)| (Source::Garrison(u), c)));
         }
-        parts.extend(ps.structures.iter().filter(|&&s| world.structures[s as usize].combat.is_some()).map(|&s| (Source::Structure(s), 1)));
+        parts.extend(ps.structures.iter().filter(|&&s| { let st = &world.structures[s as usize]; st.combat.is_some() || st.space_reach }).map(|&s| (Source::Structure(s), 1)));
     }
     for f in galaxy.fleets_at(planet).filter(|f| galaxy.hostile(world, attacker, f.owner)) {
         parts.extend(f.units.iter().map(|(&u, &c)| (Source::Unit(u), c)));

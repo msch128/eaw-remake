@@ -796,7 +796,7 @@ impl Sim {
                 continue;
             }
             let ps = &self.galaxy.planets[p as usize];
-            let defender = ps.owner.filter(|_| ps.starbase.is_some() || ps.structures.iter().any(|&s| w.structures[s as usize].combat.is_some()));
+            let defender = ps.owner.filter(|_| ps.starbase.is_some() || ps.structures.iter().any(|&s| w.structures[s as usize].combat.is_some() || w.structures[s as usize].space_reach));
             if let Some(d) = defender
                 && !factions.contains(&d)
             {
