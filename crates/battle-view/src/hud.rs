@@ -210,7 +210,7 @@ pub fn spawn_hud(
             row_gap: Val::Px(3.0),
             ..default()
         },
-        BackgroundColor(Color::srgba(0.04, 0.09, 0.17, 0.5)),
+        BackgroundColor(Color::srgba(0.04, 0.09, 0.17, 0.3)),
         GlobalZIndex(60),
     ));
     target(&mut boxed);
@@ -227,6 +227,8 @@ pub fn spawn_hud(
         }
         commands.spawn((TextSpan::new(s), f, TextColor(head_color), ChildOf(head)));
     }
+    // Thin rule under the heading (Remake frames b0031 / n93 f0011).
+    commands.spawn((Node { width: Val::Percent(100.0), height: Val::Px(1.0), ..default() }, BackgroundColor(Color::srgba(0.8, 0.86, 0.95, 0.55)), ChildOf(boxed)));
     commands.spawn((
         Text::new(format!("1. {body}")),
         font(&ui, 10.5),
