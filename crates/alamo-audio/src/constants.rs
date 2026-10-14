@@ -3,6 +3,35 @@
 
 use alamo_fs::FileSource;
 
+
+/// Music events a faction names in `Xml/Factions.xml` (`Music_Event_Battle_Load_Screen`, `Music_Event_Tactical_Win` and
+/// `_Lose`, `Music_Event_Strategic_Win` / `_Lose`, their `_Vs_Faction` variants, `Music_Event_Space_Battle_Super_Weapon`).
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct FactionMusic {
+    /// Faction name, lower-case.
+    pub faction: String,
+    /// `Music_Event_Battle_Load_Screen`.
+    pub battle_load: Option<String>,
+    /// `Music_Event_Tactical_Win`.
+    pub tactical_win: Option<String>,
+    /// `Music_Event_Tactical_Lose`.
+    pub tactical_lose: Option<String>,
+    /// `Music_Event_Strategic_Win`.
+    pub strategic_win: Option<String>,
+    /// `Music_Event_Strategic_Lose`.
+    pub strategic_lose: Option<String>,
+    /// `Music_Event_Tactical_Win_Vs_Faction`: `(opponent lower-case, event)`.
+    pub tactical_win_vs: Vec<(String, String)>,
+    /// `Music_Event_Tactical_Lose_Vs_Faction`.
+    pub tactical_lose_vs: Vec<(String, String)>,
+    /// `Music_Event_Strategic_Win_Vs_Faction`.
+    pub strategic_win_vs: Vec<(String, String)>,
+    /// `Music_Event_Strategic_Lose_Vs_Faction`.
+    pub strategic_lose_vs: Vec<(String, String)>,
+    /// `Music_Event_Space_Battle_Super_Weapon` (battle theme while a super weapon is in the battle).
+    pub space_battle_super_weapon: Option<String>,
+}
+
 /// Values read from the game data; the defaults are the shipped numbers of the Remake 4.0 files.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AudioConstants {
@@ -29,6 +58,10 @@ pub struct AudioConstants {
     pub unit_type_spotted: Vec<(String, String, String)>,
     /// `SFXEvent_GUI_Start_Campaign` of `Xml/Factions.xml`: `(faction lower-case, event)`, played when "Start Game" is pressed.
     pub start_campaign: Vec<(String, String)>,
+    /// `Music_Event_*` tags of `Xml/Factions.xml` per faction.
+    pub faction_music: Vec<FactionMusic>,
+    /// Per-faction battle announcement events of `Xml/Factions.xml`: `(faction, tag, event)`, see [`AudioConstants::parse_faction_sfx`].
+    pub faction_sfx: Vec<(String, String, String)>,
 }
 
 impl Default for AudioConstants {
@@ -45,6 +78,8 @@ impl Default for AudioConstants {
             planet_capture_bonus: Some("Unit_Light_Saber_On".into()),
             unit_type_spotted: Vec::new(),
             start_campaign: Vec::new(),
+            faction_music: Vec::new(),
+            faction_sfx: Vec::new(),
         }
     }
 }
@@ -96,6 +131,108 @@ impl AudioConstants {
         out
     }
 
+
+
+    /// The per-faction SFX tags of `Factions.xml` that carry battle announcements (`Space_Retreat_Enemy_Begin_SFXEvent` ...), as
+    /// `(faction lower-case, tag lower-case, event)`.
+    pub fn parse_faction_sfx(bytes: &[u8]) -> Vec<(String, String, String)> {
+        const TAGS: [&str; 10] = [
+            "space_retreat_begin_sfxevent",
+            "space_retreat_cancel_sfxevent",
+            "space_retreat_enemy_begin_sfxevent",
+            "space_retreat_not_allowed_sfxevent",
+            "space_retreat_not_allowed_reason_1_sfxevent",
+            "space_surrender_sfxevent",
+            "reinforcements_selection_sfxevent",
+            "reinforcements_requesting_sfxevent",
+            "reinforcements_enroute_sfxevent",
+            "reinforcements_cancelled_sfxevent",
+        ];
+        let mut warnings = Vec::new();
+        let mut out = Vec::new();
+        if let Some(root) = alamo_data::xml::parse(bytes, "Factions.xml", &mut warnings) {
+            for f in root.children_named("faction") {
+                let Some(name) = f.attr("name") else { continue };
+                for tag in TAGS {
+                    if let Some(e) = f.child_text(tag).map(str::trim).filter(|e| !e.is_empty()) {
+                        out.push((name.trim().to_ascii_lowercase(), tag.to_string(), e.to_string()));
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// Announcement event of `faction` for one of the tags of [`AudioConstants::parse_faction_sfx`] (lower-case tag name).
+    pub fn faction_sfx(&self, faction: &str, tag: &str) -> Option<&str> {
+        let f = faction.to_ascii_lowercase();
+        self.faction_sfx.iter().find(|(ff, t, _)| *ff == f && t == tag).map(|(_, _, e)| e.as_str())
+    }
+
+    /// `Music_Event_*` tags of every faction in a `Factions.xml` file.
+    pub fn parse_faction_music(bytes: &[u8]) -> Vec<FactionMusic> {
+        let mut warnings = Vec::new();
+        let mut out = Vec::new();
+        let Some(root) = alamo_data::xml::parse(bytes, "Factions.xml", &mut warnings) else { return out };
+        for f in root.children_named("faction") {
+            let Some(name) = f.attr("name") else { continue };
+            let one = |tag: &str| f.child_text(tag).map(|v| v.trim().to_string()).filter(|v| !v.is_empty());
+            let vs = |tag: &str| -> Vec<(String, String)> {
+                f.children_named(tag)
+                    .filter_map(|e| {
+                        let (opponent, event) = e.text_trimmed().split_once(',')?;
+                        let (opponent, event) = (opponent.trim(), event.trim());
+                        (!opponent.is_empty() && !event.is_empty()).then(|| (opponent.to_ascii_lowercase(), event.to_string()))
+                    })
+                    .collect()
+            };
+            out.push(FactionMusic {
+                faction: name.trim().to_ascii_lowercase(),
+                battle_load: one("music_event_battle_load_screen"),
+                tactical_win: one("music_event_tactical_win"),
+                tactical_lose: one("music_event_tactical_lose"),
+                strategic_win: one("music_event_strategic_win"),
+                strategic_lose: one("music_event_strategic_lose"),
+                tactical_win_vs: vs("music_event_tactical_win_vs_faction"),
+                tactical_lose_vs: vs("music_event_tactical_lose_vs_faction"),
+                strategic_win_vs: vs("music_event_strategic_win_vs_faction"),
+                strategic_lose_vs: vs("music_event_strategic_lose_vs_faction"),
+                space_battle_super_weapon: one("music_event_space_battle_super_weapon"),
+            });
+        }
+        out
+    }
+
+    fn faction_music(&self, faction: &str) -> Option<&FactionMusic> {
+        let f = faction.to_ascii_lowercase();
+        self.faction_music.iter().find(|m| m.faction == f)
+    }
+
+    /// Battle load screen music of `faction` (`Music_Event_Battle_Load_Screen`).
+    pub fn battle_load_music(&self, faction: &str) -> Option<&str> {
+        self.faction_music(faction)?.battle_load.as_deref()
+    }
+
+    /// Win / lose music of `faction`, in order of preference: the entry for the opponent (`..._Vs_Faction`), then the plain one.
+    pub fn result_music(&self, faction: &str, versus: Option<&str>, win: bool, tactical: bool) -> Vec<&str> {
+        let Some(m) = self.faction_music(faction) else { return Vec::new() };
+        let (vs, plain) = match (tactical, win) {
+            (true, true) => (&m.tactical_win_vs, &m.tactical_win),
+            (true, false) => (&m.tactical_lose_vs, &m.tactical_lose),
+            (false, true) => (&m.strategic_win_vs, &m.strategic_win),
+            (false, false) => (&m.strategic_lose_vs, &m.strategic_lose),
+        };
+        let versus = versus.map(str::to_ascii_lowercase);
+        let mut out: Vec<&str> = vs.iter().filter(|(o, _)| Some(o) == versus.as_ref()).map(|(_, e)| e.as_str()).collect();
+        out.extend(plain.as_deref());
+        out
+    }
+
+    /// Space battle theme while a super weapon is in the battle (`Music_Event_Space_Battle_Super_Weapon`).
+    pub fn super_weapon_battle_music(&self, faction: &str) -> Option<&str> {
+        self.faction_music(faction)?.space_battle_super_weapon.as_deref()
+    }
+
     /// Reads both files from `src`; missing files or tags keep the defaults.
     pub fn load(src: &dyn FileSource) -> Self {
         let mut c = Self::default();
@@ -120,6 +257,8 @@ impl AudioConstants {
         if let Ok(bytes) = src.read("Xml/Factions.xml") {
             c.unit_type_spotted = Self::parse_spotted(&bytes);
             c.start_campaign = Self::parse_start_campaign(&bytes);
+            c.faction_music = Self::parse_faction_music(&bytes);
+            c.faction_sfx = Self::parse_faction_sfx(&bytes);
         }
         if let Some(t) = read("Xml/Gameconstants.xml") {
             if let Some(v) = tag_f32(&t, "Health_Low_Percent_Threshold") {
@@ -188,6 +327,24 @@ mod tests {
         assert_eq!(c.spotted_line("Empire", "Yoda"), Some("Unit_Announce_Yoda_Empire_Soldier"));
         assert_eq!(c.spotted_line("Rebel", "Yoda"), None);
         assert_eq!(c.spotted_line("Rebel", "Hidden"), None);
+    }
+
+    #[test]
+    fn faction_music_and_announcements_per_faction() {
+        let xml = br#"<F><Faction Name="Rebel">
+            <Music_Event_Battle_Load_Screen> Load_2 </Music_Event_Battle_Load_Screen>
+            <Music_Event_Tactical_Lose_Vs_Faction> Empire,	 Lose_To_Empire_Event </Music_Event_Tactical_Lose_Vs_Faction>
+            <Music_Event_Tactical_Lose> Rebel_Lose </Music_Event_Tactical_Lose>
+            <Space_Retreat_Enemy_Begin_SFXEvent> Unit_Enemy_Retreat_Rebel_Soldier </Space_Retreat_Enemy_Begin_SFXEvent>
+            <Space_Retreat_Not_Allowed_Reason_2_SFXEvent> </Space_Retreat_Not_Allowed_Reason_2_SFXEvent>
+            </Faction></F>"#;
+        let c = AudioConstants { faction_music: AudioConstants::parse_faction_music(xml), faction_sfx: AudioConstants::parse_faction_sfx(xml), ..Default::default() };
+        assert_eq!(c.battle_load_music("rebel"), Some("Load_2"));
+        assert_eq!(c.result_music("Rebel", Some("EMPIRE"), false, true), ["Lose_To_Empire_Event", "Rebel_Lose"]);
+        assert_eq!(c.result_music("Rebel", Some("Pirates"), false, true), ["Rebel_Lose"]);
+        assert!(c.result_music("Rebel", None, true, true).is_empty());
+        assert_eq!(c.faction_sfx("Rebel", "space_retreat_enemy_begin_sfxevent"), Some("Unit_Enemy_Retreat_Rebel_Soldier"));
+        assert_eq!(c.faction_sfx("Rebel", "space_retreat_not_allowed_reason_1_sfxevent"), None);
     }
 
     #[test]

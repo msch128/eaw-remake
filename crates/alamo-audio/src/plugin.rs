@@ -34,6 +34,7 @@ use bevy::prelude::*;
 use rand::Rng;
 use rand::seq::SliceRandom;
 
+use crate::ledger::{LedgerEntry, LedgerKind, LedgerOutcome, SoundLedger};
 use crate::music::{MusicPlanner, MusicScene};
 use crate::sfx::SfxEvent;
 use crate::speech::UnitResponseKind;
@@ -223,6 +224,8 @@ pub struct PlayFile {
 
 fn process_file_requests(
     mut reader: MessageReader<PlayFile>,
+    mut ledger: ResMut<SoundLedger>,
+    time: Res<Time>,
     mut audio: ResMut<AlamoAudio>,
     mut assets: ResMut<Assets<AudioSource>>,
     settings: Res<AudioSettings>,
@@ -233,10 +236,28 @@ fn process_file_requests(
         if audio_log() {
             info!("audio file {}", req.name);
         }
-        let Some((handle, _)) = audio.sample(&req.name, settings.cache_budget_bytes, &mut assets) else {
-            warn!("audio file not found: {}", req.name);
-            continue;
+        let (handle, path) = match audio.sample_checked(&req.name, settings.cache_budget_bytes, &mut assets) {
+            Ok(v) => v,
+            Err((outcome, path)) => {
+                ledger.record(LedgerEntry {
+                    t: time.elapsed_secs_f64(),
+                    kind: LedgerKind::File,
+                    event: req.name.clone(),
+                    sample: req.name.clone(),
+                    path,
+                    outcome,
+                });
+                continue;
+            }
         };
+        ledger.record(LedgerEntry {
+            t: time.elapsed_secs_f64(),
+            kind: LedgerKind::File,
+            event: req.name.clone(),
+            sample: req.name.clone(),
+            path: Some(path),
+            outcome: LedgerOutcome::Played,
+        });
         let pb = PlaybackSettings::ONCE.with_volume(Volume::Linear(buses.gain(req.bus)));
         commands.spawn((AudioPlayer::<AudioSource>(handle), pb));
     }
@@ -301,7 +322,7 @@ pub struct AlamoAudio {
     resolver: SampleResolver,
     cache: HashMap<String, Handle<AudioSource>>,
     cache_bytes: usize,
-    failed: std::collections::HashSet<String>,
+    failed: HashMap<String, LedgerOutcome>,
 }
 
 impl AlamoAudio {
@@ -329,6 +350,11 @@ impl AlamoAudio {
         }
     }
 
+    /// True if the sample resolves to a file in the file system.
+    pub fn has_sample(&self, name: &str) -> bool {
+        self.resolver.resolve(&*self.fs, name).is_some()
+    }
+
     /// Resolves, reads, decodes (WAV -> PCM16) and caches a sample. `None` if it is missing or undecodable.
     pub fn sample(
         &mut self,
@@ -336,18 +362,31 @@ impl AlamoAudio {
         budget: usize,
         assets: &mut Assets<AudioSource>,
     ) -> Option<(Handle<AudioSource>, String)> {
-        let (path, _) = self.resolver.resolve(&*self.fs, name)?;
+        self.sample_checked(name, budget, assets).ok()
+    }
+
+    /// Like [`AlamoAudio::sample`], but says why a sample is unavailable: `MissingFile` (not in the file system, with the
+    /// path when one was resolved but unreadable) or `BadFile` (found, but not decodable).
+    pub fn sample_checked(
+        &mut self,
+        name: &str,
+        budget: usize,
+        assets: &mut Assets<AudioSource>,
+    ) -> Result<(Handle<AudioSource>, String), (LedgerOutcome, Option<String>)> {
+        let Some((path, _)) = self.resolver.resolve(&*self.fs, name) else {
+            return Err((LedgerOutcome::MissingFile, None));
+        };
         if let Some(h) = self.cache.get(&path) {
-            return Some((h.clone(), path));
+            return Ok((h.clone(), path));
         }
-        if self.failed.contains(&path) {
-            return None;
+        if let Some(why) = self.failed.get(&path).copied() {
+            return Err((why, Some(path)));
         }
         let bytes = match self.fs.read(&path) {
             Ok(b) => b,
             Err(_) => {
-                self.failed.insert(path);
-                return None;
+                self.failed.insert(path.clone(), LedgerOutcome::MissingFile);
+                return Err((LedgerOutcome::MissingFile, Some(path)));
             }
         };
         let bytes = if path.ends_with(".WAV") {
@@ -355,8 +394,8 @@ impl AlamoAudio {
                 Ok(pcm) => pcm.to_wav_bytes(),
                 Err(e) => {
                     warn!("cannot decode {path}: {e}");
-                    self.failed.insert(path);
-                    return None;
+                    self.failed.insert(path.clone(), LedgerOutcome::BadFile);
+                    return Err((LedgerOutcome::BadFile, Some(path)));
                 }
             }
         } else {
@@ -371,7 +410,7 @@ impl AlamoAudio {
             bytes: bytes.into(),
         });
         self.cache.insert(path.clone(), handle.clone());
-        Some((handle, path))
+        Ok((handle, path))
     }
 }
 
@@ -492,6 +531,7 @@ impl Plugin for AlamoAudioPlugin {
                 ..default()
             })
             .init_resource::<SfxState>()
+            .insert_resource(SoundLedger::new(ledger_enabled()))
             .insert_resource(director)
             .add_message::<PlaySfx>()
             .add_message::<GalaxyAudio>()
@@ -511,6 +551,9 @@ impl Plugin for AlamoAudioPlugin {
             );
         if audio_log() {
             app.add_systems(Update, log_balance);
+        }
+        if ledger_enabled() {
+            app.add_systems(Last, dump_ledger_on_exit);
         }
     }
 }
@@ -549,6 +592,7 @@ fn listener_position(listeners: &Query<&GlobalTransform, With<SpatialListener>>)
 #[allow(clippy::too_many_arguments)]
 fn process_sfx_requests(
     mut commands: Commands,
+    mut ledger: ResMut<SoundLedger>,
     mut reader: MessageReader<PlaySfx>,
     mut audio: ResMut<AlamoAudio>,
     mut state: ResMut<SfxState>,
@@ -604,9 +648,14 @@ fn process_sfx_requests(
     for (req, cont) in requests {
         let key = req.event.to_ascii_lowercase();
         let Some(ev) = audio.sfx.get(&req.event).cloned() else {
-            if audio_log() {
-                warn!("audio sfx UNKNOWN event `{}`", req.event);
-            }
+            ledger.record(LedgerEntry {
+                t: now,
+                kind: LedgerKind::Sfx,
+                event: req.event.clone(),
+                sample: String::new(),
+                path: None,
+                outcome: LedgerOutcome::UnknownEvent,
+            });
             continue;
         };
         if audio_log() && cont.is_none() {
@@ -711,7 +760,7 @@ fn process_sfx_requests(
         // With `SP_AUDIO_LOG` silent (volume 0) sounds still start, so audits see the real voice rules.
         if base_gain * attenuation * buses.gain(bus_of(&ev)) < settings.min_audible_gain
             && !ev.looping
-            && !audio_log()
+            && !ledger_enabled()
         {
             continue;
         }
@@ -740,8 +789,11 @@ fn process_sfx_requests(
             cont.sample.clone()
         } else {
             let mut chain: Vec<String> = Vec::new();
+            let pre_list = usable_samples(&audio, &mut ledger, now, &req.event, &ev.pre_samples);
+            let main_list = usable_samples(&audio, &mut ledger, now, &req.event, &ev.samples);
+            let post_list = usable_samples(&audio, &mut ledger, now, &req.event, &ev.post_samples);
             if let Some(pre) = pick(
-                &ev.pre_samples,
+                &pre_list,
                 false,
                 &format!("{key}#pre"),
                 &mut state,
@@ -750,18 +802,28 @@ fn process_sfx_requests(
                 chain.push(pre);
             }
             match pick(
-                &ev.samples,
+                &main_list,
                 ev.play_sequentially,
                 &key,
                 &mut state,
                 &mut rng,
             ) {
                 Some(s) => chain.push(s),
-                None if chain.is_empty() => continue,
+                None if chain.is_empty() => {
+                    ledger.record(LedgerEntry {
+                        t: now,
+                        kind: LedgerKind::Sfx,
+                        event: req.event.clone(),
+                        sample: String::new(),
+                        path: None,
+                        outcome: LedgerOutcome::NoSamples,
+                    });
+                    continue;
+                }
                 None => {}
             }
             if let Some(post) = pick(
-                &ev.post_samples,
+                &post_list,
                 false,
                 &format!("{key}#post"),
                 &mut state,
@@ -773,12 +835,29 @@ fn process_sfx_requests(
             follow.extend(chain);
             first
         };
-        let Some((handle, _path)) =
-            audio.sample(&sample_name, settings.cache_budget_bytes, &mut assets)
-        else {
-            // Missing file: skip the rest of the chain as well.
-            continue;
+        let (handle, path) = match audio.sample_checked(&sample_name, settings.cache_budget_bytes, &mut assets) {
+            Ok(v) => v,
+            Err((outcome, path)) => {
+                // Missing file: skip the rest of the chain as well, but say so.
+                ledger.record(LedgerEntry {
+                    t: now,
+                    kind: LedgerKind::Sfx,
+                    event: req.event.clone(),
+                    sample: sample_name.clone(),
+                    path,
+                    outcome,
+                });
+                continue;
+            }
         };
+        ledger.record(LedgerEntry {
+            t: now,
+            kind: LedgerKind::Sfx,
+            event: req.event.clone(),
+            sample: sample_name.clone(),
+            path: Some(path),
+            outcome: LedgerOutcome::Played,
+        });
         let pitch = rng.random_range(ev.pitch.0..=ev.pitch.1) / 100.0;
         let mut pb = if ev.looping {
             PlaybackSettings::LOOP
@@ -857,6 +936,28 @@ fn process_sfx_requests(
             ev.is_unit_response_vo,
         ));
     }
+}
+
+/// The samples of `list` that exist in the file system; a missing one is reported (once per sample) and never picked, so one
+/// absent file of a multi-sample event does not make the event randomly silent.
+fn usable_samples(audio: &AlamoAudio, ledger: &mut SoundLedger, now: f64, event: &str, list: &[String]) -> Vec<String> {
+    list.iter()
+        .filter(|s| {
+            let ok = audio.has_sample(s);
+            if !ok {
+                ledger.record(LedgerEntry {
+                    t: now,
+                    kind: LedgerKind::Sfx,
+                    event: event.to_string(),
+                    sample: (*s).clone(),
+                    path: None,
+                    outcome: LedgerOutcome::MissingFile,
+                });
+            }
+            ok
+        })
+        .cloned()
+        .collect()
 }
 
 /// World units per Bevy spatial unit. Large so that Bevy's own distance attenuation stays at 1 and only
@@ -1034,7 +1135,7 @@ impl SfxEmitter {
 /// Estimated linear gain of an event at `distance` (mean of its volume range, distance falloff, bus gain).
 fn estimated_gain(ev: &SfxEvent, distance: Option<f32>, buses: &AudioBuses, settings: &AudioSettings) -> f32 {
     // With `SP_AUDIO_LOG` silent (volume 0) sounds still start so audits see the real voice rules.
-    let bus = if audio_log() { 1.0 } else { buses.gain(bus_of(ev)) };
+    let bus = if ledger_enabled() { 1.0 } else { buses.gain(bus_of(ev)) };
     let mut g = (ev.volume.0 + ev.volume.1) * 0.5 / 100.0 * bus;
     if let (Some(d), Some(sat)) = (distance, ev.saturation_distance) {
         g *= distance_attenuation(d, sat * settings.saturation_scale, settings.rolloff);
@@ -1101,6 +1202,21 @@ fn sync_emitters(
 // Music
 // ----------------------------------------------------------------------------------------------
 
+/// The event `Xml/Factions.xml` names for the current scene (battle load screen, win / lose themes incl. the versus-faction variants),
+/// when it exists and at least one of its files is in the file system; otherwise the planner's naming convention applies.
+fn faction_music_event(director: &MusicDirector, audio: &AlamoAudio) -> Option<String> {
+    let c = &audio.constants;
+    let candidates: Vec<&str> = match director.planner.scene() {
+        MusicScene::BattleLoading => c.battle_load_music(director.faction.as_deref()?).into_iter().collect(),
+        MusicScene::Result { faction, win, tactical } => c.result_music(faction, director.versus.as_deref(), *win, *tactical),
+        _ => return None,
+    };
+    candidates.into_iter().find_map(|n| {
+        let e = audio.music.get(n)?;
+        e.files.iter().any(|f| audio.has_sample(f)).then(|| e.name.clone())
+    })
+}
+
 /// Selects music. Set the [`scene`](MusicScene) and, during battles, the intensity (0..1, e.g. the share
 /// of ships in combat); the [`MusicPlanner`] inside switches between ambient and battle playlists with
 /// hysteresis and this director crossfades.
@@ -1113,15 +1229,30 @@ pub struct MusicDirector {
     oneshot_done: bool,
     /// Scene to switch to once the current result stinger has played to its end.
     resume: Option<MusicScene>,
+    /// Faction of the last galaxy / space / result scene (the battle load screen has none of its own).
+    faction: Option<String>,
+    /// Faction the player fought, for the `Music_Event_*_Vs_Faction` win / lose themes.
+    versus: Option<String>,
 }
 
 impl MusicDirector {
     /// Switches the scene; the change is applied (with crossfade) on the next frame.
     pub fn set_scene(&mut self, scene: MusicScene) {
+        if let MusicScene::Galactic(f) | MusicScene::Space(f) | MusicScene::Result { faction: f, .. } = &scene {
+            self.faction = Some(f.clone());
+        }
+        if !matches!(scene, MusicScene::Result { .. }) {
+            self.versus = None;
+        }
         if self.planner.scene() != &scene {
             self.resume = None;
         }
         self.planner.set_scene(scene);
+    }
+
+    /// The faction the player fought (`None` = unknown): selects the `Music_Event_*_Vs_Faction` win / lose theme of the next result scene.
+    pub fn set_opponent(&mut self, faction: Option<String>) {
+        self.versus = faction;
     }
 
     /// Switches to `scene` once a playing win / lose stinger has finished (the stinger is not cut off by the
@@ -1200,15 +1331,29 @@ fn start_track(
     commands: &mut Commands,
     audio: &mut AlamoAudio,
     assets: &mut Assets<AudioSource>,
+    ledger: &mut SoundLedger,
+    now: f64,
     budget: usize,
     event: &MusicEvent,
     file: &str,
     fade_in: f32,
     stinger: bool,
 ) -> bool {
-    let Some((handle, _)) = audio.sample(file, budget, assets) else {
-        return false;
+    let (handle, path) = match audio.sample_checked(file, budget, assets) {
+        Ok(v) => v,
+        Err((outcome, path)) => {
+            ledger.record(LedgerEntry { t: now, kind: LedgerKind::Music, event: event.name.clone(), sample: file.to_string(), path, outcome });
+            return false;
+        }
     };
+    ledger.record(LedgerEntry {
+        t: now,
+        kind: LedgerKind::Music,
+        event: event.name.clone(),
+        sample: file.to_string(),
+        path: Some(path),
+        outcome: LedgerOutcome::Played,
+    });
     let single_loop = event.files.len() == 1 && event.looping && !stinger;
     if audio_log() {
         info!("audio music track {} (event {}, fade_in {:.2}s, loop {})", file, event.name, fade_in, single_loop);
@@ -1238,6 +1383,7 @@ fn start_track(
 #[allow(clippy::too_many_arguments)]
 fn music_system(
     mut commands: Commands,
+    mut ledger: ResMut<SoundLedger>,
     mut director: ResMut<MusicDirector>,
     mut audio: ResMut<AlamoAudio>,
     mut assets: ResMut<Assets<AudioSource>>,
@@ -1247,7 +1393,7 @@ fn music_system(
 ) {
     let dt = time.delta_secs();
     director.planner.step(dt);
-    let wanted = director.planner.wanted_event(&audio.music);
+    let wanted = faction_music_event(&director, &audio).or_else(|| director.planner.wanted_event(&audio.music));
     let changed = wanted != director.current;
     if changed {
         director.current = wanted.clone();
@@ -1315,9 +1461,15 @@ fn music_system(
         return;
     }
     let Some(event) = audio.music.get(&name).cloned() else {
+        if changed {
+            ledger.record(LedgerEntry { t: time.elapsed_secs_f64(), kind: LedgerKind::Music, event: name, sample: String::new(), path: None, outcome: LedgerOutcome::UnknownEvent });
+        }
         return;
     };
     if event.files.is_empty() {
+        if changed {
+            ledger.record(LedgerEntry { t: time.elapsed_secs_f64(), kind: LedgerKind::Music, event: name, sample: String::new(), path: None, outcome: LedgerOutcome::NoSamples });
+        }
         return;
     }
     if director.queue.is_empty() {
@@ -1345,6 +1497,8 @@ fn music_system(
             &mut commands,
             &mut audio,
             &mut assets,
+            &mut ledger,
+            time.elapsed_secs_f64(),
             settings.cache_budget_bytes,
             &event,
             &file,
@@ -1376,6 +1530,35 @@ fn update_music_gain(
         if let Some(mut s) = sink {
             s.set_volume(Volume::Linear(t.volume * t.fade * t.duck * buses.gain(Bus::Music)));
         }
+    }
+}
+
+/// `SP_AUDIO_LEDGER=<path>` (or `SP_AUDIO_LOG`) records every sound request in the [`SoundLedger`]; the TSV is written to the path
+/// every 2 s and on exit.
+fn ledger_enabled() -> bool {
+    audio_log() || std::env::var_os("SP_AUDIO_LEDGER").is_some()
+}
+
+fn dump_ledger_on_exit(
+    mut exits: MessageReader<AppExit>,
+    ledger: Res<SoundLedger>,
+    time: Res<Time<Real>>,
+    mut last: Local<(f64, usize)>,
+) {
+    // The exit message can be written after this system ran in the last frame, so the file is also refreshed every 2 s.
+    let exiting = exits.read().next().is_some();
+    let now = time.elapsed_secs_f64();
+    if !exiting && (now - last.0 < 2.0 || last.1 == ledger.entries.len()) {
+        return;
+    }
+    *last = (now, ledger.entries.len());
+    if exiting {
+        info!("audio ledger summary:\n{}", ledger.summary());
+    }
+    if let Some(path) = std::env::var_os("SP_AUDIO_LEDGER")
+        && let Err(e) = std::fs::write(&path, ledger.to_tsv())
+    {
+        warn!("cannot write audio ledger {path:?}: {e}");
     }
 }
 

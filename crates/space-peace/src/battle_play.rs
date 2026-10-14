@@ -341,7 +341,9 @@ fn poll_session_build(world: &mut World) {
                     settings.target_scale = scale;
                     settings.blocking = true;
                     settings.synthetic_pointer = true;
-                    settings.audio = false;
+                    // No audio device offscreen; the hooks still run when a sound audit asks for the ledger (then the audio plugin is
+                    // present, against an empty device).
+                    settings.audio = std::env::var_os("SP_AUDIO_LEDGER").is_some() || std::env::var_os("SP_AUDIO_LOG").is_some();
                 }
                 None => {
                     settings.audio = true;
@@ -387,6 +389,8 @@ fn finish_battle_view(
         if let Some(m) = music.as_mut() {
             let win = f.result.winner.and_then(|w| pending.0.sides.get(w)).is_some_and(|s| Some(s.faction) == player.0);
             let faction = campaign.faction.clone().unwrap_or_else(|| "Rebel".to_owned());
+            // The win / lose theme depends on who was fought (`Music_Event_Tactical_*_Vs_Faction` of Factions.xml).
+            m.set_opponent(pending.0.sides.iter().find(|s| !s.faction_name.eq_ignore_ascii_case(&faction)).map(|s| s.faction_name.clone()));
             m.set_scene(MusicScene::Result { faction, win, tactical: true });
         }
         // The advisor closes the battle: the faction's battle-end line on a win, its defeat line on a loss (not on a draw).

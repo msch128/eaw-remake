@@ -165,7 +165,13 @@ fn main() {
         app.add_plugins(AlamoRenderPlugin::new(fs.clone()));
         app.add_plugins(eaw_ui::EawUiPlugin::new(fs.clone()));
         app.add_plugins((battle_view::BattleViewPlugin, battle_view::tactical_ui::TacticalUiPlugin));
-        if offscreen.is_none() {
+        // An offscreen run has no audio device; with `SP_AUDIO_LEDGER` / `SP_AUDIO_LOG` it still runs the audio logic against an
+        // empty device so every sound event of the scripted run is logged and checked against the file system.
+        let audio_audit = std::env::var_os("SP_AUDIO_LEDGER").is_some() || std::env::var_os("SP_AUDIO_LOG").is_some();
+        if offscreen.is_some() && audio_audit {
+            app.init_asset::<bevy::audio::AudioSource>().insert_resource(alamo_audio::NoAudioDevice);
+        }
+        if offscreen.is_none() || audio_audit {
             app.add_plugins(AlamoAudioPlugin::new(fs.clone() as Arc<dyn FileSource>));
         }
     }

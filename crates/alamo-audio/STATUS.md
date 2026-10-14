@@ -99,3 +99,20 @@ Empire at War audio: event data, sample resolution, decoding and a Bevy playback
   (`Audio.xml` has none), so the bus defaults stay an estimate; nothing drowns the speech, no change made.
 - Tests: `tests/pass3.rs` (one-shot theme resumes the map music, balance line, spotted lines), `real_audio::pass3_events_exist_and_resolve`, `constants` unit tests,
   `ui_sounds::tests`, `battle-view audio::tests`; smoke scenarios `windowed-galaxy-audio-fleet`, `windowed-galaxy-audio-superweapon` and the balance line in `windowed-battle-audio-positional`.
+
+## Audio pass 4 (coverage audit, sound ledger, data-driven music and impacts)
+- Coverage and gaps per category: `docs/AUDIO-COVERAGE.md`. Static audit: `hooks.rs` (`scan_hooks`, `audit_hooks`, `WIRED_TAGS`), example `audio_hooks`,
+  test `tests/hook_audit.rs` against `tests/known_audio_gaps.txt` (the Remake's own broken references; the test fails on any new one).
+- `SoundLedger` (`ledger.rs`): every SFX request / music track / file request with the resolved path and outcome. `SP_AUDIO_LEDGER=<file>` writes a TSV and
+  keeps silent (`--volume 0`) sounds running; offscreen runs join in (audio plugin against an empty device, battle audio hooks on). `tools/audio-audit.ps1` runs
+  the galaxy and battle scenarios and checks the ledger. Unknown event / missing file / sample-less event are reported as `audio problem:` warnings, never dropped.
+- A missing sample of a multi-sample event is no longer picked (`usable_samples`), so such events do not go randomly silent.
+- `AudioConstants` now reads `Music_Event_Battle_Load_Screen`, the tactical / strategic win / lose events with their `_Vs_Faction` variants and the retreat /
+  reinforcement announcement tags of `Factions.xml` (`FactionMusic`, `faction_sfx`). `MusicDirector::set_opponent` picks `Lose_To_<Opponent>_Event`; an event whose file is
+  not installed falls back to the planner's convention. The battle load screen plays the faction's own track.
+- Battle: hull hits use `Projectile_SFXEvent_Detonate_Reduced_By_Armor` when no plain detonation is named (107 projectiles; before, their hits were silent), shield hits
+  `Projectile_SFXEvent_Detonate_Shield` (blank in the Remake data: silent), intercepted missiles detonate, the enemy's retreat plays `Space_Retreat_Enemy_Begin_SFXEvent`
+  and the own retreat announcement follows the sim's `RetreatOrdered` (button and Esc menu; a refused order is silent).
+- Galaxy: `Build_Music_Completed` (Death Star / Starforge) plays over the map music; story dialog `SFX` (and `SPEECH`, none in the data) plays.
+- Still open: ability toggle / deactivate / target-ability voices, nebula / asteroid / assist / group lines, death end sound, Death Star battle theme, retreat cancel /
+  not allowed, reinforcement panel lines, strategic win / lose per opponent (`play_ui.rs`), Lua `Play_Music` / `Play_SFX_Event`.

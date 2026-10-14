@@ -1,0 +1,47 @@
+>Unit_Turbo_Tower_Fire: unknown event
+EHD_Death_Star_Activate: missing file C000_DST0102_ENG.wav
+Fighters_Empire_Won_2: missing file Data\Audio\Voiceovers\BattleChatter\Space\FightersVanilla\U000_tip2102.wav
+Fighters_Empire_Won_3: missing file Data\Audio\Voiceovers\BattleChatter\Space\FightersVanilla\U000_tip2102.wav
+Fighters_Rebel_Losing_2: missing file Data\Audio\Voiceovers\BattleChatter\Space\FightersRebelLosing\R_BChatter_Losing_132.wav
+Ion_Cannon_Fighter_Fire: unknown event
+Preset_Unit_Vehicle_Light_Fire: no samples
+SFX_Shield_Absorb_Detonation: no samples
+Unit_Attack_Angler: missing file Data\Audio\Voiceovers\GuP\voice_message_attack_A_0_1.wav
+Unit_Attack_Bellator_Star_Destroyer: missing file Data\Audio\Voiceovers\NeutralBellator\Empire_Bellator_Attack5.wav
+Unit_Attack_Engines_MandatorII: missing file Data\Audio\Voiceovers\NeutralMandator\mandator_engines.wav
+Unit_Attack_Liberation: missing file Data\Audio\Voiceovers\Liberation\Liberation_Attack_00.wav
+Unit_Attack_Sabaoth: missing file Data\Audio\Voiceovers\UnderworldSabaoth\sabaoth_attack_9.wav
+Unit_Attack_Supa: missing file Data\Audio\Voiceovers\UnderworldSupa\supafighter_move_7.wav
+Unit_Complete_Angler: missing file Data\Audio\Voiceovers\GuP\start_battle_01.wav
+Unit_Death_Angler: missing file Data\Audio\Voiceovers\GuP\vehicle_destroyed_01.wav
+Unit_Death_Sequence_Explosion_Short: missing file Data\Audio\SFX\Explosions\Space\Sequence_Explosion_Short_1.wav
+Unit_Enemy_Health_Critical_Supa: missing file Data\Audio\Voiceovers\UnderworldSupa\supafighter_enemy_critical_1
+Unit_Engine_Attack_Liberation: missing file Data\Audio\Voiceovers\Liberation\Liberation_Attack_Hardpoint_ENGINES_00.wav
+Unit_Fighter_Bay_Attack_Liberation: missing file Data\Audio\Voiceovers\Liberation\Liberation_Attack_Hardpoint_FIGHTER_BAY_00.wav
+Unit_GravWell_Attack_Liberation: missing file Data\Audio\Voiceovers\Liberation\Liberation_Attack_Hardpoint_GravWell_00.wav
+Unit_Guard_Angler: missing file Data\Audio\Voiceovers\GuP\voice_message_yes_0_1.wav
+Unit_HP_Bay_Procursator_Destroyer: missing file Data\Audio\Voiceovers\EmpireProcursator\Procursator_Attack_Hanger_01.wav
+Unit_HP_Bay_Sabaoth: missing file Data\Audio\Voiceovers\UnderworldSabaoth\sabaoth_attack_hangar_1.wav
+Unit_HP_Torp_Nova: missing file Data\Audio\Voiceovers\NeutralNova\Nova_Target_Proton_1.wav
+Unit_Health_Critical_Supa: missing file Data\Audio\Voiceovers\UnderworldSupa\supafighter_hp_critical_1
+Unit_Health_Low_Supa: missing file Data\Audio\Voiceovers\UnderworldSupa\supafighter_hp_low_1
+Unit_Health_Low_Thrawn: unknown event
+Unit_Heavy_Mass_Driver_Fire: unknown event
+Unit_Infantry_Disruptor_Rifle_Fire: missing file Data\Audio\SFX\Weapons\Blasters\Wpn_Blaster_X8_Fire_01.wav
+Unit_Ion_Cannons_Attack_Liberation: missing file Data\Audio\Voiceovers\Liberation\Liberation_Attack_Hardpoint_ION_CANNONS_00.wav
+Unit_Ion_Fire_Super_Heavy: missing file Data\Audio\SFX\Weapons\Ions\Wpn_Ion_Huge_3.wav
+Unit_Lasers_Attack_Liberation: missing file Data\Audio\Voiceovers\Liberation\Liberation_Attack_Hardpoint_LASERS_00.wav
+Unit_Lost_Bay_Sabaoth: missing file Data\Audio\Voiceovers\UnderworldSabaoth\sabaoth_destroy_hangar_1.wav
+Unit_Move_Angler: missing file Data\Audio\Voiceovers\GuP\start_battle_01.wav
+Unit_Move_Endurance: missing file Data\Audio\Voiceovers\RebelNebula\Nebula_Move_9_Carrier.wav
+Unit_Move_Tie_Mauler: missing file U000_TMC0212_ENG.wav
+Unit_Select_Angler: missing file Data\Audio\Voiceovers\GuP\start_battle_03.wav
+Unit_Select_Bellator_Star_Destroyer: missing file Data\Audio\Voiceovers\NeutralBellator\Empire_Bellator_Select1.wav
+Unit_Select_E_Wing: missing file Data\Audio\Voiceovers\RebelEwing\Ewing_Select_05.wav
+Unit_Select_Leia: missing file Data\Audio\Voiceovers\RebelLeia\R2_Select_1.wav
+Unit_Space_Station_Death_SFX: missing file Data\Audio\SFX\Explosions\Space\Sequence_Explosion_Short_1.wav
+Unit_Star_Viper_Fire: missing file Data\Audio\SFX\proj_fire_laser_strong_01.wav
+Unit_Turbo_Fire_Empire: unknown event
+Unit_Underworld_Ship_Laser_Fire: missing file Data\Audio\SFX\proj_fire_laser_strong_01.wav
+Unit_Vehicle_T2B_Laser_Fire: missing file Data\Audio\SFX\Weapons\Lasers\Wpn_Empire_Probe_Droid_02.wav
+Unit_Vengeance_Attack_Lasers: missing file Data\Audio\Voiceovers\UnderworldVengeance\Vengenace_Attack_Laser_2.wav

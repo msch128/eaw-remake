@@ -3,6 +3,7 @@
 
 pub mod constants;
 pub mod galaxy;
+pub mod hooks;
 pub mod music;
 pub mod resolve;
 pub mod sfx;
@@ -17,6 +18,8 @@ pub use sfx::{SfxEvent, SfxLibrary};
 pub use speech::{SpeechEvent, SpeechLibrary};
 pub use wav::{AudioError, Pcm, Wav, WavFormat};
 
+#[cfg(feature = "bevy")]
+pub mod ledger;
 #[cfg(feature = "bevy")]
 pub mod plugin;
 #[cfg(feature = "bevy")]
