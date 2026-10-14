@@ -1297,7 +1297,21 @@ pub(crate) fn fleet_tooltip(
     mut tip: ResMut<eaw_ui::WorldTooltip>,
     args: Res<crate::cli::Args>,
     selection: Res<PlayerSelection>,
+    blocked: Res<galaxy_play::PlayCursorBlocked>,
+    planet_view: Option<Res<crate::planet_view::PlanetViewState>>,
+    modal: Query<(), With<ResultRoot>>,
 ) {
+    let (view_active, view_blend) = planet_view.map_or((false, 0.0), |v| (v.active, v.blend));
+    // The planet close-up shows its own hover cards (`planet_view::view_tooltip`); while it flies in, the map's card is gone.
+    if view_active && view_blend >= 1.0 {
+        return;
+    }
+    if map_tooltip_suppressed(blocked.0 && !args.hover_selected, view_active, !modal.is_empty()) {
+        if tip.text.is_some() {
+            tip.text = None;
+        }
+        return;
+    }
     let cursor = window.as_ref().and_then(|w| w.cursor_position()).or_else(|| args.hover_selected.then_some(Vec2::ZERO));
     let fleet = hover.fleet.and_then(|id| state.galaxy().fleets.get(&id).map(|f| (f, fog.fleet(id)))).filter(|(_, s)| *s != galaxy_sim::Sight::Hidden);
     let hovered_planet = hover.planet.or_else(|| args.hover_selected.then_some(selection.planet).flatten());
@@ -1306,6 +1320,11 @@ pub(crate) fn fleet_tooltip(
     if tip.text != text {
         tip.text = text;
     }
+}
+
+/// The map's hover card must not show behind a modal screen, behind menus / over the command bar, or while the planet view opens.
+fn map_tooltip_suppressed(cursor_blocked: bool, view_opening: bool, modal_open: bool) -> bool {
+    cursor_blocked || view_opening || modal_open
 }
 
 fn fleet_text(f: &galaxy_sim::Fleet, sight: galaxy_sim::Sight, state: &SimState, catalog: &galaxy_play::PlayCatalog) -> String {
@@ -1822,6 +1841,10 @@ fn show_battle_summary(world: &mut World) {
     }
 }
 
+/// Root of the full-screen battle result (a modal screen: no hover cards behind it).
+#[derive(Component)]
+pub(crate) struct ResultRoot;
+
 /// Button of the full-screen battle result: closes it.
 #[derive(Component)]
 struct ResultReturn(Entity);
@@ -1866,6 +1889,7 @@ fn spawn_result_screen(world: &mut World, s: &crate::battle_play::BattleSummary)
     let root = world
         .spawn((
             Name::new("Battle result"),
+            ResultRoot,
             Node {
                 position_type: PositionType::Absolute,
                 left: Val::Px(0.0),
@@ -2328,6 +2352,14 @@ pub(crate) fn design_scale(window: Option<Vec2>, offscreen: Option<&OffscreenTar
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn map_hover_card_is_suppressed_behind_modals_and_the_planet_view() {
+        assert!(!map_tooltip_suppressed(false, false, false));
+        assert!(map_tooltip_suppressed(false, false, true));
+        assert!(map_tooltip_suppressed(false, true, false));
+        assert!(map_tooltip_suppressed(true, false, false));
+    }
 
     #[test]
     fn planet_tooltip_lists_owner_income_and_slots() {
