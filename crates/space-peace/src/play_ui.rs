@@ -858,7 +858,8 @@ fn refresh_texts(
     }
     let paused = clock.paused() || model.speed.rate <= 0.0;
     for mut v in &mut pause_banner {
-        *v = if paused { Visibility::Inherited } else { Visibility::Hidden };
+        // The battle banner owns the top centre while a battle waits for the player.
+        *v = if paused && !model.speed.held_by_battle && model.battle.is_none() { Visibility::Inherited } else { Visibility::Hidden };
     }
     let (text, color) = &mut *speed;
     let (s, c) = if let Some(w) = &model.top.winner {
