@@ -250,3 +250,11 @@ Add `battle-view`, `galaxy-sim` (already there through galaxy-play) and `eaw-ui`
 - Hero portrait click selects and centres the camera (single click).
 - B8 effects: capital/station deaths queue a bloom flash (`effects::BloomPulses`, camera-distance weighted, ~0.7 s, boosts `Bloom::intensity`); the hull of a destroyed capital stays 45 s as a burning wreck (`ships::Wreck`, the data's damage fires keep playing). Shield ripples, muzzle flashes, tracer bolts, death explosions and debris chunks already existed. Offscreen: `--battle-fightcam` puts the camera on the closest opposing big-ship pair before the `--battle-seconds` capture.
 - U38: `Command::ReinforceAt::yaw_offset` (the ghost's wheel turn, clamped to ~15 degrees in the sim); the wheel no longer zooms while a ghost is carried; no-spawn zones are translucent red discs with a hatch texture and a soft rim (`tactical_ui::sync_zone_discs`). Offscreen check: `SP_PLACE_HOLD=1` with `--battle-reserve 3 --battle-click b_reinforcement,r_0000 --battle-seconds 14` keeps the scripted placement armed (ghost inside the first enemy zone).
+
+## Backdrop planet discs (scene.rs)
+- `w_planet_*_low_light.alo` has no sphere: `Planet` is a flat disc (about 72000 radius at scale 45, constant normal) and the map's
+  rotation lays it nearly horizontal under (or, flipped, over) the battle plane. Left as placed it is a desert floor filling the
+  start view (Tatooine, 31 of 93 maps failed the opening-frame sweep).
+- `disc_slide` moves a disc that covers >60 % of the start view sideways (camera right vector, on the side the map put it) until
+  its limb crosses the view (<= 25 %). Maps with terrain props (Skies) keep their disc. `SP_NO_DISC_SLIDE=1` turns it off.
+- Sweep: `tools\space-map-sweep.ps1 -Exe <battle_demo.exe>` renders every planet space map and flags frames under 30 % dark.

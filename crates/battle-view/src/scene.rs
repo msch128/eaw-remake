@@ -283,7 +283,13 @@ pub fn spawn_scene(commands: &mut Commands, scene: &SpaceScene, sky_radius: f32,
             e.insert(BackdropPlanet::default());
         }
     }
+    // Maps with ground terrain (the Skies maps: an island over its ocean disc) keep their disc under the ground.
+    commands.insert_resource(SceneHasTerrain(scene.props.iter().any(|p| p.model.to_ascii_lowercase().contains("terrain"))));
 }
+
+/// The scene has ground terrain props: its backdrop disc is the ground's surroundings, not a planet seen from space.
+#[derive(Resource, Debug, Default)]
+pub struct SceneHasTerrain(pub bool);
 
 /// Marks a backdrop planet or ground terrain placed below the battle plane; the value counts the frames since its model loaded
 /// ([`SETTLED`] once it was checked).
@@ -297,6 +303,70 @@ pub struct BackdropPlanet(u8);
 const PLANET_CLEARANCE: f32 = 500.0;
 const SETTLED: u8 = u8::MAX;
 
+/// Flat disc a `Planet.fx` backdrop is built from (the model has no sphere mesh: the texture is a planet seen from above on
+/// a disc of up to 72 000 units radius, below or above the battle plane).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PlanetDisc {
+    pub center: Vec3,
+    pub normal: Vec3,
+    pub radius: f32,
+}
+
+/// Start pose of the battle camera, as far as the disc check needs it.
+#[derive(Clone, Copy, Debug)]
+pub struct ViewPose {
+    pub focus: Vec3,
+    pub distance: f32,
+    pub pitch: f32,
+    pub yaw: f32,
+}
+
+/// Share of the start view (pitch and field of view of the default camera) in which the disc fills the picture. A disc that
+/// lies under the whole arena fills every ray like a flat desert floor; the Remake shows a limb and black space.
+pub fn disc_coverage(disc: &PlanetDisc, view: &ViewPose) -> f32 {
+    let (mut hit, mut total) = (0u32, 0u32);
+    let base = Vec3::new(view.yaw.sin() * view.pitch.cos(), -view.pitch.sin(), -view.yaw.cos() * view.pitch.cos());
+    let eye = view.focus - base * view.distance;
+    for lat in -3..=3 {
+        for off in -3..=3 {
+            let yw = view.yaw + lat as f32 * 9.0f32.to_radians();
+            let pt = (view.pitch + off as f32 * 7.0f32.to_radians()).min(89.0f32.to_radians());
+            let dir = Vec3::new(yw.sin() * pt.cos(), -pt.sin(), -yw.cos() * pt.cos());
+            total += 1;
+            let denom = dir.dot(disc.normal);
+            if denom.abs() < 1e-4 {
+                continue;
+            }
+            let t = (disc.center - eye).dot(disc.normal) / denom;
+            if t > 0.0 && (eye + dir * t - disc.center).length() < disc.radius {
+                hit += 1;
+            }
+        }
+    }
+    hit as f32 / total as f32
+}
+
+/// Coverage above which a disc counts as a floor under the whole start view.
+const DISC_FLOOR_COVERAGE: f32 = 0.6;
+/// Coverage a slid disc settles at: its limb crosses the view and the rest is space.
+const DISC_LIMB_COVERAGE: f32 = 0.25;
+
+/// Sideways shift (world units, along the camera's right or left vector) that moves a floor-like disc until its limb
+/// crosses the start view, as `(direction, distance)`; `None` when the disc already leaves most of the view to space.
+pub fn disc_slide(disc: &PlanetDisc, view: &ViewPose) -> Option<(Vec3, f32)> {
+    if disc_coverage(disc, view) <= DISC_FLOOR_COVERAGE {
+        return None;
+    }
+    let right = Vec3::new(view.yaw.cos(), 0.0, view.yaw.sin());
+    // The planet stays on the side its map put it: the side of the camera the disc centre lies on.
+    let dir = if (disc.center - view.focus).dot(right) < 0.0 { -right } else { right };
+    let step = (disc.radius / 60.0).max(50.0);
+    (1..=240).map(|k| k as f32 * step).find(|s| {
+        let slid = PlanetDisc { center: disc.center + dir * *s, ..*disc };
+        disc_coverage(&slid, view) <= DISC_LIMB_COVERAGE
+    }).map(|s| (dir, s))
+}
+
 /// Measures the real top of a loaded backdrop planet (world bounds of its mesh parts) and moves it down when it reaches
 /// the battle plane. Runs a few frames after loading so the transforms and bounds are up to date.
 pub fn keep_planet_below(
@@ -305,6 +375,8 @@ pub fn keep_planet_below(
     parts: Query<(&bevy::camera::primitives::Aabb, &GlobalTransform)>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    camera: Option<Single<&crate::camera::BattleCamera>>,
+    terrain: Option<Res<SceneHasTerrain>>,
 ) {
     for (entity, loaded, mut tf, mut state) in &mut planets {
         if state.0 == SETTLED {
@@ -316,6 +388,7 @@ pub fn keep_planet_below(
         }
         let mut top = f32::MIN;
         let mut max_extent = 0.0f32;
+        let mut disc = None::<PlanetDisc>;
         for e in &loaded.parts {
             let Ok((aabb, gt)) = parts.get(*e) else { continue };
             let m = gt.affine();
@@ -323,6 +396,12 @@ pub fn keep_planet_below(
             let half_y = m.matrix3.row(1).abs().dot(aabb.half_extents);
             top = top.max(c.y + half_y);
             let half = aabb.half_extents;
+            let sc = gt.scale();
+            let real = Vec3::new(half.x * sc.x, half.y * sc.y, half.z * sc.z);
+            if real.min_element() < 5.0 && real.max_element() > 1000.0 {
+                let axis = if real.x <= real.y && real.x <= real.z { Vec3::X } else if real.y <= real.z { Vec3::Y } else { Vec3::Z };
+                disc = Some(PlanetDisc { center: Vec3::from(c), normal: gt.rotation() * axis, radius: real.max_element() });
+            }
             let ext = (half.x * half.x + half.y * half.y + half.z * half.z).sqrt() * gt.scale().max_element();
             max_extent = max_extent.max(ext);
         }
@@ -332,14 +411,33 @@ pub fn keep_planet_below(
             }
             continue;
         }
+        if disc.is_some() && camera.is_none() && state.0 <= 60 {
+            continue;
+        }
         state.0 = SETTLED;
         info!("battle ground below the plane: top at {top:.0} (plane 0), position y {}", tf.translation.y);
         if top > -PLANET_CLEARANCE && std::env::var_os("SP_NO_PLANET_CLAMP").is_none() {
-            tf.translation.y -= top + PLANET_CLEARANCE;
+            let drop = top + PLANET_CLEARANCE;
+            tf.translation.y -= drop;
+            if let Some(d) = disc.as_mut() {
+                d.center.y -= drop;
+            }
+        }
+        // A flat disc that still lies under the whole arena is a desert floor, not a planet: slide it sideways until its limb
+        // crosses the start view (Tatooine: centred 10000 below, 72000 wide; the Remake shows space with the planet at one side).
+        if let (Some(d), Some(cam), false) = (disc, camera.as_deref(), terrain.as_deref().is_some_and(|t| t.0)) {
+            let view = ViewPose { focus: cam.target_focus, distance: cam.target_distance, pitch: cam.pitch, yaw: cam.target_yaw };
+            let cover = disc_coverage(&d, &view);
+            let slide = disc_slide(&d, &view).filter(|_| std::env::var_os("SP_NO_DISC_SLIDE").is_none());
+            info!("battle planet disc: radius {:.0}, normal {:?}, view coverage {cover:.2}, slide {slide:?}, view {view:?}", d.radius, d.normal);
+            if let Some((dir, s)) = slide {
+                tf.translation += dir * s;
+            }
         }
 
         // U69: Spawn atmospheric rim glow halo around the backdrop planet sphere
-        if max_extent > 200.0 {
+        // The shell is a sphere around the model centre: a flat disc has no such sphere, and a slid one would show it as a blue ball.
+        if max_extent > 200.0 && disc.is_none() {
             let atmo_mesh = meshes.add(Sphere::new(max_extent * 1.025).mesh().uv(36, 24));
             let atmo_mat = materials.add(StandardMaterial {
                 base_color: Color::srgba(0.22, 0.62, 0.98, 0.38),
@@ -399,6 +497,55 @@ fn ambient_floor(a: Vec3) -> Vec3 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Tatooine's backdrop: a 72000-wide disc, normal up, 10000 below the plane, centred next to the fleet (the QA desert floor).
+    fn tatooine_disc() -> PlanetDisc {
+        PlanetDisc { center: Vec3::new(9497.0, -15959.0, 145.0), normal: Vec3::Y, radius: 71_950.0 }
+    }
+
+    #[test]
+    fn disc_under_the_arena_fills_the_view() {
+        let cover = disc_coverage(&tatooine_disc(), &start_view());
+        assert!(cover > 0.95, "flat floor under the fleet, coverage {cover}");
+    }
+
+    #[test]
+    fn floor_disc_slides_until_space_shows() {
+        let (d, view) = (tatooine_disc(), start_view());
+        let (dir, shift) = disc_slide(&d, &view).expect("floor disc must slide");
+        assert_eq!(dir, Vec3::X, "the planet stays on the side the map put it");
+        let slid = PlanetDisc { center: d.center + dir * shift, ..d };
+        let cover = disc_coverage(&slid, &view);
+        assert!(cover <= 0.25 && cover > 0.0, "limb crosses the view, coverage {cover}");
+        // A disc that already sits far to the side is left alone.
+        let far = PlanetDisc { center: d.center + dir * (shift + 20_000.0), ..d };
+        assert_eq!(disc_slide(&far, &view), None);
+    }
+
+    #[test]
+    fn slide_follows_a_rotated_camera() {
+        let (d, mut view) = (tatooine_disc(), start_view());
+        view.yaw = std::f32::consts::FRAC_PI_2;
+        let (dir, shift) = disc_slide(&d, &view).expect("floor disc must slide");
+        assert!(dir.z.abs() > 0.99, "slides along the rotated camera's right vector, not world x: {dir:?}");
+        let slid = PlanetDisc { center: d.center + dir * shift, ..d };
+        assert!(disc_coverage(&slid, &view) <= 0.25);
+    }
+
+    #[test]
+    fn tilted_coruscant_disc_slides_too() {
+        // Coruscant_01: tilted 10 degrees, centred under the arena origin, fleet 6600 south of it.
+        let d = PlanetDisc { center: Vec3::new(0.0, -19_610.0, 0.0), normal: Vec3::new(0.17364845, -0.98480785, 0.0), radius: 71_946.0 };
+        let view = ViewPose { focus: Vec3::new(-243.0, 0.0, 6647.0), distance: 1300.0, pitch: 72f32.to_radians(), yaw: 0.0 };
+        assert!(disc_coverage(&d, &view) > 0.95);
+        let (dir, shift) = disc_slide(&d, &view).expect("floor disc must slide");
+        let slid = PlanetDisc { center: d.center + dir * shift, ..d };
+        assert!(disc_coverage(&slid, &view) <= 0.25);
+    }
+
+    fn start_view() -> ViewPose {
+        ViewPose { focus: Vec3::new(-6300.0, 0.0, 2000.0), distance: 1300.0, pitch: 72f32.to_radians(), yaw: 0.0 }
+    }
 
     #[test]
     fn test_atmosphere_glow_radius_and_scattering_color() {
