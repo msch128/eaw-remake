@@ -141,7 +141,8 @@ fn the_pirates_rearm_with_the_players_tech_in_every_game_and_never_expand() {
         }
         let held: Vec<usize> = planets.iter().copied().filter(|&p| s.galaxy().planets[p].owner == Some(pirates)).collect();
         assert_eq!(held.len(), planets.len(), "without enemies the pirates neither lose nor gain planets (ground_up {ground_up})");
-        let want = 2; // Normal pirate starbase chain caps at Lv2; Lv3 is the Starforge and restricted to Lehon
+        // The pirate chain's level 3 is the Starforge, which the data restricts to Lehon (`Required_Planets` of Starforge.xml); every other pirate planet tops out at level 2.
+        let want = 2;
         let mut raised = 0;
         let mut grew = 0;
         for &p in &held {
@@ -150,10 +151,14 @@ fn the_pirates_rearm_with_the_players_tech_in_every_game_and_never_expand() {
             assert!(lvl >= before[idx].0, "a base is never lowered");
             let cap = (w.planets[p].max_space_base as usize).clamp(1, 2);
             assert!(lvl >= cap, "base reaches planet cap for {}: lvl {lvl} vs cap {cap}", w.planets[p].name);
-            raised += usize::from(lvl >= want);
+            if w.planets[p].name.to_ascii_lowercase().contains("lehon") {
+                assert!(lvl >= 3.min(w.planets[p].max_space_base as usize), "the Starforge planet follows tech 4 up to level 3");
+            }
+            raised += usize::from(lvl >= cap.min(want));
             grew += usize::from(units > before[idx].1);
         }
         println!("ground_up {ground_up}: tech {tech0} -> 4, {} pirate planets, {raised} at base level >= {want}, {grew} with a bigger garrison", held.len());
+        assert!(raised * 10 >= held.len() * 9, "bases follow the player's tech: {raised} of {} at their planet's target level (at most {want})", held.len());
         assert!(grew > 0, "garrisons grow");
         for &p in &held {
             let is_lehon = w.planets[p].name.to_ascii_lowercase().contains("lehon");
