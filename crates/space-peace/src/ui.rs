@@ -371,14 +371,13 @@ fn update_tooltip(
         _ => **vis = Visibility::Hidden,
     }
 }
-fn toggle_fps(keys: Res<ButtonInput<KeyCode>>, mut fps: Single<&mut Visibility, With<FpsText>>) {
+/// The counter follows the "Show FPS" option; F3 flips the option for the session.
+fn toggle_fps(keys: Res<ButtonInput<KeyCode>>, mut settings: ResMut<Settings>, mut fps: Single<&mut Visibility, With<FpsText>>) {
     if keys.just_pressed(KeyCode::F3) {
-        **fps = if **fps == Visibility::Hidden {
-            Visibility::Inherited
-        } else {
-            Visibility::Hidden
-        };
+        settings.show_fps = !settings.show_fps;
     }
+    let want = if settings.show_fps { Visibility::Inherited } else { Visibility::Hidden };
+    fps.set_if_neq(want);
 }
 
 fn update_fps(

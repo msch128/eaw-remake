@@ -112,6 +112,16 @@ struct SpeedText;
 /// Centered "PAUSED" banner shown at the top of the screen when galaxy game is paused.
 #[derive(Component)]
 pub(crate) struct PauseBanner;
+/// The clickable "RESUME GAME" tab inside the [`PauseBanner`].
+#[derive(Component)]
+struct ResumeTab;
+
+/// Resumes the galaxy clock when the pause tab is pressed.
+fn resume_tab_click(tab: Query<&Interaction, (Changed<Interaction>, With<ResumeTab>)>, mut actions: MessageWriter<PlayAction>) {
+    if tab.iter().any(|i| *i == Interaction::Pressed) {
+        actions.write(PlayAction::SetSpeedLevel(1));
+    }
+}
 /// Selected fleets read-out.
 #[derive(Component)]
 struct FleetText;
@@ -168,8 +178,10 @@ impl Plugin for PlayUiPlugin {
             )
             .add_systems(Update, (declutter_top, hero_bar, spawn_pad_arrows, pad_arrows, locked_clicks, spawn_planet_panel, update_planet_panel, place_planet_panel, planet_view_ui, planet_view_bar_tab, objectives_toggle, objectives_window, objectives_scroll).chain().run_if(resource_exists::<PlayBridge>.and_then(resource_exists::<SimState>)))
             .add_systems(Update, scripted_tooltip.run_if(resource_exists::<eaw_ui::ForcedTooltip>))
+            .add_systems(Update, resume_tab_click.run_if(in_state(AppScreen::Galaxy)).run_if(resource_exists::<SimState>))
             .add_systems(Update, galactic_hotkeys.run_if(in_state(AppScreen::Galaxy)).run_if(resource_exists::<SimState>))
             .add_systems(Update, save_toast)
+            .add_systems(Update, hero_slot_clicks.run_if(in_state(AppScreen::Galaxy)).run_if(resource_exists::<PlayBridge>.and_then(resource_exists::<SimState>)))
             .add_systems(Update, auto_resolve_summary.after(battle_dialog_result).run_if(resource_exists::<PlayBridge>.and_then(resource_exists::<SimState>)))
             .add_systems(Update, show_battle_summary.run_if(in_state(AppScreen::Galaxy)).run_if(resource_exists::<crate::battle_play::BattleSummary>))
             .add_systems(Update, (result_return, result_scroll))
@@ -689,7 +701,7 @@ fn text_bundle(s: &str, size: f32, color: Color) -> impl Bundle {
     )
 }
 
-fn spawn_hud(mut commands: Commands, existing: Query<(), With<PlayHud>>) {
+fn spawn_hud(mut commands: Commands, existing: Query<(), With<Ticker>>) {
     if !existing.is_empty() {
         return;
     }
@@ -708,22 +720,47 @@ fn spawn_hud(mut commands: Commands, existing: Query<(), With<PlayHud>>) {
         SpeedText,
         GalaxyEntity,
     ));
-    commands.spawn((
-        PlayHud,
-        PauseBanner,
-        text_bundle("PAUSED", 26.0, Color::srgb(1.0, 0.85, 0.35)),
-        Node {
-            position_type: PositionType::Absolute,
-            top: Val::Px(46.0),
-            width: Val::Percent(100.0),
-            justify_content: JustifyContent::Center,
-            ..abs.clone()
-        },
-        TextLayout::justify(Justify::Center),
-        GlobalZIndex(80),
-        Visibility::Hidden,
-        GalaxyEntity,
-    ));
+    // "GAME PAUSED / RESUME GAME" tab, top centre, like the Remake: the wrapper spans the width and lets clicks through.
+    commands
+        .spawn((
+            PlayHud,
+            PauseBanner,
+            Node { position_type: PositionType::Absolute, top: Val::Px(0.0), width: Val::Percent(100.0), justify_content: JustifyContent::Center, ..abs.clone() },
+            bevy::ui::FocusPolicy::Pass,
+            GlobalZIndex(80),
+            Visibility::Hidden,
+            GalaxyEntity,
+        ))
+        .with_children(|p| {
+            p.spawn((
+                Button,
+                ResumeTab,
+                Node {
+                    flex_direction: FlexDirection::Column,
+                    align_items: AlignItems::Center,
+                    padding: UiRect::axes(Val::Px(26.0), Val::Px(5.0)),
+                    border: UiRect::bottom(Val::Px(2.0)),
+                    row_gap: Val::Px(1.0),
+                    ..default()
+                },
+                BackgroundColor(Color::srgba(0.03, 0.05, 0.10, 0.88)),
+                BorderColor::all(Color::srgb(0.25, 0.55, 0.85)),
+            ))
+            .with_children(|t| {
+                t.spawn((
+                    Text::new("GAME PAUSED"),
+                    TextFont { font: FontSource::Family("Bahnschrift".into()), font_size: FontSize::Px(15.0), ..default() },
+                    bevy::text::LetterSpacing::Rem(0.12),
+                    TextColor(Color::srgb(0.85, 0.92, 1.0)),
+                ));
+                t.spawn((
+                    Text::new("RESUME GAME"),
+                    TextFont { font: FontSource::Family("Bahnschrift".into()), font_size: FontSize::Px(12.0), ..default() },
+                    bevy::text::LetterSpacing::Rem(0.12),
+                    TextColor(Color::srgb(0.4, 0.8, 1.0)),
+                ));
+            });
+        });
     commands.spawn((
         PlayHud,
         ToastText,
@@ -783,8 +820,9 @@ fn refresh_texts(
     mut speed: Single<(&mut Text, &mut TextColor), (With<SpeedText>, Without<FleetText>, Without<PauseBanner>)>,
     mut fleets: Single<(&mut Text, &mut Visibility), (With<FleetText>, Without<SpeedText>, Without<PauseBanner>)>,
     mut pause_banner: Query<&mut Visibility, (With<PauseBanner>, Without<FleetText>, Without<SpeedText>)>,
+    new_banner: Query<(), Added<PauseBanner>>,
 ) {
-    if !model.is_changed() && !clock.is_changed() {
+    if !model.is_changed() && !clock.is_changed() && new_banner.is_empty() {
         return;
     }
     let paused = clock.paused() || model.speed.rate <= 0.0;
@@ -2898,6 +2936,39 @@ fn pad_arrows(
         for &k in kids {
             if let Ok(mut c) = texts.get_mut(k) {
                 c.0 = if usable { Color::srgb(0.85, 0.93, 1.0) } else { Color::srgb(0.35, 0.4, 0.5) };
+            }
+        }
+    }
+}
+
+
+/// A click on a hero portrait of the hero frame selects the hero's fleet and centres the map on it.
+fn hero_slot_clicks(
+    mut clicks: MessageReader<EawButtonClicked>,
+    model: Res<PlayUiModel>,
+    state: Res<SimState>,
+    player: Res<PlayerFaction>,
+    bridge: Res<PlayBridge>,
+    view: Res<crate::galaxy_view::GalaxyView>,
+    mut selection: ResMut<PlayerSelection>,
+    mut view_selection: ResMut<crate::galaxy_map::Selection>,
+    mut cam: Single<&mut crate::camera::GalaxyCamera>,
+) {
+    for click in clicks.read() {
+        let Some(k) = click.name.strip_prefix("hero_slot_").and_then(|n| n.get(4..)).and_then(|n| n.parse::<usize>().ok()) else {
+            continue;
+        };
+        let (Some(hero), Some(me)) = (model.heroes.get(k), player.0) else { continue };
+        let world = &state.world;
+        let fleet = state.galaxy().fleets.iter().find(|(_, f)| f.owner == me && f.units.keys().any(|&u| world.units[u as usize].hero && world.units[u as usize].name == *hero));
+        let Some((&id, f)) = fleet else { continue };
+        selection.fleets = [id].into();
+        if let Some(p) = f.planet() {
+            selection.planet = Some(p);
+            if let Some(vi) = bridge.sim_to_planet.get(p as usize).copied().flatten() {
+                view_selection.0 = Some(vi);
+                let w = crate::galaxy_map::galaxy_to_world(view.planets[vi].position);
+                cam.target_focus = Vec3::new(w.x, 0.0, w.z);
             }
         }
     }

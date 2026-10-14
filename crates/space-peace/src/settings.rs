@@ -147,6 +147,8 @@ pub struct Settings {
     pub vsync: bool,
     /// Frame rate cap, 0 = unlimited.
     pub fps_cap: u32,
+    /// Show the FPS counter.
+    pub show_fps: bool,
     /// UI scale factor.
     pub ui_scale: f32,
     /// Master volume 0..1.
@@ -182,6 +184,7 @@ impl Default for Settings {
             resolution: (1600, 900),
             vsync: true,
             fps_cap: 0,
+            show_fps: false,
             ui_scale: 1.0,
             master: 0.5,
             music: 0.6,
@@ -210,6 +213,8 @@ pub enum OptionKey {
     Vsync,
     /// Frame rate cap.
     FpsCap,
+    /// FPS counter overlay.
+    ShowFps,
     /// UI scale.
     UiScale,
     /// Master volume.
@@ -248,11 +253,12 @@ pub enum OptionKey {
 
 impl OptionKey {
     /// All rows in display order.
-    pub const ALL: [OptionKey; 21] = [
+    pub const ALL: [OptionKey; 22] = [
         OptionKey::WindowMode,
         OptionKey::Resolution,
         OptionKey::Vsync,
         OptionKey::FpsCap,
+        OptionKey::ShowFps,
         OptionKey::UiScale,
         OptionKey::Master,
         OptionKey::Music,
@@ -279,6 +285,7 @@ impl OptionKey {
             OptionKey::Resolution => "Resolution",
             OptionKey::Vsync => "Vertical sync",
             OptionKey::FpsCap => "FPS limit",
+            OptionKey::ShowFps => "Show FPS",
             OptionKey::UiScale => "UI scale",
             OptionKey::Master => "Master volume",
             OptionKey::Music => "Music volume",
@@ -325,6 +332,7 @@ impl Settings {
             OptionKey::WindowMode => if self.borderless { "Borderless" } else { "Windowed" }.into(),
             OptionKey::Resolution => format!("{} x {}", self.resolution.0, self.resolution.1),
             OptionKey::Vsync => on(self.vsync),
+            OptionKey::ShowFps => on(self.show_fps),
             OptionKey::FpsCap => {
                 if self.fps_cap == 0 { "Unlimited".into() } else { self.fps_cap.to_string() }
             }
@@ -359,6 +367,7 @@ impl Settings {
                 self.resolution = RESOLUTIONS[cycle(i, dir, RESOLUTIONS.len())];
             }
             OptionKey::Vsync => self.vsync = !self.vsync,
+            OptionKey::ShowFps => self.show_fps = !self.show_fps,
             OptionKey::FpsCap => {
                 let i = nearest(&FPS_CAPS, |c| (c as f32 - self.fps_cap as f32).abs());
                 self.fps_cap = FPS_CAPS[cycle(i, dir, FPS_CAPS.len())];
@@ -475,6 +484,7 @@ impl Settings {
              resolution = [{}, {}]\n\
              vsync = {}\n\
              fps_cap = {}\n\
+             show_fps = {}\n\
              ui_scale = {}\n\
              master_volume = {}\n\
              music_volume = {}\n\
@@ -497,6 +507,7 @@ impl Settings {
             self.resolution.1,
             self.vsync,
             self.fps_cap,
+            self.show_fps,
             self.ui_scale,
             self.master,
             self.music,
@@ -544,6 +555,7 @@ impl Settings {
                 }
                 "vsync" => s.vsync = boolean().unwrap_or(s.vsync),
                 "fps_cap" => s.fps_cap = value.parse().unwrap_or(s.fps_cap),
+                "show_fps" => s.show_fps = boolean().unwrap_or(s.show_fps),
                 "ui_scale" => s.ui_scale = float().unwrap_or(s.ui_scale).clamp(0.5, 3.0),
                 "master_volume" => s.master = float().unwrap_or(s.master).clamp(0.0, 1.0),
                 "music_volume" => s.music = float().unwrap_or(s.music).clamp(0.0, 1.0),
@@ -694,6 +706,7 @@ mod tests {
             resolution: (2560, 1440),
             vsync: false,
             fps_cap: 144,
+            show_fps: true,
             ui_scale: 1.5,
             master: 0.3,
             music: 0.8,
