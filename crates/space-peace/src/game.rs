@@ -712,9 +712,9 @@ mod tests {
         }
         assert!(entries.iter().any(|e| e.name == DEFAULT_CAMPAIGN && e.faction == "Rebel"));
         assert!(entries.iter().all(|e| !e.name.to_ascii_lowercase().contains("obs")));
-        // Every group offers the Rebel, Empire, Underworld, Republic and CIS variants.
+        // Remake 4.0 offers the Rebel, Empire and Underworld variants (Republic/CIS campaigns only come with another mod stack, --mod).
         let full: Vec<_> = entries.iter().filter(|e| e.group_title == "Full").map(|e| e.faction.as_str()).collect();
-        assert_eq!(full, ["Rebel", "Empire", "Underworld", "Republic", "CIS"]);
+        assert_eq!(full, ["Rebel", "Empire", "Underworld"]);
     }
 
     #[test]
