@@ -81,6 +81,8 @@ const MIN_PITCH: f32 = 0.35;
 const MAX_PITCH: f32 = 1.45;
 /// Page Up / Page Down turn speed in radians per second.
 const PAGE_TURN_SPEED: f32 = 1.2;
+/// Extra tilt towards the horizon at the closest zoom, radians: 50 deg start to about 24 deg (GMC_ZoomedPitchAngleDegrees -20).
+const ZOOM_FLATTEN: f32 = 0.45;
 const ZOOM_STEP: f32 = 0.88;
 const ZOOM_SMOOTH: f32 = 12.0;
 const PAN_SMOOTH: f32 = 14.0;
@@ -110,7 +112,7 @@ fn spawn_camera(mut commands: Commands, offscreen: Option<Res<crate::offscreen::
             distance: 400.0,
             target_distance: 400.0,
             yaw: 0.0,
-            pitch: 58f32.to_radians(),
+            pitch: 50f32.to_radians(), // GMC_InitialPitchAngleDegrees -50
         },
         Transform::default(),
     ));
@@ -275,7 +277,7 @@ fn control_camera(
 /// original game.
 fn camera_pose(bounds: &CameraBounds, focus: Vec3, distance: f32, yaw: f32, pitch: f32) -> (Vec3, Quat) {
     let zoom_t = ((distance - bounds.min_distance) / (bounds.max_distance - bounds.min_distance).max(1.0)).clamp(0.0, 1.0);
-    let pitch = pitch - (1.0 - zoom_t) * 0.2;
+    let pitch = pitch - (1.0 - zoom_t) * ZOOM_FLATTEN;
     let rot = Quat::from_rotation_y(-yaw) * Quat::from_rotation_x(-pitch);
     (focus + rot * Vec3::Z * distance, rot)
 }
