@@ -633,14 +633,18 @@ fn reinforce_panel(
         return;
     }
     let game = assets.and_then(|a| a.game.clone());
+    // Population in play plus the waves dropped but not yet seen by the simulation (it does not step while paused).
+    let unseen: i32 = ui.placed.iter().filter(|p| !p.acked).map(|p| rt.catalog.ship(p.ship).population * p.count as i32).sum();
+    let pop = rt.cur.as_ref().and_then(|c| c.pop.get(settings.player_side as usize).copied()).unwrap_or(0) + unseen;
     for k in 0..12 {
         let name = format!("r_{:02}{:02}", k / 4, k % 4);
         match ui.rows.get(k) {
-            Some((object, _, left)) => {
+            Some((object, ship, left)) => {
                 let slot = PanelSlot {
                     icon: game.as_deref().and_then(|g| eaw_ui::unit_icon(g, object)).unwrap_or_default(),
                     label: if *left > 1 { format!("x{left}") } else { String::new() },
-                    disabled: *left == 0,
+                    // Greyed out: none left, or one more would not fit under the population cap (the rule of `place_check`).
+                    disabled: *left == 0 || pop + rt.catalog.ship(*ship).population > rt.unit_cap,
                     ..default()
                 };
                 if panel.slots.get(&name) != Some(&slot) {
@@ -654,7 +658,6 @@ fn reinforce_panel(
             }
         }
     }
-    let pop = rt.cur.as_ref().and_then(|c| c.pop.get(settings.player_side as usize).copied()).unwrap_or(0);
     let text = format!("{pop}/{}", rt.unit_cap);
     if panel.texts.get("r_pop_text") != Some(&text) {
         panel.set_text("r_pop_text", text);

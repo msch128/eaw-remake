@@ -149,6 +149,23 @@ impl ShellLayout {
             out.order.push(item.name.clone());
             out.items.insert(item.name.to_lowercase(), item);
         }
+        // `r_pop_text` / `r_pop_icon` of the reinforcement window are bones without a mesh (so no collision rectangle): the game places
+        // them by their bone. Their sizes are estimates (the text runs to the window's right edge, the icon is about 22 px).
+        for (i, bone) in m.bones.iter().enumerate() {
+            let lname = bone.name.to_lowercase();
+            let size = match lname.as_str() {
+                "r_pop_text" => Vec2::new(70.0, 16.0),
+                "r_pop_icon" => Vec2::new(22.0, 22.0),
+                _ => continue,
+            };
+            if out.items.contains_key(&lname) {
+                continue;
+            }
+            let t = m.world_transform(i);
+            let item = ShellItem { name: bone.name.clone(), center: Vec2::new(t[0][3], t[1][3]), size, z: t[2][3] };
+            out.order.push(item.name.clone());
+            out.items.insert(lname, item);
+        }
         Some(out)
     }
 
