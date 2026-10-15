@@ -138,6 +138,7 @@ fn control_camera(
     selection: Option<Res<crate::galaxy_map::Selection>>,
     hover: Option<Res<crate::galaxy_map::Hover>>,
     view: Option<Res<crate::galaxy_view::GalaxyView>>,
+    planet_view: Option<Res<crate::planet_view::PlanetViewState>>,
 ) {
     let dt = time.delta_secs();
     let (cam, projection) = &mut *cam;
@@ -159,6 +160,8 @@ fn control_camera(
         MouseScrollUnit::Line => scroll.delta.y,
         MouseScrollUnit::Pixel => scroll.delta.y / 40.0,
     };
+    // The planet view owns the wheel while it is open or fading: the galaxy zoom it returns to stays where the player left it.
+    let notches = if planet_view.is_some_and(|v| v.active || v.blend > 0.0) { 0.0 } else { notches };
     if notches != 0.0 {
         let old_distance = cam.target_distance;
         cam.target_distance = (old_distance * ZOOM_STEP.powf(notches)).clamp(bounds.min_distance, bounds.max_distance);

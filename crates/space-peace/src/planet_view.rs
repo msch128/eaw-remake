@@ -33,6 +33,8 @@ pub struct PlanetViewState {
     pub start_pos: Option<Vec3>,
     /// Initial camera rotation when zoom transition begins.
     pub start_rot: Option<Quat>,
+    /// Galaxy zoom (camera target distance) before the dive; leaving the view returns to it.
+    pub return_distance: Option<f32>,
 }
 
 /// Registers the planet view.
@@ -103,6 +105,7 @@ fn view_input(
             if wheel_opens(scroll.delta.y, distance, offset) {
                 // The dive finishes while the view fades in: the camera keeps flying to the planet.
                 cam.target_focus = at;
+                state.return_distance = Some(cam.target_distance);
                 cam.target_distance = bounds.min_distance;
                 state.active = true;
                 state.planet = Some(p.0);
@@ -111,6 +114,9 @@ fn view_input(
     } else if (keys.just_pressed(KeyCode::Escape) && !dialog.is_open()) || (scroll.delta.y < 0.0 && state.blend >= 1.0) {
         // Scrolling out only leaves once the view has fully opened: a trailing wheel tick must not close it mid-flight.
         state.active = false;
+        if let Some(d) = state.return_distance.take() {
+            cam.target_distance = d.clamp(bounds.min_distance, bounds.max_distance);
+        }
     }
 }
 
