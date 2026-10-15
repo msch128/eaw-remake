@@ -168,9 +168,12 @@ impl Default for BattleViewSettings {
             synthetic_pointer: false,
             ui_scale: 1.0,
             sky_radius: 90_000.0,
-            fov_degrees: 45.0,
-            // Estimate: matches the Remake Byss video (b0640-b0705), where a big Star Destroyer spans ~14% of the frame width at 45 deg fov.
-            start_distance: 1300.0,
+            // `Space_Mode` of TacticalCameras.xml: Fov_Default 60 (D3D convention: the vertical angle, like Bevy's). Not verifiable from the data.
+            fov_degrees: 60.0,
+            // Deliberately closer than the data (`Distance_Default` 2000): the user asked for a closer default view. The earlier estimate
+            // came from the Remake Byss video (b0640-b0705), a big Star Destroyer spanning ~14% of the frame width, at 45 degrees fov.
+            // 930 at 60 deg keeps the apparent ship size of the 1300 / 45 deg view the user approved.
+            start_distance: 930.0,
             shadows: false,
             particle_density: 1.0,
             audio: true,

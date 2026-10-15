@@ -1,4 +1,4 @@
-//! Tactical Fog of War visual shroud overlay in space battles.
+//! Tactical Fog of War visual shroud overlay in space battles (off unless `SP_FOG_SHROUD` is set, see `setup_fog_shroud`).
 //!
 //! Spans a semi-transparent cosmic fog plane over the arena on the battle plane.
 //! Areas outside the player's ship sensor discs are shrouded in dark cosmic dust;
@@ -32,7 +32,10 @@ pub(crate) fn setup_fog_shroud(
     mut images: ResMut<Assets<Image>>,
 ) {
     let Some(rt) = rt else { return };
-    if !rt.fog_of_war || existing.is_some() {
+    // The shroud is a dark plane over the arena: over a backdrop planet it showed as a dark sheet with bright sensor bubbles and a hard
+    // edge (Tatooine QA shot), and the real game draws no such overlay (07_tactical_battle). The sim's fog of war still hides enemy
+    // ships; the plane is kept behind `SP_FOG_SHROUD=1` for comparison.
+    if !rt.fog_of_war || existing.is_some() || std::env::var_os("SP_FOG_SHROUD").is_none() {
         return;
     }
     let n = FOG_GRID_SIZE;

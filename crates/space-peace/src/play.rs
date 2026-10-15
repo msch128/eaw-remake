@@ -355,6 +355,8 @@ pub struct ScriptState {
     sent: f32,
     /// Seconds the scenario wants in total.
     goal: f32,
+    /// Frame at which `--grant-unit` was ordered; `--move` waits a few frames so the granted fleet exists.
+    granted_at: Option<u32>,
     frames: u32,
 }
 
@@ -419,6 +421,10 @@ fn run_script(
                 return;
             };
             let Some(planet) = selection.planet else {
+                // A granted unit can reset the selection; ask for it again while waiting.
+                if let Some(i) = args.select.as_deref().and_then(find) {
+                    map_selection.0 = Some(i);
+                }
                 if script.frames > 30 {
                     warn!("script: no planet selected, skipping orders");
                     // `--weeks` alone must still fast-forward.
@@ -429,13 +435,20 @@ fn run_script(
             };
             if let (Some(units), Some(at)) = (args.grant_unit.as_deref(), args.at.as_deref().and_then(find).and_then(|i| bridge.planet_to_sim[i])) {
                 // Several units may be granted at once, comma separated; `Name@2` puts the unit into fleet slot 2 of the planet.
-                for unit in units.split(',').map(str::trim).filter(|u| !u.is_empty()) {
-                    info!("script: granting {unit} at {}", world.planets[at as usize].display_name);
-                    match unit.split_once('@').and_then(|(n, s)| Some((n, s.parse::<u8>().ok()?))) {
-                        Some((name, slot)) => actions.write(PlayAction::DebugGrantToSlot { unit_name: name.to_owned(), planet: at, count: 1, slot }),
-                        None => actions.write(PlayAction::DebugGrant { unit_name: unit.to_owned(), planet: at, count: 1 }),
-                    };
+                // The grant is one step of its own: the fleet exists a few frames later, so a following `--move` can find it.
+                if script.granted_at.is_none() {
+                    script.granted_at = Some(script.frames);
+                    for unit in units.split(',').map(str::trim).filter(|u| !u.is_empty()) {
+                        info!("script: granting {unit} at {}", world.planets[at as usize].display_name);
+                        match unit.split_once('@').and_then(|(n, s)| Some((n, s.parse::<u8>().ok()?))) {
+                            Some((name, slot)) => actions.write(PlayAction::DebugGrantToSlot { unit_name: name.to_owned(), planet: at, count: 1, slot }),
+                            None => actions.write(PlayAction::DebugGrant { unit_name: unit.to_owned(), planet: at, count: 1 }),
+                        };
+                    }
                 }
+            }
+            if script.granted_at.is_some_and(|g| script.frames < g + 5) {
+                return;
             }
             if let Some(text) = &args.build {
                 let g = state.galaxy();
