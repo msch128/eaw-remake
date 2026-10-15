@@ -403,6 +403,10 @@ pub struct StructureType {
     /// `Tactical_Additional_Structure_Type`: Golan platform to its `*_Golan_N_Orbital`, Uplink Command to its control station). `combat` and
     /// `space_reach` are copied from it; the tactical battle uses its name.
     pub battle_form: Option<StructureTypeId>,
+    /// Combat numbers of a ground-to-space special weapon (Hypervelocity Gun, Seismic Cannon, Nuke Launcher: `Is_Special_Weapon_In_Space`): the weapon
+    /// only, built from its projectile and recharge. The structure itself cannot be hit in a space battle, so the statistical resolver neither targets it
+    /// nor counts it as a ship that keeps a side in the fight. Kept apart from `combat` so that it does not change blockades or defenders.
+    pub special_combat: Option<CombatStats>,
     /// Structure types this one counts as (its `Variant_Of_Existing_Type` ancestors), itself excluded.
     pub ancestors: Vec<StructureTypeId>,
     /// Absolute income change per week.

@@ -78,6 +78,19 @@ impl<'a> StatsBuilder<'a> {
         })
     }
 
+    /// The weapon of a ground-to-space structure: its projectile fired `Projectile_Fire_Pulse_Count` times per
+    /// `Projectile_Fire_Recharge_Seconds` (plus the pulse delays). The structure has no hull of its own in the fight (it is not a target).
+    fn special_weapon(&mut self, fields: &HashMap<String, String>) -> Option<CombatStats> {
+        let num = |k: &str| fields.get(k).and_then(|v| v.trim().parse::<f32>().ok());
+        let projectile = name_list(fields.get("projectile_types")?).into_iter().next()?;
+        let pulses = num("projectile_fire_pulse_count").unwrap_or(1.0).max(1.0) as u32;
+        let cycle = num("projectile_fire_recharge_seconds").unwrap_or(80.0) + (pulses - 1) as f32 * num("projectile_fire_pulse_delay_seconds").unwrap_or(0.5);
+        let weapon = self.weapon(&projectile, pulses, cycle, 0.0)?;
+        let mut stats = CombatStats { hull: 1.0, ..CombatStats::default() };
+        stats.add_weapon(weapon);
+        Some(stats)
+    }
+
     fn hardpoint_weapon(&mut self, hp: &HardpointDef) -> Option<Weapon> {
         let proj = hp.projectile.as_deref()?;
         let pulses = hp.fire_pulse_count.max(1);
@@ -214,6 +227,7 @@ impl World {
             });
             let combat = combat.filter(|c| !c.weapons.is_empty() || c.hull > 0.0);
             let yes = |k: &str| def.fields.get(k).is_some_and(|v| alamo_data::xml::parse_bool(v));
+            let special_combat = (combat.is_none() && yes("is_special_weapon_in_space")).then(|| sb.special_weapon(&def.fields)).flatten();
             let orbital = def.base_position.as_deref().is_some_and(|b| b.eq_ignore_ascii_case("orbital"))
                 || yes("build_tab_space_station")
                 || def.source_file.to_ascii_lowercase().contains("/space/");
@@ -245,6 +259,7 @@ impl World {
                 galactic: orbital,
                 space_reach: reach,
                 battle_form: None,
+                special_combat,
                 ancestors: Vec::new(),
                 income_abs: def.income_modifiers.iter().map(|m| m.absolute).sum(),
                 income_pct: def.income_modifiers.iter().map(|m| m.percentage).sum(),

@@ -61,6 +61,8 @@ struct Inst {
     hull: f32,
     shield: f32,
     max_shield: f32,
+    /// Fires but cannot be a target and does not keep its side in the fight.
+    immune: bool,
 }
 
 impl World {
@@ -69,8 +71,13 @@ impl World {
         match src {
             Source::Unit(u) | Source::Garrison(u) => Some(&self.units[u as usize].combat),
             Source::Starbase(s) => Some(&self.starbases[s as usize].combat),
-            Source::Structure(s) => self.structures[s as usize].combat.as_ref(),
+            Source::Structure(s) => self.structures[s as usize].combat.as_ref().or(self.structures[s as usize].special_combat.as_ref()),
         }
+    }
+
+    /// A ground-to-space weapon structure: it fires but cannot be hit (see `StructureType::special_combat`).
+    fn untargetable(&self, src: Source) -> bool {
+        matches!(src, Source::Structure(s) if self.structures[s as usize].special_combat.is_some())
     }
 
     /// Rough strength estimate (Lanchester square law): `sqrt(durability * dps)` summed over groups.
@@ -175,7 +182,7 @@ pub fn resolve_tuned(world: &World, sides: &[SideInput], rng: &mut Rng, allied: 
                 let Some(st) = world.stats_of(m.source) else { continue };
                 for _ in 0..m.count {
                     let dm = mult(s.faction);
-                    v.push(Inst { member: mi, src: m.source, hull: st.hull.max(1.0) * dm.health * base(m.source), shield: st.shield * dm.shield * base(m.source), max_shield: st.shield * dm.shield * base(m.source) });
+                    v.push(Inst { member: mi, src: m.source, hull: st.hull.max(1.0) * dm.health * base(m.source), shield: st.shield * dm.shield * base(m.source), max_shield: st.shield * dm.shield * base(m.source), immune: world.untargetable(m.source) });
                 }
             }
             v
@@ -227,7 +234,7 @@ pub fn resolve_tuned(world: &World, sides: &[SideInput], rng: &mut Rng, allied: 
                 }
             }
         }
-        let alive: Vec<usize> = (0..insts.len()).filter(|&i| !insts[i].is_empty() || !arriving[i].is_empty() || !reserve[i].is_empty()).collect();
+        let alive: Vec<usize> = (0..insts.len()).filter(|&i| insts[i].iter().any(|x| !x.immune) || !arriving[i].is_empty() || !reserve[i].is_empty()).collect();
         if alive.len() <= 1 {
             break;
         }
@@ -235,10 +242,12 @@ pub fn resolve_tuned(world: &World, sides: &[SideInput], rng: &mut Rng, allied: 
         // Damage accumulators: (shield damage, hull damage that needs shields down, direct hull damage).
         let mut acc: Vec<Vec<(f32, f32, f32)>> = insts.iter().map(|v| vec![(0.0, 0.0, 0.0); v.len()]).collect();
         let mut dealt = false;
+        // Ground-to-space weapon structures fire but are never hit.
+        let targets: Vec<Vec<usize>> = insts.iter().map(|v| (0..v.len()).filter(|&i| !v[i].immune).collect()).collect();
         for &si in &alive {
             let enemies: Vec<usize> = alive.iter().copied().filter(|&o| {
                     let (a, b) = (sides[si].faction, sides[o].faction);
-                    !insts[o].is_empty() && world.hostile(a, b) && !allied.contains(&(a.min(b), a.max(b)))
+                    insts[o].iter().any(|x| !x.immune) && world.hostile(a, b) && !allied.contains(&(a.min(b), a.max(b)))
                 }).collect();
             if enemies.is_empty() {
                 continue;
@@ -250,11 +259,11 @@ pub fn resolve_tuned(world: &World, sides: &[SideInput], rng: &mut Rng, allied: 
                 for w in &att.weapons {
                     dealt = true;
                     let ts = enemies[rng.below(enemies.len() as u64) as usize];
-                    let mut ti = rng.below(insts[ts].len() as u64) as usize;
+                    let mut ti = targets[ts][rng.below(targets[ts].len() as u64) as usize];
                     if focus > 1 {
                         let left = |i: usize| insts[ts][i].hull + insts[ts][i].shield - (acc[ts][i].0 + acc[ts][i].1 + acc[ts][i].2);
                         for _ in 1..focus {
-                            let c = rng.below(insts[ts].len() as u64) as usize;
+                            let c = targets[ts][rng.below(targets[ts].len() as u64) as usize];
                             if left(c) < left(ti) {
                                 ti = c;
                             }
@@ -324,7 +333,7 @@ pub fn resolve_tuned(world: &World, sides: &[SideInput], rng: &mut Rng, allied: 
                 .collect()
         })
         .collect();
-    let alive: Vec<usize> = (0..survivors.len()).filter(|&i| !survivors[i].is_empty()).collect();
+    let alive: Vec<usize> = (0..survivors.len()).filter(|&i| survivors[i].iter().any(|m| !world.untargetable(m.source))).collect();
     let winner = (alive.len() == 1 && rounds < world.config.combat_max_rounds).then(|| alive[0]);
     CombatResult { survivors, winner, rounds, retreated: Vec::new() }
 }
