@@ -1301,8 +1301,16 @@ pub(crate) fn fleet_tooltip(
     blocked: Res<galaxy_play::PlayCursorBlocked>,
     planet_view: Option<Res<crate::planet_view::PlanetViewState>>,
     modal: Query<(), With<ResultRoot>>,
+    drag: Res<galaxy_play::input::DragState>,
 ) {
     let (view_active, view_blend) = planet_view.map_or((false, 0.0), |v| (v.active, v.blend));
+    // While a fleet is carried the advisor line shows the route and ETA; the hover card would cover it.
+    if drag.dragging {
+        if tip.text.is_some() {
+            tip.text = None;
+        }
+        return;
+    }
     // The planet close-up shows its own hover cards (`planet_view::view_tooltip`); while it flies in, the map's card is gone.
     if view_active && view_blend >= 1.0 {
         return;

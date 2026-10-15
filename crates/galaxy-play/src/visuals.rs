@@ -326,6 +326,7 @@ pub fn draw_fleet_markers(
     cfg: Res<crate::state::PlayConfig>,
     time: Res<Time>,
     fleets: Query<(&FleetVisual, &Transform)>,
+    drag: Res<crate::input::DragState>,
 ) {
     let world = &state.world;
     let g = state.galaxy();
@@ -354,6 +355,9 @@ pub fn draw_fleet_markers(
     let pulse = 1.0 + 0.08 * (time.elapsed_secs() * 4.0).sin();
     for (v, tf) in &fleets {
         let Some(f) = g.fleets.get(&v.id) else { continue };
+        if drag.dragging && drag.carry.contains(&v.id) {
+            continue;
+        }
         let team = map_color(world, player.0, v.owner);
         let base = tf.translation;
         let ring = v.pad;

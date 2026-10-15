@@ -71,7 +71,8 @@ pub fn carry_fleets(
     layout: Res<GalaxyLayout>,
     camera: Query<(&Camera, &GlobalTransform), With<Camera3d>>,
     mut anim: ResMut<CarryAnim>,
-    mut fleets: Query<(&FleetVisual, &mut Transform)>,
+    mut fleets: Query<(&FleetVisual, &mut Transform, &Children)>,
+    mut pads: Query<&mut Visibility, With<crate::visuals::FleetPad>>,
 ) {
     let dt = time.delta_secs();
     let carrying = drag.dragging && drag.cursor_ground.is_some() && !drag.carry.is_empty();
@@ -82,7 +83,7 @@ pub fn carry_fleets(
     anim.selected = selection.fleets.clone();
 
     let offsets = fan_offsets(drag.carry.len(), layout.unit * 1.3);
-    for (visual, mut tf) in &mut fleets {
+    for (visual, mut tf, children) in &mut fleets {
         let id = visual.id;
         let sim_pos = tf.translation;
         let slot = if carrying { drag.carry.iter().position(|&c| c == id) } else { None };
@@ -96,6 +97,16 @@ pub fn carry_fleets(
             }
         }
         let mut scale = 1.0 + pop_bump(pop);
+        // The base disc and rim stay behind while the fleet is lifted (they would scale up with it and read as a second selection).
+        let carried = slot.is_some() && drag.cursor_ground.is_some();
+        for &c in children {
+            if let Ok(mut v) = pads.get_mut(c) {
+                let want = if carried { Visibility::Hidden } else { Visibility::Inherited };
+                if *v != want {
+                    *v = want;
+                }
+            }
+        }
 
         if let (Some(i), Some(cursor)) = (slot, drag.cursor_ground) {
             anim.origin.insert(id, sim_pos);
@@ -120,7 +131,7 @@ pub fn carry_fleets(
             // A bright shadow ring under the carried fleet shows that it is held.
             let shadow = Isometry3d::new(Vec3::new(next.x, 0.08, next.z), Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2));
             gizmos.circle(shadow, visual.pad * lifted * 1.25, Color::WHITE.with_alpha(0.85));
-            gizmos.circle(shadow, visual.pad * lifted * 1.55, team.with_alpha(0.55));
+            gizmos.circle(shadow, visual.pad * lifted * 1.55, Color::WHITE.with_alpha(0.35));
             // The spot the fleet came from: a dashed ring with a thin tether to the carried fleet.
             let spot = Vec3::new(sim_pos.x, 0.05, sim_pos.z);
             let ring = visual.pad;
