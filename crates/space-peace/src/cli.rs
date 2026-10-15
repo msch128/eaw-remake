@@ -374,3 +374,61 @@ mod tests {
         assert!(Args::parse(["--bogus".to_string()]).is_err());
     }
 }
+
+/// Lower-case name without "the ", " system", a "_WW" suffix, spaces and underscores: "The Coruscant System", "Coruscant_WW" and "coruscant" all match.
+pub fn plain_name(s: &str) -> String {
+    let mut t = s.trim().to_ascii_lowercase();
+    if let Some(r) = t.strip_suffix("_ww") {
+        t = r.to_owned();
+    }
+    if let Some(r) = t.strip_prefix("the ") {
+        t = r.to_owned();
+    }
+    if let Some(r) = t.strip_suffix(" system") {
+        t = r.to_owned();
+    }
+    t.retain(|c| c.is_ascii_alphanumeric());
+    t
+}
+
+/// Picks the entry of `names` (`(internal name, display name)`) a command line argument means: exact (either name), then equal after [`plain_name`].
+/// The error lists up to five close matches.
+pub fn resolve_name(kind: &str, query: &str, names: &[(&str, &str)]) -> Result<usize, String> {
+    if let Some(i) = names.iter().position(|(a, b)| a.eq_ignore_ascii_case(query.trim()) || b.eq_ignore_ascii_case(query.trim())) {
+        return Ok(i);
+    }
+    let want = plain_name(query);
+    if !want.is_empty()
+        && let Some(i) = names.iter().position(|(a, b)| plain_name(a) == want || plain_name(b) == want)
+    {
+        return Ok(i);
+    }
+    let mut close: Vec<&str> = names
+        .iter()
+        .filter(|(a, b)| {
+            let (pa, pb) = (plain_name(a), plain_name(b));
+            !want.is_empty() && (pa.contains(&want) || pb.contains(&want) || want.contains(&pa) && !pa.is_empty() || (want.len() >= 3 && pa.starts_with(&want[..3])))
+        })
+        .map(|(_, b)| *b)
+        .take(5)
+        .collect();
+    close.dedup();
+    Err(if close.is_empty() { format!("unknown {kind} `{query}`") } else { format!("unknown {kind} `{query}`; close matches: {}", close.join(", ")) })
+}
+
+#[cfg(test)]
+mod name_tests {
+    use super::*;
+
+    #[test]
+    fn names_resolve_by_internal_or_display_name() {
+        let planets = [("Coruscant_WW", "The Coruscant System"), ("Corulag_WW", "Corulag"), ("Ryloth_WW", "Ryloth")];
+        assert_eq!(resolve_name("planet", "Coruscant_WW", &planets), Ok(0));
+        assert_eq!(resolve_name("planet", "the coruscant system", &planets), Ok(0));
+        assert_eq!(resolve_name("planet", "Coruscant", &planets), Ok(0));
+        assert_eq!(resolve_name("planet", "ryloth", &planets), Ok(2));
+        let err = resolve_name("planet", "Coru", &planets).unwrap_err();
+        assert!(err.contains("The Coruscant System") && err.contains("Corulag"), "{err}");
+        assert_eq!(resolve_name("planet", "Nowhere", &planets).unwrap_err(), "unknown planet `Nowhere`");
+    }
+}

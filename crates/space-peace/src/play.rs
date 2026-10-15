@@ -385,6 +385,28 @@ fn run_script(
         hold.active = true;
         return;
     }
+    let world_names: Vec<(&str, &str)> = view.planets.iter().map(|p| (p.id.as_str(), p.display_name.as_str())).collect();
+    // A misspelled planet or unit on the command line stops the run with a clear message (exit code 2) instead of doing nothing.
+    if script.frames == 0 && script.phase == 0 {
+        let unit_names: Vec<(&str, &str)> = state.world.units.iter().map(|u| (u.name.as_str(), u.name.as_str())).collect();
+        let mut bad = Vec::new();
+        for (flag, value) in [("--select", &args.select), ("--at", &args.at), ("--move", &args.move_to)] {
+            if let Some(v) = value && let Err(e) = crate::cli::resolve_name("planet", v, &world_names) {
+                bad.push(format!("{flag}: {e}"));
+            }
+        }
+        for unit in args.grant_unit.iter().flat_map(|u| u.split(',')).map(|u| u.split('@').next().unwrap_or(u).trim()).filter(|u| !u.is_empty()) {
+            if let Err(e) = crate::cli::resolve_name("unit", unit, &unit_names) {
+                bad.push(format!("--grant-unit: {e}"));
+            }
+        }
+        if !bad.is_empty() {
+            for b in &bad {
+                eprintln!("error: {b}");
+            }
+            std::process::exit(2);
+        }
+    }
     let scripted = args.weeks.is_some() || args.build.is_some() || args.move_to.is_some() || args.grant_unit.is_some();
     if !scripted {
         if hold.active {
@@ -400,7 +422,7 @@ fn run_script(
     hold.active = true;
     script.frames += 1;
     let world = state.world.clone();
-    let find = |name: &str| view.planets.iter().position(|p| p.id.eq_ignore_ascii_case(name) || p.display_name.eq_ignore_ascii_case(name));
+    let find = |name: &str| crate::cli::resolve_name("planet", name, &world_names).ok();
     match script.phase {
         0 => {
             // Let the map settle (planet models, camera) for a few frames, then give the orders.
