@@ -235,6 +235,22 @@ impl UiTextures {
         tex
     }
 
+    /// The credit symbol (`i_icon_credit.tga`) as a white mask: the original tints it with the text colour (the file itself is yellow on black, the symbol
+    /// sits in the colour channels). Cached under `credit_icon_white`.
+    pub fn credit_icon(&mut self, images: &mut Assets<Image>) -> Option<UiTexture> {
+        const KEY: &str = "credit_icon_white";
+        if let Some(hit) = self.cache.get(&stem_key(KEY)) {
+            return hit.clone();
+        }
+        let mut raw = self.library.load("i_icon_credit.tga")?;
+        for px in raw.pixels.as_chunks_mut::<4>().0 {
+            let lum = px[0].max(px[1]).max(px[2]);
+            px[3] = (u16::from(lum) * u16::from(px[3]) / 255) as u8;
+            px[..3].fill(255);
+        }
+        Some(self.insert(images, KEY, raw))
+    }
+
     /// Registers an already decoded image under `key` (for generated textures such as faceplates).
     pub fn insert(&mut self, images: &mut Assets<Image>, key: &str, rgba: Rgba8) -> UiTexture {
         let tex = upload(images, rgba);

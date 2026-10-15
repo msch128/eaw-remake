@@ -890,7 +890,7 @@ fn view_tooltip(
 fn register_tooltip(app: &mut App) {
     app.init_resource::<OrbitSlots>().init_resource::<SellDialog>().add_systems(
         Update,
-        (view_tooltip.after(crate::play_ui::fleet_tooltip), sell_dialog_input, sell_open.after(sell_dialog_input), sell_dialog_ui.after(sell_open), sell_button_look)
+        (view_tooltip.after(crate::play_ui::fleet_tooltip), sell_dialog_input.after(crate::planet_fleets::OrganizerSet), sell_open.after(sell_dialog_input), sell_dialog_ui.after(sell_open), sell_button_look)
             .run_if(in_state(AppScreen::Galaxy)),
     );
     app.add_systems(Last, sell_dialog_escape);
@@ -909,15 +909,25 @@ mod tooltip_tests {
     }
 }
 
-/// Where a sell dialog is open: the built structure it would sell and the screen point (window pixels) of its slot.
+/// What a sell box would sell.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum SellWhat {
+    /// A built structure of a planet (a ground or orbital slot).
+    Structure { planet: u32, structure: u32 },
+    /// One ship of a fleet that waits at the planet (a fleet box icon).
+    Unit { fleet: u32, unit: u32 },
+}
+
+/// Where a sell box is open: what it sells, the credits it pays and the window point (logical pixels) it hangs from.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct SellTarget {
-    planet: u32,
-    structure: u32,
+    what: SellWhat,
+    value: i64,
     at: Vec2,
 }
 
-/// The sell dialog of the planet view. Right click on a built structure opens it; only a left click on its button sells.
+/// The sell box of the planet view, like the Empire at War command menu: right click on a structure or ship opens one line "Sell for <credits> N" at
+/// the cursor; only a left click on that line sells.
 #[derive(Resource, Default, Debug, PartialEq)]
 pub(crate) struct SellDialog(Option<SellTarget>);
 
@@ -926,10 +936,10 @@ impl SellDialog {
         self.0.is_some()
     }
 
-    /// A left click: on the button it sells (and closes), anywhere else it only closes. Returns `(planet, structure)` of a sale.
-    fn left_click(&mut self, on_button: bool) -> Option<(u32, u32)> {
+    /// A left click: on the line it sells (and closes), anywhere else it only closes. Returns what to sell.
+    fn left_click(&mut self, on_button: bool) -> Option<SellWhat> {
         let t = self.0.take()?;
-        on_button.then_some((t.planet, t.structure))
+        on_button.then_some(t.what)
     }
 }
 
@@ -938,11 +948,11 @@ fn built_structure(structures: &[u32], is_orbital: impl Fn(u32) -> bool, orbital
     structures.iter().copied().filter(|&s| is_orbital(s) == orbital).nth(n)
 }
 
-/// Position of the dialog's top-left corner (UI pixels) for a slot at `at` (window pixels): right of the slot, kept on the screen.
+/// Top-left corner of the box (UI pixels) for a cursor at `at` (window pixels): at the cursor tip, kept on the screen.
 fn dialog_corner(at: Vec2, scale: f32, size: Vec2, screen: Vec2) -> Vec2 {
     let scale = scale.max(1e-3);
-    let p = at / scale + Vec2::new(18.0, -14.0);
-    p.clamp(Vec2::splat(4.0), (screen / scale - size - Vec2::splat(4.0)).max(Vec2::splat(4.0)))
+    let p = at / scale + Vec2::new(2.0, 2.0);
+    p.clamp(Vec2::ZERO, (screen / scale - size).max(Vec2::ZERO))
 }
 
 #[derive(Component)]
@@ -951,71 +961,118 @@ struct SellDialogRoot;
 #[derive(Component)]
 struct SellButton;
 
-const DIALOG_BG: Color = Color::srgba(0.04, 0.09, 0.13, 0.96);
-const DIALOG_BORDER: Color = Color::srgb(0.0, 0.76, 0.99);
-const BUTTON_IDLE: Color = Color::srgb(0.07, 0.2, 0.3);
-const BUTTON_HOT: Color = Color::srgb(0.1, 0.4, 0.55);
-/// Estimated size of the dialog (UI pixels), only used to keep it on the screen.
-const DIALOG_SIZE: Vec2 = Vec2::new(210.0, 78.0);
+const DIALOG_BG: Color = Color::srgba(0.04, 0.09, 0.13, 0.82);
+const DIALOG_BORDER: Color = Color::srgba(0.0, 0.76, 0.99, 0.7);
+const BUTTON_HOT: Color = Color::srgba(0.1, 0.4, 0.55, 0.9);
+/// Estimated size of the box (UI pixels), only used to keep it on the screen.
+const DIALOG_SIZE: Vec2 = Vec2::new(118.0, 24.0);
 
-/// Right click on a built ground / orbital structure in the planet view opens the sell dialog at its slot; a right click anywhere else closes it.
-/// `SP_SELL_DIALOG=ground:<n>|orbital:<n>` opens it on that slot without a cursor (offscreen checks).
+/// The sellable ship behind slot `k` of fleet box `b`: `(fleet, unit)`. Heroes are not for sale.
+fn sellable_unit(boxes: &[crate::planet_fleets::BoxContent; 3], world: &galaxy_sim::World, b: usize, k: usize) -> Option<(u32, u32)> {
+    let content = boxes.get(b)?;
+    let unit = if k == 0 { content.hyper } else { content.stacks.get(k - 1).map(|s| s.0) }?;
+    (!world.units[unit as usize].hero).then_some((content.fleet?, unit))
+}
+
+/// Right click on a built ground / orbital structure (3D slot) or on a ship icon of a fleet box opens the sell box at the cursor; a right click on
+/// anything else closes it. `SP_SELL_DIALOG=ground:<n>|orbital:<n>|unit:<box>:<slot>` opens it on that thing without a cursor (offscreen checks).
 #[allow(clippy::too_many_arguments)]
 fn sell_open(
     mouse: Res<ButtonInput<MouseButton>>,
     state: Res<PlanetViewState>,
     sim: Option<Res<SimState>>,
     bridge: Option<Res<crate::play::PlayBridge>>,
+    player: Option<Res<galaxy_play::PlayerFaction>>,
     window: Option<Single<&Window, With<bevy::window::PrimaryWindow>>>,
     cam: Single<(&Camera, &GlobalTransform), With<GalaxyCamera>>,
+    slots: Query<(&eaw_ui::panels::PanelSlotName, &ComputedNode, &UiGlobalTransform, &InheritedVisibility)>,
     mut dialog: ResMut<SellDialog>,
     mut forced: Local<bool>,
 ) {
     let (Some(sim), Some(bridge)) = (sim, bridge) else { return };
     let Some(sp) = state.planet.and_then(|p| bridge.planet_to_sim.get(p).copied().flatten()).filter(|_| state.active && state.blend >= 1.0) else { return };
-    let (camera, gt) = *cam;
-    let project = |p: Vec3| camera.world_to_viewport(gt, p).ok();
-    let mut points: Vec<(Hover, Vec2)> = Vec::new();
-    points.extend(state.ground_slots.iter().enumerate().filter_map(|(i, p)| project(*p + Vec3::new(0.0, 0.2, 0.0)).map(|v| (Hover::Ground(i), v))));
-    points.extend(state.orbital_slots.iter().enumerate().filter_map(|(i, p)| project(*p + Vec3::new(0.0, 0.15, 0.0)).map(|v| (Hover::Orbital(i), v))));
-    let hit = if let Some(f) = std::env::var("SP_SELL_DIALOG").ok().filter(|_| !*forced) {
-        *forced = true;
-        let want = match f.split_once(':').and_then(|(k, n)| Some((k.to_owned(), n.parse::<usize>().ok()?))) {
-            Some((k, n)) if k == "orbital" => Hover::Orbital(n),
-            Some((_, n)) => Hover::Ground(n),
-            None => return,
-        };
-        points.iter().find(|(h, _)| *h == want).copied()
-    } else if mouse.just_pressed(MouseButton::Right) {
-        let Some(c) = window.and_then(|w| w.cursor_position()) else { return };
-        pick(&points, c, 30.0).and_then(|h| points.iter().find(|(p, _)| *p == h).copied())
-    } else {
+    let wanted = std::env::var("SP_SELL_DIALOG").ok().filter(|_| !*forced);
+    let right = mouse.just_pressed(MouseButton::Right);
+    if wanted.is_none() && !right {
         return;
+    }
+    *forced |= wanted.is_some();
+    // Physical pixels of a UI node to the logical pixels of the camera target (the window, or the image of an offscreen render).
+    let scale_factor = cam.0.target_scaling_factor().unwrap_or(1.0);
+    let boxes = player.and_then(|p| p.0).map(|me| crate::planet_fleets::box_contents(sim.galaxy(), me, sp));
+    let unit_value = |u: u32| sim.world.unit_sell_value(u).floor() as i64;
+    let structure_value = |s: u32| sim.world.sell_value(s).floor() as i64;
+    let mut target = None;
+
+    // Ship icons of the fleet boxes (UI nodes, physical pixels).
+    let ship_at = |phys: Option<Vec2>, want: Option<(usize, usize)>| {
+        let boxes = boxes.as_ref()?;
+        slots.iter().find_map(|(name, n, g, v)| {
+            let (b, k) = crate::planet_fleets::parse_slot(&name.0)?;
+            let hit = match (want, phys) {
+                (Some(w), _) => w == (b, k),
+                (None, Some(c)) => n.contains_point(*g, c),
+                _ => false,
+            };
+            (v.get() && n.size().x > 4.0 && hit).then_some(())?;
+            let (fleet, unit) = sellable_unit(boxes, &sim.world, b, k)?;
+            Some(SellTarget { what: SellWhat::Unit { fleet, unit }, value: unit_value(unit), at: g.translation / scale_factor })
+        })
     };
-    let structures = sim.galaxy().planets.get(sp as usize).map(|p| p.structures.as_slice());
-    let target = hit.and_then(|(h, at)| {
-        let (orbital, n) = match h {
-            Hover::Ground(i) => (false, i),
-            Hover::Orbital(i) => (true, i),
-            _ => return None,
-        };
-        let built = built_structure(structures?, |s| sim.world.structures.get(s as usize).is_some_and(|d| d.orbital), orbital, n)?;
-        Some(SellTarget { planet: sp, structure: built, at })
+    let forced_unit = wanted.as_deref().and_then(|f| {
+        let mut it = f.strip_prefix("unit:")?.split(':');
+        Some((it.next()?.parse::<usize>().ok()?, it.next()?.parse::<usize>().ok()?))
     });
-    // A right click on nothing closes an open dialog, a right click on another structure moves it there.
+    if forced_unit.is_some() {
+        target = ship_at(None, forced_unit);
+    } else if wanted.is_none() {
+        let phys = window.as_ref().and_then(|w| w.physical_cursor_position());
+        target = ship_at(phys, None).map(|t| SellTarget { at: window.as_ref().and_then(|w| w.cursor_position()).unwrap_or(t.at), ..t });
+    }
+
+    // Structure slots (3D scene, projected to window pixels).
+    if target.is_none() && forced_unit.is_none() {
+        let (camera, gt) = *cam;
+        let project = |p: Vec3| camera.world_to_viewport(gt, p).ok();
+        let mut points: Vec<(Hover, Vec2)> = Vec::new();
+        points.extend(state.ground_slots.iter().enumerate().filter_map(|(i, p)| project(*p + Vec3::new(0.0, 0.2, 0.0)).map(|v| (Hover::Ground(i), v))));
+        points.extend(state.orbital_slots.iter().enumerate().filter_map(|(i, p)| project(*p + Vec3::new(0.0, 0.15, 0.0)).map(|v| (Hover::Orbital(i), v))));
+        let hit = match wanted.as_deref().and_then(|f| f.split_once(':')).and_then(|(k, n)| Some((k, n.parse::<usize>().ok()?))) {
+            Some((k, n)) => {
+                let want = if k == "orbital" { Hover::Orbital(n) } else { Hover::Ground(n) };
+                points.iter().find(|(h, _)| *h == want).copied()
+            }
+            None if wanted.is_some() => None,
+            None => {
+                let Some(c) = window.as_ref().and_then(|w| w.cursor_position()) else { return };
+                pick(&points, c, 30.0).map(|h| (h, c))
+            }
+        };
+        let structures = sim.galaxy().planets.get(sp as usize).map(|p| p.structures.as_slice());
+        target = hit.and_then(|(h, at)| {
+            let (orbital, n) = match h {
+                Hover::Ground(i) => (false, i),
+                Hover::Orbital(i) => (true, i),
+                _ => return None,
+            };
+            let built = built_structure(structures?, |s| sim.world.structures.get(s as usize).is_some_and(|d| d.orbital), orbital, n)?;
+            Some(SellTarget { what: SellWhat::Structure { planet: sp, structure: built }, value: structure_value(built), at })
+        });
+    }
+    // A right click on nothing closes an open box, a right click on another thing moves it there.
     dialog.0 = target;
 }
 
-/// Builds or removes the dialog's UI when [`SellDialog`] changes: the tooltip card look (dark panel, cyan frame, gold title) and a button "Sell for N credits".
+/// Builds or removes the box when [`SellDialog`] changes: a tiny semi-transparent line "Sell for <credit icon> N" at the cursor.
 #[allow(clippy::too_many_arguments)]
 fn sell_dialog_ui(
     dialog: Res<SellDialog>,
-    sim: Option<Res<SimState>>,
-    catalog: Option<Res<PlayCatalog>>,
     assets: Option<Res<eaw_ui::EawUiAssets>>,
     settings: Option<Res<eaw_ui::EawUiSettings>>,
+    mut textures: Option<ResMut<eaw_ui::textures::UiTextures>>,
+    mut images: ResMut<Assets<Image>>,
     scale: Res<UiScale>,
-    window: Option<Single<&Window, With<bevy::window::PrimaryWindow>>>,
+    cam: Single<&Camera, With<GalaxyCamera>>,
     roots: Query<Entity, With<SellDialogRoot>>,
     mut commands: Commands,
 ) {
@@ -1025,29 +1082,30 @@ fn sell_dialog_ui(
     for e in &roots {
         commands.entity(e).despawn();
     }
-    let (Some(t), Some(sim), Some(cat)) = (dialog.0, sim, catalog) else { return };
-    let value = sim.world.sell_value(t.structure);
+    let Some(t) = dialog.0 else { return };
     let sell = assets.as_deref().and_then(|a| a.text.get("TEXT_BUTTON_SELL").filter(|s| !s.is_empty())).unwrap_or("Sell").to_owned();
     let family = settings.as_ref().and_then(|s| s.tooltip_font_family.clone());
     let font = |size: f32| match &family {
         Some(f) => TextFont { font: FontSource::Family(f.as_str().into()), font_size: FontSize::Px(size), ..default() },
         None => TextFont::from_font_size(size),
     };
-    let screen = window.map_or(Vec2::new(1920.0, 1080.0), |w| Vec2::new(w.width(), w.height()));
+    let icon = textures.as_mut().and_then(|tx| tx.credit_icon(&mut images)).map(|t| t.handle);
+    let screen = cam.logical_viewport_size().unwrap_or(Vec2::new(1920.0, 1080.0));
     let corner = dialog_corner(t.at, scale.0, DIALOG_SIZE, screen);
+    let white = Color::srgb(0.95, 0.97, 1.0);
     let mut root = commands.spawn((
         SellDialogRoot,
-        Name::new("Sell dialog"),
+        SellButton,
+        Button,
+        Name::new("Sell box"),
         Node {
             position_type: PositionType::Absolute,
             left: Val::Px(corner.x),
             top: Val::Px(corner.y),
-            width: Val::Px(DIALOG_SIZE.x),
-            flex_direction: FlexDirection::Column,
-            row_gap: Val::Px(6.0),
-            padding: UiRect::axes(Val::Px(9.0), Val::Px(7.0)),
+            align_items: AlignItems::Center,
+            column_gap: Val::Px(4.0),
+            padding: UiRect::axes(Val::Px(7.0), Val::Px(3.0)),
             border: UiRect::all(Val::Px(1.0)),
-            border_radius: BorderRadius::all(Val::Px(6.0)),
             ..default()
         },
         BackgroundColor(DIALOG_BG),
@@ -1059,29 +1117,22 @@ fn sell_dialog_ui(
         root.insert(UiTargetCamera(c));
     }
     root.with_children(|p| {
-        p.spawn((Text::new(cat.structure(t.structure).to_uppercase()), font(13.0), TextColor(Color::srgb(1.0, 0.86, 0.38))));
-        p.spawn((Node { height: Val::Px(1.0), ..default() }, BackgroundColor(Color::srgba(0.0, 0.62, 0.85, 0.55))));
-        p.spawn((
-            SellButton,
-            Button,
-            Node { padding: UiRect::axes(Val::Px(8.0), Val::Px(5.0)), border: UiRect::all(Val::Px(1.0)), justify_content: JustifyContent::Center, border_radius: BorderRadius::all(Val::Px(4.0)), ..default() },
-            BackgroundColor(BUTTON_IDLE),
-            BorderColor::all(DIALOG_BORDER),
-        ))
-        .with_children(|b| {
-            b.spawn((Text::new(format!("{sell} for {value:.0} credits")), font(12.0), TextColor(Color::srgb(0.95, 0.97, 1.0)), bevy::ui::FocusPolicy::Pass));
-        });
+        p.spawn((Text::new(format!("{sell} for")), font(12.0), TextColor(white), bevy::ui::FocusPolicy::Pass));
+        if let Some(h) = icon {
+            p.spawn((ImageNode::new(h), Node { width: Val::Px(12.0), height: Val::Px(12.0), ..default() }, bevy::ui::FocusPolicy::Pass));
+        }
+        p.spawn((Text::new(t.value.to_string()), font(12.0), TextColor(white), bevy::ui::FocusPolicy::Pass));
     });
 }
 
-/// Hover look of the dialog's button.
+/// Hover look of the sell line.
 fn sell_button_look(mut buttons: Query<(&Interaction, &mut BackgroundColor), (With<SellButton>, Changed<Interaction>)>) {
     for (i, mut bg) in &mut buttons {
-        bg.0 = if *i == Interaction::None { BUTTON_IDLE } else { BUTTON_HOT };
+        bg.0 = if *i == Interaction::None { DIALOG_BG } else { BUTTON_HOT };
     }
 }
 
-/// A left click sells when it lands on the button and only closes the dialog anywhere else. Scrolling or leaving the view also closes it.
+/// A left click sells when it lands on the sell line and only closes the box anywhere else. Scrolling or leaving the view also closes it.
 #[allow(clippy::too_many_arguments)]
 fn sell_dialog_input(
     mouse: Res<ButtonInput<MouseButton>>,
@@ -1103,16 +1154,24 @@ fn sell_dialog_input(
         return;
     }
     let on_button = buttons.iter().any(|i| *i == Interaction::Pressed);
-    if let Some((planet, structure)) = dialog.left_click(on_button) {
-        actions.write(galaxy_play::PlayAction::SellStructure { planet, structure });
-        if let (Some(sim), Some(cat)) = (sim, catalog) {
-            toast.0 = format!("{} sold for {:.0} credits", cat.structure(t.structure), sim.world.sell_value(structure));
-            toast.1 = 3.0;
+    let Some(what) = dialog.left_click(on_button) else { return };
+    let name = match what {
+        SellWhat::Structure { planet, structure } => {
+            actions.write(galaxy_play::PlayAction::SellStructure { planet, structure });
+            catalog.as_ref().map(|c| c.structure(structure).to_owned())
         }
+        SellWhat::Unit { fleet, unit } => {
+            actions.write(galaxy_play::PlayAction::SellUnit { fleet, unit });
+            sim.as_ref().map(|s| s.world.units[unit as usize].name.replace('_', " "))
+        }
+    };
+    if let Some(n) = name {
+        toast.0 = format!("{n} sold for {} credits", t.value);
+        toast.1 = 3.0;
     }
 }
 
-/// Esc closes the dialog. Runs last in the frame so the view and the pause menu, which also react to Esc, still see it open and leave Esc alone.
+/// Esc closes the box. Runs last in the frame so the view and the pause menu, which also react to Esc, still see it open and leave Esc alone.
 fn sell_dialog_escape(keys: Res<ButtonInput<KeyCode>>, mut dialog: ResMut<SellDialog>) {
     if keys.just_pressed(KeyCode::Escape) && dialog.is_open() {
         dialog.0 = None;
@@ -1124,7 +1183,7 @@ mod sell_tests {
     use super::*;
 
     fn target() -> SellTarget {
-        SellTarget { planet: 3, structure: 7, at: Vec2::new(500.0, 300.0) }
+        SellTarget { what: SellWhat::Structure { planet: 3, structure: 7 }, value: 2250, at: Vec2::new(500.0, 300.0) }
     }
 
     #[test]
@@ -1138,9 +1197,9 @@ mod sell_tests {
     }
 
     #[test]
-    fn a_click_on_the_button_sells_and_closes() {
+    fn a_click_on_the_line_sells_and_closes() {
         let mut d = SellDialog(Some(target()));
-        assert_eq!(d.left_click(true), Some((3, 7)));
+        assert_eq!(d.left_click(true), Some(SellWhat::Structure { planet: 3, structure: 7 }));
         assert!(!d.is_open());
     }
 
@@ -1152,29 +1211,29 @@ mod sell_tests {
     }
 
     #[test]
-    fn a_click_with_no_dialog_sells_nothing() {
+    fn a_click_with_no_box_sells_nothing() {
         let mut d = SellDialog::default();
         assert_eq!(d.left_click(true), None);
     }
 
     #[test]
-    fn the_dialog_stays_on_the_screen() {
-        let size = Vec2::new(200.0, 80.0);
+    fn the_box_hangs_at_the_cursor_tip_and_stays_on_the_screen() {
+        let size = Vec2::new(100.0, 24.0);
         let screen = Vec2::new(1000.0, 600.0);
-        assert_eq!(dialog_corner(Vec2::new(400.0, 300.0), 1.0, size, screen), Vec2::new(418.0, 286.0), "right of the slot");
-        assert_eq!(dialog_corner(Vec2::new(990.0, 590.0), 1.0, size, screen), Vec2::new(796.0, 516.0), "pushed back inside at the lower right corner");
-        assert_eq!(dialog_corner(Vec2::new(400.0, 300.0), 2.0, size, screen), Vec2::new(218.0, 136.0), "window pixels are divided by the UI scale");
+        assert_eq!(dialog_corner(Vec2::new(400.0, 300.0), 1.0, size, screen), Vec2::new(402.0, 302.0), "at the tip");
+        assert_eq!(dialog_corner(Vec2::new(990.0, 590.0), 1.0, size, screen), Vec2::new(900.0, 576.0), "pushed back inside at the lower right corner");
+        assert_eq!(dialog_corner(Vec2::new(400.0, 300.0), 2.0, size, screen), Vec2::new(202.0, 152.0), "window pixels are divided by the UI scale");
     }
 
-    /// The dialog flow in a tiny app with the real input systems.
-    fn flow_app() -> App {
+    /// The box flow in a tiny app with the real input systems.
+    fn flow_app(what: SellWhat) -> App {
         let mut app = App::new();
         app.init_resource::<ButtonInput<MouseButton>>()
             .init_resource::<ButtonInput<KeyCode>>()
             .init_resource::<AccumulatedMouseScroll>()
             .init_resource::<crate::play_ui::Toast>()
             .insert_resource(PlanetViewState { active: true, ..default() })
-            .insert_resource(SellDialog(Some(target())))
+            .insert_resource(SellDialog(Some(SellTarget { what, ..target() })))
             .add_message::<galaxy_play::PlayAction>()
             .add_systems(Update, sell_dialog_input)
             .add_systems(Last, sell_dialog_escape);
@@ -1182,65 +1241,73 @@ mod sell_tests {
         app
     }
 
-    fn sales(app: &App) -> Vec<(u32, u32)> {
+    fn sent(app: &App) -> Vec<galaxy_play::PlayAction> {
         let msgs = app.world().resource::<Messages<galaxy_play::PlayAction>>();
-        msgs.iter_current_update_messages()
-            .filter_map(|m| match m {
-                galaxy_play::PlayAction::SellStructure { planet, structure } => Some((*planet, *structure)),
-                _ => None,
-            })
-            .collect()
+        msgs.iter_current_update_messages().cloned().collect()
     }
 
-    #[test]
-    fn a_left_click_off_the_button_closes_and_sells_nothing() {
-        let mut app = flow_app();
-        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Left);
-        app.update();
-        assert!(!app.world().resource::<SellDialog>().is_open());
-        assert!(sales(&app).is_empty());
-    }
-
-    #[test]
-    fn a_left_click_on_the_button_sends_one_sale_and_closes() {
-        let mut app = flow_app();
+    fn press_button(app: &mut App) {
         let mut q = app.world_mut().query_filtered::<&mut Interaction, With<SellButton>>();
         *q.single_mut(app.world_mut()).unwrap() = Interaction::Pressed;
         app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Left);
-        app.update();
-        assert!(!app.world().resource::<SellDialog>().is_open());
-        assert_eq!(sales(&app), vec![(3, 7)]);
     }
 
     #[test]
-    fn nothing_is_sold_while_the_dialog_just_sits_open() {
-        let mut app = flow_app();
+    fn a_left_click_off_the_line_closes_and_sells_nothing() {
+        let mut app = flow_app(SellWhat::Structure { planet: 3, structure: 7 });
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Left);
+        app.update();
+        assert!(!app.world().resource::<SellDialog>().is_open());
+        assert!(sent(&app).is_empty());
+    }
+
+    #[test]
+    fn a_left_click_on_the_line_sells_the_structure_once_and_closes() {
+        let mut app = flow_app(SellWhat::Structure { planet: 3, structure: 7 });
+        press_button(&mut app);
+        app.update();
+        assert!(!app.world().resource::<SellDialog>().is_open());
+        assert!(matches!(sent(&app).as_slice(), [galaxy_play::PlayAction::SellStructure { planet: 3, structure: 7 }]));
+    }
+
+    #[test]
+    fn a_left_click_on_the_line_sells_one_ship_and_closes() {
+        let mut app = flow_app(SellWhat::Unit { fleet: 9, unit: 4 });
+        press_button(&mut app);
+        app.update();
+        assert!(!app.world().resource::<SellDialog>().is_open());
+        assert!(matches!(sent(&app).as_slice(), [galaxy_play::PlayAction::SellUnit { fleet: 9, unit: 4 }]));
+    }
+
+    #[test]
+    fn nothing_is_sold_while_the_box_just_sits_open() {
+        let mut app = flow_app(SellWhat::Unit { fleet: 9, unit: 4 });
         app.update();
         assert!(app.world().resource::<SellDialog>().is_open());
-        assert!(sales(&app).is_empty());
+        assert!(sent(&app).is_empty());
     }
 
     #[test]
     fn a_right_button_press_alone_never_sells() {
-        let mut app = flow_app();
+        let mut app = flow_app(SellWhat::Unit { fleet: 9, unit: 4 });
         app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Right);
         app.update();
         assert!(app.world().resource::<SellDialog>().is_open());
-        assert!(sales(&app).is_empty());
+        assert!(sent(&app).is_empty());
     }
 
     #[test]
-    fn escape_closes_the_dialog() {
-        let mut app = flow_app();
+    fn escape_closes_the_box() {
+        let mut app = flow_app(SellWhat::Unit { fleet: 9, unit: 4 });
         app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::Escape);
         app.update();
         assert!(!app.world().resource::<SellDialog>().is_open());
-        assert!(sales(&app).is_empty());
+        assert!(sent(&app).is_empty());
     }
 
     #[test]
-    fn leaving_the_planet_view_closes_the_dialog() {
-        let mut app = flow_app();
+    fn leaving_the_planet_view_closes_the_box() {
+        let mut app = flow_app(SellWhat::Unit { fleet: 9, unit: 4 });
         app.world_mut().resource_mut::<PlanetViewState>().active = false;
         app.update();
         assert!(!app.world().resource::<SellDialog>().is_open());

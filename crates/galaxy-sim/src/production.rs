@@ -90,6 +90,12 @@ impl World {
         self.structures.get(structure as usize).map_or(0.0, |st| f64::from(st.cost) / 2.0 + 1.0)
     }
 
+    /// Credits a sold ship pays back. The data has no rule for selling ships (only structures have `Delete_Building`), so this reuses the structure rule:
+    /// half the build cost plus 1 (estimate, user request).
+    pub fn unit_sell_value(&self, unit: UnitTypeId) -> f64 {
+        self.units.get(unit as usize).map_or(0.0, |u| f64::from(u.cost) / 2.0 + 1.0)
+    }
+
     /// True if a star base of `level` fits on the planet (items that need a higher level can never be built there).
     pub fn planet_takes_starbase(&self, planet: PlanetId, level: i32) -> bool {
         level <= self.max_starbase_level(planet)

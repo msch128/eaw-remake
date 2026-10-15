@@ -157,6 +157,11 @@ pub fn handle_actions(
                     state.driver.send_command(Command::SellStructure { faction: h, planet: *planet, structure: *structure });
                 }
             }
+            PlayAction::SellUnit { fleet, unit } => {
+                if let Some(h) = player.0 {
+                    state.driver.send_command(Command::SellUnit { faction: h, fleet: *fleet, unit: *unit });
+                }
+            }
             PlayAction::Cheat(cheat) => {
                 if let Some(h) = player.0 {
                     state.driver.send_command(Command::Cheat { faction: h, cheat: cheat.clone() });

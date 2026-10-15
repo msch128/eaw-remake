@@ -351,6 +351,13 @@ pub enum PlayAction {
         /// Structure type.
         structure: u32,
     },
+    /// Sell one ship of the player fleet that waits at a planet (right click on its icon in the planet view).
+    SellUnit {
+        /// Fleet that holds the ship.
+        fleet: u32,
+        /// Unit type to sell.
+        unit: u32,
+    },
     /// A cheat of the F2 menu for the player faction (a journaled command; marks the game as cheated).
     Cheat(galaxy_sim::cheats::Cheat),
     /// Fire the superweapon (Death Star, Galaxy Gun) of the player's fleet orbiting `planet`; answered by a `PlanetDestroyed` notification.

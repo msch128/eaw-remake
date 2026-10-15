@@ -209,3 +209,50 @@ fn the_space_side_of_the_queue_holds_five_items_and_a_sixth_is_refused() {
     assert_eq!(sim.world().queued_on_side(&sim.galaxy().planets[p as usize], false), 5);
     assert_eq!(sim.world().queued_on_side(&sim.galaxy().planets[p as usize], true), 0, "the ground side is separate");
 }
+
+fn fleet_of(sim: &mut Sim, owner: FactionId, unit: UnitTypeId, n: u32, at: PlanetId) -> FleetId {
+    let g = sim.galaxy_mut();
+    let id = g.fleets.keys().max().copied().unwrap_or(0) + 1;
+    g.fleets.insert(id, Fleet { id, owner, units: [(unit, n)].into(), location: FleetLocation::AtPlanet(at), previous_planet: at, slot: 0 });
+    id
+}
+
+#[test]
+fn selling_a_ship_pays_half_plus_one_and_the_last_one_removes_the_fleet() {
+    let Some(data) = load() else { return };
+    let campaign = data.campaign("GC_Full_Web_Way_Rebel").expect("campaign");
+    let mut sim = Sim::new(&data, campaign, SimConfig { victory_enabled: false, ..SimConfig::default() }).expect("sim");
+    let w = sim.world().clone();
+    let empire = w.faction_id("Empire").unwrap();
+    let rebel = w.faction_id("Rebel").unwrap();
+    let p = w.planet_id("Coruscant_WW").unwrap();
+    let isd = w.unit_id("Star_Destroyer").unwrap();
+    let f = fleet_of(&mut sim, empire, isd, 2, p);
+    let cost = f64::from(w.units[isd as usize].cost);
+    assert_eq!(w.unit_sell_value(isd), cost / 2.0 + 1.0);
+    let credits = sim.galaxy().factions[empire as usize].credits;
+    assert_eq!(sim.apply(Command::SellUnit { faction: empire, fleet: f, unit: isd }), Ok(CommandOk::Refunded(cost / 2.0 + 1.0)));
+    assert_eq!(sim.galaxy().factions[empire as usize].credits, credits + cost / 2.0 + 1.0);
+    assert_eq!(sim.galaxy().fleets[&f].units[&isd], 1);
+    assert!(sim.apply(Command::SellUnit { faction: empire, fleet: f, unit: isd }).is_ok());
+    assert!(!sim.galaxy().fleets.contains_key(&f), "the empty fleet is gone");
+    assert_eq!(sim.apply(Command::SellUnit { faction: empire, fleet: f, unit: isd }), Err(CommandError::Invalid), "nothing left to sell");
+    let other = fleet_of(&mut sim, empire, isd, 1, p);
+    assert_eq!(sim.apply(Command::SellUnit { faction: rebel, fleet: other, unit: isd }), Err(CommandError::Invalid), "not the issuer's fleet");
+}
+
+#[test]
+fn heroes_and_ships_that_are_not_in_the_fleet_cannot_be_sold() {
+    let Some(data) = load() else { return };
+    let campaign = data.campaign("GC_Full_Web_Way_Rebel").expect("campaign");
+    let mut sim = Sim::new(&data, campaign, SimConfig { victory_enabled: false, ..SimConfig::default() }).expect("sim");
+    let w = sim.world().clone();
+    let empire = w.faction_id("Empire").unwrap();
+    let p = w.planet_id("Coruscant_WW").unwrap();
+    let hero = (0..w.units.len() as u32).find(|&u| w.units[u as usize].hero && matches!(w.units[u as usize].role, UnitRole::Ship)).expect("a hero ship");
+    let f = fleet_of(&mut sim, empire, hero, 1, p);
+    assert_eq!(sim.apply(Command::SellUnit { faction: empire, fleet: f, unit: hero }), Err(CommandError::NotAvailable));
+    assert!(sim.galaxy().fleets.contains_key(&f), "the hero stays");
+    let isd = w.unit_id("Star_Destroyer").unwrap();
+    assert_eq!(sim.apply(Command::SellUnit { faction: empire, fleet: f, unit: isd }), Err(CommandError::Invalid), "this type is not in the fleet");
+}

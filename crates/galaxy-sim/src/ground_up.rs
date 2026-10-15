@@ -89,6 +89,7 @@ impl Command {
             | CancelProduction { faction, .. }
             | Retreat { faction, .. }
             | SellStructure { faction, .. }
+            | SellUnit { faction, .. }
             | Cheat { faction, .. } => Some(*faction),
         }
     }

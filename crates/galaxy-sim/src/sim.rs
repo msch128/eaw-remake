@@ -236,6 +236,44 @@ impl Sim {
                 g.factions[faction as usize].credits += refund;
                 Ok(CommandOk::Refunded(refund))
             }
+            Command::SellUnit { faction, fleet, unit } => {
+                g.sync_ships();
+                let f = g.fleets.get(&fleet).filter(|f| f.owner == faction).ok_or(CommandError::Invalid)?;
+                let FleetLocation::AtPlanet(p) = f.location else { return Err(CommandError::WrongState) };
+                if g.battles.iter().any(|b| b.planet == p) {
+                    return Err(CommandError::WrongState);
+                }
+                let ut = world.units.get(unit as usize).ok_or(CommandError::Invalid)?;
+                if f.units.get(&unit).copied().unwrap_or(0) == 0 {
+                    return Err(CommandError::Invalid);
+                }
+                if ut.hero || !matches!(ut.role, UnitRole::Ship) {
+                    return Err(CommandError::NotAvailable);
+                }
+                // The ship of the hyperspace slot goes last, like in `TransferUnits`.
+                let slot = g.hyperspace.get(&fleet).map(|h| h.0);
+                let list = g.ships.get_mut(&fleet).expect("synced");
+                let pos = list.iter().rposition(|(s, t)| *t == unit && Some(*s) != slot).or_else(|| list.iter().rposition(|(_, t)| *t == unit)).expect("count checked");
+                let (sold, _) = list.remove(pos);
+                if slot == Some(sold) {
+                    g.hyperspace.remove(&fleet);
+                }
+                let f = g.fleets.get_mut(&fleet).expect("checked");
+                let n = f.units.get_mut(&unit).expect("checked");
+                *n -= 1;
+                if *n == 0 {
+                    f.units.remove(&unit);
+                }
+                if f.units.is_empty() {
+                    g.fleets.remove(&fleet);
+                    g.ships.remove(&fleet);
+                    g.hyperspace.remove(&fleet);
+                }
+                let refund = world.unit_sell_value(unit);
+                g.factions[faction as usize].credits += refund;
+                world.refresh_economy(g);
+                Ok(CommandOk::Refunded(refund))
+            }
             Command::DestroyPlanet { faction, planet } => {
                 let fleet = g
                     .fleets

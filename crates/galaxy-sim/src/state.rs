@@ -458,6 +458,16 @@ pub enum Command {
         /// Structure type to sell (one of the planet's built structures).
         structure: StructureTypeId,
     },
+    /// Sell one ship of a fleet that waits at a planet (right click on its icon in the planet view). Heroes and non-ships cannot be sold; see
+    /// [`crate::World::unit_sell_value`].
+    SellUnit {
+        /// Issuing faction.
+        faction: FactionId,
+        /// Fleet that holds the ship.
+        fleet: FleetId,
+        /// Unit type to sell (one ship of it leaves the fleet).
+        unit: UnitTypeId,
+    },
     /// A cheat of the F2 menu (see [`crate::cheats`]); marks the game as cheated.
     Cheat {
         /// Issuing faction.

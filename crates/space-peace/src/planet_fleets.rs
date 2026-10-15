@@ -238,8 +238,12 @@ struct Drag {
     ghost: Option<Entity>,
 }
 
+/// The system that starts and ends drags; the sell box runs after it so a click on the box never starts a drag.
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct OrganizerSet;
+
 pub(crate) fn plugin(app: &mut App) {
-    app.init_resource::<OtherForces>().add_systems(Update, (other_forces_line, organizer_drag, organizer_test).chain().run_if(in_state(AppScreen::Galaxy)));
+    app.init_resource::<OtherForces>().add_systems(Update, (other_forces_line, organizer_drag.in_set(OrganizerSet), organizer_test).chain().run_if(in_state(AppScreen::Galaxy)));
 }
 
 /// The one-line strip of other forces above the boxes.
@@ -285,7 +289,7 @@ fn organizer_drag(
     slots: Query<(&eaw_ui::panels::PanelSlotName, &ComputedNode, &UiGlobalTransform, &InheritedVisibility)>,
     frames: Query<(&Name, &ComputedNode, &UiGlobalTransform)>,
     mut ghost: Query<&mut Node, With<DragGhost>>,
-    ui_scale: Res<UiScale>,
+    (ui_scale, sell): (Res<UiScale>, Res<crate::planet_view::SellDialog>),
 ) {
     let (Some(mut sim), Some(player), Some(bridge), Some(window)) = (sim, player, bridge, window) else { return };
     let Some(me) = player.0 else { return };
@@ -299,7 +303,9 @@ fn organizer_drag(
     let cursor = window.physical_cursor_position();
     let boxes = box_contents(sim.galaxy(), me, sp);
     let hit = |node: &ComputedNode, gt: &UiGlobalTransform, c: Vec2| node.size().x > 4.0 && node.contains_point(*gt, c);
+    // A click while the sell box is open belongs to the box.
     if mouse.just_pressed(MouseButton::Left)
+        && !sell.is_open()
         && let Some(c) = cursor
     {
         let found = slots.iter().find(|(name, n, g, v)| v.get() && hit(n, g, c) && parse_slot(&name.0).is_some()).and_then(|(name, ..)| parse_slot(&name.0));

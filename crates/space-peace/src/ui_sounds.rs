@@ -248,7 +248,7 @@ fn build_sounds(
                 }
             }
         }
-        if let PlayAction::SellStructure { .. } = a {
+        if matches!(a, PlayAction::SellStructure { .. } | PlayAction::SellUnit { .. }) {
             voice.write(GalaxyAudio { faction: faction.clone(), event: GalaxyEvent::ConstructionCancelled });
         }
         if let PlayAction::Build { planet, target } = a {
