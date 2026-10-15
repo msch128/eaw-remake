@@ -1331,6 +1331,19 @@ fn advisor_keep_out(ticker: Query<(&ComputedNode, &UiGlobalTransform, Option<&Ch
     }
 }
 
+/// Adds a loss row; a row with the same name (after `plain_unit_name`) takes the count instead of a second row.
+fn merge_row<I>(rows: &mut Vec<(Option<I>, String, u32)>, icon: Option<I>, name: String, n: u32) {
+    match rows.iter_mut().find(|r| r.1 == name) {
+        Some(r) => {
+            r.2 += n;
+            if r.0.is_none() {
+                r.0 = icon;
+            }
+        }
+        None => rows.push((icon, name, n)),
+    }
+}
+
 /// The display name of a unit without the " (G)" the mod's texts add to some objects (the fighters of a squadron).
 fn plain_unit_name(name: &str) -> String {
     name.trim().trim_end_matches(" (G)").trim_end().to_owned()
@@ -1913,7 +1926,7 @@ fn spawn_result_screen(world: &mut World, s: &crate::battle_play::BattleSummary)
             for (i, list) in [&screen.yours, &screen.enemy].into_iter().enumerate() {
                 for (name, n) in list.iter() {
                     let icon = game.as_deref().and_then(|g| eaw_ui::unit_icon(g, name)).and_then(|i| textures.get(&mut images, &i)).map(|t| t.handle);
-                    rows[i].push((icon, display(name), *n));
+                    merge_row(&mut rows[i], icon, display(name), *n);
                 }
             }
         }
@@ -2419,6 +2432,15 @@ mod tests {
         assert_eq!(end_opponent(Some(0), false, &rivals), Some(1), "defeat: the rival holding most planets");
         assert_eq!(end_opponent(Some(0), true, &rivals), Some(2), "victory: the rival that lost most ships");
         assert_eq!(end_opponent(Some(1), true, &[(1, 3, 0)]), None);
+    }
+
+    #[test]
+    fn rows_with_equal_names_are_merged() {
+        let mut rows: Vec<(Option<u8>, String, u32)> = Vec::new();
+        merge_row(&mut rows, None, plain_unit_name("TIE Fighter (G)"), 6);
+        merge_row(&mut rows, Some(1), plain_unit_name("TIE Fighter"), 2);
+        merge_row(&mut rows, None, "Headhunter".into(), 1);
+        assert_eq!(rows, vec![(Some(1), "TIE Fighter".to_owned(), 8), (None, "Headhunter".to_owned(), 1)]);
     }
 
     #[test]
