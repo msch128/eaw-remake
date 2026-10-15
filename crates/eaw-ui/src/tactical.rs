@@ -21,8 +21,8 @@ use crate::textures::UiTextures;
 use crate::widgets::{ButtonLabel, EawButton};
 use crate::{EawUiAssets, EawUiSettings};
 
-/// Ability types that are AI behaviours or passives, never shown as buttons.
-const HIDDEN_ABILITIES: [&str; 3] = ["HUNT", "SPOILER_LOCK", "NONE"];
+/// Ability types that never get a button (`HUNT` "Hunt for Enemies" and `SPOILER_LOCK` "Lock S-Foils" are toggles the player uses).
+const HIDDEN_ABILITIES: [&str; 1] = ["NONE"];
 
 /// An ability button of a unit type, resolved from the XML and the string table.
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -54,6 +54,22 @@ impl AbilityDef {
 
 /// Icon texture name of an ability type.
 pub fn ability_icon(kind: &str) -> String {
+    // Types without an `I_SA_<TYPE>` texture: the engine picks the icon by its ability enum, which the data does not show (estimate:
+    // the icon whose name or tooltip fits; units that name their own `Alternate_Icon_Name` override this).
+    let fallback = match kind.to_ascii_uppercase().as_str() {
+        "SPOILER_LOCK" => Some("I_SA_S_FOIL_MODE.TGA"),
+        "TURBO" => Some("I_SA_POWER_TO_ENGINES.TGA"),
+        "DEFEND" => Some("I_SA_SHIELD_FLARE.TGA"),
+        "FOW_REVEAL_PING" => Some("I_SA_SENSOR_PING.TGA"),
+        "MISSILE_SHIELD" => Some("I_SA_MISSILE_JAMMER.TGA"),
+        "SUPER_LASER" | "ENERGY_WEAPON" => Some("I_SA_BEAM.TGA"),
+        "CONCENTRATE_FIRE" => Some("I_SA_INTENSIFY_FIREPOWER.TGA"),
+        "REPLENISH_WINGMEN" => Some("I_SA_COVER_ME.TGA"),
+        _ => None,
+    };
+    if let Some(icon) = fallback {
+        return icon.to_string();
+    }
     format!("I_SA_{}.TGA", kind.to_uppercase())
 }
 
@@ -1328,6 +1344,8 @@ mod tests {
     #[test]
     fn ability_icon_names() {
         assert_eq!(ability_icon("full_salvo"), "I_SA_FULL_SALVO.TGA");
+        assert_eq!(ability_icon("spoiler_lock"), "I_SA_S_FOIL_MODE.TGA");
+        assert_eq!(ability_icon("TURBO"), "I_SA_POWER_TO_ENGINES.TGA");
     }
 
     #[test]

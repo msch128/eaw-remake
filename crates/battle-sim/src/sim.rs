@@ -220,6 +220,9 @@ impl Battle {
             retreat_ordered: vec![false; sides.len()],
             cheats: crate::cheats::Cheats::new(sides.len()),
             retreat_jump_at: vec![None; sides.len()],
+            hunt_seen: [0; 4],
+            ability_at: None,
+            lured: Vec::new(),
             reveals: Vec::new(),
             zones: Vec::new(),
             lasers: Vec::new(),
@@ -474,6 +477,8 @@ impl Battle {
             special_pulses: 0,
             special_timer: 0.0,
             special_target: NONE,
+            hunt_cell: NO_CELL,
+            hunt_since: 0.0,
             flyout_left: 0.0,
             group,
             squad,
@@ -735,6 +740,9 @@ impl Battle {
                 if !own(self, &ships) {
                     return Err(CommandError::InvalidShip);
                 }
+                for &i in &ships {
+                    self.stop_hunt(i);
+                }
                 for i in ships {
                     let s = &mut self.ships[i as usize];
                     s.order = if attack { Order::AttackMove(to) } else { Order::Move(to) };
@@ -744,6 +752,9 @@ impl Battle {
             Command::Attack { ships, target } => {
                 if !own(self, &ships) || !self.ships.get(target as usize).is_some_and(|t| t.alive && t.side != side) {
                     return Err(CommandError::InvalidShip);
+                }
+                for &i in &ships {
+                    self.stop_hunt(i);
                 }
                 for i in ships {
                     let s = &mut self.ships[i as usize];
@@ -763,6 +774,9 @@ impl Battle {
                 if !self.ships[target as usize].hps.get(hardpoint as usize).is_some_and(|h| h.alive) {
                     return Err(CommandError::InvalidHardpoint);
                 }
+                for &i in &ships {
+                    self.stop_hunt(i);
+                }
                 for i in ships {
                     let s = &mut self.ships[i as usize];
                     s.order = Order::Attack(target);
@@ -773,6 +787,9 @@ impl Battle {
             Command::Stop { ships } => {
                 if !own(self, &ships) {
                     return Err(CommandError::InvalidShip);
+                }
+                for &i in &ships {
+                    self.stop_hunt(i);
                 }
                 for i in ships {
                     let s = &mut self.ships[i as usize];
@@ -815,7 +832,10 @@ impl Battle {
                         return Err(CommandError::AbilityUnavailable);
                     }
                 }
-                if !self.activate_ability(ship, ability as usize) {
+                self.ability_at = Some(pos);
+                let activated = self.activate_ability(ship, ability as usize);
+                self.ability_at = None;
+                if !activated {
                     return Err(CommandError::AbilityUnavailable);
                 }
                 if let (Some(c), Some(t)) = (&corrupt, drained) {
@@ -873,14 +893,7 @@ impl Battle {
                 if self.time < self.config.retreat_countdown {
                     return Err(CommandError::RetreatNotAllowed);
                 }
-                let interdicted = self.ships.iter().any(|s| {
-                    let d = self.catalog.ship(s.def);
-                    s.alive
-                        && !s.retreated
-                        && s.side != side
-                        && (d.interdictor || d.abilities.iter().zip(&s.abilities).any(|(a, st)| a.interdict && st.active > 0.0))
-                });
-                if interdicted {
+                if self.interdicted(side) {
                     return Err(CommandError::RetreatBlocked);
                 }
                 if self.retreat_jump_at[side as usize].is_some() {
@@ -951,9 +964,22 @@ impl Battle {
     fn activate_ability(&mut self, ship: u32, ability: usize) -> bool {
         let def = self.catalog.ship(self.ships[ship as usize].def);
         let Some(a) = def.abilities.get(ability) else { return false };
+        let is_hunt = a.hunt;
+        let is_replenish = a.replenish;
+        let weaken = a.weaken.clone();
+        if is_replenish && self.wingmen(ship).1.is_empty() {
+            // Nobody to bring back: the once-per-battle use is kept.
+            return false;
+        }
         if a.toggle && self.ships[ship as usize].abilities[ability].active > 0.0 {
             // Toggle abilities are switched off by using them again.
             self.ships[ship as usize].abilities[ability].active = 0.0;
+            if is_hunt {
+                self.stop_hunt(ship);
+                if matches!(self.ships[ship as usize].order, Order::Attack(_) | Order::AttackMove(_)) {
+                    self.ships[ship as usize].order = Order::Idle;
+                }
+            }
             return true;
         }
         if self.ships[ship as usize].abilities[ability].cooldown > 0.0 || self.ships[ship as usize].abilities[ability].active > 0.0 {
@@ -992,6 +1018,12 @@ impl Battle {
                 hp_st.cooldown = 0.0;
                 hp_st.pulse_timer = 0.0;
             }
+        }
+        if is_replenish {
+            self.replenish_wingmen(ship);
+        }
+        if let Some(w) = weaken {
+            self.weaken_area(ship, &w);
         }
         if self.config.record_events {
             self.events.push(Event::AbilityActivated { ship, ability: ability as u16 });
@@ -1353,7 +1385,8 @@ impl Battle {
                 .zip(&att.abilities)
                 .filter(|(_, st)| st.active > 0.0)
                 .map(|(a, _)| a.cause_damage_mult)
-                .product()
+                .product::<f32>()
+                * (1.0 + att.mods[ModKind::CauseDamage as usize].0)
         } else {
             1.0
         };
@@ -1490,6 +1523,18 @@ impl Battle {
         }
     }
 
+    /// True while an enemy of `side` holds a gravity well: a station or ship with `Is_Interdictor`, or a ship whose `INTERDICT` ability is on.
+    /// The side cannot order a retreat, and a retreat that is running is cancelled.
+    pub fn interdicted(&self, side: u8) -> bool {
+        self.ships.iter().any(|s| {
+            let d = self.catalog.ship(s.def);
+            s.alive
+                && !s.retreated
+                && s.side != side
+                && (d.interdictor || d.abilities.iter().zip(&s.abilities).any(|(a, st)| a.interdict && st.active > 0.0))
+        })
+    }
+
     /// Seconds until the retreat jump of `side` (`None` when it has not ordered a retreat or the jump is done). For the countdown on the tactical screen.
     pub fn retreat_jump_in(&self, side: u8) -> Option<f32> {
         self.retreat_jump_at.get(side as usize).copied().flatten().map(|t| (t - self.time).max(0.0))
@@ -1523,6 +1568,19 @@ impl Battle {
     /// escapes (`retreated`). Units launched by a carrier escape only with a carrier that escapes; squadrons called in as reinforcements, and everything
     /// that cannot jump (dead drives, stations' fighters), are lost. Stations stay in the battle.
     fn retreat_jumps(&mut self) {
+        // A gravity well that comes up while the fleet charges its hyperdrives cancels the jump (Remake `RetreatPlan.lua`: "Retreat was aborted").
+        for side in 0..self.retreat_jump_at.len() as u8 {
+            if self.retreat_jump_at[side as usize].is_some() && self.interdicted(side) {
+                self.retreat_jump_at[side as usize] = None;
+                self.retreat_ordered[side as usize] = false;
+                for s in self.ships.iter_mut().filter(|s| s.side == side && s.alive && matches!(s.order, Order::Retreat)) {
+                    s.order = Order::Idle;
+                }
+                if self.config.record_events {
+                    self.events.push(Event::RetreatAborted { side });
+                }
+            }
+        }
         let due: Vec<u8> = (0..self.retreat_jump_at.len() as u8).filter(|&k| self.retreat_jump_at[k as usize].is_some_and(|t| self.time >= t)).collect();
         for side in due {
             self.retreat_jump_at[side as usize] = None;
@@ -1754,6 +1812,8 @@ impl Battle {
         }
         if self.tick.is_multiple_of(15) {
             self.ai_special_abilities();
+            self.run_hunts();
+            self.run_lures();
         }
         self.run_healing(dt);
         self.run_zones(dt);
@@ -1781,6 +1841,8 @@ impl Battle {
                 .filter(|o| o.alive && !o.retreated && o.side != side && self.is_visible_to(side, o.id))
                 .map(|o| o.id)
                 .collect();
+            // `Enemy_Retreating`: the other side has ordered its retreat (the jump is charging).
+            let enemy_retreating = (0..self.retreat_jump_at.len() as u8).any(|o| o != side && self.retreat_jump_at[o as usize].is_some());
             for s in self.ships.iter().filter(|s| s.alive && !s.retreated && s.side == side && s.stance != Stance::HoldFire) {
                 let def = cat.ship(s.def);
                 for (k, a) in def.abilities.iter().enumerate() {
@@ -1789,7 +1851,47 @@ impl Battle {
                         continue;
                     }
                     let k = k as u16;
-                    if a.jam {
+                    if a.replenish {
+                        // `ObjectScript_VaderTIESquadron`: used when fewer than two fighters of the squadron are left.
+                        let (alive, dead) = self.wingmen(s.id);
+                        if alive.is_empty() && !dead.is_empty() {
+                            uses.push((side, s.id, k, None));
+                        }
+                    } else if let Some(l) = &a.lure {
+                        // Estimate: draw fire when two or more mobile enemies of the listed types are inside the radius.
+                        let near = enemies
+                            .iter()
+                            .filter(|&&e| {
+                                let o = &self.ships[e as usize];
+                                let d = cat.ship(o.def);
+                                !d.is_static && d.max_speed > 0.0 && o.pos.dist(s.pos) <= l.radius && (l.types.is_empty() || l.types.contains(&d.name.to_ascii_lowercase()))
+                            })
+                            .count();
+                        if near >= 2 {
+                            uses.push((side, s.id, k, None));
+                        }
+                    } else if let Some(w) = &a.weaken {
+                        // Estimate: the AI weakens the densest group of enemies (three or more, a capital counts as three) within 4000 units.
+                        let weight = |id: u32| if cat.ship(self.ships[id as usize].def).class as u8 >= TargetClass::Capital as u8 { 3 } else { 1 };
+                        let best = enemies
+                            .iter()
+                            .filter(|&&e| self.ships[e as usize].pos.dist(s.pos) <= 4000.0)
+                            .map(|&e| {
+                                let c = self.ships[e as usize].pos;
+                                (enemies.iter().filter(|&&o| self.ships[o as usize].pos.dist(c) <= w.radius).map(|&o| weight(o)).sum::<u32>(), e)
+                            })
+                            .max_by_key(|&(n, e)| (n, std::cmp::Reverse(e)));
+                        if let Some((n, e)) = best
+                            && n >= 3
+                        {
+                            uses.push((side, s.id, k, Some(self.ships[e as usize].pos)));
+                        }
+                    } else if a.interdict {
+                        // The interdictor scripts switch the field on against a retreating enemy and off again after `AI_INTERDICT_SECS`.
+                        if enemy_retreating && ai_side {
+                            uses.push((side, s.id, k, None));
+                        }
+                    } else if a.jam {
                         let homing = self.projectiles.iter().filter(|p| p.target == s.id && p.side != side && p.pos.dist(s.pos) < 2500.0).count();
                         if homing > 0 {
                             uses.push((side, s.id, k, None));
@@ -1838,11 +1940,238 @@ impl Battle {
             }
         }
         for (side, ship, ability, at) in uses {
-            let _ = match at {
+            let result = match at {
                 Some(pos) => self.command(side, Command::UseAbilityAt { ship, ability, pos }),
                 None => self.command(side, Command::UseAbility { ship, ability }),
             };
+            if result.is_ok() && self.catalog.ship(self.ships[ship as usize].def).abilities[ability as usize].interdict {
+                self.ships[ship as usize].abilities[ability as usize].active = AI_INTERDICT_SECS;
+            }
         }
+    }
+
+    /// `WEAKEN_ENEMY`: the enemies of `ship`'s side inside the area (centred on the aimed point, else on the ship) deal less damage and move
+    /// slower for the duration; the strongest value of each kind counts.
+    fn weaken_area(&mut self, ship: u32, w: &WeakenDef) {
+        let side = self.ships[ship as usize].side;
+        let at = self.ability_at.unwrap_or(self.ships[ship as usize].pos);
+        let cat = self.catalog.clone();
+        for s in self.ships.iter_mut().filter(|s| s.alive && !s.retreated && s.side != side && s.pos.dist(at) - cat.ship(s.def).radius <= w.radius) {
+            for (kind, value) in [(ModKind::CauseDamage, -w.cause_reduction), (ModKind::Speed, -w.speed_cut), (ModKind::Defense, -w.take_increase)] {
+                let slot = &mut s.mods[kind as usize];
+                if value != 0.0 && (value.abs() >= slot.0.abs() || slot.1 <= 0.0) {
+                    *slot = (value, w.duration);
+                }
+            }
+        }
+    }
+
+    /// `LURE`: every 0.5 s the enemy ships of the listed types within the radius of an active lure are ordered to attack the caster; when the
+    /// lure ends those still on it go back to idle (AI sides pick a new target with their next search).
+    fn run_lures(&mut self) {
+        let cat = self.catalog.clone();
+        let mut lures: Vec<(u32, u8, Vec3, LureDef)> = Vec::new();
+        for s in self.ships.iter().filter(|s| s.alive && !s.retreated) {
+            for (a, st) in cat.ship(s.def).abilities.iter().zip(&s.abilities) {
+                if let Some(l) = &a.lure
+                    && st.active > 0.0
+                {
+                    lures.push((s.id, s.side, s.pos, l.clone()));
+                }
+            }
+        }
+        // Lures that ended release their victims.
+        let released: Vec<(u32, u32)> = self.lured.iter().copied().filter(|&(_, caster)| !lures.iter().any(|l| l.0 == caster)).collect();
+        self.lured.retain(|p| !released.contains(p));
+        for (id, caster) in released {
+            let s = &mut self.ships[id as usize];
+            if s.order == Order::Attack(caster) {
+                s.order = Order::Idle;
+            }
+        }
+        for (caster, side, pos, l) in &lures {
+            for s in self.ships.iter_mut().filter(|s| s.alive && !s.retreated && s.side != *side && s.stance != Stance::HoldFire) {
+                let d = cat.ship(s.def);
+                if d.is_static || d.max_speed <= 0.0 || matches!(s.order, Order::Retreat) || s.pos.dist(*pos) > l.radius {
+                    continue;
+                }
+                if !l.types.is_empty() && !l.types.contains(&d.name.to_ascii_lowercase()) {
+                    continue;
+                }
+                s.order = Order::Attack(*caster);
+                s.target = *caster;
+                s.target_hp = NO_HP;
+                if !self.lured.contains(&(s.id, *caster)) {
+                    self.lured.push((s.id, *caster));
+                }
+            }
+        }
+    }
+
+    /// The other members of a ship's squadron: (alive, lost).
+    fn wingmen(&self, leader: u32) -> (Vec<u32>, Vec<u32>) {
+        let squad = self.ships[leader as usize].squad;
+        if squad == NONE {
+            return (Vec::new(), Vec::new());
+        }
+        let (mut alive, mut dead) = (Vec::new(), Vec::new());
+        for &m in self.squads[squad as usize].iter().filter(|&&m| m != leader) {
+            let s = &self.ships[m as usize];
+            if s.retreated {
+                continue;
+            }
+            if s.alive { alive.push(m) } else { dead.push(m) }
+        }
+        (alive, dead)
+    }
+
+    /// `REPLENISH_WINGMEN`: every lost wingman is replaced by a new fighter of the same type at its formation slot behind the leader.
+    fn replenish_wingmen(&mut self, leader: u32) {
+        let (_, dead) = self.wingmen(leader);
+        let (pos, yaw, speed, side, group, squad, order) = {
+            let l = &self.ships[leader as usize];
+            (l.pos, l.yaw, l.speed, l.side, l.group, l.squad, l.order)
+        };
+        for d in dead {
+            let (def, formation, carrier) = (self.ships[d as usize].def, self.ships[d as usize].formation, self.ships[d as usize].carrier);
+            let id = self.spawn_ship(def, side, pos + formation.rotate_yaw(yaw), yaw, group, squad, formation);
+            let s = &mut self.ships[id as usize];
+            s.order = order;
+            s.carrier = carrier;
+            s.speed = speed;
+            self.squads[squad as usize].push(id);
+            if let Some(g) = self.groups.get_mut(group as usize) {
+                g.members.push(id);
+            }
+        }
+    }
+
+    /// `HUNT` ("Hunt for Enemies": scout the map for hostile targets, destroy the ones found). Every hunter flies alone, out of its squadron
+    /// formation: it takes the visible enemy its `Targeting_Priority_Set` ranks best (then the nearest, with a penalty for each other hunter
+    /// already on that enemy, so the group spreads over the enemy fleet) and chases it across the map until it is dead. With nothing in
+    /// sight it searches the map cell by cell, the nearest cell no hunter of the side has searched yet (estimate: the data names no search
+    /// pattern; cell size, the search time limit and the spreading penalty are mine). Runs twice a second.
+    fn run_hunts(&mut self) {
+        let cat = self.catalog.clone();
+        let (half, fog, step) = (self.config.half_size, self.config.fog_of_war, self.config.dt * 15.0);
+        let hunters: Vec<u32> = self
+            .ships
+            .iter()
+            .filter(|s| {
+                let d = cat.ship(s.def);
+                s.alive && !s.retreated && !d.is_static && s.stance != Stance::HoldFire && !matches!(s.order, Order::Retreat)
+                    && d.abilities.iter().zip(&s.abilities).any(|(a, st)| a.hunt && st.active > 0.0)
+            })
+            .map(|s| s.id)
+            .collect();
+        if hunters.is_empty() {
+            return;
+        }
+        let cell_size = 2.0 * half / HUNT_GRID as f32;
+        let cell_of = |p: Vec3| -> u8 {
+            let c = |v: f32| (((v + half) / cell_size).floor().max(0.0) as usize).min(HUNT_GRID - 1);
+            (c(p.y) * HUNT_GRID + c(p.x)) as u8
+        };
+        let centre_of = |c: u8| Vec3::new(-half + ((c as usize % HUNT_GRID) as f32 + 0.5) * cell_size, -half + ((c as usize / HUNT_GRID) as f32 + 0.5) * cell_size, 0.0);
+        let mut on_target = vec![0u32; self.ships.len()];
+        let mut claimed = [0u64; 4];
+        for &h in &hunters {
+            let s = &self.ships[h as usize];
+            let side = (s.side as usize).min(3);
+            // Cells and targets already taken by hunters that keep their choice.
+            if let Order::Attack(t) = s.order {
+                on_target[t as usize] += 1;
+            } else if s.hunt_cell != NO_CELL {
+                claimed[side] |= 1u64 << s.hunt_cell;
+            }
+        }
+        for &h in &hunters {
+            let (side, pos, cur) = {
+                let s = &self.ships[h as usize];
+                (s.side, s.pos, if let Order::Attack(t) = s.order { Some(t) } else { None })
+            };
+            let sd = (side as usize).min(3);
+            let def = cat.ship(self.ships[h as usize].def);
+            let set = def.priority.and_then(|i| cat.priority_sets.get(i as usize));
+            if let Some(t) = cur {
+                on_target[t as usize] = on_target[t as usize].saturating_sub(1);
+            }
+            let mut best: Option<(f32, u32)> = None;
+            for t in self.ships.iter().filter(|t| t.alive && !t.retreated && t.side != side && (!fog || self.is_visible_to(side, t.id))) {
+                let tdef = cat.ship(t.def);
+                if tdef.special_weapon.is_some() || tdef.background {
+                    continue;
+                }
+                let weight = match set {
+                    Some(p) => {
+                        if p.excluded & tdef.class.bit() != 0 {
+                            continue;
+                        }
+                        p.weight(tdef.class, tdef.golan).min(1000.0)
+                    }
+                    None => f32::from(target_priority(def.class, tdef.class)) * 10.0,
+                };
+                let mut score = weight * HUNT_WEIGHT_UNITS + t.pos.dist(pos) + on_target[t.id as usize] as f32 * HUNT_CROWD_UNITS;
+                if tdef.is_static {
+                    score += HUNT_STATIC_UNITS;
+                }
+                if cur == Some(t.id) {
+                    score -= HUNT_STICKY_UNITS;
+                }
+                if best.is_none_or(|b| score < b.0) {
+                    best = Some((score, t.id));
+                }
+            }
+            if let Some((_, t)) = best {
+                let s = &mut self.ships[h as usize];
+                if cur != Some(t) {
+                    s.order = Order::Attack(t);
+                    s.target = t;
+                    s.target_hp = NO_HP;
+                }
+                s.hunt_cell = NO_CELL;
+                on_target[t as usize] += 1;
+                continue;
+            }
+            // Nothing in sight: search the map.
+            let here = cell_of(pos);
+            self.hunt_seen[sd] |= 1u64 << here;
+            let s = &mut self.ships[h as usize];
+            s.hunt_since += step;
+            let arrived = s.hunt_cell != NO_CELL && (s.hunt_cell == here || pos.dist(centre_of(s.hunt_cell)) < 0.25 * cell_size);
+            if s.hunt_cell != NO_CELL && !arrived && s.hunt_since < HUNT_CELL_SECS && matches!(s.order, Order::AttackMove(_)) {
+                continue;
+            }
+            if s.hunt_cell != NO_CELL {
+                self.hunt_seen[sd] |= 1u64 << s.hunt_cell;
+                claimed[sd] &= !(1u64 << s.hunt_cell);
+            }
+            if self.hunt_seen[sd] == u64::MAX {
+                self.hunt_seen[sd] = 1u64 << here;
+            }
+            let taken = self.hunt_seen[sd] | claimed[sd];
+            let pick = (0..(HUNT_GRID * HUNT_GRID) as u8)
+                .filter(|&c| taken & (1u64 << c) == 0)
+                .min_by(|&a, &b| centre_of(a).dist(pos).total_cmp(&centre_of(b).dist(pos)).then(a.cmp(&b)))
+                .unwrap_or(here);
+            claimed[sd] |= 1u64 << pick;
+            s.hunt_cell = pick;
+            s.hunt_since = 0.0;
+            s.order = Order::AttackMove(centre_of(pick));
+            s.target_hp = NO_HP;
+        }
+    }
+
+    /// Switches `HUNT` off on a ship that got an order of its own, or whose player toggled it off: the hunter stops searching.
+    fn stop_hunt(&mut self, ship: u32) {
+        let def = self.catalog.ship(self.ships[ship as usize].def);
+        let s = &mut self.ships[ship as usize];
+        for (a, st) in def.abilities.iter().zip(&mut s.abilities) {
+            if a.hunt {
+                st.active = 0.0;
+            }
+        }
+        s.hunt_cell = NO_CELL;
     }
 
     /// `CORRUPT_SYSTEMS`: the shield of a corrupted ship drains until the effect ends (a depleted shield stays down for the usual time).
@@ -3169,6 +3498,18 @@ enum Deflect {
 
 /// Reload delay multiplier of missile weapons while `ROCKET_ATTACK` is active (estimate).
 const ROCKET_RELOAD_MULT: f32 = 0.4;
+
+/// `HUNT` target score (estimates): game units one step of priority weight is worth against distance, the cost of each other hunter already
+/// on the enemy, the cost of a station or structure (hunters go for ships first), and the bonus of the enemy the hunter already chases.
+const HUNT_WEIGHT_UNITS: f32 = 2500.0;
+const HUNT_CROWD_UNITS: f32 = 1800.0;
+const HUNT_STATIC_UNITS: f32 = 1.0e7;
+const HUNT_STICKY_UNITS: f32 = 2000.0;
+/// Seconds after which a hunter gives up on an unreachable search cell (estimate).
+const HUNT_CELL_SECS: f32 = 60.0;
+
+/// Seconds an AI interdictor keeps its field on (`Register_Timer(Cancel_Interdiction, 20)` in `ObjectScript_Interdict_Layer_Z.lua`).
+const AI_INTERDICT_SECS: f32 = 20.0;
 
 /// The `n`-th place an AI side searches for hidden enemies: their start, the middle, then the four quarters.
 fn search_point(n: u32, enemy_start: Vec3, half: f32) -> Vec3 {

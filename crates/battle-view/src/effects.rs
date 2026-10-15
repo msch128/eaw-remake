@@ -699,6 +699,39 @@ pub fn trigger_reveal_ping_effects(
     }
 }
 
+/// Gravity well of an interdictor (`INTERDICT` switched on, or a ship or station with `Is_Interdictor`): two slow pulsing rings on the
+/// battle plane around the ship while it blocks the retreat. The data names no particle and no radius for the field (estimate: the ring
+/// is six hull radii wide and only marks the ship), the effect is gizmo lines like the sensor ping.
+pub fn draw_gravity_wells(
+    time: Res<Time>,
+    rt: Res<BattleRuntime>,
+    settings: Res<BattleViewSettings>,
+    mut gizmos: Gizmos,
+) {
+    let Some(cur) = rt.cur.as_ref() else { return };
+    let phase = time.elapsed_secs() * 0.8;
+    for s in &cur.ships {
+        if s.seen_by & (1 << settings.player_side.min(7)) == 0 {
+            continue;
+        }
+        let def = rt.catalog.ship(s.def);
+        let on = def.interdictor || def.abilities.iter().zip(&s.abilities).any(|(a, &(active, _))| a.interdict && active > 0.0);
+        if !on {
+            continue;
+        }
+        let centre = crate::convert::sim_to_bevy(s.pos);
+        let iso = Isometry3d::new(centre, Quat::from_rotation_x(std::f32::consts::FRAC_PI_2));
+        let base = def.radius.max(60.0) * 6.0;
+        for k in 0..2 {
+            let t = (phase + k as f32 * 0.5).fract();
+            // Rings move in from the rim and fade as they reach the ship, the pull of a gravity well.
+            let radius = base * (1.0 - 0.6 * t);
+            let alpha = 0.55 * (t * std::f32::consts::PI).sin();
+            gizmos.circle(iso, radius, Color::srgba(0.55, 0.35, 1.0, alpha)).resolution(64);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

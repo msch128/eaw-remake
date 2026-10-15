@@ -168,7 +168,7 @@ but not a goal). `spawn_dialog` is for GC messages (GC intro transmissions, game
 
 * **Abilities from data:** each `Unit_Ability` `Type` of a unit (`Unit_Abilities_Data`) maps by
   convention to the icon `I_SA_<TYPE>.TGA` (mega texture) and the strings
-  `TEXT_TOOLTIP_ABILITY_<TYPE>_NAME` / `_DESCRIPTION`. `HUNT`/`SPOILER_LOCK` are AI behaviours and
+  `TEXT_TOOLTIP_ABILITY_<TYPE>_NAME` / `_DESCRIPTION`. `HUNT` and `SPOILER_LOCK` (icon `I_SA_S_FOIL_MODE`) are toggles with buttons;
   types without an icon are skipped. `unit_abilities` / `TacticalUnit::from_game` build them.
   The `special_button_NN` components (24 small slots above the selection) show them; their own
   `sa_ami_outline_NN` textures are an animated outline, not ability icons.

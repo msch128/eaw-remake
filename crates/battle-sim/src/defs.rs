@@ -220,6 +220,14 @@ pub struct AbilityDef {
     pub disable_movement: bool,
     /// `INTERDICT`: while active, enemies cannot retreat.
     pub interdict: bool,
+    /// `HUNT` ("Hunt for Enemies"): while on, the ship leaves its formation, searches the map and chases the enemies it detects.
+    pub hunt: bool,
+    /// `REPLENISH_WINGMEN` (Vader's and the 181st's squadron leaders): once, brings back every lost wingman of the leader's squadron.
+    pub replenish: bool,
+    /// `WEAKEN_ENEMY`: the weakening area.
+    pub weaken: Option<WeakenDef>,
+    /// `LURE`: the taunt area.
+    pub lure: Option<LureDef>,
     /// Abilities with `Expiration_Seconds` 0 (missile shield, interdiction) stay on until toggled off.
     pub toggle: bool,
     /// `TRACTOR_BEAM`: beam parameters from the linked `Tractor_Beam_Attack_Ability`.
@@ -283,6 +291,32 @@ pub struct RedirectDef {
     pub classes: u16,
 }
 
+/// `LURE` ("Lure Enemy Fighters" / "Fortify"): while active the caster takes less damage (the ability's `TAKE_DAMAGE_MULTIPLIER`) and the enemy ships
+/// of the listed types within `radius` are forced to attack it. The data pulses every 0.5 s for the duration.
+#[derive(Debug, Clone, Default)]
+pub struct LureDef {
+    /// `Effective_Radius`.
+    pub radius: f32,
+    /// `Target_Types` (lower case ship names; empty = every enemy).
+    pub types: Vec<String>,
+}
+
+/// `WEAKEN_ENEMY` (Thrawn, Zsinj): the `Projectile_Weaken_Enemy_*` values of the ability's `Spawned_Object_Type`. A targeted area: for `duration`
+/// seconds the enemy ships inside deal `cause_reduction` less damage and fly `speed_cut` slower.
+#[derive(Debug, Clone, Default)]
+pub struct WeakenDef {
+    /// Area radius (the ability's `Effective_Radius`, else `Projectile_Weaken_Enemy_Radius`).
+    pub radius: f32,
+    /// `Projectile_Weaken_Enemy_Duration_Seconds`.
+    pub duration: f32,
+    /// `Projectile_Weaken_Enemy_Cause_Damage_Reduction_Percent` (0.25 = 25% less damage dealt).
+    pub cause_reduction: f32,
+    /// `Projectile_Weaken_Enemy_Take_Damage_Increase_Percent`.
+    pub take_increase: f32,
+    /// Speed reduction of the projectile's `COMBAT_MOD_SPEED` (0.25 = 25% slower).
+    pub speed_cut: f32,
+}
+
 /// `BUZZ_DROIDS` with a `Buzz_Droids_Ability` that hurts enemies (Eclipse lightning storm): a damaging area placed where the ability is used.
 #[derive(Debug, Clone, Default)]
 pub struct ZoneDef {
@@ -318,10 +352,12 @@ pub enum ModKind {
     Health,
     /// `COMBAT_MOD_SHIELD`: shield damage taken.
     Shield,
+    /// `Projectile_Weaken_Enemy_Cause_Damage_Reduction_Percent` (as a negative value): damage the ship deals.
+    CauseDamage,
 }
 
 impl ModKind {
-    pub(crate) const COUNT: usize = 5;
+    pub(crate) const COUNT: usize = 6;
 }
 
 /// A `Projectile_Combat_Mod`: for `duration` seconds the ships hit (and those within the blast range of the impact)
@@ -525,6 +561,8 @@ pub struct SpecialWeaponDef {
 pub struct ProjDef {
     /// `Projectile_Combat_Mod`: a timed debuff (or buff) on the ships hit.
     pub combat_mod: Option<CombatMod>,
+    /// `Projectile_Weaken_Enemy_*`: the area weakening that `WEAKEN_ENEMY` spawns.
+    pub weaken: Option<WeakenDef>,
     /// Object name.
     pub name: String,
     /// `Projectile_Category` (lower case), e.g. `laser`, `missile`.
@@ -943,6 +981,13 @@ impl Catalog {
                 {
                     proj_names.push(p.clone());
                 }
+                if let Source::Unit(u) = s {
+                    for a in u.abilities.iter().filter(|a| a.kind.eq_ignore_ascii_case("WEAKEN_ENEMY")) {
+                        if let Some(n) = a.fields.get("spawned_object_type") {
+                            proj_names.push(n.trim().to_string());
+                        }
+                    }
+                }
                 if let Source::Structure(st) = s {
                     if let Some(pts) = st.fields.get("projectile_types") {
                         for pt in alamo_data::xml::split_list(pts) {
@@ -1029,6 +1074,13 @@ impl Catalog {
                 classes: p.fields.get("projectile_combat_mod_category_mask").map_or(0, |v| alamo_data::xml::split_list(v).iter().filter_map(|t| TargetClass::from_token(t)).fold(0u16, |m, c| m | c.bit())),
             })
             .filter(|m| m.value != 0.0 && m.duration > 0.0),
+            weaken: p.fields.get("projectile_weaken_enemy_on_detonation").is_some_and(|v| alamo_data::xml::parse_bool(v)).then(|| WeakenDef {
+                radius: f("projectile_weaken_enemy_radius"),
+                duration: f("projectile_weaken_enemy_duration_seconds"),
+                cause_reduction: f("projectile_weaken_enemy_cause_damage_reduction_percent").clamp(0.0, 0.95),
+                take_increase: f("projectile_weaken_enemy_take_damage_increase_percent").max(0.0),
+                speed_cut: if p.fields.get("projectile_combat_mod").is_some_and(|v| v.trim().eq_ignore_ascii_case("COMBAT_MOD_SPEED")) { (-f("projectile_combat_mod_value")).clamp(0.0, 0.9) } else { 0.0 },
+            }),
             ion_duration: p.ion_stun_duration,
             ion_speed_cut: (p.ion_stun_speed_reduction / 100.0).clamp(0.0, 1.0),
             ion_rate_cut: (p.ion_stun_shot_rate_reduction / 100.0).clamp(0.0, 1.0),
@@ -1239,7 +1291,7 @@ impl Catalog {
                 }
                 let offsets = u.squadron_offsets.iter().map(|o| Vec3::from_array(*o)).collect();
                 let delay = u.fields.get("spawned_squadron_delay_seconds").and_then(|v| v.parse().ok()).unwrap_or(2.0);
-                (members, offsets, at_tech0.map(|t| resolve(&t.starting)).unwrap_or_default(), at_tech0.map(|t| resolve(&t.reserve)).unwrap_or_default(), delay, ability_defs(u))
+                (members, offsets, at_tech0.map(|t| resolve(&t.starting)).unwrap_or_default(), at_tech0.map(|t| resolve(&t.reserve)).unwrap_or_default(), delay, ability_defs(u, &self.projectiles, &self.proj_index))
             }
             Source::Base(b) => {
                 let delay = b.fields.get("spawned_squadron_delay_seconds").and_then(|v| v.parse().ok()).unwrap_or(2.0);
@@ -1270,6 +1322,8 @@ impl Catalog {
             Source::Unit(u) => {
                 u.fields.get("is_interdictor").is_some_and(|v| alamo_data::xml::parse_bool(v))
             }
+            // Gravity well stations: `Is_Interdictor`, and the ability is `Active_By_Default`, so the field is always up.
+            Source::Structure(s) => s.fields.get("is_interdictor").is_some_and(|v| alamo_data::xml::parse_bool(v)),
             _ => false,
         };
 
@@ -1596,15 +1650,16 @@ impl Catalog {
     }
 }
 
-fn ability_defs(u: &SpaceUnitDef) -> Vec<AbilityDef> {
+fn ability_defs(u: &SpaceUnitDef, projectiles: &[ProjDef], proj_index: &HashMap<String, ProjId>) -> Vec<AbilityDef> {
     u.abilities
         .iter()
         .filter(|a| {
             a.expiration_seconds.unwrap_or(0.0) > 0.0
-                || ["FULL_SALVO", "TRACTOR_BEAM", "MISSILE_SHIELD", "INTERDICT", "STEALTH", "FOW_REVEAL_PING", "LASER_DEFENSE", "ROCKET_ATTACK", "SWAP_WEAPONS", "SENSOR_JAMMING", "BUZZ_DROIDS", "SUPER_LASER", "CORRUPT_SYSTEMS"].iter().any(|k| a.kind.eq_ignore_ascii_case(k))
+                || (a.kind.eq_ignore_ascii_case("LURE") && a.fields.contains_key("effective_radius"))
+                || ["FULL_SALVO", "TRACTOR_BEAM", "MISSILE_SHIELD", "INTERDICT", "STEALTH", "FOW_REVEAL_PING", "LASER_DEFENSE", "ROCKET_ATTACK", "SWAP_WEAPONS", "SENSOR_JAMMING", "BUZZ_DROIDS", "SUPER_LASER", "CORRUPT_SYSTEMS", "HUNT", "SPOILER_LOCK", "REPLENISH_WINGMEN", "WEAKEN_ENEMY"].iter().any(|k| a.kind.eq_ignore_ascii_case(k))
         })
         .map(|a| {
-            let toggle = a.expiration_seconds.unwrap_or(0.0) <= 0.0 && ["MISSILE_SHIELD", "INTERDICT", "STEALTH"].iter().any(|k| a.kind.eq_ignore_ascii_case(k));
+            let toggle = a.expiration_seconds.unwrap_or(0.0) <= 0.0 && ["MISSILE_SHIELD", "INTERDICT", "STEALTH", "HUNT", "SPOILER_LOCK"].iter().any(|k| a.kind.eq_ignore_ascii_case(k));
             let ping = a.kind.eq_ignore_ascii_case("FOW_REVEAL_PING");
             // `LASER_DEFENSE` (point defence turrets) shoots down missiles, rockets and torpedoes inside `Effective_Radius` for `Defense_Duration_In_Secs` of the linked ability.
             let laser = a.kind.eq_ignore_ascii_case("LASER_DEFENSE");
@@ -1660,6 +1715,16 @@ fn ability_defs(u: &SpaceUnitDef) -> Vec<AbilityDef> {
                 stealth: a.kind.eq_ignore_ascii_case("STEALTH"),
                 reveal_radius: if ping { a.fields.get("effective_radius").and_then(|v| v.parse().ok()).unwrap_or(1000.0) } else { 0.0 },
                 interdict: a.kind.eq_ignore_ascii_case("INTERDICT"),
+                hunt: a.kind.eq_ignore_ascii_case("HUNT"),
+                replenish: a.kind.eq_ignore_ascii_case("REPLENISH_WINGMEN"),
+                lure: a.kind.eq_ignore_ascii_case("LURE").then(|| LureDef {
+                    radius: a.fields.get("effective_radius").and_then(|v| v.trim().parse().ok()).unwrap_or(0.0),
+                    types: a.fields.get("target_types").map(|v| alamo_data::xml::split_list(v).iter().map(|t| t.to_ascii_lowercase()).collect()).unwrap_or_default(),
+                }).filter(|l| l.radius > 0.0),
+                weaken: a.kind.eq_ignore_ascii_case("WEAKEN_ENEMY").then(|| {
+                    let p = a.fields.get("spawned_object_type").and_then(|n| proj_index.get(&n.trim().to_ascii_lowercase())).and_then(|&i| projectiles.get(i as usize)).and_then(|p| p.weaken.clone()).unwrap_or(WeakenDef { radius: 2000.0, duration: 60.0, cause_reduction: 0.25, take_increase: 0.0, speed_cut: 0.25 });
+                    WeakenDef { radius: a.fields.get("effective_radius").and_then(|v| v.trim().parse().ok()).unwrap_or(p.radius), ..p }
+                }),
                 toggle,
                 salvo: a.kind.eq_ignore_ascii_case("FULL_SALVO"),
                 supports_autofire: a.fields.get("supports_autofire").is_some_and(|v| alamo_data::xml::parse_bool(v)),

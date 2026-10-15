@@ -390,6 +390,11 @@ pub enum Event {
         /// Seconds until the jump.
         jump_in: f32,
     },
+    /// A gravity well stopped the retreat of a side before its jump.
+    RetreatAborted {
+        /// Side.
+        side: u8,
+    },
     /// A ship left the battlefield.
     ShipRetreated {
         /// Ship.
@@ -591,6 +596,10 @@ pub struct Ship {
     pub shield_gen_ok: bool,
     /// Speed factor from destroyed engines.
     pub engine_factor: f32,
+    /// `HUNT`: the map cell (`HUNT_GRID` x `HUNT_GRID`) the hunter is searching, `NO_CELL` when it has none.
+    pub hunt_cell: u8,
+    /// `HUNT`: seconds since the hunter chose its search cell.
+    pub hunt_since: f32,
     /// Fighter strafing phase timer (positive = breaking away).
     pub phase: f32,
     /// Fighter break-away heading change.
@@ -671,6 +680,11 @@ pub(crate) struct Group {
 
 pub const NO_HP: u16 = u16::MAX;
 
+/// Cells per side of the square the map is cut into for the `HUNT` search (8 x 8 = 64, one bit each in a `u64`).
+pub const HUNT_GRID: usize = 8;
+/// `Ship::hunt_cell` of a hunter that has no search cell.
+pub const NO_CELL: u8 = u8::MAX;
+
 /// The battle simulation.
 pub struct Battle {
     pub(crate) catalog: Arc<Catalog>,
@@ -698,6 +712,12 @@ pub struct Battle {
     pub cheats: crate::cheats::Cheats,
     /// Per side: battle time at which the retreat jump happens (`None` = no retreat ordered).
     pub(crate) retreat_jump_at: Vec<Option<f32>>,
+    /// `HUNT`: per side, the map cells (bit per cell of the `HUNT_GRID` square) that a hunter has already searched.
+    pub(crate) hunt_seen: [u64; 4],
+    /// Where the ability being activated is aimed (`Command::UseAbilityAt`); `None` = at the ship itself.
+    pub(crate) ability_at: Option<Vec3>,
+    /// `LURE`: (ship, caster) pairs of enemies currently forced to attack a lure caster.
+    pub(crate) lured: Vec<(u32, u32)>,
     pub(crate) grid_cells: Vec<Vec<u32>>,
     /// Areas revealed to a side for a while: `(side, centre, radius, until)`.
     pub(crate) reveals: Vec<(u8, Vec3, f32, f32)>,
@@ -856,5 +876,12 @@ pub struct SideMult {
 impl Default for SideMult {
     fn default() -> Self {
         Self { damage: 1.0, health: 1.0, shield: 1.0 }
+    }
+}
+
+impl Ship {
+    /// Current value of a timed `Projectile_Combat_Mod` / `WEAKEN_ENEMY` effect on this ship (0 = none; -0.25 = 25% less).
+    pub fn mod_value(&self, kind: ModKind) -> f32 {
+        self.mods[kind as usize].0
     }
 }
