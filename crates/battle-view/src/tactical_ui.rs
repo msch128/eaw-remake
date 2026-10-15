@@ -789,7 +789,7 @@ Follows the selected unit; you can rotate around it".to_string());
 
 /// Abilities that are aimed at a point: the reveal ping, the lightning storm (zone), the super laser and the weakening area.
 fn is_targeted(d: &battle_sim::AbilityDef) -> bool {
-    d.reveal_radius > 0.0 || d.zone.is_some() || d.super_laser.is_some() || d.weaken.is_some()
+    d.reveal_radius > 0.0 || d.zone.is_some() || d.super_laser.is_some() || d.weaken.is_some() || d.energy.is_some()
 }
 
 /// Radius within which the sim looks for a super laser target around the aimed point (`Battle::command`, `UseAbilityAt`).
