@@ -454,7 +454,7 @@ impl Plugin for BattleViewPlugin {
         missiles::plugin(app);
         app.init_gizmo_group::<effects::EngineTrailGizmos>()
             .add_systems(Startup, effects::configure_engine_trail_gizmos);
-        app.add_systems(Update, (fog::setup_fog_shroud, fog::update_fog_shroud).run_if(resource_exists::<BattleRuntime>));
+        app.add_systems(Update, (fog::setup_fog_shroud, fog::update_fog_shroud, fog::fade_fog_shroud).run_if(resource_exists::<BattleRuntime>));
         app.add_systems(
                 Update,
                 (
