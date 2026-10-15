@@ -283,6 +283,31 @@ impl TaskForces {
         }
     }
 
+    /// Money a category cannot spend (its plans keep failing, e.g. an infrastructure goal whose buildings no planet can take) must not pile up
+    /// beyond `cap`: the excess moves to the other funded categories in proportion to their share (estimate, see `AI_ACCOUNT_CAP_WEEKS`).
+    /// With no category to take it the money stays where it is.
+    pub fn rebalance(&mut self, player: PlayerId, cap: f64, fractions: &HashMap<String, f64>) {
+        let over: Vec<String> = self.accounts.iter().filter(|((p, _), v)| *p == player && **v > cap).map(|((_, c), _)| c.clone()).collect();
+        if over.is_empty() {
+            return;
+        }
+        let receivers: Vec<(&String, f64)> = fractions.iter().filter(|(c, f)| **f > 0.0 && !over.contains(*c)).map(|(c, f)| (c, *f)).collect();
+        let total: f64 = receivers.iter().map(|r| r.1).sum();
+        if total <= 0.0 {
+            return;
+        }
+        let mut excess = 0.0;
+        for c in &over {
+            if let Some(v) = self.accounts.get_mut(&(player, c.clone())) {
+                excess += *v - cap;
+                *v = cap;
+            }
+        }
+        for (c, f) in receivers {
+            *self.accounts.entry((player, c.clone())).or_default() += excess * f / total;
+        }
+    }
+
     /// Money of `player` that is earmarked for plans and not spent yet.
     pub fn earmarked(&self, player: PlayerId) -> f64 {
         self.accounts.iter().filter(|((p, _), _)| *p == player).map(|(_, v)| *v).sum()
@@ -1431,6 +1456,30 @@ impl TaskForces {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unspendable_money_moves_to_the_other_categories() {
+        let mut tf = TaskForces::default();
+        let fractions: HashMap<String, f64> = [("infrastructure".to_owned(), 0.4), ("offensive".to_owned(), 0.6)].into();
+        tf.fund(0, &fractions, 1000.0);
+        tf.fund(0, &fractions, 9000.0);
+        tf.rebalance(0, 5000.0, &fractions);
+        // Infrastructure holds 4000, offensive 6000: the 1000 above the cap of 5000 moves to infrastructure.
+        assert_eq!(tf.accounts[&(0, "infrastructure".to_owned())], 5000.0);
+        assert_eq!(tf.accounts[&(0, "offensive".to_owned())], 5000.0);
+        // Nothing is lost when nobody can take the excess.
+        assert!((tf.earmarked(0) - 10000.0).abs() < 1e-9);
+        let mut tf = TaskForces::default();
+        tf.fund(0, &fractions, 10000.0);
+        tf.rebalance(0, 3000.0, &fractions);
+        assert!((tf.earmarked(0) - 10000.0).abs() < 1e-9, "both over the cap: the money stays");
+        let mut tf = TaskForces::default();
+        tf.accounts.insert((0, "infrastructure".into()), 9000.0);
+        tf.accounts.insert((0, "offensive".into()), 100.0);
+        tf.rebalance(0, 2000.0, &fractions);
+        assert_eq!(tf.accounts[&(0, "infrastructure".to_owned())], 2000.0);
+        assert_eq!(tf.accounts[&(0, "offensive".to_owned())], 7100.0);
+    }
 
     #[test]
     fn role_doctrine_balances_capitals_frigates_and_carriers() {

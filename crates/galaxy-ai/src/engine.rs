@@ -151,6 +151,8 @@ pub struct AiEngine {
     strategy_at: f64,
     stats: AiStats,
     expired: Vec<u64>,
+    /// Attacks a player lost at a planet: when the last one ended and how many in a row (see [`AiEngine::note_lost_attack`]).
+    lost_attacks: HashMap<(PlayerId, PlanetId), (f64, u32)>,
 }
 
 /// Plan scripts by goal: scans `Scripts/AI/*.lua` (not the land / space mode subdirectories) for
@@ -211,6 +213,7 @@ impl AiEngine {
             strategy_at: f64::NAN,
             stats: AiStats::default(),
             expired: Vec::new(),
+            lost_attacks: HashMap::new(),
         }
     }
 
@@ -280,6 +283,20 @@ impl AiEngine {
             self.snap = Some(s);
         }
         self.snap.as_ref().unwrap()
+    }
+
+    /// An attack of `player` on `planet` was lost (its fleet was destroyed there): offensive goals leave that planet alone for a while, longer
+    /// after every further loss in a row. The AI's own estimate of the defence was wrong (fog, rearmed garrisons), and the plan itself counts as
+    /// "worked" once its force arrived, so without this it sends the next fleet to the same wall.
+    pub fn note_lost_attack(&mut self, player: PlayerId, planet: PlanetId, now: f64) {
+        let e = self.lost_attacks.entry((player, planet)).or_insert((now, 0));
+        e.0 = now;
+        e.1 += 1;
+    }
+
+    /// An attack of `player` on `planet` was won: the memory of lost ones is cleared.
+    pub fn note_won_attack(&mut self, player: PlayerId, planet: PlanetId) {
+        self.lost_attacks.remove(&(player, planet));
     }
 
     /// Plan instances that outlived their goal's limit and should be killed.
@@ -458,6 +475,8 @@ impl AiEngine {
         let amount = amount + surplus;
         self.brains[i].last_fund = Some(now);
         self.task_forces.fund(player, &fractions, amount);
+        // Categories whose plans keep failing must not sit on a growing pile (estimate).
+        self.task_forces.rebalance(player, AI_ACCOUNT_CAP_WEEKS * snap.net_income[me].max(1000.0), &fractions);
         let view = self.view(i);
         let enabled: HashSet<String> = self.brains[i]
             .template
@@ -536,6 +555,13 @@ impl AiEngine {
                 }
                 let g = &self.brains[i].goals[e.gi];
                 let b = &self.brains[i];
+                if self.strategy.config.enabled
+                    && g.def.category.eq_ignore_ascii_case("offensive")
+                    && owner != Some(player)
+                    && self.lost_attacks.get(&(player, pl)).is_some_and(|(t, n)| now - t < lost_attack_cooldown(*n, snap.time / snap.weeks.max(1e-9)))
+                {
+                    continue;
+                }
                 if b.failures.iter().any(|f| f.target == Some(pl) && now - f.time < f.cooldown && f.goal.eq_ignore_ascii_case(&g.def.name)) {
                     continue;
                 }
@@ -952,3 +978,25 @@ impl AiEngine {
 
 /// Weeks of income the AI keeps unbudgeted in its treasury; everything above is earmarked for plans (estimate, the data has no rule).
 const AI_RESERVE_WEEKS: f64 = 4.0;
+
+/// Weeks of income one budget category may hold unspent before the excess moves to the other categories (estimate, the data has no rule: the Empire
+/// piled up 240k in an infrastructure account whose gas plans can never succeed).
+const AI_ACCOUNT_CAP_WEEKS: f64 = 20.0;
+
+/// How long offensive goals avoid a planet after `losses` lost attacks in a row: 6 weeks each, at most 24 (estimate).
+pub fn lost_attack_cooldown(losses: u32, week_seconds: f64) -> f64 {
+    f64::from(losses.min(4)) * 6.0 * week_seconds
+}
+
+#[cfg(test)]
+mod lost_attack_tests {
+    use super::*;
+
+    #[test]
+    fn cooldown_grows_with_every_lost_attack_and_is_capped() {
+        assert_eq!(lost_attack_cooldown(1, 100.0), 600.0);
+        assert_eq!(lost_attack_cooldown(2, 100.0), 1200.0);
+        assert_eq!(lost_attack_cooldown(9, 100.0), 2400.0);
+        assert_eq!(lost_attack_cooldown(0, 100.0), 0.0);
+    }
+}

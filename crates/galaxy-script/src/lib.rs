@@ -470,6 +470,7 @@ impl ScriptedSim {
             events
         };
         self.timing.sim += thread_cpu_time() - t0;
+        self.note_attack_results(&sim_events);
 
         let t1 = thread_cpu_time();
         self.notify_story(&sim_events);
@@ -487,6 +488,27 @@ impl ScriptedSim {
         StepReport {
             sim_events,
             script_events,
+        }
+    }
+
+    /// Tells the Remake AI which attacks it lost: a faction that lost its ships in a battle at a planet it does not own attacked a wall
+    /// (see `AiEngine::note_lost_attack`).
+    fn note_attack_results(&mut self, events: &[Event]) {
+        let mut g = self.inner.borrow_mut();
+        let Inner { sim, ai, .. } = &mut *g;
+        let Some(ai) = ai.as_mut() else { return };
+        let now = sim.galaxy().time;
+        for e in events {
+            let Event::BattleResolved { planet, winner, losses, .. } = e else { continue };
+            let owner = sim.galaxy().planets[*planet as usize].owner;
+            for &(f, n) in losses {
+                if n > 0 && Some(f) != *winner && owner != Some(f) {
+                    ai.note_lost_attack(f, *planet, now);
+                }
+            }
+            if let Some(w) = winner {
+                ai.note_won_attack(*w, *planet);
+            }
         }
     }
 
