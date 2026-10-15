@@ -1003,6 +1003,9 @@ fn sync_overlays(
     let player = settings.player_side;
     let right = gt.right();
     let margin = 120.0;
+    // Whole physical pixels: a bar that moves in sub-pixel steps is resampled every frame and its 2-3 px lines shimmer while a ship moves or turns.
+    let phys = cam.target_scaling_factor().unwrap_or(1.0).max(0.01);
+    let snap = |v: f32| (v * phys).round() / phys;
     let mut next = TacticalOverlays::default();
     // One overlay per unit: a squadron is one unit, so its fighters share a single bracket and bar pair.
     let mut groups: BTreeMap<u64, Vec<u32>> = BTreeMap::new();
@@ -1044,6 +1047,7 @@ fn sync_overlays(
             continue;
         }
         let half = pts.iter().map(|(c, e)| (*c - centre).length() + e).fold(0.0f32, f32::max);
+        let (centre, half) = (Vec2::new(snap(centre.x), snap(centre.y)), snap(half));
         let edge_max = pts.iter().map(|(_, e)| *e).fold(0.0f32, f32::max);
         // Own capital ships big enough to read keep just their health lines, no icon box (Remake video b0700: Star Destroyers carry bars,
         // only the fighters, heroes and tiny ships carry icon boxes). Estimate for the size: 3% of the picture height as screen radius.
