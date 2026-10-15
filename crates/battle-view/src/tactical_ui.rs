@@ -258,6 +258,7 @@ fn handle_clicks(
                 // An enemy gravity well: the sim refuses the retreat; the game's own line explains why.
                 if interdicted(&rt, player) {
                     interdict.0 = 4.0;
+                    interdict.1 = "Retreat Impossible due to presence of Interdictor".to_string();
                 }
                 rt.command(player, Command::Retreat);
             }
@@ -1598,10 +1599,11 @@ pub(crate) struct RetreatBanner;
 #[derive(Resource, Default)]
 pub struct RetreatNotice(pub f32);
 
-/// Seconds the "Unable to move with Interdictor field engaged." notice stays (the player pressed Retreat while an enemy interdictor holds a gravity
-/// well; the sim then refuses the retreat). The text is `TEXT_SFX_INT_CANNOT_MOVE_5` of the master text file; no SFX event uses it.
+/// A short notice for an order the game refuses (seconds left, text), shown in the retreat banner: Retreat under an enemy interdictor
+/// (`TEXT_SFX_*_RETREAT_INTERDICTOR_1`, the same English for all three factions) and a Move for a ship whose own ability pins it
+/// (`Disable_Movement`: `TEXT_SFX_INT_CANNOT_MOVE_5` for the interdictor field, `_3` for the missile shield).
 #[derive(Resource, Default)]
-pub struct InterdictNotice(pub f32);
+pub struct InterdictNotice(pub f32, pub String);
 
 /// An enemy ship or station holds a gravity well against `side` (the rule of `Battle::interdicted`, read from the displayed snapshot).
 fn interdicted(rt: &BattleRuntime, side: u8) -> bool {
@@ -1650,7 +1652,7 @@ fn retreat_banner(
                 Some(format!("ENEMY FLEET RETREATING - HYPERSPACE JUMP IN {}", mss(s)))
             }
         }
-        _ if interdict.0 > 0.0 => Some("Unable to move with Interdictor field engaged.".to_string()),
+        _ if interdict.0 > 0.0 => Some(interdict.1.clone()),
         _ if notice.0 > 0.0 => Some(format!("RETREAT NOT POSSIBLE YET - AVAILABLE IN {}", mss((rt.retreat_countdown - status.time).max(0.0)))),
         _ => None,
     };

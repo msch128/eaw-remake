@@ -510,6 +510,7 @@ pub fn orders(
     mut recent: ResMut<RecentOrders>,
     minimap_surfaces: Query<(&Interaction, &bevy::ui::RelativeCursorPosition), With<eaw_ui::MinimapSurface>>,
     minimap_data: Option<Res<eaw_ui::MinimapData>>,
+    mut blocked: ResMut<crate::tactical_ui::InterdictNotice>,
 ) {
     let player = settings.player_side;
     // Esc is handled by the host (space-peace battle_menu): it cancels an armed order first and only opens the menu when none is armed.
@@ -523,6 +524,14 @@ pub fn orders(
         return;
     }
     let lead = voice_lead(&rt, &ships, &mine);
+    // A ship whose own ability pins it (`Disable_Movement`) does not move: the sim keeps it in place, the game explains why.
+    let pinned = pinned_text(&rt, &mine);
+    let mut say_pinned = |blocked: &mut crate::tactical_ui::InterdictNotice| {
+        if let Some(t) = pinned {
+            blocked.0 = 4.0;
+            blocked.1 = t.to_string();
+        }
+    };
     if keys.just_pressed(KeyCode::KeyS) && !keys.pressed(KeyCode::ControlLeft) {
         rt.sim.command(player, Command::Stop { ships: mine.clone() });
         issued.write(OrderIssued { kind: OrderKind::Stop, lead });
@@ -602,9 +611,11 @@ pub fn orders(
             let (Some(g), Some(to)) = (target_ground, target_sim) else { return };
             if kind == ArmedKind::AttackMove {
                 rt.sim.command(player, Command::AttackMove { ships: mine, to });
+                say_pinned(&mut blocked);
                 issued.write(OrderIssued { kind: OrderKind::Attack, lead });
             } else {
                 rt.sim.command(player, Command::Move { ships: mine, to });
+                say_pinned(&mut blocked);
                 issued.write(OrderIssued { kind: OrderKind::Move, lead });
             }
             markers.0.push((g, 1.2, Color::srgb(0.3, 1.0, 0.4)));
@@ -629,9 +640,11 @@ pub fn orders(
             } else if let (Some(g), Some(to)) = (target_ground, target_sim) {
                 if pointer.shift {
                     rt.sim.command(player, Command::AttackMove { ships: mine, to });
+                    say_pinned(&mut blocked);
                     issued.write(OrderIssued { kind: OrderKind::Attack, lead });
                 } else {
                     rt.sim.command(player, Command::Move { ships: mine, to });
+                    say_pinned(&mut blocked);
                     issued.write(OrderIssued { kind: OrderKind::Move, lead });
                 }
                 markers.0.push((g, 1.2, Color::srgb(0.3, 1.0, 0.4)));
@@ -953,4 +966,24 @@ mod pick_tests {
         // No enemy under the cursor: falls back to the nearest unit.
         assert_eq!(pick_enemy_first(&projected[..1], cursor, true, enemy), Some(1));
     }
+}
+
+/// The game's line for a move order that a ship's own ability prevents (`Disable_Movement` while the ability is on): the interdictor field
+/// (`TEXT_SFX_INT_CANNOT_MOVE_5`) or the missile shield (`TEXT_SFX_INT_CANNOT_MOVE_3`); `None` when none of `ships` is pinned.
+fn pinned_text(rt: &BattleRuntime, ships: &[u32]) -> Option<&'static str> {
+    let cur = rt.cur.as_ref()?;
+    ships.iter().filter_map(|&id| cur.ship(id)).find_map(|s| {
+        rt.catalog.ship(s.def).abilities.iter().zip(&s.abilities).find_map(|(a, st)| {
+            if !a.disable_movement || st.0 <= 0.0 {
+                return None;
+            }
+            if a.kind.eq_ignore_ascii_case("INTERDICT") {
+                Some("Unable to move with Interdictor field engaged.")
+            } else if a.kind.eq_ignore_ascii_case("MISSILE_SHIELD") {
+                Some("With the missile shield active we're unable to move.")
+            } else {
+                None
+            }
+        })
+    })
 }
