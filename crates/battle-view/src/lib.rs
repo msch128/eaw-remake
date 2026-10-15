@@ -89,7 +89,7 @@ pub struct BattleViewSettings {
     pub sky_radius: f32,
     /// Vertical field of view in degrees.
     pub fov_degrees: f32,
-    /// Farthest camera distance the opening framing of the player's fleet picks.
+    /// Distance the End key resets the zoom to (the opening framing fits the fleet core instead, up to [`START_DISTANCE_MAX`]).
     pub start_distance: f32,
     /// Cascaded sun shadows on ships (costs a depth pass per cascade).
     pub shadows: bool,
@@ -726,6 +726,8 @@ fn stop_battle(
 
 /// Closest distance the opening framing of the player's fleet picks.
 const START_DISTANCE_MIN: f32 = 700.0;
+/// Farthest opening distance: `Space_Mode` `Distance_Default` / `Distance_Max` of TacticalCameras.xml.
+const START_DISTANCE_MAX: f32 = 2000.0;
 
 /// Advances the battle clock and fetches the snapshots around it.
 fn advance_clock(
@@ -775,20 +777,18 @@ fn advance_clock(
             .filter(|s| s.side == settings.player_side)
             .map(|s| convert::sim_to_bevy(s.pos))
             .collect();
-        if !pts.is_empty() {
-            let center = pts.iter().copied().sum::<Vec3>() / pts.len() as f32;
+        if let Some((center, core_radius)) = camera::fleet_core(&pts) {
             cam.focus = center;
             cam.target_focus = center;
-            // Close enough that the ships are models, not icons: the core (median spread) of the fleet fills the view.
-            let mut spread: Vec<f32> = pts.iter().map(|p| (*p - center).length()).collect();
-            spread.sort_by(f32::total_cmp);
-            let radius = spread[spread.len() / 2] + 150.0;
+            // Close enough that the ships are models, not icons: the dense core of the fleet fills the view.
+            let radius = core_radius + 150.0;
             let fov = settings.fov_degrees.to_radians();
             let wanted = radius * 1.2 / (fov * 0.5).tan() / cam.pitch.sin().abs().max(0.3);
-            let distance = wanted.clamp(START_DISTANCE_MIN, settings.start_distance.max(START_DISTANCE_MIN));
+            // Fits the core, at most the data's default distance: a closer cap left a scattered fleet out of the picture (QA round 2).
+            let distance = wanted.clamp(START_DISTANCE_MIN, START_DISTANCE_MAX);
             cam.distance = distance;
             cam.target_distance = distance;
-            info!("battle camera: fleet centre {center:?}, median spread {:.0}, start distance {distance:.0}", spread[spread.len() / 2]);
+            info!("battle camera: fleet core {center:?}, core radius {core_radius:.0} of {} ships, start distance {distance:.0}", pts.len());
             *auto_frame = Some((center, distance));
         }
     }
@@ -799,8 +799,7 @@ fn advance_clock(
             *auto_frame = None;
         } else {
             let own: Vec<Vec3> = cur.ships.iter().filter(|s| s.side == settings.player_side).map(|s| convert::sim_to_bevy(s.pos)).collect();
-            if !own.is_empty() {
-                let c = own.iter().copied().sum::<Vec3>() / own.len() as f32;
+            if let Some((c, _)) = camera::fleet_core(&own) {
                 cam.target_focus = c;
                 *auto_frame = Some((c, dist));
             }

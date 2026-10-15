@@ -53,9 +53,8 @@ impl Default for BattleCamera {
             bounds_min: Vec2::splat(-10_000.0),
             bounds_max: Vec2::splat(10_000.0),
             min_distance: 500.0,
-            // `Space_Mode` allows 1000..2000 only; its overview camera (`Tactical_Overview_Distance2`) reaches 6000. The wheel stops there, so
-            // zooming out never turns every ship into a dot.
-            max_distance: 6_000.0,
+            // Free zoom-out as before (the user wants unchanged camera control; only the start framing follows the data).
+            max_distance: 16_000.0,
             snap: false,
         }
     }
@@ -308,6 +307,22 @@ pub fn action_cam(
     cam.pitch += (pitch - cam.pitch) * (1.0 - (-3.0 * dt).exp());
 }
 
+/// Centre and radius of the dense core of a fleet: the mean of the half of the ships closest to the overall mean. A plain mean of
+/// a spread-out side (staggered rows, far squadrons, a station) lands in empty space between its ships, so the start view, Home and
+/// End would look at nothing.
+pub fn fleet_core(points: &[Vec3]) -> Option<(Vec3, f32)> {
+    if points.is_empty() {
+        return None;
+    }
+    let mean = points.iter().copied().sum::<Vec3>() / points.len() as f32;
+    let mut by_dist: Vec<Vec3> = points.to_vec();
+    by_dist.sort_by(|a, b| (*a - mean).length().total_cmp(&(*b - mean).length()));
+    let core = &by_dist[..points.len().div_ceil(2)];
+    let centre = core.iter().copied().sum::<Vec3>() / core.len() as f32;
+    let radius = core.iter().map(|p| (*p - centre).length()).fold(0.0, f32::max);
+    Some((centre, radius))
+}
+
 /// Camera hotkeys on the battle plane: Page Up centres on the selection (also a [`FocusCamera`] request), Home on the fleet, End resets the view.
 pub fn focus_camera(
     keys: Res<ButtonInput<KeyCode>>,
@@ -331,12 +346,11 @@ pub fn focus_camera(
         cam.target_yaw = d.target_yaw;
         cam.yaw = d.yaw;
         cam.pitch = d.pitch;
-        cam.target_distance = cam.target_distance.min(1300.0).max(cam.min_distance);
+        cam.target_distance = cam.target_distance.min(settings.start_distance).max(cam.min_distance);
     }
     if home || end {
         let own: Vec<Vec3> = ships.0.values().filter(|s| s.side == settings.player_side).map(|s| s.pos).collect();
-        if !own.is_empty() {
-            let c = own.iter().copied().sum::<Vec3>() / own.len() as f32;
+        if let Some((c, _)) = fleet_core(&own) {
             cam.target_focus = Vec3::new(c.x, cam.target_focus.y, c.z);
         }
     }
@@ -396,6 +410,20 @@ pub fn sky_follow(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fleet_core_ignores_far_outliers() {
+        // Eight ships in a tight group at x = -6000 and two far ones (a station, a late squadron): the mean lies in empty space.
+        let mut pts: Vec<Vec3> = (0..8).map(|i| Vec3::new(-6000.0 + i as f32 * 40.0, 0.0, 2000.0 + (i % 3) as f32 * 50.0)).collect();
+        pts.push(Vec3::new(3000.0, 0.0, -2500.0));
+        pts.push(Vec3::new(4500.0, 0.0, -1500.0));
+        let mean = pts.iter().copied().sum::<Vec3>() / pts.len() as f32;
+        let (c, r) = fleet_core(&pts).unwrap();
+        assert!((c - Vec3::new(-5860.0, 0.0, 2050.0)).length() < 300.0, "core centre {c:?}");
+        assert!(r < 400.0, "core radius {r}");
+        assert!((mean - c).length() > 1500.0, "the plain mean would have missed the group");
+        assert!(fleet_core(&[]).is_none());
+    }
 
     #[test]
     fn test_battle_camera_eye_pitch_and_zoom() {
