@@ -1528,3 +1528,35 @@ fn background_ships_are_not_attacked() {
     }
     assert!(b.ships.iter().filter(|s| s.side == 1).all(|s| s.alive && s.hull >= 1.0e6 * 0.999), "nothing shoots the backdrop");
 }
+
+#[test]
+fn launched_fighters_fly_straight_out_of_the_hangar_for_the_flyout_distance() {
+    let (fighter, squad) = hangar_defs();
+    let mut hangar = bay(0.0);
+    hangar.offset = Vec3::new(0.0, 200.0, 0.0);
+    hangar.flyout = 300.0;
+    let mut carrier = ship("carrier", 1.0e6, 0.0, vec![hangar]);
+    carrier.carried = vec![(1, 1)];
+    carrier.spawn_delay = 1.0;
+    let dummy = ship("dummy", 1.0e6, 0.0, vec![]);
+    let cat = Catalog::from_defs(vec![fighter, squad, carrier, dummy], vec![laser()]);
+    let mut b = Battle::new(setup(cat, "carrier", "dummy", 1, 1, cfg()));
+    let c = b.ships.iter().find(|s| s.side == 0 && s.def == 2).unwrap().id as usize;
+    let out = Vec3::from_yaw(b.ships[c].yaw + std::f32::consts::FRAC_PI_2);
+    let start: Vec<Vec3> = b.ships.iter().filter(|s| s.def == 0).map(|s| s.pos).collect();
+    assert_eq!(start.len(), 2);
+    assert!(b.ships.iter().filter(|s| s.def == 0).all(|s| s.flyout_left > 299.0), "the flyout distance comes from the bay hardpoint");
+    for _ in 0..60 {
+        b.step();
+    }
+    // After 2 s at half speed (50 u/s) each fighter is about 100 units further out of the bay, on the line through the bay.
+    for (s, p0) in b.ships.iter().filter(|s| s.def == 0).zip(&start) {
+        let moved = (s.pos - *p0).dot(out);
+        assert!(moved > 80.0 && moved < 130.0, "flies out of the bay: moved {moved}");
+        assert!((s.pos - *p0).dot(Vec3::from_yaw(b.ships[c].yaw)).abs() < 20.0, "straight, not sideways");
+    }
+    for _ in 0..30 * 8 {
+        b.step();
+    }
+    assert!(b.ships.iter().filter(|s| s.def == 0).all(|s| s.flyout_left <= 0.0), "after the distance the fighters follow orders");
+}

@@ -172,6 +172,8 @@ pub struct HpDef {
     pub bone_y: Vec3,
     /// True if a bone gave the position (otherwise it was estimated).
     pub from_bone: bool,
+    /// `Fighter_Bay_Flyout_Distance` of a fighter bay: squadrons launched from it fly this far straight out of the hangar before they take orders.
+    pub flyout: f32,
 }
 
 /// Active ability with `Mod_Multiplier` effects.
@@ -1566,6 +1568,7 @@ impl Catalog {
             full_salvo_mult: f("full_salvo_weapon_delay_multiplier", 1.0),
             power_weapons_mult: f("power_to_weapons_mode_weapon_delay_multiplier", 1.0),
             from_bone,
+            flyout: if kind == HpKind::FighterBay { f("fighter_bay_flyout_distance", 0.0).max(0.0) } else { 0.0 },
         }
     }
 

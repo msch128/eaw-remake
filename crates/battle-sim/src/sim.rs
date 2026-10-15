@@ -474,6 +474,7 @@ impl Battle {
             special_pulses: 0,
             special_timer: 0.0,
             special_target: NONE,
+            flyout_left: 0.0,
             group,
             squad,
             formation,
@@ -551,14 +552,18 @@ impl Battle {
         let c = &self.ships[carrier as usize];
         let (side, cpos, cyaw, cdef) = (c.side, c.pos, c.yaw, cat.ship(c.def));
         // Squadrons leave through a hangar that still works (the first one that does; a carrier without hangar hardpoints launches from its centre).
-        let bay = cdef
+        let bay_def = cdef
             .hardpoints
             .iter()
             .enumerate()
             .filter(|(_, h)| h.kind == HpKind::FighterBay)
             .find(|(i, _)| c.hps.get(*i).is_none_or(|s| s.alive))
             .or_else(|| cdef.hardpoints.iter().enumerate().find(|(_, h)| h.kind == HpKind::FighterBay))
-            .map_or(Vec3::ZERO, |(_, h)| h.offset);
+            .map(|(_, h)| h);
+        let bay = bay_def.map_or(Vec3::ZERO, |h| h.offset);
+        let flyout = bay_def.map_or(0.0, |h| h.flyout);
+        // The way out: away from the ship's centre through the bay (a bay on the centre line opens to the bow).
+        let out_yaw = if bay.x.hypot(bay.y) > 20.0 { cyaw + bay.y.atan2(bay.x) } else { cyaw };
         let mut rng = Rng::for_entity(self.config.seed, self.tick, carrier, 0x1A0C + self.ships.len() as u64);
         // Emerge tightly from the hangar bay opening (not scattered across a kilometer ball around the ship)
         let base = cpos + (bay + rng.in_ball() * 25.0).rotate_yaw(cyaw);
@@ -583,6 +588,10 @@ impl Battle {
                 let s = &mut self.ships[id as usize];
                 s.carrier = carrier;
                 s.speed = cat.ship(m).max_speed * 0.5;
+                if flyout > 0.0 {
+                    s.yaw = out_yaw;
+                    s.flyout_left = flyout;
+                }
                 s.order = ai_order;
                 self.squads[squad as usize].push(id);
                 ids.push(id);
@@ -2253,6 +2262,14 @@ fn mov(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, spawn: &
         return;
     }
     let dt = cfg.dt;
+    // A fighter that just left its hangar flies straight out for `Fighter_Bay_Flyout_Distance` before it follows orders.
+    if s.flyout_left > 0.0 {
+        let step = (def.max_speed * 0.5).max(10.0) * dt;
+        s.pos = s.pos + Vec3::from_yaw(s.yaw) * step;
+        s.flyout_left -= step;
+        s.speed = step / dt;
+        return;
+    }
     let speed_mult = ability_product(def, s, |a| a.speed_mult) * (1.0 - s.stun_speed_cut) * (1.0 - s.tractor_cut) * s.engine_factor;
     let pinned = def.abilities.iter().zip(&s.abilities).any(|(a, st)| a.disable_movement && st.active > 0.0);
     let max_speed = if pinned { 0.0 } else { def.max_speed * speed_mult * s.bonus.speed * (1.0 + s.mods[ModKind::Speed as usize].0) };

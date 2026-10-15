@@ -554,6 +554,8 @@ pub struct Ship {
     pub special_timer: f32,
     /// Special weapon target.
     pub special_target: u32,
+    /// Distance a launched fighter still has to fly straight out of its hangar before it follows orders (`Fighter_Bay_Flyout_Distance`).
+    pub flyout_left: f32,
     /// Setup group (for results), `NONE` for launched/reinforcement units.
     pub group: u32,
     /// Squadron index for fighters, `NONE` otherwise.
