@@ -361,7 +361,8 @@ pub fn focus_camera(
     if pts.is_empty() {
         return;
     }
-    let center = pts.iter().copied().sum::<Vec3>() / pts.len() as f32;
+    // A few ships: their mean. A big selection: its dense core (the mean of a scattered group lies in empty space).
+    let center = if pts.len() <= 4 { pts.iter().copied().sum::<Vec3>() / pts.len() as f32 } else { fleet_core(&pts).map_or(Vec3::ZERO, |c| c.0) };
     cam.target_focus = Vec3::new(center.x, cam.target_focus.y, center.z);
 }
 
