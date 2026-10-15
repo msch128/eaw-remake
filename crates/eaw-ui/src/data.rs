@@ -165,6 +165,10 @@ pub struct ForcedTooltip(pub Option<String>);
 #[derive(Resource, Debug, Clone, Copy, Default)]
 pub struct TooltipSuppress(pub bool);
 
+/// Top edge (UI pixels from the top of the screen) of the advisor log while it holds text: the droid-anchored tooltips sit above it instead of on it.
+#[derive(Resource, Debug, Clone, Copy, Default)]
+pub struct TooltipKeepOut(pub Option<f32>);
+
 
 /// Which `pads` entry each `b_create_NN` slot shows while [`CommandBarData::pads_bottom_row`] is set (written by the widgets).
 #[derive(Resource, Debug, Clone, Default)]

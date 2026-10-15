@@ -13,7 +13,7 @@ use bevy::window::PrimaryWindow;
 use crate::EawUiAssets;
 use crate::EawUiSettings;
 use crate::components::{CommandBarComponent, CommandBarDb, ComponentKind};
-use crate::data::{CommandBarData, PadRemap, EawButtonClicked, EawButtonState, ForcedTooltip, TooltipSuppress, WorldTooltip};
+use crate::data::{CommandBarData, PadRemap, EawButtonClicked, EawButtonState, ForcedTooltip, TooltipKeepOut, TooltipSuppress, WorldTooltip};
 use crate::faction::UiFaction;
 use crate::panels::{
     MinimapKind, MinimapSurface, PanelBarName, PanelData, PanelSlotName, PanelText, is_panel_slot,
@@ -1699,6 +1699,7 @@ pub(crate) fn tooltip(
     assets: Res<EawUiAssets>,
     forced: Res<ForcedTooltip>,
     suppress: Res<TooltipSuppress>,
+    keep_out: Res<TooltipKeepOut>,
     world_tip: Res<WorldTooltip>,
     buttons: Query<(Entity, &EawButton, &Interaction, &ComputedNode, &UiGlobalTransform)>,
     markers: Query<(&SlotPart, &Node, &ComputedNode, &UiGlobalTransform, &ChildOf)>,
@@ -1791,7 +1792,8 @@ pub(crate) fn tooltip(
         Some((b, ..)) => b.name.starts_with("b_create") || b.name.starts_with("queue"),
         None => true,
     };
-    let droid = buttons.iter().find(|b| b.1.name.eq_ignore_ascii_case("b_droid_help")).map(|b| (b.3, b.4));
+    // Only the droid that is laid out (another bar may carry a hidden copy of the button).
+    let droid = buttons.iter().find(|b| b.1.name.eq_ignore_ascii_case("b_droid_help") && b.3.size().x > 1.0).map(|b| (b.3, b.4));
     let inv = own.inverse_scale_factor();
     let tip_w = own.size().x * inv;
     let tip_h = own.size().y * inv;
@@ -1807,7 +1809,9 @@ pub(crate) fn tooltip(
                 let top_left = dg.translation.xy() - dn.size() * 0.5;
                 let left_ui = (top_left.x + 62.0 * ppd) * inv;
                 let bottom_phys = top_left.y - 12.0 * ppd;
-                let dist_from_bottom_ui = ((w.physical_height() as f32 - bottom_phys) * inv).max(0.0);
+                let mut dist_from_bottom_ui = ((w.physical_height() as f32 - bottom_phys) * inv).max(0.0);
+                // The advisor log grows upward from the same spot: the card sits above its text.
+                dist_from_bottom_ui = card_bottom_above_log(dist_from_bottom_ui, keep_out.0, screen_h);
                 let space_above = screen_h - dist_from_bottom_ui - 10.0;
 
                 let clamped_x = left_ui.clamp(4.0, (screen_w - tip_w - 4.0).max(4.0));
@@ -1897,6 +1901,11 @@ pub(crate) fn panel_texts(
 
 /// Keeps a tooltip of `size` (logical px) on the screen: shifted left at the right edge, and flipped above the
 /// cursor when it would run over the bottom edge. Also ensures top and left edges stay on-screen.
+/// Distance of a droid-anchored card from the screen bottom (UI px): at least `dist`, and above the advisor log whose top edge is `log_top` (px from the top).
+fn card_bottom_above_log(dist: f32, log_top: Option<f32>, screen_h: f32) -> f32 {
+    log_top.map_or(dist, |top| dist.max(screen_h - top + 4.0))
+}
+
 pub fn clamp_to_screen(anchor: Vec2, cursor: Vec2, size: Vec2, screen: Vec2) -> Vec2 {
     let mut p = anchor;
     if p.x + size.x > screen.x - 4.0 {
@@ -1919,6 +1928,14 @@ fn roman(level: u8) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn card_stays_above_the_advisor_log() {
+        assert_eq!(card_bottom_above_log(100.0, None, 1000.0), 100.0);
+        assert_eq!(card_bottom_above_log(100.0, Some(900.0), 1000.0), 104.0, "log top 100 px above the bottom: card at least 104 px up");
+        assert_eq!(card_bottom_above_log(100.0, Some(700.0), 1000.0), 304.0, "three log lines (300 px) push the card up");
+        assert_eq!(card_bottom_above_log(500.0, Some(900.0), 1000.0), 500.0);
+    }
 
     #[test]
     fn clamp_to_screen_keeps_tooltip_on_screen() {

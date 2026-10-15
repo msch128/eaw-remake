@@ -178,6 +178,7 @@ impl Plugin for PlayUiPlugin {
             )
             .add_systems(Update, (declutter_top, hero_bar, spawn_pad_arrows, pad_arrows, locked_clicks, spawn_planet_panel, update_planet_panel, place_planet_panel, planet_view_ui, planet_view_bar_tab, objectives_toggle, objectives_window, objectives_scroll).chain().run_if(resource_exists::<PlayBridge>.and_then(resource_exists::<SimState>)))
             .add_systems(Update, scripted_tooltip.run_if(resource_exists::<eaw_ui::ForcedTooltip>))
+            .add_systems(Update, advisor_keep_out)
             .add_systems(Update, resume_tab_click.run_if(in_state(AppScreen::Galaxy)).run_if(resource_exists::<SimState>))
             .add_systems(Update, galactic_hotkeys.run_if(in_state(AppScreen::Galaxy)).run_if(resource_exists::<SimState>))
             .add_systems(Update, save_toast)
@@ -1319,6 +1320,14 @@ pub(crate) fn fleet_tooltip(
     let text = cursor.and_then(|_| fleet.map(|(f, s)| fleet_text(f, s, &state, &catalog)).or_else(|| planet.map(|(i, pv, s)| planet_text(i, pv, s, &view))));
     if tip.text != text {
         tip.text = text;
+    }
+}
+
+/// Tells `eaw-ui` where the advisor log starts, so the droid-anchored hover cards (also those of the planet view) sit above its text and do not cover it.
+fn advisor_keep_out(ticker: Query<(&ComputedNode, &UiGlobalTransform, Option<&Children>), With<Ticker>>, mut keep_out: ResMut<eaw_ui::TooltipKeepOut>) {
+    let want = ticker.single().ok().filter(|(n, _, kids)| kids.is_some_and(|k| !k.is_empty()) && n.size().y > 4.0).map(|(n, g, _)| (g.translation.y - n.size().y * 0.5) * n.inverse_scale_factor());
+    if keep_out.0 != want {
+        keep_out.0 = want;
     }
 }
 
