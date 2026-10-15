@@ -239,3 +239,15 @@ The 5 s hold of the victory/defeat banner before the summary (U49) is the user's
 by `Projectile_Rocket_Curve_Offset` degrees following one full sine over `Projectile_Rocket_Curve_Distance`, ending on the original line (side
 fixed per shooter and target). The data gives the three numbers, not the curve; the shape and the per-shooter side are estimates. Rockets keep
 their small `Max_Rate_Of_Turn` homing. Offset 0 (flak, Executor barrage) flies straight.
+
+## Death Star II in a space battle
+Data (`SPACEUNITSSUPERS.XML`, `Hardpoints_Empire_Death_Star.xml`): `Death_Star_II` is `In_Background`, has a `SUPER_LASER` ability (`Recharge_Seconds` 45,
+`Expiration_Seconds` 25) and a hardpoint `HP_Death_Star_Superlaser` that is a plain laser weapon firing `Proj_Death_Star_SRI` (99999 damage) and names the
+same projectile as `Blast_Ability_Fire_Projectile_Type`.
+* The hardpoint is the ability's weapon, so it never fires on its own (a hardpoint with `Blast_Ability_Fire_Projectile_Type` has no automatic weapon).
+* `In_Background` ships are not targeted and projectiles pass through them (`ShipDef::background`).
+* **Countdown (estimate).** The first shot waits for the approach: `TSW_Start_Distance_From_Target` 80000 to `TSW_Attack_Distance_From_Target` 50000 at
+  `Max_Speed` 5. The data gives no scale from `Max_Speed` to units per second. Remake video Bqc5Ei6gF8Y (frames 5 s apart, accelerated game speed): the gauge
+  reads 390.21 at f0033 and 184.08 at f0057, and the battle started about 27 frames before f0033; at roughly 1.7x game speed that puts the start near
+  600 game seconds, so `TSW_SPEED_SCALE` = 10 gives 30000 / 50 = 600 s. This is an estimate; it only moves the first shot, not later recharges.
+* The ability starts on that cooldown (`SuperLaserDef::initial_cooldown`); the gauge in `battle-view` shows `max(effect left, cooldown)`.
