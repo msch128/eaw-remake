@@ -81,15 +81,15 @@ was tried in game. I found no evidence of UI changes (for example hiding empty a
    `Scroll_Deceleration_Factor` 1.15 (1.5), `Tactical_Edge_Scroll_Region` 10 px (2), `Tactical_Min_Scroll_Speed`
    900 (1000); `Hypergameconstants.XML` `TacticalMaxScrollSpeed` 4000 (2000). Go to
    `crates/battle-view/src/camera.rs` (line 97 reads only the edge region today) and the galaxy camera in
-   `crates/space-peace/src/camera.rs`: try the 5.2 values as a faster, snappier scroll with a 10 px edge zone.
+   `crates/space-peace/src/camera.rs`: try the 5.2 values as a faster, snappier scroll with a 10 px edge zone. 4.0 data: same tags exist with the old values, so this is a number change, not a data gap.
 2. Hard and Brutal without stat cheats. 5.2 `DIFFICULTYADJUSTMENTS.XML` sets `Damage/Health/Shield_Multiplier` to 1
    on the hard levels (4.0: 1.05 and 1.1) and lowers the AI `Credit_Multiplier` (3.0 to 2.0, 2.0 to 1.5). That is
    an economy-only difficulty, which matches our `fair` option. Go to `crates/alamo-data/src/difficulty.rs` (where
-   the multipliers are parsed) and wherever `--difficulty` is applied: offer it as the default for Hard so battles stay honest.
+   the multipliers are parsed) and wherever `--difficulty` is applied: offer it as the default for Hard so battles stay honest. 4.0 data: same tags exist (1.05 / 1.1 values), the choice is ours.
 3. Slower AI thinking cycle. 5.2 doubles `Galactic_AI_Goal_Cycle_Sleep_Duration` (hard 0.0 to 2.0, normal 2.0 to
    4.0) and raises `Galactic_AI_Contrast_Multiplier` on all levels. Our AI costs about 240 ms per game week
    (`crates/galaxy-script/STATUS.md`). Go to `crates/galaxy-script/src/ai.rs` (idle backoff): a longer sleep on
-   Hard cuts that cost with little visible loss.
+   Hard cuts that cost with little visible loss. 4.0 data: same tag exists (0.0 on hard); 4.0 itself has no stronger version, this is untested.
 
 ## Not verified
 
