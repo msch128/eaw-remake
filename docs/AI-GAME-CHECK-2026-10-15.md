@@ -202,3 +202,22 @@ Reading the tables:
 - Planets lost in a row stay 0-1: the AIs do not collapse through the core. Front planets without any fleet are common for Empire (about 60% of front planet-weeks): its large star bases carry the defence value (the garrison target subtracts half of the fixed defence), so most of its fronts need no fleet.
 - Class mix: the standing fleets are shaped by the data's build lists, so every Remake main faction is 50-85% squadrons and owns no capital ship in 80 weeks (population cap 97% full from about week 40, capital ships cost 75-100k). Rebel is the most squadron-heavy (79-85%), Empire has the most corvettes (27-43%) and the highest mean price. The Clone Wars factions own capitals (CIS 2-6%, Republic 2-6%) and more frigates. A heavier Empire needs the build lists weighed by doctrine and a scrap rule for a full population cap; neither is in the data, not done.
 - Not verified: Hard/Brutal, Empire as the human, more than one seed per campaign.
+
+## Capital ships and saving for expensive items (80 weeks, Normal, all-AI, seed 1)
+
+Cause of "Empire never owns a capital ship": the Remake's standing-fleet plan (`GC_Build_Units_Space`) only runs when the player is "economically rich" (data), and the conquer plan lists every ship class as one 100% group, so composition is the engine's call, not the data's. Every plan of a goal category drew on one shared account, and cheap items spent each credit the moment it arrived, so a 17-25k shipyard or an 18-50k capital ship was never paid: Empire had 1 capital shipyard at week 40 (data wants a third of its planets) and its fleet of 554 ships held no capital.
+
+Fix (`taskforce.rs`, labelled estimates): a plan that cannot pay for a structure makes its category save for it (`wait_for_money`; other plans of the category leave that price in the account, the claim lapses 60 s after the plan stops waiting, a price above the account cap is never saved for). The same applies to costly ships, scaled by the faction's doctrine: a fully heavy roster saves for a ship up to 0.4 of the account cap, a swarm roster (Rebels) never, so Rebels keep spending as money arrives. Structure plans that only find the structure already standing now fail (so the goal's failure learning moves to another planet).
+
+Class mix of owned ships at week 80 (capital / frigate / corvette / fighter+bomber %, mean price, share of fleet price in capitals):
+
+| Campaign | Faction | capital | frigate | corvette | squadrons | mean price | price in capitals |
+|---|---|---|---|---|---|---|---|
+| Rebel | Rebel | 0 | 3 | 5 | 91 | 563 | 0% |
+| Rebel | Empire | 3 | 29 | 40 | 29 | 3027 | 18% |
+| Rebel | Underworld | 0 | 15 | 22 | 63 | 1116 | 0% |
+| Republic (CW) | CIS | 15 | 29 | 49 | 6 | 7058 | 52% |
+| Republic (CW) | Republic | 1 | 2 | 15 | 67 | 1203 | 32% |
+| Republic (CW) | Empire | 5 | 25 | 7 | 55 | 5340 | 34% |
+
+Rebels are a squadron swarm at a mean price of 563 credits, Empire fields 5 times the price per ship with capitals; CIS is the heaviest of the Clone Wars stack. Cost: planets at week 80 over Rebel+Empire+Underworld went from about 54 to about 49 in the Rebel campaign (one seed, the runs diverge chaotically, treat as noise-level to -10%). Empire's capital count is still low (3% of ships): the standing-fleet plan is data-gated and there is no scrapping in EaW, so a full population cap is refilled only as losses free room. Not measured: Hard/Brutal, Empire as the human.

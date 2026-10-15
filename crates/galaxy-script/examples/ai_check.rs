@@ -368,6 +368,29 @@ fn main() {
             let at = |i: usize| t.planets_at[i].map_or("-".to_owned(), |v| v.to_string());
             println!("TABLE | {} | {} / {} / {} | {} / {} | {:.0}k | {} of {} | {} | {} / {} |", names[f], at(0), at(1), at(2), t.attacks_won, t.attacks_lost, g.factions[f].credits / 1000.0, t.idle_samples, t.fleet_samples, worst, t.bare_front_weeks, t.front_weeks);
         }
+        if let Ok(who) = std::env::var("CAPS") {
+            for f in (0..names.len()).filter(|&f| names[f] == who) {
+                for yard in 1..=3 {
+                    let have = g.planets.iter().filter(|p| p.owner == Some(f as u32) && p.structures.iter().any(|&s| w.structures[s as usize].name.to_ascii_lowercase().ends_with(&format!("shipyard_{yard}")))).count();
+                    println!("CAPS | planets with shipyard {yard}: {have} of {}", g.factions[f].planets_owned);
+                }
+                for &u in &w.buildable_units[f] {
+                    let ut = &w.units[u as usize];
+                    if ut.hero || ut.role != galaxy_sim::world::UnitRole::Ship || format!("{:?}", ut.category) != "Capital" {
+                        continue;
+                    }
+                    let mut why: BTreeMap<String, u32> = BTreeMap::new();
+                    for (pi, _) in g.planets.iter().enumerate().filter(|(_, p)| p.owner == Some(f as u32)) {
+                        let r = match w.check_build_unit(g, f as u32, pi as u32, u) {
+                            Ok(()) => "ok".to_owned(),
+                            Err(e) => format!("{e:?}"),
+                        };
+                        *why.entry(r).or_default() += 1;
+                    }
+                    println!("CAPS | {} | cost {} pop {} | {:?}", ut.name, ut.cost, ut.population, why);
+                }
+            }
+        }
         println!("\nMIX | faction | ships | capital % | frigate % | corvette % | fighter+bomber % | other % | mean price | share of price in capitals %");
         for f in 0..names.len() {
             if track[f].max_planets == 0 {

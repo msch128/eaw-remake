@@ -27,6 +27,10 @@ const GARRISON_PLANET_CAP: f64 = 0.15;
 const GARRISON_TOTAL_CAP: f64 = 0.3;
 /// Time between two refreshes of the garrison assignment.
 const GARRISON_REFRESH: f64 = 5.0;
+/// How long a plan keeps its claim on an account after it last waited for money (seconds of game time).
+const SAVING_HOLD: f64 = 60.0;
+/// Share of the account cap (20 weeks of income) up to which a fully heavy faction saves for one ship; dearer ones are not waited for (estimate).
+const SHIP_SAVING_SHARE: f64 = 0.4;
 /// Ships of one task force when the plan sets no `MaximumTotalSize` (none of the Remake attack plans does; an estimate that keeps one fleet inside the population cap of a battle).
 const DEFAULT_MAX_FORCE: u32 = 60;
 
@@ -131,6 +135,8 @@ struct StructJob {
     queued: Option<String>,
     /// Something was built (or stood there already).
     built: bool,
+    /// A structure of a group stood on the planet already (a plan that only finds such structures failed: the target did not need it).
+    stood: bool,
     deadline: f64,
 }
 
@@ -175,6 +181,10 @@ pub struct TaskForces {
     events: Vec<PlanEvent>,
     /// Money earmarked per `(player, goal category)`; see [`TaskForces::fund`].
     accounts: HashMap<(PlayerId, String), f64>,
+    /// Per `(player, category)` the plan that waits for money for one item: `(plan, price, wait refreshed until)`. Other plans of the category leave that price in the account.
+    saving: HashMap<(PlayerId, String), (u64, f64, f64)>,
+    /// Largest balance an account may reach per player (set by [`TaskForces::rebalance`]); a price above it is never saved for.
+    account_cap: HashMap<PlayerId, f64>,
     /// Why the production of a plan failed, for the statistics (taken when the plan ends).
     failure_detail: HashMap<u64, String>,
     /// Diagnostics per task force: what the last `Produce_Force` asked for and how it ended.
@@ -308,6 +318,7 @@ impl TaskForces {
     /// beyond `cap`: the excess moves to the other funded categories in proportion to their share (estimate, see `AI_ACCOUNT_CAP_WEEKS`).
     /// With no category to take it the money stays where it is.
     pub fn rebalance(&mut self, player: PlayerId, cap: f64, fractions: &HashMap<String, f64>) {
+        self.account_cap.insert(player, cap);
         let over: Vec<String> = self.accounts.iter().filter(|((p, _), v)| *p == player && **v > cap).map(|((_, c), _)| c.clone()).collect();
         if over.is_empty() {
             return;
@@ -334,10 +345,26 @@ impl TaskForces {
         self.accounts.iter().filter(|((p, _), _)| *p == player).map(|(_, v)| *v).sum()
     }
 
-    /// What a plan may still spend; `None` = unlimited (category without a budget).
+    /// What a plan may still spend; `None` = unlimited (category without a budget). The price another plan of the category is saving for stays in the account.
     fn allowance(&self, player: PlayerId, plan: u64) -> Option<f64> {
         let cat = self.plan_category.get(&plan)?;
-        self.accounts.get(&(player, cat.clone())).copied()
+        let balance = self.accounts.get(&(player, cat.clone())).copied()?;
+        let reserved = self.saving.get(&(player, cat.clone())).filter(|(p, _, until)| *p != plan && *until > self.clock).map_or(0.0, |s| s.1);
+        Some((balance - reserved).max(0.0))
+    }
+
+    /// A structure plan could not afford its building: the category saves for it (estimate; without this, cheap items of other plans spend every credit the moment it arrives and an
+    /// expensive one - a shipyard, a capital ship - is never paid). The first plan to wait keeps the claim while it keeps waiting; a price above the account cap is not saved for.
+    fn wait_for_money(&mut self, player: PlayerId, plan: u64, price: f64) {
+        let Some(cat) = self.plan_category.get(&plan).cloned() else { return };
+        if price > self.account_cap.get(&player).copied().unwrap_or(f64::INFINITY) {
+            return;
+        }
+        let now = self.clock;
+        let entry = self.saving.entry((player, cat)).or_insert((plan, price, now));
+        if entry.0 == plan || entry.2 <= now {
+            *entry = (plan, price, now + SAVING_HOLD);
+        }
     }
 
     fn charge(&mut self, player: PlayerId, plan: u64, cost: f64) {
@@ -969,7 +996,7 @@ impl TaskForces {
                 if groups.is_empty() {
                     return self.finish(block, true);
                 }
-                self.jobs.push(Job::Structures(StructJob { block, tf: tf_id, planet, groups, queued: None, built: false, deadline: now + 900.0 }));
+                self.jobs.push(Job::Structures(StructJob { block, tf: tf_id, planet, groups, queued: None, built: false, stood: false, deadline: now + 900.0 }));
             }
             ForceKind::Units => {
                 // The plan may ask for an enemy planet as the staging place (`Ground_Staging_Planet`); ships gathering there would reach the target one by one. The force gathers on an own planet and moves as one fleet.
@@ -1370,6 +1397,11 @@ impl TaskForces {
             let mut no_credits = false;
             let unit_cost = sim.unit_info(&unit).map_or(0.0, |u| u.cost);
             let affordable = self.allowance(player, plan).is_none_or(|a| a >= unit_cost);
+            // A heavy faction saves for a costly ship like for a building (up to [`SHIP_SAVING_SHARE`] times its heaviness of the account cap); a swarm faction spends as the money arrives.
+            let saving_share = SHIP_SAVING_SHARE * self.doctrine(sim, player).heaviness.max(0.0);
+            if !affordable && self.account_cap.get(&player).is_some_and(|cap| unit_cost <= saving_share * cap) {
+                self.wait_for_money(player, plan, unit_cost);
+            }
             if !affordable {
                 no_credits = true;
             }
@@ -1563,7 +1595,7 @@ impl TaskForces {
                 if j.built {
                     self.finish(j.block, true);
                 } else {
-                    fail(self, &j, "nothing buildable");
+                    fail(self, &j, if j.stood { "already built" } else { "nothing buildable" });
                 }
                 return None;
             };
@@ -1577,10 +1609,10 @@ impl TaskForces {
                 j.groups.pop_front();
                 continue;
             }
-            // Types of the group that already stand on the planet count as done.
+            // Types of the group that already stand on the planet are done; a plan that finds nothing else to build there failed (the target did not need it), so the goal's failure learning moves on to another planet.
             let built = sim.structures(j.planet);
             if group.types.iter().any(|ty| built.iter().any(|b| b.eq_ignore_ascii_case(ty))) && !group.types.iter().any(|t| sim.is_starbase_type(t)) {
-                j.built = true;
+                j.stood = true;
                 j.groups.pop_front();
                 continue;
             }
@@ -1607,6 +1639,7 @@ impl TaskForces {
                 sim.structure_info(ty).map_or(0.0, |s| s.cost)
             };
             if self.allowance(player, plan).is_some_and(|a| a < cost_hint.max(1.0)) {
+                self.wait_for_money(player, plan, cost_hint);
                 return Some(j);
             }
             let r = if starbase { sim.queue_starbase(player, j.planet) } else { sim.queue_structure(player, j.planet, ty) };
@@ -1837,6 +1870,40 @@ impl Doctrine {
         let small = (0.30 - 0.20 * heaviness).clamp(0.12, 0.50);
         let escort = 1.0 - capital - small;
         Self { roles: [capital, escort, small], power_exponent: 0.5 + 0.25 * heaviness, price_exponent: 0.6 - 0.35 * heaviness, heaviness }
+    }
+}
+
+#[cfg(test)]
+mod saving_tests {
+    use super::*;
+
+    #[test]
+    fn a_plan_that_waits_for_an_expensive_item_keeps_cheap_plans_from_spending_it() {
+        let mut tf = TaskForces::default();
+        tf.accounts.insert((0, "infrastructure".into()), 10_000.0);
+        tf.plan_category.insert(1, "infrastructure".into());
+        tf.plan_category.insert(2, "infrastructure".into());
+        tf.account_cap.insert(0, 60_000.0);
+        assert_eq!(tf.allowance(0, 2), Some(10_000.0));
+        tf.wait_for_money(0, 1, 25_000.0);
+        assert_eq!(tf.allowance(0, 2), Some(0.0), "the other plan leaves the saved price alone");
+        assert_eq!(tf.allowance(0, 1), Some(10_000.0), "the waiting plan sees the whole balance");
+        // A price above the account cap is never saved for.
+        let mut tf = TaskForces::default();
+        tf.accounts.insert((0, "offensive".into()), 10_000.0);
+        tf.plan_category.insert(1, "offensive".into());
+        tf.plan_category.insert(2, "offensive".into());
+        tf.account_cap.insert(0, 20_000.0);
+        tf.wait_for_money(0, 1, 90_000.0);
+        assert_eq!(tf.allowance(0, 2), Some(10_000.0));
+        // The claim ends when the plan stops waiting.
+        let mut tf = TaskForces::default();
+        tf.accounts.insert((0, "infrastructure".into()), 10_000.0);
+        tf.plan_category.insert(1, "infrastructure".into());
+        tf.plan_category.insert(2, "infrastructure".into());
+        tf.wait_for_money(0, 1, 25_000.0);
+        tf.clock += SAVING_HOLD + 1.0;
+        assert_eq!(tf.allowance(0, 2), Some(10_000.0));
     }
 }
 
