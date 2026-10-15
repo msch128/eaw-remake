@@ -404,6 +404,15 @@ fn capture_driver(
             bc.target_distance = dist;
         }
     }
+    if let Some(want) = std::env::var("SP_DEMO_PROJ").ok()
+        && let Some(cur) = rt.cur.as_ref()
+        && let Some(p) = cur.projectiles.iter().find(|p| rt.catalog.projectiles.get(p.def as usize).is_some_and(|d| d.category.eq_ignore_ascii_case(&want)))
+    {
+        // Close view of the first projectile of the category (`missile`, `laser`, `rocket`).
+        bc.snap = true;
+        bc.target_focus = battle_view::convert::sim_to_bevy(p.pos);
+        bc.target_distance = 300.0;
+    }
     if std::env::var_os("SP_DEMO_DOGFIGHT").is_some() {
         // Closest pair of opposing fighters (radius under 100).
         let f: Vec<_> = ships.0.values().filter(|s| s.radius < 100.0).collect();
@@ -411,6 +420,12 @@ fn capture_driver(
             .iter()
             .flat_map(|a| f.iter().filter(|b| b.side != a.side).map(move |b| (a, b)))
             .min_by(|x, y| x.0.pos.distance(x.1.pos).total_cmp(&y.0.pos.distance(y.1.pos)));
+        let lone = std::env::var_os("SP_DEMO_SQUAD").and_then(|_| f.iter().min_by_key(|s| s.id));
+        if let Some(a) = lone {
+            bc.snap = true;
+            bc.target_focus = a.pos;
+            bc.target_distance = 700.0;
+        } else
         if let Some((a, b)) = pair {
             bc.snap = true;
             bc.target_focus = (a.pos + b.pos) * 0.5;

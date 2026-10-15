@@ -250,6 +250,7 @@ pub fn update_ships(
     mut touch: ModelTouch,
     mut views: Query<(&mut ShipView, &mut Transform), Without<Dying>>,
     arrivals: Query<&HyperspaceArrival>,
+    cameras: Query<(&Camera, &GlobalTransform, &Projection), With<Camera3d>>,
     mut sfx: MessageWriter<alamo_audio::PlaySfx>,
     mut flash_spots: Local<Vec<Vec3>>,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -259,6 +260,11 @@ pub fn update_ships(
         return;
     };
     let dt_frame = time.delta_secs().clamp(0.001, 0.1);
+    // Camera data for the minimum on-screen size of fighters: (eye, pixels per world unit at distance 1, screen height in pixels).
+    let eye = cameras.iter().find(|(c, _, _)| c.is_active).and_then(|(c, gt, p)| match (p, c.physical_target_size()) {
+        (Projection::Perspective(p), Some(size)) => Some((gt.translation(), size.y as f32 / (2.0 * (p.fov * 0.5).tan()), size.y as f32)),
+        _ => None,
+    });
     let sim_dt = rt.dt.max(0.01);
     let next = rt.next.clone();
     let visuals = rt.visuals.clone();
@@ -444,7 +450,14 @@ pub fn update_ships(
             view.bank += (want - view.bank) * roll_step;
             tf.translation = pos;
             tf.rotation = ship_rotation(yaw) * Quat::from_rotation_z(view.bank);
-            tf.scale = Vec3::splat(vis.scale);
+            let mut boost = 1.0;
+            if matches!(def.class, TargetClass::Fighter | TargetClass::Bomber)
+                && let Some((eye, px_per_unit, height)) = eye
+                && view.visual_radius > 0.0
+            {
+                boost = fighter_boost(view.visual_radius, pos.distance(eye), px_per_unit, height);
+            }
+            tf.scale = Vec3::splat(vis.scale * boost);
             if let Ok(a) = arrivals.get(entity) {
                 if !apply_arrival(a, cur.time, radius, &mut tf) {
                     commands.entity(entity).remove::<HyperspaceArrival>();
@@ -829,6 +842,18 @@ pub fn update_super_laser_fx(mut commands: Commands, rt: Res<BattleRuntime>, mut
     }
 }
 
+/// Fighters and bombers keep at least this share of the screen height as their size (estimate from the Remake frames n93 f0011/f0013, where a fighter is
+/// about 15 px of 576, while the data gives a TIE 4 units next to a 760 unit Star Destroyer: the original draws small craft far above true scale).
+const FIGHTER_MIN_SCREEN_FRACTION: f32 = 0.026;
+/// Largest enlargement of a fighter model (estimate; caps the effect when the camera is far out).
+const FIGHTER_MAX_BOOST: f32 = 40.0;
+
+/// Scale factor that lifts a fighter of bounding radius `radius` at `dist` from the eye to the minimum screen size (1 when already larger).
+fn fighter_boost(radius: f32, dist: f32, px_per_unit: f32, screen_height: f32) -> f32 {
+    let px = 2.0 * radius * px_per_unit / dist.max(1.0);
+    (FIGHTER_MIN_SCREEN_FRACTION * screen_height / px.max(1e-3)).clamp(1.0, FIGHTER_MAX_BOOST)
+}
+
 /// Seconds a burning wreck stays on the battlefield.
 const WRECK_SECONDS: f32 = 45.0;
 
@@ -1010,6 +1035,16 @@ pub fn remove_after(mut commands: Commands, time: Res<Time>, mut q: Query<(Entit
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fighter_boost_lifts_small_craft_to_the_minimum_screen_size() {
+        // 1080 px high, 60 degree fov: 935 px per unit at distance 1. A TIE of radius 2 at 930 units is about 4 px: boosted. A big ship is left alone.
+        let px_per_unit = 1080.0 / (2.0 * (30f32.to_radians()).tan());
+        let b = fighter_boost(2.0, 930.0, px_per_unit, 1080.0);
+        assert!(b > 5.0 && b < FIGHTER_MAX_BOOST, "{b}");
+        assert_eq!(fighter_boost(400.0, 930.0, px_per_unit, 1080.0), 1.0);
+        assert_eq!(fighter_boost(0.01, 930.0, px_per_unit, 1080.0), FIGHTER_MAX_BOOST);
+    }
 
     #[test]
     fn test_debris_chunk_cooling_and_drift() {
