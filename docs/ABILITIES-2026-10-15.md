@@ -22,7 +22,7 @@ Source: Remake 4.0 `Unit_Abilities_Data` of all space units (`Units/Space`, `Spe
 | REPLENISH_WINGMEN | 10 | done (new) | yes (icon is an estimate) | - | once per battle, auto when no wingman is left; the "leader only hurt while wingmen live" rule is not modelled |
 | INTERDICT | 7 | done (fixed) | yes (hand icon is the real `I_SA_INTERDICT`) | rings (estimate) | see below |
 | WEAKEN_ENEMY | 6 | done (new) | yes | none | area radius 2000, 60 s, 25% less damage dealt, 25% slower; button uses the caster position until the click-to-aim hook in tactical_ui knows `AbilityDef.weaken` |
-| HARMONIC_BOMB | 6 | missing | - | - | several uses are commented out in the data |
+| HARMONIC_BOMB | 6 | done (new, active uses only) | button via `Alternate_Icon_Name` | none | carriers drop a +200 hull blast (radius 750, fighters and bombers); Slave I drops a seismic bomb after 5 s (radius 300, 200 damage, 3 falloff tiers); the commented-out uses in the data are ignored |
 | SUPER_LASER | 5 | done | yes | beam exists | |
 | LURE | 4 | done (new) | yes | none | enemies of the listed types within the radius are ordered to attack the caster, caster takes the ability take-damage multiplier |
 | SPRINT, LUCKY_SHOT, ENERGY_WEAPON, CLUSTER_BOMB, BLAST | 3 each | SPRINT done, others missing | - | - | hero abilities with sub-ability objects |
