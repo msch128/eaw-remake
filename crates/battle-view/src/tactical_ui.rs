@@ -1045,6 +1045,9 @@ fn sync_overlays(
         }
         let half = pts.iter().map(|(c, e)| (*c - centre).length() + e).fold(0.0f32, f32::max);
         let edge_max = pts.iter().map(|(_, e)| *e).fold(0.0f32, f32::max);
+        // Own capital ships big enough to read keep just their health lines, no icon box (Remake video b0700: Star Destroyers carry bars,
+        // only the fighters, heroes and tiny ships carry icon boxes). Estimate for the size: 3% of the picture height as screen radius.
+        let icon_only = icon_only && !(!enemy && !is_squad && edge_max >= vp.y * 0.03);
         let live: Vec<&ShipRender> = members.iter().map(|id| &ships.0[id]).collect();
         if def.special_weapon.is_some() {
             continue;
