@@ -33,6 +33,7 @@ impl Plugin for TacticalUiPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<RetreatNotice>().init_resource::<TacticalUiState>().init_resource::<ReinforceUi>().init_resource::<crate::hud::HudState>().insert_resource(OverlaysActive);
         crate::input_test::build(app);
+        app.add_systems(Update, death_star_gauge.run_if(resource_exists::<BattleRuntime>));
         app.add_systems(
             Update,
             (
@@ -1571,6 +1572,81 @@ fn retreat_banner(
     }
 }
 
+/// The Death Star countdown gauge at the top centre (`DS_Countdown_Timer`, texture `ds_countdown.tga`: red and green wings around a disc that
+/// carries the number). Shown while a ship with a super laser lives; the number is the seconds until its super laser is ready.
+#[derive(Component)]
+pub(crate) struct DeathStarGauge;
+/// The number inside the gauge.
+#[derive(Component)]
+struct DeathStarGaugeText;
+
+/// Seconds until the first super laser of `ships` is usable: per ship `(has a super laser, [(seconds of effect left, seconds until usable)])`.
+/// `None` without a living ship that has one.
+fn death_star_seconds<'a>(ships: impl Iterator<Item = (&'a [bool], &'a [(f32, f32)])>) -> Option<f32> {
+    ships
+        .filter_map(|(is_laser, states)| {
+            is_laser.iter().zip(states).filter(|(l, _)| **l).map(|(_, &(active, cooldown))| active.max(cooldown)).reduce(f32::min)
+        })
+        .reduce(f32::min)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn death_star_gauge(
+    mut commands: Commands,
+    ui: Res<eaw_ui::EawUiSettings>,
+    rt: Res<BattleRuntime>,
+    textures: Option<ResMut<UiTextures>>,
+    mut images: ResMut<Assets<Image>>,
+    mut text: Query<&mut Text, With<DeathStarGaugeText>>,
+    gauge: Query<Entity, With<DeathStarGauge>>,
+) {
+    let lasers: Vec<Vec<bool>> = rt.cur.as_ref().map_or_else(Vec::new, |c| {
+        c.ships.iter().map(|s| rt.catalog.ship(s.def).abilities.iter().map(|a| a.super_laser.is_some()).collect()).collect()
+    });
+    let seconds = rt.cur.as_ref().and_then(|c| death_star_seconds(c.ships.iter().zip(&lasers).map(|(s, l)| (l.as_slice(), s.abilities.as_slice()))));
+    match (seconds, gauge.single()) {
+        (Some(s), Ok(_)) => {
+            let want = format!("{s:.2}");
+            if let Ok(mut t) = text.single_mut() && t.0 != want {
+                t.0 = want;
+            }
+        }
+        (Some(s), Err(_)) => {
+            let Some(mut textures) = textures else { return };
+            let Some(image) = textures.get(&mut images, "ds_countdown.tga").map(|t| t.handle) else { return };
+            let mut root = commands.spawn((
+                DeathStarGauge,
+                crate::hud::TacticalHud,
+                Name::new("death star gauge"),
+                ImageNode::new(image),
+                Node {
+                    position_type: PositionType::Absolute,
+                    top: Val::Vh(0.5),
+                    left: Val::Vw(50.0 - 7.8),
+                    width: Val::Vw(15.6),
+                    aspect_ratio: Some(220.0 / 97.0),
+                    align_items: AlignItems::Center,
+                    justify_content: JustifyContent::Center,
+                    ..default()
+                },
+                GlobalZIndex(70),
+            ));
+            if let Some(cam) = ui.camera {
+                root.insert(UiTargetCamera(cam));
+            }
+            root.with_child((
+                DeathStarGaugeText,
+                Text::new(format!("{s:.2}")),
+                TextFont { font_size: FontSize::Vh(2.2), ..default() },
+                TextColor(Color::srgb(0.55, 0.95, 0.5)),
+                TextShadow { offset: Vec2::splat(1.0), color: Color::BLACK },
+            ));
+        }
+        (None, Ok(e)) => commands.entity(e).despawn(),
+        (None, Err(_)) => {}
+    }
+}
+
 /// Title text shown in the middle of the screen when the battle ends (Remake/EaW victory banner).
 #[derive(Component)]
 struct VictoryBanner;
@@ -1686,6 +1762,17 @@ fn game_font(ui: &eaw_ui::EawUiSettings, size: f32) -> TextFont {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn death_star_countdown_is_the_soonest_super_laser() {
+        let laser: &[bool] = &[false, true];
+        let none: &[bool] = &[false];
+        let a: &[(f32, f32)] = &[(0.0, 0.0), (0.0, 90.0)];
+        let b: &[(f32, f32)] = &[(0.0, 0.0), (30.0, 10.0)];
+        assert_eq!(death_star_seconds([(laser, a)].into_iter()), Some(90.0));
+        assert_eq!(death_star_seconds([(laser, a), (laser, b)].into_iter()), Some(30.0), "charging counts as the larger of the two");
+        assert_eq!(death_star_seconds([(none, &a[..1])].into_iter()), None);
+    }
 
     #[test]
     fn button_ability_maps_to_group_columns() {
