@@ -24,7 +24,7 @@ pub mod ledger;
 pub mod plugin;
 #[cfg(feature = "bevy")]
 pub use plugin::{
-    AlamoAudioPlugin, AudioBuses, AudioSettings, Bus, GalaxyAudio, MusicDirector, MusicTrack, NoAudioDevice, PlayFile,
+    AlamoAudioPlugin, AudioBuses, AudioSettings, Bus, GalaxyAudio, MusicDirector, MusicTrack, NoAudioDevice, PlayFile, PlaySpeech,
     PlaySfx, SfxCommands, SfxEmitter, SfxVoice, VolumeCategory,
 };
 pub use speech::UnitResponseKind;

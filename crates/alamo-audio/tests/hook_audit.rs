@@ -24,10 +24,11 @@ fn wired_hooks_resolve_to_files() {
     let mut w = Vec::new();
     let sfx = SfxLibrary::load(&fs, &mut w);
     let music = MusicLibrary::load(&fs, &mut w);
+    let speech = alamo_audio::SpeechLibrary::load(&fs, &mut w);
     let resolver = SampleResolver::new(&fs);
     let refs = scan_hooks(&fs);
     assert!(refs.len() > 30_000, "only {} hook references found", refs.len());
-    let audit = audit_hooks(&refs, &sfx, &music, &resolver, &fs);
+    let audit = audit_hooks(&refs, &sfx, &music, &speech, &resolver, &fs);
 
     // The hooks that matter most must exist at all.
     for tag in ["sfxevent_select", "sfxevent_move", "fire_sfxevent", "click_sfx", "projectile_sfxevent_detonate_reduced_by_armor"] {
@@ -96,4 +97,35 @@ fn story_dialog_sfx_plays() {
         assert!(!e.samples.is_empty(), "dialog SFX `{n}` has no samples");
         assert!(e.samples.iter().all(|s| resolver.resolve(&fs, s).is_some()), "dialog SFX `{n}`: a sample is missing");
     }
+}
+
+/// The Death Star countdown lines of `Factions.xml` are `SpeechEvent`s: every one resolves in the speech library to existing files
+/// (some names also exist as HUD SFX events with other files), for all three factions.
+#[test]
+fn death_star_countdown_lines_are_speech_events() {
+    let Some(install) = GameInstall::detect().filter(|i| i.mod_data(REMAKE).is_dir()) else {
+        eprintln!("skipped: Remake mod not installed");
+        return;
+    };
+    let fs = GameFs::for_mod(&install, Some(REMAKE)).expect("fs");
+    let mut w = Vec::new();
+    let speech = alamo_audio::SpeechLibrary::load(&fs, &mut w);
+    let resolver = SampleResolver::new(&fs);
+    let c = alamo_audio::AudioConstants::load(&fs);
+    let tags = ["moving_into_range", "moving_range_60_seconds", "moving_range_30_seconds", "moving_range_15_seconds", "moving_range_05_seconds", "moved_into_range"];
+    let mut checked = 0;
+    for faction in ["Empire", "Rebel", "Underworld"] {
+        for own in ["", "enemy_"] {
+            for t in tags {
+                let tag = format!("speechevent_super_weapon_{own}{t}");
+                // The Empire owns the Death Star: its enemy lines and the others' own lines are blank by design.
+                let Some(n) = c.faction_sfx(faction, &tag) else { continue };
+                // Some names also exist as HUD SFX events (other files): the tag says SpeechEvent, so the speech library decides.
+                let line = speech.get(n).unwrap_or_else(|| panic!("{faction} {tag}: `{n}` is not a SpeechEvent"));
+                assert!(!line.files.is_empty() && line.files.iter().all(|f| resolver.resolve(&fs, f).is_some()), "{faction} {tag}: `{n}` has a missing file");
+                checked += 1;
+            }
+        }
+    }
+    assert!(checked >= 12, "only {checked} Death Star lines found");
 }

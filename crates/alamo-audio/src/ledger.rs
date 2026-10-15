@@ -17,6 +17,8 @@ pub enum LedgerKind {
     Music,
     /// A direct file request (`PlayFile`).
     File,
+    /// A speech event (`PlaySpeech`).
+    Speech,
 }
 
 /// What became of a request.
@@ -143,7 +145,7 @@ impl SoundLedger {
     /// Human summary: played counts per kind and every distinct problem.
     pub fn summary(&self) -> String {
         let mut s = String::new();
-        for kind in [LedgerKind::Sfx, LedgerKind::Music, LedgerKind::File] {
+        for kind in [LedgerKind::Sfx, LedgerKind::Music, LedgerKind::File, LedgerKind::Speech] {
             let p = self.played(kind);
             let _ = writeln!(s, "{kind:?}: {} distinct events played, {} plays", p.len(), p.values().sum::<usize>());
         }

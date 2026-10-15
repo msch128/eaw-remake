@@ -602,7 +602,7 @@ pub fn battle_music(
     stats: Res<BattleAudioStats>,
     director: Option<ResMut<MusicDirector>>,
     audio: Option<Res<AlamoAudio>>,
-    mut sfx: MessageWriter<PlaySfx>,
+    mut speech: MessageWriter<alamo_audio::PlaySpeech>,
     mut countdown: Local<HashMap<ShipId, f32>>,
 ) {
     let Some(mut director) = director else { return };
@@ -634,7 +634,7 @@ pub fn battle_music(
                 // Own Death Star: the faction's own lines; an enemy one: the player's `..._Enemy_...` warnings.
                 let tag = format!("speechevent_super_weapon_{}{call}", if s.side == settings.player_side { "" } else { "enemy_" });
                 if let Some(n) = rt.player_faction.as_deref().and_then(|f| audio.constants.faction_sfx(f, &tag)) {
-                    sfx.write(PlaySfx { event: n.to_string(), position: None, source: None });
+                    speech.write(alamo_audio::PlaySpeech { event: n.to_string() });
                 }
             }
             countdown.insert(s.id, remaining);

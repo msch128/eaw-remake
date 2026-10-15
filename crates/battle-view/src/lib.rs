@@ -443,6 +443,9 @@ impl Plugin for BattleViewPlugin {
         if !app.world().contains_resource::<Messages<PlaySfx>>() {
             app.add_message::<PlaySfx>();
         }
+        if !app.world().contains_resource::<Messages<alamo_audio::PlaySpeech>>() {
+            app.add_message::<alamo_audio::PlaySpeech>();
+        }
         if !app.world().contains_resource::<Messages<alamo_audio::plugin::GalaxyAudio>>() {
             app.add_message::<alamo_audio::plugin::GalaxyAudio>();
         }

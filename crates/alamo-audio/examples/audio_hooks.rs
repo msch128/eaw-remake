@@ -24,9 +24,10 @@ fn main() {
     let mut w = Vec::new();
     let sfx = SfxLibrary::load(&fs, &mut w);
     let music = MusicLibrary::load(&fs, &mut w);
+    let speech = alamo_audio::SpeechLibrary::load(&fs, &mut w);
     let resolver = SampleResolver::new(&fs);
     let refs = scan_hooks(&fs);
-    let audit = audit_hooks(&refs, &sfx, &music, &resolver, &fs);
+    let audit = audit_hooks(&refs, &sfx, &music, &speech, &resolver, &fs);
     println!("{} hook references, {} tags", refs.len(), audit.tags.len());
     if md {
         print!("{}", audit.to_markdown(is_wired));

@@ -11,7 +11,7 @@ use std::fmt::Write as _;
 
 use alamo_fs::FileSource;
 
-use crate::{MusicLibrary, SampleResolver, SfxLibrary};
+use crate::{MusicLibrary, SampleResolver, SfxLibrary, SpeechLibrary};
 
 
 /// Hook tags the game code reads and plays (battle: `battle-view/src/visuals.rs` + `audio.rs`; galaxy: `space-peace/src/ui_sounds.rs`;
@@ -84,6 +84,18 @@ pub const WIRED_TAGS: &[&str] = &[
     "sfxevent_assist_attack",
     "death_sfxevent_end_die",
     "build_music_completed",
+    "speechevent_super_weapon_moving_into_range",
+    "speechevent_super_weapon_moving_range_60_seconds",
+    "speechevent_super_weapon_moving_range_30_seconds",
+    "speechevent_super_weapon_moving_range_15_seconds",
+    "speechevent_super_weapon_moving_range_05_seconds",
+    "speechevent_super_weapon_moved_into_range",
+    "speechevent_super_weapon_enemy_moving_into_range",
+    "speechevent_super_weapon_enemy_moving_range_60_seconds",
+    "speechevent_super_weapon_enemy_moving_range_30_seconds",
+    "speechevent_super_weapon_enemy_moving_range_15_seconds",
+    "speechevent_super_weapon_enemy_moving_range_05_seconds",
+    "speechevent_super_weapon_enemy_moved_into_range",
 ];
 
 /// True if the game code plays events named by `tag` (lower case).
@@ -104,10 +116,10 @@ pub struct HookRef {
 
 /// Tags that contain `sfx` / `music` but are not event references (flags, timings, containers, definitions).
 fn is_hook_tag(tag: &str) -> bool {
-    if !(tag.contains("sfx") || tag.contains("music")) {
+    if !(tag.contains("sfx") || tag.contains("music") || tag.starts_with("speechevent_")) {
         return false;
     }
-    const NOT_HOOKS: [&str; 12] = [
+    const NOT_HOOKS: [&str; 13] = [
         "sfxevent",
         "sfxevents",
         "sfxevent_files",
@@ -119,9 +131,10 @@ fn is_hook_tag(tag: &str) -> bool {
         "sfxevent_ambient_moving_min_delay_seconds",
         "sfxevent_ambient_moving_max_delay_seconds",
         "sfxevent_frame",
+        "speechevent_frame",
         "sfx_event_files",
     ];
-    !NOT_HOOKS.contains(&tag) && !tag.ends_with("_seconds") && !tag.ends_with("_frame")
+    !NOT_HOOKS.contains(&tag) && (tag.starts_with("speechevent_") || !tag.ends_with("_seconds") && !tag.ends_with("_frame"))
 }
 
 /// Removes `<!-- ... -->` comments.
@@ -226,6 +239,8 @@ pub struct TagAudit {
     pub no_samples: BTreeSet<String>,
     /// `(event, sample)` pairs whose file is not in the file system.
     pub missing: BTreeSet<(String, String)>,
+    /// Events an SFX / music tag names that exist only as a `SpeechEvent`, or a speech tag names that exist only as SFX: the wrong player would be used.
+    pub mixups: BTreeSet<String>,
     /// First file the tag appears in.
     pub example_file: String,
 }
@@ -242,6 +257,7 @@ pub fn audit_hooks(
     refs: &[HookRef],
     sfx: &SfxLibrary,
     music: &MusicLibrary,
+    speech: &SpeechLibrary,
     resolver: &SampleResolver,
     src: &dyn FileSource,
 ) -> HookAudit {
@@ -256,7 +272,16 @@ pub fn audit_hooks(
             continue;
         }
         let is_music = r.tag.contains("music");
-        let samples: Option<Vec<String>> = if is_music {
+        let is_speech = r.tag.starts_with("speechevent_");
+        // The event lives in the other library: the wrong player (SFX voice rules vs. speech) would be asked for it.
+        let in_sfx = sfx.get(&r.event).is_some();
+        let in_speech = speech.get(&r.event).is_some();
+        if (is_speech && !in_speech && in_sfx) || (!is_speech && !is_music && !in_sfx && in_speech) {
+            t.mixups.insert(r.event.clone());
+        }
+        let samples: Option<Vec<String>> = if is_speech {
+            speech.get(&r.event).map(|e| e.files.clone())
+        } else if is_music {
             music.get(&r.event).map(|e| e.files.clone())
         } else {
             sfx.get(&r.event).map(|e| {
@@ -299,6 +324,7 @@ impl HookAudit {
         let mut v = BTreeSet::new();
         for (_, t) in self.tags.iter().filter(|(tag, _)| wired(tag)) {
             v.extend(t.unknown.iter().map(|e| format!("{e}: unknown event")));
+            v.extend(t.mixups.iter().map(|e| format!("{e}: speech/sfx mixup")));
             v.extend(t.no_samples.iter().map(|e| format!("{e}: no samples")));
             let mut first: BTreeMap<&str, &str> = BTreeMap::new();
             for (e, s) in &t.missing {

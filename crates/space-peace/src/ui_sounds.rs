@@ -578,9 +578,8 @@ fn production_complete_sounds(
 fn story_dialog_sounds(
     mut events: MessageReader<PlayEvent>,
     current: Res<CurrentCampaign>,
-    audio: Res<AlamoAudio>,
     mut sfx: SfxCommands,
-    mut files: MessageWriter<alamo_audio::PlayFile>,
+    mut speech_out: MessageWriter<alamo_audio::PlaySpeech>,
 ) {
     for e in events.read() {
         let PlayEvent::Script(galaxy_script::ScriptEvent::Dialog { sfx: sound, speech, faction, .. }) = e else { continue };
@@ -594,10 +593,8 @@ fn story_dialog_sounds(
         if let Some(n) = sound.as_deref().filter(|n| !n.is_empty()) {
             sfx.play(n.to_owned());
         }
-        if let Some(line) = speech.as_deref().and_then(|s| audio.speech.get(s))
-            && let Some(file) = line.files.first()
-        {
-            files.write(alamo_audio::PlayFile { name: file.clone(), bus: alamo_audio::Bus::Speech });
+        if let Some(s) = speech.as_deref().filter(|s| !s.is_empty()) {
+            speech_out.write(alamo_audio::PlaySpeech { event: s.to_owned() });
         }
     }
 }

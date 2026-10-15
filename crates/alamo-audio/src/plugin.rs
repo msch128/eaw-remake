@@ -222,6 +222,59 @@ pub struct PlayFile {
     pub bus: Bus,
 }
 
+/// Plays a `SpeechEvent` of `SpeechEvents.xml` (campaign / HUD lines such as `EHD_Death_Star_Begin_Approach`) on the speech bus.
+/// Unlike an SFX event it has no voice rules; an unknown event or a missing file is reported in the [`SoundLedger`].
+#[derive(Message, Debug, Clone)]
+pub struct PlaySpeech {
+    /// Speech event name (case-insensitive).
+    pub event: String,
+}
+
+fn process_speech_requests(
+    mut reader: MessageReader<PlaySpeech>,
+    mut ledger: ResMut<SoundLedger>,
+    time: Res<Time>,
+    mut audio: ResMut<AlamoAudio>,
+    mut assets: ResMut<Assets<AudioSource>>,
+    settings: Res<AudioSettings>,
+    buses: Res<AudioBuses>,
+    mut commands: Commands,
+) {
+    let t = time.elapsed_secs_f64();
+    for req in reader.read() {
+        let note = |ledger: &mut SoundLedger, sample: &str, path: Option<String>, outcome| {
+            ledger.record(LedgerEntry { t, kind: LedgerKind::Speech, event: req.event.clone(), sample: sample.to_string(), path, outcome });
+        };
+        if audio_log() {
+            info!("audio speech {}", req.event);
+        }
+        let Some(line) = audio.speech.get(&req.event).cloned() else {
+            note(&mut ledger, "", None, LedgerOutcome::UnknownEvent);
+            continue;
+        };
+        let usable: Vec<&String> = line.files.iter().filter(|f| audio.has_sample(f)).collect();
+        for f in line.files.iter().filter(|f| !audio.has_sample(f)) {
+            note(&mut ledger, f, None, LedgerOutcome::MissingFile);
+        }
+        if line.files.is_empty() {
+            note(&mut ledger, "", None, LedgerOutcome::NoSamples);
+            continue;
+        }
+        if usable.is_empty() {
+            continue;
+        }
+        let file = usable[rand::rng().random_range(0..usable.len())].clone();
+        match audio.sample_checked(&file, settings.cache_budget_bytes, &mut assets) {
+            Ok((handle, path)) => {
+                note(&mut ledger, &file, Some(path), LedgerOutcome::Played);
+                let gain = line.volume_percent / 100.0 * buses.gain(Bus::Speech);
+                commands.spawn((AudioPlayer::<AudioSource>(handle), PlaybackSettings::ONCE.with_volume(Volume::Linear(gain))));
+            }
+            Err((outcome, path)) => note(&mut ledger, &file, path, outcome),
+        }
+    }
+}
+
 fn process_file_requests(
     mut reader: MessageReader<PlayFile>,
     mut ledger: ResMut<SoundLedger>,
@@ -536,6 +589,7 @@ impl Plugin for AlamoAudioPlugin {
             .add_message::<PlaySfx>()
             .add_message::<GalaxyAudio>()
             .add_message::<PlayFile>()
+            .add_message::<PlaySpeech>()
             .add_systems(
                 Update,
                 (
@@ -543,6 +597,7 @@ impl Plugin for AlamoAudioPlugin {
                     galaxy_audio_system,
                     process_sfx_requests,
                     process_file_requests,
+                    process_speech_requests,
                     update_voices,
                     music_system,
                     update_music_gain,
