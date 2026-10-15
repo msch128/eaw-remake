@@ -807,7 +807,19 @@ fn load_cached(lua: &Lua, sh: &Rc<RefCell<Shared>>, key: &str, source: impl FnOn
         Some(c) => c,
         None => {
             let text = source()?;
-            let f = lua.load(text.as_str()).set_name(key).into_function()?;
+            let f = match lua.load(text.as_str()).set_name(key).into_function() {
+                Ok(f) => f,
+                // The Clone Wars submod ships `Conquer_Enemy_Planet.lua` with a line that starts with a comma right after a line ending in one (`..., ,"Warlord_Corvette = 0, 10"`):
+                // no Lua accepts that, so its AI could never attack. The comma is dropped and the script loads (workaround, RULES.md).
+                Err(e) if e.to_string().contains("unexpected symbol near ','") || e.to_string().contains("'}' expected") => {
+                    let fixed = repair_double_commas(&text);
+                    if fixed == text {
+                        return Err(e);
+                    }
+                    lua.load(fixed.as_str()).set_name(key).into_function()?
+                }
+                Err(e) => return Err(e),
+            };
             let code = Rc::new(f.dump(false));
             sh.borrow_mut().compiled.insert(key.to_string(), code.clone());
             code
@@ -852,4 +864,46 @@ fn install_require(lua: &Lua, sh: &Rc<RefCell<Shared>>, _script: usize) -> mlua:
     lua.globals().set("require", f.clone())?;
     lua.globals().set("Require", f)?;
     Ok(())
+}
+
+/// Repairs the comma slips of a table constructor written one entry per line: a line-leading comma that follows a line ending in a comma is dropped, and a string entry that is
+/// followed by another string entry without a comma gets one. Comment and blank lines in between are skipped.
+fn repair_double_commas(text: &str) -> String {
+    let lines: Vec<&str> = text.split_inclusive('\n').collect();
+    let significant = |l: &str| {
+        let t = l.trim();
+        !(t.is_empty() || t.starts_with("--"))
+    };
+    let mut out: Vec<String> = lines.iter().map(|l| (*l).to_owned()).collect();
+    let mut prev: Option<usize> = None;
+    for i in 0..lines.len() {
+        if !significant(lines[i]) {
+            continue;
+        }
+        let t = lines[i].trim();
+        if let Some(p) = prev {
+            let pt = out[p].trim().to_owned();
+            if pt.ends_with(',') && t.starts_with(',') {
+                let at = out[i].find(',').unwrap_or(0);
+                out[i].remove(at);
+            } else if pt.ends_with('"') && t.starts_with('"') {
+                let end = out[p].trim_end_matches(['\r', '\n']).len();
+                out[p].insert(end, ',');
+            }
+        }
+        prev = Some(i);
+    }
+    out.concat()
+}
+
+#[cfg(test)]
+mod repair_tests {
+    use super::*;
+
+    #[test]
+    fn stray_and_missing_commas_in_a_table_are_repaired() {
+        let src = "t = {\n  \"a\",\n  --c\n  ,\"b\"\n  ,\"c\"\n  -- d\n  \"d\",\n  \"e\"\n}\n";
+        assert_eq!(repair_double_commas(src), "t = {\n  \"a\",\n  --c\n  \"b\"\n  ,\"c\",\n  -- d\n  \"d\",\n  \"e\"\n}\n");
+        assert_eq!(repair_double_commas("x = 1\n"), "x = 1\n");
+    }
 }

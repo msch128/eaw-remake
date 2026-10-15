@@ -26,6 +26,10 @@ struct Track {
     max_planets: usize,
     first_planet_gain_week: Option<u64>,
     owned_ever: HashSet<u32>,
+    attacks_won: u32,
+    attacks_lost: u32,
+    lost_weeks: Vec<u64>,
+    planets_at: [Option<usize>; 3],
     recaptures: u32,
     captures: u32,
     lost_planets: u32,
@@ -84,9 +88,29 @@ fn main() {
     let mut track: Vec<Track> = (0..names.len()).map(|_| Track::default()).collect();
     let mut types_built: Vec<BTreeMap<String, u32>> = vec![BTreeMap::new(); names.len()];
 
+    for f in 0..names.len() {
+        track[f].planets_at[0] = Some(sim.with_sim(|s| s.galaxy().factions[f].planets_owned as usize));
+    }
     let mut done = 0u64;
     while done < weeks {
+        let owners_before: Vec<Option<u32>> = sim.with_sim(|s| s.galaxy().planets.iter().map(|p| p.owner).collect());
         let r = sim.step(1.0);
+        for e in &r.sim_events {
+            match e {
+                Event::BattleResolved { planet, winner, losses, .. } => {
+                    let defender = owners_before[*planet as usize];
+                    let mut involved: Vec<u32> = losses.iter().map(|l| l.0).collect();
+                    involved.extend(*winner);
+                    involved.sort_unstable();
+                    involved.dedup();
+                    for f in involved.into_iter().filter(|f| Some(*f) != defender && (*f as usize) < names.len()) {
+                        if *winner == Some(f) { track[f as usize].attacks_won += 1; } else { track[f as usize].attacks_lost += 1; }
+                    }
+                }
+                Event::PlanetCaptured { old_owner: Some(o), .. } if (*o as usize) < track.len() => track[*o as usize].lost_weeks.push(done + 1),
+                _ => {}
+            }
+        }
         for e in &r.sim_events {
             match e {
                 Event::PlanetCaptured { planet, new_owner, old_owner, .. } => {
@@ -173,6 +197,13 @@ fn main() {
                 }
                 Event::WeekEnded { week } => {
                     done = *week;
+                    for f in 0..names.len() {
+                        let n = sim.with_sim(|s| s.galaxy().factions[f].planets_owned as usize);
+                        if done == 0 || done == weeks / 2 || done == weeks {
+                            let slot = if done == weeks { 2 } else if done == 0 { 0 } else { 1 };
+                            track[f].planets_at[slot] = Some(n);
+                        }
+                    }
                     sim.with_sim(|s| {
                         let g = s.galaxy();
                         let w = s.world();
@@ -257,6 +288,38 @@ fn main() {
             println!("\n== {sub} for {fac}: {tally:#?}");
         });
     }
+    if std::env::var_os("ROSTER").is_some() {
+        sim.with_sim(|s| {
+            let w = s.world();
+            for f in 0..names.len() {
+                let mut by: BTreeMap<String, (u32, f64, f64, f32)> = BTreeMap::new();
+                for &u in &w.buildable_units[f] {
+                    let ut = &w.units[u as usize];
+                    if ut.hero || ut.role != galaxy_sim::world::UnitRole::Ship {
+                        continue;
+                    }
+                    let st = w.strength([(galaxy_sim::combat::Source::Unit(u), 1)]) as f64;
+                    let e = by.entry(format!("{:?}", ut.category)).or_default();
+                    e.0 += 1;
+                    e.1 += f64::from(ut.cost);
+                    e.2 += st;
+                    e.3 += ut.population as f32;
+                }
+                if by.is_empty() {
+                    continue;
+                }
+                let line: Vec<String> = by.iter().map(|(c, (n, cost, st, pop))| format!("{c}: {n} types, avg cost {:.0}, avg strength {:.0}, strength/cost {:.2}, avg pop {:.1}", cost / f64::from(*n), st / f64::from(*n), st / cost.max(1.0), pop / *n as f32)).collect();
+                println!("roster {}: {}", names[f], line.join(" | "));
+                let mut costs: Vec<f64> = w.buildable_units[f].iter().map(|&u| &w.units[u as usize]).filter(|u| !u.hero && u.role == galaxy_sim::world::UnitRole::Ship && !matches!(u.category, alamo_data::ShipCategory::Other)).map(|u| f64::from(u.cost)).collect();
+                costs.sort_by(|a, b| a.total_cmp(b));
+                if !costs.is_empty() {
+                    let med = costs[costs.len() / 2];
+                    let cheap = costs.iter().filter(|c| **c < 3000.0).count() as f64 / costs.len() as f64;
+                    println!("identity {}: {} ship types, median cost {:.0}, share under 3000 credits {:.0}%, top-quartile mean {:.0}", names[f], costs.len(), med, 100.0 * cheap, costs[costs.len() * 3 / 4..].iter().sum::<f64>() / (costs.len() - costs.len() * 3 / 4) as f64);
+                }
+            }
+        });
+    }
     if std::env::var_os("HEROES").is_some() {
         sim.with_sim(|s| {
             let w = s.world();
@@ -278,6 +341,19 @@ fn main() {
                     *types_built[f].entry(w.units[u as usize].name.clone()).or_default() += c;
                 }
             }
+        }
+        println!("\nTABLE | faction | planets wk0 / mid / end | attacks won / lost | credits | idle fleet-weeks (20+) of fleet-weeks | max planets lost within 8 weeks |");
+        for f in 0..names.len() {
+            let t = &track[f];
+            if t.max_planets == 0 {
+                continue;
+            }
+            let mut worst = 0usize;
+            for &w0 in &t.lost_weeks {
+                worst = worst.max(t.lost_weeks.iter().filter(|&&w| w >= w0 && w < w0 + 8).count());
+            }
+            let at = |i: usize| t.planets_at[i].map_or("-".to_owned(), |v| v.to_string());
+            println!("TABLE | {} | {} / {} / {} | {} / {} | {:.0}k | {} of {} | {} |", names[f], at(0), at(1), at(2), t.attacks_won, t.attacks_lost, g.factions[f].credits / 1000.0, t.idle_samples, t.fleet_samples, worst);
         }
         println!("\n== verdict per faction ({done} weeks)");
         for f in 0..names.len() {

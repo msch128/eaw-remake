@@ -16,6 +16,17 @@
 pub const FORCE_MARGIN: f64 = 0.8;
 /// A composed attack force whose strength is below this share of the believed defence is dropped instead of sent (estimate).
 pub const MIN_VIABLE_FRACTION: f64 = 0.9;
+
+/// Share of the believed enemy fleets next door that a garrison must match (estimate).
+const GARRISON_FACTOR: f64 = 0.8;
+/// A front planet keeps at least this share of the owner's fleet strength even without enemy fleets in sight (estimate).
+const FRONT_FLOOR: f64 = 0.04;
+/// At most this share of the owner's fleets sits on one planet as garrison (estimate).
+const GARRISON_PLANET_CAP: f64 = 0.25;
+/// At most this share of the owner's fleets is tied up as garrison overall, the rest stays free for attacks and as the mobile reserve (estimate).
+const GARRISON_TOTAL_CAP: f64 = 0.5;
+/// Time between two refreshes of the garrison assignment.
+const GARRISON_REFRESH: f64 = 5.0;
 /// Ships of one task force when the plan sets no `MaximumTotalSize` (none of the Remake attack plans does; an estimate that keeps one fleet inside the population cap of a battle).
 const DEFAULT_MAX_FORCE: u32 = 60;
 
@@ -25,7 +36,7 @@ use alamo_lua::{HostValue, PlanEvent, TaskForceSpec};
 
 use crate::perception::Snapshot;
 use crate::requirements::{self, Requirements, is_category};
-use crate::sim::{AiSim, FleetId, PlanetId, PlayerId, Refused};
+use crate::sim::{AiSim, FleetId, FleetView, PlanetId, PlayerId, Refused};
 
 /// What a task force consists of.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -171,12 +182,17 @@ pub struct TaskForces {
     /// Believed hostile strength per player and planet (set by the engine from the strategic layer; empty = use AI power).
     pub(crate) believed: HashMap<PlayerId, Vec<f64>>,
     sizing: HashMap<PlayerId, f64>,
+    /// What each faction's roster says about how it fights (see [`Doctrine`]); computed on first use.
+    doctrines: std::cell::RefCell<HashMap<PlayerId, Doctrine>>,
     /// Number of coordinated forces attacking the same target (pincer); each is sized for its share.
     split: HashMap<(PlayerId, PlanetId), u32>,
     rally: HashMap<(PlayerId, PlanetId), Vec<u64>>,
     depart: HashMap<u64, f64>,
     /// Fleets released after assembling a force for a target stay reserved for that target for a while.
     reserved: HashMap<FleetId, (PlanetId, f64)>,
+    /// Fleets that hold a front or threatened planet; they are not free for attack forces (see [`TaskForces::update_garrisons`]).
+    held: HashSet<FleetId>,
+    garrison_clock: f64,
     clock: f64,
     /// Statistics.
     pub stats: TaskForceStats,
@@ -610,6 +626,23 @@ impl TaskForces {
     // ---- composition ---------------------------------------------------------------------------------
 
     /// Planets from which ships can reach the stage of a unit force without passing a blockade (`None`: no such restriction).
+    /// The faction's doctrine, derived once from its buildable roster.
+    fn doctrine(&self, sim: &dyn AiSim, player: PlayerId) -> Doctrine {
+        if let Some(d) = self.doctrines.borrow().get(&player) {
+            return *d;
+        }
+        let costs: Vec<f64> = sim
+            .buildable_units(player)
+            .iter()
+            .filter_map(|n| sim.unit_info(n))
+            .filter(|i| !i.is_hero && !i.category.contains("OTHER") && i.cost > 0.0)
+            .map(|i| i.cost)
+            .collect();
+        let d = Doctrine::from_costs(costs);
+        self.doctrines.borrow_mut().insert(player, d);
+        d
+    }
+
     fn stage_safety(&self, snap: &Snapshot, t: &TaskForce) -> Option<Vec<bool>> {
         if t.kind == ForceKind::Structure {
             return None;
@@ -682,16 +715,17 @@ impl TaskForces {
             }
         };
         let mut role_counts = [0usize; 3];
-        let role_targets = [0.40f64, 0.30f64, 0.30f64];
+        let doctrine = self.doctrine(sim, t.player);
+        let role_targets = doctrine.roles;
         let role_weight = |c: &(String, String, f64), counts: &[usize; 3]| -> f64 {
             let r = role_of(&c.1, &c.0);
             let total = (counts[0] + counts[1] + counts[2]) as f64;
             if total >= 2.0 {
                 let share = (counts[r] as f64) / total;
                 let mult = (role_targets[r] / share.max(0.05)).clamp(0.25, 4.0);
-                c.2.sqrt() * mult
+                c.2.powf(doctrine.power_exponent) * mult
             } else {
-                c.2.sqrt() * role_targets[r] * 3.0
+                c.2.powf(doctrine.power_exponent) * role_targets[r] * 3.0
             }
         };
         let pick = |rng: &mut u64, pool: &[&(String, String, f64)], counts: &[usize; 3]| -> Option<String> {
@@ -786,7 +820,9 @@ impl TaskForces {
                 let allowed: Vec<&(String, String, f64)> = candidates.iter().filter(|c| pct.iter().any(|g| matches(c, &g.types))).collect();
                 let efficiency = |name: &str| -> f64 {
                     let cost = sim.unit_info(name).map_or(1.0, |i| i.cost.max(1.0));
-                    sim.force_strength(&[(name.to_owned(), 1)]) / cost
+                    // Weighted by the share the doctrine gives the ship's role: a swarm faction tops up with cheap small craft, a heavy one with big ships.
+                    let role = candidates.iter().find(|c| c.0 == name).map_or(2, |c| role_of(&c.1, &c.0));
+                    sim.force_strength(&[(name.to_owned(), 1)]) / cost * role_targets[role]
                 };
                 let best = allowed.iter().map(|c| (c.0.clone(), efficiency(&c.0))).filter(|e| e.1 > 0.0).max_by(|a, b| a.1.total_cmp(&b.1).then(b.0.cmp(&a.0)));
                 if let Some((best, _)) = best {
@@ -822,7 +858,7 @@ impl TaskForces {
             if safe.is_some_and(|s| !s.get(at as usize).copied().unwrap_or(false)) {
                 continue;
             }
-            if self.owned_fleets.contains(&f.id) {
+            if self.owned_fleets.contains(&f.id) || self.held.contains(&f.id) {
                 continue;
             }
             if let Some(&(for_target, until)) = self.reserved.get(&f.id)
@@ -923,11 +959,100 @@ impl TaskForces {
         sim.move_fleet(player, fleet, to).is_ok()
     }
 
+    /// Front defence (estimate; the Remake data has no active galactic defence goal: `Generate_Magic_Space_Defense` is declared but no goal function selects it, and the
+    /// Defensive budget is 0%). It keeps the idea of the data's perceptions `Function_Is_Connected_To_Enemy` and `Space_Priority_Defense_Score` (front planets first):
+    /// a planet next to an enemy planet, or with enemy fleets one or two jumps away, keeps fleets of at least [`GARRISON_FACTOR`] times that threat (at least
+    /// [`FRONT_FLOOR`] of the owner's fleet strength on a front planet, at most [`GARRISON_PLANET_CAP`] per planet and [`GARRISON_TOTAL_CAP`] overall) out of the pool the
+    /// attack forces draw from, and free fleets move to the planets that miss their garrison, nearest first. A fallen front planet changes the front at the next refresh,
+    /// so the line re-forms one jump back instead of leaving the core open. Pirates never attack and count as no threat.
+    fn update_garrisons(&mut self, sim: &mut dyn AiSim, snap: &Snapshot) {
+        self.held.clear();
+        for me in 0..snap.names.len() as u32 {
+            if snap.human[me as usize] || snap.names[me as usize].eq_ignore_ascii_case("pirates") || snap.owned[me as usize].is_empty() {
+                continue;
+            }
+            let active = |o: PlayerId| o != me && snap.enemy[me as usize][o as usize] && !snap.names[o as usize].eq_ignore_ascii_case("pirates");
+            let enemy_fleets = |pl: usize| -> f64 { snap.strength[pl].iter().filter(|e| active(e.0)).map(|e| e.1).sum() };
+            let fleets = sim.fleets_of(me);
+            let own_total: f64 = fleets.iter().map(|f| sim.force_strength(&f.units)).sum();
+            if own_total <= 0.0 {
+                continue;
+            }
+            // Planets that need a garrison and how strong it should be, most threatened first.
+            let mut need: Vec<(PlanetId, f64)> = Vec::new();
+            for &p in &snap.owned[me as usize] {
+                let pu = p as usize;
+                let front = snap.adjacency[pu].iter().any(|&nb| snap.owner[nb as usize].is_some_and(&active));
+                let mut threat: f64 = 0.0;
+                for &nb in &snap.adjacency[pu] {
+                    threat += enemy_fleets(nb as usize);
+                    for &nb2 in &snap.adjacency[nb as usize] {
+                        if nb2 != p && !snap.adjacency[pu].contains(&nb2) {
+                            threat += 0.5 * enemy_fleets(nb2 as usize);
+                        }
+                    }
+                }
+                if !front && threat <= 0.0 {
+                    continue;
+                }
+                let floor = if front { FRONT_FLOOR * own_total } else { 0.0 };
+                let want = (GARRISON_FACTOR * threat).max(floor).min(GARRISON_PLANET_CAP * own_total);
+                // The star base and armed structures already stand against part of it.
+                let want = want - 0.5 * snap.static_defense[pu];
+                if want > 0.0 {
+                    need.push((p, want));
+                }
+            }
+            need.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(&b.0)));
+            let mut budget = GARRISON_TOTAL_CAP * own_total;
+            let mut deficits: Vec<(PlanetId, f64)> = Vec::new();
+            for (p, want) in need {
+                let want = want.min(budget);
+                if want <= 0.0 {
+                    break;
+                }
+                let mut have = 0.0;
+                let mut here: Vec<&FleetView> = fleets.iter().filter(|f| f.at == Some(p) && !self.owned_fleets.contains(&f.id)).collect();
+                here.sort_by_key(|f| f.id);
+                for f in here {
+                    if have >= want {
+                        break;
+                    }
+                    have += sim.force_strength(&f.units);
+                    self.held.insert(f.id);
+                }
+                budget -= have.min(want);
+                if have < 0.8 * want {
+                    deficits.push((p, want - have));
+                }
+            }
+            // Free fleets elsewhere reinforce the planets that miss their garrison (one fleet per planet per refresh).
+            for (p, _) in deficits {
+                let dist = hop_distances(snap, p);
+                let donor = fleets
+                    .iter()
+                    .filter(|f| f.heading_to.is_none() && f.at.is_some_and(|a| a != p) && !self.owned_fleets.contains(&f.id) && !self.held.contains(&f.id) && !self.reserved.contains_key(&f.id))
+                    .filter(|f| f.at.is_some_and(|a| snap.owner[a as usize] == Some(me) && dist[a as usize] != u32::MAX))
+                    .min_by_key(|f| (dist[f.at.unwrap_or(p) as usize], f.id));
+                if let Some(d) = donor {
+                    let safe = safe_from(snap, me, p);
+                    if d.at.is_some_and(|a| safe.get(a as usize).copied().unwrap_or(false)) && sim.move_fleet(me, d.id, p).is_ok() {
+                        self.held.insert(d.id);
+                    }
+                }
+            }
+        }
+    }
+
     /// Advances all pending commands.
     pub fn tick(&mut self, sim: &mut dyn AiSim, snap: &Snapshot, rng: &mut u64) {
         let now = sim.time();
         self.clock = now;
         self.reserved.retain(|_, (_, until)| *until > now);
+        if now - self.garrison_clock >= GARRISON_REFRESH || now < self.garrison_clock {
+            self.garrison_clock = now;
+            self.update_garrisons(sim, snap);
+        }
         let jobs = std::mem::take(&mut self.jobs);
         let mut keep = Vec::new();
         for job in jobs {
@@ -1251,7 +1376,7 @@ impl TaskForces {
         let candidate = sim
             .fleets_at(planet)
             .into_iter()
-            .filter(|f| f.owner == player && !owned.contains(&f.id))
+            .filter(|f| f.owner == player && !owned.contains(&f.id) && !self.held.contains(&f.id))
             .find(|f| f.units.iter().any(|(u, c)| u.eq_ignore_ascii_case(unit) && *c > 0));
         let Some(src) = candidate else { return false };
         let exact = src.units.iter().find(|(u, _)| u.eq_ignore_ascii_case(unit)).map(|(u, _)| u.clone()).unwrap_or_else(|| unit.to_string());
@@ -1599,3 +1724,55 @@ mod tests {
     }
 }
 
+
+/// How a faction fights, derived from the build costs of its own roster (no per-faction table): `heaviness` compares the median cost and the mean of the most expensive
+/// quarter with the references below (the medians of all rosters of the Remake and the Clone Wars stack, estimate). A heavy roster (Empire: median 8500, top quarter
+/// 133k) composes few strong ships, a light one (Rebels: median 6000, top quarter 89k) swarms with small cheap craft, in between a mix.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Doctrine {
+    /// Role shares of a force: capital / line ships, frigates and corvettes, squadrons and carriers.
+    pub roles: [f64; 3],
+    /// Exponent on a ship's power in the pick weight: above 0.5 favours big ships, below 0.5 favours many small ones.
+    pub power_exponent: f64,
+    /// -1 (swarm) .. +1 (heavy).
+    pub heaviness: f64,
+}
+
+const REF_MEDIAN_COST: f64 = 6500.0;
+const REF_TOP_QUARTER_COST: f64 = 90_000.0;
+
+impl Doctrine {
+    /// From the costs of a roster's ship types.
+    pub fn from_costs(mut costs: Vec<f64>) -> Self {
+        if costs.len() < 4 {
+            return Self { roles: [0.40, 0.30, 0.30], power_exponent: 0.5, heaviness: 0.0 };
+        }
+        costs.sort_by(|a, b| a.total_cmp(b));
+        let median = costs[costs.len() / 2];
+        let q = costs.len() * 3 / 4;
+        let top = costs[q..].iter().sum::<f64>() / (costs.len() - q) as f64;
+        let step = 1.5f64.ln();
+        let heaviness = (0.5 * (median / REF_MEDIAN_COST).ln() / step + 0.5 * (top / REF_TOP_QUARTER_COST).ln() / step).clamp(-1.0, 1.0);
+        let capital = (0.40 + 0.22 * heaviness).clamp(0.20, 0.62);
+        let small = (0.30 - 0.20 * heaviness).clamp(0.12, 0.50);
+        let escort = 1.0 - capital - small;
+        Self { roles: [capital, escort, small], power_exponent: 0.5 + 0.25 * heaviness, heaviness }
+    }
+}
+
+#[cfg(test)]
+mod doctrine_tests {
+    use super::*;
+
+    #[test]
+    fn heavy_rosters_compose_big_ships_light_ones_swarm() {
+        let rebel = Doctrine::from_costs(vec![500.0, 800.0, 1500.0, 3000.0, 6000.0, 9000.0, 12000.0, 20000.0, 60000.0, 80000.0, 90000.0, 100000.0]);
+        let empire = Doctrine::from_costs(vec![500.0, 1000.0, 2000.0, 4000.0, 8500.0, 12000.0, 20000.0, 30000.0, 110000.0, 130000.0, 150000.0, 160000.0]);
+        assert!(empire.heaviness > rebel.heaviness);
+        assert!(empire.roles[0] > rebel.roles[0] && empire.roles[2] < rebel.roles[2], "{empire:?} {rebel:?}");
+        assert!(empire.power_exponent > rebel.power_exponent);
+        let sum: f64 = empire.roles.iter().sum();
+        assert!((sum - 1.0).abs() < 1e-9);
+        assert_eq!(Doctrine::from_costs(vec![1.0]).roles, [0.40, 0.30, 0.30]);
+    }
+}

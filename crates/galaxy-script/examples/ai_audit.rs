@@ -73,7 +73,7 @@ fn main() {
     let campaign_name = args.get(1).map_or("GC_Full_Web_Way_Rebel", String::as_str);
     let seed: u64 = args.get(2).and_then(|a| a.parse().ok()).unwrap_or(1);
     let install = GameInstall::detect().expect("game install not found");
-    let fs: Arc<dyn FileSource> = Arc::new(GameFs::for_mod(&install, Some("1770851727")).expect("cannot open game files"));
+    let fs: Arc<dyn FileSource> = Arc::new(GameFs::for_mod(&install, Some(&std::env::var("MOD").unwrap_or_else(|_| "1770851727".to_owned()))).expect("cannot open game files"));
     let (data, _) = load_galaxy(&*fs);
     let data = Arc::new(data);
     let campaign = data.campaign(campaign_name).expect("campaign not found").clone();

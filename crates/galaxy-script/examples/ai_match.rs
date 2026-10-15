@@ -24,7 +24,7 @@ fn main() {
     let human = args.iter().find_map(|a| a.strip_prefix("human=")).unwrap_or("none").to_string();
 
     let install = GameInstall::detect().expect("game install not found");
-    let fs: Arc<dyn FileSource> = Arc::new(GameFs::for_mod(&install, Some("1770851727")).expect("cannot open game files"));
+    let fs: Arc<dyn FileSource> = Arc::new(GameFs::for_mod(&install, Some(&std::env::var("MOD").unwrap_or_else(|_| "1770851727".to_owned()))).expect("cannot open game files"));
     let (data, _) = load_galaxy(&*fs);
     let data = Arc::new(data);
     let campaign = data.campaign(campaign_name).expect("campaign not found").clone();
