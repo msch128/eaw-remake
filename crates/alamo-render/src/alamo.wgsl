@@ -88,6 +88,12 @@ fn perturb_planet(tbn: mat3x3<f32>, sample_rgb: vec3<f32>) -> vec3<f32> {
     return normalize(tbn * vec3<f32>(t.x * PLANET_BUMP, g * PLANET_BUMP, t.z));
 }
 
+// Planet look (estimates, tuned against the Remake Bestine frame Bqc5 f0033: dark navy ocean, sparse soft clouds).
+const PLANET_SATURATION: f32 = 1.15;
+const PLANET_GAIN: f32 = 0.9;
+const PLANET_CLOUD_GAIN: f32 = 0.7;
+const PLANET_CLOUD_MIX: f32 = 0.6;
+
 fn sun_dir() -> vec3<f32> {
     if lights.n_directional_lights > 0u {
         return normalize(lights.directional_lights[0].direction_to_light);
@@ -275,10 +281,10 @@ fn shade(in: VertexOutput, front: bool) -> vec4<f32> {
         let spec = mat.specular.rgb * spec_mask * pow(saturate(dot(n, H)), filtered_shininess(n, max(mat.shininess, 8.0), tvar)) * sun * step(0.0, dot(N, L));
         // The original renders land more saturated than the plain albedo product (video: vivid green on Byss).
         let grey = dot(surf, vec3<f32>(0.299, 0.587, 0.114));
-        var col = mix(vec3<f32>(grey), surf, 1.35) * 1.2 + spec;
+        var col = mix(vec3<f32>(grey), surf, PLANET_SATURATION) * PLANET_GAIN + spec;
         // Cloud layer, shaded with its own normal map.
         let cloud_lit = vec3<f32>(1.0) * (amb + sun * cdl);
-        col = mix(col, cloud_lit, cloud_amount * 0.9);
+        col = mix(col, cloud_lit * PLANET_CLOUD_GAIN, cloud_amount * PLANET_CLOUD_MIX);
         // City lights on the night side.
         let night = smoothstep(0.08, -0.12, dot(N, L));
         col = col + mat.city_color.rgb * city_mask * night * (1.0 - cloud_amount * 0.8);
