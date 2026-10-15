@@ -1232,6 +1232,9 @@ pub(crate) fn ability_columns(data: Res<CommandBarData>, mut buttons: Query<(&Sl
     }
 }
 
+/// Tint of the group frame pieces (estimate, see [`border_pieces`]).
+const BORDER_TINT: Color = Color::srgba(0.35, 0.42, 0.55, 0.55);
+
 /// Joins the column frames (`special_border_NN`, two selected units each) of one bar section into one panel:
 /// left / centre / right pieces at the ends and in between, the full frame for a lone column (Remake video b0700).
 pub(crate) fn border_pieces(
@@ -1266,6 +1269,9 @@ pub(crate) fn border_pieces(
         };
         if let (Some(t), Ok(mut img)) = (tex.get(&mut images, PIECES[piece]), nodes.get_mut(layer)) {
             img.image = t.handle;
+            // The frame art is near white: as a bright outline around a group (and bright seams between its cards) it is not what the Remake shows,
+            // where grouped cards keep their own dark slot frames. A dark translucent tint (estimate) keeps the frame but drops the outline.
+            img.color = BORDER_TINT;
         }
     }
 }
