@@ -213,7 +213,7 @@ fn drive_ui_scale(
 ) {
     let design = design_scale(window.as_deref().map(|w| w.size()), offscreen.as_deref());
     let v = if bar.is_empty() { settings.ui_scale } else { design * settings.ui_scale };
-    let strip = if bar.is_empty() { 0.0 } else { 290.0 * v };
+    let strip = if bar.is_empty() { 0.0 } else { bar_reserve(v) };
     if reserved.0 != strip {
         reserved.0 = strip;
     }
@@ -2408,6 +2408,13 @@ fn relation_color(state: &SimState, main_factions: &[u32], me: Option<u32>, owne
 }
 
 
+/// Height at the bottom of the screen that planet labels keep clear: the build bar (design 1366x768, about 17 % of the height,
+/// like the Remake's). It was 290 (38 % of the height), which hid every label in the lower part of the map; the minimap, the advisor
+/// and the ticker are kept clear through the panel rectangles instead.
+pub(crate) fn bar_reserve(scale: f32) -> f32 {
+    135.0 * scale
+}
+
 /// The UI is designed for 1366x768 and scales with the screen height, but never wider than the screen
 /// allows: on 16:10 or 4:3 screens the width decides, so the bar and its build pads stay on screen.
 pub(crate) fn design_scale(window: Option<Vec2>, offscreen: Option<&OffscreenTarget>) -> f32 {
@@ -2425,6 +2432,15 @@ pub(crate) fn design_scale(window: Option<Vec2>, offscreen: Option<&OffscreenTar
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_label_strip_covers_only_the_build_bar() {
+        // A label at 70 % of the screen height (the user's missing Fresia / N'Zoth) must fit above the strip at every UI size.
+        for (w, h) in [(1280.0_f32, 720.0_f32), (1920.0, 1080.0), (2400.0, 1350.0)] {
+            let scale = design_scale(Some(Vec2::new(w, h)), None);
+            assert!(h * 0.78 <= h - bar_reserve(scale), "{w}x{h}: strip {}", bar_reserve(scale));
+        }
+    }
 
     #[test]
     fn strategic_opponent_is_the_main_rival() {
