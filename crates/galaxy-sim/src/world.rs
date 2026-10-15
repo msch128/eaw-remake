@@ -228,7 +228,7 @@ pub struct FactionInfo {
     pub tech_upgrades: Vec<TechUpgrade>,
 }
 
-/// A purchasable tech level upgrade (`*_Level_*_Tech_Upgrade`).
+/// A purchasable tech level upgrade: Remake `*_Tech-N` (`Build_Advances_Tech_Level`) or vanilla `*_Level_*_Tech_Upgrade`.
 #[derive(Debug, Clone)]
 pub struct TechUpgrade {
     /// Object name.
@@ -237,6 +237,10 @@ pub struct TechUpgrade {
     pub cost: f32,
     /// Build time in seconds.
     pub time: f32,
+    /// `Required_Special_Structures` groups (Remake: the faction's `*_Research_Institute`) that must stand on the planet it is bought at.
+    pub req_structures: Vec<Vec<StructureTypeId>>,
+    /// `Required_Star_Base_Level` of the planet it is bought at (at least 1).
+    pub req_starbase: i32,
 }
 
 /// One weapon group of a combatant, aggregated per damage type.

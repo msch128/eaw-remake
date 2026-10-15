@@ -69,6 +69,20 @@ impl World {
         out
     }
 
+    /// Requirements of the faction's next tech upgrade that `planet` does not meet (empty when the chain is finished).
+    pub fn unmet_for_tech(&self, galaxy: &Galaxy, faction: FactionId, planet: PlanetId) -> Vec<Unmet> {
+        let (Some(fs), Some(ps), Some(info)) = (galaxy.factions.get(faction as usize), galaxy.planets.get(planet as usize), self.factions.get(faction as usize)) else { return Vec::new() };
+        let Some(up) = info.tech_upgrades.get((fs.tech - info.start_tech).max(0) as usize) else { return Vec::new() };
+        let mut out = Vec::new();
+        if self.starbase_level(galaxy, planet) < up.req_starbase {
+            out.push(Unmet::StarBaseLevel(up.req_starbase));
+        }
+        if self.tech_needs_institute(faction) {
+            out.extend(self.unmet_structures(ps, &up.req_structures, false));
+        }
+        out
+    }
+
     /// The requirement groups no structure of `ps` meets (structures: also none queued before the item, as in `check_build_structure`).
     fn unmet_structures(&self, ps: &PlanetState, groups: &[Vec<StructureTypeId>], count_queued: bool) -> Vec<Unmet> {
         let queued: Vec<StructureTypeId> = ps.queues[Lane::Structures as usize]

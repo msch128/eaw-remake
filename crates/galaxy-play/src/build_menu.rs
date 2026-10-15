@@ -201,7 +201,8 @@ fn reasons_for(world: &World, galaxy: &Galaxy, names: &PlayCatalog, faction: Fac
     let unmet = match target {
         BuildTarget::Unit(u) => world.unmet_for_unit(galaxy, faction, planet, u),
         BuildTarget::Structure(s) => world.unmet_for_structure(galaxy, faction, planet, s),
-        BuildTarget::Starbase(_) | BuildTarget::Tech(_) => Vec::new(),
+        BuildTarget::Tech(_) => world.unmet_for_tech(galaxy, faction, planet),
+        BuildTarget::Starbase(_) => Vec::new(),
     };
     let mut out: Vec<String> = Vec::new();
     for u in unmet {

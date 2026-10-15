@@ -68,8 +68,15 @@ Population: units have `Population_Value`; the cap is
 * Ground structures only appear if they matter for the galactic game (`StructureType::galactic`, no ground battles): see `STATUS.md` "Build menu split".
 * Star base levels are the chain `Prev_Level_Base` / `Next_Level_Base` (`Buildings/Space/GC/<Faction>/Colonies.xml`). Minor
   factions define their levels as unlinked objects (`Minor_Starbase_X`, `_2`, `_3`) which are chained by name and level.
-* Tech levels: `*_Level_N_Tech_Upgrade` upgrade objects (`Upgrades/Vanilla*.xml`, flag `Tactical_Build_Increments_Tech_Level`,
-  cost `Tactical_Build_Cost_Campaign`). Factions without such objects (minors) get generic upgrades costing 3000 x level (estimate).
+* Tech levels, Remake and Clone Wars: the upgrade objects with `Build_Advances_Tech_Level` (`Research/Units/Upgrade_Dummies.xml`: `E_/R_/U_Tech-2..5`, `CIS_Tech-1..4`, `Republic_Tech-*`, variants of `Dummy_<F>`; `GUI_Row` 0, first on the build bar).
+  Time is the object's (`Build_Time_Seconds` 300 / 450 / 600 / 750). The dummy requires the faction's `<F>_Research_Institute` **on the planet it is bought at**
+  (`Required_Special_Structures`) and star base level 1. A campaign starts only its own player faction with that institute at the home planet (`Starting_Forces`);
+  the AI factions get their levels from the story scripts (`SET_TECH_LEVEL`; `Lock_Research_Institute` locks the structure for the AI). So the institute only
+  unlocks this item, and costs 300 upkeep a week. Price: **user rule** `tech_level_cost` (5000 / 10000 / 20000 / 50000), not the object's `Build_Cost_Credits`
+  (20000 / 30000 / 40000 / 50000). The `Research_<F>_Shipyard_N` units (`_Research_<F>.xml`) are not in `GameObjectFiles.xml` and have empty names: no effect.
+  The build bar greys the item and lists the missing institute. The requirement binds only the human player (`World::tech_needs_institute`): the Remake scripts lock the institute for the AI, so the AI helpers (`ai.rs`, `galaxy-ai`) buy levels at any star base planet (estimate, test `the_ai_buys_levels_without_the_institute`).
+* Tech levels, vanilla data (no such objects): `*_Level_N_Tech_Upgrade` upgrade objects (`Upgrades/Vanilla*.xml`, flag `Tactical_Build_Increments_Tech_Level`,
+  cost `Tactical_Build_Cost_Campaign`), star base only. Factions without such objects (minors) get generic upgrades costing 3000 x level (estimate).
 * Newly built ships join the idle fleet of that faction at the planet, or create one.
 
 ## 4. Movement

@@ -133,3 +133,36 @@ fn a_greyed_ship_names_every_missing_requirement_in_the_games_words() {
         assert!(c.reasons.contains(&names.rules.funds), "{:?}", c.reasons);
     }
 }
+
+#[test]
+fn the_tech_upgrade_waits_for_the_research_institute() {
+    let Some(install) = GameInstall::detect() else { return };
+    if !install.mod_data("1770851727").is_dir() {
+        return;
+    }
+    let data = load_galaxy(&GameFs::for_mod(&install, Some("1770851727")).unwrap()).0;
+    let campaign = data.campaign("GC_Full_Web_Way_Rebel").unwrap();
+    let mut sim = Sim::new(&data, campaign, SimConfig { victory_enabled: false, ..SimConfig::default() }).unwrap();
+    let w = sim.world().clone();
+    let names = PlayCatalog::from_data(&w, &data);
+    // The human player (Rebel) holds a second planet without institute.
+    let empire = w.faction_id("Rebel").unwrap();
+    let p = w.planet_id("Coruscant_WW").unwrap();
+    sim.set_planet_owner(p, None);
+    sim.set_planet_owner(p, Some(empire));
+    sim.set_starbase(p, w.first_starbase[empire as usize]);
+    sim.add_credits(empire, 1.0e9);
+    let institute = w.structure_id("R_Research_Institute").unwrap();
+    let tech = |sim: &Sim| {
+        let menu = BuildMenu::for_planet(&w, sim.galaxy(), &names, empire, p).expect("menu");
+        menu.options.into_iter().find(|o| matches!(o.target, BuildTarget::Tech(_))).expect("tech entry")
+    };
+    let before = tech(&sim);
+    assert!(matches!(before.availability, Availability::Requires(_)), "{:?}", before.availability);
+    assert!(before.reasons.iter().any(|r| r.contains(names.structure(institute))), "reasons {:?}", before.reasons);
+
+    assert!(sim.add_structure(p, institute));
+    let after = tech(&sim);
+    assert_eq!(after.availability, Availability::Available, "reasons {:?}", after.reasons);
+    assert!(after.reasons.is_empty());
+}

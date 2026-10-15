@@ -360,6 +360,13 @@ impl World {
         Ok(next)
     }
 
+    /// Whether the faction's tech upgrades ask for their structure (the Research Institute). Only the human player's do: the Remake story scripts lock the
+    /// institute for the AI (`Lock_Research_Institute`) and hand its factions their levels (`SET_TECH_LEVEL`), so our AI helpers, which buy levels themselves, do
+    /// so at any star base planet (estimate).
+    pub fn tech_needs_institute(&self, faction: FactionId) -> bool {
+        self.victory.active_player == Some(faction)
+    }
+
     /// Checks whether the next tech level can be bought at this planet.
     pub fn check_upgrade_tech(&self, galaxy: &Galaxy, faction: FactionId, planet: PlanetId) -> Result<usize, CommandError> {
         let fs = galaxy.factions.get(faction as usize).ok_or(CommandError::Invalid)?;
@@ -381,10 +388,16 @@ impl World {
         if fs.tech >= info.max_tech || idx >= info.tech_upgrades.len() {
             return Err(CommandError::NotAvailable);
         }
-        if self.starbase_level(galaxy, planet) < 1 {
+        let up = &info.tech_upgrades[idx];
+        if self.starbase_level(galaxy, planet) < up.req_starbase {
             return Err(CommandError::RequirementsNotMet("star base".into()));
         }
-        if fs.credits < info.tech_upgrades[idx].cost as f64 {
+        if self.tech_needs_institute(faction)
+            && let Some(missing) = self.missing_structures(ps, &up.req_structures)
+        {
+            return Err(CommandError::RequirementsNotMet(missing));
+        }
+        if fs.credits < up.cost as f64 {
             return Err(CommandError::InsufficientCredits);
         }
         Ok(idx)

@@ -599,7 +599,7 @@ impl World {
     pub(crate) fn build_tech_upgrades(&mut self, data: &GameData) {
         for fi in 0..self.factions.len() {
             let fname = key(&self.factions[fi].name);
-            let mut chain = Vec::new();
+            let mut chain = self.mod_tech_chain(data, &fname, self.factions[fi].start_tech);
             // Head of the chain: affiliated tech upgrade without a previous level.
             let head = data.objects.of_kind("upgradeobject").find_map(|o| {
                 let r = data.objects.resolve(&o.name)?;
@@ -608,7 +608,7 @@ impl World {
                 (inc && aff.iter().any(|a| key(a) == fname) && r.get("previous_upgrade_level_type").is_none_or(str::is_empty))
                     .then(|| o.name.clone())
             });
-            let mut cur = head;
+            let mut cur = if chain.is_empty() { head } else { None };
             let mut guard = 0;
             while let Some(name) = cur.take() {
                 guard += 1;
@@ -620,6 +620,8 @@ impl World {
                     name: name.clone(),
                     cost: r.num("tactical_build_cost_campaign").unwrap_or(1000.0),
                     time: r.num("tactical_build_time_seconds").unwrap_or(60.0),
+                    req_structures: Vec::new(),
+                    req_starbase: 1,
                 });
                 cur = r.string("next_upgrade_level_type");
             }
@@ -627,7 +629,7 @@ impl World {
                 // Factions without upgrade objects (minors) buy generic levels.
                 let (start, max) = (self.factions[fi].start_tech, self.factions[fi].max_tech);
                 for lvl in start..max {
-                    chain.push(TechUpgrade { name: format!("Generic_Tech_{}", lvl + 1), cost: 3000.0 * (lvl + 1) as f32, time: 60.0 });
+                    chain.push(TechUpgrade { name: format!("Generic_Tech_{}", lvl + 1), cost: 3000.0 * (lvl + 1) as f32, time: 60.0, req_structures: Vec::new(), req_starbase: 1 });
                 }
             }
             // User rule (not from the data): tech levels get exponentially dearer for every faction, AI included.
@@ -637,6 +639,35 @@ impl World {
             }
             self.factions[fi].tech_upgrades = chain;
         }
+    }
+
+    /// The Remake way to raise a tech level: upgrade objects with `Build_Advances_Tech_Level` (`E_Tech-2` ... `E_Tech-5`, `CIS_Tech-1` ...), variants of
+    /// `Dummy_<F>` which require the faction's `<F>_Research_Institute` and a star base. Price, time and the requirement are the object's; empty when the
+    /// data has none for this faction (vanilla chain then).
+    fn mod_tech_chain(&self, data: &GameData, faction: &str, start: i32) -> Vec<TechUpgrade> {
+        let found: Vec<(i32, String)> = data
+            .objects
+            .of_kind("upgradeobject")
+            .filter_map(|o| {
+                let r = data.objects.resolve(&o.name)?;
+                let level: i32 = r.num("build_advances_tech_level")?;
+                r.list("affiliation").iter().any(|a| key(a) == faction).then(|| (level, o.name.clone()))
+            })
+            .collect();
+        let mut chain = Vec::new();
+        for level in start + 1.. {
+            let Some((_, name)) = found.iter().find(|(l, _)| *l == level) else { break };
+            let Some(r) = data.objects.resolve(name) else { break };
+            let (groups, _) = self.resolve_requirement(&parse_requirement(&r.string("required_special_structures").unwrap_or_default()));
+            chain.push(TechUpgrade {
+                name: name.clone(),
+                cost: r.num("build_cost_credits").unwrap_or(1000.0),
+                time: r.num("build_time_seconds").unwrap_or(60.0),
+                req_structures: groups,
+                req_starbase: r.num("required_star_base_level").unwrap_or(1).max(1),
+            });
+        }
+        chain
     }
 
     pub(crate) fn build_victory(&mut self, campaign: &Campaign) {
