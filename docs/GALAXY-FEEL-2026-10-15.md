@@ -28,3 +28,36 @@ Remake values from `GameConstants.xml` (mod 1770851727): `GMC_InitialPullbackDis
   selects that planet, so the existing dive opens its view.
 - Proof: real window, wheel x3 over empty space near Malachor kept the stars around the cursor in place; wheel x8 over Reltooine
   opened the Reltooine planet view. Unit tests in `camera.rs`.
+
+## Fleet drag and drop
+
+Source check: the three Remake videos (CS9VdxglewY 3605 s, n93_uvJ3G6Q 666 s, Bqc5Ei6gF8Y 322 s) were sampled in full (6 s steps
+over the galaxy part of CS9, 15-30 s steps elsewhere, 2 fps around planet transitions, extracted with ffmpeg into `%TEMP%\gfeel`).
+The player in CS9 keeps the game paused and only moves the camera, clicks planets and opens planet views; no drag of a fleet is
+in any video. So the spec below is built from what the frames do show (fleet look, rings, route lines) plus the user's description
+of Remake 4.0, and every number is an estimate.
+
+What the frames show about fleets on the galaxy map (CS9 f0016, f0019; t 998-1006 s, t 3565 s, t 3585 s):
+
+1. A parked fleet is a small cluster of ship models with a few tiny red or green icons next to the planet; no big numbers.
+2. A selected planet gets a thin notched ring plus the large dashed territory ring; a selected fleet is not marked by anything big.
+3. Hyperlanes are thick light shafts; a fleet on a lane is a tiny model with a short line behind it (t 1002-1005 s).
+4. The game pause banner and portraits do not change while the player moves things.
+
+Spec (user words: press and hold on a fleet, it hangs at the cursor like a picture dragged between Windows folders, drop it on a planet):
+
+1. Click on a fleet: the whole group pops once (scale up 28 % and back in 0.3 s) and keeps the pulsing double ring. Status: done
+   (`galaxy-play/src/carry.rs`, `pop_bump`).
+2. Press and move more than 6 px: the group is picked up. It hangs at the cursor, lifted 1.1 pad radii above the map and 20 % bigger,
+   following with a short exponential lag (rate 22 per second, frame rate independent). Several selected fleets fan out in a row
+   around the cursor. Status: done (`carry_fleets`).
+3. The spot it came from stays marked by a dashed ring in the owner colour with a thin dashed tether to the carried fleet. Status: done.
+4. Hover target: two pulsing rings around the planet under the cursor; green on an own planet, yellow on a neutral one, red on an enemy
+   one, red and still when no route exists. The yellow marching route line and the ETA hint stay. Status: done (`draw_drag`).
+5. Drop: the fleet glides from the cursor to where the simulation puts it (its parking pad, or into the lane) in about 0.25 s
+   (rate 14 per second) and shrinks back, then moves along the lane. Status: done.
+6. A carried fleet is never a drop target for itself (picking skips carried fleets). Status: done.
+7. Right click to move stays as it is (no carry animation, route line only).
+8. Open: hero heads follow the fleet entity, so they travel with the carried group; checked only in code so far.
+
+Offscreen proof: `--select <planet> --drag-to <planet>` fills the drag state by hand and captures the carried state.

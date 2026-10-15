@@ -22,6 +22,7 @@ pub mod driver;
 pub mod geometry;
 pub mod input;
 mod logic;
+pub mod carry;
 pub mod notify;
 pub mod state;
 pub mod ui;
@@ -154,6 +155,7 @@ impl Plugin for GalaxyPlayPlugin {
             .init_resource::<PlayMapHidden>()
             .init_resource::<input::DragState>()
             .init_resource::<visuals::FleetEntities>()
+            .init_resource::<carry::CarryAnim>()
             .init_resource::<visuals::Fog>()
             .add_message::<PlayAction>()
             .add_message::<PlayEvent>()
@@ -167,7 +169,7 @@ impl Plugin for GalaxyPlayPlugin {
                 (
                     (logic::pump_snapshots, logic::hotkeys, logic::handle_actions, logic::drive_clock, logic::prune_selection).chain().in_set(PlaySet::Logic),
                     (
-                        (visuals::sync_fleets, visuals::fit_fleet_models).chain(),
+                        (visuals::sync_fleets, visuals::fit_fleet_models, carry::carry_fleets).chain(),
                         (visuals::draw_fleet_markers, visuals::draw_routes, visuals::update_fleet_labels).run_if(|hidden: Res<PlayMapHidden>| !hidden.0),
                     )
                         .chain()

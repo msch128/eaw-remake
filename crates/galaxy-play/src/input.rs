@@ -49,6 +49,10 @@ pub struct DragState {
     pub dragging: bool,
     /// Screen rectangle of an ongoing box selection.
     pub box_rect: Option<(Vec2, Vec2)>,
+    /// Fleets hanging at the cursor while a drag is in progress (the dragged fleet and the rest of the selection).
+    pub carry: Vec<FleetId>,
+    /// Point of the map plane under the cursor while a fleet is dragged.
+    pub cursor_ground: Option<Vec3>,
     /// Route of the drag in progress.
     pub preview: Option<(PlanetId, RoutePlan)>,
 }
@@ -91,6 +95,7 @@ pub fn update_hover(
     entities: Res<FleetEntities>,
     transforms: Query<&Transform, With<FleetVisual>>,
     cfg: Res<PlayConfig>,
+    drag: Res<DragState>,
     mut hover: ResMut<PlayHover>,
 ) {
     let new = (|| {
@@ -102,7 +107,7 @@ pub fn update_hover(
         let ring = layout.unit * cfg.fleet_icon_scale * 1.5;
         let fleet = pick_nearest(
             cursor,
-            entities.0.iter().filter_map(|(&id, &e)| {
+            entities.0.iter().filter(|(id, _)| !drag.carry.contains(id)).filter_map(|(&id, &e)| {
                 let t = transforms.get(e).ok()?.translation;
                 let center = Vec3::new(t.x, t.y - layout.unit * 0.1, t.z);
                 let p = camera.world_to_viewport(cam_tf, center).ok()?;
@@ -176,6 +181,8 @@ pub fn handle_mouse(
         drag.dragging = false;
         drag.box_rect = None;
         drag.preview = None;
+        drag.carry.clear();
+        drag.cursor_ground = None;
         return;
     }
     if buttons.just_pressed(MouseButton::Left) && !over_ui {
@@ -201,6 +208,11 @@ pub fn handle_mouse(
         if drag.dragging {
             match press.fleet.filter(|&f| mine(f)) {
                 Some(src_fid) => {
+                    // The group hangs at the cursor: the dragged fleet and the rest of the selection.
+                    let mut carry: Vec<FleetId> = selection.fleets.iter().copied().filter(|&f| mine(f) && f != src_fid).collect();
+                    carry.insert(0, src_fid);
+                    drag.carry = carry;
+                    drag.cursor_ground = camera.viewport_to_world(cam_tf, cursor).ok().and_then(|ray| ray.intersect_plane(Vec3::ZERO, InfinitePlane3d::new(Vec3::Y)).map(|d| ray.get_point(d)));
                     // Drag-and-drop order: plan the route to the planet under the cursor.
                     drag.box_rect = None;
                     let target_fleet = hover.fleet.filter(|&f| f != src_fid);
@@ -253,6 +265,8 @@ pub fn handle_mouse(
     if buttons.just_released(MouseButton::Left)
         && let Some(press) = drag.left.take()
     {
+        drag.carry.clear();
+        drag.cursor_ground = None;
         let was_dragging = std::mem::take(&mut drag.dragging);
         let rect = drag.box_rect.take();
         drag.preview = None;
@@ -339,6 +353,9 @@ pub fn draw_drag(
     drag: Res<DragState>,
     layout: Res<GalaxyLayout>,
     hover: Res<PlayHover>,
+    state: Res<SimState>,
+    player: Res<PlayerFaction>,
+    time: Res<Time>,
     mut rect: Single<(&mut Node, &mut Visibility), With<BoxSelectRect>>,
 ) {
     let (node, vis) = &mut *rect;
@@ -352,11 +369,25 @@ pub fn draw_drag(
         }
         None => **vis = Visibility::Hidden,
     }
+    // The drop target: two pulsing rings, green on an own planet, red on an enemy one, yellow otherwise; red and flat when the fleet
+    // has no route there.
     if drag.dragging
+        && !drag.carry.is_empty()
         && let Some(p) = hover.planet
     {
         let c = layout.positions[p as usize];
-        gizmos.circle(Isometry3d::new(c, Quat::from_rotation_x(-FRAC_PI_2)), layout.radii[p as usize] * 1.3, Color::srgb(0.4, 1.0, 0.6));
+        let owner = state.galaxy().planets.get(p as usize).and_then(|pl| pl.owner);
+        let reachable = drag.preview.as_ref().is_some_and(|(to, _)| *to == p) || drag.carry.iter().any(|f| state.galaxy().fleets.get(f).is_some_and(|fl| fl.planet() == Some(p)));
+        let color = match owner {
+            _ if !reachable => Color::srgb(1.0, 0.25, 0.2),
+            o if o.is_some() && o == player.0 => Color::srgb(0.4, 1.0, 0.6),
+            Some(_) => Color::srgb(1.0, 0.35, 0.3),
+            None => Color::srgb(1.0, 0.85, 0.2),
+        };
+        let pulse = if reachable { 1.0 + 0.06 * (time.elapsed_secs() * 6.0).sin() } else { 1.0 };
+        let iso = Isometry3d::new(c, Quat::from_rotation_x(-FRAC_PI_2));
+        gizmos.circle(iso, layout.radii[p as usize] * 1.3 * pulse, color);
+        gizmos.circle(iso, layout.radii[p as usize] * 1.55 * pulse, color.with_alpha(0.45));
     }
 }
 

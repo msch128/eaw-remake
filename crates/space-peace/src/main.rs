@@ -7,6 +7,7 @@ mod battle_seam;
 mod campaign_select;
 mod cheat_menu;
 mod droid_menu;
+mod drag_demo;
 mod camera;
 mod cli;
 mod flow;
@@ -209,6 +210,7 @@ fn main() {
         .add_plugins(cheat_menu::plugin)
         .add_plugins(droid_menu::plugin)
         .add_plugins(galaxy_models::GalaxyModelsPlugin)
+        .add_plugins(drag_demo::DragDemoPlugin)
         .add_plugins((
             FlowPlugin,
             LoadingPlugin,

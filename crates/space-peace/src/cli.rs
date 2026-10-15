@@ -48,6 +48,8 @@ pub struct Args {
     /// Offscreen only: send the player's fleets parked at the selected planet to this planet
     /// (`--move <planet>`).
     pub move_to: Option<String>,
+    /// Offscreen only: show the fleets of the selected planet picked up and carried over this planet, as in a drag (--drag-to <planet>).
+    pub drag_to: Option<String>,
     /// Offscreen only: stop advancing when a battle waits for the player (`--stop-on-battle`).
     pub stop_on_battle: bool,
     /// Offscreen only: click this button of the battle dialog once it opens (`--battle-choice fight|auto`).
@@ -137,6 +139,7 @@ impl Default for Args {
             weeks: None,
             build: None,
             move_to: None,
+            drag_to: None,
             stop_on_battle: false,
             battle_choice: None,
             battle_auto: false,
@@ -195,6 +198,7 @@ OPTIONS:
   --weeks <n>            Offscreen: advance n galactic weeks before the capture
   --build <text>         Offscreen: queue the first build option matching text at the selected planet
   --move <planet>        Offscreen: send the fleets at the selected planet to another planet
+  --drag-to <planet>     Offscreen: carry the fleets of the selected planet over another planet, as while dragging them
   --stop-on-battle       Offscreen: stop advancing as soon as a battle waits for a decision
   --battle-choice <c>    Offscreen: click fight or auto in the battle dialog when it opens
   --battle-auto           Offscreen: the AI plays both sides of a tactical battle
@@ -287,6 +291,7 @@ impl Args {
                     out.weeks = Some(v.parse().map_err(|e| format!("bad --weeks: {e}"))?);
                 }
                 "--build" => out.build = Some(it.next().ok_or("--build needs a value")?),
+                "--drag-to" => out.drag_to = Some(it.next().ok_or("--drag-to needs a value")?),
                 "--move" => out.move_to = Some(it.next().ok_or("--move needs a value")?),
                 "--stop-on-battle" => out.stop_on_battle = true,
                 "--battle-auto" => out.battle_auto = true,
