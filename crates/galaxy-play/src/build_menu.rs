@@ -295,7 +295,14 @@ impl BuildMenu {
             });
         }
         dedupe_options(world, &mut options);
-        options.sort_by(|a, b| a.category.cmp(&b.category).then(a.cost.total_cmp(&b.cost)).then_with(|| a.name.cmp(&b.name)));
+        // The game orders its build bar by `GUI_Row` and then by object load order (the catalog index), not by price (reference video, Coruscant orbital bar).
+        let order = |o: &BuildOption| match o.target {
+            BuildTarget::Unit(u) => (world.units[u as usize].gui_row, u as usize),
+            BuildTarget::Structure(s) => (world.structures[s as usize].gui_row, s as usize),
+            BuildTarget::Starbase(b) => (0, b as usize),
+            BuildTarget::Tech(i) => (0, i),
+        };
+        options.sort_by(|a, b| a.category.cmp(&b.category).then_with(|| order(a).cmp(&order(b))));
 
         // Queues.
         let mut queue = Vec::new();

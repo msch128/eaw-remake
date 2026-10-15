@@ -345,6 +345,9 @@ pub struct UnitType {
     pub build_time: f32,
     /// Required faction tech level.
     pub tech: i32,
+    /// `GUI_Row` of the build bar: 0 for hero and vessel upgrade items, 1 for everything else. The game orders the bar by this row, then by object load order
+    /// (the catalog index).
+    pub gui_row: i32,
     /// Population used.
     pub population: i32,
     /// Population the unit counts in a space battle (`Space_Override_Population_Value`, else `population`).
@@ -396,6 +399,8 @@ pub struct StructureType {
     pub build_time: f32,
     /// Required tech level.
     pub tech: i32,
+    /// `GUI_Row` (see [`UnitType::gui_row`]).
+    pub gui_row: i32,
     /// Required star base level.
     pub req_starbase: i32,
     /// `Required_Special_Structures`: every group must be met by one of its members (`A B` = both, `A | B` = either).

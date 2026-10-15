@@ -70,3 +70,28 @@ fn flagship_prefers_hero_ship() {
 
     assert_eq!(galaxy_play::flagship(w, &fleet), Some(piett), "Hero ship Piett must be chosen as flagship over ISD");
 }
+
+#[test]
+fn build_bar_follows_the_games_order_not_the_price() {
+    let Some(install) = GameInstall::detect() else { return };
+    if !install.mod_data("1770851727").is_dir() {
+        return;
+    }
+    let data = load_galaxy(&GameFs::for_mod(&install, Some("1770851727")).unwrap()).0;
+    let campaign = data.campaign("GC_Full_Web_Way_Rebel").unwrap();
+    let mut sim = Sim::new(&data, campaign, SimConfig { victory_enabled: false, ..SimConfig::default() }).unwrap();
+    let w = sim.world().clone();
+    let names = PlayCatalog::from_data(&w, &data);
+    let empire = w.faction_id("Empire").unwrap();
+    let p = w.planet_id("Coruscant_WW").unwrap();
+    sim.set_planet_owner(p, None);
+    sim.set_planet_owner(p, Some(empire));
+    sim.add_credits(empire, 1.0e9);
+    sim.set_tech_level(empire, 9);
+    let menu = BuildMenu::for_planet(&w, sim.galaxy(), &names, empire, p).expect("menu");
+    let structures: Vec<usize> = menu.options.iter().filter_map(|o| if let BuildTarget::Structure(s) = o.target { Some(s as usize) } else { None }).collect();
+    assert!(structures.len() > 3, "some structures are offered");
+    assert!(structures.windows(2).all(|x| (w.structures[x[0]].gui_row, x[0]) <= (w.structures[x[1]].gui_row, x[1])), "structures follow GUI_Row, then the load order of the data");
+    let costs: Vec<f32> = structures.iter().map(|&s| w.structures[s].cost).collect();
+    assert!(costs.windows(2).any(|c| c[0] > c[1]), "the order is not the price order: {costs:?}");
+}
