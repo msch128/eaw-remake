@@ -53,7 +53,9 @@ impl Default for BattleCamera {
             bounds_min: Vec2::splat(-10_000.0),
             bounds_max: Vec2::splat(10_000.0),
             min_distance: 500.0,
-            max_distance: 16_000.0,
+            // `Space_Mode` allows 1000..2000 only; its overview camera (`Tactical_Overview_Distance2`) reaches 6000. The wheel stops there, so
+            // zooming out never turns every ship into a dot.
+            max_distance: 6_000.0,
             snap: false,
         }
     }
