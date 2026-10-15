@@ -453,6 +453,22 @@ pub struct ReinforceUi {
     zone_discs: Vec<(Entity, Vec3, f32)>,
     /// Mesh and material shared by the zone discs.
     zone_assets: Option<(Handle<Mesh>, Handle<StandardMaterial>)>,
+    /// Waves dropped on the map that have not arrived yet, oldest first.
+    placed: Vec<Placed>,
+}
+
+/// A wave the player dropped on the map: the reserve count went down at the drop (also while the battle is paused, when the simulation
+/// has not seen the command yet), and a ring marks where it will arrive until the simulation reports the arrival.
+#[derive(Debug)]
+struct Placed {
+    /// Ship definition.
+    ship: u32,
+    /// Units.
+    count: u32,
+    /// The arrival marker.
+    marker: Entity,
+    /// The simulation accepted the call (`ReinforcementsCalled`).
+    acked: bool,
 }
 
 /// Verdict of the placement rule at the cursor.
@@ -468,6 +484,7 @@ pub struct Ghost {
 fn init_reinforce(rt: Res<BattleRuntime>, settings: Res<BattleViewSettings>, mut ui: ResMut<ReinforceUi>) {
     ui.root = None;
     ui.rows.clear();
+    ui.placed.clear();
     let Some(side) = rt.request.as_ref().and_then(|r| r.sides.get(settings.player_side as usize)) else { return };
     for g in &side.reserve {
         let Some(ship) = rt.catalog.ship_id(&g.name) else { continue };
@@ -644,6 +661,41 @@ fn reinforce_panel(
     }
 }
 
+/// A wave was dropped at `ground` (Bevy space): the reserve count goes down now, so the window tells the truth while the battle is paused
+/// (the simulation only sees the command on its next step), and a ring marks the arrival spot until the wave arrives.
+#[allow(clippy::too_many_arguments)]
+fn reserve_wave(
+    ui: &mut ReinforceUi,
+    ship: u32,
+    count: u32,
+    ground: Vec3,
+    ring: f32,
+    commands: &mut Commands,
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<StandardMaterial>,
+) {
+    if let Some(row) = ui.rows.iter_mut().find(|r| r.1 == ship) {
+        row.2 = row.2.saturating_sub(count);
+    }
+    let marker = commands
+        .spawn((
+            crate::BattleEntity,
+            Name::new("reinforcement arrival marker"),
+            Mesh3d(meshes.add(Annulus::new(ring * 0.92, ring))),
+            MeshMaterial3d(materials.add(StandardMaterial {
+                base_color: Color::srgba(0.35, 0.85, 1.0, 0.55),
+                unlit: true,
+                alpha_mode: AlphaMode::Add,
+                double_sided: true,
+                cull_mode: None,
+                ..default()
+            })),
+            Transform::from_translation(ground + Vec3::Y * 2.0).with_rotation(Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2)),
+        ))
+        .id();
+    ui.placed.push(Placed { ship, count, marker, acked: false });
+}
+
 /// Follows the simulation: units leave the reserve when a call is accepted, a refusal shows a notice and plays a sound.
 fn reinforce_events(
     fonts: Res<eaw_ui::EawUiSettings>,
@@ -659,8 +711,17 @@ fn reinforce_events(
         match ev {
             Event::ReinforcementsCalled { side, ship, count } if *side == settings.player_side => {
                 info!("reinforcements: simulation accepted {count} of ship {ship}");
-                if let Some(row) = ui.rows.iter_mut().find(|r| r.1 == *ship) {
+                // A wave dropped on the map was counted off the reserve at the drop; only a call that came another way counts off here.
+                if let Some(p) = ui.placed.iter_mut().find(|p| !p.acked && p.ship == *ship) {
+                    p.acked = true;
+                } else if let Some(row) = ui.rows.iter_mut().find(|r| r.1 == *ship) {
                     row.2 = row.2.saturating_sub(*count);
+                }
+            }
+            Event::ReinforcementsArrived { side, .. } if *side == settings.player_side => {
+                if let Some(i) = ui.placed.iter().position(|p| p.acked) {
+                    let p = ui.placed.remove(i);
+                    commands.entity(p.marker).try_despawn();
                 }
             }
             Event::ReinforcementsRefused { side, .. } if *side == settings.player_side => {
@@ -1347,6 +1408,7 @@ fn reinforce_place(
                 hold_spot = Some(crate::convert::sim_to_bevy(pos));
             } else {
                 ctx.rt.command(player, Command::ReinforceAt { ship: row.1, count, pos, yaw_offset: 0.0 });
+                reserve_wave(&mut ui, row.1, count, crate::convert::sim_to_bevy(pos), 120.0, &mut commands, &mut meshes, &mut materials);
                 info!("reinforcements: placing {} at {pos:?} (scripted)", row.0);
                 armed.0 = None;
             }
@@ -1473,8 +1535,9 @@ fn reinforce_place(
         if let Err(why) = verdict {
             info!("reinforcements: drop of {} refused: {why}", row.0);
         } else {
-            // The count drops when the simulation reports the call (`ReinforcementsCalled`).
+            // The count drops here, not at the simulation's report: a paused battle does not step, so it would show nothing (see `reserve_wave`).
             ctx.rt.command(player, Command::ReinforceAt { ship: row.1, count, pos: sim_pos, yaw_offset: ui.ghost_yaw_offset });
+            reserve_wave(&mut ui, row.1, count, ground, ring, &mut commands, &mut meshes, &mut materials);
             info!("reinforcements: placing {count} x {} at {sim_pos:?}", row.0);
         }
         armed.0 = None;
