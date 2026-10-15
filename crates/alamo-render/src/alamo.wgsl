@@ -243,11 +243,12 @@ fn shade(in: VertexOutput, front: bool) -> vec4<f32> {
                     bubble = max(bubble, fade * fade);
                 }
             }
-            glow += 0.3 * bubble;
+            glow += 0.15 * bubble;
             let scale = max(mat.atmosphere.y, 1.0);
             let tex = textureSample(base_tex, base_samp, in.uv * scale + vec2<f32>(globals.time * 0.1, 0.0)).rgb;
             let hex = mix(vec3<f32>(1.0), tex, 0.8);
-            let c = mat.diffuse.rgb * hex * glow * mat.hit_params.z * (0.6 + 0.8 * rim);
+            // Half strength: at full strength the hit flash washed a whole hull section out to white (user, 2026-10-15).
+            let c = mat.diffuse.rgb * hex * glow * mat.hit_params.z * (0.6 + 0.8 * rim) * 0.5;
             return vec4<f32>(to_linear(c), 0.0);
         }
         rgb = base.rgb * mat.diffuse.rgb * (0.15 + rim);
