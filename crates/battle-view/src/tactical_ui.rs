@@ -31,7 +31,7 @@ pub struct TacticalUiPlugin;
 
 impl Plugin for TacticalUiPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<RetreatNotice>().init_resource::<TacticalUiState>().init_resource::<ReinforceUi>().init_resource::<crate::hud::HudState>().insert_resource(OverlaysActive);
+        app.init_resource::<RetreatNotice>().init_resource::<InterdictNotice>().init_resource::<TacticalUiState>().init_resource::<ReinforceUi>().init_resource::<crate::hud::HudState>().insert_resource(OverlaysActive);
         crate::input_test::build(app);
         app.add_systems(Update, death_star_gauge.run_if(resource_exists::<BattleRuntime>));
         app.add_systems(
@@ -241,6 +241,7 @@ fn handle_clicks(
     mut issued: MessageWriter<control::OrderIssued>,
     audio: Option<Res<alamo_audio::plugin::AlamoAudio>>,
     mut sfx: MessageWriter<alamo_audio::PlaySfx>,
+    mut interdict: ResMut<InterdictNotice>,
 ) {
     let player = settings.player_side;
     for b in buttons.read() {
@@ -253,6 +254,10 @@ fn handle_clicks(
                     && let Some(n) = rt.player_faction.as_deref().zip(audio.as_ref()).and_then(|(f, a)| a.constants.faction_sfx(f, "space_retreat_not_allowed_sfxevent"))
                 {
                     sfx.write(alamo_audio::PlaySfx { event: n.to_string(), position: None, source: None });
+                }
+                // An enemy gravity well: the sim refuses the retreat; the game's own line explains why.
+                if interdicted(&rt, player) {
+                    interdict.0 = 4.0;
                 }
                 rt.command(player, Command::Retreat);
             }
@@ -304,10 +309,23 @@ fn handle_clicks(
             armed.0 = Some(control::ArmedKind::AbilityAt);
             continue;
         }
+        // Toggle abilities: every ship of the slot takes the first ship's new state, so a squadron never ends half on, half off.
+        let first_on = group
+            .iter()
+            .filter_map(|&id| rt.cur.as_ref().and_then(|c| c.ship(id)))
+            .find_map(|s| {
+                let i = rt.catalog.ship(s.def).abilities.iter().position(|d| d.kind.eq_ignore_ascii_case(&a.ability))?;
+                s.abilities.get(i).map(|st| st.0 > 0.0)
+            })
+            .unwrap_or(false);
         for &id in group {
             let Some(s) = rt.cur.as_ref().and_then(|c| c.ship(id)) else { continue };
             let defs = &rt.catalog.ship(s.def).abilities;
             if let Some(i) = defs.iter().position(|d| d.kind.eq_ignore_ascii_case(&a.ability)) {
+                // A ship already in the first ship's new state stays: the click flips the first ship, the others follow it.
+                if defs[i].toggle && s.abilities.get(i).is_some_and(|st| (st.0 > 0.0) != first_on) {
+                    continue;
+                }
                 rt.command(player, Command::UseAbility { ship: id, ability: i as u16 });
             }
         }
@@ -768,9 +786,9 @@ Follows the selected unit; you can rotate around it".to_string());
     }
 }
 
-/// Abilities that are aimed at a point: the reveal ping, the lightning storm (zone) and the super laser.
+/// Abilities that are aimed at a point: the reveal ping, the lightning storm (zone), the super laser and the weakening area.
 fn is_targeted(d: &battle_sim::AbilityDef) -> bool {
-    d.reveal_radius > 0.0 || d.zone.is_some() || d.super_laser.is_some()
+    d.reveal_radius > 0.0 || d.zone.is_some() || d.super_laser.is_some() || d.weaken.is_some()
 }
 
 /// Radius within which the sim looks for a super laser target around the aimed point (`Battle::command`, `UseAbilityAt`).
@@ -857,6 +875,10 @@ fn ability_at(
             verdict = verdict.and(Err("Out of range"));
         }
         colour = Color::srgb(0.8, 0.5, 1.0);
+    }
+    if let Some(w) = &def.weaken {
+        radius = w.radius;
+        colour = Color::srgb(1.0, 0.75, 0.3);
     }
     if def.super_laser.is_some() {
         radius = SUPER_LASER_AIM_RADIUS;
@@ -1576,6 +1598,21 @@ pub(crate) struct RetreatBanner;
 #[derive(Resource, Default)]
 pub struct RetreatNotice(pub f32);
 
+/// Seconds the "Unable to move with Interdictor field engaged." notice stays (the player pressed Retreat while an enemy interdictor holds a gravity
+/// well; the sim then refuses the retreat). The text is `TEXT_SFX_INT_CANNOT_MOVE_5` of the master text file; no SFX event uses it.
+#[derive(Resource, Default)]
+pub struct InterdictNotice(pub f32);
+
+/// An enemy ship or station holds a gravity well against `side` (the rule of `Battle::interdicted`, read from the displayed snapshot).
+fn interdicted(rt: &BattleRuntime, side: u8) -> bool {
+    rt.cur.as_ref().is_some_and(|c| {
+        c.ships.iter().any(|s| {
+            let d = rt.catalog.ship(s.def);
+            s.side != side && (d.interdictor || d.abilities.iter().zip(&s.abilities).any(|(a, st)| a.interdict && st.0 > 0.0))
+        })
+    })
+}
+
 fn retreat_banner(
     mut commands: Commands,
     ui: Res<eaw_ui::EawUiSettings>,
@@ -1584,11 +1621,13 @@ fn retreat_banner(
     rt: Res<BattleRuntime>,
     status: Res<BattleStatus>,
     mut notice: ResMut<RetreatNotice>,
+    mut interdict: ResMut<InterdictNotice>,
     tac: Res<TacticalData>,
     mut banner: Query<(Entity, &mut Text), With<RetreatBanner>>,
 ) {
     let mss = |s: f32| format!("{}:{:02}", s.ceil() as u32 / 60, s.ceil() as u32 % 60);
     notice.0 = (notice.0 - time.delta_secs()).max(0.0);
+    interdict.0 = (interdict.0 - time.delta_secs()).max(0.0);
     let player = settings.player_side;
     let enemy_retreat = rt.cur.as_ref().and_then(|c| {
         c.retreat_jump_in.iter().enumerate().find_map(|(side, j)| {
@@ -1611,6 +1650,7 @@ fn retreat_banner(
                 Some(format!("ENEMY FLEET RETREATING - HYPERSPACE JUMP IN {}", mss(s)))
             }
         }
+        _ if interdict.0 > 0.0 => Some("Unable to move with Interdictor field engaged.".to_string()),
         _ if notice.0 > 0.0 => Some(format!("RETREAT NOT POSSIBLE YET - AVAILABLE IN {}", mss((rt.retreat_countdown - status.time).max(0.0)))),
         _ => None,
     };
