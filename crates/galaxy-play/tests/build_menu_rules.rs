@@ -95,3 +95,41 @@ fn build_bar_follows_the_games_order_not_the_price() {
     let costs: Vec<f32> = structures.iter().map(|&s| w.structures[s].cost).collect();
     assert!(costs.windows(2).any(|c| c[0] > c[1]), "the order is not the price order: {costs:?}");
 }
+
+#[test]
+fn a_greyed_ship_names_every_missing_requirement_in_the_games_words() {
+    let Some(install) = GameInstall::detect() else { return };
+    if !install.mod_data("1770851727").is_dir() {
+        return;
+    }
+    let data = load_galaxy(&GameFs::for_mod(&install, Some("1770851727")).unwrap()).0;
+    let campaign = data.campaign("GC_Full_Web_Way_Rebel").unwrap();
+    let mut sim = Sim::new(&data, campaign, SimConfig { victory_enabled: false, ..SimConfig::default() }).unwrap();
+    let w = sim.world().clone();
+    let names = PlayCatalog::from_data(&w, &data);
+    let empire = w.faction_id("Empire").unwrap();
+    let p = w.planet_id("Coruscant_WW").unwrap();
+    sim.set_planet_owner(p, None);
+    sim.set_planet_owner(p, Some(empire));
+    sim.add_credits(empire, 1.0e9);
+    sim.set_tech_level(empire, 9);
+    let menu = BuildMenu::for_planet(&w, sim.galaxy(), &names, empire, p).expect("menu");
+    let isd = w.unit_id("Star_Destroyer").unwrap();
+    let entry = menu.options.iter().find(|o| o.target == BuildTarget::Unit(isd)).expect("the Star Destroyer is listed (greyed)");
+    assert!(!entry.availability.is_available());
+    let level = format!("{} 2", names.rules.starbase);
+    let yard = format!("{} {}", names.rules.structure, names.structure(w.structure_id("E_Shipyard_3").unwrap()));
+    assert!(entry.reasons.contains(&level), "star base level named in the game's words: {:?} (wanted {level:?})", entry.reasons);
+    assert!(entry.reasons.contains(&yard), "shipyard named: {:?} (wanted {yard:?})", entry.reasons);
+    assert!(names.rules.starbase.starts_with("Required"), "text comes from TEXT_REQUIRED_STAR_BASE_LEVEL: {}", names.rules.starbase);
+    // Without credits the funds line is added.
+    let poor = {
+        sim.add_credits(empire, -1.0e9);
+        sim.add_credits(empire, -sim.galaxy().factions[empire as usize].credits);
+        BuildMenu::for_planet(&w, sim.galaxy(), &names, empire, p).expect("menu")
+    };
+    let cheap = poor.options.iter().find(|o| o.availability == galaxy_play::Availability::NeedCredits);
+    if let Some(c) = cheap {
+        assert!(c.reasons.contains(&names.rules.funds), "{:?}", c.reasons);
+    }
+}

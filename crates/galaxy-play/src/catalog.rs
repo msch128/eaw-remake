@@ -32,6 +32,67 @@ pub struct PlayCatalog {
     pub starbase_models: Vec<Option<String>>,
     /// Display name per faction.
     pub factions: Vec<String>,
+    /// The game's wording of the reasons a build item is refused.
+    pub rules: RuleTexts,
+}
+
+/// The game's own strings for build requirements (`TEXT_REQUIRED_*`, `TEXT_PRODUCTION_*`, `TEXT_BUILD_*_LIMIT_*`), English defaults without the data.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuleTexts {
+    /// `TEXT_REQUIRED_TECH_LEVEL` ("Required : Tech Level"), the level follows.
+    pub tech: String,
+    /// `TEXT_REQUIRED_STAR_BASE_LEVEL` ("Required : Space Station Level"), the level follows.
+    pub starbase: String,
+    /// `TEXT_REQUIRED_SPECIAL_STRUCTURE` ("Required :"), the structure names follow.
+    pub structure: String,
+    /// `TEXT_REQUIRED_PLANET` ("Required :"), the planet names follow.
+    pub planet: String,
+    /// `TEXT_REQUIRED_PLANET_RESTRICTION`.
+    pub planet_restriction: String,
+    /// `TEXT_PRODUCTION_INSUFFICIENT_FUNDS`.
+    pub funds: String,
+    /// `TEXT_PRODUCTION_POP_CAP_REACHED`.
+    pub pop_cap: String,
+    /// `TEXT_PRODUCTION_QUEUE_FULL`.
+    pub queue_full: String,
+    /// The start of `TEXT_BUILD_1_LIMIT_UN` ("Max Build Limit:"), the limit follows.
+    pub limit: String,
+}
+
+impl Default for RuleTexts {
+    fn default() -> Self {
+        Self {
+            tech: "Required : Tech Level".into(),
+            starbase: "Required : Space Station Level".into(),
+            structure: "Required :".into(),
+            planet: "Required :".into(),
+            planet_restriction: "Cannot be built on this planet".into(),
+            funds: "Insufficient funds".into(),
+            pop_cap: "Population cap reached".into(),
+            queue_full: "Production queue full".into(),
+            limit: "Max Build Limit:".into(),
+        }
+    }
+}
+
+impl RuleTexts {
+    /// The strings of the loaded game data; missing keys keep the English default.
+    pub fn from_data(data: &GameData) -> Self {
+        let d = Self::default();
+        let get = |key: &str, default: String| data.text(key).map(str::trim).filter(|t| !t.is_empty()).map_or(default, str::to_owned);
+        let limit = data.text("TEXT_BUILD_1_LIMIT_UN").and_then(|t| t.split(':').next()).map_or(d.limit.clone(), |p| format!("{}:", p.trim()));
+        Self {
+            tech: get("TEXT_REQUIRED_TECH_LEVEL", d.tech),
+            starbase: get("TEXT_REQUIRED_STAR_BASE_LEVEL", d.starbase),
+            structure: get("TEXT_REQUIRED_SPECIAL_STRUCTURE", d.structure),
+            planet: get("TEXT_REQUIRED_PLANET", d.planet),
+            planet_restriction: get("TEXT_REQUIRED_PLANET_RESTRICTION", d.planet_restriction),
+            funds: get("TEXT_PRODUCTION_INSUFFICIENT_FUNDS", d.funds),
+            pop_cap: get("TEXT_PRODUCTION_POP_CAP_REACHED", d.pop_cap),
+            queue_full: get("TEXT_PRODUCTION_QUEUE_FULL", d.queue_full),
+            limit,
+        }
+    }
 }
 
 /// Which model stands for a fleet on the galactic map.
@@ -65,6 +126,7 @@ impl PlayCatalog {
             starbases: world.starbases.iter().map(|s| prettify(&s.name)).collect(),
             factions: world.factions.iter().map(|f| prettify(&f.name)).collect(),
             starbase_models: vec![None; world.starbases.len()],
+            rules: RuleTexts::default(),
         }
     }
 
@@ -136,6 +198,7 @@ impl PlayCatalog {
                 .iter()
                 .map(|f| text(&data.faction(&f.name).and_then(|d| d.text_id.clone()), &f.name))
                 .collect(),
+            rules: RuleTexts::from_data(data),
         }
     }
 

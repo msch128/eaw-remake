@@ -178,3 +178,29 @@ New in this audit: `galaxy-sim/tests/super_ships.rs` checks, for every super and
 | G8 | The player cannot aim or trigger the ground-to-space weapon; the first shot comes after 15 s (estimate) | small | `battle-view` (not mine) | |
 
 Next: the fixes are done in this order: G3, G1, G4, G7 (G2 needs a decision from the lead because it touches the build menu).
+
+## 5. Logistics: what each building enables (Empire bar, 4.0; Rebel and Underworld mirror it)
+
+| Needs (`Required_Special_Structures`) | Ships unlocked (in bar) |
+|---|---|
+| `E_Shipyard_1` (star base 2, 10000) | 30 + 2 with Uplink: fighters, bombers, corvettes (Gozanti, Lancer, Vigil, Tartan ...) |
+| `E_Shipyard_2` (17500, needs 1) | 27 + 1: frigates (Victory, Vindicator, Ton Falk, Broadside, Enforcer ...), 3 capitals (Sullust Liberator/Invincible) |
+| `E_Shipyard_3` (25000, needs 2) | 32: Star Destroyers, Executor, Eclipse, Titan, SSDs, Subjugator, Praetor ... |
+| `E_Uplink_Command` (star base 3, 20000) plus a shipyard | 12 hero ships and elite fighters (Piett, Strikefast, Hoytt, Arc Hammer, Gorgon, Vensenor, Singularity, TIE Defender Elite ...) |
+| `E_Starforge` (Lehon only, 1,000,000) | production discount only, no ships |
+| Satellite grid, Golan, fortress, watchtower | defence only (Golan and Uplink missing in battle: G1) |
+| Trade hub, research institute, housing, gas refinery, admin offices | income and population (`Planet_Income_Bonus_Ability`, `Additional_Population_Capacity`): modelled in `World::planet_income`, see `galaxy-sim/RULES.md` section 2 |
+
+Enforced by `check_build_unit` and covered by `build_rules.rs::shipyard_three_needs_two_needs_one` and `hero_needs_the_uplink_and_its_cost_is_the_data_value`. Economy numbers were not re-audited here (see RULES.md section 2 and `tests/ground_up.rs`): **not verified in this audit**.
+
+## 6. Unit sorting in the build bar
+
+* The game: the real 4.0 build bar (reference video, frames `v0350s`/`v0380s`, Coruscant orbital tab) shows 250, 7500, 3500, 10000, 4500, 4500: star base upgrade, Satellite Defence Grid, Shipyard 1, Trade Hub, Admin Offices. That is **not** cost order. It is the load order of the objects (`GameObjectFiles.XML` lines 138-170: `Colonies`, `Starforge`, `Golan_3/2/1`, `Satellite_Defence_Grid`, `Shipyard_3/2/1`, `Uplink_Command`, `Trade_Hub`, `Gas_Refinery`, ..., `Admin_Station`, `Housing`, `Research_Institute`). `GUI_Row` is only 0 (vessel and hero upgrade items) or 1 (everything else), so it splits two groups and does not order ships. The order inside the ship tabs was not captured in the video: **not verified**, but the same rule (load order, `GUI_Row` 0 first) is the best evidence.
+* Ours: `galaxy-play/src/build_menu.rs:341` sorts by category, then cost ascending, then name. For orbital structures this differs from the game (e.g. Satellite Grid 3500 before Shipyard 1 10000 matches only by luck; Trade Hub 4500 and Admin 4500 sort by name).
+* Fix (not mine, `galaxy-play`): sort by category, `GUI_Row`, then the object's catalog index (`UnitTypeId` / `StructureTypeId` are assigned in load order). Needs `gui_row` on `UnitType` (galaxy-sim, small).
+
+## 7. Build conditions on the build bar
+
+* The game's own words (found in `mastertextfile_english.dat`, listed with `examples/audit_text.rs`): `TEXT_REQUIRED_TECH_LEVEL` ("Required : Tech Level"), `TEXT_REQUIRED_STAR_BASE_LEVEL` ("Required : Space Station Level"), `TEXT_REQUIRED_SPECIAL_STRUCTURE` and `TEXT_REQUIRED_PLANET` ("Required :"), `TEXT_REQUIRED_PLANET_RESTRICTION` ("Cannot be built on this planet"), `TEXT_PRODUCTION_INSUFFICIENT_FUNDS`, `TEXT_PRODUCTION_POP_CAP_REACHED`, `TEXT_PRODUCTION_QUEUE_FULL`, `TEXT_BUILD_N_LIMIT_*` ("Max Build Limit: N").
+* Now every greyed item lists all its missing requirements at once, one red line each (`World::unmet_for_unit` / `unmet_for_structure`, `BuildOption::reasons`, tooltip and locked-click toast), using these strings. Test: `a_greyed_ship_names_every_missing_requirement_in_the_games_words`.
+* Hidden or greyed (kept as before; **the game's rule is only partly verified**): the reference video (frames `v0350s` to `v0480s`) shows the orbital row listing only what can be ordered, and an item disappears once it is built. Hero upgrade tooltips carry their requirements as plain description text (`HERO_UPGRADE_REQ_*`: "Required Planet: Kuat", "Required Tech: 3", "Required Colony Lvl: 3", "Required Shipyard: ...", "Required Station: ..."), which we already show through the item description. We hide: tech above the current level, story-locked, planet-restricted and star-base-capped items, and structures with a missing requirement; ships with a missing shipyard or star base level are shown greyed. The game's strings `TEXT_REQUIRED_PLANET_RESTRICTION` and `TEXT_REQUIRED_TECH_LEVEL` suggest the engine may grey instead of hide in those cases; the video has no frame of a ship bar to decide.

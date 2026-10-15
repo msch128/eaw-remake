@@ -117,6 +117,8 @@ pub struct BuildOption {
     pub population: i32,
     /// Whether it can be ordered now.
     pub availability: Availability,
+    /// Every reason the entry cannot be ordered now, worded like the game ("Required : Tech Level 3", "Insufficient funds"); empty when it can.
+    pub reasons: Vec<String>,
 }
 
 /// One entry of a production queue.
@@ -192,6 +194,65 @@ fn availability(err: Result<(), CommandError>) -> Option<Availability> {
     }
 }
 
+/// All reasons an entry is refused, in the game's words (`PlayCatalog::rules`): every unmet requirement, then credits, population, limit or queue.
+fn reasons_for(world: &World, galaxy: &Galaxy, names: &PlayCatalog, faction: FactionId, planet: PlanetId, target: BuildTarget, a: &Availability) -> Vec<String> {
+    use galaxy_sim::Unmet;
+    let rules = &names.rules;
+    let unmet = match target {
+        BuildTarget::Unit(u) => world.unmet_for_unit(galaxy, faction, planet, u),
+        BuildTarget::Structure(s) => world.unmet_for_structure(galaxy, faction, planet, s),
+        BuildTarget::Starbase(_) | BuildTarget::Tech(_) => Vec::new(),
+    };
+    let mut out: Vec<String> = Vec::new();
+    for u in unmet {
+        match u {
+            Unmet::TechLevel(n) => out.push(format!("{} {n}", rules.tech)),
+            Unmet::StarBaseLevel(n) => out.push(format!("{} {n}", rules.starbase)),
+            Unmet::Structures(group) => {
+                let mut shown: Vec<&str> = Vec::new();
+                for s in group {
+                    let n = names.structure(s);
+                    if !shown.contains(&n) {
+                        shown.push(n);
+                    }
+                }
+                out.push(format!("{} {}", rules.structure, shown.join(" or ")));
+            }
+            Unmet::Planets(list) => {
+                let mut shown: Vec<&str> = Vec::new();
+                for p in list {
+                    let n = world.planets[p as usize].display_name.as_str();
+                    if !shown.contains(&n) {
+                        shown.push(n);
+                    }
+                }
+                out.push(format!("{} {}", rules.planet, shown.join(", ")));
+            }
+            Unmet::OrbitingUnit(u) => out.push(format!("{} {}", rules.structure, names.unit(u))),
+            Unmet::Locked => {}
+        }
+    }
+    match a {
+        Availability::Available => {}
+        Availability::NeedCredits => out.push(rules.funds.clone()),
+        Availability::PopulationCap => out.push(rules.pop_cap.clone()),
+        Availability::Full => out.push(rules.queue_full.clone()),
+        Availability::Limit => {
+            let limit = match target {
+                BuildTarget::Unit(u) => world.units[u as usize].limit_current.filter(|l| *l >= 0).map(|l| format!(" {l}")).unwrap_or_default(),
+                _ => String::new(),
+            };
+            out.push(format!("{}{limit}", rules.limit));
+        }
+        Availability::Requires(r) => {
+            if out.is_empty() {
+                out.push(r.clone());
+            }
+        }
+    }
+    out
+}
+
 /// A missing-structure requirement names objects (`E_Shipyard_3, E_Uplink_Command`, alternatives joined by ` | `); the menu shows their display names.
 fn shown_requirement(world: &World, names: &PlayCatalog, a: Availability) -> Availability {
     let Availability::Requires(raw) = a else { return a };
@@ -236,6 +297,7 @@ impl BuildMenu {
                 build_seconds: sb.build_time * scale,
                 population: 0,
                 availability: a,
+                reasons: Vec::new(),
             });
         }
         // Tech upgrade.
@@ -258,6 +320,7 @@ impl BuildMenu {
                     build_seconds: up.time * scale,
                     population: 0,
                     availability: a,
+                    reasons: Vec::new(),
                 });
             }
         }
@@ -273,6 +336,7 @@ impl BuildMenu {
                 build_seconds: ut.build_time * scale,
                 population: ut.population,
                 availability: a,
+                reasons: Vec::new(),
             });
         }
         // Structures.
@@ -292,9 +356,13 @@ impl BuildMenu {
                 build_seconds: st.build_time * scale,
                 population: 0,
                 availability: a,
+                reasons: Vec::new(),
             });
         }
         dedupe_options(world, &mut options);
+        for o in &mut options {
+            o.reasons = reasons_for(world, galaxy, names, faction, planet, o.target, &o.availability);
+        }
         // The game orders its build bar by `GUI_Row` and then by object load order (the catalog index), not by price (reference video, Coruscant orbital bar).
         let order = |o: &BuildOption| match o.target {
             BuildTarget::Unit(u) => (world.units[u as usize].gui_row, u as usize),

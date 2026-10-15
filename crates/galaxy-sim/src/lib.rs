@@ -20,6 +20,7 @@ pub use catalog::tech_level_cost;
 pub mod combat;
 mod api;
 pub mod production;
+pub mod requirements;
 mod sight;
 pub mod rng;
 pub mod sim;
@@ -37,5 +38,6 @@ pub use world::{IncomeGamble,
     StarbaseType, StructureType, StructureTypeId, UnitRole, UnitType, UnitTypeId, VictoryRules, Weapon, World,
 };
 pub use production::{DestroyRefusal, PlanetCapacity, SlotUse};
+pub use requirements::Unmet;
 pub use sight::Sight;
 pub use tactical::{GroupKind, TacticalError, TacticalGroup, TacticalRequest, TacticalResult, TacticalSide, run_headless, run_headless_observed};

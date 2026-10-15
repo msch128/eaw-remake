@@ -385,8 +385,14 @@ fn pad_tooltip(o: &galaxy_play::BuildOption, week: f32, state: &SimState, game: 
             s.push_str(&format!("\n@Upkeep\t{:.0} credits/week when built", -change));
         }
     }
+    // Every refusal on its own red line, in the game's words ("Required : Tech Level 3", "Required : Space Station Level 2", "Insufficient funds").
     if !o.availability.is_available() {
-        s.push_str(&format!("\n!{}", capitalize(&o.availability.reason())));
+        if o.reasons.is_empty() {
+            s.push_str(&format!("\n!{}", capitalize(&o.availability.reason())));
+        }
+        for r in &o.reasons {
+            s.push_str(&format!("\n!{r}"));
+        }
     }
     s
 }
@@ -2410,7 +2416,7 @@ fn locked_clicks(
         let Some(index) = c.name.strip_prefix("b_create_").and_then(|n| n.parse::<usize>().ok()) else { continue };
         let (Some(target), Some(menu)) = (bar.pads.get(remap.entry(index)).copied().flatten(), model.planet.as_ref()) else { continue };
         let Some(o) = menu.options.iter().find(|o| o.target == target) else { continue };
-        toast.0 = format!("{}: {}", o.name, capitalize(&o.availability.reason()));
+        toast.0 = format!("{}: {}", o.name, if o.reasons.is_empty() { capitalize(&o.availability.reason()) } else { o.reasons.join("; ") });
         toast.1 = 3.5;
     }
 }
