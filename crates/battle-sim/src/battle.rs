@@ -718,6 +718,8 @@ pub struct Battle {
     pub(crate) ability_at: Option<Vec3>,
     /// `LURE`: (ship, caster) pairs of enemies currently forced to attack a lure caster.
     pub(crate) lured: Vec<(u32, u32)>,
+    /// `HARMONIC_BOMB`s waiting to go off: side, place, time, what they do.
+    pub(crate) bombs: Vec<(u8, Vec3, f32, BombDef)>,
     pub(crate) grid_cells: Vec<Vec<u32>>,
     /// Areas revealed to a side for a while: `(side, centre, radius, until)`.
     pub(crate) reveals: Vec<(u8, Vec3, f32, f32)>,

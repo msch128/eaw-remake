@@ -33,6 +33,8 @@ use bevy::window::ExitCondition;
 
 const STEP_MS: u64 = 16;
 
+static ABILITY_USED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 fn parse_vec(s: &str) -> Vec<f32> {
     s.split(',').filter_map(|v| v.trim().parse().ok()).collect()
 }
@@ -149,6 +151,14 @@ fn main() {
             ("X-Wing_Squadron", 4),
         ]
     };
+    // `SP_DEMO_EXTRA=Name:count,...` adds units to the Empire side (to look at one ability).
+    let extra: Vec<(String, u32)> = std::env::var("SP_DEMO_EXTRA")
+        .unwrap_or_default()
+        .split(',')
+        .filter_map(|e| e.split_once(':').and_then(|(n, c)| Some((n.trim().to_string(), c.trim().parse().ok()?))))
+        .collect();
+    let empire_all: Vec<(&str, u32)> = empire.iter().copied().chain(extra.iter().map(|(n, c)| (n.as_str(), *c))).collect();
+    let empire = &empire_all[..];
     let mut names: Vec<&str> = empire.iter().chain(rebel).map(|x| x.0).collect();
     if let Some(st) = station.as_deref() {
         names.push(st);
@@ -314,6 +324,25 @@ fn capture_driver(
     {
         rt.command(0, battle_sim::Command::Reinforce { ship: s.def, count: 3 });
         *reinforced = true;
+    }
+    if !ABILITY_USED.load(std::sync::atomic::Ordering::Relaxed)
+        && let Some((kind, at)) = std::env::var("SP_DEMO_ABILITY").ok().and_then(|v| v.split_once('@').map(|(k, t)| (k.to_string(), t.parse::<f32>().unwrap_or(0.0))))
+        && let Some(cur) = rt.cur.as_ref()
+        && cur.time >= at
+    {
+        // `SP_DEMO_ABILITY=KIND@secs`: every player ship with that ability type uses it once at that battle time.
+        let player = settings.player_side;
+        let uses: Vec<(u32, u16)> = cur
+            .ships
+            .iter()
+            .filter(|s| s.side == player)
+            .filter_map(|s| rt.catalog.ship(s.def).abilities.iter().position(|a| a.kind.eq_ignore_ascii_case(&kind)).map(|i| (s.id, i as u16)))
+            .collect();
+        println!("demo ability {kind}: {} ships", uses.len());
+        for (ship, ability) in uses {
+            rt.command(player, battle_sim::Command::UseAbility { ship, ability });
+        }
+        ABILITY_USED.store(true, std::sync::atomic::Ordering::Relaxed);
     }
     if !*moved
         && std::env::var_os("SP_DEMO_MOVE").is_some()

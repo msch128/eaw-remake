@@ -477,3 +477,80 @@ fn lure_reads_radius_and_target_types_from_the_data() {
     assert_eq!(l.radius, 4000.0);
     assert!(l.types.contains(&"venator".to_string()) && l.types.len() > 10, "{:?}", l.types);
 }
+
+fn bomb_ability(bomb: BombDef) -> AbilityDef {
+    AbilityDef {
+        kind: "HARMONIC_BOMB".into(),
+        bomb: Some(bomb),
+        duration: 1.0,
+        recharge: 60.0,
+        speed_mult: 1.0,
+        shield_regen_mult: 1.0,
+        weapon_delay_mult: 1.0,
+        take_damage_mult: 1.0,
+        cause_damage_mult: 1.0,
+        ..AbilityDef::default()
+    }
+}
+
+#[test]
+fn a_harmonic_heal_blast_repairs_nearby_friendly_fighters_after_the_countdown() {
+    let mut carrier = mobile("carrier", 0.0);
+    carrier.abilities.push(bomb_ability(BombDef { countdown: 2.0, heal_radius: 750.0, heal_amount: 200.0, heal_classes: TargetClass::Fighter.bit(), ..BombDef::default() }));
+    let mut fighter = mobile("fighter", 0.0);
+    fighter.class = TargetClass::Fighter;
+    fighter.hull = 1000.0;
+    let cat = Catalog::from_defs(vec![carrier, fighter, mobile("foe", 0.0)], vec![laser()]);
+    let mut su = setup(cat, ("carrier", 1, false), ("foe", 1, false), BattleConfig { half_size: 6000.0, ..BattleConfig::default() });
+    su.sides[0].units.push(UnitSetup { ship: su.catalog.ship_id("fighter").unwrap(), count: 2, tag: 7 });
+    let mut b = Battle::new(su);
+    let mine = ids(&b, 0);
+    let (carrier, near, far) = (mine[0], mine[1], mine[2]);
+    let c = b.ships[carrier as usize].pos;
+    b.ships[near as usize].pos = c + Vec3::new(300.0, 0.0, 0.0);
+    b.ships[far as usize].pos = c + Vec3::new(3000.0, 0.0, 0.0);
+    b.ships[near as usize].hull = 300.0;
+    b.ships[far as usize].hull = 300.0;
+    b.command(0, Command::UseAbility { ship: carrier, ability: 0 }).unwrap();
+    for _ in 0..30 {
+        b.step();
+    }
+    assert_eq!(b.ships[near as usize].hull, 300.0, "nothing before the countdown ends");
+    for _ in 0..60 {
+        b.step();
+    }
+    assert_eq!(b.ships[near as usize].hull, 500.0, "+200 hull inside the radius");
+    assert_eq!(b.ships[far as usize].hull, 300.0, "nothing outside it");
+}
+
+#[test]
+fn a_seismic_bomb_hurts_enemies_in_the_blast_with_falling_damage() {
+    let mut boat = mobile("boat", 0.0);
+    boat.abilities.push(bomb_ability(BombDef { countdown: 1.0, blast_radius: 300.0, blast_damage: 200.0, blast_tiers: 3, ..BombDef::default() }));
+    let mut foe = mobile("foe", 0.0);
+    foe.hull = 1000.0;
+    foe.radius = 0.0;
+    let cat = Catalog::from_defs(vec![boat, foe], vec![laser()]);
+    let mut b = Battle::new(setup(cat, ("boat", 1, false), ("foe", 3, false), BattleConfig { half_size: 6000.0, ..BattleConfig::default() }));
+    let (boat, foes) = (ids(&b, 0)[0], ids(&b, 1));
+    let c = b.ships[boat as usize].pos;
+    for (f, d) in foes.iter().zip([50.0, 150.0, 250.0]) {
+        b.ships[*f as usize].pos = c + Vec3::new(d, 0.0, 0.0);
+    }
+    b.command(0, Command::UseAbility { ship: boat, ability: 0 }).unwrap();
+    for _ in 0..60 {
+        b.step();
+    }
+    let lost: Vec<f32> = foes.iter().map(|&f| 1000.0 - b.ships[f as usize].hull).collect();
+    assert!(lost[0] > lost[1] && lost[1] > lost[2] && lost[2] > 0.0, "damage falls with distance: {lost:?}");
+}
+
+#[test]
+fn harmonic_bomb_values_come_from_the_spawned_object() {
+    let Some((data, fs)) = load() else { return };
+    let cat = Catalog::build(&data, Some(&fs), &["Ton_Falk_Carrier_Template", "Boba_Fett_Slave_I"]);
+    let heal = cat.ship(cat.ship_id("Ton_Falk_Carrier_Template").expect("carrier")).abilities.iter().find_map(|a| a.bomb.clone()).expect("fighter repair");
+    assert_eq!((heal.heal_radius, heal.heal_amount), (750.0, 200.0));
+    let seismic = cat.ship(cat.ship_id("Boba_Fett_Slave_I").expect("slave i")).abilities.iter().find_map(|a| a.bomb.clone()).expect("seismic bomb");
+    assert_eq!((seismic.countdown, seismic.blast_radius, seismic.blast_damage, seismic.blast_tiers), (5.0, 300.0, 200.0, 3));
+}

@@ -223,6 +223,7 @@ impl Battle {
             hunt_seen: [0; 4],
             ability_at: None,
             lured: Vec::new(),
+            bombs: Vec::new(),
             reveals: Vec::new(),
             zones: Vec::new(),
             lasers: Vec::new(),
@@ -967,6 +968,7 @@ impl Battle {
         let is_hunt = a.hunt;
         let is_replenish = a.replenish;
         let weaken = a.weaken.clone();
+        let bomb = a.bomb.clone();
         if is_replenish && self.wingmen(ship).1.is_empty() {
             // Nobody to bring back: the once-per-battle use is kept.
             return false;
@@ -1024,6 +1026,10 @@ impl Battle {
         }
         if let Some(w) = weaken {
             self.weaken_area(ship, &w);
+        }
+        if let Some(b) = bomb {
+            let (side, pos) = (self.ships[ship as usize].side, self.ships[ship as usize].pos);
+            self.bombs.push((side, pos, self.time + b.countdown, b));
         }
         if self.config.record_events {
             self.events.push(Event::AbilityActivated { ship, ability: ability as u16 });
@@ -1817,6 +1823,7 @@ impl Battle {
         }
         self.run_healing(dt);
         self.run_zones(dt);
+        self.run_bombs();
         self.run_lasers();
         self.run_drains(dt);
         if self.tick.is_multiple_of(30) {
@@ -1855,6 +1862,13 @@ impl Battle {
                         // `ObjectScript_VaderTIESquadron`: used when fewer than two fighters of the squadron are left.
                         let (alive, dead) = self.wingmen(s.id);
                         if alive.is_empty() && !dead.is_empty() {
+                            uses.push((side, s.id, k, None));
+                        }
+                    } else if let Some(b) = &a.bomb {
+                        // Estimate: a repair blast when two or more hurt friendly fighters are in its radius, a seismic bomb when two or more enemies are.
+                        let near_hurt = self.ships.iter().filter(|o| o.alive && !o.retreated && o.side == side && o.id != s.id && o.pos.dist(s.pos) <= b.heal_radius && (b.heal_classes == 0 || b.heal_classes & cat.ship(o.def).class.bit() != 0) && o.hull < cat.ship(o.def).hull * 0.8).count();
+                        let near_foes = enemies.iter().filter(|&&e| self.ships[e as usize].pos.dist(s.pos) <= b.blast_radius + 100.0).count();
+                        if (b.heal_amount > 0.0 && near_hurt >= 2) || (b.blast_damage > 0.0 && near_foes >= 2) {
                             uses.push((side, s.id, k, None));
                         }
                     } else if let Some(l) = &a.lure {
@@ -1961,6 +1975,44 @@ impl Battle {
                 let slot = &mut s.mods[kind as usize];
                 if value != 0.0 && (value.abs() >= slot.0.abs() || slot.1 <= 0.0) {
                     *slot = (value, w.duration);
+                }
+            }
+        }
+    }
+
+    /// `HARMONIC_BOMB`: the bombs whose countdown ran out go off. A heal blast gives every friendly ship of the listed classes in the radius
+    /// hull points; a seismic bomb hurts the enemy ships in the radius, shields first, the damage falling off in equal tiers (the tier steps
+    /// are an estimate: the data names the tier count only).
+    fn run_bombs(&mut self) {
+        if self.bombs.is_empty() {
+            return;
+        }
+        let now = self.time;
+        let (due, wait): (Vec<_>, Vec<_>) = std::mem::take(&mut self.bombs).into_iter().partition(|b| b.2 <= now);
+        self.bombs = wait;
+        let cat = self.catalog.clone();
+        let record = self.config.record_events;
+        for (side, pos, _, b) in due {
+            for s in self.ships.iter_mut().filter(|s| s.alive && !s.retreated) {
+                let d = cat.ship(s.def);
+                let dist = s.pos.dist(pos) - d.radius;
+                if s.side == side && b.heal_amount > 0.0 && dist <= b.heal_radius && (b.heal_classes == 0 || b.heal_classes & d.class.bit() != 0) {
+                    s.hull = (s.hull + b.heal_amount).min(d.hull);
+                }
+                if s.side != side && b.blast_damage > 0.0 && dist <= b.blast_radius {
+                    let tier = if b.blast_tiers > 0 { ((dist.max(0.0) / b.blast_radius) * b.blast_tiers as f32).floor().min(b.blast_tiers as f32 - 1.0) } else { 0.0 };
+                    let factor = if b.blast_tiers > 0 { 1.0 - tier / b.blast_tiers as f32 } else { 1.0 };
+                    let mut dmg = b.blast_damage * factor * s.bonus.taken_hull;
+                    let soak = dmg.min(s.shield.max(0.0));
+                    s.shield -= soak;
+                    dmg -= soak;
+                    s.hull -= dmg;
+                    if s.hull <= 0.0 {
+                        s.alive = false;
+                        if record {
+                            self.events.push(Event::ShipDestroyed { ship: s.id, pos: s.pos });
+                        }
+                    }
                 }
             }
         }

@@ -228,6 +228,8 @@ pub struct AbilityDef {
     pub weaken: Option<WeakenDef>,
     /// `LURE`: the taunt area.
     pub lure: Option<LureDef>,
+    /// `HARMONIC_BOMB`: what the bomb does.
+    pub bomb: Option<BombDef>,
     /// Abilities with `Expiration_Seconds` 0 (missile shield, interdiction) stay on until toggled off.
     pub toggle: bool,
     /// `TRACTOR_BEAM`: beam parameters from the linked `Tractor_Beam_Attack_Ability`.
@@ -289,6 +291,27 @@ pub struct RedirectDef {
     pub half_arc: f32,
     /// Bit mask of shooter classes it reacts to (`Applicable_Unit_Categories`; 0 = any).
     pub classes: u16,
+}
+
+/// `HARMONIC_BOMB`: the ship drops the ability's `Spawned_Object_Type` where it is; after `countdown` seconds the object goes off.
+/// Two kinds in the 4.0 data: an instant heal blast for fighters (carriers, `Projectile_Instant_Heal_*`) and a seismic bomb (Slave I,
+/// `Projectile_Blast_Area_*`).
+#[derive(Debug, Clone, Default)]
+pub struct BombDef {
+    /// `Bomb_Countdown_Seconds`.
+    pub countdown: f32,
+    /// `Projectile_Instant_Heal_Radius`.
+    pub heal_radius: f32,
+    /// `Projectile_Instant_Heal_Health_Increase`: hull points given to each friendly ship of `heal_classes` in the radius.
+    pub heal_amount: f32,
+    /// `Projectile_Instant_Heal_Targets_Category_Mask` as a class bit mask (0 = any).
+    pub heal_classes: u16,
+    /// `Projectile_Blast_Area_Range`.
+    pub blast_radius: f32,
+    /// `Projectile_Blast_Area_Damage` at the centre.
+    pub blast_damage: f32,
+    /// `Projectile_Blast_Area_Dropoff_Tiers`: the damage falls in this many equal steps towards the edge (0 = no dropoff).
+    pub blast_tiers: u32,
 }
 
 /// `LURE` ("Lure Enemy Fighters" / "Fortify"): while active the caster takes less damage (the ability's `TAKE_DAMAGE_MULTIPLIER`) and the enemy ships
@@ -563,6 +586,10 @@ pub struct ProjDef {
     pub combat_mod: Option<CombatMod>,
     /// `Projectile_Weaken_Enemy_*`: the area weakening that `WEAKEN_ENEMY` spawns.
     pub weaken: Option<WeakenDef>,
+    /// `Projectile_Instant_Heal_*`: (radius, hull points, class mask) of an instant heal blast.
+    pub instant_heal: Option<(f32, f32, u16)>,
+    /// `Projectile_Blast_Area_Dropoff_Tiers`.
+    pub blast_tiers: u32,
     /// Object name.
     pub name: String,
     /// `Projectile_Category` (lower case), e.g. `laser`, `missile`.
@@ -982,7 +1009,7 @@ impl Catalog {
                     proj_names.push(p.clone());
                 }
                 if let Source::Unit(u) = s {
-                    for a in u.abilities.iter().filter(|a| a.kind.eq_ignore_ascii_case("WEAKEN_ENEMY")) {
+                    for a in u.abilities.iter().filter(|a| a.kind.eq_ignore_ascii_case("WEAKEN_ENEMY") || a.kind.eq_ignore_ascii_case("HARMONIC_BOMB")) {
                         if let Some(n) = a.fields.get("spawned_object_type") {
                             proj_names.push(n.trim().to_string());
                         }
@@ -1074,6 +1101,10 @@ impl Catalog {
                 classes: p.fields.get("projectile_combat_mod_category_mask").map_or(0, |v| alamo_data::xml::split_list(v).iter().filter_map(|t| TargetClass::from_token(t)).fold(0u16, |m, c| m | c.bit())),
             })
             .filter(|m| m.value != 0.0 && m.duration > 0.0),
+            instant_heal: p.fields.get("projectile_instant_heal_on_detonation").is_some_and(|v| alamo_data::xml::parse_bool(v)).then(|| {
+                (f("projectile_instant_heal_radius"), f("projectile_instant_heal_health_increase"), p.fields.get("projectile_instant_heal_targets_category_mask").map_or(0, |v| alamo_data::xml::split_list(v).iter().filter_map(|t| TargetClass::from_token(t)).fold(0u16, |m, c| m | c.bit())))
+            }),
+            blast_tiers: if p.fields.get("projectile_blast_area_dropoff").is_some_and(|v| alamo_data::xml::parse_bool(v)) { f("projectile_blast_area_dropoff_tiers") as u32 } else { 0 },
             weaken: p.fields.get("projectile_weaken_enemy_on_detonation").is_some_and(|v| alamo_data::xml::parse_bool(v)).then(|| WeakenDef {
                 radius: f("projectile_weaken_enemy_radius"),
                 duration: f("projectile_weaken_enemy_duration_seconds"),
@@ -1656,7 +1687,7 @@ fn ability_defs(u: &SpaceUnitDef, projectiles: &[ProjDef], proj_index: &HashMap<
         .filter(|a| {
             a.expiration_seconds.unwrap_or(0.0) > 0.0
                 || (a.kind.eq_ignore_ascii_case("LURE") && a.fields.contains_key("effective_radius"))
-                || ["FULL_SALVO", "TRACTOR_BEAM", "MISSILE_SHIELD", "INTERDICT", "STEALTH", "FOW_REVEAL_PING", "LASER_DEFENSE", "ROCKET_ATTACK", "SWAP_WEAPONS", "SENSOR_JAMMING", "BUZZ_DROIDS", "SUPER_LASER", "CORRUPT_SYSTEMS", "HUNT", "SPOILER_LOCK", "REPLENISH_WINGMEN", "WEAKEN_ENEMY"].iter().any(|k| a.kind.eq_ignore_ascii_case(k))
+                || ["FULL_SALVO", "TRACTOR_BEAM", "MISSILE_SHIELD", "INTERDICT", "STEALTH", "FOW_REVEAL_PING", "LASER_DEFENSE", "ROCKET_ATTACK", "SWAP_WEAPONS", "SENSOR_JAMMING", "BUZZ_DROIDS", "SUPER_LASER", "CORRUPT_SYSTEMS", "HUNT", "SPOILER_LOCK", "REPLENISH_WINGMEN", "WEAKEN_ENEMY", "HARMONIC_BOMB"].iter().any(|k| a.kind.eq_ignore_ascii_case(k))
         })
         .map(|a| {
             let toggle = a.expiration_seconds.unwrap_or(0.0) <= 0.0 && ["MISSILE_SHIELD", "INTERDICT", "STEALTH", "HUNT", "SPOILER_LOCK"].iter().any(|k| a.kind.eq_ignore_ascii_case(k));
@@ -1721,6 +1752,19 @@ fn ability_defs(u: &SpaceUnitDef, projectiles: &[ProjDef], proj_index: &HashMap<
                     radius: a.fields.get("effective_radius").and_then(|v| v.trim().parse().ok()).unwrap_or(0.0),
                     types: a.fields.get("target_types").map(|v| alamo_data::xml::split_list(v).iter().map(|t| t.to_ascii_lowercase()).collect()).unwrap_or_default(),
                 }).filter(|l| l.radius > 0.0),
+                bomb: a.kind.eq_ignore_ascii_case("HARMONIC_BOMB").then(|| {
+                    let p = a.fields.get("spawned_object_type").and_then(|n| proj_index.get(&n.trim().to_ascii_lowercase())).and_then(|&i| projectiles.get(i as usize));
+                    let (heal_radius, heal_amount, heal_classes) = p.and_then(|p| p.instant_heal).unwrap_or_default();
+                    BombDef {
+                        countdown: a.fields.get("bomb_countdown_seconds").and_then(|v| v.trim().parse().ok()).unwrap_or(0.0),
+                        heal_radius,
+                        heal_amount,
+                        heal_classes,
+                        blast_radius: p.map_or(0.0, |p| p.blast_range),
+                        blast_damage: p.map_or(0.0, |p| p.blast_damage),
+                        blast_tiers: p.map_or(0, |p| p.blast_tiers),
+                    }
+                }).filter(|b| b.heal_amount > 0.0 || b.blast_damage > 0.0),
                 weaken: a.kind.eq_ignore_ascii_case("WEAKEN_ENEMY").then(|| {
                     let p = a.fields.get("spawned_object_type").and_then(|n| proj_index.get(&n.trim().to_ascii_lowercase())).and_then(|&i| projectiles.get(i as usize)).and_then(|p| p.weaken.clone()).unwrap_or(WeakenDef { radius: 2000.0, duration: 60.0, cause_reduction: 0.25, take_increase: 0.0, speed_cut: 0.25 });
                     WeakenDef { radius: a.fields.get("effective_radius").and_then(|v| v.trim().parse().ok()).unwrap_or(p.radius), ..p }
