@@ -241,7 +241,7 @@ pub fn impact_effects(
         let normal = (at - center).normalize_or_zero();
         match kind {
             HitKind::Shield => {
-                let shield_alive = rt.cur.as_ref().and_then(|c| c.ship(*ship)).map_or(true, |s| s.shield > 0.0);
+                let shield_alive = rt.cur.as_ref().and_then(|c| c.ship(*ship)).is_some_and(|s| s.shield > 0.0 && rt.catalog.ship(s.def).shield > 0.0);
                 if shield_alive {
                     commands.trigger(ShieldHit {
                         model: entity,
@@ -330,11 +330,14 @@ pub fn impact_effects(
                     initial_color: flash_color,
                 },
             ));
-            commands.trigger(ShieldHit {
-                model: entity,
-                position: at,
-                intensity: 3.5,
-            });
+            // Only a ship that has shields in the data and still holds some shows the bubble.
+            if rt.cur.as_ref().and_then(|c| c.ship(*ship)).is_some_and(|s| s.shield > 0.0 && rt.catalog.ship(s.def).shield > 0.0) {
+                commands.trigger(ShieldHit {
+                    model: entity,
+                    position: at,
+                    intensity: 3.5,
+                });
+            }
         }
     }
 }
