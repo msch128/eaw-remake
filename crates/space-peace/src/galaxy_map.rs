@@ -344,7 +344,7 @@ fn fix_star_dome(
             {
                 let material = materials.add(StandardMaterial {
                     // The texture holds gamma-space colours; this approximates the game's look.
-                    base_color: Color::linear_rgb(0.55, 0.55, 0.55),
+                    base_color: Color::linear_rgb(0.3, 0.3, 0.3),
                     base_color_texture: Some(tex),
                     unlit: true,
                     cull_mode: Some(bevy::render::render_resource::Face::Back),
@@ -702,7 +702,8 @@ fn update_labels(
     };
     // Labels grow when zoomed in and shrink when zoomed out (whole pixel steps only).
     let zoom_out = zoom_fraction(&bounds, orbit.distance);
-    let font_px = (15.0 + (10.0 - 15.0) * smoothstep(0.0, 0.7, zoom_out)).round();
+    // estimate: the Remake labels are about 1.5% of the screen height close up (f0016), smaller than before.
+    let font_px = (11.0 + (8.0 - 11.0) * smoothstep(0.0, 0.7, zoom_out)).round();
     // UI coordinates are multiplied by the UI scale; the layout below works in viewport pixels.
     let us = ui_scale.0.max(0.1);
     let font_node_px = (font_px / us).round().max(1.0);
@@ -1142,9 +1143,9 @@ struct LaneState {
 
 /// Half widths of the ribbons in planet radii (`MapScale::unit`), by data width class. The reference
 /// shows wide soft light-blue beams of about 0.7 planet radii, thinner inter lanes and hair lines.
-const LANE_HALF_WIDTH: [f32; 3] = [0.12, 0.05, 0.022];
+const LANE_HALF_WIDTH: [f32; 3] = [0.2, 0.08, 0.03];
 /// Peak brightness (linear) of the beams.
-const LANE_PEAK: [f32; 3] = [0.34, 0.27, 0.2];
+const LANE_PEAK: [f32; 3] = [0.75, 0.5, 0.3];
 
 fn lane_class(width: f32) -> usize {
     if width >= 4.0 {
@@ -1554,11 +1555,11 @@ fn make_starfield(width: u32, height: u32) -> Image {
     }
 
     // Stars: soft gaussian dots with varying brightness and colour temperature.
-    let count = w * h / 900;
+    let count = w * h / 3600; // estimate: the Remake sky is sparse
     for _ in 0..count {
         let (cx, cy) = (rng.random_range(0..w) as i32, rng.random_range(0..h) as i32);
         let b: f32 = rng.random::<f32>().powf(5.0);
-        let peak = 0.25 + 0.75 * b;
+        let peak = 0.15 + 0.7 * b;
         let sigma = 0.8 + 1.0 * b;
         let tint: f32 = rng.random();
         let col = [0.75 + 0.25 * tint, 0.85, 1.0 - 0.3 * tint];

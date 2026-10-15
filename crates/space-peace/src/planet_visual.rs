@@ -100,7 +100,7 @@ pub fn spawn_planet_visual(
         (Some(model), true) => {
             commands.spawn((
                 AlamoModel::new(model.clone()).with_team_color(owner_c),
-                Transform::from_scale(Vec3::splat(planet.model_scale * PLANET_VISUAL_BOOST)),
+                Transform::from_scale(Vec3::splat(planet.model_scale * PLANET_VISUAL_BOOST * sector_boost(model))),
                 PlanetModel(index),
                 ChildOf(root),
             ));
@@ -171,3 +171,24 @@ fn on_model_failed(
 /// (yt CS9VdxglewY f0018/f0019: globe about 14 px wide on a 1024 px frame, label caps about 5 px) put the globe at roughly
 /// two to three label cap heights. 1.15 is measured from those frames (an estimate, the engine value is unknown).
 const PLANET_VISUAL_BOOST: f32 = 1.15;
+
+/// Extra scale of the sector clouds (`w_galaxy_mini`, `w_nebula*`): next to the Remake frames (CS9 f0016) ours were about 1.5 times too
+/// small compared with the planet globes next to them (an estimate measured from those frames).
+const SECTOR_VISUAL_BOOST: f32 = 1.5;
+
+fn sector_boost(model: &str) -> f32 {
+    let m = model.to_ascii_lowercase();
+    if m.starts_with("w_galaxy_mini") || m.starts_with("w_nebula") { SECTOR_VISUAL_BOOST } else { 1.0 }
+}
+
+#[cfg(test)]
+mod sector_tests {
+    use super::*;
+
+    #[test]
+    fn only_the_sector_clouds_grow() {
+        assert_eq!(sector_boost("W_Galaxy_Mini.alo"), SECTOR_VISUAL_BOOST);
+        assert_eq!(sector_boost("w_nebula04_Blue.alo"), SECTOR_VISUAL_BOOST);
+        assert_eq!(sector_boost("W_Planet_Terran.alo"), 1.0);
+    }
+}

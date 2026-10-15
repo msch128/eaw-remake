@@ -10,10 +10,10 @@ Remake values from `GameConstants.xml` (mod 1770851727): `GMC_InitialPullbackDis
 | # | Difference | Remake | Ours | Status |
 |---|------------|--------|------|--------|
 | 1 | Wheel zoom target | zooms toward what is under the cursor; a hovered planet opens its planet view | zoomed toward the galaxy centre, planet view needed a click first | fixed (item 1) |
-| 2 | Hyperlanes | long, bright cyan beams, clearly the strongest line on screen | thin, dim, partly red dashes | open |
-| 3 | Star field | sparse tiny stars on pure black | dense bright speckle, reads as TV noise | open |
-| 4 | Planet labels | small orange text (about 7 px at 1024 wide), few labels at once | about 2x bigger, bold, every planet labelled | open |
-| 5 | Nebula / sector clouds | 3x larger swirl with dots, soft purple | small pink swirl, about a third of the size | open |
+| 2 | Hyperlanes | long, bright cyan beams, clearly the strongest line on screen | thin, dim, partly red dashes | fixed (item 2): beams wider and about 2x brighter |
+| 3 | Star field | sparse tiny stars on pure black | dense bright speckle, reads as TV noise | partly: sky texture 4x sparser and dimmer; the dense speckle in captures still comes from another layer (to find) |
+| 4 | Planet labels | small orange text (about 7 px at 1024 wide), few labels at once | about 2x bigger, bold, every planet labelled | fixed (item 3): 11 px close / 8 px far instead of 15 / 10 |
+| 5 | Nebula / sector clouds | 3x larger swirl with dots, soft purple | small pink swirl, about a third of the size | fixed (item 4): sector clouds x1.5 |
 | 6 | Camera range and tilt | start 470 away, tilt -20 deg when zoomed in | start and range derived from galaxy extent | open |
 | 7 | Build bar | dark flat strip, thin red outline | bright maroon strip, bright top edge | open |
 | 8 | Maroon core haze | none | visible maroon blob at the galaxy centre | open |
