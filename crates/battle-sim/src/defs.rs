@@ -299,6 +299,8 @@ pub struct SuperLaserDef {
     pub delay: f32,
     /// Bit mask of ships it may be aimed at (`Applicable_Unit_Categories`; 0 = any).
     pub classes: u16,
+    /// Seconds before the first shot: the Death Star flies into range first (estimate, see `TSW_SPEED_SCALE`); 0 for super lasers without that data.
+    pub initial_cooldown: f32,
 }
 
 /// What a `Projectile_Combat_Mod` changes.
@@ -452,6 +454,8 @@ pub struct ShipDef {
     pub interdictor: bool,
     /// Ground-to-space special weapon definition, if this structure fires into orbit.
     pub special_weapon: Option<SpecialWeaponDef>,
+    /// `In_Background` (the Death Star): a backdrop object, neither targeted nor hit by anything.
+    pub background: bool,
 }
 
 impl ShipDef {
@@ -1415,6 +1419,7 @@ impl Catalog {
             golan,
             interdictor,
             special_weapon,
+            background: matches!(src, Source::Unit(u) if u.fields.get("in_background").is_some_and(|v| alamo_data::xml::parse_bool(v))),
         }
     }
 
@@ -1495,7 +1500,9 @@ impl Catalog {
                 arc_pitch = arc_pitch.max(45f32.to_radians());
             }
         }
-        let projectile = h.projectile.as_deref().and_then(|p| self.proj_index.get(&p.to_ascii_lowercase()).copied());
+        // A weapon that only the super laser ability uses (`Blast_Ability_Fire_Projectile_Type`) never fires on its own.
+        let ability_only = h.fields.get("blast_ability_fire_projectile_type").is_some_and(|v| !v.trim().is_empty());
+        let projectile = h.projectile.as_deref().filter(|_| !ability_only).and_then(|p| self.proj_index.get(&p.to_ascii_lowercase()).copied());
         let proj = projectile.map(|p| &self.projectiles[p as usize]);
         let t = h.hp_type.to_ascii_uppercase();
         let kind = if t.contains("SHIELD_GENERATOR") {
@@ -1666,6 +1673,11 @@ fn ability_defs(u: &SpaceUnitDef) -> Vec<AbilityDef> {
                     SuperLaserDef {
                         delay: f("fire_frame").trim().parse::<f32>().unwrap_or(50.0) / 30.0,
                         classes: alamo_data::xml::split_list(&f("applicable_unit_categories")).iter().filter_map(|t| TargetClass::from_token(t)).fold(0u16, |m, c| m | c.bit()),
+                        initial_cooldown: tsw_approach_seconds(
+                            u.fields.get("tsw_start_distance_from_target").and_then(|v| v.trim().parse().ok()).unwrap_or(0.0),
+                            u.fields.get("tsw_attack_distance_from_target").and_then(|v| v.trim().parse().ok()).unwrap_or(0.0),
+                            u.fields.get("max_speed").and_then(|v| v.trim().parse().ok()).unwrap_or(0.0),
+                        ),
                     }
                 }),
                 zone: a.kind.eq_ignore_ascii_case("BUZZ_DROIDS").then(|| {
@@ -1714,3 +1726,24 @@ pub fn dps_estimate(d: &ShipDef, cat: &Catalog) -> f32 {
 const MISSILE_ARC_PER_TURN_RATE: f32 = 0.17;
 /// Estimate: widest launch offset of a missile in radians (about 34 degrees).
 const MISSILE_ARC_MAX: f32 = 0.6;
+
+/// Estimate: game units per second a `Max_Speed` of 1 stands for on the Death Star's approach (`TSW_*` values). The data gives the distances
+/// (80000 -> 50000) and a speed of 5 but not the scale; the Remake video shows the countdown at about 600 s at the start, which is the factor 10.
+const TSW_SPEED_SCALE: f32 = 10.0;
+
+/// Seconds a Death Star needs to fly from `TSW_Start_Distance_From_Target` into `TSW_Attack_Distance_From_Target` at `Max_Speed`; 0 without data.
+pub fn tsw_approach_seconds(start: f32, attack: f32, max_speed: f32) -> f32 {
+    if start > attack && attack > 0.0 && max_speed > 0.0 { (start - attack) / (max_speed * TSW_SPEED_SCALE) } else { 0.0 }
+}
+
+#[cfg(test)]
+mod tsw_tests {
+    use super::*;
+
+    #[test]
+    fn death_star_approach_time() {
+        assert_eq!(tsw_approach_seconds(80000.0, 50000.0, 5.0), 600.0);
+        assert_eq!(tsw_approach_seconds(0.0, 0.0, 5.0), 0.0);
+        assert_eq!(tsw_approach_seconds(80000.0, 50000.0, 0.0), 0.0);
+    }
+}

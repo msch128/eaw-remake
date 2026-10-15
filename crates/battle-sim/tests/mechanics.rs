@@ -697,7 +697,7 @@ fn buzz_droid_storm_damages_enemies_in_the_area_over_time() {
 #[test]
 fn super_laser_destroys_the_chosen_ship_after_charging() {
     let mut station = ship("deathstar", 1.0e9, 0.0, vec![]);
-    station.abilities.push(AbilityDef { kind: "SUPER_LASER".into(), super_laser: Some(SuperLaserDef { delay: 1.5, classes: TargetClass::Frigate.bit() }), duration: 25.0, recharge: 45.0, speed_mult: 1.0, shield_regen_mult: 1.0, weapon_delay_mult: 1.0, take_damage_mult: 1.0, ..Default::default() });
+    station.abilities.push(AbilityDef { kind: "SUPER_LASER".into(), super_laser: Some(SuperLaserDef { initial_cooldown: 0.0, delay: 1.5, classes: TargetClass::Frigate.bit() }), duration: 25.0, recharge: 45.0, speed_mult: 1.0, shield_regen_mult: 1.0, weapon_delay_mult: 1.0, take_damage_mult: 1.0, ..Default::default() });
     let victim = ship("victim", 1.0e6, 1.0e5, vec![]);
     let cat = Catalog::from_defs(vec![station, victim], vec![laser()]);
     let mut b = Battle::new(setup(cat, "deathstar", "victim", 1, 1, cfg()));
@@ -770,7 +770,7 @@ fn the_ai_uses_each_new_ability_in_a_suitable_scenario() {
     assert!(used(&b, 0), "storm on a cluster");
 
     let mut dstar = ship("dstar", 1.0e6, 0.0, vec![]);
-    dstar.abilities.push(AbilityDef { super_laser: Some(SuperLaserDef { delay: 1.0, classes: TargetClass::Frigate.bit() }), ..ability("SUPER_LASER") });
+    dstar.abilities.push(AbilityDef { super_laser: Some(SuperLaserDef { initial_cooldown: 0.0, delay: 1.0, classes: TargetClass::Frigate.bit() }), ..ability("SUPER_LASER") });
     let mut b = Battle::new(setup(Catalog::from_defs(vec![dstar, dummy()], vec![laser()]), "dstar", "dummy", 1, 1, cfg()));
     for _ in 0..30 * 3 {
         b.step();
@@ -1467,4 +1467,34 @@ fn a_placed_reinforcement_arrives_turned_by_the_ghost_rotation() {
     let turns: Vec<f32> = new.iter().map(|s| s.yaw - base).collect();
     assert!(turns.iter().any(|t| (t - 0.2).abs() < 0.01), "{turns:?}");
     assert!(turns.iter().all(|t| *t <= 0.28), "{turns:?}");
+}
+
+#[test]
+fn death_star_super_laser_waits_for_its_approach_countdown() {
+    let dummy = || ship("dummy", 1.0e7, 0.0, vec![]);
+    let mut dstar = ship("dstar", 1.0e6, 0.0, vec![]);
+    dstar.abilities.push(AbilityDef { super_laser: Some(SuperLaserDef { initial_cooldown: 10.0, delay: 1.0, classes: TargetClass::Frigate.bit() }), ..ability("SUPER_LASER") });
+    let mut b = Battle::new(setup(Catalog::from_defs(vec![dstar, dummy()], vec![laser()]), "dstar", "dummy", 1, 1, cfg()));
+    let id = b.ships.iter().find(|s| s.side == 0).unwrap().id as usize;
+    assert!((b.ships[id].abilities[0].cooldown - 10.0).abs() < 1e-3, "starts on the countdown");
+    for _ in 0..30 * 8 {
+        b.step();
+    }
+    assert!(b.ships.iter().filter(|s| s.side == 1).all(|s| s.alive), "no shot before the countdown ran out");
+    for _ in 0..30 * 6 {
+        b.step();
+    }
+    assert!(b.ships.iter().filter(|s| s.side == 1).all(|s| !s.alive), "then it fires at the enemy");
+}
+
+#[test]
+fn background_ships_are_not_attacked() {
+    let mut backdrop = ship("backdrop", 1.0e6, 0.0, vec![]);
+    backdrop.background = true;
+    let cat = Catalog::from_defs(vec![ship("gunner", 1.0e6, 0.0, vec![gun("g", 0.0)]), backdrop], vec![laser()]);
+    let mut b = Battle::new(setup(cat, "gunner", "backdrop", 1, 1, cfg()));
+    for _ in 0..30 * 10 {
+        b.step();
+    }
+    assert!(b.ships.iter().filter(|s| s.side == 1).all(|s| s.alive && s.hull >= 1.0e6 * 0.999), "nothing shoots the backdrop");
 }

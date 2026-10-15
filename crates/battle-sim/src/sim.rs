@@ -452,7 +452,7 @@ impl Battle {
             carrier: NONE,
             slots: Vec::new(),
             reserve: self.spawned_for(def, side).1,
-            abilities: def.abilities.iter().map(|a| AbilityState { active: 0.0, cooldown: 0.0, target: NONE, autocast: a.supports_autofire && a.autocast_default }).collect(),
+            abilities: def.abilities.iter().map(|a| AbilityState { active: 0.0, cooldown: a.super_laser.as_ref().map_or(0.0, |l| l.initial_cooldown), target: NONE, autocast: a.supports_autofire && a.autocast_default }).collect(),
             tractor_cut: 0.0,
             path: Vec::new(),
             path_goal: Vec3::ZERO,
@@ -1000,7 +1000,7 @@ impl Battle {
                     vel: Vec3::from_yaw(s.yaw) * s.speed,
                     yaw: s.yaw,
                     radius,
-                    hit_radius: radius.max(d.hardpoint_reach),
+                    hit_radius: if d.background { 0.0 } else { radius.max(d.hardpoint_reach) },
                     side: s.side,
                     class: d.class,
                     def: s.def,
@@ -1016,7 +1016,7 @@ impl Battle {
                     } else {
                         0xFF
                     },
-                    special: d.special_weapon.is_some(),
+                    special: d.special_weapon.is_some() || d.background,
                     target_hp: s.target_hp,
                 }
             })
