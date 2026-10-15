@@ -255,6 +255,6 @@ Add `battle-view`, `galaxy-sim` (already there through galaxy-play) and `eaw-ui`
 - `w_planet_*_low_light.alo` has no sphere: `Planet` is a flat disc (about 72000 radius at scale 45, constant normal) and the map's
   rotation lays it nearly horizontal under (or, flipped, over) the battle plane. Left as placed it is a desert floor filling the
   start view (Tatooine, 31 of 93 maps failed the opening-frame sweep).
-- `disc_slide` moves a disc that covers >60 % of the start view sideways (camera right vector, on the side the map put it) until
-  its limb crosses the view (<= 25 %). Maps with terrain props (Skies) keep their disc. `SP_NO_DISC_SLIDE=1` turns it off.
-- Sweep: `tools\space-map-sweep.ps1 -Exe <battle_demo.exe>` renders every planet space map and flags frames under 30 % dark.
+- `disc_slide` moves a disc that covers >97 % of the start view (no limb at all) sideways (camera right vector, on the side the map put it) until
+  its limb shows (<= 85 %, planet-dominant like the real Bestine shot). Maps with terrain props (Skies) keep their disc. `SP_NO_DISC_SLIDE=1` turns it off.
+- Sweep: `tools\space-map-sweep.ps1 -Exe <battle_demo.exe>` renders every planet space map and flags frames with under 3 % dark pixels (a planet with no limb or space in view).

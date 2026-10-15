@@ -1,11 +1,11 @@
-# Opening-frame sweep of every planet space map: renders each one offscreen with battle_demo and flags frames that are not mostly
-# dark space (a planet disc filling the view) or maps that fail to load. One exe run at a time; output goes to $Out, never the repo.
-#   .\tools\space-map-sweep.ps1 -Exe target\release\examples\battle_demo.exe [-Maps a,b] [-MinDark 0.4]
+# Opening-frame sweep of every planet space map: renders each one offscreen with battle_demo and flags frames with almost no dark
+# pixel (a planet disc filling the view with no limb) or maps that fail to load. One exe run at a time; output goes to $Out, never the repo.
+#   .\tools\space-map-sweep.ps1 -Exe target\release\examples\battle_demo.exe [-Maps a,b] [-MinDark 0.03]
 param(
     [Parameter(Mandatory)][string]$Exe,
     [string]$Out = (Join-Path $env:TEMP 'space-map-sweep'),
     [string[]]$Maps = @(),
-    [double]$MinDark = 0.30,
+    [double]$MinDark = 0.03,
     [string]$Data = 'F:\SteamLibrary\steamapps\workshop\content\32470\1770851727\Data'
 )
 Add-Type -AssemblyName System.Drawing

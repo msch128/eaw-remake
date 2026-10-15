@@ -346,13 +346,13 @@ pub fn disc_coverage(disc: &PlanetDisc, view: &ViewPose) -> f32 {
     hit as f32 / total as f32
 }
 
-/// Coverage above which a disc counts as a floor under the whole start view.
-const DISC_FLOOR_COVERAGE: f32 = 0.6;
-/// Coverage a slid disc settles at: its limb crosses the view and the rest is space.
-const DISC_LIMB_COVERAGE: f32 = 0.25;
+/// Coverage above which a disc leaves no space at all in the start view (a flat floor with no limb).
+const DISC_FLOOR_COVERAGE: f32 = 0.97;
+/// Coverage a slid disc settles at: still planet-dominant like the real Bestine battle shot (planet under the ships, limb at the top of the picture), but the limb shows.
+const DISC_LIMB_COVERAGE: f32 = 0.85;
 
 /// Sideways shift (world units, along the camera's right or left vector) that moves a floor-like disc until its limb
-/// crosses the start view, as `(direction, distance)`; `None` when the disc already leaves most of the view to space.
+/// crosses the start view, as `(direction, distance)`; `None` when the disc already shows its limb or space.
 pub fn disc_slide(disc: &PlanetDisc, view: &ViewPose) -> Option<(Vec3, f32)> {
     if disc_coverage(disc, view) <= DISC_FLOOR_COVERAGE {
         return None;
@@ -424,7 +424,7 @@ pub fn keep_planet_below(
             }
         }
         // A flat disc that still lies under the whole arena is a desert floor, not a planet: slide it sideways until its limb
-        // crosses the start view (Tatooine: centred 10000 below, 72000 wide; the Remake shows space with the planet at one side).
+        // crosses the start view (Tatooine: centred 10000 below, 72000 wide: the whole picture was desert with no limb).
         if let (Some(d), Some(cam), false) = (disc, camera.as_deref(), terrain.as_deref().is_some_and(|t| t.0)) {
             let view = ViewPose { focus: cam.target_focus, distance: cam.target_distance, pitch: cam.pitch, yaw: cam.target_yaw };
             let cover = disc_coverage(&d, &view);
@@ -516,7 +516,7 @@ mod tests {
         assert_eq!(dir, Vec3::X, "the planet stays on the side the map put it");
         let slid = PlanetDisc { center: d.center + dir * shift, ..d };
         let cover = disc_coverage(&slid, &view);
-        assert!(cover <= 0.25 && cover > 0.0, "limb crosses the view, coverage {cover}");
+        assert!(cover <= 0.85 && cover > 0.0, "limb crosses the view, coverage {cover}");
         // A disc that already sits far to the side is left alone.
         let far = PlanetDisc { center: d.center + dir * (shift + 20_000.0), ..d };
         assert_eq!(disc_slide(&far, &view), None);
@@ -529,22 +529,22 @@ mod tests {
         let (dir, shift) = disc_slide(&d, &view).expect("floor disc must slide");
         assert!(dir.z.abs() > 0.99, "slides along the rotated camera's right vector, not world x: {dir:?}");
         let slid = PlanetDisc { center: d.center + dir * shift, ..d };
-        assert!(disc_coverage(&slid, &view) <= 0.25);
+        assert!(disc_coverage(&slid, &view) <= 0.85);
     }
 
     #[test]
     fn tilted_coruscant_disc_slides_too() {
         // Coruscant_01: tilted 10 degrees, centred under the arena origin, fleet 6600 south of it.
         let d = PlanetDisc { center: Vec3::new(0.0, -19_610.0, 0.0), normal: Vec3::new(0.17364845, -0.98480785, 0.0), radius: 71_946.0 };
-        let view = ViewPose { focus: Vec3::new(-243.0, 0.0, 6647.0), distance: 1300.0, pitch: 72f32.to_radians(), yaw: 0.0 };
+        let view = ViewPose { focus: Vec3::new(-243.0, 0.0, 6647.0), distance: 1300.0, pitch: 60f32.to_radians(), yaw: 0.0 };
         assert!(disc_coverage(&d, &view) > 0.95);
         let (dir, shift) = disc_slide(&d, &view).expect("floor disc must slide");
         let slid = PlanetDisc { center: d.center + dir * shift, ..d };
-        assert!(disc_coverage(&slid, &view) <= 0.25);
+        assert!(disc_coverage(&slid, &view) <= 0.85);
     }
 
     fn start_view() -> ViewPose {
-        ViewPose { focus: Vec3::new(-6300.0, 0.0, 2000.0), distance: 1300.0, pitch: 72f32.to_radians(), yaw: 0.0 }
+        ViewPose { focus: Vec3::new(-6300.0, 0.0, 2000.0), distance: 1300.0, pitch: 60f32.to_radians(), yaw: 0.0 }
     }
 
     #[test]
