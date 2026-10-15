@@ -371,6 +371,7 @@ impl World {
             self.resolve_unit_requirements(&mut u, &def);
             self.units.push(u);
         }
+        self.add_vessel_upgrades(data);
         self.classify_ground_structures(&struct_raw);
 
         // Star bases.
@@ -511,6 +512,43 @@ impl World {
         u.req_structures = groups;
         u.req_planets = planets;
         u.buildable &= ok && planets_ok;
+    }
+
+    /// Ship and hero upgrade items. They have no space model (`SpaceUnits` drops them), and the target ship is named only by the Remake script
+    /// `Scripts/GameObject/Upgrade_Units.lua` (`Upgrade_Unit(planet, player, from, to)`), mirrored here: item, ship that must be in orbit, ship that replaces it.
+    fn add_vessel_upgrades(&mut self, data: &GameData) {
+        const UPGRADES: &[(&str, &str, &str)] = &[
+            ("Vindicator_Upgrade", "Vindicator_Cruiser", "Bizzaro_Cult_Vindicator_Cruiser"),
+            ("Gladiator_Upgrade", "Gladiator_Star_Destroyer", "Gladiator_Star_Destroyer_Loadout2"),
+            ("Ton_Falk_Upgrade", "Ton_Falk_Carrier", "Ton_Falk_Carrier_Loadout2"),
+            ("Executrix_Upgrade", "Havelon", "Executrix_Star_Destroyer"),
+            ("Black_Squadron_Upgrade", "Black_Squadron_Team", "Devastator_Star_Destroyer"),
+            ("Piett_Procursator_Upgrade", "Piett_Procursator", "Accuser_Star_Destroyer"),
+            ("Piett_Accuser_Upgrade", "Accuser_Star_Destroyer", "Piett_Executor_P1"),
+            ("Imperial_Piett_Upgrade", "Accuser_Star_Destroyer", "Imperial_Piett_Executor_P1"),
+            ("Strikefast_Upgrade", "Strikefast", "Admonitor_Star_Destroyer"),
+            ("Admonitor_Upgrade", "Admonitor_Star_Destroyer", "Admonitor_Star_Destroyer_II"),
+            ("Quasar_Upgrade", "Quasar_Carrier_R", "Quasar_Carrier_Loadout2"),
+            ("Liberator_Upgrade", "Liberator_Carrier_R", "Liberator_Carrier_Loadout2"),
+            ("Ackbar_Upgrade", "Ackbar_Wingless", "Home_One"),
+            ("Tyber_Zann_Upgrade", "Tyber_Zann_Javelin", "Tyber_Zann_The_Merciless"),
+            ("Jared_Sykes_Upgrade", "Sykes_Venator", "End_of_Days"),
+            ("Jabba_Upgrade", "Star_Jewel", "Jabba_Destroyer"),
+        ];
+        for &(item, from, to) in UPGRADES {
+            let (Some(&f), Some(&t)) = (self.unit_index.get(&key(from)), self.unit_index.get(&key(to))) else { continue };
+            if self.unit_index.contains_key(&key(item)) {
+                continue;
+            }
+            let Some(def) = data.objects.space_unit(item) else { continue };
+            let mut u = unit_from_def(&def, CombatStats::default());
+            u.role = UnitRole::Upgrade { from: f, to: t };
+            u.category = ShipCategory::Other;
+            u.hero = false;
+            self.resolve_unit_requirements(&mut u, &def);
+            self.unit_index.insert(key(&def.name), self.units.len() as UnitTypeId);
+            self.units.push(u);
+        }
     }
 
     /// Decides which ground structures stay in the build menus (see `StructureType::galactic`).

@@ -312,6 +312,14 @@ pub enum UnitRole {
     Ship,
     /// A research item: completing it unlocks the named object for the faction.
     Research(String),
+    /// A hero or ship upgrade (`Vessel_Upgrade_Template`, `Scripts/GameObject/Upgrade_Units.lua`): completing it replaces one `from` ship of the faction at the
+    /// planet (`Required_Orbiting_Units`) by a `to` ship.
+    Upgrade {
+        /// Ship that must be in orbit and is replaced.
+        from: UnitTypeId,
+        /// Ship that takes its place.
+        to: UnitTypeId,
+    },
 }
 
 /// A buildable ship, squadron or research item.

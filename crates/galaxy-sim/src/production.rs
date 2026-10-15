@@ -232,6 +232,12 @@ impl World {
         {
             return Err(CommandError::BuildLimit);
         }
+        // An upgrade needs the ship it upgrades in orbit (`Required_Orbiting_Units`).
+        if let UnitRole::Upgrade { from, .. } = ut.role
+            && !galaxy.fleets.values().any(|f| f.owner == faction && f.location == FleetLocation::AtPlanet(planet) && f.units.get(&from).is_some_and(|&n| n > 0))
+        {
+            return Err(CommandError::RequirementsNotMet(format!("{} in orbit", self.units[from as usize].name)));
+        }
         if ut.population > 0 && fs.population_used + self.queued_population(galaxy, faction) + ut.population > fs.population_cap {
             return Err(CommandError::PopulationCap);
         }

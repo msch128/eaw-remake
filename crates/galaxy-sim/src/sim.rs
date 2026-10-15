@@ -687,6 +687,9 @@ impl Sim {
                     UnitRole::Research(target) => {
                         fs.unlocked.insert(target.to_ascii_lowercase());
                     }
+                    UnitRole::Upgrade { from, to } => {
+                        replace_unit(&mut self.galaxy, owner, planet, *from, *to);
+                    }
                 }
             }
             ProductionKind::Structure(s) => self.galaxy.planets[pi].structures.push(s),
@@ -1271,6 +1274,18 @@ impl Sim {
 }
 
 /// Adds `count` units of type `u` to the faction's idle fleet at `planet` (creating one if needed).
+/// Swaps one `from` ship of `owner` at `planet` for a `to` ship in the same fleet (a hero or ship upgrade, `Upgrade_Unit` of the Remake script).
+pub(crate) fn replace_unit(g: &mut Galaxy, owner: FactionId, planet: PlanetId, from: UnitTypeId, to: UnitTypeId) {
+    let Some(f) = g.fleets.values_mut().filter(|f| f.owner == owner && f.location == FleetLocation::AtPlanet(planet) && f.units.get(&from).is_some_and(|&n| n > 0)).min_by_key(|f| f.id) else { return };
+    if let Some(n) = f.units.get_mut(&from) {
+        *n -= 1;
+        if *n == 0 {
+            f.units.remove(&from);
+        }
+    }
+    *f.units.entry(to).or_default() += 1;
+}
+
 pub(crate) fn add_units(g: &mut Galaxy, owner: FactionId, planet: PlanetId, u: UnitTypeId, count: u32) -> FleetId {
     // New ships join the fleet in the lowest slot; a new fleet only starts where the faction has none, so slot 1 is free.
     let existing = g
