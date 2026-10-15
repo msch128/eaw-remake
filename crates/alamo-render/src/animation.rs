@@ -346,7 +346,7 @@ impl TurretAim {
 
     /// An idle turret configured from its hardpoint: bones, yaw/pitch extents and speed.
     ///
-    /// The yaw range is `Turret_Rotate_Extent_Degrees` centered on the rest pose (360 = free),
+    /// The yaw range is `Turret_Rotate_Extent_Degrees` to each side of the rest pose (360 = free),
     /// the pitch range goes from slightly below the horizontal up to `Turret_Elevate_Extent_Degrees`.
     pub fn from_hardpoint(def: &crate::xmldata::HardpointDef) -> Self {
         let mut aim = Self::idle();
@@ -357,7 +357,9 @@ impl TurretAim {
             aim.pitch_bone = b.trim().to_string();
         }
         if def.rotate_extent_deg < 359.0 {
-            let half = (def.rotate_extent_deg * 0.5).to_radians();
+            // The extent is the reach to each side of the rest pose, as the sim reads it (`battle-sim` fire arc): with half of it the barrel stopped
+            // short of targets the turret was already firing at.
+            let half = def.rotate_extent_deg.min(180.0).to_radians();
             aim.yaw_limits = Some((-half, half));
         }
         aim.pitch_limits = (-0.09, def.elevate_extent_deg.to_radians().clamp(0.02, 3.1));
@@ -465,6 +467,15 @@ pub fn build(app: &mut App, fs: &Arc<alamo_fs::GameFs>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn turret_yaw_limit_is_the_extent_to_each_side() {
+        let def = crate::xmldata::HardpointDef { rotate_extent_deg: 45.0, elevate_extent_deg: 60.0, ..Default::default() };
+        let aim = TurretAim::from_hardpoint(&def);
+        let (lo, hi) = aim.yaw_limits.unwrap();
+        assert!((hi - 45f32.to_radians()).abs() < 1e-5 && (lo + hi).abs() < 1e-5);
+        assert!(TurretAim::from_hardpoint(&crate::xmldata::HardpointDef { rotate_extent_deg: 360.0, ..Default::default() }).yaw_limits.is_none());
+    }
 
     fn index() -> AnimationIndex {
         let mut files: Vec<(String, String)> = [
