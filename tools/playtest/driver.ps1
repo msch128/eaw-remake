@@ -121,13 +121,23 @@ function Drag-Box([double]$x1, [double]$y1, [double]$x2, [double]$y2, $Button = 
 function Scroll-Wheel([int]$notches) { Assert-GameInFront; [Win]::mouse_event([Win]::WHEEL, 0, 0, 120 * $notches, [UIntPtr]::Zero); Start-Sleep -Milliseconds 100 }
 
 # Press-Key 'S' | Press-Key $VK.Esc | Press-Key '0' -Mods $VK.Ctrl
-$VK = @{ Esc = 0x1B; Space = 0x20; Enter = 0x0D; F3 = 0x72; F10 = 0x79; F11 = 0x7A; Shift = 0x10; Ctrl = 0x11 }
+$VK = @{ Esc = 0x1B; Space = 0x20; Enter = 0x0D; F3 = 0x72; F10 = 0x79; F11 = 0x7A; Shift = 0x10; Ctrl = 0x11; PgUp = 0x21; PgDn = 0x22; End = 0x23; Home = 0x24; Left = 0x25; Up = 0x26; Right = 0x27; Down = 0x28; Ins = 0x2D; Del = 0x2E }
+# Scan codes of the navigation block (all extended keys): the game reads physical keys, so these are sent by scan code.
+$NavScan = @{ 0x21 = 0x49; 0x22 = 0x51; 0x23 = 0x4F; 0x24 = 0x47; 0x25 = 0x4B; 0x26 = 0x48; 0x27 = 0x4D; 0x28 = 0x50; 0x2D = 0x52; 0x2E = 0x53 }
 function Press-Key($Key, [int[]]$Mods = @(), [int]$HoldMs = 60) {
     Assert-GameInFront
     $vk = if ($Key -is [string]) { [byte][char]$Key.ToUpper() } else { [byte]$Key }
     foreach ($m in $Mods) { [Win]::keybd_event([byte]$m, 0, 0, [UIntPtr]::Zero) }
-    [Win]::keybd_event($vk, 0, 0, [UIntPtr]::Zero); Start-Sleep -Milliseconds $HoldMs
-    [Win]::keybd_event($vk, 0, [Win]::KEYUP, [UIntPtr]::Zero)
+    if ($NavScan.ContainsKey([int]$vk)) {
+        # KEYEVENTF_EXTENDEDKEY (1) | KEYEVENTF_SCANCODE (8): without the extended scan code Windows reports the numpad key
+        # (Home would arrive as Numpad7) and the game never sees Home / End / Page Up.
+        $sc = [byte]$NavScan[[int]$vk]
+        [Win]::keybd_event($vk, $sc, 9, [UIntPtr]::Zero); Start-Sleep -Milliseconds $HoldMs
+        [Win]::keybd_event($vk, $sc, 11, [UIntPtr]::Zero)
+    } else {
+        [Win]::keybd_event($vk, 0, 0, [UIntPtr]::Zero); Start-Sleep -Milliseconds $HoldMs
+        [Win]::keybd_event($vk, 0, [Win]::KEYUP, [UIntPtr]::Zero)
+    }
     foreach ($m in $Mods) { [Win]::keybd_event([byte]$m, 0, [Win]::KEYUP, [UIntPtr]::Zero) }
     Start-Sleep -Milliseconds 80
 }
