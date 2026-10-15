@@ -598,7 +598,8 @@ impl AiEngine {
                 (g.def.name.clone(), g.def.category.clone(), f64::from(g.def.time_limit.max(60.0) * g.def.build_time_delay_tolerance.max(1.0)) * PLAN_LIMIT_FACTOR)
             };
             let b = &self.brains[i];
-            if b.active.iter().any(|a| a.goal.eq_ignore_ascii_case(&goal) && a.target == target) {
+            // One attack force per target: a second plan (another goal or a pincer partner) would reach the planet on its own and be resolved alone.
+            if b.active.iter().any(|a| a.target == target && (a.goal.eq_ignore_ascii_case(&goal) || (target.is_some() && a.category.eq_ignore_ascii_case("offensive") && category.eq_ignore_ascii_case("offensive")))) {
                 continue;
             }
             if b.active.iter().filter(|a| a.goal.eq_ignore_ascii_case(&goal)).count() >= 2 {
@@ -622,7 +623,7 @@ impl AiEngine {
                 continue;
             };
             // Pincer: a target too strong for one force but within reach of two is attacked by two coordinated plans.
-            let copies = match target {
+            let copies = match target.filter(|_| PINCER_ENABLED) {
                 Some(tp) if self.strategy.config.enabled && category.eq_ignore_ascii_case("offensive") && snap.owner[tp as usize].is_some_and(|o| snap.enemy[me][o as usize]) && self.brains[i].active.len() + 2 <= max_total => {
                     let need = self.strategy.believed_hostile_strength(snap, player, tp) * 1.25 * self.task_forces.sizing_of(player);
                     let own = self.strategy.total_strength(player);
@@ -1000,3 +1001,7 @@ mod lost_attack_tests {
         assert_eq!(lost_attack_cooldown(0, 100.0), 0.0);
     }
 }
+
+/// Coordinated two-force attacks (pincers) are off: the forces arrive seconds apart and the battle is resolved at the first arrival, so each fought alone
+/// (Ord Trasi week 9: 2, 12 and 5 ships, 593 s, 598 s, 600 s). An attack is one force that gathers at its staging planet and moves as one fleet.
+const PINCER_ENABLED: bool = false;

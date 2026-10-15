@@ -843,7 +843,8 @@ impl TaskForces {
                 self.jobs.push(Job::Structures(StructJob { block, tf: tf_id, planet, groups, queued: None, built: false, deadline: now + 900.0 }));
             }
             ForceKind::Units => {
-                let stage = stage_arg.or(t.stage).or_else(|| self.choose_stage(snap, t));
+                // The plan may ask for an enemy planet as the staging place (`Ground_Staging_Planet`); ships gathering there would reach the target one by one. The force gathers on an own planet and moves as one fleet.
+                let stage = stage_arg.filter(|&p| snap.owner[p as usize] == Some(t.player)).or(t.stage).or_else(|| self.choose_stage(snap, t));
                 let Some(stage) = stage else {
                     self.failure_detail.insert(t.plan, "no staging planet".to_string());
                     return self.finish(block, false);
