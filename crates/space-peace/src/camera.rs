@@ -134,6 +134,7 @@ fn control_camera(
     window: Option<Single<&Window, With<PrimaryWindow>>>,
     mut cam: Single<(&mut GalaxyCamera, &Projection)>,
     selection: Option<Res<crate::galaxy_map::Selection>>,
+    hover: Option<Res<crate::galaxy_map::Hover>>,
     view: Option<Res<crate::galaxy_view::GalaxyView>>,
 ) {
     let dt = time.delta_secs();
@@ -157,16 +158,30 @@ fn control_camera(
         MouseScrollUnit::Pixel => scroll.delta.y / 40.0,
     };
     if notches != 0.0 {
-        cam.target_distance = (cam.target_distance * ZOOM_STEP.powf(notches))
-            .clamp(bounds.min_distance, bounds.max_distance);
-        // Zooming in with a planet selected homes in on it, like the original.
-        if notches > 0.0
-            && let (Some(sel), Some(view)) = (selection.as_deref(), view.as_deref())
-            && let Some(p) = sel.0.and_then(|i| view.planets.get(i))
+        let old_distance = cam.target_distance;
+        cam.target_distance = (old_distance * ZOOM_STEP.powf(notches)).clamp(bounds.min_distance, bounds.max_distance);
+        let fov = match projection {
+            Projection::Perspective(p) => p.fov,
+            _ => 40f32.to_radians(),
+        };
+        let cursor = window.as_ref().and_then(|w| w.cursor_position().map(|c| (c, Vec2::new(w.width(), w.height()))));
+        let hovered = view.as_deref().zip(hover.as_deref().and_then(|h| h.0)).and_then(|(v, i)| v.planets.get(i));
+        // Like the original, the wheel zooms toward what is under the cursor: the point of the map under the pointer stays
+        // put on screen while the camera moves in or out.
+        if let Some((cursor, size)) = cursor
+            && let Some(ground) = cursor_ground_point(&bounds, cam.target_focus, old_distance, cam.yaw, cam.pitch, fov, cursor, size)
         {
-            let w = crate::galaxy_map::galaxy_to_world(p.position);
-            let k = (notches * 0.18).clamp(0.0, 1.0);
-            cam.target_focus = cam.target_focus.lerp(Vec3::new(w.x, 0.0, w.z), k);
+            let ratio = cam.target_distance / old_distance.max(1e-3);
+            cam.target_focus = ground + (cam.target_focus - ground) * ratio;
+        }
+        if notches > 0.0 {
+            // Zooming in on a hovered planet also centres it; without a pointer a selected planet is homed in on.
+            let planet = hovered.or_else(|| selection.as_deref().zip(view.as_deref()).and_then(|(s, v)| s.0.and_then(|i| v.planets.get(i))));
+            if let Some(p) = planet {
+                let w = crate::galaxy_map::galaxy_to_world(p.position);
+                let k = (notches * if hovered.is_some() { 0.3 } else { 0.18 }).clamp(0.0, 1.0);
+                cam.target_focus = cam.target_focus.lerp(Vec3::new(w.x, 0.0, w.z), k);
+            }
         }
     }
 
@@ -256,15 +271,63 @@ fn control_camera(
     cam.focus += delta * pan_k;
 }
 
+/// Camera position and rotation for a focus, distance and orbit angles. Zooming in tilts the view slightly flatter, like the
+/// original game.
+fn camera_pose(bounds: &CameraBounds, focus: Vec3, distance: f32, yaw: f32, pitch: f32) -> (Vec3, Quat) {
+    let zoom_t = ((distance - bounds.min_distance) / (bounds.max_distance - bounds.min_distance).max(1.0)).clamp(0.0, 1.0);
+    let pitch = pitch - (1.0 - zoom_t) * 0.2;
+    let rot = Quat::from_rotation_y(-yaw) * Quat::from_rotation_x(-pitch);
+    (focus + rot * Vec3::Z * distance, rot)
+}
+
+/// The point of the galaxy plane (y = 0) under `cursor` (logical pixels in a window of `size`) for the given camera state.
+#[allow(clippy::too_many_arguments)]
+fn cursor_ground_point(bounds: &CameraBounds, focus: Vec3, distance: f32, yaw: f32, pitch: f32, fov: f32, cursor: Vec2, size: Vec2) -> Option<Vec3> {
+    let (pos, rot) = camera_pose(bounds, focus, distance, yaw, pitch);
+    let half = (fov * 0.5).tan();
+    let ndc = Vec2::new(cursor.x / size.x.max(1.0) * 2.0 - 1.0, 1.0 - cursor.y / size.y.max(1.0) * 2.0);
+    let dir = rot * Vec3::new(ndc.x * half * size.x / size.y.max(1.0), ndc.y * half, -1.0);
+    (dir.y < -1e-4).then(|| pos + dir * (-pos.y / dir.y))
+}
+
 pub(crate) fn apply_camera(bounds: Res<CameraBounds>, mut q: Query<(&GalaxyCamera, &mut Transform)>) {
     for (cam, mut t) in &mut q {
-        // Zooming in tilts the view slightly flatter, like the original game.
-        let zoom_t = ((cam.distance - bounds.min_distance)
-            / (bounds.max_distance - bounds.min_distance).max(1.0))
-        .clamp(0.0, 1.0);
-        let pitch = cam.pitch - (1.0 - zoom_t) * 0.2;
-        let rot = Quat::from_rotation_y(-cam.yaw) * Quat::from_rotation_x(-pitch);
-        t.rotation = rot;
-        t.translation = cam.focus + rot * Vec3::Z * cam.distance;
+        let (translation, rotation) = camera_pose(&bounds, cam.focus, cam.distance, cam.yaw, cam.pitch);
+        t.rotation = rotation;
+        t.translation = translation;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const FOV: f32 = 0.7;
+    const SIZE: Vec2 = Vec2::new(1280.0, 720.0);
+
+    #[test]
+    fn the_screen_centre_looks_at_the_focus() {
+        let b = CameraBounds::default();
+        let focus = Vec3::new(30.0, 0.0, -20.0);
+        let p = cursor_ground_point(&b, focus, 300.0, 0.4, 1.0, FOV, SIZE * 0.5, SIZE).unwrap();
+        assert!(p.distance(focus) < 0.01);
+    }
+
+    #[test]
+    fn the_point_under_the_cursor_stays_put_while_zooming() {
+        let b = CameraBounds::default();
+        let (focus, yaw, pitch, cursor) = (Vec3::new(10.0, 0.0, 5.0), 0.3, 1.0, Vec2::new(900.0, 200.0));
+        let before = cursor_ground_point(&b, focus, 300.0, yaw, pitch, FOV, cursor, SIZE).unwrap();
+        let (old, new) = (300.0, 300.0 * ZOOM_STEP.powf(3.0));
+        let moved = before + (focus - before) * (new / old);
+        let after = cursor_ground_point(&b, moved, new, yaw, pitch, FOV, cursor, SIZE).unwrap();
+        // The pitch eases with the distance, so allow a small drift.
+        assert!(after.distance(before) < before.distance(focus) * 0.08, "{before} vs {after}");
+    }
+
+    #[test]
+    fn a_cursor_above_the_horizon_has_no_ground_point() {
+        let b = CameraBounds::default();
+        assert!(cursor_ground_point(&b, Vec3::ZERO, 300.0, 0.0, 0.4, 1.4, Vec2::new(640.0, 0.0), SIZE).is_none());
     }
 }

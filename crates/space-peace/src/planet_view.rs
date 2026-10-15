@@ -77,13 +77,19 @@ fn wheel_opens(notches: f32, distance: f32, offset: f32) -> bool {
 fn view_input(
     keys: Res<ButtonInput<KeyCode>>,
     scroll: Res<AccumulatedMouseScroll>,
-    selection: Res<Selection>,
+    mut selection: ResMut<Selection>,
+    hover: Res<crate::galaxy_map::Hover>,
     bounds: Res<CameraBounds>,
     view: Res<GalaxyView>,
     mut cam: Single<&mut GalaxyCamera>,
     mut state: ResMut<PlanetViewState>,
 ) {
     if !state.active {
+        // The wheel zooms toward the planet under the cursor (see `camera`), so zooming in on a hovered planet opens its view
+        // without a click first.
+        if scroll.delta.y > 0.0 && hover.0.is_some() && hover.0 != selection.0 && cam.target_distance <= bounds.min_distance * OPEN_DISTANCE * 2.0 {
+            selection.0 = hover.0;
+        }
         if std::env::var_os("SP_PLANET_VIEW").is_some() && selection.0.is_some() {
             state.active = true;
             state.planet = selection.0;
