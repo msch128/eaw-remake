@@ -857,10 +857,10 @@ pub fn update_super_laser_fx(mut commands: Commands, rt: Res<BattleRuntime>, mut
 }
 
 /// Fighters, bombers and squadron members keep at least this share of the screen height as their size. Estimate: the Remake frames
-/// n93 f0011/f0013 show a fighter at about 2.6% (15 px of 576), but our icon box is 24 design px (2.2%) and hid a ship of that size
-/// (QA round 3), so the ship is kept clearly larger than the box (3.6%). The data gives a TIE 4 units next to a 760 unit Star
+/// n93 f0011/f0013 show a fighter at about 2.6% (15 px of 576). 3.6% (kept larger than the 24 design px icon box) read far too big
+/// next to a Star Destroyer in play, so the Remake measure is used. The data gives a TIE 4 units next to a 760 unit Star
 /// Destroyer: the original draws small craft far above true scale.
-const FIGHTER_MIN_SCREEN_FRACTION: f32 = 0.036;
+const FIGHTER_MIN_SCREEN_FRACTION: f32 = 0.026;
 /// Largest enlargement of a fighter model (estimate; caps the effect when the camera is far out).
 const FIGHTER_MAX_BOOST: f32 = 40.0;
 
