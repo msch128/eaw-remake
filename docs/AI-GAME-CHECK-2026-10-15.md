@@ -105,3 +105,100 @@ Most of the Pirate fleet is the data's own start spawn, not our rearm rule: `ai_
 | Pirate ships (week 80) | 967 | about 820 |
 
 Still open: Empire fleets idle for 20+ weeks (409 of 1169 fleet-weeks, worst 55 weeks); heroes are not bought by the 4.0 AI (data); minor factions still hoard when the human is passive.
+
+## Items 3b/4 and the Clone Wars stack (80 weeks, Normal, all-AI, seed 1, ai_check)
+
+What changed (all in `crates/galaxy-ai/src/taskforce.rs` unless noted):
+
+- **Faction doctrine from the roster** (`Doctrine`): role shares, pick weight and the price exponent of the top-up come from the faction's own buildable ship costs (median and top quarter, measured against the other full rosters of the game). Empire comes out heavy (few big ships, ranks by raw strength), Rebels light (many cheap ships, ranks by strength per credit), Underworld in between. Standing fleets still follow the percentages of the data's `Build_Units_*` lists, so the class mix below is mostly the data's; the doctrine shapes attack forces and the top-up.
+- **Clone Wars conquer plans** (`alamo-lua/src/runtime.rs`): the submod's `Conquer_Enemy_Planet.lua` has a stray comma and a missing comma and did not compile, so no Clone Wars AI could ever attack (0 attacks in 80 weeks, 1 million credits banked). The loader now repairs those two slips (RULES-level workaround, labelled in the code).
+- **Elastic ship lists** (`A | B = 0, 10`): the submod lists ships as min/max lines. The old code took the maximum (up to 8) of every line, hundreds of ships the queue then refused. Now the minimum is certain, the maximum a cap, and the force is filled to the strength the target needs (estimate).
+- **Population** (`AiSim::population_room`): a force never asks for more ships than the faction's population cap leaves room for. Ships already built do not count.
+- **Force sizing floor**: the strength a force aims for was lower than the strength below which a force is dropped as too weak (difficulty factor under 1), so many attacks were assembled and then discarded. Both now agree.
+- **Front defence** (`update_garrisons`, estimate): the Remake data has no active galactic defence (`Generate_Magic_Space_Defense` exists but no goal function selects it, the Defensive budget is 0%). It keeps the data's idea of a front (`Function_Is_Connected_To_Enemy`): a planet next to an active enemy's planet, or with enemy fleets one or two jumps away, keeps fleets worth 0.8 times that threat (at least 2% of the owner's fleets on a front planet, at most 15% on one planet and 30% overall) out of the pool attack forces draw from; free fleets move to a front planet that misses its garrison; when a front planet falls the front is recomputed, so the line re-forms one jump back. Pirates count as no threat. Fleets reserved for an attack stay free.
+- **Second battle at the same planet** (`galaxy-sim/src/tactical.rs`): not part of the AI work; see the bug fix: reserve units never called in no longer survive for the loser.
+
+Per faction (planets week 0 / 40 / 80, attacks won / lost, credits banked, fleet-weeks idle 20+ weeks of all fleet-weeks, front planet-weeks without a fleet of all front planet-weeks; "lost in a row" = most planets lost within 8 weeks, 0-1 everywhere):
+
+### Campaign GC_Full_Web_Way_Rebel
+```
+faction | planets wk0 / mid / end | attacks won / lost | credits | idle fleet-weeks (20+) of fleet-weeks | max planets lost within 8 weeks | front planet-weeks bare / all |
+Rebel | 3 / 7 / 11 | 7 / 2 | 17k | 0 of 954 | 0 | 56 / 192 |
+Empire | 18 / 19 / 26 | 10 / 1 | 80k | 77 of 1278 | 0 | 534 / 1033 |
+Underworld | 8 / 13 / 17 | 8 / 3 | 52k | 51 of 1023 | 0 | 233 / 685 |
+CIS | 3 / 3 / 3 | 0 / 0 | 28k | 44 of 352 | 0 | 0 / 53 |
+Republic | 9 / 9 / 9 | 2 / 0 | 37k | 87 of 677 | 1 | 93 / 524 |
+MIX: faction | ships | capital % | frigate % | corvette % | fighter+bomber % | other % | mean price | share of price in capitals %
+MIX: Rebel | 394 | 0 | 5 | 10 | 85 | 0 | 695 | 0 |
+MIX: Empire | 554 | 0 | 8 | 39 | 53 | 0 | 1252 | 3 |
+MIX: Underworld | 505 | 0 | 13 | 19 | 68 | 0 | 1201 | 10 |
+MIX: CIS | 39 | 3 | 72 | 26 | 0 | 0 | 5628 | 36 |
+MIX: Republic | 146 | 5 | 27 | 20 | 48 | 0 | 3153 | 37 |
+```
+### Campaign GC_Full_Web_Way_Imperial
+```
+faction | planets wk0 / mid / end | attacks won / lost | credits | idle fleet-weeks (20+) of fleet-weeks | max planets lost within 8 weeks | front planet-weeks bare / all |
+Rebel | 5 / 9 / 15 | 12 / 3 | 39k | 19 of 1023 | 0 | 42 / 251 |
+Empire | 18 / 18 / 19 | 4 / 2 | 76k | 67 of 719 | 1 | 699 / 1095 |
+Underworld | 8 / 12 / 18 | 10 / 2 | 53k | 48 of 1052 | 0 | 230 / 625 |
+CIS | 3 / 3 / 3 | 0 / 0 | 27k | 93 of 352 | 0 | 0 / 64 |
+Republic | 9 / 10 / 10 | 0 / 0 | 64k | 81 of 617 | 0 | 84 / 549 |
+MIX: faction | ships | capital % | frigate % | corvette % | fighter+bomber % | other % | mean price | share of price in capitals %
+MIX: Rebel | 509 | 0 | 3 | 17 | 79 | 0 | 686 | 0 |
+MIX: Empire | 291 | 0 | 13 | 27 | 59 | 0 | 1517 | 3 |
+MIX: Underworld | 460 | 0 | 15 | 18 | 67 | 0 | 1223 | 4 |
+MIX: CIS | 40 | 2 | 72 | 25 | 0 | 0 | 5588 | 36 |
+MIX: Republic | 167 | 6 | 28 | 18 | 48 | 0 | 3240 | 38 |
+```
+### Campaign GC_Full_Web_Way_Underworld
+```
+faction | planets wk0 / mid / end | attacks won / lost | credits | idle fleet-weeks (20+) of fleet-weeks | max planets lost within 8 weeks | front planet-weeks bare / all |
+Rebel | 5 / 10 / 14 | 7 / 1 | 52k | 12 of 936 | 0 | 5 / 280 |
+Empire | 18 / 19 / 23 | 4 / 1 | 74k | 93 of 1094 | 0 | 630 / 1081 |
+Underworld | 7 / 10 / 13 | 5 / 6 | 154k | 38 of 973 | 0 | 267 / 633 |
+CIS | 3 / 3 / 3 | 0 / 0 | 24k | 44 of 366 | 0 | 0 / 52 |
+Republic | 9 / 10 / 10 | 1 / 0 | 39k | 139 of 644 | 1 | 76 / 546 |
+MIX: faction | ships | capital % | frigate % | corvette % | fighter+bomber % | other % | mean price | share of price in capitals %
+MIX: Rebel | 495 | 0 | 6 | 13 | 81 | 0 | 825 | 0 |
+MIX: Empire | 586 | 0 | 6 | 43 | 50 | 0 | 1159 | 3 |
+MIX: Underworld | 403 | 0 | 18 | 18 | 64 | 0 | 1365 | 5 |
+MIX: CIS | 41 | 2 | 73 | 24 | 0 | 0 | 5549 | 35 |
+MIX: Republic | 171 | 6 | 28 | 18 | 49 | 0 | 3125 | 38 |
+```
+### Campaign GC_Full_Web_Way_Republic
+```
+faction | planets wk0 / mid / end | attacks won / lost | credits | idle fleet-weeks (20+) of fleet-weeks | max planets lost within 8 weeks | front planet-weeks bare / all |
+Rebel | 6 / 13 / 17 | 8 / 2 | 333k | 39 of 1494 | 0 | 86 / 431 |
+Empire | 18 / 21 / 26 | 11 / 2 | 230k | 149 of 1215 | 0 | 697 / 1113 |
+Underworld | 7 / 9 / 12 | 3 / 0 | 28k | 60 of 902 | 0 | 289 / 682 |
+CIS | 3 / 10 / 14 | 15 / 3 | 263k | 32 of 1003 | 0 | 16 / 249 |
+Republic | 8 / 14 / 20 | 11 / 15 | 81k | 156 of 1670 | 0 | 143 / 800 |
+MIX: faction | ships | capital % | frigate % | corvette % | fighter+bomber % | other % | mean price | share of price in capitals %
+MIX: Rebel | 472 | 1 | 11 | 32 | 45 | 11 | 1691 | 24 |
+MIX: Empire | 350 | 1 | 36 | 10 | 41 | 12 | 3714 | 11 |
+MIX: Underworld | 386 | 0 | 5 | 27 | 57 | 11 | 1139 | 0 |
+MIX: CIS | 190 | 3 | 9 | 65 | 22 | 0 | 2943 | 17 |
+MIX: Republic | 588 | 2 | 11 | 10 | 68 | 10 | 1665 | 27 |
+```
+### Campaign GC_Full_Web_Way_CIS
+```
+faction | planets wk0 / mid / end | attacks won / lost | credits | idle fleet-weeks (20+) of fleet-weeks | max planets lost within 8 weeks | front planet-weeks bare / all |
+Rebel | 6 / 10 / 21 | 16 / 5 | 135k | 25 of 1582 | 0 | 62 / 444 |
+Empire | 18 / 21 / 28 | 14 / 1 | 241k | 117 of 1357 | 0 | 723 / 1209 |
+Underworld | 7 / 9 / 12 | 4 / 0 | 113k | 56 of 742 | 0 | 283 / 642 |
+CIS | 3 / 8 / 11 | 15 / 6 | 264k | 69 of 973 | 0 | 21 / 242 |
+Republic | 8 / 13 / 14 | 7 / 1 | 258k | 127 of 1086 | 1 | 96 / 665 |
+MIX: faction | ships | capital % | frigate % | corvette % | fighter+bomber % | other % | mean price | share of price in capitals %
+MIX: Rebel | 627 | 1 | 14 | 28 | 44 | 12 | 1529 | 10 |
+MIX: Empire | 343 | 1 | 20 | 21 | 41 | 18 | 2808 | 12 |
+MIX: Underworld | 423 | 0 | 2 | 37 | 55 | 7 | 1013 | 0 |
+MIX: CIS | 193 | 6 | 9 | 68 | 17 | 0 | 3591 | 33 |
+MIX: Republic | 393 | 2 | 10 | 21 | 47 | 19 | 2106 | 31 |
+```
+
+Reading the tables:
+
+- Before the work: Rebel 0/37 attacks (first pass), then 12/18; Clone Wars Republic/CIS/Rebel/Empire 0 attacks. Now every main faction of both stacks attacks and wins most of them; Clone Wars Republic 8 to 14-20 planets and CIS 3 to 11-14 planets in their own campaign (seed 1, one seed).
+- Planets lost in a row stay 0-1: the AIs do not collapse through the core. Front planets without any fleet are common for Empire (about 60% of front planet-weeks): its large star bases carry the defence value (the garrison target subtracts half of the fixed defence), so most of its fronts need no fleet.
+- Class mix: the standing fleets are shaped by the data's build lists, so every Remake main faction is 50-85% squadrons and owns no capital ship in 80 weeks (population cap 97% full from about week 40, capital ships cost 75-100k). Rebel is the most squadron-heavy (79-85%), Empire has the most corvettes (27-43%) and the highest mean price. The Clone Wars factions own capitals (CIS 2-6%, Republic 2-6%) and more frigates. A heavier Empire needs the build lists weighed by doctrine and a scrap rule for a full population cap; neither is in the data, not done.
+- Not verified: Hard/Brutal, Empire as the human, more than one seed per campaign.

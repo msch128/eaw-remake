@@ -143,6 +143,14 @@ pub trait AiSim {
 
     /// Whether a ship could be queued at the planet, apart from the price (Err(NoCredits) means only the money is missing).
     fn can_build_unit(&self, p: PlayerId, pl: PlanetId, unit: &str) -> Result<(), Refused>;
+    /// Population the faction can still add (cap minus used and queued); unlimited when the host does not model a cap.
+    fn population_room(&self, _p: PlayerId) -> f64 {
+        f64::INFINITY
+    }
+    /// Population a ship takes.
+    fn unit_population(&self, _unit: &str) -> f64 {
+        0.0
+    }
     /// Why the planet cannot take the ship, as a short phrase for diagnostics (`"ok"` when it can; empty when the host does not say).
     fn explain_build_unit(&self, _p: PlayerId, _pl: PlanetId, _unit: &str) -> String {
         String::new()

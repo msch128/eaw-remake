@@ -77,6 +77,19 @@ impl World {
         }
     }
 
+    /// Queued items on one side of the production bar: ground structures on the ground side, everything else (ships, orbital structures, star base and
+    /// tech upgrades) on the space side. The bar has `max_queue_len` slots per side, so that is also where an order stops being accepted.
+    pub fn queued_on_side(&self, ps: &PlanetState, ground: bool) -> usize {
+        let is_ground = |item: &&ProductionItem| matches!(item.kind, ProductionKind::Structure(s) if self.structures.get(s as usize).is_some_and(|st| !st.orbital));
+        ps.queues.iter().flatten().filter(|i| is_ground(i) == ground).count()
+    }
+
+    /// Credits a sold structure pays back: half its build cost plus 1. The Remake script `Delete_Building` (libUpgradeFunctions.lua) gives
+    /// `Get_Build_Cost() / 2 + 1`; the sell tooltips round that down to the half (a 7500 credit Gas Refinery says "3750").
+    pub fn sell_value(&self, structure: StructureTypeId) -> f64 {
+        self.structures.get(structure as usize).map_or(0.0, |st| f64::from(st.cost) / 2.0 + 1.0)
+    }
+
     /// True if a star base of `level` fits on the planet (items that need a higher level can never be built there).
     pub fn planet_takes_starbase(&self, planet: PlanetId, level: i32) -> bool {
         level <= self.max_starbase_level(planet)
@@ -117,6 +130,11 @@ impl World {
     }
 
     /// Population currently reserved by queued units.
+    /// Population still free for new units: the cap minus what is alive (counted in `population_used`) and what is queued.
+    pub fn population_room(&self, galaxy: &Galaxy, faction: FactionId) -> i32 {
+        galaxy.factions.get(faction as usize).map_or(0, |fs| fs.population_cap - fs.population_used - self.queued_population(galaxy, faction))
+    }
+
     fn queued_population(&self, galaxy: &Galaxy, faction: FactionId) -> i32 {
         self.queued(galaxy, faction)
             .filter_map(|i| match i.kind {
@@ -185,7 +203,7 @@ impl World {
         if self.buildable_units[faction as usize].binary_search(&unit).is_err() {
             return Err(CommandError::NotAvailable);
         }
-        if ps.queues[Lane::Units as usize].len() >= self.config.max_queue_len {
+        if self.queued_on_side(ps, false) >= self.config.max_queue_len {
             return Err(CommandError::NoSlot);
         }
         if ut.tech > fs.tech {
@@ -267,7 +285,7 @@ impl World {
         if self.buildable_structures[faction as usize].binary_search(&structure).is_err() {
             return Err(CommandError::NotAvailable);
         }
-        if ps.queues[Lane::Structures as usize].len() >= self.config.max_queue_len {
+        if self.queued_on_side(ps, !st.orbital) >= self.config.max_queue_len {
             return Err(CommandError::NoSlot);
         }
         if st.tech > fs.tech {

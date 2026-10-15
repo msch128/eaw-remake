@@ -19,6 +19,8 @@ struct Track {
     still: HashMap<u32, (u64, u32, Option<u32>)>,
     worst_idle: u64,
     idle_samples: u64,
+    front_weeks: u64,
+    bare_front_weeks: u64,
     fleet_samples: u64,
     credit_pile_weeks: u64,
     broke_weeks: u64,
@@ -248,6 +250,17 @@ fn main() {
                                 t.worst_idle = t.worst_idle.max(idle);
                             }
                             t.peak_ships = t.peak_ships.max(ships);
+                            if names[f] != human && !names[f].eq_ignore_ascii_case("pirates") {
+                                let active = |o: u32| o as usize != f && !names[o as usize].eq_ignore_ascii_case("pirates") && g.hostile(w, f as u32, o);
+                                for (pi, _) in g.planets.iter().enumerate().filter(|(_, p)| p.owner == Some(f as u32)) {
+                                    if w.adjacency[pi].iter().any(|&(nb, _)| g.planets[nb as usize].owner.is_some_and(&active)) {
+                                        t.front_weeks += 1;
+                                        if !g.fleets.values().any(|x| x.owner == f as u32 && x.planet() == Some(pi as u32)) {
+                                            t.bare_front_weeks += 1;
+                                        }
+                                    }
+                                }
+                            }
                             if heroes > 0 {
                                 t.hero_weeks += 1;
                             }
@@ -342,7 +355,7 @@ fn main() {
                 }
             }
         }
-        println!("\nTABLE | faction | planets wk0 / mid / end | attacks won / lost | credits | idle fleet-weeks (20+) of fleet-weeks | max planets lost within 8 weeks |");
+        println!("\nTABLE | faction | planets wk0 / mid / end | attacks won / lost | credits | idle fleet-weeks (20+) of fleet-weeks | max planets lost within 8 weeks | front planet-weeks bare / all |");
         for f in 0..names.len() {
             let t = &track[f];
             if t.max_planets == 0 {
@@ -353,7 +366,40 @@ fn main() {
                 worst = worst.max(t.lost_weeks.iter().filter(|&&w| w >= w0 && w < w0 + 8).count());
             }
             let at = |i: usize| t.planets_at[i].map_or("-".to_owned(), |v| v.to_string());
-            println!("TABLE | {} | {} / {} / {} | {} / {} | {:.0}k | {} of {} | {} |", names[f], at(0), at(1), at(2), t.attacks_won, t.attacks_lost, g.factions[f].credits / 1000.0, t.idle_samples, t.fleet_samples, worst);
+            println!("TABLE | {} | {} / {} / {} | {} / {} | {:.0}k | {} of {} | {} | {} / {} |", names[f], at(0), at(1), at(2), t.attacks_won, t.attacks_lost, g.factions[f].credits / 1000.0, t.idle_samples, t.fleet_samples, worst, t.bare_front_weeks, t.front_weeks);
+        }
+        println!("\nMIX | faction | ships | capital % | frigate % | corvette % | fighter+bomber % | other % | mean price | share of price in capitals %");
+        for f in 0..names.len() {
+            if track[f].max_planets == 0 {
+                continue;
+            }
+            let (mut by, mut price, mut cap_price, mut n) = (BTreeMap::<String, u32>::new(), 0.0f64, 0.0f64, 0u32);
+            for fl in g.fleets.values().filter(|x| x.owner == f as u32) {
+                for (&u, &c) in &fl.units {
+                    let ut = &w.units[u as usize];
+                    if ut.hero || ut.role != galaxy_sim::world::UnitRole::Ship {
+                        continue;
+                    }
+                    let class = match format!("{:?}", ut.category).as_str() {
+                        "Capital" => "capital",
+                        "Frigate" => "frigate",
+                        "Corvette" => "corvette",
+                        "Fighter" | "Bomber" => "small",
+                        _ => "other",
+                    };
+                    *by.entry(class.to_owned()).or_default() += c;
+                    n += c;
+                    price += f64::from(c) * f64::from(ut.cost);
+                    if class == "capital" {
+                        cap_price += f64::from(c) * f64::from(ut.cost);
+                    }
+                }
+            }
+            if n == 0 {
+                continue;
+            }
+            let pc = |k: &str| 100.0 * f64::from(by.get(k).copied().unwrap_or(0)) / f64::from(n);
+            println!("MIX | {} | {} | {:.0} | {:.0} | {:.0} | {:.0} | {:.0} | {:.0} | {:.0} |", names[f], n, pc("capital"), pc("frigate"), pc("corvette"), pc("small"), pc("other"), price / f64::from(n), 100.0 * cap_price / price.max(1.0));
         }
         println!("\n== verdict per faction ({done} weeks)");
         for f in 0..names.len() {

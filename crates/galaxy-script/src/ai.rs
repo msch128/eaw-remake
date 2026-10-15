@@ -177,6 +177,12 @@ impl AiSim for SimAdapter<'_> {
         let &u = self.world.unit_index.get(&unit.to_ascii_lowercase()).ok_or(Refused::Invalid)?;
         self.world.check_build_unit(self.sim.galaxy(), p, pl, u).map_err(refuse)
     }
+    fn population_room(&self, p: PlayerId) -> f64 {
+        f64::from(self.world.population_room(self.sim.galaxy(), p))
+    }
+    fn unit_population(&self, unit: &str) -> f64 {
+        self.world.unit_index.get(&unit.to_ascii_lowercase()).map_or(0.0, |&u| f64::from(self.world.units[u as usize].population))
+    }
     fn explain_build_unit(&self, p: PlayerId, pl: PlanetId, unit: &str) -> String {
         let Some(&u) = self.world.unit_index.get(&unit.to_ascii_lowercase()) else { return "unknown unit".into() };
         match self.world.check_build_unit(self.sim.galaxy(), p, pl, u) {

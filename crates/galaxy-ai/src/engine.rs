@@ -334,7 +334,7 @@ impl AiEngine {
                 t.failed_fast += u32::from(failed && now - a.started < 30.0);
                 let detail = self.task_forces.take_failure_detail(plan);
                 if failed && now - a.started < 30.0 {
-                    *self.stats.fast_failures.entry((a.goal.clone(), detail.unwrap_or_else(|| "other (not a production failure)".to_string()))).or_default() += 1;
+                    *self.stats.fast_failures.entry((a.goal.clone(), format!("[player {}] {}", b.player, detail.unwrap_or_else(|| "other (not a production failure)".to_string())))).or_default() += 1;
                 }
                 if failed {
                     *self.stats.plans_failed.entry(key).or_default() += 1;

@@ -20,11 +20,11 @@ pub const MIN_VIABLE_FRACTION: f64 = 0.9;
 /// Share of the believed enemy fleets next door that a garrison must match (estimate).
 const GARRISON_FACTOR: f64 = 0.8;
 /// A front planet keeps at least this share of the owner's fleet strength even without enemy fleets in sight (estimate).
-const FRONT_FLOOR: f64 = 0.04;
+const FRONT_FLOOR: f64 = 0.02;
 /// At most this share of the owner's fleets sits on one planet as garrison (estimate).
-const GARRISON_PLANET_CAP: f64 = 0.25;
+const GARRISON_PLANET_CAP: f64 = 0.15;
 /// At most this share of the owner's fleets is tied up as garrison overall, the rest stays free for attacks and as the mobile reserve (estimate).
-const GARRISON_TOTAL_CAP: f64 = 0.5;
+const GARRISON_TOTAL_CAP: f64 = 0.3;
 /// Time between two refreshes of the garrison assignment.
 const GARRISON_REFRESH: f64 = 5.0;
 /// Ships of one task force when the plan sets no `MaximumTotalSize` (none of the Remake attack plans does; an estimate that keeps one fleet inside the population cap of a battle).
@@ -37,6 +37,7 @@ use alamo_lua::{HostValue, PlanEvent, TaskForceSpec};
 use crate::perception::Snapshot;
 use crate::requirements::{self, Requirements, is_category};
 use crate::sim::{AiSim, FleetId, FleetView, PlanetId, PlayerId, Refused};
+use crate::requirements::Group;
 
 /// What a task force consists of.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -631,14 +632,20 @@ impl TaskForces {
         if let Some(d) = self.doctrines.borrow().get(&player) {
             return *d;
         }
-        let costs: Vec<f64> = sim
-            .buildable_units(player)
-            .iter()
-            .filter_map(|n| sim.unit_info(n))
-            .filter(|i| !i.is_hero && !i.category.contains("OTHER") && i.cost > 0.0)
-            .map(|i| i.cost)
-            .collect();
-        let d = Doctrine::from_costs(costs);
+        let roster = |p: PlayerId| -> Vec<f64> {
+            sim.buildable_units(p).iter().filter_map(|n| sim.unit_info(n)).filter(|i| !i.is_hero && !i.category.contains("OTHER") && i.cost > 0.0).map(|i| i.cost).collect()
+        };
+        // The reference is the middle of the full rosters in this game (20+ ship types), so "heavy" and "swarm" mean heavier or lighter than the other big factions.
+        let mut medians = Vec::new();
+        let mut tops = Vec::new();
+        for p in 0..sim.player_count() {
+            if let Some((m, t)) = Doctrine::quartiles(roster(p), 20) {
+                medians.push(m.ln());
+                tops.push(t.ln());
+            }
+        }
+        let refs = if medians.len() >= 2 { ((medians.iter().sum::<f64>() / medians.len() as f64).exp(), (tops.iter().sum::<f64>() / tops.len() as f64).exp()) } else { (REF_MEDIAN_COST, REF_TOP_QUARTER_COST) };
+        let d = Doctrine::from_costs_vs(roster(player), refs);
         self.doctrines.borrow_mut().insert(player, d);
         d
     }
@@ -700,6 +707,7 @@ impl TaskForces {
                 }
             }
         }
+        let free_ships_at_start = avail.clone();
         let matches = |c: &(String, String, f64), types: &[String]| types.iter().any(|ty| ty.eq_ignore_ascii_case(&c.0) || (is_category(ty) && ty.eq_ignore_ascii_case(&c.1)));
         let role_of = |category: &str, name: &str| -> usize {
             let cat = category.to_ascii_uppercase();
@@ -742,11 +750,24 @@ impl TaskForces {
             }
             pool.last().map(|c| c.0.clone())
         };
+        // Plans that list their ships as `A | B = 0, 10` (min, max) lines and nothing else (the Clone Wars submod's conquer plans) describe an elastic force: the minimum
+        // of each line is certain, the maximum only a cap, and the force is filled up to the strength the target needs like a percentage force (estimate; the engine's
+        // rule for such lists is not in the data). Taking the maximum of every line made hundreds of ships the queue then refused.
+        let elastic_mode = t.target.is_some()
+            && t.kind != ForceKind::Structure
+            && t.reqs.groups.iter().all(|g| g.percent.is_none())
+            && t.reqs.groups.iter().filter(|g| g.max > g.min && g.max != u32::MAX).count() >= 3;
+        let synthetic = Group {
+            types: t.reqs.groups.iter().filter(|g| g.max > g.min && g.max != u32::MAX).flat_map(|g| g.types.iter().cloned()).collect(),
+            min: 0,
+            max: u32::MAX,
+            percent: Some(100.0),
+        };
         let mut wanted = Vec::new();
         // Count groups first.
         for g in t.reqs.groups.iter().filter(|g| g.percent.is_none()) {
             let pool: Vec<_> = candidates.iter().filter(|c| matches(c, &g.types)).collect();
-            for _ in 0..g.max.min(8) {
+            for _ in 0..(if elastic_mode && g.max > g.min { g.min } else { g.max }).min(8) {
                 if let Some(n) = pick(rng, &pool, &role_counts) {
                     if let Some(c) = candidates.iter().find(|c| c.0 == n) {
                         role_counts[role_of(&c.1, &c.0)] += 1;
@@ -756,7 +777,7 @@ impl TaskForces {
             }
         }
         // Percentage groups: fill until size and (for attacks) power requirements are met.
-        let pct: Vec<_> = t.reqs.groups.iter().filter(|g| g.percent.is_some()).collect();
+        let pct: Vec<&Group> = if elastic_mode { vec![&synthetic] } else { t.reqs.groups.iter().filter(|g| g.percent.is_some()).collect() };
         if !pct.is_empty() {
             let (scale_min, scale_max) = (
                 t.numbers.get("MinContrastScale").copied().unwrap_or(1.0),
@@ -776,7 +797,8 @@ impl TaskForces {
             let believed = self.believed.get(&t.player).and_then(|v| t.target.map(|tp| v[tp as usize]));
             let strength_mode = believed.is_some() && candidates.first().is_some_and(|c| sim.force_strength(&[(c.0.clone(), 1)]) > 0.0);
             let split = t.target.and_then(|tp| self.split.get(&(t.player, tp))).copied().unwrap_or(1).max(1);
-            let needed_strength = believed.unwrap_or(0.0) * FORCE_MARGIN * scale * self.sizing.get(&t.player).copied().unwrap_or(1.0) / f64::from(split);
+            // Never below what the force must reach to be sent at all ([`MIN_VIABLE_FRACTION`]): a smaller target would only build forces that are then dropped.
+            let needed_strength = (believed.unwrap_or(0.0) * FORCE_MARGIN * scale * self.sizing.get(&t.player).copied().unwrap_or(1.0) / f64::from(split)).max(believed.unwrap_or(0.0) * (MIN_VIABLE_FRACTION + 0.1) / f64::from(split));
             let strength_of = |w: &[String]| {
                 let mut counts: Vec<(String, u32)> = Vec::new();
                 for n in w {
@@ -787,18 +809,22 @@ impl TaskForces {
                 }
                 sim.force_strength(&counts)
             };
+            let mut dead = vec![false; pct.len()];
             while (wanted.len() < min_total || if strength_mode { strength_of(&wanted) < needed_strength } else { power < needed }) && wanted.len() < cap && guard < 200 {
                 guard += 1;
-                let total_pct: f64 = pct.iter().filter_map(|g| g.percent).sum::<f64>().max(1.0);
+                let live: Vec<usize> = (0..pct.len()).filter(|&i| !dead[i]).collect();
+                let Some(&last) = live.last() else { break };
+                let total_pct: f64 = live.iter().filter_map(|&i| pct[i].percent).sum::<f64>().max(1.0);
                 let mut r = next_rand(rng) * total_pct;
-                let mut chosen = pct[0];
-                for g in &pct {
-                    r -= g.percent.unwrap_or(0.0);
+                let mut chosen_idx = last;
+                for &i in &live {
+                    r -= pct[i].percent.unwrap_or(0.0);
                     if r <= 0.0 {
-                        chosen = g;
+                        chosen_idx = i;
                         break;
                     }
                 }
+                let chosen = pct[chosen_idx];
                 let free_pool: Vec<_> = candidates.iter().filter(|c| matches(c, &chosen.types) && avail.get(&c.0.to_ascii_lowercase()).copied().unwrap_or(0) > 0).collect();
                 let pool: Vec<_> = if free_pool.is_empty() { candidates.iter().filter(|c| matches(c, &chosen.types)).collect() } else { free_pool };
                 if let Some(n) = pick(rng, &pool, &role_counts) {
@@ -811,7 +837,7 @@ impl TaskForces {
                     }
                     wanted.push(n);
                 } else {
-                    break;
+                    dead[chosen_idx] = true;
                 }
             }
             // Strength-driven top-up: when the role-weighted fill falls short of the strength the target needs, add (free slots) or swap in (full force) the ships
@@ -822,7 +848,7 @@ impl TaskForces {
                     let cost = sim.unit_info(name).map_or(1.0, |i| i.cost.max(1.0));
                     // Weighted by the share the doctrine gives the ship's role: a swarm faction tops up with cheap small craft, a heavy one with big ships.
                     let role = candidates.iter().find(|c| c.0 == name).map_or(2, |c| role_of(&c.1, &c.0));
-                    sim.force_strength(&[(name.to_owned(), 1)]) / cost * role_targets[role]
+                    sim.force_strength(&[(name.to_owned(), 1)]) / cost.powf(doctrine.price_exponent) * role_targets[role]
                 };
                 let best = allowed.iter().map(|c| (c.0.clone(), efficiency(&c.0))).filter(|e| e.1 > 0.0).max_by(|a, b| a.1.total_cmp(&b.1).then(b.0.cmp(&a.0)));
                 if let Some((best, _)) = best {
@@ -833,14 +859,55 @@ impl TaskForces {
                             wanted.push(best.clone());
                             continue;
                         }
-                        // Full: replace the ship with the least strength per credit that is not already the best type.
-                        let worst = wanted.iter().enumerate().filter(|(_, n)| **n != best).map(|(i, n)| (i, efficiency(n))).min_by(|a, b| a.1.total_cmp(&b.1));
+                        // Full: the force is limited by its slots, not by credits, so the weakest ship is swapped for the type with the most strength per price to the doctrine's slot exponent (a
+                        // heavy roster ends with its big ships, a swarm roster with the best of its small ones; estimate).
+                        let single = |n: &str| sim.force_strength(&[(n.to_owned(), 1)]);
+                        let slot_best = allowed
+                            .iter()
+                            .map(|c| (c.0.clone(), single(&c.0) / sim.unit_info(&c.0).map_or(1.0, |i| i.cost.max(1.0)).powf((doctrine.price_exponent - 0.3).max(0.0))))
+                            .filter(|e| e.1 > 0.0)
+                            .max_by(|a, b| a.1.total_cmp(&b.1).then(b.0.cmp(&a.0)))
+                            .map(|e| e.0)
+                            .unwrap_or_else(|| best.clone());
+                        let worst = wanted.iter().enumerate().filter(|(_, n)| **n != slot_best).map(|(i, n)| (i, single(n))).min_by(|a, b| a.1.total_cmp(&b.1));
                         match worst {
-                            Some((i, _)) => wanted[i] = best.clone(),
-                            None => break,
+                            Some((i, s)) if s < single(&slot_best) => wanted[i] = slot_best,
+                            _ => break,
                         }
                     }
                 }
+            }
+            // The maxima of an elastic list stay caps for every type line.
+            if elastic_mode {
+                let mut caps: Vec<(&Group, u32)> = t.reqs.groups.iter().filter(|g| g.max > g.min && g.max != u32::MAX).map(|g| (g, g.max)).collect();
+                wanted.retain(|n| match caps.iter_mut().find(|(g, _)| g.types.iter().any(|ty| ty.eq_ignore_ascii_case(n))) {
+                    Some((_, left)) if *left == 0 => false,
+                    Some((_, left)) => {
+                        *left -= 1;
+                        true
+                    }
+                    None => true,
+                });
+            }
+            // Population: ships that still have to be built take room under the cap; what does not fit is dropped (the Clone Wars rosters hit the cap, and a force the
+            // queue refuses halfway never leaves the yard).
+            let mut room = sim.population_room(t.player);
+            if room.is_finite() {
+                let mut free_left = free_ships_at_start.clone();
+                wanted.retain(|n| {
+                    let key = n.to_ascii_lowercase();
+                    if let Some(a) = free_left.get_mut(&key).filter(|a| **a > 0) {
+                        *a -= 1;
+                        return true;
+                    }
+                    let pop = sim.unit_population(n);
+                    if pop <= room {
+                        room -= pop;
+                        true
+                    } else {
+                        false
+                    }
+                });
             }
             // A force that cannot reach `MIN_VIABLE_FRACTION` of what the player believes defends the target (the size cap or the free ships ran out first)
             // is not sent: it would only feed the defenders (its attacks on Pirate star bases were lost to the last ship).
@@ -1012,7 +1079,7 @@ impl TaskForces {
                     break;
                 }
                 let mut have = 0.0;
-                let mut here: Vec<&FleetView> = fleets.iter().filter(|f| f.at == Some(p) && !self.owned_fleets.contains(&f.id)).collect();
+                let mut here: Vec<&FleetView> = fleets.iter().filter(|f| f.at == Some(p) && !self.owned_fleets.contains(&f.id) && !self.reserved.contains_key(&f.id)).collect();
                 here.sort_by_key(|f| f.id);
                 for f in here {
                     if have >= want {
@@ -1734,6 +1801,8 @@ pub struct Doctrine {
     pub roles: [f64; 3],
     /// Exponent on a ship's power in the pick weight: above 0.5 favours big ships, below 0.5 favours many small ones.
     pub power_exponent: f64,
+    /// Exponent on a ship's price when the strength-driven top-up ranks ships (strength / price^e): 1 buys the most strength per credit (swarm of cheap ships), near 0 the strongest ships whatever they cost (heavy roster).
+    pub price_exponent: f64,
     /// -1 (swarm) .. +1 (heavy).
     pub heaviness: f64,
 }
@@ -1742,21 +1811,32 @@ const REF_MEDIAN_COST: f64 = 6500.0;
 const REF_TOP_QUARTER_COST: f64 = 90_000.0;
 
 impl Doctrine {
-    /// From the costs of a roster's ship types.
-    pub fn from_costs(mut costs: Vec<f64>) -> Self {
-        if costs.len() < 4 {
-            return Self { roles: [0.40, 0.30, 0.30], power_exponent: 0.5, heaviness: 0.0 };
+    /// `(median, mean of the most expensive quarter)` of a roster with at least `min_types` ship types.
+    pub fn quartiles(mut costs: Vec<f64>, min_types: usize) -> Option<(f64, f64)> {
+        if costs.len() < min_types.max(4) {
+            return None;
         }
         costs.sort_by(|a, b| a.total_cmp(b));
-        let median = costs[costs.len() / 2];
         let q = costs.len() * 3 / 4;
-        let top = costs[q..].iter().sum::<f64>() / (costs.len() - q) as f64;
-        let step = 1.5f64.ln();
-        let heaviness = (0.5 * (median / REF_MEDIAN_COST).ln() / step + 0.5 * (top / REF_TOP_QUARTER_COST).ln() / step).clamp(-1.0, 1.0);
+        Some((costs[costs.len() / 2], costs[q..].iter().sum::<f64>() / (costs.len() - q) as f64))
+    }
+
+    /// From the costs of a roster's ship types, against the fixed reference costs.
+    pub fn from_costs(costs: Vec<f64>) -> Self {
+        Self::from_costs_vs(costs, (REF_MEDIAN_COST, REF_TOP_QUARTER_COST))
+    }
+
+    /// From the costs of a roster's ship types, against reference `(median, top quarter)` costs.
+    pub fn from_costs_vs(costs: Vec<f64>, refs: (f64, f64)) -> Self {
+        let Some((median, top)) = Self::quartiles(costs, 4) else {
+            return Self { roles: [0.40, 0.30, 0.30], power_exponent: 0.5, price_exponent: 0.6, heaviness: 0.0 };
+        };
+        let step = 1.3f64.ln();
+        let heaviness = (0.5 * (median / refs.0).ln() / step + 0.5 * (top / refs.1).ln() / step).clamp(-1.0, 1.0);
         let capital = (0.40 + 0.22 * heaviness).clamp(0.20, 0.62);
         let small = (0.30 - 0.20 * heaviness).clamp(0.12, 0.50);
         let escort = 1.0 - capital - small;
-        Self { roles: [capital, escort, small], power_exponent: 0.5 + 0.25 * heaviness, heaviness }
+        Self { roles: [capital, escort, small], power_exponent: 0.5 + 0.25 * heaviness, price_exponent: 0.6 - 0.35 * heaviness, heaviness }
     }
 }
 
@@ -1766,11 +1846,11 @@ mod doctrine_tests {
 
     #[test]
     fn heavy_rosters_compose_big_ships_light_ones_swarm() {
-        let rebel = Doctrine::from_costs(vec![500.0, 800.0, 1500.0, 3000.0, 6000.0, 9000.0, 12000.0, 20000.0, 60000.0, 80000.0, 90000.0, 100000.0]);
-        let empire = Doctrine::from_costs(vec![500.0, 1000.0, 2000.0, 4000.0, 8500.0, 12000.0, 20000.0, 30000.0, 110000.0, 130000.0, 150000.0, 160000.0]);
+        let rebel = Doctrine::from_costs(vec![300.0, 500.0, 800.0, 1500.0, 3000.0, 5000.0, 6000.0, 8000.0, 12000.0, 70000.0, 90000.0, 105000.0]);
+        let empire = Doctrine::from_costs(vec![500.0, 1000.0, 2000.0, 3500.0, 5000.0, 7000.0, 8500.0, 12000.0, 20000.0, 110000.0, 135000.0, 155000.0]);
         assert!(empire.heaviness > rebel.heaviness);
         assert!(empire.roles[0] > rebel.roles[0] && empire.roles[2] < rebel.roles[2], "{empire:?} {rebel:?}");
-        assert!(empire.power_exponent > rebel.power_exponent);
+        assert!(empire.power_exponent > rebel.power_exponent && empire.price_exponent < rebel.price_exponent);
         let sum: f64 = empire.roles.iter().sum();
         assert!((sum - 1.0).abs() < 1e-9);
         assert_eq!(Doctrine::from_costs(vec![1.0]).roles, [0.40, 0.30, 0.30]);

@@ -98,7 +98,7 @@ fn main() {
     let mut sorted: Vec<f64> = bc.iter().enumerate().filter(|(i, _)| real[*i]).map(|(_, b)| *b).collect();
     sorted.sort_by(|a, b| b.total_cmp(a));
     let choke_cut = sorted[(sorted.len() / 10).max(1) - 1];
-    let majors: Vec<usize> = ["Rebel", "Empire", "Underworld"].iter().filter_map(|n| names.iter().position(|x| x == n)).collect();
+    let majors: Vec<usize> = std::env::var("FACTIONS").unwrap_or_else(|_| "Rebel,Empire,Underworld".to_owned()).split(',').filter_map(|n| names.iter().position(|x| x == n)).collect();
 
     let mut tallies = vec![Tally::default(); names.len()];
     let mut lane_use: BTreeMap<i32, u32> = BTreeMap::new();
