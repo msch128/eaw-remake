@@ -47,7 +47,7 @@ fn main() {
     let ground_up = args.iter().any(|a| a == "groundup");
 
     let install = GameInstall::detect().expect("game install not found");
-    let fs: Arc<dyn FileSource> = Arc::new(GameFs::for_mod(&install, Some("1770851727")).expect("cannot open game files"));
+    let fs: Arc<dyn FileSource> = Arc::new(GameFs::for_mod(&install, Some(&std::env::var("MOD").unwrap_or_else(|_| "1770851727".to_owned()))).expect("cannot open game files"));
     let (data, _) = load_galaxy(&*fs);
     let data = Arc::new(data);
     let campaign = data.campaign(campaign_name).expect("campaign not found").clone();
@@ -60,6 +60,26 @@ fn main() {
     )
     .expect("cannot build simulation");
     let names: Vec<String> = sim.with_sim(|s| s.world().factions.iter().map(|f| f.name.clone()).collect());
+    if let Ok(pn) = std::env::var("PLANET") {
+        sim.with_sim(|s| {
+            let (w, g) = (s.world(), s.galaxy());
+            for (i, p) in w.planets.iter().enumerate().filter(|(_, p)| p.name.to_ascii_lowercase().contains(&pn.to_ascii_lowercase())) {
+                let ps = &g.planets[i];
+                println!("planet {} owner {:?}: credit_value {}, gamble {}, mining {}, total {}", p.name, ps.owner.map(|o| w.factions[o as usize].name.clone()), p.credit_value, ps.gamble, p.mining_colony, w.planet_income(g, i as u32));
+                for &st in &ps.structures {
+                    let s = &w.structures[st as usize];
+                    println!("   structure {}: pct {} abs {} mining pct {} abs {}", s.name, s.income_pct, s.income_abs, s.income_pct_mining, s.income_abs_mining);
+                }
+                if let Some(sb) = ps.starbase {
+                    let b = &w.starbases[sb as usize];
+                    println!("   starbase {}: pct {} abs {}", b.name, b.income_pct, b.income_abs);
+                }
+                if let Some(o) = ps.owner {
+                    println!("   faction credits_factor {}", w.factions[o as usize].credits_factor);
+                }
+            }
+        });
+    }
     println!("{campaign_name}, human {human}, {diff:?}, ground_up {ground_up}, {weeks} weeks; start errors {:?}", sim.start_errors);
     let mut track: Vec<Track> = (0..names.len()).map(|_| Track::default()).collect();
     let mut types_built: Vec<BTreeMap<String, u32>> = vec![BTreeMap::new(); names.len()];
