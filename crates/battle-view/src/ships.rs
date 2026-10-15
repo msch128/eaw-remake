@@ -451,7 +451,8 @@ pub fn update_ships(
             tf.translation = pos;
             tf.rotation = ship_rotation(yaw) * Quat::from_rotation_z(view.bank);
             let mut boost = 1.0;
-            if matches!(def.class, TargetClass::Fighter | TargetClass::Bomber)
+            // Squadron members of any class count (a Skipray blast boat squadron is no fighter class but reads as a unit of small craft).
+            if (matches!(def.class, TargetClass::Fighter | TargetClass::Bomber) || s.squad != u32::MAX)
                 && let Some((eye, px_per_unit, height)) = eye
                 && view.visual_radius > 0.0
             {
@@ -525,17 +526,20 @@ pub fn update_ships(
                 sfx.write(alamo_audio::PlaySfx { event: "Unit_Ship_Hyperspace_Exit".into(), position: Some(t.translation), source: None });
                 let radius = rt.catalog.ship(view.def).radius.max(30.0);
                 let fwd = t.rotation * Vec3::Z;
-                let flash_mesh = meshes.add(Sphere::new(radius * 0.4).mesh().uv(24, 16));
+                // Unit sphere: `update_arrival_flashes` scales it to world size (a sphere of `radius` times a scale of `radius` was the giant ball).
+                let flash_mesh = meshes.add(Sphere::new(1.0).mesh().uv(24, 16));
                 let flash_mat = materials.add(StandardMaterial {
-                    base_color: Color::srgba(0.8, 0.95, 1.0, 0.7),
+                    base_color: Color::srgba(0.8, 0.95, 1.0, 0.0),
                     unlit: true,
+                    // Additive like the arrival flash: the opaque white ball that stood here covered the screen on a fleet retreat (QA round 3).
+                    alpha_mode: AlphaMode::Add,
                     ..default()
                 });
                 commands.spawn((
                     Mesh3d(flash_mesh),
                     MeshMaterial3d(flash_mat),
                     Transform::from_translation(t.translation).with_scale(Vec3::splat(1.0)),
-                    ArrivalFlash { at: cur.time, radius: radius * 1.5 },
+                    ArrivalFlash { at: cur.time, radius: radius * 0.6 },
                     Visibility::Inherited,
                     Name::new("hyperspace departure flash"),
                 ));
@@ -842,9 +846,11 @@ pub fn update_super_laser_fx(mut commands: Commands, rt: Res<BattleRuntime>, mut
     }
 }
 
-/// Fighters and bombers keep at least this share of the screen height as their size (estimate from the Remake frames n93 f0011/f0013, where a fighter is
-/// about 15 px of 576, while the data gives a TIE 4 units next to a 760 unit Star Destroyer: the original draws small craft far above true scale).
-const FIGHTER_MIN_SCREEN_FRACTION: f32 = 0.026;
+/// Fighters, bombers and squadron members keep at least this share of the screen height as their size. Estimate: the Remake frames
+/// n93 f0011/f0013 show a fighter at about 2.6% (15 px of 576), but our icon box is 24 design px (2.2%) and hid a ship of that size
+/// (QA round 3), so the ship is kept clearly larger than the box (3.6%). The data gives a TIE 4 units next to a 760 unit Star
+/// Destroyer: the original draws small craft far above true scale.
+const FIGHTER_MIN_SCREEN_FRACTION: f32 = 0.036;
 /// Largest enlargement of a fighter model (estimate; caps the effect when the camera is far out).
 const FIGHTER_MAX_BOOST: f32 = 40.0;
 

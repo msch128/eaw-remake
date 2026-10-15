@@ -35,3 +35,21 @@ looks, not measurements; every number below is an estimate until measured on a m
 
 Home, End, PgUp, C, Space and P all act. The earlier "dead" Home/PgUp/End were a driver artifact: `keybd_event` without extended scan codes delivers
 the numpad keys. `tools/playtest/driver.ps1` now sends the navigation block by scan code.
+
+## Added after QA round 3 and the lead's notes
+
+- **Brentaal (and 10 other planets) is a terrain map by design.** `_SPACE_PLANET_GMOUNTAIN.ted` (Felucia, Mandalore, Brentaal ...) contains one prop,
+  `Prop_AAA_Terrain_GrassyMountainsHuge`, and its markers sit at z -42.9 up to +1052: the map is a low pass over mountains, not a black-space
+  map with a backdrop planet. The Remake video shows the same kind of view on Byss (video b0700: green terrain fills the picture, ships over it).
+  Other terrain maps: `_space_planet_gmountain_night_neb`, `_space_planet_gvulcano`, `_space_planet_polus_01`, `_space_planet_sullust_01`
+  (moon terrain), `_space_planet_skies_island`. Kept as is; the clamp keeps the terrain at least 500 below the plane.
+- **Retreat flash** was an opaque white sphere: a unit sphere of radius `r` AND a scale of `r`, drawn without blending. Now a unit sphere with additive blending
+  at 0.6 r, like the arrival flash (`ships.rs`). The game data has no tactical hyperspace effect (only the `Unit_Ship_Hyperspace_*` sounds), so the stretch
+  streak of `update_departures` plus a soft additive flash is the faithful form.
+- **Squadron models under icon boxes:** the size floor for fighters now also covers every squadron member, and rises to 3.6 % of the screen height, so the
+  model is larger than the 24 px icon box. The Remake's boxes also sit over ships (n93 f0011), so a box over a small ship is normal.
+- **Scroll feel (4.0 data).** `camera.rs` already uses the 4.0 `Gameconstants.xml` values: `Tactical_Min/Max_Scroll_Speed` 1000/4000, `Push_Scroll_Speed_Modifier` 2.0,
+  `Tactical_Edge_Scroll_Region` 2. `Hypergameconstants.XML` (`TacticalMaxScrollSpeed` 2000) is a separate test constants file, not the 4.0 game values.
+  Not used: `Scroll_Acceleration_Factor` 0.08 and `Scroll_Deceleration_Factor` 1.5 (the file says "the higher the number, the less acceleration will
+  be evident"). Our pan is an exponential smoothing of the target (rate 12/s). Reading the factors as time constants (0.08 s ramp-up, 1.5 s coast) would
+  make the camera drift for about a second and a half after the key is released; that is a feel change, so it is left undone until you decide.
