@@ -565,6 +565,8 @@ fn galaxy_audio(
     state: Option<Res<SimState>>,
     player: Res<PlayerFaction>,
     current: Res<CurrentCampaign>,
+    mut actions: MessageReader<galaxy_play::PlayAction>,
+    mut auto: Local<std::collections::HashMap<u32, bool>>,
     mut out: MessageWriter<alamo_audio::plugin::GalaxyAudio>,
 ) {
     use alamo_audio::GalaxyEvent as G;
@@ -574,6 +576,14 @@ fn galaxy_audio(
     let mut say = |event: G| {
         out.write(alamo_audio::plugin::GalaxyAudio { faction: faction.clone(), event });
     };
+    // Only auto-resolved battles are announced here; a fought battle was announced when its tactical result came in.
+    for a in actions.read() {
+        if let galaxy_play::PlayAction::ResolveBattle { id, choice: galaxy_play::BattleChoice::AutoResolve } = a {
+            // Remember whether the player takes part (only human battles are auto-resolved; a retreat leaves no loss entry to tell it by).
+            let mine = state.current.human_battles.iter().find(|b| b.id == *id).is_none_or(|b| b.factions.contains(&me));
+            auto.insert(*id, mine);
+        }
+    }
     for e in events.read() {
         let PlayEvent::Sim(ev) = e else { continue };
         match ev {
@@ -592,7 +602,12 @@ fn galaxy_audio(
                 }
             }
             Event::BattlePending(b) if b.factions.contains(&me) => say(G::BattlePending),
-            Event::BattleResolved { losses, .. } if losses.iter().any(|(f, _)| *f == me) => say(G::BattleEnded),
+            Event::BattleResolved { id, winner, .. } if auto.contains_key(id) => {
+                let mine = auto.remove(id).unwrap_or(false);
+                if let Some(line) = auto_resolve_line(me, mine, *winner) {
+                    say(line);
+                }
+            }
             Event::TechAdvanced { faction, .. } if *faction == me => say(G::TechLevelGained),
             Event::FactionEliminated { faction } if *faction == me => say(G::Defeated),
             _ => {}
@@ -727,10 +742,33 @@ fn log_play_flow(
     }
 }
 
+/// The advisor line for an auto-resolved battle, from the player's point of view: the end-of-battle line when the player won (or drew),
+/// the defeat line when another faction won (losing every ship, or retreating from the loss), nothing when the player was not in it.
+fn auto_resolve_line(me: galaxy_sim::FactionId, took_part: bool, winner: Option<galaxy_sim::FactionId>) -> Option<alamo_audio::GalaxyEvent> {
+    use alamo_audio::GalaxyEvent as G;
+    match winner {
+        Some(w) if w == me => Some(G::BattleEnded),
+        Some(_) if took_part => Some(G::Defeated),
+        None if took_part => Some(G::BattleEnded),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use bevy::ecs::system::RunSystemOnce;
+
+    #[test]
+    fn auto_resolve_announces_defeat_when_the_player_lost() {
+        use alamo_audio::GalaxyEvent as G;
+        // Player is faction 1; the enemy (0) won and the player lost both units: defeat, not victory.
+        assert_eq!(auto_resolve_line(1, true, Some(0)), Some(G::Defeated));
+        assert_eq!(auto_resolve_line(1, true, Some(1)), Some(G::BattleEnded));
+        assert_eq!(auto_resolve_line(1, true, None), Some(G::BattleEnded));
+        // Not part of the battle: silent.
+        assert_eq!(auto_resolve_line(2, false, Some(0)), None);
+    }
 
     #[test]
     fn button_tooltips_are_suppressed_behind_the_pause_menu() {
