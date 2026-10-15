@@ -2,7 +2,7 @@
 //! an empty slot is an empty box),
 //! the first, brighter slot of each box is its hyperspace slot, and units are dragged between the boxes (and into a hyperspace slot) with the mouse.
 //!
-//! * Dropping a stack on another box moves the stack (Shift: one ship) with `Command::TransferUnits`; an empty box receives a new fleet in its slot (`Command::TransferUnitsToSlot`).
+//! * Dropping a stack on another box moves one ship of it; with Ctrl held it moves the whole stack (the game's own hint: "To move several units from one fleet to another, click on a stack of units while pressing and holding the CTRL key") with `Command::TransferUnits`; an empty box receives a new fleet in its slot (`Command::TransferUnitsToSlot`).
 //! * Dropping a stack (or the hyperspace ship of another box) on a hyperspace slot puts one ship there: `Command::TransferUnits { hyperspace: true }` across
 //!   boxes, `Command::SetHyperspace` inside one box. The choice lives in the sim fleet (`Galaxy::hyperspace`), where the battle setup can read it later.
 //! * Forces of other factions in orbit are not in the boxes; they are listed in one line above them ([`OtherForces`]).
@@ -95,7 +95,7 @@ pub(crate) enum Target {
 }
 
 /// The commands a drag from slot `from` (`(box, slot)`) to `target` stands for; empty if the drop means nothing.
-pub(crate) fn drop_commands(me: FactionId, boxes: &[BoxContent; 3], from: (usize, usize), target: Target, shift: bool) -> Vec<Command> {
+pub(crate) fn drop_commands(me: FactionId, boxes: &[BoxContent; 3], from: (usize, usize), target: Target, whole: bool) -> Vec<Command> {
     let (b1, k1) = from;
     let src = &boxes[b1];
     let Some(f1) = src.fleet else { return Vec::new() };
@@ -143,7 +143,7 @@ pub(crate) fn drop_commands(me: FactionId, boxes: &[BoxContent; 3], from: (usize
             if k1 == 0 {
                 cmds.push(Command::SetHyperspace { faction: me, fleet: f1, unit: None });
             }
-            cmds.push(transfer(b2, if k1 == 0 || shift { 1 } else { stack }, false));
+            cmds.push(transfer(b2, if k1 != 0 && whole { stack } else { 1 }, false));
             cmds
         }
     }
@@ -351,9 +351,9 @@ fn organizer_drag(
             (hit(n, g, c) && (1..=3).contains(&idx)).then_some(idx - 1)
         });
         let target = hyper_slot.map(Target::Hyperspace).or(in_box.map(Target::Box));
-        let shift = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
+        let whole = keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight);
         if let Some(t) = target {
-            for cmd in drop_commands(me, &boxes, from, t, shift) {
+            for cmd in drop_commands(me, &boxes, from, t, whole) {
                 sim.driver.send_command(cmd);
             }
         }
@@ -525,12 +525,12 @@ mod tests {
     }
 
     #[test]
-    fn a_stack_dropped_on_another_box_moves_whole_or_one_with_shift() {
+    fn a_stack_dropped_on_another_box_moves_one_or_the_whole_stack_with_ctrl() {
         let t = |count| Command::TransferUnits { faction: 4, from: 10, to: Some(11), units: vec![(1, count)], hyperspace: false };
-        assert_eq!(drop_commands(4, &boxes(), (0, 1), Target::Box(1), false), vec![t(3)]);
-        assert_eq!(drop_commands(4, &boxes(), (0, 1), Target::Box(1), true), vec![t(1)]);
+        assert_eq!(drop_commands(4, &boxes(), (0, 1), Target::Box(1), false), vec![t(1)]);
+        assert_eq!(drop_commands(4, &boxes(), (0, 1), Target::Box(1), true), vec![t(3)]);
         // Into an empty box: a new fleet in that box's slot.
-        assert_eq!(drop_commands(4, &boxes(), (0, 2), Target::Box(2), false), vec![Command::TransferUnitsToSlot { faction: 4, from: 10, slot: 3, units: vec![(2, 1)], hyperspace: false }]);
+        assert_eq!(drop_commands(4, &boxes(), (0, 2), Target::Box(2), true), vec![Command::TransferUnitsToSlot { faction: 4, from: 10, slot: 3, units: vec![(2, 1)], hyperspace: false }]);
         // Dropped on its own box: nothing.
         assert!(drop_commands(4, &boxes(), (0, 1), Target::Box(0), false).is_empty());
     }
