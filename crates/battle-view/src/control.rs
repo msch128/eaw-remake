@@ -286,6 +286,15 @@ fn pick(projected: &[Projected], cursor: Vec2, accept: impl Fn(u32) -> bool) -> 
         .map(|(id, _)| id)
 }
 
+/// The ship under the cursor. With own ships selected an enemy under the cursor wins over own units whose pick area is smaller relative to the
+/// distance (fighter badges circling the target), so hovering an enemy hull still shows its hardpoints and right-click attacks it.
+fn pick_enemy_first(projected: &[Projected], cursor: Vec2, own_selected: bool, is_enemy: impl Fn(u32) -> bool) -> Option<u32> {
+    if own_selected && let Some(id) = pick(projected, cursor, &is_enemy) {
+        return Some(id);
+    }
+    pick(projected, cursor, |_| true)
+}
+
 /// World position of a hardpoint of a rendered ship: its bone in the loaded model, else the sim offset (the sim scales the model bones by `Scale_Factor` itself).
 pub fn hardpoint_world(rt: &BattleRuntime, s: &ShipRender, hp: usize) -> Vec3 {
     if let Some(p) = s.hp_pos.get(hp).copied().flatten() {
@@ -329,7 +338,8 @@ pub fn selection(
     let scale = settings.ui_scale;
     let projected = project_ships(cam, gt, &ships, scale);
     // Over the interface only a drag that started in the world may end; nothing is hovered or started.
-    hover.ship = if block.0 { None } else { pick(&projected, cursor, |_| true) };
+    let is_enemy = |id: u32| ships.0.get(&id).is_some_and(|s| s.side != player);
+    hover.ship = if block.0 { None } else { pick_enemy_first(&projected, cursor, !sel.ships.is_empty(), is_enemy) };
     if let Ok(ray) = cam.viewport_to_world(gt, cursor)
         && let Some(d) = ray.intersect_plane(Vec3::ZERO, InfinitePlane3d::new(Vec3::Y))
     {
@@ -356,7 +366,8 @@ pub fn selection(
         let reach_px = 24.0 * scale;
         let mut best: Option<(u32, u16, f32)> = None;
         for &eid in &candidates {
-            let Some(s) = ships.0.get(&eid) else { continue };
+            // Unseen ships (fog) are neither drawn nor pickable, so they get no reticles either.
+            let Some(s) = ships.0.get(&eid).filter(|s| s.visible) else { continue };
             let def = rt.catalog.ship(s.def);
             for (i, h) in def.hardpoints.iter().enumerate() {
                 if !h.targetable || !h.destroyable || !is_markable(h.kind) {
@@ -922,4 +933,24 @@ pub struct HardpointOrderIssued {
     pub target: u32,
     /// Hardpoint index in the target's definition.
     pub hardpoint: u16,
+}
+
+#[cfg(test)]
+mod pick_tests {
+    use super::*;
+
+    #[test]
+    fn enemy_hull_wins_over_a_closer_own_badge_when_own_ships_are_selected() {
+        // Own fighter badge (id 1) is closer in relative terms than the big enemy hull (id 2) under the same cursor.
+        let projected = [
+            Projected { id: 1, screen: Vec2::new(101.0, 100.0), radius_px: 18.0 },
+            Projected { id: 2, screen: Vec2::new(180.0, 100.0), radius_px: 400.0 },
+        ];
+        let cursor = Vec2::new(100.0, 100.0);
+        let enemy = |id: u32| id == 2;
+        assert_eq!(pick_enemy_first(&projected, cursor, false, enemy), Some(1));
+        assert_eq!(pick_enemy_first(&projected, cursor, true, enemy), Some(2));
+        // No enemy under the cursor: falls back to the nearest unit.
+        assert_eq!(pick_enemy_first(&projected[..1], cursor, true, enemy), Some(1));
+    }
 }
