@@ -486,7 +486,7 @@ fn setup_scene(
     // Route line widths in pixels per width tier.
     gizmo_store.config_mut::<RingGizmos>().0.line.width = 1.6;
     gizmo_store.config_mut::<SelectGizmos>().0.line.width = 1.5;
-    gizmo_store.config_mut::<TerritoryGizmos>().0.line.width = 3.5; // estimate: the Remake ring is a fine dashed line
+    gizmo_store.config_mut::<TerritoryGizmos>().0.line.width = 2.0; // estimate: the Remake ring is a fine dashed line
 }
 
 /// Spawns planets, labels and the selection ring from the [`GalaxyView`] resource.
@@ -1724,9 +1724,9 @@ fn fill_pip_icons(textures: Option<ResMut<eaw_ui::textures::UiTextures>>, mut im
 /// dashes (only the parts of a circle that no other disc of the same faction covers).
 fn territory_segments(view: &GalaxyView, radii: &PlanetRadii, selected: Option<usize>) -> Vec<(Vec3, Vec3, Color)> {
     // Like the original: one dashed ring, around the selected planet's sector, in the colour of its relation.
-    const SAMPLES: usize = 360;
+    const SAMPLES: usize = 720;
     // Remake f0007/f0019: about 63 dashes round the circle, dash about twice the gap: 4 samples on, 2 off.
-    const DASH: usize = 4;
+    const DASH: usize = 3;
     let Some(i) = selected.filter(|&i| i < view.planets.len()) else { return Vec::new() };
     let p = &view.planets[i];
     let c = galaxy_to_world(p.position);
@@ -1735,7 +1735,7 @@ fn territory_segments(view: &GalaxyView, radii: &PlanetRadii, selected: Option<u
     let color = Color::LinearRgba(LinearRgba::new(l.red, l.green, l.blue, 0.8));
     let a = |k: usize| k as f32 / SAMPLES as f32 * std::f32::consts::TAU;
     let pt = |k: usize| c + Vec3::new(a(k).cos() * r, 0.0, a(k).sin() * r);
-    (0..SAMPLES).filter(|k| k % (DASH + 2) < DASH).map(|k| (pt(k), pt(k + 1), color)).collect()
+    (0..SAMPLES).filter(|k| k % (DASH + 3) < DASH).map(|k| (pt(k), pt(k + 1), color)).collect()
 }
 
 /// Radius of a planet's territory disc in planet radii.

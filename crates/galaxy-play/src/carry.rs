@@ -35,8 +35,8 @@ const DROP_RATE: f32 = 14.0;
 /// Model scale of a carried fleet (it is "lifted").
 const CARRY_SCALE: f32 = 1.5;
 /// Most the carried group is scaled up, and the pad radius in pixels it is scaled to when the map is zoomed out.
-const CARRY_SCALE_MAX: f32 = 5.0;
-const CARRY_SCREEN_RADIUS: f32 = 24.0;
+const CARRY_SCALE_MAX: f32 = 9.0;
+const CARRY_SCREEN_RADIUS: f32 = 42.0;
 /// How far above the map a carried fleet hangs, in pad radii.
 const CARRY_HEIGHT: f32 = 1.1;
 /// Seconds of the click pop and its extra scale at the peak.
