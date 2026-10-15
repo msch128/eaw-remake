@@ -77,3 +77,11 @@ strength, star base / garrison), the winners of 9 resolver previews with differe
   It is bounded (per planet, by tech), so "unbounded" was wrong. What makes Pirate planets walls is the mix: a random pick from a pool with Lucrehulk battleships and cruisers
   gives 35 to 65k strength per planet by week 30 to 50. **No change made**; a design decision for the owner of the rule (for example pick by the planet's start garrison types, or cap a planet's passive
   garrison at the faction's tactical cap in pop and at a strength bound).
+
+### Correction to the Pirates paragraph (measured afterwards)
+
+Most of the Pirate fleet is the data's own start spawn, not our rearm rule: `ai_check 0/1/2 ... Rebel normal` shows 58 Pirate ships at week 0, 565 after week 1 and 617 from week 2 on
+(tech 1, so `rearm_passive` adds nothing at 2 ships per planet). The jump is `Scripts/Story/Spawn_Starting_Forces_Web_Way.lua`: every Pirate planet gets
+`Free_Random(2000, 3000) x planetSpaceCombatPowerModifier` (0.5 for a neutral owner) of combat power from the Pirate unit table, against 500 to 750 x modifier for Rebel, Empire and Underworld planets
+(CIS 2000 to 3000 like the Pirates): about 1000 to 1500 power, 8 to 9 ships per planet, which is why the Pirate planets are 4 times as strong as the main factions' own. Only the growth from 617 to 967 ships
+(all-AI games, where the main factions reach tech 4 to 5) is the user rule. So the Pirates' strength is the data's; no cap is applied.
