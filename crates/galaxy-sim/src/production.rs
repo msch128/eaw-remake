@@ -215,9 +215,6 @@ impl World {
         if self.buildable_units[faction as usize].binary_search(&unit).is_err() {
             return Err(CommandError::NotAvailable);
         }
-        if self.queued_on_side(ps, false) >= self.config.max_queue_len {
-            return Err(CommandError::NoSlot);
-        }
         if ut.tech > fs.tech {
             return Err(CommandError::RequirementsNotMet(format!("tech level {}", ut.tech)));
         }
@@ -232,6 +229,10 @@ impl World {
             if !possible {
                 return Err(CommandError::RequirementsNotMet("planet".into()));
             }
+        }
+        // Items the bar hides (tech, locked, wrong planet) are refused as such even when the queue is full.
+        if self.queued_on_side(ps, false) >= self.config.max_queue_len {
+            return Err(CommandError::NoSlot);
         }
         if self.starbase_level(galaxy, planet) < ut.req_starbase {
             return Err(CommandError::RequirementsNotMet(format!("star base level {}", ut.req_starbase)));
@@ -297,9 +298,6 @@ impl World {
         if self.buildable_structures[faction as usize].binary_search(&structure).is_err() {
             return Err(CommandError::NotAvailable);
         }
-        if self.queued_on_side(ps, !st.orbital) >= self.config.max_queue_len {
-            return Err(CommandError::NoSlot);
-        }
         if st.tech > fs.tech {
             return Err(CommandError::RequirementsNotMet(format!("tech level {}", st.tech)));
         }
@@ -314,6 +312,10 @@ impl World {
             if !possible {
                 return Err(CommandError::RequirementsNotMet("planet".into()));
             }
+        }
+        // Items the bar hides (tech, locked, wrong planet) are refused as such even when the queue is full.
+        if self.queued_on_side(ps, !st.orbital) >= self.config.max_queue_len {
+            return Err(CommandError::NoSlot);
         }
         if self.starbase_level(galaxy, planet) < st.req_starbase {
             return Err(CommandError::RequirementsNotMet(format!("star base level {}", st.req_starbase)));

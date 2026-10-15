@@ -166,3 +166,47 @@ fn the_tech_upgrade_waits_for_the_research_institute() {
     assert_eq!(after.availability, Availability::Available, "reasons {:?}", after.reasons);
     assert!(after.reasons.is_empty());
 }
+
+/// A full unit queue used to turn every unit into a greyed "no free slot" entry, including the ones the bar hides (Executor at tech 5, Piett's
+/// 1,500,000 upgrade, heroes of Tech_Level 99): they flashed up while the queue was full and vanished when a slot freed.
+#[test]
+fn a_full_queue_does_not_reveal_items_of_a_higher_tech_level() {
+    let Some(install) = GameInstall::detect() else { return };
+    if !install.mod_data("1770851727").is_dir() {
+        eprintln!("skipping: Remake workshop mod not found");
+        return;
+    }
+    let data = load_galaxy(&GameFs::for_mod(&install, Some("1770851727")).unwrap()).0;
+    let campaign = data.campaign("GC_Full_Web_Way_Rebel").unwrap();
+    let mut sim = Sim::new(&data, campaign, SimConfig { victory_enabled: false, ..SimConfig::default() }).unwrap();
+    let w = sim.world().clone();
+    let names = PlayCatalog::from_data(&w, &data);
+    let empire = w.faction_id("Empire").unwrap();
+    let p = w.planet_id("Kuat_WW").unwrap();
+    sim.set_planet_owner(p, None);
+    sim.set_planet_owner(p, Some(empire));
+    let mut sb = w.first_starbase[empire as usize];
+    for _ in 1..3 {
+        sb = sb.and_then(|b| w.starbases[b as usize].next);
+    }
+    sim.set_starbase(p, sb);
+    sim.add_credits(empire, 1.0e9);
+    sim.set_tech_level(empire, 4);
+    for n in ["E_Shipyard_1", "E_Shipyard_2", "E_Shipyard_3", "E_Uplink_Command"] {
+        assert!(sim.add_structure(p, w.structure_id(n).unwrap()));
+    }
+    let hidden: Vec<_> = ["Executor_Star_Dreadnought", "Piett_Accuser_Upgrade", "Grand_Moff_Tarkin"].iter().map(|n| w.unit_id(n).unwrap_or_else(|| panic!("no unit {n}"))).collect();
+    let listed = |sim: &Sim| {
+        let menu = BuildMenu::for_planet(&w, sim.galaxy(), &names, empire, p).expect("menu");
+        hidden.iter().filter(|&&u| menu.options.iter().any(|o| o.target == BuildTarget::Unit(u))).count()
+    };
+    assert_eq!(listed(&sim), 0, "at tech 4 the tech 5 items are not listed");
+    // Fill the unit queue with a cheap ship.
+    let menu = BuildMenu::for_planet(&w, sim.galaxy(), &names, empire, p).unwrap();
+    let ship = menu.options.iter().find(|o| o.category == galaxy_play::BuildCategory::Corvettes && o.availability.is_available()).map(|o| o.target).expect("a corvette");
+    let BuildTarget::Unit(ship) = ship else { panic!("unit") };
+    while sim.apply(galaxy_sim::Command::BuildUnit { faction: empire, planet: p, unit: ship }).is_ok() {}
+    let menu = BuildMenu::for_planet(&w, sim.galaxy(), &names, empire, p).unwrap();
+    assert!(menu.options.iter().any(|o| o.availability == Availability::Full), "the queue is full");
+    assert_eq!(listed(&sim), 0, "a full queue lists no item of a higher tech level, locked item or hero of Tech_Level 99");
+}
