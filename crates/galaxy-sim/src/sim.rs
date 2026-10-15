@@ -229,10 +229,10 @@ impl Sim {
                 if ps.owner != Some(faction) {
                     return Err(CommandError::NotOwner);
                 }
-                let st = world.structures.get(structure as usize).ok_or(CommandError::Invalid)?;
+                world.structures.get(structure as usize).ok_or(CommandError::Invalid)?;
                 let at = ps.structures.iter().position(|&s| s == structure).ok_or(CommandError::Invalid)?;
                 ps.structures.remove(at);
-                let refund = f64::from(st.cost) / 3.0;
+                let refund = world.sell_value(structure);
                 g.factions[faction as usize].credits += refund;
                 Ok(CommandOk::Refunded(refund))
             }

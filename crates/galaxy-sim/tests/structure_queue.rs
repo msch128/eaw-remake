@@ -114,7 +114,7 @@ fn every_orderable_structure_of_a_start_planet_queues_up_to_its_slots() {
 }
 
 #[test]
-fn selling_a_structure_refunds_a_third_and_frees_the_slot() {
+fn selling_a_structure_refunds_half_plus_one_and_frees_the_slot() {
     let Some(data) = load() else { return };
     let campaign = data.campaign("GC_Full_Web_Way_Rebel").expect("campaign");
     let mut sim = Sim::new(&data, campaign, SimConfig { victory_enabled: false, ..SimConfig::default() }).expect("sim");
@@ -129,8 +129,8 @@ fn selling_a_structure_refunds_a_third_and_frees_the_slot() {
     let credits = sim.galaxy().factions[empire as usize].credits;
     let r = sim.apply(Command::SellStructure { faction: empire, planet: p, structure: palace }).unwrap();
     let cost = f64::from(w.structures[palace as usize].cost);
-    assert_eq!(r, CommandOk::Refunded(cost / 3.0));
-    assert_eq!(sim.galaxy().factions[empire as usize].credits, credits + cost / 3.0);
+    assert_eq!(r, CommandOk::Refunded(cost / 2.0 + 1.0));
+    assert_eq!(sim.galaxy().factions[empire as usize].credits, credits + cost / 2.0 + 1.0);
     assert_eq!(sim.world().planet_capacity(sim.galaxy(), p).ground.free(), free_before + 1, "the slot is free again");
     // Nothing left to sell, not the owner's, unknown planet.
     assert_eq!(sim.apply(Command::SellStructure { faction: empire, planet: p, structure: palace }), Err(CommandError::Invalid));
@@ -175,4 +175,37 @@ fn orbital_and_ground_structures_build_in_parallel() {
     assert_eq!(q.len(), 2, "both structures still building");
     assert!((q[0].remaining - (g_rem_before - 5.0)).abs() < 0.1, "ground progressed by 5s");
     assert!((q[1].remaining - (o_rem_before - 5.0)).abs() < 0.1, "orbital progressed by 5s in parallel");
+}
+
+#[test]
+fn sell_value_is_half_the_cost_plus_one_and_zero_for_unknown_types() {
+    let Some(data) = load() else { return };
+    let campaign = data.campaign("GC_Full_Web_Way_Rebel").expect("campaign");
+    let sim = Sim::new(&data, campaign, SimConfig { victory_enabled: false, ..SimConfig::default() }).expect("sim");
+    let w = sim.world();
+    // Remake `Delete_Building`: Gas_Refinery_Default costs 7500, its sell text says 3750 and the script pays 3751.
+    let refinery = w.structure_id("E_Gas_Refinery").expect("E_Gas_Refinery");
+    assert_eq!(w.structures[refinery as usize].cost, 7500.0);
+    assert_eq!(w.sell_value(refinery), 3751.0);
+    assert_eq!(w.sell_value(u32::MAX), 0.0);
+}
+
+#[test]
+fn the_space_side_of_the_queue_holds_five_items_and_a_sixth_is_refused() {
+    let Some(data) = load() else { return };
+    let campaign = data.campaign("GC_Full_Web_Way_Rebel").expect("campaign");
+    let mut sim = Sim::new(&data, campaign, SimConfig { victory_enabled: false, ..SimConfig::default() }).expect("sim");
+    let w = sim.world().clone();
+    let empire = w.faction_id("Empire").unwrap();
+    let p = w.planet_id("Coruscant_WW").unwrap();
+    sim.add_credits(empire, 1.0e9);
+    sim.set_tech_level(empire, 9);
+    let unit = *w.buildable_units[empire as usize].iter().find(|&&u| w.check_build_unit(sim.galaxy(), empire, p, u).is_ok()).expect("a buildable ship");
+    assert_eq!(w.config.max_queue_len, 5, "five slots per side, like queue00..09 of the bar");
+    for _ in 0..5 {
+        sim.apply(Command::BuildUnit { faction: empire, planet: p, unit }).unwrap();
+    }
+    assert_eq!(sim.apply(Command::BuildUnit { faction: empire, planet: p, unit }), Err(CommandError::NoSlot), "the sixth ship has no queue slot");
+    assert_eq!(sim.world().queued_on_side(&sim.galaxy().planets[p as usize], false), 5);
+    assert_eq!(sim.world().queued_on_side(&sim.galaxy().planets[p as usize], true), 0, "the ground side is separate");
 }

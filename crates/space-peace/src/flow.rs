@@ -90,8 +90,9 @@ fn escape_key(
     mut options: ResMut<OptionsOpen>,
     settings: Res<Settings>,
     slots: Option<ResMut<crate::newgame::SlotScreen>>,
+    sell: Option<Res<crate::planet_view::SellDialog>>,
 ) {
-    if !keys.just_pressed(KeyCode::Escape) {
+    if !keys.just_pressed(KeyCode::Escape) || sell.is_some_and(|d| d.is_open()) {
         return;
     }
     // Esc first closes the options overlay.

@@ -52,7 +52,7 @@ pub struct SimConfig {
     pub combat_max_rounds: u32,
     /// Population cap of a faction before planets and bases add to it.
     pub base_population_cap: i32,
-    /// Maximum queued items per production lane.
+    /// Maximum queued items per side of the production bar (space left, ground right; five slots each in the interface, `queue00..09`).
     pub max_queue_len: usize,
     /// Evaluate victory conditions (and end the game when one is met).
     pub victory_enabled: bool,
@@ -130,7 +130,7 @@ impl Default for SimConfig {
             combat_round_seconds: 4.0,
             combat_max_rounds: 600,
             base_population_cap: 40,
-            max_queue_len: 8,
+            max_queue_len: 5,
             victory_enabled: true,
             ground_up: false,
             debug_commands: false,

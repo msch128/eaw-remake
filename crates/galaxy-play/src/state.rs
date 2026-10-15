@@ -344,7 +344,7 @@ pub enum PlayAction {
         /// Fleet slot.
         slot: u8,
     },
-    /// Sell a built structure of the player's planet for a third of its cost (right click on its slot in the planet view).
+    /// Sell a built structure of the player's planet for half its cost plus 1 (right click on its slot in the planet view opens the sell dialog).
     SellStructure {
         /// Planet.
         planet: PlanetId,

@@ -2723,7 +2723,7 @@ fn place_planet_panel(
     state: Res<crate::planet_view::PlanetViewState>,
     mut panel: Single<(&mut Node, &mut BackgroundColor, &mut BorderColor), With<PlanetPanel>>,
 ) {
-    let in_view = state.active && state.blend > 0.5;
+    let in_view = state.active && state.blend > crate::planet_view::DIVE_CUT;
     let (node, bg, border) = &mut *panel;
     let want_left = if in_view { Val::Percent(63.75) } else { Val::Px(20.0) };
     if node.left != want_left {

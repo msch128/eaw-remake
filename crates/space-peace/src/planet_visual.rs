@@ -33,7 +33,7 @@ pub struct PlanetVisual(#[allow(dead_code)] pub usize);
 
 /// Marks the `AlamoModel` entity of planet `.0`.
 #[derive(Component)]
-struct PlanetModel(usize);
+pub(crate) struct PlanetModel(pub(crate) usize);
 
 /// Keeps [`PlanetRadii`] in sync with the loaded models.
 pub struct PlanetVisualPlugin;

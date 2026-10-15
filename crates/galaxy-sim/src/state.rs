@@ -449,7 +449,7 @@ pub enum Command {
         /// Fleet.
         fleet: FleetId,
     },
-    /// Sell a built structure for a third of its build cost (the slot becomes free again).
+    /// Sell a built structure for half its build cost plus 1 ([`crate::World::sell_value`]) (the slot becomes free again).
     SellStructure {
         /// Issuing faction.
         faction: FactionId,

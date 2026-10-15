@@ -83,6 +83,7 @@ fn view_input(
     view: Res<GalaxyView>,
     mut cam: Single<&mut GalaxyCamera>,
     mut state: ResMut<PlanetViewState>,
+    dialog: Res<SellDialog>,
 ) {
     if !state.active {
         // The wheel zooms toward the planet under the cursor (see `camera`), so zooming in on a hovered planet opens its view
@@ -107,7 +108,7 @@ fn view_input(
                 state.planet = Some(p.0);
             }
         }
-    } else if keys.just_pressed(KeyCode::Escape) || (scroll.delta.y < 0.0 && state.blend >= 1.0) {
+    } else if (keys.just_pressed(KeyCode::Escape) && !dialog.is_open()) || (scroll.delta.y < 0.0 && state.blend >= 1.0) {
         // Scrolling out only leaves once the view has fully opened: a trailing wheel tick must not close it mid-flight.
         state.active = false;
     }
@@ -152,6 +153,27 @@ mod tests {
         assert!(!wheel_opens(0.0, 1.0, 0.0), "no wheel, no view");
     }
 
+    #[test]
+    fn the_dive_ends_where_the_real_planet_looks_like_the_scene_planet() {
+        let (planet_pos, radius) = (Vec3::new(50.0, 2.0, 50.0), 3.0);
+        let dive = dive_pose(planet_pos, radius, Quat::IDENTITY);
+        let scene = overview_pose();
+        let s = radius / SCENE_PLANET_RADIUS;
+        // Same distance (in planet radii) and the same direction to the planet centre as in the scene.
+        let scene_to_planet = (ORIGIN + SCENE_PLANET) - scene.translation;
+        let dive_to_planet = planet_pos - dive.translation;
+        assert!((dive_to_planet.length() - scene_to_planet.length() * s).abs() < 1e-4);
+        assert!(dive_to_planet.normalize().dot(scene_to_planet.normalize()) > 0.9999);
+        assert!(dive.rotation.dot(scene.rotation).abs() > 0.9999);
+    }
+
+    #[test]
+    fn the_dive_follows_the_camera_yaw() {
+        let yaw = Quat::from_rotation_y(0.7);
+        let dive = dive_pose(Vec3::ZERO, 3.0, yaw);
+        let plain = dive_pose(Vec3::ZERO, 3.0, Quat::IDENTITY);
+        assert!((dive.translation - yaw * plain.translation).length() < 1e-4);
+    }
     #[test]
     fn planet_zoom_camera_dives_onto_planet_before_overview() {
         let orbit_pos = Vec3::new(50.0, 40.0, 80.0);
@@ -210,6 +232,12 @@ fn view_scene(
     } else {
         state.blend
     };
+    // Test hook: `SP_PLANET_VIEW_BLEND=0.4` freezes the fly-in at that blend so an offscreen capture shows the transition.
+    if state.active
+        && let Some(cap) = std::env::var("SP_PLANET_VIEW_BLEND").ok().and_then(|v| v.parse::<f32>().ok())
+    {
+        state.blend = state.blend.min(cap);
+    }
     let building = state.active && existing.is_empty();
     if !state.active && state.blend == 0.0 {
         for e in &existing {
@@ -348,27 +376,45 @@ fn view_dynamic(
 pub(crate) fn camera_transition_pose(
     orbit_pos: Vec3,
     orbit_rot: Quat,
-    _planet_pos: Vec3,
-    _planet_radius: f32,
+    planet_pos: Vec3,
+    planet_radius: f32,
     blend: f32,
 ) -> Transform {
     let b = blend.clamp(0.0, 1.0);
-    let overview_pose = Transform::from_translation(ORIGIN + Vec3::new(0.0, 0.0, -1.8))
-        .looking_at(ORIGIN + Vec3::new(0.0, -1.95, -10.0), Vec3::Y);
+    let overview_pose = overview_pose();
+    if b >= DIVE_CUT {
+        return overview_pose;
+    }
+    // One continuous dive onto the real planet on the galaxy map; it ends at the pose from which the real planet looks exactly like the
+    // planet of the view scene does from the overview pose, so the cut to the scene (hidden by a very short dip) shows the same picture.
+    let dive = dive_pose(planet_pos, planet_radius, orbit_rot);
+    let k = b / DIVE_CUT;
+    let t = k * k * (3.0 - 2.0 * k);
+    Transform { translation: orbit_pos.lerp(dive.translation, t), rotation: orbit_rot.slerp(dive.rotation, t), scale: Vec3::ONE }
+}
 
-    let t = b * b * (3.0 - 2.0 * b);
-    let y_progress = (b - 0.2).max(0.0) / 0.8;
-    let y_t = y_progress * y_progress * (3.0 - 2.0 * y_progress);
+/// The camera pose of the planet view: low in front of the planet-view scene, looking at the platform.
+fn overview_pose() -> Transform {
+    Transform::from_translation(ORIGIN + Vec3::new(0.0, 0.0, -1.8)).looking_at(ORIGIN + Vec3::new(0.0, -1.95, -10.0), Vec3::Y)
+}
 
-    let target_translation = Vec3::new(
-        orbit_pos.x.lerp(overview_pose.translation.x, t),
-        orbit_pos.y.lerp(overview_pose.translation.y, y_t),
-        orbit_pos.z.lerp(overview_pose.translation.z, t),
-    );
+/// Centre of the planet of the view scene and its radius (the fit size of the planet model).
+const SCENE_PLANET: Vec3 = Vec3::new(-15.8, -1.0, -15.0);
+const SCENE_PLANET_RADIUS: f32 = 24.0;
 
+/// Blend at which the camera leaves the galaxy map and the planet-view scene takes over (the rest of the blend holds the overview pose
+/// while the view's panels fade in).
+pub(crate) const DIVE_CUT: f32 = 0.78;
+
+/// Pose in galaxy space that shows the real planet (model radius `planet_radius`) as the scene planet is seen from [`overview_pose`]:
+/// the scene is mapped onto the galaxy by a scale of `planet_radius / 24` about the planet, turned with the galaxy camera's yaw.
+pub(crate) fn dive_pose(planet_pos: Vec3, planet_radius: f32, orbit_rot: Quat) -> Transform {
+    let s = planet_radius / SCENE_PLANET_RADIUS;
+    let yaw = Quat::from_rotation_y(orbit_rot.to_euler(EulerRot::YXZ).0);
+    let scene = overview_pose();
     Transform {
-        translation: target_translation,
-        rotation: orbit_rot.slerp(overview_pose.rotation, t),
+        translation: planet_pos + yaw * ((scene.translation - (ORIGIN + SCENE_PLANET)) * s),
+        rotation: yaw * scene.rotation,
         scale: Vec3::ONE,
     }
 }
@@ -376,9 +422,17 @@ pub(crate) fn camera_transition_pose(
 fn view_camera(
     mut state: ResMut<PlanetViewState>,
     view: Res<GalaxyView>,
-    radii: Option<Res<PlanetRadii>>,
-    mut cam: Single<&mut Transform, With<GalaxyCamera>>,
+    planet_models: Query<(&crate::planet_visual::PlanetModel, &AlamoModelLoaded, &Transform), Without<GalaxyCamera>>,
+    mut cam: Single<(&mut Transform, &mut Projection), With<GalaxyCamera>>,
 ) {
+    let (cam, projection) = &mut *cam;
+    // The dive ends close to the planet: the usual near plane would cut its near side.
+    let near = if state.blend > 0.0 { 0.05 } else { 1.0 };
+    if let Projection::Perspective(p) = &mut **projection
+        && p.near != near
+    {
+        p.near = near;
+    }
     if state.blend <= 0.0 {
         return;
     }
@@ -386,8 +440,7 @@ fn view_camera(
         state.start_pos = Some(cam.translation);
         state.start_rot = Some(cam.rotation);
     }
-    let overview_pose = Transform::from_translation(ORIGIN + Vec3::new(0.0, 0.0, -1.8))
-        .looking_at(ORIGIN + Vec3::new(0.0, -1.95, -10.0), Vec3::Y);
+    let overview_pose = overview_pose();
 
     let Some((idx, p)) = state.planet.and_then(|i| view.planets.get(i).map(|p| (i, p))) else {
         let t = state.blend * state.blend * (3.0 - 2.0 * state.blend);
@@ -399,7 +452,8 @@ fn view_camera(
     };
 
     let planet_pos = crate::galaxy_map::galaxy_to_world(p.position);
-    let r = radii.as_ref().and_then(|rad| rad.0.get(idx)).copied().unwrap_or(8.0).max(4.0);
+    // The real model radius (the view scene fits the same model to 24 units), not the clamped pick radius.
+    let r = planet_models.iter().find(|(m, _, _)| m.0 == idx).map_or(2.0, |(_, loaded, tf)| (loaded.radius * tf.scale.x).max(0.5));
 
     let start_pos = state.start_pos.unwrap_or(cam.translation);
     let start_rot = state.start_rot.unwrap_or(cam.rotation);
@@ -476,7 +530,8 @@ fn view_fade(
     mut mats: ResMut<Assets<StandardMaterial>>,
     mut quad: Query<(Entity, &mut Transform, &MeshMaterial3d<StandardMaterial>), (With<FadeQuad>, Without<GalaxyCamera>)>,
 ) {
-    let alpha = (std::f32::consts::PI * state.blend).sin().powi(4) * 0.25;
+    // A very short dip to black around the cut from the galaxy to the view scene (the star sky is not part of the scene).
+    let alpha = (1.0 - (state.blend - DIVE_CUT).abs() / 0.05).clamp(0.0, 1.0).powi(2) * 0.9;
     let visible = state.blend > 0.0 && state.blend < 1.0;
     match quad.single_mut() {
         Ok((e, mut tf, mat)) => {
@@ -484,7 +539,7 @@ fn view_fade(
                 commands.entity(e).despawn();
                 return;
             }
-            tf.translation = cam.translation + cam.rotation * Vec3::NEG_Z * 1.6;
+            tf.translation = cam.translation + cam.rotation * Vec3::NEG_Z * 0.3;
             tf.rotation = cam.rotation;
             if let Some(mut m) = mats.get_mut(&mat.0) {
                 m.base_color = Color::srgba(0.0, 0.0, 0.0, alpha);
@@ -695,7 +750,7 @@ fn structure_tip(world: &galaxy_sim::World, cat: &PlayCatalog, game: Option<&ala
     if st.population_capacity > 0 {
         t.push_str(&format!("\n@Population cap\t+{}", st.population_capacity));
     }
-    t.push_str(&format!("\n@Action\tRight-click to sell for {:.0} credits", (st.cost / 3.0).floor()));
+    t.push_str(&format!("\n@Action\tRight-click to sell for {:.0} credits", world.sell_value(s).floor()));
     t
 }
 
@@ -833,7 +888,12 @@ fn view_tooltip(
 
 /// Runs after the generic hover text, which clears the tooltip whenever the map has nothing under the cursor.
 fn register_tooltip(app: &mut App) {
-    app.init_resource::<OrbitSlots>().add_systems(Update, (view_tooltip.after(crate::play_ui::fleet_tooltip), sell_click).run_if(in_state(AppScreen::Galaxy)));
+    app.init_resource::<OrbitSlots>().init_resource::<SellDialog>().add_systems(
+        Update,
+        (view_tooltip.after(crate::play_ui::fleet_tooltip), sell_dialog_input, sell_open.after(sell_dialog_input), sell_dialog_ui.after(sell_open), sell_button_look)
+            .run_if(in_state(AppScreen::Galaxy)),
+    );
+    app.add_systems(Last, sell_dialog_escape);
 }
 
 #[cfg(test)]
@@ -849,40 +909,340 @@ mod tooltip_tests {
     }
 }
 
-/// Right click on a built ground / orbital structure in the planet view sells it for a third of its cost (a journaled sim command).
+/// Where a sell dialog is open: the built structure it would sell and the screen point (window pixels) of its slot.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct SellTarget {
+    planet: u32,
+    structure: u32,
+    at: Vec2,
+}
+
+/// The sell dialog of the planet view. Right click on a built structure opens it; only a left click on its button sells.
+#[derive(Resource, Default, Debug, PartialEq)]
+pub(crate) struct SellDialog(Option<SellTarget>);
+
+impl SellDialog {
+    pub(crate) fn is_open(&self) -> bool {
+        self.0.is_some()
+    }
+
+    /// A left click: on the button it sells (and closes), anywhere else it only closes. Returns `(planet, structure)` of a sale.
+    fn left_click(&mut self, on_button: bool) -> Option<(u32, u32)> {
+        let t = self.0.take()?;
+        on_button.then_some((t.planet, t.structure))
+    }
+}
+
+/// The `n`-th built structure of the slot kind (ground or orbital), in build order: the same order the slots are filled in.
+fn built_structure(structures: &[u32], is_orbital: impl Fn(u32) -> bool, orbital: bool, n: usize) -> Option<u32> {
+    structures.iter().copied().filter(|&s| is_orbital(s) == orbital).nth(n)
+}
+
+/// Position of the dialog's top-left corner (UI pixels) for a slot at `at` (window pixels): right of the slot, kept on the screen.
+fn dialog_corner(at: Vec2, scale: f32, size: Vec2, screen: Vec2) -> Vec2 {
+    let scale = scale.max(1e-3);
+    let p = at / scale + Vec2::new(18.0, -14.0);
+    p.clamp(Vec2::splat(4.0), (screen / scale - size - Vec2::splat(4.0)).max(Vec2::splat(4.0)))
+}
+
+#[derive(Component)]
+struct SellDialogRoot;
+
+#[derive(Component)]
+struct SellButton;
+
+const DIALOG_BG: Color = Color::srgba(0.04, 0.09, 0.13, 0.96);
+const DIALOG_BORDER: Color = Color::srgb(0.0, 0.76, 0.99);
+const BUTTON_IDLE: Color = Color::srgb(0.07, 0.2, 0.3);
+const BUTTON_HOT: Color = Color::srgb(0.1, 0.4, 0.55);
+/// Estimated size of the dialog (UI pixels), only used to keep it on the screen.
+const DIALOG_SIZE: Vec2 = Vec2::new(210.0, 78.0);
+
+/// Right click on a built ground / orbital structure in the planet view opens the sell dialog at its slot; a right click anywhere else closes it.
+/// `SP_SELL_DIALOG=ground:<n>|orbital:<n>` opens it on that slot without a cursor (offscreen checks).
 #[allow(clippy::too_many_arguments)]
-fn sell_click(
+fn sell_open(
     mouse: Res<ButtonInput<MouseButton>>,
     state: Res<PlanetViewState>,
     sim: Option<Res<SimState>>,
-    catalog: Option<Res<PlayCatalog>>,
     bridge: Option<Res<crate::play::PlayBridge>>,
     window: Option<Single<&Window, With<bevy::window::PrimaryWindow>>>,
     cam: Single<(&Camera, &GlobalTransform), With<GalaxyCamera>>,
-    mut actions: MessageWriter<galaxy_play::PlayAction>,
-    mut toast: ResMut<crate::play_ui::Toast>,
+    mut dialog: ResMut<SellDialog>,
+    mut forced: Local<bool>,
 ) {
-    if !mouse.just_pressed(MouseButton::Right) || !state.active || state.blend < 1.0 {
-        return;
-    }
-    let (Some(sim), Some(cat), Some(bridge)) = (sim, catalog, bridge) else { return };
-    let Some(sp) = state.planet.and_then(|p| bridge.planet_to_sim.get(p).copied().flatten()) else { return };
-    let Some(c) = window.and_then(|w| w.cursor_position()) else { return };
+    let (Some(sim), Some(bridge)) = (sim, bridge) else { return };
+    let Some(sp) = state.planet.and_then(|p| bridge.planet_to_sim.get(p).copied().flatten()).filter(|_| state.active && state.blend >= 1.0) else { return };
     let (camera, gt) = *cam;
     let project = |p: Vec3| camera.world_to_viewport(gt, p).ok();
     let mut points: Vec<(Hover, Vec2)> = Vec::new();
     points.extend(state.ground_slots.iter().enumerate().filter_map(|(i, p)| project(*p + Vec3::new(0.0, 0.2, 0.0)).map(|v| (Hover::Ground(i), v))));
     points.extend(state.orbital_slots.iter().enumerate().filter_map(|(i, p)| project(*p + Vec3::new(0.0, 0.15, 0.0)).map(|v| (Hover::Orbital(i), v))));
-    let (orbital, n) = match pick(&points, c, 30.0) {
-        Some(Hover::Ground(i)) => (false, i),
-        Some(Hover::Orbital(i)) => (true, i),
-        _ => return,
+    let hit = if let Some(f) = std::env::var("SP_SELL_DIALOG").ok().filter(|_| !*forced) {
+        *forced = true;
+        let want = match f.split_once(':').and_then(|(k, n)| Some((k.to_owned(), n.parse::<usize>().ok()?))) {
+            Some((k, n)) if k == "orbital" => Hover::Orbital(n),
+            Some((_, n)) => Hover::Ground(n),
+            None => return,
+        };
+        points.iter().find(|(h, _)| *h == want).copied()
+    } else if mouse.just_pressed(MouseButton::Right) {
+        let Some(c) = window.and_then(|w| w.cursor_position()) else { return };
+        pick(&points, c, 30.0).and_then(|h| points.iter().find(|(p, _)| *p == h).copied())
+    } else {
+        return;
     };
-    let Some(ps) = sim.galaxy().planets.get(sp as usize) else { return };
-    let built = ps.structures.iter().copied().filter(|&s| sim.world.structures.get(s as usize).is_some_and(|d| d.orbital == orbital)).nth(n);
-    if let Some(s) = built {
-        actions.write(galaxy_play::PlayAction::SellStructure { planet: sp, structure: s });
-        toast.0 = format!("{} sold for {:.0} credits", cat.structure(s), sim.world.structures[s as usize].cost / 3.0);
-        toast.1 = 3.0;
+    let structures = sim.galaxy().planets.get(sp as usize).map(|p| p.structures.as_slice());
+    let target = hit.and_then(|(h, at)| {
+        let (orbital, n) = match h {
+            Hover::Ground(i) => (false, i),
+            Hover::Orbital(i) => (true, i),
+            _ => return None,
+        };
+        let built = built_structure(structures?, |s| sim.world.structures.get(s as usize).is_some_and(|d| d.orbital), orbital, n)?;
+        Some(SellTarget { planet: sp, structure: built, at })
+    });
+    // A right click on nothing closes an open dialog, a right click on another structure moves it there.
+    dialog.0 = target;
+}
+
+/// Builds or removes the dialog's UI when [`SellDialog`] changes: the tooltip card look (dark panel, cyan frame, gold title) and a button "Sell for N credits".
+#[allow(clippy::too_many_arguments)]
+fn sell_dialog_ui(
+    dialog: Res<SellDialog>,
+    sim: Option<Res<SimState>>,
+    catalog: Option<Res<PlayCatalog>>,
+    assets: Option<Res<eaw_ui::EawUiAssets>>,
+    settings: Option<Res<eaw_ui::EawUiSettings>>,
+    scale: Res<UiScale>,
+    window: Option<Single<&Window, With<bevy::window::PrimaryWindow>>>,
+    roots: Query<Entity, With<SellDialogRoot>>,
+    mut commands: Commands,
+) {
+    if !dialog.is_changed() {
+        return;
+    }
+    for e in &roots {
+        commands.entity(e).despawn();
+    }
+    let (Some(t), Some(sim), Some(cat)) = (dialog.0, sim, catalog) else { return };
+    let value = sim.world.sell_value(t.structure);
+    let sell = assets.as_deref().and_then(|a| a.text.get("TEXT_BUTTON_SELL").filter(|s| !s.is_empty())).unwrap_or("Sell").to_owned();
+    let family = settings.as_ref().and_then(|s| s.tooltip_font_family.clone());
+    let font = |size: f32| match &family {
+        Some(f) => TextFont { font: FontSource::Family(f.as_str().into()), font_size: FontSize::Px(size), ..default() },
+        None => TextFont::from_font_size(size),
+    };
+    let screen = window.map_or(Vec2::new(1920.0, 1080.0), |w| Vec2::new(w.width(), w.height()));
+    let corner = dialog_corner(t.at, scale.0, DIALOG_SIZE, screen);
+    let mut root = commands.spawn((
+        SellDialogRoot,
+        Name::new("Sell dialog"),
+        Node {
+            position_type: PositionType::Absolute,
+            left: Val::Px(corner.x),
+            top: Val::Px(corner.y),
+            width: Val::Px(DIALOG_SIZE.x),
+            flex_direction: FlexDirection::Column,
+            row_gap: Val::Px(6.0),
+            padding: UiRect::axes(Val::Px(9.0), Val::Px(7.0)),
+            border: UiRect::all(Val::Px(1.0)),
+            border_radius: BorderRadius::all(Val::Px(6.0)),
+            ..default()
+        },
+        BackgroundColor(DIALOG_BG),
+        BorderColor::all(DIALOG_BORDER),
+        bevy::ui::FocusPolicy::Block,
+        GlobalZIndex(1100),
+    ));
+    if let Some(c) = settings.as_ref().and_then(|s| s.camera) {
+        root.insert(UiTargetCamera(c));
+    }
+    root.with_children(|p| {
+        p.spawn((Text::new(cat.structure(t.structure).to_uppercase()), font(13.0), TextColor(Color::srgb(1.0, 0.86, 0.38))));
+        p.spawn((Node { height: Val::Px(1.0), ..default() }, BackgroundColor(Color::srgba(0.0, 0.62, 0.85, 0.55))));
+        p.spawn((
+            SellButton,
+            Button,
+            Node { padding: UiRect::axes(Val::Px(8.0), Val::Px(5.0)), border: UiRect::all(Val::Px(1.0)), justify_content: JustifyContent::Center, border_radius: BorderRadius::all(Val::Px(4.0)), ..default() },
+            BackgroundColor(BUTTON_IDLE),
+            BorderColor::all(DIALOG_BORDER),
+        ))
+        .with_children(|b| {
+            b.spawn((Text::new(format!("{sell} for {value:.0} credits")), font(12.0), TextColor(Color::srgb(0.95, 0.97, 1.0)), bevy::ui::FocusPolicy::Pass));
+        });
+    });
+}
+
+/// Hover look of the dialog's button.
+fn sell_button_look(mut buttons: Query<(&Interaction, &mut BackgroundColor), (With<SellButton>, Changed<Interaction>)>) {
+    for (i, mut bg) in &mut buttons {
+        bg.0 = if *i == Interaction::None { BUTTON_IDLE } else { BUTTON_HOT };
+    }
+}
+
+/// A left click sells when it lands on the button and only closes the dialog anywhere else. Scrolling or leaving the view also closes it.
+#[allow(clippy::too_many_arguments)]
+fn sell_dialog_input(
+    mouse: Res<ButtonInput<MouseButton>>,
+    scroll: Res<AccumulatedMouseScroll>,
+    state: Res<PlanetViewState>,
+    sim: Option<Res<SimState>>,
+    catalog: Option<Res<PlayCatalog>>,
+    buttons: Query<&Interaction, With<SellButton>>,
+    mut dialog: ResMut<SellDialog>,
+    mut actions: MessageWriter<galaxy_play::PlayAction>,
+    mut toast: ResMut<crate::play_ui::Toast>,
+) {
+    let Some(t) = dialog.0 else { return };
+    if !state.active || scroll.delta.y != 0.0 {
+        dialog.0 = None;
+        return;
+    }
+    if !mouse.just_pressed(MouseButton::Left) {
+        return;
+    }
+    let on_button = buttons.iter().any(|i| *i == Interaction::Pressed);
+    if let Some((planet, structure)) = dialog.left_click(on_button) {
+        actions.write(galaxy_play::PlayAction::SellStructure { planet, structure });
+        if let (Some(sim), Some(cat)) = (sim, catalog) {
+            toast.0 = format!("{} sold for {:.0} credits", cat.structure(t.structure), sim.world.sell_value(structure));
+            toast.1 = 3.0;
+        }
+    }
+}
+
+/// Esc closes the dialog. Runs last in the frame so the view and the pause menu, which also react to Esc, still see it open and leave Esc alone.
+fn sell_dialog_escape(keys: Res<ButtonInput<KeyCode>>, mut dialog: ResMut<SellDialog>) {
+    if keys.just_pressed(KeyCode::Escape) && dialog.is_open() {
+        dialog.0 = None;
+    }
+}
+
+#[cfg(test)]
+mod sell_tests {
+    use super::*;
+
+    fn target() -> SellTarget {
+        SellTarget { planet: 3, structure: 7, at: Vec2::new(500.0, 300.0) }
+    }
+
+    #[test]
+    fn built_structure_counts_only_its_slot_kind_in_build_order() {
+        let orbital = |s: u32| s >= 100;
+        let built = [5, 100, 6, 101, 7];
+        assert_eq!(built_structure(&built, orbital, false, 0), Some(5));
+        assert_eq!(built_structure(&built, orbital, false, 2), Some(7));
+        assert_eq!(built_structure(&built, orbital, true, 1), Some(101));
+        assert_eq!(built_structure(&built, orbital, true, 2), None, "an empty slot sells nothing");
+    }
+
+    #[test]
+    fn a_click_on_the_button_sells_and_closes() {
+        let mut d = SellDialog(Some(target()));
+        assert_eq!(d.left_click(true), Some((3, 7)));
+        assert!(!d.is_open());
+    }
+
+    #[test]
+    fn a_click_elsewhere_closes_without_selling() {
+        let mut d = SellDialog(Some(target()));
+        assert_eq!(d.left_click(false), None);
+        assert!(!d.is_open());
+    }
+
+    #[test]
+    fn a_click_with_no_dialog_sells_nothing() {
+        let mut d = SellDialog::default();
+        assert_eq!(d.left_click(true), None);
+    }
+
+    #[test]
+    fn the_dialog_stays_on_the_screen() {
+        let size = Vec2::new(200.0, 80.0);
+        let screen = Vec2::new(1000.0, 600.0);
+        assert_eq!(dialog_corner(Vec2::new(400.0, 300.0), 1.0, size, screen), Vec2::new(418.0, 286.0), "right of the slot");
+        assert_eq!(dialog_corner(Vec2::new(990.0, 590.0), 1.0, size, screen), Vec2::new(796.0, 516.0), "pushed back inside at the lower right corner");
+        assert_eq!(dialog_corner(Vec2::new(400.0, 300.0), 2.0, size, screen), Vec2::new(218.0, 136.0), "window pixels are divided by the UI scale");
+    }
+
+    /// The dialog flow in a tiny app with the real input systems.
+    fn flow_app() -> App {
+        let mut app = App::new();
+        app.init_resource::<ButtonInput<MouseButton>>()
+            .init_resource::<ButtonInput<KeyCode>>()
+            .init_resource::<AccumulatedMouseScroll>()
+            .init_resource::<crate::play_ui::Toast>()
+            .insert_resource(PlanetViewState { active: true, ..default() })
+            .insert_resource(SellDialog(Some(target())))
+            .add_message::<galaxy_play::PlayAction>()
+            .add_systems(Update, sell_dialog_input)
+            .add_systems(Last, sell_dialog_escape);
+        app.world_mut().spawn((SellButton, Interaction::None));
+        app
+    }
+
+    fn sales(app: &App) -> Vec<(u32, u32)> {
+        let msgs = app.world().resource::<Messages<galaxy_play::PlayAction>>();
+        msgs.iter_current_update_messages()
+            .filter_map(|m| match m {
+                galaxy_play::PlayAction::SellStructure { planet, structure } => Some((*planet, *structure)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_left_click_off_the_button_closes_and_sells_nothing() {
+        let mut app = flow_app();
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Left);
+        app.update();
+        assert!(!app.world().resource::<SellDialog>().is_open());
+        assert!(sales(&app).is_empty());
+    }
+
+    #[test]
+    fn a_left_click_on_the_button_sends_one_sale_and_closes() {
+        let mut app = flow_app();
+        let mut q = app.world_mut().query_filtered::<&mut Interaction, With<SellButton>>();
+        *q.single_mut(app.world_mut()).unwrap() = Interaction::Pressed;
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Left);
+        app.update();
+        assert!(!app.world().resource::<SellDialog>().is_open());
+        assert_eq!(sales(&app), vec![(3, 7)]);
+    }
+
+    #[test]
+    fn nothing_is_sold_while_the_dialog_just_sits_open() {
+        let mut app = flow_app();
+        app.update();
+        assert!(app.world().resource::<SellDialog>().is_open());
+        assert!(sales(&app).is_empty());
+    }
+
+    #[test]
+    fn a_right_button_press_alone_never_sells() {
+        let mut app = flow_app();
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Right);
+        app.update();
+        assert!(app.world().resource::<SellDialog>().is_open());
+        assert!(sales(&app).is_empty());
+    }
+
+    #[test]
+    fn escape_closes_the_dialog() {
+        let mut app = flow_app();
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::Escape);
+        app.update();
+        assert!(!app.world().resource::<SellDialog>().is_open());
+        assert!(sales(&app).is_empty());
+    }
+
+    #[test]
+    fn leaving_the_planet_view_closes_the_dialog() {
+        let mut app = flow_app();
+        app.world_mut().resource_mut::<PlanetViewState>().active = false;
+        app.update();
+        assert!(!app.world().resource::<SellDialog>().is_open());
     }
 }
