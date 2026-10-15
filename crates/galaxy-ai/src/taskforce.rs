@@ -780,6 +780,32 @@ impl TaskForces {
                     break;
                 }
             }
+            // Strength-driven top-up: when the role-weighted fill falls short of the strength the target needs, add (free slots) or swap in (full force) the ships
+            // that give the most strength per credit among what the plan allows, until the force is strong enough (estimate; the plans give no such rule).
+            if strength_mode && strength_of(&wanted) < needed_strength {
+                let allowed: Vec<&(String, String, f64)> = candidates.iter().filter(|c| pct.iter().any(|g| matches(c, &g.types))).collect();
+                let efficiency = |name: &str| -> f64 {
+                    let cost = sim.unit_info(name).map_or(1.0, |i| i.cost.max(1.0));
+                    sim.force_strength(&[(name.to_owned(), 1)]) / cost
+                };
+                let best = allowed.iter().map(|c| (c.0.clone(), efficiency(&c.0))).filter(|e| e.1 > 0.0).max_by(|a, b| a.1.total_cmp(&b.1).then(b.0.cmp(&a.0)));
+                if let Some((best, _)) = best {
+                    let mut swaps = 0;
+                    while strength_of(&wanted) < needed_strength && swaps < 200 {
+                        swaps += 1;
+                        if wanted.len() < cap {
+                            wanted.push(best.clone());
+                            continue;
+                        }
+                        // Full: replace the ship with the least strength per credit that is not already the best type.
+                        let worst = wanted.iter().enumerate().filter(|(_, n)| **n != best).map(|(i, n)| (i, efficiency(n))).min_by(|a, b| a.1.total_cmp(&b.1));
+                        match worst {
+                            Some((i, _)) => wanted[i] = best.clone(),
+                            None => break,
+                        }
+                    }
+                }
+            }
             // A force that cannot reach `MIN_VIABLE_FRACTION` of what the player believes defends the target (the size cap or the free ships ran out first)
             // is not sent: it would only feed the defenders (its attacks on Pirate star bases were lost to the last ship).
             if strength_mode && believed.is_some_and(|b| strength_of(&wanted) * f64::from(split) < b * MIN_VIABLE_FRACTION) {

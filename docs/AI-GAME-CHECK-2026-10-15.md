@@ -85,3 +85,23 @@ Most of the Pirate fleet is the data's own start spawn, not our rearm rule: `ai_
 `Free_Random(2000, 3000) x planetSpaceCombatPowerModifier` (0.5 for a neutral owner) of combat power from the Pirate unit table, against 500 to 750 x modifier for Rebel, Empire and Underworld planets
 (CIS 2000 to 3000 like the Pirates): about 1000 to 1500 power, 8 to 9 ships per planet, which is why the Pirate planets are 4 times as strong as the main factions' own. Only the growth from 617 to 967 ships
 (all-AI games, where the main factions reach tech 4 to 5) is the user rule. So the Pirates' strength is the data's; no cap is applied.
+
+## Update after the three follow-up fixes (80 weeks, Normal, all-AI, seed 1)
+
+1. **Piecemeal arrival fixed on the AI side.** Tracing every AI move command showed the cause: the Lua plans ask for a staging planet (`Ground_Staging_Planet`, "enemy undefended") and
+   `Produce_Force` took it literally, so the staging planet was the target itself and each ship of the force travelled there as its own fleet. The staging planet must now be an own planet
+   (else the nearest own planet to the target), so the force merges there and moves as one fleet; pincers are off (`PINCER_ENABLED`) and only one offensive plan per target runs at a time.
+2. **Pirate rearm from the planet's own types** (RULES.md, "Passive faction rearm"): weekly ship from the types the planet already fields, else the 3 cheapest.
+3. **Strength-driven top-up** in `compose`: when the role-weighted fill is short of the strength the target needs, free slots are filled and, at the force size cap, the least
+   cost-effective ships are swapped for the ship type with the most strength per credit (`force_strength / cost`) until the force is strong enough. (Population cap is not modelled in the
+   selection; the force cap of 60 stands in for it.)
+
+| | before (first check) | after |
+|---|---|---|
+| Rebel planets / attacks won | 5 / 0 of 37 | 11 / 12 of 18 |
+| Empire planets / attacks won | 20 / 3 of 21 | 23 / 8 of 8 |
+| Underworld planets / attacks won | 17 / 11 of 29 | 22 / 17 of 31 |
+| Rebel credits at week 80 | 72k (376k after the first fixes) | 32k (spent 98% of earned) |
+| Pirate ships (week 80) | 967 | about 820 |
+
+Still open: Empire fleets idle for 20+ weeks (409 of 1169 fleet-weeks, worst 55 weeks); heroes are not bought by the 4.0 AI (data); minor factions still hoard when the human is passive.
