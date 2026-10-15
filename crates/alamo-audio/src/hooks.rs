@@ -72,6 +72,8 @@ pub const WIRED_TAGS: &[&str] = &[
     "tsw_musicevent_activation_start",
     "space_retreat_enemy_begin_sfxevent",
     "space_retreat_not_allowed_sfxevent",
+    "space_retreat_not_allowed_reason_1_sfxevent",
+    "space_retreat_cancel_sfxevent",
     "reinforcements_selection_sfxevent",
     "reinforcements_cancelled_sfxevent",
     "sfxevent_gui_unit_ability_deactivated",

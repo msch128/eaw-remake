@@ -306,6 +306,19 @@ pub fn battle_audio(
                     send(n, None, &mut stats, &mut out);
                 }
             }
+            // An enemy gravity well came up while the fleet charged its hyperdrives (`Event::RetreatAborted`): the faction's "interdicted"
+            // line (`Space_Retreat_Not_Allowed_Reason_1_SFXEvent`, "Reason 1: Gravity Well"), else `Space_Retreat_Cancel_SFXEvent`. Only the
+            // player's own aborted retreat is announced.
+            Event::RetreatAborted { side } if *side == player => {
+                let line = faction.as_deref().and_then(|f| {
+                    constants
+                        .faction_sfx(f, "space_retreat_not_allowed_reason_1_sfxevent")
+                        .or_else(|| constants.faction_sfx(f, "space_retreat_cancel_sfxevent"))
+                });
+                if let Some(n) = line {
+                    send(n, None, &mut stats, &mut out);
+                }
+            }
             Event::ShipRetreated { ship } => {
                 let Some(&(_, side)) = mem.ships.get(ship) else { continue };
                 if side == player {

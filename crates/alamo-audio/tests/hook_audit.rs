@@ -129,3 +129,38 @@ fn death_star_countdown_lines_are_speech_events() {
     }
     assert!(checked >= 12, "only {checked} Death Star lines found");
 }
+
+/// The gravity-well retreat abort line and the GUI toggle sounds of Interdictor, Hunt, Lure and S-Foils (`SPOILER_LOCK`) of every
+/// faction exist as SFX events with files. Weaken Enemy, Call for Wingmen and Harmonic Bomb name no toggle sound; their own
+/// `Unit_Ability` block lines are covered by the `sfxevent_gui_unit_ability_*` hooks of `wired_hooks_resolve_to_files`.
+#[test]
+fn retreat_abort_and_toggle_lines_resolve() {
+    let Some(install) = GameInstall::detect().filter(|i| i.mod_data(REMAKE).is_dir()) else {
+        eprintln!("skipped: Remake mod not installed");
+        return;
+    };
+    let fs = GameFs::for_mod(&install, Some(REMAKE)).expect("fs");
+    let mut w = Vec::new();
+    let sfx = SfxLibrary::load(&fs, &mut w);
+    let resolver = SampleResolver::new(&fs);
+    let c = alamo_audio::AudioConstants::load(&fs);
+    let plays = |n: &str| sfx.get(n).is_some_and(|e| !e.samples.is_empty() && e.samples.iter().all(|s| resolver.resolve(&fs, s).is_some()));
+    let mut found = 0;
+    for faction in ["Empire", "Rebel", "Underworld"] {
+        let n = c.faction_sfx(faction, "space_retreat_not_allowed_reason_1_sfxevent").unwrap_or_else(|| panic!("{faction}: no gravity-well retreat line"));
+        assert!(plays(n), "{faction}: `{n}` does not play");
+        for kind in ["INTERDICT", "HUNT", "LURE", "SPOILER_LOCK"] {
+            for on in [true, false] {
+                match c.toggle_sfx(faction, kind, on) {
+                    Some(n) => {
+                        assert!(plays(n), "{faction} {kind} on={on}: `{n}` does not play");
+                        found += 1;
+                    }
+                    // The data lists S-Foils (`SPOILER_LOCK`) for some factions only; the other three always have one.
+                    None => assert_eq!(kind, "SPOILER_LOCK", "{faction}: no toggle sound for {kind} on={on}"),
+                }
+            }
+        }
+    }
+    assert!(found >= 3 * 3 * 2 + 2, "only {found} toggle sounds found");
+}
