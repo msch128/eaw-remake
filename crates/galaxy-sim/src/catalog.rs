@@ -40,6 +40,8 @@ struct StructRaw {
     /// Has space-side weapons (hardpoints or a ground-to-space special weapon).
     space_reach: bool,
     unlocks: Vec<String>,
+    /// Names of the structures that stand in orbit in a battle in its place (see `StructureType::battle_form`).
+    forms: Vec<String>,
 }
 
 /// Memoizing converter from hardpoints/projectiles to [`CombatStats`].
@@ -224,6 +226,11 @@ impl World {
                 // Space-side weapons: hardpoints, or a ground-to-space special weapon (hypervelocity gun, nuke launcher ...).
                 space_reach: reach,
                 unlocks: def.unlocks.clone(),
+                forms: ["place_other_type_at_every_specific_marker_position", "tactical_additional_structure_type"]
+                    .iter()
+                    .filter_map(|k| def.fields.get(*k))
+                    .filter_map(|v| name_list(v).into_iter().next())
+                    .collect(),
             });
             self.structures.push(StructureType {
                 name: def.name.clone(),
@@ -237,6 +244,7 @@ impl World {
                 req_planets: Vec::new(),
                 galactic: orbital,
                 space_reach: reach,
+                battle_form: None,
                 ancestors: Vec::new(),
                 income_abs: def.income_modifiers.iter().map(|m| m.absolute).sum(),
                 income_pct: def.income_modifiers.iter().map(|m| m.percentage).sum(),
@@ -261,6 +269,31 @@ impl World {
             let name = self.structures[i].name.clone();
             if let Some(r) = data.objects.resolve(&name) {
                 self.structures[i].ancestors = r.chain.iter().skip(1).filter_map(|o| self.structure_index.get(&key(&o.name)).copied()).collect();
+            }
+        }
+        // An orbital structure without weapons of its own that is replaced by an armed one in the battle (Golan platforms, the Uplink Command)
+        // fights with the numbers of that one.
+        for (i, raw) in struct_raw.iter().enumerate() {
+            let st = &self.structures[i];
+            if !st.orbital || st.combat.is_some() || st.space_reach {
+                continue;
+            }
+            let hull = |f: StructureTypeId| self.structures[f as usize].combat.as_ref().map_or(0.0, |c| c.hull);
+            let form = raw
+                .forms
+                .iter()
+                .filter_map(|n| self.structure_index.get(&key(n)).copied())
+                .filter(|&f| {
+                    let t = &self.structures[f as usize];
+                    f as usize != i && t.orbital && (t.combat.is_some() || t.space_reach)
+                })
+                .max_by(|&a, &b| hull(a).total_cmp(&hull(b)));
+            if let Some(f) = form {
+                let (combat, reach) = (self.structures[f as usize].combat.clone(), self.structures[f as usize].space_reach);
+                let st = &mut self.structures[i];
+                st.battle_form = Some(f);
+                st.combat = combat;
+                st.space_reach = reach;
             }
         }
         for (i, raw) in struct_raw.iter().enumerate() {

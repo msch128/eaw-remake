@@ -399,6 +399,10 @@ pub struct StructureType {
     pub galactic: bool,
     /// Space weapons or hardpoints (orbital structures with hardpoints, or ground-to-space special weapons).
     pub space_reach: bool,
+    /// The structure that stands in orbit during a space battle when this one has no weapons of its own (`Place_Other_Type_At_Every_Specific_Marker_Position`,
+    /// `Tactical_Additional_Structure_Type`: Golan platform to its `*_Golan_N_Orbital`, Uplink Command to its control station). `combat` and
+    /// `space_reach` are copied from it; the tactical battle uses its name.
+    pub battle_form: Option<StructureTypeId>,
     /// Structure types this one counts as (its `Variant_Of_Existing_Type` ancestors), itself excluded.
     pub ancestors: Vec<StructureTypeId>,
     /// Absolute income change per week.

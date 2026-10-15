@@ -214,7 +214,11 @@ impl TacticalRequest {
                                 starbase_level = world.starbases[s as usize].level.max(0) as u32;
                                 (GroupKind::Starbase, s, world.starbases[s as usize].name.clone())
                             }
-                            Source::Structure(s) => (GroupKind::Structure, s, world.structures[s as usize].name.clone()),
+                            Source::Structure(s) => {
+                                // The battle spawns the armed form of a structure that has no weapons itself (Golan platform, Uplink Command).
+                                let st = &world.structures[s as usize];
+                                (GroupKind::Structure, s, st.battle_form.map_or(st.name.clone(), |f| world.structures[f as usize].name.clone()))
+                            }
                             Source::Garrison(_) => return None,
                         };
                         let unit_health = match (kind, m.fleet) {
