@@ -121,6 +121,8 @@ pub enum SlotPart {
     Level,
     /// Coloured strip above a production queue slot: blue for the space lane, orange for the ground lane.
     LaneMark,
+    /// Small hero badge on the round portrait of a hero in a fleet box.
+    HeroBadge,
 }
 
 /// Text label of a button (`b_retreat` countdown, `b_reinforcement` points); holds the button name.
@@ -180,6 +182,12 @@ fn field_for(name: &str) -> Option<Field> {
         "text_allegiance_a" | "text_allegiance_tactical" => Field::Allegiance,
         _ => return None,
     })
+}
+
+/// Unit and hero slots of the planet-view fleet boxes (`q<box>_<row><col>`, not the pathfinder plate `q<box>_0000`): drawn without the tile frame.
+pub(crate) fn is_fleet_box_unit(lname: &str) -> bool {
+    let b = lname.as_bytes();
+    b.len() == 7 && b[0] == b'q' && b[1].is_ascii_digit() && b[2] == b'_' && b[3..].iter().all(u8::is_ascii_digit) && &lname[3..] != "0000"
 }
 
 /// Builds `<prefix>NN` slot descriptors from component names.
@@ -882,7 +890,7 @@ impl Builder<'_> {
                 icon_px = sz.min_element() * 0.88;
             }
             // Tactical selection cards are flat in the Remake (unit icon over its bars): no pad frame.
-            if !slot.is_some_and(|s| s.kind == SlotKind::Select) {
+            if !slot.is_some_and(|s| s.kind == SlotKind::Select) && !is_fleet_box_unit(&lname) {
                 self.layer(button, size, &t, sz, Vec2::ZERO, tint);
             }
         }
@@ -956,6 +964,16 @@ impl Builder<'_> {
                 ))
                 .id();
             let _ = icon;
+            if s.kind == SlotKind::Panel && is_fleet_box_unit(&lname) && let Some(t) = self.tex("i_icon_hero_you.tga") {
+                let badge = icon_px * 0.45;
+                self.world.spawn((
+                    SlotPart::HeroBadge,
+                    ImageNode::new(t.handle.clone()),
+                    Node { position_type: PositionType::Absolute, left: Val::Px(size.x * 0.5 - icon_px * 0.6), top: Val::Px(size.y * 0.5 + icon_px * 0.1), width: Val::Px(badge), height: Val::Px(badge), display: Display::None, ..default() },
+                    FocusPolicy::Pass,
+                    ChildOf(button),
+                ));
+            }
             if s.kind == SlotKind::Queue {
                 self.world.spawn((
                     SlotPart::LaneMark,
@@ -1372,12 +1390,23 @@ pub(crate) fn slots(
         st.disabled = disabled;
         st.selected = selected;
         let lane = if slot.kind == SlotKind::Queue { data.queue.get(slot.index).map_or(0, |q| q.lane) } else { 0 };
+        let look = if slot.kind == SlotKind::Panel { pname.and_then(|n| panel.slots.get(&n.0)).map_or_else(Default::default, |s| s.look) } else { crate::panels::SlotLook::Tile };
+        let (slot_w, slot_h) = (node.width, node.height);
         for k in children.iter_descendants(e) {
             let Ok((part, mut n, img, text, bg)) = parts.get_mut(k) else {
                 continue;
             };
             match part {
                 SlotPart::Icon => {
+                    if look != crate::panels::SlotLook::Tile && let (Val::Px(w), Val::Px(h)) = (slot_w, slot_h) {
+                        // Fleet boxes: bare units and round hero portraits, larger than the tile icon.
+                        let s = w.max(h) * 1.25;
+                        n.width = Val::Px(s);
+                        n.height = Val::Px(s);
+                        n.left = Val::Px(w * 0.5 - s * 0.5);
+                        n.top = Val::Px(h * 0.5 - s * 0.5);
+                        n.border_radius = if look == crate::panels::SlotLook::Hero { BorderRadius::MAX } else { BorderRadius::ZERO };
+                    }
                     if let Some(mut img) = img {
                         match tex.get(&mut images, &icon) {
                             Some(t) => {
@@ -1402,6 +1431,9 @@ pub(crate) fn slots(
                     if let Some(mut bg) = bg {
                         bg.0 = if lane == 1 { Color::srgba(1.0, 0.55, 0.1, 0.45) } else { Color::srgba(0.1, 0.5, 0.9, 0.45) };
                     }
+                }
+                SlotPart::HeroBadge => {
+                    n.display = if look == crate::panels::SlotLook::Hero { Display::Flex } else { Display::None };
                 }
                 SlotPart::LaneMark => {
                     if let Some(mut bg) = bg {
@@ -1899,6 +1931,13 @@ mod tests {
         let p2 = clamp_to_screen(Vec2::new(1900.0, 1000.0), Vec2::new(1800.0, 950.0), size, screen);
         assert!(p2.x + size.x <= screen.x);
         assert!(p2.y >= 4.0 && p2.y + size.y <= screen.y);
+    }
+
+    #[test]
+    fn fleet_box_unit_slots_exclude_the_pathfinder_plate() {
+        assert!(is_fleet_box_unit("q1_0001") && is_fleet_box_unit("q3_0406"));
+        assert!(!is_fleet_box_unit("q1_0000"));
+        assert!(!is_fleet_box_unit("queue00") && !is_fleet_box_unit("b_create_01"));
     }
 
     #[test]

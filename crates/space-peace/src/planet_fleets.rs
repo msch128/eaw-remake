@@ -204,12 +204,21 @@ impl Organizer {
             names.insert(slot_name(b, 0), content.hyper.map_or_else(|| "!hyperspace".to_owned(), |u| world.units[u as usize].name.clone()));
             for (i, &(u, c)) in content.stacks.iter().enumerate() {
                 let name = slot_name(b, i + 1);
-                slots.push((name.clone(), PanelSlot { icon: icon(u), label: if c > 1 { format!("x{c}") } else { String::new() }, ..default() }));
+                let look = if is_hero(world, game, u) { eaw_ui::SlotLook::Hero } else { eaw_ui::SlotLook::Bare };
+                slots.push((name.clone(), PanelSlot { icon: icon(u), label: if c > 1 { format!("x{c}") } else { String::new() }, look, ..default() }));
                 names.insert(name, world.units[u as usize].name.clone());
             }
         }
         (slots, names)
     }
+}
+
+/// A named hero (or a unit that shows a hero head): the Remake draws these as round portraits in the fleet boxes.
+fn is_hero(world: &galaxy_sim::World, game: Option<&alamo_data::GameData>, u: UnitTypeId) -> bool {
+    let yes = |v: &str| matches!(v.trim().to_ascii_lowercase().as_str(), "true" | "yes" | "1");
+    game.and_then(|g| g.objects.resolve(&world.units[u as usize].name)).is_some_and(|r| {
+        r.get("is_named_hero").is_some_and(yes) || r.get("show_hero_head").is_some_and(yes)
+    })
 }
 
 /// The line about other forces, filled by `planet_view_ui`.

@@ -22,6 +22,17 @@ use crate::faction::UiFaction;
 use crate::textures::UiTextures;
 use crate::widgets::EawButton;
 use crate::{EawUiAssets, EawUiSettings};
+/// How a [`PanelSlot`] draws its icon.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum SlotLook {
+    /// The component's own frame and icon size.
+    #[default]
+    Tile,
+    /// Bare, larger icon without the tile frame (units in the fleet boxes).
+    Bare,
+    /// Round portrait with the small hero badge.
+    Hero,
+}
 
 /// Content of one panel slot.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -36,6 +47,8 @@ pub struct PanelSlot {
     pub disabled: bool,
     /// Highlighted (selected).
     pub selected: bool,
+    /// How the icon is drawn (fleet boxes of the planet view draw units bare and heroes as round portraits).
+    pub look: SlotLook,
 }
 
 /// Content of all shell panels, keyed by lower-cased component name (resource).
