@@ -17,6 +17,34 @@ use crate::defs::*;
 use crate::math::{Vec3, segment_point_distance, wrap_angle};
 use crate::rng::Rng;
 
+/// Hardpoints a snapshot tracks per ship. The biggest ships have 213 (Subjugator), 185 (Super Star Destroyers) and 158 (Executor);
+/// hardpoints beyond this count are never aimed at.
+const HP_MASK_BITS: usize = 256;
+
+/// Which hardpoints of a ship are alive: bit `i` of a 256-bit set.
+#[derive(Clone, Copy, Default)]
+struct HpMask([u64; HP_MASK_BITS / 64]);
+
+impl HpMask {
+    fn from_alive(alive: impl Iterator<Item = bool>) -> Self {
+        let mut m = Self::default();
+        for (i, a) in alive.take(HP_MASK_BITS).enumerate() {
+            m.0[i / 64] |= u64::from(a) << (i % 64);
+        }
+        m
+    }
+
+    /// Is hardpoint `i` alive? Hardpoints past the mask count as dead.
+    fn test(&self, i: usize) -> bool {
+        i < HP_MASK_BITS && self.0[i / 64] >> (i % 64) & 1 == 1
+    }
+
+    /// Is any hardpoint alive?
+    fn any(&self) -> bool {
+        self.0.iter().any(|w| *w != 0)
+    }
+}
+
 /// Immutable per-step view of a ship used by the parallel stages.
 #[derive(Clone, Copy)]
 struct Snap {
@@ -31,8 +59,8 @@ struct Snap {
     def: ShipId,
     alive: bool,
     golan: bool,
-    /// Bit i set = hardpoint i (of the first 64) is alive.
-    hp_alive: u64,
+    /// Bit i set = hardpoint i (of the first [`HP_MASK_BITS`]) is alive.
+    hp_alive: HpMask,
     /// Hull and shield left as a share of the maximum (0..1).
     health: f32,
     /// Bit s set = side s sees this ship (fog of war).
@@ -1006,7 +1034,7 @@ impl Battle {
                     def: s.def,
                     alive: s.alive && !s.retreated,
                     golan: d.golan,
-                    hp_alive: s.hps.iter().take(64).enumerate().fold(0u64, |m, (i, h)| m | (u64::from(h.alive) << i)),
+                    hp_alive: HpMask::from_alive(s.hps.iter().map(|h| h.alive)),
                     carrier: s.carrier,
                     jammed: d.abilities.iter().zip(&s.abilities).any(|(a, st)| a.jam && st.active > 0.0),
                     health: ((s.hull.max(0.0) + s.shield.max(0.0)) / (d.hull.max(1.0) + d.shield)).clamp(0.0, 1.0),
@@ -2157,8 +2185,8 @@ fn scan(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig) {
     if def.class == TargetClass::Bomber && s.target != NONE && explicit.is_none() {
         let tid = s.target as usize;
         let t = snaps[tid];
-        if (t.class as u8 >= TargetClass::Frigate as u8 || cat.ship(t.def).is_static) && t.hp_alive != 0 {
-            if s.target_hp == NO_HP || (t.hp_alive & (1u64 << s.target_hp)) == 0 {
+        if (t.class as u8 >= TargetClass::Frigate as u8 || cat.ship(t.def).is_static) && t.hp_alive.any() {
+            if s.target_hp == NO_HP || !t.hp_alive.test(s.target_hp as usize) {
                 let tdef = cat.ship(t.def);
                 let hp_pri = |k: HpKind| match k {
                     HpKind::ShieldGenerator => 0,
@@ -2168,7 +2196,7 @@ fn scan(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig) {
                     _ => 4,
                 };
                 let best_hp = tdef.hardpoints.iter().enumerate()
-                    .filter(|(idx, _)| t.hp_alive & (1u64 << idx) != 0)
+                    .filter(|(idx, _)| t.hp_alive.test(*idx))
                     .min_by_key(|(_, h)| (hp_pri(h.kind), (h.offset.len() * 10.0) as u32));
                 if let Some((idx, _)) = best_hp {
                     s.target_hp = idx as u16;
@@ -2259,7 +2287,7 @@ fn mov(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, spawn: &
         let l = leaders[s.squad as usize];
         if l != NONE && l != s.id && snaps[l as usize].alive {
             let l_hp = snaps[l as usize].target_hp;
-            if l_hp != NO_HP && (s.target_hp == NO_HP || target.is_some_and(|t| (t.hp_alive & (1u64 << s.target_hp)) == 0)) {
+            if l_hp != NO_HP && (s.target_hp == NO_HP || target.is_some_and(|t| !t.hp_alive.test(s.target_hp as usize))) {
                 s.target_hp = l_hp;
             }
         }
@@ -2287,7 +2315,7 @@ fn mov(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, spawn: &
         Order::Attack(_) | Order::AttackMove(_) if target.is_some() && (aggressive || matches!(s.order, Order::Attack(_))) => {
             let t = target.expect("checked");
             let tdef = cat.ship(t.def);
-            let hp_aim = if s.target_hp != NO_HP && t.hp_alive & (1u64 << s.target_hp) != 0 {
+            let hp_aim = if s.target_hp != NO_HP && t.hp_alive.test(s.target_hp as usize) {
                 tdef.hardpoints.get(s.target_hp as usize).map(|h| t.pos + h.offset.rotate_yaw(t.yaw))
             } else {
                 None
@@ -2727,8 +2755,8 @@ fn auto_hardpoint(set: &PrioritySet, tdef: &ShipDef, target: &Snap, muzzle: Vec3
     }
     for kind in &set.hardpoints {
         let mut best: Option<(f32, usize)> = None;
-        for (i, h) in tdef.hardpoints.iter().enumerate().take(64) {
-            if h.kind != *kind || !h.targetable || !h.destroyable || target.hp_alive & (1u64 << i) == 0 {
+        for (i, h) in tdef.hardpoints.iter().enumerate().take(HP_MASK_BITS) {
+            if h.kind != *kind || !h.targetable || !h.destroyable || !target.hp_alive.test(i) {
                 continue;
             }
             let d = (target.pos + h.offset.rotate_yaw(target.yaw)).dist(muzzle);
@@ -2811,7 +2839,7 @@ fn weapons(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, rng:
             } else {
                 let t = &snaps[tgt as usize];
                 let tdef = cat.ship(t.def);
-                let targeted_hp = if s.target_hp != NO_HP && tgt == s.target && snaps[tgt as usize].hp_alive & (1u64 << s.target_hp) != 0 {
+                let targeted_hp = if s.target_hp != NO_HP && tgt == s.target && snaps[tgt as usize].hp_alive.test(s.target_hp as usize) {
                     s.target_hp
                 } else if let Some(set) = hp_set {
                     auto_hardpoint(set, tdef, t, muzzle)
@@ -2882,7 +2910,7 @@ fn weapons(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, rng:
         let mut chosen = NONE;
         for &c in &s.candidates {
             let t = &snaps[c as usize];
-            let can_shoot = if s.target_hp != NO_HP && c == s.target && t.hp_alive & (1u64 << s.target_hp) != 0 {
+            let can_shoot = if s.target_hp != NO_HP && c == s.target && t.hp_alive.test(s.target_hp as usize) {
                 let tdef = cat.ship(t.def);
                 let p = tdef.hardpoints.get(s.target_hp as usize).map(|h| t.pos + h.offset.rotate_yaw(t.yaw));
                 can_fire(hp, s.yaw, s.bonus.range, muzzle, t, pd, p) || can_fire(hp, s.yaw, s.bonus.range, muzzle, t, pd, None)

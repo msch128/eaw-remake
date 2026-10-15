@@ -531,6 +531,36 @@ fn bomber_targets_shield_generator_and_performs_evasive_vertical_climb() {
     assert!(saw_vertical_evasion, "bomber climbed/dived during egress phase");
 }
 
+/// Super ships have far more than 64 hardpoints (Subjugator 213, Executor 158): bombers must find the shield generator at index 120
+/// instead of panicking or confusing it with hardpoint 56.
+#[test]
+fn bomber_aims_at_a_hardpoint_beyond_the_sixty_fourth() {
+    let mut bomber = mobile("bomber", TargetClass::Bomber, 400.0, 100.0, vec![]);
+    bomber.radius = 10.0;
+    let mut target = ship("supercapital", 1.0e7, 0.0, vec![]);
+    target.class = TargetClass::Super;
+    target.hardpoints = (0..150)
+        .map(|i| {
+            let kind = if i == 120 { HpKind::ShieldGenerator } else { HpKind::Weapon };
+            HpDef { name: format!("hp{i}"), kind, health: 500.0, destroyable: true, targetable: true, offset: Vec3::new(100.0 - i as f32, 50.0, 0.0), ..HpDef::default() }
+        })
+        .collect();
+    let cat = Arc::new(Catalog::from_defs(vec![bomber, target], vec![laser()]));
+    let mut b = Battle::new(BattleSetup {
+        catalog: cat.clone(),
+        sides: vec![one_side(&cat, "bomber", 1, true), one_side(&cat, "supercapital", 1, true)],
+        config: BattleConfig { half_size: 12000.0, record_events: false, ..BattleConfig::default() },
+    });
+    b.ships[0].pos = Vec3::new(1000.0, 0.0, 0.0);
+    let mut aimed = Vec::new();
+    for _ in 0..30 * 20 {
+        b.step();
+        aimed.push(b.ships[0].target_hp);
+    }
+    assert!(aimed.contains(&120), "the bomber aims at the shield generator, hardpoint 120");
+    assert!(!aimed.contains(&56), "hardpoint 120 is not mistaken for hardpoint 56");
+}
+
 fn duel_loss(attacker: ShipDef, target: ShipDef, seconds: u32) -> (f32, f32) {
     let (a, t) = (attacker.name.clone(), target.name.clone());
     let cat = Catalog::from_defs(vec![attacker, target], vec![laser()]);
