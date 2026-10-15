@@ -1209,13 +1209,26 @@ fn group_digits(v: i64) -> String {
     if v < 0 { format!("-{out}") } else { out }
 }
 
-/// Moves the ability buttons above the section of the focused unit.
-pub(crate) fn ability_columns(data: Res<CommandBarData>, mut buttons: Query<(&AbilityHome, &mut Node)>) {
+/// Centres the ability buttons over their own unit card. The layout puts `special_button_{2n}` at the centre of card `n` and
+/// `special_button_{2n+1}` one slot further right, on the gap to the next card; a card with two abilities therefore moves both
+/// buttons left by half a slot so the pair sits centred above the card (one ability stays on the card's centre).
+pub(crate) fn ability_columns(data: Res<CommandBarData>, mut buttons: Query<(&Slot, &AbilityHome, &mut Node)>) {
     if !data.is_changed() {
         return;
     }
-    for (home, mut node) in &mut buttons {
-        node.left = Val::Px(home.0);
+    let homes: std::collections::HashMap<usize, f32> =
+        buttons.iter().filter(|(s, ..)| s.kind == SlotKind::Ability).map(|(s, h, _)| (s.index, h.0)).collect();
+    for (slot, home, mut node) in &mut buttons {
+        if slot.kind != SlotKind::Ability {
+            continue;
+        }
+        let col = slot.index / 2;
+        let two = data.abilities.get(col * 2 + 1).is_some_and(|a| !a.icon.is_empty());
+        let half_pitch = match (homes.get(&(col * 2)), homes.get(&(col * 2 + 1))) {
+            (Some(a), Some(b)) if two => (b - a) * 0.5,
+            _ => 0.0,
+        };
+        node.left = Val::Px(home.0 - half_pitch);
     }
 }
 
