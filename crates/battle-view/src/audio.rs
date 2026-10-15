@@ -578,6 +578,21 @@ pub fn attack_hardpoint_line<'a>(
     }
 }
 
+/// The `Factions.xml` countdown announcements (`SpeechEvent_Super_Weapon_[Enemy_]Moving_Into_Range`, `..._Moving_Range_60/30/15/05_Seconds`,
+/// `..._Moved_Into_Range`) a Death Star approach countdown going from `prev` (`None` = first sight) to `now` seconds triggers.
+fn countdown_calls(prev: Option<f32>, now: f32) -> Vec<&'static str> {
+    let Some(p) = prev else { return vec!["moving_into_range"] };
+    let mut out: Vec<&'static str> = [(60.0, "moving_range_60_seconds"), (30.0, "moving_range_30_seconds"), (15.0, "moving_range_15_seconds"), (5.0, "moving_range_05_seconds")]
+        .into_iter()
+        .filter(|&(t, _)| p > t && now <= t)
+        .map(|(_, tag)| tag)
+        .collect();
+    if p > 0.0 && now <= 0.0 {
+        out.push("moved_into_range");
+    }
+    out
+}
+
 /// Starts the space music scene for the player's faction. Battle music plays while shots are being
 /// exchanged and ends after `Music_Space_Battle_To_Ambient_Peace_Seconds` (Audio.xml) without any.
 pub fn battle_music(
@@ -586,6 +601,9 @@ pub fn battle_music(
     rt: Res<BattleRuntime>,
     stats: Res<BattleAudioStats>,
     director: Option<ResMut<MusicDirector>>,
+    audio: Option<Res<AlamoAudio>>,
+    mut sfx: MessageWriter<PlaySfx>,
+    mut countdown: Local<HashMap<ShipId, f32>>,
 ) {
     let Some(mut director) = director else { return };
     if !settings.audio {
@@ -602,6 +620,26 @@ pub fn battle_music(
     // A Death Star (any ship with a super laser) in the fight switches to the faction's `Music_Event_Space_Battle_Super_Weapon` theme.
     let super_weapon = rt.cur.as_ref().is_some_and(|c| c.ships.iter().any(|s| rt.catalog.ship(s.def).abilities.iter().any(|a| a.super_laser.is_some())));
     director.set_super_weapon(super_weapon);
+    if let (Some(cur), Some(audio)) = (rt.cur.as_ref(), audio.as_ref()) {
+        for s in &cur.ships {
+            let defs = &rt.catalog.ship(s.def).abilities;
+            let Some(first) = defs.iter().position(|a| a.super_laser.as_ref().is_some_and(|l| l.initial_cooldown > 0.0)) else { continue };
+            let remaining = s.abilities.get(first).map_or(0.0, |&(active, cooldown)| active.max(cooldown));
+            let prev = countdown.get(&s.id).copied();
+            // Only the approach countdown is announced, not the later recharges.
+            if prev == Some(0.0) {
+                continue;
+            }
+            for call in countdown_calls(prev, remaining) {
+                // Own Death Star: the faction's own lines; an enemy one: the player's `..._Enemy_...` warnings.
+                let tag = format!("speechevent_super_weapon_{}{call}", if s.side == settings.player_side { "" } else { "enemy_" });
+                if let Some(n) = rt.player_faction.as_deref().and_then(|f| audio.constants.faction_sfx(f, &tag)) {
+                    sfx.write(PlaySfx { event: n.to_string(), position: None, source: None });
+                }
+            }
+            countdown.insert(s.id, remaining);
+        }
+    }
     let fighting = stats.last_combat.is_some_and(|t| rt.clock - t <= COMBAT_WINDOW);
     director.set_battle_intensity(if fighting { 1.0 } else { 0.0 });
 }
@@ -844,5 +882,20 @@ fn voice_faction(name: &str) -> Option<&'static str> {
         "rebel" | "republic" => Some("Rebel"),
         "underworld" | "cis" => Some("Underworld"),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod countdown_tests {
+    use super::*;
+
+    #[test]
+    fn countdown_announcements() {
+        assert_eq!(countdown_calls(None, 600.0), ["moving_into_range"]);
+        assert!(countdown_calls(Some(600.0), 599.0).is_empty());
+        assert_eq!(countdown_calls(Some(61.0), 59.9), ["moving_range_60_seconds"]);
+        assert_eq!(countdown_calls(Some(5.5), 4.0), ["moving_range_05_seconds"]);
+        assert_eq!(countdown_calls(Some(0.02), 0.0), ["moved_into_range"]);
+        assert!(countdown_calls(Some(0.0), 0.0).is_empty());
     }
 }

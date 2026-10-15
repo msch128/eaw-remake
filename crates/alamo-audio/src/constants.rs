@@ -139,7 +139,7 @@ impl AudioConstants {
     /// The per-faction SFX tags of `Factions.xml` that carry battle announcements (`Space_Retreat_Enemy_Begin_SFXEvent` ...), as
     /// `(faction lower-case, tag lower-case, event)`.
     pub fn parse_faction_sfx(bytes: &[u8]) -> Vec<(String, String, String)> {
-        const TAGS: [&str; 10] = [
+        const TAGS: [&str; 22] = [
             "space_retreat_begin_sfxevent",
             "space_retreat_cancel_sfxevent",
             "space_retreat_enemy_begin_sfxevent",
@@ -150,6 +150,19 @@ impl AudioConstants {
             "reinforcements_requesting_sfxevent",
             "reinforcements_enroute_sfxevent",
             "reinforcements_cancelled_sfxevent",
+            // The Death Star approach countdown (own and enemy), see `battle-view` `death_star_speech`.
+            "speechevent_super_weapon_moving_into_range",
+            "speechevent_super_weapon_moving_range_60_seconds",
+            "speechevent_super_weapon_moving_range_30_seconds",
+            "speechevent_super_weapon_moving_range_15_seconds",
+            "speechevent_super_weapon_moving_range_05_seconds",
+            "speechevent_super_weapon_moved_into_range",
+            "speechevent_super_weapon_enemy_moving_into_range",
+            "speechevent_super_weapon_enemy_moving_range_60_seconds",
+            "speechevent_super_weapon_enemy_moving_range_30_seconds",
+            "speechevent_super_weapon_enemy_moving_range_15_seconds",
+            "speechevent_super_weapon_enemy_moving_range_05_seconds",
+            "speechevent_super_weapon_enemy_moved_into_range",
         ];
         let mut warnings = Vec::new();
         let mut out = Vec::new();
