@@ -344,7 +344,7 @@ fn fix_star_dome(
             {
                 let material = materials.add(StandardMaterial {
                     // The texture holds gamma-space colours; this approximates the game's look.
-                    base_color: Color::linear_rgb(0.3, 0.3, 0.3),
+                    base_color: Color::linear_rgb(0.12, 0.12, 0.12),
                     base_color_texture: Some(tex),
                     unlit: true,
                     cull_mode: Some(bevy::render::render_resource::Face::Back),
