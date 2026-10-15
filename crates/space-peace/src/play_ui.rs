@@ -1332,8 +1332,20 @@ pub(crate) fn fleet_tooltip(
 }
 
 /// Tells `eaw-ui` where the advisor log starts, so the droid-anchored hover cards (also those of the planet view) sit above its text and do not cover it.
-fn advisor_keep_out(ticker: Query<(&ComputedNode, &UiGlobalTransform, Option<&Children>), With<Ticker>>, mut keep_out: ResMut<eaw_ui::TooltipKeepOut>) {
-    let want = ticker.single().ok().filter(|(n, _, kids)| kids.is_some_and(|k| !k.is_empty()) && n.size().y > 4.0).map(|(n, g, _)| (g.translation.y - n.size().y * 0.5) * n.inverse_scale_factor());
+/// The hover card sits above the advisor log and above the route / arrival line of moving fleets (`FleetText`), whichever is higher.
+#[allow(clippy::type_complexity)]
+fn advisor_keep_out(
+    ticker: Query<(&ComputedNode, &UiGlobalTransform, Option<&Children>), With<Ticker>>,
+    route: Query<(&ComputedNode, &UiGlobalTransform, &InheritedVisibility, &Text), With<FleetText>>,
+    mut keep_out: ResMut<eaw_ui::TooltipKeepOut>,
+) {
+    let top = |n: &ComputedNode, g: &UiGlobalTransform| (g.translation.y - n.size().y * 0.5) * n.inverse_scale_factor();
+    let log = ticker.single().ok().filter(|(n, _, kids)| kids.is_some_and(|k| !k.is_empty()) && n.size().y > 4.0).map(|(n, g, _)| top(n, g));
+    let line = route.single().ok().filter(|(n, _, vis, text)| vis.get() && !text.0.is_empty() && n.size().y > 4.0).map(|(n, g, ..)| top(n, g));
+    let want = match (log, line) {
+        (Some(a), Some(b)) => Some(a.min(b)),
+        (a, b) => a.or(b),
+    };
     if keep_out.0 != want {
         keep_out.0 = want;
     }
