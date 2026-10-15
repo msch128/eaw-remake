@@ -78,8 +78,8 @@ pub struct AlamoParams {
     pub atmosphere_power: f32,
     /// Cloud scroll rate in UV units per second.
     pub cloud_scroll_rate: f32,
-    /// Padding (keeps the block size a multiple of 16 bytes, mirrors the shader).
-    pub pad0: f32,
+    /// Planet: local radius of a flat backdrop disc, 0 for real spheres (mirrors the shader).
+    pub disc_radius: f32,
     /// Padding.
     pub pad1: f32,
     /// Padding.
@@ -105,7 +105,7 @@ impl Default for AlamoParams {
             shininess: 32.0,
             atmosphere_power: 4.0,
             cloud_scroll_rate: 0.0,
-            pad0: 0.0,
+            disc_radius: 0.0,
             pad1: 0.0,
             pad2: 0.0,
             hit_params: Vec4::new(40.0, 1.0, 1.0, 0.0),

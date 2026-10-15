@@ -9,6 +9,7 @@
 
 #import bevy_pbr::{
     forward_io::VertexOutput,
+    mesh_functions,
     mesh_view_bindings::{view, lights, globals},
     shadows,
 }
@@ -47,7 +48,8 @@ struct AlamoParams {
     shininess: f32,
     atmosphere_power: f32,
     cloud_scroll_rate: f32,
-    _pad0: f32,
+    // Planet: x = local radius of a flat backdrop disc (0 for real spheres).
+    disc_radius: f32,
     _pad1: f32,
     _pad2: f32,
     hit_params: vec4<f32>,
@@ -93,6 +95,8 @@ const PLANET_SATURATION: f32 = 1.15;
 const PLANET_GAIN: f32 = 0.9;
 const PLANET_CLOUD_GAIN: f32 = 0.7;
 const PLANET_CLOUD_MIX: f32 = 0.6;
+// Strength of the sun on a sphere-lit disc (estimate: the lit side of the Remake Bestine frame is a dark blue, not white).
+const PLANET_DISC_LIGHT: f32 = 0.45;
 
 fn sun_dir() -> vec3<f32> {
     if lights.n_directional_lights > 0u {
@@ -251,6 +255,17 @@ fn shade(in: VertexOutput, front: bool) -> vec4<f32> {
     }
 
     if mat.kind == KIND_PLANET {
+        // A flat backdrop disc (one constant normal, no terminator possible) is lit as the sphere it stands for: the normal tilts away from the
+        // disc axis by the disc-local radius, so the map sun gives a day side, a terminator and a night side. Inferred: the original's Planet.fx
+        // must derive such a normal too, the Remake frames show a lit limb and a dark side on these discs.
+        var Ns = N;
+        if mat.disc_radius > 0.0 {
+            let m = mesh_functions::get_world_from_local(in.instance_index);
+            let r = (in.world_position.xyz - m[3].xyz);
+            let perp = r - N * dot(r, N);
+            let rho = min(length(perp) / (mat.disc_radius * length(m[0].xyz)), 0.999);
+            Ns = normalize(N * sqrt(1.0 - rho * rho) + perp / (mat.disc_radius * length(m[0].xyz)));
+        }
         var n = N;
         var city_mask = 0.0;
         var spec_mask = base.a;
@@ -263,35 +278,41 @@ fn shade(in: VertexOutput, front: bool) -> vec4<f32> {
             tvar = toksvig_variance(nm.rgb);
             city_mask = nm.a;
         }
+        n = normalize(n + (Ns - N));
         // Clouds scroll horizontally over the surface.
         let cuv = in.uv * vec2<f32>(1.0, 1.0) + vec2<f32>(globals.time * mat.cloud_scroll_rate, 0.0);
         let cloud = textureSample(cloud_tex, cloud_samp, cuv);
         let cn = textureSample(cloud_normal_tex, cloud_normal_samp, cuv);
         // Crisp cloud patches over clear land (the faint haze of the raw alpha washed the terrain out).
         let cloud_amount = smoothstep(0.2, 0.95, saturate(cloud.a));
-        let ncloud = perturb(tbn, cn.rgb);
+        let ncloud = normalize(perturb(tbn, cn.rgb) + (Ns - N));
 
         let wrap = 0.0;
         // Planets are lit like the original's `Planet.fx`: a wrapped (half-Lambert) sun term, so a backdrop planet seen from
         // above with a low sun still shows its whole day side as in the game.
-        let ndl = saturate(dot(n, L) * 0.5 + 0.5);
-        let cdl = saturate(dot(ncloud, L) * 0.5 + 0.5);
+        var ndl = saturate(dot(n, L) * 0.5 + 0.5);
+        var cdl = saturate(dot(ncloud, L) * 0.5 + 0.5);
+        if mat.disc_radius > 0.0 {
+            // Sphere-lit disc: a real terminator (a little wrap keeps the dark side from going black).
+            ndl = PLANET_DISC_LIGHT * saturate((dot(n, L) + 0.1) / 1.1);
+            cdl = PLANET_DISC_LIGHT * saturate((dot(ncloud, L) + 0.1) / 1.1);
+        }
         let surf = base.rgb * mat.diffuse.rgb * saturate3(amb + sun * ndl + fill_light(n));
         let H = normalize(L + V);
         let spec = mat.specular.rgb * spec_mask * pow(saturate(dot(n, H)), filtered_shininess(n, max(mat.shininess, 8.0), tvar)) * sun * step(0.0, dot(N, L));
         // The original renders land more saturated than the plain albedo product (video: vivid green on Byss).
         let grey = dot(surf, vec3<f32>(0.299, 0.587, 0.114));
-        var col = mix(vec3<f32>(grey), surf, PLANET_SATURATION) * PLANET_GAIN + spec;
+        var col = mix(vec3<f32>(grey), surf, PLANET_SATURATION) * PLANET_GAIN + spec * select(1.0, 0.25, mat.disc_radius > 0.0);
         // Cloud layer, shaded with its own normal map.
         let cloud_lit = vec3<f32>(1.0) * (amb + sun * cdl);
-        col = mix(col, cloud_lit * PLANET_CLOUD_GAIN, cloud_amount * PLANET_CLOUD_MIX);
+        col = mix(col, cloud_lit * PLANET_CLOUD_GAIN, cloud_amount * PLANET_CLOUD_MIX * select(1.0, 0.5, mat.disc_radius > 0.0));
         // City lights on the night side.
-        let night = smoothstep(0.08, -0.12, dot(N, L));
+        let night = smoothstep(0.08, -0.12, dot(Ns, L));
         col = col + mat.city_color.rgb * city_mask * night * (1.0 - cloud_amount * 0.8);
         // Atmosphere: lit rim.
-        let ndv = saturate(dot(N, V));
+        let ndv = saturate(dot(Ns, V));
         let rim = pow(1.0 - ndv, max(mat.atmosphere_power, 0.5));
-        let day = smoothstep(-0.25, 0.4, dot(N, L));
+        let day = smoothstep(-0.25, 0.4, dot(Ns, L));
         col = col + mat.atmosphere.rgb * rim * day * mat.atmosphere.a;
         col = col + mat.emissive.rgb;
         return vec4<f32>(to_linear(col), 1.0);

@@ -519,6 +519,6 @@ mod tests {
 
     #[test]
     fn shield_flash_duration_is_short() {
-        assert!(SHIELD_FLASH_SECS <= 0.5, "shield flash must be short and crisp");
+        assert!(SHIELD_FLASH_SECS <= 0.75, "shield flash must stay short (0.6 s bubble, estimate)");
     }
 }

@@ -361,6 +361,25 @@ fn f4(m: &Material, name: &str) -> Option<Vec4> {
     m.float4(name).map(Vec4::from)
 }
 
+/// Local radius of a flat disc mesh (all vertices in one plane, one common normal), 0 for anything else. The backdrop planets of the space maps
+/// are such discs (`w_planet_*_low_light.alo`: 156 vertices, normal -Z, z extent 0.003 against a radius of 1600).
+fn flat_disc_radius(sub: &SubMesh) -> f32 {
+    let Some(first) = sub.vertices.first() else { return 0.0 };
+    let n0 = Vec3::from(first.normal);
+    let (mut zmin, mut zmax, mut r) = (f32::MAX, f32::MIN, 0.0f32);
+    for v in &sub.vertices {
+        if Vec3::from(v.normal).dot(n0) < 0.999 {
+            return 0.0;
+        }
+        let p = Vec3::from(v.position);
+        let along = p.dot(n0);
+        zmin = zmin.min(along);
+        zmax = zmax.max(along);
+        r = r.max((p - n0 * along).length());
+    }
+    if r > 0.0 && zmax - zmin < r * 0.01 { r } else { 0.0 }
+}
+
 /// Maps an EaW material (shader name + params) to the closest [`AlamoMaterial`] flavour.
 /// Returns the material and whether it uses team colorization.
 pub fn describe_material(
@@ -646,6 +665,9 @@ fn load_model(p: &mut LoaderParams, key: &str) -> Result<Arc<CachedModel>, Strin
             }
             if p.settings.shadows {
                 material.params.flags |= crate::material::FLAG_SHADOWS;
+            }
+            if material.params.kind == crate::material::ShaderKind::Planet as u32 {
+                material.params.disc_radius = flat_disc_radius(sub);
             }
             if mesh.name.to_ascii_lowercase().starts_with("atmosphere") {
                 // The additive atmosphere ring is brighter in the original than the plain texture product (Remake video: wide pale-blue haze at the limb).
