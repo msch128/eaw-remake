@@ -74,9 +74,12 @@ fn fight(data: &GameData, fs: &GameFs, structure: &str, with_starbase: bool) -> 
 #[test]
 fn special_weapon_structures_fire_in_the_space_battle() {
     let Some((data, fs)) = load() else { return };
-    for (name, with_starbase) in [("Hypervelocity_Gun", true), ("Ground_Ion_Cannon", true), ("Hypervelocity_Gun", false), ("Ground_Ion_Cannon", false)] {
+    for (name, with_starbase) in [("Hypervelocity_Gun", true), ("Seismic_Cannon", true), ("Nuke_Launcher", true), ("Ground_Ion_Cannon", true), ("Hypervelocity_Gun", false), ("Seismic_Cannon", false), ("Nuke_Launcher", false), ("Ground_Ion_Cannon", false)] {
         let (fired, start, last, max_cd) = fight(&data, &fs, name, with_starbase);
         eprintln!("{name} starbase {with_starbase}: fired {fired}, attacker hull {start:.0} -> {last:.0}, max cooldown {max_cd:.1}");
         assert!(fired, "{name} (starbase {with_starbase}) never fired");
+        if name != "Ground_Ion_Cannon" {
+            assert!(max_cd > 70.0, "{name} recharges for 80 s (Projectile_Fire_Recharge_Seconds), saw at most {max_cd}");
+        }
     }
 }
