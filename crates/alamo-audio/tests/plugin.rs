@@ -106,8 +106,9 @@ fn play(app: &mut App, event: &str) {
 }
 
 fn voices(app: &mut App) -> Vec<String> {
+    // A cut voice fades out for a moment before it is despawned: only voices that are not stopping count.
     let mut q = app.world_mut().query::<&SfxVoice>();
-    let n = q.iter(app.world()).count();
+    let n = q.iter(app.world()).filter(|v| !v.is_stopping()).count();
     (0..n).map(|i| format!("voice{i}")).collect()
 }
 
@@ -121,6 +122,9 @@ fn plays_and_limits() {
     play(&mut app, "boom");
     app.update();
     assert_eq!(voices(&mut app).len(), 1);
+    // The cut voice is still there, fading out (no click), and is flagged as stopping.
+    let mut all = app.world_mut().query::<&SfxVoice>();
+    assert_eq!(all.iter(app.world()).count(), 2);
     // Unknown event, probability 0, and missing sample play nothing.
     for e in ["DoesNotExist", "Never", "Missing", "Preset_VO"] {
         play(&mut app, e);
@@ -131,7 +135,7 @@ fn plays_and_limits() {
 
 fn voice_events(app: &mut App) -> Vec<String> {
     let mut q = app.world_mut().query::<&SfxVoice>();
-    let mut v: Vec<String> = q.iter(app.world()).map(|v| v.event().to_string()).collect();
+    let mut v: Vec<String> = q.iter(app.world()).filter(|v| !v.is_stopping()).map(|v| v.event().to_string()).collect();
     v.sort();
     v
 }

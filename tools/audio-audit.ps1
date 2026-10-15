@@ -43,7 +43,7 @@ foreach ($r in $runs) {
     if (-not (Test-Path $ledger)) { Write-Host "${name}: no ledger written" -ForegroundColor Red; $failed++; continue }
     $rows = Import-Csv $ledger -Delimiter "`t"
     $played = $rows | Where-Object { $_.outcome -eq 'Played' } | Group-Object { "$($_.kind) $($_.event)" }
-    $problems = $rows | Where-Object { $_.outcome -ne 'Played' } | Group-Object { "$($_.outcome) $($_.kind) $($_.event) $($_.sample)" }
+    $problems = $rows | Where-Object { $_.outcome -notin 'Played','Dropped' } | Group-Object { "$($_.outcome) $($_.kind) $($_.event) $($_.sample)" }
     $bad = @($problems | Where-Object { $_.Group[0].outcome -eq 'UnknownEvent' -or -not $known.ContainsKey($_.Group[0].event.ToLowerInvariant()) })
     $missing = @($r[2] | Where-Object { $rx = $_; -not ($played | Where-Object { $_.Name -match $rx }) })
     Write-Host ("{0}: {1} requests, {2} distinct sounds played, {3} problem kinds ({4} unexpected), {5} expected categories missing" -f $name, $rows.Count, $played.Count, @($problems).Count, $bad.Count, $missing.Count)

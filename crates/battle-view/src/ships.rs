@@ -271,6 +271,13 @@ pub fn update_ships(
     let catalog = rt.catalog.clone();
     let mut present: HashSet<u32> = HashSet::with_capacity(cur.ships.len());
     flash_spots.clear();
+    // Fighters launched from a carrier or station leave a bay: no hyperspace arrival sound for them.
+    let launched: HashSet<u32> = rt
+        .fresh_events
+        .iter()
+        .filter_map(|e| if let battle_sim::Event::SquadronLaunched { ships, .. } = e { Some(ships.iter().copied()) } else { None })
+        .flatten()
+        .collect();
     rendered.0.clear();
     // Debug aid (`SP_DEBUG_KILL_HP=<battle time>`): from then on, the first capital ship of side 0 shows five destroyed hardpoints.
     let debug_kill = std::env::var("SP_DEBUG_KILL_HP").ok().and_then(|v| v.parse::<f32>().ok()).filter(|t| cur.time >= *t);
@@ -336,7 +343,7 @@ pub fn update_ships(
                 if cur.time > 2.0 || lead > 0.0 {
                     commands.entity(e).insert(HyperspaceArrival { start: cur.time + lead });
                     // `SFXEvent_Arrive_From_Hyperspace` of the factions (the same event for all three).
-                    if flash_spots.len() < 3 {
+                    if flash_spots.len() < 3 && !launched.contains(&s.id) {
                         sfx.write(alamo_audio::PlaySfx { event: "Unit_Ship_Hyperspace_Enter".into(), position: Some(pos), source: None });
                     }
                     let fighter = matches!(def.class, TargetClass::Fighter | TargetClass::Bomber);

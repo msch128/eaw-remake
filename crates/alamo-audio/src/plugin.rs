@@ -119,6 +119,10 @@ pub struct AudioSettings {
     /// `Audio_Space_3D_Rolloff_Distance_Mod` (Audio.xml): exponent of the distance falloff (estimate: the data says only
     /// "higher = quicker rolloff"; 1 is the plain `saturation / distance`).
     pub rolloff: f32,
+    /// What `Max_Instances` does when the limit is reached by an ordinary sound: false = the oldest instance fades out (the default; the data
+    /// does not say which one the engine does), true = the new request is dropped and the playing ones finish. `SP_AUDIO_MAXINST=drop` switches it
+    /// for an A/B listen.
+    pub max_instances_drop_new: bool,
 }
 
 impl Default for AudioSettings {
@@ -132,6 +136,7 @@ impl Default for AudioSettings {
             default_music_fade: 2.0,
             saturation_scale: 1.0,
             rolloff: 1.0,
+            max_instances_drop_new: std::env::var("SP_AUDIO_MAXINST").is_ok_and(|v| v.eq_ignore_ascii_case("drop")),
         }
     }
 }
@@ -655,7 +660,7 @@ fn process_sfx_requests(
     settings: Res<AudioSettings>,
     buses: Res<AudioBuses>,
     time: Res<Time>,
-    voices: Query<(Entity, &SfxVoice)>,
+    mut voices: Query<(Entity, &mut SfxVoice)>,
     listeners: Query<&GlobalTransform, With<SpatialListener>>,
 ) {
     let now = time.elapsed_secs_f64();
@@ -719,11 +724,25 @@ fn process_sfx_requests(
         if ev.is_preset {
             continue;
         }
+        // A request the data rules drop is written down with the rule (it is not a problem, but a QA run wants to see it).
+        macro_rules! dropped {
+            ($why:expr) => {{
+                ledger.record(LedgerEntry {
+                    t: now,
+                    kind: LedgerKind::Sfx,
+                    event: req.event.clone(),
+                    sample: $why.to_string(),
+                    path: None,
+                    outcome: LedgerOutcome::Dropped,
+                });
+                continue;
+            }};
+        }
         let first_try = cont.is_none();
         // Probability and predelay apply to fresh requests only.
         if first_try {
             if ev.probability < 100.0 && rng.random_range(0.0..100.0) >= ev.probability {
-                continue;
+                dropped!("probability");
             }
             if ev.predelay_ms.1 > 0.0 {
                 let delay = rng.random_range(ev.predelay_ms.0..=ev.predelay_ms.1) / 1000.0;
@@ -746,14 +765,14 @@ fn process_sfx_requests(
                 .last_unit_response
                 .is_some_and(|t| now - t < f64::from(settings.speech_global_cooldown))
             {
-                continue;
+                dropped!("unit response cooldown");
             }
             if state
                 .last_played
                 .get(&key)
                 .is_some_and(|t| now - t < f64::from(settings.speech_event_cooldown))
             {
-                continue;
+                dropped!("event cooldown");
             }
         }
         // Overlap groups. A unit response is the exception: EaW plays the move line of an order right after the
@@ -762,17 +781,31 @@ fn process_sfx_requests(
             && let Some(g) = &ev.overlap_group
             && live.iter().any(|v| v.2.as_deref() == Some(g.as_str()))
         {
-            continue;
+            dropped!(format!("overlap group {g}"));
+        }
+        // Decide audibility first: an inaudible request must not cut an audible voice (max instances, voice limit).
+        {
+            let sat = ev.saturation_distance.map(|s| s * settings.saturation_scale);
+            let att = match (!ev.is_2d && req.position.is_some() && listener.is_some(), req.position, listener, sat) {
+                (true, Some(p), Some(l), Some(s)) => distance_attenuation(p.distance(l), s, settings.rolloff),
+                _ => 1.0,
+            };
+            if ev.volume.1 / 100.0 * att * buses.gain(bus_of(&ev)) < settings.min_audible_gain && !ev.looping && !ledger_enabled() {
+                continue;
+            }
         }
         // Max instances.
         if let Some(max) = ev.max_instances {
             let same: Vec<_> = live.iter().filter(|v| v.1 == key).collect();
             if same.len() as u32 >= max {
                 if voice_over {
-                    continue;
+                    dropped!(format!("max instances {max} (voice over)"));
+                }
+                if settings.max_instances_drop_new {
+                    dropped!(format!("max instances {max}"));
                 }
                 if let Some(oldest) = same.iter().min_by(|a, b| a.4.total_cmp(&b.4)).map(|v| v.0) {
-                    commands.entity(oldest).despawn();
+                    cut_voice(&mut commands, &mut voices, oldest, now);
                     live.retain(|v| v.0 != oldest);
                 }
             }
@@ -784,7 +817,7 @@ fn process_sfx_requests(
                 if audio_log() {
                     info!("audio sfx CUT {old} for {}", req.event);
                 }
-                commands.entity(e).despawn();
+                cut_voice(&mut commands, &mut voices, e, now);
                 live.retain(|x| x.0 != e);
             }
         }
@@ -797,7 +830,7 @@ fn process_sfx_requests(
                 .map(|v| v.0);
             match victim {
                 Some(v) => {
-                    commands.entity(v).despawn();
+                    cut_voice(&mut commands, &mut voices, v, now);
                     live.retain(|x| x.0 != v);
                 }
                 None => continue,
@@ -829,7 +862,7 @@ fn process_sfx_requests(
                 .map(|v| v.0)
                 .collect::<Vec<_>>()
             {
-                commands.entity(v).despawn();
+                cut_voice(&mut commands, &mut voices, v, now);
                 live.retain(|x| x.0 != v);
             }
         }
@@ -990,6 +1023,23 @@ fn process_sfx_requests(
             voice_over,
             ev.is_unit_response_vo,
         ));
+    }
+}
+
+/// Seconds a voice takes to fade out when another sound cuts it (Max_Instances, voice limit, unit-response replacement): an abrupt
+/// despawn of a playing sample clicks, and at battle fire rates it happens many times a second.
+const CUT_FADE_SECONDS: f32 = 0.06;
+
+/// Cuts a playing voice with a short fade; a voice that was spawned this frame (not yet in the query) is despawned at once.
+fn cut_voice(commands: &mut Commands, voices: &mut Query<(Entity, &mut SfxVoice)>, e: Entity, now: f64) {
+    match voices.get_mut(e) {
+        Ok((_, mut v)) => {
+            if v.stopping.is_none() {
+                v.stopping = Some(now);
+                v.fade_out = CUT_FADE_SECONDS;
+            }
+        }
+        Err(_) => commands.entity(e).despawn(),
     }
 }
 

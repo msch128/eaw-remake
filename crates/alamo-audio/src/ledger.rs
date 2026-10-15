@@ -34,12 +34,14 @@ pub enum LedgerOutcome {
     MissingFile,
     /// The file exists but could not be decoded.
     BadFile,
+    /// A rule of the data dropped the request (probability, overlap group, max instances of a voice-over, cooldown); the reason is in `sample`.
+    Dropped,
 }
 
 impl LedgerOutcome {
     /// True for outcomes that mean the data promised a sound that did not play.
     pub fn is_problem(self) -> bool {
-        self != Self::Played
+        !matches!(self, Self::Played | Self::Dropped)
     }
 }
 
@@ -149,6 +151,8 @@ impl SoundLedger {
             let p = self.played(kind);
             let _ = writeln!(s, "{kind:?}: {} distinct events played, {} plays", p.len(), p.values().sum::<usize>());
         }
+        let dropped = self.entries.iter().filter(|e| e.outcome == LedgerOutcome::Dropped).count();
+        let _ = writeln!(s, "dropped by data rules (probability, overlap group, voice-over instance limit): {dropped}");
         let problems = self.problems();
         let _ = writeln!(s, "problems: {}", problems.len());
         for (e, n) in problems {
