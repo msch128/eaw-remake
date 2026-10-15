@@ -339,6 +339,36 @@ pub fn impact_effects(
     }
 }
 
+/// Spawns a fading additive beam (outer glow plus white core) between two world points, as the special weapons and the Death Star do.
+pub fn spawn_beam(
+    commands: &mut Commands,
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<StandardMaterial>,
+    from: Vec3,
+    to: Vec3,
+    outer: Color,
+    radius: f32,
+    seconds: f32,
+) {
+    let dir = to - from;
+    let length = dir.length();
+    if length < 1.0 {
+        return;
+    }
+    let rot = Transform::IDENTITY.looking_to(dir / length, Vec3::Y).rotation * Quat::from_rotation_x(std::f32::consts::FRAC_PI_2);
+    let mid = (from + to) * 0.5;
+    for (name, r, color) in [("beam_outer", radius, outer), ("beam_core", radius * 0.33, Color::srgba(1.0, 1.0, 1.0, 0.95))] {
+        commands.spawn((
+            Name::new(name),
+            BattleEntity,
+            Mesh3d(meshes.add(Cylinder::new(r, length))),
+            MeshMaterial3d(materials.add(StandardMaterial { base_color: color, unlit: true, alpha_mode: AlphaMode::Add, ..default() })),
+            Transform::from_translation(mid).with_rotation(rot),
+            SpecialBeam { timer: seconds, max_time: seconds, initial_color: color },
+        ));
+    }
+}
+
 /// Updates beam alpha over time and despawns expired beams.
 pub fn update_special_beams(
     mut commands: Commands,

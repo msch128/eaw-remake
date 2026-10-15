@@ -399,6 +399,8 @@ fn capture_driver(
         {
             bc.snap = true;
             bc.target_focus = g.translation();
+            bc.bounds_min = Vec2::splat(-200_000.0);
+            bc.bounds_max = Vec2::splat(200_000.0);
             bc.target_distance = dist;
         }
     }

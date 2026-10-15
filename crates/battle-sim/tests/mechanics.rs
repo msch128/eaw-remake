@@ -706,14 +706,18 @@ fn super_laser_destroys_the_chosen_ship_after_charging() {
     assert!(b.command(0, Command::UseAbilityAt { ship: c, ability: 0, pos: Vec3::new(0.0, 1.0e6, 0.0) }).is_err());
     let at = b.ships[v as usize].pos;
     b.command(0, Command::UseAbilityAt { ship: c, ability: 0, pos: at }).unwrap();
+    let mut events = Vec::new();
     for _ in 0..30 {
-        b.step();
+        events.extend(b.step().to_vec());
     }
     assert!(b.ships[v as usize].alive, "still charging after 1 s");
+    assert!(events.iter().any(|e| matches!(e, Event::SuperLaserCharging { ship, target, fire_in } if *ship == c && *target == v && (*fire_in - 1.5).abs() < 1e-3)), "the charge is announced");
+    assert!(!events.iter().any(|e| matches!(e, Event::SuperLaserFired { .. })), "no shot yet");
     for _ in 0..30 {
-        b.step();
+        events.extend(b.step().to_vec());
     }
     assert!(!b.ships[v as usize].alive, "destroyed after the charge time");
+    assert!(events.iter().any(|e| matches!(e, Event::SuperLaserFired { ship, target, .. } if *ship == c && *target == v)), "the shot is announced");
 }
 
 fn ability(kind: &str) -> AbilityDef {

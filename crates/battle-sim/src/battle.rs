@@ -402,6 +402,24 @@ pub enum Event {
         /// Ability index.
         ability: u16,
     },
+    /// A `SUPER_LASER` was aimed: the charge runs for `fire_in` seconds, then the shot lands (`SuperLaserFired`).
+    SuperLaserCharging {
+        /// Firing ship.
+        ship: u32,
+        /// Chosen target.
+        target: u32,
+        /// Seconds until the shot (`Fire_Frame` / 30).
+        fire_in: f32,
+    },
+    /// A `SUPER_LASER` shot was fired and its target destroyed.
+    SuperLaserFired {
+        /// Firing ship.
+        ship: u32,
+        /// Target.
+        target: u32,
+        /// Where the target was.
+        at: Vec3,
+    },
     /// A missile or torpedo was destroyed by a missile shield.
     ProjectileIntercepted {
         /// Projectile type.

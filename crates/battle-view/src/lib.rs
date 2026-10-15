@@ -461,7 +461,7 @@ impl Plugin for BattleViewPlugin {
                         (
                             control::read_pointer,
                             advance_clock,
-                            (effects::impact_effects, effects::hide_downed_shields, ships::ship_events).chain(),
+                            (effects::impact_effects, effects::hide_downed_shields, ships::ship_events, ships::update_super_laser_fx).chain(),
                             effects::spawn_special_weapon_beams,
                             effects::update_special_beams,
                             effects::update_special_flashes,

@@ -786,6 +786,9 @@ impl Battle {
                 }
                 if let (Some(l), Some(t)) = (&laser, shot) {
                     self.lasers.push((ship, t, self.time + l.delay));
+                    if self.config.record_events {
+                        self.cmd_events.push(Event::SuperLaserCharging { ship, target: t, fire_in: l.delay });
+                    }
                 }
                 let d = self.catalog.ship(self.ships[ship as usize].def);
                 if let Some(a) = d.abilities.get(ability as usize)
@@ -1839,6 +1842,7 @@ impl Battle {
                 t.hull = 0.0;
                 let pos = t.pos;
                 if self.config.record_events {
+                    self.events.push(Event::SuperLaserFired { ship: shooter, target, at: pos });
                     self.events.push(Event::ShipDestroyed { ship: target, pos });
                 }
             }

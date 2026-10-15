@@ -205,6 +205,34 @@ impl ModelTouch<'_, '_> {
         }
     }
 
+    /// World position of the first model proxy whose name starts with `prefix`.
+    fn proxy_world(&self, root: Entity, prefix: &str) -> Option<Vec3> {
+        let loaded = self.loaded.get(root).ok()?;
+        let p = loaded.proxies.iter().copied().find(|&p| self.names.get(p).is_ok_and(|n| n.as_str().to_ascii_lowercase().starts_with(prefix)))?;
+        self.globals.get(p).ok().map(|g| g.translation())
+    }
+
+    /// Switches the particle systems of the model proxies whose name starts with `prefix` on or off.
+    fn set_proxy_particles(&mut self, root: Entity, prefix: &str, on: bool) {
+        let Ok(loaded) = self.loaded.get(root) else { return };
+        let mut n = 0;
+        for &p in &loaded.proxies {
+            if self.names.get(p).is_ok_and(|n| n.as_str().to_ascii_lowercase().starts_with(prefix))
+                && let Ok(mut ps) = self.particles.get_mut(p)
+            {
+                ps.enabled = on;
+                // The bone itself is hidden in the model (`vis 0`; the attack animation shows it), which hides the proxy too.
+                if let Ok(parent) = self.parents.get(p).map(|c| c.parent())
+                    && let Ok(mut v) = self.visibility.get_mut(parent)
+                {
+                    *v = if on { Visibility::Visible } else { Visibility::Hidden };
+                }
+                n += 1;
+            }
+        }
+        debug!("battle: {n} of {} proxies of '{prefix}' switched {on} (super laser)", loaded.proxies.len());
+    }
+
     fn bone_world(&self, view: &ShipView, bone: &str) -> Option<Vec3> {
         let e = *view.bones.as_ref()?.get(&bone.to_ascii_lowercase())?;
         self.globals.get(e).ok().map(|g| g.translation())
@@ -556,6 +584,8 @@ pub fn ship_events(
     mut rt: ResMut<BattleRuntime>,
     mut touch: ModelTouch,
     mut views: Query<&mut ShipView>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     let events = rt.fresh_events.clone();
     let catalog = rt.catalog.clone();
@@ -633,6 +663,26 @@ pub fn ship_events(
                 });
                 rt.dying.insert(*ship);
             }
+            Event::SuperLaserCharging { ship, fire_in, .. } => {
+                // The model's `p_planet_deathstar_laser_small` proxies (the converging charge lattice) light up now, the big dish glow `fire_in` seconds later.
+                if let Some(&e) = rt.entities.get(ship) {
+                    let now = rt.cur.as_ref().map_or(0.0, |c| c.time);
+                    debug!("battle: super laser of ship {ship} charging at t={now:.1}s, shot in {fire_in:.2}s");
+                    touch.set_proxy_particles(e, SUPER_LASER_SMALL, true);
+                    commands.entity(e).insert(SuperLaserFx { large_at: now + fire_in, end_at: now + fire_in + SUPER_LASER_GLOW_AFTER, large_on: false });
+                }
+            }
+            Event::SuperLaserFired { ship, target, at } => {
+                debug!("battle: super laser of ship {ship} fired at {target}");
+                let (Some(&e), Some(cur)) = (rt.entities.get(ship), rt.cur.as_ref()) else { continue };
+                let to = Some(sim_to_bevy(*at));
+                let from = touch.proxy_world(e, SUPER_LASER_LARGE).or_else(|| cur.ship(*ship).map(|s| sim_to_bevy(s.pos)));
+                let beam_radius = (cur.ship(*ship).map_or(0.0, |s| catalog.ship(s.def).radius) * SUPER_LASER_BEAM_RADIUS_OF_HULL).max(SUPER_LASER_BEAM_RADIUS);
+                if let (Some(from), Some(to)) = (from, to) {
+                    crate::effects::spawn_beam(&mut commands, &mut meshes, &mut materials, from, to, Color::srgba(0.25, 1.0, 0.4, 0.85), beam_radius, SUPER_LASER_BEAM_SECONDS);
+                    pulses.flash(to, 1.0);
+                }
+            }
             Event::HardpointDestroyed { .. } => {}
             _ => {}
         }
@@ -702,10 +752,11 @@ pub fn update_dying(
                     Vec3::new(-0.2, -0.8, 0.6).normalize(),
                 ];
                 for i in 0..num_chunks {
-                    let mesh = meshes.add(Cuboid::new(chunk_size * 1.2, chunk_size * 0.6, chunk_size * 0.8));
+                    // Irregular dark hull chunk (a squashed low-poly sphere), not a glowing box.
+                    let mesh = meshes.add(Sphere::new(chunk_size * 0.6).mesh().ico(1).unwrap());
                     let mat = materials.add(StandardMaterial {
-                        base_color: Color::srgb(0.12, 0.12, 0.14),
-                        emissive: LinearRgba::new(0.8, 0.25, 0.05, 1.0),
+                        base_color: Color::srgb(0.1, 0.1, 0.12),
+                        emissive: LinearRgba::new(CHUNK_EMBER.0, CHUNK_EMBER.1, CHUNK_EMBER.2, 1.0),
                         perceptual_roughness: 0.8,
                         ..default()
                     });
@@ -721,7 +772,9 @@ pub fn update_dying(
                         BattleEntity,
                         Mesh3d(mesh),
                         MeshMaterial3d(mat),
-                        Transform::from_translation(tf.translation + world_offset).with_rotation(tf.rotation),
+                        Transform::from_translation(tf.translation + world_offset)
+                            .with_rotation(tf.rotation)
+                            .with_scale(Vec3::new(1.5, 0.7, 1.0 + 0.2 * i as f32)),
                         DebrisChunk {
                             timer: 30.0,
                             max_time: 30.0,
@@ -738,6 +791,40 @@ pub fn update_dying(
                 commands.entity(e).try_despawn();
             }
             rt.dying.remove(&view.id);
+        }
+    }
+}
+
+/// Proxy (bone) names of the Death Star model: the six converging charge lasers and the dish glow (`Owner_Particle_Bone_Name` of the ability).
+const SUPER_LASER_SMALL: &str = "p_planet_deathstar_laser_small";
+const SUPER_LASER_LARGE: &str = "p_planet_deathstar_laser_large";
+/// Seconds the dish glow and the lattice stay on after the shot (estimate, `Fire_Continuation` is 0.25 s in the data).
+const SUPER_LASER_GLOW_AFTER: f32 = 1.5;
+/// Look of the beam line from the dish to the target (estimates; the data has no beam art, only the particles).
+/// The beam is as wide as this share of the shooter's radius (at least `SUPER_LASER_BEAM_RADIUS`), so the Death Star's reads at battle camera distances.
+const SUPER_LASER_BEAM_RADIUS_OF_HULL: f32 = 0.012;
+const SUPER_LASER_BEAM_RADIUS: f32 = 60.0;
+const SUPER_LASER_BEAM_SECONDS: f32 = 0.8;
+
+/// Charge and glow timeline of a Death Star shot, on the ship entity.
+#[derive(Component, Debug)]
+pub struct SuperLaserFx {
+    large_at: f32,
+    end_at: f32,
+    large_on: bool,
+}
+
+/// Lights the dish glow at the shot time and switches the charge and glow particles off afterwards.
+pub fn update_super_laser_fx(mut commands: Commands, rt: Res<BattleRuntime>, mut touch: ModelTouch, mut q: Query<(Entity, &mut SuperLaserFx)>) {
+    let now = rt.cur.as_ref().map_or(0.0, |c| c.time);
+    for (e, mut fx) in &mut q {
+        if now >= fx.end_at {
+            touch.set_proxy_particles(e, SUPER_LASER_SMALL, false);
+            touch.set_proxy_particles(e, SUPER_LASER_LARGE, false);
+            commands.entity(e).remove::<SuperLaserFx>();
+        } else if now >= fx.large_at && !fx.large_on {
+            fx.large_on = true;
+            touch.set_proxy_particles(e, SUPER_LASER_LARGE, true);
         }
     }
 }
@@ -761,6 +848,9 @@ pub fn update_wrecks(time: Res<Time>, rt: Res<BattleRuntime>, mut q: Query<(&Wre
         tf.rotation = Quat::from_euler(EulerRot::XYZ, t.x, t.y, t.z) * tf.rotation;
     }
 }
+
+/// Glow of a fresh debris chunk (linear RGB, a faint ember; it cools to black over the chunk lifetime). Look estimate.
+const CHUNK_EMBER: (f32, f32, f32) = (0.18, 0.05, 0.01);
 
 /// A drifting debris chunk from a destroyed ship hull (U68).
 #[derive(Component, Debug)]
@@ -790,7 +880,7 @@ pub fn update_debris_chunks(
             tf.rotation = Quat::from_euler(EulerRot::XYZ, ang.x, ang.y, ang.z) * tf.rotation;
             if let Some(mut mat) = materials.get_mut(&mat_handle.0) {
                 let cool = (chunk.timer / chunk.max_time).clamp(0.0, 1.0);
-                mat.emissive = LinearRgba::new(0.8 * cool, 0.25 * cool, 0.05 * cool, 1.0);
+                mat.emissive = LinearRgba::new(CHUNK_EMBER.0 * cool, CHUNK_EMBER.1 * cool, CHUNK_EMBER.2 * cool, 1.0);
             }
         }
     }
