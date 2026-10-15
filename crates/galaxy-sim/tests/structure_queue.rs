@@ -218,7 +218,7 @@ fn fleet_of(sim: &mut Sim, owner: FactionId, unit: UnitTypeId, n: u32, at: Plane
 }
 
 #[test]
-fn selling_a_ship_pays_half_plus_one_and_the_last_one_removes_the_fleet() {
+fn selling_a_ship_pays_its_size_share_and_the_last_one_removes_the_fleet() {
     let Some(data) = load() else { return };
     let campaign = data.campaign("GC_Full_Web_Way_Rebel").expect("campaign");
     let mut sim = Sim::new(&data, campaign, SimConfig { victory_enabled: false, ..SimConfig::default() }).expect("sim");
@@ -229,10 +229,10 @@ fn selling_a_ship_pays_half_plus_one_and_the_last_one_removes_the_fleet() {
     let isd = w.unit_id("Star_Destroyer").unwrap();
     let f = fleet_of(&mut sim, empire, isd, 2, p);
     let cost = f64::from(w.units[isd as usize].cost);
-    assert_eq!(w.unit_sell_value(isd), cost / 2.0 + 1.0);
+    assert_eq!(w.unit_sell_value(isd), cost * 0.55);
     let credits = sim.galaxy().factions[empire as usize].credits;
-    assert_eq!(sim.apply(Command::SellUnit { faction: empire, fleet: f, unit: isd }), Ok(CommandOk::Refunded(cost / 2.0 + 1.0)));
-    assert_eq!(sim.galaxy().factions[empire as usize].credits, credits + cost / 2.0 + 1.0);
+    assert_eq!(sim.apply(Command::SellUnit { faction: empire, fleet: f, unit: isd }), Ok(CommandOk::Refunded(cost * 0.55)));
+    assert_eq!(sim.galaxy().factions[empire as usize].credits, credits + cost * 0.55);
     assert_eq!(sim.galaxy().fleets[&f].units[&isd], 1);
     assert!(sim.apply(Command::SellUnit { faction: empire, fleet: f, unit: isd }).is_ok());
     assert!(!sim.galaxy().fleets.contains_key(&f), "the empty fleet is gone");
