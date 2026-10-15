@@ -1331,6 +1331,11 @@ fn advisor_keep_out(ticker: Query<(&ComputedNode, &UiGlobalTransform, Option<&Ch
     }
 }
 
+/// The display name of a unit without the " (G)" the mod's texts add to some objects (the fighters of a squadron).
+fn plain_unit_name(name: &str) -> String {
+    name.trim().trim_end_matches(" (G)").trim_end().to_owned()
+}
+
 /// The map's hover card must not show behind a modal screen, behind menus / over the command bar, or while the planet view opens.
 fn map_tooltip_suppressed(cursor_blocked: bool, view_opening: bool, modal_open: bool) -> bool {
     cursor_blocked || view_opening || modal_open
@@ -1890,13 +1895,15 @@ fn spawn_result_screen(world: &mut World, s: &crate::battle_play::BattleSummary)
         game.as_deref()
             .and_then(|g| g.objects.resolve(object))
             .and_then(|r| r.string("text_id"))
-            .and_then(|k| texts.get(k.split_whitespace().next().unwrap_or(&k)).filter(|t| !t.is_empty()).map(str::to_string))
-            .unwrap_or_else(|| object.replace('_', " "))
+            .and_then(|k| texts.get(k.split_whitespace().next().unwrap_or(&k)).filter(|t| !t.is_empty()).map(|t| plain_unit_name(t)))
+            .unwrap_or_else(|| plain_unit_name(&object.replace('_', " ")))
     };
+    // The game's own texts (`TEXT_WIN_BATTLE` / `TEXT_LOST_BATTLE`); it has no separate retreat text, a retreat counts as a lost battle.
+    let say = |key: &str, fallback: &str| texts.get(key).filter(|t| !t.is_empty()).map_or_else(|| fallback.to_owned(), str::to_owned);
     let headline = match screen.won {
-        Some(true) => "You have won the battle!",
-        Some(false) => "You have lost the battle!",
-        None => "The battle ended in a draw.",
+        Some(true) => say("TEXT_WIN_BATTLE", "You have won the battle!"),
+        Some(false) => say("TEXT_LOST_BATTLE", "You have lost the battle!"),
+        None => "The battle ended in a draw.".to_owned(),
     };
     let secs = screen.seconds.max(0.0) as u32;
     let time = format!("Battle Time: {:02}:{:02}:{:02}", secs / 3600, secs / 60 % 60, secs % 60);
@@ -1959,7 +1966,7 @@ fn spawn_result_screen(world: &mut World, s: &crate::battle_play::BattleSummary)
         c.next().map_or(String::new(), |f| f.to_uppercase().chain(c.flat_map(char::to_lowercase)).collect())
     }).collect::<Vec<_>>().join(" ");
     world.spawn((text_bundle(&title, 26.0, Color::WHITE), ChildOf(panel)));
-    world.spawn((text_bundle(headline, 18.0, Color::WHITE), ChildOf(panel)));
+    world.spawn((text_bundle(&headline, 18.0, Color::WHITE), ChildOf(panel)));
     world.spawn((text_bundle(&time, 18.0, Color::WHITE), ChildOf(panel)));
 
     let columns = world
@@ -2412,6 +2419,12 @@ mod tests {
         assert_eq!(end_opponent(Some(0), false, &rivals), Some(1), "defeat: the rival holding most planets");
         assert_eq!(end_opponent(Some(0), true, &rivals), Some(2), "victory: the rival that lost most ships");
         assert_eq!(end_opponent(Some(1), true, &[(1, 3, 0)]), None);
+    }
+
+    #[test]
+    fn unit_names_lose_the_g_suffix() {
+        assert_eq!(plain_unit_name("TIE Fighter (G)"), "TIE Fighter");
+        assert_eq!(plain_unit_name("Headhunter Squadron"), "Headhunter Squadron");
     }
 
     #[test]
