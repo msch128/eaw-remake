@@ -224,6 +224,8 @@ impl Battle {
             ability_at: None,
             lured: Vec::new(),
             bombs: Vec::new(),
+            beams: Vec::new(),
+            clusters: Vec::new(),
             reveals: Vec::new(),
             zones: Vec::new(),
             lasers: Vec::new(),
@@ -969,6 +971,20 @@ impl Battle {
         let is_replenish = a.replenish;
         let weaken = a.weaken.clone();
         let bomb = a.bomb.clone();
+        let cluster = a.cluster.clone();
+        let mut beam: Option<(u32, f32)> = None;
+        if let Some(e) = &a.energy {
+            // The enemy ship nearest to the aimed point (else to the caster) inside the beam range and of an allowed class.
+            let (me, at) = (&self.ships[ship as usize], self.ability_at);
+            let from = at.unwrap_or(me.pos);
+            let cat = self.catalog.clone();
+            let dur = a.duration;
+            let t = self.ships.iter().filter(|o| o.alive && !o.retreated && o.side != me.side && o.pos.dist(me.pos) <= e.max_range && (e.classes == 0 || e.classes & cat.ship(o.def).class.bit() != 0)).min_by(|x, y| x.pos.dist(from).total_cmp(&y.pos.dist(from)).then(x.id.cmp(&y.id))).map(|o| o.id);
+            match t {
+                Some(t) => beam = Some((t, e.dps * dur)),
+                None => return false,
+            }
+        }
         if is_replenish && self.wingmen(ship).1.is_empty() {
             // Nobody to bring back: the once-per-battle use is kept.
             return false;
@@ -1026,6 +1042,14 @@ impl Battle {
         }
         if let Some(w) = weaken {
             self.weaken_area(ship, &w);
+        }
+        if let Some((t, total)) = beam {
+            let dur = self.catalog.ship(self.ships[ship as usize].def).abilities[ability].duration.max(0.1);
+            self.beams.push((ship, t, self.time + dur, total / dur));
+        }
+        if let Some(c) = cluster {
+            let (side, pos) = (self.ships[ship as usize].side, self.ships[ship as usize].pos);
+            self.clusters.push((side, pos, self.time + c.delay, c));
         }
         if let Some(b) = bomb {
             let (side, pos) = (self.ships[ship as usize].side, self.ships[ship as usize].pos);
@@ -1824,6 +1848,7 @@ impl Battle {
         self.run_healing(dt);
         self.run_zones(dt);
         self.run_bombs();
+        self.run_beams(dt);
         self.run_lasers();
         self.run_drains(dt);
         if self.tick.is_multiple_of(30) {
@@ -1862,6 +1887,17 @@ impl Battle {
                         // `ObjectScript_VaderTIESquadron`: used when fewer than two fighters of the squadron are left.
                         let (alive, dead) = self.wingmen(s.id);
                         if alive.is_empty() && !dead.is_empty() {
+                            uses.push((side, s.id, k, None));
+                        }
+                    } else if let Some(e) = &a.energy {
+                        let big = enemies.iter().any(|&o| self.ships[o as usize].pos.dist(s.pos) <= e.max_range && (e.classes == 0 || e.classes & cat.ship(self.ships[o as usize].def).class.bit() != 0));
+                        if big {
+                            uses.push((side, s.id, k, None));
+                        }
+                    } else if let Some(c) = &a.cluster {
+                        // Estimate: when two or more enemies are within the bomb ring.
+                        let near = enemies.iter().filter(|&&o| self.ships[o as usize].pos.dist(s.pos) <= c.spread + c.radius).count();
+                        if near >= 2 {
                             uses.push((side, s.id, k, None));
                         }
                     } else if let Some(b) = &a.bomb {
@@ -1975,6 +2011,47 @@ impl Battle {
                 let slot = &mut s.mods[kind as usize];
                 if value != 0.0 && (value.abs() >= slot.0.abs() || slot.1 <= 0.0) {
                     *slot = (value, w.duration);
+                }
+            }
+        }
+    }
+
+    /// `ENERGY_WEAPON`: a beam does its hull damage per second to its target until the ability ends, the target dies or leaves the range
+    /// (1.2 times, the ships move). `CLUSTER_BOMB`: when the delay is over `count` bombs lie on a ring `spread` units from the ship and each
+    /// does its shield damage to every enemy ship within its blast radius (estimate: evenly spaced ring; the data gives only speed and delay).
+    fn run_beams(&mut self, dt: f32) {
+        let now = self.time;
+        self.beams.retain(|b| b.2 > now);
+        let record = self.config.record_events;
+        for (shooter, target, _, dps) in self.beams.clone() {
+            let range = self.catalog.ship(self.ships[shooter as usize].def).abilities.iter().filter_map(|a| a.energy.as_ref()).map(|e| e.max_range).fold(0.0f32, f32::max);
+            let (alive, from) = (self.ships[shooter as usize].alive, self.ships[shooter as usize].pos);
+            let t = &mut self.ships[target as usize];
+            if !alive || !t.alive || t.retreated || t.pos.dist(from) > range * 1.2 {
+                self.beams.retain(|b| !(b.0 == shooter && b.1 == target));
+                continue;
+            }
+            t.since_hit = 0.0;
+            t.hull -= dps * dt * t.bonus.taken_hull;
+            if t.hull <= 0.0 {
+                t.alive = false;
+                if record {
+                    self.events.push(Event::ShipDestroyed { ship: target, pos: t.pos });
+                }
+            }
+        }
+        let (due, wait): (Vec<_>, Vec<_>) = std::mem::take(&mut self.clusters).into_iter().partition(|c| c.2 <= now);
+        self.clusters = wait;
+        let cat = self.catalog.clone();
+        for (side, pos, _, c) in due {
+            for k in 0..c.count {
+                let ang = std::f32::consts::TAU * k as f32 / c.count as f32;
+                let spot = pos + Vec3::new(ang.cos(), ang.sin(), 0.0) * c.spread;
+                for s in self.ships.iter_mut().filter(|s| s.alive && !s.retreated && s.side != side) {
+                    if s.pos.dist(spot) - cat.ship(s.def).radius <= c.radius {
+                        s.shield = (s.shield - c.damage * s.bonus.taken_shield).max(0.0);
+                        s.since_hit = 0.0;
+                    }
                 }
             }
         }

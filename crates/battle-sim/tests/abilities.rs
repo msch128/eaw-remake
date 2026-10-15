@@ -554,3 +554,91 @@ fn harmonic_bomb_values_come_from_the_spawned_object() {
     let seismic = cat.ship(cat.ship_id("Boba_Fett_Slave_I").expect("slave i")).abilities.iter().find_map(|a| a.bomb.clone()).expect("seismic bomb");
     assert_eq!((seismic.countdown, seismic.blast_radius, seismic.blast_damage, seismic.blast_tiers), (5.0, 300.0, 200.0, 3));
 }
+
+fn plain_ability(kind: &str) -> AbilityDef {
+    AbilityDef {
+        kind: kind.into(),
+        duration: 1.5,
+        recharge: 120.0,
+        speed_mult: 1.0,
+        shield_regen_mult: 1.0,
+        weapon_delay_mult: 1.0,
+        take_damage_mult: 1.0,
+        cause_damage_mult: 1.0,
+        ..AbilityDef::default()
+    }
+}
+
+#[test]
+fn the_proton_beam_burns_the_hull_of_one_enemy_in_range_and_class() {
+    let mut star = mobile("star", 0.0);
+    star.abilities.push(AbilityDef { energy: Some(EnergyDef { max_range: 2500.0, dps: 15000.0, classes: TargetClass::Frigate.bit() }), ..plain_ability("ENERGY_WEAPON") });
+    let mut fighter = mobile("fighter", 0.0);
+    fighter.class = TargetClass::Fighter;
+    let cat = Catalog::from_defs(vec![star, mobile("frigate", 0.0), fighter], vec![laser()]);
+    let mut su = setup(cat, ("star", 1, false), ("frigate", 2, false), BattleConfig { half_size: 6000.0, ..BattleConfig::default() });
+    su.sides[1].units.push(UnitSetup { ship: su.catalog.ship_id("fighter").unwrap(), count: 1, tag: 7 });
+    let mut b = Battle::new(su);
+    let star = ids(&b, 0)[0];
+    let foes = ids(&b, 1);
+    let c = b.ships[star as usize].pos;
+    b.ships[foes[0] as usize].pos = c + Vec3::new(1000.0, 0.0, 0.0);
+    b.ships[foes[1] as usize].pos = c + Vec3::new(5000.0, 0.0, 0.0);
+    b.ships[foes[2] as usize].pos = c + Vec3::new(500.0, 0.0, 0.0);
+    b.command(0, Command::UseAbility { ship: star, ability: 0 }).unwrap();
+    for _ in 0..60 {
+        b.step();
+    }
+    let lost = |i: usize| 1.0e6 - b.ships[foes[i] as usize].hull;
+    assert!((lost(0) - 22500.0).abs() < 1500.0, "15000 per second for 1.5 s: {}", lost(0));
+    assert_eq!(lost(1), 0.0, "out of range");
+    assert_eq!(lost(2), 0.0, "wrong class");
+}
+
+#[test]
+fn proton_beam_is_refused_without_a_target() {
+    let mut star = mobile("star", 0.0);
+    star.abilities.push(AbilityDef { energy: Some(EnergyDef { max_range: 2500.0, dps: 100.0, classes: 0 }), ..plain_ability("ENERGY_WEAPON") });
+    let cat = Catalog::from_defs(vec![star, mobile("far", 0.0)], vec![laser()]);
+    let mut b = Battle::new(setup(cat, ("star", 1, false), ("far", 1, false), BattleConfig { half_size: 6000.0, ..BattleConfig::default() }));
+    let (star, far) = (ids(&b, 0)[0], ids(&b, 1)[0]);
+    b.ships[far as usize].pos = b.ships[star as usize].pos + Vec3::new(4000.0, 0.0, 0.0);
+    assert_eq!(b.command(0, Command::UseAbility { ship: star, ability: 0 }), Err(CommandError::AbilityUnavailable));
+}
+
+#[test]
+fn a_cluster_bomb_ring_strips_shields_of_enemies_near_it_after_the_delay() {
+    let mut jav = mobile("javelin", 0.0);
+    jav.abilities.push(AbilityDef { cluster: Some(ClusterDef { delay: 1.5, count: 14, radius: 600.0, damage: 4500.0, spread: 540.0 }), ..plain_ability("CLUSTER_BOMB") });
+    let mut foe = mobile("foe", 0.0);
+    foe.shield = 10000.0;
+    foe.radius = 0.0;
+    let cat = Catalog::from_defs(vec![jav, foe], vec![laser()]);
+    let mut b = Battle::new(setup(cat, ("javelin", 1, false), ("foe", 2, false), BattleConfig { half_size: 6000.0, ..BattleConfig::default() }));
+    let (jav, foes) = (ids(&b, 0)[0], ids(&b, 1));
+    let c = b.ships[jav as usize].pos;
+    b.ships[foes[0] as usize].pos = c + Vec3::new(300.0, 0.0, 0.0);
+    b.ships[foes[1] as usize].pos = c + Vec3::new(4000.0, 0.0, 0.0);
+    b.command(0, Command::UseAbility { ship: jav, ability: 0 }).unwrap();
+    for _ in 0..30 {
+        b.step();
+    }
+    assert_eq!(b.ships[foes[0] as usize].shield, 10000.0, "before the delay");
+    for _ in 0..30 {
+        b.step();
+    }
+    assert!(b.ships[foes[0] as usize].shield < 10000.0, "the ring hits the near ship");
+    assert_eq!(b.ships[foes[1] as usize].shield, 10000.0, "the far ship is untouched");
+    assert_eq!(b.ships[foes[0] as usize].hull, 1.0e6, "ion bombs do no hull damage");
+}
+
+#[test]
+fn energy_weapon_and_cluster_bomb_values_come_from_the_sub_abilities() {
+    let Some((data, fs)) = load() else { return };
+    let cat = Catalog::build(&data, Some(&fs), &["Accuser_Star_Destroyer", "Tyber_Zann_Javelin"]);
+    let e = cat.ship(cat.ship_id("Accuser_Star_Destroyer").expect("accuser")).abilities.iter().find_map(|a| a.energy.clone()).expect("proton beam");
+    assert_eq!((e.max_range, e.dps), (2500.0, 15000.0));
+    let c = cat.ship(cat.ship_id("Tyber_Zann_Javelin").expect("javelin")).abilities.iter().find_map(|a| a.cluster.clone()).expect("cluster bomb");
+    assert_eq!((c.delay, c.count, c.radius, c.damage), (1.5, 14, 600.0, 4500.0));
+    assert!(c.spread > 0.0);
+}

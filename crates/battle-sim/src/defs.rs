@@ -230,6 +230,10 @@ pub struct AbilityDef {
     pub lure: Option<LureDef>,
     /// `HARMONIC_BOMB`: what the bomb does.
     pub bomb: Option<BombDef>,
+    /// `ENERGY_WEAPON`: the proton beam.
+    pub energy: Option<EnergyDef>,
+    /// `CLUSTER_BOMB`: the ring of bombs.
+    pub cluster: Option<ClusterDef>,
     /// Abilities with `Expiration_Seconds` 0 (missile shield, interdiction) stay on until toggled off.
     pub toggle: bool,
     /// `TRACTOR_BEAM`: beam parameters from the linked `Tractor_Beam_Attack_Ability`.
@@ -291,6 +295,33 @@ pub struct RedirectDef {
     pub half_arc: f32,
     /// Bit mask of shooter classes it reacts to (`Applicable_Unit_Categories`; 0 = any).
     pub classes: u16,
+}
+
+/// `ENERGY_WEAPON` ("Proton Beam", Piett and the Accuser line): a beam on one enemy ship that does massive hull damage for the ability duration.
+#[derive(Debug, Clone, Default)]
+pub struct EnergyDef {
+    /// `Activation_Max_Range` of the linked `Energy_Weapon_Attack_Ability`.
+    pub max_range: f32,
+    /// `Damage_Per_Frame` times 30 frames per second (estimate for the frame rate): hull damage per second.
+    pub dps: f32,
+    /// Bit mask of the targetable classes (`Applicable_Unit_Categories`; 0 = any).
+    pub classes: u16,
+}
+
+/// `CLUSTER_BOMB` (Javelin heroes): after `delay` seconds `count` bombs have flown outward from the ship and go off, each doing
+/// shield damage in its blast radius (`Proj_Ion_Cluster_Bomb`: no hull damage).
+#[derive(Debug, Clone, Default)]
+pub struct ClusterDef {
+    /// `Detonation_Time_In_Secs`.
+    pub delay: f32,
+    /// `Number_Of_Bombs`.
+    pub count: u32,
+    /// Bomb `Projectile_Blast_Area_Range`.
+    pub radius: f32,
+    /// Bomb `Projectile_Blast_Area_Damage` (shield points).
+    pub damage: f32,
+    /// Distance the bombs have flown from the ship at detonation: bomb speed x delay.
+    pub spread: f32,
 }
 
 /// `HARMONIC_BOMB`: the ship drops the ability's `Spawned_Object_Type` where it is; after `countdown` seconds the object goes off.
@@ -1009,6 +1040,11 @@ impl Catalog {
                     proj_names.push(p.clone());
                 }
                 if let Source::Unit(u) = s {
+                    for sa in u.sub_abilities.iter().filter(|s| s.kind.eq_ignore_ascii_case("Cluster_Bomb_Ability")) {
+                        if let Some(n) = sa.fields.get("bomb_type") {
+                            proj_names.push(n.trim().to_string());
+                        }
+                    }
                     for a in u.abilities.iter().filter(|a| a.kind.eq_ignore_ascii_case("WEAKEN_ENEMY") || a.kind.eq_ignore_ascii_case("HARMONIC_BOMB")) {
                         if let Some(n) = a.fields.get("spawned_object_type") {
                             proj_names.push(n.trim().to_string());
@@ -1687,7 +1723,7 @@ fn ability_defs(u: &SpaceUnitDef, projectiles: &[ProjDef], proj_index: &HashMap<
         .filter(|a| {
             a.expiration_seconds.unwrap_or(0.0) > 0.0
                 || (a.kind.eq_ignore_ascii_case("LURE") && a.fields.contains_key("effective_radius"))
-                || ["FULL_SALVO", "TRACTOR_BEAM", "MISSILE_SHIELD", "INTERDICT", "STEALTH", "FOW_REVEAL_PING", "LASER_DEFENSE", "ROCKET_ATTACK", "SWAP_WEAPONS", "SENSOR_JAMMING", "BUZZ_DROIDS", "SUPER_LASER", "CORRUPT_SYSTEMS", "HUNT", "SPOILER_LOCK", "REPLENISH_WINGMEN", "WEAKEN_ENEMY", "HARMONIC_BOMB"].iter().any(|k| a.kind.eq_ignore_ascii_case(k))
+                || ["FULL_SALVO", "TRACTOR_BEAM", "MISSILE_SHIELD", "INTERDICT", "STEALTH", "FOW_REVEAL_PING", "LASER_DEFENSE", "ROCKET_ATTACK", "SWAP_WEAPONS", "SENSOR_JAMMING", "BUZZ_DROIDS", "SUPER_LASER", "CORRUPT_SYSTEMS", "HUNT", "SPOILER_LOCK", "REPLENISH_WINGMEN", "WEAKEN_ENEMY", "HARMONIC_BOMB", "ENERGY_WEAPON", "CLUSTER_BOMB"].iter().any(|k| a.kind.eq_ignore_ascii_case(k))
         })
         .map(|a| {
             let toggle = a.expiration_seconds.unwrap_or(0.0) <= 0.0 && ["MISSILE_SHIELD", "INTERDICT", "STEALTH", "HUNT", "SPOILER_LOCK"].iter().any(|k| a.kind.eq_ignore_ascii_case(k));
@@ -1752,6 +1788,27 @@ fn ability_defs(u: &SpaceUnitDef, projectiles: &[ProjDef], proj_index: &HashMap<
                     radius: a.fields.get("effective_radius").and_then(|v| v.trim().parse().ok()).unwrap_or(0.0),
                     types: a.fields.get("target_types").map(|v| alamo_data::xml::split_list(v).iter().map(|t| t.to_ascii_lowercase()).collect()).unwrap_or_default(),
                 }).filter(|l| l.radius > 0.0),
+                energy: a.kind.eq_ignore_ascii_case("ENERGY_WEAPON").then(|| {
+                    let sub = a.activated_ability.as_ref().and_then(|n| u.sub_abilities.iter().find(|s| s.name.eq_ignore_ascii_case(n)));
+                    let f = |k: &str| sub.and_then(|s| s.fields.get(k)).and_then(|v| v.trim().parse::<f32>().ok()).unwrap_or(0.0);
+                    EnergyDef {
+                        max_range: f("activation_max_range"),
+                        dps: f("damage_per_frame") * 30.0,
+                        classes: sub.and_then(|s| s.fields.get("applicable_unit_categories")).map_or(0, |v| alamo_data::xml::split_list(v).iter().filter_map(|t| TargetClass::from_token(t)).fold(0u16, |m, c| m | c.bit())),
+                    }
+                }).filter(|e| e.dps > 0.0 && e.max_range > 0.0),
+                cluster: a.kind.eq_ignore_ascii_case("CLUSTER_BOMB").then(|| {
+                    let sub = a.activated_ability.as_ref().and_then(|n| u.sub_abilities.iter().find(|s| s.name.eq_ignore_ascii_case(n)));
+                    let f = |k: &str| sub.and_then(|s| s.fields.get(k)).and_then(|v| v.trim().parse::<f32>().ok()).unwrap_or(0.0);
+                    let p = sub.and_then(|s| s.fields.get("bomb_type")).and_then(|n| proj_index.get(&n.trim().to_ascii_lowercase())).and_then(|&i| projectiles.get(i as usize));
+                    ClusterDef {
+                        delay: f("detonation_time_in_secs"),
+                        count: f("number_of_bombs") as u32,
+                        radius: p.map_or(0.0, |p| p.blast_range),
+                        damage: p.map_or(0.0, |p| p.blast_damage),
+                        spread: p.map_or(0.0, |p| p.speed) * f("detonation_time_in_secs"),
+                    }
+                }).filter(|c| c.count > 0 && c.damage > 0.0 && c.radius > 0.0),
                 bomb: a.kind.eq_ignore_ascii_case("HARMONIC_BOMB").then(|| {
                     let p = a.fields.get("spawned_object_type").and_then(|n| proj_index.get(&n.trim().to_ascii_lowercase())).and_then(|&i| projectiles.get(i as usize));
                     let (heal_radius, heal_amount, heal_classes) = p.and_then(|p| p.instant_heal).unwrap_or_default();

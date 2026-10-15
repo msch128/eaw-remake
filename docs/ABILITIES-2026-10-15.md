@@ -25,7 +25,10 @@ Source: Remake 4.0 `Unit_Abilities_Data` of all space units (`Units/Space`, `Spe
 | HARMONIC_BOMB | 6 | done (new, active uses only) | button via `Alternate_Icon_Name` | none | carriers drop a +200 hull blast (radius 750, fighters and bombers); Slave I drops a seismic bomb after 5 s (radius 300, 200 damage, 3 falloff tiers); the commented-out uses in the data are ignored |
 | SUPER_LASER | 5 | done | yes | beam exists | |
 | LURE | 4 | done (new) | yes | none | enemies of the listed types within the radius are ordered to attack the caster, caster takes the ability take-damage multiplier |
-| SPRINT, LUCKY_SHOT, ENERGY_WEAPON, CLUSTER_BOMB, BLAST | 3 each | SPRINT done, others missing | - | - | hero abilities with sub-ability objects |
+| SPRINT | 3 | done | yes | - | |
+| ENERGY_WEAPON ("Proton Beam") | 3 | done (new) | yes | none | beam on one Capital/Corvette/Frigate within 2500, 500 per frame x 30 fps (estimate) for 1.5 s, hull only |
+| CLUSTER_BOMB | 3 | done (new) | yes | none | 14 ion bombs on a ring (speed x delay from the projectile), 4500 shield damage each in radius 600, no hull damage; ring placement is an estimate |
+| LUCKY_SHOT, BLAST | 3 each | not done | - | - | the data gives no numbers (a heavy projectile override, "two very powerful blasts" after 5 s of charge); needs a decision on values |
 | CORRUPT_SYSTEMS, MISSILE_SHIELD | 2 / 1 | done | yes | unchecked | |
 | SHIELD_FLARE, LEECH_SHIELDS, INVULNERABILITY, CONCENTRATE_FIRE, SWAP_WEAPONS | 1 each | CONCENTRATE_FIRE, SWAP_WEAPONS done; rest missing | - | - | |
 | Ground-only (STICKY_BOMB, TARGETED_*, FORCE_*, CAPTURE_VEHICLE, AREA_EFFECT_*, DEPLOY_TROOPERS, EJECT_VEHICLE_THIEF, FIRE_LOBBING_SUPERWEAPON) | - | not space | - | - | out of scope here |
