@@ -7,6 +7,9 @@ use std::collections::{HashMap, HashSet};
 
 use alamo_data::{Campaign, GameData, ShipCategory};
 
+/// Population per side in a space battle (user rule, replaces the data's `Space_Tactical_Unit_Cap` when that is smaller).
+pub const USER_SPACE_UNIT_CAP: i32 = 1000;
+
 /// Index of a planet in [`World::planets`].
 pub type PlanetId = u32;
 /// Index of a faction in [`World::factions`].
@@ -746,7 +749,9 @@ impl World {
                 max_tech: cf.max_tech_level.unwrap_or(5),
                 home: cf.home_location.as_ref().and_then(|h| planet_index.get(&key(h)).copied()),
                 tech_upgrades: Vec::new(),
-                space_unit_cap: if def.space_unit_cap > 0 { def.space_unit_cap } else { 150 },
+                // User rule: 1000 population per side in a space battle, so super ships (Purifier and Annihilator together) fit.
+                // The data's `Space_Tactical_Unit_Cap` (180 in Remake 4.0) is replaced on purpose.
+                space_unit_cap: USER_SPACE_UNIT_CAP.max(def.space_unit_cap),
             });
         }
         for (i, f) in factions.iter_mut().enumerate() {
