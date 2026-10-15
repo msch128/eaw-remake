@@ -108,3 +108,60 @@ fn a_corvette_next_door_does_not_reveal_the_neighbouring_system() {
     assert_eq!(sim.galaxy().sight_map(&w, rebel)[neighbour as usize], Sight::Seen);
     assert_eq!(sim.galaxy().fleet_sight(&w, rebel, enemy_fleet), Sight::Seen);
 }
+
+/// Planets at exactly `hops` lanes from the nearest planet in `from`.
+fn at_hops(w: &World, from: &[PlanetId], hops: u32) -> Vec<PlanetId> {
+    let mut dist = vec![u32::MAX; w.planets.len()];
+    let mut queue: std::collections::VecDeque<PlanetId> = from.iter().copied().collect();
+    for &p in from {
+        dist[p as usize] = 0;
+    }
+    while let Some(p) = queue.pop_front() {
+        for &(q, _) in &w.adjacency[p as usize] {
+            if dist[q as usize] == u32::MAX {
+                dist[q as usize] = dist[p as usize] + 1;
+                queue.push_back(q);
+            }
+        }
+    }
+    (0..w.planets.len() as u32).filter(|&p| dist[p as usize] == hops && w.real[p as usize]).collect()
+}
+
+/// User rule 2026-10-15: AI knowledge Easy 1 lane, Normal 2, Hard 3, Brutal everything; spy/presence reveals.
+#[test]
+fn the_ai_knows_enemy_forces_only_within_its_difficulty_range() {
+    let Some(data) = load() else { return };
+    let campaign = data.campaign("GC_Full_Web_Way_Rebel").unwrap();
+    let mut sim = Sim::new(&data, campaign, SimConfig::default()).unwrap();
+    let w = sim.world().clone();
+    let (rebel, empire) = (w.faction_id("Rebel").unwrap(), w.faction_id("Empire").unwrap());
+    sim.galaxy_mut().fleets.clear();
+    let own: Vec<PlanetId> = sim.galaxy().owned_planets(rebel).collect();
+    let (two, four) = (at_hops(&w, &own, 2), at_hops(&w, &own, 4));
+    let (two, four) = (*two.first().expect("a planet 2 lanes away"), *four.first().expect("a planet 4 lanes away"));
+    let isd = w.unit_id("Star_Destroyer").unwrap();
+    for p in [two, four] {
+        sim.galaxy_mut().planets[p as usize].owner = None;
+        let id = sim.galaxy().fleets.keys().max().copied().unwrap_or(0) + 1;
+        sim.galaxy_mut().fleets.insert(id, Fleet { id, owner: empire, units: [(isd, 3)].into(), location: FleetLocation::AtPlanet(p), previous_planet: 0, slot: 0 });
+    }
+    let believed = |sim: &mut Sim, hops: Option<u8>, p: PlanetId| {
+        sim.galaxy_mut().factions[rebel as usize].difficulty.ai_sight_hops = hops;
+        galaxy_sim::ai::believed_defense(&w, sim.galaxy(), rebel, p)
+    };
+    // Easy (1 lane) does not see the fleet 2 lanes away, Normal (2) and Hard (3) do; 4 lanes away only Brutal sees it.
+    assert_eq!(believed(&mut sim, Some(1), two), 0.0);
+    assert!(believed(&mut sim, Some(2), two) > 0.0);
+    assert!(believed(&mut sim, Some(3), two) > 0.0);
+    assert_eq!(believed(&mut sim, Some(3), four), 0.0);
+    assert!(believed(&mut sim, None, four) > 0.0);
+    // The same on the knowledge map.
+    sim.galaxy_mut().factions[rebel as usize].difficulty.ai_sight_hops = Some(1);
+    let known = sim.galaxy().ai_knowledge(&w, rebel);
+    assert!(own.iter().all(|&p| known[p as usize]) && !known[two as usize]);
+    // A spy (any fleet, here a corvette with System_Spy_Ability) at the far planet reveals it even on Easy.
+    let spy = (0..w.units.len() as u32).find(|&u| w.units[u as usize].system_spy).expect("a spy unit");
+    let id = sim.galaxy().fleets.keys().max().copied().unwrap_or(0) + 1;
+    sim.galaxy_mut().fleets.insert(id, Fleet { id, owner: rebel, units: [(spy, 1)].into(), location: FleetLocation::AtPlanet(four), previous_planet: 0, slot: 0 });
+    assert!(believed(&mut sim, Some(1), four) > 0.0);
+}

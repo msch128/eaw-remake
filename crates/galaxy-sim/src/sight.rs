@@ -92,4 +92,38 @@ impl Galaxy {
     pub fn visible_fleets(&self, world: &World, viewer: FactionId) -> Vec<(FleetId, Sight)> {
         self.fleets.keys().map(|&id| (id, self.fleet_sight(world, viewer, id))).filter(|(_, s)| *s != Sight::Hidden).collect()
     }
+
+    /// Planets whose exact forces the AI of `faction` may use (user rule 2026-10-15, RULES.md "AI knowledge"): all of them when its
+    /// `Difficulty::ai_sight_hops` is `None`, otherwise those within that many lanes of a planet it owns or a fleet it has (moving fleets count
+    /// at both ends of their lane) plus every planet it sees `Detailed` (presence, which includes the `System_Spy_Ability` units).
+    pub fn ai_knowledge(&self, world: &World, faction: FactionId) -> Vec<bool> {
+        let n = self.planets.len();
+        let Some(hops) = self.factions.get(faction as usize).and_then(|f| f.difficulty.ai_sight_hops) else { return vec![true; n] };
+        let mut known: Vec<bool> = self.sight_map(world, faction).iter().map(|&s| s == Sight::Detailed).collect();
+        let mut frontier: Vec<usize> = (0..n).filter(|&p| self.planets[p].owner == Some(faction)).collect();
+        for f in self.fleets.values().filter(|f| f.owner == faction) {
+            match f.location {
+                FleetLocation::AtPlanet(p) => frontier.push(p as usize),
+                FleetLocation::Moving { from, to, .. } => frontier.extend([from as usize, to as usize]),
+            }
+        }
+        let mut seen = vec![false; n];
+        for &p in &frontier {
+            seen[p] = true;
+        }
+        for _ in 0..=hops {
+            let mut next = Vec::new();
+            for &p in &frontier {
+                known[p] = true;
+                for &(q, _) in &world.adjacency[p] {
+                    if !seen[q as usize] {
+                        seen[q as usize] = true;
+                        next.push(q as usize);
+                    }
+                }
+            }
+            frontier = next;
+        }
+        known
+    }
 }

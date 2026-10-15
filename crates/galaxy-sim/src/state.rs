@@ -906,17 +906,21 @@ pub struct Difficulty {
     pub health: f32,
     /// Multiplier on shield points in battle.
     pub shield: f32,
+    /// AI knowledge of enemy forces (user rule 2026-10-15, RULES.md "AI knowledge"): the AI of this faction knows the exact forces only at planets within this many
+    /// lanes of its own planets and fleets (and wherever it is present); `None` = it sees everything (Brutal, and any faction nobody set a tier for).
+    #[serde(default)]
+    pub ai_sight_hops: Option<u8>,
 }
 
 impl Default for Difficulty {
     fn default() -> Self {
-        Self { credit: 1.0, build_time: 1.0, damage: 1.0, health: 1.0, shield: 1.0 }
+        Self { credit: 1.0, build_time: 1.0, damage: 1.0, health: 1.0, shield: 1.0, ai_sight_hops: None }
     }
 }
 
 impl Difficulty {
     /// From a table entry (galactic build time).
     pub fn from_adjustment(a: &alamo_data::DifficultyAdjustment) -> Self {
-        Self { credit: a.credit_multiplier, build_time: a.galactic_build_time, damage: a.damage, health: a.health, shield: a.shield }
+        Self { credit: a.credit_multiplier, build_time: a.galactic_build_time, damage: a.damage, health: a.health, shield: a.shield, ai_sight_hops: None }
     }
 }

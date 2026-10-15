@@ -610,9 +610,29 @@ pub const BRUTAL_BUILD_TIME_MULTIPLIER: f32 = 0.8;
 
 /// Maps a tier to the sim multipliers and the AI tier (see [`DifficultyTier`]).
 fn tier_settings(table: &alamo_data::DifficultyTable, tier: DifficultyTier, minor: bool) -> (galaxy_sim::Difficulty, AiTier) {
+    let (mut diff, mut ai) = tier_settings_raw(table, tier, minor);
+    let hops = ai_sight_hops(tier, minor);
+    diff.ai_sight_hops = hops;
+    ai.vision_hops = hops;
+    (diff, ai)
+}
+
+/// How far the AI sees (user rule 2026-10-15, galaxy-sim RULES.md "AI knowledge"): Easy 1 lane around its planets and fleets, Normal 2, Hard 3, Brutal everything. Minor factions use
+/// Normal (estimate, user: "same rule with Normal"), Fair plays Normal. `None` = sees everything.
+pub fn ai_sight_hops(tier: DifficultyTier, minor: bool) -> Option<u8> {
+    match tier {
+        DifficultyTier::Brutal => None,
+        _ if minor => Some(2),
+        DifficultyTier::Easy => Some(1),
+        DifficultyTier::Normal | DifficultyTier::Fair => Some(2),
+        DifficultyTier::Hard => Some(3),
+    }
+}
+
+fn tier_settings_raw(table: &alamo_data::DifficultyTable, tier: DifficultyTier, minor: bool) -> (galaxy_sim::Difficulty, AiTier) {
     let suffix = if minor { "Minor" } else { "Default" };
     let entry = |name: &str| table.get(&format!("{name}_{suffix}")).cloned().unwrap_or_default();
-    let ai = |name: &str, a: &alamo_data::DifficultyAdjustment, full: bool| AiTier { name: name.into(), contrast: f64::from(a.galactic_contrast), goal_sleep: f64::from(a.galactic_goal_sleep), full_map_knowledge: full };
+    let ai = |name: &str, a: &alamo_data::DifficultyAdjustment, full: bool| AiTier { name: name.into(), contrast: f64::from(a.galactic_contrast), goal_sleep: f64::from(a.galactic_goal_sleep), full_map_knowledge: full, vision_hops: None };
     // Easy, Normal and Hard are the `<Tier>_Default` / `<Tier>_Minor` entries of `DifficultyAdjustments.xml` unchanged. The data has no Brutal or Fair entry:
     // Brutal uses the Hard entry with the stronger income and build time above and gives the AI full map knowledge, Fair plays the Normal AI behaviour with neutral multipliers (no income, build time or battle bonus).
     match tier {

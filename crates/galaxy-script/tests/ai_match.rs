@@ -180,10 +180,18 @@ fn difficulty_tiers_scale_without_snowballing() {
 fn strategic_layer_captures_more_enemy_planets_over_several_seeds() {
     use galaxy_script::DifficultyTier::Normal;
     let (mut with, mut without) = (0, 0);
-    let seeds: u64 = std::env::var("AI_SEEDS").ok().and_then(|s| s.parse().ok()).unwrap_or(8);
-    for seed in 1..=seeds {
-        let Some(a) = run_tier(Normal, true, 30, seed) else { return };
-        let b = run_tier(Normal, false, 30, seed).unwrap();
+    // 16 seeds (8 before the AI fog of war, where one capture decided the margin), run in parallel: the runs are independent.
+    let seeds: u64 = std::env::var("AI_SEEDS").ok().and_then(|s| s.parse().ok()).unwrap_or(16);
+    let all: Vec<u64> = (1..=seeds).collect();
+    let mut runs = Vec::new();
+    for chunk in all.chunks(6) {
+        runs.extend(std::thread::scope(|s| {
+            let handles: Vec<_> = chunk.iter().map(|&seed| s.spawn(move || (run_tier(Normal, true, 30, seed), run_tier(Normal, false, 30, seed)))).collect();
+            handles.into_iter().map(|h| h.join().expect("seed thread")).collect::<Vec<_>>()
+        }));
+    }
+    for (seed, (a, b)) in (1..=seeds).zip(runs) {
+        let (Some(a), Some(b)) = (a, b) else { return };
         println!("seed {seed}: strategy {} vs plain {} enemy captures, {} vs {} pirate/neutral captures, largest faction {} vs {} planets (best faction +{} / +{} planets by week 10)", a.enemy_captures, b.enemy_captures, a.expansion_captures, b.expansion_captures, a.max_planets, b.max_planets, a.max_gain_week10, b.max_gain_week10);
         with += a.enemy_captures;
         without += b.enemy_captures;

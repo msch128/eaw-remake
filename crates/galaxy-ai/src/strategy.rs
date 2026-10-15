@@ -66,11 +66,13 @@ pub struct AiTier {
     pub goal_sleep: f64,
     /// The AI sees the whole map (no fog), an optional cheat.
     pub full_map_knowledge: bool,
+    /// Lanes around own planets and fleets the AI sees (user rule 2026-10-15: Easy 1, Normal 2, Hard 3); `None` = `StrategyConfig::vision_hops`.
+    pub vision_hops: Option<u8>,
 }
 
 impl Default for AiTier {
     fn default() -> Self {
-        Self { name: "Normal".into(), contrast: 1.0, goal_sleep: 0.0, full_map_knowledge: false }
+        Self { name: "Normal".into(), contrast: 1.0, goal_sleep: 0.0, full_map_knowledge: false, vision_hops: None }
     }
 }
 
@@ -234,11 +236,12 @@ impl Strategy {
             if full {
                 self.visible[p] = vec![true; n];
             } else {
+                let vision = self.tiers.get(&(p as u32)).and_then(|t| t.vision_hops).unwrap_or(self.config.vision_hops);
                 let mut seeds: Vec<usize> = snap.owned[p].iter().map(|&x| x as usize).collect();
                 seeds.extend((0..n).filter(|&pl| snap.power[pl].iter().any(|e| e.0 as usize == p)));
                 for s in seeds {
                     for &(t, h) in &self.near[s] {
-                        if h <= self.config.vision_hops {
+                        if h <= vision {
                             self.visible[p][t as usize] = true;
                         }
                     }

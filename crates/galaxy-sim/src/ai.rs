@@ -140,7 +140,10 @@ fn fleet_strength(world: &World, f: &Fleet) -> f32 {
 
 /// What defends a planet against `attacker`, as the battle would field it: the owner's star base with its garrison and armed structures, and the
 /// hostile fleets in orbit. The passive faction's base and garrison scale to the attacker's tech level like in `Sim::battle_sides`.
-fn defense_parts(world: &World, galaxy: &Galaxy, planet: PlanetId, attacker: FactionId) -> Vec<(Source, u32)> {
+///
+/// `known` is [`Galaxy::ai_knowledge`] of the attacker. At a planet it does not know, only what the map shows is used (**estimate**, labelled: the owner's star base and its
+/// garrison); fleets in orbit and armed structures stay hidden, so the AI can be surprised there.
+fn defense_parts(world: &World, galaxy: &Galaxy, known: &[bool], planet: PlanetId, attacker: FactionId) -> Vec<(Source, u32)> {
     let ps = &galaxy.planets[planet as usize];
     let mut parts: Vec<(Source, u32)> = Vec::new();
     let passive = world.passive_faction();
@@ -159,9 +162,11 @@ fn defense_parts(world: &World, galaxy: &Galaxy, planet: PlanetId, attacker: Fac
             parts.push((Source::Starbase(sb), 1));
             parts.extend(world.starbases[sb as usize].garrison.iter().map(|&(u, c)| (Source::Garrison(u), c)));
         }
-        parts.extend(ps.structures.iter().filter(|&&s| { let st = &world.structures[s as usize]; st.combat.is_some() || st.space_reach }).map(|&s| (Source::Structure(s), 1)));
+        if known[planet as usize] {
+            parts.extend(ps.structures.iter().filter(|&&s| { let st = &world.structures[s as usize]; st.combat.is_some() || st.space_reach }).map(|&s| (Source::Structure(s), 1)));
+        }
     }
-    for f in galaxy.fleets_at(planet).filter(|f| galaxy.hostile(world, attacker, f.owner)) {
+    for f in galaxy.fleets_at(planet).filter(|f| known[planet as usize] && galaxy.hostile(world, attacker, f.owner)) {
         for (&u, &c) in &f.units {
             let take = if Some(f.owner) == passive { c.min(units_left) } else { c };
             if Some(f.owner) == passive {
@@ -176,14 +181,14 @@ fn defense_parts(world: &World, galaxy: &Galaxy, planet: PlanetId, attacker: Fac
 }
 
 /// Estimated defensive strength of a planet from the point of view of an attacker.
-fn defense_strength(world: &World, galaxy: &Galaxy, planet: PlanetId, attacker: FactionId) -> f32 {
-    world.tuned_strength(defense_parts(world, galaxy, planet, attacker))
+fn defense_strength(world: &World, galaxy: &Galaxy, known: &[bool], planet: PlanetId, attacker: FactionId) -> f32 {
+    world.tuned_strength(defense_parts(world, galaxy, known, planet, attacker))
 }
 
 /// Plays the battle on `fleet` against the planet's defence with the statistical resolver (fixed seed) and says whether the attacker wins. The
 /// Lanchester estimate alone can be far off against star bases and swarms of small craft: a fleet that "outguns" a base 2 to 1 may still lose it all.
-fn wins_battle(world: &World, galaxy: &Galaxy, faction: FactionId, fleet: &Fleet, planet: PlanetId) -> bool {
-    let defence = defense_parts(world, galaxy, planet, faction);
+fn wins_battle(world: &World, galaxy: &Galaxy, known: &[bool], faction: FactionId, fleet: &Fleet, planet: PlanetId) -> bool {
+    let defence = defense_parts(world, galaxy, known, planet, faction);
     if defence.is_empty() {
         return true;
     }
@@ -195,7 +200,18 @@ fn wins_battle(world: &World, galaxy: &Galaxy, faction: FactionId, fleet: &Fleet
     result.winner == Some(0)
 }
 
+/// [`World::blockades`] as the AI knows it: at a planet it does not know it counts only the star base (visible on the map), not armed structures or fleets.
+fn blockades_known(world: &World, galaxy: &Galaxy, known: &[bool], planet: PlanetId, owner: FactionId) -> bool {
+    if known[planet as usize] {
+        return world.blockades(galaxy, planet, owner);
+    }
+    let ps = &galaxy.planets[planet as usize];
+    ps.starbase.is_some() && ps.owner.is_some_and(|o| galaxy.hostile(world, owner, o))
+}
+
 fn plan_military(world: &World, galaxy: &Galaxy, faction: FactionId, rng: &mut Rng, cmds: &mut Vec<Command>) {
+    let known = galaxy.ai_knowledge(world, faction);
+    let known = &known[..];
     // Group idle fleets per planet.
     let mut idle: Vec<(PlanetId, Vec<&Fleet>)> = Vec::new();
     for f in galaxy.fleets.values().filter(|f| f.owner == faction) {
@@ -239,7 +255,7 @@ fn plan_military(world: &World, galaxy: &Galaxy, faction: FactionId, rng: &mut R
             if hops_cost > 900.0 {
                 continue;
             }
-            let defense = defense_strength(world, galaxy, t, faction);
+            let defense = defense_strength(world, galaxy, known, t, faction);
             if strength <= defense * ATTACK_RATIO || (defense > 0.0 && total.unit_count() < 3) {
                 continue;
             }
@@ -251,8 +267,8 @@ fn plan_military(world: &World, galaxy: &Galaxy, faction: FactionId, rng: &mut R
         // star base or fleet; going the long way round is tried first, like `MoveFleetAround`).
         candidates.sort_by(|a, b| b.0.total_cmp(&a.0).then(a.1.cmp(&b.1)));
         let best = candidates.into_iter().find(|&(_, t)| {
-            let Some(path) = world.find_path_avoiding(p, t, |q| q != t && world.blockades(galaxy, q, faction)) else { return false };
-            path.iter().filter(|&&q| q != p && q != t).all(|&q| !world.blockades(galaxy, q, faction) || wins_battle(world, galaxy, faction, &total, q)) && wins_battle(world, galaxy, faction, &total, t)
+            let Some(path) = world.find_path_avoiding(p, t, |q| q != t && blockades_known(world, galaxy, known, q, faction)) else { return false };
+            path.iter().filter(|&&q| q != p && q != t).all(|&q| !blockades_known(world, galaxy, known, q, faction) || wins_battle(world, galaxy, known, faction, &total, q)) && wins_battle(world, galaxy, known, faction, &total, t)
         });
         if let Some((_, t)) = best {
             cmds.push(Command::MoveFleetAround { faction, fleet: main.id, to: t });
@@ -315,4 +331,9 @@ fn needed_for_ships(world: &World, galaxy: &Galaxy, faction: FactionId, s: Struc
         let ut = &world.units[u as usize];
         matches!(ut.role, UnitRole::Ship) && ut.tech <= tech && ut.req_structures.iter().any(|g| g.contains(&s))
     })
+}
+
+/// What the AI of `attacker` believes defends `planet` (fog of war applied, see [`Galaxy::ai_knowledge`]); the strength every attack decision uses.
+pub fn believed_defense(world: &World, galaxy: &Galaxy, attacker: FactionId, planet: PlanetId) -> f32 {
+    defense_strength(world, galaxy, &galaxy.ai_knowledge(world, attacker), planet, attacker)
 }

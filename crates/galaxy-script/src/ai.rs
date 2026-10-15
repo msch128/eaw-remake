@@ -271,7 +271,9 @@ impl AiSim for SimAdapter<'_> {
         use galaxy_sim::combat::Source;
         let g = self.sim.galaxy();
         let mut members: Vec<(Source, u32)> = Vec::new();
-        for f in g.fleets_at(pl) {
+        // Fog (user rule 2026-10-15): fleets in orbit and armed structures count only where the attacker's AI knows the planet; the star base is on the map.
+        let known = g.ai_knowledge(&self.world, attacker)[pl as usize];
+        for f in g.fleets_at(pl).filter(|_| known) {
             if g.hostile(&self.world, attacker, f.owner) {
                 members.extend(f.units.iter().map(|(u, c)| (Source::Unit(*u), *c)));
             }
@@ -283,7 +285,7 @@ impl AiSim for SimAdapter<'_> {
                 members.extend(self.world.starbases[sb as usize].garrison.iter().map(|&(u, c)| (Source::Garrison(u), c)));
             }
             for &s in &ps.structures {
-                if self.world.structures[s as usize].combat.is_some() {
+                if known && self.world.structures[s as usize].combat.is_some() {
                     members.push((Source::Structure(s), 1));
                 }
             }
