@@ -610,3 +610,26 @@ fn the_opposing_republic_or_cis_side_is_cut_to_three_planets() {
         assert_eq!(owned(&s, o).len(), owned(&normal, o).len().min(3), "{camp}: {other} keeps at most three planets");
     }
 }
+
+#[test]
+fn pirate_rearm_adds_only_the_ship_types_the_planet_already_fields() {
+    let Some(data) = load() else { return };
+    let mut s = sim(&data, false);
+    let w = s.world().clone();
+    let pirates = w.faction_id("Pirates").unwrap();
+    let human = w.faction_id("Rebel").unwrap();
+    let types_at = |s: &Sim, p: u32| -> std::collections::BTreeSet<u32> {
+        s.galaxy().fleets.values().filter(|f| f.owner == pirates && f.location == FleetLocation::AtPlanet(p)).flat_map(|f| f.units.iter().filter(|(_, c)| **c > 0).map(|(u, _)| *u)).collect()
+    };
+    s.step(w.config.week_seconds);
+    let planets: Vec<u32> = (0..w.planets.len() as u32).filter(|&p| w.real[p as usize] && s.galaxy().planets[p as usize].owner == Some(pirates) && !types_at(&s, p).is_empty()).collect();
+    assert!(!planets.is_empty());
+    let before: Vec<_> = planets.iter().map(|&p| types_at(&s, p)).collect();
+    s.galaxy_mut().factions[human as usize].tech = 5;
+    for _ in 0..6 {
+        s.step(w.config.week_seconds);
+    }
+    for (i, &p) in planets.iter().enumerate() {
+        assert!(types_at(&s, p).is_subset(&before[i]), "planet {} got ship types it did not field: {:?} vs {:?}", w.planets[p as usize].name, types_at(&s, p), before[i]);
+    }
+}

@@ -280,8 +280,18 @@ impl Sim {
             }
             if with_garrison && !pool.is_empty() {
                 let here: u32 = self.galaxy.fleets.values().filter(|f| f.owner == passive && f.location == crate::state::FleetLocation::AtPlanet(p)).map(|f| f.unit_count()).sum();
+                // The planet's own composition: the ship types it fields (remembered, so a planet that lost its ships keeps its types); a planet with none
+                // gets the cheapest passive ship types (estimate, RULES.md).
+                let mut own: Vec<UnitTypeId> = self.passive_types.remove(&p).unwrap_or_default();
+                for f in self.galaxy.fleets.values().filter(|f| f.owner == passive && f.location == crate::state::FleetLocation::AtPlanet(p)) {
+                    own.extend(f.units.iter().filter(|(u, c)| **c > 0 && pool.contains(u)).map(|(u, _)| *u));
+                }
+                own.sort_unstable();
+                own.dedup();
+                self.passive_types.insert(p, own.clone());
+                let planet_pool = if own.is_empty() { cheapest_types(&world, &pool, 3) } else { own };
                 if (here as i32) < PASSIVE_GARRISON_PER_TECH * tech {
-                    let pick = pool[(p as usize + week as usize) % pool.len()];
+                    let pick = planet_pool[(p as usize + week as usize) % planet_pool.len()];
                     crate::sim::add_units(&mut self.galaxy, passive, p, pick, 1);
                 }
             }
@@ -327,4 +337,12 @@ impl World {
         };
         (eff_sb, max_units)
     }
+}
+
+/// The `n` cheapest of `pool` by build cost (ties by id).
+fn cheapest_types(world: &World, pool: &[UnitTypeId], n: usize) -> Vec<UnitTypeId> {
+    let mut v = pool.to_vec();
+    v.sort_by(|&a, &b| world.units[a as usize].cost.total_cmp(&world.units[b as usize].cost).then(a.cmp(&b)));
+    v.truncate(n.max(1));
+    v
 }

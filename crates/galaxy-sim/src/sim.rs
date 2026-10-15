@@ -20,6 +20,8 @@ pub struct Sim {
     pub(crate) tactical_requests: BTreeMap<u32, crate::tactical::TacticalRequest>,
     /// Events produced by commands, delivered by the next [`Sim::step`].
     pub(crate) queued_events: Vec<Event>,
+    /// Ship types the passive faction has fielded at each of its planets (the campaign's own composition there); `rearm_passive` adds only these (not saved: rebuilt from the fleets present).
+    pub(crate) passive_types: BTreeMap<PlanetId, Vec<UnitTypeId>>,
 }
 
 impl Sim {
@@ -55,7 +57,7 @@ impl Sim {
                 add_units(&mut galaxy, f, p, u, 1);
             }
         }
-        let mut sim = Sim { world, galaxy, ai: Vec::new(), tactical: None, arenas: std::collections::HashMap::new(), tactical_requests: BTreeMap::new(), queued_events: Vec::new() };
+        let mut sim = Sim { world, galaxy, ai: Vec::new(), tactical: None, arenas: std::collections::HashMap::new(), tactical_requests: BTreeMap::new(), queued_events: Vec::new(), passive_types: BTreeMap::new() };
         if sim.world.config.ground_up {
             let human = sim.world.victory.active_player;
             sim.apply_ground_up(human);
