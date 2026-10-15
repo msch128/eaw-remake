@@ -1,8 +1,8 @@
 //! Tactical Fog of War visual shroud overlay in space battles (on by default, `SP_FOG_SHROUD=0` turns it off, see `setup_fog_shroud`).
 //!
-//! Spans a semi-transparent cosmic fog plane over the arena on the battle plane.
-//! Areas outside the player's ship sensor discs are shrouded in dark cosmic dust;
-//! areas within sensor range are rendered clear with soft feathered borders.
+//! Spans a semi-transparent cosmic fog plane over the arena on the battle plane (`SpaceFOWHeight` -10, cells of about `DesiredSpaceFOWCellSize` 100).
+//! Areas outside the player's ship sensor discs are covered in a light white haze (`SpaceFOWColor` 255 255 255 in Gameconstants.xml; the opacity is an
+//! estimate, the data alpha is 0); areas within sensor range are clear with soft feathered borders, and the plane fades out toward its own edge so no hard seam shows over a backdrop planet.
 
 use bevy::asset::RenderAssetUsages;
 use bevy::prelude::*;
@@ -10,9 +10,11 @@ use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use crate::{BattleEntity, BattleRuntime, BattleViewSettings, RenderedShips};
 
 pub const FOG_GRID_SIZE: usize = 128;
-pub const FOG_MAX_ALPHA: u8 = 195; // ~0.76 opacity
-pub const FOG_FEATHER_DISTANCE: f32 = 600.0;
-pub const FOG_COLOR_RGB: [u8; 3] = [10, 16, 26];
+pub const FOG_MAX_ALPHA: u8 = 140; // ~0.55 opacity (estimate; light haze, the dark sheet of the first version hid the planet)
+pub const FOG_FEATHER_DISTANCE: f32 = 800.0;
+/// The plane fades to nothing over this distance at its edge (no hard seam).
+pub const FOG_EDGE_FADE: f32 = 2500.0;
+pub const FOG_COLOR_RGB: [u8; 3] = [255, 255, 255];
 
 /// Resource holding the tactical fog shroud texture handle and arena size.
 #[derive(Resource)]
@@ -108,7 +110,11 @@ pub fn calculate_fog_alphas(
                 let smooth = t * t * (3.0 - 2.0 * t);
                 (smooth * FOG_MAX_ALPHA as f32).round() as u8
             };
-            alphas.push(alpha);
+            // Fade out toward the plane's own edge.
+            let edge = (half - wx.abs()).min(half - wz.abs()).max(0.0) / FOG_EDGE_FADE;
+            let edge = edge.clamp(0.0, 1.0);
+            let edge = edge * edge * (3.0 - 2.0 * edge);
+            alphas.push((alpha as f32 * edge).round() as u8);
         }
     }
     alphas
@@ -164,24 +170,27 @@ mod tests {
 
     #[test]
     fn fog_alpha_calculation_reveals_sensors_and_shrouds_distant_space() {
-        let grid = 16;
-        let arena = 10000.0;
+        let grid = 64;
+        let arena = 20000.0;
         let sensors = vec![(Vec2::ZERO, 2000.0)];
 
         let alphas = calculate_fog_alphas(grid, arena, &sensors);
         assert_eq!(alphas.len(), grid * grid);
 
-        // Center pixel (around (0,0)) should be inside sensor radius (2000.0) -> alpha 0
+        // Centre (around (0,0)) is inside the sensor radius: clear.
         let center_idx = (grid / 2) * grid + (grid / 2);
         assert_eq!(alphas[center_idx], 0, "center of sensor disc should be clear (alpha 0)");
 
-        // Corner pixel (at (-5000, -5000)) is far outside -> alpha should be FOG_MAX_ALPHA
-        let corner_idx = 0;
-        assert_eq!(alphas[corner_idx], FOG_MAX_ALPHA, "corner should be fully shrouded");
+        // Far from every sensor and well inside the plane (about (-5900, -5900)): full haze.
+        let inner = 13 * grid + 13;
+        assert_eq!(alphas[inner], FOG_MAX_ALPHA, "far space inside the plane is fully covered");
 
-        // Edge with feathering: point at distance 2300 (margin 300 out of 600) has intermediate alpha
-        let sensors_off = vec![(Vec2::new(5000.0, 5000.0), 100.0)];
-        let alphas_off = calculate_fog_alphas(4, 1000.0, &sensors_off);
-        assert!(alphas_off.iter().all(|&a| a == FOG_MAX_ALPHA));
+        // The plane's own corner fades out: no hard seam at the edge.
+        assert_eq!(alphas[0], 0, "the edge fades to nothing");
+
+        // A sensor far away leaves everything else covered.
+        let sensors_off = vec![(Vec2::new(50000.0, 50000.0), 100.0)];
+        let alphas_off = calculate_fog_alphas(grid, arena, &sensors_off);
+        assert_eq!(alphas_off[inner], FOG_MAX_ALPHA);
     }
 }
