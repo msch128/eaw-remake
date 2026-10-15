@@ -3017,6 +3017,15 @@ fn weapons(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, rng:
     }
 }
 
+/// Estimate: change of a rocket's heading (radians) over `step` units of flight after `flown` units. After `Projectile_Rocket_Straight_Distance`
+/// the heading deviation follows one full sine of amplitude `Projectile_Rocket_Curve_Offset` over `Projectile_Rocket_Curve_Distance`, so the
+/// rocket weaves in an S and ends on its original line (the data names the three values but not the curve).
+fn rocket_weave_turn(pd: &ProjDef, flown: f32, step: f32) -> f32 {
+    let dev = |s: f32| pd.rocket_weave * (2.0 * PI * (s / pd.rocket_curve).clamp(0.0, 1.0)).sin();
+    let s0 = flown - pd.rocket_straight;
+    dev(s0 + step) - dev(s0)
+}
+
 /// Moves one projectile and tests it against enemy ships.
 fn fly(p: &mut Projectile, snaps: &[Snap], grid: &Grid, cat: &Catalog, env: &FlyEnv, dt: f32) -> Out {
     let pd = &cat.projectiles[p.def as usize];
@@ -3043,6 +3052,14 @@ fn fly(p: &mut Projectile, snaps: &[Snap], grid: &Grid, cat: &Catalog, env: &Fly
                 let dir = (cur + (want - cur) * k).normalized();
                 p.vel = dir * pd.speed;
             }
+        }
+    }
+    if pd.rocket_weave > 0.0 {
+        let side = if (p.owner ^ p.target ^ p.def) & 1 == 0 { 1.0 } else { -1.0 };
+        let flown = pd.max_distance - p.range_left;
+        let turn = rocket_weave_turn(pd, flown, p.vel.len() * dt);
+        if turn != 0.0 {
+            p.vel = p.vel.rotate_yaw(side * turn);
         }
     }
     let old = p.pos;
@@ -3121,3 +3138,25 @@ const PATH_REPLAN_SECS: f32 = 0.5;
 
 /// Squadron definitions with counts.
 type Squadrons = Vec<(ShipId, u32)>;
+
+#[cfg(test)]
+mod rocket_tests {
+    use super::*;
+
+    #[test]
+    fn rocket_weaves_between_straight_and_curve_distance_and_ends_on_its_line() {
+        let pd = ProjDef { rocket_weave: 0.2, rocket_straight: 400.0, rocket_curve: 800.0, ..ProjDef::default() };
+        assert_eq!(rocket_weave_turn(&pd, 0.0, 10.0), 0.0, "straight at first");
+        assert!(rocket_weave_turn(&pd, 410.0, 10.0).abs() > 0.0, "weaves after the straight distance");
+        assert_eq!(rocket_weave_turn(&pd, 1300.0, 10.0), 0.0, "straight again after the curve");
+        // Summed over the whole curve the heading returns to where it was, and the sideways drift cancels.
+        let (mut heading, mut lateral, mut flown) = (0.0f32, 0.0f32, 0.0f32);
+        while flown < 1500.0 {
+            heading += rocket_weave_turn(&pd, flown, 1.0);
+            lateral += heading.sin();
+            flown += 1.0;
+        }
+        assert!(heading.abs() < 1e-3, "heading back on the line: {heading}");
+        assert!(lateral.abs() < 20.0, "net drift small: {lateral}");
+    }
+}

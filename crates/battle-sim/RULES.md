@@ -233,3 +233,9 @@ Squadron formation slots are data (`Squadron_Offsets`, `Starfighter_Formations.x
 | Flanking (U93) | corvettes and units faster than 250 u/s swing 3200 + 600 x (id % 3) u (attack-move) or 3500 + 500 x (id % 4) u (move) to the side | the Remake has flanking behaviour but no distances in the XML |
 Visual-only effects of U67-U74 (ribbons, debris, glow, ripples, sensor rings, hyperspace tunnel) do not change simulation state.
 The 5 s hold of the victory/defeat banner before the summary (U49) is the user's rule (`OUTCOME_HOLD_SECONDS` in `battle-view`), not an engine value.
+
+## Rocket weave (estimate)
+`ROCKET` projectiles with `Projectile_Rocket_Curve_Distance` > 0 weave: after `Projectile_Rocket_Straight_Distance` of flight their heading deviates
+by `Projectile_Rocket_Curve_Offset` degrees following one full sine over `Projectile_Rocket_Curve_Distance`, ending on the original line (side
+fixed per shooter and target). The data gives the three numbers, not the curve; the shape and the per-shooter side are estimates. Rockets keep
+their small `Max_Rate_Of_Turn` homing. Offset 0 (flak, Executor barrage) flies straight.

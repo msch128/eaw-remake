@@ -534,6 +534,13 @@ pub struct ProjDef {
     /// Estimate: homing missiles leave the launcher this many radians off the target line (left or right, per shot) and
     /// curve in with their turn rate; 0 for everything else.
     pub arc_offset: f32,
+    /// `Projectile_Rocket_Curve_Offset` in radians (`ROCKET` projectiles only): amplitude of the weave in the rocket's heading (estimate of what the
+    /// data means, see RULES.md); 0 = flies straight.
+    pub rocket_weave: f32,
+    /// `Projectile_Rocket_Straight_Distance`: flight distance before the weave starts.
+    pub rocket_straight: f32,
+    /// `Projectile_Rocket_Curve_Distance`: flight distance one weave lasts.
+    pub rocket_curve: f32,
     /// Maximum flight distance.
     pub max_distance: f32,
     /// Hurts shields.
@@ -983,6 +990,7 @@ impl Catalog {
         let speed = p.max_speed * self.speed_scale;
         let max_distance = if p.max_flight_distance > 0.0 { p.max_flight_distance } else { 4000.0 };
         let f = |k: &str| p.fields.get(k).and_then(|v| v.parse::<f32>().ok()).unwrap_or(0.0);
+        let is_rocket = p.category.as_deref().is_some_and(|c| c.eq_ignore_ascii_case("rocket"));
         ProjDef {
             name: p.name.clone(),
             category: p.category.clone().unwrap_or_default().to_ascii_lowercase(),
@@ -991,6 +999,9 @@ impl Catalog {
             speed: speed.max(1.0),
             turn_rate: p.max_rate_of_turn.max(0.0),
             arc_offset: if p.category.as_deref().is_some_and(|c| c.eq_ignore_ascii_case("missile")) { (p.max_rate_of_turn * MISSILE_ARC_PER_TURN_RATE).clamp(0.0, MISSILE_ARC_MAX) } else { 0.0 },
+            rocket_weave: if is_rocket && f("projectile_rocket_curve_distance") > 0.0 { f("projectile_rocket_curve_offset").to_radians() } else { 0.0 },
+            rocket_straight: f("projectile_rocket_straight_distance"),
+            rocket_curve: f("projectile_rocket_curve_distance"),
             max_distance,
             shield_damage: p.does_shield_damage,
             hull_damage: p.does_hitpoint_damage,
