@@ -1,4 +1,4 @@
-//! Empire-at-War style galaxy camera: angled top-down orbit with smooth zoom and clamped panning.
+﻿//! Empire-at-War style galaxy camera: angled top-down orbit with smooth zoom and clamped panning.
 
 use crate::flow::{AppScreen, not_paused};
 use crate::settings::Settings;
@@ -84,15 +84,6 @@ const PAGE_TURN_SPEED: f32 = 1.2;
 /// Extra tilt towards the horizon at the closest zoom, radians: 50 deg start to about 24 deg (GMC_ZoomedPitchAngleDegrees -20).
 const ZOOM_FLATTEN: f32 = 0.45;
 const ZOOM_STEP: f32 = 0.88;
-/// Wheel notches from the start view to the planet view. The mod data has no wheel step (Min/Max_Galactic_Zoom_Speed are marked unused in
-/// GameConstants.xml), so this is an estimate of the original's feel: a few notches take you from the galaxy into a planet.
-const NOTCHES_TO_PLANET: f32 = 6.5;
-
-/// Distance factor of one wheel notch: the start distance shrinks to the closest zoom in [NOTCHES_TO_PLANET] notches, never gentler
-/// than the old fixed step and never so coarse that one notch jumps most of the way.
-fn zoom_step(bounds: &CameraBounds) -> f32 {
-    (bounds.min_distance / bounds.initial_distance.max(bounds.min_distance)).powf(1.0 / NOTCHES_TO_PLANET).clamp(0.45, ZOOM_STEP)
-}
 const ZOOM_SMOOTH: f32 = 12.0;
 const PAN_SMOOTH: f32 = 14.0;
 const KEY_PAN_SPEED: f32 = 1.1;
@@ -170,7 +161,7 @@ fn control_camera(
     };
     if notches != 0.0 {
         let old_distance = cam.target_distance;
-        cam.target_distance = (old_distance * zoom_step(&bounds).powf(notches)).clamp(bounds.min_distance, bounds.max_distance);
+        cam.target_distance = (old_distance * ZOOM_STEP.powf(notches)).clamp(bounds.min_distance, bounds.max_distance);
         let fov = match projection {
             Projection::Perspective(p) => p.fov,
             _ => 40f32.to_radians(),
@@ -315,15 +306,6 @@ mod tests {
 
     const FOV: f32 = 0.7;
     const SIZE: Vec2 = Vec2::new(1280.0, 720.0);
-
-    #[test]
-    fn the_start_view_reaches_the_planet_in_a_few_notches() {
-        let b = CameraBounds { min_distance: 40.0, initial_distance: 1600.0, max_distance: 2000.0, ..CameraBounds::default() };
-        let notches = (b.min_distance / b.initial_distance).ln() / zoom_step(&b).ln();
-        assert!((notches - NOTCHES_TO_PLANET).abs() < 0.1, "{notches}");
-        let flat = CameraBounds { min_distance: 40.0, initial_distance: 45.0, ..b };
-        assert!(zoom_step(&flat) <= ZOOM_STEP);
-    }
 
     #[test]
     fn the_screen_centre_looks_at_the_focus() {
