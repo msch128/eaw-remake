@@ -296,6 +296,7 @@ fn capture_driver(
     mut reinforced: Local<bool>,
     mut moved: Local<bool>,
     rocks: Res<DemoRocks>,
+    named: Query<(&Name, &GlobalTransform)>,
 ) {
     let now = Instant::now();
     let dt = now.duration_since(cap.last).as_secs_f64() * 1000.0;
@@ -390,6 +391,35 @@ fn capture_driver(
         bc.snap = true;
         bc.target_focus = center;
         bc.target_distance = (radius * 1.7).clamp(1500.0, 16000.0);
+    }
+    // `SP_DEMO_SUPER`: the Death Star dish bone; `SP_DEMO_WRECK`: the first debris chunk of a dead ship.
+    for (var, bone, dist) in [("SP_DEMO_SUPER", "p_planet_deathstar_laser_large", 3000.0), ("SP_DEMO_WRECK", "ship_debris_chunk", 1500.0)] {
+        if std::env::var_os(var).is_some()
+            && let Some((_, g)) = named.iter().find(|(n, _)| n.as_str().eq_ignore_ascii_case(bone))
+        {
+            bc.snap = true;
+            bc.target_focus = g.translation();
+            bc.target_distance = dist;
+        }
+    }
+    if std::env::var_os("SP_DEMO_DOGFIGHT").is_some() {
+        // Closest pair of opposing fighters (radius under 100).
+        let f: Vec<_> = ships.0.values().filter(|s| s.radius < 100.0).collect();
+        let pair = f
+            .iter()
+            .flat_map(|a| f.iter().filter(|b| b.side != a.side).map(move |b| (a, b)))
+            .min_by(|x, y| x.0.pos.distance(x.1.pos).total_cmp(&y.0.pos.distance(y.1.pos)));
+        if let Some((a, b)) = pair {
+            bc.snap = true;
+            bc.target_focus = (a.pos + b.pos) * 0.5;
+            bc.target_distance = 700.0;
+        }
+    }
+    if let Some(pitch) = std::env::var("SP_DEMO_PITCH").ok().and_then(|v| v.parse::<f32>().ok()) {
+        bc.pitch = pitch.to_radians();
+    }
+    if let Some(d) = std::env::var("SP_DEMO_DIST").ok().and_then(|v| v.parse::<f32>().ok()) {
+        bc.target_distance = d;
     }
     if cap.overlay {
         // Select the player's capital ships and hover the biggest enemy ship.

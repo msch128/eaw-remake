@@ -221,6 +221,8 @@ fn shade(in: VertexOutput, front: bool) -> vec4<f32> {
             let radius = max(mat.hit_params.x, 1.0);
             let duration = max(mat.hit_params.y, 0.05);
             var glow = 0.0;
+            // The whole bubble lights up faintly after a hit (CS9 reference: translucent bubble round the ship), brightest at the hit.
+            var bubble = 0.0;
             for (var i = 0; i < 8; i = i + 1) {
                 let h = mat.hits[i];
                 let age = globals.time - h.w;
@@ -228,8 +230,10 @@ fn shade(in: VertexOutput, front: bool) -> vec4<f32> {
                     let d = distance(in.world_position.xyz, h.xyz) / radius;
                     let fade = 1.0 - age / duration;
                     glow += exp(-d * d * 2.0) * fade * fade;
+                    bubble = max(bubble, fade * fade);
                 }
             }
+            glow += 0.3 * bubble;
             let scale = max(mat.atmosphere.y, 1.0);
             let tex = textureSample(base_tex, base_samp, in.uv * scale + vec2<f32>(globals.time * 0.1, 0.0)).rgb;
             let hex = mix(vec3<f32>(1.0), tex, 0.8);

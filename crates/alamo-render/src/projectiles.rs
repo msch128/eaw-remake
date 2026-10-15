@@ -401,7 +401,7 @@ pub struct ShieldFlash {
     last_hit: f32,
 }
 
-const SHIELD_FLASH_SECS: f32 = 0.35;
+const SHIELD_FLASH_SECS: f32 = 0.6;
 
 /// Observer: [`ShieldHit`].
 pub fn on_shield_hit(
@@ -442,7 +442,7 @@ pub fn on_shield_hit(
                 {
                     let mut own = src;
                     own.params.flags |= FLAG_SHIELD_HITS;
-                    own.params.hit_params = Vec4::new(l.radius * 0.14, SHIELD_FLASH_SECS, 1.0, 0.0);
+                    own.params.hit_params = Vec4::new(l.radius * 0.3, SHIELD_FLASH_SECS, 1.0, 0.0);
                     mat.0 = materials.add(own);
                 }
             }
