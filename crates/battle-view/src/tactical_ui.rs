@@ -882,13 +882,14 @@ fn ability_at(
         radius = w.radius;
         colour = Color::srgb(1.0, 0.75, 0.3);
     }
-    if def.super_laser.is_some() {
+    if let Some(laser) = &def.super_laser {
         radius = SUPER_LASER_AIM_RADIUS;
         colour = Color::srgb(1.0, 0.5, 0.2);
+        // The filter of `Battle::command`: the classes of the ability data (Eclipse: Capital, Frigate, SpaceStructure, Super; nothing
+        // smaller than a frigate) and an aim circle that reaches the hull radius, so a click on the side of a big hull is not refused here.
         let target = cur.ships.iter().any(|t| {
-            t.side != settings.player_side
-                && matches!(rt.catalog.ship(t.def).class, battle_sim::TargetClass::Capital | battle_sim::TargetClass::Frigate | battle_sim::TargetClass::Structure)
-                && t.pos.dist(pos) <= SUPER_LASER_AIM_RADIUS
+            let d = rt.catalog.ship(t.def);
+            t.side != settings.player_side && (laser.classes == 0 || laser.classes & d.class.bit() != 0) && t.pos.dist(pos) <= SUPER_LASER_AIM_RADIUS + d.radius
         });
         if !target {
             verdict = verdict.and(Err("No target"));

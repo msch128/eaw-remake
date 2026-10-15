@@ -403,6 +403,11 @@ pub struct ShieldFlash {
 
 const SHIELD_FLASH_SECS: f32 = 0.6;
 
+/// Largest radius of the glow round a shield hit, in world units (the shader's `hit_params.x`, the same space as the model). Estimate: 0.3 of a
+/// Star Destroyer hull radius (about 380 units: the data gives it as 760 units across). The glow used to scale with the hull, so ten fighters
+/// lit half an Executor; a hit is about as big on every ship.
+const SHIELD_SPLASH_MAX: f32 = 115.0;
+
 /// Observer: [`ShieldHit`].
 pub fn on_shield_hit(
     ev: On<ShieldHit>,
@@ -442,7 +447,7 @@ pub fn on_shield_hit(
                 {
                     let mut own = src;
                     own.params.flags |= FLAG_SHIELD_HITS;
-                    own.params.hit_params = Vec4::new(l.radius * 0.3, SHIELD_FLASH_SECS, 1.0, 0.0);
+                    own.params.hit_params = Vec4::new((l.radius * 0.3).min(SHIELD_SPLASH_MAX), SHIELD_FLASH_SECS, 1.0, 0.0);
                     mat.0 = materials.add(own);
                 }
             }

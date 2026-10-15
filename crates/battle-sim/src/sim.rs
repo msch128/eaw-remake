@@ -1198,7 +1198,7 @@ impl Battle {
                 owner: r.ship,
                 target: r.target,
                 aim_hp: r.aim_hp,
-                range_left: pd.map_or(2000.0, |p| p.max_distance),
+                range_left: pd.map_or(2000.0, |p| flight_range(p, (r.target != NONE).then(|| self.ships[r.target as usize].pos.dist(r.from)))),
             });
         }
 
@@ -3658,6 +3658,20 @@ const PATH_REPLAN_SECS: f32 = 0.5;
 /// Squadron definitions with counts.
 type Squadrons = Vec<(ShipId, u32)>;
 
+/// Extra distance an unguided bolt flies on past the point where it was aimed (estimate, not in the data): the data's
+/// `Projectile_Max_Flight_Distance` is only 600 for the light fighter lasers, so a bolt that missed a close target vanished a few
+/// hundred units behind it. A miss now flies on into empty space; it can still hit any other enemy on the way.
+const MISS_FLY_ON: f32 = 1200.0;
+
+/// Distance a freshly fired projectile may fly: the data value, but never less than `MISS_FLY_ON` past its target.
+/// Guided (turning) and weaving projectiles keep the data value, as do beams (a flight distance of a few units).
+fn flight_range(pd: &ProjDef, target_dist: Option<f32>) -> f32 {
+    match target_dist {
+        Some(d) if pd.turn_rate <= 0.0 && pd.rocket_weave <= 0.0 && pd.max_distance >= 10.0 => pd.max_distance.max(d + MISS_FLY_ON),
+        _ => pd.max_distance,
+    }
+}
+
 #[cfg(test)]
 mod rocket_tests {
     use super::*;
@@ -3677,5 +3691,21 @@ mod rocket_tests {
         }
         assert!(heading.abs() < 1e-3, "heading back on the line: {heading}");
         assert!(lateral.abs() < 20.0, "net drift small: {lateral}");
+    }
+}
+
+#[cfg(test)]
+mod flight_range_tests {
+    use super::*;
+
+    #[test]
+    fn a_missed_bolt_flies_on_past_its_target() {
+        let light = ProjDef { max_distance: 600.0, ..ProjDef::default() };
+        assert_eq!(flight_range(&light, Some(500.0)), 500.0 + MISS_FLY_ON, "the data range would end 100 units behind the target");
+        assert_eq!(flight_range(&light, None), 600.0);
+        let homing = ProjDef { max_distance: 600.0, turn_rate: 1.0, ..ProjDef::default() };
+        assert_eq!(flight_range(&homing, Some(500.0)), 600.0);
+        let beam = ProjDef { max_distance: 1.0, ..ProjDef::default() };
+        assert_eq!(flight_range(&beam, Some(500.0)), 1.0);
     }
 }

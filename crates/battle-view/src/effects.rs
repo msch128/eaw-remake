@@ -702,8 +702,9 @@ pub fn trigger_reveal_ping_effects(
     }
 }
 
-/// Gravity well of an interdictor (`INTERDICT` switched on, or a ship or station with `Is_Interdictor`): two slow pulsing rings on the
-/// battle plane around the ship while it blocks the retreat. The data names no particle and no radius for the field (estimate: the ring
+/// Gravity well of an interdictor: two slow pulsing rings on the battle plane around the ship, drawn only while its `INTERDICT` ability is
+/// switched on (user rule). A ship that has `Is_Interdictor` in the data blocks the retreat all the time (sim) but shows no rings until the
+/// toggle is on. The data names no particle and no radius for the field (estimate: the ring
 /// is six hull radii wide and only marks the ship), the effect is gizmo lines like the sensor ping.
 pub fn draw_gravity_wells(
     time: Res<Time>,
@@ -718,7 +719,7 @@ pub fn draw_gravity_wells(
             continue;
         }
         let def = rt.catalog.ship(s.def);
-        let on = def.interdictor || def.abilities.iter().zip(&s.abilities).any(|(a, &(active, _))| a.interdict && active > 0.0);
+        let on = def.abilities.iter().zip(&s.abilities).any(|(a, &(active, _))| a.interdict && active > 0.0);
         if !on {
             continue;
         }
