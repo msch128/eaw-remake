@@ -547,6 +547,8 @@ pub fn update_ships(
                     MeshMaterial3d(flash_mat),
                     Transform::from_translation(t.translation).with_scale(Vec3::splat(1.0)),
                     ArrivalFlash { at: cur.time, radius: radius * 0.6 },
+                    // The sim clock freezes when the battle ends (DEFEATED, pause); the flash is timed on it, so it also expires on wall time (the user saw it stay forever).
+                    RemoveAfter(FLASH_WALL_SECONDS),
                     Visibility::Inherited,
                     Name::new("hyperspace departure flash"),
                 ));
@@ -556,6 +558,7 @@ pub fn update_ships(
                     heading: fwd,
                     radius,
                 });
+                commands.entity(e).insert(RemoveAfter(FLASH_WALL_SECONDS));
             } else {
                 commands.entity(e).try_despawn();
             }
@@ -1031,6 +1034,9 @@ pub fn update_departures(
     }
 }
 
+/// Wall-clock cap (seconds) on the hyperspace departure effects, which are timed on the sim clock and would stand forever once it stops.
+const FLASH_WALL_SECONDS: f32 = 3.0;
+
 /// Despawns an entity after a short delay (the root of a ship that was replaced by its death clone).
 #[derive(Component)]
 pub struct RemoveAfter(f32);
@@ -1057,6 +1063,19 @@ mod tests {
         assert!(b > 5.0 && b < FIGHTER_MAX_BOOST, "{b}");
         assert_eq!(fighter_boost(400.0, 930.0, px_per_unit, 1080.0), 1.0);
         assert_eq!(fighter_boost(0.01, 930.0, px_per_unit, 1080.0), FIGHTER_MAX_BOOST);
+    }
+
+    #[test]
+    fn remove_after_despawns_on_wall_time_when_the_sim_clock_stands() {
+        let mut app = App::new();
+        app.init_resource::<Time>().add_systems(Update, remove_after);
+        let e = app.world_mut().spawn(RemoveAfter(FLASH_WALL_SECONDS)).id();
+        app.world_mut().resource_mut::<Time>().advance_by(std::time::Duration::from_secs_f32(FLASH_WALL_SECONDS * 0.5));
+        app.update();
+        assert!(app.world().get_entity(e).is_ok());
+        app.world_mut().resource_mut::<Time>().advance_by(std::time::Duration::from_secs_f32(FLASH_WALL_SECONDS));
+        app.update();
+        assert!(app.world().get_entity(e).is_err());
     }
 
     #[test]
