@@ -510,7 +510,7 @@ pub fn orders(
     mut recent: ResMut<RecentOrders>,
     minimap_surfaces: Query<(&Interaction, &bevy::ui::RelativeCursorPosition), With<eaw_ui::MinimapSurface>>,
     minimap_data: Option<Res<eaw_ui::MinimapData>>,
-    mut blocked: ResMut<crate::tactical_ui::InterdictNotice>,
+    mut blocked: Option<ResMut<crate::tactical_ui::InterdictNotice>>,
 ) {
     let player = settings.player_side;
     // Esc is handled by the host (space-peace battle_menu): it cancels an armed order first and only opens the menu when none is armed.
@@ -526,10 +526,10 @@ pub fn orders(
     let lead = voice_lead(&rt, &ships, &mine);
     // A ship whose own ability pins it (`Disable_Movement`) does not move: the sim keeps it in place, the game explains why.
     let pinned = pinned_text(&rt, &mine);
-    let mut say_pinned = |blocked: &mut crate::tactical_ui::InterdictNotice| {
-        if let Some(t) = pinned {
-            blocked.0 = 4.0;
-            blocked.1 = t.to_string();
+    let mut say_pinned = |blocked: &mut Option<ResMut<crate::tactical_ui::InterdictNotice>>| {
+        if let (Some(t), Some(b)) = (pinned, blocked.as_mut()) {
+            b.0 = 4.0;
+            b.1 = t.to_string();
         }
     };
     if keys.just_pressed(KeyCode::KeyS) && !keys.pressed(KeyCode::ControlLeft) {

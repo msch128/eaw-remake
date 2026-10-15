@@ -12,6 +12,12 @@ looks, not measurements; every number below is an estimate until measured on a m
    round black smoke puffs that stay on screen (CS9 f0033, n93 f0011, f0013 "black puff on the desert"). Ours (`fight.png`): small orange
    puffs a few ship-widths across, no lingering smoke. `ships.rs::update_dying` already plays the data's `Death_Explosions` particle every 1.5 s and
    a flash at the end, so the gap is particle size/density and the missing smoke layer, not the trigger.
+   **Re-measured (battlemap, same day):** the effect data is already played in full. `pd_medium_3_750` has 77 emitters: fire up to 750, smoke
+   (`smoke_background` 19.5 s, 375->1500; `smoke_foreground_puff` 7 s, 375->1650), debris, shockwave, lens flares; the object lives 1500 frames. A frigate
+   death in `battle_demo` (`SP_DEMO_WRECK`, t=84 s) and a forced capital effect (`SP_DEMO_BOOM=Large_Explosion_Space_Empire_pd_medium_3_750@30`) show a
+   fireball about a ship wide with dark smoke that stays for 20 s, the same look as CS9 f0033 right side. Smoke tone is a little greyer than the Remake's black.
+   Left as is. Note: `ship_events` picks the effect by ship class, while the units' own `Death_Explosions` is mostly `New_Space_Explosion_Medium_Heat`
+   (150-500 wide, smaller) for corvettes and frigates; following the data would make those smaller, so the class table stays.
 2. **Missile and torpedo trails.** Remake: thick, curved white arcs/spirals that swing onto the target (n93 f0023). Ours: very long, thin,
    straight white lines (both demo frames) that look like laser beams, not trails. Check trail width, lifetime and the missile's steering.
 3. **Engine glow on capital ships.** Remake: ISD engines are big white discs with bloom (Bqc5 f0031, f0057), readable from far. Ours: no comparable

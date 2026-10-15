@@ -34,6 +34,7 @@ use bevy::window::ExitCondition;
 const STEP_MS: u64 = 16;
 
 static ABILITY_USED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static BOOM_AT: std::sync::Mutex<Option<Vec3>> = std::sync::Mutex::new(None);
 
 fn parse_vec(s: &str) -> Vec<f32> {
     s.split(',').filter_map(|v| v.trim().parse().ok()).collect()
@@ -364,6 +365,18 @@ fn capture_driver(
             *moved = true;
         }
     }
+    // `SP_DEMO_BOOM=Particle_Name@secs`: plays that death effect once at the first enemy capital ship, and the camera frames it afterwards.
+    let mut boom = BOOM_AT.lock().unwrap();
+    if boom.is_none()
+        && let Some((name, at)) = std::env::var("SP_DEMO_BOOM").ok().and_then(|v| v.split_once('@').map(|(k, t)| (k.to_string(), t.parse::<f32>().unwrap_or(0.0))))
+        && let Some(cur) = rt.cur.as_ref()
+        && cur.time >= at
+        && let Some(s) = ships.0.values().filter(|s| s.side != settings.player_side).max_by(|a, b| a.radius.total_cmp(&b.radius))
+    {
+        println!("demo boom {name} at {:?}", s.pos);
+        commands.trigger(alamo_render::SpawnParticleEffect { particle: name, position: s.pos, normal: Vec3::Y });
+        *boom = Some(s.pos);
+    }
     if status.tick == 0 || ships.0.is_empty() {
         return;
     }
@@ -407,6 +420,11 @@ fn capture_driver(
             bc.target_focus = (a + b) * 0.5;
             bc.target_distance = ((a - b).length() * 0.9).clamp(1800.0, 5000.0);
         }
+    }
+    if let Some(p) = *boom {
+        bc.snap = true;
+        bc.target_focus = p;
+        bc.target_distance = 2500.0;
     }
     if cap.auto {
         // Frame all living ships (a stand-in for the player scrolling to the action).
