@@ -52,7 +52,9 @@ impl Default for BattleCamera {
             pitch: 60f32.to_radians(),
             bounds_min: Vec2::splat(-10_000.0),
             bounds_max: Vec2::splat(10_000.0),
-            min_distance: 500.0,
+            // Close enough to fly beside a fighter (estimate: a fighter hull is 20 to 40 units, a capital ship over 1000; the data's
+            // `Distance_Min` of 1000 kept the view away from every model, which the player cannot accept). The wheel steps by ZOOM_STEP.
+            min_distance: 80.0,
             // Free zoom-out as before (the user wants unchanged camera control; only the start framing follows the data).
             max_distance: 16_000.0,
             snap: false,
@@ -86,6 +88,8 @@ impl BattleCamera {
 }
 
 const ZOOM_STEP: f32 = 0.86;
+/// Closest the action camera frames a whole fleet (the former `2 * min_distance` with the old closest zoom of 500).
+const ACTION_CAM_MIN_FLEET_DISTANCE: f32 = 1000.0;
 const ZOOM_SMOOTH: f32 = 10.0;
 const PAN_SMOOTH: f32 = 12.0;
 /// `Tactical_Min_Scroll_Speed` / `Tactical_Max_Scroll_Speed` (Gameconstants.xml), world units per second: the
@@ -291,7 +295,7 @@ pub fn action_cam(
             }
             let c = own.iter().map(|s| s.pos).sum::<Vec3>() / own.len() as f32;
             let spread = own.iter().map(|s| (s.pos - c).length()).fold(0.0f32, f32::max);
-            (c, (spread * 2.2).max(cam.min_distance * 2.0), None)
+            (c, (spread * 2.2).max(ACTION_CAM_MIN_FLEET_DISTANCE), None)
         }
     };
     let dt = time.delta_secs().min(0.1);
@@ -424,6 +428,15 @@ mod tests {
         assert!(r < 400.0, "core radius {r}");
         assert!((mean - c).length() > 1500.0, "the plain mean would have missed the group");
         assert!(fleet_core(&[]).is_none());
+    }
+
+    #[test]
+    fn wheel_zoom_reaches_a_close_view() {
+        let mut cam = BattleCamera::default();
+        for _ in 0..40 {
+            cam.target_distance = (cam.target_distance * ZOOM_STEP).clamp(cam.min_distance, cam.max_distance);
+        }
+        assert!(cam.target_distance < 150.0, "closest zoom {}", cam.target_distance);
     }
 
     #[test]

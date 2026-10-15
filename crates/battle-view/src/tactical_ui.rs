@@ -44,8 +44,9 @@ impl Plugin for TacticalUiPlugin {
                 init_reinforce.run_if(resource_added::<BattleRuntime>),
                 spawn_bar.run_if(resource_exists::<crate::BattleSession>.and_then(not(resource_exists::<TacticalBarSpawned>))),
                 remove_reinforce.run_if(resource_removed::<BattleRuntime>),
+                restore_cursor.run_if(resource_removed::<BattleRuntime>.or_eager(resource_removed::<crate::BattleSession>)),
                 remove_bar.run_if(resource_removed::<BattleRuntime>.or_eager(resource_removed::<crate::BattleSession>)),
-                (sync_data, sync_overlays, handle_clicks, ability_keys, autocast_toggle, autocast_rings, ability_at, hardpoint_clicks, reinforce_drag, reinforce_clicks, reinforce_place, reinforce_events, reinforce_panel, sync_minimap, minimap_pan, command_buttons_state, retreat_banner, victory_banner, pause_banner).chain().run_if(resource_exists::<BattleRuntime>),
+                (sync_data, sync_overlays, handle_clicks, order_cursor, ability_keys, autocast_toggle, autocast_rings, ability_at, hardpoint_clicks, reinforce_drag, reinforce_clicks, reinforce_place, reinforce_events, reinforce_panel, sync_minimap, minimap_pan, command_buttons_state, retreat_banner, victory_banner, pause_banner).chain().run_if(resource_exists::<BattleRuntime>),
             )
                 .chain(),
         );
@@ -1960,4 +1961,110 @@ mod tests {
 /// Minimap dot colour by relation to the player (Remake: own green, enemies red).
 fn relation_color(side: u8, player: u8) -> Color {
     if side == player { Color::srgb(0.25, 0.95, 0.3) } else { Color::srgb(0.95, 0.25, 0.2) }
+}
+
+/// The software cursor that stands in for the arrow while an order is armed or an enemy is a target.
+#[derive(Component)]
+struct OrderCursor;
+
+/// Size of the order cursor in pixels at UI scale 1 (estimate: the original cursors are 32 px; the command bar icons are 64 px).
+const ORDER_CURSOR_PX: f32 = 36.0;
+
+/// The icon the order cursor shows: the armed order's command bar icon, or the attack icon while own units are selected and the
+/// cursor is on an enemy ship or hardpoint (the call to action). `None` keeps the normal arrow. The original cursors live in the
+/// executable, not in the data, so the command bar icons of the same orders stand in.
+fn order_cursor_icon(armed: Option<control::ArmedKind>, own_selected: bool, over_enemy: bool) -> Option<&'static str> {
+    match armed {
+        Some(control::ArmedKind::Attack | control::ArmedKind::AbilityAt) => Some("I_BUTTON_COMMAND_BAR_ATTACK.TGA"),
+        Some(control::ArmedKind::AttackMove) => Some("I_BUTTON_COMMAND_BAR_ATTACK_MOVE.TGA"),
+        Some(control::ArmedKind::Move) => Some("I_BUTTON_COMMAND_BAR_MOVE.TGA"),
+        Some(control::ArmedKind::Reinforce) => None,
+        None => (own_selected && over_enemy).then_some("I_BUTTON_COMMAND_BAR_ATTACK.TGA"),
+    }
+}
+
+/// Draws the order cursor at the pointer and hides the system arrow while it is up.
+fn order_cursor(
+    mut commands: Commands,
+    textures: Option<ResMut<UiTextures>>,
+    mut images: ResMut<Assets<Image>>,
+    ui: Res<eaw_ui::EawUiSettings>,
+    scale: Res<UiScale>,
+    armed: Res<control::ArmedOrder>,
+    hover: Res<Hover>,
+    sel: Res<Selection>,
+    pointer: Res<control::Pointer>,
+    block: Res<control::UiBlock>,
+    rt: Res<BattleRuntime>,
+    settings: Res<BattleViewSettings>,
+    ships: Res<RenderedShips>,
+    mut window: Query<&mut bevy::window::CursorOptions, With<bevy::window::PrimaryWindow>>,
+    mut cursor: Query<(Entity, &mut Node, &mut ImageNode), With<OrderCursor>>,
+) {
+    let own_selected = !control::selected_mobile(&rt, &ships, &sel, settings.player_side).is_empty();
+    let over_enemy = hover.hardpoint.is_some() || hover.ship.is_some_and(|id| ships.0.get(&id).is_some_and(|s| s.side != settings.player_side && s.visible));
+    let icon = pointer.cursor.filter(|_| !block.0).and_then(|c| order_cursor_icon(armed.0, own_selected, over_enemy).map(|i| (c, i)));
+    let image = icon.and_then(|(_, name)| textures.and_then(|mut t| t.get(&mut images, name)).map(|t| t.handle));
+    let (Some((at, _)), Some(image)) = (icon, image) else {
+        for (e, ..) in &cursor {
+            commands.entity(e).despawn();
+        }
+        if let Ok(mut o) = window.single_mut()
+            && !o.visible
+        {
+            o.visible = true;
+        }
+        return;
+    };
+    let size = ORDER_CURSOR_PX / scale.0;
+    let (left, top) = ((at.x / scale.0) - size * 0.5, (at.y / scale.0) - size * 0.5);
+    if let Ok((_, mut node, mut img)) = cursor.single_mut() {
+        node.left = Val::Px(left);
+        node.top = Val::Px(top);
+        if img.image != image {
+            img.image = image;
+        }
+    } else {
+        let mut e = commands.spawn((
+            OrderCursor,
+            crate::BattleEntity,
+            Name::new("order cursor"),
+            ImageNode::new(image),
+            Node { position_type: PositionType::Absolute, left: Val::Px(left), top: Val::Px(top), width: Val::Px(size), height: Val::Px(size), ..default() },
+            bevy::ui::FocusPolicy::Pass,
+            GlobalZIndex(1000),
+        ));
+        if let Some(cam) = ui.camera {
+            e.insert(UiTargetCamera(cam));
+        }
+    }
+    if let Ok(mut o) = window.single_mut()
+        && o.visible
+    {
+        o.visible = false;
+    }
+}
+
+/// Brings the system arrow back when the battle ends with the order cursor up.
+fn restore_cursor(mut window: Query<&mut bevy::window::CursorOptions, With<bevy::window::PrimaryWindow>>) {
+    if let Ok(mut o) = window.single_mut() {
+        o.visible = true;
+    }
+}
+
+#[cfg(test)]
+mod order_cursor_tests {
+    use super::*;
+    use control::ArmedKind::*;
+
+    #[test]
+    fn cursor_follows_the_armed_order_and_enemies() {
+        assert_eq!(order_cursor_icon(Some(Attack), false, false), Some("I_BUTTON_COMMAND_BAR_ATTACK.TGA"));
+        assert_eq!(order_cursor_icon(Some(AttackMove), true, true), Some("I_BUTTON_COMMAND_BAR_ATTACK_MOVE.TGA"));
+        assert_eq!(order_cursor_icon(Some(Move), true, false), Some("I_BUTTON_COMMAND_BAR_MOVE.TGA"));
+        assert_eq!(order_cursor_icon(Some(Reinforce), true, true), None);
+        assert_eq!(order_cursor_icon(None, true, true), Some("I_BUTTON_COMMAND_BAR_ATTACK.TGA"));
+        assert_eq!(order_cursor_icon(None, false, true), None);
+        assert_eq!(order_cursor_icon(None, true, false), None);
+    }
 }

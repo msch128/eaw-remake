@@ -480,9 +480,10 @@ pub fn selection(
             .ship
             .filter(|id| ships.0.get(id).is_some_and(|s| s.side != player))
         {
-            // Clicking an enemy marks it for hardpoint targeting; clicking empty space deselects.
+            // Clicking an enemy marks it for hardpoint targeting; clicking empty world space deselects (a release over the
+            // interface, e.g. on an order button, never does: orders keep the selection).
             sel.enemy = Some(e);
-        } else if !pointer.shift {
+        } else if !pointer.shift && !block.0 {
             sel.ships.clear();
             sel.enemy = None;
         }
