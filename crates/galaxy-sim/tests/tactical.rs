@@ -776,3 +776,29 @@ fn death_star_ii_counts_zero_population_in_space_and_deploys() {
     assert!(side.groups.iter().any(|g| g.name == "Death_Star_II"), "the Death Star fights, it does not wait in the reserve");
     assert!(side.reserve.is_empty());
 }
+
+#[test]
+fn a_beaten_side_leaves_no_uncalled_reserve_in_orbit_for_a_second_battle() {
+    let Some(ctx) = load() else { return };
+    let mut sim = new_sim(&ctx);
+    let w = sim.world().clone();
+    let (empire, rebel) = (w.faction_id("Empire").unwrap(), w.faction_id("Rebel").unwrap());
+    let target = empty_planet(&sim);
+    let isd = w.unit_id("Star_Destroyer").unwrap();
+    let cap = w.factions[empire as usize].space_unit_cap;
+    let n = (cap / w.units[isd as usize].population.max(1)) as u32 + 8;
+    let ef = add_fleet(&mut sim, empire, isd, n, target, target);
+    add_fleet(&mut sim, rebel, w.unit_id("Nebulon_B_Frigate").unwrap(), 1, target, target);
+    let battle = pending(&mut sim);
+    let req = sim.tactical_setup(battle.id).unwrap();
+    let es = req.sides.iter().position(|s| s.faction == empire).unwrap();
+    assert!(req.sides[es].reserve.iter().map(|g| g.count).sum::<u32>() >= 8, "part of the fleet waits in the reserve");
+    // The Empire's deployed ships all die before the reserve is called; the Rebels win.
+    let mut result = untouched(&req);
+    result.winner = Some(1 - es);
+    result.survived[es] = vec![0; req.sides[es].groups.len()];
+    sim.apply_tactical_result(battle.id, &result).unwrap();
+    assert!(sim.galaxy().fleets.get(&ef).is_none_or(|f| f.location != FleetLocation::AtPlanet(target)), "the uncalled reserve of the loser is gone from the orbit");
+    let events = sim.step(1.0);
+    assert!(!events.iter().any(|e| matches!(e, Event::BattlePending(_))), "no second battle at the same planet");
+}
