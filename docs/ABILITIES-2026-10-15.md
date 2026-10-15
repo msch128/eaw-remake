@@ -19,12 +19,12 @@ Source: Remake 4.0 `Unit_Abilities_Data` of all space units (`Units/Space`, `Spe
 | BUZZ_DROIDS | 11 | done | yes | unchecked | |
 | TRACTOR_BEAM | 10 | done | yes | beam unchecked | |
 | FOW_REVEAL_PING | 10 | done | yes | ping ring | |
-| REPLENISH_WINGMEN | 10 | missing | no | - | next: respawn lost wingmen of the hero squadron |
+| REPLENISH_WINGMEN | 10 | done (new) | yes (icon is an estimate) | - | once per battle, auto when no wingman is left; the "leader only hurt while wingmen live" rule is not modelled |
 | INTERDICT | 7 | done (fixed) | yes (hand icon is the real `I_SA_INTERDICT`) | rings (estimate) | see below |
-| WEAKEN_ENEMY | 6 | missing | maybe | - | area effect, radius 2000, spawned object |
+| WEAKEN_ENEMY | 6 | done (new) | yes | none | area radius 2000, 60 s, 25% less damage dealt, 25% slower; button uses the caster position until the click-to-aim hook in tactical_ui knows `AbilityDef.weaken` |
 | HARMONIC_BOMB | 6 | missing | - | - | several uses are commented out in the data |
 | SUPER_LASER | 5 | done | yes | beam exists | |
-| LURE | 4 | missing | - | - | pulls listed target types |
+| LURE | 4 | done (new) | yes | none | enemies of the listed types within the radius are ordered to attack the caster, caster takes the ability take-damage multiplier |
 | SPRINT, LUCKY_SHOT, ENERGY_WEAPON, CLUSTER_BOMB, BLAST | 3 each | SPRINT done, others missing | - | - | hero abilities with sub-ability objects |
 | CORRUPT_SYSTEMS, MISSILE_SHIELD | 2 / 1 | done | yes | unchecked | |
 | SHIELD_FLARE, LEECH_SHIELDS, INVULNERABILITY, CONCENTRATE_FIRE, SWAP_WEAPONS | 1 each | CONCENTRATE_FIRE, SWAP_WEAPONS done; rest missing | - | - | |
@@ -53,3 +53,13 @@ penalty per other hunter already on it (spreads over the fleet); stations only w
 target dies. With nothing visible it searches an 8x8 grid of the map, nearest unsearched cell first, 60 s per cell at most. A
 Move/Attack/Stop order or toggling off ends it. Estimates (labelled in `sim.rs`): weights, crowd penalty, cell time.
 Not done: AI sides do not use Hunt (they have their own search).
+
+## Card icons
+
+`I_SA_<TYPE>.TGA` does not exist for TURBO, DEFEND, FOW_REVEAL_PING, MISSILE_SHIELD, SUPER_LASER, CONCENTRATE_FIRE, REPLENISH_WINGMEN and
+ENERGY_WEAPON, and most units do not name an `Alternate_Icon_Name`, so their cards were skipped (59 of 65 TURBO objects). `eaw-ui`
+now falls back to the closest existing icon (estimates, see `ability_icon`).
+
+## Gravity well station
+
+`E_Gravity_Well_Station` has `Is_Interdictor`; structures now read it, so the field is always up.
