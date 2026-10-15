@@ -34,6 +34,9 @@ const FOLLOW_RATE: f32 = 22.0;
 const DROP_RATE: f32 = 14.0;
 /// Model scale of a carried fleet (it is "lifted").
 const CARRY_SCALE: f32 = 1.5;
+/// Most the carried group is scaled up, and the pad radius in pixels it is scaled to when the map is zoomed out.
+const CARRY_SCALE_MAX: f32 = 5.0;
+const CARRY_SCREEN_RADIUS: f32 = 24.0;
 /// How far above the map a carried fleet hangs, in pad radii.
 const CARRY_HEIGHT: f32 = 1.1;
 /// Seconds of the click pop and its extra scale at the peak.
@@ -66,6 +69,7 @@ pub fn carry_fleets(
     player: Res<PlayerFaction>,
     entities: Res<FleetEntities>,
     layout: Res<GalaxyLayout>,
+    camera: Query<(&Camera, &GlobalTransform), With<Camera3d>>,
     mut anim: ResMut<CarryAnim>,
     mut fleets: Query<(&FleetVisual, &mut Transform)>,
 ) {
@@ -101,14 +105,22 @@ pub fn carry_fleets(
             let next = approach(cur, target, FOLLOW_RATE, dt);
             anim.shown.insert(id, next);
             tf.translation = next;
+            // At galaxy zoom a pad is a few pixels: the carried group is scaled up to a size that reads as held in the hand.
+            let held = camera.iter().next().and_then(|(cam, cam_tf)| {
+                let a = cam.world_to_viewport(cam_tf, next).ok()?;
+                let b = cam.world_to_viewport(cam_tf, next + cam_tf.right() * visual.pad).ok()?;
+                Some((CARRY_SCREEN_RADIUS / a.distance(b).max(1.0)).clamp(CARRY_SCALE, CARRY_SCALE_MAX))
+            });
+            let want = held.unwrap_or(CARRY_SCALE);
             let l = anim.lift.entry(id).or_insert(1.0);
-            *l += (CARRY_SCALE - *l) * (1.0 - (-FOLLOW_RATE * dt).exp());
+            *l += (want - *l) * (1.0 - (-FOLLOW_RATE * dt).exp());
+            let lifted = *l;
             scale *= *l;
 
             // A bright shadow ring under the carried fleet shows that it is held.
             let shadow = Isometry3d::new(Vec3::new(next.x, 0.08, next.z), Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2));
-            gizmos.circle(shadow, visual.pad * 1.25, Color::WHITE.with_alpha(0.85));
-            gizmos.circle(shadow, visual.pad * 1.55, team.with_alpha(0.55));
+            gizmos.circle(shadow, visual.pad * lifted * 1.25, Color::WHITE.with_alpha(0.85));
+            gizmos.circle(shadow, visual.pad * lifted * 1.55, team.with_alpha(0.55));
             // The spot the fleet came from: a dashed ring with a thin tether to the carried fleet.
             let spot = Vec3::new(sim_pos.x, 0.05, sim_pos.z);
             let ring = visual.pad;
