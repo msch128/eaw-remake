@@ -344,7 +344,7 @@ fn fix_star_dome(
             {
                 let material = materials.add(StandardMaterial {
                     // The texture holds gamma-space colours; this approximates the game's look.
-                    base_color: Color::linear_rgb(0.12, 0.12, 0.12),
+                    base_color: Color::linear_rgb(0.06, 0.06, 0.06), // estimate: only the brightest stars of the texture stay visible, the Remake sky is sparse
                     base_color_texture: Some(tex),
                     unlit: true,
                     cull_mode: Some(bevy::render::render_resource::Face::Back),
@@ -486,7 +486,7 @@ fn setup_scene(
     // Route line widths in pixels per width tier.
     gizmo_store.config_mut::<RingGizmos>().0.line.width = 1.6;
     gizmo_store.config_mut::<SelectGizmos>().0.line.width = 1.5;
-    gizmo_store.config_mut::<TerritoryGizmos>().0.line.width = 7.0;
+    gizmo_store.config_mut::<TerritoryGizmos>().0.line.width = 3.5; // estimate: the Remake ring is a fine dashed line
 }
 
 /// Spawns planets, labels and the selection ring from the [`GalaxyView`] resource.
@@ -1129,7 +1129,7 @@ pub fn route_relation(a: Option<usize>, b: Option<usize>, player: Option<usize>)
 #[derive(Component)]
 struct LaneMesh {
     mesh: Handle<Mesh>,
-    /// Route indices of the ribbon quads in vertex order (4 vertices each).
+    /// Route indices of the ribbons in vertex order (8 vertices each: four rows of two).
     routes: Vec<usize>,
 }
 
@@ -1144,6 +1144,8 @@ struct LaneState {
 /// Half widths of the ribbons in planet radii (`MapScale::unit`), by data width class. The reference
 /// shows wide soft light-blue beams of about 0.7 planet radii, thinner inter lanes and hair lines.
 const LANE_HALF_WIDTH: [f32; 3] = [0.2, 0.08, 0.03];
+/// Length of the beam beyond each planet as a fraction of the lane (estimate from the Remake frames: the shafts run past the planets).
+const LANE_OVERSHOOT: f32 = 0.25;
 /// Peak brightness (linear) of the beams.
 const LANE_PEAK: [f32; 3] = [0.75, 0.5, 0.3];
 
@@ -1165,7 +1167,8 @@ fn lane_texture() -> Image {
     let mut px = Vec::with_capacity((w * h * 4) as usize);
     for y in 0..h {
         let v = (y as f32 + 0.5) / h as f32;
-        let along = 0.12 + 0.88 * (std::f32::consts::PI * v).sin().powf(0.6);
+        // Full strength between the planets (v 0.3..0.7), fading to nothing at the far ends of the overshoot.
+        let along = smoothstep(0.0, 0.3, v) * (1.0 - smoothstep(0.7, 1.0, v));
         for x in 0..w {
             let u = ((x as f32 + 0.5) / w as f32 - 0.5) * 2.0;
             // Bright core with soft shoulders.
@@ -1230,10 +1233,18 @@ fn spawn_lanes(
                 side = Vec3::X;
             }
             let side = side.normalize() * half;
-            pos.extend([pa - side, pa + side, pb - side, pb + side].map(|p| p.to_array()));
-            uv.extend([[0.0f32, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]]);
-            let b = (n * 4) as u32;
-            idx.extend([b, b + 1, b + 2, b + 2, b + 1, b + 3]);
+            // Like the Remake's light shafts the beam overshoots both planets and fades out beyond them.
+            let ext = dir * (pa.distance(pb) * LANE_OVERSHOOT);
+            let rows = [(pa - ext, 0.0f32), (pa, 0.3), (pb, 0.7), (pb + ext, 1.0)];
+            for (p, v) in rows {
+                pos.extend([p - side, p + side].map(|q| q.to_array()));
+                uv.extend([[0.0f32, v], [1.0, v]]);
+            }
+            let b = (n * 8) as u32;
+            for r in 0..3u32 {
+                let k = b + r * 2;
+                idx.extend([k, k + 1, k + 2, k + 2, k + 1, k + 3]);
+            }
         }
         let n = pos.len();
         let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default());
@@ -1295,7 +1306,7 @@ fn update_lanes(
         return;
     }
     for lane in &lanes {
-        let mut col: Vec<[f32; 4]> = Vec::with_capacity(lane.routes.len() * 4);
+        let mut col: Vec<[f32; 4]> = Vec::with_capacity(lane.routes.len() * 8);
         for &ri in &lane.routes {
             let r = &view.routes[ri];
             let (a, b) = (&view.planets[r.a], &view.planets[r.b]);
@@ -1308,7 +1319,7 @@ fn update_lanes(
                 RouteRelation::Contested | RouteRelation::Neutral => &style.neutral,
             };
             let c = lane_color(relation, line, t, class);
-            col.extend([c; 4]);
+            col.extend([c; 8]);
         }
         if let Some(mut m) = meshes.get_mut(&lane.mesh) {
             m.insert_attribute(Mesh::ATTRIBUTE_COLOR, col);
