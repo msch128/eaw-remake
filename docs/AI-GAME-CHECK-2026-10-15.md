@@ -49,3 +49,31 @@ Tests: `galaxy-ai` and `galaxy-script` suites pass, including `ai_match` (the st
 
 * Hard / Brutal behaviour, Empire as the human faction, Clone Wars content.
 * Whether the real Remake AI loses as often against Pirates; the data (goal/equation XML and Lua) is run unchanged, only the estimates of enemy strength come from our side.
+
+## Follow-up: why the Rebel AI lost every attack (systematic check)
+
+Method: `ai_check` with `ATTACKS=<faction|1>` turns auto-resolve off, prints at every pending battle both sides (ships, plain and resolver-tuned
+strength, star base / garrison), the winners of 9 resolver previews with different seeds, then resolves it and prints the result.
+
+* **The resolver is fine.** Outcomes follow the strengths: Underworld 59 ships (tuned 25551) vs Cartels (23914) won with 46 losses; Rebel 68 ships (30105) vs Pirates
+  (42686) lost 61 ships and killed 3, which is what the square law gives for a 0.7 ratio. All 9 previews agree with the real result.
+* **The AI's belief about the defence is right** (believed 11.7k for Ord Trasi; real 12.6k plain). Three things were wrong on the attacking side:
+  1. **Piecemeal arrival.** The plan assembled about 19 ships (strength 12.5k, equal to the defence) but they reached Ord Trasi as three fleets 593 s, 598 s and 600 s
+     into the game (2, 12 and 5 ships); the sim opens and resolves a battle at the first arrival, so each fleet fought alone (preview: 9 of 9 Pirate wins each).
+     **Open**: needs a short gather window before a battle is resolved (`detect_battles`) plus joining of later arrivals; not done (touches galaxy-sim and galaxy-play).
+  2. **Force cap.** `compose` stopped at 24 ships (the plans set no `MaximumTotalSize`, 24 was our default) even when the strength it wanted (54k) was far above
+     what 24 ships reach (24k), and then launched anyway. Fixed: default cap 60 (`DEFAULT_MAX_FORCE`), and a force below `MIN_VIABLE_FRACTION` (0.9) of the believed defence
+     is not sent (the plan fails with "no ship to build").
+  3. **Own strength overestimated.** The AI measured its fleets with the plain estimate, but the resolver halves the damage of fighters and bombers
+     (`combat_efficiency` 0.5), and Rebel fleets are mostly squadrons (plain 30105 = tuned 21896). `galaxy-script/src/ai.rs` now uses `tuned_strength` for
+     force and defence estimates.
+* **Result (ai_audit, 80 weeks, seed 1):** Underworld 17 attacks, 17 won (was 29 / 11); Rebel 0 attacks (was 37 / 0), Empire 4 / 1 (was 21 / 3). The Rebel AI now stays home and
+  hoards (credits 376k): it cannot assemble a force of the strength the Pirate planets have by week 30 (60 squadron ships reach ~26k against 70k), so the AI that was
+  throwing its fleet away now does nothing. Making it build capital-heavy forces (composition by strength, not by role weights) is the next step and is not done.
+* **Pirates (item 2).** Per the 4.0 data the Pirates are fully passive: `GC_PiratesAi` / `Pirates_Template` turn off the Infrastructure, Defensive and Offensive goal categories
+  (no budget), `Maintenance_Cost` 0, `Credits_Accumulation_Factor` 1.0, `Space_Tactical_Unit_Cap` 180 (a limit per battle; the statistical resolver already uses it for
+  waves). Nothing in the data lets them grow. The growth is our user rule (`rearm_passive`: one more ship per planet and week up to 2 x the main factions' tech, picked from every ship type
+  the Pirates field, capital ships included): 68 planets x up to 10 ships = the 967 ships and the pop 14.6k (the faction pop cap does not apply to a faction that never builds).
+  It is bounded (per planet, by tech), so "unbounded" was wrong. What makes Pirate planets walls is the mix: a random pick from a pool with Lucrehulk battleships and cruisers
+  gives 35 to 65k strength per planet by week 30 to 50. **No change made**; a design decision for the owner of the rule (for example pick by the planet's start garrison types, or cap a planet's passive
+  garrison at the faction's tactical cap in pop and at a strength bound).

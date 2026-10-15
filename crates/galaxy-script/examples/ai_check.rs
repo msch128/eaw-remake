@@ -55,7 +55,7 @@ fn main() {
         fs,
         data,
         &campaign,
-        SimConfig { victory_enabled: false, ground_up, ..SimConfig::default() },
+        SimConfig { victory_enabled: false, ground_up, auto_resolve_battles: std::env::var_os("ATTACKS").is_none(), ..SimConfig::default() },
         ScriptedConfig { remake_ai: true, human: Some(human.clone()), game_scoring: false, strategy: true, difficulty: Some(diff), ..ScriptedConfig::default() },
     )
     .expect("cannot build simulation");
@@ -105,6 +105,47 @@ fn main() {
                     let who = |f: Option<u32>| f.map_or("-".to_owned(), |f| names[f as usize].clone());
                     let at = sim.with_sim(|s| (s.world().planets[*planet as usize].display_name.clone(), s.galaxy().planets[*planet as usize].owner));
                     println!("  battle week {done}: {} owner {} winner {} losses {:?}", at.0, who(at.1), who(*winner), losses.iter().map(|(f, n)| format!("{}:{n}", &names[*f as usize][..names[*f as usize].len().min(4)])).collect::<Vec<_>>());
+                }
+                Event::BattlePending(b) if std::env::var_os("ATTACKS").is_some() => {
+                    let who = std::env::var("ATTACKS").unwrap_or_default();
+                    let line = sim.with_sim(|s| {
+                        use galaxy_sim::combat::Source;
+                        let w = s.world();
+                        let sides = s.battle_sides(b);
+                        let fname = |f: u32| names[f as usize].clone();
+                        let involved = sides.iter().any(|sd| who.is_empty() || who == "1" || fname(sd.faction).eq_ignore_ascii_case(&who));
+                        if !involved {
+                            return None;
+                        }
+                        let mut parts = Vec::new();
+                        for sd in &sides {
+                            let units: Vec<(Source, u32)> = sd.members.iter().map(|m| (m.source, m.count)).collect();
+                            let ships: u32 = sd.members.iter().filter(|m| matches!(m.source, Source::Unit(_))).map(|m| m.count).sum();
+                            let plain = w.strength(units.iter().copied());
+                            let tuned = w.tuned_strength(units.iter().copied());
+                            let fixed: Vec<String> = sd.members.iter().filter(|m| !matches!(m.source, Source::Unit(_))).map(|m| match m.source { Source::Starbase(x) => w.starbases[x as usize].name.clone(), Source::Structure(x) => format!("{}x{}", m.count, w.structures[x as usize].name), Source::Garrison(u) => format!("g{}x{}", m.count, w.units[u as usize].name), Source::Unit(_) => String::new() }).collect();
+                            let pu = w.strength(units.iter().copied().filter(|m| matches!(m.0, Source::Unit(_))));
+                            let pf = w.strength(units.iter().copied().filter(|m| !matches!(m.0, Source::Unit(_))));
+                            parts.push(format!("{} {} ships plain {:.0} (ships {:.0} + fixed {:.0} = {:.0} summed) tuned {:.0} [{}]", fname(sd.faction), ships, plain, pu, pf, pu + pf, tuned, fixed.join(",")));
+                        }
+                        let mut wins = Vec::new();
+                        for seed in 1..=9u64 {
+                            let p = s.preview_auto_resolve(b.id, seed);
+                            wins.push(p.and_then(|p| p.winner).map_or("-".to_owned(), |f| fname(f)[..4.min(fname(f).len())].to_owned()));
+                        }
+                        Some(format!("  attack week {done} t={:.0}s at {}: {} || preview winners {:?}", s.galaxy().time, w.planets[b.planet as usize].display_name, parts.join("  VS  "), wins))
+                    });
+                    if let Some(l) = line {
+                        println!("{l}");
+                    }
+                    let evs = sim.with_sim_mut(|s| s.resolve_battle(b.id).unwrap_or_default());
+                    for e in evs {
+                        if let Event::BattleResolved { winner, losses, .. } = &e {
+                            if std::env::var_os("ATTACKS").is_some() {
+                                println!("      result: winner {:?} losses {:?}", winner.map(|f| names[f as usize].clone()), losses);
+                            }
+                        }
+                    }
                 }
                 Event::BattlePending(b) if std::env::var_os("PENDING").is_some() => {
                     sim.with_sim(|s| {

@@ -265,7 +265,7 @@ impl AiSim for SimAdapter<'_> {
     }
     fn force_strength(&self, units: &[(String, u32)]) -> f64 {
         let members = units.iter().filter_map(|(n, c)| Some((galaxy_sim::combat::Source::Unit(*self.world.unit_index.get(&n.to_ascii_lowercase())?), *c)));
-        f64::from(self.world.strength(members))
+        f64::from(self.world.tuned_strength(members))
     }
     fn defense_strength(&self, pl: PlanetId, attacker: PlayerId) -> f64 {
         use galaxy_sim::combat::Source;
@@ -290,7 +290,7 @@ impl AiSim for SimAdapter<'_> {
                 }
             }
         }
-        f64::from(self.world.strength(members))
+        f64::from(self.world.tuned_strength(members))
     }
     fn planet_defense(&self, pl: PlanetId) -> f64 {
         use galaxy_sim::combat::Source;
@@ -305,7 +305,7 @@ impl AiSim for SimAdapter<'_> {
                 members.push((Source::Structure(s), 1));
             }
         }
-        if members.is_empty() { 0.0 } else { f64::from(self.world.strength(members)) }
+        if members.is_empty() { 0.0 } else { f64::from(self.world.tuned_strength(members)) }
     }
     fn eta(&self, fleet: u32, to: PlanetId) -> Option<f64> {
         let f = self.sim.galaxy().fleets.get(&fleet)?;

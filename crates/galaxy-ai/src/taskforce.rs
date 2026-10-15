@@ -14,6 +14,10 @@
 /// Margin of predicted square-law strength a task force asks over what it believes defends the target (**estimate**). Tuned over 16 seeds of the all-AI match
 /// (`galaxy-script/tests/ai_match.rs`): 1.25 took 99 enemy-owner captures against 150 for the plain AI, 0.8 takes 141 (94%) at the same fleet size.
 pub const FORCE_MARGIN: f64 = 0.8;
+/// A composed attack force whose strength is below this share of the believed defence is dropped instead of sent (estimate).
+pub const MIN_VIABLE_FRACTION: f64 = 0.9;
+/// Ships of one task force when the plan sets no `MaximumTotalSize` (none of the Remake attack plans does; an estimate that keeps one fleet inside the population cap of a battle).
+const DEFAULT_MAX_FORCE: u32 = 60;
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
@@ -729,7 +733,7 @@ impl TaskForces {
                 snap.power_at(tp, |o| snap.enemy[t.player as usize][o as usize]) + snap.owner[tp as usize].filter(|o| snap.enemy[t.player as usize][*o as usize]).map_or(0.0, |_| f64::from(snap.starbase[tp as usize].0) * 400.0)
             });
             let needed = defence * scale;
-            let cap = t.reqs.max_total.unwrap_or(24) as usize;
+            let cap = t.reqs.max_total.unwrap_or(DEFAULT_MAX_FORCE) as usize;
             let min_total = t.reqs.min_total.max(1) as usize;
             let mut power = 0.0;
             let mut guard = 0;
@@ -775,6 +779,11 @@ impl TaskForces {
                 } else {
                     break;
                 }
+            }
+            // A force that cannot reach `MIN_VIABLE_FRACTION` of what the player believes defends the target (the size cap or the free ships ran out first)
+            // is not sent: it would only feed the defenders (its attacks on Pirate star bases were lost to the last ship).
+            if strength_mode && believed.is_some_and(|b| strength_of(&wanted) * f64::from(split) < b * MIN_VIABLE_FRACTION) {
+                wanted.clear();
             }
         }
         wanted
