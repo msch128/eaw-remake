@@ -305,6 +305,8 @@ pub struct SpaceUnitDef {
     pub tech_level: i32,
     /// `Population_Value`.
     pub population_value: i32,
+    /// `Space_Override_Population_Value`: what the unit counts against the cap inside a space battle (the Death Star: 0).
+    pub space_population: Option<i32>,
     /// `Required_Star_Base_Level`.
     pub required_star_base_level: i32,
     /// `Required_Special_Structures` (structures the planet must have to build this).
@@ -413,6 +415,7 @@ impl SpaceUnitDef {
             build_time: f32_or("build_time_seconds"),
             tech_level: i32_or("tech_level"),
             population_value: i32_or("population_value"),
+            space_population: r.num("space_override_population_value"),
             required_star_base_level: i32_or("required_star_base_level"),
             required_special_structures: r.list("required_special_structures"),
             required_planets: r.list("required_planets"),

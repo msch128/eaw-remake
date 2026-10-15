@@ -1044,7 +1044,7 @@ impl Catalog {
                 u.shield_refresh_rate,
                 u.armor_type.clone(),
                 u.shield_armor_type.clone(),
-                u.population_value,
+                u.space_population.unwrap_or(u.population_value),
             ),
             Source::Base(b) => (
                 b.name.clone(),

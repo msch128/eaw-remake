@@ -757,3 +757,22 @@ fn auto_resolve_agrees_with_the_tactical_battle_on_pirate_bases() {
         assert_eq!(r.4, attacker_wins, "{n} x {unit}: {r:?}");
     }
 }
+
+#[test]
+fn death_star_ii_counts_zero_population_in_space_and_deploys() {
+    let Some(ctx) = load() else { return };
+    let mut sim = new_sim(&ctx);
+    let w = sim.world().clone();
+    let (empire, rebel) = (w.faction_id("Empire").unwrap(), w.faction_id("Rebel").unwrap());
+    let target = empty_planet(&sim);
+    let Some(ds) = w.unit_id("Death_Star_II") else { return };
+    assert_eq!(w.units[ds as usize].space_population, 0, "Space_Override_Population_Value 0");
+    assert!(w.units[ds as usize].population > 0, "galactic population stays");
+    add_fleet(&mut sim, empire, ds, 1, target, target);
+    add_fleet(&mut sim, rebel, w.unit_id("Nebulon_B_Frigate").unwrap(), 1, target, target);
+    let battle = pending(&mut sim);
+    let req = sim.tactical_setup(battle.id).unwrap();
+    let side = req.sides.iter().find(|s| s.faction == empire).unwrap();
+    assert!(side.groups.iter().any(|g| g.name == "Death_Star_II"), "the Death Star fights, it does not wait in the reserve");
+    assert!(side.reserve.is_empty());
+}

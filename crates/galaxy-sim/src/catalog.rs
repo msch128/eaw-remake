@@ -170,6 +170,7 @@ fn unit_from_def(def: &SpaceUnitDef, combat: CombatStats) -> UnitType {
         build_time: def.build_time,
         tech: def.tech_level,
         population: def.population_value,
+        space_population: def.space_population.unwrap_or(def.population_value),
         req_starbase: def.required_star_base_level,
         req_structures: Vec::new(),
         req_planets: Vec::new(),

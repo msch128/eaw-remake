@@ -336,6 +336,8 @@ pub struct UnitType {
     pub tech: i32,
     /// Population used.
     pub population: i32,
+    /// Population the unit counts in a space battle (`Space_Override_Population_Value`, else `population`).
+    pub space_population: i32,
     /// Required star base level at the building planet.
     pub req_starbase: i32,
     /// `Required_Special_Structures`: every group must be met by one of its members (`A B` = both, `A | B` = either).

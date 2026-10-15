@@ -172,7 +172,7 @@ fn split_reserve(world: &World, groups: Vec<TacticalGroup>, cap: i32) -> (Vec<Ta
             deployed.push(g);
             continue;
         }
-        let pop = world.units[g.type_id as usize].population.max(0);
+        let pop = world.units[g.type_id as usize].space_population.max(0);
         let fit = if pop == 0 { g.count } else { ((cap - used).max(0) / pop) as u32 }.min(g.count);
         used += pop * fit as i32;
         if fit < g.count {
