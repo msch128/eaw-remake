@@ -61,8 +61,8 @@ pub(crate) fn nose_rotation(velocity: Vec3) -> Quat {
     if dir == Vec3::ZERO { Quat::IDENTITY } else { Quat::from_rotation_arc(Vec3::Y, dir) }
 }
 
-/// Seconds a smoke trail stays visible behind its missile (estimate from the Victory Star Destroyer video frames: the trails are several seconds long).
-const TRAIL_SECONDS: f64 = 5.0;
+/// Seconds a smoke trail stays visible behind its missile (estimate; the first 5 s guess drew arena-long straight lines, the Remake frames n93 f0023 show short curved trails of a few hundred px).
+const TRAIL_SECONDS: f64 = 2.0;
 /// Points closer than this to the last one are not added (keeps the polyline short).
 const TRAIL_STEP: f32 = 25.0;
 
@@ -80,7 +80,7 @@ pub struct MissileTrails {
 /// Thick smoke lines.
 fn configure_trail_gizmos(mut store: ResMut<GizmoConfigStore>) {
     let (cfg, _) = store.config_mut::<MissileTrailGizmos>();
-    cfg.line.width = 4.0;
+    cfg.line.width = 2.5;
     cfg.depth_bias = -0.5;
 }
 
@@ -103,8 +103,8 @@ fn draw_trails(rt: Res<BattleRuntime>, mut trails: ResMut<MissileTrails>, mut gi
     for pts in trails.lines.values() {
         for pair in pts.iter().zip(pts.iter().skip(1)) {
             let age = ((now - pair.1.1) / TRAIL_SECONDS).clamp(0.0, 1.0) as f32;
-            let a = (1.0 - age) * 0.55;
-            gizmos.line(pair.0.0, pair.1.0, Color::srgba(0.78, 0.78, 0.8, a));
+            let a = (1.0 - age) * (1.0 - age) * 0.8;
+            gizmos.line(pair.0.0, pair.1.0, Color::srgba(0.93, 0.95, 1.0, a));
         }
     }
 }
