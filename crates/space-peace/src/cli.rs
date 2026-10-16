@@ -50,6 +50,13 @@ pub struct Args {
     pub move_to: Option<String>,
     /// Offscreen only: show the fleets of the selected planet picked up and carried over this planet, as in a drag (--drag-to <planet>).
     pub drag_to: Option<String>,
+    /// Offscreen only: drag the first own fleet of the selected planet to this planet (or `planet:pad`, pad 1..3) with synthetic pointer
+    /// input through the real input path, and release it there (`--drag-pointer <planet>[:<pad>]`).
+    pub drag_pointer: Option<String>,
+    /// Offscreen only: with `--drag-pointer`, keep the button down so the capture shows the carried fleet (`--drag-hold`).
+    pub drag_hold: bool,
+    /// Offscreen only: with `--drag-pointer`, end the drag with Esc or a right click instead of the release (`--drag-cancel esc|right`).
+    pub drag_cancel: Option<String>,
     /// Offscreen only: stop advancing when a battle waits for the player (`--stop-on-battle`).
     pub stop_on_battle: bool,
     /// Offscreen only: click this button of the battle dialog once it opens (`--battle-choice fight|auto`).
@@ -140,6 +147,9 @@ impl Default for Args {
             build: None,
             move_to: None,
             drag_to: None,
+            drag_pointer: None,
+            drag_hold: false,
+            drag_cancel: None,
             stop_on_battle: false,
             battle_choice: None,
             battle_auto: false,
@@ -199,6 +209,9 @@ OPTIONS:
   --build <text>         Offscreen: queue the first build option matching text at the selected planet
   --move <planet>        Offscreen: send the fleets at the selected planet to another planet
   --drag-to <planet>     Offscreen: carry the fleets of the selected planet over another planet, as while dragging them
+  --drag-pointer <planet>[:<pad>]  Offscreen: drag a fleet of the selected planet there with synthetic pointer input and drop it
+  --drag-hold            Offscreen: with --drag-pointer, keep the button down for the capture
+  --drag-cancel <c>      Offscreen: with --drag-pointer, end the drag with esc or right (click) instead of the release
   --stop-on-battle       Offscreen: stop advancing as soon as a battle waits for a decision
   --battle-choice <c>    Offscreen: click fight or auto in the battle dialog when it opens
   --battle-auto           Offscreen: the AI plays both sides of a tactical battle
@@ -292,6 +305,15 @@ impl Args {
                 }
                 "--build" => out.build = Some(it.next().ok_or("--build needs a value")?),
                 "--drag-to" => out.drag_to = Some(it.next().ok_or("--drag-to needs a value")?),
+                "--drag-pointer" => out.drag_pointer = Some(it.next().ok_or("--drag-pointer needs a planet")?),
+                "--drag-hold" => out.drag_hold = true,
+                "--drag-cancel" => {
+                    let v = it.next().ok_or("--drag-cancel needs esc or right")?;
+                    if v != "esc" && v != "right" {
+                        return Err(format!("bad --drag-cancel `{v}` (esc or right)"));
+                    }
+                    out.drag_cancel = Some(v);
+                }
                 "--move" => out.move_to = Some(it.next().ok_or("--move needs a value")?),
                 "--stop-on-battle" => out.stop_on_battle = true,
                 "--battle-auto" => out.battle_auto = true,

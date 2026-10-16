@@ -66,6 +66,16 @@ injects window events (cursor, mouse buttons, Esc) and checks the battle banner 
 click, Options, Load Game with a slot click and Main Menu (10 checks, log line `ui-test: ... PASS`). `tools\smoke.ps1`
 runs it as `windowed-ui-pointer`. Source: `src/input_test.rs`.
 
+Offscreen fleet drag (safe while the user plays: the window exists only as data, offscreen runs have no winit):
+`--select <planet> --drag-pointer <planet>[:<pad>] [--drag-hold] [--drag-cancel esc|right]` presses on the first own fleet of the
+selected planet, moves to the target in 48 steps, rests 24 frames (nothing may toggle), releases (or cancels), and logs
+`drag-pointer: ... PASS|FAIL` with the frame the carry was lost, the orders written and the fleet's state; a magenta square marks the
+cursor in the capture. Smoke rows `drag-lower-right`, `drag-cancel-right`, `drag-cancel-esc`. Source: `src/drag_demo.rs`.
+Fixed 2026-10-17 (G2): the command bar's root node is the bounding box of its faceplate, the whole width of the bottom 42 % of the
+screen; `cursor_blocked` took all of it as "over the bar", so a drag towards a planet in the lower right was dropped the moment the
+cursor crossed that line (and those planets could not be hovered or clicked). Now only the opaque art (`eaw_ui::ShellOpaque`, alpha
+mask of the faceplate in 4 design px cells) and the bar backing count, and a drag only ends on release, Esc or a right click.
+
 ## Galaxy UI round (2026-10-09, QA U6-U12)
 - Build pad / queue / fleet-unit tooltips use `Encyclopedia_Text` (text ids, `TEXT_LINE` = line break; fallback `Tooltip_Text`) via `play_ui::lore`, plus cost / build time / population / upkeep rows and the availability reason. The tech upgrade pad lists the ships, structures and star bases that require the next tech level (`tech_unlocks`, from the sim catalog). Hovering the small red/green marker explains upkeep / income (`marker_tooltip`).
 - Planet and fleet hover text goes through `eaw_ui::WorldTooltip` (same panel and droid anchor); the old `FleetTip` entity is gone. `--tooltip <button>` shows a bar tooltip in offscreen renders.

@@ -36,7 +36,7 @@ pub use build_menu::{Availability, BuildCategory, BuildMenu, BuildOption, BuildT
 pub use catalog::{FleetModelStyle, PlayCatalog, RuleTexts};
 pub use driver::{TacticalRuntime, CommandResult, LoadProgressView, LoadResult, ResolveMode, SaveResult, ScriptSetup, SightView, SimDriver, Snapshot, Ticket};
 pub use geometry::{FleetPlace, GalaxyLayout, RoutePlan, flagship, galaxy_to_world};
-pub use input::{PlayCursorBlocked, PlayHover, PlayUiBlock};
+pub use input::{PlayCursorBlocked, PlayCursorOverUi, PlayHover, PlayUiBlock};
 
 /// Set by the host while the map is not shown (tactical battle screen): fleet markers and labels
 /// stop drawing.
@@ -152,6 +152,7 @@ impl Plugin for GalaxyPlayPlugin {
             .init_resource::<PlayUiModel>()
             .init_resource::<PlayHover>()
             .init_resource::<PlayCursorBlocked>()
+            .init_resource::<PlayCursorOverUi>()
             .init_resource::<PlayMapHidden>()
             .init_resource::<input::DragState>()
             .init_resource::<visuals::FleetEntities>()

@@ -273,6 +273,73 @@ pub struct EawPanel {
     pub model: String,
 }
 
+/// Where the frame art of a shell panel is opaque, as a grid of [`OPAQUE_CELL`] design px cells over the panel root. The root is the
+/// bounding box of all its art: the galactic faceplate spans the whole bar width and the height of the droid column, so most of that box
+/// is open map above the build bar. Hosts test the cursor and screen rectangles against this instead of the box.
+#[derive(Component, Debug, Clone, Default, PartialEq)]
+pub struct ShellOpaque {
+    /// Design size of the root.
+    size: Vec2,
+    cols: usize,
+    rows: usize,
+    cells: Vec<bool>,
+}
+
+/// Cell size of [`ShellOpaque`] in design px (about 5 screen px on a 1080p screen).
+const OPAQUE_CELL: f32 = 4.0;
+/// Alpha (0..255) from which a pixel of the frame art counts as interface; fainter pixels are soft edges (estimate; on the galactic bar
+/// at 1080p the mask then covers the droid column, the info panel, the minimap block and the build strip, nothing above the strip).
+const OPAQUE_ALPHA: u8 = 64;
+
+impl ShellOpaque {
+    fn new(size: Vec2) -> Self {
+        let (cols, rows) = ((size.x / OPAQUE_CELL).ceil().max(1.0) as usize, (size.y / OPAQUE_CELL).ceil().max(1.0) as usize);
+        Self { size, cols, rows, cells: vec![false; cols * rows] }
+    }
+
+    /// Marks the cells under the opaque pixels of an art image whose top-left corner sits at `top_left` (root design px, y down), with
+    /// `oversample` image px per design px.
+    fn add(&mut self, img: &alamo_model::image::Rgba8, top_left: Vec2, oversample: f32) {
+        for y in 0..img.height {
+            for x in 0..img.width {
+                if img.pixels[(y * img.width + x) * 4 + 3] < OPAQUE_ALPHA {
+                    continue;
+                }
+                let p = top_left + (Vec2::new(x as f32, y as f32) + 0.5) / oversample.max(1e-3);
+                if let Some(i) = self.cell(p) {
+                    self.cells[i] = true;
+                }
+            }
+        }
+    }
+
+    fn cell(&self, p: Vec2) -> Option<usize> {
+        let (c, r) = ((p.x / OPAQUE_CELL).floor(), (p.y / OPAQUE_CELL).floor());
+        (c >= 0.0 && r >= 0.0 && (c as usize) < self.cols && (r as usize) < self.rows).then(|| r as usize * self.cols + c as usize)
+    }
+
+    /// The root's design px of a point in physical (render target) px.
+    fn local(&self, node: &ComputedNode, tf: &UiGlobalTransform, p: Vec2) -> Vec2 {
+        let size = node.size().max(Vec2::splat(1e-3));
+        (p - (tf.translation - size * 0.5)) * self.size / size
+    }
+
+    /// Whether the art is opaque under `p` (physical px, like `ComputedNode::contains_point`).
+    pub fn hit(&self, node: &ComputedNode, tf: &UiGlobalTransform, p: Vec2) -> bool {
+        self.cell(self.local(node, tf, p)).is_some_and(|i| self.cells[i])
+    }
+
+    /// Whether any opaque art overlaps the rectangle `lo..hi` (physical px).
+    pub fn overlaps(&self, node: &ComputedNode, tf: &UiGlobalTransform, lo: Vec2, hi: Vec2) -> bool {
+        let (a, b) = (self.local(node, tf, lo), self.local(node, tf, hi));
+        let c0 = (a.x / OPAQUE_CELL).floor().max(0.0) as usize;
+        let r0 = (a.y / OPAQUE_CELL).floor().max(0.0) as usize;
+        let c1 = ((b.x / OPAQUE_CELL).ceil().max(0.0) as usize).min(self.cols);
+        let r1 = ((b.y / OPAQUE_CELL).ceil().max(0.0) as usize).min(self.rows);
+        (r0..r1).any(|r| (c0..c1).any(|c| self.cells[r * self.cols + c]))
+    }
+}
+
 struct Builder<'a> {
     world: &'a mut World,
     textures: UiTextures,
@@ -396,6 +463,7 @@ pub fn spawn_shell(world: &mut World, spec: &ShellSpec) -> Option<Entity> {
     let mut arts = arts;
     arts.sort_by(|a, c| a.z.total_cmp(&c.z));
     let mut decoded = HashMap::new();
+    let mut opaque = ShellOpaque::new(Vec2::new(width, height));
     for art in arts {
         let tex = decoded
             .entry(art.texture.to_lowercase())
@@ -403,9 +471,12 @@ pub fn spawn_shell(world: &mut World, spec: &ShellSpec) -> Option<Entity> {
         let Some(tex) = tex else { continue };
         let (alo, ahi) = art.bounds();
         let img = rasterize(&art.triangles, tex, alo, ahi, oversample);
+        // `image_at` puts the image's top-left corner here (root space, y down).
+        opaque.add(&img, Vec2::new(alo.x - lo.x, hi.y - ahi.y), oversample);
         let handle = b.upload_raw(&art.name, img);
         b.image_at(root, &handle, (alo + ahi) * 0.5 - lo, ahi - alo, Color::WHITE, Some(&art.name));
     }
+    b.world.entity_mut(root).insert(opaque);
 
     // Components in draw order (z, then base layer). Components far outside the art belong to
     // other panels (e.g. the ground filters below the galactic bar).
@@ -1947,6 +2018,30 @@ fn roman(level: u8) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_the_opaque_art_of_a_shell_counts_as_interface() {
+        // A 40x20 design px panel shown at 2x (80x40 physical px, centred at 100,100) with one art image of 16x8 design px at (8, 4):
+        // its left half opaque, its right half see-through (the faceplate above the build bar is like that).
+        let mut opaque = ShellOpaque::new(Vec2::new(40.0, 20.0));
+        let (w, h) = (32, 16);
+        let pixels = (0..w * h).flat_map(|i| [255, 255, 255, if i % w < w / 2 { 255 } else { 10 }]).collect();
+        opaque.add(&alamo_model::image::Rgba8 { width: w, height: h, pixels }, Vec2::new(8.0, 4.0), 2.0);
+        let node = ComputedNode { size: Vec2::new(80.0, 40.0), ..ComputedNode::DEFAULT };
+        let tf = UiGlobalTransform::from_xy(100.0, 100.0);
+        // Physical px of a design point.
+        let at = |x: f32, y: f32| Vec2::new(60.0, 80.0) + Vec2::new(x, y) * 2.0;
+        assert!(opaque.hit(&node, &tf, at(10.0, 6.0)));
+        assert!(opaque.hit(&node, &tf, at(15.0, 11.0)));
+        // Inside the panel's box but on the see-through half or outside the art: open map.
+        assert!(!opaque.hit(&node, &tf, at(21.0, 6.0)));
+        assert!(!opaque.hit(&node, &tf, at(30.0, 15.0)));
+        assert!(!opaque.hit(&node, &tf, at(2.0, 2.0)));
+        assert!(!opaque.hit(&node, &tf, at(-5.0, 6.0)));
+        // Rectangles: one touching the opaque half overlaps, one beside it does not.
+        assert!(opaque.overlaps(&node, &tf, at(14.0, 2.0), at(18.0, 5.0)));
+        assert!(!opaque.overlaps(&node, &tf, at(24.0, 2.0), at(39.0, 19.0)));
+    }
 
     #[test]
     fn card_stays_above_the_advisor_log() {

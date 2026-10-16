@@ -20,6 +20,9 @@ tactical only; no story or ground UI). Findings and design details: `UI.md`.
 `MinimapData`, `TacticalData` (set `active`). Events out (Bevy messages): `EawButtonClicked`,
 `EawAbilityClicked`, `EawSelectionClicked`, `EawHardpointClicked`, `EawSlotDropped`,
 `EawMinimapClicked`, `EawDialogResult`; `UiTexturesLoaded` when textures are ready.
+Every shell root carries `ShellOpaque` (alpha mask of its frame art, 4 design px cells): `hit(node, tf, p)` / `overlaps(node, tf, lo, hi)`
+in physical px tell whether the visible art is there. The root node itself is the bounding box of all art (the galactic bar's spans the
+whole width and the droid column's height), so hosts should not use it for pointer or label tests.
 Set `EawUiSettings::camera` when rendering to an image. Fonts come from the OS (feature
 `system-fonts`): Bahnschrift / Arial; the original EmpireAtWar fonts are not available.
 

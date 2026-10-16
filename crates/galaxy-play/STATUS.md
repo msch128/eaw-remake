@@ -15,7 +15,9 @@ the player selects and orders them, builds at owned planets, controls game speed
 - `GameClock`: pause + speed levels, `hold` flag for the host (pause menu, battle screen); time is held while a human battle waits.
 - Notifications (captured/lost planets, battle pending/resolved, construction, income, refused orders).
 - `PlayUiModel` (plain data) is the UI seam: `GalaxyPlayUiPlugin` is a simple built-in UI; the app uses `eaw-ui` instead.
-- `PlayCursorBlocked` lets the host disable mouse handling (over its UI, menus, other screens).
+- `PlayCursorBlocked` lets the host disable mouse handling (over its UI, menus, other screens). `PlayCursorOverUi` tells the plugin that
+  the block only comes from the host's interface under the cursor: a fleet drag in progress then keeps going (no target, no order on a
+  release there); only a menu / other screen / loading galaxy, Esc or a right click end it early (Esc / right click give no order).
 - Battles: with `PlayConfig::tactical_hook` "Fight" asks the worker for the tactical setup (`PlayEvent::TacticalReady(TacticalRequest)`); the host plays it and answers `PlayAction::ApplyTactical` (result applied by galaxy-sim) or `PlayAction::CancelTactical` (auto-resolve).
   `PlayAction::ResolveBattle` (currently always auto-resolved).
 

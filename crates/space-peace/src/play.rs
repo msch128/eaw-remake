@@ -260,7 +260,8 @@ fn sync_radii(radii: Res<PlanetRadii>, bridge: Res<PlayBridge>, layout: Option<R
 #[allow(clippy::too_many_arguments)]
 fn cursor_blocked(
     window: Option<Single<&Window, With<PrimaryWindow>>>,
-    bar: Query<(&ComputedNode, &UiGlobalTransform), With<EawCommandBar>>,
+    bar: Query<(&ComputedNode, &UiGlobalTransform, Option<&eaw_ui::ShellOpaque>), With<EawCommandBar>>,
+    backing: Query<(&ComputedNode, &UiGlobalTransform), With<crate::play_ui::BarBacking>>,
     cheat_panel: Query<(&ComputedNode, &UiGlobalTransform), With<crate::cheat_menu::CheatRoot>>,
     droid_menu: Option<Res<crate::droid_menu::DroidMenuState>>,
     screen: Res<State<AppScreen>>,
@@ -268,22 +269,34 @@ fn cursor_blocked(
     state: Option<Res<SimState>>,
     planet_view: Option<Res<crate::planet_view::PlanetViewState>>,
     mut blocked: ResMut<PlayCursorBlocked>,
+    mut over_ui: ResMut<galaxy_play::PlayCursorOverUi>,
 ) {
     // The planet close-up has its own pointer handling (slots, drag and drop); no map box selection behind it.
     let in_planet_view = planet_view.is_some_and(|v| v.active);
     let in_droid_menu = droid_menu.is_some_and(|d| d.open);
     let cursor = window.as_ref().and_then(|w| w.cursor_position());
     let phys_cursor = window.as_ref().and_then(|w| w.physical_cursor_position());
-    let over_bar = bar.iter().any(|(node, tf)| {
-        cursor.is_some_and(|c| node.contains_point(*tf, c)) || phys_cursor.is_some_and(|p| node.contains_point(*tf, p))
+    // Only the bar's visible art counts, not its bounding box: that spans the whole width up to the top of the droid column (the
+    // bottom 40 % of the screen), so planets above the build bar could not be hovered, clicked or dropped on. UI nodes live in
+    // physical pixels.
+    let over_bar = phys_cursor.is_some_and(|p| {
+        bar.iter().any(|(node, tf, opaque)| match opaque {
+            Some(o) => o.hit(node, tf, p),
+            None => node.contains_point(*tf, p),
+        }) || backing.iter().any(|(node, tf)| node.contains_point(*tf, p))
     });
     let over_cheat = cheat_panel.iter().any(|(node, tf)| {
         cursor.is_some_and(|c| node.contains_point(*tf, c)) || phys_cursor.is_some_and(|p| node.contains_point(*tf, p))
     });
     let loading = state.is_some_and(|s| s.current.loading);
-    let value = over_bar || over_cheat || in_droid_menu || in_planet_view || loading || paused.0 || *screen.get() != AppScreen::Galaxy;
+    let modal = in_droid_menu || in_planet_view || loading || paused.0 || *screen.get() != AppScreen::Galaxy;
+    let value = over_bar || over_cheat || modal;
     if blocked.0 != value {
         blocked.0 = value;
+    }
+    let ui = (over_bar || over_cheat) && !modal;
+    if over_ui.0 != ui {
+        over_ui.0 = ui;
     }
 }
 

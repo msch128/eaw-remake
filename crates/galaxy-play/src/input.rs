@@ -32,6 +32,12 @@ pub struct PlayHover {
 #[derive(Resource, Default, Debug, Clone, Copy)]
 pub struct PlayCursorBlocked(pub bool);
 
+/// Set by the host (with [`PlayCursorBlocked`]) when the block only comes from its interface under the cursor, not from a menu, another
+/// screen or a loading galaxy. A fleet drag in progress keeps going over the interface: it only ends on release (no order while over
+/// the interface), Esc or a right click.
+#[derive(Resource, Default, Debug, Clone, Copy)]
+pub struct PlayCursorOverUi(pub bool);
+
 /// The press that started a drag.
 #[derive(Debug, Clone, Copy)]
 struct Press {
@@ -158,7 +164,7 @@ pub fn handle_mouse(
     cfg: Res<PlayConfig>,
     camera: Query<(&Camera, &GlobalTransform), With<Camera3d>>,
     blockers: Query<&Interaction, With<PlayUiBlock>>,
-    blocked: Res<PlayCursorBlocked>,
+    (blocked, over_host_ui): (Res<PlayCursorBlocked>, Res<PlayCursorOverUi>),
     state: Res<SimState>,
     player: Res<PlayerFaction>,
     selection: Res<PlayerSelection>,
@@ -175,7 +181,16 @@ pub fn handle_mouse(
     let g = state.galaxy();
     let mine = |id: FleetId| g.fleets.get(&id).is_some_and(|f| player.0 == Some(f.owner));
 
-    if blocked.0 {
+    // A menu, another screen or a loading galaxy ends every gesture. The interface under the cursor does not: a fleet carried over the
+    // command bar on its way to a planet stays at the cursor (it only ignores new presses there).
+    let modal = blocked.0 && !(over_host_ui.0 && drag.left.is_some());
+    // Esc or a right click puts a carried fleet back; the right click gives no order.
+    let cancel = drag.dragging && (keys.just_pressed(KeyCode::Escape) || buttons.just_pressed(MouseButton::Right));
+    if modal || cancel {
+        // The route hint belongs to the drag (it stayed on screen after an aborted one).
+        if drag.dragging && model.route_hint.is_some() {
+            model.route_hint = None;
+        }
         drag.left = None;
         drag.right = None;
         drag.dragging = false;
@@ -213,10 +228,10 @@ pub fn handle_mouse(
                     carry.insert(0, src_fid);
                     drag.carry = carry;
                     drag.cursor_ground = camera.viewport_to_world(cam_tf, cursor).ok().and_then(|ray| ray.intersect_plane(Vec3::ZERO, InfinitePlane3d::new(Vec3::Y)).map(|d| ray.get_point(d)));
-                    // Drag-and-drop order: plan the route to the planet under the cursor.
+                    // Drag-and-drop order: plan the route to the planet under the cursor (none while the cursor is over the interface).
                     drag.box_rect = None;
-                    let target_fleet = hover.fleet.filter(|&f| f != src_fid);
-                    let target = hover.planet.or_else(|| target_fleet.and_then(|fid| g.fleets.get(&fid)).and_then(|f| f.planet()));
+                    let target_fleet = hover.fleet.filter(|&f| f != src_fid && !over_ui);
+                    let target = hover.planet.filter(|_| !over_ui).or_else(|| target_fleet.and_then(|fid| g.fleets.get(&fid)).and_then(|f| f.planet()));
                     model.route_hint = None;
                     drag.preview = None;
                     if let Some(to) = target {
@@ -289,7 +304,8 @@ pub fn handle_mouse(
                     }
                 }
             }
-        } else if press.fleet.is_some_and(mine) {
+        } else if press.fleet.is_some_and(mine) && !over_ui {
+            // (Released over the interface the carried fleet goes back without an order: no box either, so nothing below runs.)
             let src_fid = press.fleet.unwrap();
             let target_fleet = hover.fleet.filter(|&f| f != src_fid);
             let target_planet = hover.planet.or_else(|| target_fleet.and_then(|fid| g.fleets.get(&fid)).and_then(|f| f.planet()));

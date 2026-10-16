@@ -42,7 +42,7 @@ pub use tactical::{TacticalOverlayRoot,
     spawn_unit_panel, unit_abilities, hardpoint_reticle, bar_class, bar_color,
 };
 pub use widgets::{
-    CommandBarMode, CommandBarSpec, EawButton, EawCommandBar, EawPanel, ShellAnchor, ShellSpec,
+    CommandBarMode, CommandBarSpec, EawButton, EawCommandBar, EawPanel, ShellAnchor, ShellOpaque, ShellSpec,
     SmallCapsSpan, TipPart, Tooltip, TooltipLayout, apply_small_caps, clamp_to_screen, small_caps_segments, spawn_command_bar, spawn_shell,
 };
 

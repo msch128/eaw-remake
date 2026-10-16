@@ -68,7 +68,8 @@ impl Plugin for FlowPlugin {
             .add_systems(
                 Update,
                 (
-                    escape_key,
+                    // Before the map input: Esc while a fleet is carried only puts the fleet back (galaxy-play cancels the drag).
+                    escape_key.before(galaxy_play::PlaySet::Input),
                     start_campaign,
                     play_ui_sounds.run_if(resource_exists::<AlamoAudio>),
                 ),
@@ -91,8 +92,9 @@ fn escape_key(
     settings: Res<Settings>,
     slots: Option<ResMut<crate::newgame::SlotScreen>>,
     sell: Option<Res<crate::planet_view::SellDialog>>,
+    drag: Option<Res<galaxy_play::input::DragState>>,
 ) {
-    if !keys.just_pressed(KeyCode::Escape) || sell.is_some_and(|d| d.is_open()) {
+    if !keys.just_pressed(KeyCode::Escape) || sell.is_some_and(|d| d.is_open()) || drag.is_some_and(|d| d.dragging && !d.carry.is_empty()) {
         return;
     }
     // Esc first closes the options overlay.
