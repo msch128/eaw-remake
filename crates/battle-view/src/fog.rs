@@ -1,8 +1,9 @@
 //! Tactical Fog of War visual shroud overlay in space battles (on by default, `SP_FOG_SHROUD=0` turns it off, see `setup_fog_shroud`).
 //!
 //! Spans a semi-transparent cosmic fog plane over the arena on the battle plane (`SpaceFOWHeight` -10, cells of about `DesiredSpaceFOWCellSize` 100).
-//! Areas outside the player's ship sensor discs are covered in a light white haze (`SpaceFOWColor` 255 255 255 in Gameconstants.xml; the opacity is an
-//! estimate, the data alpha is 0); areas within sensor range are clear with soft feathered borders, and the plane fades out toward its own edge so no hard seam shows over a backdrop planet.
+//! Areas outside the player's ship sensor discs are covered in a faint white haze (`SpaceFOWColor` 255 255 255 in Gameconstants.xml; the data alpha is 0,
+//! the Remake shows no haze, the user wants a faint one, see [`FOG_MAX_ALPHA`]); areas within sensor range are clear with soft feathered borders, and the
+//! plane fades out toward its own edge so no hard seam shows over a backdrop planet.
 
 use bevy::asset::RenderAssetUsages;
 use bevy::prelude::*;
@@ -10,7 +11,9 @@ use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use crate::{BattleEntity, BattleRuntime, BattleViewSettings, RenderedShips};
 
 pub const FOG_GRID_SIZE: usize = 128;
-pub const FOG_MAX_ALPHA: u8 = 140; // ~0.55 opacity (estimate; light haze, the dark sheet of the first version hid the planet)
+/// Opacity of the full haze: 10 of 255, a dark veil that marks the sensor edge and keeps the stars visible. User pick 2026-10-17 from
+/// offscreen comparison renders at 0 / 10 / 30 / 70 / 140 (140 read as a nearly white sheet, 30 already as a grey one; the data alpha is 0).
+pub const FOG_MAX_ALPHA: u8 = 10;
 pub const FOG_FEATHER_DISTANCE: f32 = 800.0;
 /// The plane fades to nothing over this distance at its edge (no hard seam).
 pub const FOG_EDGE_FADE: f32 = 2500.0;
