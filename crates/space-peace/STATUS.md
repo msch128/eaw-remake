@@ -50,7 +50,12 @@ Connect the real battle-view hook and galaxy-sim result injection, switch menus 
 fullscreen, FPS cap).
 
 ## Galaxy map visuals (2026-10-08)
-- Lanes: wide soft additive ribbons (galaxy_map.rs spawn_lanes/update_lanes); orbit-line art always visible, core dimmed, grid off.
+- Lanes (2026-10-17, measured on the user's Remake video v0520/v0540 and CS9 f0007/f0016 at full HD): one additive ribbon per route
+  from planet centre to planet centre (no overshoot), flat band, world width = data `Width` x 0.14 map units (main 0.84, inter 0.35,
+  capillary 0.07; fixed world size, thinner on screen when zoomed out), the data colour (teal 13, 31, 38 for every relation; enemy
+  alpha fades it close up) x 3.6 in linear light (sRGB about 32, 62, 76 on black), a glint 1.6 times as bright runs along every lane
+  (scrolling texture, replaces the red/green gizmo pulses). Orbit-line art (`Region_Lines`, the thin double curves) at 0.4 so it
+  stays fainter than the lanes like in the Remake; core dimmed, grid off. galaxy_map.rs spawn_lanes/update_lanes.
 - Labels: caps in faction colour (own = green via relation_color), two pip rows (ground, space) from Max_Ground_Base/Max_Space_Base.
 - Selection: notched ring (mesh fill + gizmo outline); fleets stand on a faction-coloured base disc (galaxy-play visuals.rs).
 - Missing vs original: hero head portraits, faction emblem beside planets, dashed sector ring (W_Planet_GC_Sector), lane/slot textures from the game.

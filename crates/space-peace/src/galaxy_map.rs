@@ -20,7 +20,7 @@ use rand::{Rng, SeedableRng, rngs::SmallRng};
 
 use crate::camera::{CameraBounds, GalaxyCamera};
 use crate::flow::{AppScreen, UiSound, cursor_free, not_paused};
-use crate::galaxy_view::{GalaxyView, LineStyleView, PropView};
+use crate::galaxy_view::{GalaxyView, LineStyleView, PropView, RouteStyleView};
 use crate::planet_visual::{
     NEUTRAL, PlanetRadii, PlanetVisualAssets, PlanetVisualPlugin, rgb, spawn_planet_visual,
 };
@@ -75,7 +75,6 @@ impl Plugin for GalaxyMapPlugin {
                     update_labels,
                     draw_rings,
                     update_lanes,
-                    draw_trade_route_pulses,
                     update_planet_captures,
                     toggle_map_overlays_hotkey,
                     place_notch_fill,
@@ -334,8 +333,11 @@ fn fix_star_dome(
                     commands.entity(part).insert(DiscPart {
                         material: h.0.clone(),
                         base: m.params.diffuse,
-                        // Reference look: orbit lines at full strength, the core glow dimmed to a maroon haze, no grid.
-                        strength: match name.as_str() { "grid" => 0.0, "core" => 0.14, _ => 0.9 },
+                        // Reference look: faint orbit lines, the core glow dimmed to a maroon haze, no grid. The orbit lines (`Region_Lines`,
+                        // the thin double curves across the map with a light running along them) are faint in the Remake frames (CS9 f0016:
+                        // about sRGB 13..18, 23..28, 25..29 on black; v0520 fainter still), well below the lanes (40, 63, 77). At 0.9 they
+                        // were the brightest lines on the map (5, 54, 82); 0.4 keeps them visible but faint (estimate by eye against f0016).
+                        strength: match name.as_str() { "grid" => 0.0, "core" => 0.14, _ => 0.4 },
                     });
                 }
             }
@@ -612,7 +614,7 @@ fn spawn_galaxy(
     if use_models {
         spawn_props(&mut commands, &view.props, GalaxyEntity);
     }
-    spawn_lanes(&mut commands, &view, &scale, &mut meshes, &mut materials, &mut images);
+    spawn_lanes(&mut commands, &view, &mut meshes, &mut materials, &mut images);
     // The Remake video shows plain black space outside the galaxy core (maroon only over the core, which the disc art
     // provides), so the extra plane stays off.
     if NEBULA_PLANE {
@@ -1125,12 +1127,14 @@ pub fn route_relation(a: Option<usize>, b: Option<usize>, player: Option<usize>)
     }
 }
 
-/// A lane class: one combined ribbon mesh per width class (main web ways, inter lanes, capillaries).
+/// All lane ribbons of the galaxy in one mesh.
 #[derive(Component)]
 struct LaneMesh {
     mesh: Handle<Mesh>,
-    /// Route indices of the ribbons in vertex order (8 vertices each: four rows of two).
+    /// Route indices of the ribbons in vertex order (4 vertices each: two rows of two).
     routes: Vec<usize>,
+    /// The shared lane material (its texture scrolls to move the glints).
+    material: Handle<StandardMaterial>,
 }
 
 /// Lane colour/zoom state of the last colour update (vertex colours are only rewritten when it changes).
@@ -1141,41 +1145,39 @@ struct LaneState {
     built: bool,
 }
 
-/// Half widths of the ribbons in planet radii (`MapScale::unit`), by data width class. The reference
-/// shows wide soft light-blue beams of about 0.7 planet radii, thinner inter lanes and hair lines.
-const LANE_HALF_WIDTH: [f32; 3] = [0.2, 0.08, 0.03];
-/// Length of the beam beyond each planet as a fraction of the lane (estimate from the Remake frames: the shafts run past the planets).
-const LANE_OVERSHOOT: f32 = 0.25;
-/// Peak brightness (linear) of the beams.
-const LANE_PEAK: [f32; 3] = [0.75, 0.5, 0.3];
+/// World width of a lane per unit of its data `Width` (`TRADEROUTELINES.XML`: main 6.0, inter 2.5, capillary 0.5, hidden 0). Estimate
+/// measured on the user's Remake video at full HD: the main lanes Ansion - Bilbringi (v0520, 8.3 px per map unit) and Rendili - Corellia
+/// (v0540, 8.6 px per unit) are 0.8 to 1.0 map units wide, the inter lane west of Ansion about 0.3: a flat band of 0.14 units per width unit.
+const LANE_WIDTH_PER_DATA: f32 = 0.14;
+/// Brightness on the data colour (additive teal 13, 31, 38) in linear light. Estimate from the same frames: on black space a main lane
+/// reads about sRGB (32..44, 62..68, 76..80) in its middle, 3.6 times the data colour, and has no glow around it.
+const LANE_GAIN: f32 = 3.6;
+/// Share of the full band brightness the lane shows outside a glint: a glint (v0520, on Ansion - Bilbringi) reads about 1.6 times as
+/// bright as the lane on screen (sRGB 60, 107, 122 against 40, 63, 77), 2.8 times in linear light, over about 3 map units of its length,
+/// same width, soft ends.
+const LANE_BASE: f32 = 0.36;
+/// Map units between two glints on a lane, glint length and speed (map units per second, the speed of the old pulses). Estimates: the
+/// stills show about one glint per lane on screen, they cannot show the motion.
+const GLINT_PERIOD: f32 = 40.0;
+const GLINT_LENGTH: f32 = 3.0;
+const GLINT_SPEED: f32 = 2.0;
 
-fn lane_class(width: f32) -> usize {
-    if width >= 4.0 {
-        0
-    } else if width >= 1.5 {
-        1
-    } else {
-        2
-    }
-}
-
-/// Soft beam profile across the ribbon (u) and a gentle fade towards both ends (v).
+/// Lane texture: a flat band with soft edges across the ribbon (u) and one glint per period along it (v, repeating).
 fn lane_texture() -> Image {
     use bevy::asset::RenderAssetUsages;
+    use bevy::image::{ImageAddressMode, ImageSampler, ImageSamplerDescriptor};
     use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
-    let (w, h) = (64u32, 16u32);
+    let (w, h) = (32u32, 128u32);
     let mut px = Vec::with_capacity((w * h * 4) as usize);
     for y in 0..h {
-        let v = (y as f32 + 0.5) / h as f32;
-        // Full strength between the planets (v 0.3..0.7), fading to nothing at the far ends of the overshoot.
-        let along = smoothstep(0.0, 0.3, v) * (1.0 - smoothstep(0.7, 1.0, v));
+        // Distance to the glint centre in map units (the glint sits in the middle of the period).
+        let d = ((y as f32 + 0.5) / h as f32 - 0.5).abs() * GLINT_PERIOD;
+        let glint = 1.0 - smoothstep(0.0, GLINT_LENGTH * 0.5, d);
+        let along = LANE_BASE + (1.0 - LANE_BASE) * glint;
         for x in 0..w {
-            let u = ((x as f32 + 0.5) / w as f32 - 0.5) * 2.0;
-            // Bright core with soft shoulders.
-            let profile = (1.0 - u * u).max(0.0).powf(1.6);
-            let a = (profile * along).clamp(0.0, 1.0);
-            let c = 200 + (55.0 * (1.0 - u.abs())) as u8;
-            px.extend_from_slice(&[c, c, 255, (a * 255.0) as u8]);
+            let u = ((x as f32 + 0.5) / w as f32 - 0.5).abs() * 2.0;
+            let profile = 1.0 - smoothstep(0.7, 1.0, u);
+            px.extend_from_slice(&[255, 255, 255, ((profile * along).clamp(0.0, 1.0) * 255.0) as u8]);
         }
     }
     let mut img = Image::new(
@@ -1185,15 +1187,31 @@ fn lane_texture() -> Image {
         TextureFormat::Rgba8UnormSrgb,
         RenderAssetUsages::RENDER_WORLD,
     );
-    img.sampler = bevy::image::ImageSampler::linear();
+    img.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
+        address_mode_v: ImageAddressMode::Repeat,
+        ..ImageSamplerDescriptor::linear()
+    });
     img
 }
 
-/// Spawns the three lane ribbon meshes of the galaxy.
+/// Width of a route's ribbon in world units (0 for a hidden route).
+fn lane_width(style: &RouteStyleView) -> f32 {
+    style.neutral.width.max(style.own.width).max(style.enemy.width).max(0.0) * LANE_WIDTH_PER_DATA
+}
+
+/// The ribbon of one lane: exactly from planet centre to planet centre (the globes cover its ends), `width` wide, flat in the galaxy
+/// plane. `v` runs along it in glint periods from `phase`.
+fn lane_quad(pa: Vec3, pb: Vec3, width: f32, phase: f32) -> ([[f32; 3]; 4], [[f32; 2]; 4]) {
+    let dir = (pb - pa).normalize_or_zero();
+    let side = Vec3::Y.cross(dir).try_normalize().unwrap_or(Vec3::X) * width * 0.5;
+    let v1 = phase + pa.distance(pb) / GLINT_PERIOD;
+    ([(pa - side).to_array(), (pa + side).to_array(), (pb - side).to_array(), (pb + side).to_array()], [[0.0, phase], [1.0, phase], [0.0, v1], [1.0, v1]])
+}
+
+/// Spawns the lane ribbon mesh of the galaxy.
 fn spawn_lanes(
     commands: &mut Commands,
     view: &GalaxyView,
-    scale: &MapScale,
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
     images: &mut Assets<Image>,
@@ -1211,94 +1229,78 @@ fn spawn_lanes(
         depth_bias: -1.0e6,
         ..default()
     });
-    let mut classes: [Vec<usize>; 3] = Default::default();
+    let (mut routes, mut pos, mut uv, mut idx) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
     for (i, r) in view.routes.iter().enumerate() {
-        let (Some(_), Some(_), Some(style)) = (view.planets.get(r.a), view.planets.get(r.b), view.route_styles.get(r.style)) else {
+        let (Some(a), Some(b), Some(style)) = (view.planets.get(r.a), view.planets.get(r.b), view.route_styles.get(r.style)) else {
             continue;
         };
-        classes[lane_class(style.neutral.width.max(style.own.width))].push(i);
-    }
-    for (class, routes) in classes.into_iter().enumerate() {
-        if routes.is_empty() {
+        let width = lane_width(style);
+        if width <= 0.0 {
             continue;
         }
-        let half = LANE_HALF_WIDTH[class] * scale.unit;
-        let (mut pos, mut uv, mut idx) = (Vec::new(), Vec::new(), Vec::new());
-        for (n, &ri) in routes.iter().enumerate() {
-            let r = &view.routes[ri];
-            let (pa, pb) = (galaxy_to_world(view.planets[r.a].position), galaxy_to_world(view.planets[r.b].position));
-            let dir = (pb - pa).normalize_or_zero();
-            let mut side = Vec3::Y.cross(dir);
-            if side.length_squared() < 1e-6 {
-                side = Vec3::X;
-            }
-            let side = side.normalize() * half;
-            // Like the Remake's light shafts the beam overshoots both planets and fades out beyond them.
-            let ext = dir * (pa.distance(pb) * LANE_OVERSHOOT);
-            let rows = [(pa - ext, 0.0f32), (pa, 0.3), (pb, 0.7), (pb + ext, 1.0)];
-            for (p, v) in rows {
-                pos.extend([p - side, p + side].map(|q| q.to_array()));
-                uv.extend([[0.0f32, v], [1.0, v]]);
-            }
-            let b = (n * 8) as u32;
-            for r in 0..3u32 {
-                let k = b + r * 2;
-                idx.extend([k, k + 1, k + 2, k + 2, k + 1, k + 3]);
-            }
-        }
-        let n = pos.len();
-        let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default());
-        mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, pos);
-        mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uv);
-        mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, vec![[0.0f32; 4]; n]);
-        mesh.insert_indices(Indices::U32(idx));
-        let handle = meshes.add(mesh);
-        commands.spawn((
-            Name::new("lanes"),
-            Mesh3d(handle.clone()),
-            MeshMaterial3d(material.clone()),
-            Transform::IDENTITY,
-            bevy::camera::visibility::NoFrustumCulling,
-            LaneMesh { mesh: handle, routes },
-            GalaxyEntity,
-        ));
+        // Every lane gets its own glint phase, so the glints of neighbouring lanes do not line up.
+        let phase = (i as f32 * 0.618_034).fract();
+        let (p, t) = lane_quad(galaxy_to_world(a.position), galaxy_to_world(b.position), width, phase);
+        let k = pos.len() as u32;
+        pos.extend(p);
+        uv.extend(t);
+        idx.extend([k, k + 1, k + 2, k + 2, k + 1, k + 3]);
+        routes.push(i);
     }
+    if routes.is_empty() {
+        return;
+    }
+    let n = pos.len();
+    let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default());
+    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, pos);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uv);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, vec![[0.0f32; 4]; n]);
+    mesh.insert_indices(Indices::U32(idx));
+    let handle = meshes.add(mesh);
+    commands.spawn((
+        Name::new("lanes"),
+        Mesh3d(handle.clone()),
+        MeshMaterial3d(material.clone()),
+        Transform::IDENTITY,
+        bevy::camera::visibility::NoFrustumCulling,
+        LaneMesh { mesh: handle, routes, material },
+        GalaxyEntity,
+    ));
 }
 
-/// Linear RGB of a lane for the relation of its ends at zoom `t`; `None` when the style hides it.
-/// The game's colours are dark additive teal (13, 31, 38) meant to be added on the backdrop; they give the
-/// hue, the peak brightness per width class gives the beam.
-fn lane_color(relation: RouteRelation, style: &LineStyleView, t: f32, class: usize) -> [f32; 4] {
+/// Linear RGB of a lane drawn in `style` at zoom `t` (0 close, 1 far), as the vertex colour of its ribbon; black when the style hides it.
+/// The data colour (`Color_Zoomed_In` / `Color_Zoomed_Out`, additive teal 13, 31, 38 for every relation in the Remake) is the colour, its
+/// alpha fades the lane (the Remake's enemy lanes fade out when zoomed in); `LANE_GAIN` brings it to the frames' brightness.
+fn lane_color(style: &LineStyleView, t: f32) -> [f32; 4] {
     let mix = |i: usize| style.color_near[i] + (style.color_far[i] - style.color_near[i]) * t;
     let alpha = mix(3);
     if style.width <= 0.0 || alpha <= 0.01 {
         return [0.0; 4];
     }
-    let base_rgb = match relation {
-        // The Remake draws every hyperspace lane as a thin cyan beam (f0007/f0019); only the hue shifts a little with the relation.
-        RouteRelation::Own => Vec3::new(0.30, 0.95, 0.95),
-        RouteRelation::Contested => Vec3::new(0.35, 0.78, 1.0),
-        RouteRelation::Enemy => Vec3::new(0.32, 0.78, 1.0),
-        RouteRelation::Neutral => {
-            let rgb = Vec3::new(mix(0), mix(1), mix(2));
-            let rgb = rgb / rgb.max_element().max(1e-3);
-            rgb * 0.3 + Vec3::new(0.18, 0.62, 0.72)
-        }
-    };
-    let l = Color::srgb(base_rgb.x, base_rgb.y, base_rgb.z).to_linear();
-    let k = LANE_PEAK[class] * alpha;
+    let l = Color::srgb(mix(0), mix(1), mix(2)).to_linear();
+    // The texture carries the band at `LANE_BASE` outside the glints.
+    let k = LANE_GAIN * alpha / LANE_BASE;
     [l.red * k, l.green * k, l.blue * k, 1.0]
 }
 
-/// Keeps the ribbon colours in sync with ownership (relation of the ends) and zoom.
+/// Keeps the ribbon colours in sync with ownership (relation of the ends) and zoom, and moves the glints along the lanes.
 fn update_lanes(
     view: Res<GalaxyView>,
     bounds: Res<CameraBounds>,
+    time: Res<Time>,
     camera: Single<&GalaxyCamera>,
     lanes: Query<&LaneMesh>,
     mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
     mut state: Local<LaneState>,
 ) {
+    // The glints travel from the first end of every lane to the second.
+    let scroll = (time.elapsed_secs() * GLINT_SPEED / GLINT_PERIOD).fract();
+    for lane in &lanes {
+        if let Some(mut m) = materials.get_mut(&lane.material) {
+            m.uv_transform = bevy::math::Affine2::from_translation(Vec2::new(0.0, -scroll));
+        }
+    }
     let t = zoom_fraction(&bounds, camera.distance);
     let bucket = (t * 24.0) as i32;
     let owners = view.planets.iter().fold(1469598103934665603u64, |h, p| (h ^ p.owner.map_or(0xffff, |o| o as u64)).wrapping_mul(1099511628211));
@@ -1306,69 +1308,23 @@ fn update_lanes(
         return;
     }
     for lane in &lanes {
-        let mut col: Vec<[f32; 4]> = Vec::with_capacity(lane.routes.len() * 8);
+        let mut col: Vec<[f32; 4]> = Vec::with_capacity(lane.routes.len() * 4);
         for &ri in &lane.routes {
             let r = &view.routes[ri];
             let (a, b) = (&view.planets[r.a], &view.planets[r.b]);
             let style = &view.route_styles[r.style];
-            let class = lane_class(style.neutral.width.max(style.own.width));
-            let relation = route_relation(a.owner, b.owner, view.player_faction);
-            let line = match relation {
+            let line = match route_relation(a.owner, b.owner, view.player_faction) {
                 RouteRelation::Own => &style.own,
                 RouteRelation::Enemy => &style.enemy,
                 RouteRelation::Contested | RouteRelation::Neutral => &style.neutral,
             };
-            let c = lane_color(relation, line, t, class);
-            col.extend([c; 8]);
+            col.extend([lane_color(line, t); 4]);
         }
         if let Some(mut m) = meshes.get_mut(&lane.mesh) {
             m.insert_attribute(Mesh::ATTRIBUTE_COLOR, col);
         }
     }
     *state = LaneState { zoom_bucket: bucket, owners, built: true };
-}
-
-/// Animates light pulses along major trade routes.
-fn draw_trade_route_pulses(
-    mut gizmos: Gizmos,
-    view: Res<GalaxyView>,
-    time: Res<Time>,
-) {
-    let now = time.elapsed_secs();
-    let speed = 2.0;
-    for r in &view.routes {
-        let (Some(pa_info), Some(pb_info), Some(style)) = (view.planets.get(r.a), view.planets.get(r.b), view.route_styles.get(r.style)) else {
-            continue;
-        };
-        let class = lane_class(style.neutral.width.max(style.own.width));
-        if class > 1 {
-            continue;
-        }
-        let pa = galaxy_to_world(pa_info.position);
-        let pb = galaxy_to_world(pb_info.position);
-        let len = pa.distance(pb);
-        if len < 1.0 {
-            continue;
-        }
-        let dir = (pb - pa) / len;
-        let relation = route_relation(pa_info.owner, pb_info.owner, view.player_faction);
-        let color = match relation {
-            RouteRelation::Own => Color::srgba(0.25, 0.95, 0.65, 0.85),
-            RouteRelation::Contested => Color::srgba(0.95, 0.3, 0.2, 0.85),
-            RouteRelation::Enemy => Color::srgba(0.8, 0.2, 0.35, 0.75),
-            RouteRelation::Neutral => Color::srgba(0.4, 0.75, 1.0, 0.75),
-        };
-        let count = ((len / 14.0) as usize).clamp(1, 4);
-        let streak_len = (len * 0.08).clamp(0.4, 1.2);
-        for i in 0..count {
-            let offset = i as f32 / count as f32;
-            let phase = ((now * speed / len + offset) % 1.0 + 1.0) % 1.0;
-            let center = pa.lerp(pb, phase);
-            let p_head = center + dir * streak_len * 0.5;
-            let p_tail = center - dir * streak_len * 0.5;
-            gizmos.line_gradient(p_tail, p_head, color.with_alpha(0.0), color);
-        }
-    }
 }
 
 /// Finds the planet under the mouse cursor (ray vs. a generous pick sphere).
@@ -1627,6 +1583,64 @@ mod tests {
         assert!(!f.credits && f.military);
         f.cycle_overlays();
         assert!(!f.credits && !f.military);
+    }
+
+    /// The Remake's `Web_Way_Main` style: additive teal (13, 31, 38), width 6; the enemy look fades out when zoomed in.
+    fn remake_style(width: f32) -> RouteStyleView {
+        let line = |alpha_near: f32| LineStyleView { color_far: [13.0 / 255.0, 31.0 / 255.0, 38.0 / 255.0, 1.0], color_near: [13.0 / 255.0, 31.0 / 255.0, 38.0 / 255.0, alpha_near], width };
+        RouteStyleView { name: "Web_Way_Main".into(), own: line(1.0), enemy: line(0.0), neutral: line(1.0) }
+    }
+
+    #[test]
+    fn a_lane_runs_exactly_from_planet_centre_to_planet_centre() {
+        let (a, b) = (Vec3::new(-108.0, 10.0, -267.0), Vec3::new(-62.0, 10.0, -192.0));
+        let (pos, uv) = lane_quad(a, b, 0.84, 0.25);
+        let p = pos.map(Vec3::from_array);
+        // No overshoot: the ends of the ribbon are the two centres, its sides `width` apart.
+        assert!(((p[0] + p[1]) * 0.5).distance(a) < 1e-4 && ((p[2] + p[3]) * 0.5).distance(b) < 1e-4);
+        assert!((p[0].distance(p[1]) - 0.84).abs() < 1e-4 && (p[2].distance(p[3]) - 0.84).abs() < 1e-4);
+        // Flat in the galaxy plane, and `v` counts glint periods along it.
+        assert!(p.iter().all(|q| (q.y - 10.0).abs() < 1e-4));
+        assert!((uv[2][1] - uv[0][1] - a.distance(b) / GLINT_PERIOD).abs() < 1e-5);
+    }
+
+    #[test]
+    fn lane_width_follows_the_data_width() {
+        // Main 6.0, inter 2.5, capillary 0.5: about 0.84, 0.35 and 0.07 map units (main lanes measured 0.8 to 1.0 on v0520 / v0540).
+        assert!((lane_width(&remake_style(6.0)) - 0.84).abs() < 1e-4);
+        assert!((lane_width(&remake_style(2.5)) - 0.35).abs() < 1e-4);
+        assert!(lane_width(&remake_style(6.0)) > 2.0 * lane_width(&remake_style(2.5)));
+        assert_eq!(lane_width(&remake_style(0.0)), 0.0);
+    }
+
+    #[test]
+    fn lane_colour_is_the_data_colour_at_the_frames_brightness() {
+        let style = remake_style(6.0);
+        // On black space the band (at `LANE_BASE` of the texture) shows the measured lane colour, about sRGB (32, 62, 76).
+        let c = lane_color(&style.neutral, 1.0);
+        let shown = Color::linear_rgb(c[0] * LANE_BASE, c[1] * LANE_BASE, c[2] * LANE_BASE).to_srgba();
+        let px = [shown.red, shown.green, shown.blue].map(|v| v * 255.0);
+        assert!((px[0] - 32.0).abs() < 6.0 && (px[1] - 62.0).abs() < 6.0 && (px[2] - 76.0).abs() < 6.0, "{px:?}");
+        // The same teal for every relation (no invented green or red lanes); the enemy style's alpha fades it out close up.
+        assert_eq!(lane_color(&style.own, 0.3), lane_color(&style.neutral, 0.3));
+        assert_eq!(lane_color(&style.enemy, 0.0), [0.0; 4]);
+        assert!(lane_color(&style.enemy, 1.0)[1] > 0.0);
+        // A hidden style draws nothing.
+        assert_eq!(lane_color(&remake_style(0.0).neutral, 1.0), [0.0; 4]);
+    }
+
+    #[test]
+    fn the_lane_band_is_flat_with_one_glint_per_period() {
+        let img = lane_texture();
+        let (w, h) = (img.width() as usize, img.height() as usize);
+        let data = img.data.as_ref().expect("cpu data");
+        let alpha = |x: usize, y: usize| data[(y * w + x) * 4 + 3];
+        let base = (LANE_BASE * 255.0) as u8;
+        // Across: full in the middle and on most of the width, nothing at the very edge.
+        assert!(alpha(w / 2, 0).abs_diff(base) <= 1 && alpha(w / 4, 0).abs_diff(base) <= 1 && alpha(0, 0) < base / 4);
+        // Along: the band outside the glint, full brightness at the glint centre (middle of the period).
+        assert!(alpha(w / 2, h / 2) >= 245);
+        assert!(alpha(w / 2, h / 4).abs_diff(base) <= 1);
     }
 }
 /// A row of structure slot pips under a planet name: `row` 0 = ground slots, 1 = space slots.
