@@ -1016,20 +1016,31 @@ fn fix_fleet_label_scale(scale: Res<UiScale>, mut labels: Query<&mut Node, With<
 /// Tells the label layout where the planet panel is.
 #[allow(clippy::type_complexity)]
 fn publish_panel_rect(
-    panels: Query<(&ComputedNode, &UiGlobalTransform, &InheritedVisibility), (Or<(With<crate::ui::SkinPanel>, With<Ticker>, With<eaw_ui::EawPanel>, With<PlanetPanel>)>, Without<crate::ui::Tooltip>)>,
+    panels: Query<
+        (&ComputedNode, &UiGlobalTransform, &InheritedVisibility, Option<&eaw_ui::ShellOpaque>, Has<EawCommandBar>),
+        (Or<(With<crate::ui::SkinPanel>, With<Ticker>, With<eaw_ui::EawPanel>, With<PlanetPanel>, With<BarBacking>)>, Without<crate::ui::Tooltip>),
+    >,
     ui_scale: Res<UiScale>,
     mut rect: ResMut<crate::galaxy_map::PanelRect>,
 ) {
-    let rects: Vec<(Vec2, Vec2)> = panels
-        .iter()
-        .filter(|(_, _, vis)| vis.get())
-        .map(|(node, tf, _)| {
-            let sf = node.inverse_scale_factor() * ui_scale.0.max(0.1);
-            let c = tf.translation * sf;
-            let half = node.size() * sf * 0.5;
-            (c - half, c + half)
-        })
-        .collect();
+    let mut rects: Vec<(Vec2, Vec2)> = Vec::new();
+    for (node, tf, vis, opaque, bar) in &panels {
+        if !vis.get() {
+            continue;
+        }
+        // Physical px to the viewport px of the labels.
+        let sf = node.inverse_scale_factor() * ui_scale.0.max(0.1);
+        match opaque.filter(|_| bar) {
+            // The command bar covers only where its art is: its node is the bounding box of the faceplate, the whole width of the
+            // bottom 42 % of the screen, which hid every planet name in the lower part of the map.
+            Some(o) => rects.extend(o.rects(node, tf).into_iter().map(|(lo, hi)| (lo * sf, hi * sf))),
+            None => {
+                let c = tf.translation * sf;
+                let half = node.size() * sf * 0.5;
+                rects.push((c - half, c + half));
+            }
+        }
+    }
     if rect.0 != rects {
         rect.0 = rects;
     }

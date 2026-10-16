@@ -72,7 +72,7 @@ impl Plugin for GalaxyMapPlugin {
                 Update,
                 (
                     (update_hover, pick_planet).chain().run_if(not_paused.and_then(cursor_free)),
-                    update_labels,
+                    (update_labels, log_label_stats).chain(),
                     draw_rings,
                     update_lanes,
                     update_planet_captures,
@@ -671,10 +671,28 @@ fn spawn_galaxy(
 /// One label candidate for the screen-space declutter pass.
 #[derive(Clone, Copy)]
 struct LabelSlot {
-    /// Top-left of the label rectangle in logical viewport pixels.
+    /// Top-left of the label rectangle in logical viewport pixels (below the globe; after the placement, where it is shown).
     pos: Vec2,
+    /// Top-left of the same rectangle above the globe, for a name that would sit off the bottom or under the interface.
+    above: Vec2,
     size: Vec2,
     score: f32,
+}
+
+/// Room kept around a label in the declutter pass (viewport px).
+const LABEL_MARGIN: f32 = 2.0;
+
+/// Whether a label rectangle at `pos` (top-left, viewport px) is on screen above the bottom strip `reserved` and clear of the interface
+/// rectangles. Close up only its anchor (the top centre) has to be on screen.
+fn label_clear(pos: Vec2, size: Vec2, viewport: Vec2, reserved: f32, close: bool, panel: &PanelRect) -> bool {
+    let (lo, hi) = (pos - Vec2::splat(LABEL_MARGIN), pos + size + Vec2::splat(LABEL_MARGIN));
+    let anchor = pos + Vec2::new(size.x * 0.5, 0.0);
+    let on_screen = if close {
+        anchor.x >= 0.0 && anchor.y >= 0.0 && anchor.x <= viewport.x && anchor.y <= viewport.y - reserved
+    } else {
+        lo.x >= 0.0 && lo.y >= 0.0 && hi.x <= viewport.x && hi.y <= viewport.y - reserved
+    };
+    on_screen && !panel.0.iter().chain(panel.1.iter()).any(|(plo, phi)| lo.x < phi.x && hi.x > plo.x && lo.y < phi.y && hi.y > plo.y)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -723,7 +741,8 @@ fn update_labels(
         let (Ok(a), Ok(b)) = (camera.world_to_viewport(cam_tf, centre), camera.world_to_viewport(cam_tf, centre + cam_tf.right() * radius)) else {
             continue;
         };
-        let p = a + Vec2::new(0.0, a.distance(b) * 0.95);
+        let r_px = a.distance(b) * 0.95;
+        let p = a + Vec2::new(0.0, r_px);
         let measured = computed.size() * computed.inverse_scale_factor() * us;
         let size = if measured.x > 1.0 {
             measured
@@ -740,12 +759,9 @@ fn update_labels(
             let centre = (1.0 - ((p - viewport * 0.5).length() / (viewport.length() * 0.5)).min(1.0)).powi(2) * 4000.0;
             (if mine { 1.0e6 } else { 0.0 }) + centre + planet.income as f32 + planet.size
         };
-        slots[label.0] = Some(LabelSlot {
-            pos: Vec2::new(p.x - size.x * 0.5, p.y),
-            // Room for the two rows of structure slot pips under the name.
-            size: size + Vec2::new(0.0, font_px * 1.1),
-            score,
-        });
+        // Room for the two rows of structure slot pips under the name.
+        let size = size + Vec2::new(0.0, font_px * 1.1);
+        slots[label.0] = Some(LabelSlot { pos: Vec2::new(p.x - size.x * 0.5, p.y), above: Vec2::new(p.x - size.x * 0.5, a.y - r_px - size.y), size, score });
     }
 
     // The label colour follows the owner (a captured planet turns green).
@@ -780,18 +796,18 @@ fn update_labels(
         })
         .collect();
     let mut placed: Vec<(Vec2, Vec2)> = Vec::with_capacity(order.len());
-    const MARGIN: f32 = 2.0;
     let close = zoom_out < 0.45;
     for i in order {
-        let s = slots[i].expect("filtered above");
-        let (lo, hi) = (s.pos - Vec2::splat(MARGIN), s.pos + s.size + Vec2::splat(MARGIN));
-        // Close up every planet in view keeps its name: only its anchor has to be on screen, and crowding never hides it.
-        let anchor = s.pos + Vec2::new(s.size.x * 0.5, 0.0);
-        let on_screen = if close {
-            anchor.x >= 0.0 && anchor.y >= 0.0 && anchor.x <= viewport.x && anchor.y <= viewport.y - reserved.0
-        } else {
-            lo.x >= 0.0 && lo.y >= 0.0 && hi.x <= viewport.x && hi.y <= viewport.y - reserved.0
-        };
+        let mut s = slots[i].expect("filtered above");
+        // Close up every planet in view keeps its name: only its anchor has to be on screen, and crowding never hides it. A name that
+        // would sit off the bottom of the map or under the command bar goes above its globe instead.
+        let clear = |pos: Vec2| label_clear(pos, s.size, viewport, reserved.0, close, &panel);
+        let (below, above) = (clear(s.pos), clear(s.above));
+        if !below && above {
+            s.pos = s.above;
+        }
+        let fits = below || above;
+        let (lo, hi) = (s.pos - Vec2::splat(LABEL_MARGIN), s.pos + s.size + Vec2::splat(LABEL_MARGIN));
         let overlaps = placed
             .iter()
             .any(|&(plo, phi)| lo.x < phi.x && hi.x > plo.x && lo.y < phi.y && hi.y > plo.y);
@@ -803,11 +819,11 @@ fn update_labels(
                 })
         });
         // The selected planet always keeps its label.
-        let behind_panel = panel.0.iter().chain(panel.1.iter()).any(|(plo, phi)| lo.x < phi.x && hi.x > plo.x && lo.y < phi.y && hi.y > plo.y);
         let selected = selection.0 == Some(i);
-        if selected || (on_screen && !behind_panel && (close || (!overlaps && (!on_planet || slots[i].is_some_and(|s| s.score >= 1.0e6))))) {
+        if selected || (fits && (close || (!overlaps && (!on_planet || s.score >= 1.0e6)))) {
             placed.push((lo, hi));
             visible[i] = true;
+            slots[i] = Some(s);
         }
     }
 
@@ -854,6 +870,55 @@ fn update_labels(
             _ => *vis = Visibility::Hidden,
         }
     }
+}
+
+/// Offscreen runs: how many planets on screen (centre in view, not under the bottom strip or the interface) show their name, also for
+/// the lower third of the screen, and how often a label appeared or vanished between two frames while the camera stood still (must be 0).
+/// One log line every 60 frames: `labels: N of M on screen named, lower third n of m, toggles k, interface rects r`.
+fn log_label_stats(
+    args: Res<crate::cli::Args>,
+    view: Res<GalaxyView>,
+    reserved: Res<ReservedBottom>,
+    panel: Res<PanelRect>,
+    camera: Single<(&Camera, &GlobalTransform), With<GalaxyCamera>>,
+    labels: Query<(&PlanetLabel, &Visibility)>,
+    mut last: Local<(Option<GlobalTransform>, Vec<bool>, u32, u32)>,
+) {
+    if args.offscreen.is_none() {
+        return;
+    }
+    let (camera, cam_tf) = *camera;
+    let Some(viewport) = camera.logical_viewport_size() else { return };
+    let mut shown = vec![false; view.planets.len()];
+    for (label, vis) in &labels {
+        shown[label.0] = *vis != Visibility::Hidden;
+    }
+    let (prev_tf, prev, toggles, frames) = &mut *last;
+    *frames += 1;
+    // The first frames lay the labels out with estimated sizes, then with the measured texts; after that nothing may change.
+    if *frames > 10 && prev_tf.is_some_and(|t| t == *cam_tf) && prev.len() == shown.len() {
+        *toggles += prev.iter().zip(&shown).filter(|(a, b)| a != b).count() as u32;
+    }
+    *prev_tf = Some(*cam_tf);
+    *prev = shown.clone();
+    if *frames % 60 != 0 {
+        return;
+    }
+    let under_ui = |p: Vec2| p.y > viewport.y - reserved.0 || panel.0.iter().any(|(lo, hi)| p.cmpge(*lo).all() && p.cmple(*hi).all());
+    let (mut on, mut named, mut low_on, mut low_named) = (0, 0, 0, 0);
+    for (i, p) in view.planets.iter().enumerate() {
+        let Ok(c) = camera.world_to_viewport(cam_tf, galaxy_to_world(p.position)) else { continue };
+        if c.x < 0.0 || c.y < 0.0 || c.x > viewport.x || c.y > viewport.y || under_ui(c) {
+            continue;
+        }
+        let lower = c.y > viewport.y * 2.0 / 3.0;
+        on += 1;
+        low_on += u32::from(lower);
+        named += u32::from(shown[i]);
+        low_named += u32::from(lower && shown[i]);
+    }
+    info!("labels: {named} of {on} on screen named, lower third {low_named} of {low_on}, toggles {toggles}, interface rects {}", panel.0.len());
+    *toggles = 0;
 }
 
 /// Draws the owner ring under every planet and the pulsing selection ring. Gizmo lines keep a
@@ -1583,6 +1648,27 @@ mod tests {
         assert!(!f.credits && f.military);
         f.cycle_overlays();
         assert!(!f.credits && !f.military);
+    }
+
+    #[test]
+    fn names_in_the_lower_part_show_unless_they_sit_under_the_interface() {
+        // 1080p map: the command bar's art is the left column (to x 420 from y 675) and the build strip (from y 905); its bounding box
+        // was the whole bottom from y 629.
+        let viewport = Vec2::new(1920.0, 1080.0);
+        let mask = PanelRect(vec![(Vec2::new(0.0, 675.0), Vec2::new(420.0, 1080.0)), (Vec2::new(0.0, 905.0), Vec2::new(1920.0, 1080.0))], Vec::new());
+        let bbox = PanelRect(vec![(Vec2::new(-16.0, 629.0), Vec2::new(1947.0, 1080.0))], Vec::new());
+        let size = Vec2::new(90.0, 24.0);
+        // A planet at (1228, 705) over the open map: its name shows with the art as the obstacle, the bounding box hid it.
+        let below = Vec2::new(1228.0 - 45.0, 715.0);
+        for close in [true, false] {
+            assert!(label_clear(below, size, viewport, 190.0, close, &mask));
+            assert!(!label_clear(below, size, viewport, 190.0, close, &bbox));
+        }
+        // A planet just above the build strip: its name under the globe would sit on the strip, above the globe it is clear.
+        let (below, above) = (Vec2::new(1500.0, 890.0), Vec2::new(1500.0, 850.0));
+        assert!(!label_clear(below, size, viewport, 0.0, false, &mask) && label_clear(above, size, viewport, 0.0, false, &mask));
+        // Under the left column nothing helps (the planet itself is under the interface).
+        assert!(!label_clear(Vec2::new(200.0, 700.0), size, viewport, 0.0, true, &mask));
     }
 
     /// The Remake's `Web_Way_Main` style: additive teal (13, 31, 38), width 6; the enemy look fades out when zoomed in.

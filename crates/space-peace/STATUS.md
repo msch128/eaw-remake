@@ -57,6 +57,13 @@ fullscreen, FPS cap).
   (scrolling texture, replaces the red/green gizmo pulses). Orbit-line art (`Region_Lines`, the thin double curves) at 0.4 so it
   stays fainter than the lanes like in the Remake; core dimmed, grid off. galaxy_map.rs spawn_lanes/update_lanes.
 - Labels: caps in faction colour (own = green via relation_color), two pip rows (ground, space) from Max_Ground_Base/Max_Space_Base.
+  Every planet on screen shows its name unless the planet itself sits under opaque interface (2026-10-17, G3): the obstacles in
+  `PanelRect` are the command bar's opaque art (`eaw_ui::ShellOpaque::rects`, not its bounding box, which hid every name below
+  y 629 of 1080), the bar backing, the ticker, the hero frame and open panels. A name whose place under the globe is covered or off
+  the bottom goes above the globe instead (the Remake lets its translucent bar cover it, v0240 LORONAR, v0220 BYSS). Crowding hides
+  names only when zoomed far out (zoom fraction >= 0.45, farther than any Remake frame: those are about 8.5 px per map unit, our
+  `--zoom 0.06`). Offscreen runs log `labels: N of M on screen named, lower third n of m, toggles k` every 60 frames (smoke row
+  `labels-lower-third`).
 - Selection: notched ring (mesh fill + gizmo outline); fleets stand on a faction-coloured base disc (galaxy-play visuals.rs).
 - Missing vs original: hero head portraits, faction emblem beside planets, dashed sector ring (W_Planet_GC_Sector), lane/slot textures from the game.
 

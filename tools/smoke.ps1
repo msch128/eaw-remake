@@ -41,6 +41,9 @@ $scenarios = @(
     @('drag-lower-right',    @('--campaign', $camp, '--select', $yavin, '--zoom', '0.3', '--drag-pointer', 'Ringo Vinda', '--frames', '300'), 'drag-pointer: .*PASS'),
     @('drag-cancel-right',   @('--campaign', $camp, '--select', $yavin, '--zoom', '0.3', '--drag-pointer', 'Ringo Vinda', '--drag-cancel', 'right', '--frames', '300'), 'drag-pointer: .*PASS'),
     @('drag-cancel-esc',     @('--campaign', $camp, '--select', $yavin, '--zoom', '0.3', '--drag-pointer', 'Ringo Vinda', '--drag-cancel', 'esc', '--frames', '300'), 'drag-pointer: .*PASS'),
+    # Every planet on screen and not under the interface shows its name, also in the lower third (above the build bar, right of the droid
+    # column), and no label toggles while the camera stands still in any of the 60-frame windows (log of galaxy_map::log_label_stats).
+    @('labels-lower-third',  @('--campaign', $camp, '--select', $yavin, '--zoom', '0.3', '--frames', '300'), '(?s)^(?!.*toggles [1-9]).*labels: (\d+) of \1 on screen named, lower third ([1-9]\d*) of \2, toggles 0'),
     @('save-slot',           @('--campaign', $camp, '--slots', 'save', '--slot-click', '1', '--frames', '250'), 'saves: wrote'),
     @('save-to-file',        @('--campaign', $camp, '--weeks', '2', '--save-to', $save, '--frames', '60'), 'saves: wrote'),
     @('load-from-file',      @('--campaign', $camp, '--load-from', $save, '--frames', '60'), 'saves: loaded'),
