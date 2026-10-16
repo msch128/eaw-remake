@@ -136,9 +136,9 @@ impl std::fmt::Display for TacticalError {
 
 impl std::error::Error for TacticalError {}
 
-/// Hyperspace slots (`Galaxy::hyperspace`), per fleet: a fleet with a pathfinder ship sends only that unit into the battle at the start and every other
-/// unit of the fleet goes to the reserve (a stack of the pathfinder's type keeps one unit in the battle). A fleet with an empty pathfinder slot deploys
-/// completely (the population cap still applies afterwards).
+/// Hyperspace slots (`Galaxy::hyperspace`): once any fleet of a side has a pathfinder ship, only the pathfinder ships jump into the battle at the start
+/// and every other unit of the side, of every fleet at the planet, waits in the reserve to be called in (user rule 2026-10-16; a stack of the pathfinder's
+/// type keeps one unit in the battle). Without any pathfinder the side deploys completely (the population cap still applies afterwards).
 fn apply_hyperspace_slots(galaxy: &Galaxy, groups: Vec<TacticalGroup>) -> (Vec<TacticalGroup>, Vec<TacticalGroup>) {
     let has_slot = |g: &TacticalGroup| g.kind == GroupKind::Unit && g.fleet.is_some_and(|f| galaxy.hyperspace_unit(f).is_some());
     if !groups.iter().any(has_slot) {
@@ -146,9 +146,9 @@ fn apply_hyperspace_slots(galaxy: &Galaxy, groups: Vec<TacticalGroup>) -> (Vec<T
     }
     let (mut deployed, mut reserve) = (Vec::new(), Vec::new());
     for mut g in groups {
-        if !has_slot(&g) {
+        if g.kind != GroupKind::Unit {
             deployed.push(g);
-        } else if g.fleet.is_some_and(|f| galaxy.hyperspace_unit(f) == Some(g.type_id)) {
+        } else if has_slot(&g) && g.fleet.is_some_and(|f| galaxy.hyperspace_unit(f) == Some(g.type_id)) {
             if g.count > 1 {
                 let mut rest = g.clone();
                 rest.count = g.count - 1;

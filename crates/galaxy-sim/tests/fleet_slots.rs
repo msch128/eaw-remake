@@ -215,9 +215,9 @@ fn hosts_and_old_saves_with_unassigned_or_too_many_fleets_settle_into_three_slot
     assert_eq!(old.slot, 0);
 }
 
-/// Battle start (S2): groups and reserve follow the slots, and only a fleet with a pathfinder holds back its other units.
+/// Battle start (S2): groups and reserve follow the slots; a pathfinder in any fleet holds back every other unit of the side (user rule).
 #[test]
-fn battles_deploy_in_slot_order_and_only_a_pathfinder_fleet_holds_back_units() {
+fn battles_deploy_in_slot_order_and_a_pathfinder_holds_back_every_other_unit() {
     let Some(data) = load() else { return };
     let w = setup(&data).sim.world().clone();
     let (empire, rebel) = (w.faction_id("Empire").unwrap(), w.faction_id("Rebel").unwrap());
@@ -249,12 +249,12 @@ fn battles_deploy_in_slot_order_and_only_a_pathfinder_fleet_holds_back_units() {
     let (vic, star) = ("victory_destroyer".to_string(), "star_destroyer".to_string());
     let (d, r) = run(None);
     assert_eq!((d, r), (vec![(vic.clone(), 1), (star.clone(), 2)], vec![]), "no pathfinder: everyone deploys, slot 1 first");
-    // Slot 1 has a pathfinder, slot 2 none: the Star Destroyers of slot 2 still deploy.
+    // Slot 1 has a pathfinder: only the Victory jumps in, the Star Destroyers of slot 2 wait as reserve.
     let (d, r) = run(Some(1));
-    assert_eq!((d, r), (vec![(vic.clone(), 1), (star.clone(), 2)], vec![]));
-    // Slot 2 has a pathfinder: one Star Destroyer jumps in, the other waits; the Victory of slot 1 is untouched.
+    assert_eq!((d, r), (vec![(vic.clone(), 1)], vec![(star.clone(), 2)]));
+    // Slot 2 has a pathfinder: one Star Destroyer jumps in; the Victory (slot 1) and the other Star Destroyer wait, in slot order.
     let (d, r) = run(Some(2));
-    assert_eq!((d, r), (vec![(vic, 1), (star.clone(), 1)], vec![(star, 1)]));
+    assert_eq!((d, r), (vec![(star.clone(), 1)], vec![(vic, 1), (star, 1)]));
 }
 
 /// The cap binds the AI by default; `fleet_slot_cap_ai: false` lifts it for the AI factions, the human always keeps it.
