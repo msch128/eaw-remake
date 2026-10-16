@@ -732,6 +732,15 @@ const START_DISTANCE_MIN: f32 = 700.0;
 /// Farthest opening distance: `Space_Mode` `Distance_Default` / `Distance_Max` of TacticalCameras.xml.
 const START_DISTANCE_MAX: f32 = 2000.0;
 
+/// Opening camera from `SP_BATTLE_CAM=<distance>[,<pitch degrees>]` in place of the fleet framing (comparison renders against
+/// reference frames; the field of view stays 60 degrees, so a frame shot at another fov needs the equivalent distance).
+fn test_camera() -> Option<(f32, Option<f32>)> {
+    let v = std::env::var("SP_BATTLE_CAM").ok()?;
+    let mut parts = v.split(',').map(|p| p.trim().parse::<f32>().ok());
+    let distance = parts.next()??;
+    Some((distance, parts.next().flatten()))
+}
+
 /// Advances the battle clock and fetches the snapshots around it.
 fn advance_clock(
     time: Res<Time>,
@@ -788,7 +797,13 @@ fn advance_clock(
             let fov = settings.fov_degrees.to_radians();
             let wanted = radius * 1.2 / (fov * 0.5).tan() / cam.pitch.sin().abs().max(0.3);
             // Fits the core, at most the data's default distance: a closer cap left a scattered fleet out of the picture (QA round 2).
-            let distance = wanted.clamp(START_DISTANCE_MIN, START_DISTANCE_MAX);
+            let mut distance = wanted.clamp(START_DISTANCE_MIN, START_DISTANCE_MAX);
+            if let Some((d, pitch)) = test_camera() {
+                distance = d.clamp(cam.min_distance, cam.max_distance);
+                if let Some(p) = pitch {
+                    cam.pitch = p.to_radians();
+                }
+            }
             cam.distance = distance;
             cam.target_distance = distance;
             info!("battle camera: fleet core {center:?}, core radius {core_radius:.0} of {} ships, start distance {distance:.0}", pts.len());
