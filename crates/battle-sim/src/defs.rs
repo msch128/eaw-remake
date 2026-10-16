@@ -493,6 +493,8 @@ pub struct ShipDef {
     pub radius: f32,
     /// Radius of the model (bones) before the class clamp; stations and big ships are larger than the collision radius.
     pub model_extent: f32,
+    /// Plan-view hull from the model's meshes (`None` without a model); ships keep out of it, see [`ShipDef::footprint`].
+    pub hull_shape: Option<crate::nav::Hull>,
     /// Distance of the farthest destroyable hardpoint from the centre (x1.05): a projectile hits the unit within `max(radius, hardpoint_reach)` of its path, so shots aimed at an outlying hardpoint of a
     /// tall station do not fly past it (the collision radius is clamped and was smaller than the model).
     pub hardpoint_reach: f32,
@@ -551,6 +553,13 @@ pub struct ShipDef {
 }
 
 impl ShipDef {
+    /// Plan-view hull that other ships keep out of: the model's capsule, else the circle of the rule before the model hull (0.85 of the
+    /// collision radius, of 0.75 of it from frigates up). The collision radius is clamped per class: 700 for a 9000 unit long Executor.
+    pub fn footprint(&self) -> crate::nav::Hull {
+        let r = if self.class as u8 >= TargetClass::Frigate as u8 { self.radius * 0.75 } else { self.radius };
+        self.hull_shape.unwrap_or_else(|| crate::nav::Hull::round(r * 0.85))
+    }
+
     /// True if this ship acts as a carrier (has fighter bays, carried squadrons, or carrier designation).
     pub fn is_carrier(&self) -> bool {
         !self.carried.is_empty()
@@ -760,6 +769,8 @@ struct ModelInfo {
     /// lower-case bone name -> (position, local X axis, local Z axis) in battle space
     bones: HashMap<String, (Vec3, Vec3, Vec3, bool, Vec3)>,
     radius: f32,
+    /// Plan-view hull from the bounding boxes of the visible meshes.
+    hull: Option<crate::nav::Hull>,
 }
 
 fn load_model(fs: &dyn FileSource, name: &str) -> Option<ModelInfo> {
@@ -781,7 +792,31 @@ fn load_model(fs: &dyn FileSource, name: &str) -> Option<ModelInfo> {
         let yaxis = Vec3::new(-t[1][1], t[0][1], t[2][1]).normalized();
         bones.insert(b.name.to_ascii_lowercase(), (pos, xaxis, zaxis, mirrored, yaxis));
     }
-    Some(ModelInfo { bones, radius })
+    Some(ModelInfo { bones, radius, hull: mesh_hull(&m) })
+}
+
+/// Plan-view hull of a model: the reach ahead of and behind the centre and the half width over the bounding box corners of the visible
+/// full-detail meshes (hidden damage, collision and shield meshes and shadow volumes left out), in battle space.
+fn mesh_hull(m: &alamo_model::Model) -> Option<crate::nav::Hull> {
+    let (mut front, mut back, mut half_width) = (f32::MIN, f32::MIN, 0.0f32);
+    for (i, mesh) in m.meshes.iter().enumerate() {
+        if mesh.hidden || mesh.lod > 0 || mesh.is_shadow_volume() {
+            continue;
+        }
+        let Some(c) = m.connections.iter().find(|c| c.object == i) else { continue };
+        let t = m.world_transform(c.bone);
+        let (lo, hi) = (mesh.bbox_min, mesh.bbox_max);
+        for k in 0..8 {
+            let p = [if k & 1 == 0 { lo[0] } else { hi[0] }, if k & 2 == 0 { lo[1] } else { hi[1] }, if k & 4 == 0 { lo[2] } else { hi[2] }];
+            let w = |r: usize| t[r][0] * p[0] + t[r][1] * p[1] + t[r][2] * p[2] + t[r][3];
+            // model (x, y, z) -> battle (-y, x, z): the bow is +x.
+            let (bx, by) = (-w(1), w(0));
+            front = front.max(bx);
+            back = back.max(-bx);
+            half_width = half_width.max(by.abs());
+        }
+    }
+    (front > f32::MIN && half_width > 0.0).then(|| crate::nav::Hull { front: front.max(0.0), back: back.max(0.0), half_width })
 }
 
 /// Bone positions of a turret model (`Model_To_Attach`), in its own model space.
@@ -1091,7 +1126,8 @@ impl Catalog {
                     return m.clone();
                 }
                 let bones = m.bones.iter().map(|(n, &(p, x, z, mir, y))| (n.clone(), (Vec3::new(p.x * k, p.y * k, p.z * k), x, z, mir, y))).collect();
-                Arc::new(ModelInfo { bones, radius: m.radius * k })
+                let hull = m.hull.map(|h| crate::nav::Hull { front: h.front * k, back: h.back * k, half_width: h.half_width * k });
+                Arc::new(ModelInfo { bones, radius: m.radius * k, hull })
             });
             let model = scaled.as_ref();
             let def = cat.ship_def(s, &hp_defs[i], model.map(|m| &**m), &attach);
@@ -1517,6 +1553,8 @@ impl Catalog {
             shield_armor: sarmor.as_deref().and_then(|a| self.damage.armor_index(a)),
             radius,
             model_extent,
+            // A mesh hull far smaller than the collision radius is a placeholder model (estimate: under 0.3 of it): the round hull stands in.
+            hull_shape: model.and_then(|m| m.hull).filter(|h| h.reach() >= 0.3 * radius),
             hardpoint_reach: hardpoints.iter().filter(|h| h.destroyable).map(|h| h.offset.len()).fold(0.0f32, f32::max) * 1.05,
             max_speed,
             accel,

@@ -175,3 +175,48 @@ fn escort_corvette_steers_clear_of_capital_ship_with_buffer() {
     assert!(closest_dist > cap_hull_radius, "corvette glides around capital hull: {closest_dist} vs hull radius {cap_hull_radius}");
     assert!(b.ships[corv_id as usize].pos.x > 800.0, "corvette reaches the other side: pos {:?}", b.ships[corv_id as usize].pos);
 }
+
+#[test]
+fn ships_and_fighters_keep_out_of_a_long_hull_along_its_whole_length() {
+    // An Executor-like hull, 6000 long and 800 wide, whose collision radius is clamped to 700: a point 2000 ahead of its centre lies
+    // outside every circle of that radius but deep inside the hull.
+    let mut long = ship("long", TargetClass::Capital, 0.0, 700.0, false);
+    long.hull_shape = Some(nav::Hull { front: 3000.0, back: 3000.0, half_width: 400.0 });
+    let frigate = ship("frigate", TargetClass::Frigate, 150.0, 100.0, false);
+    let mut fighter = ship("fighter", TargetClass::Fighter, 300.0, 10.0, false);
+    fighter.turn_rate = 3.0;
+    let cat = Arc::new(Catalog::from_defs(vec![frigate, long, fighter], vec![]));
+    let config = BattleConfig { arena: Some(arena(&[])), record_events: false, ..BattleConfig::default() };
+    let sides = vec![
+        SideSetup { name: "a".into(), units: vec![UnitSetup { ship: cat.ship_id("frigate").unwrap(), count: 1, tag: 1 }, UnitSetup { ship: cat.ship_id("fighter").unwrap(), count: 1, tag: 1 }], structures: vec![], ai: false },
+        side("b", "long", &cat, 1),
+    ];
+    let mut b = Battle::new(BattleSetup { catalog: cat.clone(), sides, config });
+    let mine = ids(&b, 0);
+    let (frig, ftr) = (mine[0], mine[1]);
+    let big = ids(&b, 1)[0];
+    b.ships[big as usize].pos = Vec3::ZERO;
+    b.ships[big as usize].yaw = 0.0;
+    b.ships[frig as usize].pos = Vec3::new(2000.0, -2500.0, 0.0);
+    b.ships[ftr as usize].pos = Vec3::new(-2000.0, 2500.0, 0.0);
+    let onto = Vec3::new(2000.0, 0.0, 0.0);
+    b.command(0, Command::Move { ships: vec![frig], to: onto }).unwrap();
+    b.command(0, Command::Move { ships: vec![ftr], to: Vec3::new(-2000.0, 0.0, 0.0) }).unwrap();
+    let (long_hull, frig_hull) = (cat.ship(b.ships[big as usize].def).footprint(), cat.ship(b.ships[frig as usize].def).footprint());
+    let (mut deepest, mut fighter_closest) = (0.0f32, f32::MAX);
+    for t in 0..30 * 40 {
+        b.step();
+        let (f, o, x) = (&b.ships[frig as usize], &b.ships[big as usize], &b.ships[ftr as usize]);
+        if let Some((depth, _)) = nav::hull_overlap((f.pos, f.yaw, frig_hull), (o.pos, o.yaw, long_hull), 0.0, 1.0) {
+            deepest = deepest.max(depth);
+        }
+        if t > 30 * 5 {
+            fighter_closest = fighter_closest.min(nav::core_distance(x.pos, long_hull, o.pos, o.yaw).0);
+        }
+    }
+    let f = &b.ships[frig as usize];
+    println!("frigate deepest in the long hull {deepest:.0}, ends at {:?}; fighter closest to the hull's axis {fighter_closest:.0}", f.pos);
+    assert!(deepest < 10.0, "the frigate stays out of the long hull: {deepest:.0} units deep");
+    assert!(f.pos.dist(onto) < 1200.0, "and waits at the hull's edge: {:?}", f.pos);
+    assert!(fighter_closest > 150.0, "fighters do not park on the long hull's axis either: {fighter_closest:.0}");
+}

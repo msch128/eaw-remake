@@ -247,3 +247,72 @@ fn emergency_retreat_saves_outgunned_capital_ship() {
     assert_eq!(empire.retreated, 1, "outgunned ISD should retreat early under emergency retreat rule");
     assert!(r.duration < 90.0, "should trigger before 120 s normal threshold, took {:.0} s", r.duration);
 }
+/// Longest time (s) any two frigates or bigger stay inside each other's hull by more than a quarter of their half widths (hull capsules
+/// from the models), sampled every half second after the first 10 s.
+fn longest_hull_overlap(b: &mut Battle, cat: &Catalog, seconds: f32, mut each_tick: impl FnMut(&mut Battle)) -> (f32, String) {
+    let mut run: std::collections::HashMap<(u32, u32), f32> = std::collections::HashMap::new();
+    let mut longest = (0.0f32, String::new());
+    for step in 0..(seconds * 30.0) as u32 {
+        each_tick(b);
+        b.step();
+        if step % 15 != 0 || step < 300 {
+            continue;
+        }
+        let big: Vec<&Ship> = b.ships.iter().filter(|s| s.alive && !s.retreated && cat.ship(s.def).class as u8 >= TargetClass::Frigate as u8).collect();
+        let mut now = std::collections::HashMap::new();
+        for (i, x) in big.iter().enumerate() {
+            for y in &big[i + 1..] {
+                if x.carrier == y.id || y.carrier == x.id {
+                    continue;
+                }
+                let (hx, hy) = (cat.ship(x.def).footprint(), cat.ship(y.def).footprint());
+                if nav::hull_overlap((x.pos, x.yaw, hx), (y.pos, y.yaw, hy), 0.0, 1.0).is_some_and(|(depth, _)| depth > 0.25 * (hx.half_width + hy.half_width)) {
+                    let t = run.get(&(x.id, y.id)).copied().unwrap_or(0.0) + 0.5;
+                    if t > longest.0 {
+                        longest = (t, format!("{} #{} in {} #{} at t={:.0}", cat.ship(x.def).name, x.id, cat.ship(y.def).name, y.id, b.time()));
+                    }
+                    now.insert((x.id, y.id), t);
+                }
+            }
+        }
+        run = now;
+        if b.is_over() {
+            break;
+        }
+    }
+    longest
+}
+
+#[test]
+fn big_hulls_do_not_stay_inside_each_other_and_nobody_parks_in_an_executor() {
+    let Some((data, fs)) = load() else { return };
+    let empire = [("Star_Destroyer", 3), ("Victory_Destroyer", 3), ("Arquitens_E", 3), ("Piett_Executor_P1", 1)];
+    let rebel = [("MC-80_Star_Cruiser", 4), ("Nebulon_B_Frigate", 4), ("Assault_Frigate_Mark_II", 3), ("CR-90_Corvette", 3)];
+    let names: Vec<&str> = empire.iter().chain(rebel.iter()).map(|x| x.0).collect();
+    let cat = Arc::new(Catalog::build(&data, Some(&fs), &names));
+    let exec_def = cat.ship(cat.ship_id("Piett_Executor_P1").unwrap());
+    let h = exec_def.footprint();
+    // The Executor model is about 9000 units long; its collision radius is clamped to 700.
+    assert!(h.front + h.back > 8000.0 && h.half_width > 1000.0, "the hull comes from the model: {h:?} (radius {})", exec_def.radius);
+
+    // Both sides AI: a standard fleet battle.
+    let config = BattleConfig { record_events: false, seed: 1, ..BattleConfig::default() };
+    let mut b = Battle::new(BattleSetup { catalog: cat.clone(), sides: vec![side(&cat, "Empire", &empire, &[]), side(&cat, "Rebel", &rebel, &[])], config: config.clone() });
+    let (t, what) = longest_hull_overlap(&mut b, &cat, 150.0, |_| {});
+    println!("standard battle: longest hull overlap {t:.1} s {what}");
+    assert!(t <= 3.0, "hulls stay inside each other for {t:.1} s: {what}");
+
+    // The player sends every big ship at the Executor (the user's screenshot of ships flying into it).
+    let mut b = Battle::new(BattleSetup { catalog: cat.clone(), sides: vec![side(&cat, "Empire", &empire, &[]), SideSetup { ai: false, ..side(&cat, "Rebel", &rebel, &[]) }], config });
+    let mut ordered = false;
+    let (t, what) = longest_hull_overlap(&mut b, &cat, 150.0, |b| {
+        if !ordered && b.time() > 2.0 {
+            ordered = true;
+            let exec = b.ships.iter().find(|s| s.side == 0 && cat.ship(s.def).name == "Piett_Executor_P1").unwrap().id;
+            let mine: Vec<u32> = b.ships.iter().filter(|s| s.side == 1 && s.alive).map(|s| s.id).collect();
+            b.command(1, Command::Attack { ships: mine, target: exec }).unwrap();
+        }
+    });
+    println!("attack on the Executor: longest hull overlap {t:.1} s {what}");
+    assert!(t <= 3.0, "hulls stay inside each other for {t:.1} s: {what}");
+}

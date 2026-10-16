@@ -133,6 +133,107 @@ pub fn steer_around(pos: Vec3, heading: (f32, f32), radius: f32, lookahead: f32,
     out
 }
 
+/// Plan view of a hull: a capsule along the bow axis. The hull reaches `front` ahead of the ship's centre and `back` behind it, and
+/// `half_width` to each side; the capsule's core segment runs between the two ends pulled in by `half_width`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Hull {
+    /// Reach ahead of the centre.
+    pub front: f32,
+    /// Reach behind the centre.
+    pub back: f32,
+    /// Half of the width (the capsule radius).
+    pub half_width: f32,
+}
+
+impl Hull {
+    /// A round hull of radius `r`.
+    pub fn round(r: f32) -> Self {
+        Hull { front: r, back: r, half_width: r }
+    }
+
+    /// Farthest point of the hull from the centre.
+    pub fn reach(&self) -> f32 {
+        self.front.max(self.back).max(self.half_width)
+    }
+
+    /// End points of the core segment for a ship at `pos` with heading `yaw` (one point for a hull no longer than it is wide).
+    fn core(&self, pos: Vec3, yaw: f32) -> ((f32, f32), (f32, f32)) {
+        let (mut lo, mut hi) = (self.half_width - self.back, self.front - self.half_width);
+        if lo > hi {
+            let mid = (self.front - self.back) * 0.5;
+            (lo, hi) = (mid, mid);
+        }
+        let (c, s) = (yaw.cos(), yaw.sin());
+        ((pos.x + c * lo, pos.y + s * lo), (pos.x + c * hi, pos.y + s * hi))
+    }
+}
+
+/// Closest points of the plane segments `p0`-`p1` and `q0`-`q1` (Ericson, Real-Time Collision Detection 5.1.9).
+fn closest_points(p0: (f32, f32), p1: (f32, f32), q0: (f32, f32), q1: (f32, f32)) -> ((f32, f32), (f32, f32)) {
+    let d1 = (p1.0 - p0.0, p1.1 - p0.1);
+    let d2 = (q1.0 - q0.0, q1.1 - q0.1);
+    let r = (p0.0 - q0.0, p0.1 - q0.1);
+    let (a, e, f) = (d1.0 * d1.0 + d1.1 * d1.1, d2.0 * d2.0 + d2.1 * d2.1, d2.0 * r.0 + d2.1 * r.1);
+    let (s, t) = if a <= 1e-6 && e <= 1e-6 {
+        (0.0, 0.0)
+    } else if a <= 1e-6 {
+        (0.0, (f / e).clamp(0.0, 1.0))
+    } else {
+        let c = d1.0 * r.0 + d1.1 * r.1;
+        if e <= 1e-6 {
+            ((-c / a).clamp(0.0, 1.0), 0.0)
+        } else {
+            let b = d1.0 * d2.0 + d1.1 * d2.1;
+            let denom = a * e - b * b;
+            let mut s = if denom > 1e-6 { ((b * f - c * e) / denom).clamp(0.0, 1.0) } else { 0.0 };
+            let mut t = (b * s + f) / e;
+            if t < 0.0 {
+                t = 0.0;
+                s = (-c / a).clamp(0.0, 1.0);
+            } else if t > 1.0 {
+                t = 1.0;
+                s = ((b - c) / a).clamp(0.0, 1.0);
+            }
+            (s, t)
+        }
+    };
+    ((p0.0 + d1.0 * s, p0.1 + d1.1 * s), (q0.0 + d2.0 * t, q0.1 + d2.1 * t))
+}
+
+/// How deep hull `a` (`(position, heading, hull)`) reaches into hull `b` plus a clearance `margin`, in the battle plane, and the unit
+/// direction that moves `a` out of `b`; `None` when they keep the clearance. Two ships on the same spot go apart along x, `a` towards the
+/// sign of `tie` (give the two ships of a pair opposite signs).
+pub fn hull_overlap((a_pos, a_yaw, a): (Vec3, f32, Hull), (b_pos, b_yaw, b): (Vec3, f32, Hull), margin: f32, tie: f32) -> Option<(f32, (f32, f32))> {
+    let (a0, a1) = a.core(a_pos, a_yaw);
+    let (b0, b1) = b.core(b_pos, b_yaw);
+    let (pa, pb) = closest_points(a0, a1, b0, b1);
+    let (dx, dy) = (pa.0 - pb.0, pa.1 - pb.1);
+    let d = (dx * dx + dy * dy).sqrt();
+    let depth = a.half_width + b.half_width + margin - d;
+    if depth <= 0.0 {
+        return None;
+    }
+    // Crossing cores have no closest direction: out along the line between the centres.
+    let dir = if d > 1e-3 {
+        (dx / d, dy / d)
+    } else {
+        let (cx, cy) = (a_pos.x - b_pos.x, a_pos.y - b_pos.y);
+        let c = (cx * cx + cy * cy).sqrt();
+        if c > 1e-3 { (cx / c, cy / c) } else { (tie.signum(), 0.0) }
+    };
+    Some((depth, dir))
+}
+
+/// Distance of the point `p` from the core segment of hull `h` (at `pos`, heading `yaw`) in the battle plane, and the unit direction from
+/// the core to the point.
+pub fn core_distance(p: Vec3, h: Hull, pos: Vec3, yaw: f32) -> (f32, (f32, f32)) {
+    let (c0, c1) = h.core(pos, yaw);
+    let (q, _) = closest_points(c0, c1, (p.x, p.y), (p.x, p.y));
+    let (dx, dy) = (p.x - q.0, p.y - q.1);
+    let d = (dx * dx + dy * dy).sqrt();
+    (d, if d > 1e-3 { (dx / d, dy / d) } else { (1.0, 0.0) })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -402,5 +503,31 @@ mod grid_tests {
         assert_eq!(g.plan(Vec3::new(0.0, 4000.0, 0.0), Vec3::new(1000.0, 4000.0, 0.0), 100.0).len(), 1);
         let p = g.plan(Vec3::new(310.0, 0.0, 0.0), Vec3::new(-2000.0, 0.0, 0.0), 150.0);
         assert!(!p.is_empty());
+    }
+
+    #[test]
+    fn long_hulls_overlap_along_their_length_and_not_beyond_their_width() {
+        // A 9000 long, 2700 wide hull (the Executor) and a round 200 hull.
+        let big = Hull { front: 4500.0, back: 4500.0, half_width: 1350.0 };
+        let small = Hull::round(200.0);
+        // 3000 ahead of the centre on the bow axis is deep inside the long hull (a circle of the radius would not reach it).
+        let at = |x: f32, y: f32| Vec3::new(x, y, 0.0);
+        let (depth, dir) = hull_overlap((at(3000.0, 0.0), 0.0, small), (Vec3::ZERO, 0.0, big), 0.0, 1.0).expect("inside");
+        assert!((depth - 1550.0).abs() < 1.0, "{depth}");
+        assert!(dir.1.abs() > 0.99 || dir.0 > 0.99, "{dir:?}");
+        // Beside the hull, clear of the width: no overlap; with a clearance margin it counts.
+        assert!(hull_overlap((at(0.0, 1600.0), 0.0, small), (Vec3::ZERO, 0.0, big), 0.0, 1.0).is_none());
+        assert!(hull_overlap((at(0.0, 1600.0), 0.0, small), (Vec3::ZERO, 0.0, big), 100.0, 1.0).is_some());
+        // The hull turns with the ship: at 90 degrees the bow axis is +y.
+        assert!(hull_overlap((at(0.0, 3000.0), 0.0, small), (Vec3::ZERO, std::f32::consts::FRAC_PI_2, big), 0.0, 1.0).is_some());
+        assert!(hull_overlap((at(3000.0, 0.0), 0.0, small), (Vec3::ZERO, std::f32::consts::FRAC_PI_2, big), 0.0, 1.0).is_none());
+        // Two parallel long hulls side by side: the push is sideways.
+        let (_, dir) = hull_overlap((at(500.0, 2000.0), 0.0, big), (Vec3::ZERO, 0.0, big), 0.0, 1.0).expect("side by side");
+        assert!(dir.1 > 0.99, "{dir:?}");
+        // Round hulls behave like circles; two on the same spot go opposite ways by the tie sign.
+        assert!((hull_overlap((at(300.0, 0.0), 0.0, small), (Vec3::ZERO, 0.0, small), 0.0, 1.0).unwrap().0 - 100.0).abs() < 1e-3);
+        assert_eq!(hull_overlap((Vec3::ZERO, 0.0, small), (Vec3::ZERO, 0.0, small), 0.0, -1.0).unwrap().1, (-1.0, 0.0));
+        let (d, _) = core_distance(at(0.0, 2000.0), big, Vec3::ZERO, 0.0);
+        assert!((d - 2000.0).abs() < 1e-3);
     }
 }

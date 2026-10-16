@@ -2713,6 +2713,37 @@ struct Nav<'a> {
     hulls: &'a [u32],
 }
 
+/// Fighters fly almost anywhere but not through the middle of a hull (their own carrier excepted, they dock there): not inside 0.45 of the
+/// hull's radius and, where the model gives a hull, not within `FIGHTER_KEEP_OUT` of its half width from the hull's long axis.
+fn keep_out_of_hulls(s: &mut Ship, def: &ShipDef, snaps: &[Snap], cat: &Catalog, hulls: &[u32]) {
+    for &j in hulls {
+        if j == s.carrier {
+            continue;
+        }
+        let o = &snaps[j as usize];
+        let shape = cat.ship(o.def).hull_shape;
+        let circle = o.radius * 0.45 + def.radius;
+        let reach = circle.max(shape.map_or(0.0, |h| h.reach()) + def.radius);
+        let (dx, dy) = (s.pos.x - o.pos.x, s.pos.y - o.pos.y);
+        if dx.abs() >= reach || dy.abs() >= reach {
+            continue;
+        }
+        let d = (dx * dx + dy * dy).sqrt();
+        let mut out = (d < circle).then(|| (circle - d, if d > 1e-3 { (dx / d, dy / d) } else { (1.0, 0.0) }));
+        if let Some(h) = shape {
+            let min = h.half_width * FIGHTER_KEEP_OUT + def.radius;
+            let (cd, dir) = crate::nav::core_distance(s.pos, h, o.pos, o.yaw);
+            if cd < min && out.is_none_or(|c| min - cd > c.0) {
+                out = Some((min - cd, dir));
+            }
+        }
+        if let Some((depth, (ux, uy))) = out {
+            s.pos.x += ux * depth;
+            s.pos.y += uy * depth;
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn mov(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, spawn: &[Vec3], leaders: &[u32], obstacles: &[crate::arena::Obstacle], big: &[u32], nav: &Nav, rng: &mut Rng) {
     let def = cat.ship(s.def);
@@ -3124,9 +3155,13 @@ fn mov(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, spawn: &
             s.pos.z += (z_goal - s.pos.z).clamp(-step, step);
         }
     }
-    // Separation: mobile big ships do not sit on top of each other (each pair is resolved by both, half each; estimate 0.85 of the radii).
+    // Separation: mobile big ships do not sit on top of each other. Each pair keeps the circles of 0.85 of their radii apart (estimate) and,
+    // where a model gives one, out of each other's plan-view hull (`ShipDef::footprint`): the collision radius is clamped per class (700 for a
+    // 9000 unit long Executor), so ships parked inside long hulls. Each pair is resolved by both, half each; a ship that yields alone (to a
+    // station, or an escort to a capital ship) takes all of it. The push is faster than the ships can drive back in (`PUSH_SPEED`).
     if !fighter {
         let me = snaps[s.id as usize];
+        let me_hull = def.footprint();
         let cap = def.max_speed.max(60.0) * dt;
         for &j in nav.hulls {
             if j == s.id {
@@ -3144,42 +3179,37 @@ fn mov(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, spawn: &
                 // Capital ships hold course; escorts yield to them
                 continue;
             }
-            let fixed = cat.ship(o.def).is_static;
-            let min = if is_escort && is_cap {
-                (me.radius + o.radius + 150.0).max((me.radius + o.radius) * 0.85)
-            } else {
-                (me.radius + o.radius) * 0.85
-            };
+            let odef = cat.ship(o.def);
+            // Escorts keep a gap around capital ships (U65).
+            let margin = if is_escort && is_cap { ESCORT_GAP } else { 0.0 };
+            let min = if is_escort && is_cap { (me.radius + o.radius + margin).max((me.radius + o.radius) * 0.85) } else { (me.radius + o.radius) * 0.85 };
+            let o_hull = odef.footprint();
+            let models = def.hull_shape.is_some() || odef.hull_shape.is_some();
+            let reach = if models { min.max(me_hull.reach() + o_hull.reach() + margin) } else { min };
             let (dx, dy) = (s.pos.x - o.pos.x, s.pos.y - o.pos.y);
-            if dx.abs() < min && dy.abs() < min {
-                let d = (dx * dx + dy * dy).sqrt();
-                if d < min {
-                    let (ux, uy) = if d > 1e-3 { (dx / d, dy / d) } else { (1.0 - 2.0 * f32::from(s.id as u8 & 1), 0.0) };
-                    let push = ((min - d) * if fixed || (is_escort && is_cap) { 1.0 } else { 0.5 }).min(cap);
-                    s.pos.x += ux * push;
-                    s.pos.y += uy * push;
-                }
+            if dx.abs() >= reach || dy.abs() >= reach {
+                continue;
+            }
+            // Two ships on the same spot go opposite ways.
+            let tie = if s.id < j { 1.0 } else { -1.0 };
+            let d = (dx * dx + dy * dy).sqrt();
+            let mut out = (d < min).then(|| (min - d, if d > 1e-3 { (dx / d, dy / d) } else { (tie, 0.0) }));
+            if models
+                && let Some(h) = crate::nav::hull_overlap((s.pos, s.yaw, me_hull), (o.pos, o.yaw, o_hull), margin, tie)
+                && out.is_none_or(|c| h.0 > c.0)
+            {
+                out = Some(h);
+            }
+            if let Some((depth, (ux, uy))) = out {
+                let alone = odef.is_static || (is_escort && is_cap);
+                let push = (if alone { depth } else { depth * 0.5 }).min(cap * PUSH_SPEED);
+                s.pos.x += ux * push;
+                s.pos.y += uy * push;
             }
         }
     }
-    // Fighters fly almost anywhere but not through a hull (their own carrier excepted, they dock there).
     if fighter && cfg.navigation {
-        for &j in nav.hulls {
-            if j == s.carrier {
-                continue;
-            }
-            let o = &snaps[j as usize];
-            let min = o.radius * 0.45 + def.radius;
-            let (dx, dy) = (s.pos.x - o.pos.x, s.pos.y - o.pos.y);
-            if dx.abs() < min && dy.abs() < min {
-                let d = (dx * dx + dy * dy).sqrt();
-                if d < min {
-                    let (ux, uy) = if d > 1e-3 { (dx / d, dy / d) } else { (1.0, 0.0) };
-                    s.pos.x += ux * (min - d);
-                    s.pos.y += uy * (min - d);
-                }
-            }
-        }
+        keep_out_of_hulls(s, def, snaps, cat, nav.hulls);
     }
     // Asteroids: push the ship out of any rock it overlaps and scrub some speed.
     for o in obstacles {
@@ -3654,6 +3684,17 @@ fn search_point(n: u32, enemy_start: Vec3, half: f32) -> Vec3 {
 
 /// Seconds between replans of a moving big ship's path (also replanned when its destination moves).
 const PATH_REPLAN_SECS: f32 = 0.5;
+
+/// Gap in units that an escort (corvette, frigate) keeps from the hull of a capital ship, super ship or structure (U65, estimate).
+const ESCORT_GAP: f32 = 150.0;
+
+/// Overlapping hulls are pushed apart at up to this many times the ship's top speed, so that two ships driving for the same point or an escort
+/// heading for a point behind a capital ship cannot hold each other inside (estimate; it was 1, and pairs stayed inside each other for many seconds).
+const PUSH_SPEED: f32 = 2.0;
+
+/// Fighters keep this share of a model hull's half width away from its long axis (estimate, about the 0.45 of the radius that applies to
+/// every hull). Their own carrier is excepted.
+const FIGHTER_KEEP_OUT: f32 = 0.5;
 
 /// Squadron definitions with counts.
 type Squadrons = Vec<(ShipId, u32)>;
