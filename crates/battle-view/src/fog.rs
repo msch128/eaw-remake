@@ -16,6 +16,12 @@ pub const FOG_FEATHER_DISTANCE: f32 = 800.0;
 pub const FOG_EDGE_FADE: f32 = 2500.0;
 pub const FOG_COLOR_RGB: [u8; 3] = [255, 255, 255];
 
+/// Opacity of the full haze: [`FOG_MAX_ALPHA`], or `SP_FOG_ALPHA=<0-255>` to try another value (comparison renders).
+fn max_alpha() -> u8 {
+    static ALPHA: std::sync::OnceLock<u8> = std::sync::OnceLock::new();
+    *ALPHA.get_or_init(|| std::env::var("SP_FOG_ALPHA").ok().and_then(|v| v.parse().ok()).unwrap_or(FOG_MAX_ALPHA))
+}
+
 /// Resource holding the tactical fog shroud texture handle and arena size.
 #[derive(Resource)]
 pub struct TacticalFogShroud {
@@ -46,7 +52,7 @@ pub(crate) fn setup_fog_shroud(
     let arena_size = (rt.arena_half * 2.2).max(12000.0);
     let mut px = Vec::with_capacity(n * n * 4);
     for _ in 0..(n * n) {
-        px.extend_from_slice(&[FOG_COLOR_RGB[0], FOG_COLOR_RGB[1], FOG_COLOR_RGB[2], FOG_MAX_ALPHA]);
+        px.extend_from_slice(&[FOG_COLOR_RGB[0], FOG_COLOR_RGB[1], FOG_COLOR_RGB[2], max_alpha()]);
     }
     let mut img = Image::new(
         Extent3d { width: n as u32, height: n as u32, depth_or_array_layers: 1 },
@@ -120,6 +126,7 @@ pub fn calculate_fog_alphas(
     let mut alphas = Vec::with_capacity(grid_size * grid_size);
     let half = arena_size * 0.5;
     let step = arena_size / (grid_size.saturating_sub(1).max(1) as f32);
+    let full = max_alpha();
 
     for y in 0..grid_size {
         let wz = (y as f32) * step - half;
@@ -136,15 +143,15 @@ pub fn calculate_fog_alphas(
                 }
             }
             let alpha = if sensors.is_empty() {
-                FOG_MAX_ALPHA
+                full
             } else if min_d <= 0.0 {
                 0
             } else if min_d >= FOG_FEATHER_DISTANCE {
-                FOG_MAX_ALPHA
+                full
             } else {
                 let t = min_d / FOG_FEATHER_DISTANCE;
                 let smooth = t * t * (3.0 - 2.0 * t);
-                (smooth * FOG_MAX_ALPHA as f32).round() as u8
+                (smooth * full as f32).round() as u8
             };
             // Fade out toward the plane's own edge.
             let edge = (half - wx.abs()).min(half - wz.abs()).max(0.0) / FOG_EDGE_FADE;
