@@ -838,6 +838,7 @@ fn ability_at(
                     Node { position_type: PositionType::Absolute, display: Display::None, ..default() },
                     GlobalZIndex(70),
                     bevy::ui::FocusPolicy::Pass,
+                    crate::control::PointerTransparent,
                 ))
                 .id();
             state.ability_label = Some(e);
@@ -1414,6 +1415,7 @@ fn reinforce_place(
                     Node { position_type: PositionType::Absolute, display: Display::None, ..default() },
                     GlobalZIndex(70),
                     bevy::ui::FocusPolicy::Pass,
+                    crate::control::PointerTransparent,
                 ))
                 .id();
             ui.label = Some(e);
@@ -2007,8 +2009,11 @@ fn order_cursor(
     let icon = pointer.cursor.filter(|_| !block.0).and_then(|c| order_cursor_icon(armed.0, own_selected, over_enemy).map(|i| (c, i)));
     let image = icon.and_then(|(_, name)| textures.and_then(|mut t| t.get(&mut images, name)).map(|t| t.handle));
     let (Some((at, _)), Some(image)) = (icon, image) else {
-        for (e, ..) in &cursor {
-            commands.entity(e).despawn();
+        // Hidden, not despawned: the node is kept for the next time (no spawn and despawn churn while the hover comes and goes).
+        for (_, mut node, _) in &mut cursor {
+            if node.display != Display::None {
+                node.display = Display::None;
+            }
         }
         if let Ok(mut o) = window.single_mut()
             && !o.visible
@@ -2020,6 +2025,9 @@ fn order_cursor(
     let size = ORDER_CURSOR_PX / scale.0;
     let (left, top) = ((at.x / scale.0) - size * 0.5, (at.y / scale.0) - size * 0.5);
     if let Ok((_, mut node, mut img)) = cursor.single_mut() {
+        if node.display != Display::Flex {
+            node.display = Display::Flex;
+        }
         node.left = Val::Px(left);
         node.top = Val::Px(top);
         if img.image != image {
@@ -2033,6 +2041,7 @@ fn order_cursor(
             ImageNode::new(image),
             Node { position_type: PositionType::Absolute, left: Val::Px(left), top: Val::Px(top), width: Val::Px(size), height: Val::Px(size), ..default() },
             bevy::ui::FocusPolicy::Pass,
+            crate::control::PointerTransparent,
             GlobalZIndex(1000),
         ));
         if let Some(cam) = ui.camera {

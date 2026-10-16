@@ -258,6 +258,7 @@ pub fn spawn_hud(
         BorderColor::all(Color::srgb(0.3, 0.85, 0.95)),
         GlobalZIndex(75),
         bevy::ui::FocusPolicy::Pass,
+        crate::control::PointerTransparent,
     ));
     target(&mut panel);
     let panel = panel.id();
@@ -287,6 +288,7 @@ pub fn spawn_hud(
         BorderColor::all(Color::srgb(0.3, 0.85, 0.95)),
         GlobalZIndex(80),
         bevy::ui::FocusPolicy::Pass,
+        crate::control::PointerTransparent,
     ));
     target(&mut tip);
 
@@ -613,6 +615,7 @@ pub(crate) fn heroes(
                     BorderColor::all(Color::srgb(0.85, 0.95, 0.9)),
                     GlobalZIndex(40),
                     bevy::ui::FocusPolicy::Pass,
+                    crate::control::PointerTransparent,
                 ));
                 if let Some(cam) = ui.camera {
                     b.insert(UiTargetCamera(cam));

@@ -163,6 +163,11 @@ Add `battle-view`, `galaxy-sim` (already there through galaxy-play) and `eaw-ui`
   are still estimates (not in the data).
 - **Input blocking:** `control::ui_block` sets `UiBlock` while the cursor is on a visible UI node with a picture (alpha tested, the bar's frame art is mostly transparent),
   a background or an `Interaction`; the overlay layer (ship bars, reticles) does not count. `selection`/`orders` ignore clicks and hover then.
+  **Flicker rule (2026-10-16):** UI that follows the pointer or appears because of the hover (order cursor, cursor labels, hardpoint tooltip,
+  unit panel, hero billboards) must carry `control::PointerTransparent`. Without it the node blocks the world under itself, the hover clears,
+  the node hides, the hover returns: a toggle every frame (the order cursor and hardpoint flicker of a7e667e). The hover pick keeps last
+  frame's ship / hardpoint while the cursor is still on it (`pick`, `keep_hovered_hardpoint`) so overlapping moving targets do not alternate.
+  Tests: `ui_block_tests`, `pick_tests`.
   **Pitfall found:** node transforms are physical pixels of the window; `ComputedNode::inverse_scale_factor` includes `UiScale`, so cursor / inverse_scale_factor is wrong
   (use `camera.target_scaling_factor()`).
 - **Bug fixed in eaw-ui:** `b_droid_help_tactical` (R2) is a 93x120 Block button that covered pause / fast-forward, so those clicks went to the droid. It is now built first

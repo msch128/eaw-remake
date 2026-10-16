@@ -26,6 +26,12 @@ pub struct Selection {
 #[derive(Resource, Default, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct UiBlock(pub bool, pub Option<Entity>);
 
+/// Interface that follows the pointer or shows what is under it (order cursor, cursor labels, hardpoint tooltip, unit panel). It never
+/// counts for [`UiBlock`]: such a node appears because of the hover, so if it blocked the world it would clear the hover, hide itself and
+/// come back the next frame - the flicker of the order cursor over enemies and of the hardpoint tooltip. Applies to its children too.
+#[derive(Component, Default, Debug, Clone, Copy)]
+pub struct PointerTransparent;
+
 /// Present while the EaW overlays of `eaw-ui` draw brackets, bars and hardpoint reticles; the gizmo versions
 /// of [`overlays`] are then switched off.
 #[derive(Resource, Default, Debug, Clone, Copy)]
@@ -164,7 +170,8 @@ pub fn read_pointer(
 
 /// Sets [`UiBlock`]: the cursor is inside a visible interface node that has a picture or a background. The
 /// transparent full-screen layers of the world-space overlays (ship bars, hardpoint reticles) do not count, so
-/// reticles stay clickable and right-click orders on them reach the world.
+/// reticles stay clickable and right-click orders on them reach the world; neither does interface marked
+/// [`PointerTransparent`] (it is there because of the hover, see there).
 #[allow(clippy::type_complexity)]
 pub fn ui_block(
     pointer: Res<Pointer>,
@@ -174,8 +181,9 @@ pub fn ui_block(
     camera: Single<&Camera, With<BattleCamera>>,
     parents: Query<&ChildOf>,
     overlay_roots: Query<(), With<eaw_ui::TacticalOverlayRoot>>,
-    overlay_nodes: Query<(), Or<(With<eaw_ui::ShipOverlayNode>, With<eaw_ui::HardpointNode>)>>,
+    see_through: Query<(), Or<(With<eaw_ui::ShipOverlayNode>, With<eaw_ui::HardpointNode>, With<PointerTransparent>)>>,
 ) {
+    let passes = |n: Entity| overlay_roots.contains(n) || see_through.contains(n);
     // Node transforms are in physical pixels of the camera target (UI scale only changes node sizes).
     let target_scale = camera.target_scaling_factor().unwrap_or(1.0);
     let mut hit = false;
@@ -207,11 +215,11 @@ pub fn ui_block(
                 }
             }
             let mut cur = e;
-            let mut overlay = overlay_roots.contains(e) || overlay_nodes.contains(e);
+            let mut overlay = passes(e);
             if !overlay {
                 while let Ok(p) = parents.get(cur) {
                     cur = p.parent();
-                    if overlay_roots.contains(cur) || overlay_nodes.contains(cur) {
+                    if passes(cur) {
                         overlay = true;
                         break;
                     }
@@ -276,11 +284,17 @@ fn project_ships(
     out
 }
 
-fn pick(projected: &[Projected], cursor: Vec2, accept: impl Fn(u32) -> bool) -> Option<u32> {
+/// The accepted ship whose pick circle is closest to the cursor. `prev` (last frame's hover) stays picked while the cursor is still on it:
+/// the overlapping circles of moving ships would otherwise hand the hover back and forth every frame (flickering bars, tooltip, cursor).
+fn pick(projected: &[Projected], cursor: Vec2, accept: impl Fn(u32) -> bool, prev: Option<u32>) -> Option<u32> {
+    let under = |p: &Projected| (p.screen - cursor).length() / p.radius_px;
+    if let Some(keep) = prev.and_then(|id| projected.iter().find(|p| p.id == id)).filter(|p| accept(p.id) && under(p) <= 1.0) {
+        return Some(keep.id);
+    }
     projected
         .iter()
         .filter(|p| accept(p.id))
-        .map(|p| (p.id, (p.screen - cursor).length() / p.radius_px))
+        .map(|p| (p.id, under(p)))
         .filter(|(_, d)| *d <= 1.0)
         .min_by(|a, b| a.1.total_cmp(&b.1))
         .map(|(id, _)| id)
@@ -288,11 +302,23 @@ fn pick(projected: &[Projected], cursor: Vec2, accept: impl Fn(u32) -> bool) -> 
 
 /// The ship under the cursor. With own ships selected an enemy under the cursor wins over own units whose pick area is smaller relative to the
 /// distance (fighter badges circling the target), so hovering an enemy hull still shows its hardpoints and right-click attacks it.
-fn pick_enemy_first(projected: &[Projected], cursor: Vec2, own_selected: bool, is_enemy: impl Fn(u32) -> bool) -> Option<u32> {
-    if own_selected && let Some(id) = pick(projected, cursor, &is_enemy) {
+fn pick_enemy_first(projected: &[Projected], cursor: Vec2, own_selected: bool, is_enemy: impl Fn(u32) -> bool, prev: Option<u32>) -> Option<u32> {
+    if own_selected && let Some(id) = pick(projected, cursor, &is_enemy, prev) {
         return Some(id);
     }
-    pick(projected, cursor, |_| true)
+    pick(projected, cursor, |_| true, prev)
+}
+
+/// Share of the distance to last frame's hardpoint by which another reticle must be closer to take the hover over (estimate). Without it two
+/// reticles about as far from the cursor swap every frame while the ship turns.
+const HARDPOINT_SWITCH_RATIO: f32 = 0.75;
+
+/// The hovered hardpoint: the closest one `best`, unless last frame's `prev` is still in reach and `best` is not clearly closer.
+fn keep_hovered_hardpoint(best: Option<(u32, u16, f32)>, prev: Option<(u32, u16, f32)>) -> Option<(u32, u16)> {
+    match (best, prev) {
+        (Some(b), Some(p)) if b.2 >= p.2 * HARDPOINT_SWITCH_RATIO => Some((p.0, p.1)),
+        (b, _) => b.map(|(eid, i, _)| (eid, i)),
+    }
 }
 
 /// World position of a hardpoint of a rendered ship: its bone in the loaded model, else the sim offset (the sim scales the model bones by `Scale_Factor` itself).
@@ -331,7 +357,7 @@ pub fn selection(
     if sel.enemy.is_some_and(|id| !ships.0.contains_key(&id)) {
         sel.enemy = None;
     }
-    *hover = Hover::default();
+    let prev = std::mem::take(&mut *hover);
     let Some(cursor) = pointer.cursor else {
         return;
     };
@@ -339,7 +365,7 @@ pub fn selection(
     let projected = project_ships(cam, gt, &ships, scale);
     // Over the interface only a drag that started in the world may end; nothing is hovered or started.
     let is_enemy = |id: u32| ships.0.get(&id).is_some_and(|s| s.side != player);
-    hover.ship = if block.0 { None } else { pick_enemy_first(&projected, cursor, !sel.ships.is_empty(), is_enemy) };
+    hover.ship = if block.0 { None } else { pick_enemy_first(&projected, cursor, !sel.ships.is_empty(), is_enemy, prev.ship) };
     if let Ok(ray) = cam.viewport_to_world(gt, cursor)
         && let Some(d) = ray.intersect_plane(Vec3::ZERO, InfinitePlane3d::new(Vec3::Y))
     {
@@ -365,6 +391,8 @@ pub fn selection(
         }
         let reach_px = 24.0 * scale;
         let mut best: Option<(u32, u16, f32)> = None;
+        // Last frame's hardpoint with its distance now, while it is still in reach.
+        let mut prev_hp: Option<(u32, u16, f32)> = None;
         for &eid in &candidates {
             // Unseen ships (fog) are neither drawn nor pickable, so they get no reticles either.
             let Some(s) = ships.0.get(&eid).filter(|s| s.visible) else { continue };
@@ -379,13 +407,16 @@ pub fn selection(
                 let w = hardpoint_world(&rt, s, i);
                 if let Ok(p) = cam.world_to_viewport(gt, w) {
                     let d = (p - cursor).length();
+                    if d < reach_px && prev.hardpoint == Some((eid, i as u16)) {
+                        prev_hp = Some((eid, i as u16, d));
+                    }
                     if d < reach_px && best.as_ref().is_none_or(|(_, _, bd)| d < *bd) {
                         best = Some((eid, i as u16, d));
                     }
                 }
             }
         }
-        hover.hardpoint = best.map(|(eid, i, _)| (eid, i));
+        hover.hardpoint = keep_hovered_hardpoint(best, prev_hp);
     }
 
     // Control groups.
@@ -452,7 +483,7 @@ pub fn selection(
                 .map(|p| p.id)
                 .collect()
         } else {
-            pick(&projected, cursor, own).into_iter().collect()
+            pick(&projected, cursor, own, None).into_iter().collect()
         };
         // Double click on a ship focuses the camera on the selection.
         let now = time.elapsed_secs();
@@ -962,10 +993,119 @@ mod pick_tests {
         ];
         let cursor = Vec2::new(100.0, 100.0);
         let enemy = |id: u32| id == 2;
-        assert_eq!(pick_enemy_first(&projected, cursor, false, enemy), Some(1));
-        assert_eq!(pick_enemy_first(&projected, cursor, true, enemy), Some(2));
+        assert_eq!(pick_enemy_first(&projected, cursor, false, enemy, None), Some(1));
+        assert_eq!(pick_enemy_first(&projected, cursor, true, enemy, None), Some(2));
         // No enemy under the cursor: falls back to the nearest unit.
-        assert_eq!(pick_enemy_first(&projected[..1], cursor, true, enemy), Some(1));
+        assert_eq!(pick_enemy_first(&projected[..1], cursor, true, enemy, None), Some(1));
+        // Last frame's own badge does not keep the hover against the enemy rule.
+        assert_eq!(pick_enemy_first(&projected, cursor, true, enemy, Some(1)), Some(2));
+    }
+
+    #[test]
+    fn hover_does_not_alternate_between_overlapping_ships_over_frames() {
+        // Two enemy hulls overlap under a fixed cursor; their screen positions jitter by a pixel each frame (moving ships), so the
+        // closest one alternates. The hover must stay on the first one picked.
+        let cursor = Vec2::new(100.0, 100.0);
+        let mut hover = None;
+        let mut seen = Vec::new();
+        for frame in 0..12 {
+            let j = if frame % 2 == 0 { 1.0 } else { -1.0 };
+            let projected = [
+                Projected { id: 1, screen: Vec2::new(110.0 + j, 100.0), radius_px: 60.0 },
+                Projected { id: 2, screen: Vec2::new(90.0 + j, 100.0), radius_px: 60.0 },
+            ];
+            hover = pick_enemy_first(&projected, cursor, true, |_| true, hover);
+            seen.push(hover);
+        }
+        assert!(seen.iter().all(|h| *h == seen[0] && h.is_some()), "{seen:?}");
+        // Without the hysteresis the same input alternates (the flicker this guards against).
+        let raw: Vec<_> = (0..4)
+            .map(|frame| {
+                let j = if frame % 2 == 0 { 1.0 } else { -1.0 };
+                let projected = [
+                    Projected { id: 1, screen: Vec2::new(110.0 + j, 100.0), radius_px: 60.0 },
+                    Projected { id: 2, screen: Vec2::new(90.0 + j, 100.0), radius_px: 60.0 },
+                ];
+                pick_enemy_first(&projected, cursor, true, |_| true, None)
+            })
+            .collect();
+        assert_ne!(raw[0], raw[1]);
+        // Leaving the hovered hull hands the hover on.
+        let projected = [Projected { id: 1, screen: Vec2::new(300.0, 100.0), radius_px: 60.0 }, Projected { id: 2, screen: Vec2::new(90.0, 100.0), radius_px: 60.0 }];
+        assert_eq!(pick_enemy_first(&projected, cursor, true, |_| true, Some(1)), Some(2));
+    }
+
+    #[test]
+    fn hovered_hardpoint_sticks_until_another_is_clearly_closer() {
+        let mut hover: Option<(u32, u16)> = None;
+        let mut seen = Vec::new();
+        for frame in 0..12 {
+            // Reticles 0 and 1 are 9 and 10 px away, swapping every frame while the ship turns.
+            let (d0, d1) = if frame % 2 == 0 { (9.0, 10.0) } else { (10.0, 9.0) };
+            let best = if d0 < d1 { (7, 0, d0) } else { (7, 1, d1) };
+            let prev = hover.map(|(e, i)| (e, i, if i == 0 { d0 } else { d1 }));
+            hover = keep_hovered_hardpoint(Some(best), prev);
+            seen.push(hover);
+        }
+        assert!(seen.iter().all(|h| *h == Some((7, 0))), "{seen:?}");
+        // A reticle much closer than the held one takes over; none in reach clears the hover.
+        assert_eq!(keep_hovered_hardpoint(Some((7, 1, 3.0)), Some((7, 0, 12.0))), Some((7, 1)));
+        assert_eq!(keep_hovered_hardpoint(None, None), None);
+    }
+}
+
+#[cfg(test)]
+mod ui_block_tests {
+    use super::*;
+
+    /// Order cursor stand-in: shown at the pointer while the world is not blocked (as `order_cursor` does), hidden otherwise.
+    #[derive(Component)]
+    struct FollowsPointer;
+
+    fn follow(block: Res<UiBlock>, mut q: Query<&mut InheritedVisibility, With<FollowsPointer>>) {
+        for mut v in &mut q {
+            let want = if block.0 { InheritedVisibility::HIDDEN } else { InheritedVisibility::VISIBLE };
+            if *v != want {
+                *v = want;
+            }
+        }
+    }
+
+    /// Runs `ui_block` and the follower for `frames` frames with a fixed pointer on a 36 px opaque node centred on it; returns the
+    /// (blocked, follower visible) state of every frame.
+    fn run(transparent: bool, frames: usize) -> Vec<(bool, bool)> {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins).init_resource::<Assets<Image>>().init_resource::<UiBlock>();
+        app.insert_resource(Pointer { cursor: Some(Vec2::new(200.0, 150.0)), ..default() });
+        app.world_mut().spawn((Camera::default(), BattleCamera::default()));
+        let mut node = app.world_mut().spawn((
+            FollowsPointer,
+            ComputedNode { size: Vec2::splat(36.0), ..default() },
+            UiGlobalTransform::from_translation(Vec2::new(200.0, 150.0)),
+            InheritedVisibility::VISIBLE,
+            ImageNode::default(),
+        ));
+        if transparent {
+            node.insert(PointerTransparent);
+        }
+        app.add_systems(Update, (ui_block, follow).chain());
+        (0..frames)
+            .map(|_| {
+                app.update();
+                let blocked = app.world().resource::<UiBlock>().0;
+                let shown = app.world_mut().query_filtered::<&InheritedVisibility, With<FollowsPointer>>().single(app.world()).unwrap().get();
+                (blocked, shown)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn pointer_following_ui_never_blocks_and_never_toggles() {
+        let frames = run(true, 8);
+        assert!(frames.iter().all(|&f| f == (false, true)), "{frames:?}");
+        // The same node without the marker blocks the world under itself and toggles every frame: the order cursor flicker.
+        let old = run(false, 4);
+        assert!(old.windows(2).any(|w| w[0] != w[1]), "{old:?}");
     }
 }
 
