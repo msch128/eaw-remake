@@ -1,11 +1,14 @@
 # Smoke test: runs the release exe offscreen (no window, no audio) through the key scenarios and prints a pass/fail table.
-#   .\tools\smoke.ps1                      all scenarios
+#   .\tools\smoke.ps1                      all offscreen scenarios
 #   .\tools\smoke.ps1 -Only superweapon    scenarios whose name contains the text
+#   .\tools\smoke.ps1 -Windowed            also the windowed-* rows: they open a real (hidden) window and the window systems, so they
+#                                          run only with this switch and only while nobody uses the machine
 # Needs the game and the Remake mod installed. Output (PNGs, logs, saves) goes to $Out, never into the repo.
 param(
     [string]$Exe = (Join-Path $PSScriptRoot '..\target\release\space-peace.exe'),
     [string]$Out = (Join-Path $env:TEMP 'space-peace-smoke'),
     [string]$Only = '',
+    [switch]$Windowed,
     [int]$TimeoutSeconds = 420
 )
 $ErrorActionPreference = 'Stop'
@@ -83,8 +86,11 @@ $scenarios = @(
 )
 
 $rows = @()
+# A short -Only filter ("l") once reached the windowed rows while the user was playing (2026-10-17): they are opt-in now.
+if (-not $Windowed) { Write-Host 'windowed-* rows skipped (pass -Windowed only while nobody uses the machine)' -ForegroundColor DarkGray }
 foreach ($s in $scenarios) {
     $name = $s[0]
+    if ($name -like 'windowed-*' -and -not $Windowed) { continue }
     if ($Only -and $name -notlike "*$Only*") { continue }
     $png = Join-Path $Out "$name.png"
     $log = Join-Path $Out "$name.log"
