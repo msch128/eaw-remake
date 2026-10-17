@@ -38,7 +38,7 @@ Deterministic, rayon-parallel space-battle simulation (fixed dt 1/30). Rules and
 squadrons are lost. The old "fly out of the arena" rule is gone. Tests in `tests/mechanics.rs` (retreat_* / squadrons_*).
 
 ## Formations and idle behaviour (new)
-Squadron members follow the slot `leader position + (own place - leader's place), rotated with the leader` while idle, ordered to move or attack-move (and without a target), matching the leader's speed and closing the gap at 2 speed units per unit of distance (estimate). The places are `ShipDef::spread` (fighter and bomber squadrons: the data offsets widened to a 100 u gap, see RULES.md), the leader is the member nearest the middle of the formation; a leader in formation flight slows down while a member lags, launched squadrons open out of the hangar formation during the flyout, and a fighter at rest keeps its heading (members turn with their leader).
+Squadron members follow the slot `leader position + (own place - leader's place), rotated with the leader` while idle, ordered to move or attack-move (and without a target), matching the leader's speed and closing the gap at 2 speed units per unit of distance (estimate). The places are the data's `Squadron_Offsets` as they are (`formation_offset`; 20 u between TIE Fighters, see RULES.md "Squadron formation flight"), the leader is the member nearest the middle of the formation; a leader in formation flight slows down while a member lags (from 50 u), launched squadrons follow the leader's place through the flyout, and a fighter at rest keeps its heading (members turn with their leader). A widening of the formation to 100 u (`ShipDef::spread`) existed for one day (2026-10-17) while fighters were drawn enlarged; it is removed.
 Fighters that only hold a place (slot, carrier escort, move goal) now stop within 50 units (estimate) instead of flying past it for ever (they used to circle: 2500 units/min idle, slot error 200). Idle capitals already held position and facing (0 units/min, 0 degrees).
 `tests/formations.rs` is the navcheck: idle capital path per minute, turn, squadron spread, fighter path, closest hull approach. Open: ships still chase and orbit enemies at standoff range in combat.
 
@@ -102,3 +102,14 @@ the free store's target (`Service_Attack`: capital ships take frigates, frigates
 deals 14k instead of 0.2k (6 seeds); on the open square it takes 8-12% less damage and loses 9.2 instead of 10.0 of 14 ships against a holding fleet;
 Kuat is unchanged. Open: hardpoint targeting sets (tried, no effect), kiting, the task force's ability use on approach, the scripts' map-wide
 target search.
+
+## Squadrons fly the data's formation again (2026-10-17, user decision 12:50: fighters at their real size)
+The widening of fighter and bomber squadrons to 100 u between neighbours (`ShipDef::spread`, `SQUADRON_GAP`, `spread_formation`) is removed: it existed only because the
+craft were drawn enlarged to a fixed screen size and ran into each other. Members fly `Squadron_Offsets` as they are (`formation_offset`; TIE Fighter 20 u side by side,
+X-wing 50, TIE Interceptor pairs 6 apart in height; `ShipDef::closest_places` gives the closest two places, which battle-view fits its weave to). Kept from the first
+version: the leader is the member nearest the middle, launched squadrons follow the leader's place through the flyout, a fighter at rest keeps its heading, the leader waits for
+a member that lags (`SQUADRON_LAG_START` 50 u, half speed from `SQUADRON_LAG_HALF` 250 u, the same distances as before). Test: `defs::formation_tests`.
+`tests/tactical_ai.rs`: the mirror fight on an open square is now judged on seeds 1-8 (at least 28 ships of 80 left, 3.5 a run) instead of the sum of seeds 1-3 (at least 12 of 30):
+that sum was 12 on f9710b3, 11 with the data's formation (4, 3, 4), and both are noise: seeds 1-8 left 34 of 80 on f9710b3 and 36 of 80 now (3-6 a run in both), before the
+rule 7 of 30 on seeds 1-3. The Kuat attack (seeds 1-8) is unchanged: depth, width and `half_in` are identical to the digit on both versions, ships left 8.4 on average now against
+8.6 (its threshold is 8.0).

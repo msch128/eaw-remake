@@ -17,6 +17,7 @@ pub mod member_bars;
 pub mod panels;
 pub mod tactical;
 pub mod shell;
+pub mod squad_icons;
 pub mod textures;
 pub mod widgets;
 
@@ -33,6 +34,7 @@ pub use data::{
 };
 pub use faction::UiFaction;
 pub use member_bars::{MemberBar, MemberBars};
+pub use squad_icons::{SQUAD_ICON_DESIGN_PX, SquadIcon, SquadIconNode, SquadIconRoot, SquadIcons};
 pub use panels::{
     BANNER_AUTO, BANNER_BEGIN, BANNER_CANCEL, BannerSide, BattleBannerSpec, DialogSpec, EawDialogResult, EawMinimapClicked, EawSlotDropped, MinimapData, MinimapDot,
     MinimapKind, MinimapPing, MinimapSurface, PanelData, PanelSlot, SlotLook, fleet_slot_name, minimap_to_world, spawn_battle_banner, spawn_dialog,
@@ -176,6 +178,7 @@ impl Plugin for EawUiPlugin {
             .init_resource::<PanelData>()
             .init_resource::<TacticalData>()
             .init_resource::<TacticalOverlays>()
+            .init_resource::<SquadIcons>()
             .init_resource::<panels::MinimapFog>()
             .init_resource::<panels::MinimapCameraQuad>()
             .add_message::<EawAbilityClicked>()
@@ -188,7 +191,7 @@ impl Plugin for EawUiPlugin {
             .add_message::<EawDialogResult>()
             .add_message::<EawButtonClicked>()
             .add_message::<EawLockedClicked>()
-            .add_systems(Startup, (widgets::spawn_tooltip, tactical::spawn_overlay_layer))
+            .add_systems(Startup, (widgets::spawn_tooltip, tactical::spawn_overlay_layer, squad_icons::spawn_icon_layer))
             .add_systems(
                 Update,
                 (
@@ -216,6 +219,7 @@ impl Plugin for EawUiPlugin {
                     .chain(),
             )
             .add_systems(Update, (widgets::segment_bars, widgets::border_pieces.after(widgets::slots), widgets::ability_columns.after(widgets::slots), widgets::active_outlines.after(widgets::slots)));
+        app.add_systems(Update, squad_icons::squad_icon_nodes.after(widgets::ui_scale));
         member_bars::plugin(app);
     }
 }

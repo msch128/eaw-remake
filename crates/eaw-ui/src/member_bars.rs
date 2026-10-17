@@ -2,7 +2,8 @@
 //!
 //! The Remake draws one small health bar and one flag under every fighter, own and enemy, at every
 //! zoom (the user's 1080p video `battle1s` b0703s, b0732s, b0850s, b0760s and the 3821x2047
-//! screenshot `07_tactical_battle`). The art is the game's own, from `MT_CommandBar`:
+//! screenshot `07_tactical_battle`). Ours show only on the craft of selected or hovered squadrons (the user's rule 2026-10-17, the host
+//! decides: `battle-view` `tactical_ui::member_bars`); this module draws whatever [`MemberBars`] holds. The art is the game's own, from `MT_CommandBar`:
 //!
 //! * the bar is `I_BAR_CONTROL_WIDE` (a black track, alpha 0.31) with the `I_BAR_HEALTH_SMALL<level>`
 //!   fill on it, `level` = health in tenths: flat colours, red 1-3, orange 4-5, yellow 6-7, yellow-green
@@ -49,7 +50,8 @@ use crate::textures::UiTextures;
 use crate::widgets::EawCommandBar;
 
 /// Bar length as a share of the craft's drawn bounding sphere (diameter). Estimate from two measurements: the bar is 20.6 design px in
-/// the Remake, and the sphere of a small craft is 3.2 % of the screen height (24.6 design px) in our battle view.
+/// the Remake, whose small craft are drawn 24.6 design px across. Our craft are drawn at their model scale, a few pixels across at most, so
+/// the bar is the craft's width only close up and [`MIN_BAR`] farther out.
 pub const BAR_OF_SPHERE: f32 = 0.84;
 /// Bar thickness in design px: the small bar texture's 2 px at the 0.61 its length is drawn at (29 x 2 px at 1080p, 55 x 3 px at 2047 px).
 pub const BAR_THICKNESS: f32 = 1.21;

@@ -216,10 +216,11 @@ are flat colour, not the `i_bar_*` textures; the cooldown overlay is a rising ti
 * **Bars:** world-space bars use the original `i_bar_health_{small,medium,large}0..10` level
   textures (34/68/102 px wide, 2 px tall), `i_bar_control_wide` as frame and the full
   `i_bar_shield_*10` texture clipped to the shield fraction. `bar_class(half_size)` picks the set.
-* **Small craft:** every fighter, bomber and squadron member has a bar and a flag of its own (`member_bars.rs`): the small bar
+* **Small craft:** the Remake gives every fighter, bomber and squadron member a bar and a flag of its own; ours show them only on the craft of a selected or hovered squadron whose craft stand far enough apart on screen (the host decides, 2026-10-17; `member_bars.rs` draws what it is given): the small bar
   texture at 0.61 (20.6 x 1.2 design px; 29 x 2 px at 1080p, 55 x 3 px at 2047 px height, measured), centred under the craft with its
   top 1 design px under the silhouette, a shield bar above it when the craft has shields, and `i_garrison_flag.tga` (12 x 14, drawn at
   0.92) with its top at the bar's top and its left 1.3 design px inside the bar's right end. Not UI nodes: see the module's doc.
+* **Squadron icon:** an unpicked squadron, own or enemy, is one small icon (`squad_icons.rs`): the unit's `Icon_Name` art prepared at 32 px, drawn 11.4 design px (16 px at 1080p, estimate: no Remake frame shows one) on a faint plate (black, dark red for enemies), no frame, no bar, in a layer below the command bar. The Remake's own selection box round a selected fighter measures 28 x 27 px at 1080p (v0700s).
 * **Selection brackets:** no bracket texture exists (`i_selection_cutout_*` are 1024 px white
   masks, `selection_*_neutral` are ground decals), so brackets stay drawn corners.
 * **Hardpoints:** the original reticles `I_HARD_POINT_RETICLE_<KIND>[_TRACKED].DDS` (GENERIC, ENGINES,

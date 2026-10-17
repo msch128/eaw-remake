@@ -191,7 +191,7 @@ pub fn ui_block(
     camera: Single<&Camera, With<BattleCamera>>,
     parents: Query<&ChildOf>,
     overlay_roots: Query<(), With<eaw_ui::TacticalOverlayRoot>>,
-    see_through: Query<(), Or<(With<eaw_ui::ShipOverlayNode>, With<eaw_ui::HardpointNode>, With<PointerTransparent>)>>,
+    see_through: Query<(), Or<(With<eaw_ui::ShipOverlayNode>, With<eaw_ui::HardpointNode>, With<eaw_ui::SquadIconNode>, With<PointerTransparent>)>>,
 ) {
     let passes = |n: Entity| overlay_roots.contains(n) || see_through.contains(n);
     // Node transforms are in physical pixels of the camera target (UI scale only changes node sizes).
@@ -279,9 +279,12 @@ fn project_ships(
             let entry = squads.entry((s.side, s.squad)).or_insert((Vec2::ZERO, 0, id));
             entry.0 += c;
             entry.1 += 1;
+            // The lowest id speaks for the squadron (HashMap order would hand the badge to another craft from frame to frame).
+            entry.2 = entry.2.min(id);
         }
     }
-    // Squadron icon badges: generous pick area so clicking the floating icon badge targets the squadron
+    // The squadron's icon: a generous pick area (about twice its size) round the middle of the squadron, so that the squadron is picked by
+    // its icon even where its craft are a few pixels across.
     for (_, (sum_c, count, lead_id)) in squads {
         if count > 0 {
             out.push(Projected {
@@ -317,6 +320,18 @@ fn pick_enemy_first(projected: &[Projected], cursor: Vec2, own_selected: bool, i
         return Some(id);
     }
     pick(projected, cursor, |_| true, prev)
+}
+
+/// `picked` and every craft of the squadrons they belong to, each once, in id order: a squadron is one unit (an own click on a craft or on
+/// the squadron's icon selects it whole, as in the Remake).
+fn with_squadmates(mut picked: Vec<u32>, ships: &RenderedShips) -> Vec<u32> {
+    let squads: std::collections::HashSet<(u8, u32)> = picked.iter().filter_map(|id| ships.0.get(id)).filter(|s| s.squad != u32::MAX).map(|s| (s.side, s.squad)).collect();
+    if !squads.is_empty() {
+        picked.extend(ships.0.values().filter(|s| squads.contains(&(s.side, s.squad))).map(|s| s.id));
+    }
+    picked.sort_unstable();
+    picked.dedup();
+    picked
 }
 
 /// Share of the distance to last frame's hardpoint by which another reticle must be closer to take the hover over (estimate). Without it two
@@ -479,7 +494,7 @@ pub fn selection(
     {
         let moved = (cursor - start).length() > BOX_DRAG_PX * scale;
         let own = |id: u32| ships.0.get(&id).is_some_and(|s| s.side == player);
-        let picked: Vec<u32> = if moved {
+        let clicked: Vec<u32> = if moved {
             let (lo, hi) = (start.min(cursor), start.max(cursor));
             projected
                 .iter()
@@ -495,14 +510,16 @@ pub fn selection(
         } else {
             pick(&projected, cursor, own, None).into_iter().collect()
         };
-        // Double click on a ship focuses the camera on the selection.
+        // A squadron is one unit: any craft of it, or its icon, picks all of them.
+        let picked = with_squadmates(clicked, &ships);
+        // Double click on a ship or squadron focuses the camera on the selection (a unit is told by its lowest id).
         let now = time.elapsed_secs();
-        if !moved && let &[only] = picked.as_slice() {
-            if last_click.1 == Some(only) && now - last_click.0 < DOUBLE_CLICK_SECONDS {
+        if !moved && let Some(&unit) = picked.first() {
+            if last_click.1 == Some(unit) && now - last_click.0 < DOUBLE_CLICK_SECONDS {
                 focus.write(FocusCamera);
                 *last_click = (0.0, None);
             } else {
-                *last_click = (now, Some(only));
+                *last_click = (now, Some(unit));
             }
         } else {
             *last_click = (0.0, None);
@@ -994,6 +1011,19 @@ pub struct HardpointOrderIssued {
 #[cfg(test)]
 mod pick_tests {
     use super::*;
+
+    #[test]
+    fn a_click_on_a_craft_or_on_the_icon_selects_the_whole_squadron() {
+        // (id, side, squad): own squadron 0 of three craft, own squadron 1, the enemy's squadron 0 and an own ship in none.
+        let ships = RenderedShips([(1, 0, 0), (2, 0, 0), (3, 0, 0), (4, 0, 1), (5, 1, 0), (6, 0, u32::MAX)].into_iter().map(|(id, side, squad)| (id, ShipRender::test_craft(id, 0, side, squad, Vec3::ZERO, 1.0))).collect());
+        assert_eq!(with_squadmates(vec![2], &ships), [1, 2, 3], "any craft picks its squadron");
+        assert_eq!(with_squadmates(vec![3, 1], &ships), [1, 2, 3], "each craft once, in id order");
+        assert_eq!(with_squadmates(vec![4], &ships), [4], "squadron 1 is another unit");
+        assert_eq!(with_squadmates(vec![5], &ships), [5], "and so is the same number of the other side");
+        assert_eq!(with_squadmates(vec![6], &ships), [6], "a ship in no squadron stays alone");
+        assert_eq!(with_squadmates(vec![6, 4, 1], &ships), [1, 2, 3, 4, 6]);
+        assert!(with_squadmates(vec![], &ships).is_empty());
+    }
 
     #[test]
     fn enemy_hull_wins_over_a_closer_own_badge_when_own_ships_are_selected() {

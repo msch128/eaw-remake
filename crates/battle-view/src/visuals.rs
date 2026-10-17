@@ -119,6 +119,9 @@ pub struct ShipVisual {
     pub hero: bool,
     /// How it banks and pitches in flight (`Bank_Turn_Angle`, `Max_Rate_Of_Roll`, `Max_Lift`), see [`crate::flight`].
     pub flight: FlightLook,
+    /// The closest two places of any squadron this type flies in (`Squadron_Offsets`), `None` for a type that is in none: the room a craft
+    /// has around it, which its weave must fit ([`crate::flight::weave_scale`]).
+    pub squadron_gap: Option<f32>,
     /// Look and sound of the unit's `SUPER_LASER` shot, if it has one.
     pub super_laser: Option<SuperLaserVisual>,
 }
@@ -200,6 +203,14 @@ impl VisualCatalog {
         let mut ships = Vec::with_capacity(catalog.ships.len());
         // Types that fly in a squadron are small craft whatever their class (a Skipray blast boat squadron).
         let squadron_members: HashSet<ShipId> = catalog.ships.iter().flat_map(|d| d.members.iter().map(|&(m, _)| m)).collect();
+        let mut gaps: HashMap<ShipId, f32> = HashMap::new();
+        for squadron in &catalog.ships {
+            let Some(gap) = squadron.closest_places() else { continue };
+            for &(member, _) in &squadron.members {
+                let g = gaps.entry(member).or_insert(gap);
+                *g = g.min(gap);
+            }
+        }
         for (id, def) in catalog.ships.iter().enumerate() {
             let r = data.objects.resolve(&def.name);
             let scale = r
@@ -338,6 +349,7 @@ impl VisualCatalog {
                 sfx: unit_sfx,
                 hero: r.as_ref().and_then(|r| r.flag("is_named_hero")).unwrap_or(false),
                 flight,
+                squadron_gap: gaps.get(&(id as ShipId)).copied(),
                 super_laser: r.as_ref().and_then(SuperLaserVisual::from_unit),
             });
         }

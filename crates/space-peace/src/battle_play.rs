@@ -74,7 +74,7 @@ impl Plugin for BattlePlayPlugin {
             .add_systems(OnExit(AppScreen::SpaceBattle), end_session)
             .add_systems(
                 Update,
-                (finish_battle_view, abort_key, retreat_auto_resolve, begin_button, loading_shot, battle_menu, battle_ui_camera, battle_shot, battle_header, battle_orders, tactical_hotkeys)
+                (finish_battle_view, abort_key, retreat_auto_resolve, begin_button, loading_shot, battle_menu, battle_ui_camera, battle_shot, battle_header, battle_orders, tactical_hotkeys, select_squad_hook)
                     .run_if(in_state(AppScreen::SpaceBattle).and_then(resource_exists::<PendingTactical>)),
             );
     }
@@ -647,6 +647,46 @@ fn tactical_hotkeys(
     }
 }
 
+/// Offscreen test hook `SP_SELECT_SQUAD=near|<squadron index>`: from the 120th battle frame on, the player's squadron nearest the camera focus
+/// (or the one with that index) is selected and nothing else happens, so a capture shows one picked squadron among all the others.
+fn select_squad_hook(
+    status: Res<BattleStatus>,
+    ships: Res<battle_view::RenderedShips>,
+    settings: Res<BattleViewSettings>,
+    mut camera: Single<&mut BattleCamera>,
+    mut sel: ResMut<battle_view::Selection>,
+    mut frames: Local<u32>,
+) {
+    let Ok(which) = std::env::var("SP_SELECT_SQUAD") else { return };
+    if status.tick == 0 || ships.0.is_empty() {
+        return;
+    }
+    *frames += 1;
+    if *frames != 120 {
+        return;
+    }
+    let mut squads: std::collections::BTreeMap<u32, Vec<&battle_view::ShipRender>> = std::collections::BTreeMap::new();
+    for s in ships.0.values().filter(|s| s.side == settings.player_side && s.squad != u32::MAX) {
+        squads.entry(s.squad).or_default().push(s);
+    }
+    let centre = |m: &[&battle_view::ShipRender]| m.iter().fold(Vec3::ZERO, |a, s| a + s.pos) / m.len().max(1) as f32;
+    let picked = match which.parse::<u32>() {
+        Ok(n) => squads.get(&n),
+        Err(_) => squads.values().min_by(|a, b| centre(a).distance(camera.focus).total_cmp(&centre(b).distance(camera.focus))),
+    };
+    if let Some(members) = picked {
+        sel.ships = members.iter().map(|s| s.id).collect();
+        sel.ships.sort_unstable();
+        let middle = centre(members);
+        info!("battle: selected squadron of {} craft around {middle:?}", sel.ships.len());
+        // `SP_FOCUS_SQUAD=1` also puts the camera focus on it (close-up captures of one squadron).
+        if std::env::var_os("SP_FOCUS_SQUAD").is_some() {
+            camera.focus = Vec3::new(middle.x, camera.focus.y, middle.z);
+            camera.target_focus = camera.focus;
+        }
+    }
+}
+
 /// Offscreen scenario: one capture in the middle of the battle (`<out>_battle.png`).
 fn battle_shot(
     mut commands: Commands,
@@ -658,6 +698,7 @@ fn battle_shot(
     settings: Res<BattleViewSettings>,
     mut cam: Single<&mut BattleCamera>,
     pulses: Res<battle_view::BloomPulses>,
+    stats: (Option<Res<battle_view::BattleRuntime>>, Res<eaw_ui::MemberBars>, Res<eaw_ui::TacticalOverlays>, Res<eaw_ui::SquadIcons>, Query<&Transform>, Single<(&Camera, &GlobalTransform), With<BattleCamera>>),
 ) {
     let (Some(out), Some(target)) = (args.offscreen.as_ref(), target) else { return };
     shot.frames += 1;
@@ -704,6 +745,34 @@ fn battle_shot(
     let stem = path.file_stem().map_or_else(|| "out".into(), |s| s.to_string_lossy().into_owned());
     path.set_file_name(format!("{stem}_battle.png"));
     info!("battle: capture at t={:.1}s alive {:?} rendered {} -> {}", status.time, status.alive, ships.0.len(), path.display());
+    // What the capture shows: the bars of single craft and of units, and the size every unit type is drawn at (first craft of each type).
+    let (rt, members, overlays, squad_icons, transforms, camera) = stats;
+    // Overlay nodes that are not selected, hovered, hostile or always on are hidden by eaw-ui (bars included).
+    let shown: Vec<_> = overlays.ships.iter().filter(|o| o.selected || o.hovered || o.enemy || o.always || o.icon_only).collect();
+    info!(
+        "battle: capture shows {} bars of single craft, {} unit overlays ({} with health bars, {} icon boxes), {} squadron icons ({} enemy)",
+        members.items.len(),
+        shown.len(),
+        shown.iter().filter(|o| !o.icon_only).count(),
+        shown.iter().filter(|o| o.icon.is_some()).count(),
+        squad_icons.items.len(),
+        squad_icons.items.iter().filter(|i| i.enemy).count()
+    );
+    if let Some(rt) = rt {
+        let (cam, gt) = *camera;
+        let right = gt.right();
+        let mut seen = std::collections::BTreeSet::new();
+        for s in ships.0.values().filter(|s| s.visible && s.drawn_radius > 0.0) {
+            if !seen.insert(s.def) {
+                continue;
+            }
+            let Ok(c) = cam.world_to_viewport(gt, s.pos) else { continue };
+            let Ok(e) = cam.world_to_viewport(gt, s.pos + right * s.drawn_radius) else { continue };
+            let data = rt.visuals.ship(s.def).scale;
+            let drawn = transforms.get(s.entity).map_or(0.0, |t| t.scale.x);
+            info!("battle: size {}: drawn radius {:.2} u = {:.1} px across (model scale {data:.2}, drawn at {drawn:.2}: x{:.2})", rt.catalog.ship(s.def).name, s.drawn_radius, 2.0 * (e - c).length(), drawn / data.max(1e-6));
+        }
+    }
     commands
         .spawn(Screenshot(RenderTarget::Image(ImageRenderTarget { handle: target.image.clone(), scale_factor: target.scale_factor })))
         .observe(save_to_disk(path));

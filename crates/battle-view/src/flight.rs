@@ -230,13 +230,12 @@ pub fn attitude_rotation(yaw: f32, pitch: f32, bank: f32) -> Quat {
     ship_rotation(yaw) * Quat::from_rotation_x(-pitch) * Quat::from_rotation_z(bank)
 }
 
-/// Drift of a small craft at rest to either side, world units (estimate: squadron neighbours 100 units apart drifting towards each other
-/// take at most 60 % of the room between them on screen, see `WEAVE_FAR_START`; it varies their spacing by up to a quarter, as the
-/// Remake's idle squadrons vary theirs, 36-51 px in b0703s).
+/// Drift of a small craft at rest to either side, world units (estimate: a slow float about the craft's own size; squadrons whose neighbours
+/// have less room than this drift less, see [`weave_scale`]).
 const WEAVE_SIDE: f32 = 6.0;
-/// Up and down drift (bob) at rest, world units (estimate, same budget).
+/// Up and down drift (bob) at rest, world units (estimate, same size).
 const WEAVE_UP: f32 = 5.0;
-/// Fore and aft drift at rest, world units (estimate, same budget).
+/// Fore and aft drift at rest, world units (estimate, same size).
 const WEAVE_AHEAD: f32 = 2.0;
 /// Mean periods of the three drifts in seconds; each craft takes 0.8-1.2 times them, from its id (estimates: a slow float, the Remake's
 /// idle fighters loop round at `Min_Speed` 1, 30 units per second).
@@ -253,12 +252,9 @@ const WEAVE_IN_MOTION: f32 = 0.2;
 const WEAVE_TURN_IN_MOTION: f32 = 0.35;
 /// Seconds over which a craft's weave grows in after it appears (launch from a hangar, arrival): it leaves the bay on its exact path.
 const WEAVE_FADE_IN: f32 = 3.0;
-/// Camera distance (to the squadron) up to which the drift is whole, and from which on it is gone (estimates for the TIE fighter at the
-/// default pitch of 60 degrees: drawn with its bounding sphere at 3.2 % of the screen height, 26 px tall at 1080 lines, two neighbours
-/// 100 units apart one behind the other on screen are 36 px apart centre to centre at camera 2000 and touch from about 2790 on, weave or
-/// not). In between the drift shrinks with the room between them.
-const WEAVE_FAR_START: f32 = 1800.0;
-const WEAVE_FAR_END: f32 = 2750.0;
+/// Share of the free room between two squadron neighbours that their drifts may use together, both drifting towards each other at once
+/// (estimate): they never touch, whatever the camera distance (the craft and the gap between them shrink alike on screen).
+const WEAVE_ROOM_SHARE: f32 = 0.6;
 
 /// Drift of a small craft around its simulated place and the attitude that flies it.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
@@ -294,12 +290,12 @@ fn unit_hash(id: u32, salt: u32) -> f32 {
 }
 
 /// The weave of craft `id` at battle time `t`. `calm` (0..1) is how still it flies ([`FlightLook::calm`]), `age` the seconds since it
-/// appeared and `room` (0..1) how much of the drift the camera distance allows ([`weave_room`]). The attitude stays at any distance (it
-/// does not move the craft).
-pub fn weave(id: u32, t: f32, calm: f32, age: f32, room: f32) -> Weave {
+/// appeared and `scale` (0..1) how much of the drift the room between squadron neighbours allows ([`weave_scale`]). The attitude stays whole
+/// (it does not move the craft).
+pub fn weave(id: u32, t: f32, calm: f32, age: f32, scale: f32) -> Weave {
     let grown = smoothstep((age / WEAVE_FADE_IN).clamp(0.0, 1.0));
     let calm = calm.clamp(0.0, 1.0);
-    let drift = grown * room.clamp(0.0, 1.0) * (WEAVE_IN_MOTION + (1.0 - WEAVE_IN_MOTION) * calm);
+    let drift = grown * scale.clamp(0.0, 1.0) * (WEAVE_IN_MOTION + (1.0 - WEAVE_IN_MOTION) * calm);
     let turn = grown * (WEAVE_TURN_IN_MOTION + (1.0 - WEAVE_TURN_IN_MOTION) * calm);
     let phase = |salt: u32, period: f32| TAU * unit_hash(id, salt) + TAU * t / (period * (0.8 + 0.4 * unit_hash(id, salt + 1)));
     let side = phase(1, WEAVE_SIDE_PERIOD);
@@ -314,9 +310,14 @@ pub fn weave(id: u32, t: f32, calm: f32, age: f32, room: f32) -> Weave {
     }
 }
 
-/// Share of the drift a craft keeps `distance` from the camera (all of it up to `WEAVE_FAR_START`, none from `WEAVE_FAR_END` on).
-pub fn weave_room(distance: f32) -> f32 {
-    ((WEAVE_FAR_END - distance) / (WEAVE_FAR_END - WEAVE_FAR_START)).clamp(0.0, 1.0)
+/// Share of the drift a squadron member of bounding radius `radius` keeps when its closest neighbour's place is `gap` apart (`Squadron_Offsets`,
+/// `None`: no formation, the craft has room all round). The free room between the two spheres is `gap` less their diameters; both drifting
+/// towards each other at once use at most [`WEAVE_ROOM_SHARE`] of it, so neighbours never touch, however far the camera is: craft and gap
+/// shrink alike on screen.
+pub fn weave_scale(gap: Option<f32>, radius: f32) -> f32 {
+    let Some(gap) = gap else { return 1.0 };
+    let room = (gap - 2.0 * radius.max(0.0)).max(0.0);
+    (WEAVE_ROOM_SHARE * room / (2.0 * weave_reach())).clamp(0.0, 1.0)
 }
 
 /// The largest distance a craft's weave moves it from its simulated place (the bound the overlap budget is built on).
@@ -333,9 +334,6 @@ mod tests {
     use super::*;
 
     const DT: f32 = 1.0 / 30.0;
-    /// battle-sim's `SQUADRON_GAP`: squadron neighbours keep 100 units apart in the plan.
-    const SQUADRON_GAP: f32 = 100.0;
-
     fn tie() -> FlightLook {
         // TIE_Fighter: Bank_Turn_Angle 360, Max_Rate_Of_Roll 2.56, Max_Lift 2.8, Max_Speed 4 (x30 = 120 units/s), Max_Rate_Of_Turn 2.1.
         let xml = FlightXml { bank_turn_angle: 360.0, max_rate_of_roll: 2.56, max_lift: 2.8, max_speed: 4.0 };
@@ -505,30 +503,51 @@ mod tests {
     }
 
     #[test]
-    fn the_weave_fades_with_speed_age_and_camera_distance() {
+    fn the_weave_fades_with_speed_age_and_room() {
         let full = weave_reach();
         let max_offset = |calm: f32, age: f32, room: f32| (0..400).map(|k| weave(3, k as f32 * 0.05, calm, age, room).offset.length()).fold(0.0f32, f32::max);
         assert!(max_offset(1.0, 100.0, 1.0) > 0.8 * full);
         assert!(max_offset(0.0, 100.0, 1.0) <= WEAVE_IN_MOTION * full + 1e-4, "at top speed the rows stay rigid");
         assert_eq!(max_offset(1.0, 0.0, 1.0), 0.0, "a craft leaving the hangar is on its exact path");
-        assert_eq!(weave_room(1000.0), 1.0);
-        assert_eq!(weave_room(WEAVE_FAR_START), 1.0);
-        assert_eq!(weave_room(5000.0), 0.0);
-        assert_eq!(max_offset(1.0, 100.0, weave_room(5000.0)), 0.0);
+        assert!((max_offset(1.0, 100.0, 0.5) - 0.5 * max_offset(1.0, 100.0, 1.0)).abs() < 1e-3, "the room scales the whole drift");
+        assert_eq!(max_offset(1.0, 100.0, 0.0), 0.0, "no room, no drift");
+    }
+
+
+    /// The closest two places of a squadron of the Remake's data and the bounding radius of its craft (TIE Fighter: three rows of four, 20
+    /// apart side by side; TIE Interceptor: pairs stacked 6 apart; A-wing 28; X-wing 50).
+    const SQUADRONS: [(f32, f32); 4] = [(20.0, 2.6), (6.0, 2.6), (28.3, 2.4), (50.0, 4.1)];
+
+    #[test]
+    fn squadron_neighbours_never_touch_however_the_camera_stands() {
+        for (gap, radius) in SQUADRONS {
+            let scale = weave_scale(Some(gap), radius);
+            // Both drifting towards each other as far as the weave allows, the two spheres keep 40 % of their free room.
+            let room = gap - 2.0 * radius;
+            assert!(2.0 * weave_reach() * scale <= WEAVE_ROOM_SHARE * room.max(0.0) + 1e-4, "gap {gap}, radius {radius}: scale {scale}");
+            // Sampled: two neighbours in one heading frame, next to each other along each of its axes, drift for two minutes.
+            for axis in [Vec3::X, Vec3::Y, Vec3::Z] {
+                let mut closest = f32::MAX;
+                for id in 0..24u32 {
+                    for k in 0..2400 {
+                        let t = k as f32 * 0.05;
+                        let (a, b) = (weave(id, t, 1.0, 100.0, scale).offset, weave(id + 1, t, 1.0, 100.0, scale).offset);
+                        closest = closest.min((axis * gap + b - a).length());
+                    }
+                }
+                assert!(closest >= 2.0 * radius, "gap {gap}, radius {radius}, axis {axis}: spheres come {closest:.2} apart");
+            }
+        }
     }
 
     #[test]
-    fn squadron_neighbours_stay_clear_of_each_other_on_screen() {
-        // The tightest case: two TIE fighters 100 units apart (`SQUADRON_GAP`), one behind the other on screen, each drawn 26 px tall
-        // (bounding sphere at 3.2 % of 1080 lines), camera at the default pitch (60 degrees less the zoom tilt: 51 at camera 2000), fov 60;
-        // both drift towards each other at once. The weave never takes more than 60 % of the room between them, at any camera distance.
-        let pitch = 51f32.to_radians();
-        let plan = WEAVE_SIDE.hypot(WEAVE_AHEAD);
-        for d in (500..4000).step_by(25).map(|d| d as f32) {
-            let ppu = 1080.0 / (2.0 * d * 30f32.to_radians().tan());
-            let room = SQUADRON_GAP * ppu * pitch.sin() - 26.0;
-            let drift = 2.0 * ppu * weave_room(d) * (plan * pitch.sin() + WEAVE_UP * pitch.cos());
-            assert!(drift <= 0.6 * room.max(0.0) + 1e-3, "camera {d}: {drift:.1} px drift, {room:.1} px room");
-        }
+    fn a_cramped_squadron_drifts_less_and_a_roomy_one_keeps_the_whole_weave() {
+        let tie = weave_scale(Some(20.0), 2.6);
+        assert!(tie > 0.4 && tie < 0.7, "the TIE fighter's 20 units leave 14.8 free: {tie}");
+        assert_eq!(weave_scale(Some(50.0), 4.1), 1.0, "the X-wing's 50 units leave room for all of it");
+        assert!(weave_scale(Some(6.0), 2.6) < 0.05, "stacked TIE interceptors hardly move");
+        assert_eq!(weave_scale(Some(5.0), 2.6), 0.0, "craft that already touch stay put");
+        assert_eq!(weave_scale(None, 4.0), 1.0, "a craft without a formation has room all round");
+        assert_eq!(weave_scale(Some(20.0), 0.0), weave_scale(Some(20.0), -1.0), "an unknown radius counts as none");
     }
 }

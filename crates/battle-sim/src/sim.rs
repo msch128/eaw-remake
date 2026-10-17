@@ -399,8 +399,8 @@ impl Battle {
                 .iter()
                 .map(|&(s, _)| {
                     let d = cat.ship(s);
-                    // A squadron takes the width of its spread formation.
-                    let r = if d.is_squadron { d.spread.iter().map(|o| o.y.abs()).fold(90.0, f32::max) } else { d.radius };
+                    // A squadron takes at least the room of a unit of radius 90, more where its formation is wider.
+                    let r = if d.is_squadron { d.offsets.iter().map(|o| o.y.abs()).fold(90.0, f32::max) } else { d.radius };
                     r * 2.2 + 60.0
                 })
                 .collect();
@@ -421,7 +421,7 @@ impl Battle {
                     let mut idx = 0usize;
                     for &(m, c) in &def.members {
                         for _ in 0..c {
-                            let off = flight_offset(def, idx);
+                            let off = formation_offset(&def.offsets, idx);
                             idx += 1;
                             let id = self.spawn_ship(m, side, pos + off.rotate_yaw(yaw), yaw, group, squad, off);
                             self.squads[squad as usize].push(id);
@@ -604,12 +604,11 @@ impl Battle {
         let mut idx = 0usize;
         for &(m, n) in &sq.members {
             for _ in 0..n {
-                // Out of the bay at the data offsets (tight, facing the way out); the members open out into their spread places during the
-                // flyout.
-                let (bay_off, off) = (formation_offset(&sq.offsets, idx), flight_offset(sq, idx));
+                // Out of the bay in the data's formation, facing the way out.
+                let off = formation_offset(&sq.offsets, idx);
                 idx += 1;
                 let face = if leaves { out_yaw } else { cyaw };
-                let id = self.spawn_ship(m, side, base + bay_off.rotate_yaw(face), cyaw, NONE, squad, off);
+                let id = self.spawn_ship(m, side, base + off.rotate_yaw(face), cyaw, NONE, squad, off);
                 let s = &mut self.ships[id as usize];
                 s.carrier = carrier;
                 s.speed = cat.ship(m).max_speed * 0.5;
@@ -632,7 +631,7 @@ impl Battle {
 
     /// Puts the members of squadron `squad` in the order they take the lead: the one whose formation place is nearest the middle of the
     /// formation first (spawn order among equals). The formation turns about its leader, and a leader in a corner would swing the far side
-    /// of a spread formation twice as far at every turn and put the formation beside a move goal instead of on it.
+    /// of the formation twice as far at every turn and put the formation beside a move goal instead of on it.
     fn lead_order(&mut self, squad: u32) {
         let ships = &self.ships;
         let members = &mut self.squads[squad as usize];
@@ -1301,7 +1300,7 @@ impl Battle {
                     let mut s_idx = 0usize;
                     for &(m, c) in &def.members {
                         for _ in 0..c {
-                            let off = flight_offset(def, s_idx);
+                            let off = formation_offset(&def.offsets, s_idx);
                             s_idx += 1;
                             let id = self.spawn_ship(m, r.side, pos + off.rotate_yaw(yaw), yaw, group, squad, off);
                             self.squads[squad as usize].push(id);
@@ -2784,12 +2783,6 @@ fn launch_path(cdef: &ShipDef, h: Option<&HpDef>) -> (Vec3, f32, f32) {
     }
 }
 
-/// Place member `idx` of squadron `def` keeps in flight: the spread formation of a definition from the data, the plain offsets of a
-/// hand-made one.
-fn flight_offset(def: &ShipDef, idx: usize) -> Vec3 {
-    def.spread.get(idx).copied().unwrap_or_else(|| formation_offset(&def.offsets, idx))
-}
-
 /// Fighters fly almost anywhere but not through the middle of a hull: not inside 0.45 of the hull's radius and, where the model gives a
 /// hull, not within `FIGHTER_KEEP_OUT` of its half width from the hull's long axis. Their own carrier counts only within its height range:
 /// they left the hangar below or beside it (a carrier without a model height is excepted, its bay lies inside it).
@@ -2887,7 +2880,7 @@ fn mov(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, spawn: &
     }
     let mut face: Option<Vec3> = None;
     // Members of a squadron fly in formation: the slot is the leader's position plus the member's place relative to the leader's own place
-    // (spread `Squadron_Offsets`) turned with the leader; the leader's speed is the speed to match. The slot is a place in the plane: the
+    // (`Squadron_Offsets`) turned with the leader; the leader's speed is the speed to match. The slot is a place in the plane: the
     // height is flown on its own (the leader's, or clear of the own carrier's hull, see below).
     let slot: Option<(Vec3, f32)> = if s.squad != NONE {
         let l = leaders[s.squad as usize];
@@ -3245,7 +3238,7 @@ fn mov(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, spawn: &
                     0.0
                 }
                 // A fighter waiting where it belongs (near its carrier, in its slot of a squadron at rest) does not turn on the spot towards
-                // that point: a leader turning round would swing its whole spread formation across to the other side. Members turn with
+                // that point: a leader turning round would swing its whole formation across to the other side. Members turn with
                 // the leader, so a squadron at rest faces one way.
                 _ if fighter && settle && dist <= stop && follow_speed.is_none_or(|v| v <= 10.0) => {
                     if lead != NONE && lead != s.id && snaps[lead as usize].alive {
@@ -3293,11 +3286,11 @@ fn mov(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, spawn: &
             if let Some(v) = pace {
                 want = want.min(v);
             }
-            // A squadron leader in formation flight waits for members that lag behind their places (after a turn the outer places of a spread
-            // formation swing far): from a lag of half a gap it slows down, to half speed at two and a half gaps (estimate), so the members, at
-            // full speed, close up instead of trailing behind.
+            // A squadron leader in formation flight waits for members that lag behind their places (after a turn the outer places swing far):
+            // from a lag of `SQUADRON_LAG_START` it slows down, to half speed at `SQUADRON_LAG_HALF` (estimates), so the members, at full speed,
+            // close up instead of trailing behind.
             if fighter && settle && s.squad != NONE && leaders[s.squad as usize] == s.id {
-                want *= 1.0 - ((lags[s.squad as usize] - SQUADRON_GAP * 0.5) / (SQUADRON_GAP * 4.0)).clamp(0.0, 0.5);
+                want *= 1.0 - ((lags[s.squad as usize] - SQUADRON_LAG_START) / (SQUADRON_LAG_HALF - SQUADRON_LAG_START) * 0.5).clamp(0.0, 0.5);
             }
             if fighter {
                 if dist <= stop + braking * 0.8 && settle && aim == p {
@@ -3905,9 +3898,16 @@ const PUSH_SPEED: f32 = 2.0;
 /// every hull). Their own carrier only within its height range (they leave the hangar below or beside it).
 const FIGHTER_KEEP_OUT: f32 = 0.5;
 
-/// Distance a launched fighter keeps from its own carrier's hull on the way out of the hangar and while it flies under or over it
-/// (estimate: half the size a fighter is drawn at the default camera, about 75 units across, see battle-view `SMALL_CRAFT_SCREEN_FRACTION`).
+/// Distance a launched fighter keeps from its own carrier's hull on the way out of the hangar and while it flies under or over it (estimate:
+/// a few fighter widths, a fighter is 5 to 10 units across; it was set when fighters were drawn 75 units across and is kept, the carriers'
+/// bay paths and `tests/formations.rs` were measured with it).
 const LAUNCH_CLEARANCE: f32 = 40.0;
+/// A squadron leader in formation flight slows down while a member lags behind its place: from a lag of `SQUADRON_LAG_START` units on, to
+/// half speed at `SQUADRON_LAG_HALF` (estimates, not in the data; half a gap and two and a half gaps of the 100-unit spacing the rule was
+/// first tuned at, kept as distances: the data's formations are 20 to 50 units between neighbours, so the leader waits only for a member
+/// that really lost its place).
+const SQUADRON_LAG_START: f32 = 50.0;
+const SQUADRON_LAG_HALF: f32 = 250.0;
 /// A bay whose bone axis does not lead out of the hull within this distance (estimate) drops its fighters below the hull first: the Star
 /// Destroyer's bay axis runs along the belly to the bow.
 const LAUNCH_EXIT_MAX: f32 = 150.0;

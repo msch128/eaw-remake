@@ -10,7 +10,7 @@ use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 
 use crate::convert::{lerp_angle, ship_rotation, sim_to_bevy};
-use crate::flight::{Attitude, Motion, attitude_rotation, weave, weave_room};
+use crate::flight::{Attitude, Motion, attitude_rotation, weave, weave_scale};
 use crate::sim::ShipSnap;
 use crate::visuals::{BoneMap, ship_death_effect};
 use crate::{BattleEntity, BattleRuntime, BattleViewSettings};
@@ -79,8 +79,8 @@ pub struct ShipRender {
     pub def: ShipId,
     /// Collision radius from the definition.
     pub radius: f32,
-    /// Radius of the model's bounding sphere as it is drawn (world units, small-craft enlargement included, see `small_craft_boost`);
-    /// 0 until the model is built and while the ship streams in from hyperspace.
+    /// Radius of the model's bounding sphere as it is drawn (world units: the model's own times the data's `Scale_Factor`, for fighters
+    /// as for capital ships); 0 until the model is built and while the ship streams in from hyperspace.
     pub drawn_radius: f32,
     /// Hull fraction 0..1.
     pub hull: f32,
@@ -104,6 +104,34 @@ pub struct ShipRender {
     pub hp_pos: Vec<Option<Vec3>>,
     /// Whether the ship has functional hyperdrive engines to retreat.
     pub can_retreat: bool,
+}
+
+#[cfg(test)]
+impl ShipRender {
+    /// A rendered craft for tests of other modules: unharmed and at rest, its sphere drawn with radius 17, no hardpoints.
+    pub(crate) fn test_craft(id: u32, def: ShipId, side: u8, squad: u32, pos: Vec3, hull: f32) -> Self {
+        Self {
+            id,
+            entity: Entity::PLACEHOLDER,
+            pos,
+            yaw: 0.0,
+            side,
+            def,
+            radius: 14.0,
+            drawn_radius: 17.0,
+            hull,
+            shield: 0.0,
+            squad,
+            group: 0,
+            visible: true,
+            order: battle_sim::Order::Idle,
+            path: Vec::new(),
+            hp_alive: Vec::new(),
+            hp_health: Vec::new(),
+            hp_pos: Vec::new(),
+            can_retreat: true,
+        }
+    }
 }
 
 /// All living ships by simulation id.
@@ -322,7 +350,6 @@ pub fn update_ships(
     mut touch: ModelTouch,
     mut views: Query<(&mut ShipView, &mut Transform), Without<Dying>>,
     arrivals: Query<&HyperspaceArrival>,
-    cameras: Query<(&Camera, &GlobalTransform, &Projection), With<Camera3d>>,
     mut sfx: MessageWriter<alamo_audio::PlaySfx>,
     mut flash_spots: Local<Vec<Vec3>>,
     // One quad and one glow texture for every arrival and departure flash.
@@ -334,11 +361,6 @@ pub fn update_ships(
     let (Some(cur), alpha) = (rt.cur.clone(), rt.alpha) else {
         return;
     };
-    // Camera data for the minimum on-screen size of fighters: (eye, pixels per world unit at distance 1, screen height in pixels).
-    let eye = cameras.iter().find(|(c, _, _)| c.is_active).and_then(|(c, gt, p)| match (p, c.physical_target_size()) {
-        (Projection::Perspective(p), Some(size)) => Some((gt.translation(), size.y as f32 / (2.0 * (p.fov * 0.5).tan()), size.y as f32)),
-        _ => None,
-    });
     let sim_dt = rt.dt.max(0.01);
     let next = rt.next.clone();
     let visuals = rt.visuals.clone();
@@ -357,8 +379,6 @@ pub fn update_ships(
     let debug_kill = std::env::var("SP_DEBUG_KILL_HP").ok().and_then(|v| v.parse::<f32>().ok()).filter(|t| cur.time >= *t);
     let debug_target = debug_kill.and_then(|_| cur.ships.iter().find(|s| s.side == 0 && !s.hps.is_empty() && catalog.ship(s.def).radius > 300.0).map(|s| s.id));
     let mut debug_copy: ShipSnap;
-    // The fighters of one squadron take their size from the squadron's centre, so members never differ in size.
-    let centres = squad_centres(cur.ships.iter().filter(|s| s.squad != u32::MAX).map(|s| (s.squad, interpolate(s, next.as_ref().and_then(|n| n.ship(s.id)), alpha).0)));
     for s in &cur.ships {
         let def = catalog.ship(s.def);
         if def.is_squadron {
@@ -473,25 +493,17 @@ pub fn update_ships(
             if look.small || s.squad != u32::MAX {
                 let t = cur.time + alpha * sim_dt;
                 let calm = look.calm(view.attitude.speed());
-                let room = eye.map_or(1.0, |(eye, _, _)| weave_room(centres.get(&s.squad).copied().unwrap_or(pos).distance(eye)));
-                let w = weave(s.id, t, calm, t - view.born, room);
+                // The drift fits the room between squadron neighbours (their data spacing less the craft's own size).
+                let w = weave(s.id, t, calm, t - view.born, weave_scale(vis.squadron_gap, view.visual_radius));
                 drawn = pos + ship_rotation(yaw) * w.offset;
                 heading += w.yaw;
                 (bank, pitch) = w.lean(look, bank, pitch);
             }
             tf.translation = drawn;
             tf.rotation = attitude_rotation(heading, pitch, bank);
-            let mut boost = 1.0;
-            // Squadron members of any class count (a Skipray blast boat squadron is no fighter class but reads as a unit of small craft).
-            if (matches!(def.class, TargetClass::Fighter | TargetClass::Bomber) || s.squad != u32::MAX)
-                && let Some((eye, px_per_unit, height)) = eye
-                && view.visual_radius > 0.0
-            {
-                let at = centres.get(&s.squad).copied().unwrap_or(pos);
-                boost = small_craft_boost(view.visual_radius, at.distance(eye), px_per_unit, height);
-            }
-            tf.scale = Vec3::splat(vis.scale * boost);
-            drawn_radius = view.visual_radius * boost;
+            // Every craft is drawn at its model scale (`Scale_Factor`), fighters like capital ships: nothing enlarges them.
+            tf.scale = Vec3::splat(vis.scale);
+            drawn_radius = view.visual_radius;
             if let Ok(a) = arrivals.get(entity) {
                 if apply_arrival(a, cur.time, radius, &mut tf) {
                     // Still streaming in from hyperspace: nothing marks its place (no bar) until it is there.
@@ -1063,36 +1075,6 @@ fn bone_names(clip: &alamo_model::Animation, keep: impl Fn(&[bool]) -> bool) -> 
     names
 }
 
-/// Share of the screen height the bounding sphere of a fighter, bomber or squadron member keeps at every zoom of the original camera.
-/// The Remake draws small craft at one screen size whatever the zoom (the user's 1080p video, battle1s: TIE fighters 22-25 px across at
-/// the default camera b0703s/b0732s and still 24-25 px far out in b0760s, where a Star Destroyer is 54 px), far above true scale (the
-/// data gives a TIE 4 units next to a 760 unit Star Destroyer). The value is set so that our TIE fighter measures the same, wings
-/// included, in a 1080p render at the same camera (its bounding sphere is then 35 px across, its silhouette about 23 x 25 px).
-const SMALL_CRAFT_SCREEN_FRACTION: f32 = 0.032;
-/// Camera distance (at our fov of 60 degrees) beyond which small craft stop keeping their screen size: the Remake's widest view,
-/// `Tactical_Overview2` 6000 at fov 70 in TacticalCameras.xml, sees as much as 7277 at fov 60. Farther out the enlargement stays at
-/// its value there and small craft shrink with the world.
-const SMALL_CRAFT_FREEZE_DISTANCE: f32 = 7277.0;
-
-/// Centre of every squadron from its members' (squadron, position) pairs; the members take their size from it.
-fn squad_centres(members: impl Iterator<Item = (u32, Vec3)>) -> HashMap<u32, Vec3> {
-    let mut sum: HashMap<u32, (Vec3, f32)> = HashMap::new();
-    for (squad, pos) in members {
-        let c = sum.entry(squad).or_insert((Vec3::ZERO, 0.0));
-        c.0 += pos;
-        c.1 += 1.0;
-    }
-    sum.into_iter().map(|(squad, (pos, n))| (squad, pos / n)).collect()
-}
-
-/// Scale factor that draws a small craft of bounding radius `radius` whose squadron is `dist` from the eye at the screen size of the
-/// original ([`SMALL_CRAFT_SCREEN_FRACTION`]): never below its true size (1 close in), proportional to the distance up to
-/// [`SMALL_CRAFT_FREEZE_DISTANCE`] and constant beyond, so it is continuous and grows with the distance without jumps.
-fn small_craft_boost(radius: f32, dist: f32, px_per_unit: f32, screen_height: f32) -> f32 {
-    let px = 2.0 * radius * px_per_unit / dist.clamp(1.0, SMALL_CRAFT_FREEZE_DISTANCE);
-    (SMALL_CRAFT_SCREEN_FRACTION * screen_height / px.max(1e-3)).max(1.0)
-}
-
 /// Seconds a burning wreck stays on the battlefield.
 const WRECK_SECONDS: f32 = 45.0;
 
@@ -1392,48 +1374,96 @@ pub fn remove_after(mut commands: Commands, time: Res<Time>, mut q: Query<(Entit
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn small_craft_keep_one_screen_size_up_to_the_widest_original_view() {
-        // 1080 px high, 60 degree fov: 935 px per unit at distance 1. A TIE of bounding radius 2.6.
-        let px_per_unit = 1080.0 / (2.0 * (30f32.to_radians()).tan());
-        let r = 2.6;
-        let screen_px = |d: f32| 2.0 * r * small_craft_boost(r, d, px_per_unit, 1080.0) * px_per_unit / d;
-        // The Remake's cameras at our fov: closest 384, default 2000, overview 6064, widest 7277. Inside that range one size.
-        for d in [384.0, 1000.0, 2000.0, 6064.0, 7277.0] {
-            assert!((screen_px(d) - SMALL_CRAFT_SCREEN_FRACTION * 1080.0).abs() < 1e-2, "{d}: {} px", screen_px(d));
-        }
-        // Beyond it the enlargement holds and the craft shrinks with the world (our widest zoom is 16000).
-        let frozen = small_craft_boost(r, SMALL_CRAFT_FREEZE_DISTANCE, px_per_unit, 1080.0);
-        assert_eq!(small_craft_boost(r, 16000.0, px_per_unit, 1080.0), frozen);
-        assert!((screen_px(16000.0) - screen_px(7277.0) * 7277.0 / 16000.0).abs() < 1e-2);
-        // Close in it is never drawn below its true size, and a big ship is left alone.
-        assert_eq!(small_craft_boost(r, 20.0, px_per_unit, 1080.0), 1.0);
-        assert_eq!(small_craft_boost(400.0, 2000.0, px_per_unit, 1080.0), 1.0);
-        // Continuous and never shrinking as the camera moves out: no jumps between zoom steps.
-        let mut last = small_craft_boost(r, 10.0, px_per_unit, 1080.0);
-        for k in 0..=20_000 {
-            let d = 10.0 + k as f32;
-            let b = small_craft_boost(r, d, px_per_unit, 1080.0);
-            assert!(b >= last && b - last < 0.01, "{d}: {last} -> {b}");
-            last = b;
-        }
+    /// A running battle of a fighter and two capital ships (one on each side) with hand-made definitions, and the view's runtime for it.
+    fn scale_battle(visuals: crate::visuals::VisualCatalog) -> (crate::BattleRuntime, Vec<ShipSnap>) {
+        use battle_sim::{Battle, BattleConfig, BattleSetup, Catalog, ProjDef, ShipDef, SideSetup, UnitSetup};
+        let def = |name: &str, class, radius: f32| ShipDef { name: name.into(), class, hull: 100.0, radius, population: 1, ..ShipDef::default() };
+        let defs = vec![def("fighter", TargetClass::Fighter, 5.0), def("capital", TargetClass::Capital, 800.0)];
+        let catalog = std::sync::Arc::new(Catalog::from_defs(defs, vec![ProjDef { name: "laser".into(), ..ProjDef::default() }]));
+        let unit = |name: &str| UnitSetup { ship: catalog.ship_id(name).expect("def"), count: 1, tag: 1 };
+        let side = |units: Vec<UnitSetup>| SideSetup { name: "side".into(), units, structures: vec![], ai: false };
+        let setup = BattleSetup { sides: vec![side(vec![unit("fighter"), unit("capital")]), side(vec![unit("capital")])], catalog: catalog.clone(), config: BattleConfig::default() };
+        let sim = crate::sim::SimHandle::spawn(Battle::new(setup));
+        sim.request(1);
+        let snap = (*sim.fetch(0, true).0.expect("snapshot")).clone();
+        let ships = snap.ships.clone();
+        let rt = crate::BattleRuntime {
+            sim,
+            catalog,
+            visuals: std::sync::Arc::new(visuals),
+            dt: 1.0 / 30.0,
+            clock: 0.0,
+            cur: Some(std::sync::Arc::new(snap)),
+            next: None,
+            alpha: 0.0,
+            fresh_events: vec![],
+            entities: HashMap::new(),
+            dying: HashSet::new(),
+            request: None,
+            player_faction: None,
+            start_alive: vec![],
+            retreat_countdown: 0.0,
+            unit_cap: 0,
+            no_spawn_radius: 0.0,
+            reinforce_clearance: 0.0,
+            arena_half: 10_000.0,
+            fog_of_war: false,
+            speed: 1.0,
+            framed: false,
+            reported: false,
+            minimap_planets: vec![],
+            minimap_props: vec![],
+            minimap_tint: Color::BLACK,
+        };
+        (rt, ships)
     }
 
     #[test]
-    fn the_members_of_a_squadron_are_drawn_the_same_size() {
-        let px_per_unit = 1080.0 / (2.0 * (30f32.to_radians()).tan());
-        let eye = Vec3::new(0.0, 2000.0, 0.0);
-        // Squadron 7 spread 400 units along the line of sight: by their own distances the members would differ by a fifth.
-        let members = [(7, Vec3::new(0.0, -200.0, 0.0)), (7, Vec3::new(100.0, 0.0, 0.0)), (7, Vec3::new(-100.0, 200.0, 0.0)), (9, Vec3::new(0.0, 500.0, 0.0))];
-        let own: Vec<f32> = members[..3].iter().map(|(_, p)| small_craft_boost(2.6, p.distance(eye), px_per_unit, 1080.0)).collect();
-        assert!(own[2] < own[0] * 0.85, "{own:?}");
-        let centres = squad_centres(members.into_iter());
-        assert_eq!(centres[&7], Vec3::ZERO);
-        assert_eq!(centres[&9], Vec3::new(0.0, 500.0, 0.0));
-        let sizes: Vec<f32> = members[..3].iter().map(|(q, _)| small_craft_boost(2.6, centres[q].distance(eye), px_per_unit, 1080.0)).collect();
-        assert!(sizes.iter().all(|b| *b == sizes[0]), "{sizes:?}");
+    fn fighters_are_drawn_at_their_model_scale_like_capital_ships_whatever_the_camera() {
+        // The data's `Scale_Factor` is 0.85 for the fighter (a Y-wing's) and 1 for the capital ship; their models are 4 and 800 units in radius.
+        let visual = |model: &str, scale: f32| crate::visuals::ShipVisual { model: Some(model.into()), scale, ..Default::default() };
+        let visuals = crate::visuals::VisualCatalog { ships: vec![visual("fighter.alo", 0.85), visual("capital.alo", 1.0)], ..Default::default() };
+        let (rt, snap_ships) = scale_battle(visuals);
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<Assets<Mesh>>()
+            .init_resource::<Assets<StandardMaterial>>()
+            .init_resource::<Assets<Image>>()
+            .add_message::<alamo_audio::PlaySfx>()
+            .init_resource::<RenderedShips>()
+            .insert_resource(crate::BattleViewSettings::default())
+            .insert_resource(rt)
+            .add_systems(Update, update_ships);
+        // A camera very close to the fighters: a screen-size rule would have enlarged them here (and shrunk the enlargement far out).
+        app.world_mut().spawn((Camera3d::default(), Transform::from_xyz(0.0, 30.0, 0.0)));
+        app.update();
+        let entity_of = |app: &App, id: u32| *app.world().resource::<crate::BattleRuntime>().entities.get(&id).expect("ship entity");
+        let (fighter, capital) = (snap_ships.iter().find(|s| s.def == 0).expect("fighter").id, snap_ships.iter().find(|s| s.def == 1 && s.side == 0).expect("capital").id);
+        let loaded = |radius: f32| AlamoModelLoaded {
+            bones: vec![],
+            parts: vec![],
+            proxies: vec![],
+            axis: Entity::PLACEHOLDER,
+            hardpoints: vec![],
+            bone_by_name: HashMap::new(),
+            center: Vec3::ZERO,
+            radius,
+        };
+        for (id, radius) in [(fighter, 4.0), (capital, 800.0)] {
+            let e = entity_of(&app, id);
+            app.world_mut().entity_mut(e).insert(loaded(radius));
+        }
+        app.update();
+        let scale = |app: &App, id: u32| app.world().get::<Transform>(entity_of(app, id)).expect("transform").scale;
+        assert_eq!(scale(&app, fighter), Vec3::splat(0.85), "the fighter is drawn at its data scale, no enlargement");
+        assert_eq!(scale(&app, capital), Vec3::ONE);
+        // The drawn spheres are the models' own, times the data scales: their ratio is the model ratio.
+        let rendered = app.world().resource::<RenderedShips>();
+        let (f, c) = (rendered.0[&fighter].drawn_radius, rendered.0[&capital].drawn_radius);
+        assert_eq!((f, c), (4.0 * 0.85, 800.0));
+        assert_eq!(f / c, 3.4 / 800.0);
     }
+
 
     #[test]
     fn remove_after_despawns_on_wall_time_when_the_sim_clock_stands() {

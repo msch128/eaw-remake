@@ -418,16 +418,20 @@ fn the_ai_fleet_advances_as_one_line_and_attacks_together() {
     let names = ["Star_Destroyer", "Victory_Destroyer", "Acclamator", "Tartan_Patrol_Cruiser", "Broadside_Cruiser", "MC-80_Star_Cruiser", "Nebulon_B_Frigate", "CR-90_Corvette", "Rebel_Star_Base_2"];
     let cat = Arc::new(Catalog::build(&data, Some(&fs), &names));
     let ai = [("Star_Destroyer", 2), ("Victory_Destroyer", 2), ("Acclamator", 1), ("Broadside_Cruiser", 1), ("Tartan_Patrol_Cruiser", 2)];
-    // The same fleet waiting on an open square (no station): the AI arrives as a line and wins with ships to spare.
+    // The same fleet waiting on an open square (no station): the AI arrives as a line and wins with ships to spare. How many ships are left
+    // depends on the dogfights, which any change to fighter behaviour moves chaotically (seeds 1-3, ships left of 30: 12 on f9710b3, 11 once the
+    // fighters flew the data's formation again, the threshold sat on the noise), so it is judged on the mean of eight seeds like the Kuat attack
+    // below: seeds 1-8 left 34 of 80 on f9710b3 and 36 of 80 with the data's formation (4.3 and 4.5 a run), 2.3 a run (7 of 30 on seeds 1-3) before the
+    // rule; 3.5 a run (28 of 80) tells the two apart.
     let mut left = 0;
-    for seed in 1..=3 {
+    for seed in 1..=8 {
         let m = ai_attack(&cat, None, &ai, &ai, &[], seed);
         println!("mirror on an open square, seed {seed}: {m:?} (dealt / taken {:.2})", m.dealt / m.taken);
         assert!(m.width >= 2.5 * m.depth, "a line abreast, not a column: {m:?}");
         assert_eq!(m.winner, Some(0));
         left += m.ai_left.0;
     }
-    assert!(left >= 12, "the concentrated attack keeps ships alive: {left} of 30 left");
+    assert!(left >= 28, "the concentrated attack keeps ships alive: {left} of 80 left over eight seeds");
     // An attack on a defended planet on a map with several entry points (Kuat): the fleet does not string out on the way in. When half the fleet
     // has fired depends on the dogfights around it, which any change to fighter behaviour moves chaotically (2026-10-17: idle fighters keeping
     // their heading moved seed 1 from 38.7 to 47.6 s and the mean of seeds 1-8 from 33.9 to 37.1 s), so that time is judged on the mean of

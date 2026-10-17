@@ -84,3 +84,18 @@ dials, and compare screenshots against the real game.
 - Tests (`cargo test -p eaw-ui`, 9): one bar and flag per craft, the fill follows the health, level colours, placement against the Remake,
   shield above hull, whole pixels at 1080p and 4K, minimum bar, atlas content (no dark fringe round the flag), no flag texture.
 - Gap: `extract_member_quads` and the draw have no automated test (they need the render world); the offscreen renders cover them.
+
+## Squadron icons and picked units only (2026-10-17, user decision 12:50)
+- `squad_icons.rs`: the host fills `SquadIcons { items: Vec<SquadIcon> }` (battle-view's `tactical_ui::unit_overlays`: one per squadron nobody picks,
+  own and enemy) and `squad_icon_nodes` keeps one see-through UI node per icon in `SquadIconRoot`, a full-screen layer at `GlobalZIndex(-10)`: below the
+  command bar, so the bar, the minimap and the panels cover an icon as they cover the craft it stands for. The node is `SQUAD_ICON_DESIGN_PX` = 11.4
+  design px square (16 px at 1080p, **estimate**: no Remake frame shows an unpicked squadron's icon), the art is the unit's `Icon_Name` area-averaged
+  to 32 x 32 px once per icon name (`area_downsample`; the art is 4 times larger than it is drawn and bilinear sampling flickered), the plate
+  behind it is black at 0.40 for own squadrons and dark red at 0.55 for enemy ones. No frame, bars or flag. Nodes stay hidden until the mega
+  texture has decoded. Clicks and hover pass through (`SquadIconNode` counts as see-through in battle-view's `ui_block`); the host picks the squadron by the
+  icon's position.
+- `member_bars.rs` is unchanged in what it draws; its host now fills `MemberBars` only with the craft of selected or hovered squadrons (see battle-view
+  STATUS "Fighters at their model scale"). A picked squadron keeps `ShipOverlay`'s icon box; `ShipOverlay::icon_only` false gives that box the
+  squadron's average bar and shield bar when its craft stand too close for bars of their own.
+- Tests (`cargo test -p eaw-ui`, 4 in squad_icons): size at 1080p and 4K, the node centred on the squadron at any UI scale, plates differ, the
+  area average (alpha-weighted edge, flat pictures stay flat, odd ratios).
