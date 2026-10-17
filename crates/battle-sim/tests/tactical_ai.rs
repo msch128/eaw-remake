@@ -436,7 +436,8 @@ fn the_ai_fleet_advances_as_one_line_and_attacks_together() {
     // has fired depends on the dogfights around it, which any change to fighter behaviour moves chaotically (2026-10-17: idle fighters keeping
     // their heading moved seed 1 from 38.7 to 47.6 s and the mean of seeds 1-8 from 33.9 to 37.1 s), so that time is judged on the mean of
     // eight seeds. So are the ships left at the end (seed 1: 9 on main, 7 after the fighters left their carriers below the hull; the mean
-    // of seeds 1-8 8.75 and 8.6). A fleet that strings out fails on its depth: 2122-2142 on seeds 1-8 before this rule.
+    // of seeds 1-8 8.75 and 8.6; with the fighters kept out of every hull (87ab720) 8.9 on main and 9.0 with it, and the open square above 5
+    // of 10 on every seed with and without). A fleet that strings out fails on its depth: 2122-2142 on seeds 1-8 before this rule.
     if let Some(arena) = Arena::load(&data, &fs, "_SPACE_PLANET_KUAT_01.ted").map(Arc::new) {
         let player = [("MC-80_Star_Cruiser", 1), ("Nebulon_B_Frigate", 2), ("CR-90_Corvette", 2)];
         let runs: Vec<Attack> = std::thread::scope(|sc| {

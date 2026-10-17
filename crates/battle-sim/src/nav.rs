@@ -234,6 +234,81 @@ pub fn core_distance(p: Vec3, h: Hull, pos: Vec3, yaw: f32) -> (f32, (f32, f32))
     (d, if d > 1e-3 { (dx / d, dy / d) } else { (1.0, 0.0) })
 }
 
+/// The volume of a hull in the battle: its plan-view capsule and, where the model gives one, its height range (lowest and highest z
+/// relative to the ship's centre).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct HullVolume {
+    /// Plan-view capsule.
+    pub hull: Hull,
+    /// Height range of the model (`None`: the hull is as tall as the battle is).
+    pub z: Option<(f32, f32)>,
+}
+
+impl HullVolume {
+    /// The shortest move that takes the point `p` out of this hull, at `pos` heading `yaw`, grown by `gap` on every side: sideways in the
+    /// plan, or straight up or down, whichever is shortest. `None` when `p` is already outside.
+    pub fn way_out(&self, p: Vec3, pos: Vec3, yaw: f32, gap: f32) -> Option<Vec3> {
+        let (cd, (mut ux, mut uy)) = core_distance(p, self.hull, pos, yaw);
+        let plan = self.hull.half_width + gap - cd;
+        if plan <= 0.0 {
+            return None;
+        }
+        if cd < 1e-3 {
+            // On the core line itself: out to the left of the hull, not along it.
+            (ux, uy) = (-yaw.sin(), yaw.cos());
+        }
+        let (mut best, mut by) = (plan, Vec3::new(ux * plan, uy * plan, 0.0));
+        if let Some((lo, hi)) = self.z {
+            let (over, under) = (pos.z + hi + gap - p.z, p.z - (pos.z + lo - gap));
+            if over <= 0.0 || under <= 0.0 {
+                return None;
+            }
+            if over < best {
+                (best, by) = (over, Vec3::new(0.0, 0.0, over));
+            }
+            if under < best {
+                by = Vec3::new(0.0, 0.0, -under);
+            }
+        }
+        Some(by)
+    }
+
+    /// Whether `p` lies in the hull grown by `gap`.
+    pub fn contains(&self, p: Vec3, pos: Vec3, yaw: f32, gap: f32) -> bool {
+        self.way_out(p, pos, yaw, gap).is_some()
+    }
+
+    /// Distance from `p` to the surface of the hull at `pos` heading `yaw` (0 inside it): the plan distance to the capsule and the height
+    /// distance to the slab combined, which is the exact distance to the solid.
+    pub fn distance_to(&self, p: Vec3, pos: Vec3, yaw: f32) -> f32 {
+        let plan = (core_distance(p, self.hull, pos, yaw).0 - self.hull.half_width).max(0.0);
+        let height = self.z.map_or(0.0, |(lo, hi)| (pos.z + lo - p.z).max(p.z - (pos.z + hi)).max(0.0));
+        plan.hypot(height)
+    }
+
+    /// Where a craft at `from` attacking the point `aim` of this hull runs in: the place where the line from `aim` to the craft leaves
+    /// the hull grown by `gap` (the volume is convex, so there is one). `aim` itself when it lies outside the grown hull (a hardpoint on a
+    /// boom), and the craft's own place when it is already inside.
+    pub fn run_in(&self, aim: Vec3, from: Vec3, pos: Vec3, yaw: f32, gap: f32) -> Vec3 {
+        if !self.contains(aim, pos, yaw, gap) {
+            return aim;
+        }
+        if self.contains(from, pos, yaw, gap) {
+            return from;
+        }
+        let (mut inside, mut outside) = (0.0f32, 1.0f32);
+        for _ in 0..24 {
+            let mid = 0.5 * (inside + outside);
+            if self.contains(aim + (from - aim) * mid, pos, yaw, gap) {
+                inside = mid;
+            } else {
+                outside = mid;
+            }
+        }
+        aim + (from - aim) * outside
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -280,6 +355,66 @@ mod tests {
         let a = plan_path(Vec3::ZERO, Vec3::new(1200.0, 0.0, 0.0), 100.0, &rocks);
         let b = plan_path(Vec3::ZERO, Vec3::new(1200.0, 0.0, 0.0), 100.0, &rocks);
         assert_eq!(a, b);
+    }
+
+    /// The Executor's numbers: 9000 long, 3000 wide, from 230 below to 460 above its centre.
+    fn executor() -> HullVolume {
+        HullVolume { hull: Hull { front: 4500.0, back: 4500.0, half_width: 1500.0 }, z: Some((-230.0, 460.0)) }
+    }
+
+    #[test]
+    fn a_point_in_a_hull_is_moved_out_the_shortest_way_sideways_over_or_under_it() {
+        let (vol, at) = (executor(), |x: f32, y: f32, z: f32| Vec3::new(x, y, z));
+        // Outside the hull grown by 40: beside it, over it, under it, beyond its bow.
+        for p in [at(0.0, 1600.0, 0.0), at(0.0, 0.0, 600.0), at(0.0, 0.0, -300.0), at(4600.0, 0.0, 0.0)] {
+            assert_eq!(vol.way_out(p, Vec3::ZERO, 0.0, 40.0), None, "{p:?}");
+        }
+        // 100 under the top: 140 up to clear it (500), not 1340 sideways.
+        let up = vol.way_out(at(500.0, 200.0, 360.0), Vec3::ZERO, 0.0, 40.0).expect("inside");
+        assert_eq!((up.x, up.y), (0.0, 0.0));
+        assert!((up.z - 140.0).abs() < 1e-3, "{up:?}");
+        // Low in the hull and near the middle: down and out under it (-270).
+        let down = vol.way_out(at(0.0, 0.0, -200.0), Vec3::ZERO, 0.0, 40.0).expect("inside");
+        assert!((down.z + 70.0).abs() < 1e-3 && down.x == 0.0, "{down:?}");
+        // At mid height next to the wall: sideways, 90 to the grown wall at 1540.
+        let side = vol.way_out(at(0.0, 1450.0, 100.0), Vec3::ZERO, 0.0, 40.0).expect("inside");
+        assert!(side.z == 0.0 && (side.y - 90.0).abs() < 1e-3 && side.x.abs() < 1e-3, "{side:?}");
+        // The hull turns with the ship: at 90 degrees its bow axis is +y, so a point 3000 up the y axis is inside and one 3000 along x is not.
+        assert!(vol.contains(at(0.0, 3000.0, 100.0), Vec3::ZERO, std::f32::consts::FRAC_PI_2, 40.0));
+        assert!(!vol.contains(at(3000.0, 0.0, 100.0), Vec3::ZERO, std::f32::consts::FRAC_PI_2, 40.0));
+        // The ship's own height moves the slab with it.
+        assert!(vol.contains(at(0.0, 0.0, 1000.0), at(0.0, 0.0, 800.0), 0.0, 40.0));
+        assert!(!vol.contains(at(0.0, 0.0, 1000.0), at(0.0, 0.0, 400.0), 0.0, 40.0));
+        // A hull without a height range is as tall as the battle: only sideways; on its core line out to its left.
+        let flat = HullVolume { z: None, ..vol };
+        assert_eq!(flat.way_out(Vec3::ZERO, Vec3::ZERO, 0.0, 40.0), Some(at(0.0, 1540.0, 0.0)));
+        let turned = flat.way_out(Vec3::ZERO, Vec3::ZERO, std::f32::consts::FRAC_PI_2, 40.0).expect("inside");
+        assert!((turned.x + 1540.0).abs() < 1e-2 && turned.y.abs() < 1e-2, "{turned:?}");
+        assert!(flat.contains(at(0.0, 0.0, 5000.0), Vec3::ZERO, 0.0, 40.0));
+    }
+
+    #[test]
+    fn a_craft_attacking_a_hull_runs_in_where_its_line_meets_the_grown_surface() {
+        let (vol, at) = (executor(), |x: f32, y: f32, z: f32| Vec3::new(x, y, z));
+        let gap = 120.0;
+        let on_the_surface = |p: Vec3| !vol.contains(p, Vec3::ZERO, 0.0, gap) && vol.contains(p + (Vec3::ZERO - p).normalized() * 1.0, Vec3::ZERO, 0.0, gap);
+        // From the south-west at the hull's height: on the side wall (1500 + 120 from the axis), on the line to the aim.
+        let from = at(-3000.0, -4000.0, 0.0);
+        let p = vol.run_in(Vec3::ZERO, from, Vec3::ZERO, 0.0, gap);
+        assert!(on_the_surface(p), "{p:?}");
+        assert!((p.y + 1620.0).abs() < 1.0, "the wall: {p:?}");
+        assert!((p.x / p.y - from.x / from.y).abs() < 1e-3, "on the line from the aim to the craft: {p:?}");
+        // From above: over the middle of the hull, 120 over its top.
+        let p = vol.run_in(Vec3::ZERO, at(0.0, 0.0, 2000.0), Vec3::ZERO, 0.0, gap);
+        assert!(p.x.abs() < 1e-2 && p.y.abs() < 1e-2 && (p.z - 580.0).abs() < 0.5, "{p:?}");
+        // A hardpoint aim near the top surface seen from the side meets the side wall, the craft stays level with its line.
+        let aim = at(200.0, 100.0, 400.0);
+        let p = vol.run_in(aim, at(200.0, -5000.0, 100.0), Vec3::ZERO, 0.0, gap);
+        assert!(on_the_surface(p) || !vol.contains(p, Vec3::ZERO, 0.0, gap), "{p:?}");
+        assert!(p.y < -1500.0 && p.z > 100.0 && p.z < 400.0, "{p:?}");
+        // An aim outside the grown hull is the aim; a craft inside the grown hull runs in where it is.
+        assert_eq!(vol.run_in(at(0.0, 2000.0, 0.0), from, Vec3::ZERO, 0.0, gap), at(0.0, 2000.0, 0.0));
+        assert_eq!(vol.run_in(Vec3::ZERO, at(0.0, 1600.0, 0.0), Vec3::ZERO, 0.0, gap), at(0.0, 1600.0, 0.0));
     }
 }
 

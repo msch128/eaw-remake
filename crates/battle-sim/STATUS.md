@@ -54,6 +54,15 @@ Broadsides (checked, unchanged): `align_to_target` already turns each capital to
 ## Hull overlaps (2026-10-16)
 Ships kept apart only by the class-clamped collision circle, so long hulls were entered (Executor: 9000 long, radius 700; MC-80: radius 150 for a 540 x 450 hull) and pairs sat inside each other for minutes. `ShipDef::hull_shape` (plan-view capsule from the model meshes, `nav::Hull`) now joins the old circle in the separation and the fighter keep-out; the push-out runs at up to 2 x top speed. Measurements and estimates: RULES.md "Model hulls". Not changed: a group move order sends every ship to the same point, so a big fleet still jostles around it for a few seconds (a formation-keeping group move would fix that); `Fighter_Bay_Flyout_Distance` (c106d60) doubles the time fighters spend inside their own carrier's hull (data rule, kept). 2026-10-17: they no longer fly inside it: they leave along the bay bone's axis, from a Star Destroyer below the belly (RULES.md "Launch out of the hangar"); `tests/formations.rs` checks that no launched fighter lies in its own carrier's hull once out of the hangar (before: Star Destroyer 3032, Victory 858, MC-80 4860 of the positions from 3 s after launch, after: none of 55366).
 
+## Craft and hulls (2026-10-17)
+Squadrons of any kind used to fly into the hulls of big ships (an Executor swallowed its attackers). Every fighter, bomber and hangar-launched craft now keeps out of the
+volume of every other ship (`nav::HullVolume`: plan capsule x model height range, grown by `HULL_GAP` 40 u; `keep_out_of_hulls` moves a craft inside out the
+shortest way, sideways or over/under), attack runs on a ship with a hull end at the grown surface (`STRAFE_GAP` 80 u, `HullVolume::run_in`) and turn along it,
+craft shoot at the surface (`target_reach`), and a squadron place inside a hull is held outside it (`slot_shift`, leader lag included). Executor battle: 294k-330k
+craft-ticks inside on main, 0 now; 150 s fleet battle: 162k-174k, 0 now; bomber and fighter damage on ships with hulls unchanged in total (ten cases 82694 to 83014; RULES.md "Craft and hulls" has the
+per-case numbers). Open: a craft can leave the flyout inside a neighbour's hull for one tick; ships without a model shape (shuttles, gunships) are a 0.45 radius
+circle; the AI tests (`tactical_ai` mirror, Kuat) move chaotically with any change to fighter behaviour (both are judged on eight seeds).
+
 ## Fleet AI (2026-10-16, `ai.rs`, RULES.md 9c)
 User finding: eight AI ships flew at the player's fleet and station one behind the other and died one by one. Every AI side now plans once a second after
 `MoveToLocation.lua`, `SpaceTacticalFreeStore.lua` and `ReinforceSpace.lua`: the big ships advance as a line at the slowest ship's pace (corvettes ahead,

@@ -35,6 +35,7 @@ const STEP_MS: u64 = 16;
 
 static ABILITY_USED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 static RETREAT_ORDERED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static STRAFE_ORDERED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 static BOOM_AT: std::sync::Mutex<Option<Vec3>> = std::sync::Mutex::new(None);
 
 fn parse_vec(s: &str) -> Vec<f32> {
@@ -131,8 +132,14 @@ fn main() {
         }
     }
     let scene_rocks: Vec<Vec3> = scene.props.iter().filter(|p| !p.backdrop).map(|p| p.position).collect();
-    // Fleets.
-    let empire: &[(&str, u32)] = if small {
+    // Fleets. `SP_DEMO_STRAFE=<ship>`: that one ship of the Empire holds its place (no AI) while seven Rebel squadrons, sent at it at 1 s from 2200 units off its bow
+    // (no AI either), attack it, for a close look at attack runs on a hull (`SP_DEMO_NOFOG=1 SP_DEMO_CLOSE=1 SP_DEMO_PITCH=9
+    // SP_DEMO_DIST=950` frames a Star Destroyer from low down).
+    let strafe = std::env::var("SP_DEMO_STRAFE").ok();
+    let strafe_fleet = strafe.as_deref().map(|n| [(n, 1u32)]);
+    let empire: &[(&str, u32)] = if let Some(f) = strafe_fleet.as_ref() {
+        f
+    } else if small {
         &[("Star_Destroyer", 1), ("TIE_Fighter_Squadron", 2)]
     } else {
         &[
@@ -141,7 +148,9 @@ fn main() {
             ("TIE_Fighter_Squadron", 4),
         ]
     };
-    let rebel: &[(&str, u32)] = if std::env::var("STATION_ONLY").is_ok() {
+    let rebel: &[(&str, u32)] = if strafe.is_some() {
+        &[("Y-Wing_Squadron", 3), ("X-Wing_Squadron", 2), ("B-Wing_Squadron", 2)]
+    } else if std::env::var("STATION_ONLY").is_ok() {
         &[]
     } else if small {
         &[("MC-80_Star_Cruiser", 1), ("X-Wing_Squadron", 2)]
@@ -182,6 +191,12 @@ fn main() {
     let station_ids: Vec<battle_sim::ShipId> = station.as_deref().and_then(|n| catalog.ship_id(n)).into_iter().collect();
     let arena = battle_sim::Arena::load(&data, &*fs, &format!("{map}.TED")).map(Arc::new);
     let half = arena.as_ref().map_or(7000.0, |a| a.half_size());
+    // The strafe test fights in a small open arena: the sim puts the fleets at -0.65 and 0.3 of its half size, so the squadrons start 2200 units
+    // from the bow of the ship (3000 units from a Star Destroyer's middle, 7000 from an Executor's).
+    let (arena, half) = match strafe.as_deref().and_then(|n| catalog.ship_id(n)).map(|id| catalog.ship(id)) {
+        Some(def) => (None, ((def.hull_shape.map_or(500.0, |h| h.front.max(h.back)) + 2200.0) / 0.95).max(3200.0)),
+        None => (arena, half),
+    };
     let config = BattleConfig {
         half_size: half,
         arena,
@@ -193,6 +208,10 @@ fn main() {
     // `SP_DEMO_IDLE=<side>`: that side gets no AI, so its units wait where they arrived (a squadron at rest).
     if let Some(s) = std::env::var("SP_DEMO_IDLE").ok().and_then(|v| v.parse::<usize>().ok()).and_then(|i| sides.get_mut(i)) {
         s.ai = false;
+    }
+    if strafe.is_some() {
+        sides[0].ai = false;
+        sides[1].ai = false;
     }
     let setup = battle_sim::setup(catalog.clone(), sides, config);
     let faction_color = |name: &str, fallback: Color| {
@@ -486,6 +505,17 @@ fn capture_driver(
     {
         rt.command(0, battle_sim::Command::Reinforce { ship: s.def, count: 3 });
         *reinforced = true;
+    }
+    // `SP_DEMO_STRAFE=<ship>`: at 1 s every Rebel craft is sent to attack that ship (nothing else gives the Rebels orders).
+    if !STRAFE_ORDERED.load(std::sync::atomic::Ordering::Relaxed)
+        && std::env::var_os("SP_DEMO_STRAFE").is_some()
+        && let Some(cur) = rt.cur.as_ref()
+        && cur.time >= 1.0
+        && let Some(target) = cur.ships.iter().find(|s| s.side == 0 && rt.catalog.ship(s.def).radius > 200.0).map(|s| s.id)
+    {
+        let ships: Vec<u32> = cur.ships.iter().filter(|s| s.side == 1).map(|s| s.id).collect();
+        rt.command(1, battle_sim::Command::Attack { ships, target });
+        STRAFE_ORDERED.store(true, std::sync::atomic::Ordering::Relaxed);
     }
     // `SP_DEMO_RETREAT=<secs>` (60 or more, the sim allows a retreat from then on): the player's side orders its retreat at that battle time and
     // jumps away `retreat_jump_seconds` (10) later, each ship with its departure flash.

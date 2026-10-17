@@ -78,6 +78,9 @@ struct Snap {
     /// Group move the ship flies in (index in `Battle::formations`, `NONE` = none): the ships of one group move mostly leave each other to
     /// their slots (see `mov`).
     move_group: u32,
+    /// The hull volume of a ship that has a model hull (fighters and bombers have none: they are not hulls to keep out of): craft shooting at it
+    /// reach its surface, not its middle.
+    hull: Option<crate::nav::HullVolume>,
 }
 
 /// Uniform grid of ship ids for projectile collision.
@@ -1109,6 +1112,7 @@ impl Battle {
                     target_hp: s.target_hp,
                     formation: s.formation,
                     move_group: s.move_slot.map_or(NONE, |m| m.formation),
+                    hull: d.hull_shape.filter(|_| !matches!(d.class, TargetClass::Fighter | TargetClass::Bomber)).map(|hull| crate::nav::HullVolume { hull, z: d.hull_z }),
                 }
             })
             .collect();
@@ -1139,8 +1143,15 @@ impl Battle {
                 m.iter()
                     .filter(|&&i| i != l && snaps[i as usize].alive)
                     .map(|&i| {
-                        let place = lead.pos + formation_rel(snaps[i as usize].formation, lead.formation).rotate_yaw(lead.yaw);
-                        (snaps[i as usize].pos.x - place.x).hypot(snaps[i as usize].pos.y - place.y)
+                        let m = &snaps[i as usize];
+                        let mut place = lead.pos + formation_rel(m.formation, lead.formation).rotate_yaw(lead.yaw);
+                        // The place a craft can hold lies outside the hulls (`slot_shift`, as in `mov`).
+                        let craft = matches!(m.class, TargetClass::Fighter | TargetClass::Bomber) || m.carrier != NONE;
+                        if craft && cfg.navigation {
+                            let shift = slot_shift(i, m.carrier, cat.ship(m.def).radius, Vec3::new(place.x, place.y, lead.pos.z), &snaps, &cat, &hulls);
+                            place += Vec3::new(shift.x, shift.y, 0.0);
+                        }
+                        (m.pos.x - place.x).hypot(m.pos.y - place.y)
                     })
                     .fold(0.0, f32::max)
             })
@@ -2797,38 +2808,92 @@ fn launch_path(cdef: &ShipDef, h: Option<&HpDef>) -> (Vec3, f32, f32) {
     }
 }
 
-/// Fighters fly almost anywhere but not through the middle of a hull: not inside 0.45 of the hull's radius and, where the model gives a
-/// hull, not within `FIGHTER_KEEP_OUT` of its half width from the hull's long axis. Their own carrier counts only within its height range:
-/// they left the hangar below or beside it (a carrier without a model height is excepted, its bay lies inside it).
-fn keep_out_of_hulls(s: &mut Ship, def: &ShipDef, snaps: &[Snap], cat: &Catalog, hulls: &[u32]) {
-    for &j in hulls {
-        let o = &snaps[j as usize];
-        if j == s.carrier
-            && cat.ship(o.def).hull_z.is_none_or(|(lo, hi)| s.pos.z <= o.pos.z + lo - LAUNCH_CLEARANCE || s.pos.z >= o.pos.z + hi + LAUNCH_CLEARANCE)
-        {
-            continue;
-        }
-        let shape = cat.ship(o.def).hull_shape;
-        let circle = o.radius * 0.45 + def.radius;
-        let reach = circle.max(shape.map_or(0.0, |h| h.reach()) + def.radius);
-        let (dx, dy) = (s.pos.x - o.pos.x, s.pos.y - o.pos.y);
-        if dx.abs() >= reach || dy.abs() >= reach {
-            continue;
-        }
-        let d = (dx * dx + dy * dy).sqrt();
-        let mut out = (d < circle).then(|| (circle - d, if d > 1e-3 { (dx / d, dy / d) } else { (1.0, 0.0) }));
-        if let Some(h) = shape {
-            let min = h.half_width * FIGHTER_KEEP_OUT + def.radius;
-            let (cd, dir) = crate::nav::core_distance(s.pos, h, o.pos, o.yaw);
-            if cd < min && out.is_none_or(|c| min - cd > c.0) {
-                out = Some((min - cd, dir));
+/// The way out of the volume of ship `o` from the place `p`, for a craft of collision radius `radius`: the volume is the ship's plan-view
+/// capsule and, where the model gives one, its height range, grown by `gap`; a hull without a model shape counts as a circle of 0.45 of its
+/// radius. The way is the shortest one, sideways or over or under the hull; `None` when `p` is outside the volume.
+fn way_out_of_hull(o: &Snap, odef: &ShipDef, p: Vec3, radius: f32, gap: f32) -> Option<Vec3> {
+    let (dx, dy) = (p.x - o.pos.x, p.y - o.pos.y);
+    match odef.hull_shape {
+        Some(hull) => {
+            if dx.abs() >= hull.reach() + gap || dy.abs() >= hull.reach() + gap {
+                return None;
             }
+            crate::nav::HullVolume { hull, z: odef.hull_z }.way_out(p, o.pos, o.yaw, gap)
         }
-        if let Some((depth, (ux, uy))) = out {
-            s.pos.x += ux * depth;
-            s.pos.y += uy * depth;
+        None => {
+            let circle = o.radius * 0.45 + radius;
+            let d = dx.hypot(dy);
+            (d < circle).then(|| {
+                let (ux, uy) = if d > 1e-3 { (dx / d, dy / d) } else { (1.0, 0.0) };
+                Vec3::new(ux * (circle - d), uy * (circle - d), 0.0)
+            })
         }
     }
+}
+
+/// Whether the craft `id`, launched by `carrier`, keeps out of the hull of ship `j`: of every hull but its own; a carrier without a model
+/// height is excepted (its bay lies inside it).
+fn is_closed_to(id: u32, carrier: u32, j: u32, odef: &ShipDef) -> bool {
+    j != id && !(j == carrier && odef.hull_z.is_none())
+}
+
+/// Fighters, bombers and the other hangar craft fly almost anywhere but not through a hull: the volume of every ship grown by `HULL_GAP` is
+/// closed to them, the craft's own carrier included (it leaves the carrier through the hangar flyout, which does not come here). A craft
+/// inside is moved out the shortest way and, when it flew into the hull, turns along it (`turn_along`: on an attack run; a squadron flying in
+/// formation or holding a place keeps its heading, its places turn with it), so a run at a hull ends in a pass along or over it.
+fn keep_out_of_hulls(s: &mut Ship, def: &ShipDef, snaps: &[Snap], cat: &Catalog, hulls: &[u32], dt: f32, turn_along: bool) {
+    // Twice over: the way out of one hull can lead into the next one (a craft between two ships).
+    for _ in 0..2 {
+        let mut moved = false;
+        for &j in hulls {
+            let o = &snaps[j as usize];
+            let odef = cat.ship(o.def);
+            if !is_closed_to(s.id, s.carrier, j, odef) {
+                continue;
+            }
+            let Some(way) = way_out_of_hull(o, odef, s.pos, def.radius, HULL_GAP) else { continue };
+            s.pos += way;
+            moved = true;
+            // The plan part of the way out is the hull's normal there.
+            let push = way.x.hypot(way.y);
+            if turn_along && push > 1e-3 {
+                let (nx, ny) = (way.x / push, way.y / push);
+                let (hx, hy) = (s.yaw.cos(), s.yaw.sin());
+                if hx * nx + hy * ny < 0.0 {
+                    let (tx, ty) = if hy * nx - hx * ny >= 0.0 { (-ny, nx) } else { (ny, -nx) };
+                    turn_towards(s, ty.atan2(tx), def.turn_rate, dt);
+                }
+            }
+        }
+        if !moved {
+            break;
+        }
+    }
+}
+
+/// The shift that takes the place `p` (a squadron's formation place) out of every hull volume the craft `id` keeps out of, to just beyond
+/// `HULL_GAP`: a place inside a hull (a squadron flies alongside its carrier) is held at the nearest place outside it, not pressed against the
+/// hull's skin. The height part of the shift is the way over or under the hull where that is the shorter.
+fn slot_shift(id: u32, carrier: u32, radius: f32, p: Vec3, snaps: &[Snap], cat: &Catalog, hulls: &[u32]) -> Vec3 {
+    let mut shift = Vec3::ZERO;
+    for _ in 0..3 {
+        let mut moved = false;
+        for &j in hulls {
+            let o = &snaps[j as usize];
+            let odef = cat.ship(o.def);
+            if !is_closed_to(id, carrier, j, odef) {
+                continue;
+            }
+            if let Some(way) = way_out_of_hull(o, odef, p + shift, radius, HULL_GAP + SLOT_MARGIN) {
+                shift += way;
+                moved = true;
+            }
+        }
+        if !moved {
+            break;
+        }
+    }
+    shift
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2875,6 +2940,8 @@ fn mov(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, spawn: &
     let pinned = def.abilities.iter().zip(&s.abilities).any(|(a, st)| a.disable_movement && st.active > 0.0);
     let max_speed = if pinned { 0.0 } else { def.max_speed * speed_mult * s.bonus.speed * (1.0 + s.mods[ModKind::Speed as usize].0) };
     let fighter = matches!(def.class, TargetClass::Fighter | TargetClass::Bomber);
+    // A craft launched from a hangar, of any class (a garrison of gunships or shuttles flies like a squadron of fighters round its carrier).
+    let craft = fighter || s.carrier != NONE;
     let small = |c: TargetClass| matches!(c, TargetClass::Fighter | TargetClass::Bomber);
     // Big ships position themselves against the best non-fighter target: fast fighters cannot be chased or tracked, the guns just fire at them
     // while the ship keeps station (unless it was explicitly ordered to attack one).
@@ -2893,15 +2960,29 @@ fn mov(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, spawn: &
         Hold,
     }
     let mut face: Option<Vec3> = None;
+    // Height of the place an attack run on a ship with a hull runs in at (it flies to that height, not to the target's centre height).
+    let mut aim_z: Option<f32> = None;
     // Members of a squadron fly in formation: the slot is the leader's position plus the member's place relative to the leader's own place
     // (`Squadron_Offsets`) turned with the leader; the leader's speed is the speed to match. The slot is a place in the plane: the
-    // height is flown on its own (the leader's, or clear of the own carrier's hull, see below).
+    // height is flown on its own (the leader's, or clear of the own carrier's hull, see below). A place inside a hull volume (a squadron
+    // flies alongside its carrier) is held at the nearest place outside it (`slot_shift`), over or under the hull where that is the shorter way
+    // (`slot_dz`, added to the height flown).
+    let mut slot_dz = 0.0;
     let slot: Option<(Vec3, f32)> = if s.squad != NONE {
         let l = leaders[s.squad as usize];
-        (l != NONE && l != s.id && snaps[l as usize].alive).then(|| {
-            let q = snaps[l as usize].pos + formation_rel(s.formation, snaps[l as usize].formation).rotate_yaw(snaps[l as usize].yaw);
-            (Vec3::new(q.x, q.y, s.pos.z), snaps[l as usize].vel.len())
-        })
+        if l != NONE && l != s.id && snaps[l as usize].alive {
+            let lead = &snaps[l as usize];
+            let q = lead.pos + formation_rel(s.formation, lead.formation).rotate_yaw(lead.yaw);
+            let mut at = Vec3::new(q.x, q.y, s.pos.z);
+            if craft && cfg.navigation {
+                let shift = slot_shift(s.id, s.carrier, def.radius, Vec3::new(q.x, q.y, lead.pos.z), snaps, cat, nav.hulls);
+                at += Vec3::new(shift.x, shift.y, 0.0);
+                slot_dz = shift.z;
+            }
+            Some((at, lead.vel.len()))
+        } else {
+            None
+        }
     } else {
         None
     };
@@ -2975,20 +3056,43 @@ fn mov(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, spawn: &
                 Some(p) => (p, 0.0),
                 None => (t.pos, t.radius * 0.5),
             };
+            // A fighter attacks a ship with a hull from outside it: it runs in where the line to the aim point meets the hull grown by
+            // `STRAFE_GAP` (the aim point itself lies inside the hull), at the height of that place (over or under the hull for a hardpoint on
+            // its top or belly, level with it for one on its side). `keep_out_of_hulls` is the bound it never crosses.
+            let hull = tdef.hull_shape.filter(|_| fighter && cfg.navigation && !small(t.class));
+            let (tgt_point, radius_slack) = match hull {
+                Some(h) => {
+                    let run = crate::nav::HullVolume { hull: h, z: tdef.hull_z }.run_in(tgt_point, s.pos, t.pos, t.yaw, STRAFE_GAP);
+                    aim_z = Some(run.z);
+                    (run, 0.0)
+                }
+                None => (tgt_point, radius_slack),
+            };
             let d = tgt_point.dist(s.pos);
             if fighter {
                 let is_dogfight = matches!(t.class, TargetClass::Fighter | TargetClass::Bomber) && d < 650.0;
-                let close_run = d < (70.0 + radius_slack).max(180.0);
+                // The pass starts where it did when the aim point lay on the skin: within 180 units of the hull (the run-in point is `STRAFE_GAP` off it).
+                let close_run = d + if hull.is_some() { STRAFE_GAP } else { 0.0 } < (70.0 + radius_slack).max(180.0);
                 if s.phase > 0.0 {
                     Goal::Free(s.yaw + s.phase_turn * dt)
                 } else if close_run {
-                    if def.class == TargetClass::Bomber && (t.class as u8 >= TargetClass::Frigate as u8) {
+                    if def.class == TargetClass::Bomber && (t.class as u8 >= TargetClass::Frigate as u8) && hull.is_none() {
                         // Bombing run: fly through, then straight away for a few seconds before the next pass (estimate: 3-5 s, almost no turn).
+                        // Not at a ship with a hull: the bomber does not fly through it, so it peels off like a fighter (waiting out the 3-5 s
+                        // along the hull cost it 10 to 30% of its damage).
                         s.phase = rng.range(3.0, 5.0);
                         s.phase_turn = rng.range(-0.15, 0.15);
                     } else {
                         s.phase = rng.range(1.0, 2.5);
                         s.phase_turn = rng.range(-0.8, 0.8);
+                        // Past a hull the craft peels off to the side the hull falls away to (away from it), not into it.
+                        if let Some(h) = hull {
+                            let (_, (ux, uy)) = crate::nav::core_distance(s.pos, h, t.pos, t.yaw);
+                            let away = -s.yaw.sin() * ux + s.yaw.cos() * uy;
+                            if away.abs() > 0.05 {
+                                s.phase_turn = away.signum() * s.phase_turn.abs().max(0.3);
+                            }
+                        }
                     }
                     Goal::Free(s.yaw)
                 } else if let Some((q, v)) = slot && !is_dogfight {
@@ -3351,10 +3455,10 @@ fn mov(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, spawn: &
             // A squadron member without a target of its own keeps its leader's height: the squadron flies at one height.
             let lead = if s.squad != NONE { leaders[s.squad as usize] } else { NONE };
             let lead_z = (lead != NONE && lead != s.id && snaps[lead as usize].alive).then(|| snaps[lead as usize].pos.z);
-            let mut z_goal = target.map_or(lead_z.unwrap_or(0.0), |t| t.pos.z);
-            // A fighter under (or over) its own carrier stays clear of the hull's height until it is out from under it: it left the hangar
+            let mut z_goal = aim_z.unwrap_or_else(|| target.map_or(lead_z.unwrap_or(0.0) + slot_dz, |t| t.pos.z));
+            // A craft under (or over) its own carrier stays clear of the hull's height until it is out from under it: it left the hangar
             // below the hull and must not rise through it.
-            if fighter && s.carrier != NONE && snaps[s.carrier as usize].alive {
+            if craft && s.carrier != NONE && snaps[s.carrier as usize].alive {
                 let c = &snaps[s.carrier as usize];
                 let cdef = cat.ship(c.def);
                 if let Some((lo, hi)) = cdef.hull_z
@@ -3424,8 +3528,8 @@ fn mov(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, spawn: &
             }
         }
     }
-    if fighter && cfg.navigation {
-        keep_out_of_hulls(s, def, snaps, cat, nav.hulls);
+    if craft && cfg.navigation {
+        keep_out_of_hulls(s, def, snaps, cat, nav.hulls, dt, aim_z.is_some() || s.phase > 0.0);
     }
     // Asteroids: push the ship out of any rock it overlaps and scrub some speed.
     for o in obstacles {
@@ -3442,13 +3546,24 @@ fn mov(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, spawn: &
     }
 }
 
-/// Checks whether a hardpoint at `muzzle` could shoot at target `t`, optionally aiming at a specific point `aim`.
+/// How far a shot from `muzzle` has to reach the ship `t` when it is not aimed at one of its hardpoints: to the middle of the ship less 0.6 of
+/// its collision radius; for a craft shooting at a ship with a hull, to the hull's surface (the middle of an Executor lies 1500 units inside
+/// its hull, where nothing may fly: a fighter at the hull's skin was 1600 units from the middle and out of range of everything).
+fn target_reach(t: &Snap, muzzle: Vec3, craft: bool) -> f32 {
+    match t.hull {
+        Some(vol) if craft => vol.distance_to(muzzle, t.pos, t.yaw),
+        _ => (muzzle.dist(t.pos) - t.radius * 0.6).max(0.0),
+    }
+}
+
+/// Checks whether a hardpoint at `muzzle` could shoot at target `t`, optionally aiming at a specific point `aim`; `craft`: the shooter is a
+/// fighter, bomber or other hangar craft ([`target_reach`]).
 #[allow(clippy::too_many_arguments)]
-fn can_fire(hp: &HpDef, ship_yaw: f32, range_mult: f32, muzzle: Vec3, t: &Snap, proj: &ProjDef, aim: Option<Vec3>) -> bool {
+fn can_fire(hp: &HpDef, ship_yaw: f32, range_mult: f32, muzzle: Vec3, t: &Snap, proj: &ProjDef, aim: Option<Vec3>, craft: bool) -> bool {
     let target_pos = aim.unwrap_or(t.pos);
     let to = target_pos - muzzle;
     let dist = to.len();
-    let reach = if aim.is_some() { dist } else { (dist - t.radius * 0.6).max(0.0) };
+    let reach = if aim.is_some() { dist } else { target_reach(t, muzzle, craft) };
     if reach > hp.range * range_mult || reach < hp.min_range {
         return false;
     }
@@ -3515,6 +3630,8 @@ fn weapons(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, rng:
     let dt = cfg.dt;
     let def = cat.ship(s.def);
     let explicit_attack = matches!(s.order, Order::Attack(_));
+    // A fighter, bomber or other hangar craft measures its range to the surface of a hull, not to the middle of the ship ([`target_reach`]).
+    let craft = matches!(def.class, TargetClass::Fighter | TargetClass::Bomber) || s.carrier != NONE;
     let may_start = s.stance != Stance::HoldFire || explicit_attack;
     let rate_cut = if s.stun > 0.0 { 1.0 / (1.0 - s.stun_rate_cut).max(0.1) } else { 1.0 };
     let mut delay_mult = ability_product(def, s, |a| a.weapon_delay_mult) * rate_cut / (1.0 + s.mods[ModKind::FireRate as usize].0);
@@ -3572,9 +3689,9 @@ fn weapons(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, rng:
                 } else {
                     None
                 };
-                let (allowed, aim_hp) = if can_fire(hp, s.yaw, s.bonus.range, muzzle, t, pd, specific_aim) {
+                let (allowed, aim_hp) = if can_fire(hp, s.yaw, s.bonus.range, muzzle, t, pd, specific_aim, craft) {
                     (true, targeted_hp)
-                } else if can_fire(hp, s.yaw, s.bonus.range, muzzle, t, pd, None) {
+                } else if can_fire(hp, s.yaw, s.bonus.range, muzzle, t, pd, None, craft) {
                     (true, NO_HP)
                 } else {
                     (false, NO_HP)
@@ -3634,9 +3751,9 @@ fn weapons(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, rng:
             let can_shoot = if s.target_hp != NO_HP && c == s.target && t.hp_alive.test(s.target_hp as usize) {
                 let tdef = cat.ship(t.def);
                 let p = tdef.hardpoints.get(s.target_hp as usize).map(|h| t.pos + h.offset.rotate_yaw(t.yaw));
-                can_fire(hp, s.yaw, s.bonus.range, muzzle, t, pd, p) || can_fire(hp, s.yaw, s.bonus.range, muzzle, t, pd, None)
+                can_fire(hp, s.yaw, s.bonus.range, muzzle, t, pd, p, craft) || can_fire(hp, s.yaw, s.bonus.range, muzzle, t, pd, None, craft)
             } else {
-                can_fire(hp, s.yaw, s.bonus.range, muzzle, t, pd, None)
+                can_fire(hp, s.yaw, s.bonus.range, muzzle, t, pd, None, craft)
             };
             if t.alive && can_shoot {
                 chosen = c;
@@ -3665,7 +3782,7 @@ fn weapons(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, rng:
                     let muzzle = s.pos;
                     let to = t.pos - muzzle;
                     let ang = wrap_angle(to.y.atan2(to.x) - s.yaw).abs();
-                    if to.len() - t.radius * 0.6 <= d.range && ang <= d.half_cone + (t.radius / to.len().max(1.0)).atan() && (pd.hull_damage || pd.shield_damage) {
+                    if target_reach(t, muzzle, craft) <= d.range && ang <= d.half_cone + (t.radius / to.len().max(1.0)).atan() && (pd.hull_damage || pd.shield_damage) {
                         let aim = lead(muzzle, t, pd.speed);
                         let base_dir = (aim - muzzle).normalized();
                         let dir = if pd.turn_rate > 0.0 && tgt != NONE && matches!(pd.category.as_str(), "missile" | "torpedo" | "rocket") {
@@ -3690,7 +3807,7 @@ fn weapons(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, rng:
                     let t = &snaps[tgt as usize];
                     let to = t.pos - s.pos;
                     let ang = wrap_angle(to.y.atan2(to.x) - s.yaw).abs();
-                    let ok = to.len() - t.radius * 0.6 <= d.range && ang <= d.half_cone + (t.radius / to.len().max(1.0)).atan();
+                    let ok = target_reach(t, s.pos, craft) <= d.range && ang <= d.half_cone + (t.radius / to.len().max(1.0)).atan();
                     if ok && !(matches!(t.class, TargetClass::Fighter | TargetClass::Bomber) && pd.damage >= 150.0) {
                         s.direct_pulses = d.pulses;
                         s.direct_timer = 0.0;
@@ -3908,20 +4025,29 @@ pub(crate) const ESCORT_GAP: f32 = 150.0;
 /// heading for a point behind a capital ship cannot hold each other inside (estimate; it was 1, and pairs stayed inside each other for many seconds).
 const PUSH_SPEED: f32 = 2.0;
 
-/// Fighters keep this share of a model hull's half width away from its long axis (estimate, about the 0.45 of the radius that applies to
-/// every hull). Their own carrier only within its height range (they leave the hangar below or beside it).
-const FIGHTER_KEEP_OUT: f32 = 0.5;
-
 /// Distance a launched fighter keeps from its own carrier's hull on the way out of the hangar and while it flies under or over it (estimate:
 /// a few fighter widths, a fighter is 5 to 10 units across; it was set when fighters were drawn 75 units across and is kept, the carriers'
 /// bay paths and `tests/formations.rs` were measured with it).
 const LAUNCH_CLEARANCE: f32 = 40.0;
+/// Distance fighters, bombers and the other hangar craft keep from the hull of any ship, from their centre to the hull's surface in the plan
+/// and in height (estimate, the launch clearance: a few fighter widths, and the skin of a model carries turrets and antennas some units high).
+/// They used to keep 0.5 of a model hull's half width from its long axis, at any height: an Executor's fighters flew 770 units deep into its
+/// 1550 half width.
+const HULL_GAP: f32 = LAUNCH_CLEARANCE;
+/// Distance from a hull's surface at which fighters and bombers run in on it (estimate: twice `HULL_GAP`, a few fighter lengths off the
+/// surface and well inside the range of their weapons): the aim of an attack run on a ship with a hull is the place where the line to the
+/// aim point meets the hull grown by this.
+const STRAFE_GAP: f32 = 80.0;
+/// How far beyond `HULL_GAP` a squadron place that lies inside a hull is moved out of it (estimate: keeps a member that holds it clear of the
+/// push of `keep_out_of_hulls`).
+const SLOT_MARGIN: f32 = 10.0;
 /// A squadron leader in formation flight slows down while a member lags behind its place: from a lag of `SQUADRON_LAG_START` units on, to
 /// half speed at `SQUADRON_LAG_HALF` (estimates, not in the data; half a gap and two and a half gaps of the 100-unit spacing the rule was
 /// first tuned at, kept as distances: the data's formations are 20 to 50 units between neighbours, so the leader waits only for a member
 /// that really lost its place).
 const SQUADRON_LAG_START: f32 = 50.0;
 const SQUADRON_LAG_HALF: f32 = 250.0;
+
 /// A bay whose bone axis does not lead out of the hull within this distance (estimate) drops its fighters below the hull first: the Star
 /// Destroyer's bay axis runs along the belly to the bow.
 const LAUNCH_EXIT_MAX: f32 = 150.0;
