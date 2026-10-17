@@ -10,6 +10,12 @@ the player selects and orders them, builds at owned planets, controls game speed
   starts one at plugin build (used by the demo example).
 - Fleets on the map (generic fleet model or flagship), orbit slots, lane travel, selection, box select, drag-and-drop and
   right-click move orders with route/ETA hint, merge/split/retreat, blockade-aware route planning.
+- Carrying (carry.rs): the dragged fleet's model centre sits on this frame's cursor ray, 2.2 pads above the map or nearer the camera in
+  front of a planet globe the ray would enter, so it hangs exactly under the pointer at every zoom and tilt with no follow lag and is
+  not hidden by the planet it is held over; other carried fleets hang beside it along the screen's horizontal, and the white rings and
+  the tether end on the map point under the cursor. A carried fleet is 1.5x its size at every zoom (2026-10-17, G4: the zoom-dependent
+  1.5-9x scale of 28d1013 / 60903b2 is gone, nothing in the world changes size with the zoom; with the lift above the pad it put the
+  model 31-59 px off the cursor).
 - `BuildMenu` (units, structures, star base, tech, research) with availability reasons; `PlayAction::Build` queues it, credits go
   through galaxy-sim. Production queue model.
 - `GameClock`: pause + speed levels, `hold` flag for the host (pause menu, battle screen); time is held while a human battle waits.

@@ -6,8 +6,8 @@
 //! that exists only as data (no OS window, no OS cursor) receives what the OS would write: cursor moves and a left press and release. The
 //! pointer goes to the first own fleet at the selected planet, presses, moves to the target planet (or to its fleet pad 1..3) in small
 //! steps, rests there and releases (`--drag-hold` keeps the button down, so the capture shows the carried fleet). Every frame between the
-//! pick-up and the release must still carry the fleet, the cursor stays drawn as a cross in the capture, and the verdict is one log line
-//! `drag-pointer: ... PASS|FAIL`.
+//! pick-up and the release must still carry the fleet, the carried model's centre must stay within 3 px of the cursor, the cursor stays
+//! drawn as a cross in the capture, and the verdict is one log line `drag-pointer: ... PASS|FAIL`.
 
 use bevy::input::ButtonState;
 use bevy::input::InputSystems;
@@ -98,6 +98,8 @@ const POINTER_PATH: u32 = 8;
 const POINTER_STEPS: u32 = 48;
 const POINTER_REST: u32 = 24;
 const POINTER_AFTER: u32 = 40;
+/// Most the carried model's centre may be off the cursor on screen (logical px): it hangs exactly at the pointer.
+const ICON_TOLERANCE: f32 = 3.0;
 
 /// Progress of `--drag-pointer`.
 #[derive(Default)]
@@ -115,6 +117,8 @@ struct PointerDrag {
     aborted: Option<(u32, Vec2, bool, Option<PlanetId>)>,
     /// Largest distance on screen (logical px) between the cursor and the centre of the carried fleet model while resting on the target.
     icon_offset: f32,
+    /// World scale of the carried fleet while resting on the target (the same at every zoom).
+    carry_scale: f32,
     /// What the pointer is over while it rests on the target (cursor blocked, hovered planet and pad), and how often that changed.
     rest: Option<(bool, Option<PlanetId>, Option<u8>)>,
     toggles: u32,
@@ -275,12 +279,13 @@ fn drag_pointer(
                 st.toggles += 1;
             }
             st.rest = Some(now);
-            // The carried model's centre on screen (the model stands `pad * 0.75` above its root, see `fit_fleet_models`).
+            // The carried model's centre on screen (the model stands `FLEET_MODEL_LIFT` pads above its root, see `fit_fleet_models`).
             if carrying
                 && let Some((v, g)) = entities.0.get(&fleet).and_then(|&e| fleets.get(e).ok())
-                && let Some(p) = screen_of(g.transform_point(Vec3::Y * v.pad * 0.75))
+                && let Some(p) = screen_of(g.transform_point(Vec3::Y * v.pad * galaxy_play::visuals::FLEET_MODEL_LIFT))
             {
                 st.icon_offset = st.icon_offset.max(p.distance(st.cursor));
+                st.carry_scale = g.compute_transform().scale.x;
             }
         }
     }
@@ -302,18 +307,19 @@ fn drag_pointer(
             Some(c) => st.orders.is_empty() && !(c == "esc" && paused.0),
             None => args.drag_hold || st.orders.iter().any(|o| drops_on(o, to, pad)),
         };
-        let ok = st.picked_up && st.aborted.is_none() && st.toggles == 0 && !st.carried_after && ended;
+        let ok = st.picked_up && st.aborted.is_none() && st.toggles == 0 && !st.carried_after && st.icon_offset <= ICON_TOLERANCE && ended;
         let left = state.galaxy().fleets.get(&fleet).map(|f| match f.location {
             FleetLocation::AtPlanet(p) => format!("at planet {p} slot {}", f.slot),
             FleetLocation::Moving { to, .. } => format!("moving to {to}"),
         });
         info!(
-            "drag-pointer: picked up {} aborted {:?} toggles {} carried after the end {} icon offset {:.1} px orders {:?} paused {} fleet {:?}: {}",
+            "drag-pointer: picked up {} aborted {:?} toggles {} carried after the end {} icon offset {:.1} px carried scale {:.2} orders {:?} paused {} fleet {:?}: {}",
             st.picked_up,
             st.aborted,
             st.toggles,
             st.carried_after,
             st.icon_offset,
+            st.carry_scale,
             st.orders,
             paused.0,
             left,

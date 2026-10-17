@@ -294,6 +294,8 @@ pub fn sync_fleets(
 
 /// Height of a fleet root above the planet plane in pad radii.
 const PAD_LIFT: f32 = 0.3;
+/// Height of a fleet model's centre above its fleet root, in pad radii of the unscaled root (the ship stands on its pad).
+pub const FLEET_MODEL_LIFT: f32 = 0.75;
 
 /// Scales freshly loaded fleet models to the icon size and centers them.
 #[allow(clippy::type_complexity)]
@@ -311,7 +313,7 @@ pub fn fit_fleet_models(
         let target = pad * 2.0 * cfg.fleet_icon_scale * 2.0;
         let s = if m.radius > 0.0 { target / m.radius } else { 1.0 };
         tf.scale = Vec3::splat(s);
-        tf.translation = -m.center * s + Vec3::Y * pad * 0.75;
+        tf.translation = -m.center * s + Vec3::Y * pad * FLEET_MODEL_LIFT;
     }
 }
 

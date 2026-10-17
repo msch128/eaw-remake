@@ -38,7 +38,9 @@ $scenarios = @(
     @('queue-cancel',        @('--campaign', $camp, '--select', $yavin, '--build', 'Squadron', '--weeks', '0', '--click', 'queue00', '--frames', '300'), "clicking .queue00"),
     # Fleet drag through the real input path (synthetic pointer on a window that exists only as data, offscreen): over the open map above
     # the build bar to a planet in the lower right, which gives the move order; then the same drag ended by a right click and by Esc.
-    @('drag-lower-right',    @('--campaign', $camp, '--select', $yavin, '--zoom', '0.3', '--drag-pointer', 'Ringo Vinda', '--frames', '300'), 'drag-pointer: .*PASS'),
+    @('drag-lower-right',    @('--campaign', $camp, '--select', $yavin, '--zoom', '0.3', '--drag-pointer', 'Ringo Vinda', '--frames', '300'), 'drag-pointer: .*carried scale 1\.50 .*PASS'),
+    # Close up (the Remake's zoom): the carried fleet hangs exactly at the cursor at the same world scale (the capture shows it held).
+    @('drag-hold-closeup',   @('--campaign', $camp, '--select', $yavin, '--zoom', '0.06', '--drag-pointer', 'Arda', '--drag-hold', '--frames', '300'), 'drag-pointer: .*carried scale 1\.50 .*PASS'),
     @('drag-cancel-right',   @('--campaign', $camp, '--select', $yavin, '--zoom', '0.3', '--drag-pointer', 'Ringo Vinda', '--drag-cancel', 'right', '--frames', '300'), 'drag-pointer: .*PASS'),
     @('drag-cancel-esc',     @('--campaign', $camp, '--select', $yavin, '--zoom', '0.3', '--drag-pointer', 'Ringo Vinda', '--drag-cancel', 'esc', '--frames', '300'), 'drag-pointer: .*PASS'),
     # Every planet on screen and not under the interface shows its name, also in the lower third (above the build bar, right of the droid

@@ -75,9 +75,10 @@ runs it as `windowed-ui-pointer`. Source: `src/input_test.rs`.
 
 Offscreen fleet drag (safe while the user plays: the window exists only as data, offscreen runs have no winit):
 `--select <planet> --drag-pointer <planet>[:<pad>] [--drag-hold] [--drag-cancel esc|right]` presses on the first own fleet of the
-selected planet, moves to the target in 48 steps, rests 24 frames (nothing may toggle), releases (or cancels), and logs
-`drag-pointer: ... PASS|FAIL` with the frame the carry was lost, the orders written and the fleet's state; a magenta square marks the
-cursor in the capture. Smoke rows `drag-lower-right`, `drag-cancel-right`, `drag-cancel-esc`. Source: `src/drag_demo.rs`.
+selected planet, moves to the target in 48 steps, rests 24 frames (nothing may toggle, the carried model's centre within 3 px of the
+cursor), releases (or cancels), and logs `drag-pointer: ... PASS|FAIL` with the frame the carry was lost, the icon offset, the carried
+scale, the orders written and the fleet's state; a magenta square marks the cursor in the capture. Smoke rows `drag-lower-right`,
+`drag-hold-closeup`, `drag-cancel-right`, `drag-cancel-esc`. Source: `src/drag_demo.rs`.
 Fixed 2026-10-17 (G2): the command bar's root node is the bounding box of its faceplate, the whole width of the bottom 42 % of the
 screen; `cursor_blocked` took all of it as "over the bar", so a drag towards a planet in the lower right was dropped the moment the
 cursor crossed that line (and those planets could not be hovered or clicked). Now only the opaque art (`eaw_ui::ShellOpaque`, alpha
