@@ -563,7 +563,7 @@ fn spawn_galaxy(
             spawn_planet_visual(&mut commands, &assets, &mut materials, &view, i, pos, radius, use_models);
         commands.entity(root).insert(GalaxyEntity);
 
-        // Name label in the owner's colour (positioned and decluttered every frame).
+        // Name label in the owner's colour (positioned every frame, `update_labels`).
         let owner = relation_color(&view, planet.owner);
         // The game prints the name in capitals in the full, saturated faction colour.
         let label_c = if planet.owner.is_some() { owner } else { [0.62, 0.62, 0.62] };
@@ -700,7 +700,7 @@ fn spawn_galaxy(
     }
 }
 
-/// One label candidate for the screen-space declutter pass.
+/// Where a planet's label can go on the screen.
 #[derive(Clone, Copy)]
 struct LabelSlot {
     /// Top-left of the label rectangle in logical viewport pixels (below the globe; after the placement, where it is shown).
@@ -708,10 +708,22 @@ struct LabelSlot {
     /// Top-left of the same rectangle above the globe, for a name that would sit off the bottom or under the interface.
     above: Vec2,
     size: Vec2,
-    score: f32,
 }
 
-/// Room kept around a label in the declutter pass (viewport px).
+/// Zoom fraction (0 closest, 1 farthest) from which the map shows no planet names but the selected planet's (the hover card still
+/// names the planet under the cursor), and the one below which they come back; the gap is a hysteresis, so a zoom resting at the
+/// threshold never makes them blink. The Remake has no far zoom to measure this on (its galaxy camera has a single view, about our
+/// zoom 0.15, and b0621s without names is the camera flying back from the planet screen); 0.45 is where the crowding cull used to
+/// start thinning the names out (G3c, 2026-10-17).
+const NAMES_HIDE_FROM: f32 = 0.47;
+const NAMES_SHOW_BELOW: f32 = 0.43;
+
+/// Whether the map is zoomed out too far for planet names this frame, given last frame's answer (see [`NAMES_HIDE_FROM`]).
+fn names_far(zoom_out: f32, was_far: bool) -> bool {
+    if was_far { zoom_out >= NAMES_SHOW_BELOW } else { zoom_out >= NAMES_HIDE_FROM }
+}
+
+/// Room kept between a label and a HUD panel or the screen edge (viewport px).
 const LABEL_MARGIN: f32 = 2.0;
 /// Hysteresis of a name's place (viewport px): a name under its globe stays there while a HUD panel or the screen edge covers its box
 /// by up to `PLACE_HYSTERESIS - LABEL_MARGIN` px (the box has room around the letters; close up its anchor must stay on screen), and a
@@ -750,8 +762,8 @@ fn draw_planet_names() -> bool {
 }
 
 #[allow(clippy::too_many_arguments)]
-/// Positions the label of each planet below its sphere and hides labels that would overlap a
-/// more important one (selected, hovered, player-owned, then by income).
+/// Positions the label of each planet in view below its sphere (above it where a HUD panel or the screen edge is in the way);
+/// zoomed out past [`NAMES_HIDE_FROM`] only the selected planet keeps its label.
 fn update_labels(
     view: Res<GalaxyView>,
     radii: Res<PlanetRadii>,
@@ -767,8 +779,7 @@ fn update_labels(
     mut pip_icons: Query<&mut Node, (With<PipIcon>, Without<PlanetLabel>, Without<PipRow>)>,
     mut last_font: Local<f32>,
     mut slots: Local<Vec<Option<LabelSlot>>>,
-    mut visible: Local<Vec<bool>>,
-    mut was_above: Local<Vec<bool>>,
+    (mut visible, mut was_above, mut was_far): (Local<Vec<bool>>, Local<Vec<bool>>, Local<bool>),
 ) {
     let (camera, cam_tf, orbit) = *camera;
     let Some(viewport) = camera.logical_viewport_size() else {
@@ -776,6 +787,8 @@ fn update_labels(
     };
     // Labels grow when zoomed in and shrink when zoomed out (whole pixel steps only).
     let zoom_out = zoom_fraction(&bounds, orbit.distance);
+    let far = names_far(zoom_out, *was_far);
+    *was_far = far;
     // estimate: the Remake labels are about 1.5% of the screen height close up (f0016), smaller than before.
     let font_px = (11.0 + (8.0 - 11.0) * smoothstep(0.0, 0.7, zoom_out)).round();
     // UI coordinates are multiplied by the UI scale; the layout below works in viewport pixels.
@@ -803,19 +816,9 @@ fn update_labels(
         } else {
             Vec2::new(planet.display_name.len() as f32 * font_px * 0.6, font_px * 1.3)
         };
-        let score = if selection.0 == Some(label.0) {
-            1.0e9
-        } else if hover.0 == Some(label.0) {
-            1.0e8
-        } else {
-            let mine = planet.owner.is_some() && planet.owner == view.player_faction;
-            // Planets near the screen centre (the camera target) win over far ones, so that names show at the default zoom.
-            let centre = (1.0 - ((p - viewport * 0.5).length() / (viewport.length() * 0.5)).min(1.0)).powi(2) * 4000.0;
-            (if mine { 1.0e6 } else { 0.0 }) + centre + planet.income as f32 + planet.size
-        };
         // Room for the two rows of structure slot pips under the name.
         let size = size + Vec2::new(0.0, font_px * 1.1);
-        slots[label.0] = Some(LabelSlot { pos: Vec2::new(p.x - size.x * 0.5, p.y), above: Vec2::new(p.x - size.x * 0.5, a.y - r_px - size.y), size, score });
+        slots[label.0] = Some(LabelSlot { pos: Vec2::new(p.x - size.x * 0.5, p.y), above: Vec2::new(p.x - size.x * 0.5, a.y - r_px - size.y), size });
     }
 
     // The label colour follows the owner (a captured planet turns green).
@@ -826,38 +829,22 @@ fn update_labels(
         color.set_if_neq(TextColor(Color::srgb((c.red * k).min(1.0), (c.green * k).min(1.0), (c.blue * k).min(1.0))));
     }
 
-    // Greedy placement in priority order.
-    let mut order: Vec<usize> = (0..slots.len()).filter(|&i| slots[i].is_some()).collect();
-    order.sort_by(|&a, &b| {
-        slots[b]
-            .map_or(0.0, |s| s.score)
-            .total_cmp(&slots[a].map_or(0.0, |s| s.score))
-    });
     visible.clear();
     visible.resize(slots.len(), false);
     // Placement of this frame (`was_above` keeps last frame's for the hysteresis).
     let mut now_above = vec![false; slots.len()];
-    // Planet discs are obstacles too, so labels do not sit on top of other planets.
-    let right = cam_tf.right();
-    let discs: Vec<Option<(Vec2, f32)>> = view
-        .planets
-        .iter()
-        .enumerate()
-        .map(|(i, p)| {
-            let c = galaxy_to_world(p.position);
-            let r = radii.0[i] * 1.45;
-            let a = camera.world_to_viewport(cam_tf, c).ok()?;
-            let b = camera.world_to_viewport(cam_tf, c + right * r).ok()?;
-            Some((a, a.distance(b)))
-        })
-        .collect();
-    let mut placed: Vec<(Vec2, Vec2)> = Vec::with_capacity(order.len());
-    let close = zoom_out < 0.45;
-    for i in order {
-        let mut s = slots[i].expect("filtered above");
-        // Close up every planet in view keeps its name: only its anchor has to be on screen, and crowding never hides it. A name that
-        // would sit off the screen or under a HUD panel (the ticker line) goes above its globe instead; under the command bar it stays
-        // where it is and shows through the translucent build strip like in the Remake.
+    // Close up (names shown) only the anchor of a name has to be on screen; zoomed out, for the selected planet's, the whole name.
+    let close = !far;
+    for (i, slot) in slots.iter_mut().enumerate() {
+        let Some(s) = slot.as_mut() else { continue };
+        // The selected planet always keeps its label; zoomed out too far it is the only one.
+        let selected = selection.0 == Some(i);
+        if far && !selected {
+            continue;
+        }
+        // Every planet in view keeps its name, crowding never hides it. A name that would sit off the screen or under a HUD panel (the
+        // ticker line) goes above its globe instead; under the command bar it stays where it is and shows through the translucent
+        // build strip like in the Remake.
         let above = label_clear(s.above, s.size, viewport, close, &panel, 0.0);
         let was = was_above.get(i).copied().unwrap_or(false);
         let below = below_clear(
@@ -870,25 +857,7 @@ fn update_labels(
         if moved_up {
             s.pos = s.above;
         }
-        let fits = below || above;
-        let (lo, hi) = (s.pos - Vec2::splat(LABEL_MARGIN), s.pos + s.size + Vec2::splat(LABEL_MARGIN));
-        let overlaps = placed
-            .iter()
-            .any(|&(plo, phi)| lo.x < phi.x && hi.x > plo.x && lo.y < phi.y && hi.y > plo.y);
-        let on_planet = discs.iter().enumerate().any(|(j, d)| {
-            j != i
-                && d.is_some_and(|(c, r)| {
-                    let nearest = c.clamp(lo, hi);
-                    nearest.distance_squared(c) < r * r
-                })
-        });
-        // The selected planet always keeps its label.
-        let selected = selection.0 == Some(i);
-        if selected || (fits && (close || (!overlaps && (!on_planet || s.score >= 1.0e6)))) {
-            placed.push((lo, hi));
-            visible[i] = true;
-            slots[i] = Some(s);
-        }
+        visible[i] = selected || below || above;
         now_above[i] = visible[i] && moved_up;
     }
     *was_above = now_above;
@@ -1814,6 +1783,36 @@ mod tests {
             was = up;
         }
         switches
+    }
+
+    #[test]
+    fn far_zoom_hides_the_names_once_each_way_without_blinking() {
+        // 240 frames: a slow zoom out from 0.40 to 0.52 and back in, with a 0.01 jitter on top (a wheel step easing in, an unsteady
+        // hand). With one threshold the names blink; with the hysteresis they go once and come back once.
+        let zoom = |t: u32| 0.40 + 0.12 * (1.0 - (t as f32 / 120.0 - 1.0).abs()) + 0.01 * (t as f32 * 0.9).sin();
+        let (mut far, mut switches) = (false, 0);
+        let (mut single, mut single_switches) = (false, 0);
+        for t in 0..240 {
+            let now = names_far(zoom(t), far);
+            switches += u32::from(now != far);
+            far = now;
+            let now = zoom(t) >= 0.45;
+            single_switches += u32::from(now != single);
+            single = now;
+        }
+        assert!(single_switches > 2, "with a single threshold the case blinks ({single_switches} switches)");
+        assert_eq!(switches, 2);
+        assert!(!far, "back in, the names are back");
+        // Resting at the threshold with a 0.015 jitter for 120 frames: nothing changes, whichever way the zoom came from.
+        for start in [false, true] {
+            let mut far = start;
+            for t in 0..120 {
+                far = names_far(0.45 + 0.015 * (t as f32 * 0.9).sin(), far);
+                assert_eq!(far, start, "came from far {start}, frame {t}");
+            }
+        }
+        // Close up there are names, far out none, whatever the last frame said.
+        assert!(!names_far(0.30, false) && !names_far(0.30, true) && names_far(0.60, false) && names_far(0.60, true));
     }
 
     #[test]

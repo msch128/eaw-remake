@@ -9,14 +9,16 @@
 //!    and the names in the lower part with their positions; a name that shows, hides or moves by more than half a pixel between two
 //!    frames is a toggle.
 //! 2. per listed planet: the pointer goes to the first of a few points on the globe that is not over the bar art and has no fleet over
-//!    it (a click on a fleet selects the fleet), and rests there for 12 frames: the planet must be hovered in every one of them; a click
-//!    must select it; the own fleet of the start planet is dragged onto it and the drop must send the fleet there. A planet whose globe
-//!    is all behind the bar art is logged as such.
-//! 3. zoom: 120 frames of slow zoom out (8 % of the zoom range). Every frame logs the names shown and those in the lower part with
-//!    their positions; a name that changes between shown and hidden more than once, or between below and above its globe more than
-//!    once, blinks.
+//!    it (a click on a fleet selects the fleet), and rests there for 12 frames: the planet must be hovered in every one of them and the
+//!    hover card must name it; a click must select it; the own fleet of the start planet is dragged onto it and the drop must send the
+//!    fleet there. A planet whose globe is all behind the bar art is logged as such.
+//! 3. zoom: 120 frames of slow zoom out (8 % of the zoom range) and 120 back in. Every frame logs the names shown and those in the
+//!    lower part with their positions. A frame in which most names come or go at once is the far-zoom threshold passing; it may happen
+//!    once on the way out and once on the way back. Apart from it a name that changes between shown and hidden (its planet entering or
+//!    leaving the view) more than once on the way out or on the way back, or between below and above its globe, blinks.
 //!
-//! The verdict is one log line `label-probe: ... PASS|FAIL`.
+//! In every still and zoom frame the selected planet must show its name (at any zoom, also past `galaxy_map::NAMES_HIDE_FROM`). The
+//! verdict is one log line `label-probe: ... PASS|FAIL`.
 
 use bevy::input::ButtonState;
 use bevy::input::InputSystems;
@@ -53,8 +55,10 @@ impl Plugin for LabelProbePlugin {
 const START_FRAME: u32 = 90;
 const STILL_FRAMES: u32 = 120;
 const ZOOM_FRAMES: u32 = 120;
-/// How far the slow zoom goes out, as a share of the zoom range.
+/// How far the slow zoom goes out (and back in), as a share of the zoom range.
 const ZOOM_SPAN: f32 = 0.08;
+/// Frames from a camera move to the names it gives (camera transform, then the label layout).
+const ZOOM_LAG: u32 = 3;
 /// The lower part of the screen: the bottom 42 %, the height of the command bar.
 const LOWER: f32 = 0.58;
 /// Frames after a pointer move or press before the probe reads what the input systems made of it.
@@ -102,15 +106,20 @@ struct Probe {
     /// Per planet: the name's top-left corner (logical px) and whether it sits above its globe, if it shows.
     last: Option<Vec<Option<(Vec2, bool)>>>,
     still_toggles: u32,
-    /// Per planet during the zoom: changes between shown and hidden, and between below and above the globe.
-    shown_changes: Vec<u32>,
-    side_changes: Vec<u32>,
+    /// Per planet during the zoom out [0] and back in [1]: changes between shown and hidden, and between below and above the globe.
+    shown_changes: [Vec<u32>; 2],
+    side_changes: [Vec<u32>; 2],
+    /// Frames out [0] and back in [1] in which most names came or went at once (the far-zoom threshold).
+    threshold_passes: [u32; 2],
     zoom_from: f32,
     zoom_to: f32,
+    /// Still and zoom frames in which the selected planet, on screen, showed no name.
+    selected_unnamed: u32,
     /// The first globe point of the current planet that is free of the bar art but has a fleet over it.
     fallback: Option<Vec2>,
     hover_ok: u32,
-    hover_seen: Vec<(Option<usize>, Option<PlanetId>, bool)>,
+    /// Per hover frame: the map's hovered planet, galaxy-play's, whether the cursor is blocked and whether the hover card names it.
+    hover_seen: Vec<(Option<usize>, Option<PlanetId>, bool, bool)>,
     drag_from: Vec2,
     orders: Vec<PlayAction>,
 }
@@ -151,7 +160,7 @@ fn probe(
     mut window: Query<(Entity, &mut Window), With<PrimaryWindow>>,
     mut actions: MessageReader<PlayAction>,
     (mut moved, mut buttons): (MessageWriter<CursorMoved>, MessageWriter<MouseButtonInput>),
-    (screen, ui_scale): (Res<State<crate::flow::AppScreen>>, Res<UiScale>),
+    (screen, ui_scale, tip): (Res<State<crate::flow::AppScreen>>, Res<UiScale>, Res<eaw_ui::WorldTooltip>),
 ) {
     if !args.label_probe || st.step == Step::Done || *screen.get() != crate::flow::AppScreen::Galaxy {
         return;
@@ -177,6 +186,13 @@ fn probe(
     let globe_y: Vec<Option<f32>> = (0..n).map(|i| globe(i).map(|(a, _)| a.y)).collect();
     let names = names_now(&labels, n, us, &globe_y);
     let lower = viewport.y * LOWER;
+    // The selected planet keeps its name at every zoom while its globe is on screen.
+    let selected = selection.0.filter(|&i| globe(i).is_some_and(|(a, _)| a.x >= 0.0 && a.y >= 0.0 && a.x <= viewport.x && a.y <= viewport.y));
+    let selected_note = selected.map_or_else(
+        || "none on screen".to_string(),
+        |i| format!("{} {}", view.planets[i].display_name, if names[i].is_some() { "named" } else { "UNNAMED" }),
+    );
+    let selected_unnamed = selected.is_some_and(|i| names[i].is_none());
     let mut move_to = |p: Vec2| {
         win.bypass_change_detection().set_cursor_position(Some(p));
         moved.write(CursorMoved { window: win_entity, position: p, delta: None });
@@ -232,9 +248,13 @@ fn probe(
                 .filter_map(|i| Some(last.get(i).copied().flatten()?.0.distance(names[i]?.0)))
                 .fold(0.0f32, f32::max);
             st.still_toggles += changed;
+            st.selected_unnamed += u32::from(selected_unnamed);
             let shown = names.iter().filter(|x| x.is_some()).count();
             let low = names.iter().filter(|x| x.is_some_and(|(p, _)| p.y > lower)).count();
-            info!("label-probe: still {t} shown {shown} lower {low} changed {changed} max move {moved:.2} px |{}", lower_names(&view, &names, lower));
+            info!(
+                "label-probe: still {t} shown {shown} lower {low} changed {changed} max move {moved:.2} px, selected {selected_note} |{}",
+                lower_names(&view, &names, lower)
+            );
             st.last = Some(names);
             st.step = if t + 1 >= STILL_FRAMES { Step::Aim(0, 0, 0) } else { Step::Still(t + 1) };
         }
@@ -243,8 +263,8 @@ fn probe(
                 st.zoom_from = galaxy_camera.distance;
                 let z = zoom_fraction(&bounds, galaxy_camera.distance);
                 st.zoom_to = bounds.min_distance + (bounds.max_distance - bounds.min_distance) * (z + ZOOM_SPAN).min(1.0);
-                st.shown_changes = vec![0; n];
-                st.side_changes = vec![0; n];
+                st.shown_changes = [vec![0; n], vec![0; n]];
+                st.side_changes = [vec![0; n], vec![0; n]];
                 st.last = Some(names);
                 st.step = Step::Zoom(0);
                 return;
@@ -315,9 +335,11 @@ fn probe(
         }
         Step::Hover(k, t) => {
             let target = st.targets[k].clone();
-            let now = (hover.0, play_hover.planet, blocked.0);
+            // The hover card (eaw-ui's world tooltip) starts with the planet's name.
+            let card = tip.text.as_deref().and_then(|t| t.lines().next()) == Some(target.name.as_str());
+            let now = (hover.0, play_hover.planet, blocked.0, card);
             if t >= 2 {
-                if now.0 == Some(target.map) && !now.2 {
+                if now.0 == Some(target.map) && !now.2 && now.3 {
                     st.hover_ok += 1;
                 }
                 st.hover_seen.push(now);
@@ -327,7 +349,7 @@ fn probe(
                 let ok = st.hover_ok == HOVER_FRAMES - 2 && toggles == 0;
                 let p = target.point.unwrap_or_default();
                 let note = format!(
-                    "point ({:.0}, {:.0}) hover {} ({} of {} frames, map {:?} play {:?} fleet {:?}, {toggles} toggles)",
+                    "point ({:.0}, {:.0}) hover {} ({} of {} frames, map {:?} play {:?} fleet {:?} card {}, {toggles} toggles)",
                     p.x,
                     p.y,
                     if ok { "PASS" } else { "FAIL" },
@@ -335,7 +357,8 @@ fn probe(
                     HOVER_FRAMES - 2,
                     now.0,
                     now.1,
-                    play_hover.fleet
+                    play_hover.fleet,
+                    if card { "names it" } else { "does not name it" }
                 );
                 st.targets[k].result += &note;
                 st.targets[k].pass = ok;
@@ -418,53 +441,73 @@ fn probe(
             }
         }
         Step::Zoom(t) => {
+            // What the names show now comes from the camera of a few frames ago: count it to the way out until then.
+            let back = usize::from(t >= ZOOM_FRAMES + ZOOM_LAG);
             let last = st.last.take().unwrap_or_default();
-            let mut changed = 0;
-            for (i, &now) in names.iter().enumerate() {
-                let what = match (last.get(i).copied().flatten(), now) {
-                    (Some(_), None) => {
-                        st.shown_changes[i] += 1;
-                        "hidden"
-                    }
-                    (None, Some(_)) => {
-                        st.shown_changes[i] += 1;
-                        "shown"
-                    }
-                    (Some((_, sa)), Some((pos, sb))) if sa != sb => {
-                        st.side_changes[i] += 1;
-                        info!("label-probe: zoom {t}: {} name now {} its globe at ({:.0}, {:.0})", view.planets[i].display_name, if sb { "above" } else { "below" }, pos.x, pos.y);
-                        continue;
-                    }
-                    _ => continue,
-                };
-                changed += 1;
-                info!("label-probe: zoom {t}: {} name {what}", view.planets[i].display_name);
+            let flips: Vec<(usize, bool)> = (0..n).filter_map(|i| (last.get(i).copied().flatten().is_some() != names[i].is_some()).then_some((i, names[i].is_some()))).collect();
+            let changed = flips.len();
+            // A frame in which most names come or go at once is the far-zoom threshold passing (`galaxy_map::NAMES_HIDE_FROM`): it counts
+            // once for the whole map, not per name.
+            let (before, after) = (last.iter().filter(|x| x.is_some()).count(), names.iter().filter(|x| x.is_some()).count());
+            if changed >= 10 && changed * 2 >= before.max(after) {
+                st.threshold_passes[back] += 1;
+                info!("label-probe: zoom {t}: {changed} names {} at once (zoom threshold), {before} -> {after}", if after < before { "hidden" } else { "shown" });
+            } else {
+                for &(i, shown) in &flips {
+                    st.shown_changes[back][i] += 1;
+                    info!("label-probe: zoom {t}: {} name {}", view.planets[i].display_name, if shown { "shown" } else { "hidden" });
+                }
             }
-            let d = st.zoom_from + (st.zoom_to - st.zoom_from) * (t + 1) as f32 / ZOOM_FRAMES as f32;
+            for (i, &now) in names.iter().enumerate() {
+                if let (Some((_, sa)), Some((pos, sb))) = (last.get(i).copied().flatten(), now)
+                    && sa != sb
+                {
+                    st.side_changes[back][i] += 1;
+                    info!("label-probe: zoom {t}: {} name now {} its globe at ({:.0}, {:.0})", view.planets[i].display_name, if sb { "above" } else { "below" }, pos.x, pos.y);
+                }
+            }
+            st.selected_unnamed += u32::from(selected_unnamed);
+            // Out over ZOOM_FRAMES frames, back in over as many, then a few frames at the start zoom for the last names to settle.
+            let f = if t < ZOOM_FRAMES { (t + 1) as f32 } else { (2 * ZOOM_FRAMES).saturating_sub(t + 1) as f32 } / ZOOM_FRAMES as f32;
+            let d = st.zoom_from + (st.zoom_to - st.zoom_from) * f;
             galaxy_camera.distance = d;
             galaxy_camera.target_distance = d;
             let shown = names.iter().filter(|x| x.is_some()).count();
             let low = names.iter().filter(|x| x.is_some_and(|(p, _)| p.y > lower)).count();
-            info!("label-probe: zoom {t} z {:.3} shown {shown} lower {low} changed {changed} |{}", zoom_fraction(&bounds, d), lower_names(&view, &names, lower));
+            info!(
+                "label-probe: zoom {t} z {:.3} shown {shown} lower {low} changed {changed}, selected {selected_note} |{}",
+                zoom_fraction(&bounds, d),
+                lower_names(&view, &names, lower)
+            );
             st.last = Some(names);
-            if t + 1 < ZOOM_FRAMES {
+            if t + 1 < 2 * ZOOM_FRAMES + ZOOM_LAG {
                 st.step = Step::Zoom(t + 1);
                 return;
             }
-            // A name may come or go once while the zoom passes its threshold; twice is a blink.
-            let blinks: Vec<String> = (0..n)
-                .filter(|&i| st.shown_changes[i] > 1 || st.side_changes[i] > 1)
-                .map(|i| format!("{} ({} shown/hidden, {} below/above)", view.planets[i].display_name, st.shown_changes[i], st.side_changes[i]))
+            // On the way out and on the way back a name may come or go once (its planet enters or leaves the view) and change its side
+            // once, and the far-zoom threshold may pass once; more is a blink.
+            let mut blinks: Vec<String> = (0..n)
+                .filter(|&i| (0..2).any(|h| st.shown_changes[h][i] > 1 || st.side_changes[h][i] > 1))
+                .map(|i| {
+                    let p = &view.planets[i];
+                    format!("{} (shown/hidden {} out {} back, below/above {} out {} back)", p.display_name, st.shown_changes[0][i], st.shown_changes[1][i], st.side_changes[0][i], st.side_changes[1][i])
+                })
                 .collect();
+            if st.threshold_passes.iter().any(|&c| c > 1) {
+                blinks.push(format!("all names ({} threshold passes out, {} back)", st.threshold_passes[0], st.threshold_passes[1]));
+            }
             let tested = st.targets.iter().filter(|t| t.point.is_some()).count();
             let failed: Vec<&str> = st.targets.iter().filter(|t| !t.pass).map(|t| t.name.as_str()).collect();
-            let ok = st.still_toggles == 0 && blinks.is_empty() && failed.is_empty() && !st.targets.is_empty();
+            let ok = st.still_toggles == 0 && blinks.is_empty() && failed.is_empty() && !st.targets.is_empty() && st.selected_unnamed == 0;
             info!(
-                "label-probe: {} planets in the lower part, {tested} with a usable globe point, failed {:?}, still toggles {}, zoom blinks {:?}: {}",
+                "label-probe: {} planets in the lower part, {tested} with a usable globe point, failed {:?}, still toggles {}, zoom blinks {:?}, threshold passes {} out {} back, selected unnamed in {} frames: {}",
                 st.targets.len(),
                 failed,
                 st.still_toggles,
                 blinks,
+                st.threshold_passes[0],
+                st.threshold_passes[1],
+                st.selected_unnamed,
                 if ok { "PASS" } else { "FAIL" }
             );
             for t in st.targets.iter().filter(|t| t.point.is_none()) {

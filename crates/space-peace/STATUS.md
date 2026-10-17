@@ -90,9 +90,13 @@ fullscreen, FPS cap).
   is the bounding box of the faceplate, which hid every name below y 629 of 1080). A name that would sit under another HUD panel (the
   ticker line) or off the screen goes above its globe, with hysteresis (`PLACE_HYSTERESIS`: under its globe a name stays while its box
   is covered by up to 2 px, above it it stays until the place under the globe is clear by 4 px more), so a name grazing a panel edge
-  while the camera moves does not jump (Ithor did, `--label-probe`). Crowding hides names only when zoomed far out (zoom fraction >=
-  0.45). The Remake has no far zoom to compare with: its galaxy camera has one view (Gameconstants.xml `GMC_InitialPullbackDistance`
-  470 at `GMC_InitialPitchAngleDegrees` -50; `Max_Galactic_Zoom_Distance` is marked unused) and the wheel zooms into the planet view.
+  while the camera moves does not jump (Ithor did, `--label-probe`). Zoomed out to zoom fraction 0.47 and beyond the map shows no names
+  but the selected planet's (G3c, user decision 2026-10-17; the hover card still names the planet under the cursor), and they come
+  back below 0.43 (`NAMES_HIDE_FROM`, `NAMES_SHOW_BELOW`: the gap is a hysteresis, so a zoom resting at the threshold never makes them
+  blink); this replaced the crowding cull that thinned the names out from 0.45. At game start the camera opens on the capital at 0.25,
+  so the names show. The Remake has no far zoom to compare with: its galaxy camera has one view (Gameconstants.xml
+  `GMC_InitialPullbackDistance` 470 at `GMC_InitialPitchAngleDegrees` -50; `Max_Galactic_Zoom_Distance` is marked unused) and the
+  wheel zooms into the planet view.
   Every galaxy frame of the user's videos is at that scale with names (b0613s: Byss to Corellia 9.3 px per map unit; ours shows them
   8.5 px per map unit apart at `--zoom 0.15`), and b0621s, the one without names, is the 1 s camera flight back from the Coruscant
   planet screen (Coruscant to Alderaan 776 px against 562 px in b0613s, so closer, not farther out).
@@ -106,7 +110,13 @@ fullscreen, FPS cap).
   cursor is on the interface there): scroll the map. `SP_NO_PLANET_NAMES=1` renders the same view without names, to measure what the
   names add: behind the empty build strip our names stand 9-21 sRGB luma levels (median 12) above the strip, colour distance 17-40,
   against 20 and 34 for LORONAR in b0613s (a video frame, its dark levels are crushed); under the unit cards and the minimap column
-  they are covered, as that art is opaque.
+  they are covered, as that art is opaque. Since G3c the probe also wants the hover card to name the hovered planet and the selected
+  planet named in every frame, and zooms back in after the zoom out; the frame in which most names go or come at once (the threshold)
+  may happen once each way. 2026-10-17 across the threshold (start 0.42, out to 0.50 and back, both views): the names went once and
+  came back once, nothing else blinked, the selected name stayed; at 0.60 (names hidden) all 39 Rebel lower planets with a free globe
+  point were hovered (card), selected and reached. Known gap (also before G3c): from about zoom 0.4 the icons of fleets parked at a
+  small planet cover its whole globe, so a click there selects a fleet and the planet cannot be selected by a click (Imperial start:
+  Byss and Rendili at 0.42; Allanteen VI, Byss, The Corellia System and Fondor at 0.60).
 - Selection: notched ring (mesh fill + gizmo outline); fleets stand on a faction-coloured base disc (galaxy-play visuals.rs).
 - Missing vs original: hero head portraits, faction emblem beside planets, dashed sector ring (W_Planet_GC_Sector), lane/slot textures from the game.
 
