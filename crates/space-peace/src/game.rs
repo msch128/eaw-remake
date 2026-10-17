@@ -175,17 +175,30 @@ pub fn restart_with(content: Content, extra: &[String]) -> bool {
 #[derive(Resource, Clone, Default)]
 pub struct Game(pub Option<GameAssets>);
 
-/// Locates the install and opens the layered game file system (fast: reads archive indexes only).
-pub fn open_fs(args: &Args, log: &mut StartupLog) -> Result<(GameInstall, Arc<GameFs>), String> {
-    let started = Instant::now();
-    let install = match &args.game_dir {
+/// The installed game: the folder of `--game-dir`, else `EAW_GAME_DIR`, else the Steam install found through the registry and `libraryfolders.vdf`.
+pub fn find_install(args: &Args) -> Option<GameInstall> {
+    match &args.game_dir {
         Some(dir) => GameInstall::from_root(dir),
         None => GameInstall::detect(),
     }
-    .ok_or("no Empire at War install found (use --game-dir <path> or set EAW_GAME_DIR)")?;
-    let explicit_mod = args.mod_dir.clone().or_else(|| std::env::var_os("EAW_MOD_DIR").map(std::path::PathBuf::from));
-    let (mod_desc, fs) = if let Some(dir) = explicit_mod {
-        let mod_data = if dir.join("Data").is_dir() { dir.join("Data") } else { dir.clone() };
+}
+
+/// The mod folder named by `--mod-dir` or `EAW_MOD_DIR`; `None` selects the Workshop folder of the mod id.
+pub fn explicit_mod_dir(args: &Args) -> Option<std::path::PathBuf> {
+    args.mod_dir.clone().or_else(|| std::env::var_os("EAW_MOD_DIR").map(std::path::PathBuf::from))
+}
+
+/// The `Data` folder of an explicit mod folder: the folder itself when it has no `Data` folder below it.
+pub fn explicit_mod_data(dir: &std::path::Path) -> std::path::PathBuf {
+    if dir.join("Data").is_dir() { dir.join("Data") } else { dir.to_path_buf() }
+}
+
+/// Locates the install and opens the layered game file system (fast: reads archive indexes only).
+pub fn open_fs(args: &Args, log: &mut StartupLog) -> Result<(GameInstall, Arc<GameFs>), String> {
+    let started = Instant::now();
+    let install = find_install(args).ok_or("no Empire at War install found (use --game-dir <path> or set EAW_GAME_DIR)")?;
+    let (mod_desc, fs) = if let Some(dir) = explicit_mod_dir(args) {
+        let mod_data = explicit_mod_data(&dir);
         let fs = alamo_fs::GameFs::from_stacks(&[
             vec![mod_data],
             vec![install.foc_data.clone()],

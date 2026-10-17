@@ -16,6 +16,9 @@ default = []
 dev = ["bevy/dynamic_linking"]
 # Readable system and parameter names in Bevy error messages.
 debug = ["bevy/debug"]
+# The installed game (tools/package.ps1): a windowed app, no console window opens behind it. Its log still goes to
+# %APPDATA%\SpacePeace\logs (logfile.rs).
+dist = []
 
 [dependencies]
 bevy = { version = "=0.19.1", default-features = false, features = [

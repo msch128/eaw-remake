@@ -26,6 +26,9 @@ pub struct Args {
     pub campaign: Option<String>,
     /// Print the galaxy campaigns and exit (`--list-campaigns`).
     pub list_campaigns: bool,
+    /// Print where the game and the Remake mod were found and exit with 0 (both), 2 (game missing) or 3 (mod missing)
+    /// (`--check-install`, see `install_check.rs`).
+    pub check_install: bool,
     /// Use the built-in demo galaxy even if a game install exists (`--demo`).
     pub demo: bool,
     /// Render offscreen to this PNG instead of opening a window (`--offscreen <png>`).
@@ -141,6 +144,7 @@ impl Default for Args {
             mod_id: None,
             campaign: None,
             list_campaigns: false,
+            check_install: false,
             demo: false,
             offscreen: None,
             frames: 60,
@@ -203,8 +207,10 @@ OPTIONS:
   --loading-delay <s>    Hold the loading screen for this many extra seconds
   --game-dir <path>      Empire at War root (default: auto-detect / EAW_GAME_DIR)
   --mod <id>             Workshop mod id (default 1770851727)
+  --mod-dir <path>       Mod folder to use instead of the Workshop folder (or its Data folder; also EAW_MOD_DIR)
   --campaign <name>      Galactic conquest campaign (default GC_Full_Web_Way_Rebel)
   --list-campaigns       List galaxy campaigns and exit
+  --check-install        Print where the game and the Remake mod were found and exit: 0 both found, 2 game missing, 3 mod missing
   --demo                 Use the built-in demo galaxy
   --offscreen <out.png>  Render headless at 3840x2160, save the PNG and exit
   --frames <n>           Frames to render in offscreen mode (default 60)
@@ -295,6 +301,7 @@ impl Args {
                 "--mod" => out.mod_id = Some(it.next().ok_or("--mod needs a value")?),
                 "--campaign" => out.campaign = Some(it.next().ok_or("--campaign needs a value")?),
                 "--list-campaigns" => out.list_campaigns = true,
+                "--check-install" => out.check_install = true,
                 "--demo" => out.demo = true,
                 "--offscreen" => out.offscreen = Some(it.next().ok_or("--offscreen needs a value")?.into()),
                 "--frames" => {
@@ -413,6 +420,14 @@ mod tests {
         assert!(b.demo && b.offscreen.is_some() && b.game_dir.is_some() && b.mod_id.is_some());
         assert!(a.no_vsync);
         assert!(Args::parse(["--bogus".to_string()]).is_err());
+    }
+
+    #[test]
+    fn check_install_takes_the_search_overrides() {
+        let a = Args::parse(["--check-install", "--game-dir", "g", "--mod-dir", "m"].map(String::from)).unwrap();
+        assert!(a.check_install);
+        assert_eq!((a.game_dir, a.mod_dir), (Some("g".into()), Some("m".into())));
+        assert!(!Args::parse(Vec::new()).unwrap().check_install);
     }
 }
 

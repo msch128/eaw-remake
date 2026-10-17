@@ -18,7 +18,7 @@ Bevy 0.19.1 shell for "Space Peace: Not at War": Galactic Conquest only (no stor
 - Offscreen testing: `--offscreen out.png` renders 3840x2160 headless (no window, no audio) and logs frame times (~4 ms/frame).
 
 ## CLI flags
-`--game-dir`, `--mod <id>`, `--campaign <name>`, `--list-campaigns`, `--demo`, `--volume`, `--no-vsync`, `--fullscreen`,
+`--game-dir`, `--mod <id>`, `--mod-dir <path>`, `--campaign <name>`, `--list-campaigns`, `--check-install`, `--demo`, `--volume`, `--no-vsync`, `--fullscreen`,
 `--offscreen <png> [--frames N] [--screen menu|campaigns|galaxy|pause|options|loading] [--select <planet>] [--zoom 0..1]`,
 `--loading-delay <s>`. No flags: start on the menu; `--campaign`/`--demo` skip to the map.
 `--burst <n>` (offscreen, 2026-10-17): also saves the n frames from the scripted orders on (`--grant-unit`, `--build`, `--move`,
@@ -62,6 +62,16 @@ F9 on the map opens the placeholder screen. Needed: galaxy-sim API to apply a ta
 ## Next steps
 Connect the real battle-view hook and galaxy-sim result injection, switch menus to `eaw-ui`, run the app in a real window (input, settings apply,
 fullscreen, FPS cap).
+
+## `--check-install` and the `dist` build (2026-10-17)
+- `--check-install` (`install_check.rs`) prints where the game and the Remake mod were found and exits before any Bevy app, window or GPU exists. It asks what the
+  app asks (`game::find_install`, `explicit_mod_dir`, `explicit_mod_data`, shared with `open_fs`): `--game-dir`, `EAW_GAME_DIR`, the Steam registry and
+  `libraryfolders.vdf`; `--mod-dir`, `EAW_MOD_DIR`, the Workshop folder. Exit code 0 both found, 2 Forces of Corruption missing (no install, or `corruption\Data`
+  absent or empty; an explicit empty `--game-dir` gives 2), 3 the mod missing (its `Data` folder absent or empty). A bad command line also exits with 2 (`cli.rs`).
+  Tests: unit tests in the module on scratch folders, `tests/check_install.rs` runs the real binary (flags and environment variables).
+- Cargo feature `dist`: `windows_subsystem = "windows"`, so the installed game opens no console window; normal builds stay console apps (the smoke tests read their
+  output). Logs: every windowed run, dist or not, writes `%APPDATA%\SpacePeace\logs\space-peace-<unix time>.log` (`logfile.rs`, the 10 newest are kept, panics included);
+  offscreen runs write no log file. A dist build prints to a terminal only when its output is redirected (`eaw-remake.exe --check-install > check.txt`).
 
 ## Galaxy map visuals (2026-10-08)
 - Lanes (2026-10-17, measured on the user's Remake video v0520/v0540 and CS9 f0007/f0016 at full HD): one additive ribbon per route

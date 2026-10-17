@@ -1,5 +1,8 @@
 //! EAW:Remake - Empire at War galactic conquest shell.
 
+// The installed game (`dist` feature, built by tools/package.ps1) is a windowed app: no console window opens behind it. Normal
+// builds stay console apps, the smoke tests read their output.
+#![cfg_attr(feature = "dist", windows_subsystem = "windows")]
 #![allow(clippy::type_complexity, clippy::too_many_arguments)]
 
 mod battle_play;
@@ -19,6 +22,7 @@ mod planet_fleets;
 mod planet_view;
 mod galaxy_models;
 mod input_test;
+mod install_check;
 mod galaxy_view;
 mod game;
 mod loading;
@@ -68,6 +72,10 @@ use ui::UiPlugin;
 
 fn main() {
     let args = Args::from_env();
+    if args.check_install {
+        // First of all: no saves folder, settings, window or GPU is touched; the installer reads the exit code.
+        std::process::exit(install_check::run(&args));
+    }
     if args.offscreen.is_some() {
         newgame::isolate_offscreen_saves();
     }
