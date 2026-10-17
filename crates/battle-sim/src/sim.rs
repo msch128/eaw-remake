@@ -488,6 +488,7 @@ impl Battle {
             hunt_cell: NO_CELL,
             hunt_since: 0.0,
             flyout_left: 0.0,
+            flyout_exit: Vec3::ZERO,
             group,
             squad,
             formation,
@@ -576,9 +577,9 @@ impl Battle {
             .or_else(|| cdef.hardpoints.iter().enumerate().find(|(_, h)| h.kind == HpKind::FighterBay))
             .map(|(_, h)| h);
         let bay = bay_def.map_or(Vec3::ZERO, |h| h.offset);
-        let flyout = bay_def.map_or(0.0, |h| h.flyout);
-        // The way out: away from the ship's centre through the bay (a bay on the centre line opens to the bow).
-        let out_yaw = if bay.x.hypot(bay.y) > 20.0 { cyaw + bay.y.atan2(bay.x) } else { cyaw };
+        let (exit, heading, flyout) = launch_path(cdef, bay_def);
+        let out_yaw = cyaw + heading;
+        let leaves = flyout > 0.0 || exit != Vec3::ZERO;
         let mut rng = Rng::for_entity(self.config.seed, self.tick, carrier, 0x1A0C + self.ships.len() as u64);
         // Emerge tightly from the hangar bay opening (not scattered across a kilometer ball around the ship)
         let base = cpos + (bay + rng.in_ball() * 25.0).rotate_yaw(cyaw);
@@ -601,14 +602,15 @@ impl Battle {
                 // flyout.
                 let (bay_off, off) = (formation_offset(&sq.offsets, idx), flight_offset(sq, idx));
                 idx += 1;
-                let face = if flyout > 0.0 { out_yaw } else { cyaw };
+                let face = if leaves { out_yaw } else { cyaw };
                 let id = self.spawn_ship(m, side, base + bay_off.rotate_yaw(face), cyaw, NONE, squad, off);
                 let s = &mut self.ships[id as usize];
                 s.carrier = carrier;
                 s.speed = cat.ship(m).max_speed * 0.5;
-                if flyout > 0.0 {
+                if leaves {
                     s.yaw = out_yaw;
                     s.flyout_left = flyout;
+                    s.flyout_exit = exit.rotate_yaw(cyaw);
                 }
                 s.order = ai_order;
                 self.squads[squad as usize].push(id);
@@ -2740,20 +2742,52 @@ fn formation_rel(member: Vec3, leader: Vec3) -> Vec3 {
     Vec3::new(member.x - leader.x, member.y - leader.y, member.z)
 }
 
+/// Whether `p` lies in the hull of a ship of definition `def` at `pos` heading `yaw`, or within `margin` of it: inside its plan-view
+/// capsule and, where the model gives one, its height range.
+fn in_hull(p: Vec3, pos: Vec3, yaw: f32, def: &ShipDef, margin: f32) -> bool {
+    let hull = def.footprint();
+    crate::nav::core_distance(p, hull, pos, yaw).0 < hull.half_width + margin
+        && def.hull_z.is_none_or(|(lo, hi)| p.z > pos.z + lo - margin && p.z < pos.z + hi + margin)
+}
+
+/// The way fighters leave bay `h` of a carrier of definition `cdef`, in the carrier's frame: the direction of the first leg out of the
+/// hangar (zero when there is none), the heading of the level rest and the distance flown level. A bay on a model bone follows the bone's
+/// X axis, the hangar opening of the data (straight down for the MC-80 and the Acclamator, 45 degrees down ahead for the Victory, sideways
+/// for the Nebulon-B), until it is clear of the hull and flies the rest of `Fighter_Bay_Flyout_Distance` level; an axis that does not lead
+/// out within `LAUNCH_EXIT_MAX` (the Star Destroyer's runs along the belly to the bow) is flown level after a drop below the hull (above it
+/// for a bay in the upper half). A bay without a bone or a carrier without a model keeps the level way from the centre through the bay (a
+/// centred bay opens to the bow).
+fn launch_path(cdef: &ShipDef, h: Option<&HpDef>) -> (Vec3, f32, f32) {
+    let Some(h) = h else { return (Vec3::ZERO, 0.0, 0.0) };
+    let bay = h.offset;
+    let level_out = if bay.x.hypot(bay.y) > 20.0 { bay.y.atan2(bay.x) } else { 0.0 };
+    let Some((lo, hi)) = cdef.hull_z.filter(|_| h.from_bone && h.forward.len() > 0.5) else { return (Vec3::ZERO, level_out, h.flyout) };
+    let axis = h.forward.normalized();
+    let heading = if axis.x.hypot(axis.y) > 0.3 { axis.y.atan2(axis.x) } else { level_out };
+    let exit = (0..=(LAUNCH_EXIT_MAX / 5.0) as usize).map(|k| k as f32 * 5.0).find(|&d| !in_hull(bay + axis * d, Vec3::ZERO, 0.0, cdef, LAUNCH_CLEARANCE));
+    match exit {
+        Some(d) => (axis, heading, (h.flyout - d).max(0.0)),
+        None => (Vec3::new(0.0, 0.0, if bay.z > (lo + hi) * 0.5 { 1.0 } else { -1.0 }), heading, h.flyout),
+    }
+}
+
 /// Place member `idx` of squadron `def` keeps in flight: the spread formation of a definition from the data, the plain offsets of a
 /// hand-made one.
 fn flight_offset(def: &ShipDef, idx: usize) -> Vec3 {
     def.spread.get(idx).copied().unwrap_or_else(|| formation_offset(&def.offsets, idx))
 }
 
-/// Fighters fly almost anywhere but not through the middle of a hull (their own carrier excepted, they dock there): not inside 0.45 of the
-/// hull's radius and, where the model gives a hull, not within `FIGHTER_KEEP_OUT` of its half width from the hull's long axis.
+/// Fighters fly almost anywhere but not through the middle of a hull: not inside 0.45 of the hull's radius and, where the model gives a
+/// hull, not within `FIGHTER_KEEP_OUT` of its half width from the hull's long axis. Their own carrier counts only within its height range:
+/// they left the hangar below or beside it (a carrier without a model height is excepted, its bay lies inside it).
 fn keep_out_of_hulls(s: &mut Ship, def: &ShipDef, snaps: &[Snap], cat: &Catalog, hulls: &[u32]) {
     for &j in hulls {
-        if j == s.carrier {
+        let o = &snaps[j as usize];
+        if j == s.carrier
+            && cat.ship(o.def).hull_z.is_none_or(|(lo, hi)| s.pos.z <= o.pos.z + lo - LAUNCH_CLEARANCE || s.pos.z >= o.pos.z + hi + LAUNCH_CLEARANCE)
+        {
             continue;
         }
-        let o = &snaps[j as usize];
         let shape = cat.ship(o.def).hull_shape;
         let circle = o.radius * 0.45 + def.radius;
         let reach = circle.max(shape.map_or(0.0, |h| h.reach()) + def.radius);
@@ -2784,16 +2818,28 @@ fn mov(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, spawn: &
         return;
     }
     let dt = cfg.dt;
-    // A fighter that just left its hangar flies straight out for `Fighter_Bay_Flyout_Distance` before it follows orders. Squadron members fly
-    // along with their leader and open out of the tight hangar formation on the way: each closes the same share of the distance to its place
-    // per step, so the squadron is in formation where the flyout ends instead of re-forming in a knot in front of the hangar.
+    // A fighter that just left its hangar first clears its carrier's hull (`launch_path`), then flies straight out for the rest of
+    // `Fighter_Bay_Flyout_Distance` before it follows orders. Squadron members fly along with their leader and open out of the tight hangar
+    // formation on the level way: each closes the same share of the distance to its place per step, so the squadron is in formation where
+    // the flyout ends instead of re-forming in a knot in front of the hangar.
+    if s.flyout_exit != Vec3::ZERO {
+        let step = (def.max_speed * 0.5).max(10.0) * dt;
+        s.pos += s.flyout_exit * step;
+        s.speed = step / dt;
+        let c = s.carrier;
+        if c == NONE || !snaps[c as usize].alive || !in_hull(s.pos, snaps[c as usize].pos, snaps[c as usize].yaw, cat.ship(snaps[c as usize].def), LAUNCH_CLEARANCE) {
+            s.flyout_exit = Vec3::ZERO;
+        }
+        return;
+    }
     if s.flyout_left > 0.0 {
         let step = (def.max_speed * 0.5).max(10.0) * dt;
         let l = if s.squad != NONE { leaders[s.squad as usize] } else { NONE };
         let shift = if l != NONE && l != s.id && snaps[l as usize].alive {
             let lead = &snaps[l as usize];
             let place = lead.pos + formation_rel(s.formation, lead.formation).rotate_yaw(lead.yaw);
-            Vec3::from_yaw(lead.yaw) * step + (place - s.pos) * (step / s.flyout_left.max(step))
+            let to = place - s.pos;
+            Vec3::from_yaw(lead.yaw) * step + Vec3::new(to.x, to.y, 0.0) * (step / s.flyout_left.max(step))
         } else {
             Vec3::from_yaw(s.yaw) * step
         };
@@ -2828,11 +2874,14 @@ fn mov(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, spawn: &
     }
     let mut face: Option<Vec3> = None;
     // Members of a squadron fly in formation: the slot is the leader's position plus the member's place relative to the leader's own place
-    // (spread `Squadron_Offsets`) turned with the leader; the leader's speed is the speed to match.
+    // (spread `Squadron_Offsets`) turned with the leader; the leader's speed is the speed to match. The slot is a place in the plane: the
+    // height is flown on its own (the leader's, or clear of the own carrier's hull, see below).
     let slot: Option<(Vec3, f32)> = if s.squad != NONE {
         let l = leaders[s.squad as usize];
-        (l != NONE && l != s.id && snaps[l as usize].alive)
-            .then(|| (snaps[l as usize].pos + formation_rel(s.formation, snaps[l as usize].formation).rotate_yaw(snaps[l as usize].yaw), snaps[l as usize].vel.len()))
+        (l != NONE && l != s.id && snaps[l as usize].alive).then(|| {
+            let q = snaps[l as usize].pos + formation_rel(s.formation, snaps[l as usize].formation).rotate_yaw(snaps[l as usize].yaw);
+            (Vec3::new(q.x, q.y, s.pos.z), snaps[l as usize].vel.len())
+        })
     } else {
         None
     };
@@ -3238,7 +3287,25 @@ fn mov(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, spawn: &
             let z_dir = if s.id % 2 == 0 { 1.0 } else { -1.0 };
             s.pos.z += z_dir * (def.max_speed * 0.7 * dt);
         } else {
-            let z_goal = target.map_or(0.0, |t| t.pos.z);
+            // A squadron member without a target of its own keeps its leader's height: the squadron flies at one height.
+            let lead = if s.squad != NONE { leaders[s.squad as usize] } else { NONE };
+            let lead_z = (lead != NONE && lead != s.id && snaps[lead as usize].alive).then(|| snaps[lead as usize].pos.z);
+            let mut z_goal = target.map_or(lead_z.unwrap_or(0.0), |t| t.pos.z);
+            // A fighter under (or over) its own carrier stays clear of the hull's height until it is out from under it: it left the hangar
+            // below the hull and must not rise through it.
+            if fighter && s.carrier != NONE && snaps[s.carrier as usize].alive {
+                let c = &snaps[s.carrier as usize];
+                let cdef = cat.ship(c.def);
+                if let Some((lo, hi)) = cdef.hull_z
+                    && in_hull(Vec3::new(s.pos.x, s.pos.y, c.pos.z), c.pos, c.yaw, cdef, LAUNCH_CLEARANCE)
+                {
+                    if s.pos.z <= c.pos.z + lo - LAUNCH_CLEARANCE {
+                        z_goal = z_goal.min(c.pos.z + lo - LAUNCH_CLEARANCE);
+                    } else if s.pos.z >= c.pos.z + hi + LAUNCH_CLEARANCE {
+                        z_goal = z_goal.max(c.pos.z + hi + LAUNCH_CLEARANCE);
+                    }
+                }
+            }
             let step = def.max_speed * 0.5 * dt;
             s.pos.z += (z_goal - s.pos.z).clamp(-step, step);
         }
@@ -3781,8 +3848,15 @@ const ESCORT_GAP: f32 = 150.0;
 const PUSH_SPEED: f32 = 2.0;
 
 /// Fighters keep this share of a model hull's half width away from its long axis (estimate, about the 0.45 of the radius that applies to
-/// every hull). Their own carrier is excepted.
+/// every hull). Their own carrier only within its height range (they leave the hangar below or beside it).
 const FIGHTER_KEEP_OUT: f32 = 0.5;
+
+/// Distance a launched fighter keeps from its own carrier's hull on the way out of the hangar and while it flies under or over it
+/// (estimate: half the size a fighter is drawn at the default camera, about 75 units across, see battle-view `SMALL_CRAFT_SCREEN_FRACTION`).
+const LAUNCH_CLEARANCE: f32 = 40.0;
+/// A bay whose bone axis does not lead out of the hull within this distance (estimate) drops its fighters below the hull first: the Star
+/// Destroyer's bay axis runs along the belly to the bow.
+const LAUNCH_EXIT_MAX: f32 = 150.0;
 
 /// AI formation (estimates): a big ship flies the formation's velocity plus `FORMATION_GAIN` (1/s) times the distance to its slot, steering
 /// at the point that velocity reaches in `FORMATION_HORIZON` seconds (at least `FORMATION_LOOKAHEAD` units ahead).

@@ -498,6 +498,9 @@ pub struct ShipDef {
     pub model_extent: f32,
     /// Plan-view hull from the model's meshes (`None` without a model); ships keep out of it, see [`ShipDef::footprint`].
     pub hull_shape: Option<crate::nav::Hull>,
+    /// Height range (lowest, highest z) of the model's meshes (`None` without a model): the fighters a carrier launches leave it below or
+    /// beside the hull and keep clear of it, see `launch_path` in the simulation.
+    pub hull_z: Option<(f32, f32)>,
     /// Distance of the farthest destroyable hardpoint from the centre (x1.05): a projectile hits the unit within `max(radius, hardpoint_reach)` of its path, so shots aimed at an outlying hardpoint of a
     /// tall station do not fly past it (the collision radius is clamped and was smaller than the model).
     pub hardpoint_reach: f32,
@@ -777,6 +780,8 @@ struct ModelInfo {
     radius: f32,
     /// Plan-view hull from the bounding boxes of the visible meshes.
     hull: Option<crate::nav::Hull>,
+    /// Height range (lowest, highest z) of the visible meshes.
+    height: Option<(f32, f32)>,
 }
 
 fn load_model(fs: &dyn FileSource, name: &str) -> Option<ModelInfo> {
@@ -798,13 +803,16 @@ fn load_model(fs: &dyn FileSource, name: &str) -> Option<ModelInfo> {
         let yaxis = Vec3::new(-t[1][1], t[0][1], t[2][1]).normalized();
         bones.insert(b.name.to_ascii_lowercase(), (pos, xaxis, zaxis, mirrored, yaxis));
     }
-    Some(ModelInfo { bones, radius, hull: mesh_hull(&m) })
+    let (hull, height) = mesh_hull(&m);
+    Some(ModelInfo { bones, radius, hull, height })
 }
 
 /// Plan-view hull of a model: the reach ahead of and behind the centre and the half width over the bounding box corners of the visible
-/// full-detail meshes (hidden damage, collision and shield meshes and shadow volumes left out), in battle space.
-fn mesh_hull(m: &alamo_model::Model) -> Option<crate::nav::Hull> {
+/// full-detail meshes (hidden damage, collision and shield meshes and shadow volumes left out), in battle space; and the height range
+/// (lowest, highest z) of those corners.
+fn mesh_hull(m: &alamo_model::Model) -> (Option<crate::nav::Hull>, Option<(f32, f32)>) {
     let (mut front, mut back, mut half_width) = (f32::MIN, f32::MIN, 0.0f32);
+    let (mut low, mut high) = (f32::MAX, f32::MIN);
     for (i, mesh) in m.meshes.iter().enumerate() {
         if mesh.hidden || mesh.lod > 0 || mesh.is_shadow_volume() {
             continue;
@@ -820,9 +828,12 @@ fn mesh_hull(m: &alamo_model::Model) -> Option<crate::nav::Hull> {
             front = front.max(bx);
             back = back.max(-bx);
             half_width = half_width.max(by.abs());
+            low = low.min(w(2));
+            high = high.max(w(2));
         }
     }
-    (front > f32::MIN && half_width > 0.0).then(|| crate::nav::Hull { front: front.max(0.0), back: back.max(0.0), half_width })
+    let hull = (front > f32::MIN && half_width > 0.0).then(|| crate::nav::Hull { front: front.max(0.0), back: back.max(0.0), half_width });
+    (hull, (low <= high).then_some((low, high)))
 }
 
 /// Bone positions of a turret model (`Model_To_Attach`), in its own model space.
@@ -1133,7 +1144,7 @@ impl Catalog {
                 }
                 let bones = m.bones.iter().map(|(n, &(p, x, z, mir, y))| (n.clone(), (Vec3::new(p.x * k, p.y * k, p.z * k), x, z, mir, y))).collect();
                 let hull = m.hull.map(|h| crate::nav::Hull { front: h.front * k, back: h.back * k, half_width: h.half_width * k });
-                Arc::new(ModelInfo { bones, radius: m.radius * k, hull })
+                Arc::new(ModelInfo { bones, radius: m.radius * k, hull, height: m.height.map(|(lo, hi)| (lo * k, hi * k)) })
             });
             let model = scaled.as_ref();
             let def = cat.ship_def(s, &hp_defs[i], model.map(|m| &**m), &attach);
@@ -1573,6 +1584,7 @@ impl Catalog {
             model_extent,
             // A mesh hull far smaller than the collision radius is a placeholder model (estimate: under 0.3 of it): the round hull stands in.
             hull_shape: model.and_then(|m| m.hull).filter(|h| h.reach() >= 0.3 * radius),
+            hull_z: model.and_then(|m| m.height),
             hardpoint_reach: hardpoints.iter().filter(|h| h.destroyable).map(|h| h.offset.len()).fold(0.0f32, f32::max) * 1.05,
             max_speed,
             accel,

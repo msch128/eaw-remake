@@ -24,7 +24,7 @@ struct Metric {
     /// Largest heading change of a capital in degrees.
     capital_turn_deg: f32,
     /// Largest distance of a fighter from its formation slot (the leader's position plus the member's place relative to the leader's own), in
-    /// units, over the run (after settling).
+    /// units in the plane (the height is flown on its own: a member under its carrier stays clear of the hull), over the run (after settling).
     squadron_spread: f32,
     /// Distance flown by the busiest fighter after settling (first 10 s), per minute.
     fighter_path_per_min: f32,
@@ -91,7 +91,7 @@ fn measure(idle_secs: f32, with_move: bool) -> Option<Metric> {
                 if leader != s.id {
                     let l = &b.ships[leader as usize];
                     let slot = l.pos + Vec3::new(s.formation.x - l.formation.x, s.formation.y - l.formation.y, s.formation.z).rotate_yaw(l.yaw);
-                    m.squadron_spread = m.squadron_spread.max(s.pos.dist(slot));
+                    m.squadron_spread = m.squadron_spread.max((s.pos.x - slot.x).hypot(s.pos.y - slot.y));
                 }
             }
         }
@@ -342,3 +342,46 @@ fn capital_ship_approaches_and_aligns_broadside_weapons() {
     assert!(isd_speed < 80.0, "ISD brakes into standoff: speed {}", isd_speed);
 }
 
+
+#[test]
+fn launched_fighters_leave_their_carriers_without_flying_through_the_hull() {
+    // The hangar data: the Star Destroyer's bay axis runs along the belly to the bow (its fighters drop below the hull first), the Victory's
+    // points 45 degrees down ahead, the Nebulon-B's sideways and the MC-80's straight down (it has no flyout distance). Once a fighter is out
+    // of the hangar (its first leg flown, a few seconds at most), its position never lies in its own carrier's hull: inside the plan-view
+    // capsule and within the model's height. That holds on the level rest of the flyout and afterwards, while the squadrons wait.
+    let Some((data, fs)) = real_data() else { return };
+    let cat = Arc::new(Catalog::build(&data, Some(&fs), &["Star_Destroyer", "Victory_Destroyer", "Nebulon_B_Frigate", "MC-80_Star_Cruiser"]));
+    let mk = |name: &str, units: &[(&str, u32)]| SideSetup { name: name.into(), units: units.iter().map(|&(n, c)| UnitSetup { ship: cat.ship_id(n).unwrap(), count: c, tag: 1 }).collect(), structures: vec![], ai: false };
+    let sides = vec![mk("Empire", &[("Star_Destroyer", 1), ("Victory_Destroyer", 1)]), mk("Rebel", &[("Nebulon_B_Frigate", 1), ("MC-80_Star_Cruiser", 1)])];
+    let mut b = Battle::new(BattleSetup { catalog: cat.clone(), sides, config: BattleConfig { record_events: false, seed: 1, ..BattleConfig::default() } });
+    // The enemy is far away: nothing to engage.
+    for s in b.ships.iter_mut().filter(|s| s.side == 1) {
+        s.pos = Vec3::new(s.pos.x + 60000.0, s.pos.y, s.pos.z);
+    }
+    let mut exit_ticks: std::collections::HashMap<u32, u32> = std::collections::HashMap::new();
+    let (mut checked, mut inside) = (0usize, Vec::new());
+    let mut carriers = std::collections::BTreeSet::new();
+    for t in 0..30 * 30 {
+        for s in b.ships.iter().filter(|s| s.alive && s.flyout_exit != Vec3::ZERO) {
+            *exit_ticks.entry(s.id).or_default() += 1;
+        }
+        b.step();
+        for s in b.ships.iter().filter(|s| s.alive && s.carrier != u32::MAX && s.flyout_exit == Vec3::ZERO) {
+            let c = &b.ships[s.carrier as usize];
+            let cdef = cat.ship(c.def);
+            let (Some((lo, hi)), hull) = (cdef.hull_z, cdef.footprint()) else { continue };
+            let plan = battle_sim::nav::core_distance(s.pos, hull, c.pos, c.yaw).0;
+            carriers.insert(cdef.name.clone());
+            checked += 1;
+            if plan < hull.half_width && s.pos.z > c.pos.z + lo && s.pos.z < c.pos.z + hi {
+                inside.push(format!("t {:.1}: {} #{} of {}: {:.0} from the axis (half width {:.0}), height {:.0} in {:.0}..{:.0}", t as f32 / 30.0, cat.ship(s.def).name, s.id, cdef.name, plan, hull.half_width, s.pos.z - c.pos.z, lo, hi));
+            }
+        }
+    }
+    let (slowest, longest) = exit_ticks.iter().map(|(&id, &n)| (id, n as f32 / 30.0)).max_by(|a, b| a.1.total_cmp(&b.1)).unwrap_or((0, 0.0));
+    let of = |id: u32| format!("{} of {}", cat.ship(b.ships[id as usize].def).name, cat.ship(b.ships[b.ships[id as usize].carrier as usize].def).name);
+    println!("carriers {carriers:?}: {checked} fighter positions checked, {} inside the own hull, longest way out of a hangar {longest:.1} s ({})", inside.len(), of(slowest));
+    assert_eq!(carriers.len(), 4, "every carrier launched: {carriers:?}");
+    assert!(longest > 0.0 && longest <= 4.0, "the first leg out of the hangar is short: {longest} s");
+    assert!(inside.is_empty(), "{} positions inside the own carrier's hull, first: {:?}", inside.len(), inside.first());
+}
