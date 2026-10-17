@@ -148,10 +148,13 @@ fn a_squadron_ordered_to_move_flies_there_in_formation() {
     }
     println!("ordered squadrons: worst distance from the slot {worst:.0}");
     assert!(worst < 150.0, "members keep their slots on the way: {worst}");
-    let leader_of = |sq: u32| b.squad_leader(sq).unwrap();
-    let far = mine.iter().map(|&i| leader_of(b.ships[i as usize].squad)).map(|l| b.ships[l as usize].pos.dist(to)).fold(0.0f32, f32::max);
-    println!("farthest leader from the goal {far:.0}");
-    assert!(far < 150.0, "and the squadrons arrived: {far}");
+    // The two squadrons are one group move (RULES.md 9d): their leaders stand side by side in a formation centred on the goal.
+    let mut leaders: Vec<u32> = mine.iter().map(|&i| b.squad_leader(b.ships[i as usize].squad).unwrap()).collect();
+    leaders.sort_unstable();
+    leaders.dedup();
+    let centre = leaders.iter().fold(Vec3::ZERO, |a, &l| a + b.ships[l as usize].pos) * (1.0 / leaders.len() as f32);
+    println!("centre of the squadron leaders from the goal {:.0}", centre.dist(to));
+    assert!(centre.dist(to) < 150.0, "and the squadrons arrived: {centre:?} for {to:?}");
 }
 
 // ---------------------------------------------------------------------------------------------------------------------

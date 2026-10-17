@@ -559,6 +559,16 @@ pub struct ShipDef {
     pub special_weapon: Option<SpecialWeaponDef>,
     /// `In_Background` (the Death Star): a backdrop object, neither targeted nor hit by anything.
     pub background: bool,
+    /// `FormationOrder`: formations put lower orders further ahead.
+    pub formation_order: u8,
+    /// `Formation_Priority`: within its formation band a higher priority fills the front rows first.
+    pub formation_priority: i32,
+    /// `FormationSpacing`: multiplies `BetweenFormationSpacing` next to this unit (0 = the data has none: 1).
+    pub formation_spacing: f32,
+    /// `FormationGrouping` `Solo`: the unit does not join formations.
+    pub formation_solo: bool,
+    /// `WaitsForFormationFormup` false: in a formation the unit flies at its own speed instead of the group's.
+    pub formation_no_wait: bool,
 }
 
 impl ShipDef {
@@ -752,6 +762,23 @@ impl PrioritySet {
     }
 }
 
+/// Formation constants of GameConstants (see `formation.rs`); the defaults are the Remake's.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FormationRules {
+    /// `BetweenFormationSpacing`: clearance between neighbours in a formation beyond what keeps their hulls apart.
+    pub spacing: f32,
+    /// `Rotate_Formation_Facing_Moves`: a formation faces the direction of its move (else the way its units face).
+    pub rotate_facing: bool,
+    /// `FinalFormationFacingMinimumAngle` (radians): a ship that parks less than this off the formation's facing does not turn to it.
+    pub facing_min_angle: f32,
+}
+
+impl Default for FormationRules {
+    fn default() -> Self {
+        FormationRules { spacing: 50.0, rotate_facing: true, facing_min_angle: 5.0f32.to_radians() }
+    }
+}
+
 /// All definitions needed by battles.
 #[derive(Debug, Clone, Default)]
 pub struct Catalog {
@@ -767,6 +794,8 @@ pub struct Catalog {
     pub shield_interval: f32,
     /// `Depleted_Shield_Disable_Time`: seconds a fully drained shield stays offline.
     pub depleted_shield_disable: f32,
+    /// Formation constants.
+    pub formation: FormationRules,
     /// Targeting priority sets.
     pub priority_sets: Vec<PrioritySet>,
     priority_index: HashMap<String, u16>,
@@ -1073,7 +1102,14 @@ impl Catalog {
         let priority_index: HashMap<String, u16> = priority_sets.iter().enumerate().map(|(i, s)| (s.name.clone(), i as u16)).collect();
         let shield_interval = data.game_constants.get("shieldrechargeintervalinsecs").and_then(|v| v.parse().ok()).unwrap_or(2.0f32).max(0.1);
         let depleted_shield_disable = data.game_constants.get("depleted_shield_disable_time").and_then(|v| v.parse().ok()).unwrap_or(0.0f32).max(0.0);
-        let mut cat = Catalog { damage, speed_scale: 30.0, shield_interval, depleted_shield_disable, priority_sets, priority_index, ..Catalog::default() };
+        let constant = |tag: &str| data.game_constants.get(tag).and_then(|v| v.trim().parse::<f32>().ok());
+        let rules = FormationRules::default();
+        let formation = FormationRules {
+            spacing: constant("betweenformationspacing").unwrap_or(rules.spacing).max(0.0),
+            rotate_facing: data.game_constants.get("rotate_formation_facing_moves").map_or(rules.rotate_facing, |v| alamo_data::xml::parse_bool(v)),
+            facing_min_angle: constant("finalformationfacingminimumangle").map_or(rules.facing_min_angle, f32::to_radians),
+        };
+        let mut cat = Catalog { damage, speed_scale: 30.0, shield_interval, depleted_shield_disable, formation, priority_sets, priority_index, ..Catalog::default() };
         // Projectiles.
         let mut proj_names: Vec<String> = Vec::new();
         let hp_defs: Vec<Vec<HardpointDef>> = sources
@@ -1459,6 +1495,10 @@ impl Catalog {
             _ => false,
         };
 
+        let unit_field = |tag: &str| match src {
+            Source::Unit(u) => u.fields.get(tag).map(String::as_str),
+            _ => None,
+        };
         let no_spawn_radius = match src {
             Source::Unit(u) => u.fields.get("reinforcement_prevention_radius").and_then(|v| v.trim().parse::<f32>().ok()),
             Source::Structure(s) => s.fields.get("reinforcement_prevention_radius").and_then(|v| v.trim().parse::<f32>().ok()),
@@ -1612,6 +1652,11 @@ impl Catalog {
             interdictor,
             special_weapon,
             background: matches!(src, Source::Unit(u) if u.fields.get("in_background").is_some_and(|v| alamo_data::xml::parse_bool(v))),
+            formation_order: unit_field("formationorder").and_then(|v| v.trim().parse().ok()).unwrap_or(1),
+            formation_priority: unit_field("formation_priority").and_then(|v| v.trim().parse().ok()).unwrap_or(1),
+            formation_spacing: unit_field("formationspacing").and_then(|v| v.trim().parse().ok()).unwrap_or(1.0),
+            formation_solo: unit_field("formationgrouping").is_some_and(|v| v.trim().eq_ignore_ascii_case("solo")),
+            formation_no_wait: unit_field("waitsforformationformup").is_some_and(|v| !alamo_data::xml::parse_bool(v)),
         }
     }
 

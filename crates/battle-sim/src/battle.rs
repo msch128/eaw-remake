@@ -638,6 +638,8 @@ pub struct Ship {
     pub(crate) mods: [(f32, f32); ModKind::COUNT],
     /// AI formation: the slot this ship holds in its side's advancing group, the group's speed and heading (`None` = not in a group).
     pub(crate) group_slot: Option<(Vec3, f32, f32)>,
+    /// Group move: this ship's place in the formation at the destination (`None` = not in one; see `formation.rs`).
+    pub(crate) move_slot: Option<crate::formation::MoveSlot>,
     /// AI: the side's priority target, focused when it is within reach (`NONE` = none).
     pub(crate) focus: u32,
 }
@@ -762,6 +764,8 @@ pub struct Battle {
     pub(crate) search: Vec<(u32, f32)>,
     /// Per side: the tactical AI's formation, priority target and reserve (see `ai.rs`).
     pub(crate) ai: Vec<crate::ai::AiSide>,
+    /// Group moves under way, in the order they were given (see `formation.rs`).
+    pub(crate) formations: Vec<crate::formation::Formation>,
 }
 
 impl Battle {

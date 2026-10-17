@@ -29,6 +29,7 @@ mod arena;
 mod battle;
 pub mod cheats;
 mod defs;
+mod formation;
 mod math;
 mod placement;
 pub mod nav;
@@ -40,7 +41,7 @@ pub use battle::{
     HUNT_GRID, NONE, NO_CELL, NO_HP, NO_TAG, REINFORCE_TAG, Order, Projectile, Ship, SideSetup, SquadSlot, Stance, UnitSetup,
 };
 pub use defs::{BonusDef, CombatMod, ModKind, WeakenDef, LureDef, BombDef, EnergyDef, ClusterDef, HealDef, CorruptDef, RedirectDef, SuperLaserDef, ZoneDef, 
-    AbilityDef, Catalog, DamageMatrix, DirectWeaponDef, HpDef, HpKind, PrioritySet, ProjDef, ProjId, ShipDef, ShipId, SpecialWeaponDef, TargetClass,
+    AbilityDef, Catalog, DamageMatrix, DirectWeaponDef, FormationRules, HpDef, HpKind, PrioritySet, ProjDef, ProjId, ShipDef, ShipId, SpecialWeaponDef, TargetClass,
     TractorDef,
 };
 pub use arena::{Arena, Marker, Obstacle};

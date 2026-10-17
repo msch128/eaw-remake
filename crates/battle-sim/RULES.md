@@ -67,7 +67,7 @@ Ion stun slows the target and its fire rate for `Projectile_Ion_Stun_Duration`.
 * Big ships stop at that range with an arrival speed profile (no overshoot), start turning to the weapon bearing in the last stretch of the approach, and position themselves against the best non-fighter target (fighters and bombers are fired at but not chased, unless explicitly ordered). Restart hysteresis 1.12 x standoff (estimate).
 * Orders: `Move`, `AttackMove`, `Attack(ship)`, `AttackHardpoint(ship, hardpoint)` (aims at the hardpoint and the hit
   routes to it), `Stop`, `Retreat`, stances Aggressive / Defensive / HoldFire.
-* No ship-ship collision or avoidance; AI fleets keep a formation on the approach (section 9c).
+* No ship-ship collision or avoidance; AI fleets keep a formation on the approach (section 9c); a group move ends in a formation at its point (section 9d).
 
 ## 5. Abilities
 
@@ -185,7 +185,8 @@ after the Remake scripts `MoveToLocation.lua` (`AotR_Beginning_Assault`), `Space
   force is 2x the enemy's after 120 s; or the station below 70%, or an own big ship near the enemy), the reserve is called in one unit at a time while
   the population cap has room (`Want_To_Reinforce_Units`).
 * **Formation (estimates):** the free big ships form a line (frigates and capitals) with the corvettes and transports 700 units ahead, each row ordered by
-  where its ships stand across the line of advance (re-sorted every second, each ship keeps `radius x 2.2 + 60` of room). The slots start at or ahead of
+  where its ships stand across the line of advance (re-sorted every second, each ship keeps `radius x 2.2 + 60` of room; laid out by the slot layout of
+  group moves, section 9d, with this start layout's room, so a band wider than 6000 stands in several rows 700 apart). The slots start at or ahead of
   every ship. The anchor advances at the slowest big ship's speed, slowed down to 25% while a ship is 500-2000 units behind its slot, standing while
   reinforcements arrive within 3000 units, turning no faster than its slowest ship and its outer slots allow; a goal more than 1 rad off the heading lays
   the line out anew. A big ship flies the formation's velocity plus 0.25/s times the distance to its slot, never backwards (it waits for a slot that fell
@@ -217,6 +218,55 @@ after the Remake scripts `MoveToLocation.lua` (`AotR_Beginning_Assault`), `Space
 * **Damaged ships:** `align_to_target` counts only the weapon hardpoints that are still alive (`HpDef::arc_bins`, `HpDef::dps`); before, two damaged
   capitals could face each other with their dead batteries and stop fighting for good (seen in `even_fights_do_not_trigger_the_retreat` once the
   fleets met as lines: a draw after 1500 s; now decided after about 500-550 s).
+
+### 9d. Group moves: a formation at the destination (`formation.rs`, user rule 2026-10-17)
+Project rule: in EaW, once a move order is given, every ship plans its own route to its place without collisions and flies there; 20 Star Destroyers
+then stand in a row, tight against each other, if needed in 2-3 rows. Before, a group `Move` / `AttackMove` sent every ship to the one point
+and the ships jostled there.
+* **Slots:** a `Move` or `AttackMove` of two or more units (a fighter squadron is one unit: its leader flies the slot, the others keep their places around
+  it; static units and `FormationGrouping` `Solo` units stay out) lays out one formation centred on the ordered point. It faces the move
+  (`Rotate_Formation_Facing_Moves`, data; with the flag off, the way the group faces). Bands front to back: `FormationOrder` (data; 1 wherever a Remake space
+  unit sets it), then the escorts (fighters, bombers, corvettes, transports) ahead of the frigates and capital ships (estimate, as the AI line). A band wider
+  than 6000 in one row splits into rows of equal count (estimate: 20 Star Destroyers stand in 2 rows of 10), filled front to back by `Formation_Priority`
+  (data; likewise 1) and by how far ahead the units already are; every row is ordered by where its units stand across the move, so their ways do not cross.
+* **Spacing:** neighbours stand `BetweenFormationSpacing` (GameConstants: 50; a unit's `FormationSpacing` multiplies it) beyond what keeps their hulls
+  apart, the larger of the two plan-view hull half widths and the hull separation's 0.85 of the two snapshot radii (an escort keeps `ESCORT_GAP` 150 more
+  from a capital ship); rows likewise with the hulls' reach ahead and behind. Star Destroyers stand 589 apart (157 between the hulls), Victorys 383, a
+  Victory next to a Star Destroyer 713, corvettes 101. A fighter squadron takes the room of its members' places around its leader (`Ship::formation`),
+  each member within 50 of its place (a fighter that holds a place stops within 50), at least 90 every way (estimates, as the AI line): counted as round
+  units of radius 90, 4 pairs of the 12 squadrons six Star Destroyers launch reached into each other (1 pair with their places but without the 50), now none.
+* **Routes (estimates):** every ship flies its own route, the A* path around rocks and stations and the hull separation. On the last, straight leg a big
+  ship or a squadron's leader steers at the point of its slot's line (along the formation's heading) halfway between its own place along that line and the
+  slot: it lines up behind its slot on the way and comes in straight (a squadron keeps its leader's heading at rest, so it faces the move: 0.1 degrees off
+  instead of up to 12.7). It leaves the other ships of its formation to their slots (steering round them made neighbours that close up side by side push
+  each other off their slots), except the ones that stand while it cuts across the lanes (more than 0.35 rad off the formation's heading).
+  A ship that faces more than 1.2 rad away from where it steers, or more than 0.35 rad while it is closer to its slot than its turning radius or at the
+  start of the move, first turns on the spot to within 0.05 rad of it, to the plain bearing (so a formation sent behind itself turns round where it stands,
+  and nobody circles a slot inside its turn). It stops 20 from its slot, counts as parked within 30 and stays parked within 120 (a push does not send it round
+  again).
+* **Facing:** a parked ship that is more than `FinalFormationFacingMinimumAngle` (data: 5 degrees) off the formation's facing turns to it, and then all the
+  way. `FinalFormationFacingDeltaCoefficient` and `Max_Formation_Area` are not used: what they do in the engine is not known.
+* **Pace:** space units wait for each other (`WaitsForFormationFormup`; the data turns it off only for ground units): every unit flies the share of its top
+  speed it needs to arrive when the last one can (path length, plus the time a big ship needs to turn towards its slot), never below 25% of its top speed
+  (estimate); a unit that fights (attack-move with a living target) or has parked does not hold the group up. A unit with `WaitsForFormationFormup` false
+  flies at its own speed.
+* **Orders:** attack-moving units fight what they meet and then go on to their slots. Any other order takes a unit out of its formation; a single unit moves
+  as before. The battle view's move line follows each ship's path to its own slot; the ring stays at the ordered point.
+* **AI:** the AI's advancing line (9c) is laid out by the same code with the start layout's room (`radius x 2.2 + 60` across per unit, rows 700 apart, the
+  line's own arithmetic), so AI battles come out exactly as before (open square seeds 1-3, Kuat seeds 1-8, the retreat scenario of 9 "Retreat"); a band wider
+  than 6000 now stands in rows. With the tight room the AI fleet closed up first and met the enemy 5-9 s later (the battered fleet of
+  `a_nearly_destroyed_ai_fleet_retreats_before_it_is_wiped_out` ordered its retreat at 118-122 s instead of 110 s, measured on main 892edaf).
+* **Measured** (`group_moves.rs`, seed 1; before = main 892edaf, after = on main 87d8863):
+  * 20 Star Destroyers sent 6000 ahead: before a blob 3450 wide and 4900 deep, neighbours 530-2810 apart, still moving after 240 s (926 units and 63 degrees
+    in the last 20 s), headings up to 171 degrees off the move; now 2 rows of 10, neighbours 589 apart (157 between the hulls), each row straight within
+    0.1 units, every heading within 1 degree of the move, standing after 136 s, hull capsules never more than 0.4% inside each other, and nobody moves or
+    turns in the last 20 s.
+  * 3 Star Destroyers, 4 Victorys, 4 CR-90s and 2 Tartan pairs sent 5000 off at 40 degrees: before a blob 1610 wide and 1500 deep with the corvettes between
+    the capital ships, still moving after 240 s (717 units, 171 degrees in the last 20 s), headings up to 178 degrees off; now the 8 corvettes in a row
+    ahead of the 7 big ships, standing after 83 s, headings within 0.2 degrees. Sent on 4000 at a right angle to that move, the rows turn with it (standing after
+    121 s, overlap at most 0.5%).
+  * Sent 3000 behind themselves, 6 Star Destroyers and 4 Victorys turn on the spot and stand in 2 rows of 5 after 158 s. Attack-moving through 2 CR-90s, a
+    fleet of 6 destroys them and forms its line at the point.
 
 ## 7. Positional reinforcements, fog of war, more abilities (see ABILITIES.md)
 

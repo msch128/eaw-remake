@@ -365,6 +365,25 @@ fn capture_driver(
             *moved = true;
         }
     }
+    // `SP_DEMO_GROUP=distance`: at 2 s the player's capital ships get one group move that far towards the map centre; they form up there
+    // (battle-sim RULES.md 9d) and the camera frames them.
+    let group_move = std::env::var("SP_DEMO_GROUP").ok().and_then(|v| v.parse::<f32>().ok());
+    if let Some(dist) = group_move
+        && !*moved
+        && let Some(cur) = rt.cur.as_ref()
+        && cur.time >= 2.0
+    {
+        let player = settings.player_side;
+        let own: Vec<_> = ships.0.values().filter(|s| s.side == player && rt.catalog.ship(s.def).radius > 200.0).collect();
+        if !own.is_empty() {
+            let c = own.iter().map(|s| s.pos).sum::<Vec3>() / own.len() as f32;
+            let dest = c + Vec3::new(-c.x, 0.0, -c.z).normalize_or(Vec3::X) * dist;
+            println!("demo group move: {} ships from {c:?} to {dest:?}", own.len());
+            let ids: Vec<u32> = own.iter().map(|s| s.id).collect();
+            rt.command(player, battle_sim::Command::Move { ships: ids, to: battle_view::convert::bevy_to_sim(dest) });
+            *moved = true;
+        }
+    }
     // `SP_DEMO_BOOM=Particle_Name@secs`: plays that death effect once at the first enemy capital ship, and the camera frames it afterwards.
     let mut boom = BOOM_AT.lock().unwrap();
     if boom.is_none()
@@ -425,6 +444,17 @@ fn capture_driver(
         bc.snap = true;
         bc.target_focus = p;
         bc.target_distance = 2500.0;
+    }
+    if group_move.is_some() {
+        // Frame the player's capital ships (the group move's formation).
+        let own: Vec<Vec3> = ships.0.values().filter(|s| s.side == settings.player_side && rt.catalog.ship(s.def).radius > 200.0).map(|s| s.pos).collect();
+        if !own.is_empty() {
+            let center = own.iter().sum::<Vec3>() / own.len() as f32;
+            let radius = own.iter().map(|p| (*p - center).length()).fold(0.0f32, f32::max);
+            bc.snap = true;
+            bc.target_focus = center;
+            bc.target_distance = (radius * 1.7).clamp(1500.0, 16000.0);
+        }
     }
     if cap.auto {
         // Frame all living ships (a stand-in for the player scrolling to the action).

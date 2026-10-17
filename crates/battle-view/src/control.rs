@@ -890,9 +890,10 @@ pub fn overlays(
             _ => continue,
         };
         // The ring is world sized like in the real game (about four hull radii of the biggest ship sent there, estimate from the video frames);
-        // it goes away once the ships are inside it.
+        // it goes away once the ships are inside it. A ship of a group move flies to its own slot of the formation, the end of its path.
         let ring_radius = (s.radius * RING_HULL_RADII).clamp(RING_MIN, RING_MAX);
-        if (dest - s.pos).length() < ring_radius * 0.3 {
+        let goal = if matches!(s.order, battle_sim::Order::Attack(_)) { dest } else { s.path.last().copied().unwrap_or(dest) };
+        if (goal - s.pos).length() < ring_radius * 0.3 {
             continue;
         }
         drawn.push((s.pos, dest));

@@ -75,6 +75,9 @@ struct Snap {
     target_hp: u16,
     /// Squadron formation place ([`Ship::formation`]): members keep their place relative to the leader's own.
     formation: Vec3,
+    /// Group move the ship flies in (index in `Battle::formations`, `NONE` = none): the ships of one group move mostly leave each other to
+    /// their slots (see `mov`).
+    move_group: u32,
 }
 
 /// Uniform grid of ship ids for projectile collision.
@@ -235,6 +238,7 @@ impl Battle {
             nav_grid: None,
             search: vec![(0, 0.0); sides.len()],
             ai: (0..sides.len()).map(|i| crate::ai::AiSide::new(config.ai_reserve.get(i).cloned().unwrap_or_default())).collect(),
+            formations: Vec::new(),
             sides,
             ships: Vec::new(),
             projectiles: Vec::new(),
@@ -517,6 +521,7 @@ impl Battle {
             bonus: Bonus::default(),
             mods: [(0.0, 0.0); ModKind::COUNT],
             group_slot: None,
+            move_slot: None,
             focus: NONE,
         });
         id
@@ -709,11 +714,13 @@ impl Battle {
                 for &i in &ships {
                     self.stop_hunt(i);
                 }
-                for i in ships {
+                for &i in &ships {
                     let s = &mut self.ships[i as usize];
                     s.order = if attack { Order::AttackMove(to) } else { Order::Move(to) };
                     s.target_hp = NO_HP;
                 }
+                // Several units get a slot each in a formation at the destination (formation.rs).
+                self.form_up(&ships, to, attack);
             }
             Command::Attack { ships, target } => {
                 if !own(self, &ships) || !self.ships.get(target as usize).is_some_and(|t| t.alive && t.side != side) {
@@ -1060,6 +1067,7 @@ impl Battle {
             self.ai_plan();
         }
         self.ai_formation(dt);
+        self.move_formations();
         // Snapshot and grid.
         let time_now = self.time;
         let fog = cfg.fog_of_war;
@@ -1093,6 +1101,7 @@ impl Battle {
                     special: d.special_weapon.is_some() || d.background,
                     target_hp: s.target_hp,
                     formation: s.formation,
+                    move_group: s.move_slot.map_or(NONE, |m| m.formation),
                 }
             })
             .collect();
@@ -1813,7 +1822,7 @@ impl Battle {
                         && self.tractor_target(i as u32, t).is_some()
                     {
                         auto_use.push(k);
-                    } else if !a.toggle && a.speed_mult > 1.05 && (matches!(s.order, Order::Retreat) || (s.target != NONE && s.group_slot.is_none() && matches!(s.order, Order::AttackMove(_) | Order::Move(_)) && self.ships[s.target as usize].pos.dist(s.pos) > def.max_weapon_range * 2.0)) {
+                    } else if !a.toggle && a.speed_mult > 1.05 && (matches!(s.order, Order::Retreat) || (s.target != NONE && s.group_slot.is_none() && s.move_slot.is_none() && matches!(s.order, Order::AttackMove(_) | Order::Move(_)) && self.ships[s.target as usize].pos.dist(s.pos) > def.max_weapon_range * 2.0)) {
                         // Speed abilities: flee, or close a large gap while on the move (not in a formation, which keeps the slowest ship's pace).
                         auto_use.push(k);
                     } else if !a.toggle && s.since_hit < 3.0 && ((a.shield_regen_mult > 1.05 && def.shield > 0.0 && s.shield < 0.5 * def.shield) || (a.take_damage_mult < 0.95 && s.hull < 0.6 * def.hull)) {
@@ -2897,8 +2906,10 @@ fn mov(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, spawn: &
     // A fighter that only holds a place (formation slot, carrier escort) stops there instead of flying past it for ever.
     let mut settle = false;
     let mut follow_speed: Option<f32> = None;
-    // Speed a big ship keeps in an AI formation.
+    // Speed a ship keeps in a formation (the AI's advancing group, or a group move).
     let mut pace: Option<f32> = None;
+    // Group move: the ship's slot in the formation at the destination (formation.rs).
+    let mut slot_at: Option<crate::formation::MoveSlot> = None;
     let goal = match s.order {
         Order::Retreat => {
             // Turn round and head for the own spawn side at full throttle past the boundary.
@@ -2926,7 +2937,13 @@ fn mov(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, spawn: &
             }
         }
         Order::Move(p) => {
-            if let Some((q, v)) = slot {
+            if let Some(m) = s.move_slot {
+                // A unit of a group move flies to its own slot of the formation at the group's pace.
+                settle = true;
+                slot_at = Some(m);
+                pace = (m.pace < f32::MAX).then_some(m.pace);
+                Goal::Point(m.pos, if fighter { crate::formation::FIGHTER_HOLD } else { crate::formation::SLOT_STOP })
+            } else if let Some((q, v)) = slot {
                 settle = true;
                 follow_speed = Some(v);
                 Goal::Point(q, 50.0)
@@ -3010,7 +3027,13 @@ fn mov(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, spawn: &
             }
         }
         Order::AttackMove(p) => {
-            if let Some((q, v)) = slot {
+            if let Some(m) = s.move_slot {
+                // Nothing to fight: on to the own slot of the group move's formation.
+                settle = true;
+                slot_at = Some(m);
+                pace = (m.pace < f32::MAX).then_some(m.pace);
+                Goal::Point(m.pos, if fighter { crate::formation::FIGHTER_HOLD } else { crate::formation::SLOT_STOP })
+            } else if let Some((q, v)) = slot {
                 settle = true;
                 follow_speed = Some(v);
                 Goal::Point(q, 50.0)
@@ -3073,7 +3096,7 @@ fn mov(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, spawn: &
     };
 
     // Cohesion: while advancing without a target a big ship does not outrun the slower ones around it (within 2500 units).
-    let max_speed = if target.is_none_or(|t| t.pos.dist(s.pos) > (def.max_weapon_range * 2.0).max(1500.0)) && matches!(s.order, Order::AttackMove(_)) && !fighter && s.group_slot.is_none() {
+    let max_speed = if target.is_none_or(|t| t.pos.dist(s.pos) > (def.max_weapon_range * 2.0).max(1500.0)) && matches!(s.order, Order::AttackMove(_)) && !fighter && s.group_slot.is_none() && s.move_slot.is_none() {
         let me = snaps[s.id as usize];
         big.iter()
             .filter(|&&j| j != s.id && snaps[j as usize].side == s.side && snaps[j as usize].pos.dist(me.pos) < 2500.0)
@@ -3129,7 +3152,15 @@ fn mov(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, spawn: &
                 }
                 let heading = (s.yaw.cos(), s.yaw.sin());
                 let lookahead = (s.speed * 4.0).max(def.radius * 2.0);
-                let hulls = nav.hulls.iter().filter(|&&j| j != s.id && j != s.target && j != s.carrier && snaps[j as usize].carrier != s.id).map(|&j| crate::nav::Blocker { pos: snaps[j as usize].pos, radius: snaps[j as usize].radius });
+                // A ship of a group move leaves the other ships of its formation to their own slots and the hull separation (neighbours closing
+                // up side by side would steer each other off their slots), except the ones that stand when it cuts across the lanes (more than
+                // `TURN_FIRST` off the formation's heading): it goes round those instead of pushing them off their slots.
+                let in_lane = slot_at.is_some_and(|m| wrap_angle(s.yaw - m.heading).abs() < crate::formation::TURN_FIRST);
+                let mate = |j: u32| {
+                    let o = &snaps[j as usize];
+                    o.move_group != NONE && o.move_group == snaps[s.id as usize].move_group && (in_lane || o.vel.len() > 0.1 * cat.ship(o.def).max_speed)
+                };
+                let hulls = nav.hulls.iter().filter(|&&j| j != s.id && j != s.target && j != s.carrier && snaps[j as usize].carrier != s.id && !mate(j)).map(|&j| crate::nav::Blocker { pos: snaps[j as usize].pos, radius: snaps[j as usize].radius });
                 let st = if cfg.navigation {
                     crate::nav::steer_around(s.pos, heading, snaps[s.id as usize].radius, lookahead, hulls)
                 } else {
@@ -3140,7 +3171,7 @@ fn mov(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, spawn: &
                 // Escorts calculate a repulsion vector around capital ships to glide around them (U65).
                 if matches!(def.class, TargetClass::Corvette | TargetClass::Frigate) {
                     for &j in nav.hulls {
-                        if j == s.id || j == s.target || j == s.carrier {
+                        if j == s.id || j == s.target || j == s.carrier || mate(j) {
                             continue;
                         }
                         let oj = &snaps[j as usize];
@@ -3165,7 +3196,11 @@ fn mov(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, spawn: &
             } else {
                 s.path.clear();
             }
-            let to_aim = aim - s.pos;
+            // On the last, straight leg to its formation slot a unit (a ship, or a squadron's leader) lines up behind the slot (`MoveSlot::approach`).
+            let to_aim = match slot_at {
+                Some(m) if aim == p => m.approach(s.pos) - s.pos,
+                _ => aim - s.pos,
+            };
             let unit = to_aim.normalized();
             let desired = if fighter && follow_speed.is_some_and(|v| v > 15.0) && s.squad != NONE {
                 let l = leaders[s.squad as usize];
@@ -3192,6 +3227,12 @@ fn mov(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, spawn: &
             };
             let braking = s.speed * s.speed / (2.0 * def.accel.max(1.0));
             let lead = if s.squad != NONE { leaders[s.squad as usize] } else { NONE };
+            // Parked at its slot of a group move: the ship stands and turns to the formation's facing instead of steering at a point a few units off.
+            let parked = slot_at.filter(|m| m.parked && !fighter);
+            // A ship of a group move that turns on the spot (formation.rs decides when) stands and turns to the plain bearing: steering round
+            // hulls is for moving ships, at a standstill that correction flipped with every small turn and the ship turned back and forth.
+            let on_spot = !fighter && parked.is_none() && slot_at.is_some_and(|m| m.on_spot);
+            let desired = if on_spot { unit.y.atan2(unit.x) } else { desired };
             // Closing on a target (capitals and frigates): in the last stretch before the standoff the ship already turns the bearing at which most weapons bear
             // towards it (the speed profile below brakes it to a stop at the standoff), instead of pointing its bow at it until it has stopped.
             let err = match face {
@@ -3209,13 +3250,22 @@ fn mov(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, spawn: &
                         0.0
                     }
                 }
-                _ => turn_towards(s, desired, def.turn_rate, dt),
+                _ => match parked {
+                    Some(m) => {
+                        turn_towards(s, m.facing, def.turn_rate, dt);
+                        0.0
+                    }
+                    None => turn_towards(s, desired, def.turn_rate, dt),
+                },
             };
             let mut want = max_speed * slow;
             if err > 1.2 {
                 want *= 0.35;
             } else if err > 0.5 {
                 want *= 0.7;
+            }
+            if parked.is_some() || on_spot {
+                want = 0.0;
             }
             if let Some(v) = follow_speed {
                 let target_speed = if v > 10.0 {
@@ -3841,7 +3891,7 @@ pub(crate) fn search_point(n: u32, enemy_start: Vec3, half: f32) -> Vec3 {
 const PATH_REPLAN_SECS: f32 = 0.5;
 
 /// Gap in units that an escort (corvette, frigate) keeps from the hull of a capital ship, super ship or structure (U65, estimate).
-const ESCORT_GAP: f32 = 150.0;
+pub(crate) const ESCORT_GAP: f32 = 150.0;
 
 /// Overlapping hulls are pushed apart at up to this many times the ship's top speed, so that two ships driving for the same point or an escort
 /// heading for a point behind a capital ship cannot hold each other inside (estimate; it was 1, and pairs stayed inside each other for many seconds).

@@ -73,3 +73,14 @@ without a station was treated as an attacker (120 s and 2x instead of the data's
 peak strength, the galaxy's defender flag reaches the sim (`BattleConfig::defenders`), the reserve not called in yet counts at 0.8 (`ReinforcementsUnnormalized`), and
 the "mainly transports" clause is in. Tests: `tactical_ai::a_nearly_destroyed_ai_fleet_retreats_before_it_is_wiped_out`,
 `mechanics::a_defender_without_a_station_leaves_after_30_s_and_its_reserve_counts`.
+
+## Group moves (2026-10-17, `formation.rs`, RULES.md 9d)
+User rule: a group move ends with every ship in its own slot, side by side in rows facing the move, tight (`BetweenFormationSpacing` beyond the hulls), 2-3 rows
+for big groups. `Command::Move` / `AttackMove` of several units now lays out a formation at the point (bands by `FormationOrder`, escorts ahead, wide bands in
+rows of equal count, row order by where the ships stand; a fighter squadron is one unit, flown by its leader, with the room of its members' places); every ship
+flies its own route there (A*, hull separation; it lines up behind its slot and turns on the spot where it would swing out), the group keeps the pace of its
+slowest member (`WaitsForFormationFormup`), and parked ships turn to the formation's facing (`FinalFormationFacingMinimumAngle`). The AI's line uses the same
+layout with the start layout's room. Tests: `tests/group_moves.rs` (20 Star Destroyers in 2 rows of 10, mixed fleet rows and a second move, attack-move, a move
+behind the fleet, launched craft and their squadrons, pace, data tags, determinism) and the unit tests in `formation.rs`. Open:
+`FinalFormationFacingDeltaCoefficient` and `Max_Formation_Area` (meaning unknown); the AI's own moves after contact and its fighter escort still go to single
+points.

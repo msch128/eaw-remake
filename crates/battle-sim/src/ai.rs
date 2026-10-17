@@ -18,6 +18,7 @@ use std::f32::consts::FRAC_PI_2;
 
 use crate::battle::*;
 use crate::defs::*;
+use crate::formation::{Placed, ROW_GAP, Room, band, half_across, row_key};
 use crate::math::{Vec3, wrap_angle};
 
 /// `FREE_STORE_ATTACK_RANGE`: ships this close to the priority target attack it; an enemy this close to the protected station is its threat.
@@ -30,8 +31,6 @@ const FIGHTER_AGGRO_RANGE: f32 = 3000.0;
 const SHIP_AGGRO_RANGE: f32 = 3500.0;
 /// `MoveToLocation.lua`: the fleet moves as one task force until it is this close to the enemy location.
 const ASSAULT_RANGE: f32 = 5000.0;
-/// Estimate: the escorts screen this far ahead of the line of big ships (the start layout's row spacing).
-const ROW_GAP: f32 = 700.0;
 /// Estimate: a free ship this close to the formation joins it; ships farther away catch up first.
 const JOIN_RANGE: f32 = 3000.0;
 /// Estimate: the enemy location is the enemy with the most enemy strength within this radius.
@@ -59,8 +58,8 @@ const REINFORCE_BEHIND: f32 = 1500.0;
 /// Tactical AI state of one side.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct AiSide {
-    /// The advancing formation: ship, slot offset (x ahead of the anchor, y to its left) and half the lateral room the ship takes.
-    group: Vec<(u32, Vec3, f32)>,
+    /// The advancing formation: ship and slot offset (x ahead of the anchor, y to its left; the ships of a row share the x).
+    group: Vec<(u32, Vec3)>,
     /// Formation reference point and its heading (radians).
     anchor: Vec3,
     heading: f32,
@@ -94,25 +93,6 @@ fn shield_and_health(s: &Ship, d: &ShipDef) -> f32 {
     let hull = (s.hull / d.hull.max(1.0)).clamp(0.0, 1.0);
     let shield = if d.shield > 0.0 { (s.shield / d.shield).clamp(0.0, 1.0) } else { 0.0 };
     if shield == 0.0 || hull < shield { hull } else { shield }
-}
-
-/// Formation row of a class: the escorts (fighters, bombers, corvettes, transports) screen ahead of the line of frigates and capital ships.
-fn row_key(class: TargetClass) -> u8 {
-    match class {
-        TargetClass::Fighter | TargetClass::Bomber | TargetClass::Corvette | TargetClass::Transport => 0,
-        _ => 1,
-    }
-}
-
-/// Depth of a formation row ahead of the anchor.
-fn row_depth(row: u8) -> f32 {
-    if row == 0 { ROW_GAP } else { 0.0 }
-}
-
-/// Half the lateral room a unit takes in the formation (the start layout's `radius x 2.2 + 60` spacing; a squadron counts as radius 90).
-fn half_width(d: &ShipDef) -> f32 {
-    let r = if small(d) { 90.0 } else { d.radius };
-    (r * 2.2 + 60.0) * 0.5
 }
 
 impl Battle {
@@ -506,82 +486,89 @@ impl Battle {
         }
     }
 
-    /// Lays out a new formation: the escorts in a row ahead of the line of big ships, each row ordered by where its ships stand across the
-    /// line of advance. The slots start at or ahead of every ship, so the ships in front wait while the others close up and nobody has to
-    /// turn round.
+    /// Lays out a new formation facing the goal with the slot layout of a group move ([`crate::formation::layout`]: the escorts in a row
+    /// ahead of the big ships, a band wider than a row can be in several rows, each row ordered by where its ships stand across the line of
+    /// advance) and the start layout's room ([`Room::Start`]). The anchor stands on the front row of big ships. The slots start at or ahead
+    /// of every ship, so the ships in front wait while the others close up and nobody has to turn round.
     fn form_group(&mut self, side: u8, members: &[u32], goal: Vec3) {
-        let cat = self.catalog.clone();
-        let si = side as usize;
-        let centre = members.iter().fold(Vec3::ZERO, |a, &id| a + self.ships[id as usize].pos) * (1.0 / members.len().max(1) as f32);
+        if members.is_empty() {
+            return;
+        }
+        let units: Vec<Placed> = members.iter().map(|&id| (self.ships[id as usize].def, self.ships[id as usize].pos, None)).collect();
+        let centre = units.iter().fold(Vec3::ZERO, |a, u| a + u.1) * (1.0 / units.len() as f32);
         let to = goal - centre;
         let heading = to.y.atan2(to.x);
-        let (fwd, left) = (Vec3::from_yaw(heading), Vec3::from_yaw(heading + FRAC_PI_2));
-        // Per row: members (across, along, id, half width).
-        let mut rows: [Vec<(f32, f32, u32, f32)>; 2] = Default::default();
-        for &id in members {
-            let s = &self.ships[id as usize];
-            let d = cat.ship(s.def);
-            rows[row_key(d.class) as usize].push(((s.pos - centre).dot(left), (s.pos - centre).dot(fwd), id, half_width(d)));
+        let fwd = Vec3::from_yaw(heading);
+        let mut offsets = crate::formation::layout(&self.catalog, &units, heading, Room::Start);
+        let big = |k: usize| row_key(self.catalog.ship(units[k].0).class) == 1;
+        let front = (0..units.len()).filter(|&k| big(k)).map(|k| offsets[k].x).fold(f32::MIN, f32::max);
+        let shift = if front > f32::MIN { -front } else { ROW_GAP - offsets.iter().map(|o| o.x).fold(f32::MAX, f32::min) };
+        for o in &mut offsets {
+            o.x += shift;
         }
-        let mut group = Vec::new();
-        let mut ahead = f32::MIN;
-        for (k, mut row) in rows.into_iter().enumerate() {
-            row.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.2.cmp(&b.2)));
-            let depth = row_depth(k as u8);
-            let total: f32 = row.iter().map(|r| 2.0 * r.3).sum();
-            let mut y = -0.5 * total;
-            for (_, now, id, half) in row {
-                y += half;
-                group.push((id, Vec3::new(depth, y, 0.0), half));
-                y += half;
-                ahead = ahead.max(now - depth);
-            }
-        }
-        let ai = &mut self.ai[si];
+        let ahead = units.iter().zip(&offsets).map(|(u, o)| (u.1 - centre).dot(fwd) - o.x).fold(f32::MIN, f32::max);
+        let ai = &mut self.ai[side as usize];
         ai.anchor = centre + fwd * ahead;
         ai.heading = heading;
         ai.goal = goal;
-        ai.group = group;
+        ai.group = members.iter().copied().zip(offsets).collect();
     }
 
     /// Keeps every row ordered by where its ships stand across the line of advance: ships that were pushed past each other swap slots
     /// instead of crossing back. The row keeps its centre; each ship keeps its own width.
     fn order_rows(&mut self, side: u8) {
+        let cat = self.catalog.clone();
         let ships = &self.ships;
         let ai = &mut self.ai[side as usize];
         let left = Vec3::from_yaw(ai.heading + FRAC_PI_2);
-        for depth in [row_depth(0), row_depth(1)] {
-            let mut row: Vec<(f32, usize)> = ai.group.iter().enumerate().filter(|(_, g)| g.1.x == depth).map(|(k, g)| ((ships[g.0 as usize].pos - ai.anchor).dot(left), k)).collect();
+        let mut depths: Vec<f32> = ai.group.iter().map(|g| g.1.x).collect();
+        depths.sort_by(f32::total_cmp);
+        depths.dedup();
+        for depth in depths {
+            // (across the line now, index in the group, half the room the ship takes)
+            let mut row: Vec<(f32, usize, f32)> = ai.group.iter().enumerate().filter(|(_, g)| g.1.x == depth).map(|(k, g)| ((ships[g.0 as usize].pos - ai.anchor).dot(left), k, half_across(cat.ship(ships[g.0 as usize].def), Room::Start))).collect();
             if row.len() < 2 {
                 continue;
             }
-            let lo = row.iter().map(|r| ai.group[r.1].1.y - ai.group[r.1].2).fold(f32::MAX, f32::min);
-            let hi = row.iter().map(|r| ai.group[r.1].1.y + ai.group[r.1].2).fold(f32::MIN, f32::max);
+            let lo = row.iter().map(|r| ai.group[r.1].1.y - r.2).fold(f32::MAX, f32::min);
+            let hi = row.iter().map(|r| ai.group[r.1].1.y + r.2).fold(f32::MIN, f32::max);
             row.sort_by(|a, b| a.0.total_cmp(&b.0).then(ai.group[a.1].0.cmp(&ai.group[b.1].0)));
-            let mut y = 0.5 * (lo + hi) - 0.5 * row.iter().map(|r| 2.0 * ai.group[r.1].2).sum::<f32>();
-            for (_, k) in row {
-                let half = ai.group[k].2;
+            let mut y = 0.5 * (lo + hi) - 0.5 * row.iter().map(|r| 2.0 * r.2).sum::<f32>();
+            for (_, k, half) in row {
                 ai.group[k].1.y = y + half;
                 y += 2.0 * half;
             }
         }
     }
 
-    /// Adds a ship to the row of its class, at the end nearer to where it is.
+    /// Adds a ship to a row of its band, the one with the fewest ships (the rear one of equals), at the end nearer to where the ship is; a
+    /// ship of a band the formation does not have yet starts a row `ROW_GAP` ahead of it or behind it.
     fn join_group(&mut self, side: u8, id: u32) {
-        let d = self.catalog.ship(self.ships[id as usize].def);
-        let (depth, half) = (row_depth(row_key(d.class)), half_width(d));
+        let cat = self.catalog.clone();
+        let d = cat.ship(self.ships[id as usize].def);
+        let half = half_across(d, Room::Start);
+        let ships = &self.ships;
         let ai = &mut self.ai[side as usize];
-        let lateral = (self.ships[id as usize].pos - ai.anchor).rotate_yaw(-ai.heading).y;
-        let row: Vec<(f32, f32)> = ai.group.iter().filter(|g| g.1.x == depth).map(|g| (g.1.y, g.2)).collect();
-        let y = if row.is_empty() {
-            0.0
-        } else {
-            let hi = row.iter().map(|r| r.0 + r.1).fold(f32::MIN, f32::max);
-            let lo = row.iter().map(|r| r.0 - r.1).fold(f32::MAX, f32::min);
-            if lateral >= 0.5 * (hi + lo) { hi + half } else { lo - half }
+        let lateral = (ships[id as usize].pos - ai.anchor).rotate_yaw(-ai.heading).y;
+        let def = |g: &(u32, Vec3)| cat.ship(ships[g.0 as usize].def);
+        let mut depths: Vec<f32> = ai.group.iter().map(|g| g.1.x).collect();
+        depths.sort_by(f32::total_cmp);
+        depths.dedup();
+        let count = |x: f32| ai.group.iter().filter(|g| g.1.x == x).count();
+        let mine = depths.iter().copied().filter(|&x| ai.group.iter().any(|g| g.1.x == x && band(def(g)) == band(d))).min_by(|&a, &b| count(a).cmp(&count(b)).then(a.total_cmp(&b)));
+        let slot = match mine {
+            Some(x) => {
+                let row: Vec<(f32, f32)> = ai.group.iter().filter(|g| g.1.x == x).map(|g| (g.1.y, half_across(def(g), Room::Start))).collect();
+                let hi = row.iter().map(|r| r.0 + r.1).fold(f32::MIN, f32::max);
+                let lo = row.iter().map(|r| r.0 - r.1).fold(f32::MAX, f32::min);
+                Vec3::new(x, if lateral >= 0.5 * (hi + lo) { hi + half } else { lo - half }, 0.0)
+            }
+            None => {
+                let (rear, front) = (depths[0], depths[depths.len() - 1]);
+                if ai.group.iter().any(|g| g.1.x == front && band(d) < band(def(g))) { Vec3::new(front + ROW_GAP, 0.0, 0.0) } else { Vec3::new(rear - ROW_GAP, 0.0, 0.0) }
+            }
         };
-        ai.group.push((id, Vec3::new(depth, y, 0.0), half));
+        ai.group.push((id, slot));
     }
 
     /// Every step: the formation's anchor advances on its goal at the speed of the slowest big ship (slower while ships lag behind their
