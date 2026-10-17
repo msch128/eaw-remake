@@ -333,50 +333,6 @@ impl ShellOpaque {
         self.cell(self.local(node, tf, p)).is_some_and(|i| self.cells[i])
     }
 
-    /// The opaque art as rectangles `(lo, hi)` in physical px: the cells of each row merged into runs, equal runs of neighbouring rows
-    /// merged into one rectangle (about a dozen for the galactic bar at 1080p).
-    pub fn rects(&self, node: &ComputedNode, tf: &UiGlobalTransform) -> Vec<(Vec2, Vec2)> {
-        let size = node.size().max(Vec2::splat(1e-3));
-        let origin = tf.translation - size * 0.5;
-        let k = size / self.size.max(Vec2::splat(1e-3)) * OPAQUE_CELL;
-        // Open rectangles: (first col, end col, first row).
-        let mut open: Vec<(usize, usize, usize)> = Vec::new();
-        let mut out = Vec::new();
-        let mut close = |(c0, c1, r0): (usize, usize, usize), r1: usize| {
-            out.push((origin + Vec2::new(c0 as f32, r0 as f32) * k, origin + Vec2::new(c1 as f32, r1 as f32) * k));
-        };
-        for r in 0..=self.rows {
-            let mut runs = Vec::new();
-            if r < self.rows {
-                let mut c = 0;
-                while c < self.cols {
-                    if self.cells[r * self.cols + c] {
-                        let start = c;
-                        while c < self.cols && self.cells[r * self.cols + c] {
-                            c += 1;
-                        }
-                        runs.push((start, c));
-                    } else {
-                        c += 1;
-                    }
-                }
-            }
-            let mut next = Vec::new();
-            for rect in open.drain(..) {
-                match runs.iter().position(|&(a, b)| a == rect.0 && b == rect.1) {
-                    Some(i) => {
-                        runs.remove(i);
-                        next.push(rect);
-                    }
-                    None => close(rect, r),
-                }
-            }
-            next.extend(runs.into_iter().map(|(a, b)| (a, b, r)));
-            open = next;
-        }
-        out
-    }
-
     /// Whether any opaque art overlaps the rectangle `lo..hi` (physical px).
     pub fn overlaps(&self, node: &ComputedNode, tf: &UiGlobalTransform, lo: Vec2, hi: Vec2) -> bool {
         let (a, b) = (self.local(node, tf, lo), self.local(node, tf, hi));
@@ -2307,20 +2263,6 @@ mod tests {
         // Rectangles: one touching the opaque half overlaps, one beside it does not.
         assert!(opaque.overlaps(&node, &tf, at(14.0, 2.0), at(18.0, 5.0)));
         assert!(!opaque.overlaps(&node, &tf, at(24.0, 2.0), at(39.0, 19.0)));
-        // As rectangles: the opaque half is one 8x8 design px block (cells 2..4, rows 1..3).
-        assert_eq!(opaque.rects(&node, &tf), vec![(at(8.0, 4.0), at(16.0, 12.0))]);
-    }
-
-    #[test]
-    fn opaque_rows_merge_into_few_rectangles() {
-        // An L shape: a 3-cell column on the left, a full-width strip at the bottom.
-        let mut opaque = ShellOpaque::new(Vec2::new(16.0, 16.0));
-        for (c, r) in [(0, 0), (0, 1), (0, 2), (0, 3), (1, 3), (2, 3), (3, 3)] {
-            opaque.cells[r * 4 + c] = true;
-        }
-        let node = ComputedNode { size: Vec2::new(16.0, 16.0), ..ComputedNode::DEFAULT };
-        let tf = UiGlobalTransform::from_xy(8.0, 8.0);
-        assert_eq!(opaque.rects(&node, &tf), vec![(Vec2::ZERO, Vec2::new(4.0, 12.0)), (Vec2::new(0.0, 12.0), Vec2::new(16.0, 16.0))]);
     }
 
     #[test]

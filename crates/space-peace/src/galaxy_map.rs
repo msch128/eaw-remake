@@ -44,7 +44,6 @@ impl Plugin for GalaxyMapPlugin {
         app.add_plugins((PlanetVisualPlugin, MaterialPlugin::<LaneMaterial>::default()))
             .init_resource::<Selection>()
             .init_resource::<Hover>()
-            .init_resource::<ReservedBottom>()
             .init_resource::<PanelRect>()
             .init_resource::<Wrecks>()
             .init_resource::<DestroyedPlanets>()
@@ -172,11 +171,12 @@ struct RingGizmos;
 struct SelectGizmos;
 
 
-/// Bottom strip of the viewport (logical pixels) covered by the command bar; labels avoid it.
-#[derive(Resource, Default, Debug)]
-pub struct ReservedBottom(pub f32);
+/// UI depth of the planet names, their pip rows and emblems: below the command bar and its backing plate (-1). Like in the Remake
+/// (b0613s: LORONAR), a name behind the translucent build strip shows faintly through it and one behind the opaque art is covered.
+const LABEL_Z: i32 = -2;
 
-/// Screen rectangles (viewport pixels) the name plates avoid: `.0` the HUD panels, `.1` the hero portraits next to fleets.
+/// Screen rectangles (viewport pixels) the name plates avoid: `.0` the HUD panels, `.1` the hero portraits next to fleets. The command
+/// bar is not one of them: it is drawn over the names (see [`LABEL_Z`]).
 #[derive(Resource, Default, Debug)]
 pub struct PanelRect(pub Vec<(Vec2, Vec2)>, pub Vec<(Vec2, Vec2)>);
 
@@ -407,7 +407,7 @@ fn log_props(
 
 /// Marks a planet's screen-space name label.
 #[derive(Component)]
-struct PlanetLabel(usize);
+pub(crate) struct PlanetLabel(pub(crate) usize);
 
 /// Marks the sky sphere that follows the camera.
 #[derive(Component)]
@@ -577,6 +577,7 @@ fn spawn_galaxy(
                 .spawn((
                     Node { position_type: PositionType::Absolute, flex_direction: FlexDirection::Row, column_gap: Val::Px(1.0), ..default() },
                     Visibility::Hidden,
+                    GlobalZIndex(LABEL_Z),
                     PipRow { planet: i, row, count },
                     GalaxyEntity,
                 ))
@@ -595,6 +596,7 @@ fn spawn_galaxy(
             ImageNode::default().with_color(Color::NONE),
             Node { position_type: PositionType::Absolute, width: Val::Px(10.0), height: Val::Px(10.0), ..default() },
             Visibility::Hidden,
+            GlobalZIndex(LABEL_Z),
             Emblem(i),
             GalaxyEntity,
         ));
@@ -615,6 +617,7 @@ fn spawn_galaxy(
                 ..default()
             },
             Visibility::Hidden,
+            GlobalZIndex(LABEL_Z),
             PlanetLabel(i),
             GalaxyEntity,
         )).id();
@@ -710,18 +713,40 @@ struct LabelSlot {
 
 /// Room kept around a label in the declutter pass (viewport px).
 const LABEL_MARGIN: f32 = 2.0;
+/// Hysteresis of a name's place (viewport px): a name under its globe stays there while a HUD panel or the screen edge covers its box
+/// by up to `PLACE_HYSTERESIS - LABEL_MARGIN` px (the box has room around the letters; close up its anchor must stay on screen), and a
+/// name above its globe comes back once the place under the globe is clear by `PLACE_HYSTERESIS` px more than [`LABEL_MARGIN`].
+/// Without it a name grazing the top of the advisor's text line while the zoom moved it (Ithor at zoom 0.21, `--label-probe`: 0.9 px
+/// for 5 frames) jumped above its globe and back.
+const PLACE_HYSTERESIS: f32 = 4.0;
 
-/// Whether a label rectangle at `pos` (top-left, viewport px) is on screen above the bottom strip `reserved` and clear of the interface
-/// rectangles. Close up only its anchor (the top centre) has to be on screen.
-fn label_clear(pos: Vec2, size: Vec2, viewport: Vec2, reserved: f32, close: bool, panel: &PanelRect) -> bool {
-    let (lo, hi) = (pos - Vec2::splat(LABEL_MARGIN), pos + size + Vec2::splat(LABEL_MARGIN));
+/// Whether a label rectangle at `pos` (top-left, viewport px) is on screen and clear of the HUD panel rectangles by
+/// [`LABEL_MARGIN`]` + extra` px (a negative `extra` allows an overlap). Close up only its anchor (the top centre) has to be on screen
+/// (`extra` px inside when positive). The command bar does not count: names are drawn below it ([`LABEL_Z`]).
+fn label_clear(pos: Vec2, size: Vec2, viewport: Vec2, close: bool, panel: &PanelRect, extra: f32) -> bool {
+    let (lo, hi) = (pos - Vec2::splat(LABEL_MARGIN + extra), pos + size + Vec2::splat(LABEL_MARGIN + extra));
     let anchor = pos + Vec2::new(size.x * 0.5, 0.0);
+    let inset = extra.max(0.0);
     let on_screen = if close {
-        anchor.x >= 0.0 && anchor.y >= 0.0 && anchor.x <= viewport.x && anchor.y <= viewport.y - reserved
+        anchor.x >= inset && anchor.y >= inset && anchor.x <= viewport.x - inset && anchor.y <= viewport.y - inset
     } else {
-        lo.x >= 0.0 && lo.y >= 0.0 && hi.x <= viewport.x && hi.y <= viewport.y - reserved
+        lo.x >= 0.0 && lo.y >= 0.0 && hi.x <= viewport.x && hi.y <= viewport.y
     };
     on_screen && !panel.0.iter().chain(panel.1.iter()).any(|(plo, phi)| lo.x < phi.x && hi.x > plo.x && lo.y < phi.y && hi.y > plo.y)
+}
+
+/// Whether the place under its globe counts as clear for a name this frame (see [`PLACE_HYSTERESIS`]): `lenient` is the check that
+/// lets a name stay there, `with_room` the one a name above its globe needs to come back. With no room above it the name stays under
+/// its globe whenever `lenient` holds, so the hysteresis never hides a name.
+fn below_clear(lenient: bool, with_room: bool, above: bool, was_above: bool) -> bool {
+    if was_above && above { with_room } else { lenient }
+}
+
+/// `SP_NO_PLANET_NAMES=1`: the names are laid out as usual but not drawn, so a comparison render of the same view shows exactly what
+/// the names add on screen (how well a name shows through the build strip).
+fn draw_planet_names() -> bool {
+    static DRAW: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *DRAW.get_or_init(|| std::env::var_os("SP_NO_PLANET_NAMES").is_none())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -734,7 +759,6 @@ fn update_labels(
     (hover, filters): (Res<Hover>, Res<MapFilters>),
     bounds: Res<CameraBounds>,
     ui_scale: Res<UiScale>,
-    reserved: Res<ReservedBottom>,
     panel: Res<PanelRect>,
     camera: Single<(&Camera, &GlobalTransform, &GalaxyCamera)>,
     mut labels: Query<(&PlanetLabel, &mut Node, &mut Visibility, &ComputedNode, &mut TextFont, &mut TextColor), Without<PipRow>>,
@@ -744,6 +768,7 @@ fn update_labels(
     mut last_font: Local<f32>,
     mut slots: Local<Vec<Option<LabelSlot>>>,
     mut visible: Local<Vec<bool>>,
+    mut was_above: Local<Vec<bool>>,
 ) {
     let (camera, cam_tf, orbit) = *camera;
     let Some(viewport) = camera.logical_viewport_size() else {
@@ -810,6 +835,8 @@ fn update_labels(
     });
     visible.clear();
     visible.resize(slots.len(), false);
+    // Placement of this frame (`was_above` keeps last frame's for the hysteresis).
+    let mut now_above = vec![false; slots.len()];
     // Planet discs are obstacles too, so labels do not sit on top of other planets.
     let right = cam_tf.right();
     let discs: Vec<Option<(Vec2, f32)>> = view
@@ -829,10 +856,18 @@ fn update_labels(
     for i in order {
         let mut s = slots[i].expect("filtered above");
         // Close up every planet in view keeps its name: only its anchor has to be on screen, and crowding never hides it. A name that
-        // would sit off the bottom of the map or under the command bar goes above its globe instead.
-        let clear = |pos: Vec2| label_clear(pos, s.size, viewport, reserved.0, close, &panel);
-        let (below, above) = (clear(s.pos), clear(s.above));
-        if !below && above {
+        // would sit off the screen or under a HUD panel (the ticker line) goes above its globe instead; under the command bar it stays
+        // where it is and shows through the translucent build strip like in the Remake.
+        let above = label_clear(s.above, s.size, viewport, close, &panel, 0.0);
+        let was = was_above.get(i).copied().unwrap_or(false);
+        let below = below_clear(
+            label_clear(s.pos, s.size, viewport, close, &panel, -PLACE_HYSTERESIS),
+            was && label_clear(s.pos, s.size, viewport, close, &panel, PLACE_HYSTERESIS),
+            above,
+            was,
+        );
+        let moved_up = !below && above;
+        if moved_up {
             s.pos = s.above;
         }
         let fits = below || above;
@@ -854,14 +889,17 @@ fn update_labels(
             visible[i] = true;
             slots[i] = Some(s);
         }
+        now_above[i] = visible[i] && moved_up;
     }
+    *was_above = now_above;
 
+    let draw_names = draw_planet_names();
     for (label, mut node, mut vis, _, _, _) in &mut labels {
         match slots[label.0] {
             Some(s) if visible[label.0] => {
                 node.left = Val::Px(s.pos.x / us);
                 node.top = Val::Px(s.pos.y / us);
-                *vis = Visibility::Inherited;
+                *vis = if draw_names { Visibility::Inherited } else { Visibility::Hidden };
             }
             _ => *vis = Visibility::Hidden,
         }
@@ -901,13 +939,13 @@ fn update_labels(
     }
 }
 
-/// Offscreen runs: how many planets on screen (centre in view, not under the bottom strip or the interface) show their name, also for
-/// the lower third of the screen, and how often a label appeared or vanished between two frames while the camera stood still (must be 0).
-/// One log line every 60 frames: `labels: N of M on screen named, lower third n of m, toggles k, interface rects r`.
+/// Offscreen runs: how many planets on screen (centre in view, not under a HUD panel; the command bar draws over the names) show
+/// their name, also for the lower third of the screen, and how often a label appeared or vanished between two frames while the camera
+/// stood still (must be 0). One log line every 60 frames: `labels: N of M on screen named, lower third n of m, toggles k, interface
+/// rects r`.
 fn log_label_stats(
     args: Res<crate::cli::Args>,
     view: Res<GalaxyView>,
-    reserved: Res<ReservedBottom>,
     panel: Res<PanelRect>,
     camera: Single<(&Camera, &GlobalTransform), With<GalaxyCamera>>,
     labels: Query<(&PlanetLabel, &Visibility)>,
@@ -933,7 +971,7 @@ fn log_label_stats(
     if *frames % 60 != 0 {
         return;
     }
-    let under_ui = |p: Vec2| p.y > viewport.y - reserved.0 || panel.0.iter().any(|(lo, hi)| p.cmpge(*lo).all() && p.cmple(*hi).all());
+    let under_ui = |p: Vec2| panel.0.iter().any(|(lo, hi)| p.cmpge(*lo).all() && p.cmple(*hi).all());
     let (mut on, mut named, mut low_on, mut low_named) = (0, 0, 0, 0);
     for (i, p) in view.planets.iter().enumerate() {
         let Ok(c) = camera.world_to_viewport(cam_tf, galaxy_to_world(p.position)) else { continue };
@@ -1730,24 +1768,81 @@ mod tests {
     }
 
     #[test]
-    fn names_in_the_lower_part_show_unless_they_sit_under_the_interface() {
-        // 1080p map: the command bar's art is the left column (to x 420 from y 675) and the build strip (from y 905); its bounding box
-        // was the whole bottom from y 629.
+    fn names_in_the_lower_part_show_and_only_hud_panels_move_them() {
+        // 1080p map. The command bar is no obstacle: the names are drawn below it and show through its translucent build strip like
+        // in the Remake (b0613s: LORONAR). Its bounding box, the whole bottom from y 629, used to hide every name there.
         let viewport = Vec2::new(1920.0, 1080.0);
-        let mask = PanelRect(vec![(Vec2::new(0.0, 675.0), Vec2::new(420.0, 1080.0)), (Vec2::new(0.0, 905.0), Vec2::new(1920.0, 1080.0))], Vec::new());
-        let bbox = PanelRect(vec![(Vec2::new(-16.0, 629.0), Vec2::new(1947.0, 1080.0))], Vec::new());
         let size = Vec2::new(90.0, 24.0);
-        // A planet at (1228, 705) over the open map: its name shows with the art as the obstacle, the bounding box hid it.
-        let below = Vec2::new(1228.0 - 45.0, 715.0);
+        let ticker = PanelRect(vec![(Vec2::new(88.0, 679.0), Vec2::new(680.0, 702.0))], Vec::new());
+        let bbox = PanelRect(vec![(Vec2::new(-16.0, 629.0), Vec2::new(1947.0, 1080.0))], Vec::new());
         for close in [true, false] {
-            assert!(label_clear(below, size, viewport, 190.0, close, &mask));
-            assert!(!label_clear(below, size, viewport, 190.0, close, &bbox));
+            // Above the build strip (y 715), at 70 % of the height (the user's missing Fresia / N'Zoth) and behind the strip (y 950).
+            for y in [715.0, 756.0, 950.0] {
+                let below = Vec2::new(1228.0 - 45.0, y);
+                assert!(label_clear(below, size, viewport, close, &ticker, 0.0), "y {y}");
+                assert!(!label_clear(below, size, viewport, close, &bbox, 0.0), "y {y}");
+            }
         }
-        // A planet just above the build strip: its name under the globe would sit on the strip, above the globe it is clear.
-        let (below, above) = (Vec2::new(1500.0, 890.0), Vec2::new(1500.0, 850.0));
-        assert!(!label_clear(below, size, viewport, 0.0, false, &mask) && label_clear(above, size, viewport, 0.0, false, &mask));
-        // Under the left column nothing helps (the planet itself is under the interface).
-        assert!(!label_clear(Vec2::new(200.0, 700.0), size, viewport, 0.0, true, &mask));
+        // A name on the ticker line goes above its globe: below the globe it is covered, above it is clear.
+        let (below, above) = (Vec2::new(400.0, 680.0), Vec2::new(400.0, 640.0));
+        assert!(!label_clear(below, size, viewport, false, &ticker, 0.0) && label_clear(above, size, viewport, false, &ticker, 0.0));
+        // At the bottom edge only the anchor has to be on screen close up; zoomed out the whole name does.
+        assert!(label_clear(Vec2::new(900.0, 1070.0), size, viewport, true, &ticker, 0.0));
+        assert!(!label_clear(Vec2::new(900.0, 1070.0), size, viewport, false, &ticker, 0.0));
+    }
+
+    /// Runs the placement of one name over `frames` frames (below-globe position per frame, above-globe position fixed) and returns
+    /// how often it switched between below and above its globe.
+    fn name_switches(below_at: impl Fn(u32) -> Vec2, above: Vec2, close: bool, panel: &PanelRect, hysteresis: bool, frames: u32) -> u32 {
+        let (viewport, size) = (Vec2::new(1920.0, 1080.0), Vec2::new(28.0, 23.0));
+        let (mut was, mut switches) = (false, 0);
+        for t in 0..frames {
+            let pos = below_at(t);
+            let above = label_clear(above, size, viewport, close, panel, 0.0);
+            let below = if hysteresis {
+                below_clear(
+                    label_clear(pos, size, viewport, close, panel, -PLACE_HYSTERESIS),
+                    was && label_clear(pos, size, viewport, close, panel, PLACE_HYSTERESIS),
+                    above,
+                    was,
+                )
+            } else {
+                label_clear(pos, size, viewport, close, panel, 0.0)
+            };
+            let up = !below && above;
+            switches += u32::from(t > 0 && up != was);
+            was = up;
+        }
+        switches
+    }
+
+    #[test]
+    fn a_name_grazing_a_panel_or_the_screen_edge_does_not_blink() {
+        // Ithor at zoom 0.21 (`--label-probe`, Yavin): its name under the globe touched the top of the advisor's text line by 0.9 px
+        // for 5 frames and jumped above the globe and back. Here the place under the globe jitters by 0.8 px for 120 frames.
+        let ticker = PanelRect(vec![(Vec2::new(88.0, 642.0), Vec2::new(680.0, 702.0))], Vec::new());
+        let jitter = |base: Vec2| move |t: u32| base + Vec2::new(0.0, 0.8 * (t as f32 * 0.9).sin());
+        let up = Vec2::new(70.0, 560.0);
+        for close in [true, false] {
+            // Grazing the panel: without hysteresis the name blinks, with it it stays under its globe.
+            assert!(name_switches(jitter(Vec2::new(70.0, 617.0)), up, close, &ticker, false, 120) > 10, "close {close}: the case blinks");
+            assert_eq!(name_switches(jitter(Vec2::new(70.0, 617.0)), up, close, &ticker, true, 120), 0, "close {close}");
+            // Covered by 2 px and more: the name goes above once and stays there.
+            assert_eq!(name_switches(jitter(Vec2::new(70.0, 621.0)), up, close, &ticker, true, 120), 1, "close {close}");
+            // A slow sweep into the panel and out again (zoom in, then out) with a 1.5 px jitter: once each way.
+            let sweep = |t: u32| Vec2::new(70.0, 604.0 + 24.0 * (1.0 - (t as f32 / 60.0 - 1.0).abs()) + 1.5 * (t as f32 * 0.9).sin());
+            assert!(name_switches(sweep, up, close, &ticker, false, 120) > 2, "close {close}: the sweep blinks");
+            assert_eq!(name_switches(sweep, up, close, &ticker, true, 120), 2, "close {close}");
+        }
+        // Close up, the anchor of a name jittering across the bottom edge of the screen: the name goes above once (it never sits
+        // below the screen edge) and stays there.
+        let at_edge = jitter(Vec2::new(900.0, 1080.0));
+        assert!(name_switches(at_edge, Vec2::new(900.0, 1000.0), true, &ticker, false, 120) > 10);
+        assert_eq!(name_switches(at_edge, Vec2::new(900.0, 1000.0), true, &ticker, true, 120), 1);
+        let size = Vec2::new(28.0, 23.0);
+        assert!(!label_clear(Vec2::new(900.0, 1081.0), size, Vec2::new(1920.0, 1080.0), true, &ticker, -PLACE_HYSTERESIS));
+        // Nowhere to go above: the name stays under its globe whenever the lenient check holds.
+        assert!(below_clear(true, false, false, true) && !below_clear(true, false, true, true) && below_clear(true, false, true, false));
     }
 
     /// The Remake's `Web_Way_Main` style: additive teal (13, 31, 38), width 6; the enemy look fades out when zoomed in.

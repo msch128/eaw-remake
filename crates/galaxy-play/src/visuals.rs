@@ -558,7 +558,7 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .init_resource::<Assets<StandardMaterial>>()
-            .insert_resource(GalaxyLayout { positions: vec![Vec3::ZERO], radii: vec![1.0], unit: 1.0, index: Default::default() })
+            .insert_resource(GalaxyLayout { positions: vec![Vec3::ZERO], radii: vec![1.0], unit: 1.0, index: Default::default(), pickable: Vec::new() })
             .insert_resource(crate::state::PlayConfig::default())
             .add_systems(Update, fit_fleet_models)
             .add_systems(PostUpdate, finish_models);

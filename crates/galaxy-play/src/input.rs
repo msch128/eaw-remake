@@ -92,6 +92,21 @@ pub fn pick_nearest<T: Copy>(cursor: Vec2, points: impl Iterator<Item = (T, Vec2
         .map(|(id, _)| id)
 }
 
+/// The planet under `cursor`: the nearest planet centre on screen within its reach (the drawn orbit ring with a margin, at least
+/// 36 px). Only pickable planets count ([`GalaxyLayout::pickable`]): `Icon_Republic_Rendili_WW` stands 15 units above Rendili, so
+/// on the upper half of Rendili's globe the icon's centre was the nearer one and a fleet dropped there was sent to the icon.
+pub fn pick_planet(cursor: Vec2, layout: &GalaxyLayout, screen: impl Fn(Vec3) -> Option<Vec2>, right: Vec3) -> Option<PlanetId> {
+    pick_nearest(
+        cursor,
+        layout.positions.iter().enumerate().filter(|(i, _)| layout.pickable.get(*i).copied().unwrap_or(true)).filter_map(|(i, &c)| {
+            let a = screen(c)?;
+            let r_world = (layout.radii[i] * 1.6).max(layout.orbit_radius(i as PlanetId) * 1.25);
+            let b = screen(c + right * r_world)?;
+            Some((i as PlanetId, a, (a.distance(b) * 1.25).max(36.0)))
+        }),
+    )
+}
+
 /// Whether the fleet pads of a planet owned by `owner` take a dropped fleet of `me` into the chosen slot: own and allied planets (the
 /// player's fleets park in their slots there), not enemy or neutral ones (there the fleet attacks or takes the first free slot).
 pub fn pads_open(owner: Option<FactionId>, me: FactionId, hostile: impl Fn(FactionId) -> bool) -> bool {
@@ -137,15 +152,7 @@ pub fn update_hover(
             }),
         );
         // The planet under the cursor is always known (also with a fleet icon next to it): orders need it as their target.
-        let planet = pick_nearest(
-            cursor,
-            layout.positions.iter().enumerate().filter_map(|(i, &c)| {
-                let a = camera.world_to_viewport(cam_tf, c).ok()?;
-                let r_world = (layout.radii[i] * 1.6).max(layout.orbit_radius(i as PlanetId) * 1.25);
-                let b = camera.world_to_viewport(cam_tf, c + right * r_world).ok()?;
-                Some((i as PlanetId, a, (a.distance(b) * 1.25).max(36.0)))
-            }),
-        );
+        let planet = pick_planet(cursor, &layout, |p| camera.world_to_viewport(cam_tf, p).ok(), *right);
         // The three slot circles around the hovered planet (the ones `visuals` draws).
         let slot = planet.and_then(|p| {
             let c = layout.positions[p as usize];
@@ -474,6 +481,25 @@ mod tests {
             (0 as PlanetId, Vec2::new(100.0, 150.0), 30.0),
         ];
         assert_eq!(pick_nearest(cursor, far_planets.into_iter()), None);
+    }
+
+    #[test]
+    fn a_decoration_listed_as_a_planet_never_takes_the_pointer() {
+        // Rendili at the origin and its faction icon 15 units above it; the tilted camera shows height as up on the screen.
+        let mut layout = GalaxyLayout {
+            positions: vec![Vec3::ZERO, Vec3::new(0.0, 15.0, 0.0)],
+            radii: vec![2.0, 2.0],
+            unit: 2.0,
+            index: Default::default(),
+            pickable: vec![true, false],
+        };
+        let screen = |p: Vec3| Some(Vec2::new(500.0 + p.x * 10.0, 500.0 + p.z * 10.0 - p.y * 4.0));
+        // On the upper half of Rendili's globe the icon's centre (60 px up) is the nearer one.
+        let cursor = Vec2::new(500.0, 465.0);
+        assert_eq!(pick_planet(cursor, &layout, screen, Vec3::X), Some(0));
+        // Without the mask the icon took the hover: a fleet dropped there was sent to the icon.
+        layout.pickable.clear();
+        assert_eq!(pick_planet(cursor, &layout, screen, Vec3::X), Some(1));
     }
 
     #[test]

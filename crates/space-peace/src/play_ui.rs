@@ -208,15 +208,10 @@ fn drive_ui_scale(
     window: Option<Single<&Window, With<PrimaryWindow>>>,
     offscreen: Option<Res<OffscreenTarget>>,
     bar: Query<(), With<EawCommandBar>>,
-    mut reserved: ResMut<crate::galaxy_map::ReservedBottom>,
     mut eaw: ResMut<EawUiSettings>,
 ) {
     let design = design_scale(window.as_deref().map(|w| w.size()), offscreen.as_deref());
     let v = if bar.is_empty() { settings.ui_scale } else { design * settings.ui_scale };
-    let strip = if bar.is_empty() { 0.0 } else { bar_reserve(v) };
-    if reserved.0 != strip {
-        reserved.0 = strip;
-    }
     if eaw.scale != UiScaleMode::Fixed(v) {
         eaw.scale = UiScaleMode::Fixed(v);
     }
@@ -1014,34 +1009,28 @@ fn fix_fleet_label_scale(scale: Res<UiScale>, mut labels: Query<&mut Node, With<
     }
 }
 
-/// Tells the label layout where the planet panel is.
+/// Tells the label layout where the HUD panels are. The command bar is not one: the planet names are drawn below it (its node is the
+/// bounding box of the faceplate, the whole width of the bottom 42 % of the screen, which hid every name in the lower part of the map),
+/// so like in the Remake a name behind the translucent build strip shows through it and the opaque art covers the rest.
 #[allow(clippy::type_complexity)]
 fn publish_panel_rect(
     panels: Query<
-        (&ComputedNode, &UiGlobalTransform, &InheritedVisibility, Option<&eaw_ui::ShellOpaque>, Has<EawCommandBar>),
-        (Or<(With<crate::ui::SkinPanel>, With<Ticker>, With<eaw_ui::EawPanel>, With<PlanetPanel>, With<BarBacking>)>, Without<crate::ui::Tooltip>),
+        (&ComputedNode, &UiGlobalTransform, &InheritedVisibility),
+        (Or<(With<crate::ui::SkinPanel>, With<Ticker>, With<eaw_ui::EawPanel>, With<PlanetPanel>)>, Without<crate::ui::Tooltip>, Without<EawCommandBar>),
     >,
     ui_scale: Res<UiScale>,
     mut rect: ResMut<crate::galaxy_map::PanelRect>,
 ) {
-    let mut rects: Vec<(Vec2, Vec2)> = Vec::new();
-    for (node, tf, vis, opaque, bar) in &panels {
-        if !vis.get() {
-            continue;
-        }
-        // Physical px to the viewport px of the labels.
-        let sf = node.inverse_scale_factor() * ui_scale.0.max(0.1);
-        match opaque.filter(|_| bar) {
-            // The command bar covers only where its art is: its node is the bounding box of the faceplate, the whole width of the
-            // bottom 42 % of the screen, which hid every planet name in the lower part of the map.
-            Some(o) => rects.extend(o.rects(node, tf).into_iter().map(|(lo, hi)| (lo * sf, hi * sf))),
-            None => {
-                let c = tf.translation * sf;
-                let half = node.size() * sf * 0.5;
-                rects.push((c - half, c + half));
-            }
-        }
-    }
+    let rects: Vec<(Vec2, Vec2)> = panels
+        .iter()
+        .filter(|(_, _, vis)| vis.get())
+        .map(|(node, tf, _)| {
+            let sf = node.inverse_scale_factor() * ui_scale.0.max(0.1);
+            let c = tf.translation * sf;
+            let half = node.size() * sf * 0.5;
+            (c - half, c + half)
+        })
+        .collect();
     if rect.0 != rects {
         rect.0 = rects;
     }
@@ -2458,13 +2447,6 @@ fn relation_color(state: &SimState, main_factions: &[u32], me: Option<u32>, owne
 }
 
 
-/// Height at the bottom of the screen that planet labels keep clear: the build bar (design 1366x768, about 17 % of the height,
-/// like the Remake's). It was 290 (38 % of the height), which hid every label in the lower part of the map; the minimap, the advisor
-/// and the ticker are kept clear through the panel rectangles instead.
-pub(crate) fn bar_reserve(scale: f32) -> f32 {
-    135.0 * scale
-}
-
 /// The UI is designed for 1366x768 and scales with the screen height, but never wider than the screen
 /// allows: on 16:10 or 4:3 screens the width decides, so the bar and its build pads stay on screen.
 pub(crate) fn design_scale(window: Option<Vec2>, offscreen: Option<&OffscreenTarget>) -> f32 {
@@ -2482,15 +2464,6 @@ pub(crate) fn design_scale(window: Option<Vec2>, offscreen: Option<&OffscreenTar
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn the_label_strip_covers_only_the_build_bar() {
-        // A label at 70 % of the screen height (the user's missing Fresia / N'Zoth) must fit above the strip at every UI size.
-        for (w, h) in [(1280.0_f32, 720.0_f32), (1920.0, 1080.0), (2400.0, 1350.0)] {
-            let scale = design_scale(Some(Vec2::new(w, h)), None);
-            assert!(h * 0.78 <= h - bar_reserve(scale), "{w}x{h}: strip {}", bar_reserve(scale));
-        }
-    }
 
     #[test]
     fn strategic_opponent_is_the_main_rival() {

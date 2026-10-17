@@ -26,6 +26,11 @@ the player selects and orders them, builds at owned planets, controls game speed
   over it (zoomed out the pads are a few pixels apart). The route hint names the slot ("fleet slot 2", "merge into fleet slot 1").
   Enemy and neutral planets have no pad targets: a drop sends the fleet there (`MoveSelected`). Zoomed out a pad is a pixel or two, so
   there the hint is what tells the slot.
+- Planet under the cursor (`input::pick_planet`, 2026-10-17): only real planets count (`GalaxyLayout::pickable`). The campaigns also
+  list 24 faction icons (like `Icon_Republic_Rendili_WW`, 15 units above Rendili) and dummies as planets; on the upper half of
+  Rendili's globe the icon's centre was the nearer one, so `PlayHover::planet` (drop target, route hint) was the icon there and a fleet
+  dropped on Rendili got an order to the icon and did not move (found by the app's `--label-probe`). Test:
+  `input::tests::a_decoration_listed_as_a_planet_never_takes_the_pointer`.
 - `BuildMenu` (units, structures, star base, tech, research) with availability reasons; `PlayAction::Build` queues it, credits go
   through galaxy-sim. Production queue model.
 - `GameClock`: pause + speed levels, `hold` flag for the host (pause menu, battle screen); time is held while a human battle waits.

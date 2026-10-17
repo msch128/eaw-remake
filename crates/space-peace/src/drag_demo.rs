@@ -131,7 +131,7 @@ struct PointerDrag {
 }
 
 /// Whether `order` drops the dragged fleet on planet `to` (and into pad `pad`, if one was aimed at).
-fn drops_on(order: &PlayAction, to: PlanetId, pad: Option<u8>) -> bool {
+pub(crate) fn drops_on(order: &PlayAction, to: PlanetId, pad: Option<u8>) -> bool {
     match (order, pad) {
         // Onto a pad: into exactly that slot (the simulation merges it into the fleet holding the slot).
         (PlayAction::MoveToSlot { to: t, slot, .. }, Some(s)) => *t == to && *slot == s,

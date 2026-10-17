@@ -57,6 +57,9 @@ pub struct Args {
     pub drag_pointer: Option<String>,
     /// Offscreen only: with `--drag-pointer`, keep the button down so the capture shows the carried fleet (`--drag-hold`).
     pub drag_hold: bool,
+    /// Offscreen only: prove the names and the pointer use of the planets in the lower part of the map (`--label-probe`, see
+    /// `label_probe.rs`).
+    pub label_probe: bool,
     /// Offscreen only: with `--drag-pointer`, end the drag with Esc or a right click instead of the release (`--drag-cancel esc|right`).
     pub drag_cancel: Option<String>,
     /// Offscreen only: stop advancing when a battle waits for the player (`--stop-on-battle`).
@@ -152,6 +155,7 @@ impl Default for Args {
             drag_to: None,
             drag_pointer: None,
             drag_hold: false,
+            label_probe: false,
             drag_cancel: None,
             stop_on_battle: false,
             battle_choice: None,
@@ -215,6 +219,7 @@ OPTIONS:
   --drag-to <planet>     Offscreen: carry the fleets of the selected planet over another planet, as while dragging them
   --drag-pointer <planet>[:<pad>]  Offscreen: drag a fleet of the selected planet there with synthetic pointer input and drop it
   --drag-hold            Offscreen: with --drag-pointer, keep the button down for the capture
+  --label-probe          Offscreen: names, hover, click and drop of the planets in the lower part of the map, still and zooming (log lines label-probe:)
   --drag-cancel <c>      Offscreen: with --drag-pointer, end the drag with esc or right (click) instead of the release
   --stop-on-battle       Offscreen: stop advancing as soon as a battle waits for a decision
   --battle-choice <c>    Offscreen: click fight or auto in the battle dialog when it opens
@@ -315,6 +320,7 @@ impl Args {
                 "--drag-to" => out.drag_to = Some(it.next().ok_or("--drag-to needs a value")?),
                 "--drag-pointer" => out.drag_pointer = Some(it.next().ok_or("--drag-pointer needs a planet")?),
                 "--drag-hold" => out.drag_hold = true,
+                "--label-probe" => out.label_probe = true,
                 "--drag-cancel" => {
                     let v = it.next().ok_or("--drag-cancel needs esc or right")?;
                     if v != "esc" && v != "right" {

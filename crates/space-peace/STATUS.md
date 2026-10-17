@@ -84,13 +84,29 @@ fullscreen, FPS cap).
   come out at 1-2 px soft dots that the sub-pixel cull removes and that spread evenly instead of the Remake's dense crisp cluster,
   so it needs work in the particle renderer.
 - Labels: caps in faction colour (own = green via relation_color), two pip rows (ground, space) from Max_Ground_Base/Max_Space_Base.
-  Every planet on screen shows its name unless the planet itself sits under opaque interface (2026-10-17, G3): the obstacles in
-  `PanelRect` are the command bar's opaque art (`eaw_ui::ShellOpaque::rects`, not its bounding box, which hid every name below
-  y 629 of 1080), the bar backing, the ticker, the hero frame and open panels. A name whose place under the globe is covered or off
-  the bottom goes above the globe instead (the Remake lets its translucent bar cover it, v0240 LORONAR, v0220 BYSS). Crowding hides
-  names only when zoomed far out (zoom fraction >= 0.45, farther than any Remake frame: those are about 8.5 px per map unit, our
-  `--zoom 0.06`). Offscreen runs log `labels: N of M on screen named, lower third n of m, toggles k` every 60 frames (smoke row
-  `labels-lower-third`).
+  Every planet on screen shows its name (2026-10-17, G3 and G3b): names, pip rows and emblems are drawn below the command bar
+  (`GlobalZIndex(-2)`; the bar's backing plate is -1), so like in the Remake (b0613s LORONAR, v0220 BYSS) a name behind the
+  translucent build strip shows faintly through it and the opaque art covers the rest. The bar is no obstacle in `PanelRect` (its node
+  is the bounding box of the faceplate, which hid every name below y 629 of 1080). A name that would sit under another HUD panel (the
+  ticker line) or off the screen goes above its globe, with hysteresis (`PLACE_HYSTERESIS`: under its globe a name stays while its box
+  is covered by up to 2 px, above it it stays until the place under the globe is clear by 4 px more), so a name grazing a panel edge
+  while the camera moves does not jump (Ithor did, `--label-probe`). Crowding hides names only when zoomed far out (zoom fraction >=
+  0.45). The Remake has no far zoom to compare with: its galaxy camera has one view (Gameconstants.xml `GMC_InitialPullbackDistance`
+  470 at `GMC_InitialPitchAngleDegrees` -50; `Max_Galactic_Zoom_Distance` is marked unused) and the wheel zooms into the planet view.
+  Every galaxy frame of the user's videos is at that scale with names (b0613s: Byss to Corellia 9.3 px per map unit; ours shows them
+  8.5 px per map unit apart at `--zoom 0.15`), and b0621s, the one without names, is the 1 s camera flight back from the Coruscant
+  planet screen (Coruscant to Alderaan 776 px against 562 px in b0613s, so closer, not farther out).
+  Offscreen runs log `labels: N of M on screen named, lower third n of m, toggles k` every 60 frames (smoke row `labels-lower-third`).
+  `--label-probe` (offscreen, label_probe.rs) proves the lower part through the real input path: every planet whose globe or name is
+  in the bottom 42 % is hovered (12 frames), clicked and gets a fleet of the start planet dropped on it, then the view holds still for
+  120 frames and zooms out slowly for 120, logging per frame the names of the lower part with their positions. 2026-10-17 PASS at
+  zoom 0.06, 0.15 and 0.30 in GC_Full_Web_Way_Imperial (The Coruscant System selected) and the default Rebel campaign (The Yavin
+  System): 53 lower planets, all 37 with a globe point clear of the bar art hovered, selected and sent the fleet; no name moved in 720
+  still frames or changed more than once in 720 zoom frames. A globe entirely behind the bar art cannot be hovered or clicked (the
+  cursor is on the interface there): scroll the map. `SP_NO_PLANET_NAMES=1` renders the same view without names, to measure what the
+  names add: behind the empty build strip our names stand 9-21 sRGB luma levels (median 12) above the strip, colour distance 17-40,
+  against 20 and 34 for LORONAR in b0613s (a video frame, its dark levels are crushed); under the unit cards and the minimap column
+  they are covered, as that art is opaque.
 - Selection: notched ring (mesh fill + gizmo outline); fleets stand on a faction-coloured base disc (galaxy-play visuals.rs).
 - Missing vs original: hero head portraits, faction emblem beside planets, dashed sector ring (W_Planet_GC_Sector), lane/slot textures from the game.
 

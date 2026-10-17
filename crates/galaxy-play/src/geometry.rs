@@ -27,6 +27,9 @@ pub struct GalaxyLayout {
     pub unit: f32,
     /// Lower-cased planet object name to id.
     pub index: HashMap<String, PlanetId>,
+    /// Whether the pointer can pick the planet (empty = all): only real planets. The campaigns also list faction icons (24 like
+    /// `Icon_Republic_Rendili_WW`, 15 units above Rendili) and dummies as planets.
+    pub pickable: Vec<bool>,
 }
 
 /// `radii` is the model's bounding radius, which includes the atmosphere glow: the visible globe measures about 0.54 of it in our
@@ -38,14 +41,10 @@ impl GalaxyLayout {
     /// Layout derived from the planet positions of `world`.
     pub fn from_world(world: &World) -> Self {
         let positions: Vec<Vec3> = world.planets.iter().map(|p| galaxy_to_world(p.position)).collect();
+        let pickable: Vec<bool> =
+            world.planets.iter().enumerate().map(|(i, p)| world.real.get(i).copied().unwrap_or(true) && !p.name.to_ascii_lowercase().contains("dummy")).collect();
         // Median nearest-neighbour distance of the visible planets, like the app's `MapScale`.
-        let flat: Vec<Vec2> = world
-            .planets
-            .iter()
-            .enumerate()
-            .filter(|(i, p)| world.real[*i] && !p.name.to_ascii_lowercase().contains("dummy"))
-            .map(|(i, _)| Vec2::new(positions[i].x, positions[i].z))
-            .collect();
+        let flat: Vec<Vec2> = (0..positions.len()).filter(|&i| pickable[i]).map(|i| Vec2::new(positions[i].x, positions[i].z)).collect();
         let mut nn: Vec<f32> = flat
             .iter()
             .enumerate()
@@ -54,7 +53,7 @@ impl GalaxyLayout {
         nn.sort_by(f32::total_cmp);
         let median = nn.get(nn.len() / 2).copied().unwrap_or(30.0);
         let unit = (0.15 * median).clamp(0.5, 200.0);
-        Self { radii: vec![unit; positions.len()], positions, unit, index: world.planet_index.clone() }
+        Self { radii: vec![unit; positions.len()], positions, unit, index: world.planet_index.clone(), pickable }
     }
 
     /// Sets the radius of the planet with this object name (case-insensitive); no-op if unknown.
