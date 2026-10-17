@@ -1633,6 +1633,71 @@ fn a_defender_without_a_station_leaves_after_30_s_and_its_reserve_counts() {
 }
 
 #[test]
+fn a_defender_with_a_station_holds_until_the_station_falls_or_120_s() {
+    // `Retreat_From_Space` lets a defender that has a station consider a retreat only after 120 s ("if I have a station, wait for the defense fleet to
+    // spawn"); once the station is gone it may leave after 30 s. Our own emergency rule (U94, enemy above 3x with capital ships left) used to send such a
+    // defender away at 62 s while its station stood; now it holds, and only a fleet that has lost half of its strength (the nearly-destroyed rule) leaves
+    // earlier. Attackers and defenders without a station keep U94. Out of each other's reach (no speed): only the odds decide.
+    // `station`: the AI side has one; `defends`: it is the defender; `at`: (second, what happens): the station dies, or the ships drop to 20% hull.
+    #[derive(Clone, Copy, PartialEq)]
+    enum Then {
+        StationFalls,
+        ShipsBattered,
+    }
+    let run = |defends: bool, station: bool, at: Option<(f32, Then)>| -> Option<f32> {
+        let mut weak = mobile("weak", TargetClass::Capital, 0.0, 2000.0, vec![gun("g", 0.0)]);
+        weak.ai_power = 100.0;
+        let mut strong = mobile("strong", TargetClass::Frigate, 0.0, 8000.0, vec![gun("g", 0.0)]);
+        strong.ai_power = 200.0;
+        let mut base = ship("base", 5000.0, 0.0, vec![]);
+        base.class = TargetClass::Structure;
+        base.ai_power = 50.0;
+        let cat = Arc::new(Catalog::from_defs(vec![weak, strong, base], vec![laser()]));
+        let mut c = cfg();
+        c.retreat_countdown = 0.0;
+        c.half_size = 12_000.0;
+        c.defenders = vec![defends, !defends];
+        // Two capital ships and a station (force 250) against four ships (800): 3.2x, a survival chance of 24%, below the data's 4x with a station.
+        let mut ai = one_side(&cat, "weak", 2, true);
+        if station {
+            ai.structures = vec![cat.ship_id("base").unwrap()];
+        }
+        let mut b = Battle::new(BattleSetup { sides: vec![ai, one_side(&cat, "strong", 4, false)], catalog: cat.clone(), config: c });
+        for _ in 0..30 * 150 {
+            if let Some((t, what)) = at
+                && b.time() >= t
+                && b.time() < t + 0.1
+            {
+                match what {
+                    Then::StationFalls => b.ships.iter_mut().filter(|s| cat.ship(s.def).is_static && s.side == 0).for_each(|s| s.alive = false),
+                    Then::ShipsBattered => b.ships.iter_mut().filter(|s| !cat.ship(s.def).is_static && s.side == 0).for_each(|s| s.hull = 400.0),
+                }
+            }
+            if b.step().iter().any(|e| matches!(e, Event::RetreatOrdered { side: 0, .. })) {
+                return Some(b.time());
+            }
+        }
+        None
+    };
+    let between = |t: Option<f32>, lo: f32, hi: f32| t.is_some_and(|t| (lo..=hi).contains(&t));
+    // The retreat rule runs every 2 s, the first run past 120 s is at 122 s.
+    let held = run(true, true, None);
+    assert!(between(held, 120.0, 124.0), "a defender with a station holds until 120 s, then leaves: {held:?}");
+    // The station falls at 80 s: the defender leaves at the next check.
+    let freed = run(true, true, Some((80.0, Then::StationFalls)));
+    assert!(between(freed, 80.0, 84.0), "the station's fall frees the defender: {freed:?}");
+    // Nearly destroyed (ships at 20% hull at 70 s): it does not wait for the station or the 120 s.
+    let battered = run(true, true, Some((70.0, Then::ShipsBattered)));
+    assert!(between(battered, 70.0, 74.0), "a nearly destroyed fleet leaves at once: {battered:?}");
+    // U94 as before for an attacker with a station, and for a defender without one.
+    let attacker = run(false, true, None);
+    assert!(between(attacker, 60.0, 64.0), "an attacker leaves at the end of the retreat countdown: {attacker:?}");
+    let bare = run(true, false, None);
+    assert!(between(bare, 30.0, 34.0), "a defender without a station leaves after 30 s: {bare:?}");
+    println!("orders: held {held:?}, station falls at 80 s {freed:?}, battered at 70 s {battered:?}, attacker {attacker:?}, no station {bare:?}");
+}
+
+#[test]
 fn pressing_retreat_again_during_the_countdown_calls_it_off_and_nobody_jumps() {
     // EaW: the Retreat button pressed a second time while the hyperdrives charge cancels the retreat (`Space_Retreat_Cancel_SFXEvent`).
     let mut b = retreat_battle(vec![runner("runner", vec![]), idle_target()], "runner", 2, 10.0);

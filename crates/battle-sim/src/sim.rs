@@ -1654,7 +1654,8 @@ impl Battle {
     /// (`Forces_Are_Not_Mainly_Transports`) leaves whatever the odds, an attacker already after 30 s.
     /// U94: emergency retreat when the survival chance falls below 25% (enemy force above 3x its own) while capital ships or heroes are left, or once the
     /// side has lost half of the strength its ships had at their peak in this battle (user finding 2026-10-16: a nearly destroyed fleet of frigates and
-    /// corvettes fought to the last ship); it does not wait for the 120 s.
+    /// corvettes fought to the last ship); it does not wait for the 120 s. A defender with a living station is the exception: it holds until the station
+    /// falls or 120 s have passed (the data's wait for the defence fleet), unless it is nearly destroyed.
     /// Not for sides that may not retreat (`BattleConfig::retreat_allowed`, the galaxy says whether the faction holds more than one planet),
     /// not before the retreat countdown, and not while an interdictor blocks it.
     fn ai_retreat(&mut self) {
@@ -1690,7 +1691,13 @@ impl Battle {
             // A side of fighters and bombers only keeps the data rules (its strength without them is 0 from the start).
             let battered = self.ai[si].peak > 0.0 && fleet <= 0.5 * self.ai[si].peak;
             let critical_loss = theirs > 0.0 && mine / (mine + theirs) < 0.25;
-            let emergency_retreat = (has_valuable_ships || battered) && critical_loss && (stations == 0 || self.time > 60.0);
+            // A defender with a living station keeps to it: the data lets it consider a retreat only after 120 s ("if I have a station, wait for the
+            // defense fleet to spawn", `Retreat_From_Space`), and the station's fall frees it at once (no structure force after 30 s). U94 is our own
+            // estimate and used to send it away at the end of the retreat countdown (62 s) while the station still stood; it no longer does, only a
+            // fleet that has lost half of its peak strength (the nearly-destroyed rule) still leaves earlier. Attackers and defenders without a station
+            // keep U94.
+            let holds_station = defender && stations > 0 && self.time <= 120.0;
+            let emergency_retreat = (battered || (has_valuable_ships && !holds_station)) && critical_loss && (stations == 0 || self.time > 60.0);
 
             let age_ok = if emergency_retreat {
                 self.time >= self.config.retreat_countdown.max(30.0)

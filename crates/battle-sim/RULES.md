@@ -156,7 +156,7 @@ Source: `XML/AI/GoalFunctions/Remake_SpaceCombat.xml`, `PerceptualEquations/Rema
   `sqrt((hull + shield) x best-bearing damage rate)`, which put the Executor at 11 Star Destroyers instead of the data's 36 (user finding: the AI kept fighting after its station
   was destroyed, without a chance against a Super Star Destroyer fleet). Measured (`examples/ai_probe.rs`, seeds 1-3, scripted player attacking the station,
   before = main f9710b3): Executor, 3 Star Destroyers, 3 Victorys and 4 TIE squadrons against a Rebel star base 3 with 22 ships: before, the station fell after 126-133 s at
-  4.5-4.9x, the AI fought on until 230-260 s and lost 11-13 of its 22 ships; now it leaves at 62 s (3.7-3.8x) and loses 4. The Executor alone against 16 ships and the base: order
+  4.5-4.9x, the AI fought on until 230-260 s and lost 11-13 of its 22 ships; now it leaves at 62 s (3.7-3.8x) and loses 4 (since the station hold below it waits for the station or 120 s: see U94). The Executor alone against 16 ships and the base: order
   at 300-320 s (7-8 of 16 lost) before, 96-102 s (1 lost) now; against a Golan III and 10 ships 180-240 s (4-7 of 10 lost) before, 108-172 s (2-4 lost) now. An even fight in which
   the station falls (6 Star Destroyers, 4 Victorys against 10 ships and a base 1, 1.4-1.5x when it falls) is fought on until the enemy is 3x stronger (194-206 s). Tests:
   `tactical_ai::an_ai_defender_without_a_chance_against_a_super_star_destroyer_retreats_at_the_latest_when_its_station_falls`, `..._with_a_fair_chance_fights_on_after_losing_its_station`,
@@ -164,8 +164,17 @@ Source: `XML/AI/GoalFunctions/Remake_SpaceCombat.xml`, `PerceptualEquations/Rema
   **Emergency retreat (U94, project rule, estimate):** after the retreat countdown, without waiting for the 120 s, a side whose survival chance is below 25% (enemy force > 3 x own)
   leaves while capital ships or units of 15+ population are left, or (user finding 2026-10-16: a nearly destroyed fleet of frigates and corvettes fought to the last ship) once its
   ships without fighters and bombers have lost half of the strength they had at their peak in this battle (a side of fighters and bombers only keeps
-  the data rules). With the data's force this rule makes a defender facing a Super Star Destroyer leave at the end of the countdown even while its station stands
-  (the data alone would keep it until the station falls or 120 s). Tests: `a_nearly_destroyed_ai_fleet_retreats_before_it_is_wiped_out`
+  the data rules). **A defender with a living station is the exception (2026-10-17):** the data lets it consider a retreat only after 120 s (`Retreat_From_Space`: "if I have a
+  station, wait for the defense fleet to spawn"; it may leave after 30 s once it has none), so it holds until its station falls or 120 s have passed and U94 does not send it
+  away before; only a fleet that has lost half of its peak strength (the nearly-destroyed clause) still leaves earlier. Before, with the data's force, a defender facing a Super
+  Star Destroyer left at the end of the countdown (62 s) while its station stood. Same battles (`examples/ai_probe.rs`, seeds 1-3, big ships lost / escaped): 15 big ships against
+  an Executor fleet: order at 62 s before, 104-106 s now (the station falls at 104-106 s on seeds 1-2; on seed 3 the fleet is half destroyed at 104 s and the station stands to
+  116 s), lost 5 / 2 / 4, now 5 / 6 / 7; 22 big ships: 62 s before, 122 s now (the first check past 120 s; the station falls at 123-134 s), lost 5 / 6 / 6, now 6 / 7 / 8; an Executor
+  alone against 16 ships and a base: 76 / 72 / 66 s before, 122 s now (the base stands to 182-187 s), lost 1 / 3 / 1, now 3 / 3 / 4; against a Golan III 118-120 s before, 122 s now.
+  Attackers and defenders without a station keep U94 (`an_ai_attacker_that_is_losing_badly_retreats`: 62 s). Tests: `mechanics::a_defender_with_a_station_holds_until_the_station_falls_or_120_s`
+  (hand-made: held to 122 s; the station dies at 80 s: order at 82 s; ships at 20% hull at 70 s: order at 72 s; an attacker with a station 62 s; no station 32 s),
+  `tactical_ai::an_ai_defender_holds_while_its_station_stands_and_leaves_when_it_falls`, `an_ai_defender_whose_station_outlasts_120_s_leaves_at_120_s_if_it_has_no_chance`.
+  Tests of the other rules: `a_nearly_destroyed_ai_fleet_retreats_before_it_is_wiped_out`
   (3 Acclamators and 3 Tartan pairs against a defended planet: order at 110 s instead of 122 s, 3 of 3 Acclamators escape instead of 2 / 1; 4 Tartan pairs: order at 68 s instead of
   never), `a_defender_without_a_station_leaves_after_30_s_and_its_reserve_counts`.
   Not modelled: the Normal/Hard checks of `RetreatPlan.lua` (abort when engines of more than half the frigate/capital combat rating are down; Hard finishes off enemies below 20%
@@ -315,7 +324,7 @@ hardpoint hits on weapons, the most damaged enemy's share of the damage per 10 s
   | the same Rebel AI defends a star base 3 against them, scripted | lost 15 of 15 after 337 s, dealt 191k | lost 15 of 15 after 315 s, dealt 192k |
   | Rebel AI defends a star base 2 against 2 ISD, 2 VSD, 3 TIE squadrons, scripted | won 6/6, lost 2.5 of 10, taken 113k | won 6/6, lost 2.0, taken 116k |
 
-  Without retreats (`retreat_allowed` off): against the Executor fleet the retreat of section 9 makes the AI leave at 62 s. AI against AI battles last longer
+  Without retreats (`retreat_allowed` off): against the Executor fleet the retreat of section 9 makes the AI leave at 62 s (104-122 s since a defender holds while its station stands, see U94). AI against AI battles last longer
   (mirror 441 s before, 585 s after): both sides now split their fire by class. Tests: `tactical_ai::an_ai_fleet_shelled_from_beyond_its_sight_goes_for_the_shooter`
   (first hit on a warship at 200 s before, 102-109 s now), `ai_capital_ships_take_the_frigates_near_them` (51% of the Star Destroyers' fire on frigates
   before, 85-87% now), `the_ai_fires_full_salvos_only_at_capital_ships_and_stations` (2 of 8 at corvettes before, 0 of 8 now).

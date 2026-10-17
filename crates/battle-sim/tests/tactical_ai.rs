@@ -570,8 +570,56 @@ fn an_ai_defender_without_a_chance_against_a_super_star_destroyer_retreats_at_th
         assert!(r.start_ratio >= 3.0, "no chance from the start: {:.2}", r.start_ratio);
         let down = r.station_down.expect("the station falls");
         let (at, ratio) = r.ordered.expect("the defender retreats");
-        // The rule is checked every 2 s, not before the 60 s retreat countdown.
+        // The rule is checked every 2 s, not before the 60 s retreat countdown. A defender with a station holds until the station falls or 120 s have
+        // passed (main add6915 sent it away at 62 s with the station standing until 106 s; now the station falls after 123-127 s and the order comes at the
+        // first check past 120 s, 122 s).
         assert!(at <= down.max(60.0) + 4.0, "the AI leaves at the latest right after its station falls: station {down:.0} s, order {at:.0} s");
+        assert!(at >= down.min(120.0) - 0.1, "the AI does not leave while its station stands before 120 s: station {down:.0} s, order {at:.0} s");
+        assert!(ratio >= 2.95, "it leaves because the enemy is 3x stronger: {ratio:.2}");
+        assert!(r.big.2 * 2 >= r.big.0, "most of the fleet gets away: {:?}", r.big);
+    }
+}
+
+#[test]
+fn an_ai_defender_holds_while_its_station_stands_and_leaves_when_it_falls() {
+    // The user's Super Star Destroyer fleet (Executor, 3 Star Destroyers, 3 Victorys, 4 TIE squadrons) against a defended Rebel base: 15 big ships, the
+    // enemy is 4.5-5.7x stronger from the start. `Retreat_From_Space` makes a defender with a station wait 120 s ("wait for the defense fleet to spawn");
+    // our emergency rule U94 had sent it away at 62 s while the station stood (main add6915, seeds 1-3: 5 / 2 / 4 big ships lost). Now it holds and leaves
+    // as soon as the station is gone (it falls at 104 s and 106 s on seeds 1 and 2, 5 / 6 big ships lost, 10 / 9 escaped).
+    let Some((data, fs)) = load() else { return };
+    let names = ["Executor_Star_Dreadnought", "Star_Destroyer", "Victory_Destroyer", "TIE_Fighter_Squadron", "MC-80_Star_Cruiser", "Nebulon_B_Frigate", "Assault_Frigate_Mark_II", "CR-90_Corvette", "X-Wing_Squadron", "Rebel_Star_Base_3"];
+    let cat = Arc::new(Catalog::build(&data, Some(&fs), &names));
+    let empire = [("Executor_Star_Dreadnought", 1), ("Star_Destroyer", 3), ("Victory_Destroyer", 3), ("TIE_Fighter_Squadron", 4)];
+    let rebels = [("MC-80_Star_Cruiser", 4), ("Nebulon_B_Frigate", 4), ("Assault_Frigate_Mark_II", 3), ("CR-90_Corvette", 4), ("X-Wing_Squadron", 4)];
+    for seed in [1, 2] {
+        let r = retreat_run(&cat, 1, &empire, &rebels, &["Rebel_Star_Base_3"], None, seed);
+        println!("Executor fleet against a defended base, seed {seed}: {r:?}");
+        let down = r.station_down.expect("the station falls");
+        let (at, ratio) = r.ordered.expect("the defender retreats");
+        assert!(r.start_ratio >= 4.0 && down > 70.0, "no chance from the start, and the station stands well past 62 s: {:.2}, {down:.0} s", r.start_ratio);
+        assert!(at >= down - 0.1, "no retreat while the station stands: station {down:.1} s, order {at:.1} s");
+        assert!(at <= down + 2.2, "it leaves at the next check after the station's fall: station {down:.1} s, order {at:.1} s");
+        assert!(ratio >= 2.95, "it leaves because the enemy is 3x stronger: {ratio:.2}");
+        assert!(r.big.2 * 2 >= r.big.0, "most of the fleet gets away: {:?}", r.big);
+    }
+}
+
+#[test]
+fn an_ai_defender_whose_station_outlasts_120_s_leaves_at_120_s_if_it_has_no_chance() {
+    // An Executor alone (force 65000) against 16 Rebel ships and a base (22650): 2.9x at the start, 3.3x at 120 s, and the base stands until 182-187 s.
+    // Main add6915 ordered the retreat at 66-76 s (the survival chance crossed 25%); the defender now holds until 120 s and leaves at the first check
+    // after it (122 s, 3 / 3 big ships lost, 13 / 13 escaped).
+    let Some((data, fs)) = load() else { return };
+    let names = ["Executor_Star_Dreadnought", "MC-80_Star_Cruiser", "Assault_Frigate_Mark_II", "Nebulon_B_Frigate", "Rebel_Star_Base_3"];
+    let cat = Arc::new(Catalog::build(&data, Some(&fs), &names));
+    let rebels = [("MC-80_Star_Cruiser", 6), ("Assault_Frigate_Mark_II", 6), ("Nebulon_B_Frigate", 4)];
+    for seed in [1, 2] {
+        let r = retreat_run(&cat, 1, &[("Executor_Star_Dreadnought", 1)], &rebels, &["Rebel_Star_Base_3"], None, seed);
+        println!("Executor against a defended base, seed {seed}: {r:?}");
+        let down = r.station_down.expect("the station falls");
+        let (at, ratio) = r.ordered.expect("the defender retreats");
+        assert!((120.0..=124.5).contains(&at), "it leaves at the first check past 120 s: {at:.1} s");
+        assert!(down > at + 20.0, "the station still stands when it leaves: station {down:.0} s, order {at:.0} s");
         assert!(ratio >= 2.95, "it leaves because the enemy is 3x stronger: {ratio:.2}");
         assert!(r.big.2 * 2 >= r.big.0, "most of the fleet gets away: {:?}", r.big);
     }

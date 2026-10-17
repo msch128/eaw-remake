@@ -79,7 +79,7 @@ User finding: after the user's Super Star Destroyer fleet destroyed the AI's sta
 estimate `sqrt((hull + shield) x damage)`, which put the Executor at 11 Star Destroyers; the data's `AI_Combat_Power` (what the engine's force perception sums) puts it at 36.
 Now `ShipDef::ai_power` is read from the data and the force of a unit is its `AI_Combat_Power` times the share of hull and shield it has left (that weighting is the estimate);
 the retreat rule and the defender's aggressive mode use it, the fleet AI's positional weights keep the old estimate. Same battle, seeds 1-3: the station fell after 126-133 s and
-the AI fought on until 230-260 s, losing 11-13 of 22 ships; now it leaves at 62 s and loses 4. Probe: `examples/ai_probe.rs`. Open: the Normal/Hard checks of `RetreatPlan.lua`.
+the AI fought on until 230-260 s, losing 11-13 of 22 ships; now it leaves at 62 s and loses 4 (later made to wait for its station: see "A defender holds while its station stands"). Probe: `examples/ai_probe.rs`. Open: the Normal/Hard checks of `RetreatPlan.lua`.
 
 ## Group moves (2026-10-17, `formation.rs`, RULES.md 9d)
 User rule: a group move ends with every ship in its own slot, side by side in rows facing the move, tight (`BetweenFormationSpacing` beyond the hulls), 2-3 rows
@@ -113,3 +113,15 @@ a member that lags (`SQUADRON_LAG_START` 50 u, half speed from `SQUADRON_LAG_HAL
 that sum was 12 on f9710b3, 11 with the data's formation (4, 3, 4), and both are noise: seeds 1-8 left 34 of 80 on f9710b3 and 36 of 80 now (3-6 a run in both), before the
 rule 7 of 30 on seeds 1-3. The Kuat attack (seeds 1-8) is unchanged: depth, width and `half_in` are identical to the digit on both versions, ships left 8.4 on average now against
 8.6 (its threshold is 8.0).
+
+## A defender holds while its station stands (2026-10-17, RULES.md 9 "Retreat", polish2 R2)
+The Remake's `Retreat_From_Space` lets a defender that has a station consider a retreat only after 120 s ("if I have a station, wait for the defense fleet to spawn") and one
+without a station after 30 s. Our own emergency rule U94 (enemy above 3x with capital ships left) sent a defender away at the end of the 60 s retreat countdown (62 s) while
+its station still stood. `Battle::ai_retreat` now holds such a defender (`defender && stations > 0 && time <= 120`) until its station falls or 120 s have passed; only the
+nearly-destroyed clause (half of the peak strength lost) still lets it leave earlier. Attackers and defenders without a station keep U94 as it was. The player's own retreat
+is untouched. Measured (`examples/ai_probe.rs`, seeds 1-3): an Executor fleet against a defended base (15 big ships): the order comes when the station falls, 104-106 s (before: 62 s),
+5 / 6 / 7 big ships lost (before 5 / 2 / 4); 22 big ships: 122 s (before 62 s), 6 / 7 / 8 lost (5 / 6 / 6); an Executor alone against a base and 16 ships: 122 s (before 66-76 s),
+3 / 3 / 4 lost (1 / 3 / 1); Golan III: 122 s (118-120 s). The AI loses a few more ships for holding on, as the data's wait implies. Tests: `mechanics::a_defender_with_a_station_holds_until_the_station_falls_or_120_s`,
+`tactical_ai::an_ai_defender_holds_while_its_station_stands_and_leaves_when_it_falls`, `an_ai_defender_whose_station_outlasts_120_s_leaves_at_120_s_if_it_has_no_chance`; the older
+`an_ai_defender_without_a_chance_against_a_super_star_destroyer_retreats_at_the_latest_when_its_station_falls` also checks that it does not leave before. Open: the nearly-destroyed clause counts
+the station's own force in the fleet (a standing station keeps `fleet` high), so a defender with a station is rarely "battered" before the station falls.
