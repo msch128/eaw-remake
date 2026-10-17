@@ -117,8 +117,17 @@ fullscreen, FPS cap).
   point were hovered (card), selected and reached. Known gap (also before G3c): from about zoom 0.4 the icons of fleets parked at a
   small planet cover its whole globe, so a click there selects a fleet and the planet cannot be selected by a click (Imperial start:
   Byss and Rendili at 0.42; Allanteen VI, Byss, The Corellia System and Fondor at 0.60).
-- Selection: notched ring (mesh fill + gizmo outline); fleets stand on a faction-coloured base disc (galaxy-play visuals.rs).
-- Missing vs original: hero head portraits, faction emblem beside planets, dashed sector ring (W_Planet_GC_Sector), lane/slot textures from the game.
+- Selection: notched ring (mesh fill + gizmo outline) and the dashed sector ring in the colour of the relation
+  (`territory_segments`); fleets stand on a faction-coloured base disc (galaxy-play visuals.rs). Round the dashed ring lies the Remake's
+  sector shadow (2026-10-17, G9, `SectorShadow`): the map inside the ring is unchanged, right outside it shows at 0.44 of its
+  brightness and is back to normal 0.62 ring radii out (measured on the user's video at the same map points with and without a
+  selection: b0613s against v0240s south of Coruscant, v0220s against v0240s south of Fresia; same for every owner, colour-neutral).
+  It is a multiplying annulus under the map plane, so planets, lanes and fleets stay as bright; the factor goes into linear light
+  with the power 1.85, right for the map's typical brightness (a little darker than the Remake on the darkest space). Our render at
+  `--zoom 0.15`: 0.49 / 0.54 on the nebula 0.1 / 0.23 ring radii out, 0.37 on dark space next to the ring. `SP_NO_SECTOR_SHADOW=1`
+  leaves it out for comparison renders.
+- Missing vs original: hero head portraits, faction emblem beside planets, lane/slot textures from the game.
+  (`W_Planet_GC_Sector.alo` is not the dashed ring but the model of the "Sector" planets, the galaxy-shaped clusters like Senex-Juvex.)
 
 ## Real pointer test (galaxy screens)
 `SP_UI_TEST=exit SP_SAVES_DIR=<scratch> space-peace --hidden --exit-after 8000 --volume 0 --campaign <c> --select <planet> --weeks 8 --move <planet>`

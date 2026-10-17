@@ -60,7 +60,7 @@ impl Plugin for GalaxyMapPlugin {
             })
             .init_resource::<CaptureAnimations>()
             .add_systems(Update, apply_filter_spans)
-            .add_systems(Update, (update_pip_colors, place_sector_fill, scripted_hover.after(update_hover)).run_if(in_state(AppScreen::Galaxy)))
+            .add_systems(Update, (update_pip_colors, place_sector_shadow, scripted_hover.after(update_hover)).run_if(in_state(AppScreen::Galaxy)))
             .add_systems(Startup, setup_scene)
             .add_systems(OnEnter(AppScreen::Galaxy), spawn_galaxy)
             .add_systems(
@@ -653,13 +653,22 @@ fn spawn_galaxy(
         spawn_nebula_plane(&mut commands, &view, &mut meshes, &mut materials, &mut images);
     }
     commands.spawn((
-        Name::new("sector fill"),
-        Mesh3d(meshes.add(Circle::new(1.0).mesh().resolution(96))),
-        MeshMaterial3d(materials.add(StandardMaterial { base_color: Color::srgba(0.9, 0.1, 0.1, 0.08), unlit: true, alpha_mode: AlphaMode::Blend, cull_mode: None, depth_bias: -500.0, ..default() })),
-        Transform::from_rotation(Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2)),
+        Name::new("sector shadow"),
+        Mesh3d(meshes.add(sector_shadow_mesh())),
+        // Multiply: the map behind is scaled by the vertex colour (`sector_shadow_mesh`).
+        MeshMaterial3d(materials.add(StandardMaterial {
+            base_color: Color::WHITE,
+            unlit: true,
+            fog_enabled: false,
+            alpha_mode: AlphaMode::Multiply,
+            cull_mode: None,
+            depth_bias: -500.0,
+            ..default()
+        })),
+        Transform::default(),
         Visibility::Hidden,
         bevy::camera::visibility::NoFrustumCulling,
-        SectorFill,
+        SectorShadow,
         GalaxyEntity,
     ));
     commands.spawn((
@@ -1715,6 +1724,26 @@ mod tests {
     use super::*;
 
     #[test]
+    fn the_sector_shadow_follows_the_remake_profile() {
+        // b0613s against v0240s at the same map points south of Coruscant (ring radius 61.5 map units): distance outside the ring in
+        // map units and the brightness ratio of the map there (sRGB values).
+        let remake = [(1.4, 0.45), (4.3, 0.45), (7.2, 0.48), (12.0, 0.55), (16.8, 0.67), (21.7, 0.77), (26.6, 0.88), (31.5, 0.93), (36.4, 0.95)];
+        for (d, ratio) in remake {
+            let ours = sector_shadow_srgb(d / 61.5);
+            assert!((ours - ratio).abs() < 0.06, "{d} map units out: {ours:.3} against {ratio}");
+        }
+        // Darker the closer to the ring, back to normal at the outer edge.
+        let profile: Vec<f32> = (0..=20).map(|k| sector_shadow_srgb(SECTOR_SHADOW_WIDTH * k as f32 / 20.0)).collect();
+        assert!(profile.windows(2).all(|w| w[1] >= w[0]), "{profile:?}");
+        assert!((profile[20] - 1.0).abs() < 1e-4);
+        // The mesh carries the factor in linear light: darkest at the ring, untouched at the outer edge.
+        let mesh = sector_shadow_mesh();
+        let Some(bevy::mesh::VertexAttributeValues::Float32x4(col)) = mesh.attribute(Mesh::ATTRIBUTE_COLOR) else { panic!("no vertex colours") };
+        assert!((col[0][0] - 0.44f32.powf(SECTOR_SHADOW_GAMMA)).abs() < 1e-3, "{:?}", col[0]);
+        assert!((col[col.len() - 1][0] - 1.0).abs() < 1e-4 && col.iter().all(|c| c[3] == 1.0));
+    }
+
+    #[test]
     fn route_relations() {
         let p = Some(1);
         assert_eq!(route_relation(Some(1), Some(1), p), RouteRelation::Own);
@@ -2234,19 +2263,74 @@ fn scripted_hover(args: Res<crate::cli::Args>, selection: Res<Selection>, mut ho
     }
 }
 
-/// Translucent red fill over the sector of a selected enemy planet (v0540).
+/// The shadow the Remake lays round the selected planet's dashed sector ring: nothing changes inside the ring, right outside it the
+/// map shows at 0.44 of its brightness (sRGB values) and it is back to normal 0.62 ring radii out. Measured on the user's video at the
+/// same map points with and without a selection (homography through the planets of each frame, 11x11 px medians): b0613s against
+/// v0240s on a line south of Coruscant gives 0.97-1.08 inside, 0.45 / 0.45 / 0.50 at 1.4 / 4.3 / 7.2 map units out (ring radius
+/// 61.5), 0.55 / 0.67 / 0.77 / 0.88 / 0.93 at 12 / 17 / 22 / 27 / 32 and 0.95-0.98 beyond 36; v0220s south of Fresia (orange ring)
+/// 0.87-0.93 inside and 0.42-0.48 right outside. The same for every owner and colour-neutral (red and green ratios agree).
 #[derive(Component)]
-struct SectorFill;
+struct SectorShadow;
 
-fn place_sector_fill(
+/// Width of the shadow outside the ring, in ring radii.
+const SECTOR_SHADOW_WIDTH: f32 = 0.62;
+
+/// Brightness factor (sRGB values) of the map `d` ring radii outside the selected planet's sector ring (see [`SectorShadow`]).
+fn sector_shadow_srgb(d: f32) -> f32 {
+    1.0 - 0.56 * (1.0 - smoothstep(0.065, SECTOR_SHADOW_WIDTH, d))
+}
+
+/// The Remake scales 8-bit sRGB values; the camera multiplies in linear light, where the same darkening is a power of the factor that
+/// depends on the brightness behind it: 1.85 for the map's typical 70/255 inside the shadow (our --zoom 0.15 render: luma p10 33, median
+/// 70, p90 95), about 1.5 on the darkest space (a bit darker than the Remake there) and 2.0 near the core. 2.2 left 0.28 instead of 0.45
+/// right outside the ring on dark space.
+const SECTOR_SHADOW_GAMMA: f32 = 1.85;
+
+/// Unit ring (inner radius 1, in the map plane) out to `1 + SECTOR_SHADOW_WIDTH`, with the brightness factor of
+/// [`sector_shadow_srgb`] in linear light (power [`SECTOR_SHADOW_GAMMA`]) as vertex colour.
+fn sector_shadow_mesh() -> Mesh {
+    use bevy::asset::RenderAssetUsages;
+    use bevy::mesh::{Indices, PrimitiveTopology};
+    const SEGMENTS: usize = 128;
+    const STEPS: usize = 16;
+    let (mut pos, mut col, mut idx) = (Vec::new(), Vec::new(), Vec::new());
+    for s in 0..=STEPS {
+        let d = SECTOR_SHADOW_WIDTH * s as f32 / STEPS as f32;
+        let f = sector_shadow_srgb(d).powf(SECTOR_SHADOW_GAMMA);
+        for k in 0..SEGMENTS {
+            let th = k as f32 / SEGMENTS as f32 * std::f32::consts::TAU;
+            pos.push([(1.0 + d) * th.cos(), 0.0, (1.0 + d) * th.sin()]);
+            col.push([f, f, f, 1.0]);
+        }
+    }
+    for s in 0..STEPS {
+        for k in 0..SEGMENTS {
+            let (a, b) = ((s * SEGMENTS + k) as u32, (s * SEGMENTS + (k + 1) % SEGMENTS) as u32);
+            let (c, d) = (a + SEGMENTS as u32, b + SEGMENTS as u32);
+            idx.extend([a, c, b, b, c, d]);
+        }
+    }
+    let n = pos.len();
+    let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default());
+    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, pos);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, vec![[0.0f32, 1.0, 0.0]; n]);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, col);
+    mesh.insert_indices(Indices::U32(idx));
+    mesh
+}
+
+/// Lays the sector shadow round the selected planet's dashed ring (same radius as `territory_segments`), just under the map plane.
+/// `SP_NO_SECTOR_SHADOW=1` leaves it out, for comparison renders of the same view.
+fn place_sector_shadow(
     view: Res<GalaxyView>,
     radii: Res<PlanetRadii>,
     selection: Res<Selection>,
-    mut fill: Single<(&mut Transform, &mut Visibility), With<SectorFill>>,
+    mut shadow: Single<(&mut Transform, &mut Visibility), With<SectorShadow>>,
 ) {
-    let (tf, vis) = &mut *fill;
-    let enemy = selection.0.filter(|&i| i < view.planets.len()).filter(|_| false); // the Remake draws no red wash over an enemy sector, only the dashed circle
-    match enemy {
+    static OFF: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    let (tf, vis) = &mut *shadow;
+    let off = *OFF.get_or_init(|| std::env::var_os("SP_NO_SECTOR_SHADOW").is_some());
+    match selection.0.filter(|&i| i < view.planets.len() && !off) {
         Some(i) => {
             tf.translation = galaxy_to_world(view.planets[i].position) - Vec3::Y * 0.5;
             tf.scale = Vec3::splat((radii.0[i] * TERRITORY_RADIUS).clamp(30.0, 85.0));
