@@ -200,6 +200,47 @@ mod tests {
         assert!((at_1.translation - expected_overview.translation).length() < 1e-4, "at blend 1 camera is at overview pose");
         assert!((at_1.rotation.dot(expected_overview.rotation)).abs() > 0.9999, "at blend 1 rotation matches overview");
     }
+
+    /// Where the planet's centre is in the view of the dive at `blend` (a 40 degree 16:9 camera): `(x, y)` in -1..1 across the picture, `y` up, and the planet's
+    /// radius in the same units of the picture's height; `None` behind the camera.
+    fn planet_in_view(orbit_pos: Vec3, orbit_rot: Quat, planet_pos: Vec3, radius: f32, blend: f32) -> Option<(f32, f32, f32)> {
+        let pose = camera_transition_pose(orbit_pos, orbit_rot, planet_pos, radius, blend);
+        let local = pose.rotation.inverse() * (planet_pos - pose.translation);
+        let (depth, half_v) = (-local.z, 20f32.to_radians().tan());
+        (depth > 0.0).then(|| (local.x / depth / (half_v * 16.0 / 9.0), local.y / depth / half_v, radius / depth / half_v))
+    }
+
+    #[test]
+    fn the_planet_stays_in_view_above_the_command_bar_through_the_dive_from_every_tilt_of_the_galaxy_camera() {
+        let (planet_pos, radius) = (Vec3::new(30.0, 0.0, -20.0), 6.0);
+        // The command bar covers the picture below this (the panel of the 1080p picture: the bar starts 905 px down).
+        let bar_top = 1.0 - 2.0 * 905.0 / 1080.0;
+        for tilt in [25.0f32, 35.0, 50.0, 65.0, 80.0] {
+            // The camera hangs 80 units from the planet, as when the wheel opens the view at the closest zoom, centred on it.
+            let orbit_rot = Quat::from_rotation_y(-0.4) * Quat::from_rotation_x(-tilt.to_radians());
+            let orbit_pos = planet_pos + orbit_rot * Vec3::Z * 80.0;
+            for step in 0..=77 {
+                let blend = step as f32 / 100.0;
+                let (x, y, r) = planet_in_view(orbit_pos, orbit_rot, planet_pos, radius, blend).expect("in front of the camera");
+                // While the planet is small (before it swells into the scene's big planet at the left) its centre is on the free part of the picture.
+                if r < 0.5 {
+                    assert!(x.abs() <= 1.0 && y <= 1.0 && y >= bar_top, "tilt {tilt}: at blend {blend} the planet's centre is at ({x:.2}, {y:.2}) of the picture, the free part ends at y {bar_top:.2}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_swing_keeps_its_ends_and_closes_in_evenly() {
+        let (centre, from, to) = (Vec3::new(1.0, 0.0, 2.0), Vec3::new(1.0, 40.0, 32.0), Vec3::new(6.0, 0.3, 6.4));
+        assert!(swing(centre, from, to, 0.0).distance(from) < 1e-4);
+        assert!(swing(centre, from, to, 1.0).distance(to) < 1e-4);
+        let (ra, rb) = ((from - centre).length(), (to - centre).length());
+        let mid = swing(centre, from, to, 0.5);
+        assert!(((mid - centre).length() - (ra + rb) * 0.5).abs() < 1e-3, "the distance to the planet is the mean at the middle");
+        // A camera at the planet's centre has no direction to swing round: it goes straight.
+        assert!(swing(centre, centre, to, 0.5).distance(centre.lerp(to, 0.5)) < 1e-4);
+    }
 }
 
 /// Offsets (from the platform centre) of the ground building circles on the lower plate: up to six in one row spread over the plate, extras
@@ -396,7 +437,21 @@ pub(crate) fn camera_transition_pose(
     let dive = dive_pose(planet_pos, planet_radius, orbit_rot);
     let k = b / DIVE_CUT;
     let t = k * k * (3.0 - 2.0 * k);
-    Transform { translation: orbit_pos.lerp(dive.translation, t), rotation: orbit_rot.slerp(dive.rotation, t), scale: Vec3::ONE }
+    Transform { translation: swing(planet_pos, orbit_pos, dive.translation, t), rotation: orbit_rot.slerp(dive.rotation, t), scale: Vec3::ONE }
+}
+
+/// The point that goes from `from` to `to` by swinging round `centre` while its distance from it changes evenly, `t` of the way (0 to 1).
+/// The planet stays in front of the camera however far apart the galaxy view and the scene view are: the straight line between the two
+/// poses cut across the planet's side and, from the galaxy camera's 50 degree tilt to the scene's flat view, took the planet out of the
+/// frame for the middle of the dive.
+fn swing(centre: Vec3, from: Vec3, to: Vec3, t: f32) -> Vec3 {
+    let (a, b) = (from - centre, to - centre);
+    let (ra, rb) = (a.length(), b.length());
+    if ra < 1e-4 || rb < 1e-4 {
+        return from.lerp(to, t);
+    }
+    let turn = Quat::from_rotation_arc(a / ra, b / rb);
+    centre + Quat::IDENTITY.slerp(turn, t) * (a / ra) * (ra + (rb - ra) * t)
 }
 
 /// The camera pose of the planet view: low in front of the planet-view scene, looking at the platform.

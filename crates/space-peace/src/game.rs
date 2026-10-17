@@ -8,7 +8,7 @@ use bevy::prelude::{Resource, Vec3, info, warn};
 
 use crate::cli::Args;
 use crate::galaxy_view::{
-    FactionView, GalaxyLight, GalaxyView, LineStyleView, PlanetView, PropView, RouteStyleView, RouteView,
+    FactionView, GalaxyCameraView, GalaxyLight, GalaxyView, LineStyleView, PlanetView, PropView, RouteStyleView, RouteView,
 };
 
 /// Workshop id of "Empire at War Remake 4.0".
@@ -446,6 +446,18 @@ fn galaxy_light(data: &GameData) -> GalaxyLight {
     light
 }
 
+/// The camera tilt of `Gameconstants.xml`: `GMC_InitialPitchAngleDegrees` is negative for a camera that looks down (-50 in the Remake), so
+/// the sign is dropped; a missing, unreadable or flat (under 5 degrees) value leaves the default.
+fn galaxy_camera(data: &GameData) -> GalaxyCameraView {
+    let mut camera = GalaxyCameraView::default();
+    if let Some(p) = data.game_constants.get("gmc_initialpitchangledegrees").and_then(|s| s.trim().parse::<f32>().ok()).map(f32::abs)
+        && (5.0..=89.0).contains(&p)
+    {
+        camera.pitch_deg = p;
+    }
+    camera
+}
+
 /// Placeholder surface colour for a terrain type.
 fn terrain_color(planet: &Planet) -> [f32; 3] {
     let t = planet
@@ -691,6 +703,7 @@ pub fn build_view(data: &GameData, campaign: &Campaign) -> (GalaxyView, Vec<Stri
                 .and_then(|h| faction_names.iter().position(|n| n.eq_ignore_ascii_case(h))),
             props,
             light: galaxy_light(data),
+            camera: galaxy_camera(data),
         },
         notes,
     )
@@ -729,6 +742,7 @@ mod tests {
         );
         assert!(view.planets.iter().any(|p| p.owner.is_some()));
         assert!(view.player_faction.is_some(), "human faction resolved");
+        assert_eq!(view.camera.pitch_deg, 50.0, "Gameconstants.xml GMC_InitialPitchAngleDegrees -50 of the Remake");
         assert!(view.planets.iter().all(|p| !p.id.to_ascii_lowercase().contains("dummy")), "dummy planets filtered");
         assert!(view.planets.iter().all(|p| p.model.is_some() && p.model_scale > 0.0));
         assert!(view.props.iter().any(|p| p.model.eq_ignore_ascii_case("w_galaxy00.alo")), "galaxy art prop");
@@ -891,4 +905,32 @@ fn planet_info(data: &GameData, p: &alamo_data::Planet) -> Vec<String> {
         lines.push(h.trim().to_owned());
     }
     lines
+}
+
+#[cfg(test)]
+mod camera_constant_tests {
+    use super::*;
+
+    fn data(value: Option<&str>) -> GameData {
+        let mut d = GameData::default();
+        if let Some(v) = value {
+            d.game_constants.insert("gmc_initialpitchangledegrees".into(), v.into());
+        }
+        d
+    }
+
+    #[test]
+    fn the_camera_looks_down_at_the_angle_of_the_constant_whatever_its_sign() {
+        assert_eq!(galaxy_camera(&data(Some("-50.0"))).pitch_deg, 50.0);
+        assert_eq!(galaxy_camera(&data(Some(" -35 "))).pitch_deg, 35.0);
+        assert_eq!(galaxy_camera(&data(Some("42"))).pitch_deg, 42.0);
+    }
+
+    #[test]
+    fn a_missing_or_unreadable_constant_keeps_the_remakes_fifty_degrees() {
+        assert_eq!(galaxy_camera(&data(None)).pitch_deg, 50.0);
+        assert_eq!(galaxy_camera(&data(Some("steep"))).pitch_deg, 50.0);
+        assert_eq!(galaxy_camera(&data(Some("0"))).pitch_deg, 50.0, "a camera that looks along the plane is no map view");
+        assert_eq!(galaxy_camera(&data(Some("-90"))).pitch_deg, 50.0);
+    }
 }

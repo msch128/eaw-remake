@@ -194,3 +194,36 @@ mask of the faceplate in 4 design px cells) and the bar backing count, and a dra
 - `b_option_g` (the "Main Menu" button of the left column) opens the pause menu like Esc.
 - `SP_UI_TEST` phases 140-143 (pad tooltip lore + droid anchor, marker tooltip, tech tooltip, objectives wheel scroll, main menu button) and the ground-lane check in phase 121.
 - U20: `BarClass::of(category, hero)` maps every build entry to exactly one class filter; the stations / freighters filter holds the star base, structures, tech, research, transports and all heroes (test: `every_entry_of_a_real_space_menu_belongs_to_exactly_one_class_filter`).
+
+## Galaxy camera at the Remake's 50 degrees (2026-10-17, C2)
+- The galaxy view is tilted 50 degrees at every zoom, from `Gameconstants.xml` `GMC_InitialPitchAngleDegrees` (-50; `game::galaxy_camera` reads it into
+  `GalaxyView::camera`, the camera takes it when a galaxy is framed, `camera::frame_galaxy`). Before, the tilt eased with the zoom from 50 degrees (fully out)
+  to about 24 (closest, `ZOOM_FLATTEN` 0.45 rad, from `GMC_ZoomedPitchAngleDegrees` -20): 26 degrees at zoom 0.06, 28 at 0.15, 32 at 0.30, 35 at 0.42, 40 at 0.60.
+  Decision for the closest zoom: it stays at 50. The Remake's galaxy camera has one tilt; its flatter -20 is the planet zoom, which is the planet view's dive here
+  (`planet_view::camera_transition_pose` turns the camera from the galaxy pose into the scene's, about 13 degrees down); nothing else needs the flattening.
+  Distances, `ZOOM_STEP` (12 % a notch), zoom range, start zoom (0.25) and all controls are untouched, so the wheel path to the planet view is the same (12.8
+  notches from the start view to the opening distance of twice the closest zoom, with or without the tilt; the zoom is by distance).
+- The point under the cursor now stays exactly put while zooming (it drifted by up to 8 % with the easing tilt). The middle button still tilts (limits 20 to 83
+  degrees); a newly built galaxy starts at the data's tilt again.
+- Measured against the user's video (1080p; `SP_PLANET_PX=1` logs the screen position of every planet at the capture, the video positions are read off b0613s): from
+  Coruscant, Fresia is 328 px left and 105 px down in b0613s (down / left 0.32) and Alderaan 560 px right and 12 down; ours at zoom 0.10 (the scale of the frame) was 337 left,
+  63 down (0.19) and 550 right, 6 down before, and is 334 left, 115 down (0.34) and 558 right, 12 down now. A circle on the map is 0.77 as tall as wide at every zoom (sin 50);
+  it was 0.44 at the closest zoom (test `a_circle_on_the_map_is_as_flat_as_the_tilt_says_at_every_zoom`). The horizontal scale is the same as before at a given zoom, the
+  vertical one grows with the tilt, so the zoom that matches the Remake frame is 0.10 (the G3c note above measured Byss - Corellia instead, 8.5 against 9.3 px per map unit at 0.15; Coruscant - Alderaan is 394 px at 0.15 and 560 px in b0613s, 558 px at 0.10).
+- Core nebula coverage of the playfield (share of samples that are red-dominant above the command bar; `b0613s` 77 %, `v0240s` 80 %, `v0220s` 63 % with its selection
+  shadow): ours 43 % -> 52 % (Coruscant, 0.10), 54 % -> 76 % (Byss, 0.10), 53 % -> 73 % (0.06), 36 % -> 39 % (0.15), 23 % -> 23 % (0.30). The tilt shows more of the
+  plane and less sky, but the Remake's nebula still fills the whole screen around Coruscant (top row 65-91 % in b0613s, 1-34 % here): our core glow ends nearer the core.
+- The planet view's dive now swings round the planet (`planet_view::swing`) instead of flying a straight line from the galaxy pose to the scene's: from the 50 degree tilt
+  the straight line took the planet under the command bar from blend 0.35 on (test `the_planet_stays_in_view_above_the_command_bar_through_the_dive_from_every_tilt_of_the_galaxy_camera`
+  fails with the old line at tilt 50, passes for 25 to 80). The path of the distance, the end pose and the scene are unchanged; `SP_PLANET_VIEW_BLEND=<0..0.78>` freezes a
+  frame of the dive for a capture.
+- `SP_PLANET_PX=1` (offscreen) logs the camera and the screen position and globe radius of every planet in view at the capture (`planet-px:` lines, `offscreen::log_planet_pixels`).
+- Tests: `cargo test -p space-peace` (92), among them `camera::tests` (tilt at every zoom, circle flatness, ground point under the cursor, framing a galaxy at the data's tilt)
+  and `game::camera_constant_tests`; the real-data `maps_real_campaign` checks 50. `--label-probe` at zoom 0.06 / 0.15 / 0.30 / 0.42 / 0.60 in both campaigns (Imperial with The
+  Coruscant System, Rebel with The Yavin System), 1080p and 4K: all PASS, 0 still toggles. Three rules of the probe were wrong for the new geometry and are fixed: (1) only the
+  visible globe is the planet's own, so a planet whose visible globe is behind the info panel and whose rest of the pick disc is under a parked fleet has nothing to prove (N'Zoth at
+  Imperial 0.06 was flagged); (2) a name that goes above its globe when a panel meets its place and comes back tens of frames later is no blink: only a change of side again within
+  `SIDE_FLIP_FRAMES` (30) is (Dathomir, Rebel 0.06); (3) `ZOOM_LAG` is 2, not 3 (measured: the camera frame whose zoom first reads 0.470 hides the names two frames later), so a
+  name that shows for the single frame of the turnaround counts once out and once back; with 3 the old build flags such a planet at 4K 0.25 and 0.28 (Nanth'Ri, Rakata Prime) too.
+  Left as it was: the shown / hidden rule allows one change per leg, so a name that hides near the bottom of the screen and returns later on the same leg (Taris at Rebel 4K,
+  zoom 0.25: hidden at zoom frame 29, shown again at 117) is still flagged; that zoom is not in the usual set.

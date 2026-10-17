@@ -12,8 +12,9 @@
 //! 2. per listed planet, twice: the pointer goes to the first of a few points that is not over the bar art and rests there for 12
 //!    frames: the planet must be hovered in every one of them (no fleet) and the hover card must name it; a click must select it; the own
 //!    fleet of the start planet is dragged onto it and the drop must send the fleet there. The first time the point is one of the planet's
-//!    own that no fleet's pick area reaches ("free"); when every such point has a fleet over it, the first one with a fleet over it is
-//!    used and the planet fails (a click on a fleet selects the fleet). The second time the point lies on the visible globe
+//!    own that no fleet's pick area reaches ("free"); when every such point has a fleet over it, the first one with a fleet over it
+//!    is used and the planet fails (a click on a fleet selects the fleet). Only the visible globe is the planet's own: points of its pick
+//!    disc outside it that a fleet reaches do not count, and a planet whose visible globe is behind the interface has nothing to prove. The second time the point lies on the visible globe
 //!    (`GalaxyLayout::globe_radius`) under the pick area of a parked fleet ("under a fleet"): the planet must win there too, and the drop
 //!    must be a plain move (not a merge into the fleet). A planet whose globe is all behind the bar art is logged as such.
 //! 3. fleets: every parked fleet in view is hovered at its icon centre (it must be the one hovered) and the own ones are clicked there
@@ -22,7 +23,9 @@
 //! 4. zoom: 120 frames of slow zoom out (8 % of the zoom range) and 120 back in. Every frame logs the names shown and those in the
 //!    lower part with their positions. A frame in which most names come or go at once is the far-zoom threshold passing; it may happen
 //!    once on the way out and once on the way back. Apart from it a name that changes between shown and hidden (its planet entering or
-//!    leaving the view) more than once on the way out or on the way back, or between below and above its globe, blinks.
+//!    leaving the view) more than once on the way out or on the way back, or that changes between below and above its globe again
+//!    within `SIDE_FLIP_FRAMES` frames, blinks (a name may go above its globe when a panel meets its place and come back below when the
+//!    place clears, tens of frames later: that is the layout working).
 //!
 //! In every still and zoom frame the selected planet must show its name (at any zoom, also past `galaxy_map::NAMES_HIDE_FROM`). The
 //! verdict is one log line `label-probe: ... PASS|FAIL`.
@@ -65,8 +68,14 @@ const STILL_FRAMES: u32 = 120;
 const ZOOM_FRAMES: u32 = 120;
 /// How far the slow zoom goes out (and back in), as a share of the zoom range.
 const ZOOM_SPAN: f32 = 0.08;
-/// Frames from a camera move to the names it gives (camera transform, then the label layout).
-const ZOOM_LAG: u32 = 3;
+/// Frames from a camera move to the names it gives (camera transform, then the label layout, read by the probe two frames after it set
+/// the distance). Measured on the far-zoom threshold: the camera frame whose zoom first reads 0.470 hides the names in the frame two later
+/// (Imperial 0.42, zoom frames 74 and 76). With 3 a planet whose name shows for the one frame of the turnaround (its label crosses the
+/// screen edge at the farthest zoom: shown at the peak, hidden at the first step back) counted as two changes on the way out.
+const ZOOM_LAG: u32 = 2;
+/// A name that changes its side of the globe again less than this many zoom frames after its last change flips back and forth (a blink).
+/// A planet whose place under the globe meets a panel and later clears it changes twice, tens of frames apart: that is the layout working.
+const SIDE_FLIP_FRAMES: u32 = 30;
 /// The lower part of the screen: the bottom 42 %, the height of the command bar.
 const LOWER: f32 = 0.58;
 /// Frames after a pointer move or press before the probe reads what the input systems made of it.
@@ -150,14 +159,20 @@ struct Probe {
     /// Per planet during the zoom out [0] and back in [1]: changes between shown and hidden, and between below and above the globe.
     shown_changes: [Vec<u32>; 2],
     side_changes: [Vec<u32>; 2],
+    /// Per planet and direction: the zoom frame of its last change of side, and the changes of side that came less than
+    /// [`SIDE_FLIP_FRAMES`] after the one before (a name that flips back and forth).
+    last_side: [Vec<Option<u32>>; 2],
+    side_flips: [Vec<u32>; 2],
     /// Frames out [0] and back in [1] in which most names came or went at once (the far-zoom threshold).
     threshold_passes: [u32; 2],
     zoom_from: f32,
     zoom_to: f32,
     /// Still and zoom frames in which the selected planet, on screen, showed no name.
     selected_unnamed: u32,
-    /// The first globe point of the current planet that is free of the bar art but has a fleet over it.
+    /// The first point on the visible globe of the current planet that is free of the bar art but has a fleet over it.
     fallback: Option<Vec2>,
+    /// A point of the planet's pick disc outside its visible globe that is free of the bar art had a fleet over it (the fleet wins there).
+    outside_fleet: bool,
     hover_ok: u32,
     /// Per hover frame: the map's hovered planet, galaxy-play's planet and fleet, whether the cursor is blocked and whether the hover card
     /// names the planet.
@@ -396,6 +411,7 @@ fn probe(
                 .collect();
             if c == 0 && t == 0 {
                 st.fallback = None;
+                st.outside_fleet = false;
             }
             let Some(&point) = candidates.get(c) else {
                 if target.covered {
@@ -418,6 +434,13 @@ fn probe(
                         st.hover_seen.clear();
                         st.step = Step::Hover(k, 0);
                     }
+                    // The visible globe is behind the interface and the rest of the pick disc, which the interface leaves free, is under a
+                    // parked fleet: a fleet wins there by design (only the visible globe is the planet's own).
+                    None if st.outside_fleet => {
+                        st.targets[k].result = format!("the visible globe ({:.0}, {:.0}) r {:.1} is behind the interface and the rest of the pick disc is under a parked fleet, which wins there: nothing to prove", a.x, a.y, g);
+                        st.targets[k].pass = true;
+                        st.step = Step::Aim(k + 1, 0, 0);
+                    }
                     None => {
                         st.targets[k].result = format!("globe ({:.0}, {:.0}) r {:.0} all behind the bar art: the cursor is over the interface at every point of it, no hover, click or drop", a.x, a.y, r);
                         st.targets[k].pass = true;
@@ -434,7 +457,10 @@ fn probe(
             } else if blocked.0 || (target.covered && hover.0 != Some(target.map)) {
                 st.step = Step::Aim(k, c + 1, 0);
             } else if !target.covered && (play_hover.fleet.is_some() || hover.0 != Some(target.map)) {
-                if st.fallback.is_none() {
+                if play_hover.fleet.is_some() && hover.0 == Some(target.map) && point.distance(a) > g {
+                    // Outside the visible globe a parked fleet is picked as before: no failure of the planet.
+                    st.outside_fleet = true;
+                } else if st.fallback.is_none() {
                     st.fallback = Some(point);
                 }
                 st.step = Step::Aim(k, c + 1, 0);
@@ -598,6 +624,8 @@ fn probe(
                 st.zoom_to = bounds.min_distance + (bounds.max_distance - bounds.min_distance) * (z + ZOOM_SPAN).min(1.0);
                 st.shown_changes = [vec![0; n], vec![0; n]];
                 st.side_changes = [vec![0; n], vec![0; n]];
+                st.last_side = [vec![None; n], vec![None; n]];
+                st.side_flips = [vec![0; n], vec![0; n]];
                 st.last = Some(names);
                 st.step = Step::Zoom(0);
                 return;
@@ -674,6 +702,10 @@ fn probe(
                     && sa != sb
                 {
                     st.side_changes[back][i] += 1;
+                    if st.last_side[back][i].is_some_and(|prev| t - prev < SIDE_FLIP_FRAMES) {
+                        st.side_flips[back][i] += 1;
+                    }
+                    st.last_side[back][i] = Some(t);
                     info!("label-probe: zoom {t}: {} name now {} its globe at ({:.0}, {:.0})", view.planets[i].display_name, if sb { "above" } else { "below" }, pos.x, pos.y);
                 }
             }
@@ -695,13 +727,17 @@ fn probe(
                 st.step = Step::Zoom(t + 1);
                 return;
             }
-            // On the way out and on the way back a name may come or go once (its planet enters or leaves the view) and change its side
-            // once, and the far-zoom threshold may pass once; more is a blink.
+            // On the way out and on the way back a name may come or go once (its planet enters or leaves the view), it may change its
+            // side of the globe as its place meets or clears a panel as long as it does not flip back within `SIDE_FLIP_FRAMES`, and the
+            // far-zoom threshold may pass once; more is a blink.
             let mut blinks: Vec<String> = (0..n)
-                .filter(|&i| (0..2).any(|h| st.shown_changes[h][i] > 1 || st.side_changes[h][i] > 1))
+                .filter(|&i| (0..2).any(|h| st.shown_changes[h][i] > 1 || st.side_flips[h][i] > 0))
                 .map(|i| {
                     let p = &view.planets[i];
-                    format!("{} (shown/hidden {} out {} back, below/above {} out {} back)", p.display_name, st.shown_changes[0][i], st.shown_changes[1][i], st.side_changes[0][i], st.side_changes[1][i])
+                    format!(
+                        "{} (shown/hidden {} out {} back, below/above {} out {} back, {} out {} back flipped within {SIDE_FLIP_FRAMES} frames)",
+                        p.display_name, st.shown_changes[0][i], st.shown_changes[1][i], st.side_changes[0][i], st.side_changes[1][i], st.side_flips[0][i], st.side_flips[1][i]
+                    )
                 })
                 .collect();
             if st.threshold_passes.iter().any(|&c| c > 1) {

@@ -23,6 +23,24 @@ pub struct GalaxyView {
     pub props: Vec<PropView>,
     /// Galactic map lighting.
     pub light: GalaxyLight,
+    /// The camera of the galactic map.
+    pub camera: GalaxyCameraView,
+}
+
+/// The galactic camera of `Gameconstants.xml` (`GMC_*`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GalaxyCameraView {
+    /// Degrees the camera looks down in every normal view of the map: `GMC_InitialPitchAngleDegrees` (-50 in the file; the sign says
+    /// down). The Remake keeps it at every distance; the flatter `GMC_ZoomedPitchAngleDegrees` (-20) belongs to the planet zoom, which
+    /// is the planet view's dive here.
+    pub pitch_deg: f32,
+}
+
+impl Default for GalaxyCameraView {
+    /// The Remake's value, for a galaxy without data (the demo) and a file without the tag.
+    fn default() -> Self {
+        Self { pitch_deg: 50.0 }
+    }
 }
 
 /// A decorative (non-selectable) model placed on the galaxy map.
@@ -312,6 +330,7 @@ impl GalaxyView {
             player_faction: Some(1),
             props: Vec::new(),
             light: GalaxyLight::default(),
+            camera: GalaxyCameraView::default(),
         }
     }
 }

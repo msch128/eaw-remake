@@ -105,7 +105,44 @@ pub fn configure(app: &mut App, args: &Args, path: PathBuf) {
             burst_left: args.burst,
             burst_saved: 0,
         })
-        .add_systems(Last, drive);
+        .add_systems(Last, (drive, log_planet_pixels).chain());
+}
+
+/// `SP_PLANET_PX=1`: when the capture is made, one log line with the camera and one per planet on screen with its globe's centre and
+/// radius (logical px of the camera's viewport, 1080p with `--size 1920x1080`). Measures a galaxy view against the user's video frames.
+fn log_planet_pixels(
+    st: Res<OffscreenState>,
+    view: Res<GalaxyView>,
+    radii: Option<Res<crate::planet_visual::PlanetRadii>>,
+    camera: Option<Single<(&Camera, &GlobalTransform, &GalaxyCamera)>>,
+    mut done: Local<bool>,
+) {
+    if *done || !st.capture_requested || std::env::var_os("SP_PLANET_PX").is_none() {
+        return;
+    }
+    let (Some(camera), Some(radii)) = (camera, radii) else { return };
+    *done = true;
+    let (cam, gt, orbit) = *camera;
+    let Some(size) = cam.logical_viewport_size() else { return };
+    info!(
+        "planet-px: viewport {}x{} focus ({:.1}, {:.1}) distance {:.1} pitch {:.1} deg yaw {:.1} deg",
+        size.x,
+        size.y,
+        orbit.focus.x,
+        orbit.focus.z,
+        orbit.distance,
+        orbit.pitch.to_degrees(),
+        orbit.yaw.to_degrees()
+    );
+    for (i, p) in view.planets.iter().enumerate() {
+        let world = galaxy_to_world(p.position);
+        let Ok(c) = cam.world_to_viewport(gt, world) else { continue };
+        if c.x < 0.0 || c.y < 0.0 || c.x > size.x || c.y > size.y {
+            continue;
+        }
+        let r = radii.0.get(i).and_then(|r| cam.world_to_viewport(gt, world + gt.right() * *r).ok()).map_or(0.0, |e| (e - c).length());
+        info!("planet-px: {} {:.0} {:.0} r {:.1}", p.display_name, c.x, c.y, r);
+    }
 }
 
 #[allow(clippy::too_many_arguments)]

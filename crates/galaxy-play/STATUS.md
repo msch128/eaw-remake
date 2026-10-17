@@ -40,9 +40,9 @@ the player selects and orders them, builds at owned planets, controls game speed
   Tests: `input::tests::a_planets_globe_beats_fleets_whose_icon_is_centred_outside_it`, `a_fleet_icon_centred_on_the_globe_is_still_picked_there`,
   `fleet_icons_away_from_any_globe_are_picked_as_before`; end to end by the app's `--label-probe` (space-peace STATUS). Measured on the
   Imperial start: every parked fleet's icon is centred 1.2 to 2.1 visible globe radii from its planet's centre between zoom 0.03 and
-  0.60 (mean 2.1, 1.9 at 0.60; all of them in slot 1). Known limit, computed (no such fleet in that start): a fleet in slot 2, straight
-  above its planet, is centred 0.95 globe radii out at zoom 0.06 and inside the globe below zoom 0.13 (camera pitch under 27 degrees),
-  where it keeps its pick area over the whole globe, as before.
+  0.60 (mean 2.1, 1.9 at 0.60; all of them in slot 1). Known limit, computed (no such fleet in that start) for the old closest-zoom tilt (25 degrees): a fleet in slot 2, straight
+  above its planet, was centred 0.95 globe radii out at zoom 0.06 and inside the globe below zoom 0.13 (camera pitch under 27 degrees).
+  Gone since the galaxy camera stays at 50 degrees at every zoom (space-peace STATUS, C2).
 - `BuildMenu` (units, structures, star base, tech, research) with availability reasons; `PlayAction::Build` queues it, credits go
   through galaxy-sim. Production queue model.
 - `GameClock`: pause + speed levels, `hold` flag for the host (pause menu, battle screen); time is held while a human battle waits.

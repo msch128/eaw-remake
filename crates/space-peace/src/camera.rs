@@ -1,6 +1,7 @@
 ﻿//! Empire-at-War style galaxy camera: angled top-down orbit with smooth zoom and clamped panning.
 
 use crate::flow::{AppScreen, not_paused};
+use crate::galaxy_view::GalaxyCameraView;
 use crate::settings::Settings;
 use bevy::{
     camera::{Hdr, ImageRenderTarget, RenderTarget},
@@ -81,8 +82,6 @@ const MIN_PITCH: f32 = 0.35;
 const MAX_PITCH: f32 = 1.45;
 /// Page Up / Page Down turn speed in radians per second.
 const PAGE_TURN_SPEED: f32 = 1.2;
-/// Extra tilt towards the horizon at the closest zoom, radians: 50 deg start to about 24 deg (GMC_ZoomedPitchAngleDegrees -20).
-const ZOOM_FLATTEN: f32 = 0.45;
 const ZOOM_STEP: f32 = 0.88;
 const ZOOM_SMOOTH: f32 = 12.0;
 const PAN_SMOOTH: f32 = 14.0;
@@ -112,7 +111,7 @@ fn spawn_camera(mut commands: Commands, offscreen: Option<Res<crate::offscreen::
             distance: 400.0,
             target_distance: 400.0,
             yaw: 0.0,
-            pitch: 50f32.to_radians(), // GMC_InitialPitchAngleDegrees -50
+            pitch: GalaxyCameraView::default().pitch_deg.to_radians(), // the data's value is read when a galaxy loads (`frame_galaxy`)
         },
         Transform::default(),
     ));
@@ -146,13 +145,7 @@ fn control_camera(
     // Re-frame the whole galaxy when the bounds are (re)defined.
     if bounds.dirty {
         bounds.dirty = false;
-        let center = (bounds.min + bounds.max) * 0.5;
-        cam.target_focus = Vec3::new(center.x, 0.0, center.y);
-        cam.focus = cam.target_focus;
-        cam.target_distance = bounds
-            .initial_distance
-            .clamp(bounds.min_distance, bounds.max_distance);
-        cam.distance = cam.target_distance;
+        frame_galaxy(cam, &bounds, view.as_deref().map_or_else(GalaxyCameraView::default, |v| v.camera));
     }
 
     // Smooth zoom: each wheel notch scales the target distance.
@@ -174,7 +167,7 @@ fn control_camera(
         // Like the original, the wheel zooms toward what is under the cursor: the point of the map under the pointer stays
         // put on screen while the camera moves in or out.
         if let Some((cursor, size)) = cursor
-            && let Some(ground) = cursor_ground_point(&bounds, cam.target_focus, old_distance, cam.yaw, cam.pitch, fov, cursor, size)
+            && let Some(ground) = cursor_ground_point(cam.target_focus, old_distance, cam.yaw, cam.pitch, fov, cursor, size)
         {
             let ratio = cam.target_distance / old_distance.max(1e-3);
             cam.target_focus = ground + (cam.target_focus - ground) * ratio;
@@ -276,32 +269,43 @@ fn control_camera(
     cam.focus += delta * pan_k;
 }
 
-/// Camera position and rotation for a focus, distance and orbit angles. Zooming in tilts the view slightly flatter, like the
-/// original game.
-fn camera_pose(bounds: &CameraBounds, focus: Vec3, distance: f32, yaw: f32, pitch: f32) -> (Vec3, Quat) {
-    let zoom_t = ((distance - bounds.min_distance) / (bounds.max_distance - bounds.min_distance).max(1.0)).clamp(0.0, 1.0);
-    let pitch = pitch - (1.0 - zoom_t) * ZOOM_FLATTEN;
+/// Puts the camera on the whole galaxy: over the middle of the bounds, at the initial distance, tilted as the data says. Called when a
+/// galaxy is (re)built, so the tilt the player gave the last one with the middle button does not carry over.
+fn frame_galaxy(cam: &mut GalaxyCamera, bounds: &CameraBounds, data: GalaxyCameraView) {
+    let center = (bounds.min + bounds.max) * 0.5;
+    cam.target_focus = Vec3::new(center.x, 0.0, center.y);
+    cam.focus = cam.target_focus;
+    cam.target_distance = bounds.initial_distance.clamp(bounds.min_distance, bounds.max_distance);
+    cam.distance = cam.target_distance;
+    cam.pitch = data.pitch_deg.to_radians().clamp(MIN_PITCH, MAX_PITCH);
+}
+
+/// Camera position and rotation for a focus, distance and orbit angles. The tilt is the same at every distance: the Remake's galaxy
+/// camera has one pitch (`GMC_InitialPitchAngleDegrees` -50); its flatter `GMC_ZoomedPitchAngleDegrees` (-20) belongs to the planet
+/// zoom, which is the planet view's dive here (it turns the camera from this pose into the planet scene's).
+fn camera_pose(focus: Vec3, distance: f32, yaw: f32, pitch: f32) -> (Vec3, Quat) {
     let rot = Quat::from_rotation_y(-yaw) * Quat::from_rotation_x(-pitch);
     (focus + rot * Vec3::Z * distance, rot)
 }
 
 /// The point of the galaxy plane (y = 0) under `cursor` (logical pixels in a window of `size`) for the given camera state.
 #[allow(clippy::too_many_arguments)]
-fn cursor_ground_point(bounds: &CameraBounds, focus: Vec3, distance: f32, yaw: f32, pitch: f32, fov: f32, cursor: Vec2, size: Vec2) -> Option<Vec3> {
-    let (pos, rot) = camera_pose(bounds, focus, distance, yaw, pitch);
+fn cursor_ground_point(focus: Vec3, distance: f32, yaw: f32, pitch: f32, fov: f32, cursor: Vec2, size: Vec2) -> Option<Vec3> {
+    let (pos, rot) = camera_pose(focus, distance, yaw, pitch);
     let half = (fov * 0.5).tan();
     let ndc = Vec2::new(cursor.x / size.x.max(1.0) * 2.0 - 1.0, 1.0 - cursor.y / size.y.max(1.0) * 2.0);
     let dir = rot * Vec3::new(ndc.x * half * size.x / size.y.max(1.0), ndc.y * half, -1.0);
     (dir.y < -1e-4).then(|| pos + dir * (-pos.y / dir.y))
 }
 
-pub(crate) fn apply_camera(bounds: Res<CameraBounds>, mut q: Query<(&GalaxyCamera, &mut Transform)>) {
+pub(crate) fn apply_camera(mut q: Query<(&GalaxyCamera, &mut Transform)>) {
     for (cam, mut t) in &mut q {
-        let (translation, rotation) = camera_pose(&bounds, cam.focus, cam.distance, cam.yaw, cam.pitch);
+        let (translation, rotation) = camera_pose(cam.focus, cam.distance, cam.yaw, cam.pitch);
         t.rotation = rotation;
         t.translation = translation;
     }
 }
+
 
 #[cfg(test)]
 mod tests {
@@ -312,27 +316,86 @@ mod tests {
 
     #[test]
     fn the_screen_centre_looks_at_the_focus() {
-        let b = CameraBounds::default();
         let focus = Vec3::new(30.0, 0.0, -20.0);
-        let p = cursor_ground_point(&b, focus, 300.0, 0.4, 1.0, FOV, SIZE * 0.5, SIZE).unwrap();
+        let p = cursor_ground_point(focus, 300.0, 0.4, 1.0, FOV, SIZE * 0.5, SIZE).unwrap();
         assert!(p.distance(focus) < 0.01);
     }
 
     #[test]
     fn the_point_under_the_cursor_stays_put_while_zooming() {
-        let b = CameraBounds::default();
         let (focus, yaw, pitch, cursor) = (Vec3::new(10.0, 0.0, 5.0), 0.3, 1.0, Vec2::new(900.0, 200.0));
-        let before = cursor_ground_point(&b, focus, 300.0, yaw, pitch, FOV, cursor, SIZE).unwrap();
+        let before = cursor_ground_point(focus, 300.0, yaw, pitch, FOV, cursor, SIZE).unwrap();
         let (old, new) = (300.0, 300.0 * ZOOM_STEP.powf(3.0));
         let moved = before + (focus - before) * (new / old);
-        let after = cursor_ground_point(&b, moved, new, yaw, pitch, FOV, cursor, SIZE).unwrap();
-        // The pitch eases with the distance, so allow a small drift.
-        assert!(after.distance(before) < before.distance(focus) * 0.08, "{before} vs {after}");
+        let after = cursor_ground_point(moved, new, yaw, pitch, FOV, cursor, SIZE).unwrap();
+        // The tilt is the same at every distance, so the point does not drift at all (it drifted by up to 8 % while the tilt eased with the zoom).
+        assert!(after.distance(before) < 1e-3, "{before} vs {after}");
     }
 
     #[test]
     fn a_cursor_above_the_horizon_has_no_ground_point() {
+        assert!(cursor_ground_point(Vec3::ZERO, 300.0, 0.0, 0.4, 1.4, Vec2::new(640.0, 0.0), SIZE).is_none());
+    }
+
+    /// Where `p` of the galaxy plane is on screen (logical px), the inverse of `cursor_ground_point`.
+    fn screen_of(p: Vec3, focus: Vec3, distance: f32, yaw: f32, pitch: f32) -> Vec2 {
+        let (pos, rot) = camera_pose(focus, distance, yaw, pitch);
+        let local = rot.inverse() * (p - pos);
+        let half = (FOV * 0.5).tan();
+        let ndc = Vec2::new(local.x / -local.z / (half * SIZE.x / SIZE.y), local.y / -local.z / half);
+        Vec2::new((ndc.x * 0.5 + 0.5) * SIZE.x, (0.5 - ndc.y * 0.5) * SIZE.y)
+    }
+
+    #[test]
+    fn the_view_has_one_tilt_at_every_zoom() {
         let b = CameraBounds::default();
-        assert!(cursor_ground_point(&b, Vec3::ZERO, 300.0, 0.0, 0.4, 1.4, Vec2::new(640.0, 0.0), SIZE).is_none());
+        let pitch = GalaxyCameraView::default().pitch_deg.to_radians();
+        for k in 0..=10 {
+            let distance = b.min_distance + (b.max_distance - b.min_distance) * k as f32 / 10.0;
+            let (pos, rot) = camera_pose(Vec3::new(5.0, 0.0, 8.0), distance, 0.3, pitch);
+            let down = (-(rot * Vec3::Z)).y.asin().to_degrees();
+            assert!((down + 50.0).abs() < 1e-3, "the camera looks {down} degrees below the horizon at distance {distance}");
+            assert!((pos.y - distance * pitch.sin()).abs() < 1e-3, "it hangs {} above the plane at distance {distance}", pos.y);
+        }
+    }
+
+    #[test]
+    fn a_circle_on_the_map_is_as_flat_as_the_tilt_says_at_every_zoom() {
+        // Round planets, rings and fleet pads are laid out on the plane: at the middle of the screen a circle of the plane is sin(tilt) as tall as
+        // it is wide, 0.77 at the Remake's 50 degrees (it was 0.44 at the closest zoom with the old flattening, 25 degrees).
+        let pitch = GalaxyCameraView::default().pitch_deg.to_radians();
+        let focus = Vec3::new(-12.0, 0.0, 30.0);
+        for distance in [CameraBounds::default().min_distance, 90.0, 240.0, 650.0] {
+            let at = |d: Vec3| screen_of(focus + d, focus, distance, 0.0, pitch);
+            let (wide, tall) = ((at(Vec3::X * 0.5) - at(-Vec3::X * 0.5)).length(), (at(Vec3::Z * 0.5) - at(-Vec3::Z * 0.5)).length());
+            let ratio = tall / wide;
+            assert!((ratio - pitch.sin()).abs() < 0.01, "ratio {ratio} at distance {distance}, wanted {}", pitch.sin());
+        }
+    }
+
+    #[test]
+    fn screen_and_ground_agree_whatever_the_yaw() {
+        let (focus, pitch) = (Vec3::new(3.0, 0.0, -7.0), 50f32.to_radians());
+        for yaw in [0.0, 0.8, -2.0] {
+            let p = Vec3::new(20.0, 0.0, 11.0);
+            let px = screen_of(p, focus, 160.0, yaw, pitch);
+            let back = cursor_ground_point(focus, 160.0, yaw, pitch, FOV, px, SIZE).unwrap();
+            assert!(back.distance(p) < 1e-2, "{p} -> {px} -> {back}");
+        }
+    }
+
+    #[test]
+    fn a_galaxy_is_framed_at_the_tilt_of_the_data_and_the_middle_button_tilt_is_forgotten() {
+        let bounds = CameraBounds { min: Vec2::new(-40.0, -10.0), max: Vec2::new(60.0, 30.0), min_distance: 40.0, max_distance: 800.0, initial_distance: 700.0, dirty: true };
+        let mut cam = GalaxyCamera { focus: Vec3::new(9.0, 0.0, 9.0), target_focus: Vec3::new(9.0, 0.0, 9.0), distance: 50.0, target_distance: 50.0, yaw: 0.7, pitch: 1.3 };
+        frame_galaxy(&mut cam, &bounds, GalaxyCameraView { pitch_deg: 50.0 });
+        assert!((cam.pitch.to_degrees() - 50.0).abs() < 1e-4, "{}", cam.pitch.to_degrees());
+        assert_eq!((cam.focus, cam.target_focus), (Vec3::new(10.0, 0.0, 10.0), Vec3::new(10.0, 0.0, 10.0)));
+        assert_eq!((cam.distance, cam.target_distance), (700.0, 700.0));
+        // Another value in the data is followed, within the limits the middle button has.
+        frame_galaxy(&mut cam, &bounds, GalaxyCameraView { pitch_deg: 35.0 });
+        assert!((cam.pitch.to_degrees() - 35.0).abs() < 1e-4);
+        frame_galaxy(&mut cam, &bounds, GalaxyCameraView { pitch_deg: 89.0 });
+        assert_eq!(cam.pitch, MAX_PITCH);
     }
 }
