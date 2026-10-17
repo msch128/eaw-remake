@@ -7,7 +7,8 @@ use bevy::mesh::MeshVertexBufferLayoutRef;
 use bevy::pbr::{MaterialPipeline, MaterialPipelineKey};
 use bevy::prelude::*;
 use bevy::render::render_resource::{
-    AsBindGroup, RenderPipelineDescriptor, ShaderType, SpecializedMeshPipelineError,
+    AsBindGroup, BlendComponent, BlendFactor, BlendOperation, BlendState,
+    RenderPipelineDescriptor, ShaderType, SpecializedMeshPipelineError,
 };
 use bevy::shader::ShaderRef;
 
@@ -50,6 +51,11 @@ pub const FLAG_SHADOWS: u32 = 128;
 pub const FLAG_SHIELD_HITS: u32 = 64;
 /// Sky model: drawn at the far plane depth, behind everything, whatever its radius.
 pub const FLAG_BACKGROUND: u32 = 256;
+/// Additive glow that belongs to the backdrop (the galaxy disc art): drawn in the alpha-mask pass,
+/// after the opaque surfaces and before the transmissive ones, still adding and without depth
+/// writes. Transmissive materials then find it in Bevy's view transmission texture (the galaxy
+/// lanes blend over it in gamma space). Only for [`ShaderKind::Additive`].
+pub const FLAG_UNDERLAY: u32 = 512;
 
 /// Uniform block of [`AlamoMaterial`]; mirrors `AlamoParams` in the shader.
 #[derive(Debug, Clone, Copy, ShaderType)]
@@ -119,6 +125,7 @@ impl Default for AlamoParams {
 pub struct AlamoKey {
     kind: ShaderKind,
     background: bool,
+    underlay: bool,
 }
 
 impl From<&AlamoMaterial> for AlamoKey {
@@ -126,6 +133,7 @@ impl From<&AlamoMaterial> for AlamoKey {
         AlamoKey {
             kind: m.shader_kind(),
             background: m.params.flags & FLAG_BACKGROUND != 0,
+            underlay: m.is_underlay(),
         }
     }
 }
@@ -167,6 +175,11 @@ impl AlamoMaterial {
             _ => ShaderKind::Lit,
         }
     }
+
+    /// An additive glow drawn with the backdrop ([`FLAG_UNDERLAY`]).
+    pub fn is_underlay(&self) -> bool {
+        self.params.flags & FLAG_UNDERLAY != 0 && self.shader_kind() == ShaderKind::Additive
+    }
 }
 
 impl Material for AlamoMaterial {
@@ -176,6 +189,9 @@ impl Material for AlamoMaterial {
 
     fn alpha_mode(&self) -> AlphaMode {
         match self.shader_kind() {
+            // The mask phase comes right after the opaque one; `specialize` turns its blend back
+            // into an addition.
+            ShaderKind::Additive if self.is_underlay() => AlphaMode::Mask(0.0),
             ShaderKind::Additive | ShaderKind::Shield => AlphaMode::Add,
             ShaderKind::Alpha => AlphaMode::Blend,
             _ => AlphaMode::Opaque,
@@ -202,6 +218,56 @@ impl Material for AlamoMaterial {
                 d.depth_write_enabled = Some(false);
             }
         }
+        if key.bind_group_data.underlay {
+            // Same result as `AlphaMode::Add` (the shader writes alpha 0): colour added,
+            // destination alpha kept.
+            let target = descriptor
+                .fragment
+                .as_mut()
+                .and_then(|f| f.targets.first_mut())
+                .and_then(Option::as_mut);
+            if let Some(target) = target {
+                let add = |src_factor| BlendComponent {
+                    src_factor,
+                    dst_factor: BlendFactor::One,
+                    operation: BlendOperation::Add,
+                };
+                target.blend = Some(BlendState {
+                    color: add(BlendFactor::One),
+                    alpha: add(BlendFactor::Zero),
+                });
+            }
+            if let Some(d) = descriptor.depth_stencil.as_mut() {
+                d.depth_write_enabled = Some(false);
+            }
+        }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn material(kind: ShaderKind, flags: u32) -> AlamoMaterial {
+        AlamoMaterial {
+            params: AlamoParams { kind: kind as u32, flags, ..default() },
+            base: None,
+            normal: None,
+            cloud: None,
+            cloud_normal: None,
+        }
+    }
+
+    #[test]
+    fn an_underlay_glow_draws_in_the_mask_phase_and_nothing_else_moves() {
+        // Bevy draws the alpha-mask phase after the opaque one and before the transmissive one.
+        let glow = material(ShaderKind::Additive, FLAG_UNDERLAY);
+        assert!(glow.is_underlay() && matches!(glow.alpha_mode(), AlphaMode::Mask(_)));
+        assert!(matches!(material(ShaderKind::Additive, 0).alpha_mode(), AlphaMode::Add));
+        // The flag means nothing on other kinds.
+        let lit = material(ShaderKind::Lit, FLAG_UNDERLAY);
+        assert!(!lit.is_underlay() && matches!(lit.alpha_mode(), AlphaMode::Opaque));
+        assert!(matches!(material(ShaderKind::Shield, FLAG_UNDERLAY).alpha_mode(), AlphaMode::Add));
     }
 }

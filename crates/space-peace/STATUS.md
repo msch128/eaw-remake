@@ -57,6 +57,12 @@ fullscreen, FPS cap).
   alpha fades it close up) x 3.6 in linear light (sRGB about 32, 62, 76 on black), a glint 1.6 times as bright runs along every lane
   (scrolling texture, replaces the red/green gizmo pulses). Orbit-line art (`Region_Lines`, the thin double curves) at 0.4 so it
   stays fainter than the lanes like in the Remake; grid off. galaxy_map.rs spawn_lanes/update_lanes.
+- Lanes add in display (sRGB) values (2026-10-17, G1b), like the original's gamma-space blend: `LaneMaterial` (lane.wgsl) reads what
+  lies under the ribbon from Bevy's view transmission texture and writes linear(srgb(under) + lane). The disc art (core glow, orbit
+  lines) draws before that copy with alamo-render's `FLAG_UNDERLAY`. Over the core nebula next to Byss the Byss - Coruscant lane now
+  adds sRGB (+29, +58, +69) instead of (+4, +20, +28) (Remake v0240: about +57, +72, +72, a wider lane, video chroma pulls it toward
+  white); over black unchanged (32, 60, 75). Where two lanes cross, the later one shows, not the sum. Other galaxy nebulae (Utegetu
+  etc.) are still drawn after the lanes and add in linear light over them.
 - Core nebula (2026-10-17, G6): the galaxy art `w_galaxy00.alo` (object `Galaxy_Core_Art_Model_Web_Way`, scale 1.5) draws the pink
   glow over the middle of the map with its additive `core` disc (`W_GAL_gradient.tga`, scrolling). It runs at 0.37 (`CORE_GLOW`,
   `SP_GALAXY_CORE=<value>` for comparison renders), measured against v0240 and b0613s at the same map points; it was 0.14 (a maroon

@@ -10,10 +10,14 @@ use bevy::{
         AppGizmoBuilder,
         config::{GizmoConfigGroup, GizmoConfigStore},
     },
-    light::GlobalAmbientLight,
-    mesh::{SphereKind, SphereMeshBuilder},
+    light::{GlobalAmbientLight, NotShadowCaster},
+    mesh::{MeshVertexBufferLayoutRef, SphereKind, SphereMeshBuilder},
+    pbr::{MaterialPipeline, MaterialPipelineKey},
     prelude::*,
-    render::render_resource::{Extent3d, TextureDimension, TextureFormat},
+    render::render_resource::{
+        AsBindGroup, Extent3d, RenderPipelineDescriptor, SpecializedMeshPipelineError, TextureDimension, TextureFormat,
+    },
+    shader::ShaderRef,
     window::PrimaryWindow,
 };
 use rand::{Rng, SeedableRng, rngs::SmallRng};
@@ -25,7 +29,10 @@ use crate::planet_visual::{
     NEUTRAL, PlanetRadii, PlanetVisualAssets, PlanetVisualPlugin, rgb, spawn_planet_visual,
 };
 use alamo_render::{
-    AlamoFs, AlamoModel, AlamoModelLoaded, material::AlamoMaterial, spawn_sun, texture::TextureCache,
+    AlamoFs, AlamoModel, AlamoModelLoaded,
+    material::{AlamoMaterial, FLAG_UNDERLAY},
+    spawn_sun,
+    texture::TextureCache,
 };
 
 /// Draws the [`GalaxyView`] resource and handles planet selection.
@@ -33,7 +40,8 @@ pub struct GalaxyMapPlugin;
 
 impl Plugin for GalaxyMapPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins(PlanetVisualPlugin)
+        bevy::asset::embedded_asset!(app, "lane.wgsl");
+        app.add_plugins((PlanetVisualPlugin, MaterialPlugin::<LaneMaterial>::default()))
             .init_resource::<Selection>()
             .init_resource::<Hover>()
             .init_resource::<ReservedBottom>()
@@ -330,19 +338,25 @@ fn fix_star_dome(
     props: Query<&AlamoModelLoaded, (With<PropModel>, Added<AlamoModelLoaded>)>,
     names: Query<&Name>,
     handles: Query<&MeshMaterial3d<AlamoMaterial>>,
-    alamo_materials: Res<Assets<AlamoMaterial>>,
+    mut alamo_materials: ResMut<Assets<AlamoMaterial>>,
 ) {
     for model in &props {
         for &part in &model.parts {
             let name = names.get(part).map(|n| n.as_str().to_ascii_lowercase()).unwrap_or_default();
             if matches!(name.as_str(), "core" | "region_lines" | "grid")
                 && let Ok(h) = handles.get(part)
-                && let Some(m) = alamo_materials.get(&h.0)
+                && let Some(mut m) = alamo_materials.get_mut(&h.0)
                 && m.params.diffuse.w < 1.5
             {
                 // Only the big disc (several thousand units wide) fades; the small galaxies keep
                 // their look.
                 if model.radius > 500.0 {
+                    // The lanes add over the core glow and the orbit lines in display values (`LaneMaterial`), so both draw with
+                    // the backdrop the lanes read. The grid stays off.
+                    if name != "grid" {
+                        m.params.flags |= FLAG_UNDERLAY;
+                        commands.entity(part).insert(NotShadowCaster);
+                    }
                     commands.entity(part).insert(DiscPart {
                         material: h.0.clone(),
                         base: m.params.diffuse,
@@ -517,6 +531,7 @@ fn spawn_galaxy(
     alamo: Option<Res<AlamoFs>>,
     existing: Query<(), With<GalaxyEntity>>,
     mut images: ResMut<Assets<Image>>,
+    mut lane_materials: ResMut<Assets<LaneMaterial>>,
 ) {
     // Coming back from a tactical battle the scene is still there.
     if !existing.is_empty() {
@@ -628,7 +643,7 @@ fn spawn_galaxy(
     if use_models {
         spawn_props(&mut commands, &view.props, GalaxyEntity);
     }
-    spawn_lanes(&mut commands, &view, &mut meshes, &mut materials, &mut images);
+    spawn_lanes(&mut commands, &view, &mut meshes, &mut lane_materials, &mut images);
     // The Remake video shows plain black space outside the galaxy core (maroon only over the core, which the disc art
     // provides), so the extra plane stays off.
     if NEBULA_PLANE {
@@ -1213,7 +1228,7 @@ struct LaneMesh {
     /// Route indices of the ribbons in vertex order (4 vertices each: two rows of two).
     routes: Vec<usize>,
     /// The shared lane material (its texture scrolls to move the glints).
-    material: Handle<StandardMaterial>,
+    material: Handle<LaneMaterial>,
 }
 
 /// Lane colour/zoom state of the last colour update (vertex colours are only rewritten when it changes).
@@ -1224,6 +1239,64 @@ struct LaneState {
     built: bool,
 }
 
+/// The lane ribbons add in display (sRGB) values like the original engine, which blends in gamma space (`lane.wgsl`). Added in linear
+/// light, a lane over the pink core nebula all but vanished: next to Byss the Remake's lane adds about sRGB (+57, +72, +72) to the
+/// nebula's (105, 77, 68) (v0240), the linear sum gave (+4, +20, +28). The shader reads what lies under the lane from Bevy's view
+/// transmission texture (the opaque pass plus the galaxy disc art, drawn first with `FLAG_UNDERLAY`), so the ribbon is a transmissive
+/// "opaque" material that writes the sum itself.
+#[derive(Asset, TypePath, AsBindGroup, Debug, Clone)]
+struct LaneMaterial {
+    /// xy: UV offset of the lane texture (the glints move along v).
+    #[uniform(0)]
+    scroll: Vec4,
+    /// [`lane_texture`].
+    #[texture(1)]
+    #[sampler(2)]
+    texture: Handle<Image>,
+}
+
+impl Material for LaneMaterial {
+    fn fragment_shader() -> ShaderRef {
+        "embedded://eaw_remake/lane.wgsl".into()
+    }
+
+    fn reads_view_transmission_texture(&self) -> bool {
+        true
+    }
+
+    fn enable_prepass() -> bool {
+        false
+    }
+
+    fn enable_shadows() -> bool {
+        false
+    }
+
+    fn specialize(
+        _pipeline: &MaterialPipeline,
+        descriptor: &mut RenderPipelineDescriptor,
+        _layout: &MeshVertexBufferLayoutRef,
+        _key: MaterialPipelineKey<Self>,
+    ) -> Result<(), SpecializedMeshPipelineError> {
+        // A flat ribbon seen from both sides; it hides nothing that is drawn after it.
+        descriptor.primitive.cull_mode = None;
+        if let Some(d) = descriptor.depth_stencil.as_mut() {
+            d.depth_write_enabled = Some(false);
+        }
+        Ok(())
+    }
+}
+
+/// What a lane adds over `under` (linear RGB), as `lane.wgsl` computes it: `amount` is in display values (the vertex colour times
+/// the lane texture).
+#[cfg(test)]
+fn lane_over(under: [f32; 3], amount: [f32; 3]) -> [f32; 3] {
+    std::array::from_fn(|i| {
+        let shown = Color::linear_rgb(under[i], 0.0, 0.0).to_srgba().red + amount[i];
+        Color::srgb(shown, 0.0, 0.0).to_linear().red
+    })
+}
+
 /// World width of a lane per unit of its data `Width` (`TRADEROUTELINES.XML`: main 6.0, inter 2.5, capillary 0.5, hidden 0). Estimate
 /// measured on the user's Remake video at full HD: the main lanes Ansion - Bilbringi (v0520, 8.3 px per map unit) and Rendili - Corellia
 /// (v0540, 8.6 px per unit) are 0.8 to 1.0 map units wide, the inter lane west of Ansion about 0.3: a flat band of 0.14 units per width unit.
@@ -1231,10 +1304,10 @@ const LANE_WIDTH_PER_DATA: f32 = 0.14;
 /// Brightness on the data colour (additive teal 13, 31, 38) in linear light. Estimate from the same frames: on black space a main lane
 /// reads about sRGB (32..44, 62..68, 76..80) in its middle, 3.6 times the data colour, and has no glow around it.
 const LANE_GAIN: f32 = 3.6;
-/// Share of the full band brightness the lane shows outside a glint: a glint (v0520, on Ansion - Bilbringi) reads about 1.6 times as
-/// bright as the lane on screen (sRGB 60, 107, 122 against 40, 63, 77), 2.8 times in linear light, over about 3 map units of its length,
-/// same width, soft ends.
-const LANE_BASE: f32 = 0.36;
+/// Share of the full band brightness the lane shows outside a glint, in display values (the lanes add in sRGB, see [`LaneMaterial`]):
+/// a glint (v0520, on Ansion - Bilbringi) reads about 1.6 times as bright as the lane on screen (sRGB 60, 107, 122 against 40, 63,
+/// 77), over about 3 map units of its length, same width, soft ends.
+const LANE_BASE: f32 = 0.625;
 /// Map units between two glints on a lane, glint length and speed (map units per second, the speed of the old pulses). Estimates: the
 /// stills show about one glint per lane on screen, they cannot show the motion.
 const GLINT_PERIOD: f32 = 40.0;
@@ -1292,22 +1365,12 @@ fn spawn_lanes(
     commands: &mut Commands,
     view: &GalaxyView,
     meshes: &mut Assets<Mesh>,
-    materials: &mut Assets<StandardMaterial>,
+    materials: &mut Assets<LaneMaterial>,
     images: &mut Assets<Image>,
 ) {
     use bevy::asset::RenderAssetUsages;
     use bevy::mesh::{Indices, PrimitiveTopology};
-    let tex = images.add(lane_texture());
-    let material = materials.add(StandardMaterial {
-        base_color: Color::WHITE,
-        base_color_texture: Some(tex),
-        unlit: true,
-        alpha_mode: AlphaMode::Add,
-        cull_mode: None,
-        // Transparent objects sort by the distance of their centre: this one is huge, so push it to the very back.
-        depth_bias: -1.0e6,
-        ..default()
-    });
+    let material = materials.add(LaneMaterial { scroll: Vec4::ZERO, texture: images.add(lane_texture()) });
     let (mut routes, mut pos, mut uv, mut idx) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
     for (i, r) in view.routes.iter().enumerate() {
         let (Some(a), Some(b), Some(style)) = (view.planets.get(r.a), view.planets.get(r.b), view.route_styles.get(r.style)) else {
@@ -1347,9 +1410,10 @@ fn spawn_lanes(
     ));
 }
 
-/// Linear RGB of a lane drawn in `style` at zoom `t` (0 close, 1 far), as the vertex colour of its ribbon; black when the style hides it.
-/// The data colour (`Color_Zoomed_In` / `Color_Zoomed_Out`, additive teal 13, 31, 38 for every relation in the Remake) is the colour, its
-/// alpha fades the lane (the Remake's enemy lanes fade out when zoomed in); `LANE_GAIN` brings it to the frames' brightness.
+/// What a lane drawn in `style` at zoom `t` (0 close, 1 far) adds at a glint, in display values, as the vertex colour of its ribbon
+/// (see [`LaneMaterial`]); black when the style hides it. The data colour (`Color_Zoomed_In` / `Color_Zoomed_Out`, additive teal 13, 31,
+/// 38 for every relation in the Remake) is the colour, its alpha fades the lane (the Remake's enemy lanes fade out when zoomed in);
+/// `LANE_GAIN` brings it to the frames' brightness.
 fn lane_color(style: &LineStyleView, t: f32) -> [f32; 4] {
     let mix = |i: usize| style.color_near[i] + (style.color_far[i] - style.color_near[i]) * t;
     let alpha = mix(3);
@@ -1357,9 +1421,10 @@ fn lane_color(style: &LineStyleView, t: f32) -> [f32; 4] {
         return [0.0; 4];
     }
     let l = Color::srgb(mix(0), mix(1), mix(2)).to_linear();
+    let band = Color::linear_rgb(l.red * LANE_GAIN, l.green * LANE_GAIN, l.blue * LANE_GAIN).to_srgba();
     // The texture carries the band at `LANE_BASE` outside the glints.
-    let k = LANE_GAIN * alpha / LANE_BASE;
-    [l.red * k, l.green * k, l.blue * k, 1.0]
+    let k = alpha / LANE_BASE;
+    [band.red * k, band.green * k, band.blue * k, 1.0]
 }
 
 /// Keeps the ribbon colours in sync with ownership (relation of the ends) and zoom, and moves the glints along the lanes.
@@ -1370,14 +1435,14 @@ fn update_lanes(
     camera: Single<&GalaxyCamera>,
     lanes: Query<&LaneMesh>,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut materials: ResMut<Assets<LaneMaterial>>,
     mut state: Local<LaneState>,
 ) {
     // The glints travel from the first end of every lane to the second.
     let scroll = (time.elapsed_secs() * GLINT_SPEED / GLINT_PERIOD).fract();
     for lane in &lanes {
         if let Some(mut m) = materials.get_mut(&lane.material) {
-            m.uv_transform = bevy::math::Affine2::from_translation(Vec2::new(0.0, -scroll));
+            m.scroll = Vec4::new(0.0, -scroll, 0.0, 0.0);
         }
     }
     let t = zoom_fraction(&bounds, camera.distance);
@@ -1718,7 +1783,8 @@ mod tests {
         let style = remake_style(6.0);
         // On black space the band (at `LANE_BASE` of the texture) shows the measured lane colour, about sRGB (32, 62, 76).
         let c = lane_color(&style.neutral, 1.0);
-        let shown = Color::linear_rgb(c[0] * LANE_BASE, c[1] * LANE_BASE, c[2] * LANE_BASE).to_srgba();
+        let over_black = lane_over([0.0; 3], [c[0] * LANE_BASE, c[1] * LANE_BASE, c[2] * LANE_BASE]);
+        let shown = Color::linear_rgb(over_black[0], over_black[1], over_black[2]).to_srgba();
         let px = [shown.red, shown.green, shown.blue].map(|v| v * 255.0);
         assert!((px[0] - 32.0).abs() < 6.0 && (px[1] - 62.0).abs() < 6.0 && (px[2] - 76.0).abs() < 6.0, "{px:?}");
         // The same teal for every relation (no invented green or red lanes); the enemy style's alpha fades it out close up.
@@ -1741,6 +1807,37 @@ mod tests {
         // Along: the band outside the glint, full brightness at the glint centre (middle of the period).
         assert!(alpha(w / 2, h / 2) >= 245);
         assert!(alpha(w / 2, h / 4).abs_diff(base) <= 1);
+    }
+
+    #[test]
+    fn a_lane_adds_the_same_on_screen_over_the_core_nebula_as_on_black() {
+        let c = lane_color(&remake_style(6.0).neutral, 1.0);
+        let band = [c[0] * LANE_BASE, c[1] * LANE_BASE, c[2] * LANE_BASE];
+        // The nebula next to Byss in v0240, sRGB (105, 77, 68); the Remake's lane adds about (+57, +72, +72) there (the video's
+        // chroma subsampling pulls a thin line toward white), on black about its own colour (40, 63, 77).
+        let nebula = Color::srgb_u8(105, 77, 68).to_linear();
+        let under = [nebula.red, nebula.green, nebula.blue];
+        let screen = |lin: [f32; 3]| {
+            let s = Color::linear_rgb(lin[0], lin[1], lin[2]).to_srgba();
+            [s.red * 255.0 - 105.0, s.green * 255.0 - 77.0, s.blue * 255.0 - 68.0]
+        };
+        let added = screen(lane_over(under, band));
+        for (a, b) in added.iter().zip(band) {
+            assert!((a - b * 255.0).abs() < 1.0, "{added:?} {band:?}");
+        }
+        // The same band added in linear light: about (+5, +21, +32), the lane all but vanished.
+        let over_black = lane_over([0.0; 3], band);
+        let linear = screen(std::array::from_fn(|i| under[i] + over_black[i]));
+        assert!(linear[1] < 25.0 && added[1] > 2.5 * linear[1], "{linear:?} {added:?}");
+    }
+
+    #[test]
+    fn the_lane_material_draws_after_the_copy_of_the_backdrop() {
+        // Bevy draws a blended material in the transparent phase whatever it reads; only an opaque or masked one that reads the view
+        // transmission texture goes to the transmissive phase, after the copy of the opaque pass and the disc art.
+        let m = LaneMaterial { scroll: Vec4::ZERO, texture: Handle::default() };
+        assert!(m.reads_view_transmission_texture());
+        assert!(matches!(m.alpha_mode(), AlphaMode::Opaque | AlphaMode::Mask(_)));
     }
 
     #[test]
