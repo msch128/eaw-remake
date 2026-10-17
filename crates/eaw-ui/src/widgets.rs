@@ -1159,7 +1159,50 @@ impl Builder<'_> {
                 let l = self.text_layer(button, size, def, "", Vec2::new(size.x * 0.40, size.y * 0.5 - 8.0), Color::srgb(0.9, 0.93, 0.98));
                 self.world.entity_mut(l).insert(SlotPart::Level);
             }
+            if s.kind == SlotKind::Ability {
+                // The animated outline the original runs over an ability button while the ability is on (`Icon_Alternate_Texture_Name`
+                // sa_ami_outline_00..12 at `Anim_FPS`, looped): without it a toggled-on Hunt or S-foil lock looked exactly like an off one
+                // (the `Selected_Texture_Name` frame is all but the normal border).
+                let fps = def.raw.get("anim_fps").and_then(|v| v.trim().parse::<f32>().ok()).filter(|f| *f > 0.0).unwrap_or(8.0);
+                let frames: Vec<UiTexture> = def.icon_alt.iter().filter_map(|n| self.tex(n)).collect();
+                if let Some(first) = frames.first() {
+                    let e = self.layer(button, size, first, first.size.as_vec2(), Vec2::ZERO, Color::WHITE);
+                    self.hide(e);
+                    self.world.entity_mut(e).insert(ActiveOutline { frames: frames.iter().map(|t| t.handle.clone()).collect(), fps });
+                }
+            }
             let _ = s;
+        }
+    }
+}
+
+/// Animated outline of an ability button, shown while its ability is on (see [`active_outlines`]).
+#[derive(Component, Debug, Clone)]
+pub(crate) struct ActiveOutline {
+    frames: Vec<Handle<Image>>,
+    fps: f32,
+}
+
+/// Shows the animated outline over every ability button whose ability is on (toggled on or running) and steps its frames.
+pub(crate) fn active_outlines(time: Res<Time>, data: Res<CommandBarData>, slots: Query<(&Slot, &Children)>, mut outlines: Query<(&ActiveOutline, &mut Node, &mut ImageNode)>) {
+    let t = time.elapsed_secs();
+    for (slot, children) in &slots {
+        if slot.kind != SlotKind::Ability {
+            continue;
+        }
+        let on = data.abilities.get(slot.index).is_some_and(|a| a.active && !a.icon.is_empty());
+        for c in children.iter() {
+            let Ok((o, mut node, mut img)) = outlines.get_mut(c) else { continue };
+            let want = if on { Display::Flex } else { Display::None };
+            if node.display != want {
+                node.display = want;
+            }
+            if on && !o.frames.is_empty() {
+                let frame = &o.frames[(t * o.fps) as usize % o.frames.len()];
+                if img.image != *frame {
+                    img.image = frame.clone();
+                }
+            }
         }
     }
 }
@@ -2062,6 +2105,39 @@ fn roman(level: u8) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_ability_that_is_on_shows_the_running_outline_and_off_hides_it() {
+        use crate::data::AbilityEntry;
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(std::time::Duration::from_millis(50)))
+            .init_resource::<CommandBarData>()
+            .add_systems(Update, active_outlines);
+        let frames: Vec<Handle<Image>> = (0..13u128).map(|i| Handle::Uuid(bevy::asset::uuid::Uuid::from_u128(i + 1), std::marker::PhantomData)).collect();
+        let button = app.world_mut().spawn((Slot { kind: SlotKind::Ability, index: 1 }, Node::default())).id();
+        let outline = app
+            .world_mut()
+            .spawn((ActiveOutline { frames: frames.clone(), fps: 8.0 }, Node { display: Display::None, ..default() }, ImageNode::default(), ChildOf(button)))
+            .id();
+        let entry = |active: bool| AbilityEntry { icon: "I_SA_HUNT.TGA".into(), ready: 1.0, active, kind: "HUNT".into(), ..default() };
+        app.world_mut().resource_mut::<CommandBarData>().abilities = vec![AbilityEntry::default(), entry(false)];
+        app.update();
+        assert_eq!(app.world().get::<Node>(outline).unwrap().display, Display::None, "off: no outline");
+        // Toggled on (Hunt): the outline shows and runs through its frames at 8 per second.
+        app.world_mut().resource_mut::<CommandBarData>().abilities[1].active = true;
+        let mut seen = std::collections::HashSet::new();
+        for _ in 0..12 {
+            app.update();
+            assert_eq!(app.world().get::<Node>(outline).unwrap().display, Display::Flex, "on: the outline stays up");
+            seen.insert(app.world().get::<ImageNode>(outline).unwrap().image.id());
+        }
+        assert!(seen.len() >= 4, "the outline animates: {} frames seen", seen.len());
+        // Toggled off again.
+        app.world_mut().resource_mut::<CommandBarData>().abilities[1].active = false;
+        app.update();
+        assert_eq!(app.world().get::<Node>(outline).unwrap().display, Display::None);
+    }
 
     #[test]
     fn only_the_opaque_art_of_a_shell_counts_as_interface() {

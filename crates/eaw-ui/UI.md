@@ -171,7 +171,9 @@ but not a goal). `spawn_dialog` is for GC messages (GC intro transmissions, game
   `TEXT_TOOLTIP_ABILITY_<TYPE>_NAME` / `_DESCRIPTION`. `HUNT` and `SPOILER_LOCK` (icon `I_SA_S_FOIL_MODE`) are toggles with buttons;
   types without an icon are skipped. `unit_abilities` / `TacticalUnit::from_game` build them.
   The `special_button_NN` components (24 small slots above the selection) show them; their own
-  `sa_ami_outline_NN` textures are an animated outline, not ability icons.
+  `sa_ami_outline_NN` textures are an animated outline, not ability icons. That outline runs over the button while the ability
+  is on (`widgets::active_outlines`, `Anim_FPS` 8, looped): the `Selected_Texture_Name` frame alone is all but the normal
+  border, so a toggled-on Hunt or S-foil lock looked exactly like an off one (2026-10-16).
 * **API:** `TacticalData { active, selection: Vec<TacticalUnit>, focus, reinforcement_points, pop,
   retreat: RetreatState, overlays: Vec<ShipOverlay>, hardpoints: Vec<HardpointMarker> }`.
   With `active` set the plugin fills the bar slots (`s_select_NN` + health/shield bars, abilities

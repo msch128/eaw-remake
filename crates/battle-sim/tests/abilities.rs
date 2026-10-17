@@ -266,6 +266,43 @@ fn hunt_and_spoiler_lock_are_toggles_in_the_real_data() {
     assert!(field.toggle && field.disable_movement, "{field:?}");
 }
 
+#[test]
+fn hunt_toggles_a_real_tie_avenger_squadron_on_and_off() {
+    let Some((data, fs)) = load() else { return };
+    let cat = Arc::new(Catalog::build(&data, Some(&fs), &["TIE_Avenger_Squadron", "MC-80_Star_Cruiser"]));
+    let side = |name: &str, ship: &str| SideSetup { name: name.into(), units: vec![UnitSetup { ship: cat.ship_id(ship).unwrap(), count: 1, tag: 1 }], structures: vec![], ai: false };
+    let config = BattleConfig { fog_of_war: false, record_events: false, ..BattleConfig::default() };
+    let mut b = Battle::new(BattleSetup { catalog: cat.clone(), sides: vec![side("Empire", "TIE_Avenger_Squadron"), side("Rebel", "MC-80_Star_Cruiser")], config });
+    let members = ids(&b, 0);
+    let target = ids(&b, 1)[0];
+    assert!(members.len() >= 3, "a squadron of several fighters: {members:?}");
+    let hunt = cat.ship(b.ships[members[0] as usize].def).abilities.iter().position(|a| a.hunt).expect("TIE Avenger has HUNT");
+    // A click on the bar's button: every ship of the slot in the first ship's state is switched.
+    let click = |b: &mut Battle| {
+        let first_on = b.ships[members[0] as usize].abilities[hunt].active > 0.0;
+        for &m in &members {
+            if (b.ships[m as usize].abilities[hunt].active > 0.0) == first_on {
+                b.command(0, Command::UseAbility { ship: m, ability: hunt as u16 }).unwrap();
+            }
+        }
+    };
+    let gap = |b: &Battle| members.iter().map(|&m| b.ships[m as usize].pos.dist(b.ships[target as usize].pos)).fold(f32::MAX, f32::min);
+    for _ in 0..30 {
+        b.step();
+    }
+    let before = gap(&b);
+    click(&mut b);
+    assert!(members.iter().all(|&m| b.ships[m as usize].abilities[hunt].active > 0.0), "on for the whole squadron");
+    for _ in 0..30 * 20 {
+        b.step();
+    }
+    let after = gap(&b);
+    println!("TIE Avengers to the MC-80: {before:.0} before the hunt, {after:.0} after 20 s");
+    assert!(after < before - 1500.0, "hunting fighters go for the enemy: {before:.0} -> {after:.0}");
+    click(&mut b);
+    assert!(members.iter().all(|&m| b.ships[m as usize].abilities[hunt].active == 0.0), "the second click switches it off for the whole squadron");
+}
+
 fn wing_battle() -> Battle {
     let mut wing = mobile("wing", 600.0);
     wing.class = TargetClass::Fighter;

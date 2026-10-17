@@ -213,7 +213,7 @@ impl Plugin for EawUiPlugin {
                 )
                     .chain(),
             )
-            .add_systems(Update, (widgets::segment_bars, widgets::border_pieces.after(widgets::slots), widgets::ability_columns));
+            .add_systems(Update, (widgets::segment_bars, widgets::border_pieces.after(widgets::slots), widgets::ability_columns, widgets::active_outlines.after(widgets::slots)));
     }
 }
 
