@@ -624,7 +624,7 @@ fn an_occupied_hyperspace_slot_deploys_only_that_unit_and_an_empty_one_changes_n
 }
 
 /// A pirate planet without a fleet (it has a star base and its garrison) attacked by `n` units of `unit`: (auto-resolve preview of the attacker: start, alive;
-/// tactical headless result: start, survived).
+/// tactical headless result: start, still in the battle at its end; units that escaped by retreating are not counted).
 fn pirate_planet_attack(ctx: &Ctx, unit: &str, n: u32) -> ((u32, u32), (u32, u32), bool) {
     let mut sim = new_sim(ctx);
     let w = sim.world().clone();
@@ -643,7 +643,7 @@ fn pirate_planet_attack(ctx: &Ctx, unit: &str, n: u32) -> ((u32, u32), (u32, u32
     let catalog = catalog_for(ctx, &req);
     let result = run_headless(&req, &catalog, None).unwrap();
     let rs = req.sides.iter().position(|s| s.faction == rebel).unwrap();
-    let survived: u32 = result.survived[rs].iter().sum();
+    let survived: u32 = result.survived[rs].iter().sum::<u32>() - result.retreated[rs].iter().sum::<u32>();
     ((me.1, me.2), (n, survived), preview.winner == Some(rebel))
 }
 
@@ -651,7 +651,8 @@ fn pirate_planet_attack(ctx: &Ctx, unit: &str, n: u32) -> ((u32, u32), (u32, u32
 fn a_pirate_star_base_with_its_garrison_counts_in_both_resolvers() {
     let Some(ctx) = load() else { return };
     // The star base, its spawned garrison squadrons (Hullcracker, Z-95) and structures are part of the defender in the request and in the statistical resolver:
-    // a lone corvette dies in both, while a real fleet beats the level 1 base without losses in both (the data's pirate bases are that weak).
+    // a lone corvette dies in both (in the tactical battle its AI may also flee: it is hopelessly outgunned), while a real fleet beats the level 1 base
+    // without losses in both (the data's pirate bases are that weak).
     let (auto, tactical, auto_win) = pirate_planet_attack(&ctx, "CR-90_Corvette", 1);
     println!("1 x CR-90: auto alive {}/{} win {auto_win}, tactical survived {}/{}", auto.1, auto.0, tactical.1, tactical.0);
     assert!(!auto_win && auto.1 == 0 && tactical.1 == 0, "a corvette alone cannot take a pirate base");

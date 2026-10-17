@@ -74,6 +74,13 @@ peak strength, the galaxy's defender flag reaches the sim (`BattleConfig::defend
 the "mainly transports" clause is in. Tests: `tactical_ai::a_nearly_destroyed_ai_fleet_retreats_before_it_is_wiped_out`,
 `mechanics::a_defender_without_a_station_leaves_after_30_s_and_its_reserve_counts`.
 
+## AI retreat counts the data's force (2026-10-17, RULES.md 9 "Retreat")
+User finding: after the user's Super Star Destroyer fleet destroyed the AI's station, the AI fought on without a chance. Cause: the retreat rule compared our strength
+estimate `sqrt((hull + shield) x damage)`, which put the Executor at 11 Star Destroyers; the data's `AI_Combat_Power` (what the engine's force perception sums) puts it at 36.
+Now `ShipDef::ai_power` is read from the data and the force of a unit is its `AI_Combat_Power` times the share of hull and shield it has left (that weighting is the estimate);
+the retreat rule and the defender's aggressive mode use it, the fleet AI's positional weights keep the old estimate. Same battle, seeds 1-3: the station fell after 126-133 s and
+the AI fought on until 230-260 s, losing 11-13 of 22 ships; now it leaves at 62 s and loses 4. Probe: `examples/ai_probe.rs`. Open: the Normal/Hard checks of `RetreatPlan.lua`.
+
 ## Group moves (2026-10-17, `formation.rs`, RULES.md 9d)
 User rule: a group move ends with every ship in its own slot, side by side in rows facing the move, tight (`BetweenFormationSpacing` beyond the hulls), 2-3 rows
 for big groups. `Command::Move` / `AttackMove` of several units now lays out a formation at the point (bands by `FormationOrder`, escorts ahead, wide bands in

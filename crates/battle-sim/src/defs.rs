@@ -512,6 +512,8 @@ pub struct ShipDef {
     pub turn_rate: f32,
     /// Population cost.
     pub population: i32,
+    /// `AI_Combat_Power`: what the unit counts in the AI's force perception (`FriendlyForceUnnormalized`); 0 where the data has none.
+    pub ai_power: f32,
     /// Hardpoints.
     pub hardpoints: Vec<HpDef>,
     /// Weapon fired from the hull (fighters).
@@ -1630,6 +1632,12 @@ impl Catalog {
             accel,
             turn_rate,
             population: pop,
+            ai_power: match src {
+                Source::Unit(u) => u.ai_combat_power,
+                Source::Base(b) => b.ai_combat_power,
+                Source::Structure(s) => s.fields.get("ai_combat_power").and_then(|v| v.trim().parse().ok()).unwrap_or(0.0),
+            }
+            .max(0.0),
             hardpoints,
             direct,
             spread: Vec::new(),

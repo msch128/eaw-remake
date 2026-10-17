@@ -73,7 +73,7 @@ pub(crate) struct AiSide {
     search_best: f32,
     /// Units waiting outside the battle (definition, count), called in this order.
     pub(crate) reserve: Vec<(ShipId, u32)>,
-    /// Highest strength of the side's ships (fighters and bombers left out) in this battle so far, for the retreat rule.
+    /// Highest force of the side's ships (fighters and bombers left out) in this battle so far, for the retreat rule.
     pub(crate) peak: f32,
 }
 
@@ -96,21 +96,27 @@ fn shield_and_health(s: &Ship, d: &ShipDef) -> f32 {
 }
 
 impl Battle {
-    /// Strength of one unit (the estimate of `side_power`).
+    /// Weight of a unit where the plan looks for the enemy's and its own fleet: `sqrt((hull + shield) x best-bearing damage rate)` (estimate).
     pub(crate) fn unit_power(&self, s: &Ship) -> f32 {
         let d = self.catalog.ship(s.def);
         ((s.hull.max(0.0) + s.shield.max(0.0)) * crate::defs::dps_estimate(d, &self.catalog)).sqrt()
     }
 
-    /// Strength of a unit of type `ship` at full hull and shield (`unit_power` of a fresh ship).
-    pub(crate) fn full_power(&self, ship: ShipId) -> f32 {
-        let d = self.catalog.ship(ship);
-        ((d.hull.max(0.0) + d.shield.max(0.0)) * crate::defs::dps_estimate(d, &self.catalog)).sqrt()
+    /// Force of one unit as the Remake AI counts it (`FriendlyForceUnnormalized`): its `AI_Combat_Power` (data), weighted by the share of hull
+    /// and shield it has left (estimate: the engine's weighting is not visible).
+    pub(crate) fn unit_force(&self, s: &Ship) -> f32 {
+        let d = self.catalog.ship(s.def);
+        d.ai_power * ((s.hull.max(0.0) + s.shield.max(0.0)) / (d.hull + d.shield).max(1.0)).min(1.0)
     }
 
-    /// Strength of the side's ships and structures in the battle without fighters and bombers (their squadrons come and go).
-    pub(crate) fn fleet_power(&self, side: u8) -> f32 {
-        self.ships.iter().filter(|s| s.alive && !s.retreated && s.side == side && !small(self.catalog.ship(s.def))).map(|s| self.unit_power(s)).sum()
+    /// Force of a side: all its units in the battle.
+    pub(crate) fn side_force(&self, side: u8) -> f32 {
+        self.ships.iter().filter(|s| s.alive && !s.retreated && s.side == side).map(|s| self.unit_force(s)).sum()
+    }
+
+    /// Force of the side's ships and structures in the battle without fighters and bombers (their squadrons come and go).
+    pub(crate) fn fleet_force(&self, side: u8) -> f32 {
+        self.ships.iter().filter(|s| s.alive && !s.retreated && s.side == side && !small(self.catalog.ship(s.def))).map(|s| self.unit_force(s)).sum()
     }
 
     /// Whether the AI plan may (re)order a unit: its standing orders are its own, not a lure's, a hunt's or a retreat's (a fighter's move
@@ -267,8 +273,8 @@ impl Battle {
         // `Allowed_As_Defender_Space_Untargeted`: attackers, defenders without structures, and defenders whose fleet is twice the enemy's after 120 s attack.
         let defender = !self.sides[si].structures.is_empty();
         let allowed = !defender || structures.is_empty() || {
-            let mine: f32 = self.ships.iter().filter(|s| s.alive && !s.retreated && s.side == side && !cat.ship(s.def).is_static).map(|s| self.unit_power(s)).sum();
-            let theirs: f32 = (0..self.sides.len() as u8).filter(|&o| o != side).map(|o| self.side_power(o)).sum();
+            let mine: f32 = self.ships.iter().filter(|s| s.alive && !s.retreated && s.side == side && !cat.ship(s.def).is_static).map(|s| self.unit_force(s)).sum();
+            let theirs: f32 = (0..self.sides.len() as u8).filter(|&o| o != side).map(|o| self.side_force(o)).sum();
             time > 120.0 && mine >= 2.0 * theirs
         };
         // Aggressive mode of the free store.

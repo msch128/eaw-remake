@@ -145,13 +145,25 @@ Source: `XML/AI/GoalFunctions/Remake_SpaceCombat.xml`, `PerceptualEquations/Rema
   sets it from `TacticalSide::defender`; without it a side that brought structures defends), so a defending fleet without a station may leave after 30 s instead of being treated as an
   attacker. A side made mostly of transports (own force < 3 x the transports' force, `Forces_Are_Not_Mainly_Transports`) leaves whatever the odds, an attacker already after 30 s.
   Also required: the side's `BattleConfig::retreat_allowed` (`Allowed_To_Retreat_Space`: campaign only, faction holds more than one planet, never Pirates; galaxy-sim sets it per
-  `TacticalSide::may_retreat`), the retreat countdown (60 s) passed, and no enemy interdiction (`RetreatBlocked` is simply retried). The thresholds and ages are data; "force" is an
-  **estimate**: sum over living ships of `sqrt((hull + shield) x best-bearing damage rate)` (the engine's `FriendlyForceUnnormalized` is not visible), plus 0.8 x the full strength of the
-  units the side has not called in yet or that are on their way (`ReinforcementsUnnormalized {Parameter_Attenuator = 0.8}`, read as a factor: estimate).
+  `TacticalSide::may_retreat`), the retreat countdown (60 s) passed, and no enemy interdiction (`RetreatBlocked` is simply retried). The thresholds and ages are data, and so is
+  the force (`FriendlyForceUnnormalized`, `EnemyForceUnnormalized`): the units' `AI_Combat_Power` (`ShipDef::ai_power`; the Remake names its force total
+  `Player_AI_Combat_Power_Space_Total`): Executor 65000, Star Destroyer 1800, MC-80 1750, Victory 1200, Assault Frigate 1200, Nebulon-B 300, CR-90 100, X-wing 10, TIE 4, Rebel star
+  base 3 3750, Golan III 19500. Each unit counts with the share of hull and shield it has left (**estimate**: the engine's weighting is not visible); units the side has not called
+  in yet or that are on their way count at 0.8 (`ReinforcementsUnnormalized {Parameter_Attenuator = 0.8}`, read as a factor: estimate). Units without the tag count 0 (of 987 armed
+  space units 78 have none: dummies, story units, transports). The aggressive mode of 9c compares the same force. Until 2026-10-17 the force was our estimate
+  `sqrt((hull + shield) x best-bearing damage rate)`, which put the Executor at 11 Star Destroyers instead of the data's 36 (user finding: the AI kept fighting after its station
+  was destroyed, without a chance against a Super Star Destroyer fleet). Measured (`examples/ai_probe.rs`, seeds 1-3, scripted player attacking the station,
+  before = main f9710b3): Executor, 3 Star Destroyers, 3 Victorys and 4 TIE squadrons against a Rebel star base 3 with 22 ships: before, the station fell after 126-133 s at
+  4.5-4.9x, the AI fought on until 230-260 s and lost 11-13 of its 22 ships; now it leaves at 62 s (3.7-3.8x) and loses 4. The Executor alone against 16 ships and the base: order
+  at 300-320 s (7-8 of 16 lost) before, 96-102 s (1 lost) now; against a Golan III and 10 ships 180-240 s (4-7 of 10 lost) before, 108-172 s (2-4 lost) now. An even fight in which
+  the station falls (6 Star Destroyers, 4 Victorys against 10 ships and a base 1, 1.4-1.5x when it falls) is fought on until the enemy is 3x stronger (194-206 s). Tests:
+  `tactical_ai::an_ai_defender_without_a_chance_against_a_super_star_destroyer_retreats_at_the_latest_when_its_station_falls`, `..._with_a_fair_chance_fights_on_after_losing_its_station`,
+  `an_ai_attacker_that_is_losing_badly_retreats` (6 MC-80s and 4 Nebulon-Bs 4500 from an Executor and a star base: order at 62 s instead of 80 s).
   **Emergency retreat (U94, project rule, estimate):** after the retreat countdown, without waiting for the 120 s, a side whose survival chance is below 25% (enemy force > 3 x own)
   leaves while capital ships or units of 15+ population are left, or (user finding 2026-10-16: a nearly destroyed fleet of frigates and corvettes fought to the last ship) once its
   ships without fighters and bombers have lost half of the strength they had at their peak in this battle (a side of fighters and bombers only keeps
-  the data rules). Tests: `a_nearly_destroyed_ai_fleet_retreats_before_it_is_wiped_out`
+  the data rules). With the data's force this rule makes a defender facing a Super Star Destroyer leave at the end of the countdown even while its station stands
+  (the data alone would keep it until the station falls or 120 s). Tests: `a_nearly_destroyed_ai_fleet_retreats_before_it_is_wiped_out`
   (3 Acclamators and 3 Tartan pairs against a defended planet: order at 110 s instead of 122 s, 3 of 3 Acclamators escape instead of 2 / 1; 4 Tartan pairs: order at 68 s instead of
   never), `a_defender_without_a_station_leaves_after_30_s_and_its_reserve_counts`.
   Not modelled: the Normal/Hard checks of `RetreatPlan.lua` (abort when engines of more than half the frigate/capital combat rating are down; Hard finishes off enemies below 20%

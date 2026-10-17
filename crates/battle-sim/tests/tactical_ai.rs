@@ -457,6 +457,151 @@ fn the_ai_fleet_advances_as_one_line_and_attacks_together() {
     }
 }
 
+/// What the AI's retreat rule did in a battle against a scripted player.
+#[derive(Debug, Default)]
+struct RetreatRun {
+    /// Battle second the AI's last structure fell.
+    station_down: Option<f32>,
+    /// Battle second of the AI's retreat order and the strength ratio then (enemy force / own force, see [`force`]).
+    ordered: Option<(f32, f32)>,
+    /// Ratio at the start.
+    start_ratio: f32,
+    /// The AI's big ships (no fighters, bombers or structures) at the start, destroyed and escaped at the end.
+    big: (u32, u32, u32),
+    winner: Option<u8>,
+    /// The player side ordered a retreat (it never may on its own).
+    player_retreat: bool,
+}
+
+/// A side's force as the Remake AI counts it (`FriendlyForceUnnormalized`): the `AI_Combat_Power` of its units, each weighted by the share of
+/// hull and shield it has left.
+fn force(b: &Battle, cat: &Catalog, side: u8) -> f32 {
+    b.ships
+        .iter()
+        .filter(|s| s.alive && !s.retreated && s.side == side)
+        .map(|s| {
+            let d = cat.ship(s.def);
+            d.ai_power * ((s.hull.max(0.0) + s.shield.max(0.0)) / (d.hull + d.shield).max(1.0)).min(1.0)
+        })
+        .sum()
+}
+
+/// The AI plays side `ai`, the player the other side. An attacking player sends everything at the AI's station, then attack-moves on the
+/// nearest AI warship whenever the place it was sent to is clear; a defending player holds and fires at what comes in range. With `gap`
+/// the attacker's big ships start that far from the defender's station (or fleet) instead of across the map.
+fn retreat_run(cat: &Arc<Catalog>, ai: u8, attacker: &[(&str, u32)], defender: &[(&str, u32)], base: &[&str], gap: Option<f32>, seed: u64) -> RetreatRun {
+    let player = 1 - ai;
+    let mut sides = vec![side(cat, "Attacker", attacker, &[]), side(cat, "Defender", defender, base)];
+    sides[player as usize].ai = false;
+    let config = BattleConfig { seed, defenders: vec![false, true], ..BattleConfig::default() };
+    let mut b = Battle::new(BattleSetup { catalog: cat.clone(), sides, config });
+    let structure = |s: &Ship| cat.ship(s.def).is_static;
+    let big = |s: &Ship| !structure(s) && !matches!(cat.ship(s.def).class, TargetClass::Fighter | TargetClass::Bomber);
+    let centre = |b: &Battle, side: u8| {
+        let ships: Vec<Vec3> = b.ships.iter().filter(|s| s.alive && !s.retreated && s.side == side && big(s)).map(|s| s.pos).collect();
+        ships.iter().fold(Vec3::ZERO, |a, &p| a + p) * (1.0 / ships.len().max(1) as f32)
+    };
+    if let Some(gap) = gap {
+        let aim = b.ships.iter().find(|s| s.side == 1 && structure(s)).map_or(centre(&b, 1), |s| s.pos);
+        let to = aim - centre(&b, 0);
+        let shift = to - to.normalized() * gap;
+        for s in b.ships.iter_mut().filter(|s| s.side == 0 && !structure(s)) {
+            s.pos += shift;
+        }
+    }
+    let mut run = RetreatRun { start_ratio: force(&b, cat, player) / force(&b, cat, ai).max(1.0), ..RetreatRun::default() };
+    let ai_big: Vec<u32> = b.ships.iter().filter(|s| s.side == ai && big(s)).map(|s| s.id).collect();
+    let mut goal: Option<Vec3> = None;
+    while !b.is_over() && b.time() < 900.0 {
+        if player == 0 && b.tick().is_multiple_of(30) {
+            let mine: Vec<u32> = b.ships.iter().filter(|s| s.alive && !s.retreated && s.side == 0 && !structure(s)).map(|s| s.id).collect();
+            let enemies: Vec<Vec3> = b.ships.iter().filter(|s| s.alive && !s.retreated && s.side == ai && big(s)).map(|s| s.pos).collect();
+            if let Some(station) = b.ships.iter().find(|s| s.alive && s.side == ai && structure(s)) {
+                if goal.is_none() {
+                    goal = Some(station.pos);
+                    let target = station.id;
+                    b.command(0, Command::Attack { ships: mine, target }).unwrap();
+                }
+            } else if goal.is_none_or(|g| !enemies.iter().any(|p| p.dist(g) < 3000.0)) {
+                let from = centre(&b, 0);
+                if let Some(p) = enemies.iter().copied().min_by(|a, c| a.dist(from).total_cmp(&c.dist(from))) {
+                    goal = Some(p);
+                    b.command(0, Command::AttackMove { ships: mine, to: p }).unwrap();
+                }
+            }
+        }
+        let events = b.step().to_vec();
+        for e in &events {
+            match e {
+                Event::RetreatOrdered { side, .. } if *side == ai && run.ordered.is_none() => run.ordered = Some((b.time(), force(&b, cat, player) / force(&b, cat, ai).max(1.0))),
+                Event::RetreatOrdered { side, .. } if *side == player => run.player_retreat = true,
+                _ => {}
+            }
+        }
+        if run.station_down.is_none() && !base.is_empty() && !b.ships.iter().any(|s| s.side == 1 && s.alive && structure(s)) {
+            run.station_down = Some(b.time());
+        }
+    }
+    let ships = |f: fn(&Ship) -> bool| ai_big.iter().filter(|&&i| f(&b.ships[i as usize])).count() as u32;
+    run.big = (ai_big.len() as u32, ships(|s| !s.alive), ships(|s| s.alive && s.retreated));
+    run.winner = b.winner();
+    run
+}
+
+#[test]
+fn an_ai_defender_without_a_chance_against_a_super_star_destroyer_retreats_at_the_latest_when_its_station_falls() {
+    // User finding 2026-10-17: after the player destroyed its station, the AI fought on without a chance against a Super Star Destroyer fleet.
+    // The retreat rule compares forces, and the Remake's force is the units' `AI_Combat_Power` (Executor
+    // 65000, Star Destroyer 1800, Victory 1200, MC-80 1750, Assault Frigate 1200, Nebulon-B 300, CR-90 100, X-wing 10, star base 3750); our old
+    // estimate (sqrt of hull and shield times damage) put the Executor at 11 Star Destroyers instead of 36. Main f9710b3, same battle: the station
+    // fell after 126 / 133 s at 4.5x / 4.8x and the AI fought on until 260 / 242 s, 11 of its 29 units got away (the player kept the Executor alone).
+    let Some((data, fs)) = load() else { return };
+    let names = ["Executor_Star_Dreadnought", "Star_Destroyer", "Victory_Destroyer", "TIE_Fighter_Squadron", "MC-80_Star_Cruiser", "Nebulon_B_Frigate", "Assault_Frigate_Mark_II", "CR-90_Corvette", "X-Wing_Squadron", "Rebel_Star_Base_3"];
+    let cat = Arc::new(Catalog::build(&data, Some(&fs), &names));
+    let empire = [("Executor_Star_Dreadnought", 1), ("Star_Destroyer", 3), ("Victory_Destroyer", 3), ("TIE_Fighter_Squadron", 4)];
+    let rebels = [("MC-80_Star_Cruiser", 6), ("Nebulon_B_Frigate", 6), ("Assault_Frigate_Mark_II", 4), ("CR-90_Corvette", 6), ("X-Wing_Squadron", 6)];
+    for seed in [1, 2] {
+        let r = retreat_run(&cat, 1, &empire, &rebels, &["Rebel_Star_Base_3"], None, seed);
+        println!("Executor fleet against a defended base, seed {seed}: {r:?}");
+        assert!(r.start_ratio >= 3.0, "no chance from the start: {:.2}", r.start_ratio);
+        let down = r.station_down.expect("the station falls");
+        let (at, ratio) = r.ordered.expect("the defender retreats");
+        // The rule is checked every 2 s, not before the 60 s retreat countdown.
+        assert!(at <= down.max(60.0) + 4.0, "the AI leaves at the latest right after its station falls: station {down:.0} s, order {at:.0} s");
+        assert!(ratio >= 2.95, "it leaves because the enemy is 3x stronger: {ratio:.2}");
+        assert!(r.big.2 * 2 >= r.big.0, "most of the fleet gets away: {:?}", r.big);
+    }
+}
+
+#[test]
+fn an_ai_defender_with_a_fair_chance_fights_on_after_losing_its_station() {
+    // Six Star Destroyers and four Victorys (force 15600) destroy the star base of six MC-80s and four Nebulon-Bs (11700 and 1250): the
+    // defenders fight on while the enemy is less than 3x stronger, and the player, who never retreats on its own, does not either.
+    let Some((data, fs)) = load() else { return };
+    let cat = Arc::new(Catalog::build(&data, Some(&fs), &["Star_Destroyer", "Victory_Destroyer", "MC-80_Star_Cruiser", "Nebulon_B_Frigate", "Rebel_Star_Base_1"]));
+    let r = retreat_run(&cat, 1, &[("Star_Destroyer", 6), ("Victory_Destroyer", 4)], &[("MC-80_Star_Cruiser", 6), ("Nebulon_B_Frigate", 4)], &["Rebel_Star_Base_1"], None, 1);
+    println!("Star Destroyers against a defended base: {r:?}");
+    assert!(r.start_ratio < 2.0, "a fair fight: {:.2}", r.start_ratio);
+    let down = r.station_down.expect("the station falls");
+    assert!(r.ordered.is_none_or(|(at, ratio)| at > down + 30.0 && ratio >= 2.95), "the defender fights on: {r:?}");
+    assert!(!r.player_retreat, "the player's side never retreats by itself");
+}
+
+#[test]
+fn an_ai_attacker_that_is_losing_badly_retreats() {
+    // An AI fleet (6 MC-80s, 4 Nebulon-Bs: force 11700) jumps in 4500 units from a planet held by an Executor and a star base (67250): the
+    // attacker leaves once the retreat countdown allows (60 s) instead of after the 120 s of `Retreat_From_Space`. Main f9710b3: order at 80 s,
+    // 4 of the 10 ships lost.
+    let Some((data, fs)) = load() else { return };
+    let cat = Arc::new(Catalog::build(&data, Some(&fs), &["Executor_Star_Dreadnought", "MC-80_Star_Cruiser", "Nebulon_B_Frigate", "Empire_Star_Base_2"]));
+    let r = retreat_run(&cat, 0, &[("MC-80_Star_Cruiser", 6), ("Nebulon_B_Frigate", 4)], &[("Executor_Star_Dreadnought", 1)], &["Empire_Star_Base_2"], Some(4500.0), 1);
+    println!("AI attack on an Executor: {r:?}");
+    let (at, ratio) = r.ordered.expect("the attacker retreats");
+    assert!(at <= 64.0, "{at:.0} s");
+    assert!(ratio >= 2.95, "{ratio:.2}");
+    assert!(r.big.2 * 2 >= r.big.0, "most of the fleet gets away: {:?}", r.big);
+}
+
 #[test]
 fn a_nearly_destroyed_ai_fleet_retreats_before_it_is_wiped_out() {
     // User finding 2026-10-16: an AI fleet of frigates and corvettes fought to the last ship against a defended planet. `Retreat_From_Space` lets an

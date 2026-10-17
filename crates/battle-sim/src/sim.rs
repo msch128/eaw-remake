@@ -1641,25 +1641,11 @@ impl Battle {
         }
     }
 
-    /// Strength of a side for the retreat decision: sum of `sqrt((hull + shield) x damage rate)` over its living ships (estimate of the
-    /// engine's `FriendlyForceUnnormalized`; the thresholds below come from `Retreat_From_Space`).
-    pub(crate) fn side_power(&self, side: u8) -> f32 {
-        let cat = &self.catalog;
-        self.ships
-            .iter()
-            .filter(|s| s.side == side && s.alive && !s.retreated)
-            .map(|s| {
-                let d = cat.ship(s.def);
-                ((s.hull.max(0.0) + s.shield.max(0.0)) * crate::defs::dps_estimate(d, cat)).sqrt()
-            })
-            .sum()
-    }
-
     /// `Retreat_From_Space` of the Remake AI (Remake_SpaceCombatEquations.xml): an AI side that is clearly outgunned orders the retreat. Its force is its
-    /// strength in the battle plus 0.8 of the reserve it has not called in yet (`ReinforcementsUnnormalized {Parameter_Attenuator = 0.8}`, read as a
-    /// factor: estimate). Attacker: enemy force at least 2x its own after 120 s; defender (`IsDefender`, `BattleConfig::defenders`): at least 3x (4x with a
-    /// station) after 120 s, or after 30 s without any station; a side made mostly of transports (`Forces_Are_Not_Mainly_Transports`) leaves whatever the
-    /// odds, an attacker already after 30 s.
+    /// `AI_Combat_Power` in the battle ([`Battle::side_force`]) plus 0.8 of the reserve it has not called in yet (`ReinforcementsUnnormalized
+    /// {Parameter_Attenuator = 0.8}`, read as a factor: estimate). Attacker: enemy force at least 2x its own after 120 s; defender (`IsDefender`,
+    /// `BattleConfig::defenders`): at least 3x (4x with a station) after 120 s, or after 30 s without any station; a side made mostly of transports
+    /// (`Forces_Are_Not_Mainly_Transports`) leaves whatever the odds, an attacker already after 30 s.
     /// U94: emergency retreat when the survival chance falls below 25% (enemy force above 3x its own) while capital ships or heroes are left, or once the
     /// side has lost half of the strength its ships had at their peak in this battle (user finding 2026-10-16: a nearly destroyed fleet of frigates and
     /// corvettes fought to the last ship); it does not wait for the 120 s.
@@ -1672,7 +1658,7 @@ impl Battle {
                 continue;
             }
             let si = side as usize;
-            let fleet = self.fleet_power(side);
+            let fleet = self.fleet_force(side);
             self.ai[si].peak = self.ai[si].peak.max(fleet);
             if self.time < self.config.retreat_countdown.max(30.0) {
                 continue;
@@ -1681,12 +1667,12 @@ impl Battle {
             let stations = self.ships.iter().filter(|s| s.side == side && s.alive && cat.ship(s.def).is_static).count();
             let defender = self.config.defenders.get(si).copied().unwrap_or(!self.sides[si].structures.is_empty());
 
-            let waiting: f32 = self.ai[si].reserve.iter().map(|&(ship, k)| self.full_power(ship) * k as f32).sum::<f32>()
-                + self.pending.iter().filter(|r| r.side == side).map(|r| self.full_power(r.ship) * r.count as f32).sum::<f32>();
-            let present = self.side_power(side);
+            let waiting: f32 = self.ai[si].reserve.iter().map(|&(ship, k)| cat.ship(ship).ai_power * k as f32).sum::<f32>()
+                + self.pending.iter().filter(|r| r.side == side).map(|r| cat.ship(r.ship).ai_power * r.count as f32).sum::<f32>();
+            let present = self.side_force(side);
             let mine = present + 0.8 * waiting;
-            let theirs: f32 = (0..n as u8).filter(|&o| o != side).map(|o| self.side_power(o)).sum();
-            let transports: f32 = self.ships.iter().filter(|s| s.side == side && s.alive && !s.retreated && cat.ship(s.def).class == TargetClass::Transport).map(|s| self.unit_power(s)).sum();
+            let theirs: f32 = (0..n as u8).filter(|&o| o != side).map(|o| self.side_force(o)).sum();
+            let transports: f32 = self.ships.iter().filter(|s| s.side == side && s.alive && !s.retreated && cat.ship(s.def).class == TargetClass::Transport).map(|s| self.unit_force(s)).sum();
             let mainly_transports = present > 0.0 && present < 3.0 * transports;
 
             // U94: Emergency retreat when overwhelming superiority (< 25% survival chance) threatens to wipe out surviving capital ships, or a fleet that is

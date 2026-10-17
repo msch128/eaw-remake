@@ -1604,10 +1604,10 @@ fn a_defender_without_a_station_leaves_after_30_s_and_its_reserve_counts() {
         // Out of each other's reach (no speed): only the odds decide.
         let mut weak = mobile("weak", TargetClass::Frigate, 0.0, 2000.0, vec![gun("g", 0.0)]);
         weak.population = 5;
-        // The damage rate the strength estimate reads (`ShipDef::bearing_dps`; hand-made definitions have none): 100 damage every 0.5 s.
-        weak.bearing_dps = [200.0; 24];
+        // The force the rule counts (`AI_Combat_Power`; hand-made definitions have none): two strong ships are 4x one weak one.
+        weak.ai_power = 100.0;
         let mut strong = mobile("strong", TargetClass::Frigate, 0.0, 8000.0, vec![gun("g", 0.0)]);
-        strong.bearing_dps = [200.0; 24];
+        strong.ai_power = 200.0;
         let cat = Arc::new(Catalog::from_defs(vec![weak, strong], vec![laser()]));
         let mut c = cfg();
         c.retreat_countdown = 0.0;
