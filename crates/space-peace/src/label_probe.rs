@@ -4,15 +4,22 @@
 //!
 //! Once the map has settled the probe lists every planet whose globe or name lies in the bottom 42 % of the screen (the height of the
 //! command bar), with its globe, its name rectangle and whether the name shows. Then, through the real input path (a window that
-//! exists only as data receives cursor moves and button presses, as in `--drag-pointer`; nothing reaches the desktop):
+//! exists only as data receives cursor moves and button presses, as in `--drag-pointer`; nothing reaches the desktop) and with the game
+//! clock paused, so that no fleet moves away from under the pointer (the dragged one leaves its planet with every drop):
 //! 1. still: 120 frames with the camera and the pointer still. Every frame logs the number of names shown, the largest move of a name
 //!    and the names in the lower part with their positions; a name that shows, hides or moves by more than half a pixel between two
 //!    frames is a toggle.
-//! 2. per listed planet: the pointer goes to the first of a few points on the globe that is not over the bar art and has no fleet over
-//!    it (a click on a fleet selects the fleet), and rests there for 12 frames: the planet must be hovered in every one of them and the
-//!    hover card must name it; a click must select it; the own fleet of the start planet is dragged onto it and the drop must send the
-//!    fleet there. A planet whose globe is all behind the bar art is logged as such.
-//! 3. zoom: 120 frames of slow zoom out (8 % of the zoom range) and 120 back in. Every frame logs the names shown and those in the
+//! 2. per listed planet, twice: the pointer goes to the first of a few points that is not over the bar art and rests there for 12
+//!    frames: the planet must be hovered in every one of them (no fleet) and the hover card must name it; a click must select it; the own
+//!    fleet of the start planet is dragged onto it and the drop must send the fleet there. The first time the point is one of the planet's
+//!    own that no fleet's pick area reaches ("free"); when every such point has a fleet over it, the first one with a fleet over it is
+//!    used and the planet fails (a click on a fleet selects the fleet). The second time the point lies on the visible globe
+//!    (`GalaxyLayout::globe_radius`) under the pick area of a parked fleet ("under a fleet"): the planet must win there too, and the drop
+//!    must be a plain move (not a merge into the fleet). A planet whose globe is all behind the bar art is logged as such.
+//! 3. fleets: every parked fleet in view is hovered at its icon centre (it must be the one hovered) and the own ones are clicked there
+//!    and on the edge of their ring away from their planet (the fleet must be selected, where `input_test` clicks): the planet's globe
+//!    takes no fleet out of reach.
+//! 4. zoom: 120 frames of slow zoom out (8 % of the zoom range) and 120 back in. Every frame logs the names shown and those in the
 //!    lower part with their positions. A frame in which most names come or go at once is the far-zoom threshold passing; it may happen
 //!    once on the way out and once on the way back. Apart from it a name that changes between shown and hidden (its planet entering or
 //!    leaving the view) more than once on the way out or on the way back, or between below and above its globe, blinks.
@@ -25,7 +32,8 @@ use bevy::input::InputSystems;
 use bevy::input::mouse::MouseButtonInput;
 use bevy::prelude::*;
 use bevy::window::{CursorMoved, PrimaryWindow, WindowResolution};
-use galaxy_play::{FleetEntities, PlayAction, PlayCursorBlocked, PlayHover, PlayerFaction, PlayerSelection, SimState};
+use galaxy_play::input::{fleet_icons, pick_fleet};
+use galaxy_play::{FleetEntities, GalaxyLayout, GameClock, PlayAction, PlayConfig, PlayCursorBlocked, PlayHover, PlayerFaction, PlayerSelection, SimState};
 use galaxy_sim::{FleetId, FleetLocation, PlanetId};
 
 use crate::camera::{CameraBounds, GalaxyCamera};
@@ -70,16 +78,25 @@ const DROP_WAIT: u32 = 8;
 /// A label moving by more than this (logical px) between two still frames is a toggle.
 const MOVE_EPS: f32 = 0.5;
 
-/// A planet of the lower part of the screen.
+/// A planet of the lower part of the screen, tried once on a point nothing reaches and once under the pick area of a fleet.
 #[derive(Clone)]
 struct Target {
     map: usize,
     sim: PlanetId,
     name: String,
+    /// The visible globe under a fleet's pick area is tried, not the point of a free globe.
+    covered: bool,
     /// The point of the globe the pointer uses (the first one not over the bar art), once found.
     point: Option<Vec2>,
     result: String,
     pass: bool,
+}
+
+impl Target {
+    /// Name for the log lines: the planet and which of its two points.
+    fn label(&self) -> String {
+        format!("{} [{}]", self.name, if self.covered { "under a fleet" } else { "free" })
+    }
 }
 
 /// Where the probe is.
@@ -93,8 +110,32 @@ enum Step {
     Hover(usize, u32),
     Click(usize, u32),
     Drag(usize, u32),
+    /// Parked fleet, frame.
+    Fleets(usize, u32),
     Zoom(u32),
     Done,
+}
+
+/// A parked fleet in view and where the pointer goes: its icon centre, or (own fleets) the edge of its ring on the side away from its
+/// planet, where `input_test` clicks.
+#[derive(Clone, Copy)]
+struct FleetAim {
+    id: FleetId,
+    /// The icon centre.
+    centre: Vec2,
+    /// Where the pointer rests.
+    point: Vec2,
+    own: bool,
+    ring: bool,
+}
+
+/// What the pointer made of the aims of one kind: reached, hovered the right fleet, clicked (own fleets), selected the clicked fleet.
+#[derive(Default, Clone, Copy)]
+struct FleetTally {
+    tested: u32,
+    hovered: u32,
+    clicked: u32,
+    selected: u32,
 }
 
 #[derive(Default)]
@@ -118,10 +159,22 @@ struct Probe {
     /// The first globe point of the current planet that is free of the bar art but has a fleet over it.
     fallback: Option<Vec2>,
     hover_ok: u32,
-    /// Per hover frame: the map's hovered planet, galaxy-play's, whether the cursor is blocked and whether the hover card names it.
-    hover_seen: Vec<(Option<usize>, Option<PlanetId>, bool, bool)>,
+    /// Per hover frame: the map's hovered planet, galaxy-play's planet and fleet, whether the cursor is blocked and whether the hover card
+    /// names the planet.
+    hover_seen: Vec<(Option<usize>, Option<PlanetId>, Option<FleetId>, bool, bool)>,
     drag_from: Vec2,
+    /// The clock's speed override before the probe paused time.
+    saved_speed: Option<f32>,
+    /// What the pointer was over when the button went down and when it was released: fleet, planet, cursor blocked.
+    drag_seen: [(Option<FleetId>, Option<PlanetId>, bool); 2],
     orders: Vec<PlayAction>,
+    /// The parked fleets in view and what the pointer made of them, at the icon centre [0] and at the ring edge [1]; the aims behind the
+    /// interface or left by their fleet meanwhile, and what failed.
+    fleet_aims: Vec<FleetAim>,
+    fleets: [FleetTally; 2],
+    fleets_blocked: u32,
+    fleets_moved: u32,
+    fleets_failed: Vec<String>,
 }
 
 /// The names now: per planet its top-left corner (logical px) and whether it sits above its globe, if it shows.
@@ -151,8 +204,9 @@ fn probe(
     mut commands: Commands,
     mut st: Local<Probe>,
     (args, view, bridge, target_image, radii): (Res<Args>, Res<GalaxyView>, Res<PlayBridge>, Res<crate::offscreen::OffscreenTarget>, Res<PlanetRadii>),
-    (state, player, play_selection, entities): (Res<SimState>, Res<PlayerFaction>, Res<PlayerSelection>, Res<FleetEntities>),
-    (blocked, play_hover, hover, selection, mut hold): (Res<PlayCursorBlocked>, Res<PlayHover>, Res<Hover>, Res<Selection>, ResMut<ScriptHold>),
+    (state, player, mut play_selection, entities): (Res<SimState>, Res<PlayerFaction>, ResMut<PlayerSelection>, Res<FleetEntities>),
+    (layout, play_cfg, mut clock): (Res<GalaxyLayout>, Res<PlayConfig>, ResMut<GameClock>),
+    (blocked, play_hover, hover, mut selection, mut hold): (Res<PlayCursorBlocked>, Res<PlayHover>, Res<Hover>, ResMut<Selection>, ResMut<ScriptHold>),
     (bounds, mut galaxy_camera): (Res<CameraBounds>, Single<&mut GalaxyCamera>),
     camera: Query<(&Camera, &GlobalTransform), With<Camera3d>>,
     fleets: Query<&GlobalTransform, With<galaxy_play::FleetVisual>>,
@@ -183,6 +237,15 @@ fn probe(
         let b = cam.world_to_viewport(cam_tf, c + cam_tf.right() * radii.0[i]).ok()?;
         Some((a, a.distance(b)))
     };
+    // Radius on screen of the visible globe of sim planet `s`, which is what the pick gives to the planet over fleets.
+    let visible_globe = |i: usize, s: PlanetId| -> Option<f32> {
+        let c = galaxy_to_world(view.planets[i].position);
+        let a = cam.world_to_viewport(cam_tf, c).ok()?;
+        let b = cam.world_to_viewport(cam_tf, c + cam_tf.right() * layout.globe_radius(s)).ok()?;
+        Some(a.distance(b))
+    };
+    // The icons of the fleets the pointer can pick (as `PlayHover` computes them).
+    let icons = || fleet_icons(&layout, &play_cfg, entities.0.iter().filter_map(|(&id, &e)| Some((id, fleets.get(e).ok()?.translation()))), |p| cam.world_to_viewport(cam_tf, p).ok(), *cam_tf.right());
     let globe_y: Vec<Option<f32>> = (0..n).map(|i| globe(i).map(|(a, _)| a.y)).collect();
     let names = names_now(&labels, n, us, &globe_y);
     let lower = viewport.y * LOWER;
@@ -220,20 +283,35 @@ fn probe(
                 let Some(sim) = bridge.planet_to_sim.get(i).copied().flatten() else { continue };
                 let p = &view.planets[i];
                 info!(
-                    "label-probe: planet {} globe ({:.0}, {:.0}) r {:.0} name {}",
+                    "label-probe: planet {} globe ({:.0}, {:.0}) r {:.0} (world radius {:.2}) visible globe r {:.1} name {}",
                     p.display_name,
                     a.x,
                     a.y,
                     r,
+                    layout.radii[sim as usize],
+                    visible_globe(i, sim).unwrap_or_default(),
                     match name {
                         Some((pos, above)) => format!("shown at ({:.0}, {:.0}) {}", pos.x, pos.y, if above { "above the globe" } else { "below the globe" }),
                         None => "hidden".into(),
                     }
                 );
-                st.targets.push(Target { map: i, sim, name: p.display_name.clone(), point: None, result: String::new(), pass: false });
+                for covered in [false, true] {
+                    st.targets.push(Target { map: i, sim, name: p.display_name.clone(), covered, point: None, result: String::new(), pass: false });
+                }
             }
-            info!("label-probe: {} planets in the bottom 42 % (from y {:.0}), fleet {:?}, zoom {:.3}", st.targets.len(), lower, st.fleet, zoom_fraction(&bounds, galaxy_camera.distance));
+            info!(
+                "label-probe: {} planets in the bottom 42 % (from y {:.0}), fleet {:?}, zoom {:.3}, {} fleet icons in view, icon unit {:.2}",
+                st.targets.len() / 2,
+                lower,
+                st.fleet,
+                zoom_fraction(&bounds, galaxy_camera.distance),
+                icons().len(),
+                layout.unit
+            );
             hold.active = true;
+            // Time stands still while the probe runs: no fleet moves under the pointer (the dragged one leaves its planet with every drop).
+            st.saved_speed = clock.override_multiplier;
+            clock.override_multiplier = Some(0.0);
             st.last = Some(names);
             st.step = Step::Still(0);
         }
@@ -260,42 +338,76 @@ fn probe(
         }
         Step::Aim(k, c, t) => {
             let Some(target) = st.targets.get(k).cloned() else {
-                st.zoom_from = galaxy_camera.distance;
-                let z = zoom_fraction(&bounds, galaxy_camera.distance);
-                st.zoom_to = bounds.min_distance + (bounds.max_distance - bounds.min_distance) * (z + ZOOM_SPAN).min(1.0);
-                st.shown_changes = [vec![0; n], vec![0; n]];
-                st.side_changes = [vec![0; n], vec![0; n]];
-                st.last = Some(names);
-                st.step = Step::Zoom(0);
+                // Every planet is done: the parked fleets in view are next.
+                let g = state.galaxy();
+                let on_screen = |p: Vec2| p.x > 8.0 && p.y > 8.0 && p.x < viewport.x - 8.0 && p.y < viewport.y - 8.0;
+                // Every parked fleet on screen at its icon centre; the own ones also at the edge of their ring, away from their planet.
+                let mut aims = Vec::new();
+                for (id, centre, _) in icons().into_iter().filter(|&(id, p, _)| on_screen(p) && g.fleets.get(&id).is_some_and(|f| f.planet().is_some())) {
+                    let fleet = &g.fleets[&id];
+                    let own = Some(fleet.owner) == player.0;
+                    aims.push(FleetAim { id, centre, point: centre, own, ring: false });
+                    let root = entities.0.get(&id).and_then(|&e| fleets.get(e).ok()).map(|t| t.translation());
+                    let edge = root.zip(fleet.planet()).and_then(|(root, p)| crate::input_test::ring_edge(cam, cam_tf, &layout, &play_cfg, root, layout.positions[p as usize]));
+                    if let Some((_, point)) = edge.filter(|&(_, p)| own && on_screen(p)) {
+                        aims.push(FleetAim { id, centre, point, own, ring: true });
+                    }
+                }
+                aims.sort_by_key(|a| (a.id, a.ring));
+                info!("label-probe: {} parked fleets in view ({} of them own), {} aims", aims.iter().filter(|a| !a.ring).count(), aims.iter().filter(|a| !a.ring && a.own).count(), aims.len());
+                st.fleet_aims = aims;
+                st.step = Step::Fleets(0, 0);
                 return;
             };
-            let Some((a, r)) = globe(target.map) else {
+            let (Some((a, r)), Some(g)) = (globe(target.map), visible_globe(target.map, target.sim)) else {
                 st.targets[k].result = "globe not on screen".into();
                 st.step = Step::Aim(k + 1, 0, 0);
                 return;
             };
             // Points on the globe: the centre, then up toward the top edge and to the sides (the bar covers the lower part first). A
-            // point must not be over the bar art, and no fleet may be under it (a click there selects the fleet, not the planet).
-            let candidates: Vec<Vec2> = [
-                Vec2::ZERO,
-                Vec2::new(0.0, -0.5),
-                Vec2::new(0.0, -0.85),
-                Vec2::new(0.6, -0.45),
-                Vec2::new(-0.6, -0.45),
-                Vec2::new(0.4, 0.0),
-                Vec2::new(-0.4, 0.0),
-                Vec2::new(0.0, 0.45),
-                Vec2::new(0.35, -0.75),
-                Vec2::new(-0.35, -0.75),
-            ]
-            .iter()
-            .map(|o| a + *o * r)
-            .filter(|p| p.x > 8.0 && p.y > 8.0 && p.x < viewport.x - 8.0 && p.y < viewport.y - 8.0)
-            .collect();
+            // point must not be over the bar art. A free point has no fleet under it (a click on a fleet selects the fleet); a point
+            // under a fleet lies on the visible globe and in the pick area of a parked fleet (as the pick stood before a planet won its
+            // globe), the offsets then count in visible globe radii, and the point 9/10 of the way from the centre to the nearest fleet
+            // icon comes first (where that fleet's pick is strongest).
+            let icons_now = icons();
+            let reach = if target.covered { g } else { r };
+            let toward = icons_now.iter().map(|i| i.1).min_by(|x, y| x.distance(a).total_cmp(&y.distance(a))).map(|p| a + (p - a).normalize_or_zero() * 0.9 * g);
+            let candidates: Vec<Vec2> = toward
+                .filter(|_| target.covered)
+                .into_iter()
+                .chain(
+                    [
+                        Vec2::ZERO,
+                        Vec2::new(0.0, -0.5),
+                        Vec2::new(0.0, -0.85),
+                        Vec2::new(0.6, -0.45),
+                        Vec2::new(-0.6, -0.45),
+                        Vec2::new(0.4, 0.0),
+                        Vec2::new(-0.4, 0.0),
+                        Vec2::new(0.0, 0.45),
+                        Vec2::new(0.35, -0.75),
+                        Vec2::new(-0.35, -0.75),
+                    ]
+                    .iter()
+                    .map(|o| a + *o * reach),
+                )
+                .filter(|p| p.x > 8.0 && p.y > 8.0 && p.x < viewport.x - 8.0 && p.y < viewport.y - 8.0)
+                .filter(|&p| !target.covered || pick_fleet(p, icons_now.iter().copied(), None).is_some())
+                .collect();
             if c == 0 && t == 0 {
                 st.fallback = None;
             }
             let Some(&point) = candidates.get(c) else {
+                if target.covered {
+                    st.targets[k].result = if candidates.is_empty() {
+                        format!("no fleet's pick area reaches the visible globe ({:.0}, {:.0}) r {:.1}: nothing to prove", a.x, a.y, g)
+                    } else {
+                        "every point of the visible globe under a fleet is behind the bar art: the cursor is over the interface there".into()
+                    };
+                    st.targets[k].pass = true;
+                    st.step = Step::Aim(k + 1, 0, 0);
+                    return;
+                }
                 match st.fallback {
                     // Every free point of the globe has a fleet over it: use the first one anyway (the click selects that fleet).
                     Some(p) => {
@@ -319,14 +431,23 @@ fn probe(
             }
             if t < SETTLE {
                 st.step = Step::Aim(k, c, t + 1);
-            } else if blocked.0 {
+            } else if blocked.0 || (target.covered && hover.0 != Some(target.map)) {
                 st.step = Step::Aim(k, c + 1, 0);
-            } else if play_hover.fleet.is_some() || hover.0 != Some(target.map) {
+            } else if !target.covered && (play_hover.fleet.is_some() || hover.0 != Some(target.map)) {
                 if st.fallback.is_none() {
                     st.fallback = Some(point);
                 }
                 st.step = Step::Aim(k, c + 1, 0);
             } else {
+                if target.covered {
+                    // The fleet that held this point before: where its icon stands against the visible globe.
+                    let under = pick_fleet(point, icons_now.iter().copied(), None);
+                    st.targets[k].result = icons_now
+                        .iter()
+                        .find(|i| Some(i.0) == under)
+                        .map(|&(id, p, reach)| format!("fleet {id} held it (icon {:.1} px from the globe centre = {:.2} visible globe radii of {:.1} px, pick reach {:.0} px); ", p.distance(a), p.distance(a) / g, g, reach))
+                        .unwrap_or_default();
+                }
                 st.targets[k].point = Some(point);
                 st.hover_ok = 0;
                 st.hover_seen.clear();
@@ -337,9 +458,9 @@ fn probe(
             let target = st.targets[k].clone();
             // The hover card (eaw-ui's world tooltip) starts with the planet's name.
             let card = tip.text.as_deref().and_then(|t| t.lines().next()) == Some(target.name.as_str());
-            let now = (hover.0, play_hover.planet, blocked.0, card);
+            let now = (hover.0, play_hover.planet, play_hover.fleet, blocked.0, card);
             if t >= 2 {
-                if now.0 == Some(target.map) && !now.2 && now.3 {
+                if now.0 == Some(target.map) && now.1 == Some(target.sim) && now.2.is_none() && !now.3 && now.4 {
                     st.hover_ok += 1;
                 }
                 st.hover_seen.push(now);
@@ -357,8 +478,8 @@ fn probe(
                     HOVER_FRAMES - 2,
                     now.0,
                     now.1,
-                    play_hover.fleet,
-                    if card { "names it" } else { "does not name it" }
+                    now.2,
+                    if now.4 { "names it" } else { "does not name it" }
                 );
                 st.targets[k].result += &note;
                 st.targets[k].pass = ok;
@@ -370,6 +491,9 @@ fn probe(
         Step::Click(k, t) => {
             let target = st.targets[k].clone();
             if t == 0 {
+                // Nothing selected before the click, so the planet is selected by it (the same planet is clicked once on a free point
+                // and once under a fleet).
+                selection.0 = None;
                 buttons.write(MouseButtonInput { button: MouseButton::Left, state: ButtonState::Pressed, window: win_entity });
             }
             if t == 1 {
@@ -394,8 +518,12 @@ fn probe(
                 st.step = Step::Aim(k + 1, 0, 0);
                 return;
             };
-            if t == 0 {
-                let at = entities.0.get(&fleet).and_then(|&e| fleets.get(e).ok()).and_then(|g| cam.world_to_viewport(cam_tf, g.translation()).ok());
+            let press = SETTLE;
+            let release = press + DRAG_STEPS + DRAG_REST;
+            if t <= press {
+                // The pointer takes the fleet by its icon centre, where a player aims, and stays on it until the button goes down (the
+                // fleet's icon still settles from the last drop: a pointer left where the icon was is on the planet's globe, not on it).
+                let at = icons().into_iter().find(|i| i.0 == fleet).map(|i| i.1);
                 match at {
                     Some(p) => {
                         st.drag_from = p;
@@ -409,9 +537,8 @@ fn probe(
                     }
                 }
             }
-            let press = SETTLE;
-            let release = press + DRAG_STEPS + DRAG_REST;
             if t == press {
+                st.drag_seen[0] = (play_hover.fleet, play_hover.planet, blocked.0);
                 buttons.write(MouseButtonInput { button: MouseButton::Left, state: ButtonState::Pressed, window: win_entity });
             }
             if t > press && t <= press + DRAG_STEPS {
@@ -419,25 +546,109 @@ fn probe(
                 move_to(p);
             }
             if t == release {
+                st.drag_seen[1] = (play_hover.fleet, play_hover.planet, blocked.0);
                 buttons.write(MouseButtonInput { button: MouseButton::Left, state: ButtonState::Released, window: win_entity });
             }
             if t > release {
                 st.orders.extend(new_orders.into_iter().filter(|a| !matches!(a, PlayAction::SelectFleets(_) | PlayAction::SelectPlanet(_) | PlayAction::SetSpeedLevel(_))));
             }
             if t >= release + DROP_WAIT {
-                let ok = st.orders.iter().any(|o| crate::drag_demo::drops_on(o, target.sim, None));
+                // Under a fleet the planet wins the drop too: the fleet is sent to it (or into one of its pads), not merged into a fleet.
+                let ok = st.orders.iter().any(|o| if target.covered { moves_to(o, target.sim) } else { crate::drag_demo::drops_on(o, target.sim, None) });
                 let left = state.galaxy().fleets.get(&fleet).map(|f| match f.location {
                     FleetLocation::AtPlanet(p) => format!("at planet {p}"),
                     FleetLocation::Moving { to, .. } => format!("moving to {to}"),
                 });
-                let note = format!(", drop {} (orders {:?}, fleet {:?})", if ok { "PASS" } else { "FAIL" }, st.orders, left);
+                let [(pf, _, pb), (rf, rp, rb)] = st.drag_seen;
+                let note = format!(
+                    ", drop {} (orders {:?}, fleet {:?}; pressed on fleet {pf:?} blocked {pb}, released over planet {rp:?} fleet {rf:?} blocked {rb})",
+                    if ok { "PASS" } else { "FAIL" },
+                    st.orders,
+                    left
+                );
                 st.targets[k].result += &note;
                 st.targets[k].pass &= ok;
                 let t = &st.targets[k];
-                info!("label-probe: {}: {}", t.name, t.result);
+                info!("label-probe: {}: {}", t.label(), t.result);
                 st.step = Step::Aim(k + 1, 0, 0);
             } else {
                 st.step = Step::Drag(k, t + 1);
+            }
+        }
+        Step::Fleets(j, t) => {
+            let Some(aim) = st.fleet_aims.get(j).copied() else {
+                let [c, r] = st.fleets;
+                info!(
+                    "label-probe: {} parked fleets in view: at the icon centre {} of {} hovered right and {} of {} own clicked fleets selected; at the ring edge away from the planet {} of {} hovered right and {} of {} clicked fleets selected ({} aims behind the interface, {} moved on), failed {:?}",
+                    st.fleet_aims.iter().filter(|a| !a.ring).count(),
+                    c.hovered,
+                    c.tested,
+                    c.selected,
+                    c.clicked,
+                    r.hovered,
+                    r.tested,
+                    r.selected,
+                    r.clicked,
+                    st.fleets_blocked,
+                    st.fleets_moved,
+                    st.fleets_failed
+                );
+                st.zoom_from = galaxy_camera.distance;
+                let z = zoom_fraction(&bounds, galaxy_camera.distance);
+                st.zoom_to = bounds.min_distance + (bounds.max_distance - bounds.min_distance) * (z + ZOOM_SPAN).min(1.0);
+                st.shown_changes = [vec![0; n], vec![0; n]];
+                st.side_changes = [vec![0; n], vec![0; n]];
+                st.last = Some(names);
+                st.step = Step::Zoom(0);
+                return;
+            };
+            // The pointer rests on the aim; the fleet must be the one hovered, and a click on an own fleet must select it.
+            let kind = usize::from(aim.ring);
+            let what = if aim.ring { "ring edge" } else { "icon centre" };
+            if t == 0 {
+                move_to(aim.point);
+            }
+            if t == SETTLE {
+                // A fleet that left its planet since the list was made (the game goes on) is no longer under the pointer.
+                if !icons().into_iter().any(|i| i.0 == aim.id && i.1.distance(aim.centre) < 1.0) {
+                    st.fleets_moved += 1;
+                    st.step = Step::Fleets(j + 1, 0);
+                    return;
+                }
+                if blocked.0 {
+                    st.fleets_blocked += 1;
+                    st.step = Step::Fleets(j + 1, 0);
+                    return;
+                }
+                st.fleets[kind].tested += 1;
+                let hovered = play_hover.fleet == Some(aim.id);
+                if hovered {
+                    st.fleets[kind].hovered += 1;
+                } else {
+                    st.fleets_failed.push(format!("fleet {} {what} ({:.0}, {:.0}) hovered {:?}", aim.id, aim.point.x, aim.point.y, play_hover.fleet));
+                }
+                if aim.own && hovered {
+                    st.fleets[kind].clicked += 1;
+                    // Nothing selected before the click, so the fleet is selected by it.
+                    play_selection.fleets.clear();
+                    buttons.write(MouseButtonInput { button: MouseButton::Left, state: ButtonState::Pressed, window: win_entity });
+                } else {
+                    st.step = Step::Fleets(j + 1, 0);
+                    return;
+                }
+            }
+            if t == SETTLE + 1 {
+                buttons.write(MouseButtonInput { button: MouseButton::Left, state: ButtonState::Released, window: win_entity });
+            }
+            if t >= SETTLE + 1 + SETTLE + 2 {
+                if play_selection.fleets.contains(&aim.id) {
+                    st.fleets[kind].selected += 1;
+                } else {
+                    st.fleets_failed.push(format!("fleet {} {what} ({:.0}, {:.0}) clicked, selection {:?}", aim.id, aim.point.x, aim.point.y, play_selection.fleets));
+                }
+                st.step = Step::Fleets(j + 1, 0);
+            } else {
+                st.step = Step::Fleets(j, t + 1);
             }
         }
         Step::Zoom(t) => {
@@ -496,13 +707,16 @@ fn probe(
             if st.threshold_passes.iter().any(|&c| c > 1) {
                 blinks.push(format!("all names ({} threshold passes out, {} back)", st.threshold_passes[0], st.threshold_passes[1]));
             }
-            let tested = st.targets.iter().filter(|t| t.point.is_some()).count();
-            let failed: Vec<&str> = st.targets.iter().filter(|t| !t.pass).map(|t| t.name.as_str()).collect();
-            let ok = st.still_toggles == 0 && blinks.is_empty() && failed.is_empty() && !st.targets.is_empty() && st.selected_unnamed == 0;
+            let planets = st.targets.iter().filter(|t| !t.covered).count();
+            let tested = |covered: bool| st.targets.iter().filter(|t| t.covered == covered && t.point.is_some()).count();
+            let failed: Vec<String> = st.targets.iter().filter(|t| !t.pass).map(Target::label).collect();
+            let ok = st.still_toggles == 0 && blinks.is_empty() && failed.is_empty() && !st.targets.is_empty() && st.selected_unnamed == 0 && st.fleets_failed.is_empty();
             info!(
-                "label-probe: {} planets in the lower part, {tested} with a usable globe point, failed {:?}, still toggles {}, zoom blinks {:?}, threshold passes {} out {} back, selected unnamed in {} frames: {}",
-                st.targets.len(),
+                "label-probe: {planets} planets in the lower part, {} with a usable free globe point, {} with a fleet over the visible globe, failed {:?}, parked fleets failed {:?}, still toggles {}, zoom blinks {:?}, threshold passes {} out {} back, selected unnamed in {} frames: {}",
+                tested(false),
+                tested(true),
                 failed,
+                st.fleets_failed,
                 st.still_toggles,
                 blinks,
                 st.threshold_passes[0],
@@ -511,14 +725,20 @@ fn probe(
                 if ok { "PASS" } else { "FAIL" }
             );
             for t in st.targets.iter().filter(|t| t.point.is_none()) {
-                info!("label-probe: {}: {}", t.name, t.result);
+                info!("label-probe: {}: {}", t.label(), t.result);
             }
             hold.active = false;
+            clock.override_multiplier = st.saved_speed;
             hold.done_at = Some(std::time::Instant::now());
             st.step = Step::Done;
         }
         Step::Done => {}
     }
+}
+
+/// Whether `order` sends the dragged fleet to planet `to` itself (a plain move or a drop into one of its pads), not into a fleet parked there.
+fn moves_to(order: &PlayAction, to: PlanetId) -> bool {
+    matches!(order, PlayAction::MoveSelected(t) | PlayAction::MoveToSlot { to: t, .. } if *t == to)
 }
 
 /// The names shown in the lower part with their top-left corners, for the per-frame log lines.

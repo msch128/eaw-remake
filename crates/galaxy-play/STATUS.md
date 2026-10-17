@@ -31,6 +31,18 @@ the player selects and orders them, builds at owned planets, controls game speed
   Rendili's globe the icon's centre was the nearer one, so `PlayHover::planet` (drop target, route hint) was the icon there and a fleet
   dropped on Rendili got an order to the icon and did not move (found by the app's `--label-probe`). Test:
   `input::tests::a_decoration_listed_as_a_planet_never_takes_the_pointer`.
+- A planet's globe wins over fleet icons (`input::pick_under`, 2026-10-17, G3d): from about zoom 0.4 the pick areas of the fleets parked
+  around a small planet (20 px or more, `FLEET_PICK_PIXELS`) covered its whole globe (visible radius 6.6-9.3 px at 0.42 in 1080p), so a
+  click, the hover card and a drop there went to a fleet and the planet could not be selected. With the cursor on the visible globe
+  (`GalaxyLayout::globe_radius`, 0.54 of `radii`) only fleets whose icon is centred on that globe are picked (`globe_under`,
+  `pick_fleet`); a fleet icon centred on a globe stays selectable there, away from any globe nothing changed, and `PlayHover::planet`,
+  the fleet pads (`drop_pad`) and the drop orders are as before. The icons are `fleet_icons` (the same point and reach as before).
+  Tests: `input::tests::a_planets_globe_beats_fleets_whose_icon_is_centred_outside_it`, `a_fleet_icon_centred_on_the_globe_is_still_picked_there`,
+  `fleet_icons_away_from_any_globe_are_picked_as_before`; end to end by the app's `--label-probe` (space-peace STATUS). Measured on the
+  Imperial start: every parked fleet's icon is centred 1.2 to 2.1 visible globe radii from its planet's centre between zoom 0.03 and
+  0.60 (mean 2.1, 1.9 at 0.60; all of them in slot 1). Known limit, computed (no such fleet in that start): a fleet in slot 2, straight
+  above its planet, is centred 0.95 globe radii out at zoom 0.06 and inside the globe below zoom 0.13 (camera pitch under 27 degrees),
+  where it keeps its pick area over the whole globe, as before.
 - `BuildMenu` (units, structures, star base, tech, research) with availability reasons; `PlayAction::Build` queues it, credits go
   through galaxy-sim. Production queue model.
 - `GameClock`: pause + speed levels, `hold` flag for the host (pause menu, battle screen); time is held while a human battle waits.

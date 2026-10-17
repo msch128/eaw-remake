@@ -114,9 +114,28 @@ fullscreen, FPS cap).
   planet named in every frame, and zooms back in after the zoom out; the frame in which most names go or come at once (the threshold)
   may happen once each way. 2026-10-17 across the threshold (start 0.42, out to 0.50 and back, both views): the names went once and
   came back once, nothing else blinked, the selected name stayed; at 0.60 (names hidden) all 39 Rebel lower planets with a free globe
-  point were hovered (card), selected and reached. Known gap (also before G3c): from about zoom 0.4 the icons of fleets parked at a
-  small planet cover its whole globe, so a click there selects a fleet and the planet cannot be selected by a click (Imperial start:
-  Byss and Rendili at 0.42; Allanteen VI, Byss, The Corellia System and Fondor at 0.60).
+  point were hovered (card), selected and reached.
+  Planets stay clickable under fleet icons (2026-10-17, G3d): from about zoom 0.4 the
+  pick areas of the fleets parked around a small planet (20 px or more) covered its whole globe, so the click, the hover card and a
+  drop there went to a fleet and the planet could not be selected (the old probe: Byss and Rendili at 0.42, Allanteen VI, Byss, The
+  Corellia System and Fondor at 0.60). galaxy-play `input::pick_under` now gives a planet its visible globe (`GalaxyLayout::globe_radius`,
+  0.54 of the bounding radius: 6.6-9.3 px at 0.42 in 1080p) against fleets whose icon is centred outside it (those icons stand 13-20 px,
+  1.9-2.4 globe radii, from the centre); see galaxy-play STATUS. `--label-probe` tries every lower planet twice, on a free point and on
+  a point of the visible globe under a fleet's pick area (the point 9/10 of the way to the nearest fleet icon first; the drop must be a
+  plain move or a pad drop, not a merge into the fleet), then hovers every parked fleet in view at its icon centre and clicks the own
+  ones at the centre and at the edge of their ring. It runs with the game clock paused: the dragged fleet leaves its planet with every
+  drop and a departing icon drifts out of the globe the pointer was left on (1 to 4 of the drops went wrong in about half the runs
+  with time running).
+  Imperial start, 1080p, before / after: zoom 0.42 22 lower planets, 17 with a free globe point, 6 with a fleet over the visible globe,
+  8 failures (Byss and Rendili on both points, Allanteen VI, Cato Neimoidia, Fondor and The Corellia System under a fleet) / none; zoom
+  0.60 44 planets, 26 with a free globe point, 4 with a fleet over it, 8 failures (Allanteen VI, Byss, The Corellia System and Fondor
+  on both points) / none. At 4K the same planets fail before (5 at 0.42, 4 at 0.60, all under a fleet) and pass after; Imperial zoom
+  0.06, 0.15 and 0.30 pass. The Rebel start (38 and 53 lower planets, 20 and 39 with a free point) has no fleet over a lower globe and
+  passes before and after. The 15 parked fleets in view stay hovered right at their icon centre and the 5 own ones stay selectable at
+  the centre and at the ring edge. A click on the ring's edge towards the planet is the planet's now (the old aim of the windowed
+  fleet-ring click, the ring's right edge, was the planet's for 4 of 5 own fleets at 0.42 and 2 of 5 at 0.60), so
+  `input_test::ring_edge` aims at the edge away from the planet. Not run: the windowed `windowed-ui-pointer` row (the user was gaming).
+  Rebel zoom 0.06 shows a name blink of Agamar (two shown/hidden changes on the zoom out), also in the build before G3d: not a pick matter.
 - Selection: notched ring (mesh fill + gizmo outline) and the dashed sector ring in the colour of the relation
   (`territory_segments`); fleets stand on a faction-coloured base disc (galaxy-play visuals.rs). Round the dashed ring lies the Remake's
   sector shadow (2026-10-17, G9, `SectorShadow`): the map inside the ring is unchanged, right outside it shows at 0.44 of its

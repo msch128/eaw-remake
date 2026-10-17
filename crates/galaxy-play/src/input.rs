@@ -19,7 +19,8 @@ pub struct PlayUiBlock;
 /// What the cursor is over.
 #[derive(Resource, Debug, Default, Clone, Copy, PartialEq)]
 pub struct PlayHover {
-    /// Fleet under the cursor.
+    /// Fleet under the cursor. On a planet's globe only a fleet whose icon is centred on that globe counts (see [`pick_under`]), so the
+    /// click, the hover card and a drop there agree on the planet.
     pub fleet: Option<FleetId>,
     /// Planet under the cursor.
     pub planet: Option<PlanetId>,
@@ -107,6 +108,49 @@ pub fn pick_planet(cursor: Vec2, layout: &GalaxyLayout, screen: impl Fn(Vec3) ->
     )
 }
 
+/// A fleet icon on screen: the fleet, the point its pick is measured from and how far the pick area reaches (px).
+pub type FleetIcon = (FleetId, Vec2, f32);
+
+/// The icons the fleet pick chooses from: one per `(fleet, world position of its root)`. The hit area follows the drawn owner ring (its
+/// on-screen radius at the current zoom, with a margin) and never drops below a fixed minimum, so clicking the ring works at every zoom
+/// level.
+pub fn fleet_icons(layout: &GalaxyLayout, cfg: &PlayConfig, roots: impl Iterator<Item = (FleetId, Vec3)>, screen: impl Fn(Vec3) -> Option<Vec2>, right: Vec3) -> Vec<FleetIcon> {
+    let ring = layout.unit * cfg.fleet_icon_scale * 1.5;
+    roots
+        .filter_map(|(id, t)| {
+            let center = Vec3::new(t.x, t.y - layout.unit * 0.1, t.z);
+            let p = screen(center)?;
+            let edge = screen(center + right * ring * 1.2)?;
+            Some((id, p, (p.distance(edge) * 1.1).max(FLEET_PICK_PIXELS)))
+        })
+        .collect()
+}
+
+/// The on-screen disc (centre, radius in px) of `planet`'s globe, if `cursor` is on it.
+pub fn globe_under(cursor: Vec2, planet: PlanetId, layout: &GalaxyLayout, screen: impl Fn(Vec3) -> Option<Vec2>, right: Vec3) -> Option<(Vec2, f32)> {
+    let c = layout.positions[planet as usize];
+    let (a, b) = (screen(c)?, screen(c + right * layout.globe_radius(planet))?);
+    let r = a.distance(b);
+    (cursor.distance(a) <= r).then_some((a, r))
+}
+
+/// The fleet under `cursor`: the nearest icon whose pick area holds it. With `globe` (the disc of the planet the cursor is on) only icons
+/// centred on that disc count.
+pub fn pick_fleet(cursor: Vec2, icons: impl Iterator<Item = FleetIcon>, globe: Option<(Vec2, f32)>) -> Option<FleetId> {
+    pick_nearest(cursor, icons.filter(|&(_, p, _)| globe.is_none_or(|(c, r)| p.distance(c) <= r)))
+}
+
+/// The fleet and the planet under `cursor`. The planet is always known (also with a fleet icon next to it): orders need it as their
+/// target. A planet's globe is its own: from about zoom 0.4 on the pick areas of the fleets parked around a small planet (20 px or more)
+/// cover its whole globe (6-9 px radius at 1080p), so with the cursor on the globe the fleets whose icon is centred outside it are not
+/// picked and a click there selects the planet. A fleet whose icon is centred on the globe still wins there, and away from any globe the
+/// fleet pick is unchanged.
+pub fn pick_under(cursor: Vec2, layout: &GalaxyLayout, icons: impl Iterator<Item = FleetIcon>, screen: impl Fn(Vec3) -> Option<Vec2>, right: Vec3) -> (Option<FleetId>, Option<PlanetId>) {
+    let planet = pick_planet(cursor, layout, &screen, right);
+    let globe = planet.and_then(|p| globe_under(cursor, p, layout, &screen, right));
+    (pick_fleet(cursor, icons, globe), planet)
+}
+
 /// Whether the fleet pads of a planet owned by `owner` take a dropped fleet of `me` into the chosen slot: own and allied planets (the
 /// player's fleets park in their slots there), not enemy or neutral ones (there the fleet attacks or takes the first free slot).
 pub fn pads_open(owner: Option<FactionId>, me: FactionId, hostile: impl Fn(FactionId) -> bool) -> bool {
@@ -138,21 +182,10 @@ pub fn update_hover(
         let cursor = window?.cursor_position()?;
         let (camera, cam_tf) = camera.iter().next()?;
         let right = cam_tf.right();
-        // The hit area follows the drawn owner ring (its on-screen radius at the current zoom, with a margin) and
-        // never drops below a fixed minimum, so clicking the ring works at every zoom level.
-        let ring = layout.unit * cfg.fleet_icon_scale * 1.5;
-        let fleet = pick_nearest(
-            cursor,
-            entities.0.iter().filter(|(id, _)| !drag.carry.contains(id)).filter_map(|(&id, &e)| {
-                let t = transforms.get(e).ok()?.translation;
-                let center = Vec3::new(t.x, t.y - layout.unit * 0.1, t.z);
-                let p = camera.world_to_viewport(cam_tf, center).ok()?;
-                let edge = camera.world_to_viewport(cam_tf, center + right * ring * 1.2).ok()?;
-                Some((id, p, (p.distance(edge) * 1.1).max(FLEET_PICK_PIXELS)))
-            }),
-        );
-        // The planet under the cursor is always known (also with a fleet icon next to it): orders need it as their target.
-        let planet = pick_planet(cursor, &layout, |p| camera.world_to_viewport(cam_tf, p).ok(), *right);
+        let screen = |p: Vec3| camera.world_to_viewport(cam_tf, p).ok();
+        let roots = entities.0.iter().filter(|(id, _)| !drag.carry.contains(id)).filter_map(|(&id, &e)| Some((id, transforms.get(e).ok()?.translation)));
+        let icons = fleet_icons(&layout, &cfg, roots, screen, *right);
+        let (fleet, planet) = pick_under(cursor, &layout, icons.into_iter(), screen, *right);
         // The three slot circles around the hovered planet (the ones `visuals` draws).
         let slot = planet.and_then(|p| {
             let c = layout.positions[p as usize];
@@ -500,6 +533,45 @@ mod tests {
         // Without the mask the icon took the hover: a fleet dropped there was sent to the icon.
         layout.pickable.clear();
         assert_eq!(pick_planet(cursor, &layout, screen, Vec3::X), Some(1));
+    }
+
+    /// One small planet at screen (500, 500) with a globe of 10.8 px, and a map that shows 10 px per world unit.
+    fn small_planet() -> GalaxyLayout {
+        GalaxyLayout { positions: vec![Vec3::ZERO], radii: vec![2.0], unit: 2.0, index: Default::default(), pickable: Vec::new() }
+    }
+
+    fn screen(p: Vec3) -> Option<Vec2> {
+        Some(Vec2::new(500.0 + p.x * 10.0, 500.0 + p.z * 10.0))
+    }
+
+    #[test]
+    fn a_planets_globe_beats_fleets_whose_icon_is_centred_outside_it() {
+        let layout = small_planet();
+        // A fleet parked 25 px above the planet: its 30 px pick area holds the globe's centre, as the fleets around a small planet do.
+        let icons = [(7, Vec2::new(500.0, 475.0), 30.0)];
+        let on_globe = Vec2::new(500.0, 500.0);
+        assert_eq!(pick_under(on_globe, &layout, icons.into_iter(), screen, Vec3::X), (None, Some(0)));
+        // Without the globe the fleet took the pointer: the click, the hover card and a drop all went to the fleet.
+        assert_eq!(pick_fleet(on_globe, icons.into_iter(), None), Some(7));
+    }
+
+    #[test]
+    fn a_fleet_icon_centred_on_the_globe_is_still_picked_there() {
+        let layout = small_planet();
+        let icons = [(7, Vec2::new(505.0, 500.0), 30.0)];
+        assert_eq!(pick_under(Vec2::new(500.0, 500.0), &layout, icons.into_iter(), screen, Vec3::X), (Some(7), Some(0)));
+    }
+
+    #[test]
+    fn fleet_icons_away_from_any_globe_are_picked_as_before() {
+        let layout = small_planet();
+        let icons = [(7, Vec2::new(700.0, 700.0), 30.0), (8, Vec2::new(500.0, 475.0), 30.0)];
+        // On a fleet far from every planet.
+        assert_eq!(pick_under(Vec2::new(700.0, 715.0), &layout, icons.into_iter(), screen, Vec3::X), (Some(7), None));
+        // Just outside the globe (12 px from its centre, which is 10.8 px) the planet's priority ends and the nearby fleet is picked.
+        assert_eq!(pick_under(Vec2::new(512.0, 500.0), &layout, icons.into_iter(), screen, Vec3::X), (Some(8), Some(0)));
+        // On the globe with no fleet's pick area over it: the planet.
+        assert_eq!(pick_under(Vec2::new(500.0, 508.0), &layout, [icons[0]].into_iter(), screen, Vec3::X), (None, Some(0)));
     }
 
     #[test]

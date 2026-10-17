@@ -34,8 +34,9 @@ pub struct GalaxyLayout {
 
 /// `radii` is the model's bounding radius, which includes the atmosphere glow: the visible globe measures about 0.54 of it in our
 /// renders. Vanilla 05 puts the pad orbit at 2.2 and the pad radius at 0.6 visible globe radii, hence these two factors.
-const ORBIT_PER_RADIUS: f32 = 2.2 * 0.54;
-const PAD_PER_RADIUS: f32 = 0.6 * 0.54;
+const GLOBE_PER_RADIUS: f32 = 0.54;
+const ORBIT_PER_RADIUS: f32 = 2.2 * GLOBE_PER_RADIUS;
+const PAD_PER_RADIUS: f32 = 0.6 * GLOBE_PER_RADIUS;
 
 impl GalaxyLayout {
     /// Layout derived from the planet positions of `world`.
@@ -61,6 +62,11 @@ impl GalaxyLayout {
         if let Some(&id) = self.index.get(&name.trim().to_ascii_lowercase()) {
             self.radii[id as usize] = radius;
         }
+    }
+
+    /// Radius of the visible globe (`radii` without the atmosphere glow): the pointer is on the planet itself inside it.
+    pub fn globe_radius(&self, planet: PlanetId) -> f32 {
+        self.radii[planet as usize] * GLOBE_PER_RADIUS
     }
 
     /// Radius of the orbit the three fleet pads sit on, in the planet plane. Measured from the vanilla close-up

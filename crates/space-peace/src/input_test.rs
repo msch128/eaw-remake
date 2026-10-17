@@ -669,16 +669,27 @@ fn fleet_ring_phase(st: &mut TestState, t: u32, near: bool, ctx: &mut RingCtx, s
         gc.target_focus = Vec3::new(pos.x, 0.0, pos.z);
         return None;
     }
-    // Aim at the ring's right edge, as a player clicking the ring would.
-    let ring = layout.unit * cfg.fleet_icon_scale * 1.5;
-    let center = Vec3::new(pos.x, pos.y - layout.unit * 0.1, pos.z);
-    let right = cam_tf.right();
-    let (Ok(c), Ok(e)) = (camera.world_to_viewport(cam_tf, center), camera.world_to_viewport(cam_tf, center + right * ring * 0.95)) else {
+    // Aim at the ring's edge, as a player clicking the ring would.
+    let planet = sim.galaxy().fleets.get(&id).and_then(|f| f.planet()).map(|p| layout.positions[p as usize]);
+    let Some((c, aim)) = planet.and_then(|p| ring_edge(camera, cam_tf, layout, cfg, pos, p)) else {
         *ok = Some(false);
         return None;
     };
-    info!("ui-test: fleet-ring click ({}): camera distance {:.0}, ring radius {:.1} px, aiming {:.1} px from the centre", if near { "near" } else { "far" }, gc.distance, c.distance(e), c.distance(e));
-    Some(e * scale)
+    info!("ui-test: fleet-ring click ({}): camera distance {:.0}, aiming {:.1} px from the centre", if near { "near" } else { "far" }, gc.distance, c.distance(aim));
+    Some(aim * scale)
+}
+
+/// Where a player clicks the ring of the fleet whose root stands at `pos` at a planet centred at `planet`: the centre of its icon and the
+/// point on its ring (0.95 of the drawn radius) on the side away from the planet, because the planet's globe wins over a fleet icon
+/// centred outside it (`galaxy_play::input::pick_under`): the ring's edge towards the planet can lie on the globe, where a click selects
+/// the planet. Screen positions in logical px.
+pub(crate) fn ring_edge(camera: &Camera, cam_tf: &GlobalTransform, layout: &galaxy_play::GalaxyLayout, cfg: &galaxy_play::PlayConfig, pos: Vec3, planet: Vec3) -> Option<(Vec2, Vec2)> {
+    let ring = layout.unit * cfg.fleet_icon_scale * 1.5;
+    let center = Vec3::new(pos.x, pos.y - layout.unit * 0.1, pos.z);
+    let c = camera.world_to_viewport(cam_tf, center).ok()?;
+    let e = camera.world_to_viewport(cam_tf, center + cam_tf.right() * ring * 0.95).ok()?;
+    let p = camera.world_to_viewport(cam_tf, planet).ok()?;
+    Some((c, c + (c - p).try_normalize().unwrap_or(Vec2::X) * c.distance(e)))
 }
 
 /// Queries of the tooltip, objectives and main menu button phases.
