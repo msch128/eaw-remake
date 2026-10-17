@@ -63,7 +63,7 @@ F9 on the map opens the placeholder screen. Needed: galaxy-sim API to apply a ta
 Connect the real battle-view hook and galaxy-sim result injection, switch menus to `eaw-ui`, run the app in a real window (input, settings apply,
 fullscreen, FPS cap).
 
-## `--check-install` and the `dist` build (2026-10-17)
+## Setup.exe, `--check-install` and the `dist` build (2026-10-17)
 - `--check-install` (`install_check.rs`) prints where the game and the Remake mod were found and exits before any Bevy app, window or GPU exists. It asks what the
   app asks (`game::find_install`, `explicit_mod_dir`, `explicit_mod_data`, shared with `open_fs`): `--game-dir`, `EAW_GAME_DIR`, the Steam registry and
   `libraryfolders.vdf`; `--mod-dir`, `EAW_MOD_DIR`, the Workshop folder. Exit code 0 both found, 2 Forces of Corruption missing (no install, or `corruption\Data`
@@ -72,6 +72,12 @@ fullscreen, FPS cap).
 - Cargo feature `dist`: `windows_subsystem = "windows"`, so the installed game opens no console window; normal builds stay console apps (the smoke tests read their
   output). Logs: every windowed run, dist or not, writes `%APPDATA%\SpacePeace\logs\space-peace-<unix time>.log` (`logfile.rs`, the 10 newest are kept, panics included);
   offscreen runs write no log file. A dist build prints to a terminal only when its output is redirected (`eaw-remake.exe --check-install > check.txt`).
+- `tools\package.ps1` builds the dist exe (`RUSTFLAGS=-C target-feature=+crt-static` in a target folder of its own), checks it (windowed app; it imports only DLLs of
+  Windows 10/11, 18 of them, no vcruntime, msvcp or ucrt) and compiles `tools\installer\eaw-remake.iss` (Inno Setup 6, per user, no admin) into
+  `dist\EAW-Remake-Setup-<version>.exe`: about 19 MB around an 88 MB exe. After the files are copied the setup runs `eaw-remake.exe --check-install` hidden and, when it
+  answers 2 or 3, tells the player what to get from Steam and offers the store or Workshop page (silent setups only log the answer). The uninstaller leaves
+  `%APPDATA%\SpacePeace` alone. `tools\test-setup.ps1` tests a built setup silently in a scratch folder (install, files, Start menu, uninstall entry, offscreen run,
+  `--check-install`, uninstall); the message boxes of the wizard itself are not covered by it (they never show in a silent setup).
 
 ## Galaxy map visuals (2026-10-08)
 - Lanes (2026-10-17, measured on the user's Remake video v0520/v0540 and CS9 f0007/f0016 at full HD): one additive ribbon per route
