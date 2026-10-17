@@ -115,6 +115,9 @@ fn run_warmup(
     unbuilt: Query<(), Unbuilt>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    fs: Option<Res<alamo_render::AlamoFs>>,
+    mut images: ResMut<Assets<Image>>,
+    mut beam_art: ResMut<crate::effects::BeamArt>,
 ) {
     if warmup.done {
         return;
@@ -185,7 +188,19 @@ fn run_warmup(
                 ))
                 .id(),
         );
-        info!("battle warm-up: {} instances (unit types, missiles, arrival effects)", spawned.len());
+        // Super laser beams drawn with the data's art (the Eclipse's): the texture is decoded and the beam's pipeline built now.
+        if let Some(fs) = &fs {
+            for (id, _) in unit_types(&rt) {
+                let Some(name) = rt.visuals.ship(id).super_laser.as_ref().and_then(|l| l.beam_texture.clone()) else { continue };
+                let Some(texture) = beam_art.get_or_load(&fs.0, &mut images, &name) else { continue };
+                let at = Vec3::new(0.0, 0.0, -100.0);
+                if let Some(beam) = crate::effects::spawn_textured_beam(&mut commands, &mut meshes, &mut materials, texture, at, at + Vec3::X * 10.0, 1.0, Color::NONE, 1, MAX_WARMUP.as_secs_f32()) {
+                    commands.entity(beam).insert((WarmupInstance, ChildOf(camera)));
+                    spawned.push(beam);
+                }
+            }
+        }
+        info!("battle warm-up: {} instances (unit types, missiles, arrival effects, beams)", spawned.len());
         warmup.entities = spawned;
         return;
     };

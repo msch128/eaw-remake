@@ -474,6 +474,7 @@ impl Plugin for BattleViewPlugin {
             .init_resource::<camera::ActionCam>()
             .add_message::<control::FocusCamera>()
             .init_resource::<effects::BoltPools>()
+            .init_resource::<effects::BeamArt>()
             .init_resource::<audio::BattleAudioStats>()
             .add_message::<control::OrderIssued>()
             .add_message::<control::HardpointOrderIssued>()
@@ -505,7 +506,7 @@ impl Plugin for BattleViewPlugin {
                         (
                             control::read_pointer,
                             advance_clock,
-                            (effects::impact_effects, effects::hide_downed_shields, ships::ship_events, ships::update_super_laser_fx).chain(),
+                            (effects::impact_effects, effects::hide_downed_shields, ships::ship_events, ships::update_super_laser_fx, ships::update_super_laser_charge).chain(),
                             effects::spawn_special_weapon_beams,
                             effects::update_special_beams,
                             effects::update_special_flashes,
@@ -585,6 +586,11 @@ fn start_battle(
                 clips.extend(
                     session.visuals.ships.iter().filter_map(|s| s.death_clone_model.as_deref()).filter_map(|m| index.find(&model_stem(m), "DIE", None)),
                 );
+                // A super laser plays the shooter's ATTACK clip from the order to the shot.
+                clips.extend(session.visuals.ships.iter().filter_map(|s| {
+                    let laser = s.super_laser.as_ref()?;
+                    index.find(&model_stem(s.model.as_deref()?), "ATTACK", Some(laser.attack_variant))
+                }));
                 pre.request_animations(&fs.0, clips);
             }
             pre.request(&fs.0, cache, models);

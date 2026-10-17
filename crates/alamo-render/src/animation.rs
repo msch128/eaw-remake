@@ -189,6 +189,12 @@ impl AnimationCache {
         self.get(fs, path).map(|a| a.duration())
     }
 
+    /// The parsed clip at `path` (`None` if it cannot be read), for game code that needs more than the pose, such as which bones a
+    /// clip shows ([`alamo_model::ala::BoneTrack::visibility`]).
+    pub fn clip(&mut self, fs: &AlamoFs, path: &str) -> Option<Arc<Animation>> {
+        self.get(fs, path)
+    }
+
     /// Registers a clip parsed off the main thread (see [`crate::ModelPreloader`]); `None` = unreadable.
     pub(crate) fn insert(&mut self, path: &str, clip: Option<Animation>) {
         self.clips.entry(path.to_ascii_lowercase()).or_insert_with(|| clip.map(Arc::new));

@@ -237,6 +237,68 @@ impl ModelTouch<'_, '_> {
         let e = *view.bones.as_ref()?.get(&bone.to_ascii_lowercase())?;
         self.globals.get(e).ok().map(|g| g.translation())
     }
+
+    /// World position of the model bone called `name`, else of the first proxy whose name starts with it (`Owner_Particle_Bone_Name`
+    /// names either).
+    fn bone_or_proxy_world(&self, root: Entity, name: &str) -> Option<Vec3> {
+        let loaded = self.loaded.get(root).ok()?;
+        match loaded.bone_by_name.get(&name.to_ascii_lowercase()) {
+            Some(&b) => self.globals.get(b).ok().map(|g| g.translation()),
+            None => self.proxy_world(root, &name.to_ascii_lowercase()),
+        }
+    }
+
+    /// Before a clip that drives the visibility of `tracked` bones (lower-case names): notes their visibility, to be restored by
+    /// [`ModelTouch::end_clip`], and the proxies on the `shown` ones (the clip shows them on some frames), whose particle systems
+    /// [`ModelTouch::light_clip`] keeps on while the clip runs.
+    fn begin_clip(&self, root: Entity, tracked: &[String], shown: &[String]) -> ClipTouch {
+        let Ok(loaded) = self.loaded.get(root) else { return ClipTouch::default() };
+        let bones = tracked
+            .iter()
+            .filter_map(|n| loaded.bone_by_name.get(n).copied())
+            .map(|b| (b, self.visibility.get(b).copied().unwrap_or_default()))
+            .collect();
+        let proxies = loaded
+            .proxies
+            .iter()
+            .copied()
+            .filter(|&p| self.parents.get(p).is_ok_and(|c| self.names.get(c.parent()).is_ok_and(|n| shown.contains(&n.as_str().to_ascii_lowercase()))))
+            .collect();
+        ClipTouch { bones, proxies }
+    }
+
+    /// Keeps the particle systems of a running clip's proxies on (a proxy gets its particle system a frame after its model is
+    /// built; the clip's visibility track decides when they show).
+    fn light_clip(&mut self, touched: &ClipTouch) {
+        for &p in &touched.proxies {
+            if let Ok(mut ps) = self.particles.get_mut(p)
+                && !ps.enabled
+            {
+                ps.enabled = true;
+            }
+        }
+    }
+
+    /// After the clip of [`ModelTouch::begin_clip`]: its proxies are off again and its bones have the visibility they had before.
+    fn end_clip(&mut self, touched: &ClipTouch) {
+        for &p in &touched.proxies {
+            if let Ok(mut ps) = self.particles.get_mut(p) {
+                ps.enabled = false;
+            }
+        }
+        for &(bone, vis) in &touched.bones {
+            if let Ok(mut v) = self.visibility.get_mut(bone) {
+                *v = vis;
+            }
+        }
+    }
+}
+
+/// What a clip touches ([`ModelTouch::begin_clip`]): bones with their visibility before the clip, the proxies it lights.
+#[derive(Debug, Default)]
+pub struct ClipTouch {
+    bones: Vec<(Entity, Visibility)>,
+    proxies: Vec<Entity>,
 }
 
 /// Spawns, moves and updates all ship entities for the current snapshot pair.
@@ -590,6 +652,7 @@ fn apply_hardpoint_death(
 }
 
 /// Reacts to events of newly reached steps: ship deaths and hardpoint explosions.
+#[allow(clippy::too_many_arguments)]
 pub fn ship_events(
     mut commands: Commands,
     mut pulses: ResMut<crate::effects::BloomPulses>,
@@ -599,6 +662,10 @@ pub fn ship_events(
     mut views: Query<&mut ShipView>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    fs: Option<Res<alamo_render::AlamoFs>>,
+    mut images: ResMut<Assets<Image>>,
+    mut beam_art: ResMut<crate::effects::BeamArt>,
+    mut shot_sounds: ShotSounds,
 ) {
     let events = rt.fresh_events.clone();
     let catalog = rt.catalog.clone();
@@ -677,28 +744,119 @@ pub fn ship_events(
                 rt.dying.insert(*ship);
             }
             Event::SuperLaserCharging { ship, fire_in, .. } => {
-                // The model's `p_planet_deathstar_laser_small` proxies (the converging charge lattice) light up now, the big dish glow `fire_in` seconds later.
-                if let Some(&e) = rt.entities.get(ship) {
-                    let now = rt.cur.as_ref().map_or(0.0, |c| c.time);
-                    debug!("battle: super laser of ship {ship} charging at t={now:.1}s, shot in {fire_in:.2}s");
+                let Some(&e) = rt.entities.get(ship) else { continue };
+                let now = rt.cur.as_ref().map_or(0.0, |c| c.time);
+                let at = rt.cur.as_ref().and_then(|c| c.ship(*ship)).map_or(Vec3::ZERO, |s| sim_to_bevy(s.pos));
+                info!("battle: super laser of ship {ship} charging at t={now:.1}s at ({:.0}, {:.0}), shot in {fire_in:.2}s", at.x, at.z);
+                let laser = views.get(e).ok().and_then(|v| visuals.ship(v.def).super_laser.as_ref());
+                // The shot's sound is read while the laser charges, so that its length is known at the shot.
+                if let Some(event) = laser.and_then(|l| l.fire_loop.as_deref()) {
+                    shot_sounds.prepare(event);
+                }
+                if touch.proxy_world(e, SUPER_LASER_SMALL).is_some() {
+                    // The Death Star: its `p_planet_deathstar_laser_small` proxies (the converging charge lattice) light up now, the big dish
+                    // glow `fire_in` seconds later.
                     touch.set_proxy_particles(e, SUPER_LASER_SMALL, true);
                     commands.entity(e).insert(SuperLaserFx { large_at: now + fire_in, end_at: now + fire_in + SUPER_LASER_GLOW_AFTER, large_on: false });
+                } else if let Some(laser) = laser {
+                    // Every other super laser plays the shooter's `ATTACK` animation from the order on (`update_super_laser_charge`).
+                    commands.entity(e).insert(SuperLaserCharge { start: now, variant: laser.attack_variant, shown: None, length: 0.0 });
+                    // Its beam art is decoded now, and an unlit copy of the beam builds its render pipeline before the shot (the battle's
+                    // warm-up does both behind the loading screen; this covers scenes without one).
+                    if let Some(texture) = laser.beam_texture.as_deref().zip(fs.as_ref()).and_then(|(name, fs)| beam_art.get_or_load(&fs.0, &mut images, name)) {
+                        crate::effects::spawn_textured_beam(&mut commands, &mut meshes, &mut materials, texture, at, at + Vec3::X * 10.0, 1.0, Color::NONE, 1, *fire_in);
+                    }
                 }
             }
             Event::SuperLaserFired { ship, target, at } => {
-                debug!("battle: super laser of ship {ship} fired at {target}");
+                info!("battle: super laser of ship {ship} fired at {target}");
                 let (Some(&e), Some(cur)) = (rt.entities.get(ship), rt.cur.as_ref()) else { continue };
-                let to = Some(sim_to_bevy(*at));
-                let from = touch.proxy_world(e, SUPER_LASER_LARGE).or_else(|| cur.ship(*ship).map(|s| sim_to_bevy(s.pos)));
-                let beam_radius = (cur.ship(*ship).map_or(0.0, |s| catalog.ship(s.def).radius) * SUPER_LASER_BEAM_RADIUS_OF_HULL).max(SUPER_LASER_BEAM_RADIUS);
-                if let (Some(from), Some(to)) = (from, to) {
-                    crate::effects::spawn_beam(&mut commands, &mut meshes, &mut materials, from, to, Color::srgba(0.25, 1.0, 0.4, 0.85), beam_radius, SUPER_LASER_BEAM_SECONDS);
-                    pulses.flash(to, 1.0);
-                }
+                let Some(shooter) = cur.ship(*ship) else { continue };
+                let to = sim_to_bevy(*at);
+                let laser = visuals.ship(shooter.def).super_laser.clone();
+                let bone = laser.as_ref().and_then(|l| l.bone.clone()).unwrap_or_else(|| SUPER_LASER_LARGE.to_string());
+                let from = touch.bone_or_proxy_world(e, &bone).unwrap_or_else(|| sim_to_bevy(shooter.pos));
+                let texture = laser.as_ref().and_then(|l| l.beam_texture.as_deref()).zip(fs.as_ref()).and_then(|(name, fs)| beam_art.get_or_load(&fs.0, &mut images, name));
+                let hull = catalog.ship(shooter.def).radius;
+                let hold = laser.as_ref().and_then(|l| l.fire_loop.as_deref()).and_then(|event| shot_sounds.hold(event));
+                fire_super_laser(&mut commands, &mut meshes, &mut materials, laser.as_ref(), texture, from, to, hull, hold);
+                pulses.flash(to, 1.0);
             }
             Event::HardpointDestroyed { .. } => {}
             _ => {}
         }
+    }
+}
+
+/// The shot of a super laser from `from` to `to`: the data's beam (`Beam_Texture_Name` `Line_Width` wide, tinted with `Line_Color`,
+/// for `Fire_Continuation` seconds) when the ability names beam art and `texture` holds it, else the plain green beam line of the
+/// Death Star. With `sound_hold` (`None`: the battle's sound is off) `SFXEvent_Special_Ability_Loop` plays at the muzzle while the
+/// beam fires and for at least `sound_hold` seconds ([`ShotSounds::hold`]). Returns the beam's seconds.
+#[allow(clippy::too_many_arguments)]
+pub fn fire_super_laser(
+    commands: &mut Commands,
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<StandardMaterial>,
+    laser: Option<&crate::visuals::SuperLaserVisual>,
+    texture: Option<Handle<Image>>,
+    from: Vec3,
+    to: Vec3,
+    hull_radius: f32,
+    sound_hold: Option<f32>,
+) -> f32 {
+    let seconds = match (laser, texture) {
+        (Some(l), Some(texture)) => {
+            let seconds = if l.fire_seconds > 0.0 { l.fire_seconds } else { SUPER_LASER_BEAM_SECONDS };
+            let width = if l.line_width > 0.0 { l.line_width } else { 2.0 * SUPER_LASER_BEAM_RADIUS };
+            crate::effects::spawn_textured_beam(commands, meshes, materials, texture, from, to, width, l.line_color, l.beam_frames, seconds);
+            seconds
+        }
+        _ => {
+            let beam_radius = (hull_radius * SUPER_LASER_BEAM_RADIUS_OF_HULL).max(SUPER_LASER_BEAM_RADIUS);
+            crate::effects::spawn_beam(commands, meshes, materials, from, to, Color::srgba(0.25, 1.0, 0.4, 0.85), beam_radius, SUPER_LASER_BEAM_SECONDS);
+            SUPER_LASER_BEAM_SECONDS
+        }
+    };
+    if let (Some(event), Some(hold)) = (laser.and_then(|l| l.fire_loop.clone()), sound_hold) {
+        commands.spawn((Name::new("super laser sound"), BattleEntity, Transform::from_translation(from), alamo_audio::SfxEmitter::new(Some(event)), RemoveAfter(seconds.max(hold))));
+    }
+    seconds
+}
+
+/// Seconds a shot's loop stops short of one pass through its sample: the loop fades out after it is let go, and its voice may
+/// start a frame or two after the shot.
+const SHOT_SOUND_MARGIN: f32 = 0.1;
+
+/// The sound of super laser shots. The data gives the shot a loop (`SFXEvent_Special_Ability_Loop`: `Unit_Death_Star_2_Fire`,
+/// `Preset_INSANE_LOOP`, heard across the whole map), and its sample `GUN_Superlaser_2.wav` is a whole 3.45 s blast: full for
+/// 1.5 s, then a 2 s tail. Held only while the beam fires (the Eclipse's `Fire_Continuation` 1 s, the Death Star II's 0.25 s)
+/// it would be cut at full volume, so the loop plays one whole pass (estimate: how long the original holds it is not known).
+#[derive(SystemParam)]
+pub struct ShotSounds<'w> {
+    settings: Res<'w, BattleViewSettings>,
+    audio: Option<ResMut<'w, alamo_audio::plugin::AlamoAudio>>,
+    audio_settings: Option<Res<'w, alamo_audio::AudioSettings>>,
+    sources: Option<ResMut<'w, Assets<AudioSource>>>,
+}
+
+impl ShotSounds<'_> {
+    /// Starts reading the samples of the loop `event` on the audio worker threads.
+    fn prepare(&mut self, event: &str) {
+        let (true, Some(audio), Some(settings), Some(sources)) = (self.settings.audio, self.audio.as_mut(), self.audio_settings.as_ref(), self.sources.as_mut()) else { return };
+        if settings.load_on_worker {
+            audio.prepare_event(event, settings.cache_budget_bytes, sources);
+        }
+    }
+
+    /// `None` with the battle's sound off, else the least seconds the shot holds its loop `event`: one pass through its sample less
+    /// the loop's fade-out (0 while the sample is not read).
+    pub fn hold(&self, event: &str) -> Option<f32> {
+        if !self.settings.audio {
+            return None;
+        }
+        let (Some(audio), Some(sources)) = (self.audio.as_deref(), self.sources.as_deref()) else { return Some(0.0) };
+        let fade_out = audio.sfx.get(event).map_or(0.0, |e| e.loop_fade.1.max(0.05));
+        Some(audio.loaded_pass_seconds(event, sources).map_or(0.0, |pass| pass - fade_out - SHOT_SOUND_MARGIN))
     }
 }
 
@@ -840,6 +998,101 @@ pub fn update_super_laser_fx(mut commands: Commands, rt: Res<BattleRuntime>, mut
             touch.set_proxy_particles(e, SUPER_LASER_LARGE, true);
         }
     }
+}
+
+/// Charge of a super laser other than the Death Star's, on the ship entity: the model's `ATTACK` animation runs on the battle clock
+/// from the order on, so that its `Fire_Frame` (the shot, `fire_in` = `Fire_Frame` / 30) falls on the sim's shot.
+#[derive(Component, Debug)]
+pub struct SuperLaserCharge {
+    /// Battle time of the order.
+    start: f32,
+    /// `Attack_Anim_Sub_Index`.
+    variant: u32,
+    /// What the clip changed on the model; `None` until the clip was read.
+    shown: Option<ClipTouch>,
+    /// Clip length in seconds.
+    length: f32,
+}
+
+/// Plays the `ATTACK` clip of a [`SuperLaserCharge`]: the clip's time is the battle time since the order (it follows a paused or sped
+/// up battle), the particle proxies on the bones the clip shows are switched on for it (the Eclipse's `P_Eclipse_Charge_L` / `_S`
+/// lattice is visible from frame 51, the `Ambient_02` / `_03` glow meshes from 226 and 230, the `P_Eclipse_Star_Dreadnaught_Muzzle`
+/// flare from 230, one past its `Fire_Frame` 229). At the end of the clip the proxies are off, the bones it drove have their
+/// visibility from before again and the model returns to its `IDLE` animation.
+#[allow(clippy::type_complexity)]
+pub fn update_super_laser_charge(
+    mut commands: Commands,
+    rt: Res<BattleRuntime>,
+    fs: Option<Res<alamo_render::AlamoFs>>,
+    index: Option<Res<alamo_render::AnimationIndex>>,
+    mut clips: Option<ResMut<alamo_render::animation::AnimationCache>>,
+    mut touch: ModelTouch,
+    mut q: Query<(Entity, &AlamoModel, &mut SuperLaserCharge, Option<&mut alamo_render::AlamoAnimation>)>,
+) {
+    let (Some(fs), Some(index), Some(clips)) = (fs, index, clips.as_mut()) else { return };
+    let now = rt.cur.as_ref().map_or(0.0, |c| c.time);
+    for (e, model, mut charge, anim) in &mut q {
+        let stem = alamo_render::animation::model_stem(&model.path);
+        if charge.shown.is_none() {
+            // The model may still be loading (an order in the first moments of a battle): the clip then starts late, still on the shot.
+            if touch.loaded.get(e).is_err() {
+                continue;
+            }
+            let clip = index.find(&stem, "ATTACK", Some(charge.variant)).and_then(|path| clips.clip(&fs, &path));
+            let Some(clip) = clip else {
+                commands.entity(e).remove::<SuperLaserCharge>();
+                continue;
+            };
+            charge.length = clip.duration();
+            let touched = touch.begin_clip(e, &tracked_bones(&clip), &shown_bones(&clip));
+            info!("battle: super laser clip of {stem}: {:.1} s, {} bones driven, {} particle proxies", charge.length, touched.bones.len(), touched.proxies.len());
+            charge.shown = Some(touched);
+            let mut attack = alamo_render::AlamoAnimation::once("ATTACK");
+            attack.variant = Some(charge.variant);
+            attack.playing = false;
+            commands.entity(e).insert(attack);
+            continue;
+        }
+        let t = (now - charge.start).max(0.0);
+        if t >= charge.length {
+            if let Some(touched) = &charge.shown {
+                touch.end_clip(touched);
+            }
+            let mut ec = commands.entity(e);
+            ec.remove::<SuperLaserCharge>();
+            if index.find(&stem, "IDLE", None).is_some() {
+                ec.insert(alamo_render::AlamoAnimation::idle());
+            } else {
+                ec.remove::<alamo_render::AlamoAnimation>();
+            }
+        } else {
+            if let Some(touched) = &charge.shown {
+                touch.light_clip(touched);
+            }
+            if let Some(mut a) = anim
+                && a.kind.eq_ignore_ascii_case("ATTACK")
+            {
+                a.time = t;
+            }
+        }
+    }
+}
+
+/// Lower-case names of the bones a clip shows on some frame (bones with a visibility track that is not all off), sorted, once each.
+pub fn shown_bones(clip: &alamo_model::Animation) -> Vec<String> {
+    bone_names(clip, |v| v.iter().any(|&on| on))
+}
+
+/// Lower-case names of the bones whose visibility a clip drives, sorted, once each.
+pub fn tracked_bones(clip: &alamo_model::Animation) -> Vec<String> {
+    bone_names(clip, |_| true)
+}
+
+fn bone_names(clip: &alamo_model::Animation, keep: impl Fn(&[bool]) -> bool) -> Vec<String> {
+    let mut names: Vec<String> = clip.bones.iter().filter(|b| b.visibility.as_deref().is_some_and(&keep)).map(|b| b.name.to_ascii_lowercase()).collect();
+    names.sort();
+    names.dedup();
+    names
 }
 
 /// Share of the screen height the bounding sphere of a fighter, bomber or squadron member keeps at every zoom of the original camera.
@@ -1154,5 +1407,234 @@ mod tests {
 
         let mut tf_done = Transform::IDENTITY;
         assert!(!apply_arrival(&arrival, ARRIVAL_SECONDS, radius, &mut tf_done));
+    }
+    fn eclipse_laser() -> crate::visuals::SuperLaserVisual {
+        crate::visuals::SuperLaserVisual {
+            bone: Some("MuzzleA_00".into()),
+            beam_texture: Some("tractor_beam01.tga".into()),
+            beam_frames: 4,
+            line_width: 250.0,
+            line_color: Color::srgba_u8(255, 255, 255, 255),
+            fire_seconds: 1.0,
+            attack_variant: 0,
+            fire_loop: Some("Unit_Death_Star_2_Fire".into()),
+        }
+    }
+
+    /// Fires `laser` from `from` to `to` in an empty world (with a stand-in beam texture when `textured`, the loop held at least
+    /// `sound_hold` seconds) and returns the world.
+    fn shot(laser: crate::visuals::SuperLaserVisual, textured: bool, from: Vec3, to: Vec3, sound_hold: Option<f32>) -> (World, f32) {
+        use bevy::ecs::system::RunSystemOnce;
+        let mut world = World::new();
+        world.init_resource::<Assets<Mesh>>();
+        world.init_resource::<Assets<StandardMaterial>>();
+        world.init_resource::<Assets<Image>>();
+        let seconds = world
+            .run_system_once(move |mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut materials: ResMut<Assets<StandardMaterial>>, mut images: ResMut<Assets<Image>>| {
+                let texture = textured.then(|| images.add(Image::default()));
+                fire_super_laser(&mut commands, &mut meshes, &mut materials, Some(&laser), texture, from, to, 4000.0, sound_hold)
+            })
+            .expect("shot");
+        (world, seconds)
+    }
+
+    /// The shot sounds of `world`: loop event, seconds it is held, position.
+    fn shot_sounds(world: &mut World) -> Vec<(Option<String>, f32, Vec3)> {
+        let mut q = world.query::<(&alamo_audio::SfxEmitter, &RemoveAfter, &Transform)>();
+        q.iter(world).map(|(e, after, tf)| (e.event.clone(), after.0, tf.translation)).collect()
+    }
+
+    #[test]
+    fn the_eclipse_shot_draws_its_data_beam_from_the_muzzle_and_plays_its_blast() {
+        let (from, to) = (Vec3::new(100.0, 0.0, 0.0), Vec3::new(100.0, 0.0, -5000.0));
+        let (mut world, seconds) = shot(eclipse_laser(), true, from, to, Some(3.3));
+        assert_eq!(seconds, 1.0, "Fire_Continuation");
+        let mut beams = world.query::<(&crate::effects::SpecialBeam, &crate::effects::BeamFrames, &Mesh3d, &MeshMaterial3d<StandardMaterial>, &Transform)>();
+        let (beam, frames, mesh, material, tf) = beams.single(&world).expect("one textured beam");
+        assert_eq!((beam.max_time, frames.0), (1.0, 4));
+        let Some(bevy::mesh::VertexAttributeValues::Float32x3(points)) = world.resource::<Assets<Mesh>>().get(&mesh.0).and_then(|m| m.attribute(Mesh::ATTRIBUTE_POSITION)).cloned() else {
+            panic!("beam mesh")
+        };
+        let extent = |axis: usize| points.iter().map(|p| p[axis]).fold(f32::MIN, f32::max) - points.iter().map(|p| p[axis]).fold(f32::MAX, f32::min);
+        assert!((extent(0) - 250.0).abs() < 1e-2 && (extent(2) - 250.0).abs() < 1e-2, "Line_Width");
+        assert!((extent(1) - 5000.0).abs() < 1e-2, "muzzle to target");
+        assert!((tf.translation - from).length() < 1e-3 && (tf.rotation * Vec3::Y).dot((to - from).normalize()) > 0.999);
+        let m = world.resource::<Assets<StandardMaterial>>().get(&material.0).expect("beam material");
+        assert!(m.base_color_texture.is_some() && m.alpha_mode == AlphaMode::Add && m.unlit);
+        // The loop plays at the muzzle for one pass of its blast, longer than the 1 s beam.
+        assert_eq!(shot_sounds(&mut world), [(Some("Unit_Death_Star_2_Fire".to_string()), 3.3, from)]);
+    }
+
+    #[test]
+    fn a_shot_loop_plays_at_least_while_the_beam_fires_and_not_with_the_sound_off() {
+        // Its sample not read yet: the loop is held while the beam fires.
+        let (from, to) = (Vec3::ZERO, Vec3::new(0.0, 0.0, -9000.0));
+        let (mut world, _) = shot(eclipse_laser(), true, from, to, Some(0.0));
+        assert_eq!(shot_sounds(&mut world), [(Some("Unit_Death_Star_2_Fire".to_string()), 1.0, from)]);
+        let (mut world, _) = shot(eclipse_laser(), true, from, to, None);
+        assert!(shot_sounds(&mut world).is_empty());
+    }
+
+    #[test]
+    fn a_super_laser_without_beam_art_keeps_the_plain_beam_and_gets_its_loop() {
+        // The Death Star's data names no beam texture: the green beam line, now with `SFXEvent_Special_Ability_Loop`.
+        let ds = crate::visuals::SuperLaserVisual { bone: Some("p_planet_deathstar_laser_large".into()), beam_texture: None, line_width: 0.0, fire_seconds: 0.25, ..eclipse_laser() };
+        let (mut world, seconds) = shot(ds, false, Vec3::ZERO, Vec3::new(0.0, 0.0, -9000.0), Some(3.3));
+        assert_eq!(seconds, SUPER_LASER_BEAM_SECONDS);
+        let mut plain = world.query_filtered::<&crate::effects::SpecialBeam, Without<crate::effects::BeamFrames>>();
+        assert_eq!(plain.iter(&world).count(), 2, "outer glow and core");
+        assert_eq!(shot_sounds(&mut world), [(Some("Unit_Death_Star_2_Fire".to_string()), 3.3, Vec3::ZERO)]);
+    }
+
+    /// The Remake's data (skipped without it): what a super laser looks like comes from the unit, and the shooter's ATTACK clip runs
+    /// the charge so that its `Fire_Frame` is the sim's shot.
+    #[test]
+    fn the_eclipse_charge_and_beam_come_from_the_remake_data() {
+        use alamo_fs::FileSource;
+        let Some(install) = alamo_fs::GameInstall::detect().filter(|i| i.mod_data("1770851727").is_dir()) else { return };
+        let fs = alamo_fs::GameFs::for_mod(&install, Some("1770851727")).expect("game files");
+        let (data, _) = alamo_data::load_galaxy(&fs);
+        let catalog = battle_sim::Catalog::build(&data, Some(&fs), &["Eclipse_Star_Dreadnought"]);
+        let id = catalog.ship_id("Eclipse_Star_Dreadnought").expect("Eclipse");
+        let visuals = crate::visuals::VisualCatalog::build(&data, &catalog, vec![Color::WHITE]);
+        assert_eq!(visuals.ship(id).super_laser, Some(eclipse_laser()));
+        let fire_in = catalog.ship(id).abilities.iter().find_map(|a| a.super_laser.as_ref()).expect("SUPER_LASER").delay;
+        let clip = alamo_model::Animation::parse(&fs.read("Art/Models/Empire_Eclipse_Super_Star_Destroyer_ATTACK_00.ALA").expect("ATTACK clip")).expect("clip");
+        let shown = shown_bones(&clip);
+        assert_eq!(shown, ["ambient_02", "ambient_03", "p_eclipse_charge_l", "p_eclipse_charge_s", "p_eclipse_star_dreadnaught_muzzle"]);
+        let first_visible = |bone: &str| clip.track(bone).and_then(|t| t.visibility.as_ref()).and_then(|v| v.iter().position(|&on| on));
+        // Frame 229 (`Fire_Frame`) of the clip is the sim's shot; the charge lattice shows from frame 51, the muzzle flare right after the shot.
+        assert!((fire_in * clip.fps - 229.0).abs() < 1e-3, "fire_in {fire_in}");
+        assert_eq!((first_visible("P_Eclipse_Charge_L"), first_visible("P_Eclipse_Star_Dreadnaught_Muzzle")), (Some(51), Some(230)));
+    }
+    #[test]
+    fn a_charge_clip_lights_its_proxies_and_leaves_the_model_as_it_was() {
+        use bevy::ecs::system::RunSystemOnce;
+        // A charge bone with a particle proxy and a glow-mesh bone, both hidden at rest (`vis 0`), and a damage-fire bone the clip
+        // keeps hidden.
+        let mut world = World::new();
+        let axis = world.spawn_empty().id();
+        let charge = world.spawn((Name::new("P_Eclipse_Charge_L"), Visibility::Hidden)).id();
+        let glow = world.spawn((Name::new("Ambient_03"), Visibility::Hidden)).id();
+        let fire = world.spawn((Name::new("P_Ship_Fire_Huge"), Visibility::Hidden)).id();
+        let mut ps = AlamoParticles::new("P_Eclipse_Charge_L");
+        ps.enabled = false;
+        let proxy = world.spawn((Name::new("P_Eclipse_Charge_L"), ps, ChildOf(charge))).id();
+        let bone_by_name = [("p_eclipse_charge_l", charge), ("ambient_03", glow), ("p_ship_fire_huge", fire)].map(|(n, e)| (n.to_string(), e)).into();
+        let root = world
+            .spawn(AlamoModelLoaded { bones: vec![charge, glow, fire], parts: vec![], proxies: vec![proxy], axis, hardpoints: vec![], bone_by_name, center: Vec3::ZERO, radius: 1.0 })
+            .id();
+        let tracked: Vec<String> = ["ambient_03", "p_eclipse_charge_l", "p_ship_fire_huge"].map(String::from).to_vec();
+        let shown: Vec<String> = ["ambient_03", "p_eclipse_charge_l"].map(String::from).to_vec();
+        let touched = world
+            .run_system_once(move |mut touch: ModelTouch| {
+                let touched = touch.begin_clip(root, &tracked, &shown);
+                touch.light_clip(&touched);
+                touched
+            })
+            .expect("begin");
+        assert!(world.get::<AlamoParticles>(proxy).is_some_and(|p| p.enabled), "the charge particles are on for the clip");
+        // The clip shows its bones (`animate_models`), then ends.
+        for b in [charge, glow] {
+            *world.get_mut::<Visibility>(b).expect("bone") = Visibility::Inherited;
+        }
+        world.run_system_once(move |mut touch: ModelTouch| touch.end_clip(&touched)).expect("end");
+        assert!(world.get::<AlamoParticles>(proxy).is_some_and(|p| !p.enabled));
+        for b in [charge, glow, fire] {
+            assert_eq!(world.get::<Visibility>(b), Some(&Visibility::Hidden), "no glow mesh stays lit after the shot");
+        }
+    }
+    /// The view's half of a super laser shot, fed with the sim's events: the order (`SuperLaserCharging`) starts the shooter's charge
+    /// clip, the shot (`SuperLaserFired`) draws the beam from the shooter and plays the loop there. No game files here: the plain beam,
+    /// and the loop held while the beam fires (its sample is not read).
+    #[test]
+    fn the_super_laser_events_start_the_charge_then_draw_the_beam_and_play_its_loop() {
+        use battle_sim::{Battle, BattleConfig, BattleSetup, Catalog, ProjDef, ShipDef, SideSetup, UnitSetup};
+        use bevy::ecs::system::RunSystemOnce;
+        let ship = |name: &str, class| ShipDef { name: name.into(), class, hull: 1.0e6, radius: 500.0, population: 1, ..ShipDef::default() };
+        let catalog = std::sync::Arc::new(Catalog::from_defs(vec![ship("eclipse", TargetClass::Super), ship("target", TargetClass::Capital)], vec![ProjDef { name: "laser".into(), ..ProjDef::default() }]));
+        let side = |n: &str| SideSetup { name: n.into(), units: vec![UnitSetup { ship: catalog.ship_id(n).unwrap(), count: 1, tag: 1 }], structures: vec![], ai: false };
+        let sim = crate::sim::SimHandle::spawn(Battle::new(BattleSetup { sides: vec![side("eclipse"), side("target")], catalog: catalog.clone(), config: BattleConfig::default() }));
+        sim.request(1);
+        let cur = sim.fetch(0, true).0.expect("snapshot");
+        let (shooter, target) = (cur.ships.iter().find(|s| s.side == 0).expect("shooter").clone(), cur.ships.iter().find(|s| s.side == 1).expect("target").clone());
+        let mut ships = vec![crate::visuals::ShipVisual::default(); 2];
+        ships[shooter.def as usize].super_laser = Some(eclipse_laser());
+        let visuals = crate::visuals::VisualCatalog { ships, team_colors: vec![Color::WHITE; 2], proj_detonate: vec![None], proj_detonate_armor: vec![None], proj_detonate_shield: vec![None] };
+
+        let mut world = World::new();
+        world.init_resource::<crate::effects::BloomPulses>();
+        world.init_resource::<crate::effects::BeamArt>();
+        world.init_resource::<BattleViewSettings>();
+        world.init_resource::<Assets<Mesh>>();
+        world.init_resource::<Assets<StandardMaterial>>();
+        world.init_resource::<Assets<Image>>();
+        let view = ShipView { id: shooter.id, def: shooter.def, side: 0, hp_applied: vec![], bones: None, hp_parts: vec![], last_yaw: 0.0, smooth_yaw_rate: 0.0, bank: 0.0, visual_radius: 0.0, shown: true };
+        let e = world.spawn(view).id();
+        world.insert_resource(BattleRuntime {
+            sim,
+            catalog,
+            visuals: std::sync::Arc::new(visuals),
+            dt: 1.0 / 30.0,
+            clock: 0.0,
+            cur: Some(cur.clone()),
+            next: None,
+            alpha: 0.0,
+            fresh_events: vec![Event::SuperLaserCharging { ship: shooter.id, target: target.id, fire_in: 229.0 / 30.0 }],
+            entities: HashMap::from([(shooter.id, e)]),
+            dying: HashSet::new(),
+            request: None,
+            player_faction: None,
+            start_alive: vec![1, 1],
+            retreat_countdown: 0.0,
+            unit_cap: 0,
+            no_spawn_radius: 0.0,
+            reinforce_clearance: 0.0,
+            arena_half: 10_000.0,
+            fog_of_war: false,
+            speed: 1.0,
+            framed: false,
+            reported: false,
+            minimap_planets: vec![],
+            minimap_props: vec![],
+            minimap_tint: Color::BLACK,
+        });
+        world.run_system_once(ship_events).expect("order");
+        let charge = world.get::<SuperLaserCharge>(e).expect("the order starts the charge clip");
+        assert_eq!((charge.start, charge.variant), (cur.time, 0), "the ATTACK clip `Attack_Anim_Sub_Index` 0 runs from the order");
+        assert!(world.query::<&crate::effects::SpecialBeam>().iter(&world).next().is_none(), "no beam before the shot");
+
+        world.resource_mut::<BattleRuntime>().fresh_events = vec![Event::SuperLaserFired { ship: shooter.id, target: target.id, at: target.pos }];
+        world.run_system_once(ship_events).expect("shot");
+        let mut beams = world.query::<&crate::effects::SpecialBeam>();
+        assert_eq!(beams.iter(&world).count(), 2, "the beam: outer glow and core");
+        let muzzle = sim_to_bevy(shooter.pos);
+        assert_eq!(shot_sounds(&mut world), [(Some("Unit_Death_Star_2_Fire".to_string()), SUPER_LASER_BEAM_SECONDS, muzzle)]);
+        // With the battle's sound off the beam still fires, silently.
+        world.resource_mut::<BattleViewSettings>().audio = false;
+        world.run_system_once(ship_events).expect("second shot");
+        assert_eq!((beams.iter(&world).count(), shot_sounds(&mut world).len()), (4, 1));
+    }
+    /// The Remake's sound data (skipped without it): the Eclipse's shot loop is `Preset_INSANE_LOOP` with the 3.45 s
+    /// `GUN_Superlaser_2.wav` blast, and the shot holds it one pass less its 0.05 s fade-out and the margin.
+    #[test]
+    fn the_eclipse_shot_plays_one_pass_of_its_blast_from_the_remake_data() {
+        use bevy::ecs::system::RunSystemOnce;
+        let Some(install) = alamo_fs::GameInstall::detect().filter(|i| i.mod_data("1770851727").is_dir()) else { return };
+        let fs = std::sync::Arc::new(alamo_fs::GameFs::for_mod(&install, Some("1770851727")).expect("game files"));
+        let mut audio = alamo_audio::plugin::AlamoAudio::load(fs);
+        let event = audio.sfx.get("Unit_Death_Star_2_Fire").expect("the loop of the Eclipse's SUPER_LASER").clone();
+        assert!(event.looping && !event.is_2d && event.loop_fade.1 == 0.05, "{event:?}");
+        let mut sources = Assets::<AudioSource>::default();
+        for name in &event.samples {
+            assert!(audio.sample(name, 256 << 20, &mut sources).is_some(), "{name}");
+        }
+        let mut world = World::new();
+        world.init_resource::<BattleViewSettings>();
+        world.init_resource::<alamo_audio::AudioSettings>();
+        world.insert_resource(audio);
+        world.insert_resource(sources);
+        let hold = world.run_system_once(|sounds: ShotSounds| sounds.hold("Unit_Death_Star_2_Fire")).expect("hold").expect("sound on");
+        assert!((hold - (3.4535 - 0.05 - SHOT_SOUND_MARGIN)).abs() < 0.01, "{hold}");
     }
 }

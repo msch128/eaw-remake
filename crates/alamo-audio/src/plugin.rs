@@ -520,6 +520,32 @@ impl AlamoAudio {
         false
     }
 
+    /// [`AlamoAudio::prepare`] for every sample of `event`: true when all of them are ready.
+    pub fn prepare_event(&mut self, event: &str, budget: usize, assets: &mut Assets<AudioSource>) -> bool {
+        let names = self.sfx.get(event).map(|ev| ev.samples.clone()).unwrap_or_default();
+        let mut ready = true;
+        for name in &names {
+            ready &= self.prepare(name, budget, assets);
+        }
+        ready
+    }
+
+    /// Seconds one pass through a sample of `event` takes: the shortest of its loaded samples at the event's highest pitch, so a
+    /// loop of it that is held this long ends before it starts over. `None` while none of its samples is loaded
+    /// ([`AlamoAudio::prepare_event`]).
+    pub fn loaded_pass_seconds(&self, event: &str, assets: &Assets<AudioSource>) -> Option<f32> {
+        let ev = self.sfx.get(event)?;
+        let speed = (ev.pitch.1 / 100.0).max(0.1);
+        ev.samples
+            .iter()
+            .filter_map(|name| self.cache.get(&self.resolver.resolve(&*self.fs, name)?.0))
+            .filter_map(|handle| assets.get(handle))
+            // Cached WAV samples are PCM16 (`read_sample`); other formats are left out.
+            .filter_map(|source| Wav::parse(&source.bytes).ok().filter(|w| w.format.tag == 1 && w.format.block_align > 0 && w.format.sample_rate > 0))
+            .map(|w| w.data.len() as f32 / f32::from(w.format.block_align) / w.format.sample_rate as f32 / speed)
+            .reduce(f32::min)
+    }
+
     /// Caches the samples the workers have finished.
     fn collect_reads(&mut self, budget: usize, assets: &mut Assets<AudioSource>) {
         let Some(reader) = &self.reader else {

@@ -67,6 +67,7 @@ fn fs() -> Arc<MemFs> {
         <SFXEvent Name="Unit_Move_A"><Use_Preset>Preset_VO</Use_Preset><Samples>boom_b.wav</Samples><Overlap_Test>va</Overlap_Test></SFXEvent>
         <SFXEvent Name="Unit_Select_B"><Use_Preset>Preset_VO</Use_Preset><Samples>boom_b.wav</Samples><Overlap_Test>vb</Overlap_Test></SFXEvent>
         <SFXEvent Name="Chain_1"><Samples>boom_a.wav</Samples><Is_2D>Yes</Is_2D><Chained_SFXEvent>Boom</Chained_SFXEvent></SFXEvent>
+        <SFXEvent Name="Hum"><Samples>boom_a.wav</Samples><Play_Count>-1</Play_Count><Min_Pitch>90</Min_Pitch><Max_Pitch>125</Max_Pitch></SFXEvent>
         </SFXEvents>"#
             .to_vec(),
     );
@@ -374,4 +375,27 @@ fn a_newer_unit_response_waits_for_an_older_one_whose_sample_is_still_read() {
     assert!(voice_events(&mut app).is_empty(), "the move line waits for the select line");
     assert!(update_until(&mut app, |a| !voice_events(a).is_empty()), "no line played");
     assert_eq!(voice_events(&mut app), vec!["unit_move_a"]);
+}
+
+#[test]
+fn a_loop_is_read_ahead_and_one_pass_of_it_is_known() {
+    // A super laser shot holds its loop for one pass of the sample: the sample is read when the charge starts, and at the shot
+    // its length is known at the event's highest pitch (`boom_a.wav` is 0.1 s, "Hum" plays at up to 125 %).
+    let mut app = worker_app();
+    let budget = app.world().resource::<alamo_audio::AudioSettings>().cache_budget_bytes;
+    let pass = |app: &App, event: &str| {
+        let world = app.world();
+        world.resource::<alamo_audio::plugin::AlamoAudio>().loaded_pass_seconds(event, world.resource::<Assets<AudioSource>>())
+    };
+    let prepare = |app: &mut App| {
+        app.world_mut().resource_scope(|world, mut audio: Mut<alamo_audio::plugin::AlamoAudio>| {
+            audio.prepare_event("Hum", budget, &mut world.resource_mut::<Assets<AudioSource>>())
+        })
+    };
+    assert_eq!(pass(&app, "Hum"), None, "nothing is read yet");
+    assert!(!prepare(&mut app), "the sample is read on a worker");
+    assert!(update_until(&mut app, prepare), "the sample was never read");
+    let seconds = pass(&app, "Hum").expect("one pass");
+    assert!((seconds - 0.1 / 1.25).abs() < 1e-4, "{seconds}");
+    assert_eq!((pass(&app, "Missing"), pass(&app, "No_Such_Event")), (None, None));
 }

@@ -133,3 +133,6 @@ Empire at War audio: event data, sample resolution, decoding and a Bevy playback
   replaced while it waited is dropped (`sync_emitters`). Music: `start_track` returns `TrackStart::Waiting` and `music_system` tries the same file next frame
   with the fade-in it was given. `PlaySpeech` / `PlayFile` keep their picked file and retry. Requests give up after 10 s (`SAMPLE_WAIT_SECONDS`, ledger
   `Dropped`). Tests that count voices frame by frame switch it off; `tests/plugin.rs` and `tests/pass2.rs` check the worker path (order, loops, fade-in).
+- `AlamoAudio::prepare_event` reads every sample of an event ahead on the workers; `loaded_pass_seconds` says how long one pass through the event's
+  shortest loaded sample lasts at its highest pitch (a loop held that long ends before it starts over). The battle view reads a super laser's shot loop
+  while the laser charges and holds it one pass (battle-view STATUS, "Eclipse super laser").

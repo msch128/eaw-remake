@@ -372,15 +372,15 @@ pub fn spawn_beam(
     }
 }
 
-/// Updates beam alpha over time and despawns expired beams.
+/// Updates beam alpha over time and despawns expired beams; a textured beam also steps through its texture frames.
 pub fn update_special_beams(
     mut commands: Commands,
     time: Res<Time>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    mut query: Query<(Entity, &mut SpecialBeam, &MeshMaterial3d<StandardMaterial>)>,
+    mut query: Query<(Entity, &mut SpecialBeam, &MeshMaterial3d<StandardMaterial>, Option<&BeamFrames>)>,
 ) {
     let dt = time.delta_secs();
-    for (entity, mut beam, mat_handle) in &mut query {
+    for (entity, mut beam, mat_handle, frames) in &mut query {
         beam.timer -= dt;
         if beam.timer <= 0.0 {
             commands.entity(entity).despawn();
@@ -389,8 +389,125 @@ pub fn update_special_beams(
             let mut c = beam.initial_color.to_srgba();
             c.alpha *= alpha;
             mat.base_color = Color::Srgba(c);
+            if let Some(f) = frames {
+                mat.uv_transform = beam_frame_uv((beam.max_time - beam.timer) * BEAM_FRAMES_PER_SECOND, f.0);
+            }
         }
     }
+}
+
+/// The frames of a textured beam ([`spawn_textured_beam`]): `Num_Anim_Frames` of the ability.
+#[derive(Component, Debug)]
+pub struct BeamFrames(pub u32);
+
+/// Frame rate of an animated beam texture (estimate: the data gives only the number of frames).
+const BEAM_FRAMES_PER_SECOND: f32 = 15.0;
+
+/// Texture transform showing frame `t` (counting up, wrapping) of a beam texture with `frames` frames side by side along u (the
+/// beam's length). Estimate: the Remake's `tractor_beam01.tga` is one continuous horizontal beam; four 128 px columns of it differ
+/// only in the crackle of the white core, which reads as frames side by side.
+pub fn beam_frame_uv(t: f32, frames: u32) -> bevy::math::Affine2 {
+    let n = frames.max(1);
+    let frame = (t.max(0.0) as u32) % n;
+    bevy::math::Affine2::from_scale_angle_translation(Vec2::new(1.0 / n as f32, 1.0), 0.0, Vec2::new(frame as f32 / n as f32, 0.0))
+}
+
+/// Beam textures (`Beam_Texture_Name`) decoded once per battle, by lower-case name; `None` = missing in the data.
+#[derive(Resource, Default)]
+pub struct BeamArt(HashMap<String, Option<Handle<Image>>>);
+
+impl BeamArt {
+    /// The texture `name` with its alpha set to opaque: the beam is drawn additively, where Bevy scales the colour by the alpha, and
+    /// the alpha channel of the Remake's `tractor_beam01.tga` holds an unrelated vertical streak (the green beam is in the colour).
+    pub fn get_or_load(&mut self, fs: &alamo_fs::GameFs, images: &mut Assets<Image>, name: &str) -> Option<Handle<Image>> {
+        self.0
+            .entry(name.to_ascii_lowercase())
+            .or_insert_with(|| {
+                let bytes = alamo_render::texture::read_texture_file(fs, name)?;
+                let mut rgba = alamo_model::image::decode_texture(&bytes).map_err(|e| warn!("beam texture {name}: {e}")).ok()?;
+                for px in rgba.pixels.as_chunks_mut::<4>().0 {
+                    px[3] = 255;
+                }
+                Some(images.add(alamo_render::texture::rgba_with_mips(&rgba)))
+            })
+            .clone()
+    }
+}
+
+/// Spawns a beam drawn with a texture (`Beam_Texture_Name`): two crossed quads `width` wide from `from` to `to`, the texture's beam
+/// along the length, additive, tinted by `tint` (`Line_Color`) and fading over `seconds`, stepping through `frames` texture frames.
+/// One quad lies across the battle plane and one stands upright, so the beam reads from the battle camera's high angle and from low
+/// ones. Returns the beam entity (at `from`).
+#[allow(clippy::too_many_arguments)]
+pub fn spawn_textured_beam(
+    commands: &mut Commands,
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<StandardMaterial>,
+    texture: Handle<Image>,
+    from: Vec3,
+    to: Vec3,
+    width: f32,
+    tint: Color,
+    frames: u32,
+    seconds: f32,
+) -> Option<Entity> {
+    let dir = to - from;
+    let length = dir.length();
+    if length < 1.0 {
+        return None;
+    }
+    let material = materials.add(StandardMaterial {
+        base_color: tint,
+        base_color_texture: Some(texture),
+        unlit: true,
+        alpha_mode: AlphaMode::Add,
+        double_sided: true,
+        cull_mode: None,
+        uv_transform: beam_frame_uv(0.0, frames),
+        ..default()
+    });
+    let entity = commands
+        .spawn((
+            Name::new("textured beam"),
+            BattleEntity,
+            Mesh3d(meshes.add(crossed_beam_mesh(length, width))),
+            MeshMaterial3d(material),
+            Transform::from_translation(from).with_rotation(beam_rotation(dir / length)),
+            SpecialBeam { timer: seconds, max_time: seconds, initial_color: tint },
+            BeamFrames(frames),
+        ))
+        .id();
+    Some(entity)
+}
+
+/// Rotation that turns local +Y onto `dir` with local +X level (across the beam on the battle plane).
+fn beam_rotation(dir: Vec3) -> Quat {
+    let side = dir.cross(Vec3::Y).try_normalize().unwrap_or(Vec3::X);
+    Quat::from_mat3(&Mat3::from_cols(side, dir, side.cross(dir)))
+}
+
+/// Two crossed quads along local +Y from 0 to `length`, `width` wide: u runs along the beam, v across it.
+fn crossed_beam_mesh(length: f32, width: f32) -> Mesh {
+    use bevy::asset::RenderAssetUsages;
+    use bevy::mesh::{Indices, PrimitiveTopology};
+    let h = width * 0.5;
+    let positions = vec![
+        [-h, 0.0, 0.0],
+        [h, 0.0, 0.0],
+        [h, length, 0.0],
+        [-h, length, 0.0],
+        [0.0, 0.0, -h],
+        [0.0, 0.0, h],
+        [0.0, length, h],
+        [0.0, length, -h],
+    ];
+    let normals = vec![[0.0, 0.0, 1.0], [0.0, 0.0, 1.0], [0.0, 0.0, 1.0], [0.0, 0.0, 1.0], [1.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 0.0, 0.0]];
+    let uvs = vec![[0.0, 0.0], [0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0], [0.0, 1.0], [1.0, 1.0], [1.0, 0.0]];
+    Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default())
+        .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uvs)
+        .with_inserted_indices(Indices::U32(vec![0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7]))
 }
 
 /// Updates shockwave flash spheres, expanding radius and fading out.
@@ -831,6 +948,21 @@ mod tests {
         assert!(r_half > 0.6 * ping.max_radius, "ease-out expands quickly initially");
         let alpha_half = (1.0 - t_half).powi(2) * 0.85;
         assert!(alpha_half < 0.85, "alpha fades over time");
+    }
+
+    #[test]
+    fn a_beam_steps_through_its_texture_frames_side_by_side() {
+        // Four frames: each shows a quarter of the texture's width, frame 1 starts a quarter in, frame 4 wraps to 0.
+        let uv = |t: f32| {
+            let a = beam_frame_uv(t, 4);
+            (a.matrix2.x_axis.x, a.translation.x)
+        };
+        assert_eq!(uv(0.0), (0.25, 0.0));
+        assert_eq!(uv(1.5), (0.25, 0.25));
+        assert_eq!(uv(3.0), (0.25, 0.75));
+        assert_eq!(uv(4.2), (0.25, 0.0));
+        // A texture without frames is shown whole.
+        assert_eq!((beam_frame_uv(7.0, 1).matrix2.x_axis.x, beam_frame_uv(7.0, 1).translation.x), (1.0, 0.0));
     }
 }
 

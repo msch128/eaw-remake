@@ -113,6 +113,64 @@ pub struct ShipVisual {
     pub hero: bool,
     /// `Bank_Turn_Angle` in radians (0.0 if unspecified).
     pub bank_turn_angle: f32,
+    /// Look and sound of the unit's `SUPER_LASER` shot, if it has one.
+    pub super_laser: Option<SuperLaserVisual>,
+}
+
+/// Look and sound of a `SUPER_LASER` shot: the `Super_Laser_Ability` the unit's `Unit_Ability` names (`GUI_Activated_Ability_Name`),
+/// plus that `Unit_Ability`'s loop sound.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SuperLaserVisual {
+    /// `Owner_Particle_Bone_Name`: the bone or proxy the beam leaves from (`MuzzleA_00` on the Eclipse, the dish proxy on the Death Star).
+    pub bone: Option<String>,
+    /// `Beam_Texture_Name` (`tractor_beam01.tga` on the Eclipse); `None` keeps the plain beam line (the Death Star's data has no beam art).
+    pub beam_texture: Option<String>,
+    /// `Num_Anim_Frames`: frames of the beam texture.
+    pub beam_frames: u32,
+    /// `Line_Width` in world units (0 = not given).
+    pub line_width: f32,
+    /// `Line_Color` (`R G B A`, 0..255): tint of the beam texture.
+    pub line_color: Color,
+    /// `Fire_Continuation`: seconds the beam keeps firing (0 = not given).
+    pub fire_seconds: f32,
+    /// `Attack_Anim_Sub_Index`: the variant of the shooter's `ATTACK` animation that runs from the order to the shot; its
+    /// `Fire_Frame` is the moment of the shot.
+    pub attack_variant: u32,
+    /// `SFXEvent_Special_Ability_Loop` of the `Unit_Ability`: the sound of the shot ([`crate::ships::ShotSounds`]).
+    pub fire_loop: Option<String>,
+}
+
+impl SuperLaserVisual {
+    /// Reads the shot of a resolved unit; `None` if it has no `SUPER_LASER` `Unit_Ability`.
+    pub fn from_unit(r: &alamo_data::objects::Resolved) -> Option<Self> {
+        let ability = r
+            .element("unit_abilities_data")?
+            .children_named("unit_ability")
+            .find(|a| a.child_text("type").is_some_and(|t| t.trim().eq_ignore_ascii_case("SUPER_LASER")))?;
+        let text = |e: &alamo_data::xml::Element, t: &str| e.child_text(t).map(|v| v.trim().to_string()).filter(|v| !v.is_empty());
+        let name = text(ability, "gui_activated_ability_name");
+        let lasers: Vec<&alamo_data::xml::Element> = r.elements_named("abilities").flat_map(|a| a.children_named("super_laser_ability")).collect();
+        let laser = lasers
+            .iter()
+            .find(|l| name.as_deref().is_some_and(|n| l.attr("name").is_some_and(|a| a.trim().eq_ignore_ascii_case(n))))
+            .or(lasers.first());
+        let field = |t: &str| laser.and_then(|l| text(l, t));
+        let num = |t: &str| field(t).and_then(|v| v.trim_end_matches(['f', 'F']).parse::<f32>().ok());
+        let line_color = field("line_color")
+            .map(|v| v.split([' ', ',']).filter_map(|c| c.trim().parse::<u8>().ok()).collect::<Vec<u8>>())
+            .filter(|c| c.len() >= 3)
+            .map_or(Color::WHITE, |c| Color::srgba_u8(c[0], c[1], c[2], c.get(3).copied().unwrap_or(255)));
+        Some(Self {
+            bone: field("owner_particle_bone_name"),
+            beam_texture: field("beam_texture_name"),
+            beam_frames: num("num_anim_frames").map_or(1, |n| (n as u32).max(1)),
+            line_width: num("line_width").unwrap_or(0.0),
+            line_color,
+            fire_seconds: num("fire_continuation").unwrap_or(0.0),
+            attack_variant: num("attack_anim_sub_index").map_or(0, |n| n as u32),
+            fire_loop: text(ability, "sfxevent_special_ability_loop").filter(|n| !n.eq_ignore_ascii_case("sfx_na")),
+        })
+    }
 }
 
 /// Visual data for every ship definition of a [`Catalog`], plus the team colour per side.
@@ -265,6 +323,7 @@ impl VisualCatalog {
                 sfx: unit_sfx,
                 hero: r.as_ref().and_then(|r| r.flag("is_named_hero")).unwrap_or(false),
                 bank_turn_angle,
+                super_laser: r.as_ref().and_then(SuperLaserVisual::from_unit),
             });
         }
         let proj_tag = |tags: &[&str]| -> Vec<Option<String>> {
