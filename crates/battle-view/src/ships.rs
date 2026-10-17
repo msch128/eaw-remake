@@ -325,9 +325,10 @@ pub fn update_ships(
     cameras: Query<(&Camera, &GlobalTransform, &Projection), With<Camera3d>>,
     mut sfx: MessageWriter<alamo_audio::PlaySfx>,
     mut flash_spots: Local<Vec<Vec3>>,
-    // One unit sphere for every arrival and departure flash.
-    mut flash_mesh: Local<Option<Handle<Mesh>>>,
+    // One quad and one glow texture for every arrival and departure flash.
+    mut flash_art: Local<Option<FlashArt>>,
     mut meshes: ResMut<Assets<Mesh>>,
+    mut images: ResMut<Assets<Image>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     let (Some(cur), alpha) = (rt.cur.clone(), rt.alpha) else {
@@ -420,15 +421,9 @@ pub fn update_ships(
                     }
                     let radius = if fighter { 220.0 } else { (def.radius * vis.scale.max(1.0)).max(40.0) };
                     if !shared {
-                    commands.spawn((
-                        Name::new("hyperspace flash"),
-                        BattleEntity,
-                        Mesh3d(flash_mesh.get_or_insert_with(|| meshes.add(Sphere::new(1.0).mesh().uv(24, 16))).clone()),
-                        MeshMaterial3d(materials.add(flash_material(Color::srgba(0.75, 0.88, 1.0, 0.0)))),
-                        Transform::from_translation(pos).with_scale(Vec3::splat(radius)),
-                        Visibility::Hidden,
-                        ArrivalFlash { at: cur.time + lead + ARRIVAL_SECONDS * 0.85, radius: radius * 0.45 },
-                    ));
+                        let art = flash_art.get_or_insert_with(|| FlashArt::new(&mut meshes, &mut images));
+                        let flash = ArrivalFlash { at: cur.time + lead + ARRIVAL_SECONDS * 0.85, radius: radius * 0.45 };
+                        spawn_flash(&mut commands, art, &mut materials, pos, flash, "hyperspace flash", Visibility::Hidden);
                     }
                 }
                 rt.entities.insert(s.id, e);
@@ -568,19 +563,11 @@ pub fn update_ships(
                 sfx.write(alamo_audio::PlaySfx { event: "Unit_Ship_Hyperspace_Exit".into(), position: Some(t.translation), source: None });
                 let radius = rt.catalog.ship(view.def).radius.max(30.0);
                 let fwd = t.rotation * Vec3::Z;
-                // Unit sphere: `update_arrival_flashes` scales it to world size (a sphere of `radius` times a scale of `radius` was the giant ball).
-                // Additive like the arrival flash: the opaque white ball that stood here covered the screen on a fleet retreat (QA round 3).
-                let flash_mat = materials.add(flash_material(Color::srgba(0.8, 0.95, 1.0, 0.0)));
-                commands.spawn((
-                    Mesh3d(flash_mesh.get_or_insert_with(|| meshes.add(Sphere::new(1.0).mesh().uv(24, 16))).clone()),
-                    MeshMaterial3d(flash_mat),
-                    Transform::from_translation(t.translation).with_scale(Vec3::splat(1.0)),
-                    ArrivalFlash { at: cur.time, radius: radius * 0.6 },
-                    // The sim clock freezes when the battle ends (DEFEATED, pause); the flash is timed on it, so it also expires on wall time (the user saw it stay forever).
-                    RemoveAfter(FLASH_WALL_SECONDS),
-                    Visibility::Inherited,
-                    Name::new("hyperspace departure flash"),
-                ));
+                // A soft glow, not a ball: the opaque white ball that stood here covered the screen on a fleet retreat (QA round 3).
+                let art = flash_art.get_or_insert_with(|| FlashArt::new(&mut meshes, &mut images));
+                let flash = spawn_flash(&mut commands, art, &mut materials, t.translation, ArrivalFlash { at: cur.time, radius: radius * 0.6 }, "hyperspace departure flash", Visibility::Inherited);
+                // The sim clock freezes when the battle ends (DEFEATED, pause); the flash is timed on it, so it also expires on wall time (the user saw it stay forever).
+                commands.entity(flash).insert(RemoveAfter(FLASH_WALL_SECONDS));
                 commands.entity(e).insert(HyperspaceDeparture {
                     start: cur.time,
                     origin: t.translation,
@@ -1195,17 +1182,105 @@ pub(crate) fn ship_model(def: &battle_sim::ShipDef, model: String, team: Color) 
     }
 }
 
-/// Material of the arrival and departure flashes (the alpha is animated per flash by `update_arrival_flashes`).
-pub(crate) fn flash_material(color: Color) -> StandardMaterial {
-    StandardMaterial { base_color: color, unlit: true, alpha_mode: AlphaMode::Add, ..default() }
+/// Brightest additive alpha of a flash, at the middle of its glow.
+const FLASH_PEAK: f32 = 1.0;
+/// Seconds a flash lasts.
+const FLASH_SECONDS: f32 = 0.4;
+/// Half the side of the flash quad in [`ArrivalFlash::radius`]. The glow ([`flash_glow`]) is zero at the edge of the quad and its core is
+/// tight, so what shows of a flash is a bloom a fraction of that size.
+const FLASH_REACH: f32 = 2.0;
+
+/// Brightness (0..1) of the glow of a flash at `(u, v)` on its square image (-1..1 on both axes): a tight core with thin rays along the
+/// screen axes and the diagonals, falling smoothly to nothing at radius 1. A flash is a patch of light with no rim anywhere. (It used to be
+/// an additive sphere: a ball of one even brightness and a hard edge, which stood round the arriving ship as a translucent white sphere.)
+fn flash_glow(u: f32, v: f32) -> f32 {
+    use std::f32::consts::FRAC_PI_4;
+    let r = (u * u + v * v).sqrt().min(1.0);
+    let angle = v.atan2(u);
+    let axes = angle.cos().abs().powi(14) + angle.sin().abs().powi(14);
+    let diagonals = (angle - FRAC_PI_4).cos().abs().powi(24) + (angle + FRAC_PI_4).cos().abs().powi(24);
+    let core = (1.0 - r).powi(3);
+    (core + (0.7 * axes + 0.35 * diagonals) * (1.0 - r).powi(2)).min(1.0) * (1.0 - r)
 }
 
-/// Flash where a reinforcement drops out of hyperspace: an additive sphere that blooms and fades.
+/// The image of [`flash_glow`]: white, the glow in the alpha channel.
+pub(crate) fn flash_glow_image() -> Image {
+    use bevy::asset::RenderAssetUsages;
+    use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
+    const SIDE: u32 = 128;
+    let mut px = Vec::with_capacity((SIDE * SIDE * 4) as usize);
+    for y in 0..SIDE {
+        for x in 0..SIDE {
+            let (u, v) = (((x as f32 + 0.5) / SIDE as f32) * 2.0 - 1.0, ((y as f32 + 0.5) / SIDE as f32) * 2.0 - 1.0);
+            px.extend_from_slice(&[255, 255, 255, (flash_glow(u, v) * 255.0).round() as u8]);
+        }
+    }
+    Image::new(Extent3d { width: SIDE, height: SIDE, depth_or_array_layers: 1 }, TextureDimension::D2, px, TextureFormat::Rgba8UnormSrgb, RenderAssetUsages::default())
+}
+
+/// The quad and the glow shared by every arrival and departure flash.
+#[derive(Clone)]
+pub struct FlashArt {
+    /// A square of half side 1 in the XY plane.
+    pub(crate) mesh: Handle<Mesh>,
+    /// [`flash_glow_image`].
+    pub(crate) glow: Handle<Image>,
+}
+
+impl FlashArt {
+    pub(crate) fn new(meshes: &mut Assets<Mesh>, images: &mut Assets<Image>) -> Self {
+        Self { mesh: meshes.add(Rectangle::new(2.0, 2.0)), glow: images.add(flash_glow_image()) }
+    }
+}
+
+/// Material of the arrival and departure flashes: the glow, added to what is behind it (the alpha is animated per flash by
+/// `update_arrival_flashes`).
+pub(crate) fn flash_material(color: Color, glow: Handle<Image>) -> StandardMaterial {
+    StandardMaterial { base_color: color, base_color_texture: Some(glow), unlit: true, alpha_mode: AlphaMode::Add, cull_mode: None, ..default() }
+}
+
+/// Flash where a reinforcement drops out of hyperspace (or a ship jumps away): a soft glow that faces the camera, blooms and fades.
 #[derive(Component)]
 pub struct ArrivalFlash {
     /// Battle time the flash starts.
     at: f32,
     radius: f32,
+}
+
+/// Spawns a flash at `pos` (starting at `flash.at`; `update_arrival_flashes` sizes, fades and removes it).
+pub(crate) fn spawn_flash(commands: &mut Commands, art: &FlashArt, materials: &mut Assets<StandardMaterial>, pos: Vec3, flash: ArrivalFlash, name: &'static str, visibility: Visibility) -> Entity {
+    commands
+        .spawn((
+            Name::new(name),
+            BattleEntity,
+            Mesh3d(art.mesh.clone()),
+            MeshMaterial3d(materials.add(flash_material(Color::srgba(0.85, 0.95, 1.0, 0.0), art.glow.clone()))),
+            Transform::from_translation(pos).with_scale(Vec3::splat(flash.radius)),
+            visibility,
+            flash,
+        ))
+        .id()
+}
+
+/// How a flash looks `now`: not yet, gone, or a glow of this half size (world units) and additive alpha.
+#[derive(Debug, PartialEq)]
+enum FlashLook {
+    Waiting,
+    Gone,
+    Glow { half_size: f32, alpha: f32 },
+}
+
+/// The look of `flash` at battle time `now`: its quad blooms from 0.8 to 4 times its radius over [`FLASH_SECONDS`] while its middle fades
+/// from [`FLASH_PEAK`] to nothing.
+fn flash_look(flash: &ArrivalFlash, now: f32) -> FlashLook {
+    if now < flash.at {
+        return FlashLook::Waiting;
+    }
+    let t = (now - flash.at) / FLASH_SECONDS;
+    if t >= 1.0 {
+        return FlashLook::Gone;
+    }
+    FlashLook::Glow { half_size: flash.radius * FLASH_REACH * (0.4 + 1.6 * t.sqrt()), alpha: (1.0 - t) * (1.0 - t) * FLASH_PEAK }
 }
 
 /// Applies the streak to ships that are still arriving (U71).
@@ -1228,27 +1303,38 @@ fn apply_arrival(arrival: &HyperspaceArrival, now: f32, radius: f32, tf: &mut Tr
     true
 }
 
-/// Grows, fades and removes arrival flashes.
+/// Grows, fades and removes arrival flashes, and turns their glow to the camera.
 pub fn update_arrival_flashes(
     mut commands: Commands,
     rt: Res<BattleRuntime>,
+    cameras: Query<(&Camera, &GlobalTransform), With<Camera3d>>,
     mut flashes: Query<(Entity, &ArrivalFlash, &mut Transform, &MeshMaterial3d<StandardMaterial>, &mut Visibility)>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     let Some(now) = rt.cur.as_ref().map(|c| c.time) else { return };
+    let facing = cameras.iter().find(|(c, _)| c.is_active).map(|(_, gt)| gt.rotation());
     for (e, f, mut tf, mat, mut vis) in &mut flashes {
-        if now < f.at {
-            continue;
-        }
-        let t = (now - f.at) / 0.6;
-        if t >= 1.0 {
+        if !apply_flash(f, now, facing, &mut tf, &mut vis, materials.get_mut(&mat.0).as_deref_mut()) {
             commands.entity(e).try_despawn();
-            continue;
         }
-        *vis = Visibility::Inherited;
-        tf.scale = Vec3::splat(f.radius * (0.4 + 1.6 * t.sqrt()));
-        if let Some(mut m) = materials.get_mut(&mat.0) {
-            m.base_color = Color::srgba(0.85, 0.95, 1.0, (1.0 - t) * (1.0 - t) * 0.75);
+    }
+}
+
+/// Sizes, fades and aims `flash` for battle time `now` (`facing`: the camera's rotation); false once it is gone.
+fn apply_flash(flash: &ArrivalFlash, now: f32, facing: Option<Quat>, tf: &mut Transform, vis: &mut Visibility, material: Option<&mut StandardMaterial>) -> bool {
+    match flash_look(flash, now) {
+        FlashLook::Waiting => true,
+        FlashLook::Gone => false,
+        FlashLook::Glow { half_size, alpha } => {
+            *vis = Visibility::Inherited;
+            tf.scale = Vec3::splat(half_size);
+            if let Some(rotation) = facing {
+                tf.rotation = rotation;
+            }
+            if let Some(m) = material {
+                m.base_color = Color::srgba(0.85, 0.95, 1.0, alpha);
+            }
+            true
         }
     }
 }
@@ -1389,6 +1475,108 @@ mod tests {
         let mut tf_done = Transform::IDENTITY;
         assert!(!apply_arrival(&arrival, ARRIVAL_SECONDS, radius, &mut tf_done));
     }
+
+    /// The arrival flash was an additive UV sphere: a ball of one even brightness with a hard edge, which stood round the arriving ship as
+    /// a translucent white sphere (a Star Destroyer inside it, 1.3 s after it appeared). The glow it has now falls off smoothly to nothing
+    /// before the edge of its image, so there is no rim anywhere.
+    #[test]
+    fn a_flash_is_a_soft_glow_without_a_rim() {
+        // Along the screen axes, the diagonals and between them: brightest in the middle, falling steadily, no step anywhere (the sphere had
+        // one of 0.75 at its edge, here the steepest fall is 0.025 per hundredth of the radius), nothing at the edge.
+        for degrees in [0.0f32, 12.0, 22.5, 45.0, 60.0, 90.0, 135.0, 200.0, 315.0] {
+            let (sin, cos) = degrees.to_radians().sin_cos();
+            let along: Vec<f32> = (0..=100).map(|k| flash_glow(cos * k as f32 / 100.0, sin * k as f32 / 100.0)).collect();
+            assert!(along[0] > 0.99, "{degrees} degrees: {:?}", along[0]);
+            assert!(along.windows(2).all(|p| p[1] <= p[0]), "{degrees} degrees: {along:?}");
+            assert!(along.windows(2).all(|p| p[0] - p[1] <= 0.05), "{degrees} degrees: {along:?}");
+            assert!(along[99] < 0.01 && along[100] < 1e-4, "{degrees} degrees: {along:?}");
+        }
+        // The image carries it: opaque in the middle, nothing at the edges and in the corners.
+        let img = flash_glow_image();
+        let (w, h) = (img.width() as usize, img.height() as usize);
+        let data = img.data.as_ref().expect("cpu data");
+        let alpha = |x: usize, y: usize| data[(y * w + x) * 4 + 3];
+        assert!(alpha(w / 2, h / 2) >= 250 && alpha(w / 2 - 1, h / 2 - 1) >= 250);
+        assert!([(0, h / 2), (w - 1, h / 2), (w / 2, 0), (w / 2, h - 1), (0, 0), (w - 1, h - 1)].iter().all(|&(x, y)| alpha(x, y) <= 1));
+    }
+
+    #[test]
+    fn a_flash_is_one_flat_quad_not_a_ball() {
+        use bevy::ecs::system::RunSystemOnce;
+        let mut world = World::new();
+        world.init_resource::<Assets<Mesh>>();
+        world.init_resource::<Assets<Image>>();
+        let art = world.run_system_once(|mut meshes: ResMut<Assets<Mesh>>, mut images: ResMut<Assets<Image>>| FlashArt::new(&mut meshes, &mut images)).expect("flash art");
+        let mesh = world.resource::<Assets<Mesh>>().get(&art.mesh).expect("flash mesh");
+        assert_eq!(mesh.count_vertices(), 4, "the sphere had 425");
+        let Some(bevy::mesh::VertexAttributeValues::Float32x3(points)) = mesh.attribute(Mesh::ATTRIBUTE_POSITION) else { panic!("no positions") };
+        assert!(points.iter().all(|p| p[2] == 0.0 && p[0].abs() == 1.0 && p[1].abs() == 1.0), "{points:?}");
+    }
+
+    #[test]
+    fn a_spawned_flash_waits_hidden_and_adds_its_glow_to_what_is_behind_it() {
+        use bevy::ecs::system::RunSystemOnce;
+        let mut world = World::new();
+        world.init_resource::<Assets<Mesh>>();
+        world.init_resource::<Assets<Image>>();
+        world.init_resource::<Assets<StandardMaterial>>();
+        let flash = world
+            .run_system_once(|mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut images: ResMut<Assets<Image>>, mut materials: ResMut<Assets<StandardMaterial>>| {
+                let art = FlashArt::new(&mut meshes, &mut images);
+                (spawn_flash(&mut commands, &art, &mut materials, Vec3::new(1.0, 2.0, 3.0), ArrivalFlash { at: 9.0, radius: 300.0 }, "test flash", Visibility::Hidden), art)
+            })
+            .expect("spawn");
+        let (e, art) = flash;
+        assert_eq!(world.get::<Visibility>(e), Some(&Visibility::Hidden));
+        assert_eq!(world.get::<Transform>(e).map(|t| t.translation), Some(Vec3::new(1.0, 2.0, 3.0)));
+        assert!(world.get::<BattleEntity>(e).is_some(), "it goes with the battle");
+        assert_eq!(world.get::<Mesh3d>(e).map(|m| m.0.clone()), Some(art.mesh.clone()));
+        let material = world.get::<MeshMaterial3d<StandardMaterial>>(e).expect("material").0.clone();
+        let m = world.resource::<Assets<StandardMaterial>>().get(&material).expect("material asset");
+        assert!(m.unlit && matches!(m.alpha_mode, AlphaMode::Add) && m.base_color_texture.as_ref() == Some(&art.glow));
+        assert_eq!(m.base_color.alpha(), 0.0, "nothing shows before the flash starts");
+    }
+
+    #[test]
+    fn a_flash_blooms_and_fades_without_outgrowing_its_ship() {
+        // A Star Destroyer's flash: radius 0.45 of the ship's radius, as `update_ships` spawns it.
+        let ship = 700.0;
+        let flash = ArrivalFlash { at: 10.0, radius: ship * 0.45 };
+        assert_eq!(flash_look(&flash, 9.99), FlashLook::Waiting);
+        assert_eq!(flash_look(&flash, 10.0 + FLASH_SECONDS + 0.01), FlashLook::Gone);
+        let looks: Vec<(f32, f32)> = (0..40)
+            .map(|k| match flash_look(&flash, 10.0 + k as f32 * 0.01) {
+                FlashLook::Glow { half_size, alpha } => (half_size, alpha),
+                other => panic!("{other:?}"),
+            })
+            .collect();
+        assert!(looks.windows(2).all(|p| p[1].0 >= p[0].0 && p[1].1 <= p[0].1), "it grows and fades");
+        // The quad stays within two ship radii (its glow is much tighter), and the middle of the glow is never brighter than the peak.
+        assert!(looks.iter().all(|&(size, alpha)| size <= 2.0 * ship && alpha <= FLASH_PEAK + 1e-6), "{looks:?}");
+        assert!((looks[0].1 - FLASH_PEAK).abs() < 1e-6);
+        // Where the old sphere had its rim, the ship's own radius, the glow adds next to nothing at any moment (along the brightest ray).
+        let at_the_hull = looks.iter().map(|&(size, alpha)| alpha * flash_glow((ship / size).min(1.0), 0.0)).fold(0.0f32, f32::max);
+        assert!(at_the_hull < 0.05, "{at_the_hull}");
+    }
+
+    #[test]
+    fn a_flash_turns_its_glow_to_the_camera_and_leaves_when_over() {
+        let flash = ArrivalFlash { at: 10.0, radius: 100.0 };
+        let (mut tf, mut vis) = (Transform::from_scale(Vec3::splat(100.0)), Visibility::Hidden);
+        let mut material = StandardMaterial::default();
+        let facing = Some(Quat::from_rotation_y(0.7));
+        // Waiting: still hidden, nothing touched.
+        assert!(apply_flash(&flash, 9.0, facing, &mut tf, &mut vis, Some(&mut material)));
+        assert_eq!((vis, tf.rotation), (Visibility::Hidden, Quat::IDENTITY));
+        // Under way: shown, sized, faced to the camera, faded.
+        assert!(apply_flash(&flash, 10.2, facing, &mut tf, &mut vis, Some(&mut material)));
+        let FlashLook::Glow { half_size, alpha } = flash_look(&flash, 10.2) else { panic!("glow") };
+        assert_eq!((vis, tf.rotation, tf.scale), (Visibility::Inherited, Quat::from_rotation_y(0.7), Vec3::splat(half_size)));
+        assert!((material.base_color.alpha() - alpha).abs() < 1e-6);
+        // Over: gone.
+        assert!(!apply_flash(&flash, 10.0 + FLASH_SECONDS + 0.01, facing, &mut tf, &mut vis, Some(&mut material)));
+    }
+
     fn eclipse_laser() -> crate::visuals::SuperLaserVisual {
         crate::visuals::SuperLaserVisual {
             bone: Some("MuzzleA_00".into()),

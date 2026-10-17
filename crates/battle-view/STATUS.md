@@ -165,6 +165,33 @@ Add `battle-view`, `galaxy-sim` (already there through galaxy-play) and `eaw-ui`
   instances. Still open: the battle music start / track change reads the whole MP3 on the main thread (13-20 ms, `alamo-audio` `start_track`); frames of 30-50 ms without any load note come from the shared
   machine (other builds on the same cores).
 
+## Hyperspace flash without a sphere (2026-10-17)
+- User report: units that jump out of hyperspace briefly have a white sphere around them (a Star Destroyer inside a translucent
+  grey-white sphere). Cause: the arrival flash (d15ea16; the component `ships::ArrivalFlash` since U59) was an additive `Sphere::new(1.0).mesh().uv(24, 16)` (425
+  vertices) of one even brightness, alpha 0.75 fading to 0 over 0.6 s, radius 0.18 to 0.9 times the ship's radius, switched on 1.275 s after
+  the ship appeared (when it has settled): the ship stood inside a ball with a hard rim. The departure flash of a retreating ship was the same
+  sphere. The warm-up (ec712e6), a tint and the shield meshes are not the source: in the frame burst below the only thing round the ships is
+  that sphere (it shows from 9.55 s, once it has grown past the hull; the ships look the same without it), and the shield meshes stay hidden.
+- Now: a camera-facing quad (two triangles) with a glow image (`flash_glow`: tight core, thin rays along the screen axes and diagonals,
+  smooth to zero before the edge of the image: no rim at any angle), additive and unlit, 0.4 s (`FLASH_SECONDS`), half side 0.8 to 4 times
+  the flash radius (0.36 to 1.8 ship radii at an arrival, about a quarter of that is bright), brightness `FLASH_PEAK` 1.0 times (1 - t)^2.
+  `spawn_flash` / `flash_look` / `apply_flash` are small pure functions and tested; the flash entity goes with the battle (`BattleEntity`,
+  the departure flash had none). `warmup.rs` warms the same textured material (its pipeline differs from the old untextured one), so a
+  reinforcement still drops in without a stall.
+- Tests (ships.rs): `a_flash_is_a_soft_glow_without_a_rim` (no step larger than 0.05 of the brightness per hundredth of the radius at 9
+  angles, 0 at the edge and in the corners, the old sphere stepped 0.75), `a_flash_is_one_flat_quad_not_a_ball` (4 vertices, the sphere had
+  425), `a_spawned_flash_waits_hidden_and_adds_its_glow_to_what_is_behind_it`, `a_flash_blooms_and_fades_without_outgrowing_its_ship` (the
+  glow adds under 0.05 at the ship's own radius), `a_flash_turns_its_glow_to_the_camera_and_leaves_when_over`.
+- Frame burst (offscreen, `battle_demo --small --size 1280x720 --cam 30,35,3000 --times 9.20,9.25,...,10.00` with `SP_DEMO_REINFORCE=3
+  SP_DEMO_ARRIVAL=1`: three Star Destroyers called in at 3 s arrive at 8.1 s): before, three hard-edged translucent spheres from 9.55 to
+  10.0 s; after, a soft flare from 9.55 to about 9.75 s and nothing from 9.85 s. `SP_DEMO_ARRIVAL=1` frames the player's newest capital ship;
+  `SP_DEMO_RETREAT=61` (the sim allows a retreat from 60 s, the jump follows 10 s later) shows the departure flash: while the battle is over
+  the sim clock stands still, so a departure flash of the last ships stays at its first look (a small star at the ship's old place) until
+  `FLASH_WALL_SECONDS` (3 s) ran out, as the sphere did.
+- Not done: no Remake frame of an arrival to compare with (the video's battle chapter has none; the engine draws the jump itself, the XML has
+  only sounds and speed factors), so the size, length and brightness of the flare are look estimates. Everything is in the constants
+  `FLASH_PEAK` / `FLASH_SECONDS` / `FLASH_REACH`; a flash that is not wanted at all is one `spawn_flash` call to remove.
+
 ## Tactical screen fidelity round (2026-10-08, tactical agent)
 - **World overlays are eaw-ui's now:** `tactical_ui::sync_overlays` fills `eaw_ui::TacticalOverlays` (own resource; `TacticalData` no longer carries overlays):
   green corner brackets + the game's `i_bar_*` health/shield textures for selected and hovered ships, a health line under every own ship

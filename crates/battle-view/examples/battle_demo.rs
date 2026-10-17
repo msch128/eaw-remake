@@ -34,6 +34,7 @@ use bevy::window::ExitCondition;
 const STEP_MS: u64 = 16;
 
 static ABILITY_USED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static RETREAT_ORDERED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 static BOOM_AT: std::sync::Mutex<Option<Vec3>> = std::sync::Mutex::new(None);
 
 fn parse_vec(s: &str) -> Vec<f32> {
@@ -486,6 +487,16 @@ fn capture_driver(
         rt.command(0, battle_sim::Command::Reinforce { ship: s.def, count: 3 });
         *reinforced = true;
     }
+    // `SP_DEMO_RETREAT=<secs>` (60 or more, the sim allows a retreat from then on): the player's side orders its retreat at that battle time and
+    // jumps away `retreat_jump_seconds` (10) later, each ship with its departure flash.
+    if !RETREAT_ORDERED.load(std::sync::atomic::Ordering::Relaxed)
+        && let Some(at) = std::env::var("SP_DEMO_RETREAT").ok().and_then(|v| v.parse::<f32>().ok())
+        && let Some(cur) = rt.cur.as_ref()
+        && cur.time >= at
+    {
+        rt.command(settings.player_side, battle_sim::Command::Retreat);
+        RETREAT_ORDERED.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
     if !ABILITY_USED.load(std::sync::atomic::Ordering::Relaxed)
         && let Some((kind, at)) = std::env::var("SP_DEMO_ABILITY").ok().and_then(|v| v.split_once('@').map(|(k, t)| (k.to_string(), t.parse::<f32>().unwrap_or(0.0))))
         && let Some(cur) = rt.cur.as_ref()
@@ -604,6 +615,16 @@ fn capture_driver(
         bc.snap = true;
         bc.target_focus = p;
         bc.target_distance = 2500.0;
+    }
+    // `SP_DEMO_ARRIVAL=1` (with `SP_DEMO_REINFORCE=<secs>`): the camera frames the player's newest capital ship, the reinforcement that drops
+    // out of hyperspace; `--times` with a short step then makes a frame burst of the arrival.
+    if std::env::var_os("SP_DEMO_ARRIVAL").is_some()
+        && let Some(cur) = rt.cur.as_ref()
+        && let Some(s) = cur.ships.iter().filter(|s| s.side == settings.player_side && rt.catalog.ship(s.def).radius > 200.0).max_by_key(|s| s.id)
+    {
+        bc.snap = true;
+        bc.target_focus = battle_view::convert::sim_to_bevy(s.pos);
+        bc.target_distance = (rt.catalog.ship(s.def).radius * 4.0).clamp(1200.0, 6000.0);
     }
     if group_move.is_some() {
         // Frame the player's capital ships (the group move's formation).

@@ -162,14 +162,15 @@ fn run_warmup(
             }
         }
         // The hyperspace arrival flash and the arrival marker of a placed wave (transparent, nothing shows).
+        let flash = crate::ships::FlashArt::new(&mut meshes, &mut images);
         spawned.push(
             commands
                 .spawn((
                     Name::new("warm-up flash"),
                     BattleEntity,
                     WarmupInstance,
-                    Mesh3d(meshes.add(Sphere::new(1.0).mesh().uv(24, 16))),
-                    MeshMaterial3d(materials.add(crate::ships::flash_material(Color::srgba(0.75, 0.88, 1.0, 0.0)))),
+                    Mesh3d(flash.mesh.clone()),
+                    MeshMaterial3d(materials.add(crate::ships::flash_material(Color::srgba(0.85, 0.95, 1.0, 0.0), flash.glow.clone()))),
                     Transform::from_xyz(0.0, 0.0, -100.0).with_scale(Vec3::splat(10.0)),
                     ChildOf(camera),
                 ))
