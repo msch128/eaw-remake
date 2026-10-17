@@ -1,4 +1,4 @@
-//! "From the Grouassert!(main.iter().any(|n| n == minor), "{camp}: {minor} is the opposing side");d Up" on the largest Remake map (real data, skipped without the game).
+//! "From the Ground Up" on the largest Remake map (real data, skipped without the game).
 
 use std::collections::BTreeMap;
 

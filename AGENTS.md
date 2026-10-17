@@ -6,7 +6,7 @@ Read [`CLAUDE.md`](CLAUDE.md) first: project description, crate map, conventions
 
 ## Hard rules
 1. **Game and workshop folders are read-only.** Never write under the Steam install or the workshop content folder.
-   No game files, assets or reference screenshots in the repo, ever. The repo stays private.
+   No game files, assets or reference screenshots in the repo, ever. The repo is public on GitHub.
 2. **The user is often at this machine.** While they are:
    - only `--offscreen` runs and unit tests;
    - **no** `--hidden` / `windowed-*` smoke scenarios and **no** input tests (`SP_UI_TEST`, `SP_INPUT_TEST`,
@@ -24,6 +24,7 @@ Read [`CLAUDE.md`](CLAUDE.md) first: project description, crate map, conventions
 8. Sims (`galaxy-sim`, `battle-sim`) stay deterministic and Bevy-free; player and AI actions go through journaled
    commands so saves and replays stay consistent.
 9. No CI, no prebuilt binaries, no new dependencies without a reason.
+10. **Never quote the user or the chat in commit messages, code comments or docs; write neutral English. No local paths with user names.**
 
 ## Build, test, play
 - User exe: `.\build.ps1` → `target\release\space-peace.exe` (4–8 min). It builds the working tree.

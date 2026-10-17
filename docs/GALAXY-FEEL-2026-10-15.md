@@ -44,7 +44,7 @@ What the frames show about fleets on the galaxy map (CS9 f0016, f0019; t 998-100
 3. Hyperlanes are thick light shafts; a fleet on a lane is a tiny model with a short line behind it (t 1002-1005 s).
 4. The game pause banner and portraits do not change while the player moves things.
 
-Spec (user words: press and hold on a fleet, it hangs at the cursor like a picture dragged between Windows folders, drop it on a planet):
+Spec (user description: press and hold on a fleet, it hangs at the cursor like an item dragged between folders, drop it on a planet):
 
 1. Click on a fleet: the whole group pops once (scale up 28 % and back in 0.3 s) and keeps the pulsing double ring. Status: done
    (`galaxy-play/src/carry.rs`, `pop_bump`).

@@ -16,6 +16,7 @@ No ground combat, story campaigns or movies. Windows, edition 2024.
 - **Usage budget:** 5-hour usage window – 7 parallel agents burned ~33% in 25 min. Default to 3–4 agents on the
   critical path, few render iterations, short reports. Current plan and state: `HANDOFF.md`.
 - Commit + push to `main` after `cargo check --workspace --all-targets` passes.
+- **Never quote the user or the chat in commit messages, code comments or docs; write neutral English. No local paths with user names.**
 
 ## Crates (pipeline order)
 `alamo-fs` (MEG + layered VFS) -> `alamo-data` (XML, string tables, game objects) / `alamo-model` (.alo/.ala/particles)

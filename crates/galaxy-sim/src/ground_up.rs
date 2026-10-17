@@ -206,7 +206,7 @@ impl Sim {
     }
 }
 
-/// Garrison units per level of the human player's tech that a passive planet holds before it stops growing (estimate: the user's rule, "2 x player tech").
+/// Garrison units per level of the human player's tech that a passive planet holds before it stops growing (estimate: the user's rule, 2 x player tech).
 pub const PASSIVE_GARRISON_PER_TECH: i32 = 2;
 
 impl Sim {

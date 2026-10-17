@@ -640,7 +640,7 @@ fn tier_settings(table: &alamo_data::DifficultyTable, tier: DifficultyTier, mino
 }
 
 /// How far the AI sees (user rule 2026-10-15, galaxy-sim RULES.md "AI knowledge"): Easy 1 lane around its planets and fleets, Normal 2, Hard 3, Brutal everything. Minor factions use
-/// Normal (estimate, user: "same rule with Normal"), Fair plays Normal. `None` = sees everything.
+/// Normal (estimate), Fair plays Normal. `None` = sees everything.
 pub fn ai_sight_hops(tier: DifficultyTier, minor: bool) -> Option<u8> {
     match tier {
         DifficultyTier::Brutal => None,

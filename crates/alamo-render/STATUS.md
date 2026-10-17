@@ -56,7 +56,7 @@ the first directional light. `battle-view` spawns the map's fill lights from the
 - Particle decoding (corpus surveys: `alamo-model` examples `particle_tracks`, `particle_shapes`, `particle_frames`, `particle_one`):
   float tracks (size, frame, spin) carry keys like the color tracks (`f32 value, f32 time`; 2,000+ emitters with size keys, e.g. glowcenter 2->500 reaching 500 at 20% of life);
   they were dropped before, so sizes interpolated start->end linearly. Property 0x09 `speed` is a radial speed away from the emitter origin
-  (negative sucks inward: `inwardsucking` -350, explosion fire +135) and was ignored. Frame end values 0 and 2 are editor defaults (7,300 of 8,200); ascending
+  (negative pulls inward: `inwardsucking` -350, explosion fire +135) and was ignored. Frame end values 0 and 2 are editor defaults (7,300 of 8,200); ascending
   ends > 2 (16, 49 = sheet size, `explosion_frames_medium1` grid 4 frames 0->16) are flipbooks over the life and now animate.
   Still unknown: props 0x0b (-20..-100; drag or gravity), 0x12/0x13 (fractions), 0x17, 0x3c/0x3e/0x3f/0x40/0x42, shape kinds/params (positions are boxes, radial
   spawn shapes ignored), the exact additive blend factor. The capital explosion still lacks the dense central fireball (dim glow emitters, sparks dominate).

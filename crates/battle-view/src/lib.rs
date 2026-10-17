@@ -745,7 +745,7 @@ fn is_ground_model(model: &str) -> bool {
 }
 
 /// Writes [`BattleFinished`] once the displayed picture reached the end of a battle that came from a request.
-/// Seconds the victory/defeat banner stays up with the battle camera still running before the summary opens (user rule U49, "~5 seconds"; a click, Space or Esc skips it).
+/// Seconds the victory/defeat banner stays up with the battle camera still running before the summary opens (user rule U49: about 5 seconds; a click, Space or Esc skips it).
 const OUTCOME_HOLD_SECONDS: f32 = 5.0;
 
 fn report_outcome(

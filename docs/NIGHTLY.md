@@ -25,7 +25,7 @@ How the coordinator runs unattended. The work list is `docs/ROADMAP-2026-10-09.m
 
 ## Agent brief template
 > You work on "Space Peace: Not at War", a Rust/Bevy 0.19.1 re-engine of Star Wars: Empire at War (Remake 4.0
-> mod). Repo: C:\Users\schro\Documents\space-peace. Read CLAUDE.md and the STATUS.md of the crates you touch.
+> mod). Repo: <repo>. Read CLAUDE.md and the STATUS.md of the crates you touch.
 > Rules:
 > - Never open visible windows and never take desktop screenshots. `--hidden` and `--offscreen` runs are fine.
 > - Game and workshop folders are read-only.
@@ -33,7 +33,7 @@ How the coordinator runs unattended. The work list is `docs/ROADMAP-2026-10-09.m
 > - Do NOT commit.
 > - Use your own `CARGO_TARGET_DIR=target/<area>`.
 > - Gameplay numbers come from the data; name any estimate in RULES.md/STATUS.md.
-> - References: `C:\Users\schro\Documents\space-peace-ref\` (screenshots `0N_*.png`; Remake video frames
+> - References: `<reference frames>\` (screenshots `0N_*.png`; Remake video frames
 >   `video\vNNNNs.jpg` every 10 s and `video\battle1s\bNNNNs.jpg` every 1 s for the space battle, 613–965 s).
 >
 > Task: roadmap item #N in docs/ROADMAP-2026-10-09.md (quote it).

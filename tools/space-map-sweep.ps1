@@ -1,17 +1,19 @@
 # Opening-frame sweep of every planet space map: renders each one offscreen with battle_demo and flags frames with almost no dark
 # pixel (a planet disc filling the view with no limb) or maps that fail to load. One exe run at a time; output goes to $Out, never the repo.
-#   .\tools\space-map-sweep.ps1 -Exe target\release\examples\battle_demo.exe [-Maps a,b] [-MinDark 0.03]
+#   .\tools\space-map-sweep.ps1 -Exe target\release\examples\battle_demo.exe [-Maps a,b] [-MinDark 0.03] [-Data <mod folder>\Data]
+# Without -Maps the map list is read from the mod's Planets_*.xml: pass -Data or set EAW_MOD_DIR to the Remake mod folder.
 param(
     [Parameter(Mandatory)][string]$Exe,
     [string]$Out = (Join-Path $env:TEMP 'space-map-sweep'),
     [string[]]$Maps = @(),
     [double]$MinDark = 0.03,
-    [string]$Data = 'F:\SteamLibrary\steamapps\workshop\content\32470\1770851727\Data'
+    [string]$Data = $(if ($env:EAW_MOD_DIR) { Join-Path $env:EAW_MOD_DIR 'Data' })
 )
 Add-Type -AssemblyName System.Drawing
 New-Item -ItemType Directory -Force $Out | Out-Null
 $env:APPDATA = Join-Path $Out 'appdata'
 New-Item -ItemType Directory -Force $env:APPDATA | Out-Null
+if (-not $Maps -and -not $Data) { throw 'No map list: pass -Maps, pass -Data <mod folder>\Data or set EAW_MOD_DIR.' }
 if (-not $Maps) {
     $Maps = Get-ChildItem (Join-Path $Data 'XML') -Filter 'Planets_*.xml' | ForEach-Object {
         Select-String -Path $_.FullName -Pattern '<Space_Tactical_Map>\s*([^<\s]+?)(\.ted)?\s*<' -AllMatches | ForEach-Object { $_.Matches } | ForEach-Object { $_.Groups[1].Value }
