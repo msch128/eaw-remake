@@ -45,7 +45,8 @@ Model examples take game paths and default to mod 1770851727.
 - **`.ala`:** two encodings (per-bone key chunks `0x1002/0x1004/0x1006/0x1007/0x1008` vs pooled channels
   `0x1009/0x100a/0x100b`). Bones match the skeleton **by name**, case-insensitive. Quaternion = i16/32767.
   Translation/scale = `base + q*step`. Lookup name `<MODEL>_<KIND>_<NN>.ALA`.
-- **Particles:** 7 tracks (R,G,B,A,size,frame,spin), emitter space is **Y-up**. Fields documented as
+- **Particles:** 7 tracks (R,G,B,A,size,frame,spin), emitter space is **Z-up** like the models (on a proxy: the bone's own axes;
+  directed emitters point along +Z). Fields documented as
   "Inferred" are guesses based on value statistics.
 
 ## Coordinate conventions (most frequent source of bugs)

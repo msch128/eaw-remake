@@ -18,12 +18,12 @@ Parses Alamo engine assets into engine-neutral data. Depends only on `alamo-fs`.
 ## Conventions
 Alamo space is right-handed, Z-up, bows point -Y, UV origin top-left, CCW front faces.
 Bone transforms are row-major 3x4, local to the parent. Rigid mesh vertices are bone-local,
-skinned ones are model-space. Particle emitter space is Y-up (maps to bone +Z on proxies).
+skinned ones are model-space. Particle emitter space is Z-up too: on a proxy it is the bone's own frame (see `particle.rs`).
 Convert to Bevy with `(x,y,z) -> (x,z,-y)`.
 
 ## Examples (`cargo run -p alamo-model --example <name> -- ...`)
 `alo_dump <path>`, `chunk_tree <path>`, `alo_to_gltf <path> <out.glb>`, `parse_all`,
-`parse_all_ala`, `parse_all_particles`, `particle_summary <path>`, `particle_dump`,
+`parse_all_ala`, `parse_all_particles`, `particle_summary <path>`, `particle_dump`, `particle_axes <model> | --survey` (where proxy emitters point under both axis readings), `particle_frame_change [file...]` (which emitters a 90 degree particle frame turn moves), `particle_dir_hist` (axis of every directed emitter),
 `xml_models <Tag>`. Paths are game paths (e.g. `Art/Models/X.ALO`), mod 1770851727 by default.
 
 ## Gaps / next steps

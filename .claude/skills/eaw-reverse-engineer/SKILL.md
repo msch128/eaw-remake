@@ -37,7 +37,7 @@ the original game to compare against, and names (bones, effects, XML tags) that 
 - Module docs carry the format layout (see `alamo-map/src/lib.rs`, `alamo-model/src/particle.rs` as templates).
 
 ## Pitfalls seen in this repo
-- Axis conventions differ per format (models Z-up and bow -Y, particles Y-up, `.ted` yaw CCW from +X).
+- Axis conventions differ per format (models and particles Z-up, bow -Y; `.ted` yaw CCW from +X).
   See `eaw-formats`.
 - A mirrored or upside-down result is usually a convention issue, not a parser bug.
 - Per-frame vs per-second units (x30) in XML speeds.

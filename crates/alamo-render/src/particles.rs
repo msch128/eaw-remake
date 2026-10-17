@@ -6,11 +6,13 @@
 //! of draw calls is the number of distinct texture/blend pairs, independent of the particle count.
 //! Alpha-blended batches are sorted back to front, additive batches are not.
 //!
-//! Emitter-local space is **Y-up** (inferred from engine exhausts and damage fires, which only
-//! line up with their proxy bones if particle Y maps to the bone's Z axis). Systems attached to
-//! model proxies map it onto the bone frame (`(x, y, z) -> (x, -z, y)`) and inherit the model's
-//! Z-up to Y-up conversion; standalone systems use their Bevy transform directly (see
-//! [`AlamoParticles::in_model_space`]).
+//! Emitter-local space is an Alamo frame: **Z-up**, like the models. Systems attached to model
+//! proxies use the proxy bone's own axes (they inherit the model's Z-up to Y-up conversion);
+//! standalone systems get that conversion here, so a particle's `+Z` is their Bevy transform's `+Y`
+//! (see [`AlamoParticles::in_model_space`] and `particle_frame`). Evidence (`alamo-model` example
+//! `particle_axes`): 1139 of 1157 engine proxies blow out of the stern with the bone's axes, the Death
+//! Star's charge lattice meets at its dish, and the directed emitters of the data point along `Z`
+//! (803 speeds along `+Z`, 53 along `+Y`).
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -411,9 +413,15 @@ pub fn update_particle_view(
         };
     }
 }
-/// Particle space is Y-up, Alamo model space Z-up: `(x, y, z) -> (x, -z, y)`.
-fn particle_to_alamo() -> Quat {
-    Quat::from_rotation_x(std::f32::consts::FRAC_PI_2)
+/// Rotation from particle space to the space of the entity's transform. Particle space is an
+/// Alamo frame (Z-up): below a model proxy it is the bone's own frame; a standalone system's
+/// transform is a Bevy (Y-up) one, so particle `(x, y, z)` lands on `(x, z, -y)` there.
+fn particle_frame(in_model_space: bool) -> Quat {
+    if in_model_space {
+        Quat::IDENTITY
+    } else {
+        Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2)
+    }
 }
 
 fn sample_box(rt: &mut EmitterRuntime, min: [f32; 3], max: [f32; 3]) -> Vec3 {
@@ -442,7 +450,7 @@ fn is_light_volume(e: &Emitter) -> bool {
 /// Random vector of a property group (`Emitter::speed_group` / `position_group`). Kinds follow the
 /// public format docs (modtools.petrolution.net, "Particle File Format"): 0 exact value, 3 sphere
 /// (radius `params[1]`, surface only when `params[2] != 0`), 4 cylinder (radius `params[3]`, surface
-/// when `params[4] != 0`, height `params[5]`, axis Y). In the shipped data kind 1 is a `min..max` box and
+/// when `params[4] != 0`, height `params[5]` along the up axis `Z`). In the shipped data kind 1 is a `min..max` box and
 /// kind 2 a cube of side `params[0]` (the doc has these two the other way round). The `min`/`max`
 /// floats of sphere and cylinder groups are stale editor values and must not be used there.
 fn sample_group(rt: &mut EmitterRuntime, s: &alamo_model::particle::Shape) -> Vec3 {
@@ -474,14 +482,14 @@ fn sample_group(rt: &mut EmitterRuntime, s: &alamo_model::particle::Shape) -> Ve
         4 => {
             let (r, h) = (s.params[3].abs(), s.params[5].abs());
             let surface = s.params[4] != 0.0;
-            let (x, z) = loop {
-                let (x, z) = (rt.range(-1.0, 1.0), rt.range(-1.0, 1.0));
-                let l = (x * x + z * z).sqrt();
+            let (x, y) = loop {
+                let (x, y) = (rt.range(-1.0, 1.0), rt.range(-1.0, 1.0));
+                let l = (x * x + y * y).sqrt();
                 if l > 1e-3 && l <= 1.0 {
-                    break if surface { (x / l, z / l) } else { (x, z) };
+                    break if surface { (x / l, y / l) } else { (x, y) };
                 }
             };
-            Vec3::new(x * r, rt.range(-0.5, 0.5) * h, z * r)
+            Vec3::new(x * r, y * r, rt.range(-0.5, 0.5) * h)
         }
         _ => Vec3::new(s.params[6], s.params[7], s.params[8]),
     }
@@ -497,7 +505,7 @@ fn spawn_particle(e: &Emitter, rt: &mut EmitterRuntime, to_world: &Affine3A, sca
             local_pos.normalize()
         } else {
             let d = Vec3::new(rt.range(-1.0, 1.0), rt.range(-1.0, 1.0), rt.range(-1.0, 1.0));
-            if d.length() > 1e-3 { d.normalize() } else { Vec3::Y }
+            if d.length() > 1e-3 { d.normalize() } else { Vec3::Z }
         };
         local_vel += dir * e.speed;
     }
@@ -554,8 +562,8 @@ fn step_emitter(e: &Emitter, rt: &mut EmitterRuntime, cx: &StepCtx, budget: &mut
         world_trail,
     } = *cx;
     // Age and move.
-    // Property 0x0b: gravity along the emitter's up axis (values 0 .. -145, a few +34; Inferred, most emitters 0).
-    let acc = Vec3::from(e.acceleration) + Vec3::new(0.0, e.gravity, 0.0);
+    // Property 0x0b: gravity along the emitter's up axis Z (values 0 .. -145, a few +34; Inferred, most emitters 0).
+    let acc = Vec3::from(e.acceleration) + Vec3::new(0.0, 0.0, e.gravity);
     for p in &mut rt.particles {
         p.age += dt;
         p.vel += acc * dt;
@@ -738,13 +746,8 @@ pub fn simulate_particles(
                 }
             }
             inst.was_enabled = enabled;
-            let mut to_world = gt.affine();
-            let mut scale = to_world.matrix3.x_axis.length();
-            if spec.in_model_space {
-                // Particle space is Y-up; below a model it is mapped onto the bone's Z-up frame.
-                to_world *= Affine3A::from_quat(particle_to_alamo());
-            }
-            scale = scale.max(1e-6) * spec.size_mul.max(1e-3);
+            let to_world = gt.affine() * Affine3A::from_quat(particle_frame(spec.in_model_space));
+            let scale = to_world.matrix3.x_axis.length().max(1e-6) * spec.size_mul.max(1e-3);
             let mut local_budget = share;
             let sys = inst.system.clone();
             for (e, rt) in sys.emitters.iter().zip(inst.emitters.iter_mut()) {
@@ -1124,6 +1127,204 @@ mod tests {
             .map(|i| if i < quad_verts_count { 1.0 } else { 0.0 })
             .collect();
         assert_eq!(flags, vec![1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0]);
+    }
+
+    use alamo_model::particle::{ColorTrack, FloatTrack, Shape};
+
+    /// An exact-value property group.
+    fn exact(v: [f32; 3]) -> Shape {
+        let mut params = [0.0; 9];
+        params[6..].copy_from_slice(&v);
+        Shape { kind: 0, min: [0.0; 3], max: [0.0; 3], params }
+    }
+
+    /// Emits one visible particle at once, at `position` with `speed` (particle space); it lives 10 s.
+    fn one_particle(position: Shape, speed: Shape) -> Emitter {
+        let flat = |v: f32| FloatTrack { start: v, end: v, mode: 0, keys: Vec::new() };
+        let opaque = ColorTrack { start: 1.0, end: 1.0, keys: Vec::new() };
+        Emitter {
+            name: "test".into(),
+            texture: "p_particle_master.tga".into(),
+            texture2: None,
+            blend: BlendMode::Additive,
+            world_space: false,
+            oriented: false,
+            lifetime: 10.0,
+            atlas_grid: 1,
+            index: 0,
+            unknown_fractions: (0.0, 0.0),
+            initial_delay: 0.0,
+            spawn_rate: 0.0,
+            spawn_interval: 0.0,
+            max_particles: 1,
+            loop_count: 1,
+            speed: 0.0,
+            acceleration: [0.0; 3],
+            gravity: 0.0,
+            speed_group: speed,
+            lifetime_group: exact([0.0; 3]),
+            position_group: position,
+            randomized_scale: 0.0,
+            randomized_lifetime: 0.0,
+            color: [opaque.clone(), opaque.clone(), opaque.clone(), opaque],
+            size: flat(1.0),
+            frame: flat(0.0),
+            spin: flat(0.0),
+            links: [u32::MAX; 2],
+            props: Default::default(),
+        }
+    }
+
+    /// Runs `simulate_particles` `steps` times (`dt` seconds each) on one system with `emitter`, placed at `at`
+    /// (a model proxy when `in_model_space`, else a standalone effect); the world positions of its particles after each step.
+    fn simulate(emitter: Emitter, in_model_space: bool, at: GlobalTransform, steps: usize, dt: f32) -> Vec<Vec<Vec3>> {
+        use bevy::ecs::system::RunSystemOnce;
+        bevy::tasks::ComputeTaskPool::get_or_init(bevy::tasks::TaskPool::default);
+        let mut world = World::new();
+        world.insert_resource(Time::<()>::default());
+        world.init_resource::<ParticleView>();
+        world.init_resource::<crate::lod::LodSettings>();
+        world.init_resource::<ParticleStats>();
+        world.insert_resource(ParticleSettings { fixed_step: Some(dt), ..default() });
+        let spec = AlamoParticles { in_model_space, ..AlamoParticles::new("test") };
+        let system = Arc::new(ParticleSystem { name: "test".into(), emitters: vec![emitter] });
+        let instance = ParticleInstance { system, emitters: vec![EmitterRuntime::new(1)], was_enabled: false };
+        let entity = world.spawn((spec, at, InheritedVisibility::VISIBLE, instance)).id();
+        (0..steps)
+            .map(|_| {
+                world.run_system_once(simulate_particles).expect("simulate");
+                world.get::<ParticleInstance>(entity).expect("instance").emitters[0].quads.iter().map(|q| q.center).collect()
+            })
+            .collect()
+    }
+
+    /// A proxy bone as the model hierarchy places it: the model's Z-up to Y-up axis node, then the bone's Alamo transform.
+    fn proxy_bone(alamo: Mat4) -> GlobalTransform {
+        GlobalTransform::from(Mat4::from_quat(Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2)) * alamo)
+    }
+
+    /// Alamo (Z-up) model space to Bevy, as below the model's axis node.
+    fn alamo_to_bevy(v: Vec3) -> Vec3 {
+        Vec3::new(v.x, v.z, -v.y)
+    }
+
+    #[test]
+    fn an_emitter_offset_along_particle_z_runs_along_the_proxy_bones_z_axis() {
+        // The right `P_Eclipse_Charge_L` bone of the Eclipse (rest pose, rounded): on the hull 1600 units right of the centre line, its Z
+        // axis pointing forward and in, its Y axis down. The focus point emitter sits 6090 units out along particle Z.
+        let z = Vec3::new(-0.2, -1.0, 0.0).normalize();
+        let y = Vec3::NEG_Z;
+        let bone = Mat4::from_cols(y.cross(z).extend(0.0), y.extend(0.0), z.extend(0.0), Vec3::new(1600.3, 2936.4, 0.2).extend(1.0));
+        let steps = simulate(one_particle(exact([0.0, 0.0, 6090.0]), exact([0.0; 3])), true, proxy_bone(bone), 1, 0.016);
+        let focus = alamo_to_bevy(Vec3::new(1600.3, 2936.4, 0.2) + z * 6090.0);
+        let at = steps[0][0];
+        assert!(at.distance(focus) < 0.5, "focus at {at}, expected {focus}");
+        // In the hull's plane, not 6090 units above it (the bug: particle Z was turned onto the bone's -Y axis).
+        assert!(at.y.abs() < 1.0, "height {}", at.y);
+    }
+
+    #[test]
+    fn an_engine_exhaust_leaves_the_stern() {
+        // An Eclipse engine bone (`Pe_Eclipse_Star_Dreadnaught_L`): Z axis to the stern (Alamo +Y, the bow is -Y), Y axis up. Its thrust
+        // emitter blows 200 units per second along particle Z.
+        let bone = Mat4::from_cols(Vec4::NEG_X, Vec4::Z, Vec4::Y, Vec4::new(-199.6, 3883.4, -23.1, 1.0));
+        let steps = simulate(one_particle(exact([0.0, 0.0, 19.2]), exact([0.0, 0.0, 200.0])), true, proxy_bone(bone), 2, 0.5);
+        let moved = steps[1][0] - steps[0][0];
+        let stern = alamo_to_bevy(Vec3::Y);
+        assert!(moved.normalize().dot(stern) > 0.999, "the exhaust moved {moved}, the stern is {stern}");
+        assert!((moved.length() - 100.0).abs() < 0.1, "200 units/s for 0.5 s: {moved}");
+    }
+
+    #[test]
+    fn a_standalone_effect_has_its_particle_z_along_its_up_axis() {
+        // `SpawnParticleEffect` turns the effect's Bevy +Y onto the hit normal; the particle frame is Alamo (Z-up) below that.
+        let normal = Vec3::new(1.0, 1.0, 0.0).normalize();
+        let at = GlobalTransform::from(Transform::from_xyz(50.0, 0.0, -20.0).with_rotation(Quat::from_rotation_arc(Vec3::Y, normal)));
+        let steps = simulate(one_particle(exact([0.0, 0.0, 30.0]), exact([0.0; 3])), false, at, 1, 0.016);
+        let expected = Vec3::new(50.0, 0.0, -20.0) + normal * 30.0;
+        assert!(steps[0][0].distance(expected) < 1e-3, "{} vs {expected}", steps[0][0]);
+    }
+
+    #[test]
+    fn gravity_and_cylinders_keep_their_world_direction() {
+        // Gravity (property 0x0b) and a cylinder's height run along the up axis: Bevy's -Y / Y for a standalone effect, as before the
+        // particle frame became Alamo's Z-up.
+        let mut falling = one_particle(exact([0.0; 3]), exact([0.0; 3]));
+        falling.gravity = -100.0;
+        let steps = simulate(falling, false, GlobalTransform::IDENTITY, 2, 0.5);
+        let fall = steps[1][0] - steps[0][0];
+        assert!(fall.normalize().dot(Vec3::NEG_Y) > 0.999, "fell along {fall}");
+        let mut column = Shape { kind: 4, min: [0.0; 3], max: [0.0; 3], params: [0.0; 9] };
+        column.params[3] = 1.0; // radius
+        column.params[5] = 1000.0; // height
+        let mut tall = one_particle(column, exact([0.0; 3]));
+        tall.max_particles = 64;
+        let steps = simulate(tall, false, GlobalTransform::IDENTITY, 1, 0.016);
+        let spread = |f: fn(&Vec3) -> f32| steps[0].iter().map(f).fold(0.0f32, |m, v| m.max(v.abs()));
+        assert!(spread(|p| p.y) > 300.0 && spread(|p| p.x) <= 1.0 && spread(|p| p.z) <= 1.0, "{:?}", steps[0]);
+    }
+
+    /// The Remake's game files, if installed.
+    fn remake_fs() -> Option<alamo_fs::GameFs> {
+        let install = alamo_fs::GameInstall::detect().filter(|i| i.mod_data("1770851727").is_dir())?;
+        alamo_fs::GameFs::for_mod(&install, Some("1770851727")).ok()
+    }
+
+    /// World positions (Bevy) where the emitter `emitter` of particle file `system` puts its particle on every proxy of that name of
+    /// `model` (of several emitters with that name the one farthest out along particle Z; `None`: the proxy itself).
+    fn on_proxies(fs: &alamo_fs::GameFs, model: &str, system: &str, emitter: Option<&str>) -> Vec<Vec3> {
+        let read = |p: &str| alamo_fs::FileSource::read(fs, p).expect("game file");
+        let model = alamo_model::Model::parse(&read(&format!("Art/Models/{model}"))).expect("model");
+        let probe = match emitter {
+            Some(name) => {
+                let sys = ParticleSystem::parse(&read(&format!("Art/Models/{system}.alo"))).expect("particles");
+                let e = sys
+                    .emitters
+                    .iter()
+                    .filter(|e| e.name == name)
+                    .max_by(|a, b| a.position_group.params[8].total_cmp(&b.position_group.params[8]))
+                    .expect("emitter");
+                one_particle(e.position_group, e.speed_group)
+            }
+            None => one_particle(exact([0.0; 3]), exact([0.0; 3])),
+        };
+        model
+            .proxies
+            .iter()
+            .filter(|p| p.name.eq_ignore_ascii_case(system))
+            .map(|p| {
+                let bone = crate::model::mat4_from_34(&model.world_transform(p.bone));
+                simulate(probe.clone(), true, proxy_bone(bone), 1, 0.016)[0][0]
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_death_star_charge_lattice_meets_at_the_dish() {
+        let Some(fs) = remake_fs() else { return };
+        // Every `p_planet_deathstar_laser_small` proxy (the converging charge lasers) puts its focus point 5900 units out along particle Z;
+        // the beam leaves from the `p_planet_deathstar_laser_large` proxy (the dish, `Owner_Particle_Bone_Name`).
+        let foci = on_proxies(&fs, "Empire_Death_Star.alo", "p_planet_deathstar_laser_small", Some("FocussingPoint75"));
+        let dish = on_proxies(&fs, "Empire_Death_Star.alo", "p_planet_deathstar_laser_large", None);
+        assert!(foci.len() >= 5 && dish.len() == 1, "{} foci, {} dishes", foci.len(), dish.len());
+        for f in &foci {
+            assert!(f.distance(dish[0]) < 120.0, "focus {f} is {} from the dish {}", f.distance(dish[0]), dish[0]);
+        }
+    }
+
+    #[test]
+    fn the_eclipse_charge_focus_points_stay_on_the_hull() {
+        let Some(fs) = remake_fs() else { return };
+        // The green focus points of `P_Eclipse_Charge_L` (6090 units out) and `_S` (1800) land near the ship's centre line, at hull height,
+        // for the left and the right proxy; the old axis mapping put them 1700 to 6100 units above or below the hull.
+        for system in ["P_Eclipse_Charge_L", "P_Eclipse_Charge_S"] {
+            let foci = on_proxies(&fs, "Empire_Eclipse_Super_Star_Destroyer.ALO", system, Some("FocussingPoint75"));
+            assert_eq!(foci.len(), 2, "{system}");
+            for f in foci {
+                assert!(f.y.abs() < 200.0, "{system}: focus {f} off the hull plane");
+                assert!(f.x.abs() < 300.0, "{system}: focus {f} off the centre line");
+            }
+        }
     }
 }
 

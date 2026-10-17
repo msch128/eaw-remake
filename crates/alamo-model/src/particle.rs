@@ -26,9 +26,12 @@
 //! the end of the particle's life; color keys `(value, time)` are knots in between, with `time` as
 //! a fraction of the life.
 //!
-//! Positions and velocities are in the emitter's local space, which is **Y-up** (not the Z-up of
-//! models): when an emitter sits on a model proxy, particle `+Y` lines up with the proxy bone's
-//! `+Z` axis (engine exhaust leaving a Star Destroyer's stern, damage fire leaving the hull).
+//! Positions and velocities are in the emitter's local space, an Alamo frame like the models
+//! (**Z-up**): on a model proxy the particle axes are the proxy bone's own axes. Directed emitters
+//! point along `+Z` (803 exact speeds along `+Z`, 53 along `+Y`); engine exhausts leave the stern
+//! along their bone's `+Z` (1139 of 1157 engine proxies), and the Death Star's charge lattice meets at
+//! its dish 5900 units out along each emitter bone's `+Z` (example `particle_axes`). An earlier
+//! "Y-up" reading came from the lifetime group (always along `Y`) being taken for a velocity.
 
 use std::collections::BTreeMap;
 

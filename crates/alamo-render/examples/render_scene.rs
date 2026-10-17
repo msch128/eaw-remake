@@ -11,6 +11,7 @@
 //!   --many N              N extra copies of the model in a grid
 //!   --fx name[@x,y,z]     standalone particle system (repeatable)
 //!   --enable a,b          enable model proxy particle systems by name (event effects)
+//!   --show a,b            show these bones although the model hides them at rest (as its animations do: the Death Star's charge lattice)
 //!   --times t1,t2,...     capture at these simulation times in seconds (out_t<ms>.png)
 //!   --radius r            framing radius when no model is given
 //!   --look x,y,z          camera target offset
@@ -63,6 +64,7 @@ struct Shot {
     pending: usize,
     root: Option<Entity>,
     enable: Vec<String>,
+    show: Vec<String>,
     enabled_done: bool,
     /// Wall-clock moment after which simulation time starts (pipelines compile before that).
     ready_at: Option<std::time::Instant>,
@@ -82,6 +84,7 @@ fn main() {
     let (mut size, mut lod, mut bow) = (vec![1024.0, 640.0], None, false);
     let (mut many, mut radius) = (0usize, 100.0f32);
     let (mut fx, mut enable, mut times) = (Vec::new(), Vec::new(), vec![0.0f32]);
+    let mut show: Vec<String> = Vec::new();
     let mut look = vec![0.0, 0.0, 0.0];
     let mut offset = vec![0.0, 0.0, 0.0];
     let mut no_alpha = false;
@@ -117,6 +120,7 @@ fn main() {
                     .map(str::to_lowercase)
                     .collect()
             }
+            "--show" => show = it.next().unwrap().split(',').map(str::to_lowercase).collect(),
             "--times" => times = parse_vec(it.next().unwrap()),
             "--radius" => radius = it.next().unwrap().parse().unwrap_or(100.0),
             "--addalpha" => no_alpha = true,
@@ -276,6 +280,7 @@ fn main() {
         pending: 0,
         root,
         enable,
+        show,
         enabled_done: false,
         ready_at: None,
         bench_start: None,
@@ -291,6 +296,7 @@ fn drive(
     loaded: Query<&AlamoModelLoaded>,
     mut cam: Query<&mut Transform, With<Camera3d>>,
     mut particles: Query<(&mut AlamoParticles, Option<&Name>)>,
+    mut bones: Query<(&Name, &mut Visibility), With<alamo_render::AlamoBone>>,
     stats: Res<ParticleStats>,
     mut strategy: ResMut<TimeUpdateStrategy>,
     drawables: Query<(
@@ -339,6 +345,11 @@ fn drive(
                 p.enabled = true;
             }
             *k += 1;
+        }
+        for (name, mut vis) in &mut bones {
+            if shot.show.contains(&name.as_str().to_lowercase()) {
+                *vis = Visibility::Inherited;
+            }
         }
         shot.frame = 0; // simulation time starts when everything is configured
         return;

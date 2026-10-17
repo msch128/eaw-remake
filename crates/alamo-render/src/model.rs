@@ -571,7 +571,7 @@ fn has_vertex_color(sub: &SubMesh) -> bool {
     sub.vertex_format.ends_with('C')
 }
 
-fn mat4_from_34(t: &[[f32; 4]; 3]) -> Mat4 {
+pub(crate) fn mat4_from_34(t: &[[f32; 4]; 3]) -> Mat4 {
     Mat4::from_cols(
         Vec4::new(t[0][0], t[1][0], t[2][0], 0.0),
         Vec4::new(t[0][1], t[1][1], t[2][1], 0.0),

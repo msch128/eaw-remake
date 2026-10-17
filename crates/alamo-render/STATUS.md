@@ -117,3 +117,23 @@ the first directional light. `battle-view` spawns the map's fill lights from the
 
 ## Underlay glows (Oct 2026)
 - `FLAG_UNDERLAY` (additive kind only): the glow draws in Bevy's alpha-mask phase instead of the transparent one, still adding (blend One/One, destination alpha kept) and without depth writes. That phase comes after the opaque one and before the transmissive one, so transmissive materials find the glow in the view transmission texture. The galaxy map sets it on the disc art's `core` and `region_lines` parts, so the lanes can add over them in display values (space-peace `LaneMaterial`, G1b). Drawn colour unchanged (galaxy core samples 97.1/62.2/60.8 before, 97.2/62.2/60.8 after). Only for glows that lie under everything else: an alpha-mask item behind an underlay glow and drawn after it would cover it (none on the galaxy map). Test: `material::tests::an_underlay_glow_draws_in_the_mask_phase_and_nothing_else_moves`.
+
+## Particle axes (2026-10-17, A2b)
+- Particle space is an Alamo frame (Z-up), not Y-up: on a model proxy the emitter uses the bone's own axes (`particle_frame(true)` is the
+  identity), a standalone system (`SpawnParticleEffect`, `--fx`) gets the Z-up to Y-up turn, so its particle `+Z` is the effect's up / hit normal.
+  The old `(x, y, z) -> (x, -z, y)` mapping came from the time the lifetime group (always along Y) was read as a velocity.
+- Evidence (`alamo-model` examples `particle_axes`, `particle_dir_hist`, `particle_frame_change`): 1139 of 1157 engine proxies blow out of the
+  stern with the bone frame (1 with the old one); damage fires stream away from the hull axis in 1645 of 2974 proxies only with the bone frame, 175 only with the old one;
+  directed emitters point along Z (844 speeds and 817 offsets on +-Z) far more than along Y (74 / 21). The Death Star's nine charge emitters put their
+  focus points (5900 units out) within 33-84 units of the dish proxy; the Eclipse's `P_Eclipse_Charge_L/_S` foci land on the centre-line trench
+  (y -2999 / -550, hull height) instead of 1000-6100 units above or below the hull.
+- Gravity (property 0x0b) and the cylinder height now run along `Z`, so their world direction is unchanged. Invariant by construction: spheres,
+  cubes, zero offsets; all 77 emitters of `pd_medium_3_300/750/1250`, the fighter and corvette death effects and `P_Planet_Explode_Galactic`.
+  What visibly moves: engine exhausts (now behind the stern; they streamed up or down by the bone's Y axis), damage fires, shield-hit sparks
+  (along the hit normal), the Eclipse charge and the Death Star lattice and dish glow (which streams along the beam instead of hanging below the dish).
+- Proof: before/after sheets `a2b-eclipse-charge.png`, `a2b-deathstar.png`, `a2b-regression.png` (explosion, hyperspace arrival, ISD death clone,
+  hardpoint fires, engines; outside the repo). Explosion `pd_medium_3_750` centroid moves 24-40 px between before/after with the same seed, a new
+  random seed alone moves it 100-190 px. Tests: `particles::tests` (offsets along the bone's Z axis, exhaust out of the stern, standalone up axis,
+  gravity and cylinder unchanged, and on the Remake data: Death Star lattice at the dish, Eclipse foci on the hull).
+- `render_scene --show a,b` shows bones the model hides at rest (as an animation's visibility track does), e.g. the Death Star's lattice.
+- Not done: props 0x07/0x08 are `inBursts` / `linkToSystem` in the format doc but are read as `world_space` / `oriented`; not checked.
