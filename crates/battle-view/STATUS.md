@@ -307,3 +307,14 @@ Add `battle-view`, `galaxy-sim` (already there through galaxy-play) and `eaw-ui`
 - The backdrop planets are flat discs (`w_planet_*_low_light.alo` Planet mesh: 156 vertices, every normal -Z, z extent 0.003 at radius 1600), so no terminator was possible. `model.rs::flat_disc_radius` detects such a mesh (one normal, planar) and stores its local radius in `AlamoParams::disc_radius`; `alamo.wgsl` (planet branch) then tilts the normal by the disc-local radius (`Ns = N * sqrt(1 - rho^2) + perp / R`, centre and scale from the mesh's world matrix) and lights, clouds, night side and atmosphere rim use it. Inferred, not from the original's Planet.fx. Look constants (estimates): `PLANET_DISC_LIGHT` 0.45, specular x0.25, clouds x0.5 on discs. Real sphere planets (non-flat meshes) are unchanged.
 - Captures `battlefx_pl3..pl6_*`: Bestine shows a lit side, terminator and dark night side; Hoth is darker with the terrain still readable. Bestine's lit side is still paler than the Remake frame (Bqc5 f0033 is dark navy with a thin lit limb); the cause is probably the bluish map sun x cloud/atmosphere terms, not tuned further.
 - Capital hulls on Bestine: `LIT_GAIN` 1.4 was set deliberately from video frames (hulls near white); the blue cast is the map's sun colour (0.6/0.67/0.87 after `light_gain`) times that gain. No second formula error found; the original's treatment of sun colour is unknown, so not changed.
+
+## Audio at every zoom (2026-10-17)
+- User finding: zoomed out a little, nothing was audible any more. Cause: U79 (2026-10-11) moved the sound listener from the focus point up to 45 % of
+  the way to the camera eye (750 units off the plane at zoom 2000, 2730 at 6064, 7200 at 16000), against `Audio_Space_3D_Listener_Z_Pullback_Dist` 0
+  of the Remake's `Audio.xml`. With saturation distances of 40-750 x 1.5 (engines, guns) and a `sat / d` falloff, a far zoom put every engine and gun
+  below the start threshold. `audio::battle_listener` puts the ears back on the battle plane at the focus, lifted by the data's pullback, whatever the zoom;
+  the distance from the centre of the screen still shapes the mix (`sat / d`), explosions (`Preset_EXPL`, saturation 500000) are heard everywhere.
+- Light battle with `--battle-orders` (SP_AUDIO_LOG), median distance attenuation of the positioned sounds and engine loops started, before -> after:
+  zoom 2000: 0.133 (-17.5 dB), 11 loops -> 0.261 (-11.7 dB), 11; 6064: 0.051 (-26 dB), 3 -> 0.265, 11; 16000: 0.020 (-34 dB), 0 -> 0.249, 11.
+- Not wired yet: `SFXEvent_Ambient_Moving` flybys (5 objects in the Remake data: the Hutt V-Wing and story props); space maps have no ambience
+  in the data (`SFXEventsAmbient.xml` is land weather only), units' own `SFXEvent_Ambient_Loop` already plays.

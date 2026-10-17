@@ -663,45 +663,51 @@ pub fn battle_music(
     director.set_battle_intensity(if fighting { 1.0 } else { 0.0 });
 }
 
-/// Sound sources of the battle scene: the listener sits where the battle camera looks (distance falloff and left / right
-/// pan of every positioned sound are relative to it) and every ship hums its engine loop: `SFXEvent_Engine_Moving_Loop`
-/// while it moves, `SFXEvent_Engine_Idle_Loop` while it stands, `SFXEvent_Ambient_Loop` for units that have no engine
-/// loop of the current kind. Loops of dead, retreated or unseen ships are silent. Does nothing without `AlamoAudioPlugin`.
-#[allow(clippy::type_complexity)]
+/// The ears of the battle: on the battle plane at the point the camera looks at, lifted by `Audio_Space_3D_Listener_Z_Pullback_Dist`
+/// (Audio.xml, 0 in space: "the higher the Z elevation, the higher above the map the listener is") and turned like the camera for the
+/// left / right pan. The distance falloff of every positioned sound is relative to this point, so the zoom does not change what is
+/// heard: a far zoom shows more of the battle, and what lies away from the centre of the screen is quieter. The listener used to
+/// move 45 % of the way to the camera's eye; zoomed out, every engine and gun was then beyond its falloff and the battle went silent.
+/// Does nothing without `AlamoAudioPlugin`.
+pub fn battle_listener(
+    mut commands: Commands,
+    settings: Res<BattleViewSettings>,
+    audio: Option<Res<AlamoAudio>>,
+    cameras: Query<(&crate::camera::BattleCamera, &Transform), Without<BattleListener>>,
+    mut listener: Query<&mut Transform, With<BattleListener>>,
+) {
+    let Some(audio) = audio.filter(|_| settings.audio) else {
+        return;
+    };
+    let Ok((cam, tf)) = cameras.single() else {
+        return;
+    };
+    let at = Transform { translation: listener_position(cam.focus, audio.constants.space_listener_pullback), rotation: tf.rotation, ..default() };
+    match listener.single_mut() {
+        Ok(mut l) => *l = at,
+        Err(_) => {
+            commands.spawn((Name::new("battle sound listener"), crate::BattleEntity, BattleListener, bevy::audio::SpatialListener::new(EAR_GAP), at));
+        }
+    }
+}
+
+/// Where [`battle_listener`] puts the ears for a camera looking at `focus`: `pullback` above the battle plane, whatever the zoom.
+pub fn listener_position(focus: Vec3, pullback: f32) -> Vec3 {
+    focus + Vec3::Y * pullback
+}
+
+/// Sound sources of the battle scene: every ship hums its engine loop: `SFXEvent_Engine_Moving_Loop` while it moves,
+/// `SFXEvent_Engine_Idle_Loop` while it stands, `SFXEvent_Ambient_Loop` for units that have no engine loop of the current kind.
+/// Loops of dead, retreated or unseen ships are silent. Does nothing without `AlamoAudioPlugin`.
 pub fn battle_sources(
     mut commands: Commands,
     settings: Res<BattleViewSettings>,
     rt: Res<BattleRuntime>,
     audio: Option<Res<AlamoAudio>>,
-    cameras: Query<(&crate::camera::BattleCamera, &Transform), Without<BattleListener>>,
-    mut listener: Query<&mut Transform, With<BattleListener>>,
     mut ships: Query<(Entity, &crate::ships::ShipView, Option<&mut alamo_audio::SfxEmitter>)>,
 ) {
     if !settings.audio || audio.is_none() {
         return;
-    }
-    if let Ok((cam, tf)) = cameras.single() {
-        // Acoustic 3D perspective:
-        // Close camera (< 500m) places the listener right at the focus point on the battle plane
-        // for full bass and direct proximity; pulling back to high altitude (> 2000m) lifts and
-        // pulls the listener towards the camera eye to attenuate distant battle events realistically.
-        let pullback_frac = ((cam.distance - 500.0) / 4000.0).clamp(0.0, 0.45);
-        let listener_pos = cam.focus.lerp(tf.translation, pullback_frac);
-        match listener.single_mut() {
-            Ok(mut l) => {
-                l.translation = listener_pos;
-                l.rotation = tf.rotation;
-            }
-            Err(_) => {
-                commands.spawn((
-                    Name::new("battle sound listener"),
-                    crate::BattleEntity,
-                    BattleListener,
-                    bevy::audio::SpatialListener::new(EAR_GAP),
-                    Transform { translation: listener_pos, rotation: tf.rotation, ..default() },
-                ));
-            }
-        }
     }
     let Some(cur) = rt.cur.as_ref() else { return };
     let player = settings.player_side;
@@ -732,7 +738,7 @@ pub fn battle_sources(
     }
 }
 
-/// The sound listener of the battle (see [`battle_sources`]).
+/// The sound listener of the battle (see [`battle_listener`]).
 #[derive(Component)]
 pub struct BattleListener;
 
@@ -866,29 +872,81 @@ mod tests {
         assert!(mem.shield_down_warned.insert(ship_id), "recharged shield can report collapse again");
     }
 
+    /// Game files in memory: just enough for `AlamoAudio::load`.
+    struct MemFs(HashMap<String, Vec<u8>>);
+
+    impl alamo_fs::FileSource for MemFs {
+        fn read(&self, path: &str) -> std::io::Result<Vec<u8>> {
+            self.0.get(&alamo_fs::normalize(path)).cloned().ok_or_else(|| std::io::ErrorKind::NotFound.into())
+        }
+        fn exists(&self, path: &str) -> bool {
+            self.0.contains_key(&alamo_fs::normalize(path))
+        }
+        fn list(&self, _dir: &str) -> Vec<String> {
+            Vec::new()
+        }
+    }
+
+    fn listener_app(audio_xml: &str) -> App {
+        let files = HashMap::from([(alamo_fs::normalize("Xml/Audio.xml"), audio_xml.as_bytes().to_vec())]);
+        let mut app = App::new();
+        app.insert_resource(BattleViewSettings::default())
+            .insert_resource(AlamoAudio::load(std::sync::Arc::new(MemFs(files))))
+            .add_systems(Update, battle_listener);
+        app
+    }
+
+    /// Points the battle camera at `focus` from `distance` (as `apply_camera` does) and returns the camera's and the listener's
+    /// transform after one frame.
+    fn hear_from(app: &mut App, focus: Vec3, distance: f32) -> (Transform, Transform) {
+        let cam = crate::camera::BattleCamera { focus, target_focus: focus, distance, target_distance: distance, ..default() };
+        let (translation, rotation) = cam.eye();
+        let eye = Transform { translation, rotation, ..default() };
+        let world = app.world_mut();
+        let existing = world.query_filtered::<Entity, With<crate::camera::BattleCamera>>().iter(world).next();
+        match existing {
+            Some(e) => {
+                world.entity_mut(e).insert((cam, eye));
+            }
+            None => {
+                world.spawn((cam, eye));
+            }
+        }
+        app.update();
+        let world = app.world_mut();
+        let ears = *world.query_filtered::<&Transform, With<BattleListener>>().single(world).expect("one listener");
+        (eye, ears)
+    }
+
     #[test]
-    fn test_spatial_listener_acoustic_perspective() {
-        let focus = Vec3::new(100.0, 0.0, 200.0);
-        let cam_eye = Vec3::new(100.0, 1500.0, 3000.0);
+    fn the_battle_is_heard_from_the_point_the_camera_looks_at_at_every_zoom() {
+        // The Remake's Audio.xml: `Audio_Space_3D_Listener_Z_Pullback_Dist` 0.
+        let mut app = listener_app("<Audio><Audio_Space_3D_Listener_Z_Pullback_Dist> 0.0 </Audio_Space_3D_Listener_Z_Pullback_Dist></Audio>");
+        let focus = Vec3::new(1200.0, 0.0, -800.0);
+        // A turbolaser (`Preset_GUNSTL`: saturation 550 x the space mod 1.5) at the centre of the screen, 2000 and 6000 units to
+        // the right of it; zoomed in closest, at the data's default, at the tactical overview (5000 at a 70 degree field of view
+        // = 6064 at 60) and out farthest.
+        let saturation = 550.0 * 1.5;
+        for distance in [80.0, 2000.0, 6064.0, 16000.0] {
+            let (eye, ears) = hear_from(&mut app, focus, distance);
+            assert!(ears.translation.distance(focus) < 1e-3, "zoom {distance}: listener at {}, not at the focus", ears.translation);
+            let gain = |x: f32| alamo_audio::plugin::distance_attenuation((focus + eye.rotation * Vec3::X * x).distance(ears.translation), saturation, 1.0);
+            assert_eq!(gain(0.0), 1.0, "zoom {distance}: a gun at the centre of the screen plays at full volume");
+            assert!((gain(2000.0) - saturation / 2000.0).abs() < 1e-4, "zoom {distance}: {}", gain(2000.0));
+            assert!(gain(6000.0) < gain(2000.0), "zoom {distance}: the distance from the centre of the screen still shapes the mix");
+            // The ears point like the camera: what is right on the screen is panned right.
+            assert!((ears.rotation * Vec3::X).dot(eye.rotation * Vec3::X) > 0.999, "zoom {distance}");
+        }
+    }
 
-        // Near camera zoom (< 500m): listener stays exactly at focus for full bass
-        let dist_near: f32 = 400.0;
-        let pullback_near = ((dist_near - 500.0) / 4000.0).clamp(0.0, 0.45);
-        assert_eq!(pullback_near, 0.0);
-        let pos_near = focus.lerp(cam_eye, pullback_near);
-        assert_eq!(pos_near, focus);
-
-        // Mid-distance zoom (2500m)
-        let dist_mid: f32 = 2500.0;
-        let pullback_mid = ((dist_mid - 500.0) / 4000.0).clamp(0.0, 0.45);
-        assert!(pullback_mid > 0.4 && pullback_mid < 0.55);
-        let pos_mid = focus.lerp(cam_eye, pullback_mid);
-        assert!(pos_mid.y > 0.0, "listener is lifted and pulled back towards eye");
-
-        // Distant camera zoom (> 4000m): clamped to maximum pullback of 0.45
-        let dist_far: f32 = 8000.0;
-        let pullback_far = ((dist_far - 500.0) / 4000.0).clamp(0.0, 0.45);
-        assert_eq!(pullback_far, 0.45);
+    #[test]
+    fn the_listener_height_comes_from_audio_xml() {
+        let mut app = listener_app("<Audio><Audio_Space_3D_Listener_Z_Pullback_Dist> 80 </Audio_Space_3D_Listener_Z_Pullback_Dist></Audio>");
+        let focus = Vec3::new(-300.0, 0.0, 450.0);
+        for distance in [500.0, 16000.0] {
+            let (_, ears) = hear_from(&mut app, focus, distance);
+            assert!(ears.translation.distance(focus + Vec3::Y * 80.0) < 1e-3, "zoom {distance}: {}", ears.translation);
+        }
     }
 }
 

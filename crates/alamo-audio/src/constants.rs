@@ -47,6 +47,9 @@ pub struct AudioConstants {
     pub space_saturation_mod: f32,
     /// `Audio_Space_3D_Rolloff_Distance_Mod` (Audio.xml): higher = quicker rolloff over distance.
     pub space_rolloff_mod: f32,
+    /// `Audio_Space_3D_Listener_Z_Pullback_Dist` (Audio.xml): how far above the battle plane the listener stands (0 in space: on the plane,
+    /// at the point the camera looks at).
+    pub space_listener_pullback: f32,
     /// `SFXEvent_GUI_Negative_Feedback` (Audio.xml): the general "refused" sound.
     pub negative_feedback: Option<String>,
     /// `SFXEvent_Planet_Revealed` (Audio.xml).
@@ -75,6 +78,7 @@ impl Default for AudioConstants {
             health_critical: 0.10,
             space_saturation_mod: 1.5,
             space_rolloff_mod: 1.0,
+            space_listener_pullback: 0.0,
             negative_feedback: Some("GUI_Bad_Sound".into()),
             planet_revealed: Some("GUI_Planet_Mouse_Over".into()),
             planet_capture_bonus: Some("Unit_Light_Saber_On".into()),
@@ -294,6 +298,9 @@ impl AudioConstants {
             }
             if let Some(v) = tag_f32(&t, "Audio_Space_3D_Rolloff_Distance_Mod") {
                 c.space_rolloff_mod = v;
+            }
+            if let Some(v) = tag_f32(&t, "Audio_Space_3D_Listener_Z_Pullback_Dist") {
+                c.space_listener_pullback = v;
             }
             c.negative_feedback = tag_str(&t, "SFXEvent_GUI_Negative_Feedback").or(c.negative_feedback);
             c.planet_revealed = tag_str(&t, "SFXEvent_Planet_Revealed").or(c.planet_revealed);

@@ -536,6 +536,7 @@ impl Plugin for BattleViewPlugin {
                             control::overlays,
                             audio::battle_audio,
                             audio::battle_music,
+                            audio::battle_listener,
                             audio::battle_sources,
                             report_outcome,
                         )

@@ -58,8 +58,9 @@ Empire at War audio: event data, sample resolution, decoding and a Bevy playback
 
 ## Audio pass 2 (positional SFX, object loops, music flow, galaxy UI)
 - **Listener** (was missing: nothing carried a `SpatialListener`, so every positioned sound played centered at full volume): the battle owns a
-  `BattleListener` (`battle-view/src/audio.rs::battle_sources`) at the camera focus point on the battle plane, turned like the camera
-  (`Audio_Space_3D_Listener_Z_Pullback_Dist` = 0 in `Audio.xml`). Pan = Bevy spatial audio; distance falloff is ours.
+  `BattleListener` (`battle-view/src/audio.rs::battle_listener`) at the camera focus point on the battle plane, turned like the camera
+  (`Audio_Space_3D_Listener_Z_Pullback_Dist` = 0 in `Audio.xml`, read into `AudioConstants::space_listener_pullback`). Pan = Bevy spatial audio;
+  distance falloff is ours. The zoom does not move it (2026-10-17: a listener pulled 45 % of the way to the camera eye silenced zoomed-out battles).
 - **Distance**: `Volume_Saturation_Distance` x `Audio_Space_3D_Saturation_Distance_Mod` (1.5, `AudioSettings::saturation_scale`), beyond it
   `(sat / d)^rolloff` with `Audio_Space_3D_Rolloff_Distance_Mod` (1.0). The curve itself is an **estimate** (the data gives only these three numbers).
   `Max_Instances` caps simultaneous copies per event (oldest cut); the view adds 2 per name and frame.
