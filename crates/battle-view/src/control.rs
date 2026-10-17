@@ -26,9 +26,9 @@ pub struct Selection {
 #[derive(Resource, Default, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct UiBlock(pub bool, pub Option<Entity>);
 
-/// Interface that follows the pointer or shows what is under it (order cursor, cursor labels, hardpoint tooltip, unit panel). It never
+/// Interface that follows the pointer or shows what is under it (cursor labels, hardpoint tooltip, unit panel; the pointer pictures are the window's own cursor, see `cursor.rs`). It never
 /// counts for [`UiBlock`]: such a node appears because of the hover, so if it blocked the world it would clear the hover, hide itself and
-/// come back the next frame - the flicker of the order cursor over enemies and of the hardpoint tooltip. Applies to its children too.
+/// come back the next frame - the flicker the old order cursor (a button picture at the pointer) had over enemies, and the hardpoint tooltip's. Applies to its children too.
 #[derive(Component, Default, Debug, Clone, Copy)]
 pub struct PointerTransparent;
 
@@ -119,6 +119,16 @@ pub struct Hover {
 #[derive(Resource, Default)]
 pub struct Drag {
     start: Option<Vec2>,
+}
+
+/// How far (logical px at UI scale 1) the pointer must move with the left button down before it is a box selection and no longer a click.
+const BOX_DRAG_PX: f32 = 5.0;
+
+impl Drag {
+    /// A box selection is under way: the left button went down over the world and the pointer has moved beyond a click's reach.
+    pub fn box_dragging(&self, cursor: Vec2, scale: f32) -> bool {
+        self.start.is_some_and(|start| (cursor - start).length() > BOX_DRAG_PX * scale)
+    }
 }
 
 /// Two clicks on the same ship within this time count as a double click. Estimate (the engine value is not in the data).
@@ -467,7 +477,7 @@ pub fn selection(
     if pointer.left_released
         && let Some(start) = drag.start.take()
     {
-        let moved = (cursor - start).length() > 5.0 * scale;
+        let moved = (cursor - start).length() > BOX_DRAG_PX * scale;
         let own = |id: u32| ships.0.get(&id).is_some_and(|s| s.side == player);
         let picked: Vec<u32> = if moved {
             let (lo, hi) = (start.min(cursor), start.max(cursor));
@@ -1059,7 +1069,7 @@ mod pick_tests {
 mod ui_block_tests {
     use super::*;
 
-    /// Order cursor stand-in: shown at the pointer while the world is not blocked (as `order_cursor` does), hidden otherwise.
+    /// Stand-in for interface that follows the pointer (the old order cursor was one): shown while the world is not blocked, hidden otherwise.
     #[derive(Component)]
     struct FollowsPointer;
 
@@ -1104,7 +1114,7 @@ mod ui_block_tests {
     fn pointer_following_ui_never_blocks_and_never_toggles() {
         let frames = run(true, 8);
         assert!(frames.iter().all(|&f| f == (false, true)), "{frames:?}");
-        // The same node without the marker blocks the world under itself and toggles every frame: the order cursor flicker.
+        // The same node without the marker blocks the world under itself and toggles every frame: the flicker the order cursor had.
         let old = run(false, 4);
         assert!(old.windows(2).any(|w| w[0] != w[1]), "{old:?}");
     }
