@@ -91,3 +91,14 @@ layout with the start layout's room. Tests: `tests/group_moves.rs` (20 Star Dest
 behind the fleet, launched craft and their squadrons, pace, data tags, determinism) and the unit tests in `formation.rs`. Open:
 `FinalFormationFacingDeltaCoefficient` and `Max_Formation_Area` (meaning unknown); the AI's own moves after contact and its fighter escort still go to single
 points.
+
+## AI weaknesses measured and fixed (2026-10-17, RULES.md 9e)
+User finding with an Executor fleet: the AI played very weakly. `examples/ai_bench.rs` measures the AI against another AI, a holding
+player and a scripted focus player (open square, Kuat, Executor fleets). Found: against a holding Executor fleet the AI dealt no damage (it only went for
+what it could see and chased TIE bombers while the Executor shelled it from beyond its sight), up to 35% of its full salvos went at corvettes or fighters,
+and its ships weighed only the side's priority target. Now the AI plan knows the enemies that hit its units (`Default_Unit_Damaged`), every free unit gets
+the free store's target (`Service_Attack`: capital ships take frigates, frigates corvettes, corvettes fighters), and full salvos follow
+`Try_Offensive_Ability_Space`. Against the holding Executor fleet the first hit on a warship comes at 102-109 s instead of 200 s (seeds 1-2) and the AI
+deals 14k instead of 0.2k (6 seeds); on the open square it takes 8-12% less damage and loses 9.2 instead of 10.0 of 14 ships against a holding fleet;
+Kuat is unchanged. Open: hardpoint targeting sets (tried, no effect), kiting, the task force's ability use on approach, the scripts' map-wide
+target search.

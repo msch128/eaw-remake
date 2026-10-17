@@ -76,7 +76,9 @@ data: `SPEED_MULTIPLIER`, `SHIELD_REGEN_MULTIPLIER` (negative values are clamped
 (applied to the recharge, below 1 = faster) and `TAKE_DAMAGE_MULTIPLIER`. `FULL_SALVO` uses the per-hardpoint
 `Full_Salvo_Weapon_Delay_Multiplier`, `POWER_TO_WEAPONS` additionally the per-hardpoint
 `Power_To_Weapons_Mode_Weapon_Delay_Multiplier`. `Recharge_Seconds` starts after the effect ends. AI sides trigger
-weapon boosts when something is in range. Also implemented:
+weapon boosts when their target is in range, after `Try_Offensive_Ability_Space` (`PGCommands.lua`, called by the free store's
+`Attack_Target_Smart`): a full salvo only at a capital ship or a station with more than 20% of its hull left, a faster-fire boost
+(`POWER_TO_WEAPONS`) only at a frigate or bigger, rockets only at a frigate or bigger (section 9e). Also implemented:
 
 * `TRACTOR_BEAM`: needs a living tractor-beam hardpoint; picks the current or nearest enemy in `Activation_Max_Range` whose
   class is in `Applicable_Unit_Categories` and slows it by `Target_Speed_Decrease_Percent` while active and in range.
@@ -208,7 +210,7 @@ after the Remake scripts `MoveToLocation.lua` (`AotR_Beginning_Assault`), `Space
   on the priority target (corvettes: below). A missile ship that only reaches the enemy with its longest gun leaves alone.
 * **Priority target (estimate of the weight):** ships within 3600 units of the side's priority target count it at half its priority weight (scan), so the
   priority sets still decide between classes (an anti-fighter corvette keeps shooting fighters first). A defender that holds back focuses the enemy nearest
-  to its station.
+  to its station. Ships outside the formation get the free store's own target instead (section 9e).
 * **Station defence:** a defender that is not aggressive guards its most damaged structure (`Guard`), and attacks when the free store turns aggressive.
 * **Search:** with nothing in sight the fleet sweeps the old search points; a point's time limit (90 s, then 45 s) restarts while the fleet still closes in on it.
 * **Reserve:** `BattleConfig::ai_reserve` (galaxy-sim passes `TacticalSide::reserve` for AI sides; headless battles use it too). Units arrive at the
@@ -280,6 +282,52 @@ and the ships jostled there.
   * Sent 3000 behind themselves, 6 Star Destroyers and 4 Victorys turn on the spot and stand in 2 rows of 5 after 158 s. Attack-moving through 2 CR-90s, a
     fleet of 6 destroys them and forms its line at the point.
 
+### 9e. What the AI did worse than the Remake scripts (measured 2026-10-17, `examples/ai_bench.rs`)
+User finding with an Executor and a big fleet: the AI played very weakly. `ai_bench` runs an AI side against another AI, a player that
+holds and fires at what comes in range, or a scripted player that focuses the weakest warship near its fleet (and first the enemy station), and counts
+per side: ships lost, damage dealt and taken, time, shares of big-ship seconds with an enemy warship in reach but no shot (idle) and with none in reach,
+hardpoint hits on weapons, the most damaged enemy's share of the damage per 10 s (focus), weapon abilities used and how many at corvettes or smaller.
+* **Found** (before = main 394366b, 6 seeds): (1) against a holding Executor fleet the AI fleet dealt 0-1k damage to warships and lost all 15 ships: it went
+  only for enemies it could see (Rebel ships see 1250-3000, the Executor 30000 and fires from up to 11000), so it chased TIE bombers and swept its search
+  points while the Executor shelled it; (2) up to 35% of the AI's full salvos went at corvettes or fighters (13-35% on the open square); (3) every AI ship weighed only the side's priority
+  target (the weakest capital ship), where the free store sends capital ships at frigates, frigates at corvettes and corvettes at fighters; (4) no
+  hardpoint targeting sets (`Determine_Targeting_Priority_Set`); (5) no kiting. Focus (56-92%), idle time (0-10%) and the formation were as intended.
+* **Known attackers (data rule, `Default_Unit_Damaged` hands the AI the attacker of every hit):** an enemy that damaged one of the side's units counts as
+  known to the side's plan for `fog_linger` (15 s, `SpaceFOWRegrowTime`) although no ship of the side sees it (`Ship::hit_side_at`): the enemy location,
+  priority target and threat use it, so the fleet goes for the shooter. Weapons still only fire at what the side sees.
+* **Free store targets (data):** every free unit (outside the advancing formation) gets the target of `Service_Attack` at difficulty Normal: the side's
+  priority target when it is of the kind the unit prefers (`Is_Preferred_Target`) and within 3600; else, while its own target is not of that kind, the
+  nearest enemy of that kind within its aggro range (`Get_Preferred_Target_In_Range`: capital ships frigates, frigates corvettes, corvettes and units
+  with the `AntiFighter` category fighters, bombers and transports, fighters fighters and bombers; aggro range = longest weapon range, at least 3500, for
+  fighters 3000); else the priority target within 3600. A given target stays while it is of the preferred kind and in aggro range (an attack order holds
+  until the next service). It weighs like the priority target (half its priority weight; estimate as in 9c).
+* **Weapon abilities (data):** `Try_Offensive_Ability_Space`, see section 5. **Estimate:** the script lists its ships one by one (the Star Destroyer's rule
+  needs 3 heavy turbolasers alive, the Victory is not listed at all); we apply its common rule to every ship with the ability and do not count guns.
+* **Measured** (6 seeds, mean; before = main 394366b, after = this change; "taken" = damage the AI took):
+
+  | Battle | Before | After |
+  |---|---|---|
+  | AI attacks the same Empire fleet (2 ISD, 2 VSD, Acclamator, Broadside, 2 Tartan pairs) that holds, open square | won 6/6 after 360 s, lost 10.0 of 14, taken 177k | won 6/6 after 347 s, lost 9.2, taken 155k |
+  | the same against the scripted focus player | won 6/6 after 302 s, lost 11.0, taken 190k | won 6/6 after 287 s, lost 10.7, taken 172k |
+  | Rebel AI (2 MC-80, 3 Nebulon-B, 2 AF-II, 3 CR-90, 3 X-wing squadrons) against 2 ISD, 2 VSD, 3 TIE squadrons, scripted | won 5/6 after 559 s, lost 8.3 of 10, taken 276k | won 6/6 after 505 s, lost 8.0, taken 255k |
+  | AI attacks Kuat (MC-80, 2 Nebulon-B, 2 CR-90, star base 2), holding | won 6/6 after 371 s, lost 3.0 of 14, taken 28k | won 6/6 after 370 s, lost 3.2, taken 28k |
+  | Rebel AI (4 MC-80, 4 Nebulon-B, 3 AF-II, 4 CR-90, 4 X-wing squadrons) attacks a holding Executor, 2 ISD, 2 VSD, 3 TIE squadrons | lost 15 of 15 after 274 s, dealt 0.2k | lost 15 of 15 after 206 s, dealt 14k |
+  | the same Rebel AI defends a star base 3 against them, scripted | lost 15 of 15 after 337 s, dealt 191k | lost 15 of 15 after 315 s, dealt 192k |
+  | Rebel AI defends a star base 2 against 2 ISD, 2 VSD, 3 TIE squadrons, scripted | won 6/6, lost 2.5 of 10, taken 113k | won 6/6, lost 2.0, taken 116k |
+
+  Without retreats (`retreat_allowed` off): against the Executor fleet the retreat of section 9 makes the AI leave at 62 s. AI against AI battles last longer
+  (mirror 441 s before, 585 s after): both sides now split their fire by class. Tests: `tactical_ai::an_ai_fleet_shelled_from_beyond_its_sight_goes_for_the_shooter`
+  (first hit on a warship at 200 s before, 102-109 s now), `ai_capital_ships_take_the_frigates_near_them` (51% of the Star Destroyers' fire on frigates
+  before, 85-87% now), `the_ai_fires_full_salvos_only_at_capital_ships_and_stations` (2 of 8 at corvettes before, 0 of 8 now).
+* **Not done:** (4) the hardpoint sets: tried (every 15 s, Normal: `AntiHull` while the target's hull is below half or its shield above a quarter, else
+  `AntiShieldWeapons`, `AntiHullWeapons` or `AntiSubSystems` at random), no measurable effect, since 79% of the hardpoint damage already hits weapons; the
+  sets' flat class priorities and `Default_Space_Targeting_Priority` (a ship without a target gets `AntiCapital`, `AntiFrigate`, `AntiCorvette` or
+  `AntiFighter`) are not used either. (5) kiting: `Service_Kite` moves a damaged `Kiter` (Assault Frigate, Nebulon-B) to the edge of its target's range
+  toward `Get_Most_Defended_Position`, and `Default_Unit_Damaged` pulls back a task-force unit that is about to die; both depend on engine functions whose
+  results are not visible. Also not modelled: the task force's `Default_Target_In_Range` (full salvo at any target that comes in range during the
+  approach), the defensive abilities of `Default_Unit_Damaged` (`INVULNERABILITY` below 20% shield, `Defend` below 80%), and the scripts' map-wide
+  `Find_All_Objects_Of_Type` for the priority target (the AI here only knows what it sees or what hit it).
+
 ## 7. Positional reinforcements, fog of war, more abilities (see ABILITIES.md)
 
 * `Command::ReinforceAt { ship, count, pos }`: allowed when `pos` is inside the battle area, outside the no-spawn zone of every enemy structure and inside an area the side sees (`placement.rs`, shared with the UI).
@@ -288,7 +336,7 @@ and the ships jostled there.
   errors `OutsideBattleArea`, `InNoSpawnZone`, `NotVisible`, plus `UnitCap`. Enemy mobile ships do not block a spot. `Battle::reinforcement_zone_check(side, pos)` is the same test for an overlay (green / red). The ships arrive after `reinforce_delay` (5 s) at free space
   (nothing within `reinforce_clearance` = `Space_Reinforcement_Collision_Check_Distance` 150; they move out in rings when the spot is taken), facing the nearest enemy. `Reinforce` without a position still uses the side's point.
 * Fog of war (`BattleConfig::fog_of_war`, default on): a ship sees `Space_FOW_Reveal_Range` (`ShipDef::sensor_range`, 1250 where missing); an enemy it saw stays visible for `fog_linger` = `SpaceFOWRegrowTime` 15 s.
-  Targeting (`scan`) only considers visible enemies, so idle and attack-moving ships no longer know where the enemy is; the AI respects it because it uses the same scan. `Battle::is_visible_to(side, ship)` for the renderer.
+  Targeting (`scan`) only considers visible enemies, so idle and attack-moving ships no longer know where the enemy is; the AI respects it because it uses the same scan. Its plan also knows an enemy that hit one of its units in the last `fog_linger` s (section 9e). `Battle::is_visible_to(side, ship)` for the renderer.
   Stealthed ships (`STEALTH`) are seen only within `stealth_detection` (500, estimate); `FOW_REVEAL_PING` reveals an area for 5 s (estimate).
 * Also: `LASER_DEFENSE`, `Force_Healing_Ability`.
 

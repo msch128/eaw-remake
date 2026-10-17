@@ -635,3 +635,120 @@ fn a_nearly_destroyed_ai_fleet_retreats_before_it_is_wiped_out() {
     println!("corvettes only: retreat ordered at {ordered:?}, {escaped} escaped");
     assert!(ordered.is_some(), "corvettes alone retreat too instead of dying to the last ship");
 }
+
+/// A battle of an AI side (0) against a player side (1) that holds and fires at what comes in range, without retreats; `each` sees every
+/// step's events.
+fn hold_battle(cat: &Arc<Catalog>, ai: &[(&str, u32)], player: &[(&str, u32)], seed: u64, seconds: f32, mut each: impl FnMut(&Battle, &[Event])) {
+    let mut sides = vec![side(cat, "AI", ai, &[]), side(cat, "Player", player, &[])];
+    sides[1].ai = false;
+    let config = BattleConfig { seed, retreat_allowed: vec![false, false], ..BattleConfig::default() };
+    let mut b = Battle::new(BattleSetup { catalog: cat.clone(), sides, config });
+    while !b.is_over() && b.time() < seconds {
+        let events = b.step().to_vec();
+        each(&b, &events);
+    }
+}
+
+#[test]
+fn an_ai_fleet_shelled_from_beyond_its_sight_goes_for_the_shooter() {
+    // User finding 2026-10-17 (the AI played very weakly) with an Executor fleet: the Executor sees 30000 units and fires
+    // from up to 11000, a Rebel fleet sees 1750-3000. The AI only went for enemies it could see, so it chased the TIE bombers and swept
+    // its search points while the Executor shelled it, and dealt no damage to a warship at all. The Remake hands its AI the attacker of
+    // every hit (`Default_Unit_Damaged`): now a ship that hit the side is known to it for the fog's 15 s, and the fleet goes for it.
+    let Some((data, fs)) = load() else { return };
+    let ai = [("MC-80_Star_Cruiser", 4), ("Nebulon_B_Frigate", 4), ("Assault_Frigate_Mark_II", 3), ("CR-90_Corvette", 4), ("X-Wing_Squadron", 4)];
+    let player = [("Executor_Star_Dreadnought", 1), ("Star_Destroyer", 2), ("Victory_Destroyer", 2), ("TIE_Fighter_Squadron", 3)];
+    let names: Vec<&str> = ai.iter().chain(&player).map(|u| u.0).collect();
+    let cat = Arc::new(Catalog::build(&data, Some(&fs), &names));
+    let small = |s: &Ship| matches!(cat.ship(s.def).class, TargetClass::Fighter | TargetClass::Bomber);
+    for seed in [1, 2] {
+        // Battle second of the AI's first hit on a warship, and the damage it dealt to warships.
+        let (mut first, mut dealt) = (None, 0.0f32);
+        hold_battle(&cat, &ai, &player, seed, 400.0, |b, events| {
+            for e in events {
+                if let Event::Hit { ship, attacker, damage, .. } = *e
+                    && b.ships[attacker as usize].side == 0
+                    && !small(&b.ships[ship as usize])
+                {
+                    first.get_or_insert(b.time());
+                    dealt += damage;
+                }
+            }
+        });
+        println!("seed {seed}: first hit on a warship at {first:?}, damage to warships {dealt:.0}");
+        // Before: the first hit at 200 s (seed 1) and 601 damage; now 102-109 s and 7400-14400.
+        assert!(first.is_some_and(|t| t < 160.0), "the fleet reaches the shooters: {first:?}");
+        assert!(dealt > 3000.0, "it hurts them: {dealt:.0}");
+    }
+}
+
+#[test]
+fn ai_capital_ships_take_the_frigates_near_them() {
+    // `SpaceTacticalFreeStore.lua` (`Service_Attack`, `Get_Preferred_Target_In_Range`): a ship outside the advancing formation attacks the
+    // nearest enemy of the kind it prefers within its aggro range (capital ships frigates, frigates corvettes, corvettes and anti-fighter
+    // ships fighters, bombers and transports) before the side's priority target. Before, every ship weighed only the side's priority
+    // target, the weakest capital ship: the Star Destroyers put 51% of their fire on the frigates.
+    let Some((data, fs)) = load() else { return };
+    let ai = [("Star_Destroyer", 2), ("Victory_Destroyer", 2)];
+    let player = [("MC-80_Star_Cruiser", 2), ("Nebulon_B_Frigate", 3), ("CR-90_Corvette", 3)];
+    let names: Vec<&str> = ai.iter().chain(&player).map(|u| u.0).collect();
+    let cat = Arc::new(Catalog::build(&data, Some(&fs), &names));
+    for seed in [1, 2] {
+        // Damage the AI's capital ships dealt to capital ships and to frigates while the player had both.
+        let (mut on_capitals, mut on_frigates) = (0.0f32, 0.0f32);
+        hold_battle(&cat, &ai, &player, seed, 600.0, |b, events| {
+            let alive = |c: TargetClass| b.ships.iter().any(|s| s.alive && s.side == 1 && cat.ship(s.def).class == c);
+            if !alive(TargetClass::Capital) || !alive(TargetClass::Frigate) {
+                return;
+            }
+            for e in events {
+                let Event::Hit { ship, attacker, damage, .. } = *e else { continue };
+                let a = &b.ships[attacker as usize];
+                if a.side != 0 || cat.ship(a.def).class != TargetClass::Capital {
+                    continue;
+                }
+                match cat.ship(b.ships[ship as usize].def).class {
+                    TargetClass::Capital => on_capitals += damage,
+                    TargetClass::Frigate => on_frigates += damage,
+                    _ => {}
+                }
+            }
+        });
+        let share = on_frigates / (on_capitals + on_frigates).max(1.0);
+        println!("seed {seed}: the Star Destroyers put {:.0}% of {:.0} on the frigates", 100.0 * share, on_capitals + on_frigates);
+        assert!(share > 0.7, "{:.0}%", 100.0 * share);
+    }
+}
+
+#[test]
+fn the_ai_fires_full_salvos_only_at_capital_ships_and_stations() {
+    // `Try_Offensive_Ability_Space`: the Remake AI fires a Star Destroyer's full salvo only at a capital ship or a station with more than a
+    // fifth of its hull. Before, the AI fired it at whatever its target was: 2 of 8 salvos here went at corvettes (14-38% of the weapon
+    // abilities in fleet battles).
+    let Some((data, fs)) = load() else { return };
+    let ai = [("Star_Destroyer", 2)];
+    let player = [("CR-90_Corvette", 6), ("MC-80_Star_Cruiser", 2)];
+    let names: Vec<&str> = ai.iter().chain(&player).map(|u| u.0).collect();
+    let cat = Arc::new(Catalog::build(&data, Some(&fs), &names));
+    for seed in [1, 2] {
+        // Full salvos fired at capital ships (or bigger) and at smaller targets.
+        let (mut big, mut small) = (0, 0);
+        hold_battle(&cat, &ai, &player, seed, 600.0, |b, events| {
+            for e in events {
+                let Event::AbilityActivated { ship, ability } = *e else { continue };
+                let s = &b.ships[ship as usize];
+                if s.side != 0 || !cat.ship(s.def).abilities[ability as usize].salvo || s.target == NONE {
+                    continue;
+                }
+                if cat.ship(b.ships[s.target as usize].def).class as u8 >= TargetClass::Capital as u8 {
+                    big += 1;
+                } else {
+                    small += 1;
+                }
+            }
+        });
+        println!("seed {seed}: full salvos at capital ships {big}, at smaller targets {small}");
+        assert_eq!(small, 0);
+        assert!(big > 0, "the salvo is still used");
+    }
+}

@@ -514,6 +514,8 @@ pub struct ShipDef {
     pub population: i32,
     /// `AI_Combat_Power`: what the unit counts in the AI's force perception (`FriendlyForceUnnormalized`); 0 where the data has none.
     pub ai_power: f32,
+    /// `CategoryMask` names `AntiFighter`: the AI's free store sends it after fighters, bombers, gunships and transports.
+    pub anti_fighter: bool,
     /// Hardpoints.
     pub hardpoints: Vec<HpDef>,
     /// Weapon fired from the hull (fighters).
@@ -1638,6 +1640,7 @@ impl Catalog {
                 Source::Structure(s) => s.fields.get("ai_combat_power").and_then(|v| v.trim().parse().ok()).unwrap_or(0.0),
             }
             .max(0.0),
+            anti_fighter: matches!(src, Source::Unit(u) if u.category_mask.iter().any(|c| c.eq_ignore_ascii_case("AntiFighter"))),
             hardpoints,
             direct,
             spread: Vec::new(),

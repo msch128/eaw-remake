@@ -630,6 +630,9 @@ pub struct Ship {
     pub(crate) scan_in: f32,
     /// Game time until which each side (the first four) still sees this ship (fog of war).
     pub(crate) seen_until: [f32; 4],
+    /// Game time at which this ship last damaged a unit of each side (the first four): that side's AI knows where it is for a while, even
+    /// when it cannot see it (the shots show where they come from).
+    pub(crate) hit_side_at: [f32; 4],
     /// Seconds until each of the first two `ShipDef::heals` pulses.
     pub(crate) heal_in: [f32; 2],
     /// Multipliers from friendly `Combat_Bonus_Ability` auras (refreshed once per second).

@@ -5,14 +5,17 @@
 //!   escort the formation until an enemy comes within their aggro range, and at contact the corvettes of an attacker escort the big ships
 //!   (`Service_Guard`);
 //! * the side focuses one priority target: the weakest enemy of the most important class near its fleet, or the nearest threat to its
-//!   station (`SpaceTacticalFreeStore.lua`: `priority_target_preference`, `Service_Attack`, `Service_Move`);
+//!   station (`SpaceTacticalFreeStore.lua`: `priority_target_preference`, `Service_Attack`, `Service_Move`); every unit outside the
+//!   formation gets the free store's own target (`Service_Attack`: capital ships take frigates, frigates corvettes, corvettes fighters);
+//! * the plan knows the enemies the side sees and those that hit one of its units within the fog's regrow time (`Default_Unit_Damaged`
+//!   hands the Remake AI the attacker);
 //! * a defender guards its station until the free store's aggressive mode starts (station below 70%, enemies near the station or near its
 //!   big ships, or a fleet twice the enemy's after 120 s: `Allowed_As_Defender_Space_Untargeted`);
 //! * reserve units are called in one at a time while the population cap has room (`ReinforceSpace.lua`, `Want_To_Reinforce_Units`), and
 //!   the formation waits for units that are arriving next to it.
 //!
 //! Distances named in the scripts are data; the formation geometry, the catch-up rule, the contact rule and the focus weight are
-//! estimates (RULES.md 9c).
+//! estimates (RULES.md 9c, 9e).
 
 use std::f32::consts::FRAC_PI_2;
 
@@ -150,8 +153,8 @@ impl Battle {
         }
     }
 
-    /// `Current_Enemy_Location`: the visible enemy with the most enemy strength within `CLUSTER_RADIUS` of it (fighters only when nothing
-    /// bigger is in sight).
+    /// `Current_Enemy_Location`: the known enemy (seen, or one that hit the side) with the most enemy strength within `CLUSTER_RADIUS` of it
+    /// (fighters only when nothing bigger is known).
     fn enemy_location(&self, enemies: &[u32]) -> Option<Vec3> {
         let cat = &self.catalog;
         let units: Vec<(Vec3, f32, bool)> = enemies.iter().map(|&e| {
@@ -168,7 +171,7 @@ impl Battle {
             .map(|(_, k)| units[k].0)
     }
 
-    /// `SpaceTacticalFreeStore.lua` priority enemy: of the first class group with a visible enemy (station or capital, frigate, corvette),
+    /// `SpaceTacticalFreeStore.lua` priority enemy: of the first class group with a known enemy (station or capital, frigate, corvette),
     /// the enemy the script's scan ends on: in id order, each enemy that is at least as weak (`Get_Shield_And_Health`) and at least as
     /// close to the own fleet as the one before replaces it.
     fn priority_enemy(&self, enemies: &[u32], friendly: Vec3) -> u32 {
@@ -205,10 +208,20 @@ impl Battle {
             return;
         }
         let time = self.time;
+        // The enemies the side sees, and those that hit one of its units within the fog's regrow time although it cannot see them: the shots
+        // show where they come from (`Default_Unit_Damaged` hands the Remake AI the attacker).
+        let linger = self.config.fog_linger;
         let enemies: Vec<u32> = self
             .ships
             .iter()
-            .filter(|o| o.alive && !o.retreated && o.side != side && cat.ship(o.def).special_weapon.is_none() && !cat.ship(o.def).background && self.is_visible_to(side, o.id))
+            .filter(|o| {
+                o.alive
+                    && !o.retreated
+                    && o.side != side
+                    && cat.ship(o.def).special_weapon.is_none()
+                    && !cat.ship(o.def).background
+                    && (self.is_visible_to(side, o.id) || time - o.hit_side_at[si] <= linger)
+            })
             .map(|o| o.id)
             .collect();
         let structures: Vec<u32> = self.ships.iter().filter(|s| s.alive && s.side == side && cat.ship(s.def).is_static && cat.ship(s.def).special_weapon.is_none()).map(|s| s.id).collect();
@@ -321,6 +334,7 @@ impl Battle {
             .collect();
         let mut units: Vec<u32> = warships.iter().chain(&leaders).copied().filter(|&id| self.planned(&self.ships[id as usize])).collect();
         units.sort_unstable();
+        let given: Vec<u32> = units.iter().map(|&id| self.ships[id as usize].focus).collect();
         for &id in &units {
             self.ships[id as usize].focus = focus;
         }
@@ -432,6 +446,57 @@ impl Battle {
             };
             self.set_order(id, order);
         }
+        // `On_Unit_Service`: the free store gives every unit outside the advancing formation its own target.
+        for (&id, &prev) in units.iter().zip(&given) {
+            if !in_group.contains(&id) {
+                let t = self.service_target(id, focus, prev, &enemies);
+                if t != NONE {
+                    self.ships[id as usize].focus = t;
+                }
+            }
+        }
+    }
+
+    /// `Service_Attack` of `SpaceTacticalFreeStore.lua` in aggressive mode at difficulty Normal: the side's priority target when it is of the
+    /// kind the unit prefers (`Is_Preferred_Target`: capital ships take frigates, frigates corvettes, corvettes and anti-fighter ships fighters,
+    /// bombers and transports, fighters fighters and bombers) and within `FREE_STORE_ATTACK_RANGE`; else, while the unit's own target is not
+    /// of that kind, the nearest enemy of it within the unit's aggro range (`Get_Preferred_Target_In_Range`); else the priority target within
+    /// `FREE_STORE_ATTACK_RANGE`. A target given before (`prev`) stays while it is of the preferred kind and within the aggro range: an attack
+    /// order holds until the unit's next service. `NONE` when none of these applies (the unit keeps its own choice).
+    fn service_target(&self, id: u32, priority: u32, prev: u32, enemies: &[u32]) -> u32 {
+        use TargetClass::*;
+        let cat = &self.catalog;
+        let s = &self.ships[id as usize];
+        let d = cat.ship(s.def);
+        let kind = |t: u32| cat.ship(self.ships[t as usize].def).class;
+        let preferred = |c: TargetClass| {
+            if d.anti_fighter {
+                matches!(c, Fighter | Bomber | Transport)
+            } else {
+                match d.class {
+                    Capital | Super => c == Frigate,
+                    Frigate => c == Corvette,
+                    Corvette => matches!(c, Fighter | Bomber | Transport),
+                    Fighter => matches!(c, Fighter | Bomber),
+                    _ => false,
+                }
+            }
+        };
+        let aggro = if small(d) { FIGHTER_AGGRO_RANGE } else { d.max_weapon_range.max(SHIP_AGGRO_RANGE) };
+        let dist = |t: u32| self.ships[t as usize].pos.dist(s.pos);
+        if priority != NONE && preferred(kind(priority)) && dist(priority) < FREE_STORE_ATTACK_RANGE {
+            return priority;
+        }
+        if prev != NONE && prev != priority && enemies.contains(&prev) && preferred(kind(prev)) && dist(prev) < aggro {
+            return prev;
+        }
+        if s.target == NONE || !preferred(kind(s.target)) {
+            let near = enemies.iter().copied().filter(|&e| preferred(kind(e))).map(|e| (dist(e), e)).filter(|&(x, _)| x < aggro).min_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+            if let Some((_, e)) = near {
+                return e;
+            }
+        }
+        if priority != NONE && dist(priority) < FREE_STORE_ATTACK_RANGE { priority } else { NONE }
     }
 
     /// `Service_Guard` of `SpaceTacticalFreeStore.lua` for a corvette of an attacking side: it attacks fighters, bombers and transports within its

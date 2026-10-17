@@ -517,6 +517,7 @@ impl Battle {
             candidates: Vec::new(),
             scan_in: rng.range(0.0, self.config.retarget_interval),
             seen_until: [0.0; 4],
+            hit_side_at: [f32::NEG_INFINITY; 4],
             heal_in: [0.0; 2],
             bonus: Bonus::default(),
             mods: [(0.0, 0.0); ModKind::COUNT],
@@ -1405,6 +1406,12 @@ impl Battle {
         if self.cheats.is_invulnerable(self.ships[id as usize].side) {
             return;
         }
+        let victim_side = self.ships[id as usize].side as usize;
+        if victim_side < 4
+            && let Some(a) = self.ships.get_mut(attacker as usize)
+        {
+            a.hit_side_at[victim_side] = self.time;
+        }
         let cat = self.catalog.clone();
         let record = self.config.record_events;
         let (atk_damage, _, _) = self.side_mult(self.ships.get(attacker as usize).map_or(u8::MAX, |a| a.side));
@@ -1769,10 +1776,21 @@ impl Battle {
             if (ai_side || s.abilities.iter().any(|a| a.autocast)) && s.target != NONE && s.stance != Stance::HoldFire && (tick + i as u64).is_multiple_of(15) {
                 let t = &self.ships[s.target as usize];
                 let dist = t.pos.dist(s.pos);
+                let tdef = cat.ship(t.def);
+                let tclass = tdef.class;
                 for (k, a) in def.abilities.iter().enumerate() {
                     let boosts_weapons = a.salvo || a.rocket || a.weapon_delay_mult < 0.99;
                     // Rocket salvos are kept for frigates and bigger.
-                    if a.rocket && (cat.ship(t.def).class as u8) < TargetClass::Frigate as u8 {
+                    if a.rocket && (tclass as u8) < TargetClass::Frigate as u8 {
+                        continue;
+                    }
+                    // `Try_Offensive_Ability_Space` of the Remake AI (`Attack_Target_Smart`): a full salvo only on a capital ship or a station
+                    // with more than a fifth of its hull left, faster fire only on a frigate or bigger.
+                    let at_least = |least: TargetClass| tclass as u8 >= least as u8;
+                    if ai_side
+                        && !s.abilities[k].autocast
+                        && ((a.salvo && !(at_least(TargetClass::Capital) && t.hull > 0.2 * tdef.hull)) || (!a.salvo && !a.rocket && a.weapon_delay_mult < 0.99 && !at_least(TargetClass::Frigate)))
+                    {
                         continue;
                     }
                     let effective_range = if a.salvo { (def.preferred_range * 1.15).min(3800.0).max(2500.0) } else { def.max_weapon_range };
