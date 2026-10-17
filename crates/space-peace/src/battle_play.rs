@@ -51,10 +51,24 @@ struct BattleHint;
 struct BattleShot {
     frames: u32,
     taken: bool,
+    /// `frames` when the capture was requested: the readback needs a few more frames before the PNG is on disk.
+    taken_at: Option<u32>,
     /// Frame of the attack order of `--battle-orders` (the capture follows a few frames later).
     orders_at: Option<u32>,
     /// Frame the `--battle-fightcam` camera was placed (the capture follows a few frames later).
     fight_at: Option<u32>,
+}
+
+/// Frames after the capture request until the screenshot has been read back and written.
+const SHOT_WRITE_FRAMES: u32 = 10;
+/// Frames a scripted abort waits for the capture before it fires without a picture (the row then fails on "no picture", not on a timeout).
+const ABORT_WAITS_FOR_SHOT_FRAMES: u32 = 600;
+
+impl BattleShot {
+    /// The mid-battle capture was requested and had time to reach the disk.
+    fn written(&self) -> bool {
+        self.taken_at.is_some_and(|at| self.frames >= at + SHOT_WRITE_FRAMES)
+    }
 }
 
 /// Wires the battle screen to `battle-view`.
@@ -595,11 +609,19 @@ fn abort_key(
     args: Res<Args>,
     status: Res<BattleStatus>,
     clicks_done: Res<ScriptedClicksDone>,
+    shot: Res<BattleShot>,
     mut done: MessageWriter<BattleFinished>,
     mut fired: Local<bool>,
+    mut waited: Local<u32>,
 ) {
-    // `--battle-abort-after <s>` scripts the F10 press for test runs.
-    let scripted = !*fired && status.tick > 0 && abort_due(args.battle_abort_after, status.time, args.battle_click.is_none() || clicks_done.0);
+    // `--battle-abort-after <s>` scripts the F10 press for test runs. An offscreen run takes its mid-battle picture first: at a fast
+    // `--battle-speed` the abort time comes in fewer frames than the capture needs for the models to load (`battle_shot`).
+    let due = abort_due(args.battle_abort_after, status.time, args.battle_click.is_none() || clicks_done.0);
+    let picture = args.offscreen.is_none() || shot.written() || *waited >= ABORT_WAITS_FOR_SHOT_FRAMES;
+    if due && !picture {
+        *waited += 1;
+    }
+    let scripted = !*fired && status.tick > 0 && due && picture;
     if scripted {
         *fired = true;
         done.write(BattleFinished { id: pending.0.battle_id, outcome: BattleOutcome::Aborted });
@@ -741,6 +763,7 @@ fn battle_shot(
         }
     }
     shot.taken = true;
+    shot.taken_at = Some(shot.frames);
     let mut path = out.clone();
     let stem = path.file_stem().map_or_else(|| "out".into(), |s| s.to_string_lossy().into_owned());
     path.set_file_name(format!("{stem}_battle.png"));
@@ -1065,7 +1088,19 @@ fn abort_due(after: Option<f32>, battle_time: f32, clicks_done: bool) -> bool {
 
 #[cfg(test)]
 mod script_tests {
-    use super::abort_due;
+    use super::{BattleShot, SHOT_WRITE_FRAMES, abort_due};
+
+    #[test]
+    fn the_mid_battle_picture_counts_as_written_a_few_frames_after_its_request() {
+        let mut shot = BattleShot::default();
+        assert!(!shot.written(), "nothing was requested");
+        shot.frames = 200;
+        shot.taken = true;
+        shot.taken_at = Some(200);
+        assert!(!shot.written(), "the readback is still on its way");
+        shot.frames = 200 + SHOT_WRITE_FRAMES;
+        assert!(shot.written());
+    }
 
     #[test]
     fn scripted_abort_waits_for_the_scripted_clicks() {

@@ -51,6 +51,15 @@ F9 on the map opens the placeholder screen. Needed: galaxy-sim API to apply a ta
 - UI scale: eaw-ui owns `UiScale` (height/768 x settings scale) so bar and HUD match; labels compensate.
 - Battle scenarios: `--battle-choice fight|auto`, `--battle-auto` (AI plays both sides), `--battle-speed X`, `--battle-seconds S` (mid-battle capture `<out>_battle.png`, camera framed on all ships); the final capture waits for the return to the map.
 - Offscreen scenarios: `--battle-choice fight|auto` clicks the battle dialog button when it opens (verifies the seam headless). `--select P --weeks N --build TEXT --move PLANET` (orders at the selected planet, then N weeks, stops early on a pending battle; capture waits for it).
+- Scripted abort and the mid-battle picture (2026-10-17, R): `--battle-abort-after <s>` (the F10 press of the smoke row `battle-reinforce`) waits for the
+  scripted `--battle-click`s and, in an offscreen run, for the mid-battle capture `<out>_battle.png` (taken from battle second 12 on and 200 frames
+  into the battle view, so the models are loaded) plus 10 frames for the readback (`BattleShot::written`; after 600 frames of waiting it fires
+  without a picture and the row fails on "no picture", not on its 420 s timeout). Before, the abort time (90 battle seconds, 2.5 s a frame at
+  30x on a busy machine) and the frame-counted clicks (battle frames 60 and 100, done at 120) came before frame 200: the row logged `abandoned at
+  t=310s` and no `battle: capture at` line and failed on "no picture". Now: clicks, capture at t=254-257 s, abort 0.5 s later at t=271-274 s, 3 of 3
+  runs ok. `lost 14` in the result dialog of such a battle is not a dialog bug: the fight itself lost [0, 0] units, and the sim then auto-resolves
+  the 14 Rebel ships against the Celanon star base exactly as a plain `--battle-choice auto` does (the same dialog text, "Rebel: 0 of 14 units
+  survived (lost 14)", also with `--battle-auto --battle-abort-after 90`); the `abandoned at` log line now says that its numbers are the fight's own.
 
 ## Gaps
 - Real window input (clicks on pads, fleet drag, Esc) never run live; only offscreen renders and unit tests.

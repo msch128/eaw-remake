@@ -353,7 +353,7 @@ fn finish_battles(
                 Some(partial) => {
                     if let Some(p) = pending.as_ref() {
                         let lost: Vec<u32> = p.0.sides.iter().zip(&partial.survived).map(|(s, alive)| s.groups.iter().zip(alive).map(|(g, a)| g.count.saturating_sub(*a)).sum()).collect();
-                        info!("play: battle {}: abandoned at t={:.0}s, units lost per side {:?}", f.id, partial.duration, lost);
+                        info!("play: battle {}: abandoned at t={:.0}s, units lost per side {:?} in the fight itself; the sim auto-resolves what is left", f.id, partial.duration, lost);
                     }
                     actions.write(PlayAction::AbandonTactical { id: f.id, partial: Box::new(partial) })
                 }
