@@ -89,12 +89,55 @@ fn fs() -> Arc<MemFs> {
     Arc::new(MemFs(m))
 }
 
-fn app() -> App {
+/// A file system on which reading `.1` takes half a second, like a cold file on a busy disk.
+struct SlowFs(Arc<MemFs>, &'static str);
+
+impl FileSource for SlowFs {
+    fn read(&self, path: &str) -> io::Result<Vec<u8>> {
+        if normalize(path) == normalize(self.1) {
+            std::thread::sleep(std::time::Duration::from_millis(500));
+        }
+        self.0.read(path)
+    }
+    fn exists(&self, path: &str) -> bool {
+        self.0.exists(path)
+    }
+    fn list(&self, dir: &str) -> Vec<String> {
+        self.0.list(dir)
+    }
+}
+
+/// The plugin as the game runs it, on `fs`: samples are read and decoded on worker threads.
+fn worker_app_on(fs: Arc<dyn FileSource>) -> App {
     let mut app = App::new();
     app.add_plugins((MinimalPlugins, AssetPlugin::default()))
         .init_asset::<AudioSource>()
-        .add_plugins(AlamoAudioPlugin::new(fs()));
+        .add_plugins(AlamoAudioPlugin::new(fs));
     app
+}
+
+fn worker_app() -> App {
+    worker_app_on(fs())
+}
+
+fn app() -> App {
+    let mut app = worker_app();
+    // Samples are read on the spot: most tests count voices frame by frame (the worker reads have tests of their own).
+    app.world_mut().resource_mut::<alamo_audio::AudioSettings>().load_on_worker = false;
+    app
+}
+
+/// Updates until `done` holds (a worker thread needs a moment), at most five seconds.
+fn update_until(app: &mut App, mut done: impl FnMut(&mut App) -> bool) -> bool {
+    let started = std::time::Instant::now();
+    while started.elapsed() < std::time::Duration::from_secs(5) {
+        app.update();
+        if done(app) {
+            return true;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    false
 }
 
 fn play(app: &mut App, event: &str) {
@@ -265,4 +308,70 @@ fn speech_ducks_music_gain() {
         q.iter(app.world()).next().map(|t| t.duck_factor()).unwrap_or(1.0)
     };
     assert!(recovered > ducked, "music recovers after speech finishes: {recovered} > {ducked}");
+}
+
+fn all_voices(app: &mut App) -> usize {
+    app.world_mut().query::<&SfxVoice>().iter(app.world()).count()
+}
+
+fn music_events(app: &mut App) -> Vec<String> {
+    let mut q = app.world_mut().query::<&MusicTrack>();
+    q.iter(app.world()).map(|t| t.event.clone()).collect()
+}
+
+#[test]
+fn a_new_sample_is_read_on_a_worker_and_its_sound_follows() {
+    let mut app = worker_app();
+    play(&mut app, "Boom");
+    app.update();
+    // The frame that asked for an uncached sample does not read it: the sound waits for the worker.
+    assert_eq!(all_voices(&mut app), 0);
+    assert!(update_until(&mut app, |a| voices(a).len() == 1), "the sound never started");
+    // Cached now: the next request plays on its own frame (Max_Instances 1 fades the first one out).
+    play(&mut app, "Boom");
+    app.update();
+    assert_eq!(all_voices(&mut app), 2);
+    assert_eq!(voices(&mut app).len(), 1);
+}
+
+#[test]
+fn a_music_track_starts_once_a_worker_has_read_its_file() {
+    let mut app = worker_app();
+    app.world_mut().resource_mut::<MusicDirector>().set_scene(MusicScene::Galactic("Rebel".into()));
+    app.update();
+    assert!(music_events(&mut app).is_empty(), "the music file is not read on the frame the scene changes");
+    assert!(update_until(&mut app, |a| !music_events(a).is_empty()), "the music never started");
+    assert_eq!(music_events(&mut app), vec!["Galactic_Map_Rebel_Music_Event"]);
+}
+
+#[test]
+fn a_file_request_plays_once_a_worker_has_read_it() {
+    let mut app = worker_app();
+    app.world_mut().write_message(alamo_audio::PlayFile { name: "boom_b.wav".into(), bus: alamo_audio::Bus::Sfx });
+    let players = |a: &mut App| a.world_mut().query::<&AudioPlayer>().iter(a.world()).count();
+    app.update();
+    assert_eq!(players(&mut app), 0);
+    assert!(update_until(&mut app, |a| players(a) == 1), "the file never played");
+}
+
+/// Asks the plugin to get `sample` ready, as a sound request does; true once it is.
+fn prepare(app: &mut App, sample: &str) -> bool {
+    app.world_mut().resource_scope(|world, mut audio: Mut<alamo_audio::plugin::AlamoAudio>| {
+        audio.prepare(sample, 256 << 20, &mut world.resource_mut::<Assets<AudioSource>>())
+    })
+}
+
+#[test]
+fn a_newer_unit_response_waits_for_an_older_one_whose_sample_is_still_read() {
+    // The select line's sample is slow to read, the move line's is ready: the move line still comes second and replaces the
+    // select line, as it does when both are cached.
+    let mut app = worker_app_on(Arc::new(SlowFs(fs(), "Audio/SFX/boom_a.wav")));
+    assert!(update_until(&mut app, |a| prepare(a, "boom_b.wav")));
+    play(&mut app, "Unit_Select_A");
+    app.update();
+    play(&mut app, "Unit_Move_A");
+    app.update();
+    assert!(voice_events(&mut app).is_empty(), "the move line waits for the select line");
+    assert!(update_until(&mut app, |a| !voice_events(a).is_empty()), "no line played");
+    assert_eq!(voice_events(&mut app), vec!["unit_move_a"]);
 }

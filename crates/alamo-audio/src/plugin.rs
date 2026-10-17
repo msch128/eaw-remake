@@ -23,8 +23,10 @@
 //!   [`AudioSettings::speech_global_cooldown`] between any two unit responses) prevents spam.
 //! * **Buses**: master / music / sfx / speech / ambient in [`AudioBuses`], applied live.
 
-use std::collections::HashMap;
-use std::sync::Arc;
+use std::collections::{HashMap, HashSet};
+use std::sync::mpsc::{Receiver, Sender, channel};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use bevy::audio::{
     AudioPlayer, AudioSink, AudioSinkPlayback, AudioSource, PlaybackSettings, SpatialAudioSink,
@@ -123,6 +125,10 @@ pub struct AudioSettings {
     /// does not say which one the engine does), true = the new request is dropped and the playing ones finish. `SP_AUDIO_MAXINST=drop` switches it
     /// for an A/B listen.
     pub max_instances_drop_new: bool,
+    /// Read and decode samples on worker threads: a sound whose sample is not cached yet starts a frame or two later instead of
+    /// stalling the frame on the disk (a battle music MP3 took 7-46 ms on the main thread, a cold WAV up to 17 ms). Off, every sample
+    /// is read when it is first played (tests that count voices frame by frame).
+    pub load_on_worker: bool,
 }
 
 impl Default for AudioSettings {
@@ -137,6 +143,7 @@ impl Default for AudioSettings {
             saturation_scale: 1.0,
             rolloff: 1.0,
             max_instances_drop_new: std::env::var("SP_AUDIO_MAXINST").is_ok_and(|v| v.eq_ignore_ascii_case("drop")),
+            load_on_worker: true,
         }
     }
 }
@@ -235,6 +242,7 @@ pub struct PlaySpeech {
     pub event: String,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn process_speech_requests(
     mut reader: MessageReader<PlaySpeech>,
     mut ledger: ResMut<SoundLedger>,
@@ -244,31 +252,47 @@ fn process_speech_requests(
     settings: Res<AudioSettings>,
     buses: Res<AudioBuses>,
     mut commands: Commands,
+    mut loading: Local<Vec<(PlaySpeech, String, f64)>>,
 ) {
     let t = time.elapsed_secs_f64();
-    for req in reader.read() {
+    // Lines whose file a worker is still reading come first, with the file picked for them.
+    let waiting: Vec<(PlaySpeech, Option<String>, f64)> = loading.drain(..).map(|(r, f, since)| (r, Some(f), since)).collect();
+    for (req, picked, since) in waiting.into_iter().chain(reader.read().cloned().map(|r| (r, None, t))) {
         let note = |ledger: &mut SoundLedger, sample: &str, path: Option<String>, outcome| {
             ledger.record(LedgerEntry { t, kind: LedgerKind::Speech, event: req.event.clone(), sample: sample.to_string(), path, outcome });
         };
-        if audio_log() {
+        if audio_log() && picked.is_none() {
             info!("audio speech {}", req.event);
         }
         let Some(line) = audio.speech.get(&req.event).cloned() else {
             note(&mut ledger, "", None, LedgerOutcome::UnknownEvent);
             continue;
         };
-        let usable: Vec<&String> = line.files.iter().filter(|f| audio.has_sample(f)).collect();
-        for f in line.files.iter().filter(|f| !audio.has_sample(f)) {
-            note(&mut ledger, f, None, LedgerOutcome::MissingFile);
-        }
-        if line.files.is_empty() {
-            note(&mut ledger, "", None, LedgerOutcome::NoSamples);
+        let file = match picked {
+            Some(f) => f,
+            None => {
+                let usable: Vec<&String> = line.files.iter().filter(|f| audio.has_sample(f)).collect();
+                for f in line.files.iter().filter(|f| !audio.has_sample(f)) {
+                    note(&mut ledger, f, None, LedgerOutcome::MissingFile);
+                }
+                if line.files.is_empty() {
+                    note(&mut ledger, "", None, LedgerOutcome::NoSamples);
+                    continue;
+                }
+                if usable.is_empty() {
+                    continue;
+                }
+                usable[rand::rng().random_range(0..usable.len())].clone()
+            }
+        };
+        if settings.load_on_worker && !audio.prepare(&file, settings.cache_budget_bytes, &mut assets) {
+            if t - since < SAMPLE_WAIT_SECONDS {
+                loading.push((req, file, since));
+            } else {
+                note(&mut ledger, &file, None, LedgerOutcome::Dropped);
+            }
             continue;
         }
-        if usable.is_empty() {
-            continue;
-        }
-        let file = usable[rand::rng().random_range(0..usable.len())].clone();
         match audio.sample_checked(&file, settings.cache_budget_bytes, &mut assets) {
             Ok((handle, path)) => {
                 note(&mut ledger, &file, Some(path), LedgerOutcome::Played);
@@ -280,6 +304,7 @@ fn process_speech_requests(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn process_file_requests(
     mut reader: MessageReader<PlayFile>,
     mut ledger: ResMut<SoundLedger>,
@@ -289,10 +314,22 @@ fn process_file_requests(
     settings: Res<AudioSettings>,
     buses: Res<AudioBuses>,
     mut commands: Commands,
+    mut loading: Local<Vec<(PlayFile, f64)>>,
 ) {
-    for req in reader.read() {
-        if audio_log() {
+    let now = time.elapsed_secs_f64();
+    // Files a worker is still reading come first.
+    let waiting: Vec<(PlayFile, bool, f64)> = loading.drain(..).map(|(r, since)| (r, true, since)).collect();
+    for (req, waited, since) in waiting.into_iter().chain(reader.read().cloned().map(|r| (r, false, now))) {
+        if audio_log() && !waited {
             info!("audio file {}", req.name);
+        }
+        if settings.load_on_worker && !audio.prepare(&req.name, settings.cache_budget_bytes, &mut assets) {
+            if now - since < SAMPLE_WAIT_SECONDS {
+                loading.push((req, since));
+            } else {
+                ledger.record(LedgerEntry { t: now, kind: LedgerKind::File, event: req.name.clone(), sample: req.name.clone(), path: None, outcome: LedgerOutcome::Dropped });
+            }
+            continue;
         }
         let (handle, path) = match audio.sample_checked(&req.name, settings.cache_budget_bytes, &mut assets) {
             Ok(v) => v,
@@ -381,6 +418,10 @@ pub struct AlamoAudio {
     cache: HashMap<String, Handle<AudioSource>>,
     cache_bytes: usize,
     failed: HashMap<String, LedgerOutcome>,
+    /// Worker threads of [`AlamoAudio::prepare`], started on first use.
+    reader: Option<SampleReader>,
+    /// Samples the workers are reading, by resolved path.
+    reading: HashSet<String>,
 }
 
 impl AlamoAudio {
@@ -405,6 +446,8 @@ impl AlamoAudio {
             cache: HashMap::new(),
             cache_bytes: 0,
             failed: Default::default(),
+            reader: None,
+            reading: HashSet::new(),
         }
     }
 
@@ -440,40 +483,142 @@ impl AlamoAudio {
         if let Some(why) = self.failed.get(&path).copied() {
             return Err((why, Some(path)));
         }
-        let t0 = std::time::Instant::now();
-        let bytes = match self.fs.read(&path) {
-            Ok(b) => b,
-            Err(_) => {
-                self.failed.insert(path.clone(), LedgerOutcome::MissingFile);
-                return Err((LedgerOutcome::MissingFile, Some(path)));
-            }
+        let t0 = Instant::now();
+        let read = read_sample(&*self.fs, &path);
+        // Debug aid of the battle view (`SP_FRAME_LOG`): reads that still stall a frame (samples [`AlamoAudio::prepare`] did not get ready).
+        if frame_log() {
+            info!("audio sample {path} read and decoded on the main thread in {:.1?}", t0.elapsed());
+        }
+        self.store(path, read, budget, assets)
+    }
+
+    /// Gets `name` ready to play without touching the disk on this frame. True when it is (cached, or known to be missing or
+    /// undecodable), so [`AlamoAudio::sample_checked`] answers at once; otherwise a worker thread reads and decodes it and a later
+    /// call returns true. On the main thread a battle music MP3 took 7-46 ms to read, a cold WAV up to 17 ms.
+    pub fn prepare(&mut self, name: &str, budget: usize, assets: &mut Assets<AudioSource>) -> bool {
+        let Some((path, _)) = self.resolver.resolve(&*self.fs, name) else {
+            return true;
         };
-        let bytes = if path.ends_with(".WAV") {
-            match Wav::parse(&bytes).and_then(|w| w.decode()) {
-                Ok(pcm) => pcm.to_wav_bytes(),
-                Err(e) => {
-                    warn!("cannot decode {path}: {e}");
-                    self.failed.insert(path.clone(), LedgerOutcome::BadFile);
-                    return Err((LedgerOutcome::BadFile, Some(path)));
-                }
+        self.collect_reads(budget, assets);
+        if self.cache.contains_key(&path) || self.failed.contains_key(&path) {
+            return true;
+        }
+        if self.reading.contains(&path) {
+            return false;
+        }
+        if self.reader.is_none() {
+            self.reader = SampleReader::start(&self.fs);
+        }
+        // Without a worker the sample is read on the spot, as before.
+        let Some(reader) = &self.reader else {
+            return true;
+        };
+        if reader.jobs.send(path.clone()).is_err() {
+            return true;
+        }
+        self.reading.insert(path);
+        false
+    }
+
+    /// Caches the samples the workers have finished.
+    fn collect_reads(&mut self, budget: usize, assets: &mut Assets<AudioSource>) {
+        let Some(reader) = &self.reader else {
+            return;
+        };
+        let done: Vec<(String, SampleRead)> = reader.done.lock().unwrap_or_else(|e| e.into_inner()).try_iter().collect();
+        for (path, (read, took)) in done {
+            self.reading.remove(&path);
+            if frame_log() {
+                info!("audio sample {path} read and decoded on a worker thread in {took:.1?}");
             }
-        } else {
-            bytes
+            // `sample_checked` may have read it on the spot meanwhile.
+            if !self.cache.contains_key(&path) {
+                let _ = self.store(path, read, budget, assets);
+            }
+        }
+    }
+
+    /// Caches the bytes of a sample that was read (or notes why it cannot be played).
+    fn store(
+        &mut self,
+        path: String,
+        read: Result<Arc<[u8]>, LedgerOutcome>,
+        budget: usize,
+        assets: &mut Assets<AudioSource>,
+    ) -> Result<(Handle<AudioSource>, String), (LedgerOutcome, Option<String>)> {
+        let bytes = match read {
+            Ok(b) => b,
+            Err(why) => {
+                self.failed.insert(path.clone(), why);
+                return Err((why, Some(path)));
+            }
         };
         if self.cache_bytes + bytes.len() > budget {
             self.cache.clear();
             self.cache_bytes = 0;
         }
         self.cache_bytes += bytes.len();
-        let handle = assets.add(AudioSource {
-            bytes: bytes.into(),
-        });
+        let handle = assets.add(AudioSource { bytes });
         self.cache.insert(path.clone(), handle.clone());
-        // Debug aid of the battle view (`SP_FRAME_LOG`): first plays read and decode on the main thread.
-        if std::env::var_os("SP_FRAME_LOG").is_some() {
-            info!("audio sample {path} read and decoded on the main thread in {:.1?}", t0.elapsed());
-        }
         Ok((handle, path))
+    }
+}
+
+/// A sample read off the main thread: the bytes to play (or why there are none) and the time it took.
+type SampleRead = (Result<Arc<[u8]>, LedgerOutcome>, Duration);
+
+/// Threads reading samples for [`AlamoAudio::prepare`]: one can be busy with a music file while the other reads the sounds.
+const READ_THREADS: usize = 2;
+
+/// Worker threads that read and decode samples; they end when the [`AlamoAudio`] owning them is dropped.
+struct SampleReader {
+    /// Resolved paths to read.
+    jobs: Sender<String>,
+    /// Finished reads.
+    done: Mutex<Receiver<(String, SampleRead)>>,
+}
+
+impl SampleReader {
+    /// `None` if no thread could be started.
+    fn start(fs: &Arc<dyn FileSource>) -> Option<Self> {
+        let (jobs, queue) = channel::<String>();
+        let (finished, done) = channel();
+        let queue = Arc::new(Mutex::new(queue));
+        let mut started = 0;
+        for i in 0..READ_THREADS {
+            let (fs, queue, finished) = (fs.clone(), queue.clone(), finished.clone());
+            let worker = std::thread::Builder::new().name(format!("alamo-audio-read-{i}")).spawn(move || {
+                loop {
+                    // The queue is locked only while waiting for the next path, not during the read.
+                    let next = queue.lock().unwrap_or_else(|e| e.into_inner()).recv();
+                    let Ok(path) = next else {
+                        break;
+                    };
+                    let t0 = Instant::now();
+                    let read = read_sample(&*fs, &path);
+                    if finished.send((path, (read, t0.elapsed()))).is_err() {
+                        break;
+                    }
+                }
+            });
+            started += usize::from(worker.is_ok());
+        }
+        (started > 0).then(|| Self { jobs, done: Mutex::new(done) })
+    }
+}
+
+/// Reads a sample and turns it into the bytes Bevy plays: WAV (EaW's ADPCM included) decoded to PCM16, anything else as it is.
+fn read_sample(fs: &dyn FileSource, path: &str) -> Result<Arc<[u8]>, LedgerOutcome> {
+    let bytes = fs.read(path).map_err(|_| LedgerOutcome::MissingFile)?;
+    if !path.ends_with(".WAV") {
+        return Ok(bytes.into());
+    }
+    match Wav::parse(&bytes).and_then(|w| w.decode()) {
+        Ok(pcm) => Ok(pcm.to_wav_bytes().into()),
+        Err(e) => {
+            warn!("cannot decode {path}: {e}");
+            Err(LedgerOutcome::BadFile)
+        }
     }
 }
 
@@ -559,7 +704,12 @@ struct SfxState {
     last_played: HashMap<String, f64>,
     last_unit_response: Option<f64>,
     pending: Vec<Pending>,
+    /// Requests waiting for their samples to be read on a worker thread, with the time they began to wait.
+    loading: Vec<(PlaySfx, Option<Continuation>, f64)>,
 }
+
+/// Longest a sound waits for its sample to be read before it is dropped.
+const SAMPLE_WAIT_SECONDS: f64 = 10.0;
 
 /// Registers resources and systems. `fs` is the (layered) game file system to read data and samples from.
 pub struct AlamoAudioPlugin {
@@ -669,14 +819,15 @@ fn process_sfx_requests(
     listeners: Query<&GlobalTransform, With<SpatialListener>>,
 ) {
     let now = time.elapsed_secs_f64();
-    let mut requests: Vec<(PlaySfx, Option<Continuation>)> =
-        reader.read().cloned().map(|r| (r, None)).collect();
+    // Requests that waited for their samples come first, then the new ones; the third value is when the request began to wait.
+    let mut requests: Vec<(PlaySfx, Option<Continuation>, f64)> = std::mem::take(&mut state.loading);
+    requests.extend(reader.read().cloned().map(|r| (r, None, now)));
     // Predelayed requests that became due.
     let (due, waiting): (Vec<_>, Vec<_>) = std::mem::take(&mut state.pending)
         .into_iter()
         .partition(|p| p.due <= now);
     state.pending = waiting;
-    requests.extend(due.into_iter().map(|p| (p.request, Some(p.cont))));
+    requests.extend(due.into_iter().map(|p| (p.request, Some(p.cont), now)));
     if requests.is_empty() {
         return;
     }
@@ -709,8 +860,10 @@ fn process_sfx_requests(
         .collect();
     let listener = listener_position(&listeners);
     let mut rng = rand::rng();
+    // Source, unit-response flag and overlap group of every request that waits in this pass (see the order rule below).
+    let mut held: Vec<(Option<Entity>, bool, Option<String>)> = Vec::new();
 
-    for (req, cont) in requests {
+    for (req, cont, since) in requests {
         let key = req.event.to_ascii_lowercase();
         let Some(ev) = audio.sfx.get(&req.event).cloned() else {
             ledger.record(LedgerEntry {
@@ -723,6 +876,34 @@ fn process_sfx_requests(
             });
             continue;
         };
+        // A request whose samples are not all cached waits a frame or two while a worker reads them, so the frame never stalls on
+        // the disk. Follow-up samples of a playing event were readied with its first request. Sounds whose order matters wait behind
+        // a waiting one: those of the same object (a newer loop replaces the older one), unit responses (the newer line cuts the older
+        // one) and those of one overlap group (the first one plays, the later ones are dropped).
+        if settings.load_on_worker && !ev.is_preset && cont.as_ref().is_none_or(|c| c.sample.is_empty()) {
+            let ready = samples_ready(&mut audio, &ev, settings.cache_budget_bytes, &mut assets);
+            let behind = held.iter().any(|(source, response, group)| {
+                (source.is_some() && *source == req.source)
+                    || (*response && ev.is_unit_response_vo)
+                    || (group.is_some() && *group == ev.overlap_group)
+            });
+            if !ready || behind {
+                if now - since < SAMPLE_WAIT_SECONDS {
+                    held.push((req.source, ev.is_unit_response_vo, ev.overlap_group.clone()));
+                    state.loading.push((req, cont, since));
+                } else {
+                    ledger.record(LedgerEntry {
+                        t: now,
+                        kind: LedgerKind::Sfx,
+                        event: req.event.clone(),
+                        sample: "samples still loading".to_string(),
+                        path: None,
+                        outcome: LedgerOutcome::Dropped,
+                    });
+                }
+                continue;
+            }
+        }
         if audio_log() && cont.is_none() {
             info!("audio sfx {} (at {:?})", req.event, req.position.map(|p| p.round()));
         }
@@ -1048,6 +1229,15 @@ fn cut_voice(commands: &mut Commands, voices: &mut Query<(Entity, &mut SfxVoice)
     }
 }
 
+/// Starts reading every sample of `ev` that is not cached yet (see [`AlamoAudio::prepare`]); true when all of them can play now.
+fn samples_ready(audio: &mut AlamoAudio, ev: &SfxEvent, budget: usize, assets: &mut Assets<AudioSource>) -> bool {
+    let mut ready = true;
+    for s in ev.pre_samples.iter().chain(&ev.samples).chain(&ev.post_samples) {
+        ready &= audio.prepare(s, budget, assets);
+    }
+    ready
+}
+
 /// The samples of `list` that exist in the file system; a missing one is reported (once per sample) and never picked, so one
 /// absent file of a multi-sample event does not make the event randomly silent.
 fn usable_samples(audio: &AlamoAudio, ledger: &mut SoundLedger, now: f64, event: &str, list: &[String]) -> Vec<String> {
@@ -1263,6 +1453,7 @@ fn sync_emitters(
     settings: Res<AudioSettings>,
     time: Res<Time>,
     mut out: MessageWriter<PlaySfx>,
+    mut state: ResMut<SfxState>,
 ) {
     let now = time.elapsed_secs_f64();
     let listener = listener_position(&listeners);
@@ -1297,6 +1488,8 @@ fn sync_emitters(
                     v.stopping = Some(now);
                 }
             }
+            // The old loop may still wait for its samples: it must not start once it is no longer wanted.
+            state.loading.retain(|(r, ..)| !(r.source == Some(entity) && r.event.eq_ignore_ascii_case(&old)));
         }
         if let Some(new) = desired {
             if audio_log() {
@@ -1352,6 +1545,8 @@ pub struct MusicDirector {
     versus: Option<String>,
     /// A super weapon (Death Star) is in the space battle: its faction theme replaces the battle playlist.
     super_weapon: bool,
+    /// Fade-in of the track whose file a worker is still reading (see [`AlamoAudio::prepare`]).
+    loading_fade: Option<f32>,
 }
 
 impl MusicDirector {
@@ -1447,10 +1642,25 @@ impl MusicTrack {
         self.outgoing
     }
 
+    /// Current fade factor 0..1 (rising after the start, falling while outgoing).
+    pub fn fade(&self) -> f32 {
+        self.fade
+    }
+
     /// Ducking factor applied when speech is active (1.0 = normal, < 1.0 = ducked).
     pub fn duck_factor(&self) -> f32 {
         self.duck
     }
+}
+
+/// What became of a music file [`start_track`] was asked to play.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TrackStart {
+    Started,
+    /// Missing or undecodable (written to the ledger): the next file of the playlist is tried.
+    Failed,
+    /// A worker thread is still reading the file: the same file is tried again next frame.
+    Waiting,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1460,17 +1670,21 @@ fn start_track(
     assets: &mut Assets<AudioSource>,
     ledger: &mut SoundLedger,
     now: f64,
-    budget: usize,
+    settings: &AudioSettings,
     event: &MusicEvent,
     file: &str,
     fade_in: f32,
     stinger: bool,
-) -> bool {
-    let (handle, path) = match audio.sample_checked(file, budget, assets) {
+) -> TrackStart {
+    // A whole MP3 is megabytes: read on the main thread it stalled the frame the battle music started (7-46 ms).
+    if settings.load_on_worker && !audio.prepare(file, settings.cache_budget_bytes, assets) {
+        return TrackStart::Waiting;
+    }
+    let (handle, path) = match audio.sample_checked(file, settings.cache_budget_bytes, assets) {
         Ok(v) => v,
         Err((outcome, path)) => {
             ledger.record(LedgerEntry { t: now, kind: LedgerKind::Music, event: event.name.clone(), sample: file.to_string(), path, outcome });
-            return false;
+            return TrackStart::Failed;
         }
     };
     ledger.record(LedgerEntry {
@@ -1504,7 +1718,7 @@ fn start_track(
             duck: 1.0,
         },
     ));
-    true
+    TrackStart::Started
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1528,6 +1742,7 @@ fn music_system(
             info!("audio music scene {:?} -> event {:?}", director.planner.scene(), wanted);
         }
         director.queue.clear();
+        director.loading_fade = None;
         director.oneshot_done = false;
         let is_result_stinger = matches!(director.planner.scene(), MusicScene::Result { .. });
         let fade_out = if is_result_stinger {
@@ -1610,29 +1825,27 @@ fn music_system(
     }
     // The event's own `Fade_In_Seconds` (the previous music fades out over its `Fade_Out_Previous_Seconds`); the
     // floor only avoids a click. Following tracks of a playlist ease in over half a second.
-    let fade_in = if changed {
-        if matches!(director.planner.scene(), MusicScene::Result { .. }) {
-            0.05
-        } else {
-            event.fade_in.max(0.05)
+    // A track whose file was still being read keeps the fade-in it was started with.
+    let fade_in = match director.loading_fade.take() {
+        Some(f) => f,
+        None if changed => {
+            if matches!(director.planner.scene(), MusicScene::Result { .. }) {
+                0.05
+            } else {
+                event.fade_in.max(0.05)
+            }
         }
-    } else {
-        0.5
+        None => 0.5,
     };
     while let Some(file) = director.queue.pop() {
-        if start_track(
-            &mut commands,
-            &mut audio,
-            &mut assets,
-            &mut ledger,
-            time.elapsed_secs_f64(),
-            settings.cache_budget_bytes,
-            &event,
-            &file,
-            fade_in,
-            stinger,
-        ) {
-            break;
+        match start_track(&mut commands, &mut audio, &mut assets, &mut ledger, time.elapsed_secs_f64(), &settings, &event, &file, fade_in, stinger) {
+            TrackStart::Started => break,
+            TrackStart::Failed => {}
+            TrackStart::Waiting => {
+                director.queue.push(file);
+                director.loading_fade = Some(fade_in);
+                break;
+            }
         }
     }
 }
@@ -1693,6 +1906,12 @@ fn dump_ledger_on_exit(
 fn audio_log() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ON.get_or_init(|| std::env::var_os("SP_AUDIO_LOG").is_some())
+}
+
+/// `SP_FRAME_LOG` (the battle view's frame spike log) is set: sample reads say where they ran and how long they took.
+fn frame_log() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("SP_FRAME_LOG").is_some())
 }
 
 /// Per-bus loudness of what is playing now, as the `audio balance` log line: `music=<n>x peak avg ...`.

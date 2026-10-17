@@ -121,3 +121,14 @@ Empire at War audio: event data, sample resolution, decoding and a Bevy playback
 - Per-ability sounds (`AbilitySfx` in `battle-view/visuals.rs`: activated / deactivated / target line of each `Unit_Ability`; the old top-level lookup missed these nested tags), faction ability
   toggle sounds (`AudioConstants::toggle_sfx`), group / assist fallbacks, `Death_SFXEvent_End_Die` (1.5 s after the start sound, estimate), retreat-not-allowed before the countdown,
   reinforcement window selection / cancelled lines. Lua audio calls are not needed (only ground bombing runs use them). Still open: see `docs/AUDIO-COVERAGE.md`.
+
+## Sample reads off the main thread (2026-10-17)
+- Measured with `SP_FRAME_LOG` (battle-view's frame spike log): the battle music start read the whole MP3 on the main thread, 7-46 ms per track (a 63 ms frame at
+  the first shots of a battle), cold WAVs up to 17 ms. `AlamoAudio::prepare` now hands a sample that is not cached to two worker threads (`SampleReader`, started on
+  first use) and says when it is ready; `sample_checked` stays the synchronous path for callers that do not prepare.
+- `AudioSettings::load_on_worker` (on by default): an SFX request whose samples (pre, main, post) are not all cached waits in `SfxState::loading` before any voice
+  rule runs, so probability, predelay, cuts and instance limits act as before, a frame or two later on the first use of a sample. Requests whose order matters
+  wait behind a waiting one: same object (loops, kills-previous), unit responses (the newer line cuts the older one) and one overlap group. A loop the emitter
+  replaced while it waited is dropped (`sync_emitters`). Music: `start_track` returns `TrackStart::Waiting` and `music_system` tries the same file next frame
+  with the fade-in it was given. `PlaySpeech` / `PlayFile` keep their picked file and retry. Requests give up after 10 s (`SAMPLE_WAIT_SECONDS`, ledger
+  `Dropped`). Tests that count voices frame by frame switch it off; `tests/plugin.rs` and `tests/pass2.rs` check the worker path (order, loops, fade-in).

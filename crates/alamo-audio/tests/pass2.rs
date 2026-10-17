@@ -5,6 +5,7 @@
 use std::collections::HashMap;
 use std::io;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use alamo_audio::plugin::{MusicTrack, SfxVoice};
 use alamo_audio::{AlamoAudioPlugin, MusicDirector, MusicScene, Pcm, PlaySfx, SfxEmitter};
@@ -12,6 +13,7 @@ use alamo_fs::{FileSource, normalize};
 use bevy::asset::AssetPlugin;
 use bevy::audio::{AudioSource, PlaybackSettings, SpatialListener};
 use bevy::prelude::*;
+use bevy::time::TimeUpdateStrategy;
 
 struct MemFs(HashMap<String, Vec<u8>>);
 
@@ -68,10 +70,45 @@ fn fs() -> Arc<MemFs> {
     Arc::new(MemFs(m))
 }
 
-fn app() -> App {
+/// The plugin as the game runs it, on `fs`: samples are read and decoded on worker threads.
+fn worker_app_on(fs: Arc<dyn FileSource>) -> App {
     let mut app = App::new();
-    app.add_plugins((MinimalPlugins, AssetPlugin::default())).init_asset::<AudioSource>().add_plugins(AlamoAudioPlugin::new(fs()));
+    app.add_plugins((MinimalPlugins, AssetPlugin::default())).init_asset::<AudioSource>().add_plugins(AlamoAudioPlugin::new(fs));
     app
+}
+
+fn app() -> App {
+    let mut app = worker_app_on(fs());
+    // Samples are read on the spot: most tests count voices frame by frame (the worker reads have tests of their own).
+    app.world_mut().resource_mut::<alamo_audio::AudioSettings>().load_on_worker = false;
+    app
+}
+
+/// A file system on which reading `.1` takes half a second, like a cold file on a busy disk.
+struct SlowFs(Arc<MemFs>, &'static str);
+
+impl FileSource for SlowFs {
+    fn read(&self, path: &str) -> io::Result<Vec<u8>> {
+        if normalize(path) == normalize(self.1) {
+            std::thread::sleep(Duration::from_millis(500));
+        }
+        self.0.read(path)
+    }
+    fn exists(&self, path: &str) -> bool {
+        self.0.exists(path)
+    }
+    fn list(&self, dir: &str) -> Vec<String> {
+        self.0.list(dir)
+    }
+}
+
+/// Updates for `wall` of real time (a worker thread needs a moment).
+fn update_for(app: &mut App, wall: Duration) {
+    let started = Instant::now();
+    while started.elapsed() < wall {
+        app.update();
+        std::thread::sleep(Duration::from_millis(2));
+    }
 }
 
 fn listener(app: &mut App, at: Vec3) {
@@ -246,4 +283,42 @@ fn distance_constants_come_from_audio_xml() {
     assert_eq!(c.negative_feedback.as_deref(), Some("Gun"));
     let s = app.world().resource::<alamo_audio::AudioSettings>();
     assert_eq!((s.saturation_scale, s.rolloff), (1.5, 1.0));
+}
+
+#[test]
+fn a_loop_replaced_while_its_sample_is_read_never_starts() {
+    // The idle loop's sample is slow to read and the ship starts to move meanwhile: only the moving loop may ever play (a late idle
+    // loop would hum on for good, its emitter no longer knows it).
+    let mut app = worker_app_on(Arc::new(SlowFs(fs(), "Audio/SFX/a.wav")));
+    listener(&mut app, Vec3::ZERO);
+    let ship = app.world_mut().spawn((GlobalTransform::from_translation(Vec3::new(30.0, 0.0, 0.0)), SfxEmitter::new(Some("Engine_Idle".into())))).id();
+    app.update();
+    app.world_mut().get_mut::<SfxEmitter>(ship).unwrap().event = Some("Engine_Moving".into());
+    // Long enough for the slow read to finish as well.
+    update_for(&mut app, Duration::from_millis(800));
+    let mut q = app.world_mut().query::<&SfxVoice>();
+    let events: Vec<String> = q.iter(app.world()).filter(|v| v.source() == Some(ship)).map(|v| v.event().to_string()).collect();
+    assert_eq!(events, vec!["engine_moving"]);
+}
+
+#[test]
+fn music_that_waits_for_its_file_keeps_the_fade_in_of_its_event() {
+    // The Rebel galaxy music fades in over 2 s. Read on a worker, its first track starts a frame or two late, with that fade-in and
+    // not the half second of a following playlist track.
+    let mut app = worker_app_on(fs());
+    app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_millis(100)));
+    set_scene(&mut app, MusicScene::Galactic("Rebel".into()));
+    app.update();
+    assert!(music_tracks(&mut app).is_empty(), "the file is read on a worker");
+    let started = Instant::now();
+    while music_tracks(&mut app).is_empty() && started.elapsed() < Duration::from_secs(5) {
+        std::thread::sleep(Duration::from_millis(2));
+        app.update();
+    }
+    // One frame of 0.1 s into a 2 s fade-in.
+    app.update();
+    let mut q = app.world_mut().query::<&MusicTrack>();
+    let fade: Vec<f32> = q.iter(app.world()).map(|t| t.fade()).collect();
+    assert_eq!(fade.len(), 1);
+    assert!((fade[0] - 0.05).abs() < 1e-3, "fade after 0.1 s of a 2 s fade-in: {}", fade[0]);
 }

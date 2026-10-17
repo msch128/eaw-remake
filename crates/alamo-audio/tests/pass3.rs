@@ -53,6 +53,8 @@ fn fs() -> Arc<MemFs> {
 fn app() -> App {
     let mut app = App::new();
     app.add_plugins((MinimalPlugins, AssetPlugin::default())).init_asset::<AudioSource>().add_plugins(AlamoAudioPlugin::new(fs()));
+    // Samples are read on the spot: these tests count voices frame by frame (`plugin.rs` tests the worker reads).
+    app.world_mut().resource_mut::<alamo_audio::AudioSettings>().load_on_worker = false;
     app
 }
 
