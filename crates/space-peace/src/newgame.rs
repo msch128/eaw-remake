@@ -87,11 +87,23 @@ pub struct MenuRefresh;
 #[derive(Component)]
 struct SlotMenu;
 
+/// Saves folder of a headless run that names none (see [`isolate_offscreen_saves`]).
+static OFFSCREEN_SAVES: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+/// Sends the saves of a headless (`--offscreen`) run to a scratch folder unless `SP_SAVES_DIR` names one: a check run must never
+/// overwrite the player's autosaves (2026-10-17 an offscreen battle replaced the player's pre-battle and rolling autosaves).
+pub fn isolate_offscreen_saves() {
+    let _ = OFFSCREEN_SAVES.set(std::env::temp_dir().join("space-peace-offscreen-saves"));
+}
+
 /// `%APPDATA%\SpacePeace\saves`, `None` when `%APPDATA%` is not set.
 pub fn saves_dir() -> Option<PathBuf> {
     // Tests point this elsewhere so they never touch the player's saves.
     if let Some(d) = std::env::var_os("SP_SAVES_DIR") {
         return Some(PathBuf::from(d));
+    }
+    if let Some(d) = OFFSCREEN_SAVES.get() {
+        return Some(d.clone());
     }
     std::env::var_os("APPDATA").map(|a| PathBuf::from(a).join("SpacePeace").join("saves"))
 }

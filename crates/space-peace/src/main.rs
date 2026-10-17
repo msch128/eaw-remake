@@ -67,6 +67,9 @@ use ui::UiPlugin;
 
 fn main() {
     let args = Args::from_env();
+    if args.offscreen.is_some() {
+        newgame::isolate_offscreen_saves();
+    }
 
     if args.list_campaigns {
         if let Err(e) = game::list_campaigns(&args) {
