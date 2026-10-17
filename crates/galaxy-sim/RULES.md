@@ -173,7 +173,7 @@ With 3 tactical seeds per scenario the comparison has a noise floor of about 0.2
 
 ### Population cap and waves (data rule, calibrated on 40+ ship battles)
 `Space_Tactical_Unit_Cap` (150 population) limits what a side has in play. In the tactical battle the ships over the cap wait in a reserve and are called in as losses make room
-(`battle_sim::Battle::pop_in_play` now counts only what is alive or on its way, so losses free population; `run_headless` calls the reserve in once per second, arrival after the 5 s reinforcement delay).
+(`battle_sim::Battle::pop_in_play` now counts only what is alive or on its way, so losses free population; the battle AI of every AI side calls its reserve in one unit at a time while the cap has room (`ReinforceSpace.lua`, battle-sim RULES 9c), in the app and in `run_headless`; arrival after the 5 s reinforcement delay).
 The statistical resolver does the same (`SimConfig::combat_waves`, default on): the first ships up to the cap fight, the rest arrive 2 rounds after room appears; uncalled reserve survives.
 On 40+ ship battles (60 scenarios, 8 tactical seeds each, not used for fitting) winner agreement went from 76 % (no waves) to 93 %, mean |attacker win share difference| 0.36 -> 0.19, bias -0.23 -> +0.02.
 `combat_escape` is now 0.2 (loser keeps about 0.2 of its ships in tactical). Left over: tactical battles of 40+ ships time out as draws in 15-25 % of the runs; the statistical resolver never draws.

@@ -75,6 +75,9 @@ pub struct BattleConfig {
     pub start_health: Vec<StartHealth>,
     /// Stage carried squadron launches sequentially from hangar bay doors over time (defaults to true).
     pub staged_hangar_launch: bool,
+    /// Per side: units waiting outside the battle that the side's AI calls in one at a time while the population cap has room
+    /// (`Want_To_Reinforce_Units`; the galaxy's reinforcement pool). Missing entries mean none; sides without AI ignore it.
+    pub ai_reserve: Vec<Vec<(ShipId, u32)>>,
 }
 
 impl Default for BattleConfig {
@@ -106,6 +109,7 @@ impl Default for BattleConfig {
             retreat_allowed: Vec::new(),
             start_health: Vec::new(),
             staged_hangar_launch: true,
+            ai_reserve: Vec::new(),
         }
     }
 }
@@ -617,6 +621,10 @@ pub struct Ship {
     pub(crate) bonus: Bonus,
     /// Active `Projectile_Combat_Mod`s per `ModKind`: value and seconds left.
     pub(crate) mods: [(f32, f32); ModKind::COUNT],
+    /// AI formation: the slot this ship holds in its side's advancing group, the group's speed and heading (`None` = not in a group).
+    pub(crate) group_slot: Option<(Vec3, f32, f32)>,
+    /// AI: the side's priority target, focused when it is within reach (`NONE` = none).
+    pub(crate) focus: u32,
 }
 
 /// Multipliers a ship gets from friendly combat bonus auras; `1.0` = none.
@@ -737,6 +745,8 @@ pub struct Battle {
     pub(crate) nav_grid: Option<crate::nav::NavGrid>,
     /// Per side: `(search point index, time it was set)` of the AI search for hidden enemies.
     pub(crate) search: Vec<(u32, f32)>,
+    /// Per side: the tactical AI's formation, priority target and reserve (see `ai.rs`).
+    pub(crate) ai: Vec<crate::ai::AiSide>,
 }
 
 impl Battle {

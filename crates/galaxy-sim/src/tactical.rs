@@ -279,7 +279,7 @@ impl TacticalRequest {
 
     /// Builds the `battle-sim` setup. Fleet groups carry their group index as the tag; side `i` of the request is
     /// battle side `i`. Returns `None` if a unit has no definition in `catalog`. `ai` selects the sides the built-in
-    /// AI commands (a front end passes `false` for the human side).
+    /// AI commands (a front end passes `false` for the human side); their AI calls their reserve in (`BattleConfig::ai_reserve`).
     pub fn battle_setup(&self, catalog: &Arc<Catalog>, config: BattleConfig, ai: impl Fn(usize) -> bool) -> Option<BattleSetup> {
         self.battle_setup_with(catalog, config, ai, false)
     }
@@ -303,6 +303,12 @@ impl TacticalRequest {
                 for (ri, g) in side.reserve.iter().enumerate() {
                     units.push(UnitSetup { ship: catalog.ship_id(&g.name)?, count: g.count, tag: (side.groups.len() + ri) as u32 });
                 }
+            } else if ai(si) {
+                // The battle AI calls its reserve in itself (`ReinforceSpace.lua`); the results report them under `REINFORCE_TAG`. Units the
+                // catalog does not know cannot be called in.
+                let pool = side.reserve.iter().filter_map(|g| catalog.ship_id(&g.name).map(|id| (id, g.count))).collect();
+                config.ai_reserve.resize(self.sides.len(), Vec::new());
+                config.ai_reserve[si] = pool;
             }
             sides.push(SideSetup { name: side.faction_name.clone(), units, structures, ai: ai(si) });
             for (gi, g) in side.groups.iter().enumerate() {
@@ -476,30 +482,16 @@ pub fn run_headless(request: &TacticalRequest, catalog: &Arc<Catalog>, arena: Op
 /// [`run_headless`] that shows the running battle to `observer` every 10 battle seconds (diagnostics).
 pub fn run_headless_observed(request: &TacticalRequest, catalog: &Arc<Catalog>, arena: Option<Arc<Arena>>, observer: &mut dyn FnMut(&Battle)) -> Option<TacticalResult> {
     let config = BattleConfig { record_events: false, ..request.battle_config(arena) };
-    let (max_steps, cap) = ((request.max_seconds / config.dt) as u64 + 1, config.unit_cap);
+    let max_steps = (request.max_seconds / config.dt) as u64 + 1;
     let check_every = (1.0 / config.dt).round().max(1.0) as u64;
+    // The battle AI of every side calls its reserve (units that did not fit under the population cap) in as losses make room.
     let mut battle = Battle::new(request.battle_setup_with(catalog, config, |_| true, false)?);
-    // The reserve (units that did not fit under the population cap) is called in as losses make room, like a player would.
-    let mut waiting: Vec<Vec<(battle_sim::ShipId, u32)>> = request.sides.iter().map(|s| s.reserve.iter().filter_map(|g| catalog.ship_id(&g.name).map(|id| (id, g.count))).collect()).collect();
     let mut steps = 0;
     while !battle.is_over() && steps < max_steps {
         battle.step();
         steps += 1;
         if steps % (check_every * 10) == 0 {
             observer(&battle);
-        }
-        if steps % check_every != 0 {
-            continue;
-        }
-        for (si, pool) in waiting.iter_mut().enumerate() {
-            for (ship, left) in pool.iter_mut().filter(|(_, n)| *n > 0) {
-                let pop = catalog.ship(*ship).population.max(0);
-                let room = cap - battle.pop_in_play(si as u8);
-                let n = if pop == 0 { *left } else { ((room.max(0) / pop) as u32).min(*left) };
-                if n > 0 && battle.command(si as u8, battle_sim::Command::Reinforce { ship: *ship, count: n }).is_ok() {
-                    *left -= n;
-                }
-            }
         }
     }
     request.result_from(catalog, &battle.result())

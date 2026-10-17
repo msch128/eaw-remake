@@ -181,16 +181,26 @@ fn ai_station_launches_active_fighters_and_defenders_engage_approaching_enemies(
     }
     assert!(fighters_launched, "station should launch garrison fighters");
 
-    // Step until enemy approaches or is spotted:
-    for _ in 0..1200 {
+    // The defenders guard the station until an enemy comes within `FREE_STORE_ATTACK_RANGE` (3600) of it (`SpaceTacticalFreeStore.lua`), then attack.
+    let station = b.ships.iter().find(|s| s.side == 1 && cat.ship(s.def).is_static).unwrap().pos;
+    let mut threat_at = None;
+    for _ in 0..30 * 180 {
         b.step();
         let isd = b.ships.iter().find(|s| s.alive && s.side == 1 && !cat.ship(s.def).is_static && !matches!(cat.ship(s.def).class, TargetClass::Fighter | TargetClass::Bomber)).unwrap();
+        let nearest = b.ships.iter().filter(|s| s.alive && s.side == 0 && !matches!(cat.ship(s.def).class, TargetClass::Fighter | TargetClass::Bomber)).map(|s| s.pos.dist(station)).fold(f32::MAX, f32::min);
+        if nearest < 3600.0 && threat_at.is_none() {
+            threat_at = Some(b.time());
+        }
+        if threat_at.is_none() {
+            assert!(matches!(isd.order, Order::Guard(_)), "the defender holds at its station while the enemy is far ({nearest:.0}): {:?}", isd.order);
+        }
         if matches!(isd.order, Order::AttackMove(_) | Order::Attack(_)) {
             break;
         }
     }
     let isd = b.ships.iter().find(|s| s.alive && s.side == 1 && !cat.ship(s.def).is_static && !matches!(cat.ship(s.def).class, TargetClass::Fighter | TargetClass::Bomber)).unwrap();
     assert!(matches!(isd.order, Order::AttackMove(_) | Order::Attack(_)), "defending capital ship engages incoming enemy: {:?}", isd.order);
+    assert!(threat_at.is_some_and(|t| b.time() - t <= 2.0), "it attacks as soon as the enemy threatens the station: {threat_at:?} / {}", b.time());
 }
 
 #[test]
@@ -315,4 +325,117 @@ fn big_hulls_do_not_stay_inside_each_other_and_nobody_parks_in_an_executor() {
     });
     println!("attack on the Executor: longest hull overlap {t:.1} s {what}");
     assert!(t <= 3.0, "hulls stay inside each other for {t:.1} s: {what}");
+}
+
+/// How an AI attack went (user finding 2026-10-16: eight AI ships flew at the player's fleet and station one behind the other and were
+/// destroyed one by one). "Fleet" = the AI's own big ships (not fighters, not the craft a carrier launches).
+#[derive(Debug, Default, Clone)]
+struct Attack {
+    /// Shape of the fleet when its nearest ship first comes within 6000 units of an enemy warship: spread along the line from the fleet
+    /// to that enemy (a column is deep) and across it (a line is wide).
+    depth: f32,
+    width: f32,
+    /// Battle second of the first hit a fleet ship lands, and the seconds until half of the fleet ships have landed one (a column comes
+    /// into range one ship after the other).
+    first_hit: f32,
+    half_in: f32,
+    /// Damage the AI side dealt (shield and hull, after armour) in the 60 s after the first hit.
+    damage_60: f32,
+    /// Winner, battle seconds, fleet ships alive at the end (of the fleet ships at the start).
+    winner: Option<u8>,
+    duration: f32,
+    ai_left: (u32, u32),
+    /// Damage the AI side dealt and took over the whole battle.
+    dealt: f32,
+    taken: f32,
+}
+
+/// An AI fleet (side 0) attacks a player (side 1, no AI: the ships hold and fire at what comes in range).
+fn ai_attack(cat: &Arc<Catalog>, arena: Option<Arc<Arena>>, ai: &[(&str, u32)], player: &[(&str, u32)], base: &[&str], seed: u64) -> Attack {
+    let mut sides = vec![side(cat, "Empire", ai, &[]), side(cat, "Rebel", player, base)];
+    sides[1].ai = false;
+    let half = arena.as_ref().map_or(10_000.0, |a| a.half_size());
+    let config = BattleConfig { seed, half_size: half, arena, retreat_allowed: vec![false, false], ..BattleConfig::default() };
+    let mut b = Battle::new(BattleSetup { catalog: cat.clone(), sides, config });
+    let small = |s: &Ship| matches!(cat.ship(s.def).class, TargetClass::Fighter | TargetClass::Bomber);
+    let fleet = |s: &Ship| s.side == 0 && !cat.ship(s.def).is_static && !small(s) && s.carrier == NONE;
+    let fleet_ids: Vec<u32> = b.ships.iter().filter(|s| fleet(s)).map(|s| s.id).collect();
+    let mut m = Attack::default();
+    let mut hit_at = vec![f32::INFINITY; fleet_ids.len()];
+    let mut first: Option<f32> = None;
+    let mut shaped = false;
+    while !b.is_over() && b.time() < 1500.0 {
+        let events = b.step().to_vec();
+        let t = b.time();
+        if !shaped {
+            let alive: Vec<&Ship> = b.ships.iter().filter(|s| s.alive && fleet(s)).collect();
+            let near = alive.iter().flat_map(|s| b.ships.iter().filter(|o| o.alive && o.side == 1 && !small(o)).map(move |o| (o.pos.dist(s.pos), o.pos))).min_by(|a, c| a.0.total_cmp(&c.0));
+            if let Some((d, enemy)) = near
+                && d <= 6000.0
+            {
+                shaped = true;
+                let centre = alive.iter().fold(Vec3::ZERO, |a, s| a + s.pos) * (1.0 / alive.len() as f32);
+                let axis = (enemy - centre).normalized();
+                let spread = |v: Vec3| {
+                    let k: Vec<f32> = alive.iter().map(|s| (s.pos - centre).dot(v)).collect();
+                    k.iter().copied().fold(f32::MIN, f32::max) - k.iter().copied().fold(f32::MAX, f32::min)
+                };
+                m.depth = spread(axis);
+                m.width = spread(Vec3::new(-axis.y, axis.x, 0.0));
+            }
+        }
+        for e in &events {
+            let Event::Hit { attacker, damage, .. } = e else { continue };
+            if b.ships[*attacker as usize].side == 1 {
+                m.taken += damage;
+                continue;
+            }
+            m.dealt += damage;
+            if let Some(k) = fleet_ids.iter().position(|&f| f == *attacker) {
+                hit_at[k] = hit_at[k].min(t);
+                first.get_or_insert(t);
+            }
+            if first.is_some_and(|c| t <= c + 60.0) {
+                m.damage_60 += damage;
+            }
+        }
+    }
+    m.first_hit = first.unwrap_or(f32::INFINITY);
+    hit_at.sort_by(f32::total_cmp);
+    m.half_in = hit_at[hit_at.len().div_ceil(2).max(1) - 1] - m.first_hit;
+    m.winner = b.winner();
+    m.duration = b.time();
+    m.ai_left = (b.ships.iter().filter(|s| s.alive && fleet(s)).count() as u32, fleet_ids.len() as u32);
+    m
+}
+
+#[test]
+fn the_ai_fleet_advances_as_one_line_and_attacks_together() {
+    // The big ships move as one formation at the pace of the slowest (`MoveToLocation.lua`) and all of them attack once one meets the
+    // enemy, so they come into range together instead of one behind the other. Before this rule (same scenarios, seeds 1-3): open square
+    // width 1577-1595 / depth 1572-1590, 7 of 30 fleet ships left, damage dealt / taken 1.30-1.33; Kuat depth 2124-2134 at the approach.
+    let Some((data, fs)) = load() else { return };
+    let names = ["Star_Destroyer", "Victory_Destroyer", "Acclamator", "Tartan_Patrol_Cruiser", "Broadside_Cruiser", "MC-80_Star_Cruiser", "Nebulon_B_Frigate", "CR-90_Corvette", "Rebel_Star_Base_2"];
+    let cat = Arc::new(Catalog::build(&data, Some(&fs), &names));
+    let ai = [("Star_Destroyer", 2), ("Victory_Destroyer", 2), ("Acclamator", 1), ("Broadside_Cruiser", 1), ("Tartan_Patrol_Cruiser", 2)];
+    // The same fleet waiting on an open square (no station): the AI arrives as a line and wins with ships to spare.
+    let mut left = 0;
+    for seed in 1..=3 {
+        let m = ai_attack(&cat, None, &ai, &ai, &[], seed);
+        println!("mirror on an open square, seed {seed}: {m:?} (dealt / taken {:.2})", m.dealt / m.taken);
+        assert!(m.width >= 2.5 * m.depth, "a line abreast, not a column: {m:?}");
+        assert_eq!(m.winner, Some(0));
+        left += m.ai_left.0;
+    }
+    assert!(left >= 12, "the concentrated attack keeps ships alive: {left} of 30 left");
+    // An attack on a defended planet on a map with several entry points (Kuat): the fleet does not string out on the way in.
+    if let Some(arena) = Arena::load(&data, &fs, "_SPACE_PLANET_KUAT_01.ted").map(Arc::new) {
+        let player = [("MC-80_Star_Cruiser", 1), ("Nebulon_B_Frigate", 2), ("CR-90_Corvette", 2)];
+        let m = ai_attack(&cat, Some(arena), &ai, &player, &["Rebel_Star_Base_2"], 1);
+        println!("attack on Kuat: {m:?} (dealt / taken {:.2})", m.dealt / m.taken);
+        assert!(m.depth <= 1600.0, "the fleet keeps together on the way in: {m:?}");
+        assert!(m.half_in <= 45.0, "half the fleet fires within 45 s of the first shot: {m:?}");
+        assert_eq!(m.winner, Some(0));
+        assert!(m.ai_left.0 >= 8, "the corvettes escort the big ships instead of charging the station: {m:?}");
+    }
 }

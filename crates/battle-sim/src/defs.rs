@@ -174,6 +174,9 @@ pub struct HpDef {
     pub from_bone: bool,
     /// `Fighter_Bay_Flyout_Distance` of a fighter bay: squadrons launched from it fly this far straight out of the hangar before they take orders.
     pub flyout: f32,
+    /// Weapons: the bins of `ShipDef::bearing_dps` (bit k = bearing k x 15 degrees) the weapon can bear on, and its damage per second there.
+    pub arc_bins: u32,
+    pub dps: f32,
 }
 
 /// Active ability with `Mod_Multiplier` effects.
@@ -1290,16 +1293,18 @@ impl Catalog {
             _ => (0.0, 0.0, 0.0),
         };
         let mut bearing_dps = [0.0f32; 24];
-        for h in hardpoints.iter().filter(|h| h.kind == HpKind::Weapon) {
+        for h in hardpoints.iter_mut().filter(|h| h.kind == HpKind::Weapon) {
             let Some(p) = h.projectile else { continue };
             let pd = &self.projectiles[p as usize];
             let cycle = ((h.recharge_min + h.recharge_max) * 0.5 + (h.pulses - 1) as f32 * h.pulse_delay).max(0.2);
             let dps = pd.damage * h.pulses as f32 / cycle;
+            h.dps = dps;
             for (k, slot) in bearing_dps.iter_mut().enumerate() {
                 let a = k as f32 * std::f32::consts::TAU / 24.0;
                 let dir = Vec3::new(a.cos(), a.sin(), 0.0);
                 if dir.dot(h.left).atan2(dir.dot(h.forward)).abs() <= h.arc_yaw && dir.dot(h.normal).clamp(-1.0, 1.0).asin().abs() <= h.arc_pitch {
                     *slot += dps;
+                    h.arc_bins |= 1 << k;
                 }
             }
         }
@@ -1728,6 +1733,8 @@ impl Catalog {
             power_weapons_mult: f("power_to_weapons_mode_weapon_delay_multiplier", 1.0),
             from_bone,
             flyout: if kind == HpKind::FighterBay { f("fighter_bay_flyout_distance", 0.0).max(0.0) } else { 0.0 },
+            arc_bins: 0,
+            dps: 0.0,
         }
     }
 

@@ -222,6 +222,41 @@ fn losses_make_room_under_the_unit_cap() {
 }
 
 #[test]
+fn the_ai_calls_its_reserve_in_while_the_unit_cap_has_room() {
+    // `ReinforceSpace.lua` / `Want_To_Reinforce_Units`: an AI side calls its reserve in one unit at a time while the cap has room.
+    let cat = Catalog::from_defs(vec![ship("weak", 3000.0, 0.0, vec![]), ship("gunner", 1.0e6, 0.0, vec![gun("g", 0.0)])], vec![laser()]);
+    let weak = cat.ship_id("weak").unwrap();
+    let mut c = cfg();
+    c.unit_cap = 12;
+    c.ai_reserve = vec![vec![(weak, 3)]];
+    let mut b = Battle::new(setup(cat, "weak", "gunner", 1, 1, c));
+    let (mut called, mut arrived, mut most) = (0, 0, 0);
+    for _ in 0..30 * 600 {
+        for e in b.step() {
+            match e {
+                Event::ReinforcementsCalled { side: 0, count, .. } => called += count,
+                Event::ReinforcementsArrived { side: 0, ships } => arrived += ships.len(),
+                _ => {}
+            }
+        }
+        most = most.max(b.pop_in_play(0));
+        if b.time() < 2.5 {
+            // One weak ship (5) in play under a cap of 12: the AI calls one more at once, a third would not fit.
+            assert!(called <= 1);
+        }
+        if b.is_over() {
+            break;
+        }
+    }
+    assert_eq!(called, 3, "the whole reserve was called in as losses made room");
+    assert_eq!(arrived, 3);
+    assert!(most <= 12, "never over the cap: {most}");
+    let r = b.result();
+    let g = r.groups.iter().find(|g| g.side == 0 && g.tag == REINFORCE_TAG).expect("reported under REINFORCE_TAG");
+    assert_eq!(g.total, 3);
+}
+
+#[test]
 fn reinforcements_can_be_called_to_a_chosen_position_inside_the_zone() {
     let mut seer = ship("a", 1.0e6, 0.0, vec![]);
     seer.sensor_range = 1250.0;

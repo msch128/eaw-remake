@@ -232,6 +232,7 @@ impl Battle {
             drains: Vec::new(),
             nav_grid: None,
             search: vec![(0, 0.0); sides.len()],
+            ai: (0..sides.len()).map(|i| crate::ai::AiSide::new(config.ai_reserve.get(i).cloned().unwrap_or_default())).collect(),
             sides,
             ships: Vec::new(),
             projectiles: Vec::new(),
@@ -510,6 +511,8 @@ impl Battle {
             heal_in: [0.0; 2],
             bonus: Bonus::default(),
             mods: [(0.0, 0.0); ModKind::COUNT],
+            group_slot: None,
+            focus: NONE,
         });
         id
     }
@@ -633,68 +636,6 @@ impl Battle {
                 if seen {
                     s.seen_until[side as usize] = time + linger;
                 }
-            }
-        }
-    }
-
-    /// An AI side searches for and engages enemy forces. Visible enemy ships (prioritizing mobile units,
-    /// then space stations/structures) are engaged by idle, guarding, and attack-moving ships.
-    /// When nothing is in sight, attack-moving ships sweep the map along search points.
-    fn ai_search(&mut self) {
-        let cat = self.catalog.clone();
-        let (time, half) = (self.time, self.config.half_size);
-        for side in 0..self.sides.len().min(4) as u8 {
-            if !self.is_ai(side) {
-                continue;
-            }
-            let station_under_attack = self.ships.iter().any(|st| st.alive && !st.retreated && st.side == side && cat.ship(st.def).is_static && st.since_hit < 15.0);
-            let visible_enemy = self.ships.iter()
-                .filter(|s| s.alive && !s.retreated && s.side != side && (s.side >= 4 || !self.config.fog_of_war || time <= s.seen_until[side as usize]))
-                .max_by_key(|s| {
-                    let d = cat.ship(s.def);
-                    let mobile_bonus = if d.is_static { 0 } else { 100 };
-                    mobile_bonus + d.class as u8
-                });
-            if let Some(target_enemy) = visible_enemy {
-                self.search[side as usize] = (0, time);
-                let enemy_pos = target_enemy.pos;
-                for s in self.ships.iter_mut().filter(|s| s.alive && !s.retreated && s.side == side && !cat.ship(s.def).is_static) {
-                    let should_order = match s.order {
-                        Order::AttackMove(_) => s.pos.dist(enemy_pos) > 1200.0,
-                        Order::Idle => true,
-                        Order::Guard(guard_pt) => {
-                            station_under_attack || s.pos.dist(enemy_pos) < 5000.0 || guard_pt.dist(enemy_pos) < 5000.0 || s.since_hit < 15.0
-                        }
-                        _ => false,
-                    };
-                    if should_order {
-                        let sdef = cat.ship(s.def);
-                        let dest = if sdef.is_flanker() && s.pos.dist(enemy_pos) > 2500.0 {
-                            let to = enemy_pos - s.pos;
-                            let flank_sign = if s.id % 2 == 0 { 1.0 } else { -1.0 };
-                            let perp = Vec3::new(-to.y, to.x, 0.0).normalized() * flank_sign;
-                            enemy_pos + perp * (3200.0 + ((s.id % 3) as f32 * 600.0))
-                        } else {
-                            enemy_pos
-                        };
-                        s.order = Order::AttackMove(dest);
-                    }
-                }
-                continue;
-            }
-            let (idx, since) = self.search[side as usize];
-            let enemy = self.spawn_pos[(side as usize + 1) % self.sides.len()];
-            let cur_point = search_point(idx, enemy, half);
-            let reached = self.ships.iter().any(|s| s.alive && !s.retreated && s.side == side && !cat.ship(s.def).is_static && s.pos.dist(cur_point) < 2500.0);
-            let timeout = if idx == 0 { 90.0 } else { 45.0 };
-            if !reached && time - since < timeout {
-                continue;
-            }
-            let next = idx + 1;
-            let point = search_point(next, enemy, half);
-            self.search[side as usize] = (next, time);
-            for s in self.ships.iter_mut().filter(|s| s.alive && !s.retreated && s.side == side && !cat.ship(s.def).is_static && s.target == NONE && matches!(s.order, Order::AttackMove(_))) {
-                s.order = Order::AttackMove(point);
             }
         }
     }
@@ -1083,8 +1024,9 @@ impl Battle {
             self.update_visibility();
         }
         if self.tick.is_multiple_of(30) {
-            self.ai_search();
+            self.ai_plan();
         }
+        self.ai_formation(dt);
         // Snapshot and grid.
         let time_now = self.time;
         let fog = cfg.fog_of_war;
@@ -1641,7 +1583,7 @@ impl Battle {
 
     /// Strength of a side for the retreat decision: sum of `sqrt((hull + shield) x damage rate)` over its living ships (estimate of the
     /// engine's `FriendlyForceUnnormalized`; the thresholds below come from `Retreat_From_Space`).
-    fn side_power(&self, side: u8) -> f32 {
+    pub(crate) fn side_power(&self, side: u8) -> f32 {
         let cat = &self.catalog;
         self.ships
             .iter()
@@ -1804,8 +1746,8 @@ impl Battle {
                         && self.tractor_target(i as u32, t).is_some()
                     {
                         auto_use.push(k);
-                    } else if !a.toggle && a.speed_mult > 1.05 && (matches!(s.order, Order::Retreat) || (s.target != NONE && matches!(s.order, Order::AttackMove(_) | Order::Move(_)) && self.ships[s.target as usize].pos.dist(s.pos) > def.max_weapon_range * 2.0)) {
-                        // Speed abilities: flee, or close a large gap while on the move.
+                    } else if !a.toggle && a.speed_mult > 1.05 && (matches!(s.order, Order::Retreat) || (s.target != NONE && s.group_slot.is_none() && matches!(s.order, Order::AttackMove(_) | Order::Move(_)) && self.ships[s.target as usize].pos.dist(s.pos) > def.max_weapon_range * 2.0)) {
+                        // Speed abilities: flee, or close a large gap while on the move (not in a formation, which keeps the slowest ship's pace).
                         auto_use.push(k);
                     } else if !a.toggle && s.since_hit < 3.0 && ((a.shield_regen_mult > 1.05 && def.shield > 0.0 && s.shield < 0.5 * def.shield) || (a.take_damage_mult < 0.95 && s.hull < 0.6 * def.hull)) {
                         // Shield and damage-reduction abilities: when hurt and under fire.
@@ -2634,6 +2576,10 @@ fn scan(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig) {
         if t.health < 0.33 && !matches!(t.class, TargetClass::Fighter | TargetClass::Bomber) && d <= def.max_weapon_range * 1.1 {
             weight *= 0.5;
         }
+        // The AI side's priority target, for ships within `FREE_STORE_ATTACK_RANGE` of it (`SpaceTacticalFreeStore.lua`; the weight factor is an estimate).
+        if i as u32 == s.focus && d <= crate::ai::FREE_STORE_ATTACK_RANGE {
+            weight *= crate::ai::FOCUS_WEIGHT;
+        }
         found.push((weight, d, i as u32));
     }
     found.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.total_cmp(&b.1)).then(a.2.cmp(&b.2)));
@@ -2683,17 +2629,28 @@ fn turn_towards(s: &mut Ship, desired: f32, rate: f32, dt: f32) -> f32 {
 }
 
 /// Turns the ship so that the largest share of its weapons bears on `tpos` (broadside, bow or stern,
-/// whichever the hardpoint arcs favour).
+/// whichever the hardpoint arcs favour); a damaged ship counts only the guns it still has.
 fn align_to_target(s: &mut Ship, def: &ShipDef, tpos: Vec3, dt: f32) {
     let to = tpos - s.pos;
     let bearing = to.y.atan2(to.x);
-    if def.bearing_dps.iter().sum::<f32>() <= 0.0 {
+    let mut bins = def.bearing_dps;
+    if def.hardpoints.iter().zip(&s.hps).any(|(h, st)| h.kind == HpKind::Weapon && !st.alive) {
+        bins = [0.0; 24];
+        for (h, _) in def.hardpoints.iter().zip(&s.hps).filter(|(h, st)| h.kind == HpKind::Weapon && st.alive) {
+            for (k, slot) in bins.iter_mut().enumerate() {
+                if h.arc_bins >> k & 1 == 1 {
+                    *slot += h.dps;
+                }
+            }
+        }
+    }
+    if bins.iter().sum::<f32>() <= 0.0 {
         turn_towards(s, bearing, def.turn_rate, dt);
         return;
     }
     let rel_now = wrap_angle(bearing - s.yaw);
     let mut best = (-1.0f32, 0.0f32);
-    for (k, &dps) in def.bearing_dps.iter().enumerate() {
+    for (k, &dps) in bins.iter().enumerate() {
         let ang = wrap_angle(k as f32 * 2.0 * PI / 24.0);
         let score = dps * (1.0 - 0.15 * wrap_angle(ang - rel_now).abs() / PI);
         if score > best.0 {
@@ -2801,12 +2758,33 @@ fn mov(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, spawn: &
     // A fighter that only holds a place (formation slot, carrier escort) stops there instead of flying past it for ever.
     let mut settle = false;
     let mut follow_speed: Option<f32> = None;
+    // Speed a big ship keeps in an AI formation.
+    let mut pace: Option<f32> = None;
     let goal = match s.order {
         Order::Retreat => {
             // Turn round and head for the own spawn side at full throttle past the boundary.
             let spawn_pt = spawn.get(s.side as usize).copied().unwrap_or(Vec3::ZERO);
             let dir = if spawn_pt.len() > 10.0 { spawn_pt.normalized() } else { Vec3::new(if s.side == 0 { -1.0 } else { 1.0 }, 0.0, 0.0) };
             Goal::Point(spawn_pt + dir * 10000.0, 50.0)
+        }
+        // AI formation (`ai.rs`): hold the slot in the side's advancing group at the group's speed; the guns still fire at what comes in range.
+        // A big ship keeps station: it flies the formation's velocity plus a correction towards its slot, never backwards, so it never circles
+        // round a slot that lies inside its turning circle (it waits for a slot that fell behind it).
+        Order::AttackMove(_) if s.group_slot.is_some() => {
+            let (q, v, heading) = s.group_slot.expect("checked");
+            if fighter {
+                settle = true;
+                follow_speed = Some(v);
+                Goal::Point(q, 30.0)
+            } else {
+                let (fwd, left, err) = (Vec3::from_yaw(heading), Vec3::from_yaw(heading + PI / 2.0), q - s.pos);
+                let ahead = (v + err.dot(fwd) * FORMATION_GAIN).max(0.0);
+                let aside = err.dot(left) * FORMATION_GAIN;
+                let speed = ahead.hypot(aside);
+                let dir = if speed > 1.0 { (fwd * ahead + left * aside) * (1.0 / speed) } else { fwd };
+                pace = Some(speed);
+                Goal::Point(s.pos + dir * (speed * FORMATION_HORIZON).max(FORMATION_LOOKAHEAD), 0.0)
+            }
         }
         Order::Move(p) => {
             if let Some((q, v)) = slot {
@@ -2956,7 +2934,7 @@ fn mov(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, spawn: &
     };
 
     // Cohesion: while advancing without a target a big ship does not outrun the slower ones around it (within 2500 units).
-    let max_speed = if target.is_none_or(|t| t.pos.dist(s.pos) > (def.max_weapon_range * 2.0).max(1500.0)) && matches!(s.order, Order::AttackMove(_)) && !fighter {
+    let max_speed = if target.is_none_or(|t| t.pos.dist(s.pos) > (def.max_weapon_range * 2.0).max(1500.0)) && matches!(s.order, Order::AttackMove(_)) && !fighter && s.group_slot.is_none() {
         let me = snaps[s.id as usize];
         big.iter()
             .filter(|&&j| j != s.id && snaps[j as usize].side == s.side && snaps[j as usize].pos.dist(me.pos) < 2500.0)
@@ -3107,6 +3085,9 @@ fn mov(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, spawn: &
                     dist * 2.0
                 };
                 want = want.min(target_speed);
+            }
+            if let Some(v) = pace {
+                want = want.min(v);
             }
             if fighter {
                 if dist <= stop + braking * 0.8 && settle && aim == p {
@@ -3671,7 +3652,7 @@ const HUNT_CELL_SECS: f32 = 60.0;
 const AI_INTERDICT_SECS: f32 = 20.0;
 
 /// The `n`-th place an AI side searches for hidden enemies: their start, the middle, then the four quarters.
-fn search_point(n: u32, enemy_start: Vec3, half: f32) -> Vec3 {
+pub(crate) fn search_point(n: u32, enemy_start: Vec3, half: f32) -> Vec3 {
     match n % 6 {
         0 => enemy_start,
         1 => Vec3::ZERO,
@@ -3695,6 +3676,12 @@ const PUSH_SPEED: f32 = 2.0;
 /// Fighters keep this share of a model hull's half width away from its long axis (estimate, about the 0.45 of the radius that applies to
 /// every hull). Their own carrier is excepted.
 const FIGHTER_KEEP_OUT: f32 = 0.5;
+
+/// AI formation (estimates): a big ship flies the formation's velocity plus `FORMATION_GAIN` (1/s) times the distance to its slot, steering
+/// at the point that velocity reaches in `FORMATION_HORIZON` seconds (at least `FORMATION_LOOKAHEAD` units ahead).
+const FORMATION_GAIN: f32 = 0.25;
+const FORMATION_HORIZON: f32 = 10.0;
+const FORMATION_LOOKAHEAD: f32 = 600.0;
 
 /// Squadron definitions with counts.
 type Squadrons = Vec<(ShipId, u32)>;

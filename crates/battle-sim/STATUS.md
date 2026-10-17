@@ -53,3 +53,15 @@ Open: the standoff does not yet depend on the target class (guns that cannot fir
 Broadsides (checked, unchanged): `align_to_target` already turns each capital to the bearing with the most hardpoint damage (`ShipDef::bearing_dps`, from the hardpoint arcs) in the last stretch of the approach and while holding at the standoff; the missing part is still the pre-turn at long range.
 ## Hull overlaps (2026-10-16)
 Ships kept apart only by the class-clamped collision circle, so long hulls were entered (Executor: 9000 long, radius 700; MC-80: radius 150 for a 540 x 450 hull) and pairs sat inside each other for minutes. `ShipDef::hull_shape` (plan-view capsule from the model meshes, `nav::Hull`) now joins the old circle in the separation and the fighter keep-out; the push-out runs at up to 2 x top speed. Measurements and estimates: RULES.md "Model hulls". Not changed: a group move order sends every ship to the same point, so a big fleet still jostles around it for a few seconds (a formation-keeping group move would fix that); `Fighter_Bay_Flyout_Distance` (c106d60) doubles the time fighters spend inside their own carrier's hull (data rule, kept).
+
+## Fleet AI (2026-10-16, `ai.rs`, RULES.md 9c)
+User finding: eight AI ships flew at the player's fleet and station one behind the other and died one by one. Every AI side now plans once a second after
+`MoveToLocation.lua`, `SpaceTacticalFreeStore.lua` and `ReinforceSpace.lua`: the big ships advance as a line at the slowest ship's pace (corvettes ahead,
+fighters escort), all attack together once one meets the enemy near its standoff (then the corvettes escort the big ships, `Service_Guard`), the side
+focuses one priority target, a defender guards its station until
+the free store turns aggressive, and the AI calls its reserve in (`BattleConfig::ai_reserve`, filled by galaxy-sim for AI sides). Ships hold their formation
+slot by pace (`Ship::group_slot`, mov), so slow capitals never circle round a slot. Damaged ships turn the guns they still have to the target.
+Tests: `tactical_ai::the_ai_fleet_advances_as_one_line_and_attacks_together` (before / after numbers in RULES 9c), `mechanics::the_ai_calls_its_reserve_in_while_the_unit_cap_has_room`,
+the station test now checks that defenders hold until an enemy is within 3600 units of the station.
+Open: the formation dissolves at the enemy location, so a fleet that reaches the station first still trickles towards ships elsewhere; Flank/Bomb/Escort
+task forces of the scripts are not separate plans.

@@ -63,11 +63,11 @@ Ion stun slows the target and its fire rate for `Projectile_Ion_Stun_Duration`.
   shield-only weapons never fire at fighters or bombers.
 * Large ships close to the range that puts 80% of their weapon damage in reach (x0.95) and hold there; a long-range specialist (hull-damaging weapons backed by 25% of the damage that out-range that by 1.5x, e.g. a missile ship) holds at 0.8 of its longest range (estimate), plus half the target radius, turning to the
   bearing (bow, broadside or stern) at which the largest share of their hardpoint damage can bear on the target
-  (`ShipDef::bearing_dps`, computed from the arcs). Defender ships with a star base `Guard` the planet; attackers `AttackMove`.
+  (`ShipDef::bearing_dps`, computed from the arcs; a damaged ship counts only the guns it still has). The standing orders of an AI side come from its fleet AI (section 9c).
 * Big ships stop at that range with an arrival speed profile (no overshoot), start turning to the weapon bearing in the last stretch of the approach, and position themselves against the best non-fighter target (fighters and bombers are fired at but not chased, unless explicitly ordered). Restart hysteresis 1.12 x standoff (estimate).
 * Orders: `Move`, `AttackMove`, `Attack(ship)`, `AttackHardpoint(ship, hardpoint)` (aims at the hardpoint and the hit
   routes to it), `Stop`, `Retreat`, stances Aggressive / Defensive / HoldFire.
-* No ship-ship collision or avoidance, no formation keeping for capital ships.
+* No ship-ship collision or avoidance; AI fleets keep a formation on the approach (section 9c).
 
 ## 5. Abilities
 
@@ -153,8 +153,8 @@ Source: `XML/AI/GoalFunctions/Remake_SpaceCombat.xml`, `PerceptualEquations/Rema
   tick of speed per tick; stations are excluded (defenders guard the station position). Measured with 8 ISD vs 6 MC-80 + 6 Nebulon-B: worst overlap 16% of the radii (before: ships stacked).
 * **Already data-driven before:** target priorities by `Targeting_Priority_Set` (counter types, fighters vs bombers/capitals), hardpoint priorities (shield generator, engines, hangar, weapons) for
   attack-move sets (off by default, see section 4), squadron launch and replacement from carriers/stations (section 3), defenders guarding their station, attackers attack-moving.
-* **Not implemented:** Flank/Escort/Bombing-run goals as separate behaviours (bombers use their priority sets), AI-called reinforcements (`Command::Reinforce` needs a reinforcement pool
-  from the galaxy), the Death Star, stealth/cloak (`Try_Ability STEALTH`), and formation keeping for capital ships.
+* **Not implemented:** Flank/Escort/Bombing-run goals as separate behaviours (bombers use their priority sets),
+  the Death Star and stealth/cloak (`Try_Ability STEALTH`). AI reinforcements and formations: section 9c.
 
 ### 9b. Bombing runs, intercept, formations (new; all numbers are estimates, the data has no AI values for them)
 * **Bombing run:** a `Bomber` that reaches a frigate-or-larger target (ships and stations) flies straight on for 3-5 s (turn at most +-0.15 rad/s) before turning back for the next pass; against small targets and for fighters the old 1-2.5 s random break-away stays. Test: a bomber makes repeated passes on a static capital.
@@ -162,6 +162,49 @@ Source: `XML/AI/GoalFunctions/Remake_SpaceCombat.xml`, `PerceptualEquations/Rema
 * **Formations:** each fleet unit remembers its lateral position in the start line (`Ship::lane`, +-1500 max). Under attack-move orders, while the enemy is more than 2500 units away, the aim point is shifted sideways by that lane, so the fleet advances line abreast; broadside arcs still come from the bearing logic (section 4). While no enemy is within twice the weapon range a big ship does not outrun slower friendly big ships within 2500 units (cohesion, never below 40% of its own speed).
   Test: 3 fast + 3 slow frigates are 25 units apart in depth after 25 s (2450 without cohesion) and still 1400 units wide.
 * **Ability rules** (section 9) now have a unit test (`ai_uses_speed_shield_and_damage_abilities_by_their_numbers`).
+
+### 9c. Fleet AI: formation, priority target, station defence, reserve (`ai.rs`, user finding 2026-10-16)
+The user saw eight AI ships fly at their fleet and station one behind the other and die one by one. Every AI side now runs a plan once a second
+after the Remake scripts `MoveToLocation.lua` (`AotR_Beginning_Assault`), `SpaceTacticalFreeStore.lua` and `ReinforceSpace.lua`.
+* **Data:** `FREE_STORE_ATTACK_RANGE` 3600 (priority target and station threat), `FREE_STORE_DEFEND_RANGE` 6200, `FIGHTER_AGGRO_RANGE` 3000, the task force
+  moves until 5000 from the enemy location (`MoveToLocation.lua`), a unit with an enemy warship or structure in weapon range leaves the task force, the
+  priority enemy is picked from the classes station/capital, frigate, corvette in that order by the script's weakest-and-nearest scan
+  (`Get_Shield_And_Health`), aggressive mode (`Allowed_As_Defender_Space_Untargeted`: attackers, defenders without structures, defenders whose mobile
+  force is 2x the enemy's after 120 s; or the station below 70%, or an own big ship near the enemy), the reserve is called in one unit at a time while
+  the population cap has room (`Want_To_Reinforce_Units`).
+* **Formation (estimates):** the free big ships form a line (frigates and capitals) with the corvettes and transports 700 units ahead, each row ordered by
+  where its ships stand across the line of advance (re-sorted every second, each ship keeps `radius x 2.2 + 60` of room). The slots start at or ahead of
+  every ship. The anchor advances at the slowest big ship's speed, slowed down to 25% while a ship is 500-2000 units behind its slot, standing while
+  reinforcements arrive within 3000 units, turning no faster than its slowest ship and its outer slots allow; a goal more than 1 rad off the heading lays
+  the line out anew. A big ship flies the formation's velocity plus 0.25/s times the distance to its slot, never backwards (it waits for a slot that fell
+  behind it), so slow-turning capitals do not circle round their slots. Free ships within 3000 units join, farther ones catch up. Fighters escort the
+  formation (carrier squadrons stay with their carrier, the others 1400 units ahead of the line) until an enemy is within 3000 units of them.
+* **Attack together (estimate):** once any member has an enemy warship within 1.5x its standoff distance the whole formation is released and attack-moves
+  on the priority target (corvettes: below). A missile ship that only reaches the enemy with its longest gun leaves alone.
+* **Priority target (estimate of the weight):** ships within 3600 units of the side's priority target count it at half its priority weight (scan), so the
+  priority sets still decide between classes (an anti-fighter corvette keeps shooting fighters first). A defender that holds back focuses the enemy nearest
+  to its station.
+* **Station defence:** a defender that is not aggressive guards its most damaged structure (`Guard`), and attacks when the free store turns aggressive.
+* **Search:** with nothing in sight the fleet sweeps the old search points; a point's time limit (90 s, then 45 s) restarts while the fleet still closes in on it.
+* **Reserve:** `BattleConfig::ai_reserve` (galaxy-sim passes `TacticalSide::reserve` for AI sides; headless battles use it too). Units arrive at the
+  side's reinforcement point, or 1500 units behind the own fleet when a visible enemy is within 3000 units of that point (estimate). Results report them under
+  `REINFORCE_TAG`. Test `the_ai_calls_its_reserve_in_while_the_unit_cap_has_room` (mechanics).
+* **Corvettes (data):** at contact a corvette of an attacking side follows `Service_Guard`: it attacks fighters, bombers and transports within its aggro range
+  (longest weapon range, at least `SHIP_AGGRO_RANGE` 3500), else the enemy nearest to the own frigate, capital ship or station nearest to it (stations and
+  capital ships first, then frigates, then corvettes) once that enemy is within its aggro range of it, else it stays beside that ship (150 units of room:
+  estimate). Before, the corvettes attack-moved on the priority target with the big ships and died at the enemy station.
+* **Measured** (`tactical_ai::the_ai_fleet_advances_as_one_line_and_attacks_together`, 8 Empire ships: 2 ISD, 2 VSD, Acclamator, Broadside, 2 Tartan pairs;
+  "fleet" = the 10 ships without fighters; seeds 1 / 2 / 3; "before" = main a8316dd with the hull separation of 5a69699):
+  * the same fleet waiting on an open square: before a blob 1577-1595 wide and 1572-1590 deep when the first ship comes within 6000 units of the enemy,
+    2 / 2 / 3 fleet ships left, damage dealt / taken 1.33 / 1.30 / 1.32, won after 785 / 453 / 374 s; now a line 3312-3318 wide and 892-897 deep,
+    6 / 3 / 4 left, 1.46 / 1.51 / 1.53, won after 348 / 356 / 349 s. Damage in the 60 s after the first hit 71 / 59 / 66k before, 85 / 88 / 84k now.
+  * attack on a defended Kuat (MC-80, 2 Nebulon-B, 2 CR-90, star base 2): approach depth 2124-2134 before, 922-947 now; dealt / taken 3.34 / 4.07 / 4.02
+    before, 4.50 / 3.91 / 4.83 now; won after 539 / 538 / 547 s before, 377 / 383 / 401 s now; 9 / 9 / 9 fleet ships left before, 9 / 10 / 9 now.
+    Half the fleet in action 29 / 29 / 33 s after the first shot before, 39 / 38 / 33 s now, and the damage in the 60 s after the first hit 54 / 57 / 58k
+    before, 53 / 54 / 55k now: the long-range Broadside opens the fight while the line still closes in.
+* **Damaged ships:** `align_to_target` counts only the weapon hardpoints that are still alive (`HpDef::arc_bins`, `HpDef::dps`); before, two damaged
+  capitals could face each other with their dead batteries and stop fighting for good (seen in `even_fights_do_not_trigger_the_retreat` once the
+  fleets met as lines: a draw after 1500 s; now decided after about 500-550 s).
 
 ## 7. Positional reinforcements, fog of war, more abilities (see ABILITIES.md)
 

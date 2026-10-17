@@ -24,6 +24,7 @@
 //! # }
 //! ```
 
+mod ai;
 mod arena;
 mod battle;
 pub mod cheats;
