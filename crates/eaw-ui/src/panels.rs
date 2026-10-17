@@ -680,12 +680,17 @@ pub struct BattleBannerSpec {
     pub left: BannerSide,
     /// Right disc stack (the opponent).
     pub right: BannerSide,
+    /// Label of a third button under the banner (Cancel); `None` = only the two choices. It reports [`EawDialogResult`] with the banner
+    /// root and [`BANNER_CANCEL`] as the button and closes the banner.
+    pub cancel: Option<String>,
 }
 
 /// Names of the banner buttons in [`EawButtonClicked`].
 pub const BANNER_BEGIN: &str = "choice_button_left";
 /// See [`BANNER_BEGIN`].
 pub const BANNER_AUTO: &str = "choice_button_right";
+/// Button index of the banner's Cancel button in [`EawDialogResult`] (see [`BattleBannerSpec::cancel`]).
+pub const BANNER_CANCEL: usize = 2;
 
 /// Spawns the original battle banner (`i_attack_mode_choice.alo`); returns its root. The buttons report
 /// [`BANNER_BEGIN`] / [`BANNER_AUTO`] through [`EawButtonClicked`]; the caller closes the banner.
@@ -766,6 +771,39 @@ pub fn spawn_battle_banner(world: &mut World, spec: &BattleBannerSpec) -> Option
         if let Some(t) = &discs.1 {
             image(world, t, Vec2::splat(30.0), Vec2::new(cx, row_y - 3.0), Color::WHITE);
         }
+    }
+    if let Some(label) = &spec.cancel {
+        // Centred under the banner, in the look of the dialog buttons.
+        let (_, _, accent) = faction_colors(spec.faction);
+        let row = world
+            .spawn((
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: Val::Px(0.0),
+                    top: Val::Px(height + 4.0),
+                    width: Val::Px(width),
+                    justify_content: JustifyContent::Center,
+                    ..default()
+                },
+                FocusPolicy::Pass,
+                ChildOf(root),
+            ))
+            .id();
+        let btn = world
+            .spawn((
+                Button,
+                DialogButton { dialog: root, index: BANNER_CANCEL },
+                Node {
+                    padding: UiRect::axes(Val::Px(18.0), Val::Px(5.0)),
+                    border: UiRect::all(Val::Px(1.0)),
+                    ..default()
+                },
+                BackgroundColor(Color::srgb(0.01, 0.01, 0.03)),
+                BorderColor::all(Color::srgb(0.6, 0.65, 0.75)),
+                ChildOf(row),
+            ))
+            .id();
+        world.spawn((Text::new(label.to_uppercase()), font(13.0), TextColor(accent), ChildOf(btn)));
     }
     Some(root)
 }

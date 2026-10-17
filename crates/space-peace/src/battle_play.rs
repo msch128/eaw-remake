@@ -4,7 +4,8 @@
 //! Flow: "Fight" in the pending-battle dialog -> `galaxy-play` asks the sim worker for the tactical
 //! setup -> `PlayEvent::TacticalReady` (see `play.rs`) stores [`PendingTactical`] and opens the screen
 //! -> [`begin_session`] inserts the `BattleSession` -> `battle_view::BattleFinished` ->
-//! `PlayAction::ApplyTactical` and back to the map. Esc opens the battle menu; Retreat (or F10) abandons the fight (the sim auto-resolves it).
+//! `PlayAction::ApplyTactical` and back to the map. Esc opens the battle menu. Retreat (button or menu) asks Retreat / Auto-Resolve / Cancel;
+//! Auto-Resolve and F10 abandon the fight (the sim auto-resolves it from the units that are left).
 
 use alamo_render::SunLight;
 use battle_view::{BattleCamera, BattleEntity, BattleSession, BattleStatus, BattleViewSettings};
@@ -73,7 +74,7 @@ impl Plugin for BattlePlayPlugin {
             .add_systems(OnExit(AppScreen::SpaceBattle), end_session)
             .add_systems(
                 Update,
-                (finish_battle_view, abort_key, begin_button, loading_shot, battle_menu, battle_ui_camera, battle_shot, battle_header, battle_orders, tactical_hotkeys)
+                (finish_battle_view, abort_key, retreat_auto_resolve, begin_button, loading_shot, battle_menu, battle_ui_camera, battle_shot, battle_header, battle_orders, tactical_hotkeys)
                     .run_if(in_state(AppScreen::SpaceBattle).and_then(resource_exists::<PendingTactical>)),
             );
     }
@@ -339,6 +340,8 @@ fn poll_session_build(world: &mut World) {
             settings.particle_density = density;
             // The loading screen covers the warm-up of the reinforcements and launched fighters (see `start_after_loading_art`).
             settings.warm_up = true;
+            // Retreat asks first: Retreat, Auto-Resolve or Cancel (`battle_view::retreat_prompt`).
+            settings.retreat_prompt = true;
             match target {
                 Some((image, scale)) => {
                     settings.render_target = Some(image);
@@ -479,10 +482,11 @@ struct BattleMenuContext<'w> {
     notice: ResMut<'w, battle_view::tactical_ui::RetreatNotice>,
     slots: Option<Res<'w, crate::newgame::SlotScreen>>,
     options: Option<Res<'w, crate::options::OptionsOpen>>,
+    prompt: ResMut<'w, battle_view::retreat_prompt::RetreatPrompt>,
 }
 
 /// Esc cancels an armed order / targeting first; with nothing armed it opens the battle menu (Resume / Retreat), which pauses the battle while it is
-/// open. Retreat gives the fight up like F10.
+/// open. Retreat asks like the Retreat button (Retreat / Auto-Resolve / Cancel, `battle_view::retreat_prompt`); while that question is up, Esc answers it.
 #[allow(clippy::too_many_arguments)]
 fn battle_menu(
     keys: Res<ButtonInput<KeyCode>>,
@@ -510,6 +514,8 @@ fn battle_menu(
     if keys.just_pressed(KeyCode::Escape) || scripted {
         if in_slots || in_options {
             // Esc closes slots / options overlay first; handled by escape_key
+        } else if ctx.prompt.is_open() {
+            // Esc answers the retreat question (Cancel, `battle_view::retreat_prompt`).
         } else if armed.0.is_some() && !menu.open {
             armed.0 = None;
         } else {
@@ -523,21 +529,30 @@ fn battle_menu(
     } else if !menu.open && let Some(before) = paused_before.take() {
         settings.paused = before;
     }
-    // Test hook: `SP_TEST_RETREAT=<battle seconds>` presses Retreat in the Esc menu once at that battle time.
+    // Test hook: `SP_TEST_RETREAT=<battle seconds>` orders the retreat as the Esc menu's Retreat did before it asked first, once at that battle time.
+    let mut hooked = false;
     if !*scripted_retreat && status.tick > 0 && std::env::var("SP_TEST_RETREAT").ok().and_then(|v| v.parse::<f32>().ok()).is_some_and(|s| status.time >= s) {
         *scripted_retreat = true;
         menu.retreat = true;
+        hooked = true;
     }
     if menu.retreat {
-        // The same order as the Retreat button: the jump timer runs and the survivors escape when it ends (refused during the lock).
+        // The same as the Retreat button: the retreat question (or, during the lock, the notice); a running countdown keeps running.
         menu.retreat = false;
         menu.open = false;
+        // The player's own pause comes back now, so that the question (which stops the clock itself) restores the right one.
+        if let Some(before) = paused_before.take() {
+            settings.paused = before;
+        }
         if let Some(rt) = ctx.runtime.as_ref() {
+            let counting = rt.cur.as_ref().and_then(|c| c.retreat_jump_in.get(settings.player_side as usize).copied().flatten()).is_some();
             if status.time < rt.retreat_countdown {
                 // Locked at the start of a battle: say so instead of silently closing.
                 ctx.notice.0 = 3.5;
-            } else {
+            } else if hooked || !settings.retreat_prompt {
                 rt.order_retreat(settings.player_side);
+            } else if !counting {
+                ctx.prompt.requested = true;
             }
         }
         let _ = (&mut done, &pending);
@@ -558,6 +573,17 @@ fn battle_menu(
             }
         }
         _ => {}
+    }
+}
+
+/// AUTO-RESOLVE in the retreat question: the fight is given up as with F10, and the sim settles the battle from the units that are left, with
+/// their hull and shield (`PlayAction::AbandonTactical`: `Sim::abandon_tactical`, then the auto-resolve).
+fn retreat_auto_resolve(mut choices: MessageReader<battle_view::retreat_prompt::RetreatChoice>, pending: Res<PendingTactical>, mut done: MessageWriter<BattleFinished>) {
+    for c in choices.read() {
+        if *c == battle_view::retreat_prompt::RetreatChoice::AutoResolve {
+            info!("battle: auto-resolve chosen in the retreat question");
+            done.write(BattleFinished { id: pending.0.battle_id, outcome: BattleOutcome::Aborted });
+        }
     }
 }
 

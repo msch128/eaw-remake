@@ -32,7 +32,7 @@ pub use data::{
 };
 pub use faction::UiFaction;
 pub use panels::{
-    BANNER_AUTO, BANNER_BEGIN, BannerSide, BattleBannerSpec, DialogSpec, EawDialogResult, EawMinimapClicked, EawSlotDropped, MinimapData, MinimapDot,
+    BANNER_AUTO, BANNER_BEGIN, BANNER_CANCEL, BannerSide, BattleBannerSpec, DialogSpec, EawDialogResult, EawMinimapClicked, EawSlotDropped, MinimapData, MinimapDot,
     MinimapKind, MinimapPing, MinimapSurface, PanelData, PanelSlot, SlotLook, fleet_slot_name, minimap_to_world, spawn_battle_banner, spawn_dialog,
 };
 pub use panels::{MinimapCameraQuad, MinimapFog};

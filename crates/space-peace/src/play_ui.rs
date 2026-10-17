@@ -960,6 +960,7 @@ fn battle_dialog(world: &mut World, mut gone_frames: Local<u32>) {
         auto: "AUTO-RESOLVE".into(),
         left: side(mine),
         right: side(other),
+        cancel: None,
     };
     info!("play: battle banner flagships {:?} / {:?}, icons {:?} / {:?}", mine.flagship, other.flagship, spec.left.icon, spec.right.icon);
     if let Some(e) = eaw_ui::spawn_battle_banner(world, &spec) {
@@ -1838,10 +1839,13 @@ struct AutoBattle {
     planet: galaxy_sim::PlanetId,
     /// Per faction: id, ships before, ids of its fleets in the battle.
     sides: Vec<(galaxy_sim::FactionId, u32, Vec<galaxy_sim::FleetId>)>,
+    /// A tactical fight given up (F10, Auto-Resolve in the retreat question): its losses are not in `BattleResolved`.
+    abandoned: bool,
 }
 
 /// Auto-resolve has no tactical result: the sides are counted from the galaxy fleets before the decision, the losses come from
-/// `BattleResolved`, and ships that fled are the units of the battle's fleets that now leave the planet.
+/// `BattleResolved` (for a tactical fight that was given up, from what is left of its fleets), and ships that fled are the units of the battle's
+/// fleets that now leave the planet.
 fn auto_resolve_summary(
     mut actions: MessageReader<PlayAction>,
     mut events: MessageReader<galaxy_play::PlayEvent>,
@@ -1851,7 +1855,11 @@ fn auto_resolve_summary(
     mut commands: Commands,
 ) {
     for a in actions.read() {
-        let PlayAction::ResolveBattle { id, choice: BattleChoice::AutoResolve } = a else { continue };
+        let (id, abandoned) = match a {
+            PlayAction::ResolveBattle { id, choice: BattleChoice::AutoResolve } => (id, false),
+            PlayAction::AbandonTactical { id, .. } => (id, true),
+            _ => continue,
+        };
         let Some(b) = state.current.human_battles.iter().find(|b| b.id == *id) else { continue };
         let galaxy = state.galaxy();
         let sides = b
@@ -1864,7 +1872,7 @@ fn auto_resolve_summary(
             })
             .collect();
         noted.retain(|n| n.id != *id);
-        noted.push(AutoBattle { id: *id, planet: b.planet, sides });
+        noted.push(AutoBattle { id: *id, planet: b.planet, sides, abandoned });
     }
     for e in events.read() {
         let galaxy_play::PlayEvent::Sim(galaxy_sim::Event::BattleResolved { id, winner, losses, .. }) = e else { continue };
@@ -1875,7 +1883,12 @@ fn auto_resolve_summary(
         let mut lines = Vec::new();
         for (f, total, fleets) in &n.sides {
             let name = &state.world.factions[*f as usize].name;
-            let lost = losses.iter().find(|(lf, _)| lf == f).map_or(0, |&(_, l)| l).min(*total);
+            let lost = if n.abandoned {
+                // The fight's own losses came earlier (`UnitsDestroyed`): count what is left of the fleets.
+                total.saturating_sub(fleets.iter().filter_map(|fid| galaxy.fleets.get(fid)).map(|fl| fl.unit_count()).sum())
+            } else {
+                losses.iter().find(|(lf, _)| lf == f).map_or(0, |&(_, l)| l).min(*total)
+            };
             let fled: u32 = fleets
                 .iter()
                 .filter_map(|fid| galaxy.fleets.get(fid))

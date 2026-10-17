@@ -102,7 +102,9 @@ Population: units have `Population_Value`; the cap is
   `Fire_Pulse_Delay_Seconds`) and `Projectile` (`Projectile_Damage`, `Damage_Type`, `Projectile_Does_*_Damage`). The
   damage-type versus armor-type matrix (`Damage_To_Armor_Mod`, 673 entries in `Xml/Gameconstants.xml`) scales hits against shield
   armor and hull armor. Hardpoint health, ranges, cones and speeds are not simulated. Rounds are 4 s; a fight
-  with no damage dealt, or exceeding 600 rounds, is a draw and attackers retreat.
+  with no damage dealt, or exceeding 600 rounds, is a draw and attackers retreat. Units start with the hull and shield share they carry
+  (`galaxy.damage`, the star base's `base_health`): only a tactical fight that was given up leaves damage there (`abandon_tactical`, F10 or
+  Auto-Resolve in the retreat question), and what survives the auto-resolve heals afterwards like after every battle.
 
 ## 6. Planet capture without ground combat
 

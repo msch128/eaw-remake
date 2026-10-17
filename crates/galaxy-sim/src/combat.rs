@@ -153,6 +153,20 @@ impl Tuning {
 
 /// [`resolve_allied`] with explicit [`Tuning`].
 pub fn resolve_tuned(world: &World, sides: &[SideInput], rng: &mut Rng, allied: &std::collections::BTreeSet<(FactionId, FactionId)>, mults: &[crate::state::Difficulty], tuning: Tuning) -> CombatResult {
+    resolve_damaged(world, sides, rng, allied, mults, tuning, &[])
+}
+
+/// [`resolve_tuned`] for forces that are already damaged: `health[side][member]` lists the hull and shield share each unit of the member
+/// starts with (missing entries: undamaged), e.g. the survivors of a tactical battle that was left to the auto-resolve.
+pub fn resolve_damaged(
+    world: &World,
+    sides: &[SideInput],
+    rng: &mut Rng,
+    allied: &std::collections::BTreeSet<(FactionId, FactionId)>,
+    mults: &[crate::state::Difficulty],
+    tuning: Tuning,
+    health: &[Vec<Vec<crate::state::UnitHealth>>],
+) -> CombatResult {
     let focus = tuning.focus;
     let base = |src: Source| if matches!(src, Source::Unit(_)) { 1.0 } else { tuning.base_factor };
     let crowd: Vec<f32> = sides
@@ -176,13 +190,16 @@ pub fn resolve_tuned(world: &World, sides: &[SideInput], rng: &mut Rng, allied: 
     // Expand into instances.
     let mut insts: Vec<Vec<Inst>> = sides
         .iter()
-        .map(|s| {
+        .enumerate()
+        .map(|(si, s)| {
             let mut v = Vec::new();
             for (mi, m) in s.members.iter().enumerate() {
                 let Some(st) = world.stats_of(m.source) else { continue };
-                for _ in 0..m.count {
+                for k in 0..m.count as usize {
                     let dm = mult(s.faction);
-                    v.push(Inst { member: mi, src: m.source, hull: st.hull.max(1.0) * dm.health * base(m.source), shield: st.shield * dm.shield * base(m.source), max_shield: st.shield * dm.shield * base(m.source), immune: world.untargetable(m.source) });
+                    let h = health.get(si).and_then(|s| s.get(mi)).and_then(|l| l.get(k)).copied().unwrap_or(crate::state::UnitHealth::FULL);
+                    let (hull, shield) = (st.hull.max(1.0) * dm.health * base(m.source), st.shield * dm.shield * base(m.source));
+                    v.push(Inst { member: mi, src: m.source, hull: (hull * h.hull.clamp(0.0, 1.0)).max(1.0), shield: shield * h.shield.clamp(0.0, 1.0), max_shield: shield, immune: world.untargetable(m.source) });
                 }
             }
             v

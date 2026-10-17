@@ -28,6 +28,7 @@ pub use effects::BloomPulses;
 pub mod scene;
 pub mod ships;
 pub mod sim;
+pub mod retreat_prompt;
 pub mod tactical_ui;
 mod missiles;
 mod turrets;
@@ -104,6 +105,9 @@ pub struct BattleViewSettings {
     /// reinforcements arrive without loading anything (see [`warmup`]). Only for front ends that cover the view with a loading
     /// screen until [`BattleWarmup::done`].
     pub warm_up: bool,
+    /// The Retreat button (and a host's Esc-menu Retreat) asks first: a banner in the look of the battle-start banner offers Retreat,
+    /// Auto-Resolve and Cancel (see [`retreat_prompt`]); off, the button orders the retreat at once.
+    pub retreat_prompt: bool,
 }
 
 /// Graphics quality presets shared with the options menu.
@@ -185,6 +189,7 @@ impl Default for BattleViewSettings {
             particle_density: 1.0,
             audio: true,
             warm_up: false,
+            retreat_prompt: false,
         }
     }
 }

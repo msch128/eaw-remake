@@ -32,8 +32,16 @@ pub struct TacticalUiPlugin;
 impl Plugin for TacticalUiPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<RetreatNotice>().init_resource::<InterdictNotice>().init_resource::<TacticalUiState>().init_resource::<ReinforceUi>().init_resource::<crate::hud::HudState>().insert_resource(OverlaysActive);
+        app.init_resource::<crate::retreat_prompt::RetreatPrompt>().add_message::<crate::retreat_prompt::RetreatChoice>();
         crate::input_test::build(app);
         app.add_systems(Update, death_star_gauge.run_if(resource_exists::<BattleRuntime>));
+        app.add_systems(
+            Update,
+            (
+                (crate::retreat_prompt::open_prompt, crate::retreat_prompt::prompt_input, crate::retreat_prompt::order_retreat).chain().run_if(resource_exists::<BattleRuntime>),
+                crate::retreat_prompt::close_prompt.run_if(resource_removed::<BattleRuntime>),
+            ),
+        );
         app.add_systems(
             Update,
             (
@@ -232,7 +240,7 @@ fn handle_clicks(
     mut issued: MessageWriter<control::OrderIssued>,
     audio: Option<Res<alamo_audio::plugin::AlamoAudio>>,
     mut sfx: MessageWriter<alamo_audio::PlaySfx>,
-    mut interdict: ResMut<InterdictNotice>,
+    (mut interdict, mut prompt): (ResMut<InterdictNotice>, ResMut<crate::retreat_prompt::RetreatPrompt>),
 ) {
     let player = settings.player_side;
     for b in buttons.read() {
@@ -242,6 +250,8 @@ fn handle_clicks(
                 // Pressed again while the hyperdrives charge: the retreat is called off (the sim's `RetreatCancelled` plays the line).
                 rt.command(player, Command::CancelRetreat);
             }
+            // The game asks first (`BattleViewSettings::retreat_prompt`): Retreat, Auto-Resolve or Cancel.
+            "b_retreat" if settings.retreat_prompt && tac.retreat == RetreatState::Ready && !interdicted(&rt, player) => prompt.requested = true,
             "b_retreat" => {
                 // The announcement follows the sim's `RetreatOrdered` event (`audio::battle_audio`), so a refused order is silent.
                 // Before the retreat countdown ran out the sim refuses: the faction's `Space_Retreat_Not_Allowed_SFXEvent` instead.

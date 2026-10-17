@@ -298,6 +298,53 @@ fn abandoning_a_half_fought_battle_keeps_the_losses() {
 }
 
 #[test]
+fn auto_resolving_a_battle_that_was_left_starts_from_the_survivors_and_their_health() {
+    // Retreat dialog -> Auto-Resolve (and F10): the losses of the fight so far count, and the units left fight on with the hull and shield they
+    // have; whatever survives the auto-resolve heals afterwards like after every battle.
+    let Some(ctx) = load() else { return };
+    let run = |isd: UnitHealth| {
+        let mut sim = new_sim(&ctx);
+        let w = sim.world().clone();
+        let (empire, rebel) = (w.faction_id("Empire").unwrap(), w.faction_id("Rebel").unwrap());
+        let target = empty_planet(&sim);
+        let (sd, xw) = (w.unit_id("Star_Destroyer").unwrap(), w.unit_id("X-Wing_Squadron").unwrap());
+        let ef = add_fleet(&mut sim, empire, sd, 2, target, target);
+        let rf = add_fleet(&mut sim, rebel, xw, 4, target, neighbour(&w, target));
+        add_fleet(&mut sim, rebel, w.unit_id("MC-80_Star_Cruiser").unwrap(), 1, target, neighbour(&w, target));
+        let battle = pending(&mut sim);
+        let req = sim.tactical_setup(battle.id).unwrap();
+        let es = req.sides.iter().position(|s| s.faction == empire).unwrap();
+        let rs = req.sides.iter().position(|s| s.faction == rebel).unwrap();
+        let mut partial = TacticalResult {
+            survived: req.sides.iter().map(|s| s.groups.iter().map(|g| g.count).collect()).collect(),
+            retreated: req.sides.iter().map(|s| vec![0; s.groups.len()]).collect(),
+            health: req.sides.iter().map(|s| vec![Vec::new(); s.groups.len()]).collect(),
+            ..TacticalResult::default()
+        };
+        // Two X-wing squadrons were shot down; both Star Destroyers come out of the fight with `isd` of their hull and shield.
+        let gx = req.sides[rs].groups.iter().position(|g| g.type_id == xw).unwrap();
+        partial.survived[rs][gx] = 2;
+        let gi = req.sides[es].groups.iter().position(|g| g.type_id == sd).unwrap();
+        partial.health[es][gi] = vec![isd; 2];
+        sim.abandon_tactical(battle.id, &partial).expect("abandon");
+        assert_eq!(sim.galaxy().fleets[&rf].units[&xw], 2, "the losses of the fight are in the galaxy");
+        let damaged = sim.galaxy().damage.values().filter(|h| !h.is_full()).count();
+        assert_eq!(damaged, if isd.is_full() { 0 } else { 2 }, "the auto-resolve gets the damage of the fight");
+        let events = sim.resolve_battle_auto(battle.id).expect("resolved");
+        let winner = events.iter().find_map(|e| if let Event::BattleResolved { winner, .. } = e { Some(*winner) } else { None }).expect("resolved event");
+        let left = |f: FleetId| sim.galaxy().fleets.get(&f).map_or(0, |fl| fl.unit_count());
+        println!("Star Destroyers at {isd:?}: winner {winner:?}, left: Empire {}, Rebel {}", left(ef), left(rf));
+        assert!(left(rf) <= 2, "only the squadrons that were left can survive");
+        assert!(sim.galaxy().damage.is_empty(), "what survived the battle heals");
+        (winner, empire, rebel)
+    };
+    let (full, empire, _) = run(UnitHealth::FULL);
+    assert_eq!(full, Some(empire), "two undamaged Star Destroyers beat an MC-80 with two X-wing squadrons");
+    let (battered, _, rebel) = run(UnitHealth { hull: 0.02, shield: 0.0 });
+    assert_eq!(battered, Some(rebel), "the same Star Destroyers with 2% hull and no shields left lose to them");
+}
+
+#[test]
 fn a_sides_tech_index_counts_from_zero_at_the_games_start_level() {
     let Some(ctx) = load() else { return };
     let side_techs = |tech_of_empire: Option<i32>| {

@@ -1032,9 +1032,46 @@ impl Sim {
                 return Some(events);
             }
         }
-        let mut result = combat::resolve_allied(w, &sides, &mut rng, &self.galaxy.allied, &self.galaxy.factions.iter().map(|f| f.difficulty).collect::<Vec<_>>());
+        // Units start with the hull and shield they have: damage is only left in the galaxy by a tactical fight that was given up (`abandon_tactical`).
+        let health = self.member_health(&battle, &sides);
+        let mults: Vec<_> = self.galaxy.factions.iter().map(|f| f.difficulty).collect();
+        let mut result = combat::resolve_damaged(w, &sides, &mut rng, &self.galaxy.allied, &mults, combat::Tuning::of(w), &health);
         self.apply_escape(&sides, &mut result);
-        Some(self.apply_combat(&battle, &sides, result))
+        let events = self.apply_combat(&battle, &sides, result);
+        self.heal_survivors(&battle, &sides);
+        Some(events)
+    }
+
+    /// Hull and shield share of every unit of `sides` (see `combat::resolve_damaged`): ships from `galaxy.damage`, the star base from its planet.
+    fn member_health(&mut self, battle: &PendingBattle, sides: &[SideInput]) -> Vec<Vec<Vec<UnitHealth>>> {
+        self.galaxy.sync_ships();
+        let g = &self.galaxy;
+        sides
+            .iter()
+            .map(|s| {
+                s.members
+                    .iter()
+                    .map(|m| match (m.source, m.fleet) {
+                        (Source::Unit(u), Some(f)) => g.ships.get(&f).into_iter().flatten().filter(|(_, t)| *t == u).take(m.count as usize).map(|(id, _)| g.damage.get(id).copied().unwrap_or(UnitHealth::FULL)).collect(),
+                        (Source::Starbase(_), _) => g.planets[battle.planet as usize].base_health.into_iter().collect(),
+                        _ => Vec::new(),
+                    })
+                    .collect()
+            })
+            .collect()
+    }
+
+    /// In Empire at War what survives a battle heals back to full hull and shields (see [`Sim::apply_health`]).
+    fn heal_survivors(&mut self, battle: &PendingBattle, sides: &[SideInput]) {
+        self.galaxy.sync_ships();
+        let fleets: Vec<FleetId> = sides.iter().flat_map(|s| s.members.iter().filter_map(|m| m.fleet)).collect();
+        for f in fleets {
+            let ids: Vec<ShipId> = self.galaxy.ships.get(&f).into_iter().flatten().map(|(id, _)| *id).collect();
+            for id in ids {
+                self.galaxy.damage.remove(&id);
+            }
+        }
+        self.galaxy.planets[battle.planet as usize].base_health = None;
     }
 
     /// The statistical resolver kills every ship of the losing side; the tactical battles let the loser's AI retreat with part of its fleet. Gives each

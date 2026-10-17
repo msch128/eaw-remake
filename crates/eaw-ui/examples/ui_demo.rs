@@ -415,6 +415,7 @@ fn spawn_panel(world: &mut World, name: &str, faction: UiFaction, game: &alamo_d
                     auto: "AUTO-RESOLVE".into(),
                     left: side(2, Color::srgb(0.3, 1.0, 0.4)),
                     right: side(3, Color::srgb(1.0, 0.25, 0.25)),
+                    cancel: None,
                 },
             );
         }

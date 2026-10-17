@@ -551,7 +551,7 @@ impl Sim {
         let planet = request.planet;
         self.galaxy.sync_ships();
         let (events, _) = self.apply_losses(planet, &sides, &combat.survivors);
-        self.apply_health(&request, partial);
+        self.write_health(&request, partial);
         Ok(events)
     }
 
@@ -587,6 +587,38 @@ impl Sim {
 }
 
 impl Sim {
+    /// Writes the hull and shield the survivors of an unfinished fight have into the galaxy (ships by id, the star base on the planet), so that
+    /// the auto-resolve that settles the battle starts from them; the end of that battle heals them again (see [`Sim::apply_health`]).
+    pub(crate) fn write_health(&mut self, request: &TacticalRequest, result: &TacticalResult) {
+        let planet = request.planet as usize;
+        for (si, side) in request.sides.iter().enumerate() {
+            for (gi, g) in side.groups.iter().enumerate() {
+                let list = result.health.get(si).and_then(|r| r.get(gi)).cloned().unwrap_or_default();
+                let survived = result.survived.get(si).and_then(|r| r.get(gi)).copied().unwrap_or(0) as usize;
+                match (g.kind, g.fleet) {
+                    (GroupKind::Unit, Some(fleet)) if survived > 0 => {
+                        let ships: Vec<ShipId> = self.galaxy.ships.get(&fleet).into_iter().flatten().filter(|(_, t)| *t == g.type_id).map(|(s, _)| *s).take(survived).collect();
+                        for (k, ship) in ships.into_iter().enumerate() {
+                            // Pad with full health if the report is shorter than the survivors.
+                            match list.get(k).copied().filter(|h| !h.is_full()) {
+                                Some(h) => {
+                                    self.galaxy.damage.insert(ship, h);
+                                }
+                                None => {
+                                    self.galaxy.damage.remove(&ship);
+                                }
+                            }
+                        }
+                    }
+                    (GroupKind::Starbase, _) if survived > 0 => {
+                        self.galaxy.planets[planet].base_health = list.first().copied().filter(|h| !h.is_full());
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
     /// Writes the outcome into the galaxy: in Empire at War, surviving ships and star bases heal back
     /// to 100% hull and shields upon battle completion. Damage is removed from `galaxy.damage`.
     pub(crate) fn apply_health(&mut self, request: &TacticalRequest, result: &TacticalResult) {

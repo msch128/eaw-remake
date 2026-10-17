@@ -333,8 +333,9 @@ fn forward_battles(mut commands: Commands, mut events: MessageReader<PlayEvent>,
     }
 }
 
-/// A battle left without a result (F10 / End battle) is handed to the sim: the losses so far count, then it auto-resolves what is left (the stronger side may win).
-/// The Esc menu Retreat is not abandoned: it orders the real retreat (jump) and the normal battle result comes back (winner = the other side, `retreated` set). Real results are
+/// A battle left without a result (F10 / End battle / Auto-Resolve in the retreat question) is handed to the sim: the losses so far count, then it auto-resolves
+/// what is left with the hull and shield it has (the stronger side may win).
+/// Retreat in the retreat question is not abandoned: it orders the real retreat (jump) and the normal battle result comes back (winner = the other side, `retreated` set). Real results are
 /// applied by `battle_play`.
 fn finish_battles(
     mut finished: MessageReader<BattleFinished>,
