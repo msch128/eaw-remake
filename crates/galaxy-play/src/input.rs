@@ -5,7 +5,7 @@ use std::f32::consts::FRAC_PI_2;
 use bevy::prelude::*;
 use bevy::ui::FocusPolicy;
 use bevy::window::PrimaryWindow;
-use galaxy_sim::{FleetId, PlanetId};
+use galaxy_sim::{FactionId, FleetId, PlanetId};
 
 use crate::geometry::{GalaxyLayout, RoutePlan, format_duration, plan_route};
 use crate::state::*;
@@ -90,6 +90,21 @@ pub fn pick_nearest<T: Copy>(cursor: Vec2, points: impl Iterator<Item = (T, Vec2
         })
         .min_by(|a, b| a.1.total_cmp(&b.1))
         .map(|(id, _)| id)
+}
+
+/// Whether the fleet pads of a planet owned by `owner` take a dropped fleet of `me` into the chosen slot: own and allied planets (the
+/// player's fleets park in their slots there), not enemy or neutral ones (there the fleet attacks or takes the first free slot).
+pub fn pads_open(owner: Option<FactionId>, me: FactionId, hostile: impl Fn(FactionId) -> bool) -> bool {
+    owner.is_some_and(|o| o == me || !hostile(o))
+}
+
+/// The fleet pad `(planet, slot 1..=3)` a carried fleet goes into when it is dropped now: the pad under the cursor of an own or allied
+/// planet.
+pub fn drop_pad(state: &SimState, me: Option<FactionId>, hover: &PlayHover) -> Option<(PlanetId, u8)> {
+    let (me, planet, slot) = (me?, hover.planet?, hover.slot?);
+    let g = state.galaxy();
+    let owner = g.planets.get(planet as usize)?.owner;
+    pads_open(owner, me, |o| g.hostile(&state.world, me, o)).then_some((planet, slot))
 }
 
 /// Computes what is under the cursor.
@@ -237,7 +252,10 @@ pub fn handle_mouse(
                     if let Some(to) = target {
                         let from = g.fleets.get(&src_fid).and_then(|f| f.planet());
                         let h = player.0;
-                        if let (Some(_dst_fid), true) = (target_fleet, target_fleet.is_some_and(mine)) {
+                        // Over a fleet pad of an own or allied planet the drop goes into that slot (at the planet it is at: at once), also
+                        // when another fleet's pick area reaches over it: the pads sit a few pixels apart when zoomed out.
+                        let pad = drop_pad(&state, player.0, &hover).filter(|&(p, _)| p == to).map(|(_, s)| s);
+                        if let (None, Some(_dst_fid), true) = (pad, target_fleet, target_fleet.is_some_and(mine)) {
                             // Target is a friendly fleet -> show merge route hint!
                             let dst_name = state.world.planets[to as usize].display_name.as_str();
                             if from == Some(to) {
@@ -260,9 +278,15 @@ pub fn handle_mouse(
                                 let h = player.0?;
                                 plan_route(&state.world, g, h, state.world.fleet_speed(f), from, to)
                             });
-                            if let Some(plan) = plan {
+                            // A slot that holds an own fleet merges the drop into it.
+                            let merges = |s: u8| h.and_then(|h| g.fleet_in_slot(h, to, s)).is_some_and(|f| f != src_fid);
+                            if let (Some(s), true) = (pad, from == Some(to)) {
+                                let what = if merges(s) { "Merge into fleet slot" } else { "Fleet slot" };
+                                model.route_hint = Some(format!("{what} {s} at {}", state.world.planets[to as usize].display_name));
+                            } else if let Some(plan) = plan {
                                 let names: Vec<&str> = plan.path.iter().map(|&p| state.world.planets[p as usize].display_name.as_str()).collect();
-                                let mut hint = format!("{} - ETA {}", names.join(" > "), format_duration(plan.eta_seconds, state.world.config.week_seconds));
+                                let slot = pad.map(|s| format!(" > {} {s}", if merges(s) { "merge into fleet slot" } else { "fleet slot" })).unwrap_or_default();
+                                let mut hint = format!("{}{slot} - ETA {}", names.join(" > "), format_duration(plan.eta_seconds, state.world.config.week_seconds));
                                 if !plan.blockades.is_empty() {
                                     hint.push_str(" - blockade on the way");
                                 }
@@ -309,7 +333,17 @@ pub fn handle_mouse(
             let src_fid = press.fleet.unwrap();
             let target_fleet = hover.fleet.filter(|&f| f != src_fid);
             let target_planet = hover.planet.or_else(|| target_fleet.and_then(|fid| g.fleets.get(&fid)).and_then(|f| f.planet()));
-            if let Some(dst_fid) = target_fleet.filter(|&f| mine(f)) {
+            if let Some((to, slot)) = drop_pad(&state, player.0, &hover) {
+                // Dropped on a fleet pad of an own or allied planet: the dragged fleet (and the rest of the selection) goes into that slot,
+                // at once when it is at that planet (group 1 to group 3), on arrival otherwise, and merges into the fleet holding it. The
+                // pad wins over a fleet whose pick area reaches over it (the pads sit a few pixels apart when zoomed out). Enemy and
+                // neutral planets have no pads to drop on: the fleet is sent there.
+                let mut sel: Vec<FleetId> = selection.fleets.iter().copied().filter(|&f| mine(f)).collect();
+                if !sel.contains(&src_fid) {
+                    sel.push(src_fid);
+                }
+                actions.write(PlayAction::MoveToSlot { fleets: sel, to, slot });
+            } else if let Some(dst_fid) = target_fleet.filter(|&f| mine(f)) {
                 let from = g.fleets.get(&src_fid).and_then(|f| f.planet());
                 let to = g.fleets.get(&dst_fid).and_then(|f| f.planet());
                 if from.is_some() && from == to {
@@ -324,13 +358,6 @@ pub fn handle_mouse(
                 } else if let Some(to) = target_planet {
                     actions.write(PlayAction::MoveSelected(to));
                 }
-            } else if let (Some(to), Some(slot)) = (hover.planet, hover.slot) {
-                // Dropped on a slot circle: the dragged fleet (and the rest of the selection) goes into that slot.
-                let mut sel: Vec<FleetId> = selection.fleets.iter().copied().filter(|&f| mine(f)).collect();
-                if !sel.contains(&src_fid) {
-                    sel.push(src_fid);
-                }
-                actions.write(PlayAction::MoveToSlot { fleets: sel, to, slot });
             } else if let Some(to) = target_planet {
                 actions.write(PlayAction::MoveSelected(to));
             }
@@ -404,6 +431,28 @@ pub fn draw_drag(
         let iso = Isometry3d::new(c, Quat::from_rotation_x(-FRAC_PI_2));
         gizmos.circle(iso, layout.radii[p as usize] * 1.3 * pulse, color);
         gizmos.circle(iso, layout.radii[p as usize] * 1.55 * pulse, color.with_alpha(0.45));
+        // On an own or allied planet its three fleet pads are drop targets: all outlined, the one under the cursor lit like a selected
+        // fleet's rim (no Remake frame shows a drag; the look follows the pad outlines and selection rims of the map).
+        let g = state.galaxy();
+        if let Some(me) = player.0
+            && pads_open(owner, me, |o| g.hostile(&state.world, me, o))
+        {
+            let (r, pad) = (layout.orbit_radius(p), layout.pad_radius(p));
+            let green = Color::srgb(0.4, 1.0, 0.6);
+            let lit = 1.0 + 0.08 * (time.elapsed_secs() * 4.0).sin();
+            for s in 0..3u8 {
+                let a = crate::visuals::slot_angle(s as usize);
+                let at = Isometry3d::new(c + Vec3::new(a.cos() * r, 0.0, a.sin() * r), Quat::from_rotation_x(-FRAC_PI_2));
+                if hover.slot == Some(s + 1) {
+                    // Three rings read as one bright band (gizmo lines are a pixel wide); the carried fleet's own rings give way to it.
+                    gizmos.circle(at, pad * lit, Color::WHITE);
+                    gizmos.circle(at, pad * 1.15 * lit, green);
+                    gizmos.circle(at, pad * 1.3 * lit, green.with_alpha(0.5));
+                } else {
+                    gizmos.circle(at, pad, green.with_alpha(0.45));
+                }
+            }
+        }
     }
 }
 
@@ -425,6 +474,16 @@ mod tests {
             (0 as PlanetId, Vec2::new(100.0, 150.0), 30.0),
         ];
         assert_eq!(pick_nearest(cursor, far_planets.into_iter()), None);
+    }
+
+    #[test]
+    fn fleet_pads_take_a_drop_only_on_own_and_allied_planets() {
+        // Faction 1 is the player, 2 an ally (not hostile), 3 an enemy.
+        let hostile = |o: FactionId| o == 3;
+        assert!(pads_open(Some(1), 1, hostile));
+        assert!(pads_open(Some(2), 1, hostile));
+        assert!(!pads_open(Some(3), 1, hostile));
+        assert!(!pads_open(None, 1, hostile));
     }
 }
 

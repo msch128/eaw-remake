@@ -16,6 +16,13 @@ the player selects and orders them, builds at owned planets, controls game speed
   the tether end on the map point under the cursor. A carried fleet is 1.5x its size at every zoom (2026-10-17, G4: the zoom-dependent
   1.5-9x scale of 28d1013 / 60903b2 is gone, nothing in the world changes size with the zoom; with the lift above the pad it put the
   model 31-59 px off the cursor).
+- Fleet pads as drop targets (2026-10-17, G5): while fleets are carried over an own or allied planet (`input::pads_open`), its three
+  pads are outlined and the one under the cursor is lit (white and green band, pulsing like a selection rim; the carried fleet's white
+  rings give way to it). A drop there sends `PlayAction::MoveToSlot`, so the fleet takes that slot at once at its own planet (group 1 to
+  group 3) or on arrival elsewhere, and merges into the fleet that holds it. The pad wins over a parked fleet whose pick area reaches
+  over it (zoomed out the pads are a few pixels apart). The route hint names the slot ("fleet slot 2", "merge into fleet slot 1").
+  Enemy and neutral planets have no pad targets: a drop sends the fleet there (`MoveSelected`). Zoomed out a pad is a pixel or two, so
+  there the hint is what tells the slot.
 - `BuildMenu` (units, structures, star base, tech, research) with availability reasons; `PlayAction::Build` queues it, credits go
   through galaxy-sim. Production queue model.
 - `GameClock`: pause + speed levels, `hold` flag for the host (pause menu, battle screen); time is held while a human battle waits.

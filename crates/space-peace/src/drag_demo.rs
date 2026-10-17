@@ -111,6 +111,8 @@ struct PointerDrag {
     from: Vec2,
     /// Target planet and pad (1..3) of the drop.
     target: Option<(PlanetId, Option<u8>)>,
+    /// The aimed pad takes the drop into its slot (own or allied planet); on other planets the fleet is just sent there.
+    pad_drop: bool,
     cursor: Vec2,
     picked_up: bool,
     /// First frame the carried fleet was gone before the release: frame, cursor, cursor blocked, hovered planet.
@@ -131,11 +133,13 @@ struct PointerDrag {
 /// Whether `order` drops the dragged fleet on planet `to` (and into pad `pad`, if one was aimed at).
 fn drops_on(order: &PlayAction, to: PlanetId, pad: Option<u8>) -> bool {
     match (order, pad) {
+        // Onto a pad: into exactly that slot (the simulation merges it into the fleet holding the slot).
         (PlayAction::MoveToSlot { to: t, slot, .. }, Some(s)) => *t == to && *slot == s,
+        (_, Some(_)) => false,
         (PlayAction::MoveToSlot { to: t, .. }, None) | (PlayAction::MoveSelected(t), None) => *t == to,
-        // Onto a pad that holds an own fleet: the dragged fleet merges into it.
-        (PlayAction::MoveAndMerge { to: t, .. }, _) => *t == to,
-        (PlayAction::MergeFleets { .. }, _) => true,
+        // Onto an own fleet: the dragged fleet merges into it.
+        (PlayAction::MoveAndMerge { to: t, .. }, None) => *t == to,
+        (PlayAction::MergeFleets { .. }, None) => true,
         _ => false,
     }
 }
@@ -195,7 +199,10 @@ fn drag_pointer(
         let at = fleet.and_then(|f| entities.0.get(&f)).and_then(|&e| fleets.get(e).ok()).and_then(|(_, g)| screen_of(g.translation()));
         match (to, fleet, at) {
             (Some(to), Some(fleet), Some(at)) => {
-                info!("drag-pointer: fleet {fleet} at planet {from} (screen {at:.0}) to planet {to} pad {pad:?}");
+                let g = state.galaxy();
+                let owner = g.planets.get(to as usize).and_then(|p| p.owner);
+                st.pad_drop = pad.is_some() && galaxy_play::input::pads_open(owner, me, |o| g.hostile(&state.world, me, o));
+                info!("drag-pointer: fleet {fleet} at planet {from} (screen {at:.0}) to planet {to} pad {pad:?} (pad takes the drop: {})", st.pad_drop);
                 st.fleet = Some(fleet);
                 st.from = at;
                 st.target = Some((to, pad));
@@ -305,7 +312,12 @@ fn drag_pointer(
         // A drop gives the order to the aimed planet / pad; a cancelled drag gives none and (Esc) opens no pause menu.
         let ended = match cancel {
             Some(c) => st.orders.is_empty() && !(c == "esc" && paused.0),
-            None => args.drag_hold || st.orders.iter().any(|o| drops_on(o, to, pad)),
+            None if args.drag_hold => true,
+            // A pad of an enemy or neutral planet takes no drop into its slot: the fleet is just sent there.
+            None if pad.is_some() && !st.pad_drop => {
+                st.orders.iter().any(|o| matches!(o, PlayAction::MoveSelected(t) if *t == to)) && !st.orders.iter().any(|o| matches!(o, PlayAction::MoveToSlot { .. }))
+            }
+            None => st.orders.iter().any(|o| drops_on(o, to, pad)),
         };
         let ok = st.picked_up && st.aborted.is_none() && st.toggles == 0 && !st.carried_after && st.icon_offset <= ICON_TOLERANCE && ended;
         let left = state.galaxy().fleets.get(&fleet).map(|f| match f.location {

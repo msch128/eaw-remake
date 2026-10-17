@@ -99,7 +99,7 @@ pub fn carry_fleets(
     player: Res<PlayerFaction>,
     entities: Res<FleetEntities>,
     layout: Res<GalaxyLayout>,
-    cfg: Res<crate::state::PlayConfig>,
+    (cfg, hover): (Res<crate::state::PlayConfig>, Res<crate::input::PlayHover>),
     window: Option<Single<&Window, With<PrimaryWindow>>>,
     camera: Query<(&Camera, &GlobalTransform), With<Camera3d>>,
     mut anim: ResMut<CarryAnim>,
@@ -122,6 +122,8 @@ pub fn carry_fleets(
         Some((ray, Vec3::new(right.x, 0.0, right.z).try_normalize().unwrap_or(Vec3::X)))
     });
     let steps = fan_steps(drag.carry.len());
+    // Over a fleet pad that takes the drop, the lit pad (`input::draw_drag`) marks the spot instead of the white rings.
+    let on_pad = crate::input::drop_pad(&state, player.0, &hover).is_some();
     for (visual, mut tf, children) in &mut fleets {
         let id = visual.id;
         let sim_pos = tf.translation;
@@ -170,9 +172,11 @@ pub fn carry_fleets(
 
             // A bright ring on the map point behind the carried fleet (under the cursor) shows that it is held there.
             let under = view.and_then(|(ray, _)| held_point(ray.origin, *ray.direction, 0.0, std::iter::empty())).unwrap_or(ground) + fan;
-            let shadow = Isometry3d::new(Vec3::new(under.x, 0.08, under.z), Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2));
-            gizmos.circle(shadow, visual.pad * lifted * 1.25, Color::WHITE.with_alpha(0.85));
-            gizmos.circle(shadow, visual.pad * lifted * 1.55, Color::WHITE.with_alpha(0.35));
+            if !on_pad {
+                let shadow = Isometry3d::new(Vec3::new(under.x, 0.08, under.z), Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2));
+                gizmos.circle(shadow, visual.pad * lifted * 1.25, Color::WHITE.with_alpha(0.85));
+                gizmos.circle(shadow, visual.pad * lifted * 1.55, Color::WHITE.with_alpha(0.35));
+            }
             // The spot the fleet came from: a dashed ring with a thin tether to the carried fleet.
             let spot = Vec3::new(sim_pos.x, 0.05, sim_pos.z);
             let ring = visual.pad;

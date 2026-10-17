@@ -41,6 +41,11 @@ $scenarios = @(
     @('drag-lower-right',    @('--campaign', $camp, '--select', $yavin, '--zoom', '0.3', '--drag-pointer', 'Ringo Vinda', '--frames', '300'), 'drag-pointer: .*carried scale 1\.50 .*PASS'),
     # Close up (the Remake's zoom): the carried fleet hangs exactly at the cursor at the same world scale (the capture shows it held).
     @('drag-hold-closeup',   @('--campaign', $camp, '--select', $yavin, '--zoom', '0.06', '--drag-pointer', 'Arda', '--drag-hold', '--frames', '300'), 'drag-pointer: .*carried scale 1\.50 .*PASS'),
+    # Fleet pads are drop targets on own and allied planets: group 1 to group 3 at the same planet changes the slot at once, a pad of
+    # another own planet becomes the arrival slot, a pad of an enemy planet only sends the fleet there.
+    @('drag-pad-same-planet', @('--campaign', $camp, '--select', $yavin, '--zoom', '0.06', '--drag-pointer', 'The Yavin System:3', '--frames', '300'), 'drag-pointer: .*fleet Some\("at planet \d+ slot 3"\): PASS'),
+    @('drag-pad-own-planet', @('--campaign', $camp, '--select', $yavin, '--zoom', '0.3', '--drag-pointer', 'Dantooine:2', '--frames', '300'), 'drag-pointer: .*MoveToSlot \{[^}]*slot: 2 \}.*PASS'),
+    @('drag-pad-enemy-planet', @('--campaign', $camp, '--select', $yavin, '--zoom', '0.3', '--drag-pointer', 'Celanon:2', '--frames', '300'), 'drag-pointer: .*MoveSelected\(\d+\).*PASS'),
     @('drag-cancel-right',   @('--campaign', $camp, '--select', $yavin, '--zoom', '0.3', '--drag-pointer', 'Ringo Vinda', '--drag-cancel', 'right', '--frames', '300'), 'drag-pointer: .*PASS'),
     @('drag-cancel-esc',     @('--campaign', $camp, '--select', $yavin, '--zoom', '0.3', '--drag-pointer', 'Ringo Vinda', '--drag-cancel', 'esc', '--frames', '300'), 'drag-pointer: .*PASS'),
     # Every planet on screen and not under the interface shows its name, also in the lower third (above the build bar, right of the droid
