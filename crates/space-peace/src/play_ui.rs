@@ -178,7 +178,7 @@ impl Plugin for PlayUiPlugin {
             )
             .add_systems(Update, (declutter_top, hero_bar, spawn_pad_arrows, pad_arrows, locked_clicks, spawn_planet_panel, update_planet_panel, place_planet_panel, planet_view_ui, planet_view_bar_tab, objectives_toggle, objectives_window, objectives_scroll).chain().run_if(resource_exists::<PlayBridge>.and_then(resource_exists::<SimState>)))
             .add_systems(Update, scripted_tooltip.run_if(resource_exists::<eaw_ui::ForcedTooltip>))
-            .add_systems(Update, advisor_keep_out)
+            .add_systems(Update, advisor_keep_out.run_if(resource_exists::<eaw_ui::TooltipKeepOut>))
             .add_systems(Update, resume_tab_click.run_if(in_state(AppScreen::Galaxy)).run_if(resource_exists::<SimState>))
             .add_systems(Update, galactic_hotkeys.run_if(in_state(AppScreen::Galaxy)).run_if(resource_exists::<SimState>))
             .add_systems(Update, save_toast)

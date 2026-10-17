@@ -79,6 +79,18 @@ fullscreen, FPS cap).
   `%APPDATA%\SpacePeace` alone. `tools\test-setup.ps1` tests a built setup silently in a scratch folder (install, files, Start menu, uninstall entry, offscreen run,
   `--check-install`, uninstall); the message boxes of the wizard itself are not covered by it (they never show in a silent setup).
 
+## Starting without the game files (2026-10-17, M)
+`eaw-remake --game-dir <empty folder>` shows the "CANNOT FIND THE GAME" dialog (continue with the demo galaxy / quit) and logs one warning,
+`FALLING BACK TO DEMO GALAXY`. From 2026-10-15 (b87e2ea) the same start also logged a failed system parameter on every frame (1,196
+warnings in a 3 s run, 78 in the 60 frames of the smoke row `missing-game`, which was red on "ERROR in log, system parameter validation
+failed": PowerShell's `-match` ignores case and the handler's text says "error"). Cause: `play_ui::advisor_keep_out` takes
+`ResMut<eaw_ui::TooltipKeepOut>`, which `EawUiPlugin` inserts, and that plugin is only added with the game's files. It runs only when the
+resource exists now (`run_if(resource_exists::<eaw_ui::TooltipKeepOut>)`); the log of that start is 16 lines instead of 279. Rule: a system that
+needs something only the game's files bring waits for it with a run condition (`Option<Res<..>>` where it can do without).
+Test `tests::the_menu_without_game_files_runs_without_a_failing_system` (main.rs) builds the app the way `main` does without an install
+(`add_game` with `Boot`; engine plugins without window, audio and renderer: `RenderPlugin` with `backends: None`) and fails on any error a system
+returns in 60 menu frames (before the fix 61 errors from `advisor_keep_out`, now none). It names the systems with `--features debug`.
+
 ## Galaxy map visuals (2026-10-08)
 - Lanes (2026-10-17, measured on the user's Remake video v0520/v0540 and CS9 f0007/f0016 at full HD): one additive ribbon per route
   from planet centre to planet centre (no overshoot), flat band, world width = data `Width` x 0.14 map units (main 0.84, inter 0.35,

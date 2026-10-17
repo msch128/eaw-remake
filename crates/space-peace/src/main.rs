@@ -198,6 +198,27 @@ fn main() {
             }
         });
     }
+    add_game(&mut app, Boot { args, fs, after, loading_delay, settings, content, log, problem });
+    app.run();
+}
+
+/// What `main` works out before the app exists and the game's own wiring needs.
+struct Boot {
+    args: Args,
+    /// The game's files; `None` without an install (the menu then explains it, see `problem`).
+    fs: Option<Arc<alamo_fs::GameFs>>,
+    /// Screen shown once loading is done.
+    after: AppScreen,
+    loading_delay: f32,
+    settings: Settings,
+    content: game::ContentChoice,
+    log: StartupLog,
+    problem: game::StartupProblem,
+}
+
+/// The game on top of the engine plugins: states, resources and plugins. The same for the window, the offscreen and the test app.
+fn add_game(app: &mut App, boot: Boot) {
+    let Boot { args, fs, after, loading_delay, settings, content, log, problem } = boot;
     app.insert_state(AppScreen::Loading)
         .insert_resource(AfterLoading(after))
         .insert_resource(GameFiles(fs))
@@ -240,6 +261,80 @@ fn main() {
             UiPlugin,
             PlayGluePlugin,
             PlayUiPlugin,
-        ))
-        .run();
+        ));
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Mutex;
+
+    use bevy::{
+        ecs::error::ErrorContext,
+        render::{
+            RenderPlugin,
+            settings::{RenderCreation, WgpuSettings},
+        },
+    };
+
+    use super::*;
+
+    /// Every error a system of the test app returned.
+    static FAILURES: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+    fn record(error: BevyError, ctx: ErrorContext) {
+        FAILURES.lock().unwrap().push(format!("{} `{}`: {error}", ctx.kind(), ctx.name()));
+    }
+
+    /// The app the way `main` builds it without an install of the game, on engine plugins without window, audio or renderer.
+    fn app_without_game_files() -> App {
+        let args = Args::parse(["--screen", "menu", "--volume", "0"].map(String::from)).unwrap();
+        let mut app = App::new();
+        app.set_error_handler(record);
+        app.add_plugins(
+            DefaultPlugins
+                .set(WindowPlugin { primary_window: None, exit_condition: bevy::window::ExitCondition::DontExit, ..default() })
+                .set(RenderPlugin { render_creation: RenderCreation::Automatic(Box::new(WgpuSettings { backends: None, ..default() })), ..default() })
+                .disable::<WinitPlugin>()
+                .disable::<AudioPlugin>()
+                .disable::<bevy::log::LogPlugin>(),
+        );
+        let problem = game::StartupProblem(Some(game::describe_problem("no Empire at War install found", game::DEFAULT_MOD_ID)));
+        let boot = Boot {
+            settings: Settings::default().with_cli(&args),
+            args,
+            fs: None,
+            after: AppScreen::MainMenu,
+            loading_delay: 0.0,
+            content: default(),
+            log: StartupLog::default(),
+            problem,
+        };
+        add_game(&mut app, boot);
+        app.finish();
+        app.cleanup();
+        app
+    }
+
+    /// 2026-10-15 `advisor_keep_out` took the tooltip keep-out of `eaw-ui`, which only exists with the game's files: without them it failed its
+    /// parameter validation every frame (1,196 warnings in a 3 s run, the smoke row `missing-game` red). Any system that needs something only the
+    /// game's files bring must wait for it with a run condition. If this fails, run it with `--features debug` to see which system it is.
+    #[test]
+    fn the_menu_without_game_files_runs_without_a_failing_system() {
+        FAILURES.lock().unwrap().clear();
+        let mut app = app_without_game_files();
+        // The loading screen hands over on its own once it sees there is nothing to load.
+        let started = std::time::Instant::now();
+        while *app.world().resource::<State<AppScreen>>().get() != AppScreen::MainMenu && started.elapsed().as_secs() < 20 {
+            app.update();
+        }
+        assert_eq!(*app.world().resource::<State<AppScreen>>().get(), AppScreen::MainMenu, "the menu never came up");
+        for _ in 0..60 {
+            app.update();
+        }
+        let failures = FAILURES.lock().unwrap();
+        let mut distinct: Vec<&String> = failures.iter().collect();
+        distinct.sort();
+        distinct.dedup();
+        assert!(failures.is_empty(), "{} errors from {} distinct places in 60 frames of the menu: {distinct:#?}", failures.len(), distinct.len());
+    }
 }
