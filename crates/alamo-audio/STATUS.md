@@ -139,3 +139,19 @@ Empire at War audio: event data, sample resolution, decoding and a Bevy playback
 - `AlamoAudio::prepare_event` reads every sample of an event ahead on the workers; `loaded_pass_seconds` says how long one pass through the event's
   shortest loaded sample lasts at its highest pitch (a loop held that long ends before it starts over). The battle view reads a super laser's shot loop
   while the laser charges and holds it one pass (battle-view STATUS, "Eclipse super laser").
+
+## Audio pass 6: ability sounds (2026-10-17)
+- Census: `cargo run -p alamo-audio --no-default-features --example ability_sfx [-- 1770851727 <text>]` lists, per `Unit_Ability` type and per ability object of `Abilities`, the sound tags, how many
+  space units (objects with a `Space_Model_Name`, `Variant_Of_Existing_Type` merged in) and other objects carry them, the events they name, and whether the game code plays the tag; with a text it
+  lists who carries the matching rows. Remake 4.0, space units: `SFXEvent_Special_Ability_Loop` is on `TRACTOR_BEAM` (59 objects: the Star Destroyer family with its template / skirmish / story variants,
+  `Unit_Star_Destroyer_Tractor_Beam`), `ENERGY_WEAPON` (3: Accuser, Eclipse P4 / P5, `Unit_Star_Destroyer_Energy_Blast`), `SUPER_LASER` (12, `Unit_Death_Star_2_Fire`, wired by the shot since
+  2026-10-17) and `LEECH_SHIELDS` (the Ravager, reuses the tractor loop; the sim does not run that ability); ground only: `FORCE_SIGHT` (Yoda), `RADIOACTIVE_CONTAMINATE` (IG-88). All six events are
+  3D loops (`Play_Count -1`, `Max_Instances` 2, 1 for the super laser) with samples. No unit has the same ability type twice. Start sounds: `SFXEvent_Activate` / `Activate_SFX` of the ability
+  object a `Unit_Ability` triggers: space users `Stealth_Ability` 21, `Buzz_Droids_Ability` 19, `Corrupt_Systems_Ability` 5, `Blast_Ability` 7, `Cluster_Bomb_Ability` 4, `Shield_Flare_Ability` 1; of the
+  events they name, 2D ones are GUI or voice lines (`GUI_Toggle_Vehicle_Cloak_On`, `GUI_Buzz_Droids_SFX`, `Unit_Stealth_On_Urai_Fen`), the 3D ones are `Unit_IG88_Corrupt_Systems`,
+  `Unit_Underworld_Plasma_Fire` (`BLAST`, which the sim does not run), `Shield_Flare_SFX_Event` and, on the stealth abilities of 9 space objects (TIE Phantom, Tyber Zann's Merciless and Interceptor IV, Popara's Minstrel, Deathstrike), a pasted `Unit_Lightsaber_Projectile_Block`. There is no stop / deactivate
+  tag besides the GUI `SFXEvent_GUI_Unit_Ability_Deactivated` (wired). The faction `SFXEvent_GUI_Enemy_Toggle_Non_Hero_Ability_On/Off` entries are all blank.
+- `hooks::WIRED_TAGS` gained `sfxevent_special_ability_loop`, `sfxevent_activate` and `activate_sfx` (battle-view STATUS, "Ability sounds"). The hook audit found one broken reference among them,
+  `Unit_Corrupt_Sabateur` (a ground ability; sample `U000_DEF3006_ENG.wav` is not installed), now in `tests/known_audio_gaps.txt`.
+- `SP_AUDIO_LOG` also logs `audio emitter <entity> stops <event>` when an emitter ends a loop.
+- Test: `tests/real_audio.rs::ability_loops_are_3d_loops_with_samples`.

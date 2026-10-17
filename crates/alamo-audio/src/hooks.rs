@@ -50,6 +50,10 @@ pub const WIRED_TAGS: &[&str] = &[
     "sfxevent_engine_idle_loop",
     "sfxevent_engine_moving_loop",
     "sfxevent_ambient_loop",
+    "sfxevent_special_ability_loop",
+    // the start sound of an ability object (space units: `Blast_Ability`, `Corrupt_Systems_Ability`, `Stealth_Ability` ...)
+    "sfxevent_activate",
+    "activate_sfx",
     "sfxevent_ambient_moving",
     "sfxevent_arrive_from_hyperspace",
     "sfxevent_exit_into_hyperspace",

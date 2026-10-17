@@ -1509,6 +1509,9 @@ fn sync_emitters(
             continue;
         }
         if let Some(old) = em.playing.take() {
+            if audio_log() {
+                info!("audio emitter {entity:?} stops {old}");
+            }
             for mut v in &mut voices {
                 if v.source == Some(entity) && v.looping && v.event.eq_ignore_ascii_case(&old) && v.stopping.is_none() {
                     v.stopping = Some(now);

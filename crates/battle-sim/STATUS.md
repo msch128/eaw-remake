@@ -125,3 +125,8 @@ is untouched. Measured (`examples/ai_probe.rs`, seeds 1-3): an Executor fleet ag
 `tactical_ai::an_ai_defender_holds_while_its_station_stands_and_leaves_when_it_falls`, `an_ai_defender_whose_station_outlasts_120_s_leaves_at_120_s_if_it_has_no_chance`; the older
 `an_ai_defender_without_a_chance_against_a_super_star_destroyer_retreats_at_the_latest_when_its_station_falls` also checks that it does not leave before. Open: the nearly-destroyed clause counts
 the station's own force in the fleet (a standing station keeps `fleet` high), so a defender with a station is rarely "battered" before the station falls.
+
+## Ability starts of commands (2026-10-17)
+- `Battle::activate_ability` wrote `Event::AbilityActivated` to `events`, which `step` clears first; an ability used through `Command::UseAbility` / `UseAbilityAt` (between two steps) therefore never reported its start. Such starts now
+  wait in `cmd_events` like the other command events and arrive with the next step. Test: `tests/abilities.rs::an_ability_the_player_starts_is_reported_in_the_next_step`. Effect: the view's ability voice lines and sounds
+  (battle-view STATUS, "Ability sounds") play for abilities used by hand.

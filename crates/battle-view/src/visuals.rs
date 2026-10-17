@@ -98,6 +98,11 @@ pub struct AbilitySfx {
     pub deactivated: Option<String>,
     /// `SFXEvent_Target_Ability` (the unit's line when the player picks a target for the ability).
     pub target: Option<String>,
+    /// `SFXEvent_Special_Ability_Loop`: what the unit sounds like for as long as the ability runs (tractor beam, proton beam).
+    pub run_loop: Option<String>,
+    /// `SFXEvent_Activate` / `Activate_SFX` of the ability object the button triggers (`GUI_Activated_Ability_Name`): the sound the
+    /// ability makes where it starts.
+    pub start: Option<String>,
 }
 
 /// Visual description of one ship definition.
@@ -321,11 +326,27 @@ impl VisualCatalog {
                                 let tag = |t: &str| {
                                     a.child_text(t).map(|v| v.trim().to_string()).filter(|v| !v.is_empty() && !v.eq_ignore_ascii_case("sfx_na"))
                                 };
+                                // The ability object the button triggers: `Abilities` holds it under the name `GUI_Activated_Ability_Name` gives.
+                                let object = tag("gui_activated_ability_name").and_then(|name| {
+                                    r.as_ref()?
+                                        .elements_named("abilities")
+                                        .flat_map(|list| list.children.iter())
+                                        .find(|o| o.attr("name").is_some_and(|n| n.trim().eq_ignore_ascii_case(&name)))
+                                });
                                 AbilitySfx {
                                     kind: a.child_text("type").unwrap_or_default().trim().to_ascii_uppercase(),
                                     activated: tag("sfxevent_gui_unit_ability_activated"),
                                     deactivated: tag("sfxevent_gui_unit_ability_deactivated"),
                                     target: tag("sfxevent_target_ability"),
+                                    run_loop: tag("sfxevent_special_ability_loop"),
+                                    start: object.and_then(|o| {
+                                        ["sfxevent_activate", "activate_sfx"]
+                                            .iter()
+                                            .filter_map(|t| o.child_text(t))
+                                            .map(str::trim)
+                                            .find(|v| !v.is_empty() && !v.eq_ignore_ascii_case("sfx_na"))
+                                            .map(str::to_string)
+                                    }),
                                 }
                             })
                             .collect()

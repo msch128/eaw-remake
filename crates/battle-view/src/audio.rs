@@ -20,6 +20,7 @@ use bevy::prelude::*;
 
 use crate::control::{OrderIssued, OrderKind, Selection};
 use crate::convert::sim_to_bevy;
+use crate::sim::Snapshot;
 use crate::{BattleRuntime, BattleStatus, BattleViewSettings};
 
 /// Most sounds of one event name per frame; the rest would only pile up volume.
@@ -338,20 +339,31 @@ pub fn battle_audio(
                 }
             }
             Event::AbilityActivated { ship, ability } => {
-                if let Some(s) = cur.ship(*ship)
-                    && s.side == player
-                {
+                if let Some(s) = cur.ship(*ship) {
                     let vis = visuals.ship(s.def);
                     let kind = rt.catalog.ship(s.def).abilities.get(*ability as usize).map(|a| a.kind.to_ascii_uppercase()).unwrap_or_default();
                     let own = vis.sfx.abilities.iter().find(|a| a.kind == kind);
-                    let line = own.and_then(|a| a.activated.as_deref()).or(vis.sfx.ability.as_deref())
-                        .or_else(|| if vis.hero { vis.sfx.attack.as_deref() } else { None });
-                    if let Some(n) = line {
-                        send(n, None, &mut stats, &mut out);
+                    let mut line = None;
+                    if s.side == player {
+                        line = own.and_then(|a| a.activated.as_deref()).or(vis.sfx.ability.as_deref())
+                            .or_else(|| if vis.hero { vis.sfx.attack.as_deref() } else { None });
+                        if let Some(n) = line {
+                            send(n, None, &mut stats, &mut out);
+                        }
+                        // A non-hero ability switched on also plays the faction's GUI toggle sound (`SFXEvent_GUI_Toggle_Non_Hero_Ability_On`).
+                        if !vis.hero && let Some(n) = faction.as_deref().and_then(|f| constants.toggle_sfx(f, &kind, true)) {
+                            send(n, None, &mut stats, &mut out);
+                        }
                     }
-                    // A non-hero ability switched on also plays the faction's GUI toggle sound (`SFXEvent_GUI_Toggle_Non_Hero_Ability_On`).
-                    if !vis.hero && let Some(n) = faction.as_deref().and_then(|f| constants.toggle_sfx(f, &kind, true)) {
-                        send(n, None, &mut stats, &mut out);
+                    // The ability's own start sound sits on the unit and is heard from every unit the player sees (estimate: the data names
+                    // `SFXEvent_Activate` but not when the engine plays it; the start is the obvious moment). 2D events are GUI or voice lines
+                    // that the hooks above already cover for the unit's own side, so only the 3D ones count.
+                    let seen = s.side == player || (s.seen_by >> player.min(7)) & 1 == 1;
+                    if seen
+                        && let Some(n) = own.and_then(|a| a.start.as_deref()).filter(|n| line.is_none_or(|l| !l.eq_ignore_ascii_case(n)))
+                        && audio.as_ref().and_then(|a| a.sfx.get(n)).is_some_and(|e| !e.is_2d)
+                    {
+                        send(n, Some(sim_to_bevy(s.pos)), &mut stats, &mut out);
                     }
                 }
             }
@@ -738,6 +750,109 @@ pub fn battle_sources(
     }
 }
 
+/// The emitter that voices the `SFXEvent_Special_Ability_Loop` of one ability of one ship; a child of the ship's entity, so the sound
+/// follows the ship ([`battle_ability_loops`]).
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AbilityLoop {
+    /// Simulation id of the ship.
+    pub ship: u32,
+    /// Index into the ship definition's abilities.
+    pub ability: u16,
+}
+
+/// The ability loops that sound in `snapshot`, as `((ship id, ability index), event)`: the tractor beam's hum, the proton beam's blast, for
+/// as long as the sim says the ability runs (its seconds of effect left), on ships the player sees (own ones and enemy ones in sight, as
+/// for the engine loops). The super laser is not here: its shot plays its own loop at the muzzle ([`crate::ships::ShotSounds`]).
+pub fn running_ability_loops<'a>(
+    snapshot: &Snapshot,
+    catalog: &battle_sim::Catalog,
+    visuals: &'a crate::visuals::VisualCatalog,
+    player: u8,
+) -> Vec<((u32, u16), &'a str)> {
+    let mut out = Vec::new();
+    for s in &snapshot.ships {
+        let seen = s.side == player || (s.seen_by >> player.min(7)) & 1 == 1;
+        if !seen {
+            continue;
+        }
+        let defs = &catalog.ship(s.def).abilities;
+        for (i, &(running, _)) in s.abilities.iter().enumerate() {
+            let Some(def) = defs.get(i).filter(|d| running > 0.0 && d.super_laser.is_none()) else { continue };
+            let event = visuals.ship(s.def).sfx.abilities.iter().find(|a| a.kind.eq_ignore_ascii_case(&def.kind)).and_then(|a| a.run_loop.as_deref());
+            if let Some(event) = event {
+                out.push(((s.id, i as u16), event));
+            }
+        }
+    }
+    out
+}
+
+/// Ability loops: while an ability of a ship runs, the ship makes its `SFXEvent_Special_Ability_Loop` (`Unit_Star_Destroyer_Tractor_Beam` for
+/// the 59 objects with a `TRACTOR_BEAM`, `Unit_Star_Destroyer_Energy_Blast` for the proton beam of the Accuser and the Eclipse's
+/// `ENERGY_WEAPON`) where it is, through an [`alamo_audio::SfxEmitter`] on a child entity of the ship: the plugin starts the loop
+/// when it is audible, gives the event's `Max_Instances` voices to the nearest ships and fades the loop out over its
+/// `Loop_Fade_Out_Seconds` when the ability ends or the ship is gone. The emitter stays until its voice has faded out. `SP_AUDIO_LOG` logs
+/// each start and end. Does nothing without `AlamoAudioPlugin`.
+#[allow(clippy::too_many_arguments)]
+pub fn battle_ability_loops(
+    mut commands: Commands,
+    settings: Res<BattleViewSettings>,
+    rt: Res<BattleRuntime>,
+    audio: Option<Res<AlamoAudio>>,
+    listeners: Query<&GlobalTransform, With<BattleListener>>,
+    ships: Query<(), With<crate::ships::ShipView>>,
+    mut emitters: Query<(Entity, &AbilityLoop, &mut alamo_audio::SfxEmitter)>,
+) {
+    if !settings.audio || audio.is_none() {
+        return;
+    }
+    let Some(cur) = rt.cur.as_ref() else { return };
+    let wanted = running_ability_loops(cur, &rt.catalog, &rt.visuals, settings.player_side);
+    let log = audio_log();
+    let mut have: HashSet<(u32, u16)> = HashSet::new();
+    for (entity, key, mut emitter) in &mut emitters {
+        have.insert((key.ship, key.ability));
+        match wanted.iter().find(|(k, _)| *k == (key.ship, key.ability)) {
+            Some((_, event)) => {
+                if emitter.event.as_deref() != Some(event) {
+                    emitter.event = Some((*event).to_string());
+                }
+            }
+            None if emitter.event.is_some() => {
+                if log {
+                    info!("audio ability loop: ship {} ability {} ends {}", key.ship, key.ability, emitter.event.as_deref().unwrap_or_default());
+                }
+                emitter.event = None;
+            }
+            // The plugin has faded the loop out: the emitter is not needed any more.
+            None if emitter.playing().is_none() => commands.entity(entity).try_despawn(),
+            None => {}
+        }
+    }
+    for ((ship, ability), event) in wanted {
+        let Some(&parent) = rt.entities.get(&ship).filter(|e| ships.contains(**e) && !have.contains(&(ship, ability))) else { continue };
+        // The position is also given as a global one: the child's own is only worked out from its parent at the end of the frame.
+        let at = cur.ship(ship).map_or(Vec3::ZERO, |s| sim_to_bevy(s.pos));
+        if log {
+            let s = cur.ship(ship);
+            info!(
+                "audio ability loop: ship {ship} {} ability {ability} {} starts {event} ({:.1} s of effect left, {} units from the listener)",
+                s.map_or("?", |s| rt.catalog.ship(s.def).name.as_str()),
+                s.and_then(|s| rt.catalog.ship(s.def).abilities.get(ability as usize)).map_or("?", |a| a.kind.as_str()),
+                s.and_then(|s| s.abilities.get(ability as usize)).map_or(0.0, |a| a.0),
+                listeners.iter().next().map_or("?".to_string(), |l| format!("{:.0}", l.translation().distance(at)))
+            );
+        }
+        commands.entity(parent).with_child((
+            Name::new(format!("ability loop {ability} of ship {ship}")),
+            AbilityLoop { ship, ability },
+            alamo_audio::SfxEmitter::new(Some(event.to_string())),
+            Transform::default(),
+            GlobalTransform::from_translation(at),
+        ));
+    }
+}
+
 /// Below this speed (units per second) a unit stands still for its `SFXEvent_Ambient_Moving` (estimate: the data does not say; a
 /// moving fighter flies hundreds of units per second).
 const AMBIENT_MOVING_MIN_SPEED: f32 = 1.0;
@@ -928,7 +1043,7 @@ pub fn battle_ambient_moving(
         for (i, d) in candidates[..start].iter().enumerate() {
             let Ok((.., Some(mut clock))) = ships.get_mut(d.entity) else { continue };
             clock.played(now, d.gaps);
-            if ambient_moving_log() {
+            if audio_log() {
                 // `taken` at the cap: the flyby takes the voice of a quieter one.
                 info!(
                     "audio ambient moving: ship {} {} plays {} at t={now:.2}, loudness {:.3}, taken {} of {} voices (loudest {:.3}), {} wait, next in {:.2} s",
@@ -949,7 +1064,7 @@ pub fn battle_ambient_moving(
 }
 
 /// `SP_AUDIO_LOG` is set (see `alamo_audio::plugin`).
-fn ambient_moving_log() -> bool {
+fn audio_log() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ON.get_or_init(|| std::env::var_os("SP_AUDIO_LOG").is_some())
 }
@@ -1444,6 +1559,303 @@ mod tests {
             let (_, ears) = hear_from(&mut app, focus, distance);
             assert!(ears.translation.distance(focus + Vec3::Y * 80.0) < 1e-3, "zoom {distance}: {}", ears.translation);
         }
+    }
+
+    // ---- ability loops and start sounds ----
+
+    use crate::sim::ShipSnap;
+    use crate::visuals::AbilitySfx;
+
+    /// An own `isd` with a `TURBO` (no loop) and a `TRACTOR_BEAM`, a `laser` with a `SUPER_LASER` (its shot plays its loop) and a `plain` ship;
+    /// the visuals name the loops the Remake names.
+    fn ability_world() -> (std::sync::Arc<battle_sim::Catalog>, crate::visuals::VisualCatalog) {
+        use battle_sim::{AbilityDef, Catalog, ProjDef, ShipDef, SuperLaserDef};
+        let ability = |kind: &str| AbilityDef { kind: kind.into(), ..AbilityDef::default() };
+        let ship = |name: &str, abilities: Vec<AbilityDef>| ShipDef { name: name.into(), class: TargetClass::Capital, hull: 1000.0, radius: 100.0, population: 1, abilities, ..ShipDef::default() };
+        let catalog = Catalog::from_defs(
+            vec![
+                ship("isd", vec![ability("TURBO"), ability("TRACTOR_BEAM")]),
+                ship("laser", vec![AbilityDef { super_laser: Some(SuperLaserDef::default()), ..ability("SUPER_LASER") }]),
+                ship("plain", vec![]),
+            ],
+            vec![ProjDef { name: "laser".into(), ..ProjDef::default() }],
+        );
+        let sfx = |kind: &str, run_loop: Option<&str>| AbilitySfx { kind: kind.into(), run_loop: run_loop.map(Into::into), ..AbilitySfx::default() };
+        let mut visuals = crate::visuals::VisualCatalog { ships: vec![ShipVisual::default(); 3], ..Default::default() };
+        visuals.ships[0].sfx.abilities = vec![sfx("TURBO", None), sfx("TRACTOR_BEAM", Some("Unit_Star_Destroyer_Tractor_Beam"))];
+        visuals.ships[1].sfx.abilities = vec![sfx("SUPER_LASER", Some("Unit_Death_Star_2_Fire"))];
+        (std::sync::Arc::new(catalog), visuals)
+    }
+
+    /// A ship of a snapshot at the origin, with the given `(seconds of effect left, seconds until usable)` per ability.
+    fn snap_ship(id: u32, def: ShipId, side: u8, seen_by: u8, abilities: &[(f32, f32)]) -> ShipSnap {
+        ShipSnap {
+            id,
+            def,
+            side,
+            pos: battle_sim::Vec3::new(0.0, 0.0, 0.0),
+            yaw: 0.0,
+            speed: 0.0,
+            hull: 1000.0,
+            shield: 0.0,
+            squad: u32::MAX,
+            group: 0,
+            seen_by,
+            order: battle_sim::Order::Idle,
+            path: vec![],
+            hps: vec![],
+            abilities: abilities.to_vec(),
+            reserve_squadrons: 0,
+            autocast: vec![],
+            can_retreat: false,
+        }
+    }
+
+    #[test]
+    fn an_ability_loop_sounds_while_the_ability_runs_on_ships_the_player_sees() {
+        let (catalog, visuals) = ability_world();
+        let tractor = "Unit_Star_Destroyer_Tractor_Beam";
+        let snapshot = Snapshot {
+            ships: vec![
+                snap_ship(0, 0, 0, 0b01, &[(0.0, 0.0), (8.0, 20.0)]),   // own, tractor beam running
+                snap_ship(1, 0, 0, 0b01, &[(5.0, 0.0), (0.0, 12.0)]),   // own, only the turbo runs (no loop in the data)
+                snap_ship(2, 0, 1, 0b10, &[(0.0, 0.0), (8.0, 20.0)]),   // enemy in the fog of war
+                snap_ship(3, 0, 1, 0b11, &[(0.0, 0.0), (3.0, 20.0)]),   // enemy in sight
+                snap_ship(4, 1, 0, 0b01, &[(4.0, 0.0)]),                // own super laser: its shot plays the loop, not this
+                snap_ship(5, 2, 0, 0b01, &[]),
+            ],
+            ..Snapshot::default()
+        };
+        assert_eq!(running_ability_loops(&snapshot, &catalog, &visuals, 0), [((0, 1), tractor), ((3, 1), tractor)]);
+        // Seen from the enemy's side the fog hides the first one: its own ships and the ones it sees count.
+        assert_eq!(running_ability_loops(&snapshot, &catalog, &visuals, 1), [((2, 1), tractor), ((3, 1), tractor)]);
+    }
+
+    /// Plugin, listener, one own `isd` at 30 units from it and a view of a battle whose snapshot the test edits: frames last 0.1 s.
+    fn ability_loop_app(files: HashMap<String, Vec<u8>>) -> (App, Entity) {
+        use bevy::time::TimeUpdateStrategy;
+        let (catalog, visuals) = ability_world();
+        let battle = fighter_battle(&[&["x"]]);
+        let snap = Snapshot { ships: vec![snap_ship(7, 0, 0, 0b01, &[(0.0, 0.0), (0.0, 0.0)])], ..Snapshot::default() };
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, AssetPlugin::default(), bevy::transform::TransformPlugin))
+            .init_asset::<AudioSource>()
+            .add_plugins(alamo_audio::AlamoAudioPlugin::new(std::sync::Arc::new(MemFs(files))))
+            .insert_resource(BattleViewSettings::default())
+            .insert_resource(TimeUpdateStrategy::ManualDuration(std::time::Duration::from_millis(100)))
+            // Before the plugin's systems (`Update`): a new emitter starts its loop in the same frame.
+            .add_systems(PreUpdate, battle_ability_loops);
+        app.world_mut().resource_mut::<alamo_audio::AudioSettings>().load_on_worker = false;
+        app.world_mut().spawn((BattleListener, bevy::audio::SpatialListener::new(EAR_GAP), Transform::IDENTITY));
+        let ship = app.world_mut().spawn((crate::ships::ShipView::unloaded(7, 0, 0), Transform::from_xyz(30.0, 0.0, 0.0))).id();
+        let mut rt = flyby_runtime((battle.0, catalog, snap), visuals);
+        rt.entities.insert(7, ship);
+        app.insert_resource(rt);
+        (app, ship)
+    }
+
+    /// The ship's ability state as the displayed snapshot says it.
+    fn set_abilities(app: &mut App, abilities: &[(f32, f32)]) {
+        let mut rt = app.world_mut().resource_mut::<crate::BattleRuntime>();
+        std::sync::Arc::make_mut(rt.cur.as_mut().expect("snapshot")).ships[0].abilities = abilities.to_vec();
+    }
+
+    /// `(event, fading out)` of the voices that play (the tests play nothing else).
+    fn ability_voices(app: &mut App) -> Vec<(String, bool)> {
+        let mut q = app.world_mut().query::<&alamo_audio::SfxVoice>();
+        q.iter(app.world()).map(|v| (v.event().to_string(), v.is_stopping())).collect()
+    }
+
+    fn ability_emitters(app: &mut App) -> usize {
+        app.world_mut().query_filtered::<Entity, With<AbilityLoop>>().iter(app.world()).count()
+    }
+
+    #[test]
+    fn a_tractor_beam_hums_from_its_ship_while_it_runs_and_fades_out_when_it_ends() {
+        let mut files = sfx_files(
+            r#"<SFXEvent Name="Unit_Star_Destroyer_Tractor_Beam"><Samples>tractor.wav</Samples><Is_3D>Yes</Is_3D><Play_Count>-1</Play_Count><Max_Instances>2</Max_Instances>
+            <Volume_Saturation_Distance>100</Volume_Saturation_Distance><Loop_Fade_Out_Seconds>1.0</Loop_Fade_Out_Seconds><Min_Volume>100</Min_Volume><Max_Volume>100</Max_Volume></SFXEvent>"#,
+        );
+        files.insert(alamo_fs::normalize("Audio/SFX/tractor.wav"), alamo_audio::Pcm { channels: 1, sample_rate: 8000, samples: vec![0; 800] }.to_wav_bytes());
+        let (mut app, ship) = ability_loop_app(files);
+        let hum = "unit_star_destroyer_tractor_beam".to_string();
+        // Only the turbo runs: nothing hums.
+        set_abilities(&mut app, &[(5.0, 0.0), (0.0, 0.0)]);
+        for _ in 0..3 {
+            app.update();
+        }
+        assert_eq!((ability_emitters(&mut app), ability_voices(&mut app)), (0, vec![]));
+        // The beam starts: an emitter on the ship, a voice at the ship.
+        set_abilities(&mut app, &[(0.0, 0.0), (12.0, 20.0)]);
+        for _ in 0..3 {
+            app.update();
+        }
+        assert_eq!(ability_emitters(&mut app), 1);
+        assert_eq!(ability_voices(&mut app), [(hum.clone(), false)], "one loop for the beam");
+        let emitter = app.world_mut().query_filtered::<Entity, With<AbilityLoop>>().single(app.world()).expect("emitter");
+        assert_eq!(app.world().get::<ChildOf>(emitter).map(ChildOf::parent), Some(ship), "the emitter hangs on the ship");
+        let at = app.world().get::<GlobalTransform>(emitter).expect("position").translation();
+        assert!(at.distance(Vec3::new(30.0, 0.0, 0.0)) < 1e-3, "the sound sits on the ship: {at}");
+        // It keeps humming for as long as the sim says the ability runs.
+        for _ in 0..30 {
+            app.update();
+        }
+        assert_eq!(ability_voices(&mut app), [(hum.clone(), false)]);
+        // The ability ends: the loop fades out (the event's `Loop_Fade_Out_Seconds` 1.0 s), and the emitter goes with it.
+        set_abilities(&mut app, &[(0.0, 0.0), (0.0, 20.0)]);
+        app.update();
+        app.update();
+        assert_eq!(ability_voices(&mut app), [(hum, true)], "fading out");
+        for _ in 0..15 {
+            app.update();
+        }
+        assert_eq!((ability_emitters(&mut app), ability_voices(&mut app)), (0, vec![]), "faded out and gone");
+        // It can start again.
+        set_abilities(&mut app, &[(0.0, 0.0), (12.0, 20.0)]);
+        for _ in 0..3 {
+            app.update();
+        }
+        assert_eq!(ability_voices(&mut app).iter().filter(|v| !v.1).count(), 1);
+    }
+
+    #[test]
+    fn a_ship_that_is_gone_or_hidden_stops_its_ability_loop() {
+        let mut files = sfx_files(
+            r#"<SFXEvent Name="Unit_Star_Destroyer_Tractor_Beam"><Samples>tractor.wav</Samples><Is_3D>Yes</Is_3D><Play_Count>-1</Play_Count>
+            <Volume_Saturation_Distance>100</Volume_Saturation_Distance><Loop_Fade_Out_Seconds>0.5</Loop_Fade_Out_Seconds><Min_Volume>100</Min_Volume><Max_Volume>100</Max_Volume></SFXEvent>"#,
+        );
+        files.insert(alamo_fs::normalize("Audio/SFX/tractor.wav"), alamo_audio::Pcm { channels: 1, sample_rate: 8000, samples: vec![0; 800] }.to_wav_bytes());
+        let (mut app, ship) = ability_loop_app(files);
+        set_abilities(&mut app, &[(0.0, 0.0), (12.0, 20.0)]);
+        for _ in 0..3 {
+            app.update();
+        }
+        assert_eq!(ability_voices(&mut app).len(), 1);
+        // The ship leaves the snapshot (destroyed, retreated): the loop fades out although its ability was still running.
+        std::sync::Arc::make_mut(app.world_mut().resource_mut::<crate::BattleRuntime>().cur.as_mut().expect("snapshot")).ships.clear();
+        for _ in 0..12 {
+            app.update();
+        }
+        assert_eq!((ability_emitters(&mut app), ability_voices(&mut app)), (0, vec![]));
+        // An own ship is always heard; the loop of a ship the player cannot see is silent.
+        let mut rt = app.world_mut().resource_mut::<crate::BattleRuntime>();
+        std::sync::Arc::make_mut(rt.cur.as_mut().expect("snapshot")).ships.push(snap_ship(7, 0, 1, 0b10, &[(0.0, 0.0), (12.0, 20.0)]));
+        for _ in 0..3 {
+            app.update();
+        }
+        assert_eq!((ability_emitters(&mut app), ability_voices(&mut app)), (0, vec![]), "an enemy ship in the fog of war is silent");
+        let _ = ship;
+    }
+
+    /// The events a ship's ability starts, as `battle_audio` sends them: `(event, position)`.
+    fn ability_start_sounds(player_side: u8, ship: ShipSnap, ability: u16) -> Vec<(String, Option<Vec3>)> {
+        use bevy::ecs::system::RunSystemOnce;
+        let (catalog, mut visuals) = ability_world();
+        let sfx = |kind: &str, activated: Option<&str>, start: Option<&str>| AbilitySfx {
+            kind: kind.into(),
+            activated: activated.map(Into::into),
+            start: start.map(Into::into),
+            ..AbilitySfx::default()
+        };
+        // Ability 0 is a `TURBO` with a 3D start sound, ability 1 a `TRACTOR_BEAM` whose start sound is 2D (a GUI line); a third one names the
+        // same 3D event as the unit's activated line.
+        visuals.ships[0].sfx.abilities =
+            vec![sfx("TURBO", None, Some("Start_3D")), sfx("TRACTOR_BEAM", None, Some("Start_2D")), sfx("SPRINT", Some("Start_3D"), Some("Start_3D"))];
+        let mut cat = (*catalog).clone();
+        cat.ships[0].abilities.push(battle_sim::AbilityDef { kind: "SPRINT".into(), ..Default::default() });
+        let files = sfx_files(
+            r#"<SFXEvent Name="Start_3D"><Samples>a.wav</Samples><Is_3D>Yes</Is_3D><Volume_Saturation_Distance>100</Volume_Saturation_Distance></SFXEvent>
+            <SFXEvent Name="Start_2D"><Samples>a.wav</Samples><Is_2D>Yes</Is_2D></SFXEvent>"#,
+        );
+        let battle = fighter_battle(&[&["x"]]);
+        let snap = Snapshot { ships: vec![ship.clone()], ..Snapshot::default() };
+        let mut rt = flyby_runtime((battle.0, std::sync::Arc::new(cat), snap), visuals);
+        rt.fresh_events = vec![Event::AbilityActivated { ship: ship.id, ability }];
+        let mut world = World::new();
+        world.insert_resource(BattleViewSettings { player_side, ..BattleViewSettings::default() });
+        world.insert_resource(AlamoAudio::load(std::sync::Arc::new(MemFs(files))));
+        world.insert_resource(rt);
+        world.init_resource::<Selection>();
+        world.init_resource::<BattleAudioStats>();
+        world.init_resource::<Messages<PlaySfx>>();
+        world.init_resource::<Messages<alamo_audio::plugin::GalaxyAudio>>();
+        world.init_resource::<Messages<OrderIssued>>();
+        world.init_resource::<Messages<crate::control::HardpointOrderIssued>>();
+        world.run_system_once(battle_audio).expect("battle audio");
+        world.resource_mut::<Messages<PlaySfx>>().drain().map(|m| (m.event, m.position)).collect()
+    }
+
+    /// The Remake's ability sounds through the whole chain (skipped without the game files): the units' data names the loops and start sounds the view
+    /// plays, and for the Star Destroyer the real simulation runs the tractor beam for its duration while the loops planned from the snapshots begin with
+    /// the ability and end with it.
+    #[test]
+    fn the_remake_ability_sounds_come_from_the_data_and_the_tractor_beam_hums_exactly_as_long_as_the_sim_runs_it() {
+        use battle_sim::{Battle, BattleConfig, BattleSetup, Catalog, Command, SideSetup, UnitSetup};
+        let Some(install) = alamo_fs::GameInstall::detect().filter(|i| i.mod_data("1770851727").is_dir()) else { return };
+        let fs = alamo_fs::GameFs::for_mod(&install, Some("1770851727")).expect("game files");
+        let (data, _) = alamo_data::load_galaxy(&fs);
+        let catalog = std::sync::Arc::new(Catalog::build(&data, Some(&fs), &["Star_Destroyer", "Nebulon_B_Frigate", "Accuser_Star_Destroyer", "IG-2000", "Eclipse_Star_Dreadnought"]));
+        let visuals = crate::visuals::VisualCatalog::build(&data, &catalog, vec![Color::WHITE; 2]);
+        // What the data of other ability types names: the proton beam's loop, IG-88's corrupt systems start sound, the Eclipse's super laser (its shot plays
+        // the loop, the planner leaves it out).
+        let sound = |ship: &str, kind: &str| {
+            let id = catalog.ship_id(ship).unwrap_or_else(|| panic!("{ship} in the catalog"));
+            let a = visuals.ship(id).sfx.abilities.iter().find(|a| a.kind.eq_ignore_ascii_case(kind)).unwrap_or_else(|| panic!("{ship} has {kind}"));
+            (a.run_loop.clone(), a.start.clone())
+        };
+        assert_eq!(sound("Accuser_Star_Destroyer", "ENERGY_WEAPON").0.as_deref(), Some("Unit_Star_Destroyer_Energy_Blast"));
+        assert_eq!(sound("IG-2000", "CORRUPT_SYSTEMS").1.as_deref(), Some("Unit_IG88_Corrupt_Systems"));
+        let eclipse = catalog.ship_id("Eclipse_Star_Dreadnought").expect("def");
+        assert!(catalog.ship(eclipse).abilities.iter().any(|a| a.super_laser.is_some()) && sound("Eclipse_Star_Dreadnought", "SUPER_LASER").0.as_deref() == Some("Unit_Death_Star_2_Fire"));
+        let isd = catalog.ship_id("Star_Destroyer").expect("Star_Destroyer in the catalog");
+        let beam = catalog.ship(isd).abilities.iter().position(|a| a.kind.eq_ignore_ascii_case("TRACTOR_BEAM")).expect("the Star Destroyer has a tractor beam");
+        let named = visuals.ship(isd).sfx.abilities.iter().find(|a| a.kind.eq_ignore_ascii_case("TRACTOR_BEAM")).and_then(|a| a.run_loop.as_deref());
+        assert_eq!(named, Some("Unit_Star_Destroyer_Tractor_Beam"), "the loop comes from the unit's `Unit_Ability`");
+        let side = |name: &str, ship: &str| SideSetup {
+            name: name.into(),
+            units: vec![UnitSetup { ship: catalog.ship_id(ship).expect("def"), count: 1, tag: 1 }],
+            structures: vec![],
+            ai: false,
+        };
+        let config = BattleConfig { record_events: true, fog_of_war: false, ..BattleConfig::default() };
+        let mut battle = Battle::new(BattleSetup { catalog: catalog.clone(), sides: vec![side("Empire", "Star_Destroyer"), side("Rebel", "Nebulon_B_Frigate")], config });
+        // The frigate 2000 units from the Star Destroyer: inside the beam's reach (`Activation_Max_Range` 3000).
+        let ship = battle.ships.iter().find(|s| s.def == isd).expect("the Star Destroyer").id;
+        for s in &mut battle.ships {
+            s.pos = if s.id == ship { battle_sim::Vec3::new(0.0, 0.0, 0.0) } else { battle_sim::Vec3::new(2000.0, 0.0, 0.0) };
+        }
+        let sim = crate::sim::SimHandle::spawn(battle);
+        sim.command(0, Command::UseAbility { ship, ability: beam as u16 });
+        let ticks = (20.0 / sim.dt) as u64;
+        sim.request(ticks);
+        let mut humming = Vec::new();
+        for tick in 1..=ticks {
+            let snapshot = sim.fetch(tick, true).0.expect("snapshot");
+            let loops = running_ability_loops(&snapshot, &catalog, &visuals, 0);
+            assert!(loops.is_empty() || loops == [((ship, beam as u16), "Unit_Star_Destroyer_Tractor_Beam")], "tick {tick}: {loops:?}");
+            humming.push(!loops.is_empty());
+        }
+        let seconds = humming.iter().filter(|h| **h).count() as f32 * sim.dt;
+        let duration = catalog.ship(isd).abilities[beam].duration;
+        assert!((seconds - duration).abs() < 0.1, "the loop sounds {seconds:.2} s, the sim runs the ability {duration} s");
+        assert!(humming[..(duration / sim.dt) as usize - 2].iter().all(|h| *h) && humming[(duration / sim.dt) as usize + 2..].iter().all(|h| !*h), "one run from the start to the end");
+        let activated = sim.drain_events(ticks).into_iter().filter(|e| matches!(e, Event::AbilityActivated { ship: s, ability } if *s == ship && *ability == beam as u16)).count();
+        assert_eq!(activated, 1, "the sim reports the start");
+    }
+
+    #[test]
+    fn an_ability_starts_with_its_own_3d_sound_on_the_unit_for_everyone_who_sees_it() {
+        let at = |s: ShipSnap| Some(crate::convert::sim_to_bevy(s.pos));
+        let own = snap_ship(3, 0, 0, 0b01, &[]);
+        let sounds = ability_start_sounds(0, own.clone(), 0);
+        assert_eq!(sounds, [("Start_3D".to_string(), at(own))], "own ship: the 3D start sound at the unit");
+        let seen_enemy = snap_ship(3, 0, 1, 0b11, &[]);
+        assert_eq!(ability_start_sounds(0, seen_enemy.clone(), 0), [("Start_3D".to_string(), at(seen_enemy))], "an enemy the player sees is heard too");
+        assert!(ability_start_sounds(0, snap_ship(3, 0, 1, 0b10, &[]), 0).is_empty(), "an enemy in the fog of war is silent");
+        assert!(ability_start_sounds(0, snap_ship(3, 0, 0, 0b01, &[]), 1).is_empty(), "a 2D start sound is a GUI or voice line: the unit's own hooks cover it");
+        // The unit's activated line is the same event: it plays once (the line, as before), not twice.
+        let sounds = ability_start_sounds(0, snap_ship(3, 0, 0, 0b01, &[]), 2);
+        assert_eq!(sounds.iter().filter(|s| s.0 == "Start_3D").count(), 1, "{sounds:?}");
     }
 }
 

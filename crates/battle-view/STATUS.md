@@ -473,3 +473,27 @@ Add `battle-view`, `galaxy-sim` (already there through galaxy-play) and `eaw-ui`
 - `SP_DEMO_STERN=<ship name>` makes the demo camera follow the engines of the first ship whose definition name contains the text, from behind (`--cam yaw,pitch,distance`: the yaw is the offset from straight astern in degrees).
   It lifts the camera's map-bounds clamp, because the Eclipse's stern lies outside the map box at the start. Check (engine glow): `SP_DEMO_EXTRA=Eclipse_Star_Dreadnought:1 SP_DEMO_STERN=eclipse battle_demo --small --offscreen out.png --size 1280x720 --times 6 --cam 25,4,900`;
   other ships: `SP_DEMO_STERN=star_destroyer` (`--cam 25,6,520`), `victory` (`25,6,380`), `venator` (`25,6,380`, with `SP_DEMO_EXTRA=Victory_Destroyer:1,Venator_Empire:1`).
+
+## Ability sounds (2026-10-17, soundfix A)
+- **Loops** (`audio::battle_ability_loops`): while the sim runs an ability (the `(seconds of effect left, ...)` of the snapshot is above 0) whose `Unit_Ability` names `SFXEvent_Special_Ability_Loop`, the ship makes that
+  loop where it is: an `alamo_audio::SfxEmitter` on a child entity of the ship ([`audio::AbilityLoop`]), so the plugin's emitter rules apply (starts only when audible, the event's `Max_Instances` voices go to the
+  nearest ships, fade-out over `Loop_Fade_Out_Seconds` when the ability ends or the ship is gone). Ships the player sees count, own and enemy (as for the engine loops). Tractor beam: 59 space objects,
+  `Unit_Star_Destroyer_Tractor_Beam` (loop, `Max_Instances` 2, saturation 100 x 1.5, `Loop_Fade_In/Out` 0.5 / 1.0 s, volume 30-100 % drawn once per start); proton beam (`ENERGY_WEAPON`):
+  `Unit_Star_Destroyer_Energy_Blast`. The super laser keeps its shot sound (`ShotSounds`), `running_ability_loops` leaves it out. How long the original holds a loop is not in the data: it follows the sim's
+  duration (tractor beam 12 s, the sim's default where the data gives no `Expiration_Seconds`). `VisualCatalog` reads `AbilitySfx::run_loop`; sim ability and visual ability are paired by type (no unit has one
+  type twice, checked by the census).
+- **Start sounds** (`battle_audio`, `Event::AbilityActivated`): the `SFXEvent_Activate` / `Activate_SFX` of the ability object (`AbilitySfx::start`) plays at the unit for every unit the player sees when the
+  event is 3D; 2D ones are GUI or voice lines already covered by the unit's own hooks (and are skipped), and an event equal to the unit's activated line plays once. Estimate: the data names the tag but not the moment
+  (the start is the obvious one). Space users with a 3D start event the sim can start: `CORRUPT_SYSTEMS` (IG-88's `Unit_IG88_Corrupt_Systems`), `STEALTH` of 9 space objects (TIE Phantom, Tyber Zann's Merciless, Popara's Minstrel ...: a `Unit_Lightsaber_Projectile_Block` the Remake
+  pasted into their cloak ability: it plays as the data says). `BLAST`, `SHIELD_FLARE` are not run by the sim.
+- **Sim fix** (battle-sim STATUS): an ability the player started with a command never reported `AbilityActivated` (the next step cleared it first), so neither the unit's activated voice line nor these
+  sounds played for abilities used by hand; they did for the AI's and autocast uses.
+- Log (`SP_AUDIO_LOG`): `audio ability loop: ship <id> <type> ability <i> <KIND> starts <event> (<s> of effect left, <d> units from the listener)`, `... ends <event>`, then the plugin's `audio emitter .. -> / stops`
+  and `audio sfx PLAY` lines. Test hook `SP_TEST_ABILITY=<TYPE>@<battle seconds>` (space-peace `battle_play::test_ability`): the player's ships with that ability use it once a battle second from then on and the camera
+  (and with it the listener) stays on the first of them.
+- Proof (offscreen Yavin -> Hoth battle, 2 granted Star Destroyers, `SP_TEST_ABILITY=TRACTOR_BEAM@30 --battle-orders --battle-speed 10 --volume 0`): the loop starts with the ability and ends with it, e.g. `starts ... (11.7 s of
+  effect left, 90 units from the listener)`, `audio sfx PLAY Unit_Star_Destroyer_Tractor_Beam (spatial=true dist=24 att=1.000 ...)`, `ends` 1.14 s later (11.4 battle seconds at speed 10), `audio emitter .. stops` 44 ms after.
+- Tests: `audio::tests::{an_ability_loop_sounds_while_the_ability_runs_on_ships_the_player_sees, a_tractor_beam_hums_from_its_ship_while_it_runs_and_fades_out_when_it_ends,
+  a_ship_that_is_gone_or_hidden_stops_its_ability_loop, an_ability_starts_with_its_own_3d_sound_on_the_unit_for_everyone_who_sees_it,
+  the_remake_ability_sounds_come_from_the_data_and_the_tractor_beam_hums_exactly_as_long_as_the_sim_runs_it}` (the last one: real data, a real battle, the loop planned from every snapshot for 20 s lasts the sim's
+  12 s +- 0.1 s).

@@ -15,6 +15,7 @@ Unit_Attack_Liberation: missing file Data\Audio\Voiceovers\Liberation\Liberation
 Unit_Attack_Sabaoth: missing file Data\Audio\Voiceovers\UnderworldSabaoth\sabaoth_attack_9.wav
 Unit_Attack_Supa: missing file Data\Audio\Voiceovers\UnderworldSupa\supafighter_move_7.wav
 Unit_Complete_Angler: missing file Data\Audio\Voiceovers\GuP\start_battle_01.wav
+Unit_Corrupt_Sabateur: missing file U000_DEF3006_ENG.wav
 Unit_Death_Angler: missing file Data\Audio\Voiceovers\GuP\vehicle_destroyed_01.wav
 Unit_Death_Sequence_Explosion_Short: missing file Data\Audio\SFX\Explosions\Space\Sequence_Explosion_Short_1.wav
 Unit_Enemy_Health_Critical_Supa: missing file Data\Audio\Voiceovers\UnderworldSupa\supafighter_enemy_critical_1

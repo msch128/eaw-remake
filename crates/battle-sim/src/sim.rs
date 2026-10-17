@@ -806,7 +806,7 @@ impl Battle {
                     }
                 }
                 self.ability_at = Some(pos);
-                let activated = self.activate_ability(ship, ability as usize);
+                let activated = self.activate_ability(ship, ability as usize, true);
                 self.ability_at = None;
                 if !activated {
                     return Err(CommandError::AbilityUnavailable);
@@ -850,7 +850,7 @@ impl Battle {
                 if !own(self, &[ship]) {
                     return Err(CommandError::InvalidShip);
                 }
-                if !self.activate_ability(ship, ability as usize) {
+                if !self.activate_ability(ship, ability as usize, true) {
                     return Err(CommandError::AbilityUnavailable);
                 }
             }
@@ -945,7 +945,7 @@ impl Battle {
         self.ships.iter().filter(|o| eligible(o)).min_by(|a, b| a.pos.dist(s.pos).total_cmp(&b.pos.dist(s.pos)).then(a.id.cmp(&b.id))).map(|o| o.id)
     }
 
-    fn activate_ability(&mut self, ship: u32, ability: usize) -> bool {
+    fn activate_ability(&mut self, ship: u32, ability: usize, from_command: bool) -> bool {
         let def = self.catalog.ship(self.ships[ship as usize].def);
         let Some(a) = def.abilities.get(ability) else { return false };
         let is_hunt = a.hunt;
@@ -1037,7 +1037,14 @@ impl Battle {
             self.bombs.push((side, pos, self.time + b.countdown, b));
         }
         if self.config.record_events {
-            self.events.push(Event::AbilityActivated { ship, ability: ability as u16 });
+            // A command runs between two steps and the next step clears `events` first: its report waits in `cmd_events` (an ability the
+            // player started by hand used to report nothing, so its sounds never played).
+            let activated = Event::AbilityActivated { ship, ability: ability as u16 };
+            if from_command {
+                self.cmd_events.push(activated);
+            } else {
+                self.events.push(activated);
+            }
         }
         true
     }
@@ -1852,7 +1859,7 @@ impl Battle {
                 }
             }
             for k in auto_use {
-                self.activate_ability(i as u32, k);
+                self.activate_ability(i as u32, k, false);
             }
         }
         self.run_carriers(dt);

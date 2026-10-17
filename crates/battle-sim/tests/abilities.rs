@@ -102,6 +102,21 @@ fn interdicted_retreat_works_again_when_the_field_goes_off() {
 }
 
 #[test]
+fn an_ability_the_player_starts_is_reported_in_the_next_step() {
+    // A command runs between two steps and a step starts by clearing its events: the start of an ability used by hand got lost, so
+    // nothing that listens for it (the unit's voice line, the ability's own sound) ever played.
+    let mut b = interdictor_battle(false);
+    let field = ids(&b, 1)[0];
+    b.command(1, Command::UseAbility { ship: field, ability: 0 }).unwrap();
+    let events: Vec<Event> = b.step().to_vec();
+    assert_eq!(events.iter().filter(|e| matches!(e, Event::AbilityActivated { ship, ability: 0 } if *ship == field)).count(), 1, "{events:?}");
+    // Switching the toggle off again is not a start, and the report is not repeated.
+    assert!(!b.step().iter().any(|e| matches!(e, Event::AbilityActivated { .. })));
+    b.command(1, Command::UseAbility { ship: field, ability: 0 }).unwrap();
+    assert!(!b.step().iter().any(|e| matches!(e, Event::AbilityActivated { .. })));
+}
+
+#[test]
 fn the_field_pins_its_own_ship() {
     let mut b = interdictor_battle(false);
     let field = ids(&b, 1)[0];

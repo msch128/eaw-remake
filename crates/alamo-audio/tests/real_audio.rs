@@ -201,3 +201,19 @@ fn pass3_events_exist_and_resolve() {
     let ds = music.get("Space_Map_Activate_Death_Star_Music_Event").expect("Death Star activation music");
     assert!(!ds.looping && ds.files.iter().all(|f| resolver.resolve(&fs, f).is_some()));
 }
+
+/// Audio pass 6: the loops abilities run (`SFXEvent_Special_Ability_Loop`: tractor beam, proton beam, super laser) are 3D loops with a
+/// `Max_Instances` and samples that resolve.
+#[test]
+fn ability_loops_are_3d_loops_with_samples() {
+    let Some(fs) = fs() else { return };
+    let mut w = Vec::new();
+    let sfx = SfxLibrary::load(&fs, &mut w);
+    let resolver = SampleResolver::new(&fs);
+    for (name, instances) in [("Unit_Star_Destroyer_Tractor_Beam", 2), ("Unit_Star_Destroyer_Energy_Blast", 2), ("Unit_Death_Star_2_Fire", 1)] {
+        let e = sfx.get(name).unwrap_or_else(|| panic!("{name} missing"));
+        assert!(e.looping && !e.is_2d && !e.is_preset, "{name}: a 3D loop");
+        assert_eq!(e.max_instances, Some(instances), "{name}");
+        assert!(!e.samples.is_empty() && e.samples.iter().all(|s| resolver.resolve(&fs, s).is_some()), "{name}: samples resolve");
+    }
+}

@@ -74,7 +74,7 @@ impl Plugin for BattlePlayPlugin {
             .add_systems(OnExit(AppScreen::SpaceBattle), end_session)
             .add_systems(
                 Update,
-                (finish_battle_view, abort_key, retreat_auto_resolve, begin_button, loading_shot, battle_menu, battle_ui_camera, battle_shot, battle_header, battle_orders, tactical_hotkeys, select_squad_hook)
+                (finish_battle_view, abort_key, retreat_auto_resolve, begin_button, loading_shot, battle_menu, battle_ui_camera, battle_shot, battle_header, battle_orders, tactical_hotkeys, select_squad_hook, test_ability)
                     .run_if(in_state(AppScreen::SpaceBattle).and_then(resource_exists::<PendingTactical>)),
             );
     }
@@ -916,6 +916,47 @@ fn battle_orders(
             }
         }
         _ => {}
+    }
+}
+
+/// Test hook (`SP_TEST_ABILITY=<TYPE>@<battle seconds>`, e.g. `TRACTOR_BEAM@20`): from that battle time on, once a battle second, every ship of the
+/// player's side that has an ability of that type and has it ready uses it (the sim refuses a use that has no target yet), and the camera, which
+/// carries the sound listener, stays on the first of them. Scripted runs have no way to press an ability button or to move the camera.
+fn test_ability(
+    status: Res<BattleStatus>,
+    rt: Option<Res<battle_view::BattleRuntime>>,
+    settings: Res<BattleViewSettings>,
+    mut cam: Single<&mut BattleCamera>,
+    mut hook: Local<Option<Option<(String, f32)>>>,
+    mut last: Local<f32>,
+) {
+    let hook = hook.get_or_insert_with(|| {
+        let v = std::env::var("SP_TEST_ABILITY").ok()?;
+        let (kind, at) = v.split_once('@')?;
+        Some((kind.trim().to_ascii_uppercase(), at.trim().parse().ok()?))
+    });
+    let (Some((kind, at)), Some(rt)) = (hook.as_ref(), rt) else { return };
+    if status.tick == 0 || status.time < *at {
+        return;
+    }
+    let Some(cur) = rt.cur.as_ref() else { return };
+    let users = || cur.ships.iter().filter(|s| s.side == settings.player_side).filter(|s| rt.catalog.ship(s.def).abilities.iter().any(|d| d.kind.eq_ignore_ascii_case(kind)));
+    if let Some(s) = users().next() {
+        let at = battle_view::convert::sim_to_bevy(s.pos);
+        cam.focus = Vec3::new(at.x, cam.focus.y, at.z);
+        cam.target_focus = cam.focus;
+    }
+    if status.time < *last + 1.0 {
+        return;
+    }
+    *last = status.time;
+    for s in users() {
+        for (i, def) in rt.catalog.ship(s.def).abilities.iter().enumerate().filter(|(_, d)| d.kind.eq_ignore_ascii_case(kind)) {
+            if s.abilities.get(i).is_some_and(|a| a.0 <= 0.0 && a.1 <= 0.0) {
+                rt.command(settings.player_side, battle_sim::Command::UseAbility { ship: s.id, ability: i as u16 });
+                debug!("battle: test hook asks {} of ship {} ({}) at t={:.1}s", def.kind, s.id, rt.catalog.ship(s.def).name, status.time);
+            }
+        }
     }
 }
 
