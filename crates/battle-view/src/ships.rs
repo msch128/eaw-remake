@@ -79,6 +79,9 @@ pub struct ShipRender {
     pub def: ShipId,
     /// Collision radius from the definition.
     pub radius: f32,
+    /// Radius of the model's bounding sphere as it is drawn (world units, small-craft enlargement included, see `small_craft_boost`);
+    /// 0 until the model is built and while the ship streams in from hyperspace.
+    pub drawn_radius: f32,
     /// Hull fraction 0..1.
     pub hull: f32,
     /// Shield fraction 0..1 (0 for ships without shields).
@@ -450,6 +453,7 @@ pub fn update_ships(
         let mut radius = def.radius;
         // Where the ship is drawn: its simulated place plus a small craft's weave. Picking, overlays and turrets use it.
         let mut drawn = pos;
+        let mut drawn_radius = 0.0;
         if let Ok((mut view, mut tf)) = views.get_mut(entity) {
             if view.visual_radius == 0.0
                 && let Ok(l) = touch.loaded.get(entity)
@@ -492,8 +496,12 @@ pub fn update_ships(
                 boost = small_craft_boost(view.visual_radius, at.distance(eye), px_per_unit, height);
             }
             tf.scale = Vec3::splat(vis.scale * boost);
+            drawn_radius = view.visual_radius * boost;
             if let Ok(a) = arrivals.get(entity) {
-                if !apply_arrival(a, cur.time, radius, &mut tf) {
+                if apply_arrival(a, cur.time, radius, &mut tf) {
+                    // Still streaming in from hyperspace: nothing marks its place (no bar) until it is there.
+                    drawn_radius = 0.0;
+                } else {
                     commands.entity(entity).remove::<HyperspaceArrival>();
                 }
             }
@@ -526,6 +534,7 @@ pub fn update_ships(
                 side: s.side,
                 def: s.def,
                 radius,
+                drawn_radius,
                 hull: hull_frac,
                 shield: shield_frac,
                 squad: s.squad,

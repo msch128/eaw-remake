@@ -195,7 +195,7 @@ Add `battle-view`, `galaxy-sim` (already there through galaxy-play) and `eaw-ui`
   `input-test: N checks PASS|FAIL`; smoke scenario `windowed-battle-input`. Failures print the nodes under the cursor.
 
 ## Tactical round 2 (2026-10-08, tactical agent)
-- **Overlays:** one bracket + bar pair per unit (a squadron is one unit: `ShipSnap::squad`), only for selected/hovered units (no always-on lines); shield bar sits above the hull bar.
+- **Overlays:** one bracket + bar pair per unit (a squadron is one unit: `ShipSnap::squad`), only for selected/hovered units (no always-on lines); shield bar sits above the hull bar. Since 2026-10-17 fighters, bombers and squadron members have no bracket / bar pair of their own: each craft carries its own bar and flag (last section).
   Hardpoint reticles with health on the hovered ship, the selected enemy or a lone selected ship (clickable only on enemies with own ships selected).
   Everything battle-scoped is cleared on exit (`remove_bar` empties `TacticalOverlays`, the HUD, fog, armed order, battle cam, selection, pause) and `check_teardown`
   logs an ERROR (smoke fails) if tactical UI entities are left 8 frames later. All despawns in this area are `try_despawn`.
@@ -214,7 +214,7 @@ Add `battle-view`, `galaxy-sim` (already there through galaxy-play) and `eaw-ui`
 - **Camera (user spec):** hold the middle button: left / right rotates (yaw), up / down tilts (pitch, limits 0.55..1.30 rad are estimates); Page Up / Page Down rotate, Q / E too; wheel zooms.
   Covered by `input_test` (`middle-drag-rotates-and-tilts`, `page-up-rotates`; 20 checks in all).
 - **Overlay look (video frames v0700/v0710):** small units are marked by a little icon box (`ShipOverlay::icon`, the unit's `Icon_Name`) with two bars under it, squadrons only while selected or hovered (unselected, own ones show their fighters with the bars and the flag: user's video b0703s, b0732s); capitals and stations
-  keep corner brackets and carry the bars above (shield above hull). Hardpoint reticles show health; hovering one shows "<Text_ID of the hardpoint> - <projectile damage> DMG - <health>%".
+  keep corner brackets and carry the bars above (shield above hull) (a picked squadron's box has no bars under it any more: its craft carry their own). Hardpoint reticles show health; hovering one shows "<Text_ID of the hardpoint> - <projectile damage> DMG - <health>%".
 - **Unit panel:** hovering a ship (0.35 s) shows the cyan glass panel above R2 (icon, name, `Encyclopedia_Unit_Class`, first `Encyclopedia_Text` string, hull / shield); the advisor bubble hides meanwhile.
   The "No AI / Destination" lines of the video are not reproduced (the snapshot has no order state).
 - **Heroes:** portraits top right with orange rings (white when selected), plus a small face box floating next to each hero ship (`HeroBillboard`).
@@ -394,3 +394,34 @@ Add `battle-view`, `galaxy-sim` (already there through galaxy-play) and `eaw-ui`
   Check: `SP_DEMO_FLIGHT=1 SP_DEMO_IDLE=0 SP_DEMO_DOGFIGHT=1 SP_DEMO_SQUAD=centre SP_DEMO_DIST=2000 battle_demo --offscreen out.png --map
   _SPACE_PLANET_BYSS_01 --size 1920x1080 --times 8,9,10,11,12` (a resting squadron); without `SP_DEMO_IDLE` and with `--times 49.5,50.5,51.5,52.5`
   a squadron turning.
+
+## One bar and flag per craft (2026-10-17)
+- **The Remake** (user's 1080p video battle1s b0703s / b0732s / b0850s / b0760s / b0699s, screenshot 07_tactical_battle): every fighter and
+  bomber, own and enemy, has its own health bar under it and a flag at the right end of the bar, at every zoom (bars and flags keep their screen
+  size like the fighters do, b0760s); a selected craft also gets a white box of its own (b0699s). Art from `MT_CommandBar`: bar =
+  `I_BAR_CONTROL_WIDE` (black track, alpha 0.31) + `I_BAR_HEALTH_SMALL<tenths>` fill (flat colours, fill as wide as the health: b0866s shows the
+  dark track right of an 80 % fill; level 10 over the track reproduces the screenshot's pixel (55,210,65) exactly), flag = `I_GARRISON_FLAG`
+  (12 x 14, pole 0xf6 / 0xa3, pennant 0xd8: the screenshot's flag pixels).
+- **Measured**, Remake 1080p video | Remake 2047 px screenshot | ours at 1080p: bar 29 px (27-31) x 2 | 55 x 3 (= 29 at 1080p) | 29-31 x 2 (the craft's
+  drawn sphere x 0.84, so 22-41 at camera 930 where a craft's true size beats the 3.2 % boost); flag pole 14-16 px | 30 px (= 15.8) | 16; bar top
+  under the craft's silhouette 1.1 px | 2 px (= 1.1) | 1 px (median of 21 TIE fighters on a lit Bestine render, one outlier 2); bar centred on the
+  craft within 2 px | 2 px | -4 to +2.5 px.
+- **Chevron:** not every TIE carries a flag. 3 of 12 per squadron (b0703s, b0732s, b0850s, b0699s, which also shows 3 chevron cards in the selection
+  tray; 07 too) show a small green rank chevron above the right wing instead (`I_HIGHLIGHT_RANK_*`-like art). The data has no field for who gets
+  it (`TIE_Fighter` and the garrison variant `TIE_Fighter_G` differ only in text and `Destruction_Survivors`), so it is not drawn: every craft gets the flag.
+- **Ours:** `tactical_ui::sync_member_bars` -> `eaw_ui::MemberBars` (one `MemberBar` per visible fighter / bomber / squadron member, sorted by id: its
+  own hull and, when its definition has shields, its shield; off-screen craft skipped) -> `eaw-ui/src/member_bars.rs` (see its STATUS).
+  `ShipRender::drawn_radius` is the bounding sphere as drawn, small-craft enlargement included, 0 until the model is built and while the craft
+  streams in from hyperspace. Dead craft leave `RenderedShips` and fogged ones are `!visible`: no bar. Squadrons have no overlay of their own while
+  unpicked; a picked or hovered one keeps its icon box (`ShipOverlay::icon_only`, no bars) and its craft keep theirs. Capital ships, frigates and
+  structures are unchanged. `remove_bar` clears the bars with the battle.
+- **Cost** (`SP_FRAME_LOG=0`, frame intervals from the log's timestamps, offscreen 1080p, battle 8-28 s, the machine busy with other builds, base
+  803eec2): big battle (24 X-wing + 12 Y-wing + 12 A-wing squadrons granted to the player, 533 ships, camera 6064): before mean 19.0 / 19.1 ms
+  (p50 16.8 / 16.9), after 17.6 / 16.3 (p50 15.4 / 14.4); process CPU per frame 31.9-35.0 ms before, 31.4-32.2 after (an earlier, quieter set of
+  runs: 15.3-16.4 before, 14.1-14.9 after; one further after run, 127 ms frame interval, was disturbed by another process and is left out). Ordinary battle (245 ships, camera 2000): 11.7 / 12.7 before, 11.1 / 12.8 after (noise). The old squadron
+  overlays were about 19 UI nodes each; the bars cost `member_quads` 8.8 us per frame for 500 craft. The first version put every rectangle into the
+  UI batcher as an item of its own: +3-4 ms per frame and +5 ms CPU for about 2000 rectangles, hence two runs of glyphs now.
+  Big battle: `eaw-remake --offscreen x.png --campaign GC_Full_Web_Way_Rebel --select "The Yavin System" --grant-unit X-Wing_Squadron,...
+  --at "The Yavin System" --weeks 8 --move Hoth --battle-choice fight --size 1920x1080` with `SP_BATTLE_CAM=6064 SP_FRAME_LOG=0`.
+- Not done: the selection box per craft (b0699s), the chevron, the lost-health track on capital-ship bars (`eaw_ui::ship_overlays` draws the level
+  colour over the full length), an automated test of the render-world extraction (the offscreen renders cover it).

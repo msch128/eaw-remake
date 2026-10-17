@@ -13,6 +13,7 @@
 pub mod components;
 pub mod data;
 pub mod faction;
+pub mod member_bars;
 pub mod panels;
 pub mod tactical;
 pub mod shell;
@@ -31,6 +32,7 @@ pub use data::{
     QueueEntry, SelectionEntry,
 };
 pub use faction::UiFaction;
+pub use member_bars::{MemberBar, MemberBars};
 pub use panels::{
     BANNER_AUTO, BANNER_BEGIN, BANNER_CANCEL, BannerSide, BattleBannerSpec, DialogSpec, EawDialogResult, EawMinimapClicked, EawSlotDropped, MinimapData, MinimapDot,
     MinimapKind, MinimapPing, MinimapSurface, PanelData, PanelSlot, SlotLook, fleet_slot_name, minimap_to_world, spawn_battle_banner, spawn_dialog,
@@ -214,6 +216,7 @@ impl Plugin for EawUiPlugin {
                     .chain(),
             )
             .add_systems(Update, (widgets::segment_bars, widgets::border_pieces.after(widgets::slots), widgets::ability_columns.after(widgets::slots), widgets::active_outlines.after(widgets::slots)));
+        member_bars::plugin(app);
     }
 }
 

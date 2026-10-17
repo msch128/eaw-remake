@@ -69,3 +69,18 @@ dials, and compare screenshots against the real game.
   `queue00..04` with space items and `queue05..09` with ground structures.
 - Tab buttons (`b_space_tab`, `b_planet_tab`) honour `<Mouse_Over_Offset>` (the hover tile of the tall tab sheet); before, the
   hover layer ignored it and drew the wrong tile through the frame (`CommandBarComponent::mouse_over_offset`).
+
+## Per-craft bars and flags (2026-10-17)
+- `member_bars.rs`: the host fills `MemberBars { scale_factor, items: Vec<MemberBar> }` each frame (battle-view's `sync_member_bars`);
+  `build_member_quads` (PostUpdate) turns it into rectangles of a small atlas (an opaque white strip that is tinted into bars of any length
+  and colour, and `I_GARRISON_FLAG` resampled to the size it is drawn at, redrawn when the UI scale changes); `extract_member_quads`
+  (render world, `RenderUiSystems::ExtractImages`) appends them to bevy_ui's `ExtractedUiNodes` as two `ExtractedUiItem::Glyphs` runs (bars,
+  then flags), which bevy_ui draws as one item each, just below the command bar (the interface covers a craft behind it). No entities, no
+  layout, one draw call whatever the number of craft; `EawUiPlugin` registers it all. One UI item per rectangle was tried first and cost
+  3-4 ms per frame with about 2000 rectangles (bevy_ui keeps a render entity, a phase item and a sort entry for each).
+- Look and sizes are in the module's doc comment (Remake measurements; design px = 1/768 of the screen height): bar 0.84 of the craft's
+  drawn sphere = 20.6 design px long, 1.21 thick, flag 0.92 of its texture; colours and the flag come from the game's textures at run time
+  (`BarLook::from_textures`, the compiled-in colours are only for tests and tools without the game).
+- Tests (`cargo test -p eaw-ui`, 9): one bar and flag per craft, the fill follows the health, level colours, placement against the Remake,
+  shield above hull, whole pixels at 1080p and 4K, minimum bar, atlas content (no dark fringe round the flag), no flag texture.
+- Gap: `extract_member_quads` and the draw have no automated test (they need the render world); the offscreen renders cover them.

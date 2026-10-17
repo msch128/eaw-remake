@@ -64,9 +64,12 @@ Other bones of the galactic shell: `radar_galactic` (171x171 minimap hole), `b_d
 
 ### Bars
 
-A `Bar` component does not scale a fill: `Max_Bar_Level` (10) pre-rendered textures exist, one per
-level (`i_bar_health_small0..10`, `i_bar_shield_small10` is the full shield), plus a frame texture
-(`i_bar_control_wide`). The engine picks the texture for `round(fraction * 10)`.
+A `Bar` component has `Max_Bar_Level` (10) flat-colour textures, one per level (`i_bar_health_small0..10`: black 0, red 1-3,
+orange 4-5, yellow 6-7, yellow-green 8-9, green 10; `i_bar_shield_small10` is the full shield), plus a black track texture
+(`i_bar_control_wide`, alpha 0.31). The engine picks the colour for `round(fraction * 10)`. World bars (user's video b0866s: a bar
+at 80 % shows the dark track right of the fill; the 2047 px screenshot's bar pixel (55,210,65) is level 10 over the track) draw the
+fill only as wide as the fraction. Our capital-ship overlays (`ship_overlays`) still draw the level colour over the full length;
+the per-craft bars of fighters and bombers (`member_bars.rs`, below) clip the fill.
 
 ### Factions
 
@@ -213,6 +216,10 @@ are flat colour, not the `i_bar_*` textures; the cooldown overlay is a rising ti
 * **Bars:** world-space bars use the original `i_bar_health_{small,medium,large}0..10` level
   textures (34/68/102 px wide, 2 px tall), `i_bar_control_wide` as frame and the full
   `i_bar_shield_*10` texture clipped to the shield fraction. `bar_class(half_size)` picks the set.
+* **Small craft:** every fighter, bomber and squadron member has a bar and a flag of its own (`member_bars.rs`): the small bar
+  texture at 0.61 (20.6 x 1.2 design px; 29 x 2 px at 1080p, 55 x 3 px at 2047 px height, measured), centred under the craft with its
+  top 1 design px under the silhouette, a shield bar above it when the craft has shields, and `i_garrison_flag.tga` (12 x 14, drawn at
+  0.92) with its top at the bar's top and its left 1.3 design px inside the bar's right end. Not UI nodes: see the module's doc.
 * **Selection brackets:** no bracket texture exists (`i_selection_cutout_*` are 1024 px white
   masks, `selection_*_neutral` are ground decals), so brackets stay drawn corners.
 * **Hardpoints:** the original reticles `I_HARD_POINT_RETICLE_<KIND>[_TRACKED].DDS` (GENERIC, ENGINES,
