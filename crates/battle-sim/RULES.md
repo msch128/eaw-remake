@@ -275,7 +275,7 @@ The viewer draws missiles at the simulated position and velocity, so the trails 
 
 ## Behaviour constants added in U52, U60-U66 and U93 (what is data, what is estimate)
 The Remake XML has no numbers for these movement and doctrine details; every value below is an **estimate**, kept in `sim.rs` / `defs.rs`, and only shapes how ships move, never damage, health, range or speed from the data.
-Squadron formation slots are data (`Squadron_Offsets`, `Starfighter_Formations.xml`); only the fallback `(-20 x i, 25 x (i % 2))` is an estimate.
+Squadron formation slots are data (`Squadron_Offsets`, `Starfighter_Formations.xml`); only the fallback `(-20 x i, 25 x (i % 2))` is an estimate. Fighter and bomber squadrons fly that formation widened (row "Squadron spread" below).
 
 | Item | Value | Why it is an estimate |
 |---|---|---|
@@ -288,6 +288,7 @@ Squadron formation slots are data (`Squadron_Offsets`, `Starfighter_Formations.x
 | Interceptor doctrine (U66) | **replaced by data**: the A-Wing has `Targeting_Priority_Set` `Fighter` (Bomber 1.0, Fighter 2.0), the X-Wing the `Bomber` set, so interceptors prefer bombers through the normal priority weights; the name list and the x0.15 are gone | test `fighter_vs_bomber_targeting_follows_the_priority_set_of_the_unit` (real_data) |
 | Carrier screen (earlier) | fighters near their carrier prefer bombers within 3500 u of it, x0.3 | estimate, already labelled in the code |
 | Flanking (U93) | corvettes and units faster than 250 u/s swing 3200 + 600 x (id % 3) u (attack-move) or 3500 + 500 x (id % 4) u (move) to the side | the Remake has flanking behaviour but no distances in the XML |
+| Squadron spread (2026-10-17) | fighter and bomber squadrons widen `Squadron_Offsets` in the plan until the closest members are 100 u apart (`SQUADRON_GAP`, at most x5 `SQUADRON_SPREAD_MAX`; places on one spot are pushed apart), led by the member nearest the middle; launched ones open out during the flyout; a leader slows down while a member lags (half speed at 2.5 gaps); a fighter at rest keeps its heading | the Remake keeps TIEs about two fighter widths apart (user's video b0703s: 36-51 px at the default camera, about 100 u) while the data offsets are 20 u; the data has no spacing or steering numbers |
 Visual-only effects of U67-U74 (ribbons, debris, glow, ripples, sensor rings, hyperspace tunnel) do not change simulation state.
 The 5 s hold of the victory/defeat banner before the summary (U49) is the user's rule (`OUTCOME_HOLD_SECONDS` in `battle-view`), not an engine value.
 

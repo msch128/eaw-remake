@@ -73,6 +73,8 @@ struct Snap {
     special: bool,
     /// Targeted hardpoint index.
     target_hp: u16,
+    /// Squadron formation place ([`Ship::formation`]): members keep their place relative to the leader's own.
+    formation: Vec3,
 }
 
 /// Uniform grid of ship ids for projectile collision.
@@ -393,7 +395,8 @@ impl Battle {
                 .iter()
                 .map(|&(s, _)| {
                     let d = cat.ship(s);
-                    let r = if d.is_squadron { 90.0 } else { d.radius };
+                    // A squadron takes the width of its spread formation.
+                    let r = if d.is_squadron { d.spread.iter().map(|o| o.y.abs()).fold(90.0, f32::max) } else { d.radius };
                     r * 2.2 + 60.0
                 })
                 .collect();
@@ -414,7 +417,7 @@ impl Battle {
                     let mut idx = 0usize;
                     for &(m, c) in &def.members {
                         for _ in 0..c {
-                            let off = def.offsets.get(idx).copied().unwrap_or(Vec3::new(-20.0 * idx as f32, 25.0 * (idx % 2) as f32, 0.0));
+                            let off = flight_offset(def, idx);
                             idx += 1;
                             let id = self.spawn_ship(m, side, pos + off.rotate_yaw(yaw), yaw, group, squad, off);
                             self.squads[squad as usize].push(id);
@@ -422,6 +425,7 @@ impl Battle {
                             self.ships[id as usize].order = order;
                         }
                     }
+                    self.lead_order(squad);
                 } else if def.class == TargetClass::Fighter || def.class == TargetClass::Bomber {
                     let squad = self.squads.len() as u32;
                     self.squads.push(Vec::new());
@@ -593,9 +597,12 @@ impl Battle {
         let mut idx = 0usize;
         for &(m, n) in &sq.members {
             for _ in 0..n {
-                let off = sq.offsets.get(idx).copied().unwrap_or(Vec3::new(-20.0 * idx as f32, 25.0 * (idx % 2) as f32, 0.0));
+                // Out of the bay at the data offsets (tight, facing the way out); the members open out into their spread places during the
+                // flyout.
+                let (bay_off, off) = (formation_offset(&sq.offsets, idx), flight_offset(sq, idx));
                 idx += 1;
-                let id = self.spawn_ship(m, side, base + off.rotate_yaw(cyaw), cyaw, NONE, squad, off);
+                let face = if flyout > 0.0 { out_yaw } else { cyaw };
+                let id = self.spawn_ship(m, side, base + bay_off.rotate_yaw(face), cyaw, NONE, squad, off);
                 let s = &mut self.ships[id as usize];
                 s.carrier = carrier;
                 s.speed = cat.ship(m).max_speed * 0.5;
@@ -608,10 +615,23 @@ impl Battle {
                 ids.push(id);
             }
         }
+        self.lead_order(squad);
         if self.config.record_events {
             self.events.push(Event::SquadronLaunched { carrier, ships: ids.clone() });
         }
         ids
+    }
+
+    /// Puts the members of squadron `squad` in the order they take the lead: the one whose formation place is nearest the middle of the
+    /// formation first (spawn order among equals). The formation turns about its leader, and a leader in a corner would swing the far side
+    /// of a spread formation twice as far at every turn and put the formation beside a move goal instead of on it.
+    fn lead_order(&mut self, squad: u32) {
+        let ships = &self.ships;
+        let members = &mut self.squads[squad as usize];
+        let n = members.len().max(1) as f32;
+        let (cx, cy) = members.iter().fold((0.0, 0.0), |(x, y), &i| (x + ships[i as usize].formation.x / n, y + ships[i as usize].formation.y / n));
+        let off_middle = |i: &u32| (ships[*i as usize].formation.x - cx).hypot(ships[*i as usize].formation.y - cy);
+        members.sort_by(|a, b| off_middle(a).total_cmp(&off_middle(b)));
     }
 
     /// Recomputes which enemy ships each side sees: within the `Space_FOW_Reveal_Range` of one of its ships (a stealthed ship only within
@@ -1070,6 +1090,7 @@ impl Battle {
                     },
                     special: d.special_weapon.is_some() || d.background,
                     target_hp: s.target_hp,
+                    formation: s.formation,
                 }
             })
             .collect();
@@ -1090,6 +1111,22 @@ impl Battle {
             .iter()
             .map(|m| m.iter().copied().find(|&i| snaps[i as usize].alive).unwrap_or(NONE))
             .collect();
+        // Per squadron: how far the farthest member is from its formation place (plan distance; the leader waits for it, see `mov`).
+        let squad_lags: Vec<f32> = self
+            .squads
+            .iter()
+            .zip(&squad_leaders)
+            .map(|(m, &l)| {
+                let Some(lead) = (l != NONE).then(|| &snaps[l as usize]) else { return 0.0 };
+                m.iter()
+                    .filter(|&&i| i != l && snaps[i as usize].alive)
+                    .map(|&i| {
+                        let place = lead.pos + formation_rel(snaps[i as usize].formation, lead.formation).rotate_yaw(lead.yaw);
+                        (snaps[i as usize].pos.x - place.x).hypot(snaps[i as usize].pos.y - place.y)
+                    })
+                    .fold(0.0, f32::max)
+            })
+            .collect();
         {
             let work = |s: &mut Ship| {
                 if !s.alive || s.retreated {
@@ -1097,7 +1134,7 @@ impl Battle {
                 }
                 scan(s, &snaps, &cat, &cfg);
                 let mut rng = Rng::for_entity(cfg.seed, tick, s.id, 0x30FE);
-                mov(s, &snaps, &cat, &cfg, &spawn, &squad_leaders, obstacles, &big, &Nav { grid: self.nav_grid.as_ref(), hulls: &hulls }, &mut rng);
+                mov(s, &snaps, &cat, &cfg, &spawn, &squad_leaders, &squad_lags, obstacles, &big, &Nav { grid: self.nav_grid.as_ref(), hulls: &hulls }, &mut rng);
             };
             if par && self.ships.len() > 16 {
                 self.ships.par_iter_mut().for_each(work);
@@ -1252,7 +1289,7 @@ impl Battle {
                     let mut s_idx = 0usize;
                     for &(m, c) in &def.members {
                         for _ in 0..c {
-                            let off = def.offsets.get(s_idx).copied().unwrap_or(Vec3::new(-20.0 * s_idx as f32, 25.0 * (s_idx % 2) as f32, 0.0));
+                            let off = flight_offset(def, s_idx);
                             s_idx += 1;
                             let id = self.spawn_ship(m, r.side, pos + off.rotate_yaw(yaw), yaw, group, squad, off);
                             self.squads[squad as usize].push(id);
@@ -1260,6 +1297,7 @@ impl Battle {
                             ids.push(id);
                         }
                     }
+                    self.lead_order(squad);
                 } else {
                     let id = self.spawn_ship(r.ship, r.side, pos, yaw, group, NONE, Vec3::ZERO);
                     self.groups[group as usize].members.push(id);
@@ -2126,13 +2164,13 @@ impl Battle {
     /// `REPLENISH_WINGMEN`: every lost wingman is replaced by a new fighter of the same type at its formation slot behind the leader.
     fn replenish_wingmen(&mut self, leader: u32) {
         let (_, dead) = self.wingmen(leader);
-        let (pos, yaw, speed, side, group, squad, order) = {
+        let (pos, yaw, speed, side, group, squad, order, lead_place) = {
             let l = &self.ships[leader as usize];
-            (l.pos, l.yaw, l.speed, l.side, l.group, l.squad, l.order)
+            (l.pos, l.yaw, l.speed, l.side, l.group, l.squad, l.order, l.formation)
         };
         for d in dead {
             let (def, formation, carrier) = (self.ships[d as usize].def, self.ships[d as usize].formation, self.ships[d as usize].carrier);
-            let id = self.spawn_ship(def, side, pos + formation.rotate_yaw(yaw), yaw, group, squad, formation);
+            let id = self.spawn_ship(def, side, pos + formation_rel(formation, lead_place).rotate_yaw(yaw), yaw, group, squad, formation);
             let s = &mut self.ships[id as usize];
             s.order = order;
             s.carrier = carrier;
@@ -2697,6 +2735,17 @@ struct Nav<'a> {
     hulls: &'a [u32],
 }
 
+/// Where a squadron member flies relative to its leader: its formation place minus the leader's in the plan, at its own height offset.
+fn formation_rel(member: Vec3, leader: Vec3) -> Vec3 {
+    Vec3::new(member.x - leader.x, member.y - leader.y, member.z)
+}
+
+/// Place member `idx` of squadron `def` keeps in flight: the spread formation of a definition from the data, the plain offsets of a
+/// hand-made one.
+fn flight_offset(def: &ShipDef, idx: usize) -> Vec3 {
+    def.spread.get(idx).copied().unwrap_or_else(|| formation_offset(&def.offsets, idx))
+}
+
 /// Fighters fly almost anywhere but not through the middle of a hull (their own carrier excepted, they dock there): not inside 0.45 of the
 /// hull's radius and, where the model gives a hull, not within `FIGHTER_KEEP_OUT` of its half width from the hull's long axis.
 fn keep_out_of_hulls(s: &mut Ship, def: &ShipDef, snaps: &[Snap], cat: &Catalog, hulls: &[u32]) {
@@ -2729,18 +2778,31 @@ fn keep_out_of_hulls(s: &mut Ship, def: &ShipDef, snaps: &[Snap], cat: &Catalog,
 }
 
 #[allow(clippy::too_many_arguments)]
-fn mov(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, spawn: &[Vec3], leaders: &[u32], obstacles: &[crate::arena::Obstacle], big: &[u32], nav: &Nav, rng: &mut Rng) {
+fn mov(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, spawn: &[Vec3], leaders: &[u32], lags: &[f32], obstacles: &[crate::arena::Obstacle], big: &[u32], nav: &Nav, rng: &mut Rng) {
     let def = cat.ship(s.def);
     if def.is_static {
         return;
     }
     let dt = cfg.dt;
-    // A fighter that just left its hangar flies straight out for `Fighter_Bay_Flyout_Distance` before it follows orders.
+    // A fighter that just left its hangar flies straight out for `Fighter_Bay_Flyout_Distance` before it follows orders. Squadron members fly
+    // along with their leader and open out of the tight hangar formation on the way: each closes the same share of the distance to its place
+    // per step, so the squadron is in formation where the flyout ends instead of re-forming in a knot in front of the hangar.
     if s.flyout_left > 0.0 {
         let step = (def.max_speed * 0.5).max(10.0) * dt;
-        s.pos = s.pos + Vec3::from_yaw(s.yaw) * step;
+        let l = if s.squad != NONE { leaders[s.squad as usize] } else { NONE };
+        let shift = if l != NONE && l != s.id && snaps[l as usize].alive {
+            let lead = &snaps[l as usize];
+            let place = lead.pos + formation_rel(s.formation, lead.formation).rotate_yaw(lead.yaw);
+            Vec3::from_yaw(lead.yaw) * step + (place - s.pos) * (step / s.flyout_left.max(step))
+        } else {
+            Vec3::from_yaw(s.yaw) * step
+        };
+        s.pos += shift;
+        if l != s.id && shift.x.hypot(shift.y) > 1e-3 {
+            s.yaw = shift.y.atan2(shift.x);
+        }
         s.flyout_left -= step;
-        s.speed = step / dt;
+        s.speed = shift.len() / dt;
         return;
     }
     let speed_mult = ability_product(def, s, |a| a.speed_mult) * (1.0 - s.stun_speed_cut) * (1.0 - s.tractor_cut) * s.engine_factor;
@@ -2765,11 +2827,12 @@ fn mov(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, spawn: &
         Hold,
     }
     let mut face: Option<Vec3> = None;
-    // Members of a squadron fly in formation: the slot is the leader's position plus the data offset (`Squadron_Offsets`) turned with the leader;
-    // the leader's speed is the speed to match.
+    // Members of a squadron fly in formation: the slot is the leader's position plus the member's place relative to the leader's own place
+    // (spread `Squadron_Offsets`) turned with the leader; the leader's speed is the speed to match.
     let slot: Option<(Vec3, f32)> = if s.squad != NONE {
         let l = leaders[s.squad as usize];
-        (l != NONE && l != s.id && snaps[l as usize].alive).then(|| (snaps[l as usize].pos + s.formation.rotate_yaw(snaps[l as usize].yaw), snaps[l as usize].vel.len()))
+        (l != NONE && l != s.id && snaps[l as usize].alive)
+            .then(|| (snaps[l as usize].pos + formation_rel(s.formation, snaps[l as usize].formation).rotate_yaw(snaps[l as usize].yaw), snaps[l as usize].vel.len()))
     } else {
         None
     };
@@ -3079,12 +3142,23 @@ fn mov(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, spawn: &
                 (unit.y + avoid.1).atan2(unit.x + avoid.0)
             };
             let braking = s.speed * s.speed / (2.0 * def.accel.max(1.0));
+            let lead = if s.squad != NONE { leaders[s.squad as usize] } else { NONE };
             // Closing on a target (capitals and frigates): in the last stretch before the standoff the ship already turns the bearing at which most weapons bear
             // towards it (the speed profile below brakes it to a stop at the standoff), instead of pointing its bow at it until it has stopped.
             let err = match face {
                 Some(f) if !fighter && aim == p && dist <= stop + (braking * 2.5 + def.radius * 1.5).max(400.0) => {
                     align_to_target(s, def, f, dt);
                     0.0
+                }
+                // A fighter waiting where it belongs (near its carrier, in its slot of a squadron at rest) does not turn on the spot towards
+                // that point: a leader turning round would swing its whole spread formation across to the other side. Members turn with
+                // the leader, so a squadron at rest faces one way.
+                _ if fighter && settle && dist <= stop && follow_speed.is_none_or(|v| v <= 10.0) => {
+                    if lead != NONE && lead != s.id && snaps[lead as usize].alive {
+                        turn_towards(s, snaps[lead as usize].yaw, def.turn_rate, dt)
+                    } else {
+                        0.0
+                    }
                 }
                 _ => turn_towards(s, desired, def.turn_rate, dt),
             };
@@ -3115,6 +3189,12 @@ fn mov(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, spawn: &
             }
             if let Some(v) = pace {
                 want = want.min(v);
+            }
+            // A squadron leader in formation flight waits for members that lag behind their places (after a turn the outer places of a spread
+            // formation swing far): from a lag of half a gap it slows down, to half speed at two and a half gaps (estimate), so the members, at
+            // full speed, close up instead of trailing behind.
+            if fighter && settle && s.squad != NONE && leaders[s.squad as usize] == s.id {
+                want *= 1.0 - ((lags[s.squad as usize] - SQUADRON_GAP * 0.5) / (SQUADRON_GAP * 4.0)).clamp(0.0, 0.5);
             }
             if fighter {
                 if dist <= stop + braking * 0.8 && settle && aim == p {

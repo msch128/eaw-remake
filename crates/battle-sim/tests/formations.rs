@@ -23,7 +23,8 @@ struct Metric {
     capital_path_per_min: f32,
     /// Largest heading change of a capital in degrees.
     capital_turn_deg: f32,
-    /// Largest distance of a fighter from its formation slot (leader position plus offset), in units, over the run (after settling).
+    /// Largest distance of a fighter from its formation slot (the leader's position plus the member's place relative to the leader's own), in
+    /// units, over the run (after settling).
     squadron_spread: f32,
     /// Distance flown by the busiest fighter after settling (first 10 s), per minute.
     fighter_path_per_min: f32,
@@ -86,10 +87,10 @@ fn measure(idle_secs: f32, with_move: bool) -> Option<Metric> {
         }
         if t > 10 * 30 {
             for s in b.ships.iter().filter(|s| s.side == 0 && s.squad != u32::MAX && s.alive) {
-                let leader = b.ships.iter().filter(|o| o.squad == s.squad && o.alive).map(|o| o.id).min().unwrap();
+                let leader = b.squad_leader(s.squad).unwrap();
                 if leader != s.id {
                     let l = &b.ships[leader as usize];
-                    let slot = l.pos + s.formation.rotate_yaw(l.yaw);
+                    let slot = l.pos + Vec3::new(s.formation.x - l.formation.x, s.formation.y - l.formation.y, s.formation.z).rotate_yaw(l.yaw);
                     m.squadron_spread = m.squadron_spread.max(s.pos.dist(slot));
                 }
             }
@@ -137,17 +138,17 @@ fn a_squadron_ordered_to_move_flies_there_in_formation() {
         b.step();
         if t > 5 * 30 {
             for s in b.ships.iter().filter(|s| s.side == 0 && s.alive) {
-                let leader = b.ships.iter().filter(|o| o.squad == s.squad && o.alive).map(|o| o.id).min().unwrap();
+                let leader = b.squad_leader(s.squad).unwrap();
                 if leader != s.id {
                     let l = &b.ships[leader as usize];
-                    worst = worst.max(s.pos.dist(l.pos + s.formation.rotate_yaw(l.yaw)));
+                    worst = worst.max(s.pos.dist(l.pos + Vec3::new(s.formation.x - l.formation.x, s.formation.y - l.formation.y, s.formation.z).rotate_yaw(l.yaw)));
                 }
             }
         }
     }
     println!("ordered squadrons: worst distance from the slot {worst:.0}");
     assert!(worst < 150.0, "members keep their slots on the way: {worst}");
-    let leader_of = |sq: u32| b.ships.iter().filter(|o| o.squad == sq).map(|o| o.id).min().unwrap();
+    let leader_of = |sq: u32| b.squad_leader(sq).unwrap();
     let far = mine.iter().map(|&i| leader_of(b.ships[i as usize].squad)).map(|l| b.ships[l as usize].pos.dist(to)).fold(0.0f32, f32::max);
     println!("farthest leader from the goal {far:.0}");
     assert!(far < 150.0, "and the squadrons arrived: {far}");

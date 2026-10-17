@@ -38,7 +38,7 @@ Deterministic, rayon-parallel space-battle simulation (fixed dt 1/30). Rules and
 squadrons are lost. The old "fly out of the arena" rule is gone. Tests in `tests/mechanics.rs` (retreat_* / squadrons_*).
 
 ## Formations and idle behaviour (new)
-Squadron members follow the slot `leader position + Squadron_Offsets entry (rotated with the leader)` while idle, ordered to move or attack-move (and without a target), matching the leader's speed and closing the gap at 2 speed units per unit of distance (estimate).
+Squadron members follow the slot `leader position + (own place - leader's place), rotated with the leader` while idle, ordered to move or attack-move (and without a target), matching the leader's speed and closing the gap at 2 speed units per unit of distance (estimate). The places are `ShipDef::spread` (fighter and bomber squadrons: the data offsets widened to a 100 u gap, see RULES.md), the leader is the member nearest the middle of the formation; a leader in formation flight slows down while a member lags, launched squadrons open out of the hangar formation during the flyout, and a fighter at rest keeps its heading (members turn with their leader).
 Fighters that only hold a place (slot, carrier escort, move goal) now stop within 50 units (estimate) instead of flying past it for ever (they used to circle: 2500 units/min idle, slot error 200). Idle capitals already held position and facing (0 units/min, 0 degrees).
 `tests/formations.rs` is the navcheck: idle capital path per minute, turn, squadron spread, fighter path, closest hull approach. Open: ships still chase and orbit enemies at standoff range in combat.
 

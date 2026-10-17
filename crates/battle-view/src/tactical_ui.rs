@@ -1070,6 +1070,12 @@ fn reticle_kind(kind: HpKind) -> &'static str {
     }
 }
 
+/// Whether a unit's overlay carries the icon box: a squadron only while it is selected or hovered, any other unit when it shows
+/// nothing else (`icon_only`) or is only a few pixels wide (`edge_px`, screen radius).
+fn icon_box(is_squad: bool, picked: bool, icon_only: bool, edge_px: f32) -> bool {
+    if is_squad { picked } else { icon_only || edge_px < 9.0 }
+}
+
 /// Marker id of a hardpoint: `<ship>:<hardpoint index>`.
 fn hardpoint_id(ship: u32, hp: usize) -> String {
     format!("{ship}:{hp}")
@@ -1160,9 +1166,12 @@ fn sync_overlays(
                 n.push_str(" [ENGINES DISABLED]");
             }
         }
-        // The icon marks tiny units, squadrons and every unit nobody has selected or hovered (so that no unit is invisible).
-        let icon = (icon_only || is_squad || edge_max < 9.0).then(|| assets.as_ref().and_then(|a| a.game.as_deref()).and_then(|g| eaw_ui::unit_icon(g, &def.name))).flatten()
-            .or_else(|| is_squad.then(|| "I_BUTTON_UNIT_GENERIC_FIGHTER.TGA".to_string()));
+        // The icon marks tiny units and every other unit nobody has selected or hovered (so that no unit is invisible). Squadrons carry it
+        // only while selected or hovered: the Remake draws an unselected squadron as its fighters with their bar and flag, no box (user's
+        // video b0703s and b0732s); its fighters keep their screen size at every zoom, so they stay in sight.
+        let marked = icon_box(is_squad, selected || hovered, icon_only, edge_max);
+        let icon = marked.then(|| assets.as_ref().and_then(|a| a.game.as_deref()).and_then(|g| eaw_ui::unit_icon(g, &def.name))).flatten()
+            .or_else(|| (is_squad && marked).then(|| "I_BUTTON_UNIT_GENERIC_FIGHTER.TGA".to_string()));
         if icon_only && icon.is_none() {
             continue;
         }
@@ -1900,6 +1909,18 @@ fn game_font(ui: &eaw_ui::EawUiSettings, size: f32) -> TextFont {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn squadrons_carry_the_icon_box_only_while_selected_or_hovered() {
+        // An unselected squadron, own or enemy, at any zoom: no box (its fighters are drawn at their screen size).
+        assert!(!icon_box(true, false, false, 3.0));
+        assert!(!icon_box(true, false, true, 40.0));
+        assert!(icon_box(true, true, false, 40.0));
+        // Other units keep it when they show nothing else or are a few pixels wide.
+        assert!(icon_box(false, false, true, 40.0));
+        assert!(icon_box(false, false, false, 5.0));
+        assert!(!icon_box(false, true, false, 40.0));
+    }
 
     #[test]
     fn death_star_countdown_is_the_soonest_super_laser() {

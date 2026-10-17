@@ -802,6 +802,11 @@ impl Battle {
         self.sides.len()
     }
 
+    /// The ship that leads squadron `squad`: its first member alive (the member nearest the middle of the formation, see `lead_order`).
+    pub fn squad_leader(&self, squad: u32) -> Option<u32> {
+        self.squads.get(squad as usize)?.iter().copied().find(|&i| self.ships[i as usize].alive)
+    }
+
     /// Initial spawn / arrival yaw for `side` (from `side_places`).
     pub fn spawn_yaw(&self, side: u8) -> f32 {
         self.side_places.get(side as usize).and_then(|p| p.first()).map_or(if side == 0 { 0.0 } else { std::f32::consts::PI }, |p| p.1)

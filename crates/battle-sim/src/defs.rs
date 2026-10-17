@@ -517,6 +517,9 @@ pub struct ShipDef {
     pub members: Vec<(ShipId, u32)>,
     /// Squadron formation offsets in battle space.
     pub offsets: Vec<Vec3>,
+    /// The places the members of a fighter or bomber squadron keep in flight: `offsets` (one per member, the fallback row where the data
+    /// has none) spread out by [`spread_formation`]. Empty for other squadrons and hand-made definitions, which fly at `offsets`.
+    pub spread: Vec<Vec3>,
     /// The squadrons launched and held in reserve per tech level of the owner (`Starting_` / `Reserve_Spawned_Units_Tech_N`): `(tech, carried,
     /// reserve)`. Empty for hand-made definitions, which use `carried` and `reserve` at every tech level.
     pub spawned_by_tech: Vec<SpawnedAt>,
@@ -1136,6 +1139,16 @@ impl Catalog {
             let def = cat.ship_def(s, &hp_defs[i], model.map(|m| &**m), &attach);
             cat.ships.push(def);
         }
+        // Squadrons of fighters and bombers fly spread out (their craft are drawn far above true size); other squadrons, like a pair of
+        // Tartan patrol cruisers, keep the data offsets.
+        for i in 0..cat.ships.len() {
+            let d = &cat.ships[i];
+            if d.members.is_empty() || !d.members.iter().all(|&(m, _)| matches!(cat.ships[m as usize].class, TargetClass::Fighter | TargetClass::Bomber)) {
+                continue;
+            }
+            let n: usize = d.members.iter().map(|m| m.1 as usize).sum();
+            cat.ships[i].spread = spread_formation(&(0..n).map(|k| formation_offset(&d.offsets, k)).collect::<Vec<_>>());
+        }
         cat
     }
 
@@ -1567,6 +1580,7 @@ impl Catalog {
             population: pop,
             hardpoints,
             direct,
+            spread: Vec::new(),
             members,
             offsets,
             spawned_by_tech,
@@ -1935,6 +1949,52 @@ pub fn dps_estimate(d: &ShipDef, cat: &Catalog) -> f32 {
     d.members.iter().map(|(m, c)| dps_estimate(cat.ship(*m), cat) * *c as f32).sum()
 }
 
+/// Plan distance a fighter or bomber squadron keeps between neighbouring members (estimate). The Remake keeps a squadron's fighters
+/// about two fighter widths apart (the user's 1080p video, b0703s at the default camera: 12 TIEs 36-51 px apart centre to centre,
+/// about 100 units at 0.47 px per unit), while `Squadron_Offsets` set TIE fighters 20 units apart side by side: drawn at their screen
+/// size they ran into a blob.
+pub const SQUADRON_GAP: f32 = 100.0;
+/// Largest widening of a formation (estimate): offsets the data puts (almost) on the same spot are pushed apart instead.
+pub const SQUADRON_SPREAD_MAX: f32 = 5.0;
+
+/// Formation offset `idx` of a squadron: the data's `Squadron_Offsets`, or a staggered row behind the leader where the data has fewer.
+pub fn formation_offset(offsets: &[Vec3], idx: usize) -> Vec3 {
+    offsets.get(idx).copied().unwrap_or(Vec3::new(-20.0 * idx as f32, 25.0 * (idx % 2) as f32, 0.0))
+}
+
+/// The places a squadron's members keep in flight: the plan (x, y) of `offsets` widened (heights as in the data) until the closest two
+/// places are [`SQUADRON_GAP`] apart, at most [`SQUADRON_SPREAD_MAX`] times, never narrowed; then places still closer than the gap are
+/// pushed apart, half each, in a fixed number of rounds (deterministic; places on the same spot part sideways).
+pub fn spread_formation(offsets: &[Vec3]) -> Vec<Vec3> {
+    let plan = |a: &Vec3, b: &Vec3| (a.x - b.x).hypot(a.y - b.y);
+    let closest = offsets.iter().enumerate().flat_map(|(i, a)| offsets[i + 1..].iter().map(move |b| plan(a, b))).filter(|d| *d >= 1.0).fold(f32::MAX, f32::min);
+    let k = (SQUADRON_GAP / closest).clamp(1.0, SQUADRON_SPREAD_MAX);
+    let mut out: Vec<Vec3> = offsets.iter().map(|o| Vec3::new(o.x * k, o.y * k, o.z)).collect();
+    for _ in 0..32 {
+        let mut moved = false;
+        for i in 0..out.len() {
+            for j in i + 1..out.len() {
+                let (dx, dy) = (out[j].x - out[i].x, out[j].y - out[i].y);
+                let d = dx.hypot(dy);
+                if d >= SQUADRON_GAP - 1e-3 {
+                    continue;
+                }
+                let (ux, uy) = if d > 1e-3 { (dx / d, dy / d) } else { (0.0, 1.0) };
+                let push = (SQUADRON_GAP - d) * 0.5;
+                out[i].x -= ux * push;
+                out[i].y -= uy * push;
+                out[j].x += ux * push;
+                out[j].y += uy * push;
+                moved = true;
+            }
+        }
+        if !moved {
+            break;
+        }
+    }
+    out
+}
+
 /// Estimate: launch offset in radians per radian/second of a missile's `Max_Rate_Of_Turn` (a fast-turning missile can afford a wider arc and
 /// still reach its target; the data has no launch angle for missiles).
 const MISSILE_ARC_PER_TURN_RATE: f32 = 0.17;
@@ -1948,6 +2008,35 @@ const TSW_SPEED_SCALE: f32 = 10.0;
 /// Seconds a Death Star needs to fly from `TSW_Start_Distance_From_Target` into `TSW_Attack_Distance_From_Target` at `Max_Speed`; 0 without data.
 pub fn tsw_approach_seconds(start: f32, attack: f32, max_speed: f32) -> f32 {
     if start > attack && attack > 0.0 && max_speed > 0.0 { (start - attack) / (max_speed * TSW_SPEED_SCALE) } else { 0.0 }
+}
+
+#[cfg(test)]
+mod formation_tests {
+    use super::*;
+
+    #[test]
+    fn a_spread_formation_keeps_its_shape_and_parts_stacked_places() {
+        // The Remake's TIE Fighter squadron: three rows of four, 20 units apart side by side (five times that is the gap), 40 between the
+        // rows and 40 up or down.
+        let tie: Vec<Vec3> = [40.0f32, 0.0, -40.0].iter().flat_map(|&x| [30.0f32, 10.0, -10.0, -30.0].map(move |y| Vec3::new(x, y, -x))).collect();
+        for (a, b) in tie.iter().zip(spread_formation(&tie)) {
+            assert_eq!((b.x, b.y, b.z), (a.x * 5.0, a.y * 5.0, a.z), "widened to the gap, the shape only scaled in the plan");
+        }
+        // TIE Interceptors: two pairs stacked on one spot (6 units apart in height) next to places 6 units off.
+        let tin = [(0.0, 9.0, 0.0), (0.0, -9.0, 0.0), (25.0, -33.0, 0.0), (30.0, -30.0, -3.0), (30.0, -30.0, 3.0), (25.0, 33.0, 0.0), (30.0, 30.0, -3.0), (30.0, 30.0, 3.0)]
+            .map(|(x, y, z)| Vec3::new(x, y, z));
+        let s = spread_formation(&tin);
+        for i in 0..s.len() {
+            for j in i + 1..s.len() {
+                let d = (s[i].x - s[j].x).hypot(s[i].y - s[j].y);
+                assert!(d >= SQUADRON_GAP - 0.5, "places {i} and {j} only {d:.1} apart: {s:?}");
+            }
+        }
+        assert_eq!(spread_formation(&tin), s, "deterministic");
+        // A formation already wider than the gap stays as it is.
+        let wide = [Vec3::new(0.0, 150.0, 0.0), Vec3::new(0.0, -150.0, 0.0), Vec3::new(-150.0, 0.0, 10.0)];
+        assert_eq!(spread_formation(&wide), wide.to_vec());
+    }
 }
 
 #[cfg(test)]

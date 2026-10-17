@@ -285,6 +285,8 @@ pub fn update_ships(
     let debug_kill = std::env::var("SP_DEBUG_KILL_HP").ok().and_then(|v| v.parse::<f32>().ok()).filter(|t| cur.time >= *t);
     let debug_target = debug_kill.and_then(|_| cur.ships.iter().find(|s| s.side == 0 && !s.hps.is_empty() && catalog.ship(s.def).radius > 300.0).map(|s| s.id));
     let mut debug_copy: ShipSnap;
+    // The fighters of one squadron take their size from the squadron's centre, so members never differ in size.
+    let centres = squad_centres(cur.ships.iter().filter(|s| s.squad != u32::MAX).map(|s| (s.squad, interpolate(s, next.as_ref().and_then(|n| n.ship(s.id)), alpha).0)));
     for s in &cur.ships {
         let def = catalog.ship(s.def);
         if def.is_squadron {
@@ -452,7 +454,8 @@ pub fn update_ships(
                 && let Some((eye, px_per_unit, height)) = eye
                 && view.visual_radius > 0.0
             {
-                boost = fighter_boost(view.visual_radius, pos.distance(eye), px_per_unit, height);
+                let at = centres.get(&s.squad).copied().unwrap_or(pos);
+                boost = small_craft_boost(view.visual_radius, at.distance(eye), px_per_unit, height);
             }
             tf.scale = Vec3::splat(vis.scale * boost);
             if let Ok(a) = arrivals.get(entity) {
@@ -839,18 +842,34 @@ pub fn update_super_laser_fx(mut commands: Commands, rt: Res<BattleRuntime>, mut
     }
 }
 
-/// Fighters, bombers and squadron members keep at least this share of the screen height as their size. Estimate: the Remake frames
-/// n93 f0011/f0013 show a fighter at about 2.6% (15 px of 576). 3.6% (kept larger than the 24 design px icon box) read far too big
-/// next to a Star Destroyer in play, so the Remake measure is used. The data gives a TIE 4 units next to a 760 unit Star
-/// Destroyer: the original draws small craft far above true scale.
-const FIGHTER_MIN_SCREEN_FRACTION: f32 = 0.026;
-/// Largest enlargement of a fighter model (estimate; caps the effect when the camera is far out).
-const FIGHTER_MAX_BOOST: f32 = 40.0;
+/// Share of the screen height the bounding sphere of a fighter, bomber or squadron member keeps at every zoom of the original camera.
+/// The Remake draws small craft at one screen size whatever the zoom (the user's 1080p video, battle1s: TIE fighters 22-25 px across at
+/// the default camera b0703s/b0732s and still 24-25 px far out in b0760s, where a Star Destroyer is 54 px), far above true scale (the
+/// data gives a TIE 4 units next to a 760 unit Star Destroyer). The value is set so that our TIE fighter measures the same, wings
+/// included, in a 1080p render at the same camera (its bounding sphere is then 35 px across, its silhouette about 23 x 25 px).
+const SMALL_CRAFT_SCREEN_FRACTION: f32 = 0.032;
+/// Camera distance (at our fov of 60 degrees) beyond which small craft stop keeping their screen size: the Remake's widest view,
+/// `Tactical_Overview2` 6000 at fov 70 in TacticalCameras.xml, sees as much as 7277 at fov 60. Farther out the enlargement stays at
+/// its value there and small craft shrink with the world.
+const SMALL_CRAFT_FREEZE_DISTANCE: f32 = 7277.0;
 
-/// Scale factor that lifts a fighter of bounding radius `radius` at `dist` from the eye to the minimum screen size (1 when already larger).
-fn fighter_boost(radius: f32, dist: f32, px_per_unit: f32, screen_height: f32) -> f32 {
-    let px = 2.0 * radius * px_per_unit / dist.max(1.0);
-    (FIGHTER_MIN_SCREEN_FRACTION * screen_height / px.max(1e-3)).clamp(1.0, FIGHTER_MAX_BOOST)
+/// Centre of every squadron from its members' (squadron, position) pairs; the members take their size from it.
+fn squad_centres(members: impl Iterator<Item = (u32, Vec3)>) -> HashMap<u32, Vec3> {
+    let mut sum: HashMap<u32, (Vec3, f32)> = HashMap::new();
+    for (squad, pos) in members {
+        let c = sum.entry(squad).or_insert((Vec3::ZERO, 0.0));
+        c.0 += pos;
+        c.1 += 1.0;
+    }
+    sum.into_iter().map(|(squad, (pos, n))| (squad, pos / n)).collect()
+}
+
+/// Scale factor that draws a small craft of bounding radius `radius` whose squadron is `dist` from the eye at the screen size of the
+/// original ([`SMALL_CRAFT_SCREEN_FRACTION`]): never below its true size (1 close in), proportional to the distance up to
+/// [`SMALL_CRAFT_FREEZE_DISTANCE`] and constant beyond, so it is continuous and grows with the distance without jumps.
+fn small_craft_boost(radius: f32, dist: f32, px_per_unit: f32, screen_height: f32) -> f32 {
+    let px = 2.0 * radius * px_per_unit / dist.clamp(1.0, SMALL_CRAFT_FREEZE_DISTANCE);
+    (SMALL_CRAFT_SCREEN_FRACTION * screen_height / px.max(1e-3)).max(1.0)
 }
 
 /// Seconds a burning wreck stays on the battlefield.
@@ -1055,13 +1074,45 @@ mod tests {
     use super::*;
 
     #[test]
-    fn fighter_boost_lifts_small_craft_to_the_minimum_screen_size() {
-        // 1080 px high, 60 degree fov: 935 px per unit at distance 1. A TIE of radius 2 at 930 units is about 4 px: boosted. A big ship is left alone.
+    fn small_craft_keep_one_screen_size_up_to_the_widest_original_view() {
+        // 1080 px high, 60 degree fov: 935 px per unit at distance 1. A TIE of bounding radius 2.6.
         let px_per_unit = 1080.0 / (2.0 * (30f32.to_radians()).tan());
-        let b = fighter_boost(2.0, 930.0, px_per_unit, 1080.0);
-        assert!(b > 5.0 && b < FIGHTER_MAX_BOOST, "{b}");
-        assert_eq!(fighter_boost(400.0, 930.0, px_per_unit, 1080.0), 1.0);
-        assert_eq!(fighter_boost(0.01, 930.0, px_per_unit, 1080.0), FIGHTER_MAX_BOOST);
+        let r = 2.6;
+        let screen_px = |d: f32| 2.0 * r * small_craft_boost(r, d, px_per_unit, 1080.0) * px_per_unit / d;
+        // The Remake's cameras at our fov: closest 384, default 2000, overview 6064, widest 7277. Inside that range one size.
+        for d in [384.0, 1000.0, 2000.0, 6064.0, 7277.0] {
+            assert!((screen_px(d) - SMALL_CRAFT_SCREEN_FRACTION * 1080.0).abs() < 1e-2, "{d}: {} px", screen_px(d));
+        }
+        // Beyond it the enlargement holds and the craft shrinks with the world (our widest zoom is 16000).
+        let frozen = small_craft_boost(r, SMALL_CRAFT_FREEZE_DISTANCE, px_per_unit, 1080.0);
+        assert_eq!(small_craft_boost(r, 16000.0, px_per_unit, 1080.0), frozen);
+        assert!((screen_px(16000.0) - screen_px(7277.0) * 7277.0 / 16000.0).abs() < 1e-2);
+        // Close in it is never drawn below its true size, and a big ship is left alone.
+        assert_eq!(small_craft_boost(r, 20.0, px_per_unit, 1080.0), 1.0);
+        assert_eq!(small_craft_boost(400.0, 2000.0, px_per_unit, 1080.0), 1.0);
+        // Continuous and never shrinking as the camera moves out: no jumps between zoom steps.
+        let mut last = small_craft_boost(r, 10.0, px_per_unit, 1080.0);
+        for k in 0..=20_000 {
+            let d = 10.0 + k as f32;
+            let b = small_craft_boost(r, d, px_per_unit, 1080.0);
+            assert!(b >= last && b - last < 0.01, "{d}: {last} -> {b}");
+            last = b;
+        }
+    }
+
+    #[test]
+    fn the_members_of_a_squadron_are_drawn_the_same_size() {
+        let px_per_unit = 1080.0 / (2.0 * (30f32.to_radians()).tan());
+        let eye = Vec3::new(0.0, 2000.0, 0.0);
+        // Squadron 7 spread 400 units along the line of sight: by their own distances the members would differ by a fifth.
+        let members = [(7, Vec3::new(0.0, -200.0, 0.0)), (7, Vec3::new(100.0, 0.0, 0.0)), (7, Vec3::new(-100.0, 200.0, 0.0)), (9, Vec3::new(0.0, 500.0, 0.0))];
+        let own: Vec<f32> = members[..3].iter().map(|(_, p)| small_craft_boost(2.6, p.distance(eye), px_per_unit, 1080.0)).collect();
+        assert!(own[2] < own[0] * 0.85, "{own:?}");
+        let centres = squad_centres(members.into_iter());
+        assert_eq!(centres[&7], Vec3::ZERO);
+        assert_eq!(centres[&9], Vec3::new(0.0, 500.0, 0.0));
+        let sizes: Vec<f32> = members[..3].iter().map(|(q, _)| small_craft_boost(2.6, centres[q].distance(eye), px_per_unit, 1080.0)).collect();
+        assert!(sizes.iter().all(|b| *b == sizes[0]), "{sizes:?}");
     }
 
     #[test]

@@ -213,7 +213,7 @@ Add `battle-view`, `galaxy-sim` (already there through galaxy-play) and `eaw-ui`
 ## Tactical round 3 (2026-10-08): video reference alignment
 - **Camera (user spec):** hold the middle button: left / right rotates (yaw), up / down tilts (pitch, limits 0.55..1.30 rad are estimates); Page Up / Page Down rotate, Q / E too; wheel zooms.
   Covered by `input_test` (`middle-drag-rotates-and-tilts`, `page-up-rotates`; 20 checks in all).
-- **Overlay look (video frames v0700/v0710):** squadrons and other small units are marked by a little icon box (`ShipOverlay::icon`, the unit's `Icon_Name`) with two bars under it; capitals and stations
+- **Overlay look (video frames v0700/v0710):** small units are marked by a little icon box (`ShipOverlay::icon`, the unit's `Icon_Name`) with two bars under it, squadrons only while selected or hovered (unselected, own ones show their fighters with the bars and the flag: user's video b0703s, b0732s); capitals and stations
   keep corner brackets and carry the bars above (shield above hull). Hardpoint reticles show health; hovering one shows "<Text_ID of the hardpoint> - <projectile damage> DMG - <health>%".
 - **Unit panel:** hovering a ship (0.35 s) shows the cyan glass panel above R2 (icon, name, `Encyclopedia_Unit_Class`, first `Encyclopedia_Text` string, hull / shield); the advisor bubble hides meanwhile.
   The "No AI / Destination" lines of the video are not reproduced (the snapshot has no order state).
@@ -318,3 +318,7 @@ Add `battle-view`, `galaxy-sim` (already there through galaxy-play) and `eaw-ui`
   zoom 2000: 0.133 (-17.5 dB), 11 loops -> 0.261 (-11.7 dB), 11; 6064: 0.051 (-26 dB), 3 -> 0.265, 11; 16000: 0.020 (-34 dB), 0 -> 0.249, 11.
 - Not wired yet: `SFXEvent_Ambient_Moving` flybys (5 objects in the Remake data: the Hutt V-Wing and story props); space maps have no ambience
   in the data (`SFXEventsAmbient.xml` is land weather only), units' own `SFXEvent_Ambient_Loop` already plays.
+
+## Fighter size and squadron spread (2026-10-17)
+- **Size:** `ships::small_craft_boost` draws fighters, bombers and squadron members with their bounding sphere at 3.2 % of the screen height (`SMALL_CRAFT_SCREEN_FRACTION`) at every camera distance up to 7277 (the Remake's widest view at our fov, `SMALL_CRAFT_FREEZE_DISTANCE`); farther out the enlargement holds and they shrink with the world; never below true size. One factor per squadron, from its centre, so members match. Measured against the user's video: TIEs 23-29 x 23-27 px (wings included) at 1080p in b0703s, b0732s, b0850s and still 22-25 px in b0760s; ours 18-20 x 24-26 px at camera 2000 (bounding sphere 35 px). Replaces `fighter_boost` (2.6 %, cap 40) of the FX pass 2 above.
+- **Spacing:** squadron members fly 100 units apart (battle-sim `SQUADRON_GAP`), about 47 px at camera 2000: the Remake shows 36-51 px in b0703s. Squadrons carry the icon box only while selected or hovered.
