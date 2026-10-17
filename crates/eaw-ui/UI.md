@@ -199,7 +199,17 @@ are flat colour, not the `i_bar_*` textures; the cooldown overlay is a rising ti
 * **Ability buttons:** the shell rectangle of `special_button_NN` is 24x25 design px (textures
   26x26; `I_SA_*` icons 26x26), i.e. about 34 px at 1080p; the tactical bar really has small ability
   buttons in a row above the selection, there is no separate ability shell or engine rescale in
-  the data. They are now drawn at the natural 26 px border with the icon filling it.
+  the data. Their layers are drawn at the natural 26 px border with the icon filling it (see the next point for the scale).
+* **Ability buttons per card (2026-10-16):** the shell's 24 buttons are an even row, 27.5 design px apart, two per 55 px card
+  column, so with every card showing its abilities the buttons of neighbouring cards ran together into one long row (13 icons for
+  ten cards in a fleet). `tactical::ability_slots` now fills the buttons in card order (each entry knows its card, its place and
+  how many its card shows; every card keeps two, a third or fourth takes a button other cards leave free) and
+  `widgets::ability_columns` centres each card's buttons on top of that card, as the Remake centres a group's abilities on top of
+  the group (video b0700). The buttons show at their component's `<Scale>` 0.8 around their centre on the shell's button row
+  (`UiTransform`; the layers stay at natural size inside): the Remake's ability icons measure 23-26 px at 1080p next to its 77 px
+  card pitch, centred on that row (b0700s.jpg); ours were 36 px at the same pitch and are 26 px now. A pair keeps 4 design px
+  between its buttons and 12.6 px to the next card. More than two abilities go in two rows; beyond two rows of two they are
+  drawn smaller so they stay inside their card's share of the bar (8 px kept free).
 * **Bars:** world-space bars use the original `i_bar_health_{small,medium,large}0..10` level
   textures (34/68/102 px wide, 2 px tall), `i_bar_control_wide` as frame and the full
   `i_bar_shield_*10` texture clipped to the shield fraction. `bar_class(half_size)` picks the set.

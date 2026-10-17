@@ -330,6 +330,43 @@ pub struct EawHardpointClicked {
     pub id: String,
 }
 
+/// Number of ability buttons of the tactical bar (`special_button_00..23`).
+const ABILITY_BUTTONS: usize = 24;
+
+/// The ability buttons (`special_button_NN`) for the cards of `tac`, in card order; each entry knows its card and its place among the
+/// abilities that card shows, and `widgets::ability_columns` puts it above that card. Every card keeps its first two abilities (the bar
+/// has two buttons per card); further abilities take the buttons other cards leave free. Before, buttons `2n` and `2n + 1` belonged to
+/// card `n`: a third ability never showed, and the buttons of neighbouring cards ran together into one evenly spaced row.
+pub fn ability_slots(tac: &TacticalData) -> Vec<AbilityEntry> {
+    let cards: Vec<&TacticalUnit> = tac.selection.iter().take(ABILITY_BUTTONS / 2).collect();
+    let mut shown: Vec<usize> = cards.iter().map(|u| u.abilities.len().min(2)).collect();
+    let mut spare = ABILITY_BUTTONS - shown.iter().sum::<usize>();
+    for (n, u) in shown.iter_mut().zip(&cards) {
+        let more = (u.abilities.len() - *n).min(spare);
+        *n += more;
+        spare -= more;
+    }
+    let mut abilities = vec![AbilityEntry::default(); ABILITY_BUTTONS];
+    let mut slots = abilities.iter_mut();
+    for (card, (u, &of)) in cards.iter().zip(&shown).enumerate() {
+        for (nth, a) in u.abilities.iter().take(of).enumerate() {
+            let Some(slot) = slots.next() else { break };
+            *slot = AbilityEntry {
+                icon: a.def.icon.clone(),
+                ready: 1.0 - a.cooldown.clamp(0.0, 1.0),
+                active: a.active,
+                disabled: a.disabled,
+                kind: a.def.kind.clone(),
+                tooltip: a.def.tooltip(),
+                card,
+                nth,
+                of,
+            };
+        }
+    }
+    abilities
+}
+
 /// Copies [`TacticalData`] into [`CommandBarData`] slots.
 pub(crate) fn tactical_sync(tac: Res<TacticalData>, mut bar: ResMut<CommandBarData>) {
     if !tac.is_changed() || !tac.active {
@@ -350,22 +387,7 @@ pub(crate) fn tactical_sync(tac: Res<TacticalData>, mut bar: ResMut<CommandBarDa
     }
     bar.selection = selection;
 
-    // Ability buttons: up to 2 per column (special_button_{2*col} and special_button_{2*col + 1}).
-    // Up to 12 columns (24 ability slots). Every unit's abilities show above its card in the group.
-    let mut abilities = vec![AbilityEntry::default(); 24];
-    for (col, u) in tac.selection.iter().take(12).enumerate() {
-        for (a_idx, a) in u.abilities.iter().take(2).enumerate() {
-            abilities[col * 2 + a_idx] = AbilityEntry {
-                icon: a.def.icon.clone(),
-                ready: 1.0 - a.cooldown.clamp(0.0, 1.0),
-                active: a.active,
-                disabled: a.disabled,
-                kind: a.def.kind.clone(),
-                tooltip: a.def.tooltip(),
-            };
-        }
-    }
-    bar.abilities = abilities;
+    bar.abilities = ability_slots(&tac);
     bar.ability_column = 0;
     if let Some((cur, cap)) = tac.pop {
         bar.pop_current = cur;
@@ -428,14 +450,12 @@ pub(crate) fn tactical_clicks(
         if let Some(i) = c.name.strip_prefix("special_button_").and_then(|n| n.parse::<usize>().ok())
             && let Some(a) = bar.abilities.get(i).filter(|a| !a.icon.is_empty())
             && !a.disabled
+            && let Some(u) = tac.selection.get(a.card)
         {
-            let group_idx = i / 2;
-            if let Some(u) = tac.selection.get(group_idx) {
-                abilities.write(EawAbilityClicked {
-                    unit_type: u.unit_type.clone(),
-                    ability: a.kind.clone(),
-                });
-            }
+            abilities.write(EawAbilityClicked {
+                unit_type: u.unit_type.clone(),
+                ability: a.kind.clone(),
+            });
         }
         if let Some(i) = c.name.strip_prefix("s_select_").and_then(|n| n.parse::<usize>().ok()) {
             let group_idx = i / 2;
@@ -1160,6 +1180,31 @@ pub(crate) fn unit_panel(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ability_slots_keep_two_per_card_and_give_spare_buttons_to_cards_with_more() {
+        let unit = |n: usize| TacticalUnit {
+            abilities: (0..n).map(|i| AbilityState { def: AbilityDef { kind: format!("A{i}"), icon: format!("I_SA_A{i}.TGA"), ..default() }, ..default() }).collect(),
+            ..default()
+        };
+        let shown = |slots: &[AbilityEntry]| slots.iter().filter(|a| !a.icon.is_empty()).map(|a| (a.card, a.nth, a.of)).collect::<Vec<_>>();
+        // A few cards: every ability gets a button, in card order, the third and fourth ones too.
+        let slots = ability_slots(&TacticalData { selection: vec![unit(3), unit(1), unit(0), unit(4)], ..default() });
+        assert_eq!(slots.len(), 24);
+        assert_eq!(shown(&slots), [(0, 0, 3), (0, 1, 3), (0, 2, 3), (1, 0, 1), (3, 0, 4), (3, 1, 4), (3, 2, 4), (3, 3, 4)]);
+        assert_eq!((slots[2].kind.as_str(), slots[4].kind.as_str()), ("A2", "A0"));
+        // A full bar: twelve cards keep their first two abilities; the third of the first card finds no button.
+        let mut full: Vec<TacticalUnit> = (0..12).map(|_| unit(2)).collect();
+        full[0] = unit(3);
+        let slots = shown(&ability_slots(&TacticalData { selection: full, ..default() }));
+        assert!((0..12).all(|c| slots.iter().filter(|x| x.0 == c).count() == 2 && slots.iter().all(|x| x.2 == 2)), "{slots:?}");
+        // Ten cards with two leave two spare buttons for the card with five: it shows four.
+        let mut some: Vec<TacticalUnit> = (0..10).map(|_| unit(2)).collect();
+        some.insert(3, unit(5));
+        let slots = shown(&ability_slots(&TacticalData { selection: some, ..default() }));
+        assert_eq!(slots.len(), 24);
+        assert_eq!(slots.iter().filter(|x| x.0 == 3).map(|x| x.2).collect::<Vec<_>>(), [4, 4, 4, 4]);
+    }
 
     #[test]
     fn player_triggered_abilities_sort_before_automatic_ones() {

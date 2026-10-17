@@ -79,9 +79,13 @@ pub struct ButtonLayers {
     disabled: Option<Entity>,
 }
 
-/// Left edge (design px) of an ability button in the shell; the button moves right by whole bar columns.
+/// Place of an ability button in the shell: its top left corner (design px), and the `<Scale>` of its component, at which
+/// [`ability_columns`] draws the whole button while it moves the button above its card.
 #[derive(Component, Debug, Clone, Copy)]
-pub(crate) struct AbilityHome(f32);
+pub(crate) struct AbilityHome {
+    corner: Vec2,
+    scale: f32,
+}
 
 /// What a slot kind is bound to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -978,7 +982,10 @@ impl Builder<'_> {
                 self.world.entity_mut(button).insert(PanelSlotName(lname.clone()));
             }
             if s.kind == SlotKind::Ability {
-                self.world.entity_mut(button).insert(AbilityHome(center.x - size.x * 0.5));
+                self.world.entity_mut(button).insert(AbilityHome {
+                    corner: Vec2::new(center.x - size.x * 0.5, self.root_h - center.y - size.y * 0.5),
+                    scale: if def.scale > 0.0 { def.scale } else { 1.0 },
+                });
             }
             // Slots stay invisible until data fills them.
             self.world.entity_mut(button).insert(Visibility::Hidden);
@@ -995,12 +1002,16 @@ impl Builder<'_> {
             let cap = size.max_element().max(8.0) * 1.5;
             s * (cap / s.max_element().max(1.0)).min(1.0)
         };
+        // Ability buttons draw every layer at its natural size; `ability_columns` scales the whole button by the `<Scale>`.
+        let ability = slot.is_some_and(|s| s.kind == SlotKind::Ability);
+        let layer_size = |t: &UiTexture| if ability { t.size.as_vec2() } else { scaled(t) };
         if let Some(t) = CommandBarComponent::pick(&def.blank, fi).and_then(|n| self.tex(n)) {
             let mut sz = scaled(&t);
             icon_px = (sz.min_element() * 0.84).max(20.0);
-            if slot.is_some_and(|s| s.kind == SlotKind::Ability) {
-                // The ability border is drawn at its natural size and the icon fills it
-                // (the shell rectangle is 24x25, the textures are 26x26).
+            if ability {
+                // The ability border is drawn at its natural size and the icon fills it (the shell rectangle is 24x25, the textures
+                // are 26x26); the whole button then shows at the component's Scale 0.8, as the Remake draws it (video b0700: icons
+                // 23-26 px at 1080p next to a 77 px card pitch).
                 sz = t.size.as_vec2();
                 icon_px = sz.min_element() * 0.88;
             }
@@ -1022,19 +1033,19 @@ impl Builder<'_> {
             layers.icon = Some(self.layer(button, size, t, sz, def.icon_offset, tint));
         }
         if let Some(t) = CommandBarComponent::pick(&def.disabled, fi).and_then(|n| self.tex(n)) {
-            let sz = scaled(&t);
+            let sz = layer_size(&t);
             let e = self.layer(button, size, &t, sz, def.icon_offset, tint);
             self.hide(e);
             layers.disabled = Some(e);
         }
         if let Some(t) = CommandBarComponent::pick(&def.selected, fi).and_then(|n| self.tex(n)) {
-            let sz = scaled(&t);
+            let sz = layer_size(&t);
             let e = self.layer(button, size, &t, sz, def.icon_offset, tint);
             self.hide(e);
             layers.selected = Some(e);
         }
         if let Some(t) = CommandBarComponent::pick(&def.mouse_over, fi).and_then(|n| self.tex(n)) {
-            let sz = scaled(&t);
+            let sz = layer_size(&t);
             let e = self.layer(button, size, &t, sz, def.mouse_over_offset, tint);
             self.hide(e);
             layers.over = Some(e);
@@ -1367,26 +1378,72 @@ fn group_digits(v: i64) -> String {
     if v < 0 { format!("-{out}") } else { out }
 }
 
-/// Centres the ability buttons over their own unit card. The layout puts `special_button_{2n}` at the centre of card `n` and
-/// `special_button_{2n+1}` one slot further right, on the gap to the next card; a card with two abilities therefore moves both
-/// buttons left by half a slot so the pair sits centred above the card (one ability stays on the card's centre).
-pub(crate) fn ability_columns(data: Res<CommandBarData>, mut buttons: Query<(&Slot, &AbilityHome, &mut Node)>) {
+/// Space (design px) between two ability buttons of one card, and between two rows.
+const ABILITY_ICON_GAP: f32 = 4.0;
+/// Space (design px) at least kept free between the ability buttons of neighbouring cards. The tactical bar's cards are 55 design px
+/// apart and its buttons 24 px wide (`tactical_shell_layout` in tests/real_data.rs); at the component's Scale 0.8 a pair of buttons
+/// leaves 12.6 px to the next card, against 4 px inside the pair.
+const ABILITY_CARD_GAP: f32 = 8.0;
+
+/// Where ability `nth` of the `of` abilities of a card sits: `center` is the card's centre, `pitch` the room of the card (distance to
+/// the nearer neighbouring card), `w` the button width (design px) and `base` the scale the buttons are drawn at. Returns (left edge,
+/// row above the bottom row, scale). One or two abilities sit side by side centred above the card, as the Remake centres a group's
+/// abilities on top of the group (video b0700); more go in two rows. Buttons that would not fit the card with [`ABILITY_CARD_GAP`] to
+/// spare are drawn smaller, so the buttons of neighbouring cards never overlap and never run together into one evenly spaced row.
+pub(crate) fn ability_place(center: f32, pitch: f32, w: f32, base: f32, nth: usize, of: usize) -> (f32, usize, f32) {
+    let of = of.max(1);
+    let cols = if of <= 2 { of } else { of.div_ceil(2) };
+    let scale = ((pitch - ABILITY_CARD_GAP - (cols - 1) as f32 * ABILITY_ICON_GAP) / (cols as f32 * w)).min(base);
+    let (row, col) = (nth / cols, nth % cols);
+    // A last row that is not full is centred on its own.
+    let in_row = if row == (of - 1) / cols { of - row * cols } else { cols };
+    let row_w = in_row as f32 * w * scale + (in_row - 1) as f32 * ABILITY_ICON_GAP;
+    (center - row_w * 0.5 + col as f32 * (w * scale + ABILITY_ICON_GAP), row, scale)
+}
+
+/// Puts every ability button above its own card ([`ability_place`]), drawn at the `<Scale>` of its component. The bar layout has
+/// `special_button_{2n}` on the centre of card `n`, which gives the card centres and the room between them. Runs after [`slots`]
+/// (lib.rs): a new selection's buttons are placed in the frame they appear, not one frame late at the old places.
+pub(crate) fn ability_columns(data: Res<CommandBarData>, mut buttons: Query<(&Slot, &AbilityHome, &mut Node, &mut UiTransform)>) {
     if !data.is_changed() {
         return;
     }
-    let homes: std::collections::HashMap<usize, f32> =
-        buttons.iter().filter(|(s, ..)| s.kind == SlotKind::Ability).map(|(s, h, _)| (s.index, h.0)).collect();
-    for (slot, home, mut node) in &mut buttons {
+    let homes: HashMap<usize, AbilityHome> = buttons.iter().filter(|(s, ..)| s.kind == SlotKind::Ability).map(|(s, h, ..)| (s.index, *h)).collect();
+    let centre = |card: usize| homes.get(&(card * 2)).map(|h| h.corner.x);
+    let room = |card: usize| {
+        let c = centre(card)?;
+        let left = card.checked_sub(1).and_then(centre).map(|p| c - p);
+        let right = centre(card + 1).map(|n| n - c);
+        left.into_iter().chain(right).reduce(f32::min)
+    };
+    for (slot, home, mut node, mut tf) in &mut buttons {
         if slot.kind != SlotKind::Ability {
             continue;
         }
-        let col = slot.index / 2;
-        let two = data.abilities.get(col * 2 + 1).is_some_and(|a| !a.icon.is_empty());
-        let half_pitch = match (homes.get(&(col * 2)), homes.get(&(col * 2 + 1))) {
-            (Some(a), Some(b)) if two => (b - a) * 0.5,
-            _ => 0.0,
+        let (w, h) = match (node.width, node.height) {
+            (Val::Px(w), Val::Px(h)) => (w, h),
+            _ => (24.0, 25.0),
         };
-        node.left = Val::Px(home.0 - half_pitch);
+        let entry = data.abilities.get(slot.index).filter(|a| !a.icon.is_empty());
+        let (left, top, scale) = match entry.and_then(|a| homes.get(&(a.card * 2)).map(|c| (a, c.corner))) {
+            Some((a, card_corner)) => {
+                let pitch = room(a.card).unwrap_or(2.0 * w + ABILITY_ICON_GAP + ABILITY_CARD_GAP);
+                let (left, row, scale) = ability_place(card_corner.x + w * 0.5, pitch, w, home.scale, a.nth, a.of);
+                // The node scales around its centre, which stays on the shell's button row for the bottom row (the Remake's icon centres
+                // sit there, b0700); shift it so the scaled button's left edge lands where it belongs.
+                (left - w * (1.0 - scale) * 0.5, home.corner.y - row as f32 * (h * scale + ABILITY_ICON_GAP), scale)
+            }
+            None => (home.corner.x, home.corner.y, home.scale),
+        };
+        if node.left != Val::Px(left) {
+            node.left = Val::Px(left);
+        }
+        if node.top != Val::Px(top) {
+            node.top = Val::Px(top);
+        }
+        if tf.scale != Vec2::splat(scale) {
+            tf.scale = Vec2::splat(scale);
+        }
     }
 }
 
@@ -2137,6 +2194,95 @@ mod tests {
         app.world_mut().resource_mut::<CommandBarData>().abilities[1].active = false;
         app.update();
         assert_eq!(app.world().get::<Node>(outline).unwrap().display, Display::None);
+    }
+
+    #[test]
+    fn ability_buttons_sit_above_their_own_card_and_keep_off_the_neighbours() {
+        // The tactical bar: cards 55 design px apart, buttons 24 px wide (tests/real_data.rs `tactical_shell_layout`), Scale 0.8.
+        let (pitch, w, base) = (55.0, 24.0, 0.8);
+        let share = (pitch - ABILITY_CARD_GAP) * 0.5;
+        for of in 1..=6 {
+            let place: Vec<(f32, usize, f32)> = (0..of).map(|nth| ability_place(0.0, pitch, w, base, nth, of)).collect();
+            let scale = place[0].2;
+            assert!(place.iter().all(|p| p.2 == scale), "one size per card");
+            assert_eq!(scale == base, of <= 4, "{of} abilities: the component's size up to two rows of two, smaller beyond");
+            for (i, a) in place.iter().enumerate() {
+                let (l, r) = (a.0, a.0 + w * scale);
+                assert!(l >= -share - 1e-3 && r <= share + 1e-3, "{of} abilities: button {i} spans {l}..{r}, the card's share is ±{share}");
+                for b in place[i + 1..].iter().filter(|b| b.1 == a.1) {
+                    assert!(b.0 >= r + ABILITY_ICON_GAP - 1e-3 || a.0 >= b.0 + w * scale + ABILITY_ICON_GAP - 1e-3, "{of} abilities: buttons of one row overlap");
+                }
+            }
+            for row in 0..2 {
+                let in_row: Vec<_> = place.iter().filter(|p| p.1 == row).collect();
+                if let (Some(first), Some(last)) = (in_row.first(), in_row.last()) {
+                    assert!((first.0 + last.0 + w * scale).abs() < 1e-3, "{of} abilities: row {row} is centred on the card");
+                }
+            }
+        }
+        // Two neighbouring cards with two abilities each: the gap between the cards is three times the gap inside a card.
+        let at = |c: f32, nth| ability_place(c, pitch, w, base, nth, 2);
+        let (within, across) = (at(0.0, 1).0 - (at(0.0, 0).0 + w * base), at(pitch, 0).0 - (at(0.0, 1).0 + w * base));
+        assert!(across >= 3.0 * within, "gap between cards {across}, inside a card {within}");
+    }
+
+    #[test]
+    fn ability_columns_moves_every_button_above_its_card() {
+        use crate::data::AbilityEntry;
+        /// Ability button nodes written per frame.
+        #[derive(Resource, Default)]
+        struct Moves(usize);
+        let mut app = App::new();
+        app.init_resource::<CommandBarData>().init_resource::<Moves>().add_systems(
+            Update,
+            (ability_columns, (|q: Query<(), (Changed<Node>, With<AbilityHome>)>, mut m: ResMut<Moves>| m.0 += q.iter().count()).after(ability_columns)),
+        );
+        // The shell's button row: 24 buttons 27.5 design px apart, special_button_{2n} on the centre of card n (x 380 + 55 n).
+        let corner = |i: usize| Vec2::new(380.0 + 27.5 * i as f32 - 12.0, 40.0);
+        let buttons: Vec<Entity> = (0..24)
+            .map(|i| {
+                let node = Node { left: Val::Px(corner(i).x), top: Val::Px(corner(i).y), width: Val::Px(24.0), height: Val::Px(25.0), ..default() };
+                app.world_mut().spawn((Slot { kind: SlotKind::Ability, index: i }, AbilityHome { corner: corner(i), scale: 0.8 }, node)).id()
+            })
+            .collect();
+        let entry = |card, nth, of| AbilityEntry { icon: "I_SA_HUNT.TGA".into(), card, nth, of, ..default() };
+        // Card 0 with two abilities, card 1 with one, card 2 with five.
+        let mut abilities = vec![entry(0, 0, 2), entry(0, 1, 2), entry(1, 0, 1)];
+        abilities.extend((0..5).map(|n| entry(2, n, 5)));
+        abilities.resize(24, AbilityEntry::default());
+        app.world_mut().resource_mut::<CommandBarData>().abilities = abilities;
+        app.update();
+        // Visible box (left, right, top, bottom) of button i: the node scales around its centre.
+        let at = |app: &App, i: usize| {
+            let n = app.world().get::<Node>(buttons[i]).unwrap();
+            let s = app.world().get::<UiTransform>(buttons[i]).unwrap().scale.x;
+            let (Val::Px(l), Val::Px(t)) = (n.left, n.top) else { panic!("px") };
+            (l + 12.0 * (1.0 - s), l + 12.0 * (1.0 + s), t + 12.5 * (1.0 - s), t + 12.5 * (1.0 + s))
+        };
+        let at0 = |i| at(&app, i);
+        assert!((at0(0).1 - at0(0).0 - 24.0 * 0.8).abs() < 1e-3, "drawn at the component's Scale");
+        assert!(((at0(0).0 + at0(1).1) * 0.5 - 380.0).abs() < 1e-3, "the pair is centred on card 0");
+        assert!(((at0(2).0 + at0(2).1) * 0.5 - 435.0).abs() < 1e-3, "the single button on card 1");
+        assert!(at0(3).1 - at0(3).0 < 24.0 * 0.8, "five abilities are drawn smaller");
+        assert!((0..6).all(|i| ((at0(i).2 + at0(i).3) * 0.5 - 52.5).abs() < 1e-3), "the bottom row stays centred on the shell's button row");
+        assert!(at0(6).3 < at0(3).2, "abilities 4 and 5 of card 2 go in a row above");
+        for (i, card) in [0, 0, 1, 2, 2, 2, 2, 2].into_iter().enumerate() {
+            let (l, r, ..) = at0(i);
+            let c = 380.0 + 55.0 * card as f32;
+            assert!(l >= c - 23.5 - 1e-3 && r <= c + 23.5 + 1e-3, "button {i} of card {card} spans {l}..{r}");
+        }
+        // Unused buttons stay where the shell has them.
+        assert_eq!(app.world().get::<Node>(buttons[10]).unwrap().left, Val::Px(corner(10).x));
+        // The bar data changes every frame in a battle (cooldowns, health): the buttons stay where they are and their nodes are not
+        // written again.
+        let placed: Vec<_> = (0..24).map(at0).collect();
+        app.world_mut().resource_mut::<Moves>().0 = 0;
+        for _ in 0..8 {
+            app.world_mut().resource_mut::<CommandBarData>().set_changed();
+            app.update();
+            assert_eq!((0..24).map(|i| at(&app, i)).collect::<Vec<_>>(), placed);
+        }
+        assert_eq!(app.world().resource::<Moves>().0, 0, "no layout writes while nothing moves");
     }
 
     #[test]

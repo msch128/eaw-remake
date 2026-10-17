@@ -38,7 +38,7 @@ pub use panels::{
 pub use panels::{MinimapCameraQuad, MinimapFog};
 pub use tactical::{TacticalOverlayRoot, 
     AbilityDef, AbilityState, EawAbilityClicked, EawHardpointClicked, EawSelectionClicked,
-    HardpointMarker, HardpointNode, RetreatState, ShipOverlay, ShipOverlayNode, TacticalData, TacticalOverlays, TacticalUnit, ability_icon,
+    HardpointMarker, HardpointNode, RetreatState, ShipOverlay, ShipOverlayNode, TacticalData, TacticalOverlays, TacticalUnit, ability_icon, ability_slots,
     spawn_unit_panel, unit_abilities, hardpoint_reticle, bar_class, bar_color,
 };
 pub use widgets::{
@@ -213,7 +213,7 @@ impl Plugin for EawUiPlugin {
                 )
                     .chain(),
             )
-            .add_systems(Update, (widgets::segment_bars, widgets::border_pieces.after(widgets::slots), widgets::ability_columns, widgets::active_outlines.after(widgets::slots)));
+            .add_systems(Update, (widgets::segment_bars, widgets::border_pieces.after(widgets::slots), widgets::ability_columns.after(widgets::slots), widgets::active_outlines.after(widgets::slots)));
     }
 }
 

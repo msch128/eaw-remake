@@ -215,6 +215,7 @@ fn drive(
         Query<(), With<crate::tactical_ui::AutocastRing>>,
         Query<&Text, With<crate::hud::UnitPanelStats>>,
         MessageWriter<eaw_ui::EawMinimapClicked>,
+        Res<eaw_ui::CommandBarData>,
     ),
     extra: (
         Res<UiBlock>,
@@ -237,7 +238,7 @@ fn drive(
 ) {
     let (block, pointer, hover, names, all_nodes, interactions, mut commands, action, armed, reinforce, mut motion, mut keyboard, tactical, mut ability_clicks, move_lines, mut recent) = extra;
     st.ability_clicks += ability_clicks.read().count() as u32;
-    let (hp_overlays, hp_tips, mut cams, autocast_rings, panel_stats, mut minimap) = hp_ui;
+    let (hp_overlays, hp_tips, mut cams, autocast_rings, panel_stats, mut minimap, bar_data) = hp_ui;
     let cam_pose = cams.single().map(|c| (c.target_yaw, c.pitch)).unwrap_or_default();
     let (cam_entity, cam, gt) = *camera;
     let sf = cam.target_scaling_factor().unwrap_or(1.0);
@@ -597,9 +598,10 @@ fn drive(
                 (0, None) => verdict = Some(("autocast-toggle (selected unit has no autocast ability)".into(), true)),
                 (0, Some((id, i, k, on))) => {
                     st.autocast = Some((id, i, on));
-                    let btn_idx = tactical.focus * 2 + k;
-                    let name = format!("special_button_{btn_idx:02}");
-                    match bar.iter().find(|r| r.0.name == name && r.4.get()) {
+                    // The bar entry that shows ability k of the focused card (`eaw_ui::ability_slots`).
+                    let shown = bar_data.abilities.iter().position(|e| !e.icon.is_empty() && e.card == tactical.focus && e.nth == k);
+                    let name = shown.map(|b| format!("special_button_{b:02}"));
+                    match bar.iter().find(|r| name.as_deref() == Some(r.0.name.as_str()) && r.4.get()) {
                         Some(r) => act = Some(Act::Move(r.3.translation / sf)),
                         None => verdict = Some(("autocast-toggle: ability button not visible".into(), false)),
                     }

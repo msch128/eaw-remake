@@ -961,21 +961,19 @@ fn ability_keys(
 #[derive(Component)]
 pub(crate) struct AutocastRing;
 
-/// The ability of the unit group behind `special_button_NN`: (ship slot group, kind of the ability).
-fn button_ability(name: &str, tac: &TacticalData, state: &TacticalUiState) -> Option<(Vec<u32>, String)> {
+/// The ability of the unit group behind `special_button_NN`: (ship slot group, kind of the ability). The bar entry of the button names
+/// its card (`eaw_ui::ability_slots`).
+fn button_ability(name: &str, bar: &eaw_ui::CommandBarData, state: &TacticalUiState) -> Option<(Vec<u32>, String)> {
     let k: usize = name.strip_prefix("special_button_")?.parse().ok()?;
-    let group_idx = k / 2;
-    let ability_idx = k % 2;
-    let unit = tac.selection.get(group_idx)?;
-    let kind = unit.abilities.get(ability_idx)?.def.kind.clone();
-    Some((state.groups.get(group_idx)?.clone(), kind))
+    let entry = bar.abilities.get(k).filter(|a| !a.icon.is_empty())?;
+    Some((state.groups.get(entry.card)?.clone(), entry.kind.clone()))
 }
 
 /// Right click on an ability button turns its autocast on or off for every ship of the slot (only abilities that support it).
 #[allow(clippy::too_many_arguments)]
 fn autocast_toggle(
     pointer: Res<control::Pointer>,
-    tac: Res<TacticalData>,
+    bar: Res<eaw_ui::CommandBarData>,
     state: Res<TacticalUiState>,
     rt: Res<BattleRuntime>,
     settings: Res<BattleViewSettings>,
@@ -991,7 +989,7 @@ fn autocast_toggle(
     else {
         return;
     };
-    let Some((group, kind)) = button_ability(&name, &tac, &state) else { return };
+    let Some((group, kind)) = button_ability(&name, &bar, &state) else { return };
     let Some(cur) = rt.cur.as_ref() else { return };
     // The new state follows the first ship of the slot so that a mixed slot ends up uniform.
     let mut target: Option<bool> = None;
@@ -1009,7 +1007,7 @@ fn autocast_toggle(
 
 /// Keeps a ring on every ability button whose autocast is on (first ship of the focused slot).
 fn autocast_rings(
-    tac: Res<TacticalData>,
+    bar: Res<eaw_ui::CommandBarData>,
     state: Res<TacticalUiState>,
     rt: Res<BattleRuntime>,
     buttons: Query<(Entity, &eaw_ui::EawButton, Option<&Children>)>,
@@ -1020,7 +1018,7 @@ fn autocast_rings(
         if !b.name.starts_with("special_button_") {
             continue;
         }
-        let on = button_ability(&b.name, &tac, &state).is_some_and(|(group, kind)| {
+        let on = button_ability(&b.name, &bar, &state).is_some_and(|(group, kind)| {
             group.first().and_then(|&id| rt.cur.as_ref().and_then(|c| c.ship(id))).is_some_and(|s| {
                 let defs = &rt.catalog.ship(s.def).abilities;
                 defs.iter().position(|d| d.kind.eq_ignore_ascii_case(&kind)).is_some_and(|i| defs[i].supports_autofire && s.autocast.get(i).copied().unwrap_or(false))
@@ -1892,62 +1890,24 @@ mod tests {
     }
 
     #[test]
-    fn button_ability_maps_to_group_columns() {
+    fn button_ability_maps_to_the_card_of_its_bar_entry() {
+        let ability = |kind: &str| eaw_ui::AbilityState { def: eaw_ui::AbilityDef { kind: kind.into(), icon: format!("I_SA_{kind}.TGA"), ..default() }, ..default() };
+        let unit = |name: &str, kinds: &[&str]| eaw_ui::TacticalUnit { unit_type: name.into(), abilities: kinds.iter().map(|k| ability(k)).collect(), ..default() };
         let tac = TacticalData {
             active: true,
-            focus: 0,
-            selection: vec![
-                eaw_ui::TacticalUnit {
-                    unit_type: "Thrawn".into(),
-                    abilities: vec![
-                        eaw_ui::AbilityState {
-                            def: eaw_ui::AbilityDef { kind: "POWER_TO_WEAPONS".into(), ..default() },
-                            ..default()
-                        },
-                        eaw_ui::AbilityState {
-                            def: eaw_ui::AbilityDef { kind: "TRACTOR_BEAM".into(), ..default() },
-                            ..default()
-                        },
-                    ],
-                    ..default()
-                },
-                eaw_ui::TacticalUnit {
-                    unit_type: "Victory".into(),
-                    abilities: vec![
-                        eaw_ui::AbilityState {
-                            def: eaw_ui::AbilityDef { kind: "FULL_SALVO".into(), ..default() },
-                            ..default()
-                        },
-                    ],
-                    ..default()
-                },
-            ],
+            selection: vec![unit("Thrawn", &["POWER_TO_WEAPONS", "TRACTOR_BEAM"]), unit("Victory", &["FULL_SALVO"]), unit("Corvette", &[]), unit("X-Wing", &["HUNT", "SPOILER_LOCK"])],
             ..default()
         };
-        let state = TacticalUiState {
-            groups: vec![vec![101], vec![201, 202]],
-            ..default()
-        };
-
-        // Col 0: Thrawn (special_button_00 and 01)
-        assert_eq!(
-            button_ability("special_button_00", &tac, &state),
-            Some((vec![101], "POWER_TO_WEAPONS".into()))
-        );
-        assert_eq!(
-            button_ability("special_button_01", &tac, &state),
-            Some((vec![101], "TRACTOR_BEAM".into()))
-        );
-
-        // Col 1: Victory (special_button_02)
-        assert_eq!(
-            button_ability("special_button_02", &tac, &state),
-            Some((vec![201, 202], "FULL_SALVO".into()))
-        );
-        assert_eq!(button_ability("special_button_03", &tac, &state), None);
-
-        // Col 2: empty
-        assert_eq!(button_ability("special_button_04", &tac, &state), None);
+        let bar = eaw_ui::CommandBarData { abilities: eaw_ui::ability_slots(&tac), ..default() };
+        let state = TacticalUiState { groups: vec![vec![101], vec![201, 202], vec![301], vec![401, 402, 403]], ..default() };
+        // The buttons fill in card order; the card of each button is in its bar entry, not in the button number.
+        assert_eq!(button_ability("special_button_00", &bar, &state), Some((vec![101], "POWER_TO_WEAPONS".into())));
+        assert_eq!(button_ability("special_button_01", &bar, &state), Some((vec![101], "TRACTOR_BEAM".into())));
+        assert_eq!(button_ability("special_button_02", &bar, &state), Some((vec![201, 202], "FULL_SALVO".into())));
+        assert_eq!(button_ability("special_button_03", &bar, &state), Some((vec![401, 402, 403], "HUNT".into())));
+        assert_eq!(button_ability("special_button_04", &bar, &state), Some((vec![401, 402, 403], "SPOILER_LOCK".into())));
+        assert_eq!(button_ability("special_button_05", &bar, &state), None);
+        assert_eq!(button_ability("b_retreat", &bar, &state), None);
     }
 
     #[test]

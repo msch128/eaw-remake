@@ -99,6 +99,12 @@ pub struct AbilityEntry {
     pub kind: String,
     /// Tooltip text (already localized).
     pub tooltip: String,
+    /// Selection card (index into `TacticalData::selection`, the bar column) the ability belongs to.
+    pub card: usize,
+    /// Place of the ability among the abilities of its card.
+    pub nth: usize,
+    /// Number of abilities the card shows.
+    pub of: usize,
 }
 
 /// Everything the command bars display (resource).
