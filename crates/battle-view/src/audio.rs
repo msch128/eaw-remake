@@ -319,6 +319,12 @@ pub fn battle_audio(
                     send(n, None, &mut stats, &mut out);
                 }
             }
+            // The player called the own retreat off (Retreat pressed again during the countdown): `Space_Retreat_Cancel_SFXEvent`.
+            Event::RetreatCancelled { side } if *side == player => {
+                if let Some(n) = faction.as_deref().and_then(|f| constants.faction_sfx(f, "space_retreat_cancel_sfxevent")) {
+                    send(n, None, &mut stats, &mut out);
+                }
+            }
             Event::ShipRetreated { ship } => {
                 let Some(&(_, side)) = mem.ships.get(ship) else { continue };
                 if side == player {

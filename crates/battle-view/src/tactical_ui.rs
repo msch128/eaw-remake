@@ -199,17 +199,7 @@ fn sync_data(
     paired.sort_by_key(|(u, _)| u.section);
     let (selection, groups): (Vec<_>, Vec<_>) = paired.into_iter().unzip();
 
-    let retreat = if status.over {
-        RetreatState::Unavailable
-    } else if let Some(jump) = cur.retreat_jump_in.get(player as usize).copied().flatten() {
-        // The order was given: the jump countdown runs (pressed button look and m:ss under it).
-        RetreatState::Countdown(jump)
-    } else if status.time >= rt.retreat_countdown {
-        RetreatState::Ready
-    } else {
-        // Not available yet: the original shows the button dimmed and without text (Remake video b0662).
-        RetreatState::Unavailable
-    };
+    let retreat = retreat_state(status.over, cur.retreat_jump_in.get(player as usize).copied().flatten(), status.time, rt.retreat_countdown);
     let new = TacticalData {
         active: true,
         focus: if overview { usize::MAX } else { tac.focus.min(selection.len().saturating_sub(1)) },
@@ -248,6 +238,10 @@ fn handle_clicks(
     for b in buttons.read() {
         let mine = || control::selected_mobile(&rt, &ships, &sel, player);
         match b.name.as_str() {
+            "b_retreat" if matches!(retreat_press(tac.retreat), Command::CancelRetreat) => {
+                // Pressed again while the hyperdrives charge: the retreat is called off (the sim's `RetreatCancelled` plays the line).
+                rt.command(player, Command::CancelRetreat);
+            }
             "b_retreat" => {
                 // The announcement follows the sim's `RetreatOrdered` event (`audio::battle_audio`), so a refused order is silent.
                 // Before the retreat countdown ran out the sim refuses: the faction's `Space_Retreat_Not_Allowed_SFXEvent` instead.
@@ -1605,6 +1599,25 @@ pub struct RetreatNotice(pub f32);
 #[derive(Resource, Default)]
 pub struct InterdictNotice(pub f32, pub String);
 
+/// State of the Retreat button: unavailable once the battle is over and before the retreat countdown ran out (the original shows it dimmed and
+/// without text, Remake video b0662), the jump countdown while the own retreat runs (pressed look and m:ss under it), else ready.
+fn retreat_state(over: bool, jump_in: Option<f32>, time: f32, countdown: f32) -> RetreatState {
+    if over {
+        RetreatState::Unavailable
+    } else if let Some(jump) = jump_in {
+        RetreatState::Countdown(jump)
+    } else if time >= countdown {
+        RetreatState::Ready
+    } else {
+        RetreatState::Unavailable
+    }
+}
+
+/// What a press on the Retreat button does: while the jump countdown runs it calls the retreat off (EaW), otherwise it orders the retreat.
+fn retreat_press(state: RetreatState) -> Command {
+    if matches!(state, RetreatState::Countdown(_)) { Command::CancelRetreat } else { Command::Retreat }
+}
+
 /// An enemy ship or station holds a gravity well against `side` (the rule of `Battle::interdicted`, read from the displayed snapshot).
 fn interdicted(rt: &BattleRuntime, side: u8) -> bool {
     rt.cur.as_ref().is_some_and(|c| {
@@ -2034,5 +2047,51 @@ mod order_cursor_tests {
         assert_eq!(order_cursor_icon(None, true, true), Some("I_BUTTON_COMMAND_BAR_ATTACK.TGA"));
         assert_eq!(order_cursor_icon(None, false, true), None);
         assert_eq!(order_cursor_icon(None, true, false), None);
+    }
+}
+
+#[cfg(test)]
+mod retreat_tests {
+    use super::*;
+    use battle_sim::{Battle, BattleConfig, BattleSetup, Catalog, ProjDef, ShipDef, SideSetup, TargetClass, UnitSetup};
+
+    /// Two frigates of the player (side 0, no AI) against an idle station; the retreat is allowed at once and the jump comes 10 s after the order.
+    fn battle() -> Battle {
+        let runner = ShipDef { name: "runner".into(), class: TargetClass::Frigate, hull: 1000.0, max_speed: 100.0, accel: 100.0, turn_rate: 1.0, radius: 50.0, population: 1, ..ShipDef::default() };
+        let idle = ShipDef { name: "idle".into(), class: TargetClass::Structure, is_static: true, hull: 1.0e6, radius: 100.0, ..ShipDef::default() };
+        let cat = std::sync::Arc::new(Catalog::from_defs(vec![runner, idle], vec![ProjDef { name: "laser".into(), ..ProjDef::default() }]));
+        let side = |n: &str, c: u32| SideSetup { name: n.into(), units: vec![UnitSetup { ship: cat.ship_id(n).unwrap(), count: c, tag: 1 }], structures: vec![], ai: false };
+        let config = BattleConfig { retreat_countdown: 0.0, retreat_jump_seconds: 10.0, ..BattleConfig::default() };
+        Battle::new(BattleSetup { sides: vec![side("runner", 2), side("idle", 1)], catalog: cat.clone(), config })
+    }
+
+    #[test]
+    fn pressing_retreat_again_during_the_countdown_calls_it_off_and_the_button_holds_its_state() {
+        // The real worker and snapshots, one step per frame: Retreat pressed after 1 s, pressed again 4 s later (EaW cancels the retreat).
+        let sim = crate::sim::SimHandle::spawn(battle());
+        let mut seen = Vec::new();
+        let mut last = None;
+        for tick in 0..30 * 25u64 {
+            sim.request(tick + 1);
+            let cur = sim.fetch(tick, true).0.expect("snapshot");
+            let state = retreat_state(cur.over, cur.retreat_jump_in.first().copied().flatten(), cur.time, 0.0);
+            if tick == 30 || tick == 150 {
+                sim.command(0, retreat_press(state));
+            }
+            seen.push(state);
+            last = Some(cur);
+        }
+        let countdown = |s: &RetreatState| matches!(s, RetreatState::Countdown(_));
+        // The order reaches the next step: from then on the countdown shows on every frame until the second press.
+        assert!(seen[..31].iter().all(|s| *s == RetreatState::Ready), "{:?}", &seen[..31]);
+        assert!(seen[33..151].iter().all(countdown), "{:?}", &seen[33..151]);
+        // Called off: ready again on every following frame, the countdown never comes back (no flicker between the two looks).
+        assert!(seen[153..].iter().all(|s| *s == RetreatState::Ready), "{:?}", seen[153..].iter().find(|s| **s != RetreatState::Ready));
+        let toggles = seen.windows(2).filter(|w| countdown(&w[0]) != countdown(&w[1])).count();
+        assert_eq!(toggles, 2, "one change for the order, one for the cancel");
+        // Well past the first jump time (11 s): both frigates are still in the battle.
+        let last = last.unwrap();
+        assert_eq!(last.alive.first().copied(), Some(2), "nobody jumped out");
+        assert!(!last.over);
     }
 }

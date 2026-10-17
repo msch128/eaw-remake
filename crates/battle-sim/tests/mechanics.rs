@@ -1631,3 +1631,35 @@ fn a_defender_without_a_station_leaves_after_30_s_and_its_reserve_counts() {
     assert!(attacker > 120.0, "an attacker waits for 120 s: {attacker}");
     assert_eq!(run(true, 3), None, "three more ships waiting outside: the odds are even, nobody leaves");
 }
+
+#[test]
+fn pressing_retreat_again_during_the_countdown_calls_it_off_and_nobody_jumps() {
+    // EaW: the Retreat button pressed a second time while the hyperdrives charge cancels the retreat (`Space_Retreat_Cancel_SFXEvent`).
+    let mut b = retreat_battle(vec![runner("runner", vec![]), idle_target()], "runner", 2, 10.0);
+    assert_eq!(b.command(0, Command::CancelRetreat), Ok(()), "nothing to call off: no effect");
+    assert_eq!(b.retreat_jump_in(0), None);
+    b.command(0, Command::Retreat).unwrap();
+    let mut events = Vec::new();
+    for _ in 0..(4.0 * 30.0) as usize {
+        events.extend(b.step().iter().cloned());
+    }
+    assert!(events.contains(&Event::RetreatOrdered { side: 0, jump_in: 10.0 }));
+    assert!(b.ships.iter().filter(|s| s.side == 0).all(|s| matches!(s.order, Order::Retreat)));
+    b.command(0, Command::CancelRetreat).unwrap();
+    assert_eq!(b.retreat_jump_in(0), None, "the countdown is gone at once");
+    assert!(b.ships.iter().filter(|s| s.side == 0).all(|s| matches!(s.order, Order::Idle)), "the units stop retreating and wait for orders");
+    assert!(b.step().contains(&Event::RetreatCancelled { side: 0 }));
+    // Well past the old jump time: nobody left the battle.
+    for _ in 0..(12.0 * 30.0) as usize {
+        b.step();
+    }
+    assert!(b.ships.iter().filter(|s| s.side == 0).all(|s| s.alive && !s.retreated), "nobody jumped out");
+    assert!(!b.is_over());
+    // A new order starts a full countdown again and the jump happens when it ends.
+    b.command(0, Command::Retreat).unwrap();
+    assert!((b.retreat_jump_in(0).unwrap() - 10.0).abs() < 0.1, "{:?}", b.retreat_jump_in(0));
+    for _ in 0..(10.5 * 30.0) as usize {
+        b.step();
+    }
+    assert!(b.ships.iter().filter(|s| s.side == 0).all(|s| s.alive && s.retreated), "the second retreat runs to the jump");
+}

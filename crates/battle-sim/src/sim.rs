@@ -852,6 +852,17 @@ impl Battle {
                     s.order = Order::Retreat;
                 }
             }
+            Command::CancelRetreat => {
+                if self.retreat_jump_at[side as usize].take().is_some() {
+                    self.retreat_ordered[side as usize] = false;
+                    for s in self.ships.iter_mut().filter(|s| s.side == side && s.alive && matches!(s.order, Order::Retreat)) {
+                        s.order = Order::Idle;
+                    }
+                    if self.config.record_events {
+                        self.cmd_events.push(Event::RetreatCancelled { side });
+                    }
+                }
+            }
             Command::Cheat(cheat) => self.apply_cheat(side, cheat),
             Command::ReinforceAt { ship, count, pos, yaw_offset } => {
                 self.reinforcement_zone_check(side, pos)?;

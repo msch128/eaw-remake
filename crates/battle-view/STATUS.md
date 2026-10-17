@@ -62,7 +62,7 @@ Without `--offscreen` it opens a window. Other flags: `--map`, `--cam yaw,pitch,
 - `Snapshot::result` carries the final `BattleResult`; `ShipSnap::abilities` carries (active, cooldown) per ability.
 - `tactical_ui::TacticalUiPlugin` (needs `eaw_ui::EawUiPlugin::new(fs).with_game_data(data)`): spawns the EaW space tactical
   bar with each battle, fills `TacticalData` (selection grouped per unit type with hull/shield, ability buttons with cooldown/active,
-  retreat countdown/ready, population) and turns clicks into commands (`b_retreat` -> `Command::Retreat`, ability button ->
+  retreat countdown/ready, population) and turns clicks into commands (`b_retreat` -> `Command::Retreat`, during the jump countdown -> `Command::CancelRetreat`, ability button ->
   `UseAbility` for the focused group, selection slot -> sub-select, shift removes). Not wired: reinforcement buttons, eaw-ui
   world-space overlays (gizmo bars stay), `Hardpoint` markers.
 - `audio` module: `PlaySfx` messages for weapon fire (`Fire_SFXEvent`), non-shield hits (`Projectile_SFXEvent_Detonate`), ship death

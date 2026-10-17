@@ -51,7 +51,7 @@ playable.
 | Retreat started (own) | yes (now on the sim's `RetreatOrdered`, was on the button click: a refused order and the Esc menu path were wrong) | `Space_Retreat_Begin_SFXEvent` = `<F>HD_Retreat_Started_Space` | `battle-view/audio.rs` |
 | Retreat started (enemy) | yes (new) | `Space_Retreat_Enemy_Begin_SFXEvent` (`Unit_Enemy_Retreat_*_Soldier`) | `battle-view/audio.rs` |
 | Retreat not allowed | yes (new, countdown case only) | `Space_Retreat_Not_Allowed_SFXEvent` when the retreat button is pressed before `retreat_countdown`; the interdictor reason 1 and the Esc-menu path are not covered | `tactical_ui.rs` |
-| Retreat cancel | data gap in our sim | `Space_Retreat_Cancel_SFXEvent` exists, the sim has no cancel command | - |
+| Retreat cancel | yes (new) | `Space_Retreat_Cancel_SFXEvent` when the player presses Retreat again during the jump countdown (`Command::CancelRetreat`, sim event `RetreatCancelled`); a gravity well that stops the jump plays reason 1 first | `battle-view/audio.rs` |
 | Reinforcements selection / cancelled | yes (new) | `Reinforcements_Selection_SFXEvent` when the window opens, `_Cancelled_` when it is closed while a unit is picked (estimate) | `tactical_ui.rs` |
 | Reinforcements requesting | no | `Reinforcements_Requesting_SFXEvent` (`<F>HD_Request_Assistance`): no clear moment (the call already plays `En_Route`) | open |
 | Reinforcements available / en route / enemy wave | yes | `<F>HD_Reinforcements_Available`, `_En_Route`, `Enemy_Forces` (estimate for the enemy wave) | `battle-view/audio.rs` |

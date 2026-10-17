@@ -96,6 +96,8 @@ Not implemented: stealth, sensor jamming, and every other ability type.
   (default 10 s, **estimate**: the user said 10 or 20 s and the data has no value; `Battle::retreat_jump_in(side)` gives the countdown) runs. At zero every living
   unit with at least one living `HpKind::Engine` hardpoint (ships without engine hardpoints count as having drives) escapes and counts as retreated survivor; the others are lost.
   Units spawned in the battle do not escape on their own: a carrier's launched squadrons escape only if the carrier does, squadrons called in as reinforcements are lost.
+  Pressing Retreat again while the timer runs calls the retreat off (EaW; `Command::CancelRetreat`): the timer stops, the retreating units stop and wait for orders,
+  `Event::RetreatCancelled` is reported (`Space_Retreat_Cancel_SFXEvent`), and a later order starts a full timer again. A second `Command::Retreat` still only keeps the timer.
 * A side loses when it has no ship other than fighters/bombers left (a fighter-only side loses when its fighters are gone).
   The loser's remaining fighters are destroyed with it. Battles are a draw after `max_time` (60 min: the data has no battle time limit, this only guards headless runs). Mobile ships climb or sink towards their target's height at half top speed (flight is otherwise planar, and launch-bay or spawn height offsets used to keep ships out of weapon range for ever).
 * Arena: `BattleConfig::arena` (`Arena::load(data, fs, "<map>.ted")` via the `alamo-map` crate) gives the playable bounds,

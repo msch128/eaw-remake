@@ -253,6 +253,9 @@ pub enum Command {
     },
     /// Order the whole side to leave the battlefield.
     Retreat,
+    /// Call the side's retreat off while its hyperspace jump is still being prepared (EaW: the Retreat button pressed again during the countdown);
+    /// the units stop and wait for orders. Nothing happens when no retreat is running.
+    CancelRetreat,
     /// A cheat of the F2 menu (see [`crate::cheats`]).
     Cheat(crate::cheats::BattleCheat),
     /// Call in reinforcements (limited by the unit cap, arrive after a delay) at the side's reinforcement point.
@@ -400,6 +403,11 @@ pub enum Event {
     },
     /// A gravity well stopped the retreat of a side before its jump.
     RetreatAborted {
+        /// Side.
+        side: u8,
+    },
+    /// A side called its retreat off before the jump (`Command::CancelRetreat`).
+    RetreatCancelled {
         /// Side.
         side: u8,
     },
