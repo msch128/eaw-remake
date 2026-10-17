@@ -39,6 +39,8 @@ pub struct ShipSnap {
     pub pos: Vec3,
     /// Heading in radians.
     pub yaw: f32,
+    /// Current speed, units per second.
+    pub speed: f32,
     /// Hull points.
     pub hull: f32,
     /// Shield points.
@@ -137,6 +139,7 @@ fn snapshot(battle: &Battle, events: Vec<Event>, step_ms: f32) -> Snapshot {
                 side: s.side,
                 pos: s.pos,
                 yaw: s.yaw,
+                speed: s.speed,
                 hull: s.hull,
                 shield: s.shield,
                 squad: s.squad,

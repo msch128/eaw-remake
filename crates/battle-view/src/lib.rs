@@ -540,6 +540,7 @@ impl Plugin for BattleViewPlugin {
                             audio::battle_music,
                             audio::battle_listener,
                             audio::battle_sources,
+                            audio::battle_ambient_moving,
                             report_outcome,
                         )
                             .chain(),

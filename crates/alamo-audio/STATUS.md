@@ -67,7 +67,10 @@ Empire at War audio: event data, sample resolution, decoding and a Bevy playback
 - **Object loops**: `SfxEmitter` component (`event: Option<String>`): the plugin starts the loop at the object, follows it, fades the old one out
   (`Loop_Fade_Out_Seconds`) on a change or when the object is gone, starts nothing that would be inaudible, and gives `Max_Instances` slots to the nearest
   objects. Battle ships use `SFXEvent_Engine_Idle_Loop` / `_Moving_Loop`, else `SFXEvent_Ambient_Loop` (unit XML). Moving = route or move / attack / retreat order (estimate).
-  Still no data for space ambience beds; `SFXEvent_Turret_Rotating_Loop`, `_Engine_Cinematic_Focus_Loop`, `_Ambient_Moving` are not wired.
+  Still no data for space ambience beds; `SFXEvent_Turret_Rotating_Loop` and `_Engine_Cinematic_Focus_Loop` are not wired.
+- **Flybys** (`SFXEvent_Ambient_Moving`, 2026-10-17): one-shots played by `battle-view` (`audio::battle_ambient_moving`) at the unit every
+  min..max delay seconds while it moves. They do not rely on the `Max_Instances` rule above: the view starts one only while its event has a
+  free voice, nearest first, or when it is at least twice as loud as every playing one (the oldest it then cuts is 6 dB quieter).
 - **Music**: result stingers play once (the data's `Loop = Yes` of the win events is ignored) and are not cut off by the return to the map:
   `MusicDirector::resume_after_stinger(scene)` (used by `flow::galaxy_music`). New track fade-in is the event's own `Fade_In_Seconds`; the previous one
   fades over `Fade_Out_Previous_Seconds`. Not defined in the data: peace / war variants of the galaxy theme, speech ducking.

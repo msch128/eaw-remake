@@ -69,6 +69,10 @@ pub struct UnitSfx {
     pub engine_moving: Option<String>,
     /// `SFXEvent_Ambient_Loop` (constant machinery of stations and big ships).
     pub ambient_loop: Option<String>,
+    /// `SFXEvent_Ambient_Moving`: played now and then while the unit moves (the fighters' flybys).
+    pub ambient_moving: Option<String>,
+    /// `SFXEvent_Ambient_Moving_Min_Delay_Seconds` / `_Max_Delay_Seconds`: the random gap between two of them.
+    pub ambient_moving_delay: (f32, f32),
     /// `SFXEvent_Group_Move` (heroes: the line for a move order given to a group; estimate, the data does not say when).
     pub group_move: Option<String>,
     /// `SFXEvent_Group_Attack`.
@@ -287,6 +291,11 @@ impl VisualCatalog {
                 engine_idle: sfx("sfxevent_engine_idle_loop"),
                 engine_moving: sfx("sfxevent_engine_moving_loop"),
                 ambient_loop: sfx("sfxevent_ambient_loop"),
+                ambient_moving: sfx("sfxevent_ambient_moving").filter(|n| !n.eq_ignore_ascii_case("sfx_na")),
+                ambient_moving_delay: ambient_moving_delay(
+                    r.as_ref().and_then(|r| r.num("sfxevent_ambient_moving_min_delay_seconds")),
+                    r.as_ref().and_then(|r| r.num("sfxevent_ambient_moving_max_delay_seconds")),
+                ),
                 group_move: sfx("sfxevent_group_move").filter(|n| !n.eq_ignore_ascii_case("sfx_na")),
                 group_attack: sfx("sfxevent_group_attack").filter(|n| !n.eq_ignore_ascii_case("sfx_na")),
                 assist_move: sfx("sfxevent_assist_move").filter(|n| !n.eq_ignore_ascii_case("sfx_na")),
@@ -376,6 +385,19 @@ pub fn ship_death_effect(class: TargetClass) -> &'static str {
         TargetClass::Super | TargetClass::Structure => "Large_Explosion_Space_Empire_pd_medium_3_1250",
         _ => "Large_Explosion_Space_Empire_pd_medium_3_300",
     }
+}
+
+/// Gap in seconds between two `SFXEvent_Ambient_Moving` sounds when a unit names no delays: the data's most common pair (estimate:
+/// 188 of the 261 space units with the event name 3 to 5 s; only the `Ravager` names none).
+pub const DEFAULT_AMBIENT_MOVING_DELAY: (f32, f32) = (3.0, 5.0);
+/// Shortest gap between two `SFXEvent_Ambient_Moving` sounds of one unit (guards against a 0 delay; the data's shortest is 1 s).
+const MIN_AMBIENT_MOVING_DELAY: f32 = 0.25;
+
+/// The `min..max` gap between two `SFXEvent_Ambient_Moving` sounds of a unit from its min / max delay tags.
+pub fn ambient_moving_delay(min: Option<f32>, max: Option<f32>) -> (f32, f32) {
+    let min = min.unwrap_or(DEFAULT_AMBIENT_MOVING_DELAY.0).max(MIN_AMBIENT_MOVING_DELAY);
+    let max = max.unwrap_or(DEFAULT_AMBIENT_MOVING_DELAY.1).max(min);
+    (min, max)
 }
 
 /// True for hardpoint kinds that deserve a marker the player can target.

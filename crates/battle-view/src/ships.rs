@@ -40,6 +40,14 @@ pub struct ShipView {
     shown: bool,
 }
 
+#[cfg(test)]
+impl ShipView {
+    /// The view of simulation ship `id` before its model is loaded, for tests of other modules.
+    pub(crate) fn unloaded(id: u32, def: ShipId, side: u8) -> Self {
+        Self { id, def, side, hp_applied: vec![], bones: None, hp_parts: vec![], attitude: Attitude::default(), born: 0.0, visual_radius: 0.0, shown: true }
+    }
+}
+
 /// A destroyed ship that keeps drifting while it burns and blows up.
 #[derive(Component, Debug)]
 pub struct Dying {

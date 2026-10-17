@@ -323,8 +323,31 @@ Add `battle-view`, `galaxy-sim` (already there through galaxy-play) and `eaw-ui`
   the distance from the centre of the screen still shapes the mix (`sat / d`), explosions (`Preset_EXPL`, saturation 500000) are heard everywhere.
 - Light battle with `--battle-orders` (SP_AUDIO_LOG), median distance attenuation of the positioned sounds and engine loops started, before -> after:
   zoom 2000: 0.133 (-17.5 dB), 11 loops -> 0.261 (-11.7 dB), 11; 6064: 0.051 (-26 dB), 3 -> 0.265, 11; 16000: 0.020 (-34 dB), 0 -> 0.249, 11.
-- Not wired yet: `SFXEvent_Ambient_Moving` flybys (5 objects in the Remake data: the Hutt V-Wing and story props); space maps have no ambience
-  in the data (`SFXEventsAmbient.xml` is land weather only), units' own `SFXEvent_Ambient_Loop` already plays.
+- Space maps have no ambience in the data (`SFXEventsAmbient.xml` is land weather only); units' own `SFXEvent_Ambient_Loop` already plays.
+  Flybys: see below.
+
+## Flybys: `SFXEvent_Ambient_Moving` (2026-10-17, A3)
+- **Count** (`alamo-audio/examples/ambient_moving.rs`): 224 tags in the Remake's XML; 169 loaded objects name the event themselves and 746 have
+  one after `Variant_Of_Existing_Type` (332 ground infantry, 199 space units, 99 ground vehicles, 54 unique units ...). 261 of them have a
+  `Space_Model_Name`, all with samples: delays 3-5 s (188), 5-10 s (65), 1-1 s (5), 2-6 s and 1-2 s (1 each), none (the `Ravager`). The old
+  note "5 objects" was wrong. The space events are whooshes of 1.5-6.9 s, most 3.3-6.9 s (Z-95 5.2 s, X-wing 5.3-6.8 s, TIE fighter
+  6.5-6.9 s), all `Preset_EGB`: 3D, `Max_Instances` 2, saturation 60, volume 80-100.
+- **Clock** (`audio::AmbientMoving`): a unit that moves (snapshot speed > 1 unit/s, estimate) and that the player sees waits one gap, then plays its
+  event, then waits a new gap uniform in `SFXEvent_Ambient_Moving_Min/Max_Delay_Seconds` (default 3-5 s, estimate: the most common pair).
+  splitmix64 seeded by the simulation id: every unit has its own fixed sequence. Stopping resets it. Looping events are skipped
+  (`Unit_Shuttle_Moving_Engine_Loop` of the shuttles: repeating a loop would stack loops that never end).
+- **Voices** (`audio::flybys_to_start`): every fighter asks for a flyby every few seconds and each event has 2 voices. With the plugin's rule (the
+  oldest voice gives way) the first build cut every Z-95 flyby after a median 0.11 s of its 5.2 s (offscreen Yavin -> Hoth battle, 928 flybys
+  in 60 s, 473 of them cut for a farther one; `fxaudio-run/chop.pl`). Now a due flyby waits for a free voice of its event, the loudest
+  (nearest the listener) first, and takes a voice only when it is at least twice as loud as every one playing (6 dB, estimate); the plugin
+  then cuts the oldest, which is quieter by that much. Requests count as playing for 0.5 s before their voice exists (a sample read on the worker).
+  Same battle with the rule: 266 flybys start in 60 s instead of 1369 (`Unit_Headhunter_Fly_By` 64 instead of 930: Cutlass 49, Z-95 14,
+  Hullcracker 1; ARC-170 63, T-wing 62, X4 46, LAAT 31) while up to 58 units wait; the started ones are near the listener (median distance
+  704 against 1076 before; Z-95 loudness median 0.52); 8 took a voice, each at least 2.0 times as loud as every playing one. Offscreen
+  runs have no audio device, so a voice ends after 2 s there: on a real device the 5 s whooshes free their voice later and fewer start.
+- The sound sits on the unit (`PlaySfx::source`) and follows it; the distance to the battle listener sets the volume as for every 3D sound.
+- Cost: 26 us per frame on average, 146 us at most (in-game timing in the battle above, release; 40 us before the event data was cached per unit).
+- `SP_AUDIO_LOG`: one line per flyby (`audio ambient moving: ship <id> <type> plays <event> at t=..., loudness, voices taken, units waiting, next gap`).
 
 ## Fighter size and squadron spread (2026-10-17)
 - **Size:** `ships::small_craft_boost` draws fighters, bombers and squadron members with their bounding sphere at 3.2 % of the screen height (`SMALL_CRAFT_SCREEN_FRACTION`) at every camera distance up to 7277 (the Remake's widest view at our fov, `SMALL_CRAFT_FREEZE_DISTANCE`); farther out the enlargement holds and they shrink with the world; never below true size. One factor per squadron, from its centre, so members match. Measured against the user's video: TIEs 23-29 x 23-27 px (wings included) at 1080p in b0703s, b0732s, b0850s and still 22-25 px in b0760s; ours 18-20 x 24-26 px at camera 2000 (bounding sphere 35 px). Replaces `fighter_boost` (2.6 %, cap 40) of the FX pass 2 above.

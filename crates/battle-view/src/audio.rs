@@ -738,6 +738,222 @@ pub fn battle_sources(
     }
 }
 
+/// Below this speed (units per second) a unit stands still for its `SFXEvent_Ambient_Moving` (estimate: the data does not say; a
+/// moving fighter flies hundreds of units per second).
+const AMBIENT_MOVING_MIN_SPEED: f32 = 1.0;
+
+/// Battle seconds a flyby request holds a voice of its event before the voice exists: the plugin reads a sample it has not cached on a
+/// worker thread first (estimate: a read takes a frame or two).
+const FLYBY_REQUEST_GRACE: f64 = 0.5;
+
+/// A flyby that finds every `Max_Instances` voice of its event taken starts only when it is at least this many times as loud as each of
+/// them (6 dB); the voice the plugin then cuts, the event's oldest, is quieter by at least that much (estimate: the data does not say).
+const FLYBY_TAKEOVER: f32 = 2.0;
+
+/// What the voice rules need of a unit's flyby event: its `Max_Instances` and, for a 3D sound, its saturation distance.
+#[derive(Debug, Clone, Copy)]
+struct FlybyRules {
+    cap: Option<u32>,
+    saturation: Option<f32>,
+}
+
+/// The `SFXEvent_Ambient_Moving` clock of one unit: the battle time of its next sound (`None` while the unit stands), when it last
+/// asked for one, and its own random sequence, seeded by the unit's simulation id so that a battle replays with the same gaps.
+#[derive(Component, Debug, Clone)]
+pub struct AmbientMoving {
+    next: Option<f64>,
+    requested: Option<f64>,
+    rng: u64,
+    /// Looked up once when the unit appears (waiting units are due every frame); `None` keeps the unit silent.
+    rules: Option<FlybyRules>,
+}
+
+impl AmbientMoving {
+    /// The clock of the unit with simulation id `ship` whose flyby is `event`; silent without one and for a loop.
+    pub fn new(ship: u32, event: Option<&alamo_audio::SfxEvent>) -> Self {
+        let rules = event
+            .filter(|e| !e.looping)
+            .map(|e| FlybyRules { cap: e.max_instances, saturation: e.saturation_distance.filter(|_| !e.is_2d) });
+        Self { next: None, requested: None, rng: u64::from(ship) ^ 0x6A09_E667_F3BC_C909, rules }
+    }
+
+    /// A gap uniform in `min..=max` seconds (splitmix64).
+    fn gap(&mut self, (min, max): (f32, f32)) -> f64 {
+        self.rng = self.rng.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut z = self.rng;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^= z >> 31;
+        let u = (z >> 11) as f64 / (1u64 << 53) as f64;
+        f64::from(min) + (f64::from(max) - f64::from(min)) * u
+    }
+
+    /// Advances the clock to battle time `now`; true while the unit's sound is due, until [`AmbientMoving::played`]. A unit that starts
+    /// moving waits one gap first (a fleet that sets off together does not sound at once); one that stops starts over when it moves again.
+    pub fn due(&mut self, moving: bool, now: f64, gaps: (f32, f32)) -> bool {
+        if !moving {
+            self.next = None;
+            return false;
+        }
+        match self.next {
+            Some(due) => now >= due,
+            None => {
+                self.next = Some(now + self.gap(gaps));
+                false
+            }
+        }
+    }
+
+    /// The sound was asked for at battle time `now`: the next one is due a gap later.
+    pub fn played(&mut self, now: f64, gaps: (f32, f32)) {
+        self.next = Some(now + self.gap(gaps));
+        self.requested = Some(now);
+    }
+
+    /// Battle time of the next sound, if the unit moves.
+    pub fn next(&self) -> Option<f64> {
+        self.next
+    }
+
+    /// True while a request made at battle time `now` may still wait for its voice ([`FLYBY_REQUEST_GRACE`]).
+    fn fresh(&self, now: f64) -> bool {
+        self.requested.is_some_and(|t| now - t < FLYBY_REQUEST_GRACE)
+    }
+}
+
+/// How many of the flybys of one event that are due start now. `due`: their loudness (distance attenuation), loudest first;
+/// `instances`: the loudness of the event's voices that play and of requests not started yet. While the event has fewer than `cap`
+/// (`Max_Instances`) instances the loudest due ones fill them; when all are taken only one at least [`FLYBY_TAKEOVER`] times as loud as
+/// each instance starts, so a near flyby is never cut for a far one. The others wait.
+fn flybys_to_start(due: &[f32], instances: &[f32], cap: Option<u32>) -> usize {
+    let Some(cap) = cap else { return due.len() };
+    let free = (cap as usize).saturating_sub(instances.len());
+    if free > 0 {
+        return free.min(due.len());
+    }
+    let loudest = instances.iter().copied().fold(0.0, f32::max);
+    usize::from(due.first().is_some_and(|&l| l >= FLYBY_TAKEOVER * loudest))
+}
+
+/// A unit whose flyby is due (see [`battle_ambient_moving`]).
+struct DueFlyby<'a> {
+    entity: Entity,
+    ship: u32,
+    def: ShipId,
+    event: &'a str,
+    cap: Option<u32>,
+    loudness: f32,
+    at: Vec3,
+    gaps: (f32, f32),
+}
+
+/// Flybys: a unit whose data names an `SFXEvent_Ambient_Moving` plays it again and again while it moves, `SFXEvent_Ambient_Moving_Min_Delay_Seconds`
+/// to `_Max_Delay_Seconds` of battle time apart ([`AmbientMoving`]); the sound sits on the unit and follows it. Every moving fighter
+/// asks for one every few seconds and its event has 2 voices (`Max_Instances` of `Preset_EGB`), so the plugin's rule (the oldest voice
+/// gives way) would cut each 5 s whoosh after a fraction of a second: a due flyby waits until a voice of its event is free, the
+/// loudest (nearest the listener) first, and takes a voice only from flybys at least 6 dB quieter ([`flybys_to_start`]). Units the
+/// player does not see stay silent like their loops, and a looping event is not repeated (it would pile up loops that never end;
+/// `Unit_Shuttle_Moving_Engine_Loop` of the shuttles is one). `SP_AUDIO_LOG` logs every flyby with the unit. Does nothing without
+/// `AlamoAudioPlugin`.
+#[allow(clippy::too_many_arguments)]
+pub fn battle_ambient_moving(
+    mut commands: Commands,
+    settings: Res<BattleViewSettings>,
+    rt: Res<BattleRuntime>,
+    audio: Option<Res<AlamoAudio>>,
+    audio_settings: Option<Res<alamo_audio::AudioSettings>>,
+    listeners: Query<&GlobalTransform, With<BattleListener>>,
+    voices: Query<&alamo_audio::SfxVoice>,
+    mut ships: Query<(Entity, &crate::ships::ShipView, &GlobalTransform, Option<&mut AmbientMoving>)>,
+    mut out: MessageWriter<PlaySfx>,
+) {
+    let Some(audio) = audio.filter(|_| settings.audio) else {
+        return;
+    };
+    let Some(cur) = rt.cur.as_ref() else { return };
+    let (player, now) = (settings.player_side, rt.clock);
+    let ear = listeners.iter().next().map(GlobalTransform::translation);
+    let (scale, rolloff) = audio_settings.map_or((1.0, 1.0), |s| (s.saturation_scale, s.rolloff));
+    let mut due: Vec<DueFlyby> = Vec::new();
+    // Requests that may still wait for their voice: (event, unit, loudness).
+    let mut fresh: Vec<(&str, Entity, f32)> = Vec::new();
+    for (entity, view, at, clock) in &mut ships {
+        let sfx = &rt.visuals.ship(view.def).sfx;
+        let Some(event) = sfx.ambient_moving.as_deref() else { continue };
+        let Some(mut clock) = clock else {
+            commands.entity(entity).insert(AmbientMoving::new(view.id, audio.sfx.get(event)));
+            continue;
+        };
+        let Some(rules) = clock.rules else { continue };
+        let moving = cur.ship(view.id).is_some_and(|s| {
+            let seen = s.side == player || (s.seen_by >> player.min(7)) & 1 == 1;
+            seen && s.speed > AMBIENT_MOVING_MIN_SPEED
+        });
+        let (is_due, is_fresh) = (clock.due(moving, now, sfx.ambient_moving_delay), clock.fresh(now));
+        if !is_due && !is_fresh {
+            continue;
+        }
+        let loudness = match (ear, rules.saturation) {
+            (Some(ear), Some(sat)) => alamo_audio::plugin::distance_attenuation(at.translation().distance(ear), sat * scale, rolloff),
+            _ => 1.0,
+        };
+        if is_fresh {
+            fresh.push((event, entity, loudness));
+        }
+        if is_due {
+            let gaps = sfx.ambient_moving_delay;
+            due.push(DueFlyby { entity, ship: view.id, def: view.def, event, cap: rules.cap, loudness, at: at.translation(), gaps });
+        }
+    }
+    // Loudest first; the ship id breaks ties so that the choice does not depend on the query order.
+    due.sort_by(|a, b| b.loudness.total_cmp(&a.loudness).then(a.ship.cmp(&b.ship)));
+    // Unit files spell an event's name in different cases.
+    let mut events: Vec<&str> = Vec::new();
+    for d in &due {
+        if !events.iter().any(|e| e.eq_ignore_ascii_case(d.event)) {
+            events.push(d.event);
+        }
+    }
+    for event in events {
+        let candidates: Vec<&DueFlyby> = due.iter().filter(|d| d.event.eq_ignore_ascii_case(event)).collect();
+        let playing: Vec<&alamo_audio::SfxVoice> = voices.iter().filter(|v| !v.is_stopping() && v.event().eq_ignore_ascii_case(event)).collect();
+        let instances: Vec<f32> = playing
+            .iter()
+            .map(|v| v.attenuation())
+            .chain(fresh.iter().filter(|f| f.0.eq_ignore_ascii_case(event) && !playing.iter().any(|v| v.source() == Some(f.1))).map(|f| f.2))
+            .collect();
+        let cap = candidates[0].cap;
+        let loudness: Vec<f32> = candidates.iter().map(|d| d.loudness).collect();
+        let start = flybys_to_start(&loudness, &instances, cap);
+        for (i, d) in candidates[..start].iter().enumerate() {
+            let Ok((.., Some(mut clock))) = ships.get_mut(d.entity) else { continue };
+            clock.played(now, d.gaps);
+            if ambient_moving_log() {
+                // `taken` at the cap: the flyby takes the voice of a quieter one.
+                info!(
+                    "audio ambient moving: ship {} {} plays {} at t={now:.2}, loudness {:.3}, taken {} of {} voices (loudest {:.3}), {} wait, next in {:.2} s",
+                    d.ship,
+                    rt.catalog.ship(d.def).name,
+                    d.event,
+                    d.loudness,
+                    instances.len() + i,
+                    cap.map_or("any".to_string(), |c| c.to_string()),
+                    instances.iter().copied().fold(0.0, f32::max),
+                    candidates.len() - start,
+                    clock.next().map_or(0.0, |n| n - now)
+                );
+            }
+            out.write(PlaySfx { event: d.event.to_string(), position: Some(d.at), source: Some(d.entity) });
+        }
+    }
+}
+
+/// `SP_AUDIO_LOG` is set (see `alamo_audio::plugin`).
+fn ambient_moving_log() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("SP_AUDIO_LOG").is_some())
+}
+
 /// The sound listener of the battle (see [`battle_listener`]).
 #[derive(Component)]
 pub struct BattleListener;
@@ -937,6 +1153,287 @@ mod tests {
             // The ears point like the camera: what is right on the screen is panned right.
             assert!((ears.rotation * Vec3::X).dot(eye.rotation * Vec3::X) > 0.999, "zoom {distance}");
         }
+    }
+
+    /// Battle times at which a unit plays its ambient-moving sound when it moves at the times `moving` says, ticked at 30 frames per second.
+    fn flybys(ship: u32, gaps: (f32, f32), moving: impl Fn(f64) -> bool, seconds: f64) -> Vec<f64> {
+        let mut clock = AmbientMoving::new(ship, None);
+        let mut at = Vec::new();
+        for t in (0..(seconds * 30.0) as u32).map(|f| f64::from(f) / 30.0) {
+            if clock.due(moving(t), t, gaps) {
+                clock.played(t, gaps);
+                at.push(t);
+            }
+        }
+        at
+    }
+
+    #[test]
+    fn a_moving_unit_plays_its_flyby_every_min_to_max_delay_seconds() {
+        // An X-wing (`Unit_X_Wing_Fly_By`, delays 5 to 10 s) on the move for ten minutes.
+        let at = flybys(7, (5.0, 10.0), |_| true, 600.0);
+        let frame = 1.0 / 30.0 + 1e-9;
+        assert!((5.0..=10.0 + frame).contains(&at[0]), "the first one waits a gap: {}", at[0]);
+        let gaps: Vec<f64> = at.windows(2).map(|w| w[1] - w[0]).collect();
+        assert!(gaps.iter().all(|g| (5.0..=10.0 + frame).contains(g)), "{gaps:?}");
+        let mean = gaps.iter().sum::<f64>() / gaps.len() as f64;
+        assert!((mean - 7.5).abs() < 0.5, "mean gap {mean} s, {} sounds", at.len());
+        let (lo, hi) = gaps.iter().fold((f64::MAX, 0.0f64), |(lo, hi), &g| (lo.min(g), hi.max(g)));
+        assert!(lo < 5.5 && hi > 9.5, "the whole range is used: {lo:.2}..{hi:.2}");
+    }
+
+    #[test]
+    fn a_standing_unit_is_silent_and_waits_a_gap_after_it_sets_off() {
+        // Stands for 20 s, moves for 20 s, stands again and sets off once more at 60 s; delays 3 to 5 s.
+        let moving = |t: f64| (20.0..40.0).contains(&t) || t >= 60.0;
+        let at = flybys(3, (3.0, 5.0), moving, 90.0);
+        assert!(at.iter().all(|&t| moving(t)), "only while it moves: {at:?}");
+        assert!(at.iter().find(|&&t| t >= 20.0).is_some_and(|&t| t >= 23.0), "{at:?}");
+        assert!(at.iter().find(|&&t| t >= 60.0).is_some_and(|&t| t >= 63.0), "a new gap after the stop: {at:?}");
+    }
+
+    #[test]
+    fn each_unit_has_its_own_fixed_flyby_sequence() {
+        let a = flybys(11, (3.0, 5.0), |_| true, 120.0);
+        assert_eq!(a, flybys(11, (3.0, 5.0), |_| true, 120.0), "a replayed battle hears the same flybys");
+        assert_ne!(a, flybys(12, (3.0, 5.0), |_| true, 120.0), "two fighters do not whoosh in step");
+    }
+
+    /// The Remake's fighters (skipped without the game files): an X-wing whooshes past every 3 to 5 s, Luke's every 5 to 10 s, the shuttle's
+    /// ambient-moving event is a loop; a unit without the delay tags gets the data's common 3 to 5 s.
+    #[test]
+    fn the_remake_fighters_name_their_flybys() {
+        let Some(install) = alamo_fs::GameInstall::detect().filter(|i| i.mod_data("1770851727").is_dir()) else { return };
+        let fs = alamo_fs::GameFs::for_mod(&install, Some("1770851727")).expect("game files");
+        let (data, _) = alamo_data::load_galaxy(&fs);
+        let names = ["X-Wing_Squadron", "TIE_Fighter_Squadron", "Luke_XWing", "Lambda_Shuttle"];
+        let catalog = battle_sim::Catalog::build(&data, Some(&fs), &names);
+        let visuals = crate::visuals::VisualCatalog::build(&data, &catalog, vec![Color::WHITE]);
+        let flyby = |name: &str| {
+            let id = catalog.ship_id(name).unwrap_or_else(|| panic!("{name} in the catalog"));
+            let sfx = &visuals.ship(id).sfx;
+            (sfx.ambient_moving.clone(), sfx.ambient_moving_delay)
+        };
+        assert_eq!(flyby("X-Wing"), (Some("Unit_X_Wing_Fly_By".into()), (3.0, 5.0)));
+        assert_eq!(flyby("TIE_Fighter"), (Some("Unit_TIE_Fighter_Fly_By".into()), (3.0, 5.0)));
+        assert_eq!(flyby("Luke_XWing"), (Some("Unit_X_Wing_Fly_By".into()), (5.0, 10.0)));
+        assert_eq!(crate::visuals::ambient_moving_delay(None, None), (3.0, 5.0));
+        let audio = AlamoAudio::load(std::sync::Arc::new(fs));
+        for event in ["Unit_X_Wing_Fly_By", "Unit_TIE_Fighter_Fly_By"] {
+            let e = audio.sfx.get(event).expect("flyby event");
+            assert!(!e.looping && !e.samples.is_empty() && e.max_instances == Some(2), "{e:?}");
+        }
+        assert!(audio.sfx.get("Unit_Shuttle_Moving_Engine_Loop").is_some_and(|e| e.looping), "repeating it would pile up loops");
+    }
+
+    /// A battle of one fighter per name and side for the flyby tests: the simulation, its catalog and its first snapshot.
+    fn fighter_battle(sides: &[&[&str]]) -> (crate::sim::SimHandle, std::sync::Arc<battle_sim::Catalog>, crate::sim::Snapshot) {
+        use battle_sim::{Battle, BattleConfig, BattleSetup, Catalog, ProjDef, ShipDef, SideSetup, UnitSetup};
+        let fighter = |name: &&str| ShipDef { name: (*name).into(), class: TargetClass::Fighter, hull: 100.0, radius: 10.0, population: 1, ..ShipDef::default() };
+        let defs = sides.iter().flat_map(|names| names.iter().map(fighter)).collect();
+        let catalog = std::sync::Arc::new(Catalog::from_defs(defs, vec![ProjDef { name: "laser".into(), ..ProjDef::default() }]));
+        let side = |units: &&[&str]| SideSetup {
+            name: "side".into(),
+            units: units.iter().map(|n| UnitSetup { ship: catalog.ship_id(n).expect("def"), count: 1, tag: 1 }).collect(),
+            structures: vec![],
+            ai: false,
+        };
+        let setup = BattleSetup { sides: sides.iter().map(side).collect(), catalog: catalog.clone(), config: BattleConfig::default() };
+        let sim = crate::sim::SimHandle::spawn(Battle::new(setup));
+        sim.request(1);
+        let snap = (*sim.fetch(0, true).0.expect("snapshot")).clone();
+        (sim, catalog, snap)
+    }
+
+    /// The view of a running battle for the flyby tests.
+    fn flyby_runtime(
+        (sim, catalog, snap): (crate::sim::SimHandle, std::sync::Arc<battle_sim::Catalog>, crate::sim::Snapshot),
+        visuals: crate::visuals::VisualCatalog,
+    ) -> crate::BattleRuntime {
+        crate::BattleRuntime {
+            sim,
+            catalog,
+            visuals: std::sync::Arc::new(visuals),
+            dt: 1.0 / 30.0,
+            clock: 0.0,
+            cur: Some(std::sync::Arc::new(snap)),
+            next: None,
+            alpha: 0.0,
+            fresh_events: vec![],
+            entities: HashMap::new(),
+            dying: HashSet::new(),
+            request: None,
+            player_faction: None,
+            start_alive: vec![],
+            retreat_countdown: 0.0,
+            unit_cap: 0,
+            no_spawn_radius: 0.0,
+            reinforce_clearance: 0.0,
+            arena_half: 10_000.0,
+            fog_of_war: true,
+            speed: 1.0,
+            framed: false,
+            reported: false,
+            minimap_planets: vec![],
+            minimap_props: vec![],
+            minimap_tint: Color::BLACK,
+        }
+    }
+
+    /// The view's catalog with `event` as the ambient-moving sound of the named units, `gaps` apart.
+    fn flyby_visuals(catalog: &battle_sim::Catalog, flybys: &[(&str, &str, (f32, f32))]) -> crate::visuals::VisualCatalog {
+        let mut visuals = crate::visuals::VisualCatalog { ships: vec![ShipVisual::default(); catalog.ships.len()], ..Default::default() };
+        for &(name, event, gaps) in flybys {
+            let v = &mut visuals.ships[catalog.ship_id(name).expect("def") as usize].sfx;
+            (v.ambient_moving, v.ambient_moving_delay) = (Some(event.into()), gaps);
+        }
+        visuals
+    }
+
+    /// `SFXEventFiles.xml` and `SFXEvents.xml` holding `events`.
+    fn sfx_files(events: &str) -> HashMap<String, Vec<u8>> {
+        HashMap::from([
+            (alamo_fs::normalize("Xml/SFXEventFiles.xml"), b"<SFXEvent_Files><File>SFXEvents.xml</File></SFXEvent_Files>".to_vec()),
+            (alamo_fs::normalize("Xml/SFXEvents.xml"), format!("<SFXEvents>{events}</SFXEvents>").into_bytes()),
+        ])
+    }
+
+    #[test]
+    fn flybys_fill_free_voices_loudest_first_and_take_one_only_from_much_quieter_ones() {
+        assert_eq!(flybys_to_start(&[0.9, 0.5, 0.1], &[], Some(2)), 2, "the two loudest get the two free voices");
+        assert_eq!(flybys_to_start(&[0.9, 0.5], &[0.05], Some(2)), 1, "one voice left");
+        assert_eq!(flybys_to_start(&[0.3, 0.2], &[0.5, 0.2], Some(2)), 0, "all taken by louder ones: they wait");
+        assert_eq!(flybys_to_start(&[0.39], &[0.2, 0.1], Some(2)), 0, "less than twice as loud as the loudest playing one");
+        assert_eq!(flybys_to_start(&[0.4, 0.39], &[0.2, 0.1], Some(2)), 1, "twice as loud as each: the cut voice is 6 dB quieter or more");
+        assert_eq!(flybys_to_start(&[0.1, 0.1, 0.1], &[0.5, 0.5, 0.5], None), 3, "no Max_Instances: all start");
+    }
+
+    /// With the audio plugin's own voice rules (`Max_Instances` 2, the oldest voice gives way): two far flybys take the two voices, a
+    /// unit nearer but not twice as loud waits, a near one takes a far one's voice, and the far one that still waits does not cut it.
+    #[test]
+    fn a_near_flyby_takes_a_voice_from_far_ones_and_is_not_cut_by_them() {
+        let names = ["far_a", "far_b", "near", "middle"];
+        let battle = fighter_battle(&[&names]);
+        let (catalog, mut snap) = (battle.1.clone(), battle.2.clone());
+        for s in &mut snap.ships {
+            s.speed = 300.0;
+        }
+        let visuals = flyby_visuals(&catalog, &names.map(|n| (n, "Unit_Z95_Fly_By", (3.0, 5.0))));
+        let mut files = sfx_files(
+            r#"<SFXEvent Name="Unit_Z95_Fly_By"><Samples>z95.wav</Samples><Is_3D>Yes</Is_3D><Max_Instances>2</Max_Instances>
+            <Volume_Saturation_Distance>60</Volume_Saturation_Distance><Min_Volume>100</Min_Volume><Max_Volume>100</Max_Volume></SFXEvent>"#,
+        );
+        files.insert(alamo_fs::normalize("Audio/SFX/z95.wav"), alamo_audio::Pcm { channels: 1, sample_rate: 8000, samples: vec![0; 800] }.to_wav_bytes());
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, AssetPlugin::default()))
+            .init_asset::<AudioSource>()
+            .add_plugins(alamo_audio::AlamoAudioPlugin::new(std::sync::Arc::new(MemFs(files))))
+            .insert_resource(BattleViewSettings::default())
+            // Before the plugin's systems (`Update`): a request starts its voice in the same frame.
+            .add_systems(PreUpdate, battle_ambient_moving);
+        app.world_mut().resource_mut::<alamo_audio::AudioSettings>().load_on_worker = false;
+        app.world_mut().spawn((BattleListener, bevy::audio::SpatialListener::new(EAR_GAP), GlobalTransform::IDENTITY));
+        // On a line from the listener; a clock runs only when the test makes it due.
+        let mut unit = HashMap::new();
+        let event = app.world().resource::<AlamoAudio>().sfx.get("Unit_Z95_Fly_By").cloned();
+        for (name, x) in names.into_iter().zip([2000.0, 2100.0, 100.0, 1500.0]) {
+            let s = snap.ships.iter().find(|s| catalog.ship(s.def).name == name).expect("ship");
+            let clock = AmbientMoving { next: Some(f64::MAX), ..AmbientMoving::new(s.id, event.as_ref()) };
+            let e = app.world_mut().spawn((crate::ships::ShipView::unloaded(s.id, s.def, 0), GlobalTransform::from_translation(Vec3::X * x), clock)).id();
+            unit.insert(name, e);
+        }
+        app.insert_resource(flyby_runtime((battle.0, catalog, snap), visuals));
+        let step = |app: &mut App, t: f64, due: &[&str]| {
+            for name in due {
+                app.world_mut().get_mut::<AmbientMoving>(unit[name]).expect("clock").next = Some(0.0);
+            }
+            app.world_mut().resource_mut::<crate::BattleRuntime>().clock = t;
+            app.update();
+            // Units with a voice of the event, and whether it fades out (cut).
+            let mut q = app.world_mut().query::<&alamo_audio::SfxVoice>();
+            let mut voices: Vec<(&str, bool)> =
+                q.iter(app.world()).map(|v| (names.into_iter().find(|n| v.source() == Some(unit[n])).expect("a flyby voice"), v.is_stopping())).collect();
+            voices.sort();
+            voices
+        };
+        let waits = |app: &App, name: &str| app.world().get::<AmbientMoving>(unit[name]).expect("clock").next == Some(0.0);
+        assert_eq!(step(&mut app, 10.0, &["far_a"]), [("far_a", false)]);
+        assert_eq!(step(&mut app, 10.2, &["far_b"]), [("far_a", false), ("far_b", false)]);
+        // 1500 from the listener against 2000: louder, but not twice as loud.
+        assert_eq!(step(&mut app, 11.0, &["middle"]), [("far_a", false), ("far_b", false)]);
+        assert!(waits(&app, "middle"), "it stays due");
+        // 100 away: the plugin cuts the oldest voice (far_a) for it; middle still waits.
+        assert_eq!(step(&mut app, 12.0, &["near"]), [("far_a", true), ("far_b", false), ("near", false)]);
+        assert!(waits(&app, "middle") && !waits(&app, "near"));
+        assert_eq!(step(&mut app, 13.0, &[]).into_iter().filter(|v| !v.1).collect::<Vec<_>>(), [("far_b", false), ("near", false)], "nothing cuts the near one");
+        assert!(waits(&app, "middle"));
+    }
+
+    #[test]
+    fn moving_units_the_player_sees_play_their_flyby_where_they_are() {
+        use bevy::ecs::system::RunSystemOnce;
+        // The player's X-wing (`Unit_X_Wing_Fly_By`), a shuttle whose ambient-moving event loops, a Y-wing that names none and a standing
+        // A-wing; the enemy's TIE fighter in the fog of war.
+        let names = ["xwing", "shuttle", "ywing", "awing", "tie"];
+        let (sim, catalog, mut snap) = fighter_battle(&[&names[..4], &names[4..]]);
+        let id = |name: &str| snap.ships.iter().find(|s| catalog.ship(s.def).name == name).expect("ship").id;
+        let ids = names.map(id);
+        for s in &mut snap.ships {
+            s.speed = if catalog.ship(s.def).name == "awing" { 0.0 } else { 300.0 };
+            if s.side == 1 {
+                s.seen_by = 0b10;
+            }
+        }
+        let flybys = [("xwing", "Unit_X_Wing_Fly_By", (5.0, 10.0)), ("shuttle", "Shuttle_Loop", (3.0, 5.0)), ("awing", "Unit_X_Wing_Fly_By", (3.0, 5.0)), ("tie", "Unit_TIE_Fighter_Fly_By", (3.0, 5.0))];
+        let visuals = flyby_visuals(&catalog, &flybys);
+        let files = sfx_files(
+            r#"<SFXEvent Name="Unit_X_Wing_Fly_By"><Samples>xwing.wav</Samples><Max_Instances>2</Max_Instances></SFXEvent>
+            <SFXEvent Name="Unit_TIE_Fighter_Fly_By"><Samples>tie.wav</Samples></SFXEvent>
+            <SFXEvent Name="Shuttle_Loop"><Samples>shuttle.wav</Samples><Play_Count>-1</Play_Count></SFXEvent>"#,
+        );
+        let mut world = World::new();
+        world.insert_resource(BattleViewSettings::default());
+        world.insert_resource(AlamoAudio::load(std::sync::Arc::new(MemFs(files))));
+        world.init_resource::<Messages<PlaySfx>>();
+        let mut place = HashMap::new();
+        for (i, (&ship, name)) in ids.iter().zip(names).enumerate() {
+            let at = Vec3::new(100.0 * i as f32, 0.0, -50.0);
+            let def = catalog.ship_id(name).expect("def");
+            let e = world.spawn((crate::ships::ShipView::unloaded(ship, def, (name == "tie").into()), GlobalTransform::from_translation(at))).id();
+            place.insert(e, (name, at));
+        }
+        world.insert_resource(flyby_runtime((sim, catalog, snap), visuals));
+        // Two minutes of battle time at 10 updates per second.
+        let mut heard: Vec<(f64, &str, String, Vec3)> = Vec::new();
+        for step in 0..1200 {
+            let t = f64::from(step) / 10.0;
+            world.resource_mut::<crate::BattleRuntime>().clock = t;
+            world.run_system_once(battle_ambient_moving).expect("flybys");
+            for m in world.resource_mut::<Messages<PlaySfx>>().drain() {
+                let (name, at) = place[&m.source.expect("the sound sits on the unit")];
+                assert_eq!(m.position, Some(at), "{name}");
+                heard.push((t, name, m.event, at));
+            }
+        }
+        let of = |name: &str| heard.iter().filter(|h| h.1 == name).map(|h| h.0).collect::<Vec<_>>();
+        let xwing = of("xwing");
+        assert!((12..=24).contains(&xwing.len()), "120 s at one per 5 to 10 s: {xwing:?}");
+        assert!(heard.iter().filter(|h| h.1 == "xwing").all(|h| h.2 == "Unit_X_Wing_Fly_By"));
+        assert!(xwing.windows(2).all(|w| (5.0..=10.1).contains(&(w[1] - w[0]))), "{xwing:?}");
+        assert!(of("shuttle").is_empty() && of("ywing").is_empty() && of("awing").is_empty() && of("tie").is_empty(), "{heard:?}");
+        // Out of the fog the TIE fighter is heard too.
+        {
+            let mut rt = world.resource_mut::<crate::BattleRuntime>();
+            for s in &mut std::sync::Arc::make_mut(rt.cur.as_mut().expect("snapshot")).ships {
+                s.seen_by = 0b11;
+            }
+        }
+        for step in 1200..1500 {
+            world.resource_mut::<crate::BattleRuntime>().clock = f64::from(step) / 10.0;
+            world.run_system_once(battle_ambient_moving).expect("flybys");
+            heard.extend(world.resource_mut::<Messages<PlaySfx>>().drain().map(|m| (0.0, place[&m.source.expect("source")].0, m.event, Vec3::ZERO)));
+        }
+        assert!(heard.iter().any(|h| h.1 == "tie" && h.2 == "Unit_TIE_Fighter_Fly_By"), "{heard:?}");
     }
 
     #[test]

@@ -58,7 +58,8 @@ playable.
 | Shields down, base under attack, base critical | yes | HUD lines `Shields_Down`, `Space_Station_Under_Attack`, `Space_Station_Damaged`; delay from `Audio.xml` | `battle-view/audio.rs` |
 | Unit type spotted (Star Destroyer, AT-AT ...) | yes | `SFXEvent_Unit_Type_Spotted` of `Factions.xml` (22 refs) | `battle-view/audio.rs` |
 | Engine idle / moving loops, ambient machinery loops | yes | `SFXEvent_Engine_Idle_Loop` 231, `_Engine_Moving_Loop` 251, `_Ambient_Loop` 140 | `SfxEmitter` |
-| Cinematic focus engine loop, ambient moving, turret rotating loop | no | `_Engine_Cinematic_Focus_Loop` 327, `_Ambient_Moving` 224, `_Turret_Rotating_Loop` 117 refs (the turret one only on ground props) | open |
+| Flybys (ambient moving) | yes (new) | `SFXEvent_Ambient_Moving` 224 refs (746 objects after inheritance, 261 space units), every `_Min/_Max_Delay_Seconds` while the unit moves; a flyby waits for a free voice of its event, nearest first (estimate) | `battle-view/audio.rs` |
+| Cinematic focus engine loop, turret rotating loop | no | `_Engine_Cinematic_Focus_Loop` 327, `_Turret_Rotating_Loop` 117 refs (the turret one only on ground props) | open |
 | Group move / attack, assist move / attack | yes (new, estimate) | `SFXEvent_Group_Move/_Attack` (heroes) as fallback of the fleet-move/attack line for a group order; `SFXEvent_Assist_Move/_Attack` (blank or `SFX_NA` in most units) as last resort before the faction line. The data does not say when the engine plays them | `battle-view/audio.rs` |
 | Nebula / asteroid move lines, hero respawned | no | 229 / 198 / 128 refs; need terrain and respawn state the battle view does not expose | open |
 | Space ambience bed | data gap | no event in `AmbientMapSounds.xml` / `SFXEventsAmbient.xml` (land weather only) | - |
