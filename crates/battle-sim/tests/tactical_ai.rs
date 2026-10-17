@@ -439,3 +439,37 @@ fn the_ai_fleet_advances_as_one_line_and_attacks_together() {
         assert!(m.ai_left.0 >= 8, "the corvettes escort the big ships instead of charging the station: {m:?}");
     }
 }
+
+#[test]
+fn a_nearly_destroyed_ai_fleet_retreats_before_it_is_wiped_out() {
+    // User finding 2026-10-16: an AI fleet of frigates and corvettes fought to the last ship against a defended planet. `Retreat_From_Space` lets an
+    // attacker leave only after 120 s, and the emergency rule (U94) was only for capital ships and units of 15 population. Now a side that has lost
+    // half of its strength while the enemy is more than 3x stronger leaves at once. Before: 3 Acclamators with 3 Tartan pairs ordered the retreat
+    // at 122 s and saved 2 / 1 of the Acclamators (seeds 1 / 2); 4 Tartan pairs never ordered it and were wiped out.
+    let Some((data, fs)) = load() else { return };
+    let cat = Arc::new(Catalog::build(&data, Some(&fs), &["Acclamator", "Tartan_Patrol_Cruiser", "MC-80_Star_Cruiser", "Nebulon_B_Frigate", "CR-90_Corvette", "Rebel_Star_Base_3"]));
+    let player = [("MC-80_Star_Cruiser", 3), ("Nebulon_B_Frigate", 4), ("CR-90_Corvette", 2)];
+    // (battle second of the retreat order, units that escaped)
+    let attack = |ai: &[(&str, u32)], seed: u64| -> (Option<f32>, u32) {
+        let mut sides = vec![side(&cat, "Empire", ai, &[]), side(&cat, "Rebel", &player, &["Rebel_Star_Base_3"])];
+        sides[1].ai = false;
+        let mut b = Battle::new(BattleSetup { catalog: cat.clone(), sides, config: BattleConfig { seed, ..BattleConfig::default() } });
+        let mut ordered = None;
+        while !b.is_over() && b.time() < 600.0 {
+            if b.step().iter().any(|e| matches!(e, Event::RetreatOrdered { side: 0, .. })) && ordered.is_none() {
+                ordered = Some(b.time());
+            }
+        }
+        let escaped = b.result().groups.iter().filter(|g| g.side == 0).map(|g| g.retreated).sum();
+        (ordered, escaped)
+    };
+    for seed in [1, 2] {
+        let (ordered, escaped) = attack(&[("Acclamator", 3), ("Tartan_Patrol_Cruiser", 3)], seed);
+        println!("frigates and corvettes, seed {seed}: retreat ordered at {ordered:?}, {escaped} escaped");
+        assert!(ordered.is_some_and(|t| t < 120.0), "the battered fleet does not wait for 120 s: {ordered:?}");
+        assert!(escaped >= 2, "two of the three Acclamators get away: {escaped}");
+    }
+    let (ordered, escaped) = attack(&[("Tartan_Patrol_Cruiser", 4)], 1);
+    println!("corvettes only: retreat ordered at {ordered:?}, {escaped} escaped");
+    assert!(ordered.is_some(), "corvettes alone retreat too instead of dying to the last ship");
+}

@@ -139,11 +139,21 @@ Source: `XML/AI/GoalFunctions/Remake_SpaceCombat.xml`, `PerceptualEquations/Rema
 (Destroy / Flank / Bomb / Strike / Focus_Weak / Escort / Reinforce / Retreat); the engine part that matters for us is implemented as follows.
 
 * **Retreat (`Retreat_From_Space`, implemented):** an AI side orders `Command::Retreat` (every 2 s check) when it is clearly outgunned. Attacker: enemy force >= 2 x own force and battle age > 120 s;
-  defender: enemy >= 3 x own (4 x with a living station) and age > 120 s (> 30 s when it has no station). Also required: the side's `BattleConfig::retreat_allowed` (`Allowed_To_Retreat_Space`:
-  campaign only, faction holds more than one planet, never Pirates; galaxy-sim sets it per `TacticalSide::may_retreat`), the retreat countdown (60 s) passed, and no enemy interdiction
-  (`RetreatBlocked` is simply retried). The thresholds and ages are data; "force" is an **estimate**: sum over living ships of `sqrt((hull + shield) x best-bearing damage rate)` (the engine's
-  `FriendlyForceUnnormalized` is not visible), reinforcements are not counted (`ReinforcementsUnnormalized` x 0.8 is ignored), the "mainly transports" clause and the Hard-difficulty
-  "finish low-health enemies before leaving" step are not modelled. Retreating ships must still fly out of the arena, so a late order saves only the fast or distant ships.
+  defender: enemy >= 3 x own (4 x with a living station) and age > 120 s (> 30 s when it has no station). "Defender" is the galaxy's `IsDefender` (`BattleConfig::defenders`, galaxy-sim
+  sets it from `TacticalSide::defender`; without it a side that brought structures defends), so a defending fleet without a station may leave after 30 s instead of being treated as an
+  attacker. A side made mostly of transports (own force < 3 x the transports' force, `Forces_Are_Not_Mainly_Transports`) leaves whatever the odds, an attacker already after 30 s.
+  Also required: the side's `BattleConfig::retreat_allowed` (`Allowed_To_Retreat_Space`: campaign only, faction holds more than one planet, never Pirates; galaxy-sim sets it per
+  `TacticalSide::may_retreat`), the retreat countdown (60 s) passed, and no enemy interdiction (`RetreatBlocked` is simply retried). The thresholds and ages are data; "force" is an
+  **estimate**: sum over living ships of `sqrt((hull + shield) x best-bearing damage rate)` (the engine's `FriendlyForceUnnormalized` is not visible), plus 0.8 x the full strength of the
+  units the side has not called in yet or that are on their way (`ReinforcementsUnnormalized {Parameter_Attenuator = 0.8}`, read as a factor: estimate).
+  **Emergency retreat (U94, project rule, estimate):** after the retreat countdown, without waiting for the 120 s, a side whose survival chance is below 25% (enemy force > 3 x own)
+  leaves while capital ships or units of 15+ population are left, or (user finding 2026-10-16: a nearly destroyed fleet of frigates and corvettes fought to the last ship) once its
+  ships without fighters and bombers have lost half of the strength they had at their peak in this battle (a side of fighters and bombers only keeps
+  the data rules). Tests: `a_nearly_destroyed_ai_fleet_retreats_before_it_is_wiped_out`
+  (3 Acclamators and 3 Tartan pairs against a defended planet: order at 110 s instead of 122 s, 3 of 3 Acclamators escape instead of 2 / 1; 4 Tartan pairs: order at 68 s instead of
+  never), `a_defender_without_a_station_leaves_after_30_s_and_its_reserve_counts`.
+  Not modelled: the Normal/Hard checks of `RetreatPlan.lua` (abort when engines of more than half the frigate/capital combat rating are down; Hard finishes off enemies below 20%
+  hull and shield first) and `AI_CAN_NOT_RETREAT` while `FocusWeak.lua` runs. Retreating ships must still fly out of the arena, so a late order saves only the fast or distant ships.
 * **Focus weak (`Prevent_Retreat_On_Priority_Target`, implemented):** a non-fighter enemy with less than 33% of hull + shield left (data threshold) inside weapon reach gets its priority weight halved
   (factor 0.5 is an estimate), so ships finish off wounded targets instead of spreading fire.
 * **Ability use (implemented generically from the ability numbers, not names):** besides the weapon boosts, tractor beams and missile shields of section 5, AI ships now use expiring abilities

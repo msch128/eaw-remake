@@ -1595,9 +1595,14 @@ impl Battle {
             .sum()
     }
 
-    /// `Retreat_From_Space` of the Remake AI (Remake_SpaceCombatEquations.xml): an AI side that is clearly outgunned orders the retreat. Attacker: enemy
-    /// force at least 2x its own after 120 s; defender: at least 3x (4x with a station) after 120 s, or after 30 s without any station.
-    /// U94: Emergency tactical retreat when critical loss (< 25% survival chance, theirs >= 3x mine) threatens surviving capital ships and heroes.
+    /// `Retreat_From_Space` of the Remake AI (Remake_SpaceCombatEquations.xml): an AI side that is clearly outgunned orders the retreat. Its force is its
+    /// strength in the battle plus 0.8 of the reserve it has not called in yet (`ReinforcementsUnnormalized {Parameter_Attenuator = 0.8}`, read as a
+    /// factor: estimate). Attacker: enemy force at least 2x its own after 120 s; defender (`IsDefender`, `BattleConfig::defenders`): at least 3x (4x with a
+    /// station) after 120 s, or after 30 s without any station; a side made mostly of transports (`Forces_Are_Not_Mainly_Transports`) leaves whatever the
+    /// odds, an attacker already after 30 s.
+    /// U94: emergency retreat when the survival chance falls below 25% (enemy force above 3x its own) while capital ships or heroes are left, or once the
+    /// side has lost half of the strength its ships had at their peak in this battle (user finding 2026-10-16: a nearly destroyed fleet of frigates and
+    /// corvettes fought to the last ship); it does not wait for the 120 s.
     /// Not for sides that may not retreat (`BattleConfig::retreat_allowed`, the galaxy says whether the faction holds more than one planet),
     /// not before the retreat countdown, and not while an interdictor blocks it.
     fn ai_retreat(&mut self) {
@@ -1606,36 +1611,47 @@ impl Battle {
             if !self.is_ai(side) || self.retreat_ordered[side as usize] || !self.config.retreat_allowed.get(side as usize).copied().unwrap_or(true) {
                 continue;
             }
+            let si = side as usize;
+            let fleet = self.fleet_power(side);
+            self.ai[si].peak = self.ai[si].peak.max(fleet);
             if self.time < self.config.retreat_countdown.max(30.0) {
                 continue;
             }
             let cat = self.catalog.clone();
             let stations = self.ships.iter().filter(|s| s.side == side && s.alive && cat.ship(s.def).is_static).count();
-            let defender = !self.sides[side as usize].structures.is_empty();
+            let defender = self.config.defenders.get(si).copied().unwrap_or(!self.sides[si].structures.is_empty());
 
-            let mine = self.side_power(side);
+            let waiting: f32 = self.ai[si].reserve.iter().map(|&(ship, k)| self.full_power(ship) * k as f32).sum::<f32>()
+                + self.pending.iter().filter(|r| r.side == side).map(|r| self.full_power(r.ship) * r.count as f32).sum::<f32>();
+            let present = self.side_power(side);
+            let mine = present + 0.8 * waiting;
             let theirs: f32 = (0..n as u8).filter(|&o| o != side).map(|o| self.side_power(o)).sum();
+            let transports: f32 = self.ships.iter().filter(|s| s.side == side && s.alive && !s.retreated && cat.ship(s.def).class == TargetClass::Transport).map(|s| self.unit_power(s)).sum();
+            let mainly_transports = present > 0.0 && present < 3.0 * transports;
 
-            // U94: Emergency retreat when overwhelming superiority (< 25% survival chance) threatens to wipe out surviving capital ships
+            // U94: Emergency retreat when overwhelming superiority (< 25% survival chance) threatens to wipe out surviving capital ships, or a fleet that is
+            // already half destroyed.
             let has_valuable_ships = self.ships.iter().any(|s| {
                 s.side == side && s.alive && !s.retreated && !cat.ship(s.def).is_static
                     && (cat.ship(s.def).class as u8 >= TargetClass::Capital as u8 || cat.ship(s.def).population >= 15)
             });
+            // A side of fighters and bombers only keeps the data rules (its strength without them is 0 from the start).
+            let battered = self.ai[si].peak > 0.0 && fleet <= 0.5 * self.ai[si].peak;
             let critical_loss = theirs > 0.0 && mine / (mine + theirs) < 0.25;
-            let emergency_retreat = has_valuable_ships && critical_loss && (stations == 0 || self.time > 60.0);
+            let emergency_retreat = (has_valuable_ships || battered) && critical_loss && (stations == 0 || self.time > 60.0);
 
             let age_ok = if emergency_retreat {
                 self.time >= self.config.retreat_countdown.max(30.0)
             } else if defender {
                 if stations == 0 { self.time > 30.0 } else { self.time > 120.0 }
             } else {
-                self.time > 120.0
+                self.time > 120.0 || (self.time > 30.0 && mainly_transports)
             };
             if !age_ok {
                 continue;
             }
             let factor = if defender { 3.0 + f32::from(u8::from(stations > 0)) } else { 2.0 };
-            if (theirs > 0.0 && theirs >= factor * mine) || emergency_retreat {
+            if (theirs > 0.0 && theirs >= factor * mine) || mainly_transports || emergency_retreat {
                 let _ = self.command(side, Command::Retreat);
             }
         }

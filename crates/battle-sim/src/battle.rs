@@ -78,6 +78,9 @@ pub struct BattleConfig {
     /// Per side: units waiting outside the battle that the side's AI calls in one at a time while the population cap has room
     /// (`Want_To_Reinforce_Units`; the galaxy's reinforcement pool). Missing entries mean none; sides without AI ignore it.
     pub ai_reserve: Vec<Vec<(ShipId, u32)>>,
+    /// Per side: the side defends the planet (`Variable_Self.IsDefender` of the AI retreat rule), with or without a station. Missing entries:
+    /// a side that brought structures defends.
+    pub defenders: Vec<bool>,
 }
 
 impl Default for BattleConfig {
@@ -110,6 +113,7 @@ impl Default for BattleConfig {
             start_health: Vec::new(),
             staged_hangar_launch: true,
             ai_reserve: Vec::new(),
+            defenders: Vec::new(),
         }
     }
 }

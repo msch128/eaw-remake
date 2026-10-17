@@ -272,9 +272,10 @@ impl TacticalRequest {
         let half_size = arena.as_ref().map_or(BattleConfig::default().half_size, |a| a.half_size());
         let side_mults = self.sides.iter().map(|s| battle_sim::SideMult { damage: s.damage_mult, health: s.health_mult, shield: s.shield_mult }).collect();
         let retreat_allowed = self.sides.iter().map(|s| s.may_retreat).collect();
+        let defenders = self.sides.iter().map(|s| s.defender).collect();
         let unit_cap = self.sides.iter().map(|s| s.unit_cap).max().unwrap_or(150);
         let side_tech = self.sides.iter().map(|s| s.tech).collect();
-        BattleConfig { side_tech, seed: self.seed, max_time: self.max_seconds, half_size, arena, side_mults, retreat_allowed, unit_cap, ..BattleConfig::default() }
+        BattleConfig { side_tech, seed: self.seed, max_time: self.max_seconds, half_size, arena, side_mults, retreat_allowed, defenders, unit_cap, ..BattleConfig::default() }
     }
 
     /// Builds the `battle-sim` setup. Fleet groups carry their group index as the tag; side `i` of the request is

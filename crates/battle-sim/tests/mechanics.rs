@@ -1595,3 +1595,39 @@ fn launched_fighters_fly_straight_out_of_the_hangar_for_the_flyout_distance() {
     }
     assert!(b.ships.iter().filter(|s| s.def == 0).all(|s| s.flyout_left <= 0.0), "after the distance the fighters follow orders");
 }
+
+#[test]
+fn a_defender_without_a_station_leaves_after_30_s_and_its_reserve_counts() {
+    // `Retreat_From_Space`: a defender (`IsDefender`) without a station may leave after 30 s once the enemy is 3x stronger; an attacker waits for 120 s.
+    // The reserve it has not called in yet counts at 0.8 (`ReinforcementsUnnormalized`).
+    let run = |defends: bool, reserve: u32| -> Option<f32> {
+        // Out of each other's reach (no speed): only the odds decide.
+        let mut weak = mobile("weak", TargetClass::Frigate, 0.0, 2000.0, vec![gun("g", 0.0)]);
+        weak.population = 5;
+        // The damage rate the strength estimate reads (`ShipDef::bearing_dps`; hand-made definitions have none): 100 damage every 0.5 s.
+        weak.bearing_dps = [200.0; 24];
+        let mut strong = mobile("strong", TargetClass::Frigate, 0.0, 8000.0, vec![gun("g", 0.0)]);
+        strong.bearing_dps = [200.0; 24];
+        let cat = Arc::new(Catalog::from_defs(vec![weak, strong], vec![laser()]));
+        let mut c = cfg();
+        c.retreat_countdown = 0.0;
+        c.half_size = 12_000.0;
+        // No room under the cap: the reserve stays outside the battle.
+        c.unit_cap = 5;
+        c.defenders = vec![defends, !defends];
+        c.ai_reserve = vec![vec![(cat.ship_id("weak").unwrap(), reserve)]];
+        let player = one_side(&cat, "strong", 2, false);
+        let mut b = Battle::new(BattleSetup { sides: vec![one_side(&cat, "weak", 1, true), player], catalog: cat, config: c });
+        for _ in 0..30 * 150 {
+            if b.step().iter().any(|e| matches!(e, Event::RetreatOrdered { side: 0, .. })) {
+                return Some(b.time());
+            }
+        }
+        None
+    };
+    let defender = run(true, 0).expect("the defender leaves");
+    assert!((30.0..35.0).contains(&defender), "a defender without a station leaves right after 30 s: {defender}");
+    let attacker = run(false, 0).expect("the attacker leaves too");
+    assert!(attacker > 120.0, "an attacker waits for 120 s: {attacker}");
+    assert_eq!(run(true, 3), None, "three more ships waiting outside: the odds are even, nobody leaves");
+}

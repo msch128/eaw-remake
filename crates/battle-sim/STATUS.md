@@ -65,3 +65,11 @@ Tests: `tactical_ai::the_ai_fleet_advances_as_one_line_and_attacks_together` (be
 the station test now checks that defenders hold until an enemy is within 3600 units of the station.
 Open: the formation dissolves at the enemy location, so a fleet that reaches the station first still trickles towards ships elsewhere; Flank/Bomb/Escort
 task forces of the scripts are not separate plans.
+
+## AI retreat (2026-10-17, RULES.md 9 "Retreat")
+User finding: the AI did not retreat although its fleet was nearly destroyed. Causes: attackers may only leave after 120 s (data) and the emergency rule (U94) only
+covered capital ships and units of 15+ population, so a fleet of frigates and corvettes that was being destroyed before 120 s fought to the last ship; a defending fleet
+without a station was treated as an attacker (120 s and 2x instead of the data's 30 s and 3x). Now: the emergency rule also covers a side that has lost half of its
+peak strength, the galaxy's defender flag reaches the sim (`BattleConfig::defenders`), the reserve not called in yet counts at 0.8 (`ReinforcementsUnnormalized`), and
+the "mainly transports" clause is in. Tests: `tactical_ai::a_nearly_destroyed_ai_fleet_retreats_before_it_is_wiped_out`,
+`mechanics::a_defender_without_a_station_leaves_after_30_s_and_its_reserve_counts`.

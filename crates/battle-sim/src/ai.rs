@@ -73,7 +73,9 @@ pub(crate) struct AiSide {
     /// Closest any big ship came to the current search point so far.
     search_best: f32,
     /// Units waiting outside the battle (definition, count), called in this order.
-    reserve: Vec<(ShipId, u32)>,
+    pub(crate) reserve: Vec<(ShipId, u32)>,
+    /// Highest strength of the side's ships (fighters and bombers left out) in this battle so far, for the retreat rule.
+    pub(crate) peak: f32,
 }
 
 impl AiSide {
@@ -118,6 +120,17 @@ impl Battle {
     pub(crate) fn unit_power(&self, s: &Ship) -> f32 {
         let d = self.catalog.ship(s.def);
         ((s.hull.max(0.0) + s.shield.max(0.0)) * crate::defs::dps_estimate(d, &self.catalog)).sqrt()
+    }
+
+    /// Strength of a unit of type `ship` at full hull and shield (`unit_power` of a fresh ship).
+    pub(crate) fn full_power(&self, ship: ShipId) -> f32 {
+        let d = self.catalog.ship(ship);
+        ((d.hull.max(0.0) + d.shield.max(0.0)) * crate::defs::dps_estimate(d, &self.catalog)).sqrt()
+    }
+
+    /// Strength of the side's ships and structures in the battle without fighters and bombers (their squadrons come and go).
+    pub(crate) fn fleet_power(&self, side: u8) -> f32 {
+        self.ships.iter().filter(|s| s.alive && !s.retreated && s.side == side && !small(self.catalog.ship(s.def))).map(|s| self.unit_power(s)).sum()
     }
 
     /// Whether the AI plan may (re)order a unit: its standing orders are its own, not a lure's, a hunt's or a retreat's (a fighter's move
