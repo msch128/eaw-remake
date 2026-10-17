@@ -32,6 +32,8 @@ pub struct Args {
     pub offscreen: Option<PathBuf>,
     /// Number of frames to render in offscreen mode (`--frames <n>`).
     pub frames: u32,
+    /// Offscreen: consecutive frames to save from the scripted orders on (`--burst <n>`, flicker checks), 0 = none.
+    pub burst: u32,
     /// Screen to start on: `menu`, `campaigns` or `galaxy` (`--screen <name>`).
     pub screen: Option<String>,
     /// Offscreen only: select and frame this planet (`--select <id or name>`).
@@ -139,6 +141,7 @@ impl Default for Args {
             demo: false,
             offscreen: None,
             frames: 60,
+            burst: 0,
             screen: None,
             select: None,
             planet_view: None,
@@ -201,6 +204,7 @@ OPTIONS:
   --demo                 Use the built-in demo galaxy
   --offscreen <out.png>  Render headless at 3840x2160, save the PNG and exit
   --frames <n>           Frames to render in offscreen mode (default 60)
+  --burst <n>            Offscreen: also save the n frames from the scripted orders on, <out>-000.png ... (flicker checks)
   --screen <name>        Start screen: menu, campaigns or galaxy
   --select <planet>      Offscreen: select and frame a planet (id or name)
   --planet-view <planet> Offscreen: open the planet view of a planet (id or name) after the other scenario flags ran
@@ -291,6 +295,10 @@ impl Args {
                 "--frames" => {
                     let v = it.next().ok_or("--frames needs a value")?;
                     out.frames = v.parse().map_err(|e| format!("bad --frames: {e}"))?;
+                }
+                "--burst" => {
+                    let v = it.next().ok_or("--burst needs a value")?;
+                    out.burst = v.parse().map_err(|e| format!("bad --burst: {e}"))?;
                 }
                 "--screen" => out.screen = Some(it.next().ok_or("--screen needs a value")?),
                 "--select" => out.select = Some(it.next().ok_or("--select needs a value")?),
@@ -389,12 +397,12 @@ mod tests {
         let a = Args::parse(["--campaign", "x", "--no-vsync"].map(String::from)).unwrap();
         assert_eq!(a.campaign.as_deref(), Some("x"));
         let b = Args::parse(
-            ["--screen", "menu", "--offscreen", "o.png", "--frames", "5", "--volume", "0.3", "--loading-delay", "2", "--zoom", "0.5", "--select", "P", "--game-dir", "g", "--mod", "1", "--demo"]
+            ["--screen", "menu", "--offscreen", "o.png", "--frames", "5", "--burst", "3", "--volume", "0.3", "--loading-delay", "2", "--zoom", "0.5", "--select", "P", "--game-dir", "g", "--mod", "1", "--demo"]
                 .map(String::from),
         )
         .unwrap();
         assert_eq!(b.screen.as_deref(), Some("menu"));
-        assert_eq!(b.frames, 5);
+        assert_eq!((b.frames, b.burst), (5, 3));
         assert_eq!(b.volume, Some(0.3));
         assert!(b.demo && b.offscreen.is_some() && b.game_dir.is_some() && b.mod_id.is_some());
         assert!(a.no_vsync);

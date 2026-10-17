@@ -64,6 +64,16 @@ struct OffscreenState {
     ready_at: Option<Instant>,
     /// Capture the loading screen itself.
     loading_shot: bool,
+    /// `--burst`: frames still to save one by one, and frames saved so far.
+    burst_left: u32,
+    burst_saved: u32,
+}
+
+/// `<out>-007.png` next to `<out>.png`: frame 7 of a `--burst`.
+fn burst_path(path: &std::path::Path, k: u32) -> PathBuf {
+    let stem = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+    let ext = path.extension().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "png".into());
+    path.with_file_name(format!("{stem}-{k:03}.{ext}"))
 }
 
 /// Registers the offscreen target and the driver system on `app` (call before `run`).
@@ -92,6 +102,8 @@ pub fn configure(app: &mut App, args: &Args, path: PathBuf) {
             galaxy_frames: 0,
             ready_at: None,
             loading_shot: args.screen.as_deref() == Some("loading"),
+            burst_left: args.burst,
+            burst_saved: 0,
         })
         .add_systems(Last, drive);
 }
@@ -195,7 +207,21 @@ fn drive(
         st.ready_at.is_some_and(|t| now.duration_since(t).as_secs_f32() > 3.0) && hold.settled()
     };
     let view_ready = st.planet_view.is_none() || st.planet_view_opened.is_some_and(|f| frame >= f + 150);
-    if frame >= st.frames && st.frame_ms.len() as u32 >= st.frames / 2 && settled && view_ready && !st.capture_requested {
+    // `--burst n`: the n frames from the scripted orders on (or before the final capture if nothing was ordered), each saved on its
+    // own, to look for single-frame flicker.
+    if st.burst_left > 0 && (hold.acted || (frame >= st.frames && settled)) && !st.capture_requested {
+        let path = burst_path(&st.path, st.burst_saved);
+        info!("offscreen: burst frame {} is frame {frame}", st.burst_saved);
+        commands
+            .spawn(Screenshot(RenderTarget::Image(ImageRenderTarget {
+                handle: target.image.clone(),
+                scale_factor: target.scale_factor,
+            })))
+            .observe(save_to_disk(path));
+        st.burst_left -= 1;
+        st.burst_saved += 1;
+    }
+    if frame >= st.frames && st.frame_ms.len() as u32 >= st.frames / 2 && settled && view_ready && !st.capture_requested && st.burst_left == 0 {
         st.capture_requested = true;
         st.capture_time = Some(now);
         let path = st.path.clone();

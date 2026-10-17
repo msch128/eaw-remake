@@ -10,6 +10,9 @@ the player selects and orders them, builds at owned planets, controls game speed
   starts one at plugin build (used by the demo example).
 - Fleets on the map (generic fleet model or flagship), orbit slots, lane travel, selection, box select, drag-and-drop and
   right-click move orders with route/ETA hint, merge/split/retreat, blockade-aware route planning.
+- A new fleet model spawns hidden and shows once `fit_fleet_models` has scaled it (2026-10-17): alamo-render spawns the parts in
+  PostUpdate, after the fit, and a hero Star Destroyer at its own size flashed the whole map for a frame (user report on recruiting
+  Thrawn). Test: `visuals::tests::a_new_fleet_model_never_shows_at_its_own_size`.
 - Carrying (carry.rs): the dragged fleet's model centre sits on this frame's cursor ray, 2.2 pads above the map or nearer the camera in
   front of a planet globe the ray would enter, so it hangs exactly under the pointer at every zoom and tilt with no follow lag and is
   not hidden by the planet it is held over; other carried fleets hang beside it along the screen's horizontal, and the white rings and

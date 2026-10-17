@@ -115,7 +115,10 @@ fn spawn_model(commands: &mut Commands, assets: &FleetAssets, mats: &mut Assets<
         (Some(m), true) => {
             let mut spec = AlamoModel::new(m).with_team_color(team);
             spec.bow_forward = bow;
-            commands.spawn((spec, Transform::default(), FleetModel, ChildOf(parent)));
+            // Hidden until `fit_fleet_models` has scaled it: alamo-render spawns the parts in PostUpdate, after the fit, so a new fleet
+            // showed its flagship at its own size for one frame. A hero Star Destroyer (Thrawn's Strikefast) filled the whole map:
+            // the white flash the user saw when recruiting a hero.
+            commands.spawn((spec, Transform::default(), Visibility::Hidden, FleetModel, ChildOf(parent)));
         }
         _ => {
             let mat = mats.add(StandardMaterial { base_color: team, emissive: team.to_linear() * 0.6, ..default() });
@@ -297,15 +300,15 @@ const PAD_LIFT: f32 = 0.3;
 /// Height of a fleet model's centre above its fleet root, in pad radii of the unscaled root (the ship stands on its pad).
 pub const FLEET_MODEL_LIFT: f32 = 0.75;
 
-/// Scales freshly loaded fleet models to the icon size and centers them.
+/// Scales freshly loaded fleet models to the icon size, centers them and shows them (they spawn hidden).
 #[allow(clippy::type_complexity)]
 pub fn fit_fleet_models(
     layout: Res<GalaxyLayout>,
     cfg: Res<crate::state::PlayConfig>,
     parents: Query<&FleetVisual>,
-    mut loaded: Query<(&AlamoModelLoaded, &mut Transform, &ChildOf), (With<FleetModel>, Added<AlamoModelLoaded>)>,
+    mut loaded: Query<(&AlamoModelLoaded, &mut Transform, &mut Visibility, &ChildOf), (With<FleetModel>, Added<AlamoModelLoaded>)>,
 ) {
-    for (m, mut tf, parent) in &mut loaded {
+    for (m, mut tf, mut vis, parent) in &mut loaded {
         // The ship stands on its pad: about 2 pad radii of model radius (vanilla 05 shows a Star Destroyer about 1.25 pad diameters long;
         // our first render at 1.3 was too small to see). Measured on
         // vanilla 05 only. `fleet_icon_scale` 0.5 is the default and stays the tuning knob.
@@ -314,6 +317,7 @@ pub fn fit_fleet_models(
         let s = if m.radius > 0.0 { target / m.radius } else { 1.0 };
         tf.scale = Vec3::splat(s);
         tf.translation = -m.center * s + Vec3::Y * pad * FLEET_MODEL_LIFT;
+        *vis = Visibility::Inherited;
     }
 }
 
@@ -525,5 +529,67 @@ mod tests {
         let fog = Fog { seq: Some(0), view: Some(view) };
         assert_eq!((fog.fleet(1), fog.fleet(2), fog.fleet(3)), (Sight::Detailed, Sight::Seen, Sight::Hidden));
         assert_eq!((fog.planet(1), fog.planet(2), fog.planet(9)), (Sight::Seen, Sight::Hidden, Sight::Hidden));
+    }
+
+    /// Stand-in for alamo-render, which finishes a model in PostUpdate, after the Update fit: here every model loads in its second
+    /// frame, a hull of radius 800 like a Star Destroyer.
+    fn finish_models(mut commands: Commands, models: Query<Entity, (With<AlamoModel>, Without<AlamoModelLoaded>)>, mut frame: Local<u32>) {
+        *frame += 1;
+        if *frame < 2 {
+            return;
+        }
+        for e in &models {
+            let axis = commands.spawn((Transform::default(), Visibility::Inherited, ChildOf(e))).id();
+            commands.entity(e).insert(AlamoModelLoaded {
+                bones: Vec::new(),
+                parts: Vec::new(),
+                proxies: Vec::new(),
+                axis,
+                hardpoints: Vec::new(),
+                bone_by_name: Default::default(),
+                center: Vec3::ZERO,
+                radius: 800.0,
+            });
+        }
+    }
+
+    /// (shown, scale) of a new fleet's model in each of `frames` frames; `old` spawns it the way it was before (visible at once).
+    fn new_fleet_model(frames: usize, old: bool) -> Vec<(bool, f32)> {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<Assets<StandardMaterial>>()
+            .insert_resource(GalaxyLayout { positions: vec![Vec3::ZERO], radii: vec![1.0], unit: 1.0, index: Default::default() })
+            .insert_resource(crate::state::PlayConfig::default())
+            .add_systems(Update, fit_fleet_models)
+            .add_systems(PostUpdate, finish_models);
+        let world = app.world_mut();
+        let root = world.spawn((Transform::default(), Visibility::default(), FleetVisual { id: 1, owner: 0, model: None, heading: Vec3::X, pad: 2.0 })).id();
+        if old {
+            world.spawn((AlamoModel::new("strikefast.alo"), Transform::default(), FleetModel, ChildOf(root)));
+        } else {
+            let assets = FleetAssets { cone: Handle::default(), disc: Handle::default(), rim: Handle::default() };
+            world.resource_scope(|world, mut mats: Mut<Assets<StandardMaterial>>| {
+                spawn_model(&mut world.commands(), &assets, &mut mats, true, Some("strikefast.alo"), true, Color::WHITE, root);
+            });
+            world.flush();
+        }
+        (0..frames)
+            .map(|_| {
+                app.update();
+                let (vis, tf) = app.world_mut().query_filtered::<(&Visibility, &Transform), With<FleetModel>>().single(app.world()).unwrap();
+                (*vis != Visibility::Hidden, tf.scale.x)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_new_fleet_model_never_shows_at_its_own_size() {
+        let frames = new_fleet_model(6, false);
+        // Shown only once fitted to the icon size, and shown in the end.
+        assert!(frames.iter().all(|&(shown, scale)| !shown || scale < 0.1), "{frames:?}");
+        assert!(frames.last().is_some_and(|f| f.0), "{frames:?}");
+        // Spawned visible, the model showed at scale 1 in the frame it loaded: the hull filled the map (the white flash).
+        let old = new_fleet_model(6, true);
+        assert!(old.iter().any(|&(shown, scale)| shown && scale == 1.0), "{old:?}");
     }
 }

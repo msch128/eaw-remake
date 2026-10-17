@@ -21,6 +21,19 @@ Bevy 0.19.1 shell for "Space Peace: Not at War": Galactic Conquest only (no stor
 `--game-dir`, `--mod <id>`, `--campaign <name>`, `--list-campaigns`, `--demo`, `--volume`, `--no-vsync`, `--fullscreen`,
 `--offscreen <png> [--frames N] [--screen menu|campaigns|galaxy|pause|options|loading] [--select <planet>] [--zoom 0..1]`,
 `--loading-delay <s>`. No flags: start on the menu; `--campaign`/`--demo` skip to the map.
+`--burst <n>` (offscreen, 2026-10-17): also saves the n frames from the scripted orders on (`--grant-unit`, `--build`, `--move`,
+`--weeks`) as `<out>-000.png` ..., for single-frame flicker. Example (the hero-recruit flash, G7): `--campaign
+GC_Full_Web_Way_Imperial --select "The Coruscant System" --zoom 0.09 --grant-unit Strikefast --at "The Coruscant System" --burst 40`.
+A `--build` that matches nothing lists what the planet can build.
+
+## New galaxy models stay hidden until fitted (2026-10-17, G7)
+User: the galaxy map flashes white for a moment when a hero is recruited (example Thrawn). alamo-render spawns a model's parts in
+PostUpdate, after the Update systems that scale fleet and station models to their icon size, so a new model showed at its own
+size for one frame: Thrawn's Strikefast (radius about 800) filled the whole map with grey hull (burst frame 2: 827,000 of 2 million
+pixels changed for one frame). Fleet models (galaxy-play `spawn_model` / `fit_fleet_models`) and station models (`station_model` /
+`fit_stations`) now spawn hidden and show once fitted; the same Thrawn burst changes 109 pixels in that frame. Tests run the fit
+over several frames with a stand-in that finishes the model in PostUpdate: `a_new_fleet_model_never_shows_at_its_own_size`
+(galaxy-play, also shows the old spawn flashing), `a_new_station_model_never_shows_at_its_own_size`.
 
 ## SpaceBattle seam (`battle_seam.rs`, plan in the module doc)
 galaxy-play `PlayEvent::OpenTacticalBattle(PendingBattle)` -> `OpenBattle` -> `AppScreen::SpaceBattle` (galaxy scene kept hidden) ->

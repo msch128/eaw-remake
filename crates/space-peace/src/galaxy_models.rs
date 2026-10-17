@@ -94,7 +94,7 @@ fn sync_stations(
                     StationDisc(root),
                 ));
                 if let Some(m) = model {
-                    commands.spawn((AlamoModel::new(m).with_team_color(col), Transform::default(), StationModel(pad), ChildOf(root)));
+                    commands.spawn((station_model(&m, col, pad), ChildOf(root)));
                 }
                 stations.0.insert(id, (root, w));
             }
@@ -111,18 +111,26 @@ fn sync_stations(
 #[derive(Component)]
 struct StationDisc(Entity);
 
-/// Scales freshly loaded station models to a fixed size and centres them.
+/// A station's model, hidden until `fit_stations` has scaled it: alamo-render spawns the parts in PostUpdate, after the fit, so a
+/// new or upgraded star base showed at its own size for one frame (like the hero ships that flashed the map white, see
+/// `galaxy_play::visuals::spawn_model`).
+fn station_model(model: &str, col: Color, pad: f32) -> impl Bundle {
+    (AlamoModel::new(model).with_team_color(col), Transform::default(), Visibility::Hidden, StationModel(pad))
+}
+
+/// Scales freshly loaded station models to a fixed size, centres them and shows them.
 fn fit_stations(
     mut commands: Commands,
-    mut loaded: Query<(&AlamoModelLoaded, &mut Transform, &StationModel), Added<AlamoModelLoaded>>,
+    mut loaded: Query<(&AlamoModelLoaded, &mut Transform, &mut Visibility, &StationModel), Added<AlamoModelLoaded>>,
     discs: Query<(Entity, &StationDisc)>,
     roots: Query<(), With<Station>>,
 ) {
-    for (m, mut tf, station) in &mut loaded {
+    for (m, mut tf, mut vis, station) in &mut loaded {
         // About 1.6 pad radii of model radius: the station stands on its pad like the ships (it was 0.6 `unit`, far bigger than the pads).
         let s = if m.radius > 0.0 { station.0 * 1.6 / m.radius } else { 1.0 };
         tf.scale = Vec3::splat(s);
         tf.translation = -m.center * s;
+        *vis = Visibility::Inherited;
     }
     for (e, d) in &discs {
         if !roots.contains(d.0) {
@@ -141,5 +149,50 @@ fn hide_in_planet_view(
         if *v != want {
             *v = want;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Stand-in for alamo-render, which finishes a model in PostUpdate, after the Update fit: here every model loads in its second
+    /// frame, radius 800 like a star base.
+    fn finish_models(mut commands: Commands, models: Query<Entity, (With<AlamoModel>, Without<AlamoModelLoaded>)>, mut frame: Local<u32>) {
+        *frame += 1;
+        if *frame < 2 {
+            return;
+        }
+        for e in &models {
+            let axis = commands.spawn((Transform::default(), Visibility::Inherited, ChildOf(e))).id();
+            commands.entity(e).insert(AlamoModelLoaded {
+                bones: Vec::new(),
+                parts: Vec::new(),
+                proxies: Vec::new(),
+                axis,
+                hardpoints: Vec::new(),
+                bone_by_name: Default::default(),
+                center: Vec3::ZERO,
+                radius: 800.0,
+            });
+        }
+    }
+
+    #[test]
+    fn a_new_station_model_never_shows_at_its_own_size() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins).add_systems(Update, fit_stations).add_systems(PostUpdate, finish_models);
+        let root = app.world_mut().spawn((Station, Transform::default(), Visibility::default())).id();
+        app.world_mut().spawn((station_model("e_station_4.alo", Color::WHITE, 2.0), ChildOf(root)));
+        let frames: Vec<(bool, f32)> = (0..6)
+            .map(|_| {
+                app.update();
+                let (vis, tf) = app.world_mut().query_filtered::<(&Visibility, &Transform), With<StationModel>>().single(app.world()).unwrap();
+                (*vis != Visibility::Hidden, tf.scale.x)
+            })
+            .collect();
+        // Shown only once fitted to its pad, and shown in the end.
+        assert!(frames.iter().all(|&(shown, scale)| !shown || scale < 0.1), "{frames:?}");
+        assert!(frames.last().is_some_and(|f| f.0), "{frames:?}");
     }
 }

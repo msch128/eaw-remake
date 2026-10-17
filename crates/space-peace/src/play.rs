@@ -43,6 +43,8 @@ pub struct ScriptHold {
     pub done_at: Option<Instant>,
     /// A tactical battle will open and the capture has to wait for it and the return.
     pub waiting_battle: bool,
+    /// The script gave its first order (grant, build, move, weeks): `--burst` starts saving frames here.
+    pub acted: bool,
 }
 
 impl ScriptHold {
@@ -474,6 +476,7 @@ fn run_script(
                 // The grant is one step of its own: the fleet exists a few frames later, so a following `--move` can find it.
                 if script.granted_at.is_none() {
                     script.granted_at = Some(script.frames);
+                    hold.acted = true;
                     for unit in units.split(',').map(str::trim).filter(|u| !u.is_empty()) {
                         info!("script: granting {unit} at {}", world.planets[at as usize].display_name);
                         match unit.split_once('@').and_then(|(n, s)| Some((n, s.parse::<u8>().ok()?))) {
@@ -489,17 +492,16 @@ fn run_script(
             if let Some(text) = &args.build {
                 let g = state.galaxy();
                 let menu = BuildMenu::for_planet(&world, g, &catalog, h, planet);
-                let pick = menu.and_then(|m| {
-                    m.options
-                        .into_iter()
-                        .find(|o| o.availability.is_available() && o.name.to_ascii_lowercase().contains(&text.to_ascii_lowercase()))
-                });
-                match pick {
+                let available: Vec<_> = menu.map(|m| m.options.into_iter().filter(|o| o.availability.is_available()).collect()).unwrap_or_default();
+                match available.iter().find(|o| o.name.to_ascii_lowercase().contains(&text.to_ascii_lowercase())) {
                     Some(o) => {
                         info!("script: building {} at {}", o.name, world.planets[planet as usize].display_name);
                         actions.write(PlayAction::Build { planet, target: o.target });
                     }
-                    None => warn!("script: nothing buildable matching `{text}` at the selected planet"),
+                    None => {
+                        let names: Vec<&str> = available.iter().map(|o| o.name.as_str()).collect();
+                        warn!("script: nothing buildable matching `{text}` at the selected planet (available: {})", names.join(", "));
+                    }
                 }
             }
             if let Some(dest) = args.move_to.as_deref().and_then(find).and_then(|i| bridge.planet_to_sim[i]) {
@@ -517,6 +519,7 @@ fn run_script(
             script.goal = args.weeks.unwrap_or(0) as f32 * world.config.week_seconds;
             script.phase = 2;
             script.frames = 0;
+            hold.acted = true;
         }
         _ => {
             // Orders were handled in the frame before; now advance time in week-sized steps.
