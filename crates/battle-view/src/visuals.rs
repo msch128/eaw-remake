@@ -1,11 +1,13 @@
 //! Per-ship render data that the simulation catalog does not carry: model scale, death effects and
 //! the model bones belonging to each hardpoint.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use alamo_data::GameData;
 use battle_sim::{Catalog, HpKind, ShipId, TargetClass};
 use bevy::prelude::*;
+
+use crate::flight::{FlightLook, FlightXml};
 
 /// Visual description of one hardpoint (same index as in [`battle_sim::ShipDef::hardpoints`]).
 #[derive(Debug, Clone, Default)]
@@ -111,8 +113,8 @@ pub struct ShipVisual {
     pub sfx: UnitSfx,
     /// `Is_Named_Hero`.
     pub hero: bool,
-    /// `Bank_Turn_Angle` in radians (0.0 if unspecified).
-    pub bank_turn_angle: f32,
+    /// How it banks and pitches in flight (`Bank_Turn_Angle`, `Max_Rate_Of_Roll`, `Max_Lift`), see [`crate::flight`].
+    pub flight: FlightLook,
     /// Look and sound of the unit's `SUPER_LASER` shot, if it has one.
     pub super_laser: Option<SuperLaserVisual>,
 }
@@ -192,7 +194,9 @@ impl VisualCatalog {
     /// Reads the render fields of every ship in `catalog` from the game XML.
     pub fn build(data: &GameData, catalog: &Catalog, team_colors: Vec<Color>) -> Self {
         let mut ships = Vec::with_capacity(catalog.ships.len());
-        for def in &catalog.ships {
+        // Types that fly in a squadron are small craft whatever their class (a Skipray blast boat squadron).
+        let squadron_members: HashSet<ShipId> = catalog.ships.iter().flat_map(|d| d.members.iter().map(|&(m, _)| m)).collect();
+        for (id, def) in catalog.ships.iter().enumerate() {
             let r = data.objects.resolve(&def.name);
             let scale = r
                 .as_ref()
@@ -308,12 +312,14 @@ impl VisualCatalog {
                     })
                     .unwrap_or_default(),
             };
-            let bank_turn_angle = r
-                .as_ref()
-                .and_then(|r| r.get("bank_turn_angle"))
-                .and_then(|v| v.parse::<f32>().ok())
-                .map(|deg| deg.to_radians())
-                .unwrap_or(0.0);
+            let xml_num = |tag: &str| r.as_ref().and_then(|r| r.num::<f32>(tag)).unwrap_or(0.0);
+            let flight_xml = FlightXml {
+                bank_turn_angle: xml_num("bank_turn_angle"),
+                max_rate_of_roll: xml_num("max_rate_of_roll"),
+                max_lift: xml_num("max_lift"),
+                max_speed: xml_num("max_speed"),
+            };
+            let flight = FlightLook::new(def.class, squadron_members.contains(&(id as ShipId)), flight_xml, def.turn_rate, def.max_speed);
             ships.push(ShipVisual {
                 model: def.model.clone(),
                 scale,
@@ -322,7 +328,7 @@ impl VisualCatalog {
                 hardpoints,
                 sfx: unit_sfx,
                 hero: r.as_ref().and_then(|r| r.flag("is_named_hero")).unwrap_or(false),
-                bank_turn_angle,
+                flight,
                 super_laser: r.as_ref().and_then(SuperLaserVisual::from_unit),
             });
         }

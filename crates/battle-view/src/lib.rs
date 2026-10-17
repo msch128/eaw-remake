@@ -18,6 +18,7 @@ pub mod audio;
 pub mod camera;
 pub mod control;
 pub mod convert;
+pub mod flight;
 pub(crate) mod fog;
 mod frame_log;
 pub mod gpu_profile;

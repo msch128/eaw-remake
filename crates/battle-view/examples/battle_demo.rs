@@ -188,11 +188,12 @@ fn main() {
         fog_of_war: std::env::var_os("SP_DEMO_NOFOG").is_none(),
         ..BattleConfig::default()
     };
-    let setup = battle_sim::setup(
-        catalog.clone(),
-        vec![side("Empire", empire, vec![]), side("Rebel_Alliance", rebel, station_ids)],
-        config,
-    );
+    let mut sides = vec![side("Empire", empire, vec![]), side("Rebel_Alliance", rebel, station_ids)];
+    // `SP_DEMO_IDLE=<side>`: that side gets no AI, so its units wait where they arrived (a squadron at rest).
+    if let Some(s) = std::env::var("SP_DEMO_IDLE").ok().and_then(|v| v.parse::<usize>().ok()).and_then(|i| sides.get_mut(i)) {
+        s.ai = false;
+    }
+    let setup = battle_sim::setup(catalog.clone(), sides, config);
     let faction_color = |name: &str, fallback: Color| {
         data.faction(name)
             .and_then(|f| f.color)
@@ -258,7 +259,7 @@ fn main() {
                 cam_applied: false,
                 auto,
             })
-            .add_systems(Last, capture_driver);
+            .add_systems(Last, (capture_driver, flight_probe.after(capture_driver), hide_small_craft));
         }
         None => {
             app.add_plugins(DefaultPlugins.set(WindowPlugin {
@@ -282,6 +283,165 @@ fn main() {
         .add_plugins(BattleViewPlugin)
         .insert_resource(BattleSession::new(setup, visuals, scene));
     app.run();
+}
+
+/// `SP_DEMO_HIDE_SMALL=1`: hides every squadron member, for a picture of everything else: told apart from the normal picture of the same
+/// moment (the battle is deterministic), it gives the craft's silhouettes. `SP_DEMO_ONLY_SQUAD=<n>` hides all but squadron n: its
+/// silhouettes alone, without the other craft that fly across it.
+fn hide_small_craft(ships: Res<RenderedShips>, mut shown: Query<&mut Visibility, With<battle_view::ShipView>>) {
+    let only = std::env::var("SP_DEMO_ONLY_SQUAD").ok().and_then(|v| v.parse::<u32>().ok());
+    if std::env::var_os("SP_DEMO_HIDE_SMALL").is_none() && only.is_none() {
+        return;
+    }
+    for s in ships.0.values().filter(|s| s.squad != u32::MAX && Some(s.squad) != only) {
+        if let Ok(mut v) = shown.get_mut(s.entity) {
+            *v = Visibility::Hidden;
+        }
+    }
+}
+
+/// What `flight_probe` remembers between frames: per ship id the battle time it last changed its heading.
+#[derive(Default)]
+struct FlightMemory {
+    turned_at: std::collections::HashMap<u32, f32>,
+    tick: u64,
+    captures: usize,
+}
+
+/// `SP_DEMO_FLIGHT=1`: at every capture, these lines.
+/// * `spacing`: how close the members of a squadron at rest (every member under 5 % of its top speed) come on screen, over such squadrons
+///   wholly in the picture: the smallest gap between the screen boxes of their drawn meshes (px; negative: the boxes overlap by that much;
+///   the box of a turned craft is far larger than its silhouette, so only a positive gap proves anything) and the smallest distance
+///   between centres.
+/// * `members`, per such squadron within 2900 units of the eye: the screen centre of every member. With a second render of the same
+///   moment under `SP_DEMO_HIDE_SMALL` or `SP_DEMO_ONLY_SQUAD`, the pixels that differ are the craft's silhouettes; matched to these
+///   centres they show whether neighbours touch.
+/// * `lean`: how the drawn ships lean. Turning ships (at least 30 % of their turn rate and top speed): how many bank into the turn and how
+///   many out of it, and the steepest bank, for small craft and for bigger ships; bigger ships that have kept their heading for 10 s.
+#[allow(clippy::too_many_arguments)]
+fn flight_probe(
+    cap: Res<Capture>,
+    status: Res<BattleStatus>,
+    mut memory: Local<FlightMemory>,
+    ships: Res<RenderedShips>,
+    rt: Option<Res<battle_view::BattleRuntime>>,
+    loaded: Query<&alamo_render::AlamoModelLoaded>,
+    parts: Query<(&bevy::camera::primitives::Aabb, &GlobalTransform, &InheritedVisibility)>,
+    roots: Query<&GlobalTransform, With<battle_view::ShipView>>,
+    cameras: Query<(&Camera, &GlobalTransform), With<Camera3d>>,
+) {
+    if std::env::var_os("SP_DEMO_FLIGHT").is_none() {
+        return;
+    }
+    let Some(rt) = rt else { return };
+    let (Some(cur), Some(next)) = (rt.cur.as_ref(), rt.next.as_ref()) else { return };
+    let dt = (next.time - cur.time).max(1e-3);
+    // Per ship this step: (yaw rate, speed in the plane).
+    let motion = |id: u32| -> Option<(f32, f32)> {
+        let (a, b) = (cur.ship(id)?, next.ship(id)?);
+        let turn = (b.yaw - a.yaw + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
+        Some((turn / dt, (b.pos.x - a.pos.x).hypot(b.pos.y - a.pos.y) / dt))
+    };
+    if cur.tick != memory.tick {
+        memory.tick = cur.tick;
+        for s in &cur.ships {
+            if motion(s.id).is_none_or(|(yaw_rate, _)| yaw_rate.abs() > 1e-4) {
+                memory.turned_at.insert(s.id, cur.time);
+            } else {
+                memory.turned_at.entry(s.id).or_insert(cur.time);
+            }
+        }
+    }
+    if cap.next == memory.captures {
+        return;
+    }
+    memory.captures = cap.next;
+    let Some((camera, eye)) = cameras.iter().find(|(c, _)| c.is_active) else { return };
+    let Some(view) = camera.logical_viewport_size() else { return };
+    // Screen box and centre of every member of a squadron, and whether the member is at rest.
+    let mut squads: std::collections::HashMap<u32, Vec<(Rect, Vec2, bool, Vec3)>> = std::collections::HashMap::new();
+    for s in ships.0.values().filter(|s| s.squad != u32::MAX) {
+        let Ok(model) = loaded.get(s.entity) else { continue };
+        let mut rect: Option<Rect> = None;
+        for (aabb, gt, _) in model.parts.iter().filter_map(|&p| parts.get(p).ok()).filter(|(_, _, v)| v.get()) {
+            for k in 0..8 {
+                let sign = |bit: usize| if k & bit == 0 { -1.0 } else { 1.0 };
+                let corner = Vec3::from(aabb.center) + Vec3::from(aabb.half_extents) * Vec3::new(sign(1), sign(2), sign(4));
+                if let Ok(px) = camera.world_to_viewport(eye, gt.transform_point(corner)) {
+                    rect = Some(rect.map_or(Rect::from_corners(px, px), |r| r.union_point(px)));
+                }
+            }
+        }
+        let resting = motion(s.id).is_some_and(|(_, speed)| speed < 0.05 * rt.catalog.ship(s.def).max_speed);
+        if let (Some(rect), Ok(centre)) = (rect, camera.world_to_viewport(eye, s.pos)) {
+            squads.entry(s.squad).or_default().push((rect, centre, resting, s.pos));
+        }
+    }
+    let (mut counted, mut pairs, mut overlaps) = (0, 0, 0);
+    let (mut gap, mut apart) = (f32::MAX, f32::MAX);
+    let mut ids: Vec<u32> = squads.keys().copied().collect();
+    ids.sort_unstable();
+    for squad in ids {
+        let members = &squads[&squad];
+        let inside = |r: &Rect| r.min.x >= 0.0 && r.min.y >= 0.0 && r.max.x <= view.x && r.max.y <= view.y;
+        if members.len() < 2 || !members.iter().all(|(r, _, resting, _)| inside(r) && *resting) {
+            continue;
+        }
+        counted += 1;
+        // Squadrons close to the camera (where small craft weave): their members' screen centres, for the silhouette check of the renders.
+        let middle = members.iter().map(|m| m.3).sum::<Vec3>() / members.len() as f32;
+        let distance = middle.distance(eye.translation());
+        if distance < 2900.0 {
+            let at: Vec<String> = members.iter().map(|m| format!("{:.1},{:.1}", m.1.x, m.1.y)).collect();
+            println!("members t={:.2}s squad {squad} distance {distance:.0}: {}", status.time, at.join(" "));
+        }
+        for (i, (a, ca, _, _)) in members.iter().enumerate() {
+            for (b, cb, _, _) in &members[i + 1..] {
+                let g = (a.min.x - b.max.x).max(b.min.x - a.max.x).max(a.min.y - b.max.y).max(b.min.y - a.max.y);
+                pairs += 1;
+                overlaps += usize::from(g < 0.0);
+                gap = gap.min(g);
+                apart = apart.min(ca.distance(*cb));
+            }
+        }
+    }
+    println!(
+        "spacing t={:.2}s: {counted} squadrons at rest wholly in view, {pairs} member pairs: closest mesh boxes {gap:.1} px apart ({overlaps} pairs overlap), closest centres {apart:.1} px",
+        status.time
+    );
+    // (into the turn, out of it, steepest bank in degrees).
+    let (mut small, mut big) = ((0, 0, 0.0f32), (0, 0, 0.0f32));
+    let (mut calm, mut calm_leaning, mut calm_most) = (0, 0, 0.0f32);
+    for s in ships.0.values() {
+        let (Some((yaw_rate, speed)), Ok(gt)) = (motion(s.id), roots.get(s.entity)) else { continue };
+        let def = rt.catalog.ship(s.def);
+        if def.is_static || def.turn_rate <= 0.0 || def.max_speed <= 0.0 {
+            continue;
+        }
+        // Bank in degrees, positive: right wing down (the model's +X is its left wing).
+        let bank = (gt.rotation() * Vec3::X).y.clamp(-1.0, 1.0).asin().to_degrees();
+        let is_small = s.squad != u32::MAX || matches!(def.class, battle_sim::TargetClass::Fighter | battle_sim::TargetClass::Bomber);
+        if yaw_rate.abs() >= 0.3 * def.turn_rate && speed >= 0.3 * def.max_speed {
+            let tally = if is_small { &mut small } else { &mut big };
+            if bank.abs() >= 1.0 {
+                // The sim's yaw grows to the left: a left turn should lower the left wing (negative bank).
+                if bank * yaw_rate < 0.0 {
+                    tally.0 += 1;
+                } else {
+                    tally.1 += 1;
+                }
+            }
+            tally.2 = tally.2.max(bank.abs());
+        } else if !is_small && memory.turned_at.get(&s.id).is_some_and(|&t| cur.time - t >= 10.0) {
+            calm += 1;
+            calm_leaning += usize::from(bank.abs() > 0.01);
+            calm_most = calm_most.max(bank.abs());
+        }
+    }
+    println!(
+        "lean t={:.2}s: turning small craft {} banked into the turn, {} out of it, steepest {:.0} deg; turning bigger ships {} into, {} out, steepest {:.1} deg; bigger ships on one heading for 10 s: {calm}, {calm_leaning} of them leaning (most {calm_most:.3} deg)",
+        status.time, small.0, small.1, small.2, big.0, big.1, big.2
+    );
 }
 
 /// Positions of the map's rocks and other props (for `SP_DEMO_MOVE`).
@@ -497,10 +657,15 @@ fn capture_driver(
             .iter()
             .flat_map(|a| f.iter().filter(|b| b.side != a.side).map(move |b| (a, b)))
             .min_by(|x, y| x.0.pos.distance(x.1.pos).total_cmp(&y.0.pos.distance(y.1.pos)));
-        let lone = std::env::var_os("SP_DEMO_SQUAD").and_then(|_| f.iter().min_by_key(|s| s.id));
-        if let Some(a) = lone {
+        // `SP_DEMO_SQUAD=centre` frames the middle of that fighter's squadron (the whole formation stands still in the picture).
+        let lone = std::env::var("SP_DEMO_SQUAD").ok().and_then(|mode| {
+            let first = f.iter().min_by_key(|s| s.id)?;
+            let members: Vec<Vec3> = f.iter().filter(|s| s.squad == first.squad).map(|s| s.pos).collect();
+            Some(if mode == "centre" { members.iter().sum::<Vec3>() / members.len() as f32 } else { first.pos })
+        });
+        if let Some(at) = lone {
             bc.snap = true;
-            bc.target_focus = a.pos;
+            bc.target_focus = at;
             bc.target_distance = 700.0;
         } else
         if let Some((a, b)) = pair {

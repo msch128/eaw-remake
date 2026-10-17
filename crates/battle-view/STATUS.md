@@ -6,7 +6,7 @@ Bevy plugin that renders and drives a `battle-sim` space battle with the EaW loo
 - Scene from a space `.ted` (`SpaceScene`): skydome, backdrop planet, props, sun + ambient, bounds.
 - Sim on a worker thread (`sim.rs`), one snapshot per step; render interpolates (smooth at any FPS).
   `blocking: true` makes offscreen runs reproducible.
-- Ships as `AlamoModel` (team colour, bank into turns), hardpoint death (hide meshes, damage fires,
+- Ships as `AlamoModel` (team colour, bank into turns, pitch with climbs, small craft weave: `flight.rs`), hardpoint death (hide meshes, damage fires,
   death particle), capital death sequence, fighters despawn with a small explosion.
 - Bolts: pooled `ProjectileVisual`; impacts via `ProjectileImpact` / `ShieldHit` (budgeted per frame).
 - Camera: wheel zoom, WASD/edge pan, Q/E or MMB rotate, Ctrl+MMB grab, clamped to map bounds.
@@ -329,3 +329,45 @@ Add `battle-view`, `galaxy-sim` (already there through galaxy-play) and `eaw-ui`
 ## Fighter size and squadron spread (2026-10-17)
 - **Size:** `ships::small_craft_boost` draws fighters, bombers and squadron members with their bounding sphere at 3.2 % of the screen height (`SMALL_CRAFT_SCREEN_FRACTION`) at every camera distance up to 7277 (the Remake's widest view at our fov, `SMALL_CRAFT_FREEZE_DISTANCE`); farther out the enlargement holds and they shrink with the world; never below true size. One factor per squadron, from its centre, so members match. Measured against the user's video: TIEs 23-29 x 23-27 px (wings included) at 1080p in b0703s, b0732s, b0850s and still 22-25 px in b0760s; ours 18-20 x 24-26 px at camera 2000 (bounding sphere 35 px). Replaces `fighter_boost` (2.6 %, cap 40) of the FX pass 2 above.
 - **Spacing:** squadron members fly 100 units apart (battle-sim `SQUADRON_GAP`), about 47 px at camera 2000: the Remake shows 36-51 px in b0703s. Squadrons carry the icon box only while selected or hovered.
+
+## Lively flight (2026-10-17)
+- `flight.rs`, view only: battle-sim is unchanged. Bank and pitch advance once per simulation step from the snapshots (frame-rate
+  independent), the weave reads the battle clock and the ship id; nothing is random. A paused battle is a frozen picture.
+- **Data (Remake XML):** `Bank_Turn_Angle` (TIE fighter and X-wing 360, which reads as no limit; `Spacecraft_Base` 90; Star Destroyer and
+  Venator 20), `Max_Rate_Of_Roll` (TIE 2.56, X-wing 2.5, Star Destroyer 0.0375, Venator 0.05 rad/s), `Max_Lift` (TIE 2.8 of `Max_Speed` 4).
+  No space model of the Remake has a turn or bank clip (TURNL/TURNR clips belong to ground units; its TIE fighter model has no clips, its
+  X-wing only deploy and undeploy), so the original banks in code.
+- **Measured** (YouTube wkiF9UTI3xo at 10-15 frames/s): TIE fighters bank up to about 35 degrees and X-wings 45-60 in a dogfight (15.3 s);
+  a Venator rolls 6-8 degrees in a turn at its full rate and is level within 1.5 degrees after it (513-527 s); squadrons on the move keep
+  rigid rows (23 tracked TIEs move under 0.8 px RMS against their row neighbours at 20-27 px spacing, 532 s). User video b0703s, b0727s:
+  idle squadrons are loose clusters, neighbours 36-51 px apart.
+- **Bank:** into the turn, `max_bank` x turn-rate fraction x speed fraction, critically damped and at most `Max_Rate_Of_Roll` fast. Small
+  craft (fighters, bombers, squadron members): `Bank_Turn_Angle` up to 60 degrees (estimate: the video's steepest). Bigger ships: 35 % of
+  `Bank_Turn_Angle` (estimate from the Venator: 7 degrees for the Star Destroyer and the Venator). Structures do not bank. The old code
+  banked small craft and corvettes out of the turn (the right wing went down in a left turn), frigates and capital ships not at all.
+- **Pitch:** the flight-path angle of the sim's climb or dive (speed taken as at least half the top speed), small craft up to
+  `atan(Max_Lift / Max_Speed)` (inferred: TIE 35 degrees) or 30 degrees without `Max_Lift` (estimate), bigger ships 4 degrees (estimate);
+  the pitch changes at most at the turn rate (estimate).
+- **Weave (small craft):** phase and period per craft from its id: drift 6 to the side, 5 up and down, 2 fore and aft (world units), periods
+  4.2 / 3.4 / 5.6 s x 0.8-1.2, nose +-10, bank +-14, pitch +-7 degrees (all estimates). At top speed 20 % of the drift and 35 % of the attitude
+  stay (rows stay rigid on the move); it grows in over 3 s after a craft appears (it leaves the hangar on its exact path); the drift fades
+  from camera distance 1800 to 2750 to the squadron, where neighbours would come too close on screen. `ShipRender::pos` is the drawn position,
+  so selection rings, bars, flags, picking and turret aim follow the drawn craft.
+- **Proof** (`battle_demo`, Byss, camera 2000): the four resting squadrons nearest the camera (2000-2480 units), 17 frames each, rendered
+  alone (`SP_DEMO_ONLY_SQUAD`) against a render with every squadron hidden (`SP_DEMO_HIDE_SMALL`): no two silhouettes touch; closest gaps
+  12 / 4 / 7 / 4 px (before, the rigid grid: 16 / 7 / 10 / 7), median gap to the nearest neighbour 17 / 9 / 13 / 8 px (before 18 / 8 / 12 /
+  8). Every turning ship of the battle at 49-54 s (11 frames; the framed TIE squadron turns): before 13 small craft banked into the turn and
+  184 out of it (steepest 32 degrees), after 197 into and 36 out (turn reversals while the roll catches up, and the sway in gentle turns;
+  steepest 57), bigger ships 0 / 0 before and 43 into, 0 out after (steepest 5.6). Bigger ships on one heading for 10 s (8-16 s): 0 of 72
+  samples lean.
+  The app's `--battle-orders` shot (camera 2000) shows the selection, the bars, flags, order lines and attack markers as before.
+- **Cost:** 27 us per frame for 292 ships (93 ns each, release, every ship weaving); `battle_demo` 140 s at 1080p (292 ships), six
+  alternating runs each: mean frame 7.71 ms before and 7.74 after (run to run 7.12-8.37), p99 14.9 both; `SP_FRAME_LOG=20` main-thread
+  spikes inside the battle, runs 3-6: before 3 / 8 / 0 / 0, after 0 / 22 / 0 / 0 (run 4 was busy for both, at 110-137 s with the render
+  thread at 17-27 ms in the same frames).
+- `battle_demo` switches: `SP_DEMO_IDLE=<side>` (that side has no AI: its squadrons rest where they arrive), `SP_DEMO_SQUAD=centre` (with
+  `SP_DEMO_DOGFIGHT`: frames the middle of the first squadron), `SP_DEMO_FLIGHT=1` (probe lines `spacing`, `members`, `lean` at every capture),
+  `SP_DEMO_HIDE_SMALL=1` and `SP_DEMO_ONLY_SQUAD=<n>` (silhouette renders).
+  Check: `SP_DEMO_FLIGHT=1 SP_DEMO_IDLE=0 SP_DEMO_DOGFIGHT=1 SP_DEMO_SQUAD=centre SP_DEMO_DIST=2000 battle_demo --offscreen out.png --map
+  _SPACE_PLANET_BYSS_01 --size 1920x1080 --times 8,9,10,11,12` (a resting squadron); without `SP_DEMO_IDLE` and with `--times 49.5,50.5,51.5,52.5`
+  a squadron turning.

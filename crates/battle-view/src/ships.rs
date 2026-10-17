@@ -10,6 +10,7 @@ use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 
 use crate::convert::{lerp_angle, ship_rotation, sim_to_bevy};
+use crate::flight::{Attitude, Motion, attitude_rotation, weave, weave_room};
 use crate::sim::ShipSnap;
 use crate::visuals::{BoneMap, ship_death_effect};
 use crate::{BattleEntity, BattleRuntime, BattleViewSettings};
@@ -29,12 +30,10 @@ pub struct ShipView {
     bones: Option<BoneMap>,
     /// Parts hanging below each hardpoint's bone.
     hp_parts: Vec<Vec<Entity>>,
-    /// Previous heading for banking.
-    last_yaw: f32,
-    /// Smoothed angular turn velocity.
-    smooth_yaw_rate: f32,
-    /// Smoothed bank angle.
-    bank: f32,
+    /// Bank and pitch from the simulated motion ([`crate::flight`]).
+    attitude: Attitude,
+    /// Battle time the ship appeared: a small craft's weave grows in from then.
+    born: f32,
     /// Radius of the visible geometry in world units (0 until the model has loaded).
     visual_radius: f32,
     /// The model is shown (enemy ships hide in the fog of war).
@@ -61,7 +60,8 @@ pub struct ShipRender {
     pub id: u32,
     /// Root entity.
     pub entity: Entity,
-    /// Bevy world position.
+    /// Bevy world position where the ship is drawn: its simulated place, plus a small craft's weave (at most
+    /// [`crate::flight::weave_reach`], 8.1 units).
     pub pos: Vec3,
     /// Sim heading in radians (interpolated).
     pub yaw: f32,
@@ -305,7 +305,6 @@ pub struct ClipTouch {
 #[allow(clippy::too_many_arguments)]
 pub fn update_ships(
     mut commands: Commands,
-    time: Res<Time>,
     mut rt: ResMut<BattleRuntime>,
     settings: Res<BattleViewSettings>,
     mut rendered: ResMut<RenderedShips>,
@@ -323,7 +322,6 @@ pub fn update_ships(
     let (Some(cur), alpha) = (rt.cur.clone(), rt.alpha) else {
         return;
     };
-    let dt_frame = time.delta_secs().clamp(0.001, 0.1);
     // Camera data for the minimum on-screen size of fighters: (eye, pixels per world unit at distance 1, screen height in pixels).
     let eye = cameras.iter().find(|(c, _, _)| c.is_active).and_then(|(c, gt, p)| match (p, c.physical_target_size()) {
         (Projection::Perspective(p), Some(size)) => Some((gt.translation(), size.y as f32 / (2.0 * (p.fov * 0.5).tan()), size.y as f32)),
@@ -388,9 +386,8 @@ pub fn update_ships(
                             hp_applied: vec![true; s.hps.len()],
                             bones: None,
                             hp_parts: Vec::new(),
-                            last_yaw: yaw,
-                            smooth_yaw_rate: 0.0,
-                            bank: 0.0,
+                            attitude: Attitude::new(cur.tick),
+                            born: cur.time,
                             visual_radius: 0.0,
                             shown: true,
                         },
@@ -443,6 +440,8 @@ pub fn update_ships(
             .collect();
         let mut hp_pos: Vec<Option<Vec3>> = vec![None; s.hps.len()];
         let mut radius = def.radius;
+        // Where the ship is drawn: its simulated place plus a small craft's weave. Picking, overlays and turrets use it.
+        let mut drawn = pos;
         if let Ok((mut view, mut tf)) = views.get_mut(entity) {
             if view.visual_radius == 0.0
                 && let Ok(l) = touch.loaded.get(entity)
@@ -452,64 +451,29 @@ pub fn update_ships(
             if view.visual_radius > 0.0 {
                 radius = view.visual_radius * 0.8;
             }
-            // Angular velocity from simulation snapshots (noise-free, independent of frame rate)
-            let snap_yaw_rate = if let Some(n) = nxt {
-                let mut d = n.yaw - s.yaw;
-                while d > std::f32::consts::PI {
-                    d -= std::f32::consts::TAU;
-                }
-                while d < -std::f32::consts::PI {
-                    d += std::f32::consts::TAU;
-                }
-                d / sim_dt
-            } else {
-                0.0
-            };
-            // Low-pass filter angular velocity over time to avoid snap transitions
-            let yaw_filter = 1.0 - (-8.0 * dt_frame).exp();
-            if settings.paused || rt.speed == 0.0 {
-                view.smooth_yaw_rate = 0.0;
-            } else {
-                view.smooth_yaw_rate += (snap_yaw_rate - view.smooth_yaw_rate) * yaw_filter;
-            }
-            view.last_yaw = yaw;
-
             if view.shown != visible {
                 view.shown = visible;
                 commands.entity(entity).insert(if visible { Visibility::Inherited } else { Visibility::Hidden });
             }
 
-            // Natural, weighted banking into turns.
-            // Capital ships, frigates, structures and super weapons do NOT bank like atmospheric planes.
-            // In EaW only fighters and bombers bank into turns (and corvettes very slightly).
-            let max_bank = match def.class {
-                TargetClass::Super | TargetClass::Structure | TargetClass::Capital | TargetClass::Frigate => 0.0,
-                TargetClass::Corvette => 0.04, // ~2 degrees
-                TargetClass::Transport | TargetClass::Other => 0.02,
-                TargetClass::Fighter | TargetClass::Bomber => {
-                    if vis.bank_turn_angle > 0.0 {
-                        vis.bank_turn_angle.min(0.55) // max ~31 degrees
-                    } else {
-                        0.45 // ~26 degrees
-                    }
-                }
-            };
-            let turn_fraction = if def.turn_rate > 1e-3 {
-                (view.smooth_yaw_rate / def.turn_rate).clamp(-1.0, 1.0)
-            } else {
-                0.0
-            };
-            let want = if settings.paused || rt.speed == 0.0 { 0.0 } else { turn_fraction * max_bank };
-            let roll_speed = match def.class {
-                TargetClass::Super | TargetClass::Structure | TargetClass::Capital | TargetClass::Frigate => 5.0,
-                TargetClass::Corvette => 3.2,
-                TargetClass::Transport | TargetClass::Other => 2.0,
-                TargetClass::Fighter | TargetClass::Bomber => 5.5,
-            };
-            let roll_step = 1.0 - (-roll_speed * dt_frame).exp();
-            view.bank += (want - view.bank) * roll_step;
-            tf.translation = pos;
-            tf.rotation = ship_rotation(yaw) * Quat::from_rotation_z(view.bank);
+            // Bank into turns and pitch with climbs from the step's motion; small craft also weave around their place (`flight`).
+            // A paused battle keeps its lean: the attitude only moves with the simulation steps.
+            let look = &vis.flight;
+            let motion = nxt.map(|n| Motion::between(s.pos, s.yaw, n.pos, n.yaw, sim_dt));
+            view.attitude.update(cur.tick, look, motion, sim_dt);
+            let (mut bank, mut pitch) = view.attitude.at(alpha);
+            let mut heading = yaw;
+            if look.small || s.squad != u32::MAX {
+                let t = cur.time + alpha * sim_dt;
+                let calm = look.calm(view.attitude.speed());
+                let room = eye.map_or(1.0, |(eye, _, _)| weave_room(centres.get(&s.squad).copied().unwrap_or(pos).distance(eye)));
+                let w = weave(s.id, t, calm, t - view.born, room);
+                drawn = pos + ship_rotation(yaw) * w.offset;
+                heading += w.yaw;
+                (bank, pitch) = w.lean(look, bank, pitch);
+            }
+            tf.translation = drawn;
+            tf.rotation = attitude_rotation(heading, pitch, bank);
             let mut boost = 1.0;
             // Squadron members of any class count (a Skipray blast boat squadron is no fighter class but reads as a unit of small craft).
             if (matches!(def.class, TargetClass::Fighter | TargetClass::Bomber) || s.squad != u32::MAX)
@@ -549,7 +513,7 @@ pub fn update_ships(
             ShipRender {
                 id: s.id,
                 entity,
-                pos,
+                pos: drawn,
                 yaw,
                 side: s.side,
                 def: s.def,
@@ -1569,7 +1533,7 @@ mod tests {
         world.init_resource::<Assets<Mesh>>();
         world.init_resource::<Assets<StandardMaterial>>();
         world.init_resource::<Assets<Image>>();
-        let view = ShipView { id: shooter.id, def: shooter.def, side: 0, hp_applied: vec![], bones: None, hp_parts: vec![], last_yaw: 0.0, smooth_yaw_rate: 0.0, bank: 0.0, visual_radius: 0.0, shown: true };
+        let view = ShipView { id: shooter.id, def: shooter.def, side: 0, hp_applied: vec![], bones: None, hp_parts: vec![], attitude: Attitude::default(), born: 0.0, visual_radius: 0.0, shown: true };
         let e = world.spawn(view).id();
         world.insert_resource(BattleRuntime {
             sim,
