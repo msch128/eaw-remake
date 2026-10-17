@@ -203,6 +203,7 @@ impl TextureCache {
         if let Some(h) = self.by_name.get(&key) {
             return h.clone();
         }
+        let t0 = std::time::Instant::now();
         let handle = match read_texture_file(fs, name) {
             // A data gap (the file exists in no layer): logged once, not an error of ours.
             None => {
@@ -220,6 +221,7 @@ impl TextureCache {
             },
         };
         self.by_name.insert(key, handle.clone());
+        crate::frame_trace::note(|| format!("texture {name} decoded on the main thread {:.1?}", t0.elapsed()));
         handle
     }
 

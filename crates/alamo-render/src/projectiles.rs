@@ -13,7 +13,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use alamo_fs::FileSource;
+use alamo_fs::{FileSource, GameFs};
 use alamo_model::Model;
 use bevy::prelude::*;
 
@@ -70,6 +70,13 @@ pub struct BoltGeometry {
     layers: Vec<BoltLayer>,
 }
 
+impl BoltGeometry {
+    /// Texture names of the layers (lower case, as the batch renderer looks them up).
+    pub(crate) fn textures(&self) -> impl Iterator<Item = &str> {
+        self.layers.iter().map(|l| l.texture.as_str())
+    }
+}
+
 #[derive(Component)]
 pub(crate) struct BoltInstance {
     geometry: Arc<BoltGeometry>,
@@ -101,14 +108,33 @@ pub struct BoltCache {
     geometry: HashMap<String, Option<Arc<BoltGeometry>>>,
 }
 
-fn load_geometry(
-    fs: &AlamoFs,
+impl BoltCache {
+    /// Registers geometry built off the main thread (see [`crate::ModelPreloader`]) under its [`bolt_key`].
+    pub(crate) fn insert(&mut self, key: String, geometry: Option<Arc<BoltGeometry>>) {
+        self.geometry.entry(key).or_insert(geometry);
+    }
+
+    /// True if the geometry under `key` was built (a model that is no bolt is cached as `None`).
+    #[cfg(test)]
+    pub(crate) fn built(&self, key: &str) -> bool {
+        matches!(self.geometry.get(key), Some(Some(_)))
+    }
+}
+
+/// Cache key of a bolt model drawn at `scale`.
+pub(crate) fn bolt_key(model: &str, scale: f32) -> String {
+    format!("{}@{}", model.to_ascii_lowercase(), scale)
+}
+
+/// Reads a bolt model and converts it into batch geometry (also called by the preload workers).
+pub(crate) fn load_geometry(
+    fs: &GameFs,
     model: &str,
     scale: f32,
     laser_color: Option<[u8; 4]>,
 ) -> Option<Arc<BoltGeometry>> {
     let path = crate::model::model_path(model);
-    let data = fs.0.read(&path).ok()?;
+    let data = fs.read(&path).ok()?;
     let m = Model::parse(&data).ok()?;
     // Alamo (Z-up) to Bevy (Y-up): (x, y, z) -> (x, z, -y), then the bolt scale.
     let conv = |p: [f32; 3]| [p[0] * scale, p[2] * scale, -p[1] * scale];
@@ -179,11 +205,16 @@ pub(crate) fn load_bolts(
                 .insert(BoltInstance::empty(&spec.name));
             continue;
         };
-        let key = format!("{}@{}", model.to_ascii_lowercase(), def.scale);
+        let key = bolt_key(&model, def.scale);
         let geometry = cache
             .geometry
             .entry(key)
-            .or_insert_with(|| load_geometry(&fs, &model, def.scale, def.laser_color))
+            .or_insert_with(|| {
+                let t0 = std::time::Instant::now();
+                let g = load_geometry(&fs.0, &model, def.scale, def.laser_color);
+                crate::frame_trace::note(|| format!("bolt {model} loaded on the main thread {:.1?}", t0.elapsed()));
+                g
+            })
             .clone();
         let Some(geometry) = geometry else {
             warn!("projectile model {model} could not be loaded");

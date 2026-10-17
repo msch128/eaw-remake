@@ -189,13 +189,22 @@ impl AnimationCache {
         self.get(fs, path).map(|a| a.duration())
     }
 
+    /// Registers a clip parsed off the main thread (see [`crate::ModelPreloader`]); `None` = unreadable.
+    pub(crate) fn insert(&mut self, path: &str, clip: Option<Animation>) {
+        self.clips.entry(path.to_ascii_lowercase()).or_insert_with(|| clip.map(Arc::new));
+    }
+
     fn get(&mut self, fs: &AlamoFs, path: &str) -> Option<Arc<Animation>> {
         self.clips
             .entry(path.to_ascii_lowercase())
             .or_insert_with(|| {
+                let t0 = std::time::Instant::now();
                 let data = fs.0.read(path).ok()?;
                 match Animation::parse(&data) {
-                    Ok(a) => Some(Arc::new(a)),
+                    Ok(a) => {
+                        crate::frame_trace::note(|| format!("animation {path} parsed on the main thread {:.1?}", t0.elapsed()));
+                        Some(Arc::new(a))
+                    }
                     Err(e) => {
                         warn!("animation {path}: {e}");
                         None

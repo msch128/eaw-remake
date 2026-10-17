@@ -599,6 +599,7 @@ fn load_model(p: &mut LoaderParams, key: &str) -> Result<Arc<CachedModel>, Strin
         return Ok(m.clone());
     }
     let t_start = std::time::Instant::now();
+    let preloaded = p.cache.preparsed.contains_key(&key.to_ascii_lowercase());
     // A model parsed by the preload workers skips the file read and the parse.
     let (model, t_read) = if let Some(m) = p.cache.preparsed.remove(&key.to_ascii_lowercase()) {
         (m, t_start.elapsed())
@@ -714,6 +715,7 @@ fn load_model(p: &mut LoaderParams, key: &str) -> Result<Arc<CachedModel>, Strin
         .models
         .insert(key.to_ascii_lowercase(), cached.clone());
     let total = t_start.elapsed();
+    crate::frame_trace::note(|| format!("model {key}{} {total:.1?} (textures {t_tex:.1?})", if preloaded { " (preloaded)" } else { "" }));
     if total.as_millis() >= 20 {
         info!(
             "load_model {key}: {total:.1?} (read {t_read:.1?}, parse {:.1?}, textures {t_tex:.1?}, rest {:.1?})",
@@ -776,6 +778,7 @@ pub fn spawn_models(
     let started = std::time::Instant::now();
     let budget = loader.settings.spawn_budget;
     let mut spawned = 0u32;
+    let materials_before = loader.cache.materials.len();
     for (root, spec) in &new {
         if failed.contains(root) {
             continue;
@@ -986,6 +989,10 @@ pub fn spawn_models(
     }
     if spawned > 0 && started.elapsed().as_millis() >= 15 {
         info!("spawn_models: {spawned} models in {:.1?}", started.elapsed());
+    }
+    if spawned > 0 {
+        let new_materials = loader.cache.materials.len() - materials_before;
+        crate::frame_trace::note(|| format!("spawn_models {spawned} models, {new_materials} new materials, {:.1?}", started.elapsed()));
     }
 }
 

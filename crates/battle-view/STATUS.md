@@ -126,7 +126,7 @@ Add `battle-view`, `galaxy-sim` (already there through galaxy-play) and `eaw-ui`
 ## Entering a battle without a stall
 - `start_battle` now requests `BattleSession::asset_paths()` (ship models, sky, nebula, props) from `alamo_render::ModelPreloader` the first frame the session exists and waits (`is_idle`) before it spawns the
   scene, so file reads, `.alo` parsing and texture decoding run on worker threads and the render thread only builds meshes. The system runs while the `BattleSession` resource exists (no longer only on the frame
-  it is added); it does nothing once the battle has started. No app change needed: the loading screen just stays up a few frames longer. Hardpoint/turret models are not in the list and still load on first use.
+  it is added); it does nothing once the battle has started. No app change needed: the loading screen just stays up a few frames longer. Hardpoint/turret models are not in the list and still load on first use (preloaded since 2026-10-17, see "Reinforcements without a stall").
 - `battle_demo` prints `longest of the first 400 frames`. Release, 1920x1080, demo battle: 107-118 ms (frame 2) before, 62 ms after; the remaining 62 ms is the demo's own `Battle::new` (the app builds the battle on a worker thread in `from_request`). A later 58-61 ms frame in one of three runs is the Executor's mesh build (18 ms) plus other spawns.
 - Preload now also covers the battle's particle textures: `BattleSession::effect_names()` (death effects of ships and hardpoints, the class explosions, the particle objects of every projectile in the catalog)
   goes to `ModelPreloader::request_particles`. Hardpoint/turret models are not part of the list because battle-view does not spawn them as models (no `with_unit`); the log line `load_model` (>= 20 ms) shows
@@ -147,6 +147,23 @@ Add `battle-view`, `galaxy-sim` (already there through galaxy-play) and `eaw-ui`
   Longest frame while loading, release: Yavin_WW scenario 71-125 ms before, Hoth (`--campaign GC_Full_Web_Way_Rebel --select "The Yavin System" --weeks 8 --move Hoth --battle-choice fight`, deterministic) 56-70 ms now,
   one random-battle run 57/57/91 ms. The rest is Bevy's render world (`run_render_schedule` 30-40 ms spikes with `propagate_parent_transforms`/instance-buffer writes waiting on it), not our systems.
   `tools\smoke.ps1 -Only battle-fight-orders` passes.
+
+## Reinforcements without a stall (2026-10-17)
+- `SP_FRAME_LOG=<ms>` (`frame_log.rs`) logs every battle frame whose main-thread work or duration exceeds the limit with what it did: new ships / models / particle systems, render pipelines created or
+  still compiling (render world), the longest render-world frame, the last sim step and every main-thread load noted in `alamo_render::frame_trace` (model builds, texture decodes, particle / animation / bolt
+  parses, time spent waiting for the simulation). `alamo-audio` logs its first-play reads and decodes with the same variable.
+- Measured (release, `--offscreen --size 1920x1080`, Yavin -> Hoth with `--battle-reserve 3`, `--grant-unit MC-80_Star_Cruiser,MC-75_Cruiser,Endurance_Fleet_Carrier,Dauntless_Cruiser_R,Bothan_Assault_Cruiser_R
+  --at "The Yavin System"` and `--battle-click b_reinforcement,r_0000,...` calling in one unit of each of the 10 reserve types): every arrival of a type that was not on the field read and parsed files on the main
+  thread: the particle systems its proxies name (engine glows, blink lights: 7-14 ms each from a cold disk; MC-75 frame 92 ms, Bothan 38 ms), its hardpoint models with their textures (MC-80: 40 turrets in
+  31 + 21 + 15 ms frames, Endurance bridge / tower 12 + 10 ms), the bolt texture of a new weapon on its first shot (`w_turbolaser.dds` 12.5-13 ms), explosion particle systems on their first use.
+- Fixes: the preload list adds the models the hardpoints attach (`BattleSession::attached_models`, also missile models), the `Damage_Particles` objects and the IDLE / DIE clips; `alamo-render`'s preload parses
+  proxy particle systems with each model, keeps the parsed effect systems and builds the bolts (see its STATUS). The warm-up (`warmup.rs`, `BattleViewSettings::warm_up`, set by space-peace) spawns one instance
+  of every (unit type, side) the request can field (groups, reserve, squadron members, hangar fighters) plus the arrival flash and marker in front of the battle camera while the loading screen covers it; meshes,
+  team-colour materials, turrets, proxy particles and render pipelines are built then, and the instances are removed once every model is built and no pipeline is compiling (at most 3 s more, 10 s in all). The
+  battle clock stands until then, and `battle_play` keeps the loading screen until `BattleWarmup::done`. The arrival / departure flashes share one sphere mesh.
+- Result (same scenario): main-thread file loads during the battle 40 (174 ms, worst frame 80 ms) -> 0; worst arrival frame 95 ms -> under 17 ms (no logged frame at the arrivals). Warm-up 0.1-0.9 s with 27-44
+  instances. Still open: the battle music start / track change reads the whole MP3 on the main thread (13-20 ms, `alamo-audio` `start_track`); frames of 30-50 ms without any load note come from the shared
+  machine (other builds on the same cores).
 
 ## Tactical screen fidelity round (2026-10-08, tactical agent)
 - **World overlays are eaw-ui's now:** `tactical_ui::sync_overlays` fills `eaw_ui::TacticalOverlays` (own resource; `TacticalData` no longer carries overlays):

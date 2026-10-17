@@ -295,9 +295,13 @@ impl ParticleCache {
         self.systems
             .entry(key)
             .or_insert_with(|| {
+                let t0 = std::time::Instant::now();
                 let data = fs.0.read(path).ok()?;
                 match ParticleSystem::parse(&data) {
-                    Ok(s) => Some(Arc::new(s)),
+                    Ok(s) => {
+                        crate::frame_trace::note(|| format!("particles {path} parsed on the main thread {:.1?}", t0.elapsed()));
+                        Some(Arc::new(s))
+                    }
                     Err(e) => {
                         warn!("particle system {path}: {e}");
                         None
@@ -310,6 +314,11 @@ impl ParticleCache {
     /// True if `path` exists and parses.
     pub fn exists(&mut self, fs: &AlamoFs, path: &str) -> bool {
         self.get(fs, path).is_some()
+    }
+
+    /// Registers a system parsed off the main thread (see [`crate::ModelPreloader`]); `None` = no such file.
+    pub(crate) fn insert(&mut self, path: &str, system: Option<ParticleSystem>) {
+        self.systems.entry(path.to_ascii_lowercase()).or_insert_with(|| system.map(Arc::new));
     }
 }
 

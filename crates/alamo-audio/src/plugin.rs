@@ -440,6 +440,7 @@ impl AlamoAudio {
         if let Some(why) = self.failed.get(&path).copied() {
             return Err((why, Some(path)));
         }
+        let t0 = std::time::Instant::now();
         let bytes = match self.fs.read(&path) {
             Ok(b) => b,
             Err(_) => {
@@ -468,6 +469,10 @@ impl AlamoAudio {
             bytes: bytes.into(),
         });
         self.cache.insert(path.clone(), handle.clone());
+        // Debug aid of the battle view (`SP_FRAME_LOG`): first plays read and decode on the main thread.
+        if std::env::var_os("SP_FRAME_LOG").is_some() {
+            info!("audio sample {path} read and decoded on the main thread in {:.1?}", t0.elapsed());
+        }
         Ok((handle, path))
     }
 }

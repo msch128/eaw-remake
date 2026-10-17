@@ -232,12 +232,14 @@ fn start_after_loading_art(world: &mut World) {
         if let Some(mut a) = world.get_mut::<BattleLoadingArt>(e) {
             a.0 += 1;
         }
-        // The ships spawn over several frames (`spawn_budget`): keep the loading screen until all models are there.
+        // The ships spawn over several frames (`spawn_budget`): keep the loading screen until all models are there and the
+        // warm-up of what the battle can bring in later is over (its instances stand in front of the battle camera).
         let pending = world
             .query_filtered::<(), (With<alamo_render::AlamoModel>, Without<alamo_render::AlamoModelLoaded>, Without<alamo_render::model::AlamoLoadFailed>)>()
             .iter(world)
             .count();
-        if art > 20 && pending == 0 {
+        let warmed = world.get_resource::<battle_view::BattleWarmup>().is_none_or(|w| w.done());
+        if art > 20 && pending == 0 && warmed {
             let first = !world.entity(e).contains::<WaitingForBegin>();
             if first {
                 info!("battle: longest frame while loading {:.0} ms", world.resource::<WorstFrame>().0 * 1000.0);
@@ -335,6 +337,8 @@ fn poll_session_build(world: &mut World) {
             settings.bloom = bloom;
             settings.shadows = shadows;
             settings.particle_density = density;
+            // The loading screen covers the warm-up of the reinforcements and launched fighters (see `start_after_loading_art`).
+            settings.warm_up = true;
             match target {
                 Some((image, scale)) => {
                     settings.render_target = Some(image);

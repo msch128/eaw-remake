@@ -8,6 +8,7 @@
 //! See [`AlamoModel`] for spawning, [`spawn_sun`] for the lighting convention and
 //! [`material::AlamoMaterial`] for the shader emulation.
 pub mod animation;
+pub mod frame_trace;
 pub mod hardpoints;
 mod lighting;
 pub mod lod;

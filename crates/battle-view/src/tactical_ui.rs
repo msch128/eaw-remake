@@ -705,18 +705,16 @@ fn reserve_wave(
             crate::BattleEntity,
             Name::new("reinforcement arrival marker"),
             Mesh3d(meshes.add(Annulus::new(ring * 0.92, ring))),
-            MeshMaterial3d(materials.add(StandardMaterial {
-                base_color: Color::srgba(0.35, 0.85, 1.0, 0.55),
-                unlit: true,
-                alpha_mode: AlphaMode::Add,
-                double_sided: true,
-                cull_mode: None,
-                ..default()
-            })),
+            MeshMaterial3d(materials.add(marker_material())),
             Transform::from_translation(ground + Vec3::Y * 2.0).with_rotation(Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2)),
         ))
         .id();
     ui.placed.push(Placed { ship, count, marker, acked: false });
+}
+
+/// Material of the ring that marks where a placed wave will arrive.
+pub(crate) fn marker_material() -> StandardMaterial {
+    StandardMaterial { base_color: Color::srgba(0.35, 0.85, 1.0, 0.55), unlit: true, alpha_mode: AlphaMode::Add, double_sided: true, cull_mode: None, ..default() }
 }
 
 /// Follows the simulation: units leave the reserve when a call is accepted, a refusal shows a notice and plays a sound.

@@ -253,6 +253,8 @@ pub fn update_ships(
     cameras: Query<(&Camera, &GlobalTransform, &Projection), With<Camera3d>>,
     mut sfx: MessageWriter<alamo_audio::PlaySfx>,
     mut flash_spots: Local<Vec<Vec3>>,
+    // One unit sphere for every arrival and departure flash.
+    mut flash_mesh: Local<Option<Handle<Mesh>>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
@@ -305,19 +307,11 @@ pub fn update_ships(
         let entity = match rt.entities.get(&s.id) {
             Some(&e) => e,
             None => {
-                let mut spec = AlamoModel::new(model).with_team_color(visuals.team_color(s.side));
-                // Turrets and art pieces of the unit's hardpoints hang on the hull's bones (see `turrets.rs`).
-                if !matches!(def.class, TargetClass::Fighter | TargetClass::Bomber) {
-                    spec = spec.with_unit(def.name.clone());
-                }
-                if matches!(def.class, TargetClass::Fighter | TargetClass::Bomber) {
-                    spec = spec.with_lod(LodSelect::MostDetailed);
-                }
                 let e = commands
                     .spawn((
                         Name::new(format!("{} #{}", def.name, s.id)),
                         BattleEntity,
-                        spec,
+                        ship_model(def, model, visuals.team_color(s.side)),
                         Transform {
                             translation: pos,
                             rotation: ship_rotation(yaw),
@@ -357,13 +351,8 @@ pub fn update_ships(
                     commands.spawn((
                         Name::new("hyperspace flash"),
                         BattleEntity,
-                        Mesh3d(meshes.add(Sphere::new(1.0).mesh().uv(24, 16))),
-                        MeshMaterial3d(materials.add(StandardMaterial {
-                            base_color: Color::srgba(0.75, 0.88, 1.0, 0.0),
-                            unlit: true,
-                            alpha_mode: AlphaMode::Add,
-                            ..default()
-                        })),
+                        Mesh3d(flash_mesh.get_or_insert_with(|| meshes.add(Sphere::new(1.0).mesh().uv(24, 16))).clone()),
+                        MeshMaterial3d(materials.add(flash_material(Color::srgba(0.75, 0.88, 1.0, 0.0)))),
                         Transform::from_translation(pos).with_scale(Vec3::splat(radius)),
                         Visibility::Hidden,
                         ArrivalFlash { at: cur.time + lead + ARRIVAL_SECONDS * 0.85, radius: radius * 0.45 },
@@ -534,16 +523,10 @@ pub fn update_ships(
                 let radius = rt.catalog.ship(view.def).radius.max(30.0);
                 let fwd = t.rotation * Vec3::Z;
                 // Unit sphere: `update_arrival_flashes` scales it to world size (a sphere of `radius` times a scale of `radius` was the giant ball).
-                let flash_mesh = meshes.add(Sphere::new(1.0).mesh().uv(24, 16));
-                let flash_mat = materials.add(StandardMaterial {
-                    base_color: Color::srgba(0.8, 0.95, 1.0, 0.0),
-                    unlit: true,
-                    // Additive like the arrival flash: the opaque white ball that stood here covered the screen on a fleet retreat (QA round 3).
-                    alpha_mode: AlphaMode::Add,
-                    ..default()
-                });
+                // Additive like the arrival flash: the opaque white ball that stood here covered the screen on a fleet retreat (QA round 3).
+                let flash_mat = materials.add(flash_material(Color::srgba(0.8, 0.95, 1.0, 0.0)));
                 commands.spawn((
-                    Mesh3d(flash_mesh),
+                    Mesh3d(flash_mesh.get_or_insert_with(|| meshes.add(Sphere::new(1.0).mesh().uv(24, 16))).clone()),
                     MeshMaterial3d(flash_mat),
                     Transform::from_translation(t.translation).with_scale(Vec3::splat(1.0)),
                     ArrivalFlash { at: cur.time, radius: radius * 0.6 },
@@ -946,6 +929,22 @@ const ARRIVAL_SECONDS: f32 = 1.5;
 pub struct HyperspaceArrival {
     /// Battle time the ship appeared.
     start: f32,
+}
+
+/// The model spec of a battle ship: turrets and art pieces of the unit's hardpoints hang on the hull's bones (see `turrets.rs`), small craft
+/// show their most detailed meshes. Shared with the warm-up so that both build the same meshes and materials.
+pub(crate) fn ship_model(def: &battle_sim::ShipDef, model: String, team: Color) -> AlamoModel {
+    let spec = AlamoModel::new(model).with_team_color(team);
+    if matches!(def.class, TargetClass::Fighter | TargetClass::Bomber) {
+        spec.with_lod(LodSelect::MostDetailed)
+    } else {
+        spec.with_unit(def.name.clone())
+    }
+}
+
+/// Material of the arrival and departure flashes (the alpha is animated per flash by `update_arrival_flashes`).
+pub(crate) fn flash_material(color: Color) -> StandardMaterial {
+    StandardMaterial { base_color: color, unlit: true, alpha_mode: AlphaMode::Add, ..default() }
 }
 
 /// Flash where a reinforcement drops out of hyperspace: an additive sphere that blooms and fades.

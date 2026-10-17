@@ -19,6 +19,7 @@ pub mod camera;
 pub mod control;
 pub mod convert;
 pub(crate) mod fog;
+mod frame_log;
 pub mod gpu_profile;
 pub(crate) mod hud;
 mod input_test;
@@ -31,6 +32,7 @@ pub mod tactical_ui;
 mod missiles;
 mod turrets;
 pub mod visuals;
+pub mod warmup;
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -52,6 +54,7 @@ pub use scene::{SceneProp, SpaceScene};
 pub use ships::{RenderedShips, ShipRender, ShipView};
 pub use sim::{SimHandle, Snapshot};
 pub use visuals::VisualCatalog;
+pub use warmup::BattleWarmup;
 
 /// Marks every entity the battle view spawned, for cleanup.
 #[derive(Component, Debug, Default)]
@@ -97,6 +100,10 @@ pub struct BattleViewSettings {
     pub particle_density: f32,
     /// Send sound requests ([`audio`]); nothing is audible without `AlamoAudioPlugin`.
     pub audio: bool,
+    /// Before the battle starts, spawn one instance of every unit type it can bring in later in front of the camera, so that
+    /// reinforcements arrive without loading anything (see [`warmup`]). Only for front ends that cover the view with a loading
+    /// screen until [`BattleWarmup::done`].
+    pub warm_up: bool,
 }
 
 /// Graphics quality presets shared with the options menu.
@@ -177,6 +184,7 @@ impl Default for BattleViewSettings {
             shadows: false,
             particle_density: 1.0,
             audio: true,
+            warm_up: false,
         }
     }
 }
@@ -258,6 +266,31 @@ impl BattleSession {
         })
     }
 
+    /// The unit catalog of the battle.
+    fn catalog(&self) -> Option<&Arc<Catalog>> {
+        self.built.as_ref().map(|b| &b.1).or(self.setup.as_ref().map(|s| &s.catalog))
+    }
+
+    /// Models the battle shows besides [`Self::asset_paths`], for [`alamo_render::ModelPreloader::request`]: what the units'
+    /// hardpoints attach to their hulls (turrets, bridges, dishes) and the missile and torpedo models.
+    pub fn attached_models(&self, defs: &alamo_render::XmlDefs) -> Vec<String> {
+        let Some(catalog) = self.catalog() else { return Vec::new() };
+        let mut v: Vec<String> = catalog
+            .ships
+            .iter()
+            .filter_map(|s| defs.unit(&s.name))
+            .flat_map(|u| &u.hardpoints)
+            .filter_map(|h| defs.hardpoint(h)?.model.clone())
+            .collect();
+        v.extend(
+            catalog
+                .projectiles
+                .iter()
+                .filter_map(|p| defs.projectile(&p.name)?.model.clone().filter(|m| missiles::is_missile_model(&p.category, m))),
+        );
+        v
+    }
+
     /// Model files of the battle (ships, sky, nebula, props) for [`alamo_render::ModelPreloader::request`].
     pub fn asset_paths(&self) -> Vec<String> {
         let mut v: Vec<String> = self.visuals.ships.iter().filter_map(|s| s.model.clone()).collect();
@@ -275,6 +308,8 @@ impl BattleSession {
         for s in &self.visuals.ships {
             particles.extend(s.death_effects.iter().cloned());
             particles.extend(s.hardpoints.iter().filter_map(|h| h.death_effect.clone()));
+            // `Damage_Particles` names a bone with fire proxies or a particle object (`request_particles` keeps the objects).
+            particles.extend(s.hardpoints.iter().filter_map(|h| h.damage_bone.clone()));
         }
         // Fallback death explosions by ship size and the finales of the death sequence.
         for n in ["Large_Explosion_Space_Empire_pd_medium_3_150", "Large_Explosion_Space_Empire_pd_medium_3_300", "Large_Explosion_Space_Empire_pd_medium_3_750", "Huge_Explosion_Space", "Large_Explosion_Space", "Medium_Explosion_Space"] {
@@ -284,8 +319,7 @@ impl BattleSession {
         for class in [Fighter, Transport, Frigate, Capital, Super, Structure] {
             particles.push(visuals::ship_death_effect(class).to_string());
         }
-        let catalog = self.built.as_ref().map(|b| &b.1).or(self.setup.as_ref().map(|s| &s.catalog));
-        let projectiles = catalog.map_or_else(Vec::new, |c| c.projectiles.iter().map(|p| p.name.clone()).collect());
+        let projectiles = self.catalog().map_or_else(Vec::new, |c| c.projectiles.iter().map(|p| p.name.clone()).collect());
         (particles, projectiles)
     }
 
@@ -452,6 +486,8 @@ impl Plugin for BattleViewPlugin {
         app.add_systems(Update, (scene::keep_planet_below, scene::update_atmosphere_glow).run_if(resource_exists::<BattleRuntime>));
         turrets::plugin(app);
         missiles::plugin(app);
+        frame_log::plugin(app);
+        warmup::plugin(app);
         app.init_gizmo_group::<effects::EngineTrailGizmos>()
             .add_systems(Startup, effects::configure_engine_trail_gizmos);
         app.add_systems(Update, (fog::setup_fog_shroud, fog::update_fog_shroud, fog::fade_fog_shroud).run_if(resource_exists::<BattleRuntime>));
@@ -519,6 +555,7 @@ fn start_battle(
     alamo_fs: Option<Res<alamo_render::AlamoFs>>,
     model_cache: Option<Res<alamo_render::ModelCache>>,
     xml_defs: Option<Res<alamo_render::XmlDefs>>,
+    animations: Option<Res<alamo_render::AnimationIndex>>,
 ) {
     if session.built.is_none() && session.setup.is_none() {
         return;
@@ -531,7 +568,20 @@ fn start_battle(
     {
         if !session.preload_requested {
             session.preload_requested = true;
-            pre.request(&fs.0, cache, session.asset_paths());
+            let mut models = session.asset_paths();
+            if let Some(defs) = &xml_defs {
+                models.extend(session.attached_models(defs));
+            }
+            // Idle loops start when a model spawns, a death clone's DIE clip when a ship breaks up.
+            if let Some(index) = &animations {
+                use alamo_render::animation::model_stem;
+                let mut clips: Vec<String> = models.iter().filter_map(|m| index.find(&model_stem(m), "IDLE", None)).collect();
+                clips.extend(
+                    session.visuals.ships.iter().filter_map(|s| s.death_clone_model.as_deref()).filter_map(|m| index.find(&model_stem(m), "DIE", None)),
+                );
+                pre.request_animations(&fs.0, clips);
+            }
+            pre.request(&fs.0, cache, models);
             if let Some(defs) = &xml_defs {
                 let (particles, projectiles) = session.effect_names();
                 pre.request_particles(&fs.0, defs, particles, projectiles);
@@ -629,6 +679,7 @@ fn start_battle(
             scale_factor: settings.target_scale,
         }));
     }
+    commands.insert_resource(BattleWarmup::default());
     commands.insert_resource(BattleRuntime {
         sim,
         catalog,
@@ -724,6 +775,7 @@ fn stop_battle(
     ships.0.clear();
     *pools = effects::BoltPools::default();
     commands.remove_resource::<fog::TacticalFogShroud>();
+    commands.remove_resource::<BattleWarmup>();
     commands.remove_resource::<BattleRuntime>();
 }
 
@@ -749,14 +801,19 @@ fn advance_clock(
     mut status: ResMut<BattleStatus>,
     mut cam: Single<&mut BattleCamera>,
     mut auto_frame: Local<Option<(Vec3, f32)>>,
+    warmup: Option<Res<BattleWarmup>>,
 ) {
-    rt.speed = if settings.paused || status.over { 0.0 } else { settings.speed };
+    // The battle stands while the loading screen still warms up what it can bring in later.
+    let warming = warmup.is_some_and(|w| !w.done());
+    rt.speed = if settings.paused || status.over || warming { 0.0 } else { settings.speed };
     let step = rt.dt as f64;
     let dt_real = (time.delta_secs() as f64).min(0.1);
     rt.clock += dt_real * rt.speed as f64;
     let tick = (rt.clock / step).floor() as u64;
     rt.sim.request(tick + 3);
+    let fetch_started = std::time::Instant::now();
     let (a, b) = rt.sim.fetch(tick, settings.blocking);
+    alamo_render::frame_trace::note_slow("waiting for the simulation", fetch_started.elapsed(), std::time::Duration::from_millis(1));
     let (cur, next, alpha) = match (a, b) {
         (Some(a), Some(b)) => {
             let alpha = ((rt.clock - a.tick as f64 * step) / step).clamp(0.0, 1.0) as f32;
