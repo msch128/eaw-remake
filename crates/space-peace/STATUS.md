@@ -56,7 +56,14 @@ fullscreen, FPS cap).
   capillary 0.07; fixed world size, thinner on screen when zoomed out), the data colour (teal 13, 31, 38 for every relation; enemy
   alpha fades it close up) x 3.6 in linear light (sRGB about 32, 62, 76 on black), a glint 1.6 times as bright runs along every lane
   (scrolling texture, replaces the red/green gizmo pulses). Orbit-line art (`Region_Lines`, the thin double curves) at 0.4 so it
-  stays fainter than the lanes like in the Remake; core dimmed, grid off. galaxy_map.rs spawn_lanes/update_lanes.
+  stays fainter than the lanes like in the Remake; grid off. galaxy_map.rs spawn_lanes/update_lanes.
+- Core nebula (2026-10-17, G6): the galaxy art `w_galaxy00.alo` (object `Galaxy_Core_Art_Model_Web_Way`, scale 1.5) draws the pink
+  glow over the middle of the map with its additive `core` disc (`W_GAL_gradient.tga`, scrolling). It runs at 0.37 (`CORE_GLOW`,
+  `SP_GALAXY_CORE=<value>` for comparison renders), measured against v0240 and b0613s at the same map points; it was 0.14 (a maroon
+  haze, the area round Coruscant read black/dark red). Not drawn yet: the core star cluster, the model's `p_galaxycore` proxy (three
+  emitters of thousands of 0.2-0.4 unit sparks). The particle plugin starts `p_` proxies switched off, and switched on its sparks
+  come out at 1-2 px soft dots that the sub-pixel cull removes and that spread evenly instead of the Remake's dense crisp cluster,
+  so it needs work in the particle renderer.
 - Labels: caps in faction colour (own = green via relation_color), two pip rows (ground, space) from Max_Ground_Base/Max_Space_Base.
   Every planet on screen shows its name unless the planet itself sits under opaque interface (2026-10-17, G3): the obstacles in
   `PanelRect` are the command bar's opaque art (`eaw_ui::ShellOpaque::rects`, not its bounding box, which hid every name below

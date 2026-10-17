@@ -302,6 +302,19 @@ fn fade_galaxy_disc(
     }
 }
 
+/// Brightness of the galaxy art's `core` glow (`W_GAL_gradient.tga` on the additive `core` disc: the pink nebula over the middle of
+/// the map): [`CORE_GLOW`], or `SP_GALAXY_CORE=<value>` to try another one (comparison renders).
+fn core_glow() -> f32 {
+    static CORE: std::sync::OnceLock<f32> = std::sync::OnceLock::new();
+    *CORE.get_or_init(|| std::env::var("SP_GALAXY_CORE").ok().and_then(|v| v.parse().ok()).unwrap_or(CORE_GLOW))
+}
+/// Measured on the user's Remake video at the same map points (projected through the planets of each frame, median of 13x13 px,
+/// outside any selection ring): v0240 (nothing selected) averages sRGB (103, 69, 65) over 16 points round the core, b0613s (86, 45,
+/// 49) over 8; our core at 0.3 / 0.4 / 0.5 gives (78, 49, 48) / (105, 68, 66) / (133, 86, 84) on the first set and (68, 39, 41) /
+/// (93, 54, 57) / (118, 69, 74) on the second, so 0.39 matches v0240 and 0.35 b0613s (the gradient scrolls, frames differ). It was
+/// 0.14 (0506963, a maroon haze), and 1.0 floods the whole view with pink.
+const CORE_GLOW: f32 = 0.37;
+
 /// Replaces the flat grey `Stars` dome of the galaxy art model by an unlit star texture.
 ///
 /// The model's `Stars` mesh only has an emissive colour and a base texture (a star field with
@@ -333,11 +346,12 @@ fn fix_star_dome(
                     commands.entity(part).insert(DiscPart {
                         material: h.0.clone(),
                         base: m.params.diffuse,
-                        // Reference look: faint orbit lines, the core glow dimmed to a maroon haze, no grid. The orbit lines (`Region_Lines`,
-                        // the thin double curves across the map with a light running along them) are faint in the Remake frames (CS9 f0016:
-                        // about sRGB 13..18, 23..28, 25..29 on black; v0520 fainter still), well below the lanes (40, 63, 77). At 0.9 they
-                        // were the brightest lines on the map (5, 54, 82); 0.4 keeps them visible but faint (estimate by eye against f0016).
-                        strength: match name.as_str() { "grid" => 0.0, "core" => 0.14, _ => 0.4 },
+                        // Reference look: faint orbit lines, the core glow at the measured brightness ([`CORE_GLOW`]), no grid. The
+                        // orbit lines (`Region_Lines`, the thin double curves across the map with a light running along them) are faint
+                        // in the Remake frames (CS9 f0016: about sRGB 13..18, 23..28, 25..29 on black; v0520 fainter still), well below
+                        // the lanes (40, 63, 77). At 0.9 they were the brightest lines on the map (5, 54, 82); 0.4 keeps them visible but
+                        // faint (estimate by eye against f0016).
+                        strength: match name.as_str() { "grid" => 0.0, "core" => core_glow(), _ => 0.4 },
                     });
                 }
             }
@@ -1727,6 +1741,13 @@ mod tests {
         // Along: the band outside the glint, full brightness at the glint centre (middle of the period).
         assert!(alpha(w / 2, h / 2) >= 245);
         assert!(alpha(w / 2, h / 4).abs_diff(base) <= 1);
+    }
+
+    #[test]
+    fn the_core_glow_stays_in_the_measured_window() {
+        // Measured against two Remake frames (0.39 on v0240, 0.35 on b0613s); 0.14 left the core a maroon haze. A new value needs
+        // new measurements (see CORE_GLOW).
+        assert!((0.35..=0.39).contains(&CORE_GLOW), "{CORE_GLOW}");
     }
 }
 /// A row of structure slot pips under a planet name: `row` 0 = ground slots, 1 = space slots.
