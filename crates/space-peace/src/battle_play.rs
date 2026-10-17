@@ -74,7 +74,7 @@ impl Plugin for BattlePlayPlugin {
             .add_systems(OnExit(AppScreen::SpaceBattle), end_session)
             .add_systems(
                 Update,
-                (finish_battle_view, abort_key, retreat_auto_resolve, begin_button, loading_shot, battle_menu, battle_ui_camera, battle_shot, battle_header, battle_orders, tactical_hotkeys, select_squad_hook, test_ability)
+                (finish_battle_view, abort_key, retreat_auto_resolve, begin_button, loading_shot, battle_menu, battle_ui_camera, battle_shot, battle_header, battle_orders, tactical_hotkeys, select_squad_hook, test_ability, test_camera)
                     .run_if(in_state(AppScreen::SpaceBattle).and_then(resource_exists::<PendingTactical>)),
             );
     }
@@ -957,6 +957,43 @@ fn test_ability(
                 debug!("battle: test hook asks {} of ship {} ({}) at t={:.1}s", def.kind, s.id, rt.catalog.ship(s.def).name, status.time);
             }
         }
+    }
+}
+
+/// Test hook (`SP_TEST_CAM=fight`): from battle second 5 on the camera, and with it the sound listener, follows the fight like a player watching it does: once a battle
+/// second it picks the middle of the closest pair of ships of opposing sides (big ships first, as `--battle-fightcam`), and eases there. Scripted runs have no way to move
+/// the camera, so without it the listener stays where the fleets started and the shots it hears later are thousands of units away.
+fn test_camera(
+    status: Res<BattleStatus>,
+    ships: Res<battle_view::RenderedShips>,
+    settings: Res<BattleViewSettings>,
+    mut cam: Single<&mut BattleCamera>,
+    mut on: Local<Option<bool>>,
+    mut aim: Local<Option<(f32, Vec3)>>,
+) {
+    if !*on.get_or_insert_with(|| std::env::var("SP_TEST_CAM").is_ok_and(|v| v.eq_ignore_ascii_case("fight"))) || status.tick == 0 || status.time < 5.0 {
+        return;
+    }
+    if aim.is_none_or(|(at, _)| status.time >= at + 1.0) {
+        let player = settings.player_side;
+        let closest = |min_radius: f32| {
+            let mut best: Option<(f32, Vec3)> = None;
+            for a in ships.0.values().filter(|s| s.side == player && s.radius >= min_radius) {
+                for b in ships.0.values().filter(|s| s.side != player && s.radius >= min_radius) {
+                    let d = a.pos.distance(b.pos);
+                    if best.is_none_or(|(bd, _)| d < bd) {
+                        best = Some((d, (a.pos + b.pos) * 0.5));
+                    }
+                }
+            }
+            best
+        };
+        *aim = Some((status.time, closest(40.0).or_else(|| closest(0.0)).map_or_else(|| aim.map_or(cam.focus, |a| a.1), |(_, mid)| mid)));
+    }
+    if let Some((_, to)) = *aim {
+        let focus = Vec3::new(cam.focus.x, cam.focus.y, cam.focus.z).lerp(Vec3::new(to.x, cam.focus.y, to.z), 0.1);
+        cam.focus = focus;
+        cam.target_focus = focus;
     }
 }
 

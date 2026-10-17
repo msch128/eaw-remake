@@ -10,8 +10,10 @@
 //!   (never the same twice in a row); volume and pitch are drawn from the event's min/max range.
 //! * **Probability / predelay** are honoured. `Pre_Samples` play first, `Post_Samples` and
 //!   `Chained_SFXEvent` follow when the previous sound has finished.
-//! * **Max_Instances**: for ordinary sounds the oldest instance is cut; for voice-over (unit responses,
-//!   HUD and ambient chatter) the new request is dropped instead so lines never cut each other off.
+//! * **Max_Instances**: a new 3D one-shot takes the instance that is quietest at the listener (of equally loud ones, within 3 dB, the oldest) and is dropped when
+//!   it is more than 3 dB quieter than that one, so a far shot never cuts a near one ([`AudioSettings::max_instances_nearest`]); other ordinary sounds
+//!   (2D, loops, continuations) cut the oldest instance; for voice-over (unit responses, HUD and ambient chatter) the new request is dropped instead so
+//!   lines never cut each other off.
 //! * **Overlap_Test**: events of one overlap group never play at the same time.
 //! * **Voice limit** ([`AudioSettings::max_voices`]): when full, the least important voice (highest
 //!   priority number, then oldest) is stolen if it is less important than the newcomer, otherwise the
@@ -121,10 +123,17 @@ pub struct AudioSettings {
     /// `Audio_Space_3D_Rolloff_Distance_Mod` (Audio.xml): exponent of the distance falloff (estimate: the data says only
     /// "higher = quicker rolloff"; 1 is the plain `saturation / distance`).
     pub rolloff: f32,
-    /// What `Max_Instances` does when the limit is reached by an ordinary sound: false = the oldest instance fades out (the default; the data
-    /// does not say which one the engine does), true = the new request is dropped and the playing ones finish. `SP_AUDIO_MAXINST=drop` switches it
-    /// for an A/B listen.
+    /// What `Max_Instances` does when the limit is reached by an ordinary sound: false = an instance fades out for the new request (which one:
+    /// [`AudioSettings::max_instances_nearest`]; the data does not say what the engine does), true = the new request is dropped and the playing ones finish.
+    /// `SP_AUDIO_MAXINST=drop` switches it for an A/B listen.
     pub max_instances_drop_new: bool,
+    /// Which instance of an event a new 3D one-shot takes when every `Max_Instances` voice plays (the data gives the limit, not the rule): true = the quietest by
+    /// distance falloff, and the request is dropped when it is more than [`AudioSettings::instance_margin_db`] quieter than that one, so a far shot never cuts a near
+    /// one (the default); false = the oldest instance fades out whatever its loudness (the rule before 2026-10-17; `SP_AUDIO_MAXINST=oldest`).
+    pub max_instances_nearest: bool,
+    /// How much quieter than the instance it takes a 3D one-shot may be at `Max_Instances` (dB, estimate); also the width of the steps in which falloffs count as
+    /// equally loud (then the oldest goes).
+    pub instance_margin_db: f32,
     /// Read and decode samples on worker threads: a sound whose sample is not cached yet starts a frame or two later instead of
     /// stalling the frame on the disk (a battle music MP3 took 7-46 ms on the main thread, a cold WAV up to 17 ms). Off, every sample
     /// is read when it is first played (tests that count voices frame by frame).
@@ -143,6 +152,8 @@ impl Default for AudioSettings {
             saturation_scale: 1.0,
             rolloff: 1.0,
             max_instances_drop_new: std::env::var("SP_AUDIO_MAXINST").is_ok_and(|v| v.eq_ignore_ascii_case("drop")),
+            max_instances_nearest: !std::env::var("SP_AUDIO_MAXINST").is_ok_and(|v| v.eq_ignore_ascii_case("oldest")),
+            instance_margin_db: 3.0,
             load_on_worker: true,
         }
     }
@@ -830,6 +841,48 @@ fn listener_position(listeners: &Query<&GlobalTransform, With<SpatialListener>>)
     listeners.iter().next().map(|t| t.translation())
 }
 
+/// Time `process_sfx_requests` spent and requests it handled since `log_balance` last looked (`SP_AUDIO_LOG`): what the voice rules cost.
+static REQUEST_NANOS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static REQUESTS_HANDLED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Adds the time from its creation to its end to [`REQUEST_NANOS`].
+struct RequestTimer(std::time::Instant);
+
+impl Drop for RequestTimer {
+    fn drop(&mut self) {
+        REQUEST_NANOS.fetch_add(self.0.elapsed().as_nanos() as u64, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+/// A playing voice as [`process_sfx_requests`] sees it while it hands voices out within one frame.
+struct Live {
+    entity: Entity,
+    event: String,
+    group: Option<String>,
+    priority: u8,
+    started: f64,
+    source: Option<Entity>,
+    voice_over: bool,
+    unit_response: bool,
+    /// Distance falloff at the last update (1 = full volume).
+    attenuation: f32,
+}
+
+/// Falloffs within one step count as equally loud: the steps are 3 dB wide (half an octave of amplitude) and shifted so that full volume and a
+/// hair less share the top one (most sounds in a fight stand inside their saturation distance).
+fn loudness_step(attenuation: f32) -> i32 {
+    (attenuation.max(1e-6).log2() * 2.0 + 0.5).floor() as i32
+}
+
+/// What a new 3D one-shot does when every `Max_Instances` voice of its event plays: the index into `voices` (their `(distance falloff, start time)`) of the instance it
+/// takes, or `None` when it is dropped. The quietest instance goes (of equally loud ones, see [`loudness_step`], the oldest), and a request more than `margin_db`
+/// quieter than that instance is dropped: a far shot never cuts a near one, while shots of the same loudness (everything inside the saturation distance) replace the
+/// oldest as before.
+fn instance_to_cut(voices: &[(f32, f64)], attenuation: f32, margin_db: f32) -> Option<usize> {
+    let victim = (0..voices.len()).min_by(|&a, &b| loudness_step(voices[a].0).cmp(&loudness_step(voices[b].0)).then(voices[a].1.total_cmp(&voices[b].1)))?;
+    (attenuation * 10f32.powf(margin_db / 20.0) >= voices[victim].0).then_some(victim)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn process_sfx_requests(
     mut commands: Commands,
@@ -857,31 +910,24 @@ fn process_sfx_requests(
     if requests.is_empty() {
         return;
     }
+    let _timer = audio_log().then(|| {
+        REQUESTS_HANDLED.fetch_add(requests.len() as u64, std::sync::atomic::Ordering::Relaxed);
+        RequestTimer(std::time::Instant::now())
+    });
     // Live view of voices, updated as we spawn / steal within this frame.
-    #[allow(clippy::type_complexity)]
-    let mut live: Vec<(
-        Entity,
-        String,
-        Option<String>,
-        u8,
-        f64,
-        Option<Entity>,
-        bool,
-        bool,
-    )> = voices
+    let mut live: Vec<Live> = voices
         .iter()
         .filter(|(_, v)| v.stopping.is_none())
-        .map(|(e, v)| {
-            (
-                e,
-                v.event.clone(),
-                v.group.clone(),
-                v.priority,
-                v.started,
-                v.source,
-                v.is_voice_over,
-                v.unit_response,
-            )
+        .map(|(e, v)| Live {
+            entity: e,
+            event: v.event.clone(),
+            group: v.group.clone(),
+            priority: v.priority,
+            started: v.started,
+            source: v.source,
+            voice_over: v.is_voice_over,
+            unit_response: v.unit_response,
+            attenuation: v.attenuation,
         })
         .collect();
     let listener = listener_position(&listeners);
@@ -991,24 +1037,26 @@ fn process_sfx_requests(
         // select line, so the newer response cuts the older one (below) instead of being dropped.
         if !ev.is_unit_response_vo
             && let Some(g) = &ev.overlap_group
-            && live.iter().any(|v| v.2.as_deref() == Some(g.as_str()))
+            && live.iter().any(|v| v.group.as_deref() == Some(g.as_str()))
         {
             dropped!(format!("overlap group {g}"));
         }
+        // Distance / spatialization: how loud this request is at the listener.
+        let spatial = !ev.is_2d && req.position.is_some() && listener.is_some();
+        let saturation = ev.saturation_distance.map(|s| s * settings.saturation_scale);
+        let mut attenuation = 1.0;
+        let mut distance = None;
+        if let (true, Some(pos), Some(l), Some(sat)) = (spatial, req.position, listener, saturation) {
+            distance = Some(pos.distance(l));
+            attenuation = distance_attenuation(pos.distance(l), sat, settings.rolloff);
+        }
         // Decide audibility first: an inaudible request must not cut an audible voice (max instances, voice limit).
-        {
-            let sat = ev.saturation_distance.map(|s| s * settings.saturation_scale);
-            let att = match (!ev.is_2d && req.position.is_some() && listener.is_some(), req.position, listener, sat) {
-                (true, Some(p), Some(l), Some(s)) => distance_attenuation(p.distance(l), s, settings.rolloff),
-                _ => 1.0,
-            };
-            if ev.volume.1 / 100.0 * att * buses.gain(bus_of(&ev)) < settings.min_audible_gain && !ev.looping && !ledger_enabled() {
-                continue;
-            }
+        if ev.volume.1 / 100.0 * attenuation * buses.gain(bus_of(&ev)) < settings.min_audible_gain && !ev.looping && !ledger_enabled() {
+            continue;
         }
         // Max instances.
         if let Some(max) = ev.max_instances {
-            let same: Vec<_> = live.iter().filter(|v| v.1 == key).collect();
+            let same: Vec<&Live> = live.iter().filter(|v| v.event == key).collect();
             if same.len() as u32 >= max {
                 if voice_over {
                     dropped!(format!("max instances {max} (voice over)"));
@@ -1016,44 +1064,75 @@ fn process_sfx_requests(
                 if settings.max_instances_drop_new {
                     dropped!(format!("max instances {max}"));
                 }
-                if let Some(oldest) = same.iter().min_by(|a, b| a.4.total_cmp(&b.4)).map(|v| v.0) {
-                    cut_voice(&mut commands, &mut voices, oldest, now);
-                    live.retain(|v| v.0 != oldest);
+                // A new 3D one-shot is as loud as it is near: it takes the instance that is quietest at the listener and is dropped when even that one is
+                // louder, so a far shot never cuts a near one. Continuations of a sound that started earlier, loops and 2D sounds (all of one loudness)
+                // keep the old rule: the oldest instance gives way.
+                let victim = if settings.max_instances_nearest && first_try && !ev.looping {
+                    let playing: Vec<(f32, f64)> = same.iter().map(|v| (v.attenuation, v.started)).collect();
+                    match instance_to_cut(&playing, attenuation, settings.instance_margin_db) {
+                        Some(i) => Some(same[i].entity),
+                        None => {
+                            if audio_log() {
+                                let mut louder: Vec<String> = playing.iter().map(|p| format!("{:.3}", p.0)).collect();
+                                louder.sort();
+                                info!("audio sfx DROPMAX {} (att {attenuation:.3}, dist {}; {max} playing at att {})", req.event, fmt_distance(distance), louder.join(" "));
+                            }
+                            dropped!(format!("max instances {max}, the playing ones are louder"));
+                        }
+                    }
+                } else {
+                    same.iter().min_by(|a, b| a.started.total_cmp(&b.started)).map(|v| v.entity)
+                };
+                if let Some(victim) = victim {
+                    if audio_log()
+                        && let Some(v) = live.iter().find(|v| v.entity == victim)
+                    {
+                        let far = voices.get(victim).ok().and_then(|(_, v)| v.distance);
+                        info!(
+                            "audio sfx CUTMAX {} (att {:.3}, dist {}, {:.2} s old, voice={victim:?}) for {} (att {attenuation:.3}, dist {}) cap {max}",
+                            v.event,
+                            v.attenuation,
+                            fmt_distance(far),
+                            now - v.started,
+                            req.event,
+                            fmt_distance(distance)
+                        );
+                    }
+                    cut_voice(&mut commands, &mut voices, victim, now);
+                    live.retain(|v| v.entity != victim);
                 }
             }
         }
         // Unit responses never talk over each other: the new line replaces the one still playing.
         if ev.is_unit_response_vo && first_try {
-            let cut: Vec<(Entity, String)> = live.iter().filter(|v| v.7).map(|v| (v.0, v.1.clone())).collect();
+            let cut: Vec<(Entity, String)> = live.iter().filter(|v| v.unit_response).map(|v| (v.entity, v.event.clone())).collect();
             for (e, old) in cut {
                 if audio_log() {
                     info!("audio sfx CUT {old} for {}", req.event);
                 }
                 cut_voice(&mut commands, &mut voices, e, now);
-                live.retain(|x| x.0 != e);
+                live.retain(|x| x.entity != e);
             }
         }
         // Global voice limit.
         if live.len() >= settings.max_voices {
             let victim = live
                 .iter()
-                .filter(|v| v.3 > ev.priority || (v.3 == ev.priority && !v.6 && !voice_over))
-                .max_by(|a, b| a.3.cmp(&b.3).then(b.4.total_cmp(&a.4)))
-                .map(|v| v.0);
+                .filter(|v| v.priority > ev.priority || (v.priority == ev.priority && !v.voice_over && !voice_over))
+                .max_by(|a, b| a.priority.cmp(&b.priority).then(b.started.total_cmp(&a.started)))
+                .map(|v| v.entity);
             match victim {
-                Some(v) => {
-                    cut_voice(&mut commands, &mut voices, v, now);
-                    live.retain(|x| x.0 != v);
+                Some(victim) => {
+                    if audio_log()
+                        && let Some(v) = live.iter().find(|v| v.entity == victim)
+                    {
+                        info!("audio sfx CUTLIM {} (att {:.3}, {:.2} s old, voice={victim:?}) for {} (att {attenuation:.3}) at {} voices", v.event, v.attenuation, now - v.started, req.event, live.len());
+                    }
+                    cut_voice(&mut commands, &mut voices, victim, now);
+                    live.retain(|x| x.entity != victim);
                 }
                 None => continue,
             }
-        }
-        // Distance / spatialization.
-        let spatial = !ev.is_2d && req.position.is_some() && listener.is_some();
-        let mut attenuation = 1.0;
-        let saturation = ev.saturation_distance.map(|s| s * settings.saturation_scale);
-        if let (true, Some(pos), Some(l), Some(sat)) = (spatial, req.position, listener, saturation) {
-            attenuation = distance_attenuation(pos.distance(l), sat, settings.rolloff);
         }
         let volume = rng.random_range(ev.volume.0..=ev.volume.1) / 100.0;
         let base_gain = volume;
@@ -1070,12 +1149,12 @@ fn process_sfx_requests(
         {
             for v in live
                 .iter()
-                .filter(|v| v.5 == Some(src))
-                .map(|v| v.0)
+                .filter(|v| v.source == Some(src))
+                .map(|v| v.entity)
                 .collect::<Vec<_>>()
             {
                 cut_voice(&mut commands, &mut voices, v, now);
-                live.retain(|x| x.0 != v);
+                live.retain(|x| x.entity != v);
             }
         }
         // Pick the sample (pre-samples first).
@@ -1198,43 +1277,43 @@ fn process_sfx_requests(
             distance: None,
             attenuation,
         };
-        if audio_log() && first_try {
-            info!(
-                "audio sfx PLAY {} (unit_response={} spatial={} dist={} att={:.3} vol={:.2} bus={:?} eff={:.3})",
-                req.event,
-                ev.is_unit_response_vo,
-                spatial,
-                match (spatial, req.position, listener) {
-                    (true, Some(p), Some(l)) => format!("{:.0}", p.distance(l)),
-                    _ => "-".into(),
-                },
-                attenuation,
-                base_gain,
-                bus_of(&ev),
-                base_gain * attenuation * buses.gain_no_master(bus_of(&ev))
-            );
-        }
         let mut ec = commands.spawn((AudioPlayer::<AudioSource>(handle), pb, voice));
         if let Some(p) = req.position {
             ec.insert(Transform::from_translation(p));
         }
         let id = ec.id();
+        if audio_log() && first_try {
+            info!(
+                "audio sfx PLAY {} (unit_response={} spatial={} dist={} att={:.3} vol={:.2} bus={:?} eff={:.3} cap={} loop={} voice={id:?})",
+                req.event,
+                ev.is_unit_response_vo,
+                spatial,
+                fmt_distance(distance),
+                attenuation,
+                base_gain,
+                bus_of(&ev),
+                base_gain * attenuation * buses.gain_no_master(bus_of(&ev)),
+                ev.max_instances.map_or("-".to_string(), |m| m.to_string()),
+                ev.looping
+            );
+        }
         if ev.is_unit_response_vo {
             state.last_unit_response = Some(now);
         }
         if first_try {
             state.last_played.insert(key.clone(), now);
         }
-        live.push((
-            id,
-            key,
-            ev.overlap_group.clone(),
-            ev.priority,
-            now,
-            req.source,
+        live.push(Live {
+            entity: id,
+            event: key,
+            group: ev.overlap_group.clone(),
+            priority: ev.priority,
+            started: now,
+            source: req.source,
             voice_over,
-            ev.is_unit_response_vo,
-        ));
+            unit_response: ev.is_unit_response_vo,
+            attenuation,
+        });
     }
 }
 
@@ -1937,6 +2016,11 @@ fn audio_log() -> bool {
     *ON.get_or_init(|| std::env::var_os("SP_AUDIO_LOG").is_some())
 }
 
+/// A distance for the log: whole units, `-` without one.
+fn fmt_distance(distance: Option<f32>) -> String {
+    distance.map_or("-".to_string(), |d| format!("{d:.0}"))
+}
+
 /// `SP_FRAME_LOG` (the battle view's frame spike log) is set: sample reads say where they ran and how long they took.
 fn frame_log() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
@@ -1970,6 +2054,10 @@ fn log_balance(
         return;
     }
     *next = now + 5.0;
+    let (nanos, handled) = (REQUEST_NANOS.swap(0, std::sync::atomic::Ordering::Relaxed), REQUESTS_HANDLED.swap(0, std::sync::atomic::Ordering::Relaxed));
+    if handled > 0 {
+        info!("audio alloc: {handled} requests in {:.2} ms ({:.1} us each) of voice rules in the last 5 s", nanos as f64 / 1e6, nanos as f64 / 1e3 / handled as f64);
+    }
     let mut items: Vec<(Bus, f32)> = voices
         .iter()
         .filter(|v| v.stopping.is_none())
@@ -1985,6 +2073,26 @@ fn log_balance(
 mod tests {
     use super::*;
     use crate::constants::AudioConstants;
+
+    #[test]
+    fn the_quietest_instance_goes_and_a_request_much_quieter_than_it_is_dropped() {
+        // `(falloff, start time)` of the instances. Equally loud: the oldest gives way, as before.
+        assert_eq!(instance_to_cut(&[(1.0, 0.0), (1.0, 1.0)], 1.0, 3.0), Some(0));
+        assert_eq!(instance_to_cut(&[(1.0, 1.0), (1.0, 0.0)], 1.0, 3.0), Some(1));
+        // A far request (26 dB down) never cuts near ones.
+        assert_eq!(instance_to_cut(&[(1.0, 0.0), (1.0, 1.0)], 0.05, 3.0), None);
+        // A near request takes the far instance, however young it is.
+        assert_eq!(instance_to_cut(&[(1.0, 0.0), (0.05, 1.0)], 1.0, 3.0), Some(1));
+        // Within the margin (3 dB) of the instance it would take it still gets it; beyond it, it is dropped.
+        assert_eq!(instance_to_cut(&[(1.0, 0.0), (0.2, 1.0)], 0.15, 3.0), Some(1));
+        assert_eq!(instance_to_cut(&[(1.0, 0.0), (0.2, 1.0)], 0.1, 3.0), None);
+        // Full volume and a hair less are equally loud (the top step is shifted), so the oldest goes, not the quieter-by-a-hair one.
+        assert_eq!(instance_to_cut(&[(1.0, 0.0), (0.9, 1.0)], 1.0, 3.0), Some(0));
+        // No margin: only a request at least as loud as the instance gets it.
+        assert_eq!(instance_to_cut(&[(1.0, 0.0), (1.0, 1.0)], 0.99, 0.0), None);
+        assert_eq!(instance_to_cut(&[(0.5, 0.0), (0.5, 1.0)], 0.5, 0.0), Some(0));
+        assert_eq!(instance_to_cut(&[], 1.0, 3.0), None, "nothing to take");
+    }
 
     #[test]
     fn death_star_theme_only_in_the_battle_playlist_with_a_super_weapon() {

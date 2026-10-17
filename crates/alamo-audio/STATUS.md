@@ -63,7 +63,7 @@ Empire at War audio: event data, sample resolution, decoding and a Bevy playback
   distance falloff is ours. The zoom does not move it (2026-10-17: a listener pulled 45 % of the way to the camera eye silenced zoomed-out battles).
 - **Distance**: `Volume_Saturation_Distance` x `Audio_Space_3D_Saturation_Distance_Mod` (1.5, `AudioSettings::saturation_scale`), beyond it
   `(sat / d)^rolloff` with `Audio_Space_3D_Rolloff_Distance_Mod` (1.0). The curve itself is an **estimate** (the data gives only these three numbers).
-  `Max_Instances` caps simultaneous copies per event (oldest cut); the view adds 2 per name and frame.
+  `Max_Instances` caps simultaneous copies per event (a 3D one-shot takes the quietest instance and a much quieter request is dropped, see "Max_Instances: the nearest sound wins"); the view adds 2 per name and frame.
 - **Object loops**: `SfxEmitter` component (`event: Option<String>`): the plugin starts the loop at the object, follows it, fades the old one out
   (`Loop_Fade_Out_Seconds`) on a change or when the object is gone, starts nothing that would be inaudible, and gives `Max_Instances` slots to the nearest
   objects. Battle ships use `SFXEvent_Engine_Idle_Loop` / `_Moving_Loop`, else `SFXEvent_Ambient_Loop` (unit XML). Moving = route or move / attack / retreat order (estimate).
@@ -79,6 +79,25 @@ Empire at War audio: event data, sample resolution, decoding and a Bevy playback
   `SFXEvent_Select` / `_Fleet_Move` / `_Move`, planet capture bonus `SFXEvent_Planet_Capture_Bonus_Reward`.
 - Tests: `tests/pass2.rs` (silent), `ui_sounds::tests`; smoke scenarios `windowed-battle-audio-positional`, `windowed-ui-pointer-audio`, `windowed-galaxy-audio-build`
   (`SP_AUDIO_LOG` lines `audio sfx PLAY ... spatial=true dist=.. att=..`, `audio emitter`, `audio music track`, `audio music stinger done`).
+
+## Max_Instances: the nearest sound wins (2026-10-17)
+- Rule (`plugin.rs::instance_to_cut`, `AudioSettings::{max_instances_nearest, instance_margin_db}`): when every `Max_Instances` voice of an event plays, a new 3D one-shot (first sample of a sound, not a loop, not
+  voice-over) takes the instance with the lowest distance falloff; falloffs within one 3 dB step count as equally loud and then the oldest goes (full volume and a hair less share the top step, so everything
+  inside the saturation distance behaves exactly as before). If the request is more than 3 dB (`instance_margin_db`, estimate) quieter than the instance it would take it is dropped (ledger `Dropped`, log `DROPMAX`). The data
+  gives `Max_Instances` and `Priority`, not the rule, so the choice is an estimate; both values are untouched. `SP_AUDIO_MAXINST=oldest` brings back the old rule (the oldest voice gives way whatever its loudness) for an
+  A/B listen, `drop` still drops every new request at the limit. 2D sounds, loops and the later samples of a started sound keep the old rule. The global voice limit (48) is unchanged (priority, then oldest).
+- Why: a fight at `Max_Instances` 3-4 per weapon event cut near shots for far ones. Offscreen Yavin -> Hoth with 24 granted TIE squadrons, `SP_TEST_CAM=fight` (the listener follows the fight), 170 battle s, the 60 s after
+  the first weapon fire (battle t 107 s), voices of 3D events with `Max_Instances`: old rule 2610 voices started, 1909 cut at the instance limit, 107 of those cuts took a voice more than 3 dB louder than the request
+  (47 more than 6 dB, 13 more than 10 dB), 0 drops; new rule 3020 voices, 2193 cuts, 0 / 0 / 0 such cuts, 234 requests dropped (10 % of the requests that found the limit reached). Second pair (150 s, the 43 s of shooting): old 89 /
+  42 / 6 of 1566 cuts, new 0 of 1424 and 113 drops (7 %). The shots that were heard (not cut within 0.5 s) stand a little nearer: median distance 1089 -> 997 units (pair 1), 1134 -> 1103 (pair 2). The effect is small in aggregate
+  because most cuts happen between shots of one loudness (inside the saturation distance of 150 u), where nothing changes. Request counts differ between runs by up to 15 % (the frame rate sets how many requests the view sends).
+- Cost: the voice rules take 46-76 us per request in a battle with `SP_AUDIO_LOG` on (the log lines are most of it), old and new rule alike (new 46-71 us); without log lines a bench of 40 requests a frame at a limit of 4 takes
+  11.2 us per request with the new rule and 15.9 us with the old (far requests are dropped instead of spawning a voice), `cargo test -p alamo-audio --test max_instances -- --ignored --nocapture`.
+- `SP_AUDIO_LOG` lines: `audio sfx CUTMAX <victim> (att, dist, age, voice=..) for <event> (att, dist) cap N`, `DROPMAX <event> (att, dist; N playing at att ..)`, `CUTLIM` (voice limit), `PLAY ... cap=N loop=bool voice=..`,
+  and `audio alloc: N requests in X ms (Y us each) of voice rules in the last 5 s`. App test hook `SP_TEST_CAM=fight` (space-peace `battle_play::test_camera`): the camera, and with it the listener, follows the closest opposing pair of
+  ships from battle second 5 on; scripted runs otherwise listen from where the fleets started.
+- Tests: `tests/max_instances.rs` (a far shot never cuts a near one, a near shot takes the farthest voice, equal loudness replaces the oldest as before, the 3 dB margin, the old rule on request, 2D and loops, and the Remake's
+  `Unit_Laser_Fire_Empire_Fighter_1` with its real data: 60 far shots cut none of the 4 near voices), `plugin::tests::the_quietest_instance_goes_and_a_request_much_quieter_than_it_is_dropped`.
 
 ## Audio pass 3 (galaxy fleets, Death Star, menu start sound, battle reports, balance log)
 - **Galaxy fleets** (`ui_sounds.rs`): `Galactic_Fleet_Hyperspace` when one of the player's fleets leaves for hyperspace and when it drops out (the data has
