@@ -8,7 +8,6 @@
 //! | `PerceptualEquations` | named equations (see [`crate::equation`]) |
 //! | `Templates` | budget allocation per goal category and the categories that are switched on |
 //!
-//! See `AI.md` for how these fit together.
 
 use std::collections::{BTreeMap, HashMap};
 

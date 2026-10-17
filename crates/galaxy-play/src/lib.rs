@@ -3,7 +3,7 @@
 //! prompts.
 //!
 //! ```ignore
-//! // Host app (see the crate README in `lib.rs` docs of `GalaxyPlayPlugin`):
+//! // Host app:
 //! let init = PlayInit::from_data(&data, campaign, PlayConfig::default())?;
 //! app.add_plugins((GalaxyPlayPlugin::new(init), GalaxyPlayUiPlugin));
 //! ```
@@ -15,6 +15,11 @@
 //! * [`state`]: resources, the [`PlayAction`] / [`PlayEvent`] messages and [`PlayUiModel`];
 //! * [`GalaxyPlayPlugin`]: logic, fleets on the map, mouse input;
 //! * [`GalaxyPlayUiPlugin`]: a simple UI that only reads [`PlayUiModel`] and writes [`PlayAction`].
+//!
+//! The worker can run the plain `galaxy-sim` or the scripted backend (`galaxy_script::ScriptedSim`: Remake story
+//! scripts, Remake AI plus strategy layer, difficulty tiers, snapshot save and load); everything the host does goes
+//! through [`PlayAction`], never through direct `Sim` calls. A "Fight" on a pending battle asks the worker for the
+//! tactical setup (`PlayEvent::TacticalReady`); the host plays it and answers with `PlayAction::ApplyTactical`.
 
 pub mod build_menu;
 pub mod catalog;

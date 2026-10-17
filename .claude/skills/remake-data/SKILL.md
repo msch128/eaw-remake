@@ -11,7 +11,7 @@ The Steam root is in the registry (`HKCU\Software\Valve\Steam\SteamPath`); the g
 folder. Override with env `EAW_GAME_DIR` (game root) or the app flag `--game-dir`.
 
 **Rule: never invent gameplay numbers.** Look the value up in the data, cite the XML file and tag in code
-comments or RULES.md, and mark values the engine hides (closed source) as an **estimate**.
+comments or docs/RULES.md, and mark values the engine hides (closed source) as an **estimate**.
 
 ## Getting at the data
 
@@ -43,7 +43,7 @@ test run does not prove real data was checked. Look for the skip message.
 - Unknown tags stay in `fields` maps. Energy fields and `Depleted_Shield_Regen_Cap` are untyped (raw map only).
 - English string table only (`MasterTextFile_ENGLISH.dat`). No localization.
 
-## Interpreting values (established rules, see crate RULES.md)
+## Interpreting values (established rules, see docs/RULES.md)
 
 - XML `Max_Speed` (ships and projectiles) is **per frame** and is multiplied by 30 (`Catalog::speed_scale`).
   `*_Seconds` fields are real seconds. `Max_Rate_Of_Turn` is used as rad/s.
@@ -51,15 +51,15 @@ test run does not prove real data was checked. Look for the skip message.
   `Depleted_Shield_Disable_Time` (4 s).
 - `Fire_Category_Restrictions` = classes the weapon must **not** fire at.
 - GC week = 60 s. Planet capture without ground combat is a rule inferred from the AI scripts.
-- Battle rules: `crates/battle-sim/RULES.md`. GC rules: `crates/galaxy-sim/RULES.md`.
-  Update the matching RULES.md when you change or discover a rule.
+- Battle and galaxy rules: `docs/RULES.md` (Part 1 galaxy, Part 2 battle).
+  Update `docs/RULES.md` when you change or discover a rule.
 
 ## Lua scripts
 
-709 scripts (mod + base game). Inventory of the 446 engine API functions and entry points: `crates/alamo-lua/API.md`
-(regenerate with `cargo run -p alamo-lua --example lua_survey -- 1770851727 --md crates/alamo-lua/API.md`).
+709 scripts (mod + base game). The inventory of the 446 engine API functions and entry points is generated, not stored:
+`cargo run -p alamo-lua --example lua_survey -- 1770851727 --md lua-api.md` (summary in `docs/ARCHITECTURE.md`, alamo-lua).
 Story plots: `run_story [workshop_id] [plots.xml] [seconds]`. GC with scripts: `galaxy-script --example scripted_match`.
-API gaps between scripts and the sim: `crates/galaxy-script/NEEDS.md` -> `crates/galaxy-sim/NEEDS-DONE.md`.
+Gaps between scripts and the sim are listed in `docs/KNOWN-GAPS.md`.
 
 ## Scope
 Galactic Conquest and space battles only. Ground combat, story campaigns and movies are out of scope.

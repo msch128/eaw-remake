@@ -13,6 +13,15 @@
 //!   between its per-step snapshots, so the picture is smooth at any frame rate.
 //! * Input: [`camera::BattleCamera`] (wheel zoom, WASD / edge pan, Q E / middle drag rotate) and
 //!   [`control`] (click and box select, right click move / attack / attack hardpoint).
+//!
+//! Organisation: `ships` spawns and interpolates the ship entities, `flight` adds banking and weave,
+//! `turrets` aims turrets at their targets, `effects` and `missiles` draw bolts, impacts and missile
+//! trails, `audio` turns sim events into `alamo_audio` messages, `tactical_ui` feeds the `eaw-ui` space
+//! command bar and turns its clicks into sim commands, `hud` and `retreat_prompt` add the advisor bubble,
+//! objectives, hero portraits and the retreat question, `cursor` sets the game's own mouse pointers,
+//! `fog` draws the fog-of-war shroud and `warmup` builds every model and pipeline a battle can need behind
+//! the loading screen. `convert` holds the coordinate conversions between sim, map and Bevy space.
+//! A finished battle is reported as the `BattleFinished` message carrying the sim's `TacticalResult`.
 
 pub mod audio;
 pub mod camera;

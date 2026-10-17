@@ -10,7 +10,9 @@
 //! * what scripts do (spawn units, give credits, unlock objects, show dialogs / messages) is applied to
 //!   the simulation by [`SimHost`] and reported as [`ScriptEvent`]s.
 //!
-//! What galaxy-sim cannot express yet is listed in `NEEDS.md`.
+//! Scripts change the simulation only through galaxy-sim's public API (`api.rs` there); the sim itself stays
+//! script-agnostic and deterministic. `ai.rs` implements `galaxy_ai::AiSim` on the sim so the Remake's galactic AI
+//! can drive the AI factions, and `save.rs` writes and restores snapshot saves. See docs/ARCHITECTURE.md.
 
 pub mod ai;
 pub mod host;
@@ -36,7 +38,7 @@ pub use save::{Checkpoint, Diagnostics, LoadProgress, SAVE_VERSION, SaveError, S
 pub struct ScriptedConfig {
     /// Run `GameScoring`.
     pub game_scoring: bool,
-    /// Also start `GalacticFreeStore` for every faction (experimental, see `NEEDS.md`).
+    /// Also start `GalacticFreeStore` for every faction (experimental: it stops at the first access to the engine-provided `FreeStore` object).
     pub freestore: bool,
     /// Script scheduler step in game seconds.
     pub script_step: f64,
@@ -46,7 +48,7 @@ pub struct ScriptedConfig {
     pub remake_ai: bool,
     /// Difficulty of the AI factions (credits, build times, battle multipliers, contrast, goal sleep); `None` = no multipliers. Default `Normal`.
     pub difficulty: Option<DifficultyTier>,
-    /// Strategic layer of the Remake AI (influence maps, utility scoring, pincers, honest information); see `galaxy-ai/STRATEGY.md`.
+    /// Strategic layer of the Remake AI (influence maps, utility scoring, pincers, honest information); see docs/ARCHITECTURE.md (galaxy-ai).
     pub strategy: bool,
     /// Personality per faction name (lower case); factions without an entry use `default_personality`.
     pub personalities: std::collections::HashMap<String, Personality>,
@@ -639,7 +641,7 @@ fn tier_settings(table: &alamo_data::DifficultyTable, tier: DifficultyTier, mino
     (diff, ai)
 }
 
-/// How far the AI sees (design rule 2026-10-15, galaxy-sim RULES.md "AI knowledge"): Easy 1 lane around its planets and fleets, Normal 2, Hard 3, Brutal everything. Minor factions use
+/// How far the AI sees (project rule, docs/RULES.md "AI knowledge per difficulty"): Easy 1 lane around its planets and fleets, Normal 2, Hard 3, Brutal everything. Minor factions use
 /// Normal (estimate), Fair plays Normal. `None` = sees everything.
 pub fn ai_sight_hops(tier: DifficultyTier, minor: bool) -> Option<u8> {
     match tier {

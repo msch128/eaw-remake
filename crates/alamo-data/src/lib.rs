@@ -4,6 +4,12 @@
 //! All loading goes through [`alamo_fs::FileSource`] and never fails hard: problems are
 //! returned as [`Warning`]s so partially available data (e.g. base-game files that only exist in
 //! MEG archives) still yields a usable [`GameData`].
+//!
+//! `objects` merges every object XML and applies `Variant_Of_Existing_Type` inheritance through `resolve()`; `space`
+//! gives typed views (ships, squadrons, hardpoints, projectiles, abilities, star bases, structures); `combat` holds the
+//! damage-to-armor matrix and the Gameconstants map; `difficulty` the per-tier multipliers; `text` the English string
+//! table only. Unknown tags stay in `fields` maps instead of being rejected. Ground and story data is parsed generically
+//! but unused.
 
 pub mod combat;
 pub mod difficulty;

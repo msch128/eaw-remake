@@ -1,5 +1,5 @@
-//! Formations of group moves. In EaW the units ordered somewhere together end up side by side in rows that face the move (design rule
-//! 2026-10-17: 20 Star Destroyers stand in a tight row, if needed in 2-3 rows). [`layout`] places the slots; the
+//! Formations of group moves. In EaW the units ordered somewhere together end up side by side in rows that face the move (project rule:
+//! 20 Star Destroyers stand in a tight row, if needed in 2-3 rows). [`layout`] places the slots; the
 //! destination formations of `Command::Move` / `Command::AttackMove` ([`Formation`], tight: [`Room::Tight`]) and the AI's advancing line
 //! ([`crate::ai`], with the start layout's room: [`Room::Start`]) share it. A unit of a destination formation flies its own route to its
 //! slot (`mov`: the nav grid's A*, `steer_around` and the hull separation), the group keeps the pace of its slowest member, and a ship that
@@ -9,7 +9,7 @@
 //! `FormationSpacing` multiplies it; `FormationOrder` puts lower orders further ahead; within its band a higher `Formation_Priority` fills
 //! the front rows first; `FormationGrouping` `Solo` units do not join; a unit with `WaitsForFormationFormup` false flies at its own speed;
 //! `Rotate_Formation_Facing_Moves` turns the formation to face its move; a ship that parks less than `FinalFormationFacingMinimumAngle`
-//! off that facing stays as it is. Estimates (RULES.md 9d): the escort band ahead of the big ships, the row width, the pace rule, the way
+//! off that facing stays as it is. Estimates (docs/RULES.md, "Group moves"): the escort band ahead of the big ships, the row width, the pace rule, the way
 //! in to a slot (lining up behind it, turning on the spot) and the stop and hold distances.
 
 use std::f32::consts::FRAC_PI_2;

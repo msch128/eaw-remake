@@ -19,7 +19,7 @@ Each area uses its own `CARGO_TARGET_DIR`, so parallel builds and agents don't b
 2. `cargo test -p <crate>`. Real-data tests **skip** without the game; check the output for skip notes.
 3. Visual or behavioural proof using the matching row below. **Open the PNG with the Read tool and look at it**
    before saying a visual change works.
-4. Update the crate's `STATUS.md` (and RULES.md / UI.md if rules or findings changed).
+4. Update `docs/KNOWN-GAPS.md` (and `docs/RULES.md` if a rule changed).
 
 ## What proves what
 
@@ -42,6 +42,6 @@ known number from RULES.md). Known reference results: ISD vs MC-80 1v1 ~270 s (M
 VSD vs Nebulon-B ~30 s.
 
 ## Honesty rules
-- Windowed mode and real mouse input are mostly untested (see STATUS.md files). An offscreen PNG does not
+- Windowed mode and real mouse input are mostly untested (see docs/KNOWN-GAPS.md). An offscreen PNG does not
   prove that clicking works. Say so instead of claiming it.
 - Frame-time numbers depend on the machine and on other running programs. Report them with the conditions.

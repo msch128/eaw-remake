@@ -517,7 +517,7 @@ impl Sim {
     /// Applies the result of the tactical battle set up with [`Sim::tactical_setup`]: removes destroyed
     /// units, the star base and structures, lets the beaten side's surviving fleets fall back (a draw makes
     /// every attacker retreat) and returns the events (`UnitsDestroyed`, `BattleWon/Lost`, `BattleResolved`).
-    /// A planet changes hands afterwards through the normal capture rule (RULES.md section 6): the winner alone in
+    /// A planet changes hands afterwards through the normal capture rule (docs/RULES.md, "Planet capture without ground combat"): the winner alone in
     /// orbit and no star base left.
     pub fn apply_tactical_result(&mut self, battle_id: u32, result: &TacticalResult) -> Result<Vec<Event>, TacticalError> {
         let pos = self.galaxy.battles.iter().position(|b| b.id == battle_id).ok_or(TacticalError::UnknownBattle)?;

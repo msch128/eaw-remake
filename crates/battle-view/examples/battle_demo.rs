@@ -570,7 +570,7 @@ fn capture_driver(
         }
     }
     // `SP_DEMO_GROUP=distance`: at 2 s the player's capital ships get one group move that far towards the map centre; they form up there
-    // (battle-sim RULES.md 9d) and the camera frames them.
+    // (docs/RULES.md, group moves) and the camera frames them.
     let group_move = std::env::var("SP_DEMO_GROUP").ok().and_then(|v| v.parse::<f32>().ok());
     if let Some(dist) = group_move
         && !*moved

@@ -1,4 +1,13 @@
 //! EAW:Remake - Empire at War galactic conquest shell.
+//!
+//! The executable that wires the other crates together. `main` parses the command line (`cli`), then runs either an
+//! install check, an offscreen render or the windowed app. Screens and their order live in `flow` (loading, main menu,
+//! campaign select, galaxy, space battle); `game` maps the parsed campaign data to what the map shows; `galaxy_map`,
+//! `planet_visual`, `planet_view` and `camera` draw the galaxy; `play` and `play_ui` connect `galaxy-play` and the
+//! `eaw-ui` command bar; `battle_seam` and `battle_play` open a `battle-view` session for a pending battle and hand
+//! the result back; `settings`, `options` and `menu` hold the persisted settings and the menus; `offscreen` renders
+//! scripted scenarios to PNG; `input_test`, `drag_demo` and `label_probe` are opt-in self tests that the smoke script
+//! runs; `logfile` writes the session log.
 
 // The installed game (`dist` feature, built by tools/package.ps1) is a windowed app: no console window opens behind it. Normal
 // builds stay console apps, the smoke tests read their output.

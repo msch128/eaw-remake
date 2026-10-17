@@ -1,5 +1,5 @@
 //! Strategic layer on top of the Remake AI: influence maps over the route graph and utility based target scoring.
-//! Design and tuning notes: `STRATEGY.md`.
+//! Design notes: docs/ARCHITECTURE.md (galaxy-ai).
 //!
 //! The Remake goal functions give every `(goal, target)` a desire from the original equations; the layer multiplies it by
 //! [`Strategy::factor`], a value between 0.2 and 3 that expresses what the 2006 equations cannot see: how far the

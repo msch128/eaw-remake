@@ -1,146 +1,99 @@
 # EAW:Remake
 
-An unofficial, high-performance open-source Rust/Bevy reimplementation of **Galactic Conquest** and **space battles** for *Star Wars: Empire at War - Forces of Corruption* running the **[Empire at War Remake 4.0](https://steamcommunity.com/sharedfiles/filedetails/?id=1770851727)** modification.
+An unofficial open-source Rust/Bevy reimplementation of **Galactic Conquest** and **space battles** for *Star Wars: Empire at War - Forces of Corruption* running the **[Empire at War Remake 4.0](https://steamcommunity.com/sharedfiles/filedetails/?id=1770851727)** modification.
 
-![Galactic Conquest Overview](docs/screenshots/galaxy_coruscant.png)
+![A space battle over Kuat: the Rebel Viscount Star Defender burns while Star Destroyers fire](docs/screenshots/battle.jpg)
 
-> **Clean-Room & Bring Your Own Game:** This repository contains **zero** copyrighted assets, models, textures, sounds, or game data. The engine dynamically parses your legally owned Steam installation and subscribed Steam Workshop mod files at runtime. No proprietary files or precompiled binaries are distributed.
+> **Bring your own game:** this repository contains no game files - no models, textures, sounds or data. The engine reads your own Steam installation of the game and the subscribed Remake mod at runtime. The screenshots show the engine running with the original game and the Remake mod; their art belongs to Lucasfilm, Petroglyph and the Empire at War Remake team.
 
----
+![Galactic Conquest: the core worlds around Coruscant](docs/screenshots/galaxy.jpg)
 
-![Space Tactical Combat](docs/screenshots/tactical_battle.png)
+## What it is
 
-## Current Status: playable, not finished (audit ~70 / 100)
+The Remake's campaigns (Web Way Mini, Standard and Full with up to 145 planets, Clone Wars and more) for the playable
+factions: planets, star bases and structures, fleets on hyperspace lanes, production queues, heroes, superweapons, AI
+opponents with difficulty levels, save slots. Battles are real-time 3D space combat on the Remake's maps with hardpoints,
+shields, squadrons, abilities, reinforcements and retreat. Unit stats, weapons and the economy come from the Remake's XML.
+Ground battles, story campaigns and movies are out of scope.
 
-An audit on 2026-10-14 put the project at roughly 70 out of 100 against the goal of playing Remake 4.0 Galactic Conquest with
-space battles. The campaign loop runs from start to galactic victory, but fidelity to the Remake is partial.
-
-| Area | Audit score |
-|---|---|
-| Galaxy UI | 74 |
-| Galaxy rules / AI | 66 |
-| Battle UI | 68 |
-| Battle behaviour | 70 |
-| Visuals | 72 |
-| Audio | 45 (implemented, not yet heard live) |
-| Stability | 78 |
-
-### What exists
-* **Galactic Conquest:** 145-planet maps with planet models, star base tiers and structures, five playable factions, three fleet
-  slots per planet, production queues with cancel and refund, hyperlanes, superweapons, droid advisor menu, save slots and autosaves.
-* **Space battles:** real-time 3D tactical combat with hardpoint damage, shield arcs, hangar launches, abilities, retreat,
-  reinforcements, a unit-card bar, minimap and camera hotkeys.
-* **Audio:** adaptive music, positional effects, unit speech and advisor lines are implemented but have not been verified by
-  listening in a live session.
-* **Engine:** deterministic headless sims (`galaxy-sim`, `battle-sim`) separate from rendering; Steam install and Workshop mod are
-  found automatically. Performance numbers (4K, ~2 GB) predate the latest changes.
-
-### Not verified
-No sound has been heard live and no real mouse or keyboard input has been tested in the latest round; visual changes were
-checked only in offscreen renders.
-
-### Known gaps
-Invented numbers still being replaced by data values, no source for the superweapon gauge art, missile arcs, ground-to-space
-special weapons in battle, reinforcement placement polish, laser bolt look, per-group ability buttons, battle Esc menu and the
-three autosave slots. The full list is in `HANDOFF.md` and `docs/QA-2026-10-09-user.md`.
-
----
+![Turbolaser fire between the battle lines](docs/screenshots/battle-lasers.jpg)
 
 ## Requirements
 
-- **Operating System:** Windows 10/11 (x64)
-- **Base Game:** A legally owned copy of [Star Wars: Empire at War - Gold Pack on Steam](https://store.steampowered.com/app/32470/STAR_WARS_Empire_at_War__Gold_Pack/) (includes *Forces of Corruption*).
-- **Mod:** Subscribed to [Empire at War Remake 4.0 on Steam Workshop](https://steamcommunity.com/sharedfiles/filedetails/?id=1770851727) (Steam Workshop ID `1770851727`).
-- **Build Tools:** Rust toolchain (stable) and MSVC C++ Build Tools (`build.ps1` automatically detects and installs them if missing).
+* Windows 10/11 (64-bit) with a DirectX 12 or Vulkan graphics card.
+* **[Star Wars: Empire at War - Gold Pack](https://store.steampowered.com/app/32470/STAR_WARS_Empire_at_War__Gold_Pack/)** on Steam and the subscribed Workshop mod **[Empire at War Remake 4.0](https://steamcommunity.com/sharedfiles/filedetails/?id=1770851727)**.
 
----
+## Install
 
-## Getting Started
+1. In Steam, install the game and subscribe to the mod. Let the download finish.
+2. Download **`EAW-Remake-Setup-0.1.0.exe`** from the **[Releases page](https://github.com/msch128/eaw-remake/releases)** and run it.
+   The setup is not code-signed, so Windows SmartScreen says "Windows protected your PC": click **More info**, then **Run anyway**.
+3. Click through the setup. It installs for your user only (no administrator rights, no Visual C++ runtime needed) and checks that the game and the mod are there; if one is missing it says so and offers the Steam page.
+4. Start **EAW Remake** from the Start menu. Uninstall it under Windows Settings > Apps; your saves and settings in `%APPDATA%\SpacePeace` stay.
 
-### 1. Build
+## Build from source
 
-Clone the repository and run the PowerShell build script:
+Clone the repository and double-click `build.bat`, or run:
 
 ```powershell
 .\build.ps1
 ```
 
-This compiles optimized release binaries:
-- `target\release\eaw-remake.exe` (primary executable)
-- `eaw-remake.exe` next to `build.bat` (a copy of the above)
+If Rust or the Microsoft C++ Build Tools are missing, the script installs them with `winget` first (the Build Tools ask for
+an administrator confirmation). It then compiles `target\release\eaw-remake.exe`. `tools\package.ps1` builds the Windows
+setup (it needs Inno Setup 6). More in [CONTRIBUTING.md](CONTRIBUTING.md).
 
-### 2. Run
+## Run
 
-Launch the game executable:
+Start `eaw-remake.exe` (or **EAW Remake** from the Start menu), pick a galaxy and your side. Settings are stored in
+`%APPDATA%\SpacePeace\settings.toml`, saves in `%APPDATA%\SpacePeace\saves` and logs in `%APPDATA%\SpacePeace\logs`.
+
+### Finding the game
+
+On startup the engine looks for your installation by itself:
+1. It reads the Steam folder from the Windows registry.
+2. It searches every Steam library in `libraryfolders.vdf` for *Empire at War* (app ID `32470`).
+3. It looks for the Remake in `steamapps/workshop/content/32470/1770851727`.
+
+If the game or the mod is somewhere else, pass the folders on the command line or as environment variables:
 
 ```powershell
-.\target\release\eaw-remake.exe
+eaw-remake.exe --game-dir "D:\Games\Star Wars Empire at War" --mod-dir "D:\Mods\1770851727"
 ```
 
-### Auto-Detection & Custom Paths
+* `EAW_GAME_DIR`: the game's root folder (`...\steamapps\common\Star Wars Empire at War`)
+* `EAW_MOD_DIR`: the mod's folder (`...\steamapps\workshop\content\32470\1770851727`)
 
-The engine automatically discovers your Steam installation on startup:
-1. Queries the Windows Registry for the Steam installation directory.
-2. Scans all active Steam libraries in `libraryfolders.vdf` for *Empire at War* (App ID `32470`).
-3. Discovers the Remake mod in `steamapps/workshop/content/32470/1770851727`.
+`eaw-remake.exe --check-install > check.txt` writes which folders were found.
 
-If your game or mod files reside in a custom location, specify them via command line or environment variables:
-
-* **Command Line Flags:**
-  ```powershell
-  .\target\release\eaw-remake.exe --game-dir "D:\Games\Star Wars Empire at War" --mod-dir "D:\Mods\1770851727"
-  ```
-* **Environment Variables:**
-  * `EAW_GAME_DIR`: Root folder of the game (`.../steamapps/common/Star Wars Empire at War`)
-  * `EAW_MOD_DIR`: Root folder of the mod (`.../steamapps/workshop/content/32470/1770851727`)
-
-### Useful Command Line Options
+### Useful command line options
 
 | Flag | Description |
 |---|---|
-| `--campaign <ID>` | Launch directly into a campaign (e.g. `GC_Full_Web_Way_Rebel`, `GC_Standard_Web_Way_Imperial`) |
-| `--faction <Name>` | Choose human faction (`Rebel`, `Empire`, `Underworld`, `Republic`, `CIS`) |
-| `--list-campaigns` | List all discovered Galactic Conquest scenarios |
-| `--fullscreen` | Run in borderless fullscreen mode |
-| `--volume <0.0..1.0>` | Set master audio volume (e.g. `--volume 0.8`) |
-| `--offscreen <file.png>` | Render N frames headlessly directly to an image file |
+| `--campaign <ID>` | Start a campaign directly, e.g. `GC_Full_Web_Way_Rebel` or `GC_Standard_Web_Way_Imperial` |
+| `--list-campaigns` | List all campaigns found in your installation |
+| `--difficulty <d>` | AI difficulty of a new game: `easy`, `normal`, `hard`, `brutal`, `fair` |
+| `--load-from <file>` | Start from a save file |
+| `--fullscreen` | Start in borderless fullscreen |
+| `--volume <0..1>` | Master volume |
 
-User configuration (window mode, resolution, volume, graphics preferences) is stored in `%APPDATA%\EAW-Remake\settings.toml`.
+`eaw-remake.exe --help` lists every option; most of the others are test hooks.
 
----
+## Status
 
-## Architecture
+Preview. The maintainer plays galactic conquest and space battles live on Windows with sound, mouse and keyboard.
+The offscreen smoke suite (`tools/smoke.ps1`) passes 28 of 29 rows, and about 820 automated tests pass. There are no
+ground battles and no story campaigns, and the interface is English only. What is known to be missing or unverified is
+listed in [docs/KNOWN-GAPS.md](docs/KNOWN-GAPS.md).
 
-The project is structured into modular, decoupled Rust crates:
+## Documentation
 
-| Crate | Responsibility |
-|---|---|
-| `alamo-fs` | Virtual layered file system (`GameFs`), `.MEG` archive reading, Steam path discovery |
-| `alamo-data` | Lenient XML parsing, string tables (`.DAT`), game objects, units, campaigns |
-| `alamo-model` | 3D Alamo geometry (`.ALO`), skeletal animation (`.ALA`), particle systems, DDS textures |
-| `alamo-map` | Alamo tactical space battle map reader (`.TED`) |
-| `alamo-audio` | Audio decoding (WAV, ADPCM, MP3), music playlists, 3D sound effects, speech events |
-| `alamo-lua` | Lua runtime for story scripts, trigger evaluation, and scripted campaign events |
-| `galaxy-sim` | Headless, deterministic Galactic Conquest simulation (economy, fleets, conquest, builds) |
-| `battle-sim` | Headless, deterministic, multi-threaded 3D tactical space battle simulation |
-| `galaxy-script` | Galactic script bridge connecting Remake plot scripts with `galaxy-sim` |
-| `galaxy-ai` | Galactic AI strategic planning, fleet defense, expansion, and invasion logic |
-| `alamo-render` | Bevy rendering plugin: custom Alamo PBR shaders, laser bolts, engine trails, particles |
-| `battle-view` | Bevy tactical battle plugin: 3D scene representation, camera controls, combat UI |
-| `eaw-ui` | Ingame user interface and HUD components rebuilt from Alamo game data |
-| `galaxy-play` | Galactic Conquest UI, fleet movement interaction, planet view, build queues |
-| `eaw-remake` | Main application executable: lifecycle management, campaign select, save/load, settings |
-
----
-
-## Design Principles
-
-* **Strict Clean-Room Architecture:** Zero game assets or proprietary binaries in the repository. Everything is parsed at runtime from the user's local installation.
-* **Deterministic Simulations:** Simulations are decoupled from graphics and frame rates, free of global mutable state, and fully journaled for reliable replays and save games.
-* **Data-Driven Rules:** Unit statistics, weapon parameters, and economic values come directly from the Remake XML files—never hardcoded or invented.
-* **Fault-Tolerant Parsers:** Undecoded chunks or non-standard mod syntax produce warnings rather than fatal crashes.
-
----
+* [CONTRIBUTING.md](CONTRIBUTING.md): build, test, verify, conventions, playtest checklist, releasing.
+* [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): crate map, pipeline, simulation versus rendering, where data comes from.
+* [docs/RULES.md](docs/RULES.md): the game rules implemented, each marked as data, estimate or project rule.
+* [docs/FORMATS.md](docs/FORMATS.md): the Alamo file formats and how they are read.
+* [docs/KNOWN-GAPS.md](docs/KNOWN-GAPS.md): what is missing, how to see it, where it lives.
+* [AGENTS.md](AGENTS.md): rules for coding agents working in this repository.
 
 ## Credits & Acknowledgments
 
@@ -150,14 +103,12 @@ For complete attributions and open-source library licenses, see [`CREDITS.md`](C
 * **Petroglyph Games** and **LucasArts** for creating the original *Star Wars: Empire at War*.
 * **[Bevy Engine](https://bevy.org)** and the Rust community for the modern ECS and graphics ecosystem.
 
----
-
 ## Legal / Disclaimer
 
 EAW:Remake is an independent, non-commercial fan-made project. It is **not affiliated with, authorized, sponsored, or endorsed by** The Walt Disney Company, Lucasfilm Ltd., LucasArts, Petroglyph Games, Valve Corporation, or the Empire at War Remake team.
 
 *Star Wars* and all associated names, marks, logos, and emblems are registered trademarks of Lucasfilm Ltd. and Disney.
 
-This repository contains **strictly original software source code** and distributes **no copyrighted game data**. Users must supply their own legally purchased copy of *Star Wars: Empire at War* and subscribe to the *Empire at War Remake 4.0* mod on Steam Workshop.
+This repository contains **original source code only** and distributes **no game data**. The setup on the Releases page contains only this project's own program. Users must supply their own legally purchased copy of *Star Wars: Empire at War* and subscribe to the *Empire at War Remake 4.0* mod on Steam Workshop.
 
 The source code is licensed under the [MIT License](LICENSE).

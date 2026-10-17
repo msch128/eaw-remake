@@ -15,7 +15,7 @@
 //!   the formation waits for units that are arriving next to it.
 //!
 //! Distances named in the scripts are data; the formation geometry, the catch-up rule, the contact rule and the focus weight are
-//! estimates (RULES.md 9c, 9e).
+//! estimates (docs/RULES.md, "Tactical AI").
 
 use std::f32::consts::FRAC_PI_2;
 

@@ -1,5 +1,12 @@
 //! Headless deterministic tactical space battle simulation for Empire at War: Forces of
-//! Corruption (Remake 4.0 data). See `RULES.md` for the implemented rules and their data sources.
+//! Corruption (Remake 4.0 data). See docs/RULES.md for the implemented rules and their data sources.
+//!
+//! Fixed 30 Hz step, rayon-parallel target scans, per-entity random generators seeded by `(seed, tick, id)`, so a
+//! battle gives the same result with or without threads. `defs.rs` builds the immutable `Catalog` (ships, hardpoints,
+//! projectiles, damage matrix) from the game data and the `.alo` models; `battle.rs` holds state, commands, events and
+//! results; `sim.rs` the step systems; `ai.rs` the side-level tactical AI; `formation.rs` and `nav.rs` group moves and
+//! steering; `arena.rs` the playable area read from a `.ted` map; `placement.rs` the reinforcement-zone rule shared with
+//! the view. Engine rules the data does not state are named estimates in `BattleConfig` or `defs.rs`.
 //!
 //! ```no_run
 //! # use battle_sim::*;

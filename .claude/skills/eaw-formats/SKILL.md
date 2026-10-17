@@ -5,7 +5,7 @@ description: Reference for the Petroglyph Alamo engine file formats used by Empi
 
 # Alamo file formats in this repo
 
-All readers are read-only and never modify game files. Paths are relative to a `Data` root,
+The human-readable version of this skill is `docs/FORMATS.md`. All readers are read-only and never modify game files. Paths are relative to a `Data` root,
 case-insensitive, `/` or `\` allowed (`Art/Models/EV_Star_Destroyer.ALO`, `Xml/Planets.xml`).
 
 ## Where each format lives

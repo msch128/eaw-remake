@@ -32,8 +32,8 @@ the original game to compare against, and names (bones, effects, XML tags) that 
 - Doc comments mark certainty explicitly: proven facts plainly, inferred ones with **"Inferred"** or
   **(guess)** plus the evidence ("all 212 `pe_` files have value 3").
 - Engine rules not visible in the data go into `BattleConfig` / `SimConfig` / `defs.rs` as named,
-  documented **estimates**, and into the crate's `RULES.md` with their source. Never bury them as magic numbers.
-- Update the crate `STATUS.md` "Gaps" list when something is decoded or newly found to be unknown.
+  documented **estimates**, and into `docs/RULES.md` with their source. Never bury them as magic numbers.
+- Update `docs/FORMATS.md` and `docs/KNOWN-GAPS.md` when something is decoded or newly found to be unknown.
 - Module docs carry the format layout (see `alamo-map/src/lib.rs`, `alamo-model/src/particle.rs` as templates).
 
 ## Pitfalls seen in this repo

@@ -810,7 +810,7 @@ fn load_cached(lua: &Lua, sh: &Rc<RefCell<Shared>>, key: &str, source: impl FnOn
             let f = match lua.load(text.as_str()).set_name(key).into_function() {
                 Ok(f) => f,
                 // The Clone Wars submod ships `Conquer_Enemy_Planet.lua` with a line that starts with a comma right after a line ending in one (`..., ,"Warlord_Corvette = 0, 10"`):
-                // no Lua accepts that, so its AI could never attack. The comma is dropped and the script loads (workaround, RULES.md).
+                // no Lua accepts that, so its AI could never attack. The comma is dropped and the script loads (workaround).
                 Err(e) if e.to_string().contains("unexpected symbol near ','") || e.to_string().contains("'}' expected") => {
                     let fixed = repair_double_commas(&text);
                     if fixed == text {

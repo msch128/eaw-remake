@@ -669,7 +669,7 @@ pub struct ProjDef {
     /// curve in with their turn rate; 0 for everything else.
     pub arc_offset: f32,
     /// `Projectile_Rocket_Curve_Offset` in radians (`ROCKET` projectiles only): amplitude of the weave in the rocket's heading (estimate of what the
-    /// data means, see RULES.md); 0 = flies straight.
+    /// data means, see docs/RULES.md); 0 = flies straight.
     pub rocket_weave: f32,
     /// `Projectile_Rocket_Straight_Distance`: flight distance before the weave starts.
     pub rocket_straight: f32,

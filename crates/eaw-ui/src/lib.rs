@@ -8,7 +8,14 @@
 //!
 //! Add [`EawUiPlugin`], spawn a bar with [`widgets::spawn_command_bar`] (or the
 //! [`EawUiCommandsExt`] helper), write to [`CommandBarData`] and listen for
-//! [`EawButtonClicked`]. See `UI.md` for the findings behind it.
+//! [`EawButtonClicked`].
+//!
+//! Layout comes from the shell models (every element is a hidden quad whose bone gives its centre and size, in
+//! the original 1366x768 design space, scaled by screen height / 768), look and behaviour from
+//! `CommandBarComponents.xml`, and small textures from the packed `MT_CommandBar` mega texture. Fonts are resolved
+//! from the operating system. The space tactical bar (`tactical`), per-craft bars (`member_bars`) and squadron
+//! icons (`squad_icons`) are drawn from data the host fills in each frame; `panels` holds the fleet organizer, planet
+//! screen and reinforcement/hero frames.
 
 pub mod components;
 pub mod data;

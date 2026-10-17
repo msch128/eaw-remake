@@ -7,6 +7,15 @@
 //!
 //! See [`AlamoModel`] for spawning, [`spawn_sun`] for the lighting convention and
 //! [`material::AlamoMaterial`] for the shader emulation.
+//!
+//! Organisation: `model` converts parsed `.alo` files into meshes, materials and bone hierarchies; `texture`
+//! and `preload` load DDS/TGA/PNG (BC1/2/3 stay compressed) synchronously or on worker threads and share the
+//! caches; `material` and `alamo.wgsl` emulate the Alamo mesh shaders (bump, gloss, team colour, planet,
+//! additive, shield, nebula) in gamma-space shading, so the camera must use `Tonemapping::None`; `animation`,
+//! `hardpoints` and `sequences` play `.ala` animations, aim turrets, destroy hardpoints and run the
+//! hyperspace-arrival and death sequences; `particles` simulates particle systems on the CPU and batches them
+//! into one dynamic mesh per texture and blend mode; `projectiles` and `xmldata` draw bolts and impacts from
+//! the XML definitions; `lod` culls by screen size; `frame_trace` is a debug aid for frame spikes.
 pub mod animation;
 pub mod frame_trace;
 pub mod hardpoints;

@@ -2,6 +2,13 @@
 //!
 //! All paths are relative to a `Data` root (e.g. `Xml/Planets.xml`), case-insensitive,
 //! and may use `/` or `\` as separator.
+//!
+//! [`MegArchive`] reads `.meg` archives, [`LooseDir`] a plain directory, and [`GameFs::for_mod`] stacks them the way the
+//! engine does (mod over Forces of Corruption over the base game, `megafiles.xml` lists, patch archives, the audio
+//! archives the engine mounts itself; non-English speech is skipped). [`GameInstall::detect`] finds the Steam install
+//! (env `EAW_GAME_DIR`, otherwise the registry plus `libraryfolders.vdf`). Precedence rules are at the top of `vfs.rs`;
+//! the ordering of unlisted patch archives is an educated guess. Everything is read-only and `Send + Sync`; whole files
+//! are read into memory.
 
 mod install;
 mod loose;

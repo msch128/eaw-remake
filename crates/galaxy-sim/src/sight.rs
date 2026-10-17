@@ -2,7 +2,7 @@
 //!
 //! The data has almost no numbers for this: `Minimum_Visible_Base_Level`, the spy abilities and `Galactic_Stealth_Ability` (all
 //! `Evade_Detection_Chance` 0) say who can see what, but not how far a planet or fleet sees. The model below is therefore an
-//! **estimate** (named in RULES.md): presence in a system gives full detail, one lane around it gives a rough picture, the rest of
+//! **estimate** (named in docs/RULES.md): presence in a system gives full detail, one lane around it gives a rough picture, the rest of
 //! the galaxy shows only owners. It is a pure function of the galaxy state, so it is deterministic.
 
 use crate::state::{FleetLocation, Galaxy};
@@ -93,7 +93,7 @@ impl Galaxy {
         self.fleets.keys().map(|&id| (id, self.fleet_sight(world, viewer, id))).filter(|(_, s)| *s != Sight::Hidden).collect()
     }
 
-    /// Planets whose exact forces the AI of `faction` may use (design rule 2026-10-15, RULES.md "AI knowledge"): all of them when its
+    /// Planets whose exact forces the AI of `faction` may use (project rule, docs/RULES.md "AI knowledge per difficulty"): all of them when its
     /// `Difficulty::ai_sight_hops` is `None`, otherwise those within that many lanes of a planet it owns or a fleet it has (moving fleets count
     /// at both ends of their lane) plus every planet it sees `Detailed` (presence, which includes the `System_Spy_Ability` units).
     pub fn ai_knowledge(&self, world: &World, faction: FactionId) -> Vec<bool> {

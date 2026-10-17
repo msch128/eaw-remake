@@ -148,7 +148,7 @@ fn a_squadron_ordered_to_move_flies_there_in_formation() {
     }
     println!("ordered squadrons: worst distance from the slot {worst:.0}");
     assert!(worst < 150.0, "members keep their slots on the way: {worst}");
-    // The two squadrons are one group move (RULES.md 9d): their leaders stand side by side in a formation centred on the goal.
+    // The two squadrons are one group move (docs/RULES.md, "Group moves"): their leaders stand side by side in a formation centred on the goal.
     let mut leaders: Vec<u32> = mine.iter().map(|&i| b.squad_leader(b.ships[i as usize].squad).unwrap()).collect();
     leaders.sort_unstable();
     leaders.dedup();

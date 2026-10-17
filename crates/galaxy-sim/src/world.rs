@@ -24,7 +24,7 @@ pub type StarbaseTypeId = u32;
 pub type FleetId = u32;
 
 /// Tunable simulation constants. Defaults follow the Remake data where the data defines them and
-/// are documented estimates elsewhere (see RULES.md).
+/// are documented estimates elsewhere (see docs/RULES.md).
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SimConfig {
     /// Seed for all pseudo random decisions (AI tie breaks, combat target selection).
@@ -412,7 +412,7 @@ pub struct StructureType {
     /// `Required_Planets`: if not empty, the structure can only be built on these planets (terrain variants, Starforge, refineries ...).
     pub req_planets: Vec<PlanetId>,
     /// Orbital structures always; a ground structure only if it affects the galactic game (income, population, space
-    /// weapons or hardpoints, ship discounts, gambling income) or is a prerequisite of one. See `galaxy-sim/STATUS.md`.
+    /// weapons or hardpoints, ship discounts, gambling income) or is a prerequisite of one. See docs/RULES.md, "Production".
     pub galactic: bool,
     /// Space weapons or hardpoints (orbital structures with hardpoints, or ground-to-space special weapons).
     pub space_reach: bool,

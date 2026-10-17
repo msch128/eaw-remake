@@ -155,7 +155,7 @@ impl Sim {
                     ps.starbase = Some(sb);
                 }
             }
-            // Space and ground structures the build rules refuse in this state (tech, star base level, planet, special structures) are dropped; RULES.md lists them.
+            // Space and ground structures the build rules refuse in this state (tech, star base level, planet, special structures) are dropped; docs/RULES.md lists them.
             for &p in &kept {
                 self.drop_invalid_structures(f, p);
             }
@@ -221,7 +221,7 @@ impl Sim {
         .max(1)
     }
 
-    /// The passive faction (Pirates) never expands but rearms with the player's tech (design rule, estimates in `RULES.md`): every planet it holds gets the
+    /// The passive faction (Pirates) never expands but rearms with the player's tech (design rule, estimates in docs/RULES.md): every planet it holds gets the
     /// star base of its own chain at level `clamp(player tech, 1, top level)` (raised, never lowered; applied at the start and every week), and
     /// every week a planet with fewer than `2 x tech` passive units gets one more, picked deterministically from the ship types the passive faction fields
     /// in the campaign (no heroes, no planet destroyers, cycling by planet and week). It costs nothing and the units never move because the faction
@@ -282,7 +282,7 @@ impl Sim {
             if with_garrison && !pool.is_empty() {
                 let here: u32 = self.galaxy.fleets.values().filter(|f| f.owner == passive && f.location == crate::state::FleetLocation::AtPlanet(p)).map(|f| f.unit_count()).sum();
                 // The planet's own composition: the ship types it fields (remembered, so a planet that lost its ships keeps its types); a planet with none
-                // gets the cheapest passive ship types (estimate, RULES.md).
+                // gets the cheapest passive ship types (estimate, docs/RULES.md).
                 let mut own: Vec<UnitTypeId> = self.passive_types.remove(&p).unwrap_or_default();
                 for f in self.galaxy.fleets.values().filter(|f| f.owner == passive && f.location == crate::state::FleetLocation::AtPlanet(p)) {
                     own.extend(f.units.iter().filter(|(u, c)| **c > 0 && pool.contains(u)).map(|(u, _)| *u));

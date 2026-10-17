@@ -1,7 +1,7 @@
 //! Tactical AI bench: the AI against the AI or a scripted player on the real Remake data (the AI attacks as side 0, or defends a station
 //! as side 1), with the numbers that show how well each side fights: result, losses, damage, how much of the time its big ships had an
 //! enemy warship in reach without firing, where its hull hits landed, how much enemy firepower it faced, how it concentrated its fire, what
-//! its weapon abilities were used on and how much its fighters and bombers fired. RULES.md 9e has the results.
+//! its weapon abilities were used on and how much its fighters and bombers fired. docs/RULES.md ("Tactical AI") has the rules it checks.
 //!
 //! Usage: `cargo run --release -p battle-sim --example ai_bench -- [scenario filter] [seeds=N] [detail]`
 //! (`TRACE=<scenario>` prints what the AI's big ships do every 10 s of seed 1, with `TRACE_CRAFT=1` its fighters and bombers).

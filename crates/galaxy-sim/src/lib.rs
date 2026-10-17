@@ -1,5 +1,12 @@
 //! Headless, deterministic galactic conquest simulation for Empire at War: Forces of Corruption
-//! (Remake 4.0 data), space only. See `RULES.md` for the rules and their sources.
+//! (Remake 4.0 data), space only. See docs/RULES.md for the rules and their sources.
+//!
+//! `World` is the static, shared (`Arc`) part built once from the game data (planets, hyperspace lanes, factions,
+//! unit, structure and star base catalogs); `Galaxy` is the mutable state; `Sim` drives time, commands and events.
+//! All randomness comes from a seeded generator and there is no global state, so equal inputs give equal games.
+//! Player and AI actions are serialisable `Command`s. Battles are resolved statistically (`combat.rs`) or handed to
+//! `battle-sim` as plain data (`tactical.rs`). `api.rs` is the direct manipulation API used by `galaxy-script`.
+//! Game rules whose numbers the data lacks are named estimates in `SimConfig`.
 //!
 //! ```no_run
 //! # use galaxy_sim::{Sim, SimConfig};

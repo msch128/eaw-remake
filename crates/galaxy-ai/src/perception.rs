@@ -3,7 +3,7 @@
 //! Definitions are reconstructed from how the equations use them (the engine's own definitions are not
 //! available). Where a variable is "normalized" it is divided by the largest value on the map; the
 //! `NBT*` variants (`SpaceTotalNBTD`, `BaseIncomeNBTP`, ...) are approximated by their plain versions.
-//! Anything not listed in `AI.md` reads as 0 and is counted in the evaluation statistics.
+//! Any variable not implemented here reads as 0 and is counted in the evaluation statistics.
 
 use std::collections::HashMap;
 
