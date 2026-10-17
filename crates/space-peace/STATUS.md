@@ -66,10 +66,29 @@ fullscreen, FPS cap).
 ## Galaxy map visuals (2026-10-08)
 - Lanes (2026-10-17, measured on the user's Remake video v0520/v0540 and CS9 f0007/f0016 at full HD): one additive ribbon per route
   from planet centre to planet centre (no overshoot), flat band, world width = data `Width` x 0.14 map units (main 0.84, inter 0.35,
-  capillary 0.07; fixed world size, thinner on screen when zoomed out), the data colour (teal 13, 31, 38 for every relation; enemy
-  alpha fades it close up) x 3.6 in linear light (sRGB about 32, 62, 76 on black), a glint 1.6 times as bright runs along every lane
+  capillary 0.07; fixed world size, thinner on screen when zoomed out), the data colour (teal 13, 31, 38 for every relation; the data's
+  Enemy look fades it out close up, which the map does not use, see the next item) x 3.6 in linear light (sRGB about 32, 62, 76 on
+  black), a glint 1.6 times as bright runs along every lane
   (scrolling texture, replaces the red/green gizmo pulses). Orbit-line art (`Region_Lines`, the thin double curves) at 0.4 so it
   stays fainter than the lanes like in the Remake; grid off. galaxy_map.rs spawn_lanes/update_lanes.
+- Every lane shows, whoever holds its planets (2026-10-17; user request: the connection between two planets must always be visible; a lane such as
+  Alderaan - Brentaal was missing until a planet was conquered). Cause 1: the lane look was picked by the owners of
+  its two planets (`Own` / `Enemy` / `Contested` / `Neutral`) and the Remake's Web_Way_Main and Web_Way_Inter `Enemy` look has
+  `Color_Zoomed_In` alpha 0, so every main or inter lane between two planets of one other faction faded out with the zoom (alpha = zoom
+  fraction: 0.25 at the opening zoom, 0.06 close up, gone below 0.01); in the Imperial start 141 of 145 planets belong to some faction
+  (68 to Independent Forces), so 54 of the 189 routes were faded, 64 of 189 in the Rebel start, and each conquest lit the lanes at the
+  new planet. Now `lane_line` gives every lane the look of an unclaimed route (the same teal as the other looks in the data), and
+  nothing in the lane code reads an owner (`route_relation` is gone). Cause 2: the repaint of the vertex colours was keyed on zoom
+  step and an owner hash held in a `Local` that outlived the galaxy, so a galaxy spawned again (back to the menu, the same campaign)
+  whose owners and zoom matched the old one's stayed black; `LaneMesh::painted` now belongs to the mesh and a new mesh is always
+  painted. At the first paint the log says `lanes: N routes in the campaign, N drawn, N at full brightness at zoom z (n use a hidden
+  style)`: 189 / 189 / 189 in both Full Web Way campaigns (before: 189 drawn, 135 / 125 at full brightness). Tests (galaxy_map.rs):
+  `every_drawn_lane_is_as_bright_as_the_next_at_every_zoom_whoever_holds_its_planets`,
+  `a_galaxy_spawned_again_gets_its_lane_colours_at_the_same_zoom_and_owners`,
+  `the_full_web_way_campaigns_draw_every_route_of_their_data_at_full_brightness` (real data, skips without the game; the campaign
+  lists 189 routes, 189 are defined, 189 lie between planets of the map, 189 are drawn and bright at 8 zooms from 0 to 1). The look of
+  a lane (width, colour, glint) is unchanged: `--zoom 0.15` / `0.06` renders at Alderaan differ from the old build only by the newly
+  shown lanes.
 - Lanes add in display (sRGB) values (2026-10-17, G1b), like the original's gamma-space blend: `LaneMaterial` (lane.wgsl) reads what
   lies under the ribbon from Bevy's view transmission texture and writes linear(srgb(under) + lane). The disc art (core glow, orbit
   lines) draws before that copy with alamo-render's `FLAG_UNDERLAY`. Over the core nebula next to Byss the Byss - Coruscant lane now

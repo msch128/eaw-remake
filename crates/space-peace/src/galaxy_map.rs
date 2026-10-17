@@ -1214,29 +1214,6 @@ fn place_notch_fill(
         }
     }
 }
-/// Relation of a trade route to the human player, derived from the owners of its end points.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum RouteRelation {
-    /// Both ends belong to the player.
-    Own,
-    /// Both ends belong to the same other faction.
-    Enemy,
-    /// The ends belong to different factions (an active front line).
-    Contested,
-    /// At least one end is unowned.
-    Neutral,
-}
-
-/// Classifies a route from the owners of its two end points.
-pub fn route_relation(a: Option<usize>, b: Option<usize>, player: Option<usize>) -> RouteRelation {
-    match (a, b) {
-        (Some(x), Some(y)) if x == y && Some(x) == player => RouteRelation::Own,
-        (Some(x), Some(y)) if x == y => RouteRelation::Enemy,
-        (Some(_), Some(_)) => RouteRelation::Contested,
-        _ => RouteRelation::Neutral,
-    }
-}
-
 /// All lane ribbons of the galaxy in one mesh.
 #[derive(Component)]
 struct LaneMesh {
@@ -1245,14 +1222,9 @@ struct LaneMesh {
     routes: Vec<usize>,
     /// The shared lane material (its texture scrolls to move the glints).
     material: Handle<LaneMaterial>,
-}
-
-/// Lane colour/zoom state of the last colour update (vertex colours are only rewritten when it changes).
-#[derive(Default)]
-struct LaneState {
-    zoom_bucket: i32,
-    owners: u64,
-    built: bool,
+    /// Zoom step the vertex colours were written for: `None` until the first frame paints a new mesh, which starts black. A galaxy that
+    /// is spawned again (back to the menu, the same campaign) must be painted whatever the zoom was when the old one went.
+    painted: Option<i32>,
 }
 
 /// The lane ribbons add in display (sRGB) values like the original engine, which blends in gamma space (`lane.wgsl`). Added in linear
@@ -1386,27 +1358,22 @@ fn spawn_lanes(
 ) {
     use bevy::asset::RenderAssetUsages;
     use bevy::mesh::{Indices, PrimitiveTopology};
+    let routes = lane_routes(view);
+    if routes.is_empty() {
+        return;
+    }
     let material = materials.add(LaneMaterial { scroll: Vec4::ZERO, texture: images.add(lane_texture()) });
-    let (mut routes, mut pos, mut uv, mut idx) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
-    for (i, r) in view.routes.iter().enumerate() {
-        let (Some(a), Some(b), Some(style)) = (view.planets.get(r.a), view.planets.get(r.b), view.route_styles.get(r.style)) else {
-            continue;
-        };
-        let width = lane_width(style);
-        if width <= 0.0 {
-            continue;
-        }
+    let (mut pos, mut uv, mut idx) = (Vec::new(), Vec::new(), Vec::new());
+    for &i in &routes {
+        let r = &view.routes[i];
+        let (a, b) = (&view.planets[r.a], &view.planets[r.b]);
         // Every lane gets its own glint phase, so the glints of neighbouring lanes do not line up.
         let phase = (i as f32 * 0.618_034).fract();
-        let (p, t) = lane_quad(galaxy_to_world(a.position), galaxy_to_world(b.position), width, phase);
+        let (p, t) = lane_quad(galaxy_to_world(a.position), galaxy_to_world(b.position), lane_width(&view.route_styles[r.style]), phase);
         let k = pos.len() as u32;
         pos.extend(p);
         uv.extend(t);
         idx.extend([k, k + 1, k + 2, k + 2, k + 1, k + 3]);
-        routes.push(i);
-    }
-    if routes.is_empty() {
-        return;
     }
     let n = pos.len();
     let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default());
@@ -1421,15 +1388,15 @@ fn spawn_lanes(
         MeshMaterial3d(material.clone()),
         Transform::IDENTITY,
         bevy::camera::visibility::NoFrustumCulling,
-        LaneMesh { mesh: handle, routes, material },
+        LaneMesh { mesh: handle, routes, material, painted: None },
         GalaxyEntity,
     ));
 }
 
 /// What a lane drawn in `style` at zoom `t` (0 close, 1 far) adds at a glint, in display values, as the vertex colour of its ribbon
 /// (see [`LaneMaterial`]); black when the style hides it. The data colour (`Color_Zoomed_In` / `Color_Zoomed_Out`, additive teal 13, 31,
-/// 38 for every relation in the Remake) is the colour, its alpha fades the lane (the Remake's enemy lanes fade out when zoomed in);
-/// `LANE_GAIN` brings it to the frames' brightness.
+/// 38 for every relation in the Remake) is the colour, its alpha fades the lane (the Remake's `Enemy` look fades out when zoomed in; the
+/// map does not draw a lane in that look, see [`lane_line`]); `LANE_GAIN` brings it to the frames' brightness.
 fn lane_color(style: &LineStyleView, t: f32) -> [f32; 4] {
     let mix = |i: usize| style.color_near[i] + (style.color_far[i] - style.color_near[i]) * t;
     let alpha = mix(3);
@@ -1443,16 +1410,65 @@ fn lane_color(style: &LineStyleView, t: f32) -> [f32; 4] {
     [band.red * k, band.green * k, band.blue * k, 1.0]
 }
 
-/// Keeps the ribbon colours in sync with ownership (relation of the ends) and zoom, and moves the glints along the lanes.
+/// The routes that get a ribbon, in ribbon order: every route between two planets of the map whose style has a width (the data's `Hidden`
+/// style has none).
+fn lane_routes(view: &GalaxyView) -> Vec<usize> {
+    let on_map = |p: usize| view.planets.get(p).is_some();
+    let wide = |s: usize| view.route_styles.get(s).is_some_and(|s| lane_width(s) > 0.0);
+    view.routes.iter().enumerate().filter(|(_, r)| on_map(r.a) && on_map(r.b) && wide(r.style)).map(|(i, _)| i).collect()
+}
+
+/// The look every lane of `style` has, whoever holds the planets at its ends. The data gives a route one look per relation to the player
+/// (`Neutral`, `Ally`, `Enemy`), and in the Remake's main and inter styles the `Enemy` look fades out when zoomed in
+/// (`Color_Zoomed_In` alpha 0). Picked by the owners of a lane's planets, that look hid every lane between two planets of one other
+/// faction, so only the lanes at the player's own and unclaimed planets showed: at the Imperial start 54 of the 189 routes were faded
+/// at the opening zoom (0.25) and only came back at the farthest zoom, 64 of 189 at the Rebel start, and each conquest lit the lanes at
+/// the new planet. The map shows every route at all times (user request, 2026-10-17: the connection between two planets must always be visible),
+/// so a lane takes the look of a route nobody holds, which is the same teal as the other looks in the data.
+fn lane_line(style: &RouteStyleView) -> &LineStyleView {
+    &style.neutral
+}
+
+/// Vertex colour of the ribbon of `route` at zoom `t` (0 close, 1 far).
+fn route_lane_color(view: &GalaxyView, route: usize, t: f32) -> [f32; 4] {
+    lane_color(lane_line(&view.route_styles[view.routes[route].style]), t)
+}
+
+/// What the map draws of the campaign's routes at zoom `t`: for the log line and the tests.
+#[derive(Debug, PartialEq, Eq)]
+struct LaneReport {
+    /// Routes between two planets of the map.
+    routes: usize,
+    /// Routes that have a ribbon (the others use a hidden style).
+    drawn: usize,
+    /// Ribbons at least as bright at this zoom as the lane between two unowned planets of their style: a ribbon whose colour is black or
+    /// faded counts as drawn but not as bright.
+    bright: usize,
+}
+
+fn lane_report(view: &GalaxyView, t: f32) -> LaneReport {
+    let drawn = lane_routes(view);
+    let bright = drawn
+        .iter()
+        .filter(|&&ri| {
+            let full = lane_color(&view.route_styles[view.routes[ri].style].neutral, t);
+            let col = route_lane_color(view, ri, t);
+            full[..3].iter().any(|&c| c > 0.0) && (0..3).all(|i| col[i] >= full[i] * 0.99)
+        })
+        .count();
+    LaneReport { routes: view.routes.len(), drawn: drawn.len(), bright }
+}
+
+/// Keeps the ribbon colours in sync with the zoom (never with who holds the planets, see [`lane_line`]) and moves the glints along the
+/// lanes. The first frame of a new lane mesh paints it and logs what is drawn.
 fn update_lanes(
     view: Res<GalaxyView>,
     bounds: Res<CameraBounds>,
     time: Res<Time>,
     camera: Single<&GalaxyCamera>,
-    lanes: Query<&LaneMesh>,
+    mut lanes: Query<&mut LaneMesh>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<LaneMaterial>>,
-    mut state: Local<LaneState>,
 ) {
     // The glints travel from the first end of every lane to the second.
     let scroll = (time.elapsed_secs() * GLINT_SPEED / GLINT_PERIOD).fract();
@@ -1462,29 +1478,20 @@ fn update_lanes(
         }
     }
     let t = zoom_fraction(&bounds, camera.distance);
-    let bucket = (t * 24.0) as i32;
-    let owners = view.planets.iter().fold(1469598103934665603u64, |h, p| (h ^ p.owner.map_or(0xffff, |o| o as u64)).wrapping_mul(1099511628211));
-    if state.built && state.zoom_bucket == bucket && state.owners == owners {
-        return;
-    }
-    for lane in &lanes {
-        let mut col: Vec<[f32; 4]> = Vec::with_capacity(lane.routes.len() * 4);
-        for &ri in &lane.routes {
-            let r = &view.routes[ri];
-            let (a, b) = (&view.planets[r.a], &view.planets[r.b]);
-            let style = &view.route_styles[r.style];
-            let line = match route_relation(a.owner, b.owner, view.player_faction) {
-                RouteRelation::Own => &style.own,
-                RouteRelation::Enemy => &style.enemy,
-                RouteRelation::Contested | RouteRelation::Neutral => &style.neutral,
-            };
-            col.extend([lane_color(line, t); 4]);
+    let step = (t * 24.0) as i32;
+    for mut lane in &mut lanes {
+        if lane.painted == Some(step) {
+            continue;
         }
-        if let Some(mut m) = meshes.get_mut(&lane.mesh) {
-            m.insert_attribute(Mesh::ATTRIBUTE_COLOR, col);
+        let col: Vec<[f32; 4]> = lane.routes.iter().flat_map(|&ri| [route_lane_color(&view, ri, t); 4]).collect();
+        let Some(mut m) = meshes.get_mut(&lane.mesh) else { continue };
+        m.insert_attribute(Mesh::ATTRIBUTE_COLOR, col);
+        if lane.painted.is_none() {
+            let r = lane_report(&view, t);
+            info!("lanes: {} routes in the campaign, {} drawn, {} at full brightness at zoom {t:.2} ({} use a hidden style)", r.routes, r.drawn, r.bright, r.routes - r.drawn);
         }
+        lane.painted = Some(step);
     }
-    *state = LaneState { zoom_bucket: bucket, owners, built: true };
 }
 
 /// Finds the planet under the mouse cursor (ray vs. a generous pick sphere).
@@ -1744,16 +1751,6 @@ mod tests {
     }
 
     #[test]
-    fn route_relations() {
-        let p = Some(1);
-        assert_eq!(route_relation(Some(1), Some(1), p), RouteRelation::Own);
-        assert_eq!(route_relation(Some(2), Some(2), p), RouteRelation::Enemy);
-        assert_eq!(route_relation(Some(1), Some(2), p), RouteRelation::Contested);
-        assert_eq!(route_relation(None, Some(2), p), RouteRelation::Neutral);
-        assert_eq!(route_relation(Some(1), Some(1), None), RouteRelation::Enemy);
-    }
-
-    #[test]
     fn map_filters_cycle_overlays() {
         let mut f = MapFilters::default();
         assert!(!f.credits && !f.military);
@@ -1916,6 +1913,109 @@ mod tests {
         assert!(lane_color(&style.enemy, 1.0)[1] > 0.0);
         // A hidden style draws nothing.
         assert_eq!(lane_color(&remake_style(0.0).neutral, 1.0), [0.0; 4]);
+    }
+
+    /// The demo galaxy with the Remake's lane styles spread over its routes: main, inter and hidden. Its owners give every kind of lane:
+    /// the player's own, between two planets of one other faction (the Enemy look fades out when zoomed in), between rivals, unowned.
+    fn lane_test_view() -> GalaxyView {
+        let mut view = GalaxyView::demo();
+        view.route_styles = vec![remake_style(6.0), remake_style(2.5), remake_style(0.0)];
+        for (i, r) in view.routes.iter_mut().enumerate() {
+            r.style = i % 3;
+        }
+        view
+    }
+
+    /// Zooms from the closest view to the farthest, the map's start views (0.15, 0.25) among them.
+    const LANE_ZOOMS: [f32; 8] = [0.0, 0.01, 0.06, 0.15, 0.25, 0.5, 0.75, 1.0];
+
+    #[test]
+    fn every_drawn_lane_is_as_bright_as_the_next_at_every_zoom_whoever_holds_its_planets() {
+        let view = lane_test_view();
+        let held_by_another = |r: &crate::galaxy_view::RouteView| {
+            let (a, b) = (view.planets[r.a].owner, view.planets[r.b].owner);
+            a == b && a.is_some() && a != view.player_faction
+        };
+        assert!(view.routes.iter().filter(|r| held_by_another(r)).count() >= 5, "the test galaxy needs lanes between planets of another faction");
+        let shown = view.routes.iter().filter(|r| r.style != 2).count();
+        for t in LANE_ZOOMS {
+            let report = lane_report(&view, t);
+            assert_eq!(report, LaneReport { routes: view.routes.len(), drawn: shown, bright: shown }, "zoom {t}");
+            for ri in lane_routes(&view) {
+                let neutral = &view.route_styles[view.routes[ri].style].neutral;
+                assert_eq!(route_lane_color(&view, ri, t), lane_color(neutral, t), "route {ri} at zoom {t}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_galaxy_spawned_again_gets_its_lane_colours_at_the_same_zoom_and_owners() {
+        use bevy::ecs::system::RunSystemOnce;
+        let mut world = World::new();
+        world.init_resource::<Assets<Mesh>>();
+        world.init_resource::<Assets<LaneMaterial>>();
+        world.init_resource::<Assets<Image>>();
+        world.init_resource::<Time>();
+        world.insert_resource(lane_test_view());
+        world.insert_resource(CameraBounds::default());
+        world.spawn(GalaxyCamera { focus: Vec3::ZERO, target_focus: Vec3::ZERO, distance: 200.0, target_distance: 200.0, yaw: 0.0, pitch: 0.9 });
+        let spawn = |world: &mut World| {
+            world
+                .run_system_once(|mut commands: Commands, view: Res<GalaxyView>, mut meshes: ResMut<Assets<Mesh>>, mut materials: ResMut<Assets<LaneMaterial>>, mut images: ResMut<Assets<Image>>| {
+                    spawn_lanes(&mut commands, &view, &mut meshes, &mut materials, &mut images)
+                })
+                .expect("spawn the lanes");
+        };
+        // Ribbons with a colour, as the renderer sees the mesh.
+        let painted = |world: &mut World| -> usize {
+            let mesh = world.query::<&LaneMesh>().single(world).expect("one lane mesh").mesh.clone();
+            let Some(bevy::mesh::VertexAttributeValues::Float32x4(col)) = world.resource::<Assets<Mesh>>().get(&mesh).and_then(|m| m.attribute(Mesh::ATTRIBUTE_COLOR)).cloned() else {
+                panic!("no vertex colours")
+            };
+            col.chunks(4).filter(|ribbon| ribbon[0][..3].iter().any(|&c| c > 0.0)).count()
+        };
+        let mut frame = Schedule::default();
+        frame.add_systems(update_lanes);
+        let ribbons = lane_routes(world.resource::<GalaxyView>()).len();
+        spawn(&mut world);
+        frame.run(&mut world);
+        assert_eq!(painted(&mut world), ribbons, "the first galaxy");
+        // Back to the menu and the same campaign again: a new mesh, black until painted, with the zoom and the owners of the old one.
+        let old = world.query::<(Entity, &LaneMesh)>().single(&world).map(|(e, _)| e).expect("lane mesh");
+        world.despawn(old);
+        spawn(&mut world);
+        frame.run(&mut world);
+        assert_eq!(painted(&mut world), ribbons, "the galaxy spawned again");
+    }
+
+    #[test]
+    fn the_full_web_way_campaigns_draw_every_route_of_their_data_at_full_brightness() {
+        use crate::cli::Args;
+        use crate::game::{StartupLog, build_view, load_assets};
+        let Ok(assets) = load_assets(&Args::default(), &mut StartupLog::default()) else {
+            eprintln!("skipped: no game install");
+            return;
+        };
+        let mut short = Vec::new();
+        for name in ["GC_Full_Web_Way_Imperial", "GC_Full_Web_Way_Rebel"] {
+            let Some(campaign) = assets.data.campaign(name) else {
+                eprintln!("skipped: campaign {name} missing");
+                continue;
+            };
+            let (view, notes) = build_view(&assets.data, campaign);
+            let (listed, defined) = (campaign.trade_routes.len(), assets.data.campaign_trade_routes(campaign).len());
+            for t in LANE_ZOOMS {
+                let r = lane_report(&view, t);
+                eprintln!(
+                    "{name} at zoom {t}: the campaign lists {listed} routes, {defined} are defined, {} lie between planets of the map, {} are drawn, {} at full brightness",
+                    r.routes, r.drawn, r.bright
+                );
+                if (defined, r.routes, r.drawn, r.bright) != (listed, listed, listed, listed) {
+                    short.push(format!("{name} at zoom {t}: {listed} listed, {defined} defined, {} on the map, {} drawn, {} bright ({notes:?})", r.routes, r.drawn, r.bright));
+                }
+            }
+        }
+        assert!(short.is_empty(), "{short:#?}");
     }
 
     #[test]
