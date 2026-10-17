@@ -185,6 +185,29 @@ fn fragment(in: VertexOutput, @builtin(front_facing) front: bool) -> @location(0
 }
 #endif
 
+// A shield-shader mesh that is visible at rest is a glow shell: the engine flames (`Engine_Glow_*`), sails, waterfalls, hangar force
+// fields. MeshShield.fx's `t1` technique, read from the shipped effect file (`Art/Shaders/MeshShield.fxo`: vs_1_1 + ps_2_0, blend
+// ONE/ONE, two-sided, no depth write, so the alpha of the colour is unused):
+//   vertex: tint = clamp(object-space normal z + EdgeBrightness, 0, 1) * vertex colour * Color
+//           uv0, uv1, uv2 = uv * (BaseUVScale, WaveUVScale, DistortUVScale) + (0, scroll rate * time)
+//   pixel:  rgb = base(uv0 + 0.25 * distortion(uv2).rg) * wave(uv1) * tint
+// The normal is the mesh's own (bone-local Alamo frame): the model matrix is a rotation and a uniform scale, so its transpose undoes it.
+fn shield_glow(in: VertexOutput, vcol: vec4<f32>) -> vec4<f32> {
+    let m = mesh_functions::get_world_from_local(in.instance_index);
+    let to_world = mat3x3<f32>(m[0].xyz, m[1].xyz, m[2].xyz);
+    let n_obj = normalize(transpose(to_world) * normalize(in.world_normal));
+    let edge = clamp(n_obj.z + mat.atmosphere.x, 0.0, 1.0);
+    let t = globals.time;
+    let uv0 = vec2<f32>(in.uv.x, in.uv.y) * mat.atmosphere.y + vec2<f32>(0.0, mat.city_color.x * t);
+    let uv1 = vec2<f32>(in.uv.x, in.uv.y) * mat.atmosphere.z + vec2<f32>(0.0, mat.city_color.y * t);
+    let uv2 = vec2<f32>(in.uv.x, in.uv.y) * mat.city_color.w + vec2<f32>(0.0, mat.city_color.z * t);
+    let distortion = textureSample(cloud_normal_tex, cloud_normal_samp, uv2).rg;
+    let base = textureSample(base_tex, base_samp, uv0 + distortion * 0.25);
+    let wave = textureSample(cloud_tex, cloud_samp, uv1);
+    let rgb = base.rgb * wave.rgb * (vcol.rgb * mat.diffuse.rgb * edge);
+    return vec4<f32>(to_linear(rgb), 0.0);
+}
+
 fn shade(in: VertexOutput, front: bool) -> vec4<f32> {
     let uv = in.uv + mat.uv_offset.xy + mat.uv_offset.zw * globals.time;
     let base = textureSample(base_tex, base_samp, uv);
@@ -225,8 +248,8 @@ fn shade(in: VertexOutput, front: bool) -> vec4<f32> {
     }
 
     if mat.kind == KIND_SHIELD {
-        let rim = pow(1.0 - saturate(abs(dot(N, V))), 2.0);
         if has(FLAG_SHIELD_HITS) {
+            let rim = pow(1.0 - saturate(abs(dot(N, V))), 2.0);
             // Visible only where the bubble was hit: a glow around each hit point that fades out.
             let radius = max(mat.hit_params.x, 1.0);
             let duration = max(mat.hit_params.y, 0.05);
@@ -251,8 +274,7 @@ fn shade(in: VertexOutput, front: bool) -> vec4<f32> {
             let c = mat.diffuse.rgb * hex * glow * mat.hit_params.z * (0.6 + 0.8 * rim) * 0.5;
             return vec4<f32>(to_linear(c), 0.0);
         }
-        rgb = base.rgb * mat.diffuse.rgb * (0.15 + rim);
-        return vec4<f32>(to_linear(rgb), 0.0);
+        return shield_glow(in, vcol);
     }
 
     if mat.kind == KIND_PLANET {

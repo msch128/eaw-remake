@@ -23,7 +23,7 @@ Bevy 0.19.1 plugin that spawns original EaW models with an EaW-style look. Depen
 `xml_grep <text>`, `tex_dump`, `tangent_check`, `fire_scale`, `bone_scales`. Needs a GPU; sim time is held ~3 s for shader warm-up.
 
 ## Gaps / next steps
-- Shaders are approximations (shield, additive brightness, cloud shading); no fog, reflection maps, stencil shadow volumes.
+- Shaders are approximations (additive brightness, cloud shading; the shield bubble flash is ours, the visible shield-shader glow shells are the decoded `MeshShield` technique); no fog, reflection maps, stencil shadow volumes.
 - Particle scale/semantics unverified vs original; missile smoke does not trail; custom-render projectiles undrawn.
 - No animation blending; light emitters (type 4) not used as lights; hardpoints without models are bare bones.
 - Asset loading is synchronous (one frame stall on big models); skinned meshes not batched across instances.
@@ -136,4 +136,40 @@ the first directional light. `battle-view` spawns the map's fill lights from the
   random seed alone moves it 100-190 px. Tests: `particles::tests` (offsets along the bone's Z axis, exhaust out of the stern, standalone up axis,
   gravity and cylinder unchanged, and on the Remake data: Death Star lattice at the dish, Eclipse foci on the hull).
 - `render_scene --show a,b` shows bones the model hides at rest (as an animation's visibility track does), e.g. the Death Star's lattice.
-- Not done: props 0x07/0x08 are `inBursts` / `linkToSystem` in the format doc but are read as `world_space` / `oriented`; not checked.
+- Props 0x07/0x08 are `inBursts` / `linkToSystem` in the format doc: `0x07` now also drives the engine spawn model and `0x2e` (`isNotBillboarded`) the flat sprites, see "Engine glow".
+
+## Engine glow (2026-10-17, polish2 E)
+User report on the Eclipse: the engines pulsed, the colour was off and a white cone showed around the engines (screenshot: three nozzles at the stern edge over a bright
+planet, each with a flat teal half disc cut off by the hull, a red flare and a white outline). Five causes, all in our reading of the data:
+- **Engines were one particle per life.** Property `0x07` of an emitter is `inBursts` (format doc); the 1,071 emitters that loop without bursts, the whole Eclipse
+  engine among them, carry the editor default `numParticlesPerBurst` 1 next to a rate of 1 to 20 per second. `step_emitter` read that as a burst of one particle
+  per life, so every emitter faded in and out alone: the Eclipse's cores (life 1 s, triangular fade) pulsed between nothing and 0.5 every second, the ISD's
+  (life 5 s) every five, and the 212 with `numBursts` 1 went out for good after one life. As authored 6 to 20 particles overlap and the triangular fades add up to a
+  constant. Engine systems (`pe_`, `pte_`: `is_engine_system`, `ParticleInstance::engine`) now run `inBursts`-less emitters continuously at their rate (no `max_particles`
+  cap, 512 live as a safety net). Every other system keeps the old reading (their look was tuned against the video; 1,116 emitters of other systems would change,
+  see below).
+- **A flat sprite was drawn as a billboard.** Property `0x2e` is `isNotBillboarded`; the Eclipse's `engine_pulseG` (a solid white disc, cell 3 of `P_PARTICLE_LIGHT`, tinted
+  teal 0.2 / 0.5 / 0.45) is flat. As a camera-facing disc it was the teal half disc cut by the nozzle housing. Engine emitters with `Emitter::billboard` false now are quads in the
+  emitter's XY plane (normal along the exhaust, inferred: a shockwave lies on the ground plane), seen from the stern only as a round disc and nearly invisible from the side;
+  seen from behind the winding is mirrored so the batch's back-face culling keeps them (bolts share the batch and keep theirs).
+- **The glow cones were treated as shield bubbles.** `AlamoPart::shield` was every `MeshShield` mesh, but 374 of the 646 shield-shader sub-meshes of the Remake are visible at rest (208 `Engine_Glow*`
+  cones in 144 models, sails, waterfalls, hangar fields; example `shield_meshes`). `on_shield_hit` switched them to the hit flash and `update_shields` hid them afterwards: after the first hit of a
+  ship its engine cones vanished, and each hit flashed them. Only meshes the model hides at rest are bubbles now (`is_shield_bubble`).
+- **`MeshShield` ignored `Color`, the vertex colour and the textures.** The Eclipse's `Engine_Glow_Red` is `Engine_Glow_Fancy_White.tga` times `Color` red, drawn white with a rim term (the white cone).
+  The shipped effect decodes (`alamo-model` examples `fx_states`, `fx_disasm`): technique `t1` is ONE/ONE, two-sided, no depth write, vertex `tint = clamp(object-space normal z + EdgeBrightness, 0, 1) *
+  vertex colour * Color`, UV sets `uv * (BaseUVScale, WaveUVScale, DistortUVScale)` scrolled in v by the three scroll rates, pixel `base(uv0 + 0.25 * distortion(uv2).rg) * wave(uv1) * tint`.
+  `alamo.wgsl::shield_glow` is that, with the wave and distortion textures in the planet's cloud slots (`describe_material`). The tint is `Color` for the visible meshes only; the hidden bubbles keep their neutral hit flash
+  (a coloured flash would change every battle's look, not asked for).
+- Sampler address modes of the glow textures were not decoded (repeat assumed; `MeshShield` `t1` has `op103/105/107/109` = 2 on sampler 0, which may be mirror): it only changes the very tip of a cone.
+- `particle.wgsl` still multiplies additive sprites by the texture alpha (the P_PARTICLE_LIGHT note above); `PrimAdditive` itself is `tex * vertex colour` ONE/ONE with neither alpha used. The effect of
+  dropping it was not tested (hard-edged RGB discs like cell 3 would show), so it stays.
+- Proof (Eclipse side view, `render_scene --bow --cam 90,5,0.25 --look 0,-250,3500`, 4 s at 8 frames per second, mean of a 110 x 100 window around one nozzle, frames from 1 s on): red 16.0 to 20.8 (x1.31, period exactly 1 s) before,
+  32.8 to 33.1 after (x1.01); green 9.3 to 13.7 before, 2.6 to 2.7 after (the teal half discs are gone). From directly behind (`--cam 0,0,0.12 --look 0,513,3940`, from 1.5 s): red x1.46 before, x1.05 after; green still runs
+  89 to 135 once a second: that is `engine_pulseG` itself (colour halves over its 1 s life, rate 1 per second), the one pulse in the data, visible only from behind. `render_scene --hits 1.6,1.9`: before, the cones are
+  gone after two hits; after, unchanged. Test: `particles::tests::an_engine_that_is_not_in_bursts_glows_steadily_instead_of_pulsing`, `the_eclipse_engine_glows_steadily_but_for_its_one_pulsing_disc` (data),
+  `a_sprite_that_is_not_billboarded_lies_in_the_engine_bones_xy_plane`, `model::tests::only_the_shield_shader_meshes_the_model_hides_are_bubbles`, `the_eclipses_red_engine_cone_is_a_visible_shield_mesh_next_to_a_hidden_bubble`.
+- Cost: the default `battle_demo` battle (292 ships) keeps 5,858 particles alive instead of 605 at 10 s (an engine proxy keeps 19 on average, 132 at most); `ParticleStats::cpu_ms` 0.69 to 2.14 ms, frame mean 12.98 to 14.35 ms at 1600 x 900.
+- `render_scene` got `--hide a,b` (hide bones, to tell a mesh from a particle system), `--noauto` (no proxy particles), `--hits t,..` (scripted shield hits at the camera target) and prints the model's centre and radius.
+  `battle_demo`: `SP_DEMO_STERN=<ship name>` follows that ship's engines from behind (`--cam yaw-off-astern,pitch,distance`), with the camera bounds lifted (the Eclipse's stern lies outside the map box).
+- Open: the same two readings (`inBursts`, `isNotBillboarded`) are wrong for the other looping emitters too (missile smoke is already special-cased as a stream; beam fronts, hardpoint glows, shockwave rings are not);
+  they were left alone because their look was checked against the video. `EngineThrottle` is not driven by any game code (all engines run at full intensity).

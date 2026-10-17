@@ -181,8 +181,18 @@ pub struct AlamoProxy {
 pub struct AlamoPart {
     mesh: usize,
     sub: usize,
-    /// The part uses the shield shader (`MeshShield`); see [`crate::ShieldHit`].
+    /// The part is a shield bubble: a `MeshShield` mesh that is hidden at rest and flashes where the ship is hit; see
+    /// [`crate::ShieldHit`]. The other `MeshShield` meshes (engine glow cones, sails, hangar force fields) are visible all the time and
+    /// are not flagged.
     pub shield: bool,
+}
+
+/// A shield bubble is a shield-shader mesh the model hides at rest (272 sub-meshes in the Remake's files). 374 more `MeshShield`
+/// sub-meshes are visible at rest: 208 `Engine_Glow*` cones (144 models), sails, waterfalls, hangar force fields. Treated as bubbles
+/// they flashed on every hit of the ship and were hidden again afterwards, so the engines lost their glow cones and pulsed with the
+/// shield.
+pub(crate) fn is_shield_bubble(kind: ShaderKind, hidden_at_rest: bool) -> bool {
+    kind == ShaderKind::Shield && hidden_at_rest
 }
 
 /// Bone that faces the camera.
@@ -429,7 +439,10 @@ pub fn describe_material(
             flags |= FLAG_SPEC_FROM_BASE_ALPHA;
         }
     }
-    if has_vertex_color && (shader.contains("vcolor") || p.kind == ShaderKind::Lit as u32) {
+    // Shield-shader glow shells multiply by their vertex colour as well (`MeshShield.fx`, see `alamo.wgsl`).
+    if has_vertex_color
+        && (shader.contains("vcolor") || p.kind == ShaderKind::Lit as u32 || p.kind == ShaderKind::Shield as u32)
+    {
         flags |= FLAG_VERTEX_COLOR;
     }
 
@@ -445,12 +458,20 @@ pub fn describe_material(
         p.diffuse = f4(m, "Color").unwrap_or(p.diffuse);
     }
     if p.kind == ShaderKind::Shield as u32 {
-        // Shield parameters share the planet slots: x EdgeBrightness, y BaseUVScale, z WaveUVScale.
+        // Shield parameters share the planet slots: `atmosphere` x EdgeBrightness, y BaseUVScale, z WaveUVScale; `city_color` the
+        // scroll rates per second (x base, y wave, z distortion) and w DistortUVScale. The textures are `base` (BaseTexture),
+        // `cloud` (WaveTexture) and `cloud_normal` (DistortionTexture).
         p.atmosphere = Vec4::new(
             m.float("EdgeBrightness").unwrap_or(0.5),
             m.float("BaseUVScale").unwrap_or(1.0),
             m.float("WaveUVScale").unwrap_or(1.0),
             0.0,
+        );
+        p.city_color = Vec4::new(
+            m.float("BaseUVScrollRate").unwrap_or(0.0),
+            m.float("WaveUVScrollRate").unwrap_or(0.0),
+            m.float("DistortUVScrollRate").unwrap_or(0.0),
+            m.float("DistortUVScale").unwrap_or(1.0),
         );
     }
     p.shininess = m.float("Shininess").unwrap_or(32.0);
@@ -483,8 +504,11 @@ pub fn describe_material(
     if normal.is_some() {
         flags |= FLAG_NORMAL_MAP;
     }
-    let cloud = m.texture("CloudTexture").and_then(&mut texture);
-    let cloud_normal = m.texture("CloudNormalTexture").and_then(&mut texture);
+    let shield = p.kind == ShaderKind::Shield as u32;
+    let cloud = m.texture(if shield { "WaveTexture" } else { "CloudTexture" }).and_then(&mut texture);
+    let cloud_normal = m
+        .texture(if shield { "DistortionTexture" } else { "CloudNormalTexture" })
+        .and_then(&mut texture);
     p.flags = flags;
     (
         AlamoMaterial {
@@ -661,6 +685,12 @@ fn load_model(p: &mut LoaderParams, key: &str) -> Result<Arc<CachedModel>, Strin
                 },
             );
             let mut material = material;
+            if material.shader_kind() == ShaderKind::Shield && !mesh.hidden {
+                // A shield-shader mesh that is visible at rest (engine glow cone, sails, hangar force field) is tinted by its `Color`
+                // (the Eclipse's `Engine_Glow_Red`: a white flame texture times red). The hidden bubbles keep their neutral
+                // flash.
+                material.params.diffuse = f4(&sub.material, "Color").unwrap_or(Vec4::ONE);
+            }
             if p.settings.flip_normal_green {
                 material.params.flags |= crate::material::FLAG_FLIP_GREEN;
             }
@@ -904,7 +934,7 @@ pub fn spawn_models(
                     AlamoPart {
                         mesh: ci,
                         sub: si,
-                        shield: part.material.shader_kind() == ShaderKind::Shield,
+                        shield: is_shield_bubble(part.material.shader_kind(), mesh.hidden),
                     },
                     ChildOf(parent),
                 ));
@@ -1202,6 +1232,71 @@ mod tests {
         assert_ne!(kind("MeshGloss.fx").1 & FLAG_SPEC_FROM_BASE_ALPHA, 0);
         assert_eq!(kind("Nebula.fx").0, ShaderKind::Additive as u32);
         assert_eq!(kind("Tree.fx").3, 1);
+    }
+
+    #[test]
+    fn only_the_shield_shader_meshes_the_model_hides_are_bubbles() {
+        assert!(is_shield_bubble(ShaderKind::Shield, true));
+        // The engine glow cones are visible at rest: not flashed, not hidden by the hit logic.
+        assert!(!is_shield_bubble(ShaderKind::Shield, false));
+        assert!(!is_shield_bubble(ShaderKind::Lit, true));
+        assert!(!is_shield_bubble(ShaderKind::Additive, true));
+    }
+
+    #[test]
+    fn shield_params_follow_the_effect_constants() {
+        // The Eclipse's `Engine_Glow_Red`.
+        let m = material(
+            "MeshShield.fx",
+            &[
+                ("Color", ParamValue::Float4([1.0, 0.0, 0.0, 1.0])),
+                ("EdgeBrightness", ParamValue::Float(1.0)),
+                ("BaseUVScale", ParamValue::Float(1.0)),
+                ("WaveUVScale", ParamValue::Float(0.5)),
+                ("DistortUVScale", ParamValue::Float(2.0)),
+                ("BaseUVScrollRate", ParamValue::Float(0.0)),
+                ("WaveUVScrollRate", ParamValue::Float(0.1)),
+                ("DistortUVScrollRate", ParamValue::Float(0.3)),
+            ],
+        );
+        let mut asked = Vec::new();
+        let (a, _) = describe_material(&m, false, true, |n| { asked.push(n.to_string()); None }, |_| {});
+        assert_eq!(a.params.atmosphere, Vec4::new(1.0, 1.0, 0.5, 0.0));
+        assert_eq!(a.params.city_color, Vec4::new(0.0, 0.1, 0.3, 2.0));
+        assert_ne!(a.params.flags & FLAG_VERTEX_COLOR, 0, "the glow shell multiplies by its vertex colour");
+        assert!(asked.is_empty(), "no texture parameters were given");
+        // The wave and distortion textures are asked for in place of the planet's cloud textures (their slots), in that order.
+        let textured = material(
+            "MeshShield.fx",
+            &[
+                ("BaseTexture", ParamValue::Texture("Engine_Glow_Fancy_White.tga".into())),
+                ("WaveTexture", ParamValue::Texture("Engine_Glow_Blue_wave.tga".into())),
+                ("DistortionTexture", ParamValue::Texture("Engine_Glow_Blue_dist.tga".into())),
+                ("CloudTexture", ParamValue::Texture("not_this_one.tga".into())),
+            ],
+        );
+        let mut asked = Vec::new();
+        describe_material(&textured, false, false, |n| { asked.push(n.to_string()); None }, |_| {});
+        assert_eq!(asked, ["Engine_Glow_Fancy_White.tga", "Engine_Glow_Blue_wave.tga", "Engine_Glow_Blue_dist.tga"]);
+    }
+
+    #[test]
+    fn the_eclipses_red_engine_cone_is_a_visible_shield_mesh_next_to_a_hidden_bubble() {
+        let Some(install) = alamo_fs::GameInstall::detect().filter(|i| i.mod_data("1770851727").is_dir()) else { return };
+        let fs = alamo_fs::GameFs::for_mod(&install, Some("1770851727")).expect("file system");
+        let data = alamo_fs::FileSource::read(&fs, "Art/Models/Empire_Eclipse_Super_Star_Destroyer.ALO").expect("model");
+        let model = Model::parse(&data).expect("parse");
+        let shield = |name: &str| model.meshes.iter().find(|m| m.name == name).unwrap_or_else(|| panic!("mesh {name}"));
+        let (bubble, cone) = (shield("Shield"), shield("Engine_Glow_Red"));
+        let kind = |m: &alamo_model::alo::Mesh| describe_material(&m.sub_meshes[0].material, false, true, |_| None, |_| {}).0.shader_kind();
+        assert_eq!((kind(bubble), bubble.hidden), (ShaderKind::Shield, true));
+        assert_eq!((kind(cone), cone.hidden), (ShaderKind::Shield, false));
+        assert!(is_shield_bubble(kind(bubble), bubble.hidden) && !is_shield_bubble(kind(cone), cone.hidden));
+        // The cone is a white flame texture tinted red by `Color`.
+        let m = &cone.sub_meshes[0].material;
+        assert_eq!(f4(m, "Color"), Some(Vec4::new(1.0, 0.0, 0.0, 1.0)));
+        assert_eq!(m.texture("BaseTexture"), Some("Engine_Glow_Fancy_White.tga"));
+        assert_eq!(m.texture("WaveTexture"), Some("Engine_Glow_Blue_wave.tga"));
     }
 
     #[test]

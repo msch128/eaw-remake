@@ -585,6 +585,24 @@ fn capture_driver(
         bc.min_distance = 100.0;
         cap.cam_applied = true;
     }
+    // `SP_DEMO_STERN=<ship name>`: the camera follows the engines of the first ship whose definition name contains the text, from behind;
+    // `--cam yaw,pitch,distance` then give the yaw off straight astern (degrees), the pitch and the distance.
+    if let Ok(name) = std::env::var("SP_DEMO_STERN") {
+        let name = name.to_ascii_lowercase();
+        let off = cap.cams.get(idx).map_or(0.0, |c| c[0]);
+        let ship = ships.0.values().filter(|s| rt.catalog.ship(s.def).name.to_ascii_lowercase().contains(&name)).min_by_key(|s| s.id);
+        if let Some(s) = ship {
+            // The model's bow points along the heading `(cos yaw, 0, -sin yaw)` in Bevy space; the engines sit at about four fifths of the radius astern.
+            let stern = Vec3::new(-s.yaw.cos(), 0.0, s.yaw.sin());
+            let radius = if s.drawn_radius > 0.0 { s.drawn_radius } else { s.radius };
+            // A capital ship's stern can lie outside the map box (the Eclipse starts at the edge): lift the camera's clamp.
+            bc.bounds_min = Vec2::splat(-30_000.0);
+            bc.bounds_max = Vec2::splat(30_000.0);
+            bc.snap = true;
+            bc.target_focus = s.pos + stern * radius * 0.8;
+            bc.target_yaw = s.yaw - std::f32::consts::FRAC_PI_2 + off.to_radians();
+        }
+    }
     if std::env::var_os("SP_DEMO_CLOSE").is_some() {
         // Close view of a damaged capital ship: one with a destroyed hardpoint, else the most worn shield.
         let pick = ships

@@ -144,10 +144,22 @@ pub struct Emitter {
     pub texture2: Option<String>,
     /// Blend mode.
     pub blend: BlendMode,
-    /// Particles live in world space once spawned (property `0x07`). Inferred.
+    /// Particles live in world space once spawned (property `0x07`). Inferred. Property `0x07` is `inBursts` in the public
+    /// format doc, see [`in_bursts`](Self::in_bursts): in the data the two readings agree (burst effects stay where they went off).
     pub world_space: bool,
-    /// Sprites keep the emitter's orientation instead of facing the camera (property `0x08`). Inferred.
+    /// Property `0x08`, `linkToSystem` in the public format doc (the particles follow their system). Not a sprite orientation:
+    /// that is [`billboard`](Self::billboard).
     pub oriented: bool,
+    /// Emits in bursts (property `0x07`, `inBursts` in the format doc, https://modtools.petrolution.net/docs/ParticleFileFormat):
+    /// `max_particles` (`numParticlesPerBurst`) every `spawn_interval` (`burstDelay`), `loop_count` (`numBursts`, `u32::MAX` = for
+    /// ever) times. Without it the emitter runs continuously at `spawn_rate` (`numParticlesPerSecond`) and the three burst fields
+    /// are unused editor values: 1071 emitters loop for ever without bursts and say `max_particles` 1, among them every emitter of the
+    /// Eclipse engine (rate 1 to 20 per second, life 0.5 to 1 s).
+    pub in_bursts: bool,
+    /// Sprites face the camera. Property `0x2e` is `isNotBillboarded` in the format doc: when set (429 of 8,251 emitters: shockwave
+    /// discs, flat smoke, the Eclipse engine's `engine_pulseG`) the sprite is a flat quad in the emitter's own XY plane (inferred:
+    /// a shockwave lies on the ground plane, perpendicular to the up axis Z).
+    pub billboard: bool,
     /// Particle lifetime in seconds (`0x0f`). Inferred.
     pub lifetime: f32,
     /// Texture atlas is `grid x grid` cells, `grid = sqrt(0x10)`. Inferred.
@@ -394,6 +406,8 @@ fn parse_emitter(c: &Chunk) -> Result<Emitter> {
         blend: BlendMode::Other(0),
         world_space: false,
         oriented: false,
+        in_bursts: false,
+        billboard: true,
         lifetime: 1.0,
         atlas_grid: 1,
         index: 0,
@@ -436,6 +450,9 @@ fn parse_emitter(c: &Chunk) -> Result<Emitter> {
     }
     e.world_space = e.prop_flag(0x07);
     e.oriented = e.prop_flag(0x08);
+    e.in_bursts = e.prop_flag(0x07);
+    // A missing property 0x2e (4 emitters) is the default: billboarded.
+    e.billboard = !e.prop_flag(0x2e);
     e.lifetime = e.prop_f32(0x0f).unwrap_or(1.0).max(0.001);
     let cells = e.prop_u32(0x10).unwrap_or(1).max(1);
     e.atlas_grid = (cells as f32).sqrt().round().max(1.0) as u32;
@@ -511,10 +528,17 @@ mod tests {
     }
 
     fn sample() -> Vec<u8> {
+        sample_with(&[(0x07, 1)])
+    }
+
+    /// A one-emitter system whose flag properties (`id`, byte value) are `flags`.
+    fn sample_with(flags: &[(u8, u8)]) -> Vec<u8> {
         let mut props = mini(0x04, &2u32.to_le_bytes());
         props.extend(mini(0x0f, &2.5f32.to_le_bytes()));
         props.extend(mini(0x10, &64u32.to_le_bytes()));
-        props.extend(mini(0x07, &[1]));
+        for &(id, v) in flags {
+            props.extend(mini(id, &[v]));
+        }
         let mut tracks = Vec::new();
         for (start, end, key) in [
             (255u8, 65u8, Some((100u32, 0.5f32))),
@@ -571,6 +595,23 @@ mod tests {
         assert_eq!(r.at(0.0), 1.0);
         assert!((r.at(0.5) - 100.0 / 255.0).abs() < 1e-6);
         assert!((r.at(1.0) - 65.0 / 255.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn the_burst_and_billboard_flags_are_properties_07_and_2e() {
+        let parse = |flags: &[(u8, u8)]| ParticleSystem::parse(&sample_with(flags)).unwrap().emitters.remove(0);
+        // No flags: continuous (not in bursts), facing the camera.
+        let e = parse(&[]);
+        assert!(!e.in_bursts && e.billboard);
+        // `inBursts` (0x07) is also what `world_space` reads.
+        let e = parse(&[(0x07, 1)]);
+        assert!(e.in_bursts && e.world_space && e.billboard);
+        // `isNotBillboarded` (0x2e) makes a flat sprite; 0 keeps the billboard.
+        assert!(!parse(&[(0x2e, 1)]).billboard);
+        assert!(parse(&[(0x2e, 0)]).billboard);
+        // `linkToSystem` (0x08) does not touch either.
+        let e = parse(&[(0x08, 1)]);
+        assert!(!e.in_bursts && e.billboard);
     }
 
     #[test]

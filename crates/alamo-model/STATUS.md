@@ -30,3 +30,22 @@ Convert to Bevy with `(x,y,z) -> (x,z,-y)`.
 - Chunks 0x1200 (collision tree) and 0x1300 extras ignored; billboard mode 7 and light fields partly guessed.
 - Particle semantics partly inferred (spawn rate/burst rules, shape block 3, tracks modes, flags 0x08/0x41/0x43).
 - No glTF animation/skin export; no `.ted`/map parsing.
+
+## Spawn model, sprite orientation, effect files (2026-10-17, polish2 E)
+- Emitter property `0x07` is `inBursts` in the public format doc (it is still also read as `world_space`, the two agree in the data): `Emitter::in_bursts`.
+  Without it the emitter runs at `spawn_rate` (`numParticlesPerSecond`) and `max_particles` (`numParticlesPerBurst`), `spawn_interval` (`burstDelay`)
+  and `loop_count` (`numBursts`) are unused editor values. 1,071 of the 8,251 emitters loop for ever without bursts and say `max_particles` 1 (the
+  editor default): the whole Eclipse engine, rate 1 to 20 per second, life 0.5 to 1 s; 212 more say `numBursts` 1. Survey: example `particle_spawn`.
+- Property `0x2e` is `isNotBillboarded`: `Emitter::billboard` (429 emitters are flat sprites: shockwave discs, flat smoke, the Eclipse engine's
+  `engine_pulseG`; 4 have no such property and keep the billboard). Property `0x08` is `linkToSystem`; `Emitter::oriented` reads it, nothing uses it
+  (it was named for a sprite orientation, which is `0x2e`).
+- The shipped effect files (`Art/Shaders/**/*.FXO`, compiled D3D9 effects, no source) decode with the new examples `fx_states` (render states per
+  pass) and `fx_disasm` (shader assembly). Read this way: `PrimAdditive` is `tex t0; mul r0, t0, v0` blended ONE/ONE, so neither alpha is used by
+  the blend; `PrimAlpha` SRCALPHA/INVSRCALPHA; `PrimModulate` ZERO/SRCCOLOR; `PrimDepthSpriteAdditive` ONE/ONE; `MeshAdditive` ONE/ONE, ZFUNC
+  less-equal, no depth write; `MeshShield` ONE/ONE two-sided, technique `t1` is a vs_1_1 + ps_2_0 (see `alamo-render/STATUS.md`, engine glow).
+  `StarWarsG.exe` lists the particle effects as `PrimOpaque, PrimAdditive, PrimAlpha, PrimModulate, PrimDepthSpriteAdditive, PrimDepthSpriteAlpha,
+  PrimDepthSpriteModulate, ...` (strings at 0x819678); emitter type 1 is additive by name and by that order, the other type values are not mapped.
+- Not decoded: the sampler states (`op103[..]` ... in `fx_states`, so the address modes of the shield glow textures: repeat is assumed), the
+  effect parameters' semantics, the `isHeatParticle` / `hasTail` / `noDepthTest` flags.
+- Other examples touched: `particle_one` (spawn model, billboard flag, all colour tracks, corrected group names), `shield_meshes` (which
+  `MeshShield` meshes the models hide: 272 sub-meshes hidden at rest, 374 visible, 208 of them `Engine_Glow*` in 144 models).

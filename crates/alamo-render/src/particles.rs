@@ -6,6 +6,11 @@
 //! of draw calls is the number of distinct texture/blend pairs, independent of the particle count.
 //! Alpha-blended batches are sorted back to front, additive batches are not.
 //!
+//! Engine exhausts (`pe_`, `pte_`, see [`is_engine_system`]) are read as authored: an emitter that is not in bursts (`inBursts`, format
+//! doc property 0x07) emits `numParticlesPerSecond` for as long as the engine runs, so overlapping particles add up to a steady glow, and
+//! a sprite that is not billboarded (`isNotBillboarded`, 0x2e) is a flat quad in the emitter's XY plane. Every other system keeps the
+//! older reading (bursts of `max_particles`, camera-facing quads).
+//!
 //! Emitter-local space is an Alamo frame: **Z-up**, like the models. Systems attached to model
 //! proxies use the proxy bone's own axes (they inherit the model's Z-up to Y-up conversion);
 //! standalone systems get that conversion here, so a particle's `+Z` is their Bevy transform's `+Y`
@@ -188,7 +193,7 @@ struct Particle {
     spin: f32,
 }
 
-/// One camera-facing quad ready to be written into a batch mesh.
+/// One quad ready to be written into a batch mesh: camera-facing, or flat in the emitter's XY plane.
 #[derive(Clone, Copy)]
 struct Quad {
     center: Vec3,
@@ -197,6 +202,9 @@ struct Quad {
     color: [f32; 4],
     cell: u32,
     grid: u32,
+    /// World directions of the emitter's X and Y axes for a sprite that is not billboarded
+    /// ([`Emitter::billboard`], honoured on engine systems only); `None` faces the camera.
+    flat: Option<[Vec3; 2]>,
 }
 
 struct EmitterRuntime {
@@ -249,6 +257,9 @@ pub struct ParticleInstance {
     system: Arc<ParticleSystem>,
     emitters: Vec<EmitterRuntime>,
     was_enabled: bool,
+    /// An engine exhaust (`pe_`, `pte_`, see [`is_engine_system`]): its emitters run as authored (continuous streams, flat sprites),
+    /// see [`step_emitter`].
+    engine: bool,
 }
 
 impl ParticleInstance {
@@ -291,6 +302,12 @@ pub fn starts_enabled(name: &str, prefixes: &[String]) -> bool {
     prefixes.iter().any(|p| n.starts_with(p.as_str()))
 }
 
+/// True for an engine exhaust system: the file name of `path` starts with one of the always-on prefixes (`pe_`, `pte_`). These are the
+/// systems that [`EngineThrottle`] drives and whose emitters [`step_emitter`] reads as authored (continuous streams, flat sprites).
+pub fn is_engine_system(path: &str, prefixes: &[String]) -> bool {
+    starts_enabled(path.rsplit(['/', '\\']).next().unwrap_or(path), prefixes)
+}
+
 impl ParticleCache {
     fn get(&mut self, fs: &AlamoFs, path: &str) -> Option<Arc<ParticleSystem>> {
         let key = path.to_ascii_lowercase();
@@ -328,17 +345,20 @@ impl ParticleCache {
 pub fn load_particles(
     mut commands: Commands,
     fs: Res<AlamoFs>,
+    settings: Res<ParticleSettings>,
     mut cache: ResMut<ParticleCache>,
     new: Query<(Entity, &AlamoParticles), Without<ParticleInstance>>,
 ) {
     for (entity, spec) in &new {
         let path = particle_path(&spec.path);
+        let engine = is_engine_system(&spec.path, &settings.always_on_prefixes);
         let Some(system) = cache.get(&fs, &path) else {
             error!("cannot load particle system {path}");
             commands.entity(entity).insert(ParticleInstance {
                 system: Arc::new(ParticleSystem::default()),
                 emitters: Vec::new(),
                 was_enabled: false,
+                engine,
             });
             continue;
         };
@@ -353,6 +373,7 @@ pub fn load_particles(
             system,
             emitters,
             was_enabled: false,
+            engine,
         });
         commands.trigger(ParticlesLoaded { entity });
     }
@@ -550,7 +571,18 @@ struct StepCtx<'a> {
     scale: f32,
     density: f32,
     world_trail: bool,
+    /// An engine exhaust system ([`ParticleInstance::engine`]).
+    engine: bool,
+    /// [`AlamoParticles::intensity`].
+    intensity: f32,
+    /// Camera position and pixels per unit for the size cull (see `simulate_particles`).
+    cull: Option<(Vec3, f32)>,
+    /// World directions of the emitter's X and Y axes: the plane of a flat sprite.
+    axes: [Vec3; 2],
 }
+
+/// Live particles one steady engine emitter may keep (the data needs at most 125: rate times life).
+const ENGINE_MAX_LIVE: usize = 512;
 
 fn step_emitter(e: &Emitter, rt: &mut EmitterRuntime, cx: &StepCtx, budget: &mut usize) {
     let StepCtx {
@@ -560,6 +592,8 @@ fn step_emitter(e: &Emitter, rt: &mut EmitterRuntime, cx: &StepCtx, budget: &mut
         scale,
         density,
         world_trail,
+        engine,
+        ..
     } = *cx;
     // Age and move.
     // Property 0x0b: gravity along the emitter's up axis Z (values 0 .. -145, a few +34; Inferred, most emitters 0).
@@ -581,13 +615,21 @@ fn step_emitter(e: &Emitter, rt: &mut EmitterRuntime, cx: &StepCtx, budget: &mut
     }
     // A flying missile's emitters loop forever with `max_particles` 1: read as a continuous stream at the emitter rate (the smoke trail), not one puff per cycle.
     let stream = world_trail && e.loop_count == u32::MAX && (e.spawn_rate > 0.0 || e.spawn_interval > 0.0);
-    let cap = if e.max_particles > 0 && !stream {
+    // An engine emitter that is not in bursts emits `spawn_rate` particles per second for as long as the engine runs; its burst fields
+    // (`max_particles` 1, `spawn_interval` 0.5, `loop_count`) are unused editor values (format doc, property 0x07 `inBursts`). Read as
+    // bursts every one of them was a single particle per life that faded in and out: the ISD's cores (life 5 s, rate 1 per second) and
+    // the Eclipse's (life 1 s, rate 6) pulsed from nothing to a quarter of their glow and back, and the ones with `loop_count` 1 went
+    // out for good after one life. Overlapping particles with triangular fades add up to a constant glow instead.
+    let steady = engine && !e.in_bursts && (e.spawn_rate > 0.0 || e.spawn_interval > 0.0);
+    let cap = if steady {
+        ENGINE_MAX_LIVE
+    } else if e.max_particles > 0 && !stream {
         e.max_particles as usize
     } else {
         usize::MAX
     };
     let forever = e.loop_count == 0 || e.loop_count == u32::MAX;
-    if e.loop_count == 0 || stream {
+    if e.loop_count == 0 || stream || steady {
         // Continuous.
         let rate = if e.spawn_rate > 0.0 {
             e.spawn_rate
@@ -635,15 +677,20 @@ fn step_emitter(e: &Emitter, rt: &mut EmitterRuntime, cx: &StepCtx, budget: &mut
     }
 }
 
-fn build_quads(
-    e: &Emitter,
-    rt: &mut EmitterRuntime,
-    to_world: &Affine3A,
-    scale: f32,
-    intensity: f32,
-    cull: Option<(Vec3, f32)>,
-    world_trail: bool,
-) {
+/// Turns the live particles of one emitter into quads. A sprite that is not billboarded ([`Emitter::billboard`]) lies flat in the
+/// emitter's XY plane, on engine systems; elsewhere it still faces the camera (not checked against the original there).
+fn build_quads(e: &Emitter, rt: &mut EmitterRuntime, cx: &StepCtx) {
+    let StepCtx {
+        to_world,
+        scale,
+        intensity,
+        cull,
+        world_trail,
+        engine,
+        axes,
+        ..
+    } = *cx;
+    let flat = (engine && !e.billboard).then_some(axes);
     let color_gain = if intensity < 1.0 {
         0.25 + 0.75 * intensity.max(0.0)
     } else {
@@ -697,6 +744,7 @@ fn build_quads(
             color: [r, g, b, a],
             cell,
             grid,
+            flat,
         });
     }
 }
@@ -750,21 +798,24 @@ pub fn simulate_particles(
             let scale = to_world.matrix3.x_axis.length().max(1e-6) * spec.size_mul.max(1e-3);
             let mut local_budget = share;
             let sys = inst.system.clone();
+            let cx = StepCtx {
+                dt,
+                enabled,
+                to_world: &to_world,
+                scale,
+                density: settings.density,
+                world_trail: spec.world_trail,
+                engine: inst.engine,
+                intensity: spec.intensity,
+                cull,
+                axes: [
+                    Vec3::from(to_world.matrix3.x_axis).normalize_or_zero(),
+                    Vec3::from(to_world.matrix3.y_axis).normalize_or_zero(),
+                ],
+            };
             for (e, rt) in sys.emitters.iter().zip(inst.emitters.iter_mut()) {
-                step_emitter(
-                    e,
-                    rt,
-                    &StepCtx {
-                        dt,
-                        enabled,
-                        to_world: &to_world,
-                        scale,
-                        density: settings.density,
-                        world_trail: spec.world_trail,
-                    },
-                    &mut local_budget,
-                );
-                build_quads(e, rt, &to_world, scale, spec.intensity, cull, spec.world_trail);
+                step_emitter(e, rt, &cx, &mut local_budget);
+                build_quads(e, rt, &cx);
             }
         });
     live_total = systems.iter().map(|(_, _, _, i)| i.live()).sum();
@@ -926,8 +977,15 @@ pub fn update_particle_batches(
         for (i, q) in quads.iter().enumerate() {
             let h = q.size * 0.5;
             let (s, c) = q.rot.sin_cos();
-            let ax = (right * c + up * s) * h;
-            let ay = (up * c - right * s) * h;
+            // A flat sprite spins in its own plane, a billboard in the screen's. The batch culls back faces: seen from behind a flat
+            // sprite is mirrored so that its front faces the camera (the winding follows the axes' cross product).
+            let [x_axis, y_axis] = match q.flat {
+                Some([x, y]) if x.cross(y).dot(view.position - q.center) < 0.0 => [x, -y],
+                Some(axes) => axes,
+                None => [right, up],
+            };
+            let ax = (x_axis * c + y_axis * s) * h;
+            let ay = (y_axis * c - x_axis * s) * h;
             for (dx, dy) in [(-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)] {
                 pos.push((q.center + ax * dx + ay * dy).to_array());
             }
@@ -1119,6 +1177,7 @@ mod tests {
                 color: [1.0, 1.0, 1.0, 1.0],
                 cell: 0,
                 grid: 1,
+                flat: None,
             }
         ];
         let quad_verts_count = quads.len() * 4;
@@ -1149,6 +1208,8 @@ mod tests {
             blend: BlendMode::Additive,
             world_space: false,
             oriented: false,
+            in_bursts: true,
+            billboard: true,
             lifetime: 10.0,
             atlas_grid: 1,
             index: 0,
@@ -1178,6 +1239,14 @@ mod tests {
     /// Runs `simulate_particles` `steps` times (`dt` seconds each) on one system with `emitter`, placed at `at`
     /// (a model proxy when `in_model_space`, else a standalone effect); the world positions of its particles after each step.
     fn simulate(emitter: Emitter, in_model_space: bool, at: GlobalTransform, steps: usize, dt: f32) -> Vec<Vec<Vec3>> {
+        run(emitter, false, in_model_space, at, steps, dt)
+            .into_iter()
+            .map(|quads| quads.iter().map(|q| q.center).collect())
+            .collect()
+    }
+
+    /// Like [`simulate`], on an engine system when `engine`, with the quads of every step.
+    fn run(emitter: Emitter, engine: bool, in_model_space: bool, at: GlobalTransform, steps: usize, dt: f32) -> Vec<Vec<Quad>> {
         use bevy::ecs::system::RunSystemOnce;
         bevy::tasks::ComputeTaskPool::get_or_init(bevy::tasks::TaskPool::default);
         let mut world = World::new();
@@ -1188,12 +1257,12 @@ mod tests {
         world.insert_resource(ParticleSettings { fixed_step: Some(dt), ..default() });
         let spec = AlamoParticles { in_model_space, ..AlamoParticles::new("test") };
         let system = Arc::new(ParticleSystem { name: "test".into(), emitters: vec![emitter] });
-        let instance = ParticleInstance { system, emitters: vec![EmitterRuntime::new(1)], was_enabled: false };
+        let instance = ParticleInstance { system, emitters: vec![EmitterRuntime::new(1)], was_enabled: false, engine };
         let entity = world.spawn((spec, at, InheritedVisibility::VISIBLE, instance)).id();
         (0..steps)
             .map(|_| {
                 world.run_system_once(simulate_particles).expect("simulate");
-                world.get::<ParticleInstance>(entity).expect("instance").emitters[0].quads.iter().map(|q| q.center).collect()
+                world.get::<ParticleInstance>(entity).expect("instance").emitters[0].quads.clone()
             })
             .collect()
     }
@@ -1264,6 +1333,86 @@ mod tests {
         assert!(spread(|p| p.y) > 300.0 && spread(|p| p.x) <= 1.0 && spread(|p| p.z) <= 1.0, "{:?}", steps[0]);
     }
 
+    /// A looping engine emitter as the Eclipse's `engine_core` is authored: not in bursts, `max_particles` 1 (the editor default, unused),
+    /// 6 particles per second living 1 s, a triangular fade (0 at birth and death, 0.5 at half life).
+    fn engine_core() -> Emitter {
+        let mut e = one_particle(exact([0.0; 3]), exact([0.0; 3]));
+        e.in_bursts = false;
+        e.loop_count = u32::MAX;
+        e.max_particles = 1;
+        e.spawn_interval = 0.5;
+        e.spawn_rate = 6.0;
+        e.lifetime = 1.0;
+        let fade = ColorTrack { start: 0.0, end: 0.0, keys: vec![(0.5, 0.5)] };
+        e.color = [fade.clone(), fade.clone(), fade.clone(), fade];
+        e
+    }
+
+    /// Total of the three colour channels of all quads, per step.
+    fn glow(steps: &[Vec<Quad>]) -> Vec<f32> {
+        steps.iter().map(|q| q.iter().map(|q| q.color[0] + q.color[1] + q.color[2]).sum()).collect()
+    }
+
+    #[test]
+    fn an_engine_that_is_not_in_bursts_glows_steadily_instead_of_pulsing() {
+        // 3.2 s at 60 Hz. Read as a burst of one particle per life (the old model) the glow breathes from nothing to 1.5 (0.5 per
+        // channel) and back every second; as authored, 6 particles per second overlap and their triangular fades add up to 4.5
+        // (6 particles x a mean of 0.25 x 3 channels).
+        let steps = run(engine_core(), true, true, GlobalTransform::IDENTITY, 192, 1.0 / 60.0);
+        let live: Vec<usize> = steps.iter().map(Vec::len).collect();
+        let settled = &glow(&steps)[90..];
+        let (lo, hi) = settled.iter().fold((f32::MAX, f32::MIN), |(lo, hi), &g| (lo.min(g), hi.max(g)));
+        assert!(live[90..].iter().all(|&n| (5..=7).contains(&n)), "live particles {:?}", &live[90..]);
+        assert!(hi / lo < 1.08 && (hi - 4.5).abs() < 0.2, "glow {lo}..{hi}");
+        // The same emitter on any other system keeps the burst reading: one particle that breathes.
+        let steps = run(engine_core(), false, true, GlobalTransform::IDENTITY, 192, 1.0 / 60.0);
+        let (lo, hi) = glow(&steps)[90..].iter().fold((f32::MAX, f32::MIN), |(lo, hi), &g| (lo.min(g), hi.max(g)));
+        assert!(steps.iter().all(|q| q.len() <= 1) && hi / lo.max(1e-3) > 20.0, "glow {lo}..{hi}");
+    }
+
+    #[test]
+    fn an_engine_emitter_that_loops_once_does_not_go_out_and_a_burst_stays_a_burst() {
+        // `loop_count` (numBursts) 1 without `in_bursts`: the old model ran one life and never emitted again.
+        let mut once = engine_core();
+        once.loop_count = 1;
+        let steps = run(once, true, true, GlobalTransform::IDENTITY, 240, 1.0 / 60.0);
+        assert!(steps[200].len() >= 5, "{} particles after 3.3 s", steps[200].len());
+        // In bursts, an engine system still emits `max_particles` per burst (here 1 per second, life 1 s).
+        let mut burst = engine_core();
+        burst.in_bursts = true;
+        let steps = run(burst, true, true, GlobalTransform::IDENTITY, 240, 1.0 / 60.0);
+        assert!(steps.iter().all(|q| q.len() <= 1), "a burst emitter keeps its count");
+    }
+
+    #[test]
+    fn a_sprite_that_is_not_billboarded_lies_in_the_engine_bones_xy_plane() {
+        // The Eclipse engine bone again: particle Z to the stern, Y up, X to the left.
+        let bone = Mat4::from_cols(Vec4::NEG_X, Vec4::Z, Vec4::Y, Vec4::new(-199.6, 3883.4, -23.1, 1.0));
+        let mut disc = engine_core();
+        disc.billboard = false;
+        let steps = run(disc.clone(), true, true, proxy_bone(bone), 30, 1.0 / 60.0);
+        let q = steps[29].first().expect("a particle");
+        let [x, y] = q.flat.expect("a flat sprite");
+        let stern = alamo_to_bevy(Vec3::Y);
+        assert!(x.cross(y).dot(stern) > 0.999, "the disc's normal {} is not the stern {stern}", x.cross(y));
+        assert!(x.dot(alamo_to_bevy(Vec3::NEG_X)) > 0.999 && y.dot(alamo_to_bevy(Vec3::Z)) > 0.999, "axes {x} {y}");
+        // Billboarded emitters and other systems face the camera.
+        let steps = run(engine_core(), true, true, proxy_bone(bone), 30, 1.0 / 60.0);
+        assert!(steps[29].iter().all(|q| q.flat.is_none()));
+        let steps = run(disc, false, true, proxy_bone(bone), 30, 1.0 / 60.0);
+        assert!(steps[29].iter().all(|q| q.flat.is_none()));
+    }
+
+    #[test]
+    fn engine_systems_are_recognised_by_file_name() {
+        let pre = vec!["pe_".to_string(), "pte_".to_string()];
+        assert!(is_engine_system("Pe_Eclipse_Star_Dreadnaught_L", &pre));
+        assert!(is_engine_system("Art/Models/pte_hutt_light_frigate.alo", &pre));
+        assert!(is_engine_system("Art\\Models\\PE_ISD.ALO", &pre));
+        assert!(!is_engine_system("p_explosion_small01", &pre));
+        assert!(!is_engine_system("Art/Models/pe_dir/P_Smoke.alo", &pre));
+    }
+
     /// The Remake's game files, if installed.
     fn remake_fs() -> Option<alamo_fs::GameFs> {
         let install = alamo_fs::GameInstall::detect().filter(|i| i.mod_data("1770851727").is_dir())?;
@@ -1297,6 +1446,33 @@ mod tests {
                 simulate(probe.clone(), true, proxy_bone(bone), 1, 0.016)[0][0]
             })
             .collect()
+    }
+
+    /// 95th over 5th percentile of the values (single-frame blips of constant-colour emitters do not count).
+    fn spread(mut v: Vec<f32>) -> f32 {
+        v.sort_by(f32::total_cmp);
+        v[v.len() * 95 / 100] / v[v.len() * 5 / 100].max(1e-3)
+    }
+
+    #[test]
+    fn the_eclipse_engine_glows_steadily_but_for_its_one_pulsing_disc() {
+        let Some(fs) = remake_fs() else { return };
+        // 4 s of every emitter of both Eclipse engine systems on a proxy, glow measured from 2 s on. All but `engine_pulseG` overlap
+        // enough particles to hold their brightness (within 30 %: the ripple of one particle in ten); `engine_pulseG` (rate 1, life 1,
+        // colour halving over its life) is the data's own pulse: it runs from full to half brightness once a second.
+        for system in ["Pe_Eclipse_Star_Dreadnaught_L", "Pe_Eclipse_Star_Dreadnaught_S"] {
+            let data = alamo_fs::FileSource::read(&fs, &format!("Art/Models/{system}.ALO")).expect("game file");
+            for e in ParticleSystem::parse(&data).expect("particles").emitters {
+                let name = e.name.clone();
+                let steps = run(e, true, true, GlobalTransform::IDENTITY, 240, 1.0 / 60.0);
+                let s = spread(glow(&steps)[120..].to_vec());
+                if name == "engine_pulseG" {
+                    assert!(s > 1.5, "{system}/{name}: spread {s}, the data pulses");
+                } else {
+                    assert!(s < 1.3, "{system}/{name}: spread {s}, a steady glow was expected");
+                }
+            }
+        }
     }
 
     #[test]

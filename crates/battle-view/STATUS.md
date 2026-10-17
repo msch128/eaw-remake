@@ -468,3 +468,8 @@ Add `battle-view`, `galaxy-sim` (already there through galaxy-play) and `eaw-ui`
 - The window is written only when the pointer or its picture changes (never once per frame), and the pictures are loaded once and kept: winit caches one OS cursor per image.
 - `SP_CURSOR_LOG=1` logs every change (`cursor: system arrow -> POINTER_ATTACK at Some(..)`), also offscreen (no window to set there; the choice is still made and kept in `ShownCursor`).
 - Tests: `cargo test -p battle-view cursor` (table, frames, animation, the real `selection` hover over 120 frames across a hull and a wing turret with the crosshair changing exactly at the boundaries and the window written only then, right-click orders with and without the crosshair, armed orders, interface / box drag). A windowed check of the real OS cursor was not run (the user plays on the machine): see the report of C1 for the rows to run.
+
+## `battle_demo` stern camera (2026-10-17, polish2 E)
+- `SP_DEMO_STERN=<ship name>` makes the demo camera follow the engines of the first ship whose definition name contains the text, from behind (`--cam yaw,pitch,distance`: the yaw is the offset from straight astern in degrees).
+  It lifts the camera's map-bounds clamp, because the Eclipse's stern lies outside the map box at the start. Check (engine glow): `SP_DEMO_EXTRA=Eclipse_Star_Dreadnought:1 SP_DEMO_STERN=eclipse battle_demo --small --offscreen out.png --size 1280x720 --times 6 --cam 25,4,900`;
+  other ships: `SP_DEMO_STERN=star_destroyer` (`--cam 25,6,520`), `victory` (`25,6,380`), `venator` (`25,6,380`, with `SP_DEMO_EXTRA=Victory_Destroyer:1,Venator_Empire:1`).
