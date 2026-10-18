@@ -1513,6 +1513,11 @@ pub(crate) fn slots(
             SlotKind::Queue => data.queue.get(slot.index).filter(|q| q.count > 0).map(|q| q.tooltip.clone()).filter(|t| !t.is_empty()),
             _ => None,
         };
+        // A slot only explains what the data puts in it: the shell's own tooltip key of a slot (a pad's is the production queue text)
+        // showed "Production queue full" over the unit cards of the battle bar, which reuses these slots.
+        if !button.tooltips.is_empty() {
+            button.tooltips.clear();
+        }
         button.tooltip_icon = match slot.kind {
             SlotKind::Ability => data.abilities.get(slot.index).filter(|a| !a.icon.is_empty()).map(|a| a.icon.clone()),
             SlotKind::Pad => data.pads.get(slot.index).map(|p| p.icon.clone()),
