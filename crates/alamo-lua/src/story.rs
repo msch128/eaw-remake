@@ -8,7 +8,7 @@
 //! others are handed to the host.
 //!
 //! **Semantics are reconstructed**, not verified against the engine: in particular `STORY_TRIGGER` events
-//! fire only when another event triggers them by name (exception: `*_Auto` events with prerequisites fire when activated), and several `Prereq` tags mean "all of them".
+//! fire only when another event triggers them by name (exceptions: `*_Auto` events and hero spawns with prerequisites fire when activated), and several `Prereq` tags mean "all of them".
 
 use std::collections::HashMap;
 
@@ -412,7 +412,11 @@ impl StoryEngine {
                             && (ev.name.to_ascii_lowercase().ends_with("_auto")
                                 || (!ev.rewards.is_empty() && ev.rewards.iter().all(|w| matches!(w.kind.as_str(), "RESET_BRANCH" | "REMOVE_STORY_GOAL"))
                                 // Era locks of the Clone Wars plots (`Story_SandBox_Minors_*_WW_CW*.xml`): `LOCK_UNIT` at `Universal_Story_Start`, nothing triggers them by name (inferred).
-                                || (!ev.rewards.is_empty() && ev.rewards.iter().all(|w| w.kind == "LOCK_UNIT")))))
+                                || (!ev.rewards.is_empty() && ev.rewards.iter().all(|w| w.kind == "LOCK_UNIT"))
+                                // Hero spawns of the Remake plots (`Spawn_Tyber`, `Spawn_Darth_Vader`, `Empire_AI_Heroes_01` ...: 333 of them):
+                                // `SPAWN_HERO` after `Universal_Story_Start` or a respawn timer; nothing triggers them by name, yet the heroes
+                                // are there in the game (inferred).
+                                || (!ev.rewards.is_empty() && ev.rewards.iter().all(|w| w.kind == "SPAWN_HERO")))))
                 }
                 "STORY_WIN_BATTLES" | "STORY_LOSE_BATTLES" => {
                     let need: u32 = ev.params.first().and_then(|p| p.parse().ok()).unwrap_or(1);
@@ -687,5 +691,24 @@ mod tests {
             "prereq A has not fired"
         );
         assert_eq!(s.notify(&["STORY_GENERIC"], "free", 1.0).len(), 1);
+    }
+
+    #[test]
+    fn hero_spawns_fire_once_their_prerequisite_has() {
+        let p = plot(
+            r#"<Story>
+            <Event Name="Universal_Story_Start"><Event_Type>STORY_ELAPSED</Event_Type><Event_Param1>0</Event_Param1></Event>
+            <Event Name="Spawn_Tyber"><Event_Type>STORY_TRIGGER</Event_Type><Reward_Type>SPAWN_HERO</Reward_Type>
+              <Reward_Param1>Tyber_Zann_Javelin</Reward_Param1><Reward_Param2>Ryloth_WW</Reward_Param2><Prereq>Universal_Story_Start</Prereq></Event>
+            <Event Name="Waits"><Event_Type>STORY_TRIGGER</Event_Type><Reward_Type>CREDITS</Reward_Type><Reward_Param1>5</Reward_Param1>
+              <Prereq>Universal_Story_Start</Prereq></Event>
+            </Story>"#,
+        );
+        let mut s = StoryEngine::default();
+        s.activate(p, 0, Some("Underworld".into()), 0.0);
+        let mut fired: Vec<String> = s.tick(0.0).into_iter().map(|f| f.event).collect();
+        fired.extend(s.tick(1.0).into_iter().map(|f| f.event));
+        assert!(fired.iter().any(|e| e == "Spawn_Tyber"), "the hero spawn fires after the story start: {fired:?}");
+        assert!(!fired.iter().any(|e| e == "Waits"), "a plain STORY_TRIGGER still waits to be triggered by name");
     }
 }
