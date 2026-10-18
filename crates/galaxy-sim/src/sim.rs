@@ -1362,12 +1362,13 @@ pub(crate) fn replace_unit(g: &mut Galaxy, owner: FactionId, planet: PlanetId, f
 }
 
 pub(crate) fn add_units(g: &mut Galaxy, owner: FactionId, planet: PlanetId, u: UnitTypeId, count: u32) -> FleetId {
-    // New ships join the fleet in the lowest slot; a new fleet only starts where the faction has none, so slot 1 is free.
+    // New ships always join the fleet in slot 1 of the planet, or start a new one there: fleets the player keeps in slots 2 and 3
+    // never grow by production.
     let existing = g
         .fleets
         .values_mut()
-        .filter(|f| f.owner == owner && f.location == FleetLocation::AtPlanet(planet))
-        .min_by_key(|f| (if f.slot == 0 { u8::MAX } else { f.slot }, f.id));
+        .filter(|f| f.owner == owner && f.location == FleetLocation::AtPlanet(planet) && f.slot == 1)
+        .min_by_key(|f| f.id);
     if let Some(f) = existing {
         *f.units.entry(u).or_default() += count;
         return f.id;

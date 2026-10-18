@@ -280,3 +280,20 @@ fn ai_factions_are_not_capped_unless_configured_but_the_human_is() {
     }
     assert_eq!(fleets, 3, "the human gets three fleets, no more");
 }
+
+#[test]
+fn new_ships_join_slot_one_and_never_a_fleet_in_slot_two_or_three() {
+    let Some(data) = load() else { return };
+    let mut s = setup(&data);
+    // The only fleet at home sits in slot 3.
+    let kept = s.sim.spawn_units(s.empire, s.away, s.isd, 1);
+    s.sim.apply(Command::MoveFleetToSlot { faction: s.empire, fleet: kept, to: s.home, slot: 3 }).unwrap();
+    arrive(&mut s.sim, kept);
+    assert_eq!(slot(&s.sim, kept), 3);
+    // A finished ship starts a new fleet in slot 1; the next one joins it.
+    let built = s.sim.spawn_units(s.empire, s.home, s.isd, 1);
+    assert_ne!(built, kept, "the slot 3 fleet does not grow");
+    assert_eq!((slot(&s.sim, built), count(&s.sim, built), count(&s.sim, kept)), (1, 1, 1));
+    assert_eq!(s.sim.spawn_units(s.empire, s.home, s.isd, 1), built);
+    assert_eq!((count(&s.sim, built), count(&s.sim, kept)), (2, 1));
+}
