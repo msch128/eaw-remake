@@ -106,13 +106,18 @@ pub fn unit_abilities(
         if !textures.library().in_mega_texture(&icon) && textures.library().load(&icon).is_none() {
             continue;
         }
-        let key = |suffix: &str| format!("TEXT_TOOLTIP_ABILITY_{kind}_{suffix}");
+        // A unit may name its own texts for an ability (`Alternate_Name_Text` / `Alternate_Description_Text`: the Subjugator's
+        // ROCKET_ATTACK is its flak cannon); otherwise the ability type's texts apply.
+        let own = |field: &str, suffix: &str| {
+            a.fields
+                .get(field)
+                .and_then(|k| text.get(k.trim()))
+                .or_else(|| text.get(&format!("TEXT_TOOLTIP_ABILITY_{kind}_{suffix}")))
+        };
         priority.push(activation_priority(a.fields.get("activation_style").map_or("", String::as_str)));
         out.push(AbilityDef {
-            name: text
-                .get(&key("NAME"))
-                .map_or_else(|| kind.replace('_', " "), str::to_string),
-            description: text.get(&key("DESCRIPTION")).unwrap_or_default().to_string(),
+            name: own("alternate_name_text", "NAME").map_or_else(|| kind.replace('_', " "), str::to_string),
+            description: own("alternate_description_text", "DESCRIPTION").unwrap_or_default().to_string(),
             icon,
             recharge_seconds: a.recharge_seconds.unwrap_or(0.0),
             duration_seconds: a.expiration_seconds.unwrap_or(0.0),
