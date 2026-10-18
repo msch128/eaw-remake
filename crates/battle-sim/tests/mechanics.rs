@@ -1728,3 +1728,23 @@ fn pressing_retreat_again_during_the_countdown_calls_it_off_and_nobody_jumps() {
     }
     assert!(b.ships.iter().filter(|s| s.side == 0).all(|s| s.alive && s.retreated), "the second retreat runs to the jump");
 }
+
+/// Corvettes, frigates and capital ships stay on the battle plane like in EaW: a target far above does not lift them, they fire up at it.
+#[test]
+fn a_frigate_stays_on_the_battle_plane_when_its_target_is_far_above() {
+    let mut frigate = mobile("frigate", TargetClass::Frigate, 200.0, 1000.0, vec![]);
+    frigate.radius = 100.0;
+    let target = ship("high", 1.0e7, 0.0, vec![]);
+    let cat = Arc::new(Catalog::from_defs(vec![frigate, target], vec![laser()]));
+    let mut b = Battle::new(BattleSetup {
+        catalog: cat.clone(),
+        sides: vec![one_side(&cat, "frigate", 1, true), one_side(&cat, "high", 1, true)],
+        config: BattleConfig { half_size: 12000.0, record_events: false, ..BattleConfig::default() },
+    });
+    b.ships[0].pos = Vec3::new(2000.0, 0.0, 0.0);
+    b.ships[1].pos = Vec3::new(0.0, 0.0, 1500.0);
+    for _ in 0..30 * 20 {
+        b.step();
+    }
+    assert!(b.ships[0].pos.z.abs() < 1.0, "the frigate climbed to {}", b.ships[0].pos.z);
+}
