@@ -367,7 +367,7 @@ pub fn update_ships(
     let catalog = rt.catalog.clone();
     let mut present: HashSet<u32> = HashSet::with_capacity(cur.ships.len());
     flash_spots.clear();
-    // Fighters launched from a carrier or station leave a bay: no hyperspace arrival sound for them.
+    // Fighters launched from a carrier or station leave a bay: no hyperspace arrival for them (no drop-out, flash or sound).
     let launched: HashSet<u32> = rt
         .fresh_events
         .iter()
@@ -425,12 +425,12 @@ pub fn update_ships(
                         },
                     ))
                     .id();
-                // Ships that show up after the start (reinforcements) drop out of hyperspace.
+                // Ships that show up after the start (reinforcements) drop out of hyperspace; craft out of a hangar bay do not.
                 let lead = if std::env::var_os("SP_FORCE_ARRIVAL").is_some() { 4.0 } else { 0.0 };
-                if cur.time > 2.0 || lead > 0.0 {
+                if (cur.time > 2.0 || lead > 0.0) && !launched.contains(&s.id) {
                     commands.entity(e).insert(HyperspaceArrival { start: cur.time + lead });
                     // `SFXEvent_Arrive_From_Hyperspace` of the factions (the same event for all three).
-                    if flash_spots.len() < 3 && !launched.contains(&s.id) {
+                    if flash_spots.len() < 3 {
                         sfx.write(alamo_audio::PlaySfx { event: "Unit_Ship_Hyperspace_Enter".into(), position: Some(pos), source: None });
                     }
                     let fighter = matches!(def.class, TargetClass::Fighter | TargetClass::Bomber);
