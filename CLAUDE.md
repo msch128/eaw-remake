@@ -13,8 +13,7 @@ No ground combat, story campaigns or movies. Windows, edition 2024.
 - **Game and workshop folders are read-only.** No audible playback in tests.
 - **No CI / GitHub Actions, no prebuilt binaries.** Users build locally with `build.bat` / `build.ps1`.
 - **English only** (no localization). Talk to the user in German.
-- **Usage budget:** 5-hour usage window – 7 parallel agents burned ~33% in 25 min. Default to 3–4 agents on the
-  critical path, few render iterations, short reports. Current plan and state: `HANDOFF.md`.
+- Current plan and state: `HANDOFF.md`.
 - Commit + push to `main` after `cargo check --workspace --all-targets` passes.
 - **Never quote the user or the chat in commit messages, code comments or docs; write neutral English. No local paths with user names.**
 
