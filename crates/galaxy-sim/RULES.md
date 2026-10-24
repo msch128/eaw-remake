@@ -152,6 +152,9 @@ A tactical battle (front end or `run_headless`) reports survivors per group; los
 statistical result. Units that left the battle by `Retreat` count as survivors and, when their side did not win (or the battle was a draw and they
 attack), their fleets escape along the escape route above (estimate: no attrition, `Space_Retreat_Attrition_Factor` is 0 in the data). Damage is
 not carried over between battles (surviving ships are repaired), also an estimate.
+Reserve ships that were never called into the fight (population cap, section "Population cap and waves") never fought, so they always survive. If their side won or the
+battle was a draw they stay where they are; if their side lost, their fleets escape along the escape route like retreating ones (before, a side that lost on the field lost its
+uncalled reserve with it, so one lost deployed ship cost the whole fleet). Survivors of the fight itself keep the rules above.
 
 ## 8. Difficulty multipliers
 `Sim::set_faction_difficulty(faction, Difficulty)` (from `alamo_data::DifficultyAdjustment`): positive income x `credit`, build times x `build_time`,

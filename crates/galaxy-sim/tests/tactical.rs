@@ -825,28 +825,73 @@ fn death_star_ii_counts_zero_population_in_space_and_deploys() {
     assert!(side.reserve.is_empty());
 }
 
-#[test]
-fn a_beaten_side_leaves_no_uncalled_reserve_in_orbit_for_a_second_battle() {
-    let Some(ctx) = load() else { return };
-    let mut sim = new_sim(&ctx);
+/// An Empire fleet bigger than the population cap fights a lone Nebulon at an empty planet; part of it waits in the reserve and is never called.
+/// Returns the sim, the request, the battle id, the Empire fleet, its fleet size, the Empire's side index and the battle planet.
+fn reserve_battle(ctx: &Ctx) -> (Sim, TacticalRequest, u32, FleetId, u32, usize, PlanetId) {
+    let mut sim = new_sim(ctx);
     let w = sim.world().clone();
     let (empire, rebel) = (w.faction_id("Empire").unwrap(), w.faction_id("Rebel").unwrap());
     let target = empty_planet(&sim);
     let isd = w.unit_id("Star_Destroyer").unwrap();
     let cap = w.factions[empire as usize].space_unit_cap;
     let n = (cap / w.units[isd as usize].population.max(1)) as u32 + 8;
-    let ef = add_fleet(&mut sim, empire, isd, n, target, target);
+    let ef = add_fleet(&mut sim, empire, isd, n, target, neighbour(&w, target));
     add_fleet(&mut sim, rebel, w.unit_id("Nebulon_B_Frigate").unwrap(), 1, target, target);
     let battle = pending(&mut sim);
     let req = sim.tactical_setup(battle.id).unwrap();
     let es = req.sides.iter().position(|s| s.faction == empire).unwrap();
     assert!(req.sides[es].reserve.iter().map(|g| g.count).sum::<u32>() >= 8, "part of the fleet waits in the reserve");
-    // The Empire's deployed ships all die before the reserve is called; the Rebels win.
+    (sim, req, battle.id, ef, n, es, target)
+}
+
+#[test]
+fn a_beaten_sides_uncalled_reserve_survives_and_falls_back_to_the_nearest_friendly_planet() {
+    let Some(ctx) = load() else { return };
+    let (mut sim, req, battle, ef, n, es, target) = reserve_battle(&ctx);
+    let w = sim.world().clone();
+    let isd = w.unit_id("Star_Destroyer").unwrap();
+    let reserve: u32 = req.sides[es].reserve.iter().map(|g| g.count).sum();
+    // The deployed ships all die before the reserve is called; the Rebels win.
     let mut result = untouched(&req);
     result.winner = Some(1 - es);
     result.survived[es] = vec![0; req.sides[es].groups.len()];
-    sim.apply_tactical_result(battle.id, &result).unwrap();
-    assert!(sim.galaxy().fleets.get(&ef).is_none_or(|f| f.location != FleetLocation::AtPlanet(target)), "the uncalled reserve of the loser is gone from the orbit");
+    sim.apply_tactical_result(battle, &result).unwrap();
+    assert_eq!(sim.galaxy().fleets[&ef].units[&isd], reserve, "only the reserve is left, all {} of it (fleet was {n})", reserve);
+    assert_ne!(sim.galaxy().fleets[&ef].location, FleetLocation::AtPlanet(target), "the reserve does not stay in the orbit of the winner");
+    assert!(sim.galaxy().escaping.contains(&ef), "it makes the escape move");
+    let empire = w.faction_id("Empire").unwrap();
+    let (dest, _) = destination(&sim, ef);
+    assert_eq!(sim.galaxy().planets[dest as usize].owner, Some(empire), "the escape goes to a friendly planet");
+    let time = |p: PlanetId| w.find_path(target, p).map(|path| path.windows(2).map(|e| { let r = &w.routes[w.route_between(e[0], e[1]).unwrap() as usize]; r.length / r.hs_factor }).sum::<f32>()).unwrap_or(f32::MAX);
+    let best = sim.galaxy().owned_planets(empire).filter(|&p| w.real[p as usize] && p != target).map(&time).fold(f32::MAX, f32::min);
+    assert!((time(dest) - best).abs() < 1e-3, "nearest friendly planet: {} vs {best}", time(dest));
     let events = sim.step(1.0);
     assert!(!events.iter().any(|e| matches!(e, Event::BattlePending(_))), "no second battle at the same planet");
+}
+
+#[test]
+fn a_winning_sides_uncalled_reserve_stays_where_it_is() {
+    let Some(ctx) = load() else { return };
+    let (mut sim, req, battle, ef, n, es, target) = reserve_battle(&ctx);
+    let isd = sim.world().unit_id("Star_Destroyer").unwrap();
+    let mut result = untouched(&req);
+    result.winner = Some(es);
+    result.survived[1 - es] = vec![0; req.sides[1 - es].groups.len()];
+    sim.apply_tactical_result(battle, &result).unwrap();
+    assert_eq!(sim.galaxy().fleets[&ef].units[&isd], n, "nothing was lost");
+    assert_eq!(sim.galaxy().fleets[&ef].location, FleetLocation::AtPlanet(target));
+}
+
+#[test]
+fn a_retreat_takes_the_uncalled_reserve_along() {
+    let Some(ctx) = load() else { return };
+    let (mut sim, req, battle, ef, n, es, target) = reserve_battle(&ctx);
+    let isd = sim.world().unit_id("Star_Destroyer").unwrap();
+    let mut result = untouched(&req);
+    result.winner = Some(1 - es);
+    result.retreated[es] = result.survived[es].clone();
+    sim.apply_tactical_result(battle, &result).unwrap();
+    assert_eq!(sim.galaxy().fleets[&ef].units[&isd], n, "the whole fleet got away");
+    assert_ne!(sim.galaxy().fleets[&ef].location, FleetLocation::AtPlanet(target));
+    assert!(sim.galaxy().escaping.contains(&ef));
 }

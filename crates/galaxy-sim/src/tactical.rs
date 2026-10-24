@@ -437,23 +437,22 @@ impl TacticalRequest {
                     }
                 }
             }
-            // Reserve units that were never called in fought nothing. A side that won keeps them; a side that lost on the field loses them with it (EaW
-            // keeps feeding the reserve in until nothing is left, so a beaten side never leaves ships behind in orbit for a second battle at the same planet),
-            // and a side that left by retreating takes them along.
+            // Reserve units that were never called in fought nothing, so they always survive. A side that won or drew leaves them where they are; a side
+            // that lost (on the field or by retreating) pulls their fleets out like a retreat, so no ship stays in orbit for a second battle at the same planet.
             let lost = result.winner.is_some_and(|w| w != si);
-            let retreated_off = fleet_gone.iter().any(|x| x.1);
             for (ri, g) in side.reserve.iter().enumerate() {
                 let called = result.reserve_called.get(si).and_then(|r| r.get(ri)).copied().unwrap_or(0).min(g.count);
                 let alive_called = result.reserve_survived.get(si).and_then(|r| r.get(ri)).copied().unwrap_or(0).min(called);
-                let uncalled = if lost && !retreated_off { 0 } else { g.count - called };
+                let uncalled = g.count - called;
                 alive[find(g)] += uncalled + alive_called;
                 if lost
-                    && retreated_off
                     && uncalled > 0
                     && let Some(f) = g.fleet
-                    && !fleet_gone.iter().any(|x| x.0 == f)
                 {
-                    fleet_gone.push((f, true));
+                    match fleet_gone.iter_mut().find(|x| x.0 == f) {
+                        Some(x) => x.1 = true,
+                        None => fleet_gone.push((f, true)),
+                    }
                 }
             }
             sides.push(SideInput { faction: side.faction, members: members.iter().map(|&(source, fleet, count)| Member { source, fleet, count }).collect() });
