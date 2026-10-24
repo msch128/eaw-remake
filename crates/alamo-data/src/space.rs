@@ -281,6 +281,8 @@ pub struct SpaceUnitDef {
     pub acceleration: f32,
     /// `OverrideDeceleration`.
     pub deceleration: f32,
+    /// `Layer_Z_Adjust`: the fixed height of the unit above (or below) the battle plane.
+    pub layer_z_adjust: f32,
     /// `Hyperspace_Speed`.
     pub hyperspace_speed: f32,
     /// `Hyperspace` (can jump).
@@ -403,6 +405,7 @@ impl SpaceUnitDef {
             bank_turn_angle: f32_or("bank_turn_angle"),
             acceleration: f32_or("overrideacceleration"),
             deceleration: f32_or("overridedeceleration"),
+            layer_z_adjust: f32_or("layer_z_adjust"),
             hyperspace_speed: f32_or("hyperspace_speed"),
             can_hyperspace: r.flag("hyperspace").unwrap_or(false),
             fow_reveal_range: f32_or("space_fow_reveal_range"),

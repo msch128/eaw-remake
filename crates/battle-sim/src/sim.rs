@@ -3445,19 +3445,16 @@ fn mov(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, spawn: &
     s.speed = s.speed.clamp(0.0, top_clamp.max(0.0));
     let fwd = Vec3::from_yaw(s.yaw);
     s.pos += fwd * (s.speed * dt);
-    // Flight is planar (yaw only), so height differences from launch bays and spawn points would never close and ships could circle a target
-    // out of weapon range for ever: fighters and bombers climb or sink towards their target's height (or the battle plane) at half their top
-    // speed. Corvettes, frigates and capital ships stay on the battle plane like in EaW and fire up or down at craft; they used to chase a
-    // squadron's height and drift far above or below the fight.
+    // Height: EaW moves every unit on the battle plane, each at the fixed height of its type (`Layer_Z_Adjust`, a few hundred units at
+    // most); nobody climbs or sinks after a target, guns fire up or down. Ships coming out of a bay or a spawn point at another height
+    // settle onto their layer at half their top speed. Craft only leave their layer to keep out of hulls: the height of an attack run past a
+    // hull (`aim_z`) or of a formation place shifted over or under one (`slot_dz`).
     if !def.is_static {
-        if def.class == TargetClass::Bomber && s.phase > 0.0 {
-            let z_dir = if s.id % 2 == 0 { 1.0 } else { -1.0 };
-            s.pos.z += z_dir * (def.max_speed * 0.7 * dt);
-        } else {
-            // A squadron member without a target of its own keeps its leader's height: the squadron flies at one height.
+        {
+            // A squadron member flies at its leader's height (the squadron keeps one height; the leader settles onto the layer).
             let lead = if s.squad != NONE { leaders[s.squad as usize] } else { NONE };
             let lead_z = (lead != NONE && lead != s.id && snaps[lead as usize].alive).then(|| snaps[lead as usize].pos.z);
-            let mut z_goal = if craft { aim_z.unwrap_or_else(|| target.map_or(lead_z.unwrap_or(0.0) + slot_dz, |t| t.pos.z)) } else { 0.0 };
+            let mut z_goal = if craft { aim_z.unwrap_or(lead_z.unwrap_or(def.layer_z) + slot_dz) } else { def.layer_z };
             // A craft under (or over) its own carrier stays clear of the hull's height until it is out from under it: it left the hangar
             // below the hull and must not rise through it.
             if craft && s.carrier != NONE && snaps[s.carrier as usize].alive {

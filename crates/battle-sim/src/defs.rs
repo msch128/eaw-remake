@@ -504,6 +504,9 @@ pub struct ShipDef {
     /// Distance of the farthest destroyable hardpoint from the centre (x1.05): a projectile hits the unit within `max(radius, hardpoint_reach)` of its path, so shots aimed at an outlying hardpoint of a
     /// tall station do not fly past it (the collision radius is clamped and was smaller than the model).
     pub hardpoint_reach: f32,
+    /// `Layer_Z_Adjust`: the unit's fixed height over the battle plane (EaW moves every unit on the plane; the layers only keep
+    /// models apart). 0 without a unit source.
+    pub layer_z: f32,
     /// Maximum speed, units per second.
     pub max_speed: f32,
     /// Acceleration, units per second squared.
@@ -1617,6 +1620,10 @@ impl Catalog {
             hull_shape: model.and_then(|m| m.hull).filter(|h| h.reach() >= 0.3 * radius),
             hull_z: model.and_then(|m| m.height),
             hardpoint_reach: hardpoints.iter().filter(|h| h.destroyable).map(|h| h.offset.len()).fold(0.0f32, f32::max) * 1.05,
+            layer_z: match src {
+                Source::Unit(u) => u.layer_z_adjust,
+                _ => 0.0,
+            },
             max_speed,
             accel,
             turn_rate,

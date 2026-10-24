@@ -533,7 +533,7 @@ fn bombers_make_straight_bombing_runs_on_big_ships() {
 }
 
 #[test]
-fn bomber_targets_shield_generator_and_performs_evasive_vertical_climb() {
+fn bomber_targets_shield_generator_and_stays_on_its_layer() {
     let mut bomber = mobile("bomber", TargetClass::Bomber, 400.0, 100.0, vec![]);
     bomber.radius = 10.0;
     let mut target = ship("capital", 1.0e7, 0.0, vec![]);
@@ -550,7 +550,6 @@ fn bomber_targets_shield_generator_and_performs_evasive_vertical_climb() {
         config: BattleConfig { half_size: 12000.0, record_events: false, ..BattleConfig::default() },
     });
     b.ships[0].pos = Vec3::new(1000.0, 0.0, 0.0);
-    let mut saw_vertical_evasion = false;
     let mut saw_shield_gen_targeted = false;
     for _ in 0..30 * 20 {
         b.step();
@@ -558,12 +557,9 @@ fn bomber_targets_shield_generator_and_performs_evasive_vertical_climb() {
         if s.target_hp == 1 {
             saw_shield_gen_targeted = true;
         }
-        if s.pos.z.abs() > 30.0 {
-            saw_vertical_evasion = true;
-        }
+        assert!(s.pos.z.abs() < 300.0, "the bomber left its layer: z {}", s.pos.z);
     }
     assert!(saw_shield_gen_targeted, "bomber automatically targeted ShieldGenerator");
-    assert!(saw_vertical_evasion, "bomber climbed/dived during egress phase");
 }
 
 /// Super ships have far more than 64 hardpoints (Subjugator 213, Executor 158): bombers must find the shield generator at index 120
