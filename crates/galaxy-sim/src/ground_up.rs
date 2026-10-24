@@ -221,7 +221,7 @@ impl Sim {
         .max(1)
     }
 
-    /// The passive faction (Pirates) never expands but rearms with the player's tech (user rule, estimates in `RULES.md`): every planet it holds gets the
+    /// The passive faction (Pirates) never expands but rearms with the player's tech (design rule, estimates in `RULES.md`): every planet it holds gets the
     /// star base of its own chain at level `clamp(player tech, 1, top level)` (raised, never lowered; applied at the start and every week), and
     /// every week a planet with fewer than `2 x tech` passive units gets one more, picked deterministically from the ship types the passive faction fields
     /// in the campaign (no heroes, no planet destroyers, cycling by planet and week). It costs nothing and the units never move because the faction

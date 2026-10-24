@@ -7,7 +7,7 @@ use std::collections::{HashMap, HashSet};
 
 use alamo_data::{Campaign, GameData, ShipCategory};
 
-/// Population per side in a space battle (user rule, replaces the data's `Space_Tactical_Unit_Cap` when that is smaller).
+/// Population per side in a space battle (design rule, replaces the data's `Space_Tactical_Unit_Cap` when that is smaller).
 pub const USER_SPACE_UNIT_CAP: i32 = 1000;
 
 /// Index of a planet in [`World::planets`].
@@ -39,7 +39,7 @@ pub struct SimConfig {
     pub build_time_scale: f32,
     /// Seconds an uncontested hostile fleet must stay in orbit before a planet changes hands.
     pub capture_delay_seconds: f32,
-    /// Credits cap per owned planet (`Credit_Cap_Per_Planet`); 0 = no cap (the default: user rule, credits never expire).
+    /// Credits cap per owned planet (`Credit_Cap_Per_Planet`); 0 = no cap (the default: design rule, credits never expire).
     pub credit_cap_per_planet: f64,
     /// Resolve battles automatically at the end of the step instead of emitting
     /// `Event::BattlePending` and waiting for the caller.
@@ -774,7 +774,7 @@ impl World {
                 max_tech: cf.max_tech_level.unwrap_or(5),
                 home: cf.home_location.as_ref().and_then(|h| planet_index.get(&key(h)).copied()),
                 tech_upgrades: Vec::new(),
-                // User rule: 1000 population per side in a space battle, so super ships (Purifier and Annihilator together) fit.
+                // Design rule: 1000 population per side in a space battle, so super ships (Purifier and Annihilator together) fit.
                 // The data's `Space_Tactical_Unit_Cap` (180 in Remake 4.0) is replaced on purpose.
                 space_unit_cap: USER_SPACE_UNIT_CAP.max(def.space_unit_cap),
             });

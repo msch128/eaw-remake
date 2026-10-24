@@ -215,7 +215,7 @@ fn hosts_and_old_saves_with_unassigned_or_too_many_fleets_settle_into_three_slot
     assert_eq!(old.slot, 0);
 }
 
-/// Battle start (S2): groups and reserve follow the slots; a pathfinder in any fleet holds back every other unit of the side (user rule).
+/// Battle start (S2): groups and reserve follow the slots; a pathfinder in any fleet holds back every other unit of the side (design rule).
 #[test]
 fn battles_deploy_in_slot_order_and_a_pathfinder_holds_back_every_other_unit() {
     let Some(data) = load() else { return };

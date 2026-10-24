@@ -1,4 +1,4 @@
-//! Group moves (user rule 2026-10-17: 20 Star Destroyers stand in a tight row, if needed in 2-3 rows): a Move or
+//! Group moves (design rule 2026-10-17: 20 Star Destroyers stand in a tight row, if needed in 2-3 rows): a Move or
 //! Attack-move order for several units gives every unit its own slot of a formation at the destination, every ship flies its own route
 //! there, and the group keeps the pace of its slowest member (`formation.rs`, RULES.md 9d). Real Remake data where it is installed.
 

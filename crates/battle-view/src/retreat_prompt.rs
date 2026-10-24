@@ -1,4 +1,4 @@
-//! The retreat question (user request 2026-10-16): with [`BattleViewSettings::retreat_prompt`] (the game turns it on) a press on Retreat opens a
+//! The retreat question (design request 2026-10-16): with [`BattleViewSettings::retreat_prompt`] (the game turns it on) a press on Retreat opens a
 //! banner in the look of the battle-start banner (`eaw_ui::spawn_battle_banner`, `i_attack_mode_choice.alo`) instead of ordering the retreat:
 //! RETREAT starts the jump countdown, AUTO-RESOLVE asks the host to settle the battle from the units that are left ([`RetreatChoice`]), CANCEL
 //! (or Esc) closes it. The battle clock stands still while it is open. Texts from `MasterTextFile`: `TEXT_TOOLTIP_RETREAT_BUTTON` ("Retreat from

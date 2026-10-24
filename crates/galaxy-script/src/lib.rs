@@ -121,7 +121,7 @@ pub enum DifficultyTier {
     Fair,
 }
 
-/// Minor factions (`GC_MinorAi`) expand and attack only cautiously (estimate, the user asked for it): they weigh attacks down, ask a larger force margin and
+/// Minor factions (`GC_MinorAi`) expand and attack only cautiously (estimate, a design choice): they weigh attacks down, ask a larger force margin and
 /// keep more at home. The same strategic layer and attack logic as the major factions, with these multipliers.
 pub fn minor_personality() -> Personality {
     Personality { aggression: 0.6, expansion: 0.7, caution: 1.4 }
@@ -624,10 +624,10 @@ pub fn player_difficulty(_tier: DifficultyTier) -> galaxy_sim::Difficulty {
 }
 
 /// Brutal AI income multiplier (Hard is 3.0 in the data).
-/// estimate: user decision 2026-10-14, no XML value.
+/// estimate: design decision 2026-10-14, no XML value.
 pub const BRUTAL_CREDIT_MULTIPLIER: f32 = 4.0;
 /// Brutal AI galactic build-time multiplier (Hard is 0.9 in the data).
-/// estimate: user decision 2026-10-14, no XML value.
+/// estimate: design decision 2026-10-14, no XML value.
 pub const BRUTAL_BUILD_TIME_MULTIPLIER: f32 = 0.8;
 
 /// Maps a tier to the sim multipliers and the AI tier (see [`DifficultyTier`]).
@@ -639,7 +639,7 @@ fn tier_settings(table: &alamo_data::DifficultyTable, tier: DifficultyTier, mino
     (diff, ai)
 }
 
-/// How far the AI sees (user rule 2026-10-15, galaxy-sim RULES.md "AI knowledge"): Easy 1 lane around its planets and fleets, Normal 2, Hard 3, Brutal everything. Minor factions use
+/// How far the AI sees (design rule 2026-10-15, galaxy-sim RULES.md "AI knowledge"): Easy 1 lane around its planets and fleets, Normal 2, Hard 3, Brutal everything. Minor factions use
 /// Normal (estimate), Fair plays Normal. `None` = sees everything.
 pub fn ai_sight_hops(tier: DifficultyTier, minor: bool) -> Option<u8> {
     match tier {

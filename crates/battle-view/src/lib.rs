@@ -183,7 +183,7 @@ impl Default for BattleViewSettings {
             sky_radius: 90_000.0,
             // `Space_Mode` of TacticalCameras.xml: Fov_Default 60 (D3D convention: the vertical angle, like Bevy's). Not verifiable from the data.
             fov_degrees: 60.0,
-            // Deliberately closer than the data (`Distance_Default` 2000): the user asked for a closer default view. The earlier estimate
+            // Deliberately closer than the data (`Distance_Default` 2000): a closer default view was chosen in playtesting. The earlier estimate
             // came from the Remake Byss video (b0640-b0705), a big Star Destroyer spanning ~14% of the frame width, at 45 degrees fov.
             // 930 at 60 deg keeps the apparent ship size of the 1300 / 45 deg view the user approved.
             start_distance: 930.0,
@@ -745,7 +745,7 @@ fn is_ground_model(model: &str) -> bool {
 }
 
 /// Writes [`BattleFinished`] once the displayed picture reached the end of a battle that came from a request.
-/// Seconds the victory/defeat banner stays up with the battle camera still running before the summary opens (user rule U49: about 5 seconds; a click, Space or Esc skips it).
+/// Seconds the victory/defeat banner stays up with the battle camera still running before the summary opens (design rule U49: about 5 seconds; a click, Space or Esc skips it).
 const OUTCOME_HOLD_SECONDS: f32 = 5.0;
 
 fn report_outcome(

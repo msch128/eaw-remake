@@ -1,4 +1,4 @@
-//! Formations of group moves. In EaW the units ordered somewhere together end up side by side in rows that face the move (user rule
+//! Formations of group moves. In EaW the units ordered somewhere together end up side by side in rows that face the move (design rule
 //! 2026-10-17: 20 Star Destroyers stand in a tight row, if needed in 2-3 rows). [`layout`] places the slots; the
 //! destination formations of `Command::Move` / `Command::AttackMove` ([`Formation`], tight: [`Room::Tight`]) and the AI's advancing line
 //! ([`crate::ai`], with the start layout's room: [`Room::Start`]) share it. A unit of a destination formation flies its own route to its

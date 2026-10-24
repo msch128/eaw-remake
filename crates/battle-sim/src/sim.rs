@@ -1486,7 +1486,7 @@ impl Battle {
         }
         if !shield_hit && pd.hull_damage && hull_part > 0.0 && (s.shield <= 0.0 || !pd.shield_damage) {
             let h = hull_part * cat.damage.multiplier(pd.damage_type, def.armor) / tgt_health * s.bonus.taken_hull / (1.0 + s.mods[ModKind::Health as usize].0);
-            // User rule (U47): a unit with destroyable hardpoints has no hull pool of its own, its hit points are the sum of its hardpoints and it dies when
+            // Design rule (U47): a unit with destroyable hardpoints has no hull pool of its own, its hit points are the sum of its hardpoints and it dies when
             // the last one is destroyed. The hit goes to the aimed hardpoint, else the one nearest to the impact; damage beyond what the hardpoint had
             // spills over to the next nearest ones, halving at every step (100000, 50000, 25000 ... until it is below 1), all in whole numbers. Units
             // without destroyable hardpoints (fighters, small craft) keep a plain hull.
@@ -1671,7 +1671,7 @@ impl Battle {
     /// `BattleConfig::defenders`): at least 3x (4x with a station) after 120 s, or after 30 s without any station; a side made mostly of transports
     /// (`Forces_Are_Not_Mainly_Transports`) leaves whatever the odds, an attacker already after 30 s.
     /// U94: emergency retreat when the survival chance falls below 25% (enemy force above 3x its own) while capital ships or heroes are left, or once the
-    /// side has lost half of the strength its ships had at their peak in this battle (user finding 2026-10-16: a nearly destroyed fleet of frigates and
+    /// side has lost half of the strength its ships had at their peak in this battle (playtest finding 2026-10-16: a nearly destroyed fleet of frigates and
     /// corvettes fought to the last ship); it does not wait for the 120 s. A defender with a living station is the exception: it holds until the station
     /// falls or 120 s have passed (the data's wait for the defence fleet), unless it is nearly destroyed.
     /// Not for sides that may not retreat (`BattleConfig::retreat_allowed`, the galaxy says whether the faction holds more than one planet),

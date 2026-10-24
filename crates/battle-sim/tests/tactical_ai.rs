@@ -327,7 +327,7 @@ fn big_hulls_do_not_stay_inside_each_other_and_nobody_parks_in_an_executor() {
     assert!(t <= 3.0, "hulls stay inside each other for {t:.1} s: {what}");
 }
 
-/// How an AI attack went (user finding 2026-10-16: eight AI ships flew at the player's fleet and station one behind the other and were
+/// How an AI attack went (playtest finding 2026-10-16: eight AI ships flew at the player's fleet and station one behind the other and were
 /// destroyed one by one). "Fleet" = the AI's own big ships (not fighters, not the craft a carrier launches).
 #[derive(Debug, Default, Clone)]
 struct Attack {
@@ -555,7 +555,7 @@ fn retreat_run(cat: &Arc<Catalog>, ai: u8, attacker: &[(&str, u32)], defender: &
 
 #[test]
 fn an_ai_defender_without_a_chance_against_a_super_star_destroyer_retreats_at_the_latest_when_its_station_falls() {
-    // User finding 2026-10-17: after the player destroyed its station, the AI fought on without a chance against a Super Star Destroyer fleet.
+    // Playtest finding 2026-10-17: after the player destroyed its station, the AI fought on without a chance against a Super Star Destroyer fleet.
     // The retreat rule compares forces, and the Remake's force is the units' `AI_Combat_Power` (Executor
     // 65000, Star Destroyer 1800, Victory 1200, MC-80 1750, Assault Frigate 1200, Nebulon-B 300, CR-90 100, X-wing 10, star base 3750); our old
     // estimate (sqrt of hull and shield times damage) put the Executor at 11 Star Destroyers instead of 36. Main f9710b3, same battle: the station
@@ -657,7 +657,7 @@ fn an_ai_attacker_that_is_losing_badly_retreats() {
 
 #[test]
 fn a_nearly_destroyed_ai_fleet_retreats_before_it_is_wiped_out() {
-    // User finding 2026-10-16: an AI fleet of frigates and corvettes fought to the last ship against a defended planet. `Retreat_From_Space` lets an
+    // Playtest finding 2026-10-16: an AI fleet of frigates and corvettes fought to the last ship against a defended planet. `Retreat_From_Space` lets an
     // attacker leave only after 120 s, and the emergency rule (U94) was only for capital ships and units of 15 population. Now a side that has lost
     // half of its strength while the enemy is more than 3x stronger leaves at once. Before: 3 Acclamators with 3 Tartan pairs ordered the retreat
     // at 122 s and saved 2 / 1 of the Acclamators (seeds 1 / 2); 4 Tartan pairs never ordered it and were wiped out.
@@ -704,7 +704,7 @@ fn hold_battle(cat: &Arc<Catalog>, ai: &[(&str, u32)], player: &[(&str, u32)], s
 
 #[test]
 fn an_ai_fleet_shelled_from_beyond_its_sight_goes_for_the_shooter() {
-    // User finding 2026-10-17 (the AI played very weakly) with an Executor fleet: the Executor sees 30000 units and fires
+    // Playtest finding 2026-10-17 (the AI played very weakly) with an Executor fleet: the Executor sees 30000 units and fires
     // from up to 11000, a Rebel fleet sees 1750-3000. The AI only went for enemies it could see, so it chased the TIE bombers and swept
     // its search points while the Executor shelled it, and dealt no damage to a warship at all. The Remake hands its AI the attacker of
     // every hit (`Default_Unit_Damaged`): now a ship that hit the side is known to it for the fog's 15 s, and the fleet goes for it.

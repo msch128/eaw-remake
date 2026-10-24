@@ -55,7 +55,7 @@ impl Default for BattleCamera {
             // Close enough to fly beside a fighter (estimate: a fighter hull is 20 to 40 units, a capital ship over 1000; the data's
             // `Distance_Min` of 1000 kept the view away from every model, which the player cannot accept). The wheel steps by ZOOM_STEP.
             min_distance: 80.0,
-            // Free zoom-out as before (the user wants unchanged camera control; only the start framing follows the data).
+            // Free zoom-out as before (camera control stays unchanged by design; only the start framing follows the data).
             max_distance: 16_000.0,
             snap: false,
         }

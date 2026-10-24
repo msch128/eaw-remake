@@ -90,7 +90,7 @@ impl World {
         self.structures.get(structure as usize).map_or(0.0, |st| f64::from(st.cost) / 2.0 + 1.0)
     }
 
-    /// Credits a sold ship pays back. The data has no rule for selling ships (only structures have `Delete_Building`); user rule: 35% of the
+    /// Credits a sold ship pays back. The data has no rule for selling ships (only structures have `Delete_Building`); design rule: 35% of the
     /// build cost for small craft (fighters, bombers, transports, corvettes), 55% for frigates, capitals and super capitals.
     pub fn unit_sell_value(&self, unit: UnitTypeId) -> f64 {
         self.units.get(unit as usize).map_or(0.0, |u| {

@@ -66,7 +66,7 @@ pub struct AiTier {
     pub goal_sleep: f64,
     /// The AI sees the whole map (no fog), an optional cheat.
     pub full_map_knowledge: bool,
-    /// Lanes around own planets and fleets the AI sees (user rule 2026-10-15: Easy 1, Normal 2, Hard 3); `None` = `StrategyConfig::vision_hops`.
+    /// Lanes around own planets and fleets the AI sees (design rule 2026-10-15: Easy 1, Normal 2, Hard 3); `None` = `StrategyConfig::vision_hops`.
     pub vision_hops: Option<u8>,
 }
 

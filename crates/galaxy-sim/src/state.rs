@@ -916,7 +916,7 @@ pub struct Difficulty {
     pub health: f32,
     /// Multiplier on shield points in battle.
     pub shield: f32,
-    /// AI knowledge of enemy forces (user rule 2026-10-15, RULES.md "AI knowledge"): the AI of this faction knows the exact forces only at planets within this many
+    /// AI knowledge of enemy forces (design rule 2026-10-15, RULES.md "AI knowledge"): the AI of this faction knows the exact forces only at planets within this many
     /// lanes of its own planets and fleets (and wherever it is present); `None` = it sees everything (Brutal, and any faction nobody set a tier for).
     #[serde(default)]
     pub ai_sight_hops: Option<u8>,

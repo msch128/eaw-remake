@@ -93,7 +93,7 @@ impl Galaxy {
         self.fleets.keys().map(|&id| (id, self.fleet_sight(world, viewer, id))).filter(|(_, s)| *s != Sight::Hidden).collect()
     }
 
-    /// Planets whose exact forces the AI of `faction` may use (user rule 2026-10-15, RULES.md "AI knowledge"): all of them when its
+    /// Planets whose exact forces the AI of `faction` may use (design rule 2026-10-15, RULES.md "AI knowledge"): all of them when its
     /// `Difficulty::ai_sight_hops` is `None`, otherwise those within that many lanes of a planet it owns or a fleet it has (moving fleets count
     /// at both ends of their lane) plus every planet it sees `Detailed` (presence, which includes the `System_Spy_Ability` units).
     pub fn ai_knowledge(&self, world: &World, faction: FactionId) -> Vec<bool> {

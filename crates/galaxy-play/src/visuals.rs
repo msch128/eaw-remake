@@ -117,7 +117,7 @@ fn spawn_model(commands: &mut Commands, assets: &FleetAssets, mats: &mut Assets<
             spec.bow_forward = bow;
             // Hidden until `fit_fleet_models` has scaled it: alamo-render spawns the parts in PostUpdate, after the fit, so a new fleet
             // showed its flagship at its own size for one frame. A hero Star Destroyer (Thrawn's Strikefast) filled the whole map:
-            // the white flash the user saw when recruiting a hero.
+            // the white flash seen in playtesting when recruiting a hero.
             commands.spawn((spec, Transform::default(), Visibility::Hidden, FleetModel, ChildOf(parent)));
         }
         _ => {

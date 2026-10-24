@@ -578,7 +578,7 @@ pub fn update_ships(
                 // A soft glow, not a ball: the opaque white ball that stood here covered the screen on a fleet retreat (QA round 3).
                 let art = flash_art.get_or_insert_with(|| FlashArt::new(&mut meshes, &mut images));
                 let flash = spawn_flash(&mut commands, art, &mut materials, t.translation, ArrivalFlash { at: cur.time, radius: radius * 0.6 }, "hyperspace departure flash", Visibility::Inherited);
-                // The sim clock freezes when the battle ends (DEFEATED, pause); the flash is timed on it, so it also expires on wall time (the user saw it stay forever).
+                // The sim clock freezes when the battle ends (DEFEATED, pause); the flash is timed on it, so it also expires on wall time (in playtesting it stayed forever).
                 commands.entity(flash).insert(RemoveAfter(FLASH_WALL_SECONDS));
                 commands.entity(e).insert(HyperspaceDeparture {
                     start: cur.time,

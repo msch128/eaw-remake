@@ -820,7 +820,7 @@ pub fn trigger_reveal_ping_effects(
 }
 
 /// Gravity well of an interdictor: two slow pulsing rings on the battle plane around the ship, drawn only while its `INTERDICT` ability is
-/// switched on (user rule). A ship that has `Is_Interdictor` in the data blocks the retreat all the time (sim) but shows no rings until the
+/// switched on (design rule). A ship that has `Is_Interdictor` in the data blocks the retreat all the time (sim) but shows no rings until the
 /// toggle is on. The data names no particle and no radius for the field (estimate: the ring
 /// is six hull radii wide and only marks the ship), the effect is gizmo lines like the sensor ping.
 pub fn draw_gravity_wells(

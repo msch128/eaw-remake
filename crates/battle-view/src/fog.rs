@@ -2,7 +2,7 @@
 //!
 //! Spans a semi-transparent cosmic fog plane over the arena on the battle plane (`SpaceFOWHeight` -10, cells of about `DesiredSpaceFOWCellSize` 100).
 //! Areas outside the player's ship sensor discs are covered in a faint white haze (`SpaceFOWColor` 255 255 255 in Gameconstants.xml; the data alpha is 0,
-//! the Remake shows no haze, the user wants a faint one, see [`FOG_MAX_ALPHA`]); areas within sensor range are clear with soft feathered borders, and the
+//! the Remake shows no haze, a faint one is a design choice, see [`FOG_MAX_ALPHA`]); areas within sensor range are clear with soft feathered borders, and the
 //! plane fades out toward its own edge so no hard seam shows over a backdrop planet.
 
 use bevy::asset::RenderAssetUsages;
@@ -47,7 +47,7 @@ pub(crate) fn setup_fog_shroud(
     mut images: ResMut<Assets<Image>>,
 ) {
     let Some(rt) = rt else { return };
-    // The user wants the visible shroud over areas none of their ships sees (on by default; `SP_FOG_SHROUD=0` turns the plane off).
+    // By design the shroud stays visible over areas none of the player's ships sees (on by default; `SP_FOG_SHROUD=0` turns the plane off).
     if !rt.fog_of_war || existing.is_some() || std::env::var_os("SP_FOG_SHROUD").is_some_and(|v| v == "0") {
         return;
     }

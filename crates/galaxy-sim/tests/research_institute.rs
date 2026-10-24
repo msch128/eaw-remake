@@ -1,6 +1,6 @@
 //! Remake tech levels come from the Research Institute: `E_Tech-2` ... `R_Tech-5` (`Build_Advances_Tech_Level`, variants of `Dummy_<F>`) need the
 //! faction's `<F>_Research_Institute` on the planet, take 300 / 450 / 600 / 750 s, and the Clone Wars stack adds `CIS_Tech-*` / `Republic_Tech-*`.
-//! Prices are the user rule (`tech_level_cost`), not the object's. Skipped when a mod folder is missing.
+//! Prices are the design rule (`tech_level_cost`), not the object's. Skipped when a mod folder is missing.
 
 use alamo_data::{GameData, load_galaxy};
 use alamo_fs::{GameFs, GameInstall};

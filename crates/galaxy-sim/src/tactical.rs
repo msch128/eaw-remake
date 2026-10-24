@@ -137,7 +137,7 @@ impl std::fmt::Display for TacticalError {
 impl std::error::Error for TacticalError {}
 
 /// Hyperspace slots (`Galaxy::hyperspace`): once any fleet of a side has a pathfinder ship, only the pathfinder ships jump into the battle at the start
-/// and every other unit of the side, of every fleet at the planet, waits in the reserve to be called in (user rule 2026-10-16; a stack of the pathfinder's
+/// and every other unit of the side, of every fleet at the planet, waits in the reserve to be called in (design rule 2026-10-16; a stack of the pathfinder's
 /// type keeps one unit in the battle). Without any pathfinder the side deploys completely (the population cap still applies afterwards).
 fn apply_hyperspace_slots(galaxy: &Galaxy, groups: Vec<TacticalGroup>) -> (Vec<TacticalGroup>, Vec<TacticalGroup>) {
     let has_slot = |g: &TacticalGroup| g.kind == GroupKind::Unit && g.fleet.is_some_and(|f| galaxy.hyperspace_unit(f).is_some());

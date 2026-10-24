@@ -1423,7 +1423,7 @@ fn lane_routes(view: &GalaxyView) -> Vec<usize> {
 /// (`Color_Zoomed_In` alpha 0). Picked by the owners of a lane's planets, that look hid every lane between two planets of one other
 /// faction, so only the lanes at the player's own and unclaimed planets showed: at the Imperial start 54 of the 189 routes were faded
 /// at the opening zoom (0.25) and only came back at the farthest zoom, 64 of 189 at the Rebel start, and each conquest lit the lanes at
-/// the new planet. The map shows every route at all times (user request, 2026-10-17: the connection between two planets must always be visible),
+/// the new planet. The map shows every route at all times (design request, 2026-10-17: the connection between two planets must always be visible),
 /// so a lane takes the look of a route nobody holds, which is the same teal as the other looks in the data.
 fn lane_line(style: &RouteStyleView) -> &LineStyleView {
     &style.neutral
