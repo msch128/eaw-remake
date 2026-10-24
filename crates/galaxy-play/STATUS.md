@@ -19,6 +19,14 @@ the player selects and orders them, builds at owned planets, controls game speed
   the tether end on the map point under the cursor. A carried fleet is 1.5x its size at every zoom (2026-10-17, G4: the zoom-dependent
   1.5-9x scale of 28d1013 / 60903b2 is gone, nothing in the world changes size with the zoom; with the lift above the pad it put the
   model 31-59 px off the cursor).
+- A dropped fleet shrinks back and never pops (2026-10-17, D): after the drop the lift (1.5x, above) goes back to 1 on its own clock
+  (`CarryAnim::lift_of`, `DROP_RATE`), whether the fleet still glides to its parking spot or not. It was tied to the glide: a finished
+  lift was removed at 1.001 and the next glide frame started it again at 1.5, so a fleet dragged over a long way (a glide of 0.45 s or more)
+  popped to 1.4 times its size in one frame (+39.5 % at 60 Hz, 0.45 s after the drop), shrank for four frames and snapped to 1 (-16 %) when
+  the glide ended. Now the largest step after a drop is the first frame's 6.9 % (1.500, 1.396, 1.314, 1.248 ... 1.000 after 0.45 s). Tests
+  `carry::tests::{a_dropped_fleet_shrinks_back_smoothly_and_never_grows_again, the_lift_follows_the_clock_not_the_frame_count,
+  a_fleet_picked_up_again_while_it_shrinks_goes_on_from_its_size, a_fleet_that_was_never_carried_has_no_lift}`; the app's `--drag-pointer`
+  scenario fails on a frame-to-frame size change of more than 10 % after the release (it logged 39.5 % before the fix).
 - Fleet pads as drop targets (2026-10-17, G5): while fleets are carried over an own or allied planet (`input::pads_open`), its three
   pads are outlined and the one under the cursor is lit (white and green band, pulsing like a selection rim; the carried fleet's white
   rings give way to it). A drop there sends `PlayAction::MoveToSlot`, so the fleet takes that slot at once at its own planet (group 1 to

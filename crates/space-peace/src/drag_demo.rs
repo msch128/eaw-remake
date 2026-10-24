@@ -100,6 +100,9 @@ const POINTER_REST: u32 = 24;
 const POINTER_AFTER: u32 = 40;
 /// Most the carried model's centre may be off the cursor on screen (logical px): it hangs exactly at the pointer.
 const ICON_TOLERANCE: f32 = 3.0;
+/// Most a dropped fleet's drawn size may change from one frame to the next (a fraction): it eases from the carry scale 1.5 to 1, the first
+/// frame by 7 % at 60 Hz, and nothing may make it jump.
+const DROP_STEP_MAX: f32 = 0.10;
 
 /// Progress of `--drag-pointer`.
 #[derive(Default)]
@@ -121,6 +124,9 @@ struct PointerDrag {
     icon_offset: f32,
     /// World scale of the carried fleet while resting on the target (the same at every zoom).
     carry_scale: f32,
+    /// World scale of the fleet in the last frame, and the largest change of it between two frames after the release (a fraction).
+    prev_scale: Option<f32>,
+    drop_step: f32,
     /// What the pointer is over while it rests on the target (cursor blocked, hovered planet and pad), and how often that changed.
     rest: Option<(bool, Option<PlanetId>, Option<u8>)>,
     toggles: u32,
@@ -162,6 +168,7 @@ fn drag_pointer(
     mut actions: MessageReader<PlayAction>,
     (mut moved, mut buttons, mut keys): (MessageWriter<CursorMoved>, MessageWriter<MouseButtonInput>, MessageWriter<KeyboardInput>),
     (screen, ui_scale): (Res<State<crate::flow::AppScreen>>, Res<UiScale>),
+    time: Res<Time>,
 ) {
     let Some(spec) = args.drag_pointer.as_deref() else { return };
     if st.done || *screen.get() != crate::flow::AppScreen::Galaxy {
@@ -270,6 +277,22 @@ fn drag_pointer(
     }
     // What the input systems made of the previous frame.
     let carrying = drag.dragging && drag.carry.contains(&fleet);
+    // The world scale the fleet was drawn at in the last frame. After the release it shrinks back to its normal size while it glides home:
+    // no frame may change it by more than `DROP_STEP_MAX` (a fleet that popped to 1.4 times its size half a second after the drop, 39.5 % in
+    // one frame, went unseen by this scenario). `SP_DRAG_TRACE=1` logs it with the frame time, one line per frame.
+    let scale_now = entities.0.get(&fleet).and_then(|&e| fleets.get(e).ok()).map(|(_, g)| g.compute_transform().scale.x);
+    if std::env::var_os("SP_DRAG_TRACE").is_some()
+        && let Some(scale) = scale_now
+    {
+        info!("drag-trace: t {t} dt {:.2} ms scale {scale:.3} carrying {carrying} cursor {:.0}", time.delta_secs() * 1000.0, st.cursor);
+    }
+    if t > release
+        && !args.drag_hold
+        && let (Some(before), Some(now)) = (st.prev_scale, scale_now)
+    {
+        st.drop_step = st.drop_step.max(((now - before) / before).abs());
+    }
+    st.prev_scale = scale_now;
     if (POINTER_PATH..=release).contains(&t) {
         if carrying {
             st.picked_up = true;
@@ -319,19 +342,20 @@ fn drag_pointer(
             }
             None => st.orders.iter().any(|o| drops_on(o, to, pad)),
         };
-        let ok = st.picked_up && st.aborted.is_none() && st.toggles == 0 && !st.carried_after && st.icon_offset <= ICON_TOLERANCE && ended;
+        let ok = st.picked_up && st.aborted.is_none() && st.toggles == 0 && !st.carried_after && st.icon_offset <= ICON_TOLERANCE && st.drop_step <= DROP_STEP_MAX && ended;
         let left = state.galaxy().fleets.get(&fleet).map(|f| match f.location {
             FleetLocation::AtPlanet(p) => format!("at planet {p} slot {}", f.slot),
             FleetLocation::Moving { to, .. } => format!("moving to {to}"),
         });
         info!(
-            "drag-pointer: picked up {} aborted {:?} toggles {} carried after the end {} icon offset {:.1} px carried scale {:.2} orders {:?} paused {} fleet {:?}: {}",
+            "drag-pointer: picked up {} aborted {:?} toggles {} carried after the end {} icon offset {:.1} px carried scale {:.2} drop size step {:.1} % orders {:?} paused {} fleet {:?}: {}",
             st.picked_up,
             st.aborted,
             st.toggles,
             st.carried_after,
             st.icon_offset,
             st.carry_scale,
+            st.drop_step * 100.0,
             st.orders,
             paused.0,
             left,

@@ -45,6 +45,30 @@ const CARRY_STEP: f32 = 1.3;
 const POP_SECONDS: f32 = 0.3;
 const POP_SCALE: f32 = 0.28;
 
+/// A lift this close to 1 counts as over (and is dropped), so a finished fleet keeps no entry.
+const LIFT_DONE: f32 = 1e-3;
+
+impl CarryAnim {
+    /// The model scale ("lift") of fleet `id` in this frame: up to [`CARRY_SCALE`] while it is `held`, back to 1 after the drop. The way
+    /// back runs on its own clock ([`DROP_RATE`]) whether the fleet still glides to its parking spot or not: it used to be tied to the
+    /// glide, which restarted a finished lift at the carry scale when the glide outlasted it (a drag over a long way: 0.45 s after the drop the
+    /// fleet popped to 1.4 times its size in one frame, then shrank again and snapped to 1 when the glide ended).
+    fn lift_of(&mut self, id: FleetId, held: bool, dt: f32) -> f32 {
+        if held {
+            let l = self.lift.entry(id).or_insert(1.0);
+            *l += (CARRY_SCALE - *l) * (1.0 - (-LIFT_RATE * dt).exp());
+            return *l;
+        }
+        let Some(l) = self.lift.get_mut(&id) else { return 1.0 };
+        *l += (1.0 - *l) * (1.0 - (-DROP_RATE * dt).exp());
+        if (*l - 1.0).abs() > LIFT_DONE {
+            return *l;
+        }
+        self.lift.remove(&id);
+        1.0
+    }
+}
+
 /// Moves `cur` towards `target` by an exponential step that does not depend on the frame rate.
 pub(crate) fn approach(cur: Vec3, target: Vec3, rate: f32, dt: f32) -> Vec3 {
     cur + (target - cur) * (1.0 - (-rate * dt).exp())
@@ -152,9 +176,7 @@ pub fn carry_fleets(
         if let (Some(i), Some(ground)) = (slot, drag.cursor_ground) {
             anim.origin.insert(id, sim_pos);
             let team = map_color(&state.world, player.0, visual.owner);
-            let l = anim.lift.entry(id).or_insert(1.0);
-            *l += (CARRY_SCALE - *l) * (1.0 - (-LIFT_RATE * dt).exp());
-            let lifted = *l;
+            let lifted = anim.lift_of(id, true, dt);
             scale *= lifted;
             // The held fleet's model centre sits on the cursor ray, so it is drawn exactly under the pointer at any zoom and camera tilt
             // (no follow lag), in front of the planet it is held over; the others hang beside it. The root is below the model's centre
@@ -195,25 +217,23 @@ pub fn carry_fleets(
                 gizmos.line(spot + dir * s, spot + dir * (s + dash), team.with_alpha(0.45));
                 s += dash * 2.0;
             }
-        } else if let Some(&cur) = anim.shown.get(&id) {
-            // Dropped: glide from the cursor to the parking spot (or into the lane) the simulation chose.
-            let next = approach(cur, sim_pos, DROP_RATE, dt);
-            if next.distance(sim_pos) < visual.pad * 0.05 {
-                anim.shown.remove(&id);
-                anim.origin.remove(&id);
-            } else {
-                anim.shown.insert(id, next);
-                tf.translation = next;
-            }
-            let l = anim.lift.entry(id).or_insert(CARRY_SCALE);
-            *l += (1.0 - *l) * (1.0 - (-DROP_RATE * dt).exp());
-            scale *= *l;
         } else {
-            anim.lift.remove(&id);
+            // Dropped: glide from the cursor to the parking spot (or into the lane) the simulation chose, while the lift shrinks back.
+            if let Some(&cur) = anim.shown.get(&id) {
+                let next = approach(cur, sim_pos, DROP_RATE, dt);
+                if next.distance(sim_pos) < visual.pad * 0.05 {
+                    anim.shown.remove(&id);
+                    anim.origin.remove(&id);
+                } else {
+                    anim.shown.insert(id, next);
+                    tf.translation = next;
+                }
+            }
+            scale *= anim.lift_of(id, false, dt);
         }
         tf.scale = Vec3::splat(scale);
     }
-    anim.lift.retain(|id, l| entities.0.contains_key(id) && (*l - 1.0).abs() > 1e-3);
+    anim.lift.retain(|id, _| entities.0.contains_key(id));
 }
 
 #[cfg(test)]
@@ -283,5 +303,57 @@ mod tests {
         assert!(pop_bump(1.0).abs() < 1e-5);
         assert!(pop_bump(0.0).abs() < 1e-5);
         assert!((pop_bump(0.5) - POP_SCALE).abs() < 1e-5);
+    }
+
+    /// The lift of fleet 7 in every frame: held for `held` seconds, then dropped for `after` seconds.
+    fn lift_frames(anim: &mut CarryAnim, held: f32, after: f32, fps: f32) -> Vec<f32> {
+        let dt = 1.0 / fps;
+        let mut frames: Vec<f32> = (0..(held * fps) as usize).map(|_| anim.lift_of(7, true, dt)).collect();
+        frames.extend((0..(after * fps) as usize).map(|_| anim.lift_of(7, false, dt)));
+        frames
+    }
+
+    /// Largest change from one frame to the next, as a fraction of the size.
+    fn largest_step(frames: &[f32]) -> f32 {
+        frames.windows(2).map(|w| (w[1] - w[0]).abs() / w[0]).fold(0.0, f32::max)
+    }
+
+    #[test]
+    fn a_dropped_fleet_shrinks_back_smoothly_and_never_grows_again() {
+        // A drag over a long way: the glide to the parking spot outlasts the lift (0.45 s), which is when the old code lifted the fleet
+        // again (39.5 % in one frame at 60 Hz, 0.45 s after the drop) and then snapped it to 1 when the glide ended. Every frame here is
+        // asked for with the fleet still gliding: nothing but the lift's own clock may decide.
+        let mut anim = CarryAnim::default();
+        let frames = lift_frames(&mut anim, 1.0, 3.0, 60.0);
+        let dropped = &frames[59..];
+        assert!((dropped[0] - CARRY_SCALE).abs() < 0.01, "held at {}", dropped[0]);
+        assert!(dropped.windows(2).all(|w| w[1] <= w[0]), "the fleet grew again after the drop: {dropped:?}");
+        assert!(largest_step(dropped) < 0.08, "a step of {:.1} % in one frame", largest_step(dropped) * 100.0);
+        assert_eq!(dropped.last(), Some(&1.0));
+        assert!(anim.lift.is_empty(), "a fleet back at its size keeps no lift entry");
+    }
+
+    #[test]
+    fn the_lift_follows_the_clock_not_the_frame_count() {
+        let (mut slow, mut fast) = (CarryAnim::default(), CarryAnim::default());
+        let at = |anim: &mut CarryAnim, fps: f32| *lift_frames(anim, 0.5, 0.1, fps).last().expect("frames");
+        assert!((at(&mut slow, 60.0) - at(&mut fast, 240.0)).abs() < 0.01);
+    }
+
+    #[test]
+    fn a_fleet_picked_up_again_while_it_shrinks_goes_on_from_its_size() {
+        let mut anim = CarryAnim::default();
+        let before = *lift_frames(&mut anim, 1.0, 0.1, 60.0).last().expect("frames");
+        let again = anim.lift_of(7, true, 1.0 / 60.0);
+        assert!(before < CARRY_SCALE - 0.05, "it had begun to shrink: {before}");
+        // One frame of the pick-up's own (faster) ease from where it was, not a restart from 1 or a jump to the carry scale.
+        assert!(again > before && again < before * 1.15, "{before} -> {again}");
+    }
+
+    #[test]
+    fn a_fleet_that_was_never_carried_has_no_lift() {
+        let mut anim = CarryAnim::default();
+        assert_eq!(anim.lift_of(3, false, 1.0 / 60.0), 1.0);
+        assert!(anim.lift.is_empty());
     }
 }

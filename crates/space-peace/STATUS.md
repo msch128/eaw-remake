@@ -222,6 +222,14 @@ Fixed 2026-10-17 (G2): the command bar's root node is the bounding box of its fa
 screen; `cursor_blocked` took all of it as "over the bar", so a drag towards a planet in the lower right was dropped the moment the
 cursor crossed that line (and those planets could not be hovered or clicked). Now only the opaque art (`eaw_ui::ShellOpaque`, alpha
 mask of the faceplate in 4 design px cells) and the bar backing count, and a drag only ends on release, Esc or a right click.
+The scenario runs at 60 Hz of game time (2026-10-17, D; `offscreen::fixed_step`, `SP_FRAME_DT_MS=<ms>` sets another step for a diagnostic):
+it counts frames, but the carry animation counts seconds (a fleet that is clicked pops for 0.3 s, up to +28 % on top of the lift), so
+`drag-hold-closeup` read a carried scale of 1.60 and 1.73 instead of 1.50 in 2 of 21 runs on a machine fast enough to finish a frame in under
+4 ms: the pop was still running at the last measured frame, 74 frames after the press (reproduced at 3.3 / 3.7 / 4.0 / 4.2 / 5.0 ms per frame:
+carried scale 1.75 / 1.64 / 1.55 / 1.50 / 1.50). The player sees no jump in that: it is the designed click pop at the pick-up (1.0 to 1.88 and
+back to 1.5 within 0.45 s at 60 Hz). A size jump after the drop was real, see galaxy-play STATUS (a long drag: +39.5 % in one frame, 0.45 s after
+the drop); the verdict line now logs the `drop size step` (largest change of the fleet's size between two frames after the release, at most 10 %)
+and `SP_DRAG_TRACE=1` logs the size, the frame time and the cursor of every frame.
 
 ## Galaxy UI round (2026-10-09, QA U6-U12)
 - Build pad / queue / fleet-unit tooltips use `Encyclopedia_Text` (text ids, `TEXT_LINE` = line break; fallback `Tooltip_Text`) via `play_ui::lore`, plus cost / build time / population / upkeep rows and the availability reason. The tech upgrade pad lists the ships, structures and star bases that require the next tech level (`tech_unlocks`, from the sim catalog). Hovering the small red/green marker explains upkeep / income (`marker_tooltip`).

@@ -1,7 +1,11 @@
 ﻿//! Headless rendering (`--offscreen <out.png>`): renders the normal scene into a 3840x2160
 //! texture without creating a window, logs frame timings and saves the last frame as PNG.
 
-use std::{collections::HashMap, path::PathBuf, time::Instant};
+use std::{
+    collections::HashMap,
+    path::PathBuf,
+    time::{Duration, Instant},
+};
 
 use bevy::{
     app::AppExit,
@@ -10,6 +14,7 @@ use bevy::{
     prelude::*,
     render::view::screenshot::{Screenshot, ScreenshotCaptured, save_to_disk},
     render::render_resource::TextureFormat,
+    time::TimeUpdateStrategy,
 };
 
 use crate::camera::{CameraBounds, GalaxyCamera};
@@ -76,9 +81,22 @@ fn burst_path(path: &std::path::Path, k: u32) -> PathBuf {
     path.with_file_name(format!("{stem}-{k:03}.{ext}"))
 }
 
+/// Seconds of game time every frame of the offscreen run advances, if it is fixed: `SP_FRAME_DT_MS=<ms>` (a diagnostic, e.g. 3.5 for the
+/// frames of a quiet fast machine), and 1/60 for `--drag-pointer`. The pointer scenario counts frames, but what it measures animates in
+/// seconds (the click pop of a picked-up fleet lasts 0.3 s): at 3-4 ms per frame the pop was still running at the last measured frame and
+/// the carried scale read 1.60 and 1.73 instead of 1.50 in 2 of 21 runs of `drag-hold-closeup`. At 60 Hz the pop is over after 18 frames
+/// whatever the machine does.
+fn fixed_step(args: &Args) -> Option<Duration> {
+    let ms = std::env::var("SP_FRAME_DT_MS").ok().and_then(|v| v.parse::<f32>().ok()).filter(|ms| *ms > 0.0);
+    ms.map(|ms| Duration::from_secs_f32(ms / 1000.0)).or_else(|| args.drag_pointer.as_ref().map(|_| Duration::from_secs_f32(1.0 / 60.0)))
+}
+
 /// Registers the offscreen target and the driver system on `app` (call before `run`).
 pub fn configure(app: &mut App, args: &Args, path: PathBuf) {
     let _ = TARGET_SIZE.set(args.size.unwrap_or((3840, 2160)));
+    if let Some(step) = fixed_step(args) {
+        app.insert_resource(TimeUpdateStrategy::ManualDuration(step));
+    }
     let image = Image::new_target_texture(size().0, size().1, TextureFormat::Rgba8UnormSrgb, None);
     let handle = app.world_mut().resource_mut::<Assets<Image>>().add(image);
     let frames = args.frames.max(2);
