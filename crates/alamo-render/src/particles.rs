@@ -4,7 +4,9 @@
 //! simulation each live particle is a camera-facing quad; all quads of the same texture and blend
 //! mode (from every instance in the scene) are written into a single dynamic mesh, so the number
 //! of draw calls is the number of distinct texture/blend pairs, independent of the particle count.
-//! Alpha-blended batches are sorted back to front, additive batches are not.
+//! Alpha-blended batches are sorted back to front, additive batches are not. A batch's quads are packed ([`pack_into`]) into the two storage
+//! buffers its vertex shader reads, and the bytes in use are written over the front of the GPU buffers in the render world's extraction
+//! ([`upload_batches`]): a frame allocates nothing and uploads only what it draws.
 //!
 //! Engine exhausts (`pe_`, `pte_`, see [`is_engine_system`]) are read as authored: an emitter that is not in bursts (`inBursts`, format
 //! doc property 0x07) emits `numParticlesPerSecond` for as long as the engine runs, so overlapping particles add up to a steady glow, and
@@ -86,6 +88,13 @@ pub struct ParticleStats {
     pub systems: usize,
     /// Milliseconds spent in simulation plus mesh building.
     pub cpu_ms: f32,
+    /// Of `cpu_ms`: the simulation, collecting the quads of every batch, and packing (sorting, vertices, buffers) the batches.
+    pub sim_ms: f32,
+    pub gather_ms: f32,
+    pub pack_ms: f32,
+    /// Quads packed this frame, and the bytes handed to the GPU for them (the buffers' whole capacity, padding included).
+    pub quads: usize,
+    pub upload_bytes: usize,
 }
 
 /// Plays a particle system (`Art/Models/<path>`). Insert it on an entity with a transform;
@@ -207,6 +216,16 @@ struct Quad {
     flat: Option<[Vec3; 2]>,
 }
 
+/// How the quads of an emitter are drawn, worked out once from its data.
+enum Routing {
+    /// Not worked out yet (done by the first [`simulate_particles`] that steps the emitter).
+    Unknown,
+    /// Draws nothing as a sprite: heat haze, light volumes, debris meshes.
+    Skip,
+    /// Into the batch of this texture (lower case) and blend mode.
+    Draw { texture: String, blend: BlendMode },
+}
+
 struct EmitterRuntime {
     particles: Vec<Particle>,
     time: f32,
@@ -215,6 +234,7 @@ struct EmitterRuntime {
     cycles_done: u32,
     rng: u64,
     quads: Vec<Quad>,
+    route: Routing,
 }
 
 impl EmitterRuntime {
@@ -227,6 +247,19 @@ impl EmitterRuntime {
             cycles_done: 0,
             rng: seed | 1,
             quads: Vec::new(),
+            route: Routing::Unknown,
+        }
+    }
+
+    /// Works out `route` from the emitter's data (its texture name was lower-cased, and the three kinds that draw nothing looked up, for every
+    /// emitter with quads in every frame before: a string allocation each).
+    fn ensure_route(&mut self, e: &Emitter) {
+        if matches!(self.route, Routing::Unknown) {
+            self.route = if is_distortion(e) || is_light_volume(e) || matches!(e.blend, BlendMode::Mesh) {
+                Routing::Skip
+            } else {
+                Routing::Draw { texture: e.texture.to_ascii_lowercase(), blend: e.blend }
+            };
         }
     }
 
@@ -814,6 +847,7 @@ pub fn simulate_particles(
                 ],
             };
             for (e, rt) in sys.emitters.iter().zip(inst.emitters.iter_mut()) {
+                rt.ensure_route(e);
                 step_emitter(e, rt, &cx, &mut local_budget);
                 build_quads(e, rt, &cx);
             }
@@ -822,6 +856,7 @@ pub fn simulate_particles(
     stats.live = live_total;
     stats.systems = systems.iter().count();
     stats.cpu_ms = started.elapsed().as_secs_f32() * 1000.0;
+    stats.sim_ms = stats.cpu_ms;
 }
 
 /// Heat-haze emitters distort the background in the original engine; they are not drawn.
@@ -844,6 +879,17 @@ struct Batch {
     /// Capacity in indices (also the vertex count of the dummy draw mesh) and in vertices.
     cap_idx: usize,
     cap_vert: usize,
+    /// Frames in a row that used less than a quarter of the capacity (see [`batch_capacity`]).
+    low_frames: u32,
+    /// This frame's packed index and vertex bytes, the first `ib_used` and `vb_used` of the vectors, when they are written into the GPU
+    /// buffers by [`upload_batches`] (`staged`); the vectors live on from frame to frame, so a frame allocates nothing. A frame in which the
+    /// batch got new buffers carries its data in the buffer assets instead (the GPU buffers do not exist yet when the render world
+    /// extracts that frame).
+    ib: Vec<u8>,
+    vb: Vec<u8>,
+    ib_used: usize,
+    vb_used: usize,
+    staged: bool,
 }
 
 const INITIAL_IDX_CAPACITY: usize = 6 * 1024;
@@ -875,6 +921,185 @@ pub struct ParticleBatches {
     batches: HashMap<BatchKey, Batch>,
 }
 
+/// Bytes of one vertex in a batch buffer: position and the quad flag, uv and two spare floats, colour (three `vec4`s for the shader).
+const VERTEX_BYTES: usize = 48;
+/// Quads one task packs when a big batch is packed on the task pool, and the size under which a batch is packed on the calling thread.
+const PACK_CHUNK: usize = 512;
+const PACK_PARALLEL_MIN: usize = 1536;
+/// Frames in a row of using less than a quarter of a batch's capacity before the capacity shrinks (see [`batch_capacity`]).
+const SHRINK_AFTER_FRAMES: u32 = 120;
+
+/// The camera's screen axes and position, for packing quads.
+#[derive(Clone, Copy)]
+struct PackView {
+    right: Vec3,
+    up: Vec3,
+    position: Vec3,
+}
+
+/// Capacity (indices, vertices) of a batch for this frame's geometry. Every frame uploads the whole capacity (Bevy writes a storage buffer of
+/// the same size in place; another size is a new buffer), so it grows by doubling when the geometry does not fit and shrinks to a snug size
+/// once less than a quarter of it was used for [`SHRINK_AFTER_FRAMES`] frames in a row: the peak of a past explosion is not paid for ever after.
+fn batch_capacity(cap_idx: usize, cap_vert: usize, total_idx: usize, total_vert: usize, low_frames: &mut u32) -> (usize, usize) {
+    const MIN_VERT: usize = INITIAL_IDX_CAPACITY / 6 * 4;
+    if total_idx > cap_idx || total_vert > cap_vert {
+        *low_frames = 0;
+        let (mut idx, mut vert) = (cap_idx, cap_vert);
+        while idx < total_idx {
+            idx *= 2;
+        }
+        while vert < total_vert {
+            vert *= 2;
+        }
+        return (idx, vert);
+    }
+    if total_idx * 4 > cap_idx || total_vert * 4 > cap_vert || (cap_idx <= INITIAL_IDX_CAPACITY && cap_vert <= MIN_VERT) {
+        *low_frames = 0;
+        return (cap_idx, cap_vert);
+    }
+    *low_frames += 1;
+    if *low_frames < SHRINK_AFTER_FRAMES {
+        return (cap_idx, cap_vert);
+    }
+    *low_frames = 0;
+    let (mut idx, mut vert) = (INITIAL_IDX_CAPACITY, MIN_VERT);
+    while idx < total_idx * 3 / 2 {
+        idx *= 2;
+    }
+    while vert < total_vert * 3 / 2 {
+        vert *= 2;
+    }
+    (idx.min(cap_idx), vert.min(cap_vert))
+}
+
+/// Writes `values` as little-endian `f32`s into `dst`.
+#[inline]
+fn put_floats(dst: &mut [u8], values: &[f32]) {
+    for (d, v) in dst.as_chunks_mut::<4>().0.iter_mut().zip(values) {
+        d.copy_from_slice(&v.to_le_bytes());
+    }
+}
+
+/// The four vertices (`vb`, 192 bytes) and six indices (`ib`, 24 bytes) of quad number `index` of its batch.
+#[inline]
+fn pack_quad(q: &Quad, index: usize, view: PackView, vb: &mut [u8], ib: &mut [u8]) {
+    let h = q.size * 0.5;
+    let (s, c) = q.rot.sin_cos();
+    // A flat sprite spins in its own plane, a billboard in the screen's. The batch culls back faces: seen from behind a flat
+    // sprite is mirrored so that its front faces the camera (the winding follows the axes' cross product).
+    let [x_axis, y_axis] = match q.flat {
+        Some([x, y]) if x.cross(y).dot(view.position - q.center) < 0.0 => [x, -y],
+        Some(axes) => axes,
+        None => [view.right, view.up],
+    };
+    let ax = (x_axis * c + y_axis * s) * h;
+    let ay = (y_axis * c - x_axis * s) * h;
+    let cell = q.cell % (q.grid * q.grid);
+    let g = q.grid as f32;
+    let (cx, cy) = ((cell % q.grid) as f32, (cell / q.grid) as f32);
+    let (u0, v0, u1, v1) = (cx / g, cy / g, (cx + 1.0) / g, (cy + 1.0) / g);
+    let corners = [(-1.0f32, -1.0f32, u0, v1), (1.0, -1.0, u1, v1), (-1.0, 1.0, u0, v0), (1.0, 1.0, u1, v0)];
+    for (k, (dx, dy, u, v)) in corners.into_iter().enumerate() {
+        let p = (q.center + ax * dx + ay * dy).to_array();
+        let vertex = [p[0], p[1], p[2], 1.0, u, v, 0.0, 0.0, q.color[0], q.color[1], q.color[2], q.color[3]];
+        put_floats(&mut vb[k * VERTEX_BYTES..(k + 1) * VERTEX_BYTES], &vertex);
+    }
+    let b = (index * 4) as u32;
+    for (d, i) in ib.as_chunks_mut::<4>().0.iter_mut().zip([b, b + 1, b + 2, b + 2, b + 1, b + 3]) {
+        d.copy_from_slice(&i.to_le_bytes());
+    }
+}
+
+/// Packs a run of quads whose first quad is number `first` of its batch.
+fn pack_quads(quads: &[Quad], first: usize, view: PackView, vb: &mut [u8], ib: &mut [u8]) {
+    for (k, q) in quads.iter().enumerate() {
+        pack_quad(q, first + k, view, &mut vb[k * 4 * VERTEX_BYTES..(k + 1) * 4 * VERTEX_BYTES], &mut ib[k * 24..(k + 1) * 24]);
+    }
+}
+
+/// Packs the quads (in order, `slices` one after the other) and then the extra bolt geometry into the index buffer `ib` and the vertex buffer
+/// `vb` of a batch and returns how many bytes of each are used. With `pad_to` (indices, vertices) the vectors are made exactly that big and
+/// zero-padded, for a buffer that is created from these bytes. With `None` they are the batch's own vectors, which live on from frame to frame
+/// and only ever grow: everything in front of the used length is overwritten here, and nothing behind it is looked at (the shader reads only
+/// what the count at the front of the index buffer names). The index buffer is that count and then the indices, a vertex is [`VERTEX_BYTES`]
+/// bytes (the layout `particle.wgsl` reads). A big batch is packed on the task pool, quads of different chunks are independent.
+fn pack_into(
+    ib: &mut Vec<u8>,
+    vb: &mut Vec<u8>,
+    slices: &[&[Quad]],
+    bolts: Option<&MeshBuf>,
+    pad_to: Option<(usize, usize)>,
+    view: PackView,
+    parallel: bool,
+) -> (usize, usize) {
+    let n: usize = slices.iter().map(|s| s.len()).sum();
+    let bolt_idx = bolts.map_or(0, |b| b.idx.len());
+    let used = ((n * 6 + bolt_idx + 1) * 4, (n * 4 + bolts.map_or(0, |b| b.pos.len())) * VERTEX_BYTES);
+    match pad_to {
+        Some((idx, vert)) => {
+            ib.clear();
+            ib.resize((idx + 1) * 4, 0);
+            vb.clear();
+            vb.resize(vert * VERTEX_BYTES, 0);
+        }
+        None => {
+            if ib.len() < used.0 {
+                ib.resize(used.0, 0);
+            }
+            if vb.len() < used.1 {
+                vb.resize(used.1, 0);
+            }
+        }
+    }
+    ib[..4].copy_from_slice(&((n * 6 + bolt_idx) as u32).to_le_bytes());
+    {
+        let (mut iq, _) = ib[4..].split_at_mut(n * 24);
+        let (mut vq, _) = vb.split_at_mut(n * 4 * VERTEX_BYTES);
+        let mut jobs = Vec::new();
+        let mut first = 0;
+        for slice in slices {
+            for chunk in slice.chunks(PACK_CHUNK) {
+                let (i, rest_i) = iq.split_at_mut(chunk.len() * 24);
+                let (v, rest_v) = vq.split_at_mut(chunk.len() * 4 * VERTEX_BYTES);
+                (iq, vq) = (rest_i, rest_v);
+                jobs.push((chunk, first, v, i));
+                first += chunk.len();
+            }
+        }
+        if parallel && n >= PACK_PARALLEL_MIN {
+            bevy::tasks::ComputeTaskPool::get().scope(|scope| {
+                for (chunk, first, v, i) in jobs {
+                    scope.spawn(async move { pack_quads(chunk, first, view, v, i) });
+                }
+            });
+        } else {
+            for (chunk, first, v, i) in jobs {
+                pack_quads(chunk, first, view, v, i);
+            }
+        }
+    }
+    if let Some(b) = bolts {
+        // The vertices of a bolt are not quads (flag 0) and their indices follow the quads' vertices.
+        let base = (n * 4) as u32;
+        let idx_at = 4 + n * 24;
+        for (j, i) in b.idx.iter().enumerate() {
+            ib[idx_at + j * 4..idx_at + j * 4 + 4].copy_from_slice(&(i + base).to_le_bytes());
+        }
+        for (j, ((p, uv), col)) in b.pos.iter().zip(&b.uv).zip(&b.col).enumerate() {
+            let at = (n * 4 + j) * VERTEX_BYTES;
+            put_floats(&mut vb[at..at + VERTEX_BYTES], &[p[0], p[1], p[2], 0.0, uv[0], uv[1], 0.0, 0.0, col[0], col[1], col[2], col[3]]);
+        }
+    }
+    used
+}
+
+/// [`pack_into`] into new buffers, zero-padded to the capacity `caps`.
+fn pack_batch(slices: &[&[Quad]], bolts: Option<&MeshBuf>, caps: (usize, usize), view: PackView, parallel: bool) -> (Vec<u8>, Vec<u8>) {
+    let (mut ib, mut vb) = (Vec::new(), Vec::new());
+    pack_into(&mut ib, &mut vb, slices, bolts, Some(caps), view, parallel);
+    (ib, vb)
+}
+
 /// Collects all quads into the batch meshes.
 #[allow(clippy::too_many_arguments)]
 pub fn update_particle_batches(
@@ -894,50 +1119,57 @@ pub fn update_particle_batches(
     mut visibility: Query<&mut Visibility>,
 ) {
     let started = std::time::Instant::now();
-    let mut gathered: HashMap<BatchKey, Vec<Quad>> = HashMap::new();
-    let mut extra_bufs = std::mem::take(&mut extra.buffers);
-    for k in extra_bufs.keys() {
-        gathered.entry(k.clone()).or_default();
-    }
+    // The quads of every batch stay where the emitters keep them; they are packed from there (only the sorted alpha batches are copied).
+    let mut gathered: HashMap<(&str, u32), Vec<&[Quad]>> = HashMap::new();
     for inst in &systems {
-        for (e, rt) in inst.system.emitters.iter().zip(&inst.emitters) {
+        for rt in &inst.emitters {
             if rt.quads.is_empty() {
                 continue;
             }
-            if is_distortion(e) || is_light_volume(e) || matches!(e.blend, BlendMode::Mesh) {
+            let Routing::Draw { texture, blend } = &rt.route else {
                 continue;
-            }
-            let mode = match e.blend {
+            };
+            let mode = match blend {
                 BlendMode::Alpha => 0,
                 BlendMode::Light => 1,
                 _ if settings.additive_alpha => 1,
                 _ => 2,
             };
-            gathered
-                .entry((e.texture.to_ascii_lowercase(), mode))
-                .or_default()
-                .extend_from_slice(&rt.quads);
+            gathered.entry((texture.as_str(), mode)).or_default().push(&rt.quads);
         }
     }
-    let right = view.rotation * Vec3::X;
-    let up = view.rotation * Vec3::Y;
+    let mut extra_bufs = std::mem::take(&mut extra.buffers);
+    // One entry per batch with quads or bolts (the key is built once per batch here, not once per emitter).
+    let mut work: Vec<(BatchKey, Vec<&[Quad]>)> = gathered.into_iter().map(|((texture, mode), slices)| ((texture.to_owned(), mode), slices)).collect();
+    for k in extra_bufs.keys() {
+        if !work.iter().any(|(key, _)| key == k) {
+            work.push((k.clone(), Vec::new()));
+        }
+    }
+    let gathered_at = std::time::Instant::now();
+    stats.gather_ms = (gathered_at - started).as_secs_f32() * 1000.0;
+    stats.quads = 0;
+    stats.upload_bytes = 0;
+    let pack_view = PackView { right: view.rotation * Vec3::X, up: view.rotation * Vec3::Y, position: view.position };
     let mut active = 0;
     for (key, batch) in &mut batches.batches {
-        if !gathered.contains_key(key)
-            && let Ok(mut v) = visibility.get_mut(batch.entity)
-        {
-            *v = Visibility::Hidden;
+        if !work.iter().any(|(k, _)| k == key) {
+            batch.staged = false;
+            if let Ok(mut v) = visibility.get_mut(batch.entity) {
+                *v = Visibility::Hidden;
+            }
         }
     }
-    for (key, mut quads) in gathered {
+    for (key, slices) in work {
         let bolts = extra_bufs.remove(&key);
-        if !batches.batches.contains_key(&key) {
+        let created = !batches.batches.contains_key(&key);
+        if created {
             let texture = textures.get(&fs.0, &mut images, &key.0);
             let texture_ok = texture.is_some();
             let cap_idx = INITIAL_IDX_CAPACITY;
             let cap_vert = cap_idx / 6 * 4;
             let indices = buffers.add(ShaderBuffer::new(&vec![0u8; (cap_idx + 1) * 4], RenderAssetUsages::default()));
-            let verts = buffers.add(ShaderBuffer::new(&vec![0u8; cap_vert * 48], RenderAssetUsages::default()));
+            let verts = buffers.add(ShaderBuffer::new(&vec![0u8; cap_vert * VERTEX_BYTES], RenderAssetUsages::default()));
             let material = materials.add(ParticleMaterial {
                 texture,
                 additive: key.1,
@@ -956,117 +1188,98 @@ pub fn update_particle_batches(
                 .id();
             batches.batches.insert(
                 key.clone(),
-                Batch { entity, mesh, indices, verts, material, texture_ok, cap_idx, cap_vert },
+                Batch { entity, mesh, indices, verts, material, texture_ok, cap_idx, cap_vert, low_frames: 0, ib: Vec::new(), vb: Vec::new(), ib_used: 0, vb_used: 0, staged: false },
             );
         }
         let batch = batches.batches.get_mut(&key).expect("batch exists");
-        if key.1 == 0 {
-            // Alpha blended: far to near.
-            quads.sort_by(|a, b| {
+        // Alpha blended: far to near.
+        let mut sorted: Vec<Quad> = Vec::new();
+        let slices: Vec<&[Quad]> = if key.1 == 0 {
+            sorted.extend(slices.iter().flat_map(|s| s.iter().copied()));
+            sorted.sort_by(|a, b| {
                 let da = (a.center - view.position).length_squared();
                 let db = (b.center - view.position).length_squared();
                 db.total_cmp(&da)
             });
-        }
-        let n = quads.len();
+            vec![&sorted[..]]
+        } else {
+            slices
+        };
+        let n: usize = slices.iter().map(|s| s.len()).sum();
         active += 1;
-        let mut pos = Vec::with_capacity(n * 4);
-        let mut uv = Vec::with_capacity(n * 4);
-        let mut col = Vec::with_capacity(n * 4);
-        let mut idx = Vec::with_capacity(n * 6);
-        for (i, q) in quads.iter().enumerate() {
-            let h = q.size * 0.5;
-            let (s, c) = q.rot.sin_cos();
-            // A flat sprite spins in its own plane, a billboard in the screen's. The batch culls back faces: seen from behind a flat
-            // sprite is mirrored so that its front faces the camera (the winding follows the axes' cross product).
-            let [x_axis, y_axis] = match q.flat {
-                Some([x, y]) if x.cross(y).dot(view.position - q.center) < 0.0 => [x, -y],
-                Some(axes) => axes,
-                None => [right, up],
-            };
-            let ax = (x_axis * c + y_axis * s) * h;
-            let ay = (y_axis * c - x_axis * s) * h;
-            for (dx, dy) in [(-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)] {
-                pos.push((q.center + ax * dx + ay * dy).to_array());
-            }
-            let cell = q.cell % (q.grid * q.grid);
-            let g = q.grid as f32;
-            let (cx, cy) = ((cell % q.grid) as f32, (cell / q.grid) as f32);
-            let (u0, v0, u1, v1) = (cx / g, cy / g, (cx + 1.0) / g, (cy + 1.0) / g);
-            uv.extend([[u0, v1], [u1, v1], [u0, v0], [u1, v0]]);
-            col.extend([q.color; 4]);
-            let b = (i * 4) as u32;
-            idx.extend([b, b + 1, b + 2, b + 2, b + 1, b + 3]);
-        }
-        if let Some(b) = bolts {
-            let base = pos.len() as u32;
-            pos.extend(b.pos);
-            uv.extend(b.uv);
-            col.extend(b.col);
-            idx.extend(b.idx.iter().map(|i| i + base));
-        }
-        if pos.is_empty() {
+        let total_vert = n * 4 + bolts.as_ref().map_or(0, |b| b.pos.len());
+        let total_idx = n * 6 + bolts.as_ref().map_or(0, |b| b.idx.len());
+        if total_vert == 0 {
+            batch.staged = false;
             if let Ok(mut v) = visibility.get_mut(batch.entity) {
                 *v = Visibility::Hidden;
             }
             continue;
         }
-        // Grow geometrically (never shrink); a larger draw mesh and new buffers are rare events.
-        if idx.len() > batch.cap_idx || pos.len() > batch.cap_vert {
-            while batch.cap_idx < idx.len() {
-                batch.cap_idx *= 2;
-            }
-            while batch.cap_vert < pos.len() {
-                batch.cap_vert *= 2;
-            }
+        // A new capacity needs a larger (or smaller) draw mesh and new buffers: a rare event.
+        let caps = batch_capacity(batch.cap_idx, batch.cap_vert, total_idx, total_vert, &mut batch.low_frames);
+        let resized = caps != (batch.cap_idx, batch.cap_vert);
+        if resized {
+            (batch.cap_idx, batch.cap_vert) = caps;
+            (batch.ib, batch.vb) = (Vec::new(), Vec::new());
             if let Some(mut m) = meshes.get_mut(&batch.mesh) {
                 *m = draw_mesh(batch.cap_idx);
             }
             // New buffer assets of the new size; assigning them marks the material changed so its bind
             // group is rebuilt around them.
-            batch.indices = buffers.add(ShaderBuffer::new(
-                &vec![0u8; (batch.cap_idx + 1) * 4],
-                RenderAssetUsages::default(),
-            ));
-            batch.verts = buffers.add(ShaderBuffer::new(
-                &vec![0u8; batch.cap_vert * 48],
-                RenderAssetUsages::default(),
-            ));
+            batch.indices = buffers.add(ShaderBuffer::new(&vec![0u8; (batch.cap_idx + 1) * 4], RenderAssetUsages::default()));
+            batch.verts = buffers.add(ShaderBuffer::new(&vec![0u8; batch.cap_vert * VERTEX_BYTES], RenderAssetUsages::default()));
             if let Some(mut m) = materials.get_mut(&batch.material) {
                 m.indices = batch.indices.clone();
                 m.verts = batch.verts.clone();
             }
         }
-        // Rewrite both storage buffers in place (same size: Bevy uses `write_buffer`, no allocation).
-        let mut ib = Vec::with_capacity((batch.cap_idx + 1) * 4);
-        ib.extend_from_slice(&(idx.len() as u32).to_le_bytes());
-        for i in &idx {
-            ib.extend_from_slice(&i.to_le_bytes());
-        }
-        ib.resize((batch.cap_idx + 1) * 4, 0);
-        let mut vb = Vec::with_capacity(batch.cap_vert * 48);
-        let quad_verts_count = quads.len() * 4;
-        for i in 0..pos.len() {
-            let is_quad = if i < quad_verts_count { 1.0f32 } else { 0.0f32 };
-            for f in pos[i].iter().chain(&[is_quad]).chain(&uv[i]).chain(&[0.0, 0.0]).chain(&col[i]) {
-                vb.extend_from_slice(&f.to_le_bytes());
+        stats.quads += n;
+        if created || resized {
+            // New buffers get their first content from the assets, zero-padded to the capacity (the GPU buffers are created from it when
+            // the render world prepares them, after this frame's extraction).
+            let (ib, vb) = pack_batch(&slices, bolts.as_ref(), (batch.cap_idx, batch.cap_vert), pack_view, true);
+            stats.upload_bytes += ib.len() + vb.len();
+            if let Some(mut b) = buffers.get_mut(&batch.indices) {
+                b.data = Some(ib);
+                b.buffer_description.size = ((batch.cap_idx + 1) * 4) as u64;
             }
-        }
-        vb.resize(batch.cap_vert * 48, 0);
-        if let Some(mut b) = buffers.get_mut(&batch.indices) {
-            b.data = Some(ib);
-            b.buffer_description.size = ((batch.cap_idx + 1) * 4) as u64;
-        }
-        if let Some(mut b) = buffers.get_mut(&batch.verts) {
-            b.data = Some(vb);
-            b.buffer_description.size = (batch.cap_vert * 48) as u64;
+            if let Some(mut b) = buffers.get_mut(&batch.verts) {
+                b.data = Some(vb);
+                b.buffer_description.size = (batch.cap_vert * VERTEX_BYTES) as u64;
+            }
+            batch.staged = false;
+        } else {
+            // Every other frame packs into the batch's own vectors (no allocation) and `upload_batches` writes what is in use over the
+            // front of the GPU buffers; the buffer assets stay as they are.
+            (batch.ib_used, batch.vb_used) = pack_into(&mut batch.ib, &mut batch.vb, &slices, bolts.as_ref(), None, pack_view, true);
+            stats.upload_bytes += batch.ib_used + batch.vb_used;
+            batch.staged = true;
         }
         if let Ok(mut v) = visibility.get_mut(batch.entity) {
             *v = if batch.texture_ok { Visibility::Visible } else { Visibility::Hidden };
         }
     }
     stats.batches = active;
+    stats.pack_ms = gathered_at.elapsed().as_secs_f32() * 1000.0;
     stats.cpu_ms += started.elapsed().as_secs_f32() * 1000.0;
+}
+
+/// Render world, in the extraction: writes the bytes the batches packed this frame over the front of their GPU buffers, only the part in use
+/// (a buffer asset would have uploaded the whole capacity, from a new vector every frame, and freed it in the render world after the copy).
+/// The shader reads only what the index buffer's count names, so what lies behind the front is never looked at. A batch's GPU buffers are
+/// created from its first frame's assets, when the render world prepares them, so `staged` is false until the frame after.
+fn upload_batches(
+    batches: bevy::render::Extract<Res<ParticleBatches>>,
+    gpu_buffers: Res<bevy::render::render_asset::RenderAssets<bevy::render::storage::GpuShaderBuffer>>,
+    queue: Res<bevy::render::renderer::RenderQueue>,
+) {
+    for batch in batches.batches.values().filter(|b| b.staged) {
+        if let (Some(indices), Some(verts)) = (gpu_buffers.get(&batch.indices), gpu_buffers.get(&batch.verts)) {
+            queue.write_buffer(&indices.buffer, 0, &batch.ib[..batch.ib_used]);
+            queue.write_buffer(&verts.buffer, 0, &batch.vb[..batch.vb_used]);
+        }
+    }
 }
 
 /// Draw mesh of a batch: `cap_idx` dummy vertices. The vertex shader ignores their data and reads the
@@ -1115,6 +1328,12 @@ pub fn build(app: &mut App) {
         && let Some(render) = app.get_sub_app_mut(bevy::render::RenderApp)
     {
         render.add_systems(bevy::render::Render, publish_gpu_memory);
+    }
+    if std::env::var_os("SP_PARTICLE_LOG").is_some() {
+        app.add_systems(Update, log_particle_stats);
+    }
+    if let Some(render) = app.get_sub_app_mut(bevy::render::RenderApp) {
+        render.add_systems(bevy::render::ExtractSchedule, upload_batches);
     }
     app.init_resource::<StableFonts>().add_systems(Update, (stabilize_fonts, collect_font_atlases).chain());
     app.add_plugins(MaterialPlugin::<ParticleMaterial>::default())
@@ -1504,6 +1723,17 @@ mod tests {
     }
 }
 
+/// Debug aid (`SP_PARTICLE_LOG=1`): every 300th frame, what the particles cost in the frame just run: live particles, quads, the milliseconds of
+/// simulation, of collecting the quads and of packing the batches, and the megabytes handed to the GPU.
+pub fn log_particle_stats(frames: Res<bevy::diagnostic::FrameCount>, stats: Res<ParticleStats>) {
+    if frames.0.is_multiple_of(300) {
+        info!(
+            "particles: {} live in {} systems, {} quads in {} batches; {:.2} ms (simulation {:.2}, gather {:.2}, pack {:.2}), {:.2} MB to the GPU",
+            stats.live, stats.systems, stats.quads, stats.batches, stats.cpu_ms, stats.sim_ms, stats.gather_ms, stats.pack_ms, stats.upload_bytes as f32 / 1e6
+        );
+    }
+}
+
 /// Debug aid (`SP_ASSET_LOG=1`): logs asset counts every 10 s to spot leaks.
 pub fn log_asset_counts(
     frames: Res<bevy::diagnostic::FrameCount>,
@@ -1657,5 +1887,177 @@ fn publish_gpu_memory(device: Res<bevy::render::renderer::RenderDevice>, mut n: 
     if let Some(report) = device.wgpu_device().generate_allocator_report() {
         GPU_ALLOCATED.store(report.total_allocated_bytes, std::sync::atomic::Ordering::Relaxed);
         GPU_RESERVED.store(report.total_reserved_bytes, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+#[cfg(test)]
+mod pack_tests {
+    use super::*;
+
+    /// The packing as it was before `pack_batch` (one vertex at a time through four vectors and a float at a time into the buffers): the
+    /// reference the bytes of the new packing must equal.
+    fn pack_reference(quads: &[Quad], bolts: Option<&MeshBuf>, caps: (usize, usize), view: PackView) -> (Vec<u8>, Vec<u8>) {
+        let (right, up) = (view.right, view.up);
+        let n = quads.len();
+        let mut pos = Vec::with_capacity(n * 4);
+        let mut uv = Vec::with_capacity(n * 4);
+        let mut col = Vec::with_capacity(n * 4);
+        let mut idx = Vec::with_capacity(n * 6);
+        for (i, q) in quads.iter().enumerate() {
+            let h = q.size * 0.5;
+            let (s, c) = q.rot.sin_cos();
+            let [x_axis, y_axis] = match q.flat {
+                Some([x, y]) if x.cross(y).dot(view.position - q.center) < 0.0 => [x, -y],
+                Some(axes) => axes,
+                None => [right, up],
+            };
+            let ax = (x_axis * c + y_axis * s) * h;
+            let ay = (y_axis * c - x_axis * s) * h;
+            for (dx, dy) in [(-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)] {
+                pos.push((q.center + ax * dx + ay * dy).to_array());
+            }
+            let cell = q.cell % (q.grid * q.grid);
+            let g = q.grid as f32;
+            let (cx, cy) = ((cell % q.grid) as f32, (cell / q.grid) as f32);
+            let (u0, v0, u1, v1) = (cx / g, cy / g, (cx + 1.0) / g, (cy + 1.0) / g);
+            uv.extend([[u0, v1], [u1, v1], [u0, v0], [u1, v0]]);
+            col.extend([q.color; 4]);
+            let b = (i * 4) as u32;
+            idx.extend([b, b + 1, b + 2, b + 2, b + 1, b + 3]);
+        }
+        if let Some(b) = bolts {
+            let base = pos.len() as u32;
+            pos.extend(b.pos.iter().copied());
+            uv.extend(b.uv.iter().copied());
+            col.extend(b.col.iter().copied());
+            idx.extend(b.idx.iter().map(|i| i + base));
+        }
+        let mut ib = Vec::with_capacity((caps.0 + 1) * 4);
+        ib.extend_from_slice(&(idx.len() as u32).to_le_bytes());
+        for i in &idx {
+            ib.extend_from_slice(&i.to_le_bytes());
+        }
+        ib.resize((caps.0 + 1) * 4, 0);
+        let mut vb = Vec::with_capacity(caps.1 * 48);
+        let quad_verts_count = n * 4;
+        for i in 0..pos.len() {
+            let is_quad = if i < quad_verts_count { 1.0f32 } else { 0.0f32 };
+            for f in pos[i].iter().chain(&[is_quad]).chain(&uv[i]).chain(&[0.0, 0.0]).chain(&col[i]) {
+                vb.extend_from_slice(&f.to_le_bytes());
+            }
+        }
+        vb.resize(caps.1 * 48, 0);
+        (ib, vb)
+    }
+
+    /// A reproducible mix of camera-facing and flat quads (seen from the front and from behind), atlas cells beyond the sheet, odd sizes.
+    fn quads(n: usize, seed: u64) -> Vec<Quad> {
+        let mut state = seed | 1;
+        let mut next = move || {
+            state ^= state >> 12;
+            state ^= state << 25;
+            state ^= state >> 27;
+            ((state.wrapping_mul(0x2545_F491_4F6C_DD1D) >> 40) as f32) / (1u64 << 24) as f32
+        };
+        (0..n)
+            .map(|i| {
+                let v = |next: &mut dyn FnMut() -> f32, r: f32| Vec3::new(next() - 0.5, next() - 0.5, next() - 0.5) * r;
+                let flat = (i % 3 == 0).then(|| [v(&mut next, 2.0).normalize_or_zero(), v(&mut next, 2.0).normalize_or_zero()]);
+                Quad {
+                    center: v(&mut next, 4000.0),
+                    size: 0.2 + next() * 60.0,
+                    rot: (next() - 0.5) * 6.4,
+                    color: [next(), next(), next(), next()],
+                    cell: (next() * 70.0) as u32,
+                    grid: [1, 2, 4, 8][i % 4],
+                    flat,
+                }
+            })
+            .collect()
+    }
+
+    fn bolts(n: usize) -> MeshBuf {
+        let mut b = MeshBuf::default();
+        for k in 0..n {
+            let f = k as f32;
+            b.pos.push([f, 2.0 * f, -f]);
+            b.uv.push([0.25 * f, 0.5]);
+            b.col.push([1.0, 0.5, 0.25, 0.75]);
+        }
+        for t in 0..n / 3 {
+            b.idx.extend([3 * t as u32, 3 * t as u32 + 1, 3 * t as u32 + 2]);
+        }
+        b
+    }
+
+    fn view() -> PackView {
+        PackView { right: Vec3::new(1.0, 0.0, 0.2).normalize(), up: Vec3::new(0.0, 1.0, 0.1).normalize(), position: Vec3::new(10.0, 700.0, -300.0) }
+    }
+
+    #[test]
+    fn packing_gives_the_bytes_of_the_old_packing_in_one_thread_and_on_the_task_pool() {
+        bevy::tasks::ComputeTaskPool::get_or_init(bevy::tasks::TaskPool::default);
+        for (n, bolt_verts, parts) in [(0, 0, 1), (1, 0, 1), (7, 6, 2), (511, 0, 3), (513, 9, 2), (1600, 0, 3), (5000, 30, 4), (5000, 0, 1)] {
+            let all = quads(n, 7 + n as u64);
+            // The quads of one batch come from several emitters: slices of unequal length.
+            let cuts: Vec<usize> = (0..=parts).map(|p| n * p * p / (parts * parts)).collect();
+            let slices: Vec<&[Quad]> = cuts.windows(2).map(|w| &all[w[0]..w[1]]).collect();
+            let extra = (bolt_verts > 0).then(|| bolts(bolt_verts));
+            let caps = ((n * 6 + extra.as_ref().map_or(0, |b| b.idx.len()) + 100).next_power_of_two(), (n * 4 + bolt_verts + 100).next_power_of_two());
+            let want = pack_reference(&all, extra.as_ref(), caps, view());
+            for parallel in [false, true] {
+                let got = pack_batch(&slices, extra.as_ref(), caps, view(), parallel);
+                assert!(got.0 == want.0, "{n} quads, {bolt_verts} bolt vertices, parallel {parallel}: the index buffer differs");
+                assert!(got.1 == want.1, "{n} quads, {bolt_verts} bolt vertices, parallel {parallel}: the vertex buffer differs");
+            }
+        }
+    }
+
+    #[test]
+    fn packing_into_vectors_that_live_on_gives_the_front_of_the_padded_buffers() {
+        bevy::tasks::ComputeTaskPool::get_or_init(bevy::tasks::TaskPool::default);
+        let all = quads(2000, 3);
+        let extra = bolts(12);
+        let caps = (16384, 8192);
+        let (padded_i, padded_v) = pack_batch(&[&all[..]], Some(&extra), caps, view(), true);
+        // Vectors left over from an earlier frame: too small for this one, or big and full of other bytes.
+        for (mut ib, mut vb) in [(vec![7u8; 5], vec![9u8; 100]), (vec![7u8; 1 << 20], vec![9u8; 1 << 22])] {
+            let used = pack_into(&mut ib, &mut vb, &[&all[..]], Some(&extra), None, view(), true);
+            assert_eq!(used, ((2000 * 6 + extra.idx.len() + 1) * 4, (2000 * 4 + 12) * VERTEX_BYTES));
+            assert!(padded_i.starts_with(&ib[..used.0]) && padded_v.starts_with(&vb[..used.1]), "the used part differs from the padded buffers");
+            // The next frame has fewer quads and no bolts: nothing of the earlier frame is left in front of the used length.
+            let used = pack_into(&mut ib, &mut vb, &[&all[..10]], None, None, view(), false);
+            let (small_i, small_v) = pack_batch(&[&all[..10]], None, caps, view(), false);
+            assert_eq!(used, ((10 * 6 + 1) * 4, 10 * 4 * VERTEX_BYTES));
+            assert!(small_i.starts_with(&ib[..used.0]) && small_v.starts_with(&vb[..used.1]));
+        }
+    }
+
+    #[test]
+    fn the_capacity_of_a_batch_doubles_when_it_is_full_and_shrinks_after_a_quiet_spell() {
+        let (mut idx, mut vert, mut low) = (INITIAL_IDX_CAPACITY, INITIAL_IDX_CAPACITY / 6 * 4, 0);
+        // 5,000 quads need 30,000 indices and 20,000 vertices: three doublings of 6,144 and of 4,096.
+        (idx, vert) = batch_capacity(idx, vert, 30_000, 20_000, &mut low);
+        assert_eq!((idx, vert), (6144 * 8, 4096 * 8));
+        // Half of it: no change. A quarter or less for 120 frames in a row: down to 1.5 times the use.
+        assert_eq!(batch_capacity(idx, vert, 30_000, 20_000, &mut low), (idx, vert));
+        for _ in 0..SHRINK_AFTER_FRAMES - 1 {
+            assert_eq!(batch_capacity(idx, vert, 6_000, 4_000, &mut low), (idx, vert), "no shrinking before the spell is over");
+        }
+        let (small_idx, small_vert) = batch_capacity(idx, vert, 6_000, 4_000, &mut low);
+        assert_eq!((small_idx, small_vert), (6144 * 2, 4096 * 2), "it keeps 1.5 times the use: 9,000 indices and 6,000 vertices");
+        // One busy frame in between starts the count again.
+        let mut low = 0;
+        for _ in 0..SHRINK_AFTER_FRAMES - 1 {
+            batch_capacity(idx, vert, 6_000, 4_000, &mut low);
+        }
+        assert_eq!(batch_capacity(idx, vert, 40_000, 20_000, &mut low), (idx, vert));
+        assert_eq!(low, 0);
+        // The smallest capacity never shrinks.
+        let (min_idx, min_vert) = (INITIAL_IDX_CAPACITY, INITIAL_IDX_CAPACITY / 6 * 4);
+        let mut low = 0;
+        for _ in 0..3 * SHRINK_AFTER_FRAMES {
+            assert_eq!(batch_capacity(min_idx, min_vert, 6, 4, &mut low), (min_idx, min_vert));
+        }
     }
 }

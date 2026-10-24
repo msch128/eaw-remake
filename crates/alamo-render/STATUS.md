@@ -173,3 +173,29 @@ planet, each with a flat teal half disc cut off by the hull, a red flare and a w
   `battle_demo`: `SP_DEMO_STERN=<ship name>` follows that ship's engines from behind (`--cam yaw-off-astern,pitch,distance`), with the camera bounds lifted (the Eclipse's stern lies outside the map box).
 - Open: the same two readings (`inBursts`, `isNotBillboarded`) are wrong for the other looping emitters too (missile smoke is already special-cased as a stream; beam fronts, hardpoint glows, shockwave rings are not);
   they were left alone because their look was checked against the video. `EngineThrottle` is not driven by any game code (all engines run at full intensity).
+
+## Particle upload (2026-10-17, P: the release cost of the engine glow)
+The engine glow commit (7a0d5b4) keeps about ten times the particles alive: in `battle_demo` (292 ships) 5,858 at 10 s instead of 605, 7,129 live and 4,952 quads on average over 140 s.
+Release, 1080p, alternating runs on a machine busy with other builds (frame ms mean / p50 / p99; parent = the commit before the glow, fc45210):
+- `battle_demo` default, 140 s, two rounds: parent 8.23 / 7.30 / 23.8 and 8.23 / 7.33 / 25.4; with the glow 8.97 / 8.53 / 25.2 and 8.98 / 8.47 / 28.1 (+0.75 mean, +1.2 p50; quiet runs earlier
+  7.23 / 6.88 / 16.9 against 8.40 / 8.25 / 18.0); now 7.14 / 6.19 / 22.3 and 7.04 / 6.09 / 22.4, 1.1 ms under the parent.
+- A Galactic Conquest battle with 893 ships (Yavin to Hoth, 68 `--grant-unit`, `--battle-auto`, `SP_FRAME_LOG=0`, battle seconds 10 to 32): parent 23.85 / 21.17 / 57.1 and 22.91 / 20.28 / 51.5;
+  with the glow 27.57 / 24.36 / 64.1 and 25.22 / 22.47 / 55.9 (+2.3 to +3.7 mean; three quiet pairs earlier 22.0 against 24.3); now 22.77 / 19.39 / 45.2 and 23.67 / 21.03 / 49.1, level with the parent.
+- Where it went (`ParticleStats` now splits it; `battle_demo` prints the means, `SP_PARTICLE_LOG=1` logs it in any run): `update_particle_batches` collected the quads of every batch into new vectors
+  (a lower-cased texture name allocated for every emitter with quads, every frame), pushed each quad through four vectors and 48 single-float copies, and handed Bevy a new 2 to 4 MB `Vec` every frame,
+  zero-filled to the buffer's capacity (which only ever doubled and kept the peak of the last explosion), moved into the buffer asset, extracted, copied again by `write_buffer` and freed in the render
+  world. Per frame on average (battle_demo): simulation 0.35 ms, gather 0.30, pack 1.07, 3.84 MB to the GPU (the particles' own GPU time is small: `main_transparent_pass_3d` 0.04 ms at the median with and without the glow).
+- Now: (1) an emitter works out once how it is drawn (`Routing`: its texture lower-cased, or nothing for heat haze, light volumes and mesh emitters), the quads of a batch stay in the emitters' vectors
+  and are packed from there (only the sorted alpha batches are copied); (2) `pack_into` writes the 4 vertices and 6 indices of a quad straight into the buffer bytes, big batches in chunks of 512 quads on
+  the task pool; (3) a batch keeps its own staging vectors, which only grow, and `upload_batches` (render world, in the extraction) writes the bytes in use over the front of the GPU buffers with
+  `RenderQueue::write_buffer`: nothing is allocated per frame and only the used part goes up, the shader reads only what the count at the front of the index buffer names. A batch that just got new
+  buffers (the first frame, a new capacity) carries its first content in the buffer assets, because its GPU buffers do not exist yet when that frame is extracted; (4) the capacity doubles when full
+  and shrinks to 1.5 times the use after 120 frames of using under a quarter of it (`batch_capacity`).
+  Per frame now: simulation 0.40 ms, gather 0.13, pack 0.48, 1.40 MB: 1.72 ms to 1.0 ms of CPU, and the render thread no longer copies and frees 3.8 MB each frame.
+- The look is the same by construction and by picture. Test `pack_tests::packing_gives_the_bytes_of_the_old_packing_in_one_thread_and_on_the_task_pool` packs random camera-facing and flat quads (seen from
+  both sides), atlas cells beyond the sheet and bolt geometry in 8 shapes with the new code (one thread and the task pool) and with a copy of the old packing: the index and vertex bytes are equal;
+  `packing_into_vectors_that_live_on_gives_the_front_of_the_padded_buffers` (staging vectors left over from earlier frames), `the_capacity_of_a_batch_doubles_when_it_is_full_and_shrinks_after_a_quiet_spell`.
+  `battle_demo` at 20 s and 100 s, 1920 x 1080, mean absolute difference per channel (0 to 255) of two runs of the same build: 0.034 (the glow commit) and 0.020 (now); the glow commit against now 0.056 / 0.006;
+  parent against the glow 0.12 and 0.07 (0.09 % of the samples differ by more than 24 levels): the change of the glow commit shows above that noise, this one does not.
+- Not done: the simulation (0.4 ms, `step_emitter` for the 14,000 live particles of a big battle, 8,600 of them not drawn: under a pixel or faded out) and a quad-per-instance layout (a 48 to 80 byte record instead of 216 bytes
+  per quad, corners built in `particle.wgsl`).

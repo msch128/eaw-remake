@@ -52,6 +52,8 @@ struct Capture {
     overlay: bool,
     target: Handle<Image>,
     frame_ms: Vec<f64>,
+    /// Per frame next to `frame_ms`: live particles, quads, simulation / gather / pack milliseconds, MB uploaded, total particle milliseconds.
+    particles: Vec<[f32; 7]>,
     last: Instant,
     wall_start: Instant,
     warm: u32,
@@ -268,6 +270,7 @@ fn main() {
                 overlay,
                 target,
                 frame_ms: Vec::new(),
+                particles: Vec::new(),
                 last: Instant::now(),
                 wall_start: Instant::now(),
                 warm: 0,
@@ -794,6 +797,7 @@ fn capture_driver(
         cap.skip -= 1;
     } else if cap.warm > 40 {
         cap.frame_ms.push(dt);
+        cap.particles.push([stats.live as f32, stats.quads as f32, stats.sim_ms, stats.gather_ms, stats.pack_ms, stats.upload_bytes as f32 / 1e6, stats.cpu_ms]);
         if dt > 20.0 {
             println!(
                 "hitch {dt:.1} ms at t={:.2}s tick {} alive {:?} particles {} batches {} step {:.2} ms",
@@ -849,6 +853,14 @@ fn capture_driver(
                                 pct(0.95),
                                 pct(0.99),
                                 ms[ms.len() - 1]
+                            );
+                        }
+                        if !cap.particles.is_empty() {
+                            let n = cap.particles.len() as f32;
+                            let mean = |k: usize| cap.particles.iter().map(|p| p[k]).sum::<f32>() / n;
+                            println!(
+                                "particles per frame (mean of {}): {:.0} live, {:.0} quads; simulation {:.3} ms + gather {:.3} + pack {:.3} = {:.3} ms; {:.2} MB uploaded",
+                                cap.particles.len(), mean(0), mean(1), mean(2), mean(3), mean(4), mean(6), mean(5)
                             );
                         }
                         if let Some(p) = prof {
