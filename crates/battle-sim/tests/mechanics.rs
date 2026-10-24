@@ -1748,3 +1748,26 @@ fn a_frigate_stays_on_the_battle_plane_when_its_target_is_far_above() {
     }
     assert!(b.ships[0].pos.z.abs() < 1.0, "the frigate climbed to {}", b.ships[0].pos.z);
 }
+
+/// A projectile without shield damage (`Projectile_Does_Shield_Damage` No: missiles, proton torpedoes and the Remake's mass drivers
+/// `Proj_Mass_Driver_Turret` / `Proj_Vengeance_Mass_Driver`) goes through a full shield straight to the hull.
+#[test]
+fn a_mass_driver_ignores_the_shield_and_hits_the_hull() {
+    let mass_driver = ProjDef { name: "mass_driver".into(), category: "mass_driver".into(), shield_damage: false, ..laser() };
+    let shooter = ship("shooter", 1.0e6, 0.0, vec![gun("driver", 0.0)]);
+    let target = ship("target", 1.0e6, 5000.0, vec![]);
+    let cat = Arc::new(Catalog::from_defs(vec![shooter, target], vec![mass_driver]));
+    let mut b = Battle::new(BattleSetup {
+        catalog: cat.clone(),
+        sides: vec![one_side(&cat, "shooter", 1, true), one_side(&cat, "target", 1, true)],
+        config: BattleConfig { half_size: 12000.0, record_events: false, ..BattleConfig::default() },
+    });
+    b.ships[0].pos = Vec3::new(-1000.0, 0.0, 0.0);
+    b.ships[1].pos = Vec3::new(1000.0, 0.0, 0.0);
+    for _ in 0..30 * 20 {
+        b.step();
+    }
+    let t = &b.ships[1];
+    assert!(t.hull < 1.0e6, "the hull took the hits (hull {})", t.hull);
+    assert_eq!(t.shield, 5000.0, "the shield stays full");
+}
