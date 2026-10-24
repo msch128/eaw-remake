@@ -46,7 +46,7 @@ Without `--offscreen` it opens a window. Other flags: `--map`, `--cam yaw,pitch,
 2. Merge or LOD static props; check Bevy extraction cost (transform propagation, batching).
 3. Death-clone models or shorter death effects; engine glow tied to speed.
 4. Shield bubble visibility from sim state; hull-damage smoke below 50% health.
-5. Live-test the round trip in the app (see "Integration for space-peace"); reinforcements in the request.
+5. Live-test the round trip in the app (see "Integration for eaw-remake"); reinforcements in the request.
 
 ## Open questions
 
@@ -75,7 +75,7 @@ Without `--offscreen` it opens a window. Other flags: `--map`, `--cam yaw,pitch,
 - Example `tactical_roundtrip --offscreen out.png [--at 25] [--speed 30] [--ui]`: pending battle in galaxy-sim -> `tactical_setup` ->
   `from_request` -> AI vs AI at 30x -> `BattleFinished` -> `apply_tactical_result`, prints the new galaxy state.
 
-## Integration for space-peace
+## Integration for eaw-remake
 Add `battle-view`, `galaxy-sim` (already there through galaxy-play) and `eaw-ui` to the app; add `AlamoRenderPlugin`, `BattleViewPlugin`,
 `TacticalUiPlugin` and `EawUiPlugin` once at startup (they are idle without a `BattleSession`).
 
@@ -99,13 +99,13 @@ Add `battle-view`, `galaxy-sim` (already there through galaxy-play) and `eaw-ui`
 - `BattleViewSettings::{shadows, particle_density}` and `QualityPreset {Low, Medium, High}` (`apply_quality`): Low = no MSAA / bloom / shadows, 0.5 particles;
   Medium = 2x MSAA, bloom, 0.75; High = 4x MSAA, bloom, 3-cascade sun shadows to 8000 units, full density. `start_battle` sets `AlamoRenderSettings::shadows`
   and `ParticleSettings::density` before the models spawn; `spawn_scene` uses `spawn_sun_shadowed` when shadows are on. `battle_demo --shadows | --quality low|medium|high`.
-- space-peace `Settings`: `shadows`, `particle_density`, options rows "Graphics quality" (cycles the presets, "Custom" when the values match none) and "Shadows".
+- eaw-remake `Settings`: `shadows`, `particle_density`, options rows "Graphics quality" (cycles the presets, "Custom" when the values match none) and "Shadows".
 - 4K, ~290 ships, `battle_demo --seed 7`: default 10.3 ms mean, `--shadows` 10.1, Low 8.6, High 10.1 (p99 12-14 ms). Shadows are visible (`target/vis/shadow_cmp.png`).
 
 ## GPU profiling
 - `battle_view::gpu_profile` (`timestamp_render_plugin()` replaces the `RenderPlugin`, `GpuProfilePlugin` collects Bevy's `RenderDiagnosticsPlugin` timestamps, `GpuProfile::summary()` prints
   per-pass medians/p95, GPU and CPU). `battle_demo --gpu-profile` prints it at the end. Needs Vulkan/DX12 timestamp queries; per-system CPU time is not collected here (use `--features profile`
-  with `TRACE_CHROME=1`). To use it in `space-peace --offscreen`: build `DefaultPlugins` with `.set(timestamp_render_plugin())`, add `GpuProfilePlugin` after it, print `GpuProfile::summary()` on exit.
+  with `TRACE_CHROME=1`). To use it in `eaw-remake --offscreen`: build `DefaultPlugins` with `.set(timestamp_render_plugin())`, add `GpuProfilePlugin` after it, print `GpuProfile::summary()` on exit.
 - 4K, 290-ship battle, High (shadows): GPU medians per frame: bin_unpacking 0.96 ms (GPU mesh preprocessing), opaque pass 0.47, bloom 0.19, transparent pass (all particles) 0.07, clustering 0.07,
   upscaling 0.03: about 1.8 ms in total against a 9.4 ms wall mean, so the demo is CPU / pacing bound, not GPU bound. Hitches of 20-40 ms line up with sim steps of 4-12 ms (blocking offscreen mode waits for the sim).
 
@@ -131,11 +131,11 @@ Add `battle-view`, `galaxy-sim` (already there through galaxy-play) and `eaw-ui`
 - Preload now also covers the battle's particle textures: `BattleSession::effect_names()` (death effects of ships and hardpoints, the class explosions, the particle objects of every projectile in the catalog)
   goes to `ModelPreloader::request_particles`. Hardpoint/turret models are not part of the list because battle-view does not spawn them as models (no `with_unit`); the log line `load_model` (>= 20 ms) shows
   any model that still loads late.
-- Measured on the real app path (`space-peace --offscreen --screen galaxy --campaign GC_Mini_Web_Way_Rebel --weeks 250 --stop-on-battle --battle-choice fight`, the integrator's "longest frame while loading"):
+- Measured on the real app path (`eaw-remake --offscreen --screen galaxy --campaign GC_Mini_Web_Way_Rebel --weeks 250 --stop-on-battle --battle-choice fight`, the integrator's "longest frame while loading"):
   release 71-125 ms with preload vs 191-232 ms without (`SP_NO_PRELOAD=1` switches it off); dev profile 144 ms vs 627 ms. Run-to-run noise on this shared machine is about +-30 ms.
   Tried and dropped (no measurable change): a per-frame spawn budget for `spawn_models` (`AlamoRenderSettings::spawn_budget`, still available, default off) and `RenderAssetBytesPerFrame` (16 MiB). The remaining ~70-100 ms
   frame is not in `start_battle` (it takes ~0.1 ms) nor in model loading; it is app-side (tactical UI / session start) and needs a Chrome trace of that frame.
-- Chrome trace of the battle entry on the app path (`cargo build --release -p space-peace --features battle-view/profile`, `TRACE_CHROME=...`; ~27 GB for 100 s, so analyse with grep + awk for spans > 10 ms and
+- Chrome trace of the battle entry on the app path (`cargo build --release -p eaw-remake --features battle-view/profile`, `TRACE_CHROME=...`; ~27 GB for 100 s, so analyse with grep + awk for spans > 10 ms and
   delete it): the remaining hitches are three separate one-frame costs, none of them model or texture loading (traced times, release is faster): `OnEnter(AppScreen::SpaceBattle)` 55 ms (`battle_play::spawn_loading_art`
   / `suspend_galaxy_look`, `hide_galaxy`, `hide_play_ui`), the command flush that spawns the ships' bone hierarchies 31 ms (+10 ms in `spawn_models`), and `tactical_ui::spawn_bar` -> `spawn_eaw_command_bar` 40 ms
   (the whole command bar tree in one command). Bevy's own `run_render_schedule` shows 30-40 ms spikes (and the systems that wait for it) a few times per run. Not fixed: each needs structural work
@@ -157,7 +157,7 @@ Add `battle-view`, `galaxy-sim` (already there through galaxy-play) and `eaw-ui`
   thread: the particle systems its proxies name (engine glows, blink lights: 7-14 ms each from a cold disk; MC-75 frame 92 ms, Bothan 38 ms), its hardpoint models with their textures (MC-80: 40 turrets in
   31 + 21 + 15 ms frames, Endurance bridge / tower 12 + 10 ms), the bolt texture of a new weapon on its first shot (`w_turbolaser.dds` 12.5-13 ms), explosion particle systems on their first use.
 - Fixes: the preload list adds the models the hardpoints attach (`BattleSession::attached_models`, also missile models), the `Damage_Particles` objects and the IDLE / DIE clips; `alamo-render`'s preload parses
-  proxy particle systems with each model, keeps the parsed effect systems and builds the bolts (see its STATUS). The warm-up (`warmup.rs`, `BattleViewSettings::warm_up`, set by space-peace) spawns one instance
+  proxy particle systems with each model, keeps the parsed effect systems and builds the bolts (see its STATUS). The warm-up (`warmup.rs`, `BattleViewSettings::warm_up`, set by eaw-remake) spawns one instance
   of every (unit type, side) the request can field (groups, reserve, squadron members, hangar fighters) plus the arrival flash and marker in front of the battle camera while the loading screen covers it; meshes,
   team-colour materials, turrets, proxy particles and render pipelines are built then, and the instances are removed once every model is built and no pipeline is compiling (at most 3 s more, 10 s in all). The
   battle clock stands until then, and `battle_play` keeps the loading screen until `BattleWarmup::done`. The arrival / departure flashes share one sphere mesh.
@@ -216,7 +216,7 @@ Add `battle-view`, `galaxy-sim` (already there through galaxy-play) and `eaw-ui`
   (use `camera.target_scaling_factor()`).
 - **Bug fixed in eaw-ui:** `b_droid_help_tactical` (R2) is a 93x120 Block button that covered pause / fast-forward, so those clicks went to the droid. It is now built first
   (underneath). Camera/pause/option buttons are fine.
-- **Real-input self test** `input_test.rs`: `SP_INPUT_TEST=1|exit` with a windowed run (`space-peace --hidden ...`, battle for the player) injects `CursorMoved`,
+- **Real-input self test** `input_test.rs`: `SP_INPUT_TEST=1|exit` with a windowed run (`eaw-remake --hidden ...`, battle for the player) injects `CursorMoved`,
   `MouseButtonInput` and the window's cursor position before Bevy's input systems, so it exercises the real pipeline (`ButtonInput`, `ui_focus_system`, `read_pointer`):
   select ship, right-click order, plain `Button` control experiment, a command bar button click, bar area keeps the selection, empty click deselects. One line
   `input-test: N checks PASS|FAIL`; smoke scenario `windowed-battle-input`. Failures print the nodes under the cursor.
@@ -254,7 +254,7 @@ Add `battle-view`, `galaxy-sim` (already there through galaxy-play) and `eaw-ui`
   The sim's refusal itself is not visible to the view (commands are fire and forget), so the checks are replicated on the snapshot.
 - Hotkeys: Shift + 1..6 press the ability buttons of the focused unit (the data has none; plain digits stay control groups). Autocast toggles are not implemented (no state for it in battle-sim).
 - Tests: `ability-hotkey` in `input_test` only runs for real when the selected unit has an ability (it is vacuous in the Hoth smoke scenario); the targeting cursor has no automated test yet.
-- Esc (host decision, `space-peace::battle_play::battle_menu`): cancels an armed order / targeting first; with nothing armed it opens the Resume / Retreat menu, which pauses the battle clock while open (the player's own pause is restored on close). `control::orders` no longer reads Esc. `input_test` steps `escape ArmedCleared / Paused(true) / Paused(false)` (25 checks).
+- Esc (host decision, `eaw-remake::battle_play::battle_menu`): cancels an armed order / targeting first; with nothing armed it opens the Resume / Retreat menu, which pauses the battle clock while open (the player's own pause is restored on close). `control::orders` no longer reads Esc. `input_test` steps `escape ArmedCleared / Paused(true) / Paused(false)` (25 checks).
 
 ## Tactical round 5: move lines
 - `ShipSnap::order` / `ShipRender::order` (sim `Order`) feed `control::overlays`: every selected ship of the player, and every ship ordered in the last 3 s (`RecentOrders`), draws a thin line to its destination
@@ -385,7 +385,7 @@ Add `battle-view`, `galaxy-sim` (already there through galaxy-play) and `eaw-ui`
 - **Numbers** (offscreen 1080p, battle second 20, Rebel campaign `GC_Full_Web_Way_Rebel`, Yavin -> Hoth, `--grant-unit` of 30 TIE Fighter, 2 TIE Bomber and 2 TIE Interceptor squadrons, 2 Star Destroyers and a Victory = 460 fighters; the app's capture log line `battle: capture shows ...` counts what is drawn): bars of single craft with nothing picked, f9710b3 -> now: camera 930 249 -> 0, 2000 464 -> 0, 6064 573 -> 0, 700 at 15 degrees 222 -> 0 (Rebel fleet of 48 X-wing / Y-wing / A-wing squadrons: 133 / 264 / 383 / 121 -> 0); squadron icons drawn 29 / 50 / 57 / 24. One TIE squadron picked: 0 craft bars and one box with one average bar at those four cameras, 12 craft bars at camera 300 and 150. The enemy\'s squadrons get theirs too (a capture at 100 s with the A-wings sent at the enemy: 9 enemy icons with red plates).
 - **Cost** (`SP_FRAME_LOG=0`, frame intervals of the log, battle seconds 8-28, alternating runs on a machine busy with other builds; f9710b3 plus the capture log only against this change): the 460 fighters at camera 6064 mean 15.23 / 15.17 ms before and 13.86 / 13.64 after (p99 33 / 34 -> 30 / 30), at camera 2000 18.65 / 15.72 -> 18.30 / 15.07; the Rebel fleet of 533 ships at 6064 12.36 / 12.48 -> 11.55 / 12.05. No bars to build, 60 small UI nodes instead of up to 573 bars and flags.
 - **Tests:** battle-view `ships::fighters_are_drawn_at_their_model_scale_like_capital_ships_whatever_the_camera` (update_ships through a Bevy app), `tactical_ui::{nothing_picked_shows_no_bar_at_all, only_the_craft_of_a_picked_squadron_get_bars, selecting_or_hovering_a_craft_picks_its_whole_squadron, craft_standing_close_together_do_not_pile_up_their_bars, every_unpicked_squadron_has_one_small_icon_and_no_box_or_bar, a_picked_squadron_keeps_its_box_and_gives_up_its_icon, a_picked_squadron_standing_close_shows_one_average_bar_under_its_box}`, `control::pick_tests::a_click_on_a_craft_or_on_the_icon_selects_the_whole_squadron`, `flight::{squadron_neighbours_never_touch_however_the_camera_stands, a_cramped_squadron_drifts_less_and_a_roomy_one_keeps_the_whole_weave}`; eaw-ui `squad_icons::tests`; battle-sim `defs::formation_tests`.
-- **Capture hooks** (space-peace `--offscreen` with a battle): `SP_SELECT_SQUAD=near|<squadron index>` selects the player\'s squadron nearest the camera focus (or that one) at frame 120 and `SP_FOCUS_SQUAD=1` puts the camera on it; the capture log prints the bars and icons drawn and, per unit type, its drawn radius, size in pixels and scale against the data\'s (`battle: size ...`). Proof: `SP_BATTLE_CAM=930|2000|6064|700,15 SP_FRAME_LOG=0 eaw-remake --offscreen x.png --campaign GC_Full_Web_Way_Rebel --select "The Yavin System" --grant-unit <list> --at "The Yavin System" --weeks 8 --move Hoth --battle-choice fight --size 1920x1080 --volume 0 --battle-seconds 20` (run with `SP_SAVES_DIR` set to a scratch folder).
+- **Capture hooks** (eaw-remake `--offscreen` with a battle): `SP_SELECT_SQUAD=near|<squadron index>` selects the player\'s squadron nearest the camera focus (or that one) at frame 120 and `SP_FOCUS_SQUAD=1` puts the camera on it; the capture log prints the bars and icons drawn and, per unit type, its drawn radius, size in pixels and scale against the data\'s (`battle: size ...`). Proof: `SP_BATTLE_CAM=930|2000|6064|700,15 SP_FRAME_LOG=0 eaw-remake --offscreen x.png --campaign GC_Full_Web_Way_Rebel --select "The Yavin System" --grant-unit <list> --at "The Yavin System" --weeks 8 --move Hoth --battle-choice fight --size 1920x1080 --volume 0 --battle-seconds 20` (run with `SP_SAVES_DIR` set to a scratch folder).
 - **Open:** non-squadron units that are tiny on screen (frigates and corvettes zoomed out) and every enemy capital ship still show the framed icon box (not part of the user\'s decision); the picked squadron\'s box is 34 px against the Remake\'s measured 28 x 27 px.
 
 ## Lively flight (2026-10-17)
@@ -489,7 +489,7 @@ Add `battle-view`, `galaxy-sim` (already there through galaxy-play) and `eaw-ui`
 - **Sim fix** (battle-sim STATUS): an ability the player started with a command never reported `AbilityActivated` (the next step cleared it first), so neither the unit's activated voice line nor these
   sounds played for abilities used by hand; they did for the AI's and autocast uses.
 - Log (`SP_AUDIO_LOG`): `audio ability loop: ship <id> <type> ability <i> <KIND> starts <event> (<s> of effect left, <d> units from the listener)`, `... ends <event>`, then the plugin's `audio emitter .. -> / stops`
-  and `audio sfx PLAY` lines. Test hook `SP_TEST_ABILITY=<TYPE>@<battle seconds>` (space-peace `battle_play::test_ability`): the player's ships with that ability use it once a battle second from then on and the camera
+  and `audio sfx PLAY` lines. Test hook `SP_TEST_ABILITY=<TYPE>@<battle seconds>` (eaw-remake `battle_play::test_ability`): the player's ships with that ability use it once a battle second from then on and the camera
   (and with it the listener) stays on the first of them.
 - Proof (offscreen Yavin -> Hoth battle, 2 granted Star Destroyers, `SP_TEST_ABILITY=TRACTOR_BEAM@30 --battle-orders --battle-speed 10 --volume 0`): the loop starts with the ability and ends with it, e.g. `starts ... (11.7 s of
   effect left, 90 units from the listener)`, `audio sfx PLAY Unit_Star_Destroyer_Tractor_Beam (spatial=true dist=24 att=1.000 ...)`, `ends` 1.14 s later (11.4 battle seconds at speed 10), `audio emitter .. stops` 44 ms after.

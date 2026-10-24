@@ -1,5 +1,5 @@
 # Builds the player installer, EAW-Remake-Setup-<version>.exe (Inno Setup, per user, no admin rights):
-#   1. cargo build --release -p space-peace --features dist, with the C runtime linked in, so a fresh Windows needs no Visual C++ runtime
+#   1. cargo build --release -p eaw-remake --features dist, with the C runtime linked in, so a fresh Windows needs no Visual C++ runtime
 #   2. checks the exe: a windowed app that imports only DLLs of Windows 10/11
 #   3. compiles tools\installer\eaw-remake.iss with ISCC
 #   .\tools\package.ps1                              build into target\dist, write dist\EAW-Remake-Setup-<version>.exe
@@ -39,7 +39,7 @@ if (-not $SkipBuild) {
         # cargo reports progress on stderr; with 'Stop' Windows PowerShell 5.1 turns that into a terminating error when the output is
         # captured, so only the exit code decides here (as in build.ps1).
         $ErrorActionPreference = 'Continue'
-        cargo build --release -p space-peace --features dist
+        cargo build --release -p eaw-remake --features dist
         $buildCode = $LASTEXITCODE
         $ErrorActionPreference = 'Stop'
     } finally {

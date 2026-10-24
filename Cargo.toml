@@ -13,7 +13,7 @@ members = [
     "crates/alamo-model",
     "crates/alamo-render",
     "crates/battle-view",
-    "crates/space-peace",
+    "crates/eaw-remake",
     "crates/galaxy-play",
     "crates/eaw-ui",
 ]

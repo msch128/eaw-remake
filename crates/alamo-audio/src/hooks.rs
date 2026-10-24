@@ -14,7 +14,7 @@ use alamo_fs::FileSource;
 use crate::{MusicLibrary, SampleResolver, SfxLibrary, SpeechLibrary};
 
 
-/// Hook tags the game code reads and plays (battle: `battle-view/src/visuals.rs` + `audio.rs`; galaxy: `space-peace/src/ui_sounds.rs`;
+/// Hook tags the game code reads and plays (battle: `battle-view/src/visuals.rs` + `audio.rs`; galaxy: `eaw-remake/src/ui_sounds.rs`;
 /// `alamo-audio/src/constants.rs` for `Audio.xml` / `Factions.xml`). Keep in sync when a new hook is wired; the audit marks every
 /// other tag "NO". Music is selected by event-name convention (`MusicPlanner`), not through the `Music_Event_*` faction tags.
 pub const WIRED_TAGS: &[&str] = &[

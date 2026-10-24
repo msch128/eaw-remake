@@ -1,5 +1,5 @@
 //! User settings: window, graphics, audio and camera options, persisted as a small TOML file
-//! under `%APPDATA%\SpacePeace\settings.toml` (never inside the repository). Command line flags
+//! under `%APPDATA%\EAW-Remake\settings.toml` (never inside the repository). Command line flags
 //! override the stored values for the current run.
 
 use std::{
@@ -442,7 +442,7 @@ impl Settings {
 
     /// Location of the settings file, `None` when `%APPDATA%` is not set.
     pub fn path() -> Option<PathBuf> {
-        std::env::var_os("APPDATA").map(|a| PathBuf::from(a).join("SpacePeace").join("settings.toml"))
+        crate::datadir::data_dir().map(|d| d.join("settings.toml"))
     }
 
     /// Loads the stored settings, falling back to defaults for a missing or unreadable file.
@@ -479,7 +479,7 @@ impl Settings {
     /// Serialises to a flat TOML document.
     pub fn to_toml(&self) -> String {
         format!(
-            "# Space Peace settings\n\
+            "# EAW:Remake settings\n\
              window_mode = \"{}\"\n\
              resolution = [{}, {}]\n\
              vsync = {}\n\

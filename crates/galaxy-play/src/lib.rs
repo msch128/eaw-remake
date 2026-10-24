@@ -65,7 +65,7 @@ pub enum PlaySet {
 
 /// The playable galactic game.
 ///
-/// Integration into the `space-peace` app:
+/// Integration into the `eaw-remake` app:
 ///
 /// 1. Add `GalaxyPlayPlugin::deferred()` once (after `AlamoRenderPlugin`); nothing runs until a
 ///    game is started.

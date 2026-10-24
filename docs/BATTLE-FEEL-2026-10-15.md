@@ -1,6 +1,6 @@
 # Space battle feel vs the Remake, 2026-10-15
 
-What still feels different, ranked by how much a player notices. Sources: Remake frames in `space-peace-ref\yt` (n93 f0011/f0013/f0023,
+What still feels different, ranked by how much a player notices. Sources: Remake frames in `eaw-remake-ref\yt` (n93 f0011/f0013/f0023,
 CS9 f0027/f0033, Bqc5 f0031/f0053/f0057, ref 07_tactical_battle) against our frames: real window runs through
 `tools/playtest/driver.ps1` (Hoth battle) and `battle_demo` close-ups (`SP_DEMO_FIGHT`, `SP_DEMO_DOGFIGHT`, Bestine, 1920x1080, t=40-50 s).
 Limits: stills only (no motion), our demo fleets are not the Remake's, and the demo draws no HUD overlays. Items 1-3 are comparisons of

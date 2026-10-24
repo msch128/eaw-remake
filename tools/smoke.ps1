@@ -5,8 +5,8 @@
 #                                          run only with this switch and only while nobody uses the machine
 # Needs the game and the Remake mod installed. Output (PNGs, logs, saves) goes to $Out, never into the repo.
 param(
-    [string]$Exe = (Join-Path $PSScriptRoot '..\target\release\space-peace.exe'),
-    [string]$Out = (Join-Path $env:TEMP 'space-peace-smoke'),
+    [string]$Exe = (Join-Path $PSScriptRoot '..\target\release\eaw-remake.exe'),
+    [string]$Out = (Join-Path $env:TEMP 'eaw-remake-smoke'),
     [string]$Only = '',
     [switch]$Windowed,
     [int]$TimeoutSeconds = 420
@@ -66,7 +66,7 @@ $scenarios = @(
     @('windowed-battle',     @('--hidden', '--no-vsync', '--exit-after', '9000', '--volume', '0', '--campaign', $camp, '--select', $yavin, '--weeks', '8', '--move', 'Hoth', '--battle-choice', 'fight', '--battle-auto', '--battle-speed', '30'), 'battle: over'),
     # Real input path of the tactical screen: injected window events (select, order, bar button, deselect); see battle-view/src/input_test.rs.
     @('windowed-battle-input', @('--hidden', '--no-vsync', '--exit-after', '9000', '--volume', '0', '--campaign', $camp, '--select', $yavin, '--weeks', '8', '--move', 'Hoth', '--battle-choice', 'fight', '--battle-reserve', '3', '--battle-speed', '1'), 'input-test: [0-9]+ checks PASS'),
-    # Real pointer path of the galaxy screens: battle banner, ESC menu (save, slots, options, load, main menu); see space-peace/src/input_test.rs.
+    # Real pointer path of the galaxy screens: battle banner, ESC menu (save, slots, options, load, main menu); see eaw-remake/src/input_test.rs.
     @('windowed-ui-pointer', @('--hidden', '--no-vsync', '--exit-after', '8000', '--volume', '0', '--campaign', $camp, '--select', $yavin, '--weeks', '8', '--move', 'Hoth'), 'ui-test: [0-9]+ checks PASS'),
     # F10 equivalent (--battle-abort-after): the half-fought battle is abandoned and the galaxy keeps the losses so far (some side lost units).
     @('windowed-battle-f10-abandon', @('--hidden', '--no-vsync', '--exit-after', '6000', '--volume', '0', '--campaign', $camp, '--select', $yavin, '--weeks', '8', '--move', 'Hoth', '--battle-choice', 'fight', '--battle-auto', '--battle-speed', '30', '--battle-abort-after', '90'), 'abandoned at t=\d+s, units lost per side \[[0-9, ]*[1-9]'),

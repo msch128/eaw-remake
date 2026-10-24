@@ -29,9 +29,9 @@ or set the environment variables EAW_GAME_DIR and EAW_MOD_DIR.
 
 Saves, settings and logs
 ------------------------
-They are in %APPDATA%\SpacePeace (settings.toml, saves, logs). Uninstalling EAW:Remake
+They are in %APPDATA%\EAW-Remake (settings.toml, saves, logs). Uninstalling EAW:Remake
 keeps that folder; delete it by hand to remove your saves.
-If something goes wrong, attach the newest file of %APPDATA%\SpacePeace\logs to your
+If something goes wrong, attach the newest file of %APPDATA%\EAW-Remake\logs to your
 bug report: https://github.com/msch128/eaw-remake/issues
 
 License

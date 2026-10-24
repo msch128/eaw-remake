@@ -14,6 +14,7 @@ mod drag_demo;
 mod label_probe;
 mod camera;
 mod cli;
+mod datadir;
 mod flow;
 mod galaxy_map;
 mod hero_heads;
@@ -88,9 +89,12 @@ fn main() {
         return;
     }
 
+    // Before anything reads or writes settings, saves or logs: a data folder of the old name moves to the current one.
+    let mut log = StartupLog::default();
+    datadir::init().record(&mut log);
+
     // Opening the file system is fast; the data itself is parsed in the background while the
     // loading screen is shown. Without an install the demo galaxy is used.
-    let mut log = StartupLog::default();
     let mut problem = game::StartupProblem::default();
     let mut content = game::ContentChoice { active: game::Content::from_mod_arg(args.mod_id.as_deref()), ..default() };
     let fs = if args.demo {

@@ -42,6 +42,8 @@ Runs the Remake's Lua plot scripts and `GameScoring` on top of `galaxy-sim` (`Sc
   back; they are event driven (`Story_Event_Trigger`, state machines) and the story engine knows which events fired, so nothing is repeated. A loaded game's ships and queues stay, AI goals start new
   plans. So the continuation is **not bit-identical** to the original game (the tests print whether it is; it is not). Loading checks format, version, campaign, data fingerprint and that the
   restored state hashes like the saved one (`SaveError::{Version, DataMismatch, Corrupt, Setup}`); `ScriptedSim::load_warnings` lists parts of the save that did not fit.
+- **Format id (2026-10-17):** files carry `eaw-remake-save`. Files written under the working title say `space-peace-save` and load unchanged (`check_format` in `save.rs`); saving a loaded game writes
+  the new id. Proof: unit tests of the check (no game needed) and the real-data test `a_save_with_the_old_format_id_still_loads`, which rewrites the id of a fresh save to the old one and loads it.
 - The journal is gone (no `with_sim_mut` taint, `Diagnostics::journal_*` are 0, `SaveFile::total_steps()` is 1, `LoadProgress` has one step). `PlayAction::Save/Load` are unchanged.
   Runtime-only things (tactical catalog and arenas) are still restored with `load_with(.., |s| s.with_sim_runtime(..))`.
 - **Defaults:** `ScriptedConfig::default()` now means Remake AI + strategic layer + `DifficultyTier::Normal` (use `remake_ai: false, difficulty: None` for the old stub).

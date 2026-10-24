@@ -13,8 +13,8 @@ was not reproduced yet.
 
 ## How the mod is selected
 
-- `--mod <workshop id>` (`crates/space-peace/src/cli.rs`). `alamo_fs::GameFs::for_mods` stacks the workshop folder
-  on FoC and EaW data. Any id works. `Content` in `crates/space-peace/src/game.rs` only knows `Remake` (4.0) and
+- `--mod <workshop id>` (`crates/eaw-remake/src/cli.rs`). `alamo_fs::GameFs::for_mods` stacks the workshop folder
+  on FoC and EaW data. Any id works. `Content` in `crates/eaw-remake/src/game.rs` only knows `Remake` (4.0) and
   `CloneWars` (`fft`); an unknown id is treated as plain Remake.
 - 5.2 is loose XML plus MEG archives with the same layout as 4.0 (`Config.meg`, `Maps.meg`, `Maps_RE.meg`,
   `Shaders.meg`, `Patch.meg`, `Patch2.meg`, `64Patch.meg` at the `Data` root). The VFS needs no change.
@@ -81,7 +81,7 @@ was tried in game. I found no evidence of UI changes (for example hiding empty a
    `Scroll_Deceleration_Factor` 1.15 (1.5), `Tactical_Edge_Scroll_Region` 10 px (2), `Tactical_Min_Scroll_Speed`
    900 (1000); `Hypergameconstants.XML` `TacticalMaxScrollSpeed` 4000 (2000). Go to
    `crates/battle-view/src/camera.rs` (line 97 reads only the edge region today) and the galaxy camera in
-   `crates/space-peace/src/camera.rs`: try the 5.2 values as a faster, snappier scroll with a 10 px edge zone. 4.0 data: same tags exist with the old values, so this is a number change, not a data gap.
+   `crates/eaw-remake/src/camera.rs`: try the 5.2 values as a faster, snappier scroll with a 10 px edge zone. 4.0 data: same tags exist with the old values, so this is a number change, not a data gap.
 2. Hard and Brutal without stat cheats. 5.2 `DIFFICULTYADJUSTMENTS.XML` sets `Damage/Health/Shield_Multiplier` to 1
    on the hard levels (4.0: 1.05 and 1.1) and lowers the AI `Credit_Multiplier` (3.0 to 2.0, 2.0 to 1.5). That is
    an economy-only difficulty, which matches our `fair` option. Go to `crates/alamo-data/src/difficulty.rs` (where

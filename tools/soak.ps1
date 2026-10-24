@@ -7,8 +7,8 @@
 # rise in more than 80% of the later samples and end > 10% above the warm-up value (linear growth); any ERROR,
 # "Out of Memory", "failed validation", panic; >20 identical WARN lines; offscreen galaxy p99 frame time >= 33 ms.
 param(
-    [string]$Exe = (Join-Path $PSScriptRoot '..\target\release\space-peace.exe'),
-    [string]$Out = (Join-Path $env:TEMP 'space-peace-soak'),
+    [string]$Exe = (Join-Path $PSScriptRoot '..\target\release\eaw-remake.exe'),
+    [string]$Out = (Join-Path $env:TEMP 'eaw-remake-soak'),
     [int]$BattleMinutes = 5,
     [int]$GalaxyMinutes = 10,
     [string]$Only = '',

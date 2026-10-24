@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use alamo_data::{GameData, load_galaxy};
 use alamo_fs::{FileSource, GameFs, GameInstall};
-use galaxy_script::{DifficultyTier, SaveError, ScriptedConfig, ScriptedSim};
+use galaxy_script::{DifficultyTier, SaveError, SaveFile, ScriptedConfig, ScriptedSim};
 use galaxy_sim::{Command, Event, SimConfig};
 
 struct Ctx {
@@ -49,7 +49,7 @@ fn loaded_game_equals_the_saved_state_and_plays_on() {
     let empire = w.faction_id("Empire").unwrap();
     let _ = sim.apply(Command::BuildUnit { faction: empire, planet: w.planet_id("Coruscant_WW").unwrap(), unit: w.unit_id("TIE_Fighter_Squadron").unwrap() });
     weeks(&mut sim, 24);
-    let path = std::env::temp_dir().join("space_peace_test_save.json");
+    let path = std::env::temp_dir().join("eaw_remake_test_save.json");
     sim.save(&path).expect("save");
     let size = std::fs::metadata(&path).unwrap().len();
 
@@ -111,6 +111,35 @@ fn bad_saves_are_rejected() {
     assert!(matches!(ScriptedSim::from_save(file, c.fs.clone(), c.data.clone(), |_| {}), Err(SaveError::UnknownCampaign(_))));
 }
 
+/// Files written while the game still had its working title say `space-peace-save`. They are the same format and still load.
+#[test]
+fn a_save_with_the_old_format_id_still_loads() {
+    let Some(c) = ctx() else { return };
+    let mut sim = new_sim(&c, ScriptedConfig { game_scoring: false, ..ai_config() });
+    weeks(&mut sim, 2);
+    let path = std::env::temp_dir().join("eaw_remake_test_old_format.json");
+    sim.save(&path).expect("save");
+    // A save of this build carries the new id; an old file is the same text with the old one.
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert!(text.starts_with(r#"{"format":"eaw-remake-save","#), "a new save carries the new id");
+    std::fs::write(&path, text.replacen("eaw-remake-save", "space-peace-save", 1)).unwrap();
+    assert_eq!(SaveFile::read(&path).unwrap().format, "space-peace-save");
+
+    let t = std::time::Instant::now();
+    let loaded = ScriptedSim::load(&path, c.fs.clone(), c.data.clone()).expect("the old-format save loads");
+    println!("loaded a `space-peace-save` file of week {} in {:?}", loaded.checkpoint().week, t.elapsed());
+    assert_eq!(loaded.checkpoint(), sim.checkpoint());
+    // Saved again, it carries the new id.
+    loaded.save(&path).expect("resave");
+    assert_eq!(SaveFile::read(&path).unwrap().format, "eaw-remake-save");
+
+    // An id that is neither of the two is still refused.
+    let mut other = SaveFile::read(&path).unwrap();
+    other.format = "other-save".into();
+    assert!(matches!(ScriptedSim::from_save(other, c.fs.clone(), c.data.clone(), |_| {}), Err(SaveError::Format(_))));
+    let _ = std::fs::remove_file(&path);
+}
+
 /// Manual measurement: `cargo test --release -p galaxy-script --test save load_time -- --ignored --nocapture`.
 #[test]
 #[ignore]
@@ -118,7 +147,7 @@ fn load_time_of_a_200_week_save() {
     let Some(c) = ctx() else { return };
     let mut sim = new_sim(&c, ai_config());
     weeks(&mut sim, 200);
-    let path = std::env::temp_dir().join("space_peace_test_save200.json");
+    let path = std::env::temp_dir().join("eaw_remake_test_save200.json");
     let t = std::time::Instant::now();
     sim.save(&path).expect("save");
     println!("save: {:?}, {} KB", t.elapsed(), std::fs::metadata(&path).unwrap().len() / 1024);
@@ -144,7 +173,7 @@ fn debug_grant_is_gated_and_survives_a_save() {
     sim.apply(Command::DebugGrant { faction: rebel, planet: home, unit, count: 2 }).expect("granted");
     weeks(&mut sim, 1);
     assert_eq!(count(&sim), before + 2);
-    let path = std::env::temp_dir().join("space_peace_test_debug_grant.json");
+    let path = std::env::temp_dir().join("eaw_remake_test_debug_grant.json");
     sim.save(&path).expect("save");
     let loaded = ScriptedSim::load(&path, c.fs.clone(), c.data.clone()).expect("load");
     assert_eq!(count(&loaded), before + 2, "the replay repeats the grant");

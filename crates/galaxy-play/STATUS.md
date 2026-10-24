@@ -6,7 +6,7 @@ the player selects and orders them, builds at owned planets, controls game speed
 ## What works
 - `driver.rs`: threaded `SimDriver` (commands, advance, battle resolution, snapshots), headless-testable.
 - `GalaxyPlayPlugin::deferred()` + `start_play(world, PlayInit)` / `stop_play(world)`: the host starts a game when a campaign
-  opens (the `space-peace` app does this on entering the map) and stops it when leaving. `GalaxyPlayPlugin::new(init)` still
+  opens (the `eaw-remake` app does this on entering the map) and stops it when leaving. `GalaxyPlayPlugin::new(init)` still
   starts one at plugin build (used by the demo example).
 - Fleets on the map (generic fleet model or flagship), orbit slots, lane travel, selection, box select, drag-and-drop and
   right-click move orders with route/ETA hint, merge/split/retreat, blockade-aware route planning.
@@ -46,11 +46,11 @@ the player selects and orders them, builds at owned planets, controls game speed
   `pick_fleet`); a fleet icon centred on a globe stays selectable there, away from any globe nothing changed, and `PlayHover::planet`,
   the fleet pads (`drop_pad`) and the drop orders are as before. The icons are `fleet_icons` (the same point and reach as before).
   Tests: `input::tests::a_planets_globe_beats_fleets_whose_icon_is_centred_outside_it`, `a_fleet_icon_centred_on_the_globe_is_still_picked_there`,
-  `fleet_icons_away_from_any_globe_are_picked_as_before`; end to end by the app's `--label-probe` (space-peace STATUS). Measured on the
+  `fleet_icons_away_from_any_globe_are_picked_as_before`; end to end by the app's `--label-probe` (eaw-remake STATUS). Measured on the
   Imperial start: every parked fleet's icon is centred 1.2 to 2.1 visible globe radii from its planet's centre between zoom 0.03 and
   0.60 (mean 2.1, 1.9 at 0.60; all of them in slot 1). Known limit, computed (no such fleet in that start) for the old closest-zoom tilt (25 degrees): a fleet in slot 2, straight
   above its planet, was centred 0.95 globe radii out at zoom 0.06 and inside the globe below zoom 0.13 (camera pitch under 27 degrees).
-  Gone since the galaxy camera stays at 50 degrees at every zoom (space-peace STATUS, C2).
+  Gone since the galaxy camera stays at 50 degrees at every zoom (eaw-remake STATUS, C2).
 - `BuildMenu` (units, structures, star base, tech, research) with availability reasons; `PlayAction::Build` queues it, credits go
   through galaxy-sim. Production queue model.
 - `GameClock`: pause + speed levels, `hold` flag for the host (pause menu, battle screen); time is held while a human battle waits.
@@ -64,7 +64,7 @@ the player selects and orders them, builds at owned planets, controls game speed
 
 ## Run
 `cargo run -p galaxy-play --example galaxy_play_demo -- --offscreen out.png [--weeks N] [--human] ...` (no window).
-Integration test path: `space-peace --offscreen out.png --campaign GC_Full_Web_Way_Rebel --select "The Yavin System" --weeks 8 --build Squadron --move Hoth`.
+Integration test path: `eaw-remake --offscreen out.png --campaign GC_Full_Web_Way_Rebel --select "The Yavin System" --weeks 8 --build Squadron --move Hoth`.
 
 ## Gaps
 - No order to cancel a queue entry (no galaxy-sim command).
@@ -87,12 +87,12 @@ the journaled methods, so a save is possible at any moment. `PlayInit::from_data
   Replay (load) speed: ~0.2 s per game week plus ~1 s setup; a 200-week save takes ~40 s: show the loading bar. No keyframes yet (a state-hash checkpoint every N weeks would only verify, not speed up).
 - Tests: `tests/scripted.rs` (render-loop responsiveness, save -> continue -> load -> identical continuation, `from_save` with monotone progress, classic-AI save/load, plain backend refusing to save).
 
-### Steps for the app (integrator, `space-peace`)
+### Steps for the app (integrator, `eaw-remake`)
 1. Settings/menu data: add to the campaign start screen a difficulty selector (Easy / Normal / Hard from the mod, plus "Brutal" and "Fair" labelled as custom) and a checkbox "Classic AI"
    (disables the selector). Store them in `PlayConfig { difficulty, classic_ai, .. }`.
 2. New game: `let fs: Arc<dyn FileSource> = game_fs.clone(); let data: Arc<GameData> = ...; start_play(world, PlayInit::scripted(data, fs, &campaign, cfg)?)` (replaces `PlayInit::from_data`).
    Keep `cfg.pick_planets = false` as before. Show a "Preparing galaxy..." overlay while `SimState.current.loading`.
-3. Save: a button/hotkey sends `PlayAction::Save(path)`; slots live in e.g. `%APPDATA%\SpacePeace\saves\<slot>.json`. Read `PlayEvent::SaveFinished` for success/failure.
+3. Save: a button/hotkey sends `PlayAction::Save(path)`; slots live in e.g. `%APPDATA%\EAW-Remake\saves\<slot>.json`. Read `PlayEvent::SaveFinished` for success/failure.
    A slot list can use `galaxy_script::SaveFile::read(path)` (cheap): `checkpoint.week`, `checkpoint.factions`, `header.campaign`, `header.config.difficulty`, `header.config.remake_ai`.
 4. Load from the main menu: `start_play(world, PlayInit::from_save(path, data, fs, PlayConfig::default())?)`, show a loading bar from `SimState.driver.load_progress()` (fraction + week) while it is `Some`
    or `current.loading`. Load from inside a game of the same campaign/player: `PlayAction::Load(path)` with the same bar, then handle `PlayEvent::LoadFinished` (on `Err` show the text).

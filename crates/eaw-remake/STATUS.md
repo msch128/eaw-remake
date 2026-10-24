@@ -1,6 +1,6 @@
-# space-peace (app crate) - status
+# eaw-remake (app crate) - status
 
-Bevy 0.19.1 shell for "Space Peace: Not at War": Galactic Conquest only (no story, no movies).
+Bevy 0.19.1 shell for "EAW:Remake": Galactic Conquest only (no story, no movies).
 
 ## What works
 - Screens (`flow.rs`, `AppScreen`): Loading -> MainMenu -> CampaignSelect -> Galaxy <-> SpaceBattle (seam).
@@ -9,7 +9,7 @@ Bevy 0.19.1 shell for "Space Peace: Not at War": Galactic Conquest only (no stor
   Rebel/Empire/Underworld, pause menu on Esc, options overlay. UI is built from plain `MenuSpec` data via `spawn_menu`
   (single replacement point for the future `eaw-ui` look).
 - Settings (`settings.rs`): window mode, resolution, vsync, FPS cap, UI scale, volumes, edge scroll, camera speed;
-  stored in `%APPDATA%\SpacePeace\settings.toml`; CLI flags override per run.
+  stored in `%APPDATA%\EAW-Remake\settings.toml`; CLI flags override per run.
 - Galaxy map (`galaxy_map.rs`, `planet_visual.rs`, `camera.rs`, `ui.rs`): real `.alo` planets via `alamo-render`,
   galaxy disc/stars from `w_galaxy00`, route lines from TRADEROUTELINES.XML, declutter labels, owner rings, selection,
   info panel (ability, structure slots, starting forces), faction bar, tooltip, click/hover SFX.
@@ -72,6 +72,17 @@ F9 on the map opens the placeholder screen. Needed: galaxy-sim API to apply a ta
 Connect the real battle-view hook and galaxy-sim result injection, switch menus to `eaw-ui`, run the app in a real window (input, settings apply,
 fullscreen, FPS cap).
 
+## Name and data folder (2026-10-17)
+- The working title is gone: package and directory `eaw-remake` (`crates/eaw-remake`), binary `eaw-remake.exe`. `build.ps1` copies the built exe next to `build.bat` as `eaw-remake.exe` (git ignores it).
+- Data folder `%APPDATA%\EAW-Remake` (`datadir.rs`; `Settings::path`, `newgame::saves_dir` and `logfile::logs_dir` all go through `data_dir()`). At start-up, before settings or saves are read
+  (`main`), `datadir::init()` moves an existing `%APPDATA%\SpacePeace` to the new name when the new one does not exist (`std::fs::rename`: settings, saves and logs together). When the move
+  fails (a file in it is locked) that run uses the old folder and logs a warning (start-up log, so it reaches the log file); the next start tries again. `data_dir()` only computes a path, so
+  unit tests never move anything. Tests: `datadir::tests` on scratch folders (move, second start, refused move, a real locked file, both folders present, fresh install, the three users of the path);
+  `cargo test -p eaw-remake` runs 112 unit tests and 6 integration tests.
+- Logs are `eaw-remake-<unix time>.log`. The cleanup orders by the time in the name and counts the `space-peace-<time>.log` files that came along with the old folder among the 10 (sorting by
+  name would have kept the oldest ones; test `logs_of_the_old_name_count_and_go_by_age_not_by_name`).
+- Settings file header `# EAW:Remake settings`; an offscreen run without `SP_SAVES_DIR` saves into `%TEMP%\eaw-remake-offscreen-saves`. Saves carry the format id `eaw-remake-save`; the old id still loads (galaxy-script STATUS).
+
 ## Setup.exe, `--check-install` and the `dist` build (2026-10-17)
 - `--check-install` (`install_check.rs`) prints where the game and the Remake mod were found and exits before any Bevy app, window or GPU exists. It asks what the
   app asks (`game::find_install`, `explicit_mod_dir`, `explicit_mod_data`, shared with `open_fs`): `--game-dir`, `EAW_GAME_DIR`, the Steam registry and
@@ -79,13 +90,13 @@ fullscreen, FPS cap).
   absent or empty; an explicit empty `--game-dir` gives 2), 3 the mod missing (its `Data` folder absent or empty). A bad command line also exits with 2 (`cli.rs`).
   Tests: unit tests in the module on scratch folders, `tests/check_install.rs` runs the real binary (flags and environment variables).
 - Cargo feature `dist`: `windows_subsystem = "windows"`, so the installed game opens no console window; normal builds stay console apps (the smoke tests read their
-  output). Logs: every windowed run, dist or not, writes `%APPDATA%\SpacePeace\logs\space-peace-<unix time>.log` (`logfile.rs`, the 10 newest are kept, panics included);
+  output). Logs: every windowed run, dist or not, writes `%APPDATA%\EAW-Remake\logs\eaw-remake-<unix time>.log` (`logfile.rs`, the 10 newest are kept, panics included);
   offscreen runs write no log file. A dist build prints to a terminal only when its output is redirected (`eaw-remake.exe --check-install > check.txt`).
 - `tools\package.ps1` builds the dist exe (`RUSTFLAGS=-C target-feature=+crt-static` in a target folder of its own), checks it (windowed app; it imports only DLLs of
   Windows 10/11, 18 of them, no vcruntime, msvcp or ucrt) and compiles `tools\installer\eaw-remake.iss` (Inno Setup 6, per user, no admin) into
   `dist\EAW-Remake-Setup-<version>.exe`: about 19 MB around an 88 MB exe. After the files are copied the setup runs `eaw-remake.exe --check-install` hidden and, when it
   answers 2 or 3, tells the player what to get from Steam and offers the store or Workshop page (silent setups only log the answer). The uninstaller leaves
-  `%APPDATA%\SpacePeace` alone. `tools\test-setup.ps1` tests a built setup silently in a scratch folder (install, files, Start menu, uninstall entry, offscreen run,
+  `%APPDATA%\EAW-Remake` alone. `tools\test-setup.ps1` tests a built setup silently in a scratch folder (install, files, Start menu, uninstall entry, offscreen run,
   `--check-install`, uninstall); the message boxes of the wizard itself are not covered by it (they never show in a silent setup).
 
 ## Starting without the game files (2026-10-17, M)
@@ -205,7 +216,7 @@ returns in 60 menu frames (before the fix 61 errors from `advisor_keep_out`, now
   (`W_Planet_GC_Sector.alo` is not the dashed ring but the model of the "Sector" planets, the galaxy-shaped clusters like Senex-Juvex.)
 
 ## Real pointer test (galaxy screens)
-`SP_UI_TEST=exit SP_SAVES_DIR=<scratch> space-peace --hidden --exit-after 8000 --volume 0 --campaign <c> --select <planet> --weeks 8 --move <planet>`
+`SP_UI_TEST=exit SP_SAVES_DIR=<scratch> eaw-remake --hidden --exit-after 8000 --volume 0 --campaign <c> --select <planet> --weeks 8 --move <planet>`
 injects window events (cursor, mouse buttons, Esc) and checks the battle banner click, the pause menu, Save Game with a slot
 click, Options, Load Game with a slot click and Main Menu (10 checks, log line `ui-test: ... PASS`). `tools\smoke.ps1`
 runs it as `windowed-ui-pointer`. Source: `src/input_test.rs`.
@@ -263,7 +274,7 @@ and `SP_DRAG_TRACE=1` logs the size, the frame time and the cursor of every fram
   fails with the old line at tilt 50, passes for 25 to 80). The path of the distance, the end pose and the scene are unchanged; `SP_PLANET_VIEW_BLEND=<0..0.78>` freezes a
   frame of the dive for a capture.
 - `SP_PLANET_PX=1` (offscreen) logs the camera and the screen position and globe radius of every planet in view at the capture (`planet-px:` lines, `offscreen::log_planet_pixels`).
-- Tests: `cargo test -p space-peace` (92), among them `camera::tests` (tilt at every zoom, circle flatness, ground point under the cursor, framing a galaxy at the data's tilt)
+- Tests: `cargo test -p eaw-remake` (92), among them `camera::tests` (tilt at every zoom, circle flatness, ground point under the cursor, framing a galaxy at the data's tilt)
   and `game::camera_constant_tests`; the real-data `maps_real_campaign` checks 50. `--label-probe` at zoom 0.06 / 0.15 / 0.30 / 0.42 / 0.60 in both campaigns (Imperial with The
   Coruscant System, Rebel with The Yavin System), 1080p and 4K: all PASS, 0 still toggles. Three rules of the probe were wrong for the new geometry and are fixed: (1) only the
   visible globe is the planet's own, so a planet whose visible globe is behind the info panel and whose rest of the pick disc is under a parked fleet has nothing to prove (N'Zoth at

@@ -1,6 +1,6 @@
 //! Opt-in self test of the real input path of the tactical screen (`SP_INPUT_TEST=1`, or `=exit` to quit afterwards).
 //!
-//! Needs a real window (`space-peace --hidden ...`). The test writes what the window system would write
+//! Needs a real window (`eaw-remake --hidden ...`). The test writes what the window system would write
 //! (`CursorMoved`, `MouseButtonInput`, the window's cursor position) before Bevy's input systems run and lets the normal
 //! pipeline (`ButtonInput`, the UI focus system, battle-view's pointer reading) do the rest, so it covers the same code as a
 //! real mouse. Each step moves the pointer, presses and releases a button and checks the effect a few frames later:

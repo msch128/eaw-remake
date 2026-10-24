@@ -1,4 +1,4 @@
-# Space Peace: Not at War - build script
+# EAW:Remake - build script
 # Installs Rust and the MSVC Build Tools if missing, then builds the game locally.
 #   .\build.ps1            -> release build
 #   .\build.ps1 -Debug     -> debug build
@@ -39,7 +39,14 @@ if ($LASTEXITCODE -ne 0) { Write-Host 'Build failed.' -ForegroundColor Red; exit
 
 $profileDir = if ($Debug) { 'debug' } else { 'release' }
 $exe = "$PSScriptRoot\target\$profileDir\eaw-remake.exe"
+# A copy next to build.bat, so the game starts from the folder it was built in (git ignores it).
 if (Test-Path $exe) {
-    Copy-Item $exe "$PSScriptRoot\target\$profileDir\space-peace.exe" -Force -ErrorAction SilentlyContinue
+    $copy = "$PSScriptRoot\eaw-remake.exe"
+    try {
+        Copy-Item $exe $copy -Force -ErrorAction Stop
+        $exe = $copy
+    } catch {
+        Write-Host "Could not copy the exe next to build.bat ($($_.Exception.Message)). Is the game running? Built exe: $exe" -ForegroundColor Yellow
+    }
 }
 Write-Host "Done. Executable: $exe" -ForegroundColor Green

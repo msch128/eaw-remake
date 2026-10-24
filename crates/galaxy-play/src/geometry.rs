@@ -8,7 +8,7 @@ use bevy::prelude::{Resource, Vec2, Vec3};
 use galaxy_sim::{Fleet, FleetLocation, Galaxy, PlanetId, UnitTypeId, World};
 
 /// Converts EaW galactic coordinates (x/y plane, z up) to Bevy world space (y up). Identical to
-/// the `galaxy_to_world` of the `space-peace` app so both draw the same map.
+/// the `galaxy_to_world` of the `eaw-remake` app so both draw the same map.
 pub fn galaxy_to_world(p: [f32; 3]) -> Vec3 {
     Vec3::new(p[0], p[2], -p[1])
 }

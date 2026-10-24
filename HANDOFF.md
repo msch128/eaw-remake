@@ -54,7 +54,7 @@ battles, EaW look and feel". The earlier "U100 / 100% fidelity" claim was a docu
 ## Crates
 `alamo-fs`, `alamo-data`, `alamo-model`, `alamo-map`, `alamo-audio`, `alamo-lua` (parsers and runtime); `galaxy-sim`, `battle-sim`
 (headless deterministic sims); `galaxy-ai`, `galaxy-script`; `alamo-render`, `battle-view`, `eaw-ui`, `galaxy-play` (Bevy plugins);
-`space-peace` (the app). Per-crate state is in each `STATUS.md`.
+`eaw-remake` (the app). Per-crate state is in each `STATUS.md`.
 
 ## Key decisions (don't silently revert)
 - Planet capture (space-only Remake): hostile faction alone in orbit and no enemy starbase changes the owner (inferred).

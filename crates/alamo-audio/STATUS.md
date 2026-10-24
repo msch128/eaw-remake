@@ -33,7 +33,7 @@ Empire at War audio: event data, sample resolution, decoding and a Bevy playback
 - Tests (silent): `tests/director_flow.rs` steps the planner menu -> galactic -> loading -> space low/high intensity -> win/lose
   for Empire and Rebel and checks every file resolves; galaxy events resolve to existing samples for all factions.
 
-## Integration for space-peace
+## Integration for eaw-remake
 1. Menu: `MusicDirector::set_scene(MusicScene::MainMenu)`; galaxy: `MusicScene::Galactic(player_faction)`.
 2. Battle load screen: `MusicScene::BattleLoading`; battle start: `MusicScene::Space(player_faction)` and every frame
    `set_battle_intensity(ships_firing / ships_total)` (0..1).
@@ -74,7 +74,7 @@ Empire at War audio: event data, sample resolution, decoding and a Bevy playback
 - **Music**: result stingers play once (the data's `Loop = Yes` of the win events is ignored) and are not cut off by the return to the map:
   `MusicDirector::resume_after_stinger(scene)` (used by `flow::galaxy_music`). New track fade-in is the event's own `Fade_In_Seconds`; the previous one
   fades over `Fade_Out_Previous_Seconds`. Not defined in the data: peace / war variants of the galaxy theme, speech ducking.
-- **Galaxy UI** (`space-peace/src/ui_sounds.rs`): `Click_SFX` / `Mouse_Over_SFX` per component of `CommandBarComponents.xml`, locked click and rejected command ->
+- **Galaxy UI** (`eaw-remake/src/ui_sounds.rs`): `Click_SFX` / `Mouse_Over_SFX` per component of `CommandBarComponents.xml`, locked click and rejected command ->
   `SFXEvent_GUI_Negative_Feedback` (`GUI_Bad_Sound`), build queued/complete from the object's `SFXEvent_Build_Started/_Complete`, fleet select / move / retreat from the lead unit's
   `SFXEvent_Select` / `_Fleet_Move` / `_Move`, planet capture bonus `SFXEvent_Planet_Capture_Bonus_Reward`.
 - Tests: `tests/pass2.rs` (silent), `ui_sounds::tests`; smoke scenarios `windowed-battle-audio-positional`, `windowed-ui-pointer-audio`, `windowed-galaxy-audio-build`
@@ -94,7 +94,7 @@ Empire at War audio: event data, sample resolution, decoding and a Bevy playback
 - Cost: the voice rules take 46-76 us per request in a battle with `SP_AUDIO_LOG` on (the log lines are most of it), old and new rule alike (new 46-71 us); without log lines a bench of 40 requests a frame at a limit of 4 takes
   11.2 us per request with the new rule and 15.9 us with the old (far requests are dropped instead of spawning a voice), `cargo test -p alamo-audio --test max_instances -- --ignored --nocapture`.
 - `SP_AUDIO_LOG` lines: `audio sfx CUTMAX <victim> (att, dist, age, voice=..) for <event> (att, dist) cap N`, `DROPMAX <event> (att, dist; N playing at att ..)`, `CUTLIM` (voice limit), `PLAY ... cap=N loop=bool voice=..`,
-  and `audio alloc: N requests in X ms (Y us each) of voice rules in the last 5 s`. App test hook `SP_TEST_CAM=fight` (space-peace `battle_play::test_camera`): the camera, and with it the listener, follows the closest opposing pair of
+  and `audio alloc: N requests in X ms (Y us each) of voice rules in the last 5 s`. App test hook `SP_TEST_CAM=fight` (eaw-remake `battle_play::test_camera`): the camera, and with it the listener, follows the closest opposing pair of
   ships from battle second 5 on; scripted runs otherwise listen from where the fleets started.
 - Tests: `tests/max_instances.rs` (a far shot never cuts a near one, a near shot takes the farthest voice, equal loudness replaces the oldest as before, the 3 dB margin, the old rule on request, 2D and loops, and the Remake's
   `Unit_Laser_Fire_Empire_Fighter_1` with its real data: 60 far shots cut none of the 4 near voices), `plugin::tests::the_quietest_instance_goes_and_a_request_much_quieter_than_it_is_dropped`.

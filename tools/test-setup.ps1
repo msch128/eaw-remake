@@ -130,7 +130,7 @@ Check 'e. uninstall entry is gone' (-not (Test-Path $uninstallKey))
 Check 'e. no other Start menu folder or uninstall entry changed' (((Get-ChildItem $programs -Force | ForEach-Object Name) -join '|') -eq $programsBefore -and ((Get-ChildItem $uninstallRoot | ForEach-Object PSChildName) -join '|') -eq $uninstallBefore)
 # The uninstaller can only remove what the setup installed, unless the script says otherwise: it must not (saves and settings stay).
 $code = ($script -split "`r?`n" | Where-Object { $_ -notmatch '^\s*;' }) -join "`n"
-Check 'e. the script deletes nothing besides its own files (no [InstallDelete], no [UninstallDelete], no SpacePeace folder)' ($code -notmatch '(?mi)^\[(Install|Uninstall)Delete\]' -and $code -notmatch 'SpacePeace')
+Check 'e. the script deletes nothing besides its own files (no [InstallDelete], no [UninstallDelete], no AppData folder, where the data lives)' ($code -notmatch '(?mi)^\[(Install|Uninstall)Delete\]' -and $code -notmatch '(?i)appdata')
 
 # f. game or mod missing: the install still completes
 foreach ($case in @(@{ Tag = 'game-missing'; Code = 2; Vars = @{ EAW_GAME_DIR = $empty } }, @{ Tag = 'mod-missing'; Code = 3; Vars = @{ EAW_MOD_DIR = (Join-Path $Scratch 'no-such-mod') } })) {

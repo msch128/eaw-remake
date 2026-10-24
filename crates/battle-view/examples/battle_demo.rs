@@ -287,7 +287,7 @@ fn main() {
         None => {
             app.add_plugins(DefaultPlugins.set(WindowPlugin {
                 primary_window: Some(Window {
-                    title: "Space Peace - battle view demo".into(),
+                    title: "EAW:Remake - battle view demo".into(),
                     resolution: (1920, 1080).into(),
                     ..default()
                 }),

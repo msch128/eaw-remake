@@ -1,6 +1,6 @@
 //! Save and load of a running game: a *snapshot* of the actual state, so loading takes the same time however long the game has run.
 //!
-//! A save file (JSON, `space-peace-save` format version 2) holds
+//! A save file (JSON, `eaw-remake-save` format version 2) holds
 //! * a header: campaign, [`SimConfig`], [`ScriptedConfig`] (seed, difficulty, personalities, variety), counts and a fingerprint of the game data;
 //! * a checkpoint: state hash, time, week and a per-faction summary (readable without loading the game, for save lists);
 //! * the state: the complete galaxy-sim state ([`galaxy_sim::SimSnapshot`]: planets, queues, fleets, damage, statistics, RNG, cooldowns), the script runtime
@@ -25,7 +25,19 @@ use crate::{ScriptedConfig, ScriptedSim};
 
 /// Current file format version.
 pub const SAVE_VERSION: u32 = 2;
-const FORMAT: &str = "space-peace-save";
+/// Format id of the files this build writes.
+const FORMAT: &str = "eaw-remake-save";
+/// Format id of the files written while the game still had its working title. Same format, so they load as before.
+const LEGACY_FORMAT: &str = "space-peace-save";
+
+/// Accepts the format id of this build and the one of the files written before the rename.
+fn check_format(id: &str) -> Result<(), SaveError> {
+    if id == FORMAT || id == LEGACY_FORMAT {
+        Ok(())
+    } else {
+        Err(SaveError::Format(format!("unexpected format {id}")))
+    }
+}
 
 /// How the match was set up.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -73,7 +85,7 @@ pub struct GameState {
 /// The file.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SaveFile {
-    /// Always `space-peace-save`.
+    /// `eaw-remake-save` for the files of this build; files from before the rename say `space-peace-save` and load as well.
     pub format: String,
     /// File format version.
     pub version: u32,
@@ -245,9 +257,7 @@ impl ScriptedSim {
 
     /// Like [`ScriptedSim::from_save`], reporting progress (a snapshot loads in one step; the callback sees `done == total == 1` at the end).
     pub fn from_save_progress(file: SaveFile, fs: Arc<dyn FileSource>, data: Arc<GameData>, setup: impl FnOnce(&mut ScriptedSim), progress: &mut dyn FnMut(LoadProgress)) -> Result<ScriptedSim, SaveError> {
-        if file.format != FORMAT {
-            return Err(SaveError::Format(format!("unexpected format {}", file.format)));
-        }
+        check_format(&file.format)?;
         if file.version != SAVE_VERSION {
             return Err(SaveError::Version(file.version));
         }
@@ -334,5 +344,28 @@ impl ScriptedSim {
             journal_entries: 0,
             journal_steps: 0,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_format_id_of_this_build_and_the_one_before_the_rename_are_accepted() {
+        assert!(check_format("eaw-remake-save").is_ok());
+        assert!(check_format("space-peace-save").is_ok());
+    }
+
+    #[test]
+    fn any_other_format_id_is_refused() {
+        for id in ["", "eaw-remake", "eaw-remake-save2", "space-peace-save2", "SPACE-PEACE-SAVE"] {
+            assert!(matches!(check_format(id), Err(SaveError::Format(_))), "{id:?} was accepted");
+        }
+    }
+
+    #[test]
+    fn this_build_writes_the_new_id() {
+        assert_eq!(FORMAT, "eaw-remake-save");
     }
 }

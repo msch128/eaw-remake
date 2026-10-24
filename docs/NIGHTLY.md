@@ -24,7 +24,7 @@ How the coordinator runs unattended. The work list is `docs/ROADMAP-2026-10-09.m
    is still open, and the honest % estimate.
 
 ## Agent brief template
-> You work on "Space Peace: Not at War", a Rust/Bevy 0.19.1 re-engine of Star Wars: Empire at War (Remake 4.0
+> You work on "EAW:Remake", a Rust/Bevy 0.19.1 re-engine of Star Wars: Empire at War (Remake 4.0
 > mod). Repo: <repo>. Read CLAUDE.md and the STATUS.md of the crates you touch.
 > Rules:
 > - Never open visible windows and never take desktop screenshots. `--hidden` and `--offscreen` runs are fine.
@@ -44,10 +44,10 @@ How the coordinator runs unattended. The work list is `docs/ROADMAP-2026-10-09.m
 ## Area ownership (to avoid two agents in one file)
 | Area | Files | Target dir |
 |---|---|---|
-| tactical | `battle-view/*`, `space-peace/src/battle_play.rs` | `target/tactical` |
+| tactical | `battle-view/*`, `eaw-remake/src/battle_play.rs` | `target/tactical` |
 | sim | `battle-sim/*`, `galaxy-sim/*`, `galaxy-ai/*`, `galaxy-script/*`, `galaxy-play/src/driver.rs` | `target/battle` |
-| galaxy UI | `eaw-ui/*`, `space-peace/src/{play_ui,galaxy_map,menu,input_test}.rs`, `galaxy-play/src/visuals.rs` | `target/ui` |
-| render | `alamo-render/*`, `battle-view/src/scene.rs`, `space-peace/src/planet_view.rs` | `target/render` |
+| galaxy UI | `eaw-ui/*`, `eaw-remake/src/{play_ui,galaxy_map,menu,input_test}.rs`, `galaxy-play/src/visuals.rs` | `target/ui` |
+| render | `alamo-render/*`, `battle-view/src/scene.rs`, `eaw-remake/src/planet_view.rs` | `target/render` |
 
 ## Balance rule (user, 2026-10-09)
 Every area at about 80% is worth more than a few areas at 100% and the rest at 50%. The goal is EaW plus the

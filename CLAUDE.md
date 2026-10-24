@@ -1,4 +1,4 @@
-# Space Peace: Not at War
+# EAW:Remake
 
 Rust/Bevy 0.19.1 reimplementation of *Star Wars: Empire at War - Forces of Corruption* playing the
 **Empire at War Remake 4.0** mod (Workshop `1770851727`). Scope: Galactic Conquest + space battles only.
@@ -21,7 +21,7 @@ No ground combat, story campaigns or movies. Windows, edition 2024.
 `alamo-fs` (MEG + layered VFS) -> `alamo-data` (XML, string tables, game objects) / `alamo-model` (.alo/.ala/particles)
 / `alamo-map` (.ted) / `alamo-audio` / `alamo-lua` (script runtime) -> `galaxy-sim` (headless GC) / `battle-sim`
 (headless deterministic space battles) / `galaxy-ai` / `galaxy-script` (Lua against galaxy-sim) -> `alamo-render`,
-`battle-view`, `eaw-ui`, `galaxy-play` (Bevy plugins) -> `space-peace` (the app).
+`battle-view`, `eaw-ui`, `galaxy-play` (Bevy plugins) -> `eaw-remake` (the app).
 
 Every crate has a `STATUS.md` (what works / key decisions / gaps / next steps). Read it before working on a crate
 and update it afterwards. Rules and their data sources: `battle-sim/RULES.md`, `galaxy-sim/RULES.md`.
@@ -37,7 +37,7 @@ UI findings: `eaw-ui/UI.md`. Lua API inventory: `alamo-lua/API.md`.
 ## Build and verify
 Build per crate with a per-area `CARGO_TARGET_DIR` (`target/app`, `target/render`, `target/battle`, `target/ui`, ...).
 Verify visually with headless `--offscreen out.png` renders and look at the PNG. Details: `.claude/skills/eaw-verify`.
-Full build: `.\build.ps1` (release) / `.\build.ps1 -Debug`. Regression smoke test of the release exe (offscreen
+Full build: `.\build.ps1` (release) / `.\build.ps1 -Debug`; it also copies the exe next to `build.bat` as `eaw-remake.exe`. Regression smoke test of the release exe (offscreen
 scenarios, pass/fail table): `.\tools\smoke.ps1 [-Exe path] [-Only name]`.
 Leak/crash/frame-time guard (hidden window, `SP_ASSET_LOG=1`, memory + asset-count growth, log spam, p99): `.\tools\soak.ps1 [-Exe path] [-BattleMinutes 5] [-GalaxyMinutes 10] [-Only battle|galaxy|frametime]`.
 

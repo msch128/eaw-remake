@@ -1,6 +1,6 @@
 //! Opt-in self test of the real pointer path of the galaxy screens (`SP_UI_TEST=1`, or `=exit` to quit afterwards).
 //!
-//! Needs a real window (`space-peace --hidden ...`) and a scenario in which a battle is pending for the player
+//! Needs a real window (`eaw-remake --hidden ...`) and a scenario in which a battle is pending for the player
 //! (`--select <planet> --weeks 8 --move <planet>`). Like `battle-view`'s input test it writes what the window system
 //! would write (`CursorMoved`, `MouseButtonInput`, `KeyboardInput`, the window's cursor position) and lets Bevy's input
 //! and UI focus systems do the rest. Checks: a click on the battle banner's Auto-Resolve button decides the battle;

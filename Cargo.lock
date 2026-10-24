@@ -2361,6 +2361,25 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d8b14ccef22fc6f5a8f4d7d768562a182c04ce9a3b3157b91390b52ddfdf1a76"
 
 [[package]]
+name = "eaw-remake"
+version = "0.1.0"
+dependencies = [
+ "alamo-audio",
+ "alamo-data",
+ "alamo-fs",
+ "alamo-model",
+ "alamo-render",
+ "battle-sim",
+ "battle-view",
+ "bevy",
+ "eaw-ui",
+ "galaxy-play",
+ "galaxy-script",
+ "galaxy-sim",
+ "rand 0.9.5",
+]
+
+[[package]]
 name = "eaw-ui"
 version = "0.1.0"
 dependencies = [
@@ -4701,25 +4720,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dd538fb6910ac1099850255cf94a94df6551fbdd602454387d0adb2d1ca6dead"
 dependencies = [
  "serde",
-]
-
-[[package]]
-name = "space-peace"
-version = "0.1.0"
-dependencies = [
- "alamo-audio",
- "alamo-data",
- "alamo-fs",
- "alamo-model",
- "alamo-render",
- "battle-sim",
- "battle-view",
- "bevy",
- "eaw-ui",
- "galaxy-play",
- "galaxy-script",
- "galaxy-sim",
- "rand 0.9.5",
 ]
 
 [[package]]

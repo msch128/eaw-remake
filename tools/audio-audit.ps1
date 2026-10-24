@@ -7,7 +7,7 @@
 # Safe while the user is here: offscreen, --volume 0, scratch APPDATA, no window, no audio device.
 param(
     [string]$Exe = (Join-Path $PSScriptRoot '..\target\release\eaw-remake.exe'),
-    [string]$Out = (Join-Path $env:TEMP 'space-peace-audio-audit'),
+    [string]$Out = (Join-Path $env:TEMP 'eaw-remake-audio-audit'),
     [int]$TimeoutSeconds = 420
 )
 $ErrorActionPreference = 'Stop'

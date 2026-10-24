@@ -3,7 +3,7 @@
 ;
 ; Installs for the current user only (no admin rights, no UAC prompt). The setup holds only our own files: the game exe,
 ; LICENSE, CREDITS.md and a readme. The game and the Remake mod come from the player's Steam and are never copied.
-; The uninstaller removes what the setup installed and keeps %APPDATA%\SpacePeace (saves, settings, logs).
+; The uninstaller removes what the setup installed and keeps %APPDATA%\EAW-Remake (saves, settings, logs).
 
 #ifndef AppVersion
   #define AppVersion "0.1.0"
@@ -77,7 +77,7 @@ begin
   ShellExec('open', Url, '', '', SW_SHOWNORMAL, ewNoWait, ErrorCode);
 end;
 
-{ Asks the installed game whether the game and the Remake mod are there (see crates/space-peace/src/install_check.rs):
+{ Asks the installed game whether the game and the Remake mod are there (see crates/eaw-remake/src/install_check.rs):
   exit code 0 both found, 2 the game is missing, 3 the mod is missing. The install is finished either way, so the player
   can get the missing part from Steam afterwards. Silent setups only write the answer to the log (/LOG). }
 procedure CheckInstall;

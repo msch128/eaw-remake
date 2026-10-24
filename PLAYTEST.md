@@ -1,6 +1,6 @@
 # Playtest guide
 
-First live test of **Space Peace: Not at War**. The whole loop (title screen, galaxy map, battle, result, end screen,
+First live test of **EAW:Remake**. The whole loop (title screen, galaxy map, battle, result, end screen,
 save/load) runs and passes an automated offscreen smoke test (`tools\smoke.ps1`, 18 scenarios), but almost everything
 was checked with scripted input and rendered pictures, not with a real mouse and keyboard. Expect rough edges in input,
 camera feel and performance on your machine, and please send the log file (see the end).
@@ -12,7 +12,7 @@ Requirements: Windows 10/11, the Steam copy of *Empire at War - Gold Pack* (Forc
 
 ```powershell
 .\build.ps1            # release build, 10-20 min the first time
-.\target\release\space-peace.exe
+.\eaw-remake.exe       # a copy of target\release\eaw-remake.exe, next to build.bat
 ```
 
 If the game or the mod is not found, the title screen says what is missing and how to fix it (install via Steam,
@@ -74,7 +74,7 @@ Tactical battle
 | **F10** | abandon the battle: the galaxy simulation auto-resolves it |
 
 Saving: Esc -> **Save Game** -> a slot (5 slots). Loading: **Load Game** in the main menu (any slot, restarts that galaxy) or in
-the pause menu (same galaxy only). Saves live in `%APPDATA%\SpacePeace\saves\slotN.json` and replay the game when loaded, so
+the pause menu (same galaxy only). Saves live in `%APPDATA%\EAW-Remake\saves\slotN.json` and replay the game when loaded, so
 loading a long game takes a while (a progress bar shows the week reached).
 
 Options (title screen or pause menu): window mode, resolution, vsync, FPS limit, UI scale, volumes, edge scrolling, camera
@@ -111,6 +111,10 @@ speed, anti-aliasing, bloom, shadows, and a graphics quality preset (which also 
 
 ## Logs and reporting problems
 
-Every windowed run writes a log to `%APPDATA%\SpacePeace\logs\space-peace-<time>.log` (the 10 newest are kept, panics
-included). Settings are in `%APPDATA%\SpacePeace\settings.toml`. Please send the newest log with a short description of
+Every windowed run writes a log to `%APPDATA%\EAW-Remake\logs\eaw-remake-<time>.log` (the 10 newest are kept, panics
+included). Settings are in `%APPDATA%\EAW-Remake\settings.toml`. Please send the newest log with a short description of
 what you did and what you saw.
+
+Builds from before the rename kept this folder as `%APPDATA%\SpacePeace`. The first start of a newer build moves it to
+`%APPDATA%\EAW-Remake` with everything in it (saves, settings, logs); if a file in it is in use (an old build still
+running), the old folder is used for that run and moved at a later start. Saves of the old format still load.

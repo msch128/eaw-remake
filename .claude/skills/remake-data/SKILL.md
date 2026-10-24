@@ -25,7 +25,7 @@ cargo run -p alamo-data --example object_dump -- 1770851727 ?Corvette           
 # raw file out of the VFS
 cargo run -p alamo-fs --example megtool -- vfs-cat 1770851727 Xml/Gameconstants.xml
 # campaigns
-cargo run -p space-peace -- --list-campaigns
+cargo run -p eaw-remake -- --list-campaigns
 ```
 
 Use a separate `CARGO_TARGET_DIR` for data tools (e.g. `target/tmp`), so you don't block other builds.

@@ -1,5 +1,5 @@
 [package]
-name = "space-peace"
+name = "eaw-remake"
 description = "EAW:Remake - modern clean-room Empire at War engine reimplementation"
 version.workspace = true
 edition.workspace = true
@@ -17,7 +17,7 @@ dev = ["bevy/dynamic_linking"]
 # Readable system and parameter names in Bevy error messages.
 debug = ["bevy/debug"]
 # The installed game (tools/package.ps1): a windowed app, no console window opens behind it. Its log still goes to
-# %APPDATA%\SpacePeace\logs (logfile.rs).
+# %APPDATA%\EAW-Remake\logs (logfile.rs).
 dist = []
 
 [dependencies]

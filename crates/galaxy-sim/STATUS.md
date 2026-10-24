@@ -60,7 +60,7 @@ Headless, deterministic, `Send` Galactic Conquest simulation. Rules: `RULES.md`.
   object names (`E_Uplink_Command`). Hero cost 1 credit is the data value (`Build_Cost_Credits` 1, the upgrade items cost 25000+), not a bug.
 - Fixes: `catalog.rs` parses requirements into groups (`req_structures: Vec<Vec<StructureTypeId>>`), structures get `req_planets`; `production.rs` enforces groups,
   planets and `Max_Space_Base` (item hidden via `RequirementsNotMet("planet")`) for ships and structures; `World::planet_capacity` exposes slot counts for the UI
-  (`PlanetCapacity`); `BuildMenu::starbase_max` + display names of requirements (`galaxy-play/build_menu.rs`); `space-peace/play.rs::on_space_tab` puts orbital
+  (`PlanetCapacity`); `BuildMenu::starbase_max` + display names of requirements (`galaxy-play/build_menu.rs`); `eaw-remake/play.rs::on_space_tab` puts orbital
   structures (`StructureType::orbital`: `Base_Position` Orbital / `Build_Tab_Space_Station` / `Buildings/Space/` source) on the space tab, ground structures on the ground tab.
   The AI uses the same `check_build_*` calls, so it obeys all of it.
 - Ground structure rule (`classify_ground_structures`): a ground structure stays buildable (`galactic`) if it has positive income, a mining-colony income bonus,

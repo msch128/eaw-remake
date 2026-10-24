@@ -67,7 +67,7 @@ Clone the repository and run the PowerShell build script:
 
 This compiles optimized release binaries:
 - `target\release\eaw-remake.exe` (primary executable)
-- `target\release\space-peace.exe` (backwards-compatible alias)
+- `eaw-remake.exe` next to `build.bat` (a copy of the above)
 
 ### 2. Run
 
@@ -105,7 +105,7 @@ If your game or mod files reside in a custom location, specify them via command 
 | `--volume <0.0..1.0>` | Set master audio volume (e.g. `--volume 0.8`) |
 | `--offscreen <file.png>` | Render N frames headlessly directly to an image file |
 
-User configuration (window mode, resolution, volume, graphics preferences) is stored in `%APPDATA%\SpacePeace\settings.toml`.
+User configuration (window mode, resolution, volume, graphics preferences) is stored in `%APPDATA%\EAW-Remake\settings.toml`.
 
 ---
 
@@ -129,7 +129,7 @@ The project is structured into modular, decoupled Rust crates:
 | `battle-view` | Bevy tactical battle plugin: 3D scene representation, camera controls, combat UI |
 | `eaw-ui` | Ingame user interface and HUD components rebuilt from Alamo game data |
 | `galaxy-play` | Galactic Conquest UI, fleet movement interaction, planet view, build queues |
-| `space-peace` | Main application executable: lifecycle management, campaign select, save/load, settings |
+| `eaw-remake` | Main application executable: lifecycle management, campaign select, save/load, settings |
 
 ---
 

@@ -572,7 +572,7 @@ pub fn orders(
     mut blocked: Option<ResMut<crate::tactical_ui::InterdictNotice>>,
 ) {
     let player = settings.player_side;
-    // Esc is handled by the host (space-peace battle_menu): it cancels an armed order first and only opens the menu when none is armed.
+    // Esc is handled by the host (eaw-remake battle_menu): it cancels an armed order first and only opens the menu when none is armed.
     // A command button arms an order for the next left click; a right click cancels it (also without a selection).
     if pointer.right_pressed && armed.0.is_some() {
         armed.0 = None;

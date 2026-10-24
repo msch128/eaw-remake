@@ -13,7 +13,7 @@
 //!   --seed N           simulation seed
 //! ```
 //! A minimal map (planet models, lanes, owner rings) is drawn here only so the fleets have
-//! something to sit on; the real map belongs to the `space-peace` app.
+//! something to sit on; the real map belongs to the `eaw-remake` app.
 
 use std::f32::consts::FRAC_PI_2;
 use std::sync::Arc;
