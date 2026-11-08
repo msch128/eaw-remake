@@ -334,7 +334,11 @@ fn the_ravager_leeches_400_shield_per_second_and_triples_its_damage() {
 fn concentrate_fire_marks_the_target_for_half_again_the_damage() {
     // Before: CONCENTRATE_FIRE was an estimated self buff (delay x0.65, damage dealt and taken x1.25); the data marks the target.
     let Some((data, fs)) = load() else { return };
-    let cat = Arc::new(Catalog::build(&data, Some(&fs as &dyn FileSource), &["TF-24_Requiem", "Star_Destroyer"]));
+    let mut cat = Catalog::build(&data, Some(&fs as &dyn FileSource), &["TF-24_Requiem", "Star_Destroyer"]);
+    // The Requiem's escort (`Reinforcements_TF24`) would arrive and join the fight; only the two Star Destroyers may shoot here.
+    let requiem = cat.ship_id("TF-24_Requiem").unwrap();
+    cat.ships[requiem as usize].spawn_script = None;
+    let cat = Arc::new(cat);
     let req = cat.ship(cat.ship_id("TF-24_Requiem").unwrap());
     let a = req.abilities.iter().find(|a| a.kind == "CONCENTRATE_FIRE").expect("the Requiem has it");
     let c = a.concentrate.as_ref().expect("Requiem_Home_One_Ability");
