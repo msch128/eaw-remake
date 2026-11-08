@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 use alamo_data::GameObjects;
 use alamo_fs::{FileSource, GameFs, GameInstall};
 use alamo_map::chunk::{Chunk, Minis, chunks};
-use alamo_map::{ObjectClass, SpaceMap};
+use alamo_map::SpaceMap;
 
 fn hex(d: &[u8]) -> String {
     let s: Vec<String> = d.iter().take(24).map(|b| format!("{b:02x}")).collect();
