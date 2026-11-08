@@ -150,3 +150,70 @@ fn a_charged_krayt_blast_fires_the_special_megaweapon_once() {
     assert_eq!(later.1, 0, "only one");
     assert!(later.0 >= 1, "then normal fire again");
 }
+
+#[test]
+fn hutt_v_wings_fire_one_ion_shot_from_their_container_data() {
+    // Before: ION_CANNON_SHOT was not in the ability list (its data sits on `Hutt_V-Wing_Squadron_Container`).
+    let Some((data, fs)) = load() else { return };
+    let mut b = duel(&data, &fs, "Hutt_V-Wing_Squadron", "Nebulon_B_Frigate", 600.0);
+    let cat = b.catalog().clone();
+    let vw = cat.ship(cat.ship_id("Hutt_V_Wing_Fighter").unwrap());
+    let a = vw.abilities.iter().find(|a| a.kind == "ION_CANNON_SHOT").expect("the V-wing has the ion shot");
+    let shot = a.shot.as_ref().unwrap();
+    let ion = cat.projectile_id("Proj_Ship_Ion_Cannon_Small").unwrap();
+    assert_eq!((a.recharge, shot.proj, shot.mult), (20.0, Some(ion), 1.0), "Recharge_Seconds 20, Projectile_Types_Override");
+    let wings: Vec<u32> = b.ships.iter().filter(|s| s.side == 0).map(|s| s.id).collect();
+    assert_eq!(wings.len(), 5);
+    let t = b.ships.iter().position(|s| s.side == 1).unwrap() as u32;
+    b.command(0, Command::Attack { ships: wings.clone(), target: t }).unwrap();
+    for _ in 0..60 {
+        b.step();
+    }
+    let k = ability(&b, wings[0], "ION_CANNON_SHOT").unwrap() as u16;
+    b.command(0, Command::UseAbility { ship: wings[0], ability: k }).expect("on the current target");
+    let mut shots: Vec<ProjId> = Vec::new();
+    for _ in 0..90 {
+        for e in b.step() {
+            if let Event::ProjectileFired { ship, projectile, .. } = *e
+                && ship == wings[0]
+            {
+                shots.push(projectile);
+            }
+        }
+    }
+    let ions = shots.iter().filter(|&&p| p == ion).count();
+    eprintln!("V-wing shots in 3 s: {} of them ion", ions);
+    assert_eq!((shots.first(), ions), (Some(&ion), 1), "the next shot is the one ion shot: {shots:?}");
+}
+
+#[test]
+fn an_ai_v_wing_squadron_spends_its_ion_shots_on_a_frigate() {
+    let Some((data, fs)) = load() else { return };
+    let ion_shots = |ai: bool| {
+        let cat = Arc::new(Catalog::build(&data, Some(&fs as &dyn FileSource), &["Hutt_V-Wing_Squadron", "Nebulon_B_Frigate"]));
+        let unit = |n: &str| UnitSetup { ship: cat.ship_id(n).unwrap(), count: 1, tag: 0 };
+        let sides = vec![
+            SideSetup { name: "Hutts".into(), units: vec![unit("Hutt_V-Wing_Squadron")], structures: vec![], ai },
+            SideSetup { name: "Empire".into(), units: vec![unit("Nebulon_B_Frigate")], structures: vec![], ai: false },
+        ];
+        let mut b = Battle::new(BattleSetup { catalog: cat.clone(), sides, config: BattleConfig { seed: 5, fog_of_war: false, ..BattleConfig::default() } });
+        let t = b.ships.iter().position(|s| s.side == 1).unwrap();
+        let near = b.ships.iter().find(|s| s.side == 0).unwrap().pos + Vec3::new(800.0, 0.0, 0.0);
+        b.ships[t].pos = near;
+        b.ships[t].stance = Stance::HoldFire;
+        let ion = cat.projectile_id("Proj_Ship_Ion_Cannon_Small").unwrap();
+        let mut n = 0;
+        for _ in 0..30 * 40 {
+            n += b.step().iter().filter(|e| matches!(e, Event::ProjectileFired { projectile, .. } if *projectile == ion)).count();
+            // Only the frigate itself: its fighters are taken out as they launch.
+            for s in b.ships.iter_mut().filter(|s| s.side == 1 && s.id as usize != t) {
+                s.alive = false;
+            }
+        }
+        n
+    };
+    let (player, ai) = (ion_shots(false), ion_shots(true));
+    eprintln!("ion shots in 40 s: player side {player}, AI side {ai}");
+    assert_eq!(player, 0, "a player side without autofire keeps them");
+    assert!(ai >= 5, "each of the 5 V-wings fires at least one (recharge 20 s): {ai}");
+}

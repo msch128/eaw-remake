@@ -2049,10 +2049,9 @@ impl Battle {
                         continue;
                     }
                     if let Some(sh) = &a.shot {
-                        // Estimate (no AI rule in the Remake scripts; the ability supports autofire): the strong shot goes to a frigate or
-                        // bigger in weapon range.
+                        // The shot goes to a target of its AI classes whose hull is in weapon range ([`ShotDef::ai_classes`]).
                         let ready = s.abilities[k].cooldown <= 0.0 && s.abilities[k].active <= 0.0;
-                        if ready && (ai_side || s.abilities[k].autocast) && tclass as u8 >= TargetClass::Frigate as u8 && (sh.classes == 0 || sh.classes & tclass.bit() != 0) && dist <= def.max_weapon_range {
+                        if ready && (ai_side || s.abilities[k].autocast) && sh.ai_classes & tclass.bit() != 0 && (sh.classes == 0 || sh.classes & tclass.bit() != 0) && dist - tdef.radius <= def.max_weapon_range {
                             auto_use.push(k);
                             break;
                         }

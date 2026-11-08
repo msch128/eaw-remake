@@ -264,7 +264,7 @@ pub struct AbilityDef {
     pub reveal_radius: f32,
 }
 
-/// `LUCKY_SHOT`: the next shot of the craft at the ability's target ([`AbilityState::target`]) uses the ability's
+/// `LUCKY_SHOT`, `ION_CANNON_SHOT`: the next shot of the craft at the ability's target ([`AbilityState::target`]) uses the ability's
 /// `Projectile_Types_Override` (else its own weapon) and does `mult` times its damage (`CAUSE_DAMAGE_MULTIPLIER`, `Red_Squadron_Container`: 600).
 #[derive(Debug, Clone, Default)]
 pub struct ShotDef {
@@ -274,6 +274,8 @@ pub struct ShotDef {
     pub mult: f32,
     /// `Applicable_Unit_Categories` of the linked `*_Attack_Ability` as a class bit mask (0 = any).
     pub classes: u16,
+    /// Targets the AI (and autofire) spends it on, as a class bit mask.
+    pub ai_classes: u16,
 }
 
 /// `BLAST` (`Blast_Ability`): after `charge` seconds every hardpoint with a `Blast_Ability_Fire_Projectile_Type` ([`HpDef::blast_projectile`])
@@ -2220,7 +2222,7 @@ fn ability_defs(u: &SpaceUnitDef, projectiles: &[ProjDef], proj_index: &HashMap<
         .filter(|a| {
             a.expiration_seconds.unwrap_or(0.0) > 0.0
                 || (a.kind.eq_ignore_ascii_case("LURE") && a.fields.contains_key("effective_radius"))
-                || ["FULL_SALVO", "TRACTOR_BEAM", "MISSILE_SHIELD", "INTERDICT", "STEALTH", "FOW_REVEAL_PING", "LASER_DEFENSE", "ROCKET_ATTACK", "SWAP_WEAPONS", "SENSOR_JAMMING", "BUZZ_DROIDS", "SUPER_LASER", "CORRUPT_SYSTEMS", "HUNT", "SPOILER_LOCK", "REPLENISH_WINGMEN", "WEAKEN_ENEMY", "HARMONIC_BOMB", "ENERGY_WEAPON", "CLUSTER_BOMB", "LUCKY_SHOT", "BLAST"].iter().any(|k| a.kind.eq_ignore_ascii_case(k))
+                || ["FULL_SALVO", "TRACTOR_BEAM", "MISSILE_SHIELD", "INTERDICT", "STEALTH", "FOW_REVEAL_PING", "LASER_DEFENSE", "ROCKET_ATTACK", "SWAP_WEAPONS", "SENSOR_JAMMING", "BUZZ_DROIDS", "SUPER_LASER", "CORRUPT_SYSTEMS", "HUNT", "SPOILER_LOCK", "REPLENISH_WINGMEN", "WEAKEN_ENEMY", "HARMONIC_BOMB", "ENERGY_WEAPON", "CLUSTER_BOMB", "LUCKY_SHOT", "BLAST", "ION_CANNON_SHOT"].iter().any(|k| a.kind.eq_ignore_ascii_case(k))
         })
         .map(|a| {
             let toggle = a.expiration_seconds.unwrap_or(0.0) <= 0.0 && ["MISSILE_SHIELD", "INTERDICT", "STEALTH", "HUNT", "SPOILER_LOCK"].iter().any(|k| a.kind.eq_ignore_ascii_case(k));
@@ -2245,12 +2247,16 @@ fn ability_defs(u: &SpaceUnitDef, projectiles: &[ProjDef], proj_index: &HashMap<
                 let f = |k: &str| sub.and_then(|s| s.fields.get(k)).and_then(|v| alamo_data::xml::parse_num::<f32>(v));
                 BlastDef { charge: f("charge_up_seconds").unwrap_or(0.0).max(0.0), mult: f("damage_multiplier").unwrap_or(1.0) }
             });
-            let shot = a.kind.eq_ignore_ascii_case("LUCKY_SHOT").then(|| {
+            let lucky = a.kind.eq_ignore_ascii_case("LUCKY_SHOT");
+            let shot = (lucky || a.kind.eq_ignore_ascii_case("ION_CANNON_SHOT")).then(|| {
                 let sub = a.activated_ability.as_ref().and_then(|n| u.sub_abilities.iter().find(|s| s.name.eq_ignore_ascii_case(n)));
                 ShotDef {
                     proj: a.fields.get("projectile_types_override").and_then(|n| proj_index.get(&n.trim().to_ascii_lowercase())).copied(),
                     mult: std::mem::replace(&mut cause_damage_mult, 1.0),
                     classes: sub.and_then(|s| s.fields.get("applicable_unit_categories")).map_or(0, |v| alamo_data::xml::split_list(v).iter().filter_map(|t| TargetClass::from_token(t)).fold(0u16, |m, c| m | c.bit())),
+                    // `ION_CANNON_SHOT`: `Default_Unit_Target_In_Range` (`PGEvents.lua`) fires it at a frigate, capital or super ship. `LUCKY_SHOT` has
+                    // no AI rule; estimate: the same targets and stations.
+                    ai_classes: [TargetClass::Frigate, TargetClass::Capital, TargetClass::Super].into_iter().chain(lucky.then_some(TargetClass::Structure)).fold(0u16, |m, c| m | c.bit()),
                 }
             });
 
