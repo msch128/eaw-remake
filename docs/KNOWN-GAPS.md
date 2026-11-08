@@ -92,9 +92,8 @@ data are labelled in [RULES.md](RULES.md).
 - **Waypoint mode of the command bar (c_button03) acts as a plain move.** Observe: arm the waypoint button in a battle and click twice; only one move is issued. Where: `crates/battle-view/src/tactical_ui.rs` (needs path orders in battle-sim).
 - **The attack-move button (c_button01) gives an attack-move; the Remake's own tooltip says it issues a plain move.** `TEXT_TOOLTIP_ATTACK_MOVE_01`: "The Attack Move Order has no function in Remake and issues a normal Move Order instead." Owner decision whether to follow it. Observe: arm the button and click past an enemy. Where: `crates/battle-view/src/tactical_ui.rs`, `crates/battle-view/src/control.rs`.
 - **Frigates and corvettes that are tiny on screen, and every enemy capital ship, still show the framed icon box.** Observe: zoom a battle out and compare with the Remake, which shows a plain icon. Where: `crates/battle-view/src/tactical_ui.rs` (`unit_overlays`), `crates/eaw-ui/src/tactical.rs`.
-- **A picked squadron's icon box is 34 px at 1080p, the Remake's measures 28 x 27 px.** Observe: pick a squadron at 1080p and measure the box. Where: `crates/eaw-ui/src/tactical.rs` (`ShipOverlay`).
 - **Capital-ship health bars draw the level colour over the full length; the Remake keeps a dark track for lost hull.** Observe: damage a capital ship to about 80% and look at its bar. Where: `crates/eaw-ui/src/tactical.rs` (ship overlays), `crates/eaw-ui/src/member_bars.rs` clips correctly for small craft only.
-- **No selection box per craft, no rank chevron on units.** Observe: select a squadron and compare with the Remake's per-fighter selection box. Where: `crates/battle-view/src/tactical_ui.rs`, `crates/eaw-ui/src/member_bars.rs`.
+- **No rank chevron on squadrons.** Observe: compare a veteran squadron with the Remake's chevron above its silhouette (video b0703s). Where: `crates/battle-view/src/tactical_ui.rs`, `crates/eaw-ui/src/member_bars.rs`.
 - **The advisor bubble lacks its cyan tail and hero ability buttons are not shown on the portraits.** Observe: start a battle with a hero. Where: `crates/battle-view/src/hud.rs` (unverified: check the code before fixing).
 - **The backdrop planet disc has no terminator and its rim is brighter on the wrong side compared with the Remake.** Observe: render a battle over Bestine or Kuat with `battle_demo --offscreen` and compare the planet with a Remake frame. Where: `crates/battle-view/src/scene.rs` (discs are flat with one normal; whether the original fakes a sphere normal is unknown).
 - **Hyperspace arrival and departure flash is a look estimate.** Observe: `SP_DEMO_ARRIVAL=1 battle_demo` and compare with the Remake. Where: `crates/battle-view/src/ships.rs` (`FLASH_PEAK`, `FLASH_SECONDS`, `FLASH_REACH`); no Remake frame of an arrival was available.
@@ -127,8 +126,7 @@ data are labelled in [RULES.md](RULES.md).
 - **`ForcedTooltip` anchor is approximate.** Observe: `ui_demo --tooltip <button>`. Where: `crates/eaw-ui/src/widgets.rs`.
 - **The faceplate's ornament dome row is not drawn (it is not part of the mesh).** Observe: compare the galactic bar with the Remake. Where: `crates/eaw-ui/src/shell.rs`.
 - **Hero health bars and special-ability slots of the planet panel are wired by name but untested with real art.** Observe: open a planet with a hero. Where: `crates/eaw-ui/src/panels.rs` (unverified).
-- **The render-world extraction of per-craft bars (`extract_member_quads`) has no automated test.** Observe: offscreen renders cover it. Where: `crates/eaw-ui/src/member_bars.rs`.
-- **The squadron icon size (11.4 design px) and plate colours are estimates; no Remake frame shows an unpicked squadron's icon.** Observe: `battle_demo --offscreen` with fighters. Where: `crates/eaw-ui/src/squad_icons.rs`.
+- **The render-world extraction of the squadron bars (`extract_member_quads`) has no automated test.** Observe: offscreen renders cover it. Where: `crates/eaw-ui/src/member_bars.rs`.
 
 ## Rendering
 

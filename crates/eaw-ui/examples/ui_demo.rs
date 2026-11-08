@@ -537,6 +537,7 @@ fn spawn_panel(world: &mut World, name: &str, faction: UiFaction, game: &alamo_d
                 always: false,
                 icon: None,
                 icon_only: false,
+                see_through: false,
             };
             world.insert_resource(TacticalData {
                 active: true,

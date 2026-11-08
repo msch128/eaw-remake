@@ -260,6 +260,7 @@ struct Projected {
 
 impl Projected {
     /// A round pick area.
+    #[cfg(test)]
     fn circle(id: u32, screen: Vec2, radius_px: f32) -> Self {
         Self { id, screen, tail: screen, radius_px }
     }
@@ -293,7 +294,6 @@ fn project_ships(
 ) -> Vec<Projected> {
     let right = gt.right();
     let mut out = Vec::with_capacity(ships.0.len() + 16);
-    let mut squads: std::collections::HashMap<(u8, u32), (Vec2, usize, u32)> = std::collections::HashMap::new();
     // A squadron member the tactical view does not draw is not under the cursor either: its squadron is picked by its leader's silhouette.
     for (&id, s) in ships.0.iter().filter(|(_, s)| s.visible && s.drawn) {
         let Ok(c) = camera.world_to_viewport(gt, s.pos) else {
@@ -317,20 +317,6 @@ fn project_ships(
             .world_to_viewport(gt, s.pos + right * reach)
             .map_or(8.0, |e| (e - c).length());
         out.push(Projected { id, screen: head, tail, radius_px: edge.max(9.0 * scale) });
-        if s.squad != u32::MAX {
-            let entry = squads.entry((s.side, s.squad)).or_insert((Vec2::ZERO, 0, id));
-            entry.0 += c;
-            entry.1 += 1;
-            // The lowest id speaks for the squadron (HashMap order would hand the badge to another craft from frame to frame).
-            entry.2 = entry.2.min(id);
-        }
-    }
-    // The squadron's icon: a generous pick area (about twice its size) round the middle of the squadron, so that the squadron is picked by
-    // its icon even where its craft are a few pixels across.
-    for (_, (sum_c, count, lead_id)) in squads {
-        if count > 0 {
-            out.push(Projected::circle(lead_id, sum_c / (count as f32), 18.0 * scale));
-        }
     }
     out
 }
@@ -360,8 +346,8 @@ fn pick_enemy_first(projected: &[Projected], cursor: Vec2, own_selected: bool, i
     pick(projected, cursor, |_| true, prev)
 }
 
-/// `picked` and every craft of the squadrons they belong to, each once, in id order: a squadron is one unit (an own click on a craft or on
-/// the squadron's icon selects it whole, as in the Remake).
+/// `picked` and every craft of the squadrons they belong to, each once, in id order: a squadron is one unit (an own click on the craft
+/// that stands for it selects it whole, as in the Remake).
 fn with_squadmates(mut picked: Vec<u32>, ships: &RenderedShips) -> Vec<u32> {
     let squads: std::collections::HashSet<(u8, u32)> = picked.iter().filter_map(|id| ships.0.get(id)).filter(|s| s.squad != u32::MAX).map(|s| (s.side, s.squad)).collect();
     if !squads.is_empty() {
@@ -548,7 +534,7 @@ pub fn selection(
         } else {
             pick(&projected, cursor, own, None).into_iter().collect()
         };
-        // A squadron is one unit: any craft of it, or its icon, picks all of them.
+        // A squadron is one unit: the craft that stands for it picks all of them.
         let picked = with_squadmates(clicked, &ships);
         // Double click on a ship or squadron focuses the camera on the selection (a unit is told by its lowest id).
         let now = time.elapsed_secs();
@@ -1074,7 +1060,7 @@ mod pick_tests {
     use super::*;
 
     #[test]
-    fn a_click_on_a_craft_or_on_the_icon_selects_the_whole_squadron() {
+    fn a_click_on_a_craft_selects_the_whole_squadron() {
         // (id, side, squad): own squadron 0 of three craft, own squadron 1, the enemy's squadron 0 and an own ship in none.
         let ships = RenderedShips([(1, 0, 0), (2, 0, 0), (3, 0, 0), (4, 0, 1), (5, 1, 0), (6, 0, u32::MAX)].into_iter().map(|(id, side, squad)| (id, ShipRender::test_craft(id, 0, side, squad, Vec3::ZERO, 1.0))).collect());
         assert_eq!(with_squadmates(vec![2], &ships), [1, 2, 3], "any craft picks its squadron");

@@ -8,7 +8,7 @@
 //! eaw-ui's world-space ship overlays (the gizmo bars of `control::overlays` stay in use).
 #![allow(clippy::type_complexity, clippy::too_many_arguments)]
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap};
 
 use battle_sim::{Command, HpKind};
 use bevy::prelude::*;
@@ -16,7 +16,7 @@ use eaw_ui::textures::UiTextures;
 use eaw_ui::{
     AbilityState, CommandBarMode, CommandBarSpec, EawAbilityClicked, EawButtonClicked, EawCommandBar, EawHardpointClicked, EawMinimapClicked,
     EawSelectionClicked, EawUiAssets, EawUiCommandsExt, HardpointMarker, MemberBar, MemberBars, MinimapData, MinimapDot, MinimapSurface, PanelData, PanelSlot,
-    RetreatState, ShellAnchor, ShellSpec, ShipOverlay, SquadIcon, SquadIcons, TacticalData, TacticalOverlays, TacticalUnit, UiFaction, minimap_to_world, spawn_shell,
+    RetreatState, ShellAnchor, ShellSpec, ShipOverlay, SquadIcons, TacticalData, TacticalOverlays, TacticalUnit, UiFaction, minimap_to_world, spawn_shell,
 };
 
 use crate::camera::BattleCamera;
@@ -31,7 +31,7 @@ pub struct TacticalUiPlugin;
 
 impl Plugin for TacticalUiPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<RetreatNotice>().init_resource::<InterdictNotice>().init_resource::<TacticalUiState>().init_resource::<CraftBarUnits>().init_resource::<ReinforceUi>().init_resource::<crate::hud::HudState>().insert_resource(OverlaysActive);
+        app.init_resource::<RetreatNotice>().init_resource::<InterdictNotice>().init_resource::<TacticalUiState>().init_resource::<ReinforceUi>().init_resource::<crate::hud::HudState>().insert_resource(OverlaysActive);
         app.init_resource::<crate::retreat_prompt::RetreatPrompt>().add_message::<crate::retreat_prompt::RetreatChoice>();
         crate::input_test::build(app);
         crate::build_bar::build(app);
@@ -116,7 +116,7 @@ fn spawn_bar(mut commands: Commands, session: Res<crate::BattleSession>) {
     commands.insert_resource(TacticalBarSpawned);
 }
 
-fn remove_bar(mut commands: Commands, bars: Query<Entity, With<EawCommandBar>>, mut tac: ResMut<TacticalData>, mut overlays: ResMut<TacticalOverlays>, mut members: ResMut<MemberBars>, mut squad_icons: ResMut<SquadIcons>, mut craft_units: ResMut<CraftBarUnits>, mut fog: ResMut<eaw_ui::MinimapFog>, mut armed: ResMut<control::ArmedOrder>, mut action: ResMut<crate::camera::ActionCam>, mut sel: ResMut<Selection>, mut settings: ResMut<BattleViewSettings>) {
+fn remove_bar(mut commands: Commands, bars: Query<Entity, With<EawCommandBar>>, mut tac: ResMut<TacticalData>, mut overlays: ResMut<TacticalOverlays>, mut members: ResMut<MemberBars>, mut squad_icons: ResMut<SquadIcons>, mut fog: ResMut<eaw_ui::MinimapFog>, mut armed: ResMut<control::ArmedOrder>, mut action: ResMut<crate::camera::ActionCam>, mut sel: ResMut<Selection>, mut settings: ResMut<BattleViewSettings>) {
     // Nothing of this battle may leak into the next one (or into the galaxy).
     armed.0 = None;
     *action = crate::camera::ActionCam::default();
@@ -131,7 +131,6 @@ fn remove_bar(mut commands: Commands, bars: Query<Entity, With<EawCommandBar>>, 
     }
     members.items.clear();
     squad_icons.items.clear();
-    craft_units.0.clear();
     commands.insert_resource(TeardownCheck(8));
     for e in &bars {
         commands.entity(e).try_despawn();
@@ -1137,35 +1136,6 @@ fn unit_key(s: &ShipRender, class: battle_sim::TargetClass) -> u64 {
     }
 }
 
-/// Least distance in design px that the craft of a picked squadron keep from one another on screen for a bar and a flag each (estimate:
-/// the shortest bar is 8 design px and its flag hangs about 10 beyond the bar's end). Closer together, their bars and flags would lie on top
-/// of one another: the squadron then shows its one box with the average bar instead.
-const CRAFT_BARS_MIN_GAP: f32 = 18.0;
-/// Dead band round [`CRAFT_BARS_MIN_GAP`] (estimate): a squadron that shows craft bars keeps them until its craft come this share closer than the limit, one
-/// that shows its one box bar needs this share more room. The weave and the flight of the craft move their spacing a few pixels a second; at the
-/// limit itself the squadron would flip between the two every few frames.
-const CRAFT_BARS_HYSTERESIS: f32 = 0.10;
-
-/// The picked squadrons whose craft carry bars of their own this frame, by [`unit_key`]: decided by [`unit_overlays`] (which needs last frame's
-/// answer for its dead band), read by [`sync_member_bars`].
-#[derive(Resource, Default, Debug)]
-pub(crate) struct CraftBarUnits(HashSet<u64>);
-
-/// Whether the craft of one squadron, at these screen positions, stand far enough apart for a bar and a flag each: the typical craft (the
-/// median of every craft's distance to its nearest neighbour) has `min_gap` pixels of room. A lone craft always does.
-fn craft_bars_fit(points: &[Vec2], min_gap: f32) -> bool {
-    if points.len() < 2 {
-        return true;
-    }
-    let mut nearest: Vec<f32> = points
-        .iter()
-        .enumerate()
-        .map(|(i, p)| points.iter().enumerate().filter(|(j, _)| *j != i).map(|(_, q)| p.distance(*q)).fold(f32::MAX, f32::min))
-        .collect();
-    nearest.sort_by(f32::total_cmp);
-    nearest[nearest.len() / 2] >= min_gap
-}
-
 /// Texture name of a unit type's icon (its `Icon_Name`), looked up once per type; squadrons without art get the generic fighter icon.
 fn unit_icon_name(cache: &mut HashMap<u32, Option<String>>, assets: Option<&EawUiAssets>, def: &battle_sim::ShipDef, id: u32, is_squad: bool) -> Option<String> {
     cache
@@ -1183,8 +1153,6 @@ struct ScreenView<'a> {
     right: Vec3,
     /// Physical pixels per logical pixel: positions snap to whole physical pixels.
     phys: f32,
-    /// UI scale: logical pixels per design pixel.
-    ui_scale: f32,
     /// World point to logical window pixels, `None` behind the camera.
     project: &'a dyn Fn(Vec3) -> Option<Vec2>,
 }
@@ -1202,18 +1170,17 @@ struct UnitInputs<'a> {
     retreat_active: &'a dyn Fn(u8) -> bool,
 }
 
-/// The overlays of every visible unit and the icons of the squadrons nobody picks: a picked unit (selected or under the cursor) shows its
-/// brackets and bars, a picked squadron its box and either its craft's bars ([`sync_member_bars`]) or its own average bar, an unpicked
-/// squadron its one small icon and nothing else, any other unit nobody picks only its icon box.
-fn unit_overlays(inp: &UnitInputs, icon_names: &mut HashMap<u32, Option<String>>, craft_bars: &mut HashSet<u64>, view: &ScreenView) -> (Vec<ShipOverlay>, Vec<SquadIcon>) {
+/// The overlays of every visible unit: a picked unit (selected or under the cursor) shows its brackets and bars, a picked squadron the
+/// see-through box round the craft that stands for it (Remake video v0700s; its bar and flag are [`sync_member_bars`], like every
+/// squadron's), any other unit nobody picks only its icon box. An unpicked squadron has no overlay: its bar and flag mark it.
+fn unit_overlays(inp: &UnitInputs, icon_names: &mut HashMap<u32, Option<String>>, view: &ScreenView) -> Vec<ShipOverlay> {
     let (ships, sel, hover, player) = (inp.ships, inp.sel, inp.hover, inp.player);
     let (vp, project) = (view.viewport, view.project);
     let margin = 120.0;
     // Whole physical pixels: a bar that moves in sub-pixel steps is resampled every frame and its 2-3 px lines shimmer while a ship moves or turns.
     let snap = |v: f32| (v * view.phys).round() / view.phys;
-    let (mut overlays, mut icons) = (Vec::new(), Vec::new());
-    let mut next_bars: HashSet<u64> = HashSet::new();
-    // One overlay per unit: a picked squadron is one unit, so its fighters share a single icon box (their bars are `sync_member_bars`).
+    let mut overlays = Vec::new();
+    // One overlay per unit: a squadron is one unit.
     let mut groups: BTreeMap<u64, Vec<u32>> = BTreeMap::new();
     for (&id, s) in ships.0.iter().filter(|(_, s)| s.visible) {
         groups.entry(unit_key(s, inp.catalog.ship(s.def).class)).or_default().push(id);
@@ -1227,14 +1194,20 @@ fn unit_overlays(inp: &UnitInputs, icon_names: &mut HashMap<u32, Option<String>>
         let def = inp.catalog.ship(first.def);
         let is_squad = is_small_craft(def.class, first.squad);
         let enemy = first.side != player;
-        // An unpicked squadron needs only where its craft are; every other unit also how large they look.
-        let sized = !is_squad || selected || hovered;
-        let pts: Vec<(Vec2, f32)> = members
+        if is_squad && !(selected || hovered) {
+            continue;
+        }
+        // A squadron's box sits on the craft that stands for it; every other unit is measured over all its ships.
+        let placed: Vec<&ShipRender> = if is_squad {
+            stand_in(members.iter().map(|id| &ships.0[id])).into_iter().collect()
+        } else {
+            members.iter().map(|id| &ships.0[id]).collect()
+        };
+        let pts: Vec<(Vec2, f32)> = placed
             .iter()
-            .filter_map(|id| {
-                let s = &ships.0[id];
+            .filter_map(|s| {
                 let c = project(s.pos)?;
-                let edge = if sized { project(s.pos + view.right * s.radius).map_or(8.0, |e| (e - c).length()) } else { 0.0 };
+                let edge = project(s.pos + view.right * s.radius).map_or(8.0, |e| (e - c).length());
                 Some((c, edge))
             })
             .collect();
@@ -1246,24 +1219,8 @@ fn unit_overlays(inp: &UnitInputs, icon_names: &mut HashMap<u32, Option<String>>
         if centre.x < -margin || centre.y < -margin || centre.x > vp.x + margin || centre.y > vp.y + margin {
             continue;
         }
-        // A squadron nobody picks: its one small icon, nothing else (no box, bar or flag; its craft are drawn at their model scale).
-        if is_squad && !(selected || hovered) {
-            if let Some(icon) = unit_icon_name(icon_names, inp.assets, def, first.def, true) {
-                icons.push(SquadIcon { id: key, screen_pos: Vec2::new(snap(centre.x), snap(centre.y)), icon, enemy });
-            }
-            continue;
-        }
-        // A picked squadron shows its box, and its craft their bars when they stand far enough apart, else the box carries the average bar (with
-        // a dead band round the limit, last frame's answer decides inside it).
-        let own_bars = is_squad && {
-            let room = CRAFT_BARS_MIN_GAP * view.ui_scale * if craft_bars.contains(&key) { 1.0 - CRAFT_BARS_HYSTERESIS } else { 1.0 + CRAFT_BARS_HYSTERESIS };
-            craft_bars_fit(&pts.iter().map(|p| p.0).collect::<Vec<_>>(), room)
-        };
-        if own_bars {
-            next_bars.insert(key);
-        }
-        // Units nobody selected or hovers show only their icon.
-        let icon_only = if is_squad { own_bars } else { !selected && !hovered };
+        // Units nobody selected or hovers show only their icon; a picked squadron only its box (its bar is a member bar).
+        let icon_only = is_squad || (!selected && !hovered);
         let half = pts.iter().map(|(c, e)| (*c - centre).length() + e).fold(0.0f32, f32::max);
         let (centre, half) = (Vec2::new(snap(centre.x), snap(centre.y)), snap(half));
         let edge_max = pts.iter().map(|(_, e)| *e).fold(0.0f32, f32::max);
@@ -1288,39 +1245,43 @@ fn unit_overlays(inp: &UnitInputs, icon_names: &mut HashMap<u32, Option<String>>
         {
             n.push_str(" [ENGINES DISABLED]");
         }
-        // The box with the unit icon marks tiny units and every other unit nobody has selected or hovered (so that no unit is invisible),
-        // and a picked squadron. An unpicked squadron has no box: its craft are drawn at their model scale, so it shows its one small icon
-        // ([`SquadIcons`], above).
-        let marked = icon_box(is_squad, selected || hovered, icon_only, edge_max);
-        let icon = marked.then(|| unit_icon_name(icon_names, inp.assets, def, first.def, is_squad)).flatten();
-        if icon_only && icon.is_none() {
+        // The box with the unit icon marks tiny units and every other unit nobody has selected or hovered (so that no unit is invisible).
+        // A picked squadron's box is see-through: its craft is drawn at the original's screen size and shows inside it.
+        let marked = !is_squad && icon_box(false, selected || hovered, icon_only, edge_max);
+        let icon = marked.then(|| unit_icon_name(icon_names, inp.assets, def, first.def, false)).flatten();
+        if icon_only && icon.is_none() && !is_squad {
             continue;
         }
+        let n_live = live.len().max(1) as f32;
         overlays.push(ShipOverlay {
             id: key,
             screen_pos: centre,
             half_size: if is_squad { 11.0 } else { half.clamp(11.0, 220.0) },
-            health: live.iter().map(|s| s.hull).sum::<f32>() / n,
-            shield: (def.shield > 0.0).then(|| live.iter().map(|s| s.shield).sum::<f32>() / n),
+            health: live.iter().map(|s| s.hull).sum::<f32>() / n_live,
+            shield: (def.shield > 0.0).then(|| live.iter().map(|s| s.shield).sum::<f32>() / n_live),
             selected,
             hovered,
             enemy,
             name,
             always: false,
             // Far zoom (units a few pixels wide): a small box with the unit icon marks the unit, as in the Remake (video b0700).
-            // A picked squadron gets the box too; the bars and flags of its craft are `MemberBars`, not part of this overlay.
             icon,
             icon_only,
+            see_through: is_squad,
         });
     }
-    *craft_bars = next_bars;
-    (overlays, icons)
+    overlays
+}
+
+/// The craft that stands for a squadron on screen: the drawn one (the tactical view draws only its leader), the lowest id among several (the
+/// battle cam draws them all); `None` while none is drawn.
+fn stand_in<'a>(members: impl Iterator<Item = &'a ShipRender>) -> Option<&'a ShipRender> {
+    members.filter(|s| s.drawn && s.drawn_radius > 0.0).min_by_key(|s| s.id)
 }
 
 /// Feeds eaw-ui's world-space overlays: selection brackets and bars of the ships and structures that are hovered or selected, the
-/// icon box of a picked squadron, the one small icon of every other squadron ([`SquadIcons`]) and the hardpoint reticles of the targeted
-/// enemy. Bars and flags show only on picked units (selected or under the cursor); the bars and flags of the craft of a picked squadron
-/// are [`sync_member_bars`].
+/// see-through box of a picked squadron and the hardpoint reticles of the ship under the cursor or the selected enemy. The bar and flag of
+/// every squadron are [`sync_member_bars`].
 #[allow(clippy::too_many_arguments)]
 fn sync_overlays(
     rt: Res<BattleRuntime>,
@@ -1329,23 +1290,19 @@ fn sync_overlays(
     ships: Res<RenderedShips>,
     settings: Res<BattleViewSettings>,
     assets: Option<Res<EawUiAssets>>,
-    ui_scale: Res<UiScale>,
     camera: Single<(&Camera, &GlobalTransform), With<BattleCamera>>,
     mut out: ResMut<TacticalOverlays>,
-    mut squad_icons: ResMut<SquadIcons>,
-    mut craft_units: ResMut<CraftBarUnits>,
     mut icon_names: Local<HashMap<u32, Option<String>>>,
 ) {
     let (cam, gt) = *camera;
     let Some(viewport) = cam.logical_viewport_size() else { return };
     let player = settings.player_side;
     let project = |p: Vec3| cam.world_to_viewport(gt, p).ok();
-    let view = ScreenView { viewport, right: gt.right().into(), phys: cam.target_scaling_factor().unwrap_or(1.0).max(0.01), ui_scale: ui_scale.0, project: &project };
+    let view = ScreenView { viewport, right: gt.right().into(), phys: cam.target_scaling_factor().unwrap_or(1.0).max(0.01), project: &project };
     let retreat_active = |side: u8| rt.cur.as_ref().and_then(|c| c.retreat_jump_in.get(side as usize).copied().flatten()).is_some();
     let inputs = UnitInputs { catalog: &rt.catalog, ships: &ships, sel: &sel, hover: &hover, player, assets: assets.as_deref(), retreat_active: &retreat_active };
-    let (overlays, icons) = unit_overlays(&inputs, &mut icon_names, &mut craft_units.0, &view);
+    let overlays = unit_overlays(&inputs, &mut icon_names, &view);
     let mut next = TacticalOverlays { ships: overlays, hardpoints: Vec::new() };
-    let next_icons = SquadIcons { items: icons };
     // Hardpoint reticles on the ship under the cursor (own or enemy) or the selected enemy. They are clickable (attack that hardpoint) when
     // they belong to an enemy and own ships are selected.
     if let Some(s) = reticle_target(&hover, &sel).and_then(|id| ships.0.get(&id)) {
@@ -1375,30 +1332,30 @@ fn sync_overlays(
     if *out != next {
         *out = next;
     }
-    if *squad_icons != next_icons {
-        *squad_icons = next_icons;
-    }
 }
 
 /// Margin around the window inside which small craft still get a bar (logical px): a craft just off the edge keeps its bar sliding in.
 const MEMBER_BAR_MARGIN: f32 = 120.0;
 
-/// Whether a ship is one of the small craft that carry a bar and a flag of their own when picked: fighters, bombers and the members of any
-/// squadron (a Skipray blast boat squadron is no fighter class but reads as a unit of small craft).
+/// Whether a ship is one of the small craft that carry a bar and a flag of their own: fighters, bombers and the members of any squadron (a
+/// Skipray blast boat squadron is no fighter class but reads as a unit of small craft).
 fn is_small_craft(class: battle_sim::TargetClass, squad: u32) -> bool {
     matches!(class, battle_sim::TargetClass::Fighter | battle_sim::TargetClass::Bomber) || squad != u32::MAX
 }
 
-/// The bars and flags of single craft, only for the craft of the units in `with_bars` (the picked squadrons whose craft stand far enough
-/// apart, [`CraftBarUnits`]; `unit_of` names the unit of a small craft, `None` for every other ship): the member's own hull (and shield when
-/// it has one), at the screen position and size of its drawn bounding sphere, like the Remake's (user's video b0703s, b0732s, b0850s,
-/// screenshot 07_tactical_battle). Craft whose model is not built yet, that the player does not see (fog of war) or that are off screen get
-/// none; dead ones are no longer in `ships`. `project` maps a world point to logical window pixels. The result is sorted by id so overlapping
-/// bars keep their order. With no unit in `with_bars` there is nothing to do and no bar.
+/// Unit of a small craft for its bar: its squadron, or the craft itself outside a squadron (each lone fighter is drawn on its own).
+fn bar_unit(s: &ShipRender, class: battle_sim::TargetClass) -> Option<u64> {
+    is_small_craft(class, s.squad).then(|| if s.squad != u32::MAX { unit_key(s, class) } else { (3 << 40) | u64::from(s.id) })
+}
+
+/// The bar and flag of every squadron and lone small craft the player sees, own and enemy, picked or not (Remake video b0703s: every
+/// squadron, nothing selected; n93 f0011: enemy ones too): one per unit (`unit_of`, `None` for other ships), under the craft that stands
+/// for it ([`stand_in`]) at its drawn size, filled to the average hull (and shield, where `has_shield`) of the unit's living craft. Units
+/// without a drawn craft or off screen get none. `project` maps a world point to logical window pixels. Sorted by id so overlapping bars
+/// keep their order.
 fn member_bars(
     ships: &[&ShipRender],
     unit_of: impl Fn(&ShipRender) -> Option<u64>,
-    with_bars: &HashSet<u64>,
     has_shield: impl Fn(&ShipRender) -> bool,
     project: impl Fn(Vec3) -> Option<Vec2>,
     right: Vec3,
@@ -1406,35 +1363,31 @@ fn member_bars(
     out: &mut Vec<MemberBar>,
 ) {
     out.clear();
-    if with_bars.is_empty() {
-        return;
-    }
-    let mut units: HashMap<u64, Vec<(&ShipRender, Vec2)>> = HashMap::new();
+    let mut units: HashMap<u64, Vec<&ShipRender>> = HashMap::new();
     for s in ships.iter().filter(|s| s.visible) {
-        if let Some(key) = unit_of(s).filter(|k| with_bars.contains(k))
-            && let Some(c) = project(s.pos)
-        {
-            units.entry(key).or_default().push((s, c));
+        if let Some(key) = unit_of(s) {
+            units.entry(key).or_default().push(s);
         }
     }
     for members in units.values() {
-        for &(s, c) in members.iter().filter(|(s, _)| s.drawn_radius > 0.0) {
-            if c.x < -MEMBER_BAR_MARGIN || c.y < -MEMBER_BAR_MARGIN || c.x > viewport.x + MEMBER_BAR_MARGIN || c.y > viewport.y + MEMBER_BAR_MARGIN {
-                continue;
-            }
-            let radius = project(s.pos + right * s.drawn_radius).map_or(8.0, |e| (e - c).length());
-            out.push(MemberBar { id: s.id, pos: c, radius, health: s.hull, shield: has_shield(s).then_some(s.shield) });
+        let Some(s) = stand_in(members.iter().copied()) else { continue };
+        let Some(c) = project(s.pos) else { continue };
+        if c.x < -MEMBER_BAR_MARGIN || c.y < -MEMBER_BAR_MARGIN || c.x > viewport.x + MEMBER_BAR_MARGIN || c.y > viewport.y + MEMBER_BAR_MARGIN {
+            continue;
         }
+        let radius = project(s.pos + right * s.drawn_radius).map_or(8.0, |e| (e - c).length());
+        let n = members.len() as f32;
+        let health = members.iter().map(|m| m.hull).sum::<f32>() / n;
+        let shield = has_shield(s).then(|| members.iter().map(|m| m.shield).sum::<f32>() / n);
+        out.push(MemberBar { id: s.id, pos: c, radius, health, shield });
     }
     out.sort_unstable_by_key(|m| m.id);
 }
 
-/// Feeds eaw-ui's per-craft bars and flags ([`MemberBars`]) for the squadrons [`sync_overlays`] decided on ([`CraftBarUnits`]): the craft of selected
-/// or hovered squadrons that stand far enough apart on screen, see [`member_bars`].
+/// Feeds eaw-ui's bars and flags of small craft ([`MemberBars`]): one per squadron and lone fighter, see [`member_bars`].
 fn sync_member_bars(
     rt: Res<BattleRuntime>,
     ships: Res<RenderedShips>,
-    units: Res<CraftBarUnits>,
     camera: Single<(&Camera, &GlobalTransform), With<BattleCamera>>,
     mut out: ResMut<MemberBars>,
 ) {
@@ -1442,12 +1395,10 @@ fn sync_member_bars(
     let Some(viewport) = cam.logical_viewport_size() else { return };
     out.scale_factor = cam.target_scaling_factor().unwrap_or(1.0).max(0.01);
     let catalog = &rt.catalog;
-    let class_of = |s: &ShipRender| catalog.ship(s.def).class;
-    let all: Vec<&ShipRender> = if units.0.is_empty() { Vec::new() } else { ships.0.values().collect() };
+    let all: Vec<&ShipRender> = ships.0.values().collect();
     member_bars(
         &all,
-        |s| is_small_craft(class_of(s), s.squad).then(|| unit_key(s, class_of(s))),
-        &units.0,
+        |s| bar_unit(s, catalog.ship(s.def).class),
         |s| catalog.ship(s.def).shield > 0.0,
         |p| cam.world_to_viewport(gt, p).ok(),
         gt.right().into(),
@@ -2141,6 +2092,7 @@ fn game_font(ui: &eaw_ui::EawUiSettings, size: f32) -> TextFont {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashSet;
 
     #[test]
     fn an_ability_button_plays_its_click_sfx_and_the_radar_and_hardpoints_stay_silent() {
@@ -2266,61 +2218,71 @@ mod tests {
 
     const VIEWPORT: Vec2 = Vec2::new(1920.0, 1080.0);
 
-    /// The bars of single craft of the units in `with_bars` (the picked squadrons that [`unit_overlays`] gave bars of their own).
-    fn bars_for(ships: &[ShipRender], with_bars: &[u64], has_shield: impl Fn(&ShipRender) -> bool) -> Vec<MemberBar> {
+    /// The bars of every unit of small craft among `ships`.
+    fn bars_for(ships: &[ShipRender], has_shield: impl Fn(&ShipRender) -> bool) -> Vec<MemberBar> {
         let all: Vec<&ShipRender> = ships.iter().collect();
-        let with_bars: HashSet<u64> = with_bars.iter().copied().collect();
         let mut out = Vec::new();
-        member_bars(&all, |s| is_small_craft(class_of(s), s.squad).then(|| unit_key(s, class_of(s))), &with_bars, has_shield, flat, Vec3::X, VIEWPORT, &mut out);
+        member_bars(&all, |s| bar_unit(s, class_of(s)), has_shield, flat, Vec3::X, VIEWPORT, &mut out);
         out
     }
 
-    /// Key of own squadron 0.
-    fn squad0() -> u64 {
-        unit_key(&craft(0, 0.0, 1.0), battle_sim::TargetClass::Fighter)
-    }
-
-    /// The bars of squadron 0, picked, with room for all of them.
-    fn bars_of(ships: &[ShipRender], has_shield: impl Fn(&ShipRender) -> bool) -> Vec<MemberBar> {
-        bars_for(ships, &[squad0()], has_shield)
+    #[test]
+    fn every_squadron_has_one_bar_under_the_craft_that_stands_for_it_picked_or_not() {
+        // Own squadrons 0 and 1 and enemy squadron 0 of twelve craft each, the tactical view drawing only the first of each; an enemy capital ship.
+        let (ships, _) = field(40.0);
+        let bars = bars_for(&ships, |_| false);
+        assert_eq!(bars.iter().map(|b| b.id).collect::<Vec<_>>(), [0, 12, 24], "one bar per squadron, own and enemy, with nothing picked");
+        // At the drawn craft's place, as large as its drawn sphere.
+        assert_eq!(bars[0].pos, Vec2::new(100.0, 300.0));
+        assert!(bars.iter().all(|b| b.radius == 17.0));
     }
 
     #[test]
-    fn every_member_of_a_picked_squadron_gets_its_own_bar() {
-        let squad = [craft(7, 300.0, 1.0), craft(3, 200.0, 0.5), craft(5, 250.0, 0.2)];
-        let bars = bars_of(&squad, |_| false);
-        assert_eq!(bars.len(), 3, "one bar per member, not one per squadron");
-        // At the member's own place, as large as its drawn sphere, sorted by id.
-        assert_eq!(bars.iter().map(|b| b.id).collect::<Vec<_>>(), [3, 5, 7]);
-        assert_eq!(bars.iter().map(|b| b.pos.x).collect::<Vec<_>>(), [200.0, 250.0, 300.0]);
-        assert!(bars.iter().all(|b| b.radius == 17.0 && b.pos.y == 100.0));
+    fn a_squadron_bar_is_the_average_of_its_living_craft() {
+        let mut squad = [craft(1, 100.0, 1.0), craft(2, 200.0, 0.5), craft(3, 300.0, 0.3)];
+        for s in &mut squad[1..] {
+            s.drawn = false;
+        }
+        squad[0].shield = 0.6;
+        let bars = bars_for(&squad, |_| true);
+        assert_eq!(bars.len(), 1);
+        assert!((bars[0].health - 0.6).abs() < 1e-6, "{}", bars[0].health);
+        assert!((bars[0].shield.expect("shield") - 0.2).abs() < 1e-6);
+        assert_eq!(bars_for(&squad, |_| false)[0].shield, None, "craft without shields have no shield bar");
+        // A dead craft is gone from the published ships: the average is over the living.
+        assert!((bars_for(&squad[..2], |_| false)[0].health - 0.75).abs() < 1e-6);
     }
 
     #[test]
-    fn nothing_picked_shows_no_bar_at_all() {
-        // Three squadrons of 12 craft 40 px apart and an enemy capital ship: with nothing selected and nothing under the cursor no squadron has
-        // craft bars, no craft has a bar and no overlay carries a health bar.
-        let (ships, catalog) = field(40.0);
-        let mut with_bars = HashSet::new();
-        let (overlays, _) = overlays_state(&ships, &catalog, &Selection::default(), &Hover::default(), &mut with_bars);
-        assert!(with_bars.is_empty(), "{with_bars:?}");
-        assert!(overlays.iter().all(|o| o.icon_only), "{overlays:?}");
-        assert!(bars_for(&ships, &[], |_| false).is_empty());
-        // A selected or hovered capital ship adds no craft bars either: only squadrons have them.
-        let sel = Selection { ships: vec![], enemy: Some(100) };
-        let hover = Hover { ship: Some(100), ..Hover::default() };
-        overlays_state(&ships, &catalog, &sel, &hover, &mut with_bars);
-        assert!(with_bars.is_empty(), "{with_bars:?}");
+    fn the_battle_cam_draws_every_craft_and_the_lowest_id_carries_the_squadron_bar() {
+        let squad = [craft(7, 300.0, 1.0), craft(3, 200.0, 0.5), craft(5, 250.0, 0.0)];
+        let bars = bars_for(&squad, |_| false);
+        assert_eq!(bars.len(), 1, "still one bar for the squadron");
+        assert_eq!((bars[0].id, bars[0].pos.x), (3, 200.0));
     }
 
     #[test]
-    fn only_the_craft_of_a_picked_squadron_get_bars() {
-        let ships: Vec<ShipRender> = (0..24).map(|i| ship(i, 0, 0, i / 12, Vec3::new(100.0 + 600.0 * (i / 12) as f32 + 40.0 * (i % 12) as f32, 0.0, 100.0), 1.0)).collect();
-        let key = |squad: u32| unit_key(&ship(0, 0, 0, squad, Vec3::ZERO, 1.0), battle_sim::TargetClass::Fighter);
-        let ids = |picked: &[u64]| bars_for(&ships, picked, |_| false).iter().map(|b| b.id).collect::<Vec<_>>();
-        assert_eq!(ids(&[key(1)]), (12..24).collect::<Vec<_>>(), "squadron 1 only");
-        assert_eq!(ids(&[key(0)]), (0..12).collect::<Vec<_>>(), "squadron 0 only");
-        assert_eq!(ids(&[key(0), key(1)]).len(), 24);
+    fn hidden_unbuilt_and_off_screen_squadrons_show_nothing() {
+        let unit = |x: f32, squad: u32| ship(squad * 10, 0, 0, squad, Vec3::new(x, 0.0, 100.0), 1.0);
+        let mut ships = [unit(100.0, 1), unit(200.0, 2), unit(300.0, 3), unit(5000.0, 4), unit(500.0, 5)];
+        ships[0].visible = false; // fog of war
+        ships[1].drawn_radius = 0.0; // model not built yet
+        ships[2].drawn = false; // no member drawn
+        assert_eq!(bars_for(&ships, |_| false).iter().map(|b| b.id).collect::<Vec<_>>(), [50], "the far-off one (x 5000) neither");
+    }
+
+    #[test]
+    fn lone_fighters_carry_a_bar_each_and_capital_ships_none() {
+        use battle_sim::TargetClass as C;
+        assert!(is_small_craft(C::Fighter, u32::MAX));
+        assert!(is_small_craft(C::Bomber, u32::MAX));
+        assert!(is_small_craft(C::Corvette, 4), "a squadron member of any class is a small craft");
+        assert!(!is_small_craft(C::Capital, u32::MAX));
+        assert!(!is_small_craft(C::Frigate, u32::MAX));
+        let lone = |id: u32, x: f32| ship(id, 0, 0, u32::MAX, Vec3::new(x, 0.0, 100.0), 1.0);
+        let capital = ship(2, 1, 0, u32::MAX, Vec3::new(200.0, 0.0, 100.0), 1.0);
+        let ships = [lone(1, 100.0), capital, lone(3, 300.0)];
+        assert_eq!(bars_for(&ships, |_| false).iter().map(|b| b.id).collect::<Vec<_>>(), [1, 3]);
     }
 
     #[test]
@@ -2330,125 +2292,23 @@ mod tests {
         let key = |i: usize| unit_key(&ships[i], battle_sim::TargetClass::Fighter);
         let (own0, own1, enemy0) = (key(0), key(12), key(24));
         assert_ne!(own0, enemy0, "squadron 0 of the other side is another unit");
-        let picked = |sel: Selection, hover: Hover| {
-            let mut with_bars = HashSet::new();
-            overlays_state(&ships, &catalog, &sel, &hover, &mut with_bars);
-            with_bars
-        };
-        assert!(picked(Selection::default(), Hover::default()).is_empty());
-        assert_eq!(picked(Selection { ships: vec![5], enemy: None }, Hover::default()), HashSet::from([own0]), "one selected craft stands for its squadron");
-        assert_eq!(picked(Selection::default(), Hover { ship: Some(7), ..Hover::default() }), HashSet::from([own0]), "so does the one under the cursor");
-        assert_eq!(picked(Selection { ships: vec![], enemy: Some(30) }, Hover::default()), HashSet::from([enemy0]), "the enemy marked for targeting");
-        assert_eq!(picked(Selection { ships: vec![0], enemy: None }, Hover { ship: Some(13), ..Hover::default() }), HashSet::from([own0, own1]));
+        let boxed = |sel: Selection, hover: Hover| -> HashSet<u64> { overlays_of(&ships, &catalog, &sel, &hover).iter().filter(|o| o.see_through).map(|o| o.id).collect() };
+        assert!(boxed(Selection::default(), Hover::default()).is_empty());
+        assert_eq!(boxed(Selection { ships: vec![5], enemy: None }, Hover::default()), HashSet::from([own0]), "one selected craft stands for its squadron");
+        assert_eq!(boxed(Selection::default(), Hover { ship: Some(7), ..Hover::default() }), HashSet::from([own0]), "so does the one under the cursor");
+        assert_eq!(boxed(Selection { ships: vec![], enemy: Some(30) }, Hover::default()), HashSet::from([enemy0]), "the enemy marked for targeting");
+        assert_eq!(boxed(Selection { ships: vec![0], enemy: None }, Hover { ship: Some(13), ..Hover::default() }), HashSet::from([own0, own1]));
     }
 
-    #[test]
-    fn a_members_bar_follows_its_own_health() {
-        let mut squad = [craft(1, 100.0, 1.0), craft(2, 200.0, 0.75), craft(3, 300.0, 0.3)];
-        let health = |bars: &[MemberBar]| bars.iter().map(|b| b.health).collect::<Vec<_>>();
-        assert_eq!(health(&bars_of(&squad, |_| false)), [1.0, 0.75, 0.3]);
-        // Only the member that took damage changes; the others keep theirs.
-        squad[1].hull = 0.25;
-        assert_eq!(health(&bars_of(&squad, |_| false)), [1.0, 0.25, 0.3]);
-    }
-
-    #[test]
-    fn members_with_shields_carry_their_shield_and_the_others_none() {
-        let mut squad = [craft(1, 100.0, 1.0), craft(2, 200.0, 1.0)];
-        squad[0].shield = 0.6;
-        let bars = bars_of(&squad, |s| s.id == 1);
-        assert_eq!(bars[0].shield, Some(0.6));
-        assert_eq!(bars[1].shield, None);
-    }
-
-    #[test]
-    fn hidden_dead_unbuilt_and_off_screen_members_show_nothing() {
-        let mut squad = [craft(1, 100.0, 1.0), craft(2, 200.0, 1.0), craft(3, 300.0, 1.0), craft(4, 400.0, 1.0), craft(5, 500.0, 1.0)];
-        squad[1].visible = false; // fog of war
-        squad[2].drawn_radius = 0.0; // model not built yet
-        squad[3].pos.x = 5000.0; // far off the screen
-        let ids = |ships: &[ShipRender]| bars_of(ships, |_| false).iter().map(|b| b.id).collect::<Vec<_>>();
-        assert_eq!(ids(&squad), [1, 5]);
-        // A dead member is gone from the published ships altogether.
-        assert_eq!(ids(&squad[..1]), [1]);
-    }
-
-    #[test]
-    fn capital_ships_keep_their_own_overlay_and_get_no_member_bar() {
-        use battle_sim::TargetClass as C;
-        assert!(is_small_craft(C::Fighter, u32::MAX));
-        assert!(is_small_craft(C::Bomber, u32::MAX));
-        assert!(is_small_craft(C::Corvette, 4), "a squadron member of any class is a small craft");
-        assert!(!is_small_craft(C::Capital, u32::MAX));
-        assert!(!is_small_craft(C::Frigate, u32::MAX));
-        let capital = ship(2, 1, 0, u32::MAX, Vec3::new(200.0, 0.0, 100.0), 1.0);
-        let ships = [craft(1, 100.0, 1.0), capital];
-        let key = unit_key(&ships[1], C::Capital);
-        assert_eq!(bars_for(&ships, &[key, squad0()], |_| false).iter().map(|b| b.id).collect::<Vec<_>>(), [1], "even named, a capital ship has no craft bar");
-    }
-
-    #[test]
-    fn craft_standing_close_together_do_not_pile_up_their_bars() {
-        // One picked squadron of 12 on a grid: 9 px apart (a TIE squadron at camera 2000) the box carries one average bar and the craft none, 40 px
-        // apart (a close zoom) each craft has its own bar and the box none.
-        for (gap, own) in [(9.0, false), (40.0, true)] {
-            let (ships, catalog) = field(gap);
-            let key = unit_key(&ships[0], battle_sim::TargetClass::Fighter);
-            let mut with_bars = HashSet::new();
-            let (overlays, _) = overlays_state(&ships, &catalog, &Selection { ships: vec![0], enemy: None }, &Hover::default(), &mut with_bars);
-            assert_eq!(with_bars.contains(&key), own, "{gap} px apart");
-            assert_eq!(overlays.iter().find(|o| o.id == key).expect("the box").icon_only, own, "the box carries the bar only when the craft have none");
-            assert_eq!(bars_for(&ships, &with_bars.iter().copied().collect::<Vec<_>>(), |_| false).len(), if own { 12 } else { 0 }, "{gap} px apart");
-        }
-        // The typical craft decides, not the one that strayed: a squadron spread out with one craft beside its neighbour still shows bars.
-        let min_gap = CRAFT_BARS_MIN_GAP * 1.41;
-        assert!(craft_bars_fit(&[Vec2::new(0.0, 0.0), Vec2::new(5.0, 0.0), Vec2::new(100.0, 0.0), Vec2::new(200.0, 0.0), Vec2::new(300.0, 0.0)], min_gap));
-        assert!(!craft_bars_fit(&[Vec2::new(0.0, 0.0), Vec2::new(5.0, 0.0), Vec2::new(10.0, 0.0), Vec2::new(200.0, 0.0)], min_gap));
-        assert!(craft_bars_fit(&[Vec2::new(3.0, 3.0)], min_gap), "a lone craft always has room");
-        assert!(craft_bars_fit(&[], min_gap));
-    }
-
-    #[test]
-    fn a_squadron_at_the_limit_does_not_flip_between_craft_bars_and_one_bar() {
-        let limit = CRAFT_BARS_MIN_GAP * 1.41;
-        let sel = Selection { ships: vec![0], enemy: None };
-        let has_bars = |gap: f32, state: &mut HashSet<u64>| {
-            let (ships, catalog) = field(gap);
-            overlays_state(&ships, &catalog, &sel, &Hover::default(), state);
-            state.contains(&unit_key(&ships[0], battle_sim::TargetClass::Fighter))
-        };
-        // The craft's spacing wobbles 6 % round the limit (the weave, the flight), frame after frame: nothing changes, whichever side it started on.
-        for start in [0.5f32, 1.5] {
-            let mut state = HashSet::new();
-            let settled = has_bars(limit * start, &mut state);
-            assert_eq!(settled, start > 1.0);
-            for frame in 0..300 {
-                let gap = limit * (1.0 + 0.06 * (frame as f32 * 0.9).sin());
-                assert_eq!(has_bars(gap, &mut state), settled, "frame {frame}, spacing {:.2} of the limit", gap / limit);
-            }
-        }
-        // A zoom from 0.5 to 1.5 times the limit and back, one percent a frame: one change each way, at 1.1 and at 0.9 of the limit.
-        let mut state = HashSet::new();
-        let (mut last, mut changes) = (false, Vec::new());
-        for k in 0..=200 {
-            let f = if k <= 100 { 0.5 + k as f32 / 100.0 } else { 1.5 - (k - 100) as f32 / 100.0 };
-            let now = has_bars(limit * f, &mut state);
-            if now != last {
-                changes.push((now, f));
-                last = now;
-            }
-        }
-        assert_eq!(changes.len(), 2, "{changes:?}");
-        assert!(changes[0].0 && (1.1..1.12).contains(&changes[0].1), "craft bars come at 1.1 of the limit: {changes:?}");
-        assert!(!changes[1].0 && (0.88..=0.9).contains(&changes[1].1), "and go at 0.9 of it: {changes:?}");
-    }
-
-    /// Visible units for `unit_overlays`: own squadrons 0 and 1 and enemy squadron 0 of twelve craft each, 40 px apart, and an enemy capital ship.
+    /// Visible units for `unit_overlays`: own squadrons 0 and 1 and enemy squadron 0 of twelve craft each, `gap` px apart, of which the
+    /// tactical view draws only the first (the leader), and an enemy capital ship.
     fn field(gap: f32) -> (Vec<ShipRender>, battle_sim::Catalog) {
         let mut ships = Vec::new();
         for (side, squad, x0) in [(0u8, 0u32, 100.0f32), (0, 1, 700.0), (1, 0, 1300.0)] {
             for i in 0..12u32 {
-                ships.push(ship(ships.len() as u32, 0, side, squad, Vec3::new(x0 + gap * (i % 4) as f32, 0.0, 300.0 + gap * (i / 4) as f32), 1.0));
+                let mut s = ship(ships.len() as u32, 0, side, squad, Vec3::new(x0 + gap * (i % 4) as f32, 0.0, 300.0 + gap * (i / 4) as f32), 1.0);
+                s.drawn = i == 0;
+                ships.push(s);
             }
         }
         ships.push(ship(100, 1, 1, u32::MAX, Vec3::new(1500.0, 0.0, 800.0), 1.0));
@@ -2457,68 +2317,34 @@ mod tests {
         (ships, catalog)
     }
 
-    fn overlays_of(ships: &[ShipRender], catalog: &battle_sim::Catalog, sel: &Selection, hover: &Hover) -> (Vec<ShipOverlay>, Vec<SquadIcon>) {
-        overlays_state(ships, catalog, sel, hover, &mut HashSet::new())
-    }
-
-    /// [`unit_overlays`] with the answer of the last frame in `craft_bars` (the squadrons whose craft carry bars), which it replaces.
-    fn overlays_state(ships: &[ShipRender], catalog: &battle_sim::Catalog, sel: &Selection, hover: &Hover, craft_bars: &mut HashSet<u64>) -> (Vec<ShipOverlay>, Vec<SquadIcon>) {
+    fn overlays_of(ships: &[ShipRender], catalog: &battle_sim::Catalog, sel: &Selection, hover: &Hover) -> Vec<ShipOverlay> {
         let rendered = RenderedShips(ships.iter().cloned().map(|s| (s.id, s)).collect());
         let no_retreat = |_: u8| false;
         let inputs = UnitInputs { catalog, ships: &rendered, sel, hover, player: 0, assets: None, retreat_active: &no_retreat };
-        let view = ScreenView { viewport: VIEWPORT, right: Vec3::X, phys: 1.0, ui_scale: 1.41, project: &flat };
-        unit_overlays(&inputs, &mut HashMap::new(), craft_bars, &view)
+        let view = ScreenView { viewport: VIEWPORT, right: Vec3::X, phys: 1.0, project: &flat };
+        unit_overlays(&inputs, &mut HashMap::new(), &view)
     }
 
     #[test]
-    fn every_unpicked_squadron_has_one_small_icon_and_no_box_or_bar() {
+    fn an_unpicked_squadron_has_no_box_and_no_icon() {
         let (ships, catalog) = field(40.0);
-        let (overlays, icons) = overlays_of(&ships, &catalog, &Selection::default(), &Hover::default());
-        assert_eq!(icons.len(), 3, "one icon per squadron, not one per craft (36 craft)");
-        assert_eq!(icons.iter().filter(|i| i.enemy).count(), 1, "the enemy squadron has its icon too");
-        let ids: HashSet<u64> = icons.iter().map(|i| i.id).collect();
-        assert_eq!(ids.len(), 3, "each its own squadron");
-        assert!(icons.iter().all(|i| !i.icon.is_empty()), "the unit's icon art (the generic fighter without game data)");
-        // The icon sits in the middle of its squadron.
-        let own0 = icons.iter().find(|i| !i.enemy && i.screen_pos.x < 400.0).expect("own squadron 0");
-        assert_eq!(own0.screen_pos, Vec2::new(100.0 + 60.0, 300.0 + 40.0));
-        // No squadron overlay (box, bars, flag), and no health bar anywhere with nothing picked (the enemy capital ship would show only its
-        // icon box, which needs the game's icon art).
-        assert!(overlays.iter().all(|o| o.id == 100 && o.icon_only), "nothing but the capital ship's icon box: {overlays:?}");
-        // And no craft bar.
-        assert!(bars_for(&ships, &[], |_| false).is_empty());
+        let overlays = overlays_of(&ships, &catalog, &Selection::default(), &Hover::default());
+        // At most the capital ship's icon box (which needs the game's icon art, so not even that here): a squadron's bar and flag mark it.
+        assert!(overlays.iter().all(|o| o.id == 100), "{overlays:?}");
     }
 
     #[test]
-    fn a_picked_squadron_keeps_its_box_and_gives_up_its_icon() {
+    fn a_picked_squadron_has_one_see_through_box_on_the_craft_that_stands_for_it() {
         let (ships, catalog) = field(40.0);
         let own0 = unit_key(&ships[0], battle_sim::TargetClass::Fighter);
         for (sel, hover) in [(Selection { ships: vec![5], enemy: None }, Hover::default()), (Selection::default(), Hover { ship: Some(5), ..Hover::default() })] {
-            let (overlays, icons) = overlays_of(&ships, &catalog, &sel, &hover);
-            assert_eq!(icons.len(), 2, "the other two squadrons keep theirs");
-            assert!(icons.iter().all(|i| i.id != own0));
-            let boxed = overlays.iter().find(|o| o.id == own0).expect("the box of the picked squadron");
-            assert!(boxed.icon.is_some() && (boxed.selected || boxed.hovered));
-            assert_eq!(overlays.iter().filter(|o| o.id != 100).count(), 1, "one box, not one per craft");
-            // 40 px apart there is room for a bar each: the box shows none of its own.
-            assert!(boxed.icon_only, "its craft carry the bars");
+            let overlays = overlays_of(&ships, &catalog, &sel, &hover);
+            let boxed: Vec<&ShipOverlay> = overlays.iter().filter(|o| o.id == own0).collect();
+            assert_eq!(boxed.len(), 1, "one box, not one per craft");
+            let b = boxed[0];
+            assert!(b.see_through && b.icon.is_none() && b.icon_only && (b.selected || b.hovered), "{b:?}");
+            assert_eq!(b.screen_pos, Vec2::new(100.0, 300.0), "on the leader, the craft the tactical view draws");
         }
-    }
-
-    #[test]
-    fn a_picked_squadron_standing_close_shows_one_average_bar_under_its_box() {
-        let (mut ships, catalog) = field(6.0);
-        ships[3].hull = 0.5;
-        let (overlays, icons) = overlays_of(&ships, &catalog, &Selection { ships: vec![0], enemy: None }, &Hover::default());
-        assert_eq!(icons.len(), 2);
-        let boxed = overlays.iter().find(|o| o.id != 100 && o.icon.is_some()).expect("box");
-        assert!(!boxed.icon_only, "the box carries the squadron's bar");
-        assert!((boxed.health - (11.0 + 0.5) / 12.0).abs() < 1e-5, "the average of its craft: {}", boxed.health);
-        // ... and the craft show none of their own.
-        let key = unit_key(&ships[0], battle_sim::TargetClass::Fighter);
-        let mut with_bars = HashSet::new();
-        overlays_state(&ships, &catalog, &Selection { ships: vec![0], enemy: None }, &Hover::default(), &mut with_bars);
-        assert!(!with_bars.contains(&key) && bars_for(&ships, &with_bars.iter().copied().collect::<Vec<_>>(), |_| false).is_empty());
     }
 
     #[test]

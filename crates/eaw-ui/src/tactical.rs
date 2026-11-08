@@ -259,7 +259,13 @@ pub struct ShipOverlay {
     pub icon: Option<String>,
     /// Nobody selected or hovers the unit: only the icon box is drawn (no brackets, bars or flag).
     pub icon_only: bool,
+    /// The box of a picked squadron: a white frame with round corners round its craft, which shows through it (no icon art, no plate),
+    /// [`SQUAD_BOX_DESIGN_PX`] across (Remake video v0700s).
+    pub see_through: bool,
 }
+
+/// Size of a picked squadron's box in design pixels: the Remake's measures 28 x 27 px at 1080p (video v0700s), 19.9 design px.
+pub const SQUAD_BOX_DESIGN_PX: f32 = 19.9;
 
 /// A hardpoint marker on a hovered capital ship.
 #[derive(Debug, Clone, PartialEq)]
@@ -598,6 +604,7 @@ pub(crate) fn ship_overlays(
     mut images: ResMut<Assets<Image>>,
     mut commands: Commands,
     mut styles: Query<(&mut Node, Option<&mut ImageNode>, Option<&mut BorderColor>, Option<&mut Text>)>,
+    mut plates: Query<&mut BackgroundColor>,
     settings: Res<EawUiSettings>,
 ) {
     let Ok(root) = root.single() else { return };
@@ -786,8 +793,14 @@ pub(crate) fn ship_overlays(
         };
         let Ok(parts) = nodes.get(e) else { continue };
         // Small units get an icon box (24 design px) instead of brackets; big ones keep brackets and carry the bars above.
-        let icon_mode = o.icon.is_some();
-        let (half, w) = if icon_mode { (12.0 * s, 24.0 * s) } else { (o.half_size, w) };
+        let icon_mode = o.icon.is_some() || o.see_through;
+        let (half, w) = if o.see_through {
+            (SQUAD_BOX_DESIGN_PX * 0.5 * s, SQUAD_BOX_DESIGN_PX * s)
+        } else if icon_mode {
+            (12.0 * s, 24.0 * s)
+        } else {
+            (o.half_size, w)
+        };
         if let Ok((mut node, ..)) = styles.get_mut(e) {
             node.left = px(o.screen_pos.x - half, s);
             node.top = px(o.screen_pos.y - half, s);
@@ -819,14 +832,19 @@ pub(crate) fn ship_overlays(
         }
         if let Ok((mut n, img, bc, _)) = styles.get_mut(parts.icon) {
             n.display = if icon_mode { Display::Flex } else { Display::None };
-            if let (Some(mut img), Some(name)) = (img, o.icon.as_deref())
-                && let Some(t) = textures.get(&mut images, name)
-            {
-                img.image = t.handle;
+            n.border_radius = if o.see_through { BorderRadius::all(Val::Px(4.0)) } else { BorderRadius::ZERO };
+            if let Some(mut img) = img {
+                if let Some(t) = o.icon.as_deref().and_then(|name| textures.get(&mut images, name)) {
+                    img.image = t.handle;
+                }
+                img.color = if o.see_through { Color::NONE } else { Color::WHITE };
             }
             if let Some(mut bc) = bc {
                 *bc = BorderColor::all(if o.enemy { accent } else { Color::WHITE });
             }
+        }
+        if let Ok(mut plate) = plates.get_mut(parts.icon) {
+            plate.0 = if o.see_through { Color::NONE } else { Color::srgba(0.0, 0.0, 0.0, 0.45) };
         }
         let set = bar_set(&mut sets, &mut textures, &mut images, parts.class);
         if let Ok((_, Some(mut img), ..)) = styles.get_mut(parts.health_img) {
