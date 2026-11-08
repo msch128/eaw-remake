@@ -123,8 +123,12 @@ pub struct PlanetState {
     pub destroyed: bool,
     /// Current income swing of a gambling structure (a fraction of the planet's base income; see `IncomeGamble`).
     pub gamble: f32,
-    /// Game time of the next gambling evaluation.
+    /// Game time of the next gambling evaluation for structures.
     pub gamble_at: f64,
+    /// Current income swing of a gambling hero orbiting the planet (see `IncomeGamble`).
+    pub hero_gamble: f32,
+    /// Game time of the next gambling evaluation for heroes.
+    pub hero_gamble_at: f64,
 }
 
 /// Hull and shield of a ship or star base as a fraction of the maximum (1.0 = undamaged).
@@ -870,6 +874,7 @@ impl Galaxy {
             p.structures.hash(&mut h);
             p.destroyed.hash(&mut h);
             p.gamble.to_bits().hash(&mut h);
+            p.hero_gamble.to_bits().hash(&mut h);
             for q in &p.queues {
                 for it in q {
                     it.remaining.to_bits().hash(&mut h);

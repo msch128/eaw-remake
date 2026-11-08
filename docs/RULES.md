@@ -37,7 +37,7 @@ and here. Known holes are in [KNOWN-GAPS.md](KNOWN-GAPS.md).
 | `Political_Income_Curve`, `Income_Redistribution` | Data: `Xml/Gameconstants.xml` | ignored: political control is always 1 for owned planets |
 | `Income_Stream_Ability` on mines | Data: `Buildings/Ground/GC/**/Mining_Facility*.xml` | ignored: its comment says it exists in tactical modes only |
 | `Additional_Multiplier_On_Mining_Colonies` | Data: mining facilities | on a planet with `Planet_Is_Mining_Colony` the facility modifiers count (1 + multiplier) times |
-| `Planet_Income_Gambling_Ability` (Underworld cantina, scrapyard) | Data: `Evaluation_Interval_In_Secs`, `Chance_To_Win`, `Max/Min_Income_Modifier`; Estimate: applied like a percentage of the planet's base until the next evaluation | uses the galaxy RNG, so it is deterministic |
+| `Planet_Income_Gambling_Ability` (Underworld structures, heroes: Mon Mothma +-25%, Jabba, Tyber, Xizor -50%/+100%) | Data: `Evaluation_Interval_In_Secs`, `Chance_To_Win`, `Max/Min_Income_Modifier`; Estimate: when both a gambling structure and a hero are present, both roll independently on their own timers and stack additively | uses the galaxy RNG, so it is deterministic; heroes evaluate while orbiting an owned planet |
 | Starting credits, tech levels, home planets, forces | Data: `Xml/Campaigns_*.xml` (`Starting_Credits`, `Starting_Tech_Level`, `Home_Location`, `Starting_Forces`) | `FactionInfo` |
 | Trade route `Credit_Gain_Factor`, `Political_Control_Gain`, black market, corruption | Data: `Xml/TradeRoutes_Web_Way.xml` | not modelled; every Web Way lane has both at 0 |
 

@@ -384,6 +384,8 @@ pub struct UnitType {
     pub upkeep: f32,
     /// Percentage modifier on base planet income while orbiting an owned planet (e.g. freighters, Errant Venture).
     pub income_pct: f32,
+    /// `Planet_Income_Gambling_Ability`: periodic income swing at the orbiting planet (Mon Mothma, Jabba, Tyber, Xizor).
+    pub gamble: Option<IncomeGamble>,
     /// `AI_Combat_Power`.
     pub ai_power: f32,
     /// True if the unit can appear in a build menu at all.

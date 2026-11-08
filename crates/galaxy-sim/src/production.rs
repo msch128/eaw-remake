@@ -421,7 +421,7 @@ impl World {
     pub fn planet_income(&self, galaxy: &Galaxy, planet: PlanetId) -> f32 {
         let ps = &galaxy.planets[planet as usize];
         let base = self.planets[planet as usize].credit_value;
-        let (mut pct, mut abs) = (ps.gamble, 0.0f32);
+        let (mut pct, mut abs) = (ps.gamble + ps.hero_gamble, 0.0f32);
         let mining = self.planets[planet as usize].mining_colony;
         for &s in &ps.structures {
             let st = &self.structures[s as usize];

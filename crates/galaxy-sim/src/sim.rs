@@ -804,22 +804,38 @@ impl Sim {
     }
 
     /// Finds planets where hostile parties meet and starts (or resolves) a battle there.
-    /// Evaluates the gambling structures (`Planet_Income_Gambling_Ability`) whose time has come.
+    /// Evaluates the gambling structures and hero abilities (`Planet_Income_Gambling_Ability`) whose time has come.
     fn gamble_income(&mut self) {
         let world = self.world.clone();
         let now = self.galaxy.time;
         for p in 0..self.galaxy.planets.len() {
-            let Some(g) = self.galaxy.planets[p].structures.iter().find_map(|&s| world.structures[s as usize].gamble) else {
-                if self.galaxy.planets[p].gamble != 0.0 {
-                    self.galaxy.planets[p].gamble = 0.0;
+            let struct_g = self.galaxy.planets[p].structures.iter().find_map(|&s| world.structures[s as usize].gamble);
+            if let Some(g) = struct_g {
+                if now >= self.galaxy.planets[p].gamble_at {
+                    let win = self.galaxy.rng.unit() < g.chance;
+                    let ps = &mut self.galaxy.planets[p];
+                    ps.gamble = if win { g.max } else { g.min };
+                    ps.gamble_at = now + f64::from(g.interval);
                 }
-                continue;
-            };
-            if now >= self.galaxy.planets[p].gamble_at {
-                let win = self.galaxy.rng.unit() < g.chance;
-                let ps = &mut self.galaxy.planets[p];
-                ps.gamble = if win { g.max } else { g.min };
-                ps.gamble_at = now + f64::from(g.interval);
+            } else if self.galaxy.planets[p].gamble != 0.0 {
+                self.galaxy.planets[p].gamble = 0.0;
+            }
+
+            let hero_g = self.galaxy.planets[p].owner.and_then(|owner| {
+                self.galaxy.fleets.values()
+                    .filter(|f| f.owner == owner && f.location == FleetLocation::AtPlanet(p as PlanetId))
+                    .flat_map(|f| f.units.keys())
+                    .find_map(|&u| world.units[u as usize].gamble)
+            });
+            if let Some(g) = hero_g {
+                if now >= self.galaxy.planets[p].hero_gamble_at {
+                    let win = self.galaxy.rng.unit() < g.chance;
+                    let ps = &mut self.galaxy.planets[p];
+                    ps.hero_gamble = if win { g.max } else { g.min };
+                    ps.hero_gamble_at = now + f64::from(g.interval);
+                }
+            } else if self.galaxy.planets[p].hero_gamble != 0.0 {
+                self.galaxy.planets[p].hero_gamble = 0.0;
             }
         }
     }

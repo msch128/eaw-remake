@@ -200,6 +200,15 @@ fn unit_from_def(def: &SpaceUnitDef, combat: CombatStats) -> UnitType {
         system_spy: def.sub_abilities.iter().any(|a| a.kind.eq_ignore_ascii_case("system_spy_ability")),
         upkeep: def.upkeep(),
         income_pct: def.income_pct(),
+        gamble: def.sub_abilities.iter().find(|a| a.kind.eq_ignore_ascii_case("planet_income_gambling_ability")).map(|a| {
+            let num = |k: &str| a.fields.get(k).and_then(|v| v.trim().parse::<f32>().ok());
+            IncomeGamble {
+                interval: num("evaluation_interval_in_secs").unwrap_or(30.0).max(1.0),
+                min: num("min_income_modifier").unwrap_or(0.0),
+                max: num("max_income_modifier").unwrap_or(0.0),
+                chance: num("chance_to_win").unwrap_or(0.5).clamp(0.0, 1.0),
+            }
+        }),
         ai_power: def.ai_combat_power,
         buildable: def.build_cost > 0.0 && yes("build_tab_space_units") && !def.affiliation.is_empty(),
         carries: def.starting_spawned_units.clone(),
@@ -373,6 +382,9 @@ impl World {
             u.buildable &= ok;
             if u.income_pct == 0.0 {
                 u.income_pct = def.squadron_units.iter().filter_map(|m| self.unit_index.get(&key(m))).map(|&mid| self.units[mid as usize].income_pct).sum();
+            }
+            if u.gamble.is_none() {
+                u.gamble = def.squadron_units.iter().filter_map(|m| self.unit_index.get(&key(m))).find_map(|&mid| self.units[mid as usize].gamble);
             }
             self.resolve_unit_requirements(&mut u, &def);
             self.units.push(u);
