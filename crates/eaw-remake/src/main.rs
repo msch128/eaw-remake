@@ -24,6 +24,7 @@ mod label_probe;
 mod camera;
 mod cli;
 mod datadir;
+mod fleet_trace;
 mod flow;
 mod galaxy_map;
 mod hero_heads;
@@ -249,6 +250,7 @@ fn add_game(app: &mut App, boot: Boot) {
         .insert_resource(GalaxyView::default())
         .add_systems(Startup, game::replay_startup_log)
         .add_plugins(input_test::plugin)
+        .add_plugins(fleet_trace::plugin)
         .add_plugins(hero_heads::HeroHeadsPlugin)
         .add_plugins(ui_sounds::UiSoundsPlugin)
         .add_plugins(planet_view::PlanetViewPlugin)
