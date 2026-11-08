@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>EAW:Remake - third-party licences</title>
+<style>
+body { font: 15px/1.5 system-ui, "Segoe UI", sans-serif; margin: 0; padding: 24px; color: #1b1f24; background: #fff; }
+main { max-width: 960px; margin: 0 auto; }
+h1 { font-size: 1.6rem; }
+h2 { font-size: 1.25rem; margin-top: 2rem; }
+h3 { font-size: 1.05rem; margin-bottom: 0.25rem; }
+ul.used-by { columns: 3 220px; padding-left: 1.2rem; margin-top: 0.25rem; }
+pre { white-space: pre-wrap; background: #f4f6f8; border: 1px solid #d8dde3; padding: 12px; font-size: 13px; }
+</style>
+</head>
+<body>
+<main>
+<h1>Third-party licences</h1>
+<p>EAW:Remake is MIT-licensed. The program is built from the open-source projects listed below; their licence texts and
+copyright notices follow. The program contains no game data: it reads Star Wars: Empire at War and the Empire at War
+Remake mod from the player's own Steam installation.</p>
+
+<h2>Embedded assets</h2>
+<h3 id="fira-mono">Fira Mono (subset, the default font of Bevy's text module)</h3>
+<p>Licensed under the SIL Open Font License, Version 1.1.</p>
+<pre>
+@@FIRA_MONO_OFL@@
+</pre>
+
+<h2>Licences of the Rust crates</h2>
+<ul>
+{{#each overview}}
+<li><a href="#{{id}}">{{name}}</a> ({{count}})</li>
+{{/each}}
+</ul>
+
+{{#each licenses}}
+<h3 id="{{id}}">{{name}}</h3>
+<p>Used by:</p>
+<ul class="used-by">
+{{#each used_by}}
+<li><a href="https://crates.io/crates/{{crate.name}}/{{crate.version}}">{{crate.name}} {{crate.version}}</a></li>
+{{/each}}
+</ul>
+<pre>{{text}}</pre>
+{{/each}}
+</main>
+</body>
+</html>

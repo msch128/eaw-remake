@@ -1,7 +1,8 @@
 # Builds the player installer, EAW-Remake-Setup-<version>.exe (Inno Setup, per user, no admin rights):
 #   1. cargo build --release -p eaw-remake --features dist, with the C runtime linked in, so a fresh Windows needs no Visual C++ runtime
 #   2. checks the exe: a windowed app that imports only DLLs of Windows 10/11
-#   3. compiles tools\installer\eaw-remake.iss with ISCC
+#   3. writes THIRD-PARTY-LICENSES.html (cargo about + the licence of the embedded default font)
+#   4. compiles tools\installer\eaw-remake.iss with ISCC
 #   .\tools\package.ps1                              build into target\dist, write dist\EAW-Remake-Setup-<version>.exe
 #   .\tools\package.ps1 -SkipBuild                   reuse the exe of the last build (checks and setup only)
 #   .\tools\package.ps1 -TargetDir F:\t -OutDir C:\o  other cargo target folder / output folder
@@ -88,13 +89,30 @@ foreach ($dll in $deps) {
 Write-Host ("exe imports {0} DLLs: {1}" -f $deps.Count, ($deps -join ', '))
 if ($bad) { $bad | ForEach-Object { Write-Host "  not allowed: $_" -ForegroundColor Red }; throw 'the exe imports DLLs that a fresh Windows may not have' }
 
-# 3. Setup
+# 3. Third-party licences: a public binary must carry the licence texts of everything built into it - every Rust crate of
+# the program (cargo about, tools\about.toml) and Bevy's embedded default font Fira Mono (SIL OFL 1.1). No file, no setup.
+New-Item -ItemType Directory -Force $OutDir | Out-Null
+$licenses = Join-Path $OutDir 'THIRD-PARTY-LICENSES.html'
+if (-not (Get-Command cargo-about -ErrorAction SilentlyContinue)) { throw 'cargo-about not found: cargo install cargo-about --locked --features cli' }
+Remove-Item $licenses -ErrorAction SilentlyContinue
+$ErrorActionPreference = 'Continue'
+& cargo about generate --config (Join-Path $repo 'tools\about.toml') --manifest-path (Join-Path $repo 'crates\space-peace\Cargo.toml') --features dist --output-file $licenses (Join-Path $repo 'tools\about.hbs') 2>&1 |
+    Where-Object { "$_" -match '(?i)error|unaccepted|failed' } | ForEach-Object { Write-Host "  cargo about: $_" }
+$aboutCode = $LASTEXITCODE
+$ErrorActionPreference = 'Stop'
+if ($aboutCode -ne 0 -or -not (Test-Path $licenses)) { throw "cargo about failed (exit code $aboutCode)" }
+$fira = [System.Net.WebUtility]::HtmlEncode((Get-Content -Raw (Join-Path $repo 'tools\licenses\FiraMono-OFL-1.1.txt')))
+$html = (Get-Content -Raw $licenses).Replace('@@FIRA_MONO_OFL@@', $fira)
+if ($html -notmatch 'SIL OPEN FONT LICENSE' -or $html -notmatch 'MIT License|Permission is hereby granted') { throw 'THIRD-PARTY-LICENSES.html is incomplete' }
+[System.IO.File]::WriteAllText($licenses, $html, (New-Object System.Text.UTF8Encoding($false)))
+Write-Host ("licences: {0} ({1:N0} KB)" -f $licenses, ((Get-Item $licenses).Length / 1KB))
+
+# 4. Setup
 $iscc = @("$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe", "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe", "$env:ProgramFiles\Inno Setup 6\ISCC.exe") |
     Where-Object { Test-Path $_ } | Select-Object -First 1
 if (-not $iscc) { $found = Get-Command ISCC.exe -ErrorAction SilentlyContinue; if ($found) { $iscc = $found.Source } }
 if (-not $iscc) { throw 'Inno Setup 6 not found: winget install --id JRSoftware.InnoSetup -e --silent --scope user' }
-New-Item -ItemType Directory -Force $OutDir | Out-Null
-& $iscc "/DAppVersion=$version" "/DExePath=$exe" "/O$OutDir" (Join-Path $repo 'tools\installer\eaw-remake.iss')
+& $iscc "/DAppVersion=$version" "/DExePath=$exe" "/DLicensesPath=$licenses" "/O$OutDir" (Join-Path $repo 'tools\installer\eaw-remake.iss')
 if ($LASTEXITCODE -ne 0) { throw "ISCC failed (exit code $LASTEXITCODE)" }
 
 $setup = Join-Path $OutDir "EAW-Remake-Setup-$version.exe"

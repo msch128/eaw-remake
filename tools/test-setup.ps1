@@ -83,7 +83,7 @@ Check 'a. the setup run again over the install (update) exits with 0' ($again.Co
 Check 'a. still one uninstall entry' (@(Get-ChildItem $uninstallRoot | Where-Object PSChildName -like "{$appId}*").Count -eq 1)
 
 # b. files, Start menu, uninstall entry
-$expected = 'eaw-remake.exe', 'LICENSE', 'CREDITS.md', 'README.txt', 'unins000.exe'
+$expected = 'eaw-remake.exe', 'LICENSE', 'CREDITS.md', 'README.txt', 'THIRD-PARTY-LICENSES.html', 'unins000.exe'
 foreach ($f in $expected) {
     $path = Join-Path $app $f
     Check "b. installed file $f" (Test-Path $path) $(if (Test-Path $path) { '{0:N0} bytes' -f (Get-Item $path).Length })

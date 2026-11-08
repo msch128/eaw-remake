@@ -11,7 +11,7 @@ No ground combat, story campaigns or movies. Windows, edition 2024.
 - **Never open visible windows and never take desktop screenshots** – the user games on this machine. Visual checks are
   offscreen renders of our own scene only (PNG into the scratchpad or `target/`, never the repo).
 - **Game and workshop folders are read-only.** No audible playback in tests.
-- **No CI / GitHub Actions, no prebuilt binaries.** Users build locally with `build.bat` / `build.ps1`.
+- **No CI / GitHub Actions.** Players install the Windows setup from the GitHub Releases page (built locally with `tools/package.ps1` and published by hand); developers build with `build.bat` / `build.ps1`.
 - **English only** (no localization). Talk to the user in German.
 - Current plan and state: `HANDOFF.md`.
 - Commit + push to `main` after `cargo check --workspace --all-targets` passes.

@@ -58,6 +58,7 @@ Source: "{#ExePath}"; DestDir: "{app}"; DestName: "{#AppExe}"; Flags: ignorevers
 Source: "..\..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\..\CREDITS.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "README.txt"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#LicensesPath}"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\EAW Remake"; Filename: "{app}\{#AppExe}"; WorkingDir: "{app}"

@@ -23,7 +23,7 @@ Read [`CLAUDE.md`](CLAUDE.md) first: project description, crate map, conventions
 7. Code, comments and docs in English. Talk to the user in German.
 8. Sims (`galaxy-sim`, `battle-sim`) stay deterministic and Bevy-free; player and AI actions go through journaled
    commands so saves and replays stay consistent.
-9. No CI, no prebuilt binaries, no new dependencies without a reason.
+9. No CI. Release setups are built locally with tools/package.ps1 and published by hand. No new dependencies without a reason.
 10. **Never quote the user or the chat in commit messages, code comments or docs; write neutral English. No local paths with user names.**
 
 ## Build, test, play
