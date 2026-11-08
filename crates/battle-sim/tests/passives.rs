@@ -196,3 +196,19 @@ fn vaders_wingmen_take_his_hits() {
     assert!(!hits.is_empty() && hits.iter().all(|h| wings.contains(h)), "the bolt hits a wingman, not Vader: {hits:?}");
     assert_eq!(full(&b, vader), vader_hp, "Vader is not damaged while his wingmen live");
 }
+
+#[test]
+fn retreat_prevention_keeps_its_own_side_in_the_battle() {
+    let Some((data, fs)) = load() else { return };
+    let cat = Arc::new(Catalog::build(&data, Some(&fs), &["Titan_Star_Destroyer", "Death_Star_II", "Star_Destroyer", "MC-80_Star_Cruiser"]));
+    let prevents = |n: &str| cat.ship(cat.ship_id(n).unwrap_or_else(|| panic!("{n}"))).prevents_retreat;
+    assert_eq!([prevents("Titan_Star_Destroyer"), prevents("Death_Star_II"), prevents("Star_Destroyer")], [true, true, false]);
+    let side = |n: &str| SideSetup { name: "s".into(), units: vec![UnitSetup { ship: cat.ship_id(n).unwrap(), count: 1, tag: 1 }], structures: vec![], ai: false };
+    let config = BattleConfig { retreat_countdown: 0.0, ..BattleConfig::default() };
+    let mut b = Battle::new(BattleSetup { catalog: cat.clone(), sides: vec![side("Titan_Star_Destroyer"), side("MC-80_Star_Cruiser")], config });
+    assert_eq!(b.command(0, Command::Retreat), Err(CommandError::RetreatPrevented), "the Titan's own side cannot retreat");
+    assert_eq!(b.command(1, Command::Retreat), Ok(()), "its enemy can");
+    let titan = b.ships.iter().find(|s| s.side == 0 && cat.ship(s.def).prevents_retreat).unwrap().id;
+    b.ships[titan as usize].alive = false;
+    assert_eq!(b.command(0, Command::Retreat), Ok(()), "with the Titan gone the side may retreat");
+}

@@ -314,6 +314,8 @@ pub enum CommandError {
     BattleOver,
     /// An enemy interdictor prevents retreating.
     RetreatBlocked,
+    /// An own unit with `Retreat_Prevention_Ability` (Death Star II, Titan) prevents retreating.
+    RetreatPrevented,
     /// The chosen reinforcement position is not in an area the side can see (fog of war).
     NotVisible,
     /// The chosen reinforcement position lies inside the no-spawn zone of an enemy structure.

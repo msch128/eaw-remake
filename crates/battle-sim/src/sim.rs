@@ -923,6 +923,9 @@ impl Battle {
                 if self.interdicted(side) {
                     return Err(CommandError::RetreatBlocked);
                 }
+                if self.retreat_prevented(side) {
+                    return Err(CommandError::RetreatPrevented);
+                }
                 if self.retreat_jump_at[side as usize].is_some() {
                     return Ok(());
                 }
@@ -1841,6 +1844,12 @@ impl Battle {
                 && s.side != side
                 && (d.interdictor || d.abilities.iter().zip(&s.abilities).any(|(a, st)| a.interdict && st.active > 0.0))
         })
+    }
+
+    /// True while a living unit of `side` has a `Retreat_Prevention_Ability` (Death Star II, Titan; the faction's "Reason 2: Friendly Hero
+    /// Preventing", Tarkin's "Unable to contemplate retreat as a viable option"): the side cannot order a retreat.
+    pub fn retreat_prevented(&self, side: u8) -> bool {
+        self.ships.iter().any(|s| s.side == side && s.alive && !s.retreated && self.catalog.ship(s.def).prevents_retreat)
     }
 
     /// Seconds until the retreat jump of `side` (`None` when it has not ordered a retreat or the jump is done). For the countdown on the tactical screen.

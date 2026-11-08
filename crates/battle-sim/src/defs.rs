@@ -759,6 +759,9 @@ pub struct ShipDef {
     pub golan: bool,
     /// Always prevents enemy retreat while alive (`Is_Interdictor`); ships with an `INTERDICT` ability do so while it is on.
     pub interdictor: bool,
+    /// `Retreat_Prevention_Ability` (Death Star II, Titan): while it lives its own side cannot retreat (the faction's "Reason 2: Friendly
+    /// Hero Preventing").
+    pub prevents_retreat: bool,
     /// Ground-to-space special weapon definition, if this structure fires into orbit.
     pub special_weapon: Option<SpecialWeaponDef>,
     /// `In_Background` (the Death Star): a backdrop object, neither targeted nor hit by anything.
@@ -2086,6 +2089,7 @@ impl Catalog {
             priority_attack_move,
             golan,
             interdictor,
+            prevents_retreat: matches!(src, Source::Unit(u) if u.sub_abilities.iter().any(|a| a.kind.eq_ignore_ascii_case("Retreat_Prevention_Ability"))),
             special_weapon,
             background: matches!(src, Source::Unit(u) if u.fields.get("in_background").is_some_and(|v| alamo_data::xml::parse_bool(v))),
             formation_order: unit_field("formationorder").and_then(alamo_data::xml::parse_num).unwrap_or(1),

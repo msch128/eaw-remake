@@ -612,7 +612,10 @@ with `speed_mult > 1.05` when fleeing or when the target is over twice the weapo
   `Space_Reinforcement_Collision_Check_Distance` 150, data), moving out in rings when the spot is taken, facing the
   nearest enemy. Enemy mobile ships do not block a spot.
 * Data: retreat becomes available after `Space_Retreat_Allowed_Countdown_Seconds` (60 s) and is blocked by enemy
-  interdictors; `Space_Retreat_Attrition_Factor` is 0. Estimate: on the order every mobile unit heads for its own spawn
+  interdictors (`FACTIONS.XML` "Reason 1: Gravity Well") and, while it lives, by an own unit with `Retreat_Prevention_Ability`
+  ("Reason 2: Friendly Hero Preventing"; Death Star II `Tarkin_Retreat_Prevention`, Titan `Stealth_Retreat_Prevention`;
+  `TEXT_TOOLTIP_TARKIN`: "Unable to contemplate retreat as a viable option"; `Command::Retreat` answers `RetreatPrevented`, the
+  AI's retreat rule is refused the same way); `Space_Retreat_Attrition_Factor` is 0. Estimate: on the order every mobile unit heads for its own spawn
   point. Data: the jump timer is the faction's `Space_Retreat_Countdown_Seconds` (`FACTIONS.XML`, 30 s for every Remake
   faction; `BattleConfig::side_retreat_jump`, 30 s where a faction has none); at zero every living unit with a
   living engine hardpoint (ships without engine hardpoints count as having drives) escapes and counts as a survivor,
