@@ -206,6 +206,11 @@ fn main() {
         Some(def) => (None, ((def.hull_shape.map_or(500.0, |h| h.front.max(h.back)) + 2200.0) / 0.95).max(3200.0)),
         None => (arena, half),
     };
+    // `SP_DEMO_HALF=<units>`: a small open arena of that half size instead of the map's, so the fleets (and a `--station`) meet within seconds.
+    let (arena, half) = match std::env::var("SP_DEMO_HALF").ok().and_then(|v| v.parse::<f32>().ok()) {
+        Some(h) => (None, h),
+        None => (arena, half),
+    };
     let config = BattleConfig {
         half_size: half,
         arena,
