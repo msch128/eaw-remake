@@ -674,6 +674,8 @@ pub struct ShipDef {
     pub formation_solo: bool,
     /// `WaitsForFormationFormup` false: in a formation the unit flies at its own speed instead of the group's.
     pub formation_no_wait: bool,
+    /// A `Behavior` / `SpaceBehavior` copy lists `ASTEROID_FIELD_DAMAGE` (`Vessel_Base` gives it to corvettes, frigates and capitals; fighters have none).
+    pub asteroid_field_damage: bool,
 }
 
 impl ShipDef {
@@ -899,6 +901,10 @@ pub struct Catalog {
     pub shield_interval: f32,
     /// `Depleted_Shield_Disable_Time`: seconds a fully drained shield stays offline.
     pub depleted_shield_disable: f32,
+    /// `Asteroid_Field_Damage`: points one proc deals (200 in the Remake data).
+    pub asteroid_field_damage: f32,
+    /// `Asteroid_Field_Damage_Rate`: probability a proc lands on each 30 Hz frame (0.05).
+    pub asteroid_field_damage_rate: f32,
     /// Formation constants.
     pub formation: FormationRules,
     /// `AIUsesFogOfWarSpace` False: AI sides know every enemy ship. The fog of the view and of player sides is unchanged. False (fog-bound
@@ -1122,6 +1128,23 @@ fn load_source(data: &GameData, name: &str) -> Option<Source> {
     data.objects.structure(name).map(|s| Source::Structure(Box::new(s)))
 }
 
+/// Whether any `Behavior` / `SpaceBehavior` copy of the object lists a token (upper case).
+fn behaviour_check(objects: &alamo_data::GameObjects, name: &str) -> impl Fn(&str) -> bool + use<> {
+    let tokens: Vec<String> = objects
+        .resolve(name)
+        .map(|r| {
+            ["behavior", "spacebehavior"]
+                .iter()
+                .flat_map(|t| r.get_all(t))
+                .flat_map(|v| v.split([',', ' ', '\t', '\r', '\n']))
+                .filter(|t| !t.is_empty())
+                .map(str::to_ascii_uppercase)
+                .collect()
+        })
+        .unwrap_or_default();
+    move |t: &str| tokens.iter().any(|x| x == t)
+}
+
 fn hash_unit(s: &str, salt: u32) -> f32 {
     let mut h = 0xcbf2_9ce4_8422_2325u64 ^ salt as u64;
     for b in s.bytes() {
@@ -1218,7 +1241,7 @@ impl Catalog {
             facing_min_angle: constant("finalformationfacingminimumangle").map_or(rules.facing_min_angle, f32::to_radians),
         };
         let ai_ignores_fog = data.game_constants.get("aiusesfogofwarspace").is_some_and(|v| !alamo_data::xml::parse_bool(v));
-        let mut cat = Catalog { damage, speed_scale: 30.0, shield_interval, depleted_shield_disable, formation, ai_ignores_fog, priority_sets, priority_index, ..Catalog::default() };
+        let mut cat = Catalog { damage, speed_scale: 30.0, shield_interval, depleted_shield_disable, asteroid_field_damage: constant("asteroid_field_damage").unwrap_or(0.0).max(0.0), asteroid_field_damage_rate: constant("asteroid_field_damage_rate").unwrap_or(0.0).clamp(0.0, 1.0), formation, ai_ignores_fog, priority_sets, priority_index, ..Catalog::default() };
         // Projectiles.
         let mut proj_names: Vec<String> = Vec::new();
         let hp_defs: Vec<Vec<HardpointDef>> = sources
@@ -1707,7 +1730,9 @@ impl Catalog {
                 laser.ion = stunner;
             }
         }
+        let behaves = behaviour_check(objects, &name);
         ShipDef {
+            asteroid_field_damage: behaves("ASTEROID_FIELD_DAMAGE"),
             name,
             text_id,
             heals,

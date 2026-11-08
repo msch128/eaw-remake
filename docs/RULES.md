@@ -581,6 +581,17 @@ with `speed_mult > 1.05` when fleeing or when the target is over twice the weapo
   nor a field. `Is_Impassable_Asteroid` without `Space_Obstacle_Radius` (`Destroyable_Asteroid_Huge`, footprint 320)
   is not a nav rock. Without an arena fleets start in rows by size class in an empty square of `half_size` = 10000.
   The planet and backdrop props are not obstacles.
+* Asteroid fields: a ship is inside an `Is_Asteroid_Field` zone when its centre lies within the radius on the map
+  plane. A ship with `ASTEROID_FIELD_DAMAGE` in a `Behavior` / `SpaceBehavior` copy (`Vessel_Base` in
+  `Units/Space/_Default_Base.xml` gives it to corvettes, frigates and capitals; `Spacecraft_Base` fighters have none)
+  takes `Asteroid_Field_Damage` 200 with probability `Asteroid_Field_Damage_Rate` 0.05 per 30 Hz frame
+  (`Gameconstants.xml`: "Probability the damage is applied in each frame"), 1.5 hits or 300 points a second on
+  average. The damage type is `Damage_Asteroid` (no armor modifier in the data, so 1.0), shield first, then the
+  hardpoints like any hit. Estimate: the hit lands half the ship's radius from its centre in a random direction,
+  which picks the hardpoint. View: the unit's `Asteroid_Damage_Hit_Particles` (`Large_Damage_Space` for vessels) and
+  `SFXEvent_Damaged_By_Asteroid` (`SFX_Asteroid_Detonation`) where it lands; an own unit entering a field says its
+  `SFXEvent_Move_Into_Asteroid_Field` line (estimate: on entering, once per unit type per 12 s; the data does not
+  say when the engine plays it).
 
 ## 2.9 Navigation, hulls, formations
 

@@ -512,6 +512,7 @@ impl Battle {
             path_age: 1.0e9,
             since_hit: 1.0e3,
             shield_lock: 0.0,
+            in_asteroid_field: false,
             stun: 0.0,
             stun_speed_cut: 0.0,
             stun_rate_cut: 0.0,
@@ -1745,7 +1746,52 @@ impl Battle {
         }
     }
 
+    /// `Is_Asteroid_Field` zones. A ship whose centre lies within a field's radius (map plane) is inside; one with `ASTEROID_FIELD_DAMAGE`
+    /// takes `Asteroid_Field_Damage` of type `Damage_Asteroid` with probability `Asteroid_Field_Damage_Rate` per 30 Hz frame, shield first.
+    /// Estimate: the hit lands half the ship's radius from its centre in a random direction (which hardpoint it reaches).
+    fn asteroid_fields(&mut self, dt: f32) {
+        let Some(arena) = self.config.arena.as_ref().filter(|a| !a.asteroid_fields.is_empty()) else { return };
+        let fields: Vec<(Vec3, f32)> = arena.asteroid_fields.iter().map(|f| (f.pos, f.radius * f.radius)).collect();
+        let cat = self.catalog.clone();
+        let chance = (cat.asteroid_field_damage_rate * dt * 30.0).min(1.0);
+        let pd = ProjDef {
+            name: "Asteroid_Field_Damage".into(),
+            damage_type: cat.damage.damage_index("Damage_Asteroid"),
+            damage: cat.asteroid_field_damage,
+            shield_damage: true,
+            hull_damage: true,
+            ..ProjDef::default()
+        };
+        let record = self.config.record_events;
+        for i in 0..self.ships.len() {
+            let s = &self.ships[i];
+            let inside = s.alive && !s.retreated && fields.iter().any(|&(c, r2)| (s.pos.x - c.x).powi(2) + (s.pos.y - c.y).powi(2) <= r2);
+            let entered = inside && !s.in_asteroid_field;
+            let def = cat.ship(s.def);
+            let (hurts, radius) = (def.asteroid_field_damage, def.radius);
+            let ship = s.id;
+            self.ships[i].in_asteroid_field = inside;
+            if entered && record {
+                self.events.push(Event::EnteredAsteroidField { ship });
+            }
+            if !inside || !hurts || pd.damage <= 0.0 {
+                continue;
+            }
+            let mut rng = Rng::for_entity(self.config.seed, self.tick, ship, 0xA57E);
+            if rng.unit() >= chance {
+                continue;
+            }
+            let a = rng.range(0.0, 2.0 * PI);
+            let pos = self.ships[i].pos + Vec3::new(a.cos(), a.sin(), 0.0) * (radius * 0.5);
+            self.damage_ship(ship, NONE, &pd, NO_PROJ, pd.damage, pos, NO_HP);
+            if record {
+                self.events.push(Event::AsteroidFieldHit { ship, pos });
+            }
+        }
+    }
+
     fn upkeep(&mut self, dt: f32) {
+        self.asteroid_fields(dt);
         let cat = self.catalog.clone();
         let tick = self.tick;
         if tick.is_multiple_of(60) {

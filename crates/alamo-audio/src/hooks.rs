@@ -33,6 +33,7 @@ pub const WIRED_TAGS: &[&str] = &[
     "sfxevent_enemy_damaged_health_low_warning",
     "sfxevent_enemy_damaged_health_critical_warning",
     "sfxevent_hardpoint_destroyed",
+    "sfxevent_move_into_asteroid_field",
     "sfxevent_gui_unit_ability_activated",
     "sfxevent_ability_activated",
     "sfxevent_special_ability",
@@ -46,6 +47,7 @@ pub const WIRED_TAGS: &[&str] = &[
     "projectile_sfxevent_detonate_reduced_by_shield",
     "death_sfxevent_start_die",
     "death_explosion_sfxevent",
+    "sfxevent_damaged_by_asteroid",
     // loops
     "sfxevent_engine_idle_loop",
     "sfxevent_engine_moving_loop",

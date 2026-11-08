@@ -61,6 +61,8 @@ pub struct AudioMemory {
     /// Bit 0: low-health line played, bit 1: critical line played.
     health_flags: HashMap<u32, u8>,
     under_attack: HashMap<ShipId, f64>,
+    /// Unit type -> battle clock of its last "moving into" line (asteroid field, nebula).
+    zone_lines: HashMap<ShipId, f64>,
     last_station_alarm: Option<f64>,
     last_flee: Option<f64>,
     last_retreat_ok: Option<f64>,
@@ -291,6 +293,24 @@ pub fn battle_audio(
                     && let Some(n) = hardpoint_destroyed_line(visuals.ship(s.def), *hardpoint)
                 {
                     send(n, None, None, &mut stats, &mut out);
+                }
+            }
+            // `SFXEvent_Move_Into_Asteroid_Field`: the line of an own unit that enters a field (estimate: when the engine plays it is not in the
+            // data; once per unit type per `UNDER_ATTACK_GAP`).
+            Event::EnteredAsteroidField { ship } => {
+                if let Some(s) = cur.ship(*ship)
+                    && s.side == player
+                    && mem.zone_lines.get(&s.def).is_none_or(|t| clock - t >= UNDER_ATTACK_GAP)
+                    && let Some(n) = visuals.ship(s.def).sfx.move_into_asteroid_field.as_deref()
+                {
+                    mem.zone_lines.insert(s.def, clock);
+                    send(n, None, None, &mut stats, &mut out);
+                }
+            }
+            // `SFXEvent_Damaged_By_Asteroid` where the asteroid hit the unit.
+            Event::AsteroidFieldHit { ship, pos } => {
+                if let Some(n) = mem.ships.get(ship).and_then(|&(def, _)| visuals.ship(def).sfx.damaged_by_asteroid.as_deref()) {
+                    send(n, Some(sim_to_bevy(*pos)), None, &mut stats, &mut out);
                 }
             }
             Event::ReinforcementsCalled { side, .. } if *side == player => say(GalaxyEvent::ReinforcementsEnRoute, &mut stats),
@@ -2061,6 +2081,63 @@ mod tests {
         assert!(sent.iter().any(|(e, s)| e == "Unit_TIE_Fighter_Death_SFX" && *s == Some(tie_e)), "{sent:?}");
         assert!(sent.iter().any(|(e, s)| e == "Plain_Boom" && s.is_none()), "{sent:?}");
         assert!(sent.iter().any(|(e, s)| e == "Unit_Magnepulse_Fire" && *s == Some(tie_e)), "{sent:?}");
+    }
+
+    /// Runs `battle_audio` once over `events` with an own ship 7 and an enemy ship 8 of definition 0, whose space-zone sounds are set.
+    fn zone_sounds(events: Vec<Event>) -> Vec<(String, Option<Vec3>)> {
+        use bevy::ecs::system::RunSystemOnce;
+        let (catalog, mut visuals) = ability_world();
+        let sfx = &mut visuals.ships[0].sfx;
+        sfx.move_into_asteroid_field = Some("Unit_Asteroids_Victory_Destroyer".into());
+        sfx.damaged_by_asteroid = Some("SFX_Asteroid_Detonation".into());
+        let files = sfx_files(
+            r#"<SFXEvent Name="Unit_Asteroids_Victory_Destroyer"><Samples>a.wav</Samples></SFXEvent>
+            <SFXEvent Name="SFX_Asteroid_Detonation"><Samples>a.wav</Samples></SFXEvent>"#,
+        );
+        let battle = fighter_battle(&[&["x"]]);
+        let snap = Snapshot { ships: vec![snap_ship(7, 0, 0, 0b01, &[]), snap_ship(8, 0, 1, 0b01, &[])], ..Snapshot::default() };
+        let mut rt = flyby_runtime((battle.0, catalog, snap), visuals);
+        rt.fresh_events = events;
+        let mut world = World::new();
+        world.insert_resource(BattleViewSettings::default());
+        world.insert_resource(AlamoAudio::load(std::sync::Arc::new(MemFs(files))));
+        world.insert_resource(rt);
+        world.init_resource::<Selection>();
+        world.init_resource::<BattleAudioStats>();
+        world.init_resource::<Messages<PlaySfx>>();
+        world.init_resource::<Messages<alamo_audio::plugin::GalaxyAudio>>();
+        world.init_resource::<Messages<OrderIssued>>();
+        world.init_resource::<Messages<crate::control::HardpointOrderIssued>>();
+        world.run_system_once(battle_audio).expect("battle audio");
+        world.resource_mut::<Messages<PlaySfx>>().drain().map(|m| (m.event, m.position)).collect()
+    }
+
+    #[test]
+    fn an_own_unit_entering_an_asteroid_field_says_its_line_once_per_gap() {
+        let sent = zone_sounds(vec![Event::EnteredAsteroidField { ship: 8 }, Event::EnteredAsteroidField { ship: 7 }, Event::EnteredAsteroidField { ship: 7 }]);
+        assert_eq!(sent, [("Unit_Asteroids_Victory_Destroyer".to_string(), None)], "the enemy is silent, the second entry waits for the gap");
+    }
+
+    #[test]
+    fn an_asteroid_hit_sounds_where_it_lands_on_any_side() {
+        let pos = battle_sim::Vec3::new(1.0, 2.0, 3.0);
+        let sent = zone_sounds(vec![Event::AsteroidFieldHit { ship: 8, pos }]);
+        assert_eq!(sent, [("SFX_Asteroid_Detonation".to_string(), Some(sim_to_bevy(pos)))]);
+    }
+
+    /// Skipped without the game files.
+    #[test]
+    fn the_remake_names_the_asteroid_field_line_sound_and_particle() {
+        let Some(install) = alamo_fs::GameInstall::detect().filter(|i| i.mod_data("1770851727").is_dir()) else { return };
+        let fs = alamo_fs::GameFs::for_mod(&install, Some("1770851727")).expect("game files");
+        let (data, _) = alamo_data::load_galaxy(&fs);
+        let catalog = battle_sim::Catalog::build(&data, Some(&fs), &["Victory_Destroyer"]);
+        let visuals = crate::visuals::VisualCatalog::build(&data, &catalog, vec![Color::WHITE; 2]);
+        let v = visuals.ship(catalog.ship_id("Victory_Destroyer").expect("in the catalog"));
+        assert_eq!(v.sfx.move_into_asteroid_field.as_deref(), Some("Unit_Asteroids_Victory_Destroyer"));
+        // `Vessel_Base` in `Units/Space/_Default_Base.xml`.
+        assert_eq!(v.sfx.damaged_by_asteroid.as_deref(), Some("SFX_Asteroid_Detonation"));
+        assert_eq!(v.asteroid_hit_particles.as_deref(), Some("Large_Damage_Space"));
     }
 
     /// The Remake's ability sounds through the whole chain (skipped without the game files): the units' data names the loops and start sounds the view

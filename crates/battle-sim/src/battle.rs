@@ -455,6 +455,18 @@ pub enum Event {
         /// Where it was destroyed.
         pos: Vec3,
     },
+    /// A ship entered an `Is_Asteroid_Field` zone (any ship; only `ASTEROID_FIELD_DAMAGE` ships take damage there).
+    EnteredAsteroidField {
+        /// Ship.
+        ship: u32,
+    },
+    /// `Asteroid_Field_Damage` landed on a ship (it also reports an [`Event::Hit`] with projectile [`NO_PROJ`]).
+    AsteroidFieldHit {
+        /// Ship.
+        ship: u32,
+        /// Where it landed.
+        pos: Vec3,
+    },
     /// The battle ended.
     BattleOver {
         /// Winning side, `None` for a draw.
@@ -607,6 +619,8 @@ pub struct Ship {
     pub since_hit: f32,
     /// Seconds left before a depleted shield may regenerate again (`Depleted_Shield_Disable_Time`).
     pub shield_lock: f32,
+    /// Inside an `Is_Asteroid_Field` zone this step.
+    pub in_asteroid_field: bool,
     /// Tractor beam speed reduction currently applied to this ship (0..1).
     pub tractor_cut: f32,
     /// Planned route of a big ship that is going somewhere: the waypoints still ahead, the last one being the destination. Empty when the
@@ -701,6 +715,8 @@ pub(crate) struct Group {
 }
 
 pub const NO_HP: u16 = u16::MAX;
+/// [`Event::Hit`] projectile of damage that no projectile dealt (asteroid fields).
+pub const NO_PROJ: ProjId = ProjId::MAX;
 
 /// Cells per side of the square the map is cut into for the `HUNT` search (8 x 8 = 64, one bit each in a `u64`).
 pub const HUNT_GRID: usize = 8;

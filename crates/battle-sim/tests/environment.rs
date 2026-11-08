@@ -3,10 +3,12 @@
 //! The old classifier guessed a radius from the name (huge 600, large 350, medium 180, small 80,
 //! anything else 200) and treated every name containing "asteroid" as a solid rock.
 
+use std::sync::Arc;
+
 use alamo_data::load_galaxy;
 use alamo_fs::{FileSource, GameFs, GameInstall};
 use alamo_map::{MapObject, SpaceMap};
-use battle_sim::{Arena, prop_zones};
+use battle_sim::*;
 
 fn load() -> Option<alamo_data::GameData> {
     let install = GameInstall::detect()?;
@@ -155,4 +157,72 @@ fn space_maps_with_fields_nebulae_or_ion_storms() {
             "_SPACE_PLANET_VERGESSOASTEROIDS_04.TED nebula=0 ion=0 field=1 rocks=0 props=Asteroid_Field_Huge_Obstacle_Damage_4000",
         ]
     );
+}
+
+/// A battle on an empty test map with one `Asteroid_Field_Huge_Obstacle_Damage_8000` (radius 3500) at the origin. Side 0 holds `units`,
+/// side 1 one `Star_Destroyer` far outside the field (so the battle does not end).
+fn field_battle(data: &alamo_data::GameData, fs: &GameFs, units: &[&str]) -> Battle {
+    let mut names: Vec<&str> = units.to_vec();
+    names.push("Star_Destroyer");
+    let cat = Arc::new(Catalog::build(data, Some(fs as &dyn FileSource), &names));
+    let mut map = SpaceMap::default();
+    map.bounds.min = [-30000.0, -30000.0, 0.0];
+    map.bounds.max = [30000.0, 30000.0, 0.0];
+    map.objects.push(MapObject { type_name: Some("Asteroid_Field_Huge_Obstacle_Damage_8000".into()), ..MapObject::default() });
+    let arena = Arena::from_space_map(data, &map);
+    let unit = |n: &str| UnitSetup { ship: cat.ship_id(n).unwrap_or_else(|| panic!("{n}")), count: 1, tag: 1 };
+    let sides = vec![
+        SideSetup { name: "Empire".into(), units: units.iter().map(|n| unit(n)).collect(), structures: vec![], ai: false },
+        SideSetup { name: "Rebel".into(), units: vec![unit("Star_Destroyer")], structures: vec![], ai: false },
+    ];
+    let config = BattleConfig { seed: 7, arena: Some(Arc::new(arena)), ..BattleConfig::default() };
+    let mut b = Battle::new(BattleSetup { catalog: cat, sides, config });
+    let mut x = -1500.0;
+    for s in b.ships.iter_mut().filter(|s| s.carrier == NONE) {
+        s.pos = if s.side == 0 { Vec3::new(x, 0.0, 0.0) } else { Vec3::new(25000.0, 25000.0, 0.0) };
+        x += 100.0;
+    }
+    b
+}
+
+#[test]
+fn asteroid_field_damages_ships_with_the_behaviour() {
+    let Some((data, fs)) = load_fs() else { return };
+    let mut b = field_battle(&data, &fs, &["Victory_Destroyer", "TIE_Fighter_Squadron"]);
+    let cat = b.catalog().clone();
+    assert_eq!((cat.asteroid_field_damage, cat.asteroid_field_damage_rate), (200.0, 0.05), "Gameconstants.xml");
+    let vsd = cat.ship_id("Victory_Destroyer").unwrap();
+    assert!(cat.ship(vsd).asteroid_field_damage, "Vessel_Base SpaceBehavior");
+    let fighters: Vec<u32> = b.ships.iter().filter(|s| s.side == 0 && s.carrier == NONE && cat.ship(s.def).class == TargetClass::Fighter).map(|s| s.id).collect();
+    assert!(!fighters.is_empty());
+    assert!(fighters.iter().all(|&f| !cat.ship(b.ships[f as usize].def).asteroid_field_damage), "Spacecraft_Base has no ASTEROID_FIELD_DAMAGE");
+    let victory = b.ships.iter().find(|s| s.def == vsd).unwrap().id;
+    let enemies: Vec<u32> = b.ships.iter().filter(|s| s.side == 1).map(|s| s.id).collect();
+    let (shield0, hull0) = (b.ships[victory as usize].shield, b.ships[victory as usize].hull);
+
+    let steps = 30 * 20;
+    let (mut hits, mut entered, mut damage) = (Vec::new(), Vec::new(), 0.0f32);
+    for _ in 0..steps {
+        for e in b.step() {
+            match *e {
+                Event::AsteroidFieldHit { ship, .. } => hits.push(ship),
+                Event::EnteredAsteroidField { ship } => entered.push(ship),
+                Event::Hit { ship, projectile, damage: d, .. } if projectile == NO_PROJ => {
+                    assert_eq!(ship, victory);
+                    damage += d;
+                }
+                _ => {}
+            }
+        }
+    }
+    let lost = (shield0 - b.ships[victory as usize].shield) + (hull0 - b.ships[victory as usize].hull);
+    eprintln!("{steps} steps: {} hits, {damage} damage reported, shield+hull lost {lost}, entered {}", hits.len(), entered.len());
+    assert!(hits.iter().all(|&s| s == victory), "only the ASTEROID_FIELD_DAMAGE ship is hit");
+    // 0.05 per frame over 600 frames: 30 expected.
+    assert!((15..=45).contains(&hits.len()), "{} hits", hits.len());
+    assert!((damage - 200.0 * hits.len() as f32).abs() < 1.0, "200 per hit, Damage_Asteroid has no armor modifier");
+    assert!(lost > 0.0);
+    assert!(entered.contains(&victory) && fighters.iter().all(|f| entered.contains(f)), "every ship inside reports the entry");
+    assert!(enemies.iter().all(|e| !entered.contains(e)), "the ships outside the field");
+    assert!(fighters.iter().all(|f| entered.iter().filter(|e| *e == f).count() == 1), "once per entry");
 }

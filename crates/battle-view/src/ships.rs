@@ -762,6 +762,13 @@ pub fn ship_events(
                 fire_super_laser(&mut commands, &mut meshes, &mut materials, laser.as_ref(), texture, from, to, hull, hold);
                 pulses.flash(to, 1.0);
             }
+            // `Asteroid_Damage_Hit_Particles` of the unit where the asteroid hit it.
+            Event::AsteroidFieldHit { ship, pos } => {
+                let def = rt.cur.as_ref().and_then(|c| c.ship(*ship)).map(|s| s.def);
+                if let Some(particle) = def.and_then(|d| visuals.ship(d).asteroid_hit_particles.clone()) {
+                    commands.trigger(SpawnParticleEffect { particle, position: sim_to_bevy(*pos), normal: Vec3::Y });
+                }
+            }
             Event::HardpointDestroyed { .. } => {}
             _ => {}
         }

@@ -324,6 +324,7 @@ impl BattleSession {
         for s in &self.visuals.ships {
             particles.extend(s.death_effects.iter().cloned());
             particles.extend(s.hardpoints.iter().filter_map(|h| h.death_effect.clone()));
+            particles.extend(s.asteroid_hit_particles.clone());
             // `Damage_Particles` names a bone with fire proxies or a particle object (`request_particles` keeps the objects).
             particles.extend(s.hardpoints.iter().filter_map(|h| h.damage_bone.clone()));
         }

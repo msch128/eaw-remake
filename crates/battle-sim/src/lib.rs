@@ -45,7 +45,7 @@ mod sim;
 
 pub use battle::{
     AbilityState, Battle, BattleConfig, SideMult, StartHealth, BattleResult, BattleSetup, Command, CommandError, Event, GroupResult, HitKind, HpState,
-    HUNT_GRID, NONE, NO_CELL, NO_HP, NO_TAG, REINFORCE_TAG, Order, Projectile, Ship, SideSetup, SquadSlot, Stance, UnitSetup,
+    HUNT_GRID, NONE, NO_CELL, NO_HP, NO_PROJ, NO_TAG, REINFORCE_TAG, Order, Projectile, Ship, SideSetup, SquadSlot, Stance, UnitSetup,
 };
 pub use defs::{Bonus, BonusDef, CombatMod, ModKind, WeakenDef, LureDef, BombDef, EnergyDef, ClusterDef, HealDef, CorruptDef, RedirectDef, SuperLaserDef, ZoneDef, 
     AbilityDef, Catalog, DamageMatrix, DirectWeaponDef, FormationRules, HpDef, HpKind, PrioritySet, ProjDef, ProjId, ShipDef, ShipId, SpecialWeaponDef, TargetClass,

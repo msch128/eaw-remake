@@ -87,6 +87,10 @@ pub struct UnitSfx {
     pub assist_attack: Option<String>,
     /// `Death_SFXEvent_End_Die` (end of the death sequence).
     pub death_end: Option<String>,
+    /// `SFXEvent_Move_Into_Asteroid_Field`: the unit's line when it enters an asteroid field.
+    pub move_into_asteroid_field: Option<String>,
+    /// `SFXEvent_Damaged_By_Asteroid`: the sound of an asteroid-field hit on the unit.
+    pub damaged_by_asteroid: Option<String>,
     /// Sounds of each `Unit_Ability` of `Unit_Abilities_Data`.
     pub abilities: Vec<AbilitySfx>,
 }
@@ -118,6 +122,8 @@ pub struct ShipVisual {
     pub scale: f32,
     /// Particle objects played when the unit dies (fighters, `Death_Explosions`).
     pub death_effects: Vec<String>,
+    /// `Asteroid_Damage_Hit_Particles`: the particle of an asteroid-field hit on the unit.
+    pub asteroid_hit_particles: Option<String>,
     /// Model of the `Death_Clone` object (the hull in pieces) and its animation model stem, for preloading.
     pub death_clone_model: Option<String>,
     /// One entry per simulation hardpoint.
@@ -323,6 +329,8 @@ impl VisualCatalog {
                 assist_move: sfx("sfxevent_assist_move").filter(|n| !n.eq_ignore_ascii_case("sfx_na")),
                 assist_attack: sfx("sfxevent_assist_attack").filter(|n| !n.eq_ignore_ascii_case("sfx_na")),
                 death_end: sfx("death_sfxevent_end_die"),
+                move_into_asteroid_field: sfx("sfxevent_move_into_asteroid_field").filter(|n| !n.eq_ignore_ascii_case("sfx_na")),
+                damaged_by_asteroid: sfx("sfxevent_damaged_by_asteroid").filter(|n| !n.eq_ignore_ascii_case("sfx_na")),
                 abilities: r
                     .as_ref()
                     .and_then(|r| r.element("unit_abilities_data"))
@@ -371,6 +379,7 @@ impl VisualCatalog {
                 model: def.model.clone(),
                 scale,
                 death_effects,
+                asteroid_hit_particles: sfx("asteroid_damage_hit_particles"),
                 death_clone_model,
                 hardpoints,
                 sfx: unit_sfx,
