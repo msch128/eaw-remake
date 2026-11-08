@@ -117,6 +117,9 @@ pub struct AlamoParticles {
     /// Multiplier on the sprite size on top of the entity scale (1 = as is). A missile model is scaled down by its `Scale_Factor`, its smoke is not.
     pub size_mul: f32,
     pub intensity: f32,
+    /// The system was put on a surface with its `Z` on the surface normal (a shield impact, `Particle_Attach_To_Collision`): its sprites
+    /// that are not billboarded (`isNotBillboarded`, 0x2e) lie flat in that surface, as on engine systems.
+    pub on_surface: bool,
 }
 
 impl AlamoParticles {
@@ -129,6 +132,7 @@ impl AlamoParticles {
             intensity: 1.0,
             world_trail: false,
             size_mul: 1.0,
+            on_surface: false,
         }
     }
 
@@ -440,6 +444,7 @@ pub fn attach_proxy_particles(
             intensity: 1.0,
             world_trail: false,
             size_mul: 1.0,
+            on_surface: false,
         });
     }
 }
@@ -612,6 +617,8 @@ struct StepCtx<'a> {
     cull: Option<(Vec3, f32)>,
     /// World directions of the emitter's X and Y axes: the plane of a flat sprite.
     axes: [Vec3; 2],
+    /// Sprites that are not billboarded lie in that plane: an engine system or one on a surface ([`AlamoParticles::on_surface`]).
+    flat_sprites: bool,
 }
 
 /// Live particles one steady engine emitter may keep (the data needs at most 125: rate times life).
@@ -711,7 +718,8 @@ fn step_emitter(e: &Emitter, rt: &mut EmitterRuntime, cx: &StepCtx, budget: &mut
 }
 
 /// Turns the live particles of one emitter into quads. A sprite that is not billboarded ([`Emitter::billboard`]) lies flat in the
-/// emitter's XY plane, on engine systems; elsewhere it still faces the camera (not checked against the original there).
+/// emitter's XY plane, on engine systems and on systems put on a surface (shield impacts); elsewhere it still faces the camera (not
+/// checked against the original there).
 fn build_quads(e: &Emitter, rt: &mut EmitterRuntime, cx: &StepCtx) {
     let StepCtx {
         to_world,
@@ -719,11 +727,11 @@ fn build_quads(e: &Emitter, rt: &mut EmitterRuntime, cx: &StepCtx) {
         intensity,
         cull,
         world_trail,
-        engine,
         axes,
+        flat_sprites,
         ..
     } = *cx;
-    let flat = (engine && !e.billboard).then_some(axes);
+    let flat = (flat_sprites && !e.billboard).then_some(axes);
     let color_gain = if intensity < 1.0 {
         0.25 + 0.75 * intensity.max(0.0)
     } else {
@@ -845,6 +853,7 @@ pub fn simulate_particles(
                     Vec3::from(to_world.matrix3.x_axis).normalize_or_zero(),
                     Vec3::from(to_world.matrix3.y_axis).normalize_or_zero(),
                 ],
+                flat_sprites: inst.engine || spec.on_surface,
             };
             for (e, rt) in sys.emitters.iter().zip(inst.emitters.iter_mut()) {
                 rt.ensure_route(e);
@@ -1466,6 +1475,11 @@ mod tests {
 
     /// Like [`simulate`], on an engine system when `engine`, with the quads of every step.
     fn run(emitter: Emitter, engine: bool, in_model_space: bool, at: GlobalTransform, steps: usize, dt: f32) -> Vec<Vec<Quad>> {
+        run_spec(emitter, AlamoParticles { in_model_space, ..AlamoParticles::new("test") }, engine, at, steps, dt)
+    }
+
+    /// Like [`run`], with the given [`AlamoParticles`].
+    fn run_spec(emitter: Emitter, spec: AlamoParticles, engine: bool, at: GlobalTransform, steps: usize, dt: f32) -> Vec<Vec<Quad>> {
         use bevy::ecs::system::RunSystemOnce;
         bevy::tasks::ComputeTaskPool::get_or_init(bevy::tasks::TaskPool::default);
         let mut world = World::new();
@@ -1474,7 +1488,6 @@ mod tests {
         world.init_resource::<crate::lod::LodSettings>();
         world.init_resource::<ParticleStats>();
         world.insert_resource(ParticleSettings { fixed_step: Some(dt), ..default() });
-        let spec = AlamoParticles { in_model_space, ..AlamoParticles::new("test") };
         let system = Arc::new(ParticleSystem { name: "test".into(), emitters: vec![emitter] });
         let instance = ParticleInstance { system, emitters: vec![EmitterRuntime::new(1)], was_enabled: false, engine };
         let entity = world.spawn((spec, at, InheritedVisibility::VISIBLE, instance)).id();
@@ -1620,6 +1633,26 @@ mod tests {
         assert!(steps[29].iter().all(|q| q.flat.is_none()));
         let steps = run(disc, false, true, proxy_bone(bone), 30, 1.0 / 60.0);
         assert!(steps[29].iter().all(|q| q.flat.is_none()));
+    }
+
+    #[test]
+    fn a_shield_impact_lies_flat_on_the_hit_surface() {
+        // `ps_turbolaser`'s shield ring and the `P_shield_blast_*` discs are not billboarded (0x2e = 1): put on a surface as
+        // `spawn_effect` puts an impact (its +Y on the surface normal), they lie in that surface instead of facing the camera.
+        let normal = Vec3::new(0.3, 0.2, -0.9).normalize();
+        let at = GlobalTransform::from(Transform::from_xyz(100.0, 0.0, 50.0).with_rotation(Quat::from_rotation_arc(Vec3::Y, normal)));
+        let mut ring = one_particle(exact([0.0; 3]), exact([0.0; 3]));
+        ring.billboard = false;
+        let spec = AlamoParticles { on_surface: true, ..AlamoParticles::new("test") };
+        let steps = run_spec(ring.clone(), spec, false, at, 2, 1.0 / 60.0);
+        let [x, y] = steps[1].first().expect("a particle").flat.expect("a flat sprite");
+        assert!(x.cross(y).dot(normal).abs() > 0.999, "the ring's normal {} is not the surface normal {normal}", x.cross(y));
+        // The same system spawned anywhere else still faces the camera, and so does a billboarded emitter on a surface.
+        let steps = run_spec(ring, AlamoParticles::new("test"), false, at, 2, 1.0 / 60.0);
+        assert!(steps[1].iter().all(|q| q.flat.is_none()));
+        let spec = AlamoParticles { on_surface: true, ..AlamoParticles::new("test") };
+        let steps = run_spec(one_particle(exact([0.0; 3]), exact([0.0; 3])), spec, false, at, 2, 1.0 / 60.0);
+        assert!(steps[1].iter().all(|q| q.flat.is_none()));
     }
 
     #[test]

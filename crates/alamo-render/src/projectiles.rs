@@ -343,12 +343,15 @@ pub struct SpawnParticleEffect {
 #[derive(Component, Debug)]
 pub struct AutoDespawn(pub Timer);
 
+/// Spawns the particle object `particle` at `position`, its up axis on `normal`. `on_surface` (shield impacts): the flat sprites of the
+/// system lie in the surface ([`AlamoParticles::on_surface`]).
 fn spawn_effect(
     commands: &mut Commands,
     defs: &XmlDefs,
     particle: &str,
     position: Vec3,
     normal: Vec3,
+    on_surface: bool,
 ) {
     let Some(def) = defs.particle(particle) else {
         warn!("unknown particle object {particle}");
@@ -361,7 +364,7 @@ fn spawn_effect(
     };
     commands.spawn((
         Name::new(format!("fx {particle}")),
-        AlamoParticles::new(def.model.clone()),
+        AlamoParticles { on_surface, ..AlamoParticles::new(def.model.clone()) },
         Transform {
             translation: position,
             rotation: Quat::from_rotation_arc(Vec3::Y, up),
@@ -390,13 +393,13 @@ pub fn on_projectile_impact(ev: On<ProjectileImpact>, mut commands: Commands, de
         ImpactKind::Shield => &p.shield_absorb,
     };
     if let Some(name) = name {
-        spawn_effect(&mut commands, &defs, name, ev.position, ev.normal);
+        spawn_effect(&mut commands, &defs, name, ev.position, ev.normal, ev.kind == ImpactKind::Shield);
     }
 }
 
 /// Observer: [`SpawnParticleEffect`].
 pub fn on_spawn_effect(ev: On<SpawnParticleEffect>, mut commands: Commands, defs: Res<XmlDefs>) {
-    spawn_effect(&mut commands, &defs, &ev.particle, ev.position, ev.normal);
+    spawn_effect(&mut commands, &defs, &ev.particle, ev.position, ev.normal, false);
 }
 
 /// Despawns finished effects.
