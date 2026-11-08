@@ -15,6 +15,7 @@ use std::collections::{HashMap, HashSet};
 
 use alamo_audio::plugin::AlamoAudio;
 use alamo_audio::{AudioConstants, GalaxyEvent, MusicDirector, MusicScene, PlaySfx};
+use alamo_render::{AlamoHardpoint, AlamoModelLoaded, TurretAim};
 use battle_sim::{Event, HitKind, ShipId, TargetClass};
 use bevy::prelude::*;
 
@@ -847,6 +848,135 @@ pub fn battle_ability_loops(
             Name::new(format!("ability loop {ability} of ship {ship}")),
             AbilityLoop { ship, ability },
             alamo_audio::SfxEmitter::new(Some(event.to_string())),
+            Transform::default(),
+            GlobalTransform::from_translation(at),
+        ));
+    }
+}
+
+/// Radians of turret aim change since the last sample that count as rotating.
+/// Estimate `turret_rotating_epsilon`: `SFXEvent_Turret_Rotating_Loop` plays while the turret rotates and the data gives no dead zone.
+pub const TURRET_ROTATING_EPSILON: f32 = 1.0e-3;
+
+/// True when the turret's yaw or pitch moved by more than [`TURRET_ROTATING_EPSILON`].
+pub fn turret_rotated(prev: (f32, f32), now: (f32, f32)) -> bool {
+    (now.0 - prev.0).abs() > TURRET_ROTATING_EPSILON || (now.1 - prev.1).abs() > TURRET_ROTATING_EPSILON
+}
+
+/// Cinematic camera focus is on `ship` (the C camera, not the Space battle cam).
+pub fn cinematic_focus_on(cam: &crate::camera::ActionCam, ship: u32) -> bool {
+    cam.active && cam.cinematic && cam.focus == Some(ship)
+}
+
+/// Which extra loop a child emitter of a ship is (`battle_unit_loops`).
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum UnitLoopKind {
+    /// `SFXEvent_Turret_Rotating_Loop`.
+    TurretRotating,
+    /// `SFXEvent_Engine_Cinematic_Focus_Loop`.
+    CinematicFocus,
+}
+
+/// Child emitter of one extra unit loop. The ship's own emitter keeps the idle / moving engine.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UnitLoop {
+    /// Simulation id of the ship.
+    pub ship: u32,
+    /// Which loop this emitter is.
+    pub kind: UnitLoopKind,
+}
+
+/// Ships whose turrets turned since the last sample, from the change in [`TurretAim`] yaw and pitch.
+fn rotating_ships(ships: &Query<(&crate::ships::ShipView, &AlamoModelLoaded)>, hardpoints: &Query<&AlamoHardpoint>, turrets: &Query<&TurretAim>, prev: &mut HashMap<Entity, (f32, f32)>) -> HashSet<u32> {
+    let mut rotating = HashSet::new();
+    let mut seen = HashSet::new();
+    for (view, loaded) in ships {
+        for &hp in &loaded.hardpoints {
+            let Ok(hp) = hardpoints.get(hp) else { continue };
+            if hp.destroyed {
+                continue;
+            }
+            let Some(turret) = hp.turret else { continue };
+            let Ok(aim) = turrets.get(turret) else { continue };
+            seen.insert(turret);
+            let now = (aim.yaw, aim.pitch);
+            if prev.get(&turret).is_some_and(|old| turret_rotated(*old, now)) {
+                rotating.insert(view.id);
+            }
+            prev.insert(turret, now);
+        }
+    }
+    prev.retain(|e, _| seen.contains(e));
+    rotating
+}
+
+/// `SFXEvent_Turret_Rotating_Loop` while a turret of the unit is turning, and `SFXEvent_Engine_Cinematic_Focus_Loop` while
+/// cinematic camera focus is on the unit. Each is a child [`alamo_audio::SfxEmitter`] of the ship, so the idle / moving engine
+/// loop is left as it is (estimate `cinematic_focus_stacks`: the data does not say the cinematic loop replaces it). A unit with
+/// an empty value or `SFX_NA` stays silent, as do dead ships and ships the player cannot see. Does nothing without `AlamoAudioPlugin`.
+#[allow(clippy::too_many_arguments)]
+pub fn battle_unit_loops(
+    mut commands: Commands,
+    settings: Res<BattleViewSettings>,
+    rt: Res<BattleRuntime>,
+    audio: Option<Res<AlamoAudio>>,
+    action: Option<Res<crate::camera::ActionCam>>,
+    ships: Query<(&crate::ships::ShipView, &AlamoModelLoaded)>,
+    ship_ok: Query<(), With<crate::ships::ShipView>>,
+    hardpoints: Query<&AlamoHardpoint>,
+    turrets: Query<&TurretAim>,
+    mut emitters: Query<(Entity, &UnitLoop, &mut alamo_audio::SfxEmitter)>,
+    mut prev_aim: Local<HashMap<Entity, (f32, f32)>>,
+) {
+    if !settings.audio || audio.is_none() {
+        return;
+    }
+    let Some(cur) = rt.cur.as_ref() else { return };
+    let player = settings.player_side;
+    let rotating = rotating_ships(&ships, &hardpoints, &turrets, &mut prev_aim);
+    let mut wanted: Vec<(u32, UnitLoopKind, String)> = Vec::new();
+    for s in &cur.ships {
+        let seen = s.side == player || (s.seen_by >> player.min(7)) & 1 == 1;
+        if !seen {
+            continue;
+        }
+        let v = &rt.visuals.ship(s.def).sfx;
+        if rotating.contains(&s.id)
+            && let Some(event) = v.turret_rotating.clone()
+        {
+            wanted.push((s.id, UnitLoopKind::TurretRotating, event));
+        }
+        if action.as_ref().is_some_and(|cam| cinematic_focus_on(cam, s.id))
+            && let Some(event) = v.cinematic_engine.clone()
+        {
+            wanted.push((s.id, UnitLoopKind::CinematicFocus, event));
+        }
+    }
+    let mut have: HashSet<(u32, UnitLoopKind)> = HashSet::new();
+    for (entity, key, mut emitter) in &mut emitters {
+        have.insert((key.ship, key.kind));
+        match wanted.iter().find(|(ship, kind, _)| *ship == key.ship && *kind == key.kind) {
+            Some((_, _, event)) => {
+                if emitter.event.as_deref() != Some(event.as_str()) {
+                    emitter.event = Some(event.clone());
+                }
+            }
+            None if emitter.event.is_some() => emitter.event = None,
+            None if emitter.playing().is_none() => commands.entity(entity).try_despawn(),
+            None => {}
+        }
+    }
+    for (ship, kind, event) in wanted {
+        let Some(&parent) = rt.entities.get(&ship).filter(|e| ship_ok.contains(**e) && !have.contains(&(ship, kind))) else { continue };
+        let at = cur.ship(ship).map_or(Vec3::ZERO, |s| sim_to_bevy(s.pos));
+        let label = match kind {
+            UnitLoopKind::TurretRotating => "turret rotating",
+            UnitLoopKind::CinematicFocus => "cinematic focus",
+        };
+        commands.entity(parent).with_child((
+            Name::new(format!("{label} loop of ship {ship}")),
+            UnitLoop { ship, kind },
+            alamo_audio::SfxEmitter::new(Some(event)),
             Transform::default(),
             GlobalTransform::from_translation(at),
         ));
@@ -1745,6 +1875,108 @@ mod tests {
         }
         assert_eq!((ability_emitters(&mut app), ability_voices(&mut app)), (0, vec![]), "an enemy ship in the fog of war is silent");
         let _ = ship;
+    }
+
+    fn loop_event(name: &str, sample: &str) -> String {
+        format!(
+            r#"<SFXEvent Name="{name}"><Samples>{sample}</Samples><Is_3D>Yes</Is_3D><Play_Count>-1</Play_Count><Max_Instances>4</Max_Instances><Volume_Saturation_Distance>100</Volume_Saturation_Distance><Loop_Fade_Out_Seconds>0.5</Loop_Fade_Out_Seconds><Min_Volume>100</Min_Volume><Max_Volume>100</Max_Volume></SFXEvent>"#
+        )
+    }
+
+    /// Plugin, listener and one own ship at 30 units, with a turret whose aim the test sets.
+    fn unit_loop_app(turret_event: Option<&str>, cinematic_event: Option<&str>, files: HashMap<String, Vec<u8>>) -> (App, Entity, Entity) {
+        use bevy::time::TimeUpdateStrategy;
+        let (catalog, mut visuals) = ability_world();
+        visuals.ships[0].sfx.turret_rotating = turret_event.map(str::to_string);
+        visuals.ships[0].sfx.cinematic_engine = cinematic_event.map(str::to_string);
+        let battle = fighter_battle(&[&["x"]]);
+        let snap = Snapshot { ships: vec![snap_ship(7, 0, 0, 0b01, &[])], ..Snapshot::default() };
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, AssetPlugin::default(), bevy::transform::TransformPlugin))
+            .init_asset::<AudioSource>()
+            .add_plugins(alamo_audio::AlamoAudioPlugin::new(std::sync::Arc::new(MemFs(files))))
+            .insert_resource(BattleViewSettings::default())
+            .insert_resource(crate::camera::ActionCam::default())
+            .insert_resource(TimeUpdateStrategy::ManualDuration(std::time::Duration::from_millis(100)))
+            .add_systems(PreUpdate, battle_unit_loops);
+        app.world_mut().resource_mut::<alamo_audio::AudioSettings>().load_on_worker = false;
+        app.world_mut().spawn((BattleListener, bevy::audio::SpatialListener::new(EAR_GAP), Transform::IDENTITY));
+        let turret = app.world_mut().spawn(TurretAim::idle()).id();
+        let axis = app.world_mut().spawn_empty().id();
+        let hp = app.world_mut().spawn(AlamoHardpoint { name: "HP_Turret".into(), destroyed: false, turret: Some(turret) }).id();
+        let loaded = AlamoModelLoaded { bones: vec![], parts: vec![], proxies: vec![], axis, hardpoints: vec![hp], bone_by_name: HashMap::new(), center: Vec3::ZERO, radius: 1.0 };
+        let ship = app.world_mut().spawn((crate::ships::ShipView::unloaded(7, 0, 0), loaded, Transform::from_xyz(30.0, 0.0, 0.0))).id();
+        let mut rt = flyby_runtime((battle.0, catalog, snap), visuals);
+        rt.entities.insert(7, ship);
+        app.insert_resource(rt);
+        (app, ship, turret)
+    }
+
+    fn unit_voices(app: &mut App) -> Vec<(String, bool)> {
+        let mut q = app.world_mut().query::<&alamo_audio::SfxVoice>();
+        let mut v: Vec<_> = q.iter(app.world()).map(|voice| (voice.event().to_string(), voice.is_stopping())).collect();
+        v.sort();
+        v
+    }
+
+    #[test]
+    fn turret_rotation_uses_the_named_epsilon() {
+        assert!(!turret_rotated((0.0, 0.0), (TURRET_ROTATING_EPSILON, 0.0)));
+        assert!(turret_rotated((0.0, 0.0), (TURRET_ROTATING_EPSILON + 1.0e-6, 0.0)));
+        assert!(turret_rotated((0.2, 0.0), (0.2, -0.01)));
+        let movie = crate::camera::ActionCam { active: true, cinematic: false, focus: Some(7), request: false };
+        let cine = crate::camera::ActionCam { cinematic: true, ..movie };
+        assert!(!cinematic_focus_on(&movie, 7));
+        assert!(cinematic_focus_on(&cine, 7));
+        assert!(!cinematic_focus_on(&cine, 8));
+    }
+
+    #[test]
+    fn a_turret_loop_plays_while_the_aim_changes_and_stops_when_it_holds() {
+        let mut files = sfx_files(&loop_event("Structure_Turret_Motor", "motor.wav"));
+        files.insert(alamo_fs::normalize("Audio/SFX/motor.wav"), alamo_audio::Pcm { channels: 1, sample_rate: 8000, samples: vec![0; 800] }.to_wav_bytes());
+        let (mut app, ship, turret) = unit_loop_app(Some("Structure_Turret_Motor"), None, files);
+        let hum = "structure_turret_motor";
+        for _ in 0..3 {
+            app.update();
+        }
+        assert!(unit_voices(&mut app).is_empty(), "a still turret is silent");
+        for i in 1..4 {
+            app.world_mut().get_mut::<TurretAim>(turret).expect("aim").yaw = 0.05 * i as f32;
+            app.update();
+        }
+        assert_eq!(unit_voices(&mut app), [(hum.to_string(), false)]);
+        let emitter = app.world_mut().query_filtered::<Entity, With<UnitLoop>>().single(app.world()).expect("emitter");
+        assert_eq!(app.world().get::<ChildOf>(emitter).map(ChildOf::parent), Some(ship));
+        // Held aim: the loop fades out.
+        for _ in 0..12 {
+            app.update();
+        }
+        assert!(unit_voices(&mut app).iter().all(|v| v.1) || unit_voices(&mut app).is_empty(), "held aim stops the loop");
+    }
+
+    #[test]
+    fn cinematic_focus_plays_the_engine_loop_and_movie_mode_does_not() {
+        let mut files = sfx_files(&loop_event("Unit_TIE_Fighter_Cinematic_Engine_Loop", "cine.wav"));
+        files.insert(alamo_fs::normalize("Audio/SFX/cine.wav"), alamo_audio::Pcm { channels: 1, sample_rate: 8000, samples: vec![0; 800] }.to_wav_bytes());
+        let (mut app, _ship, _turret) = unit_loop_app(None, Some("Unit_TIE_Fighter_Cinematic_Engine_Loop"), files);
+        let hum = "unit_tie_fighter_cinematic_engine_loop";
+        app.world_mut().resource_mut::<crate::camera::ActionCam>().active = true;
+        app.world_mut().resource_mut::<crate::camera::ActionCam>().focus = Some(7);
+        for _ in 0..3 {
+            app.update();
+        }
+        assert!(unit_voices(&mut app).is_empty(), "the Space battle cam is not the cinematic focus loop");
+        app.world_mut().resource_mut::<crate::camera::ActionCam>().cinematic = true;
+        for _ in 0..3 {
+            app.update();
+        }
+        assert_eq!(unit_voices(&mut app), [(hum.to_string(), false)]);
+        app.world_mut().resource_mut::<crate::camera::ActionCam>().active = false;
+        for _ in 0..12 {
+            app.update();
+        }
+        assert!(unit_voices(&mut app).iter().all(|v| v.1) || unit_voices(&mut app).is_empty());
     }
 
     /// The events a ship's ability starts, as `battle_audio` sends them: `(event, position)`.

@@ -753,6 +753,12 @@ Estimates and data that shape what the player sees and hears. Behaviour is in `b
 * `alamo_audio::hooks` scans every `Xml/**/*.xml` for tags containing `SFX` or `Music` (39,047 references in 223 tags);
   `hooks::WIRED_TAGS` lists the ones the game plays; `tests/hook_audit.rs` fails on any new unplayable event, with the
   Remake's own broken references in `tests/known_audio_gaps.txt`.
+* `SFXEvent_Turret_Rotating_Loop` (164 references, ground units and structures; no space-unit file names it) loops while
+  a turret of that unit is turning. Estimate `turret_rotating_epsilon`: the aim yaw or pitch moved by more than 0.001
+  radian since the last sample. The data says the loop plays while the turret rotates and gives no dead zone.
+* `SFXEvent_Engine_Cinematic_Focus_Loop` (550 references) loops while cinematic camera focus is on that unit (C; the
+  Space battle cam is not this). Estimate `cinematic_focus_stacks`: the loop plays as well as the idle or moving engine
+  loop. The data does not say that it replaces that loop. An empty value or `SFX_NA` stays silent.
 
 ## 3.2 Cameras and interaction
 

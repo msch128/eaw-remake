@@ -551,6 +551,7 @@ impl Plugin for BattleViewPlugin {
                             audio::battle_listener,
                             audio::battle_sources,
                             audio::battle_ability_loops,
+                            audio::battle_unit_loops,
                             audio::battle_ambient_moving,
                             report_outcome,
                         )

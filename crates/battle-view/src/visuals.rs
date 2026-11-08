@@ -69,6 +69,10 @@ pub struct UnitSfx {
     pub engine_moving: Option<String>,
     /// `SFXEvent_Ambient_Loop` (constant machinery of stations and big ships).
     pub ambient_loop: Option<String>,
+    /// `SFXEvent_Turret_Rotating_Loop` (while a turret of the unit is turning).
+    pub turret_rotating: Option<String>,
+    /// `SFXEvent_Engine_Cinematic_Focus_Loop` (while cinematic camera focus is on the unit).
+    pub cinematic_engine: Option<String>,
     /// `SFXEvent_Ambient_Moving`: played now and then while the unit moves (the fighters' flybys).
     pub ambient_moving: Option<String>,
     /// `SFXEvent_Ambient_Moving_Min_Delay_Seconds` / `_Max_Delay_Seconds`: the random gap between two of them.
@@ -307,6 +311,8 @@ impl VisualCatalog {
                 engine_idle: sfx("sfxevent_engine_idle_loop"),
                 engine_moving: sfx("sfxevent_engine_moving_loop"),
                 ambient_loop: sfx("sfxevent_ambient_loop"),
+                turret_rotating: sfx("sfxevent_turret_rotating_loop").filter(|n| !n.eq_ignore_ascii_case("sfx_na")),
+                cinematic_engine: sfx("sfxevent_engine_cinematic_focus_loop").filter(|n| !n.eq_ignore_ascii_case("sfx_na")),
                 ambient_moving: sfx("sfxevent_ambient_moving").filter(|n| !n.eq_ignore_ascii_case("sfx_na")),
                 ambient_moving_delay: ambient_moving_delay(
                     r.as_ref().and_then(|r| r.num("sfxevent_ambient_moving_min_delay_seconds")),
