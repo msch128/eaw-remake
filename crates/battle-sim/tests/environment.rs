@@ -262,3 +262,38 @@ fn a_nebula_blocks_special_abilities_until_five_seconds_after_leaving() {
     assert!((149..=151).contains(&waited), "5 s at 30 Hz, got {waited} frames");
     assert_eq!(use_it(&mut b), Ok(()));
 }
+
+#[test]
+fn an_ion_storm_drops_shields_until_five_seconds_after_leaving() {
+    let Some((data, fs)) = load_fs() else { return };
+    let mut b = zone_battle(&data, &fs, "Nebula_Medium_Ion", &["Victory_Destroyer"]);
+    let cat = b.catalog().clone();
+    assert_eq!(cat.ion_storm_shield_disable, 5.0, "Ion_Storm_Shield_Disable_Time");
+    assert_eq!(b.config().arena.as_ref().map(|a| a.ion_storms[0].radius), Some(570.0));
+    let vsd = cat.ship_id("Victory_Destroyer").unwrap();
+    let ship = b.ships.iter().find(|s| s.def == vsd).unwrap().id as usize;
+    let full = cat.ship(vsd).shield;
+    assert!(full > 0.0 && b.ships[ship].shield == full);
+    b.ships[ship].pos = Vec3::new(0.0, 0.0, 0.0);
+    for _ in 0..30 {
+        b.step();
+        assert_eq!(b.ships[ship].shield, 0.0, "inside the storm");
+    }
+
+    // Out of the storm: the shield stays down for 5 s, then recharges.
+    b.ships[ship].pos = Vec3::new(5000.0, 0.0, 0.0);
+    let mut down = 0;
+    while b.ships[ship].shield_lock > 0.0 {
+        b.step();
+        down += 1;
+        if b.ships[ship].shield_lock > 0.0 {
+            assert_eq!(b.ships[ship].shield, 0.0, "{down} frames after leaving");
+        }
+    }
+    for _ in 0..30 {
+        b.step();
+    }
+    eprintln!("shield down {down} frames after leaving, then {} of {full} after 1 s", b.ships[ship].shield);
+    assert!((149..=151).contains(&down), "5 s at 30 Hz, got {down} frames");
+    assert!(b.ships[ship].shield > 0.0, "recharges after the lock");
+}

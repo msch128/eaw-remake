@@ -1810,9 +1810,21 @@ impl Battle {
         }
     }
 
+    /// `Is_Ion_Storm` zones (centre within the radius, map plane). Estimate: a ship with `NEBULA` (the units' only space-field behaviour) loses its
+    /// shield inside, and it stays down for `Ion_Storm_Shield_Disable_Time` after the ship left.
+    fn ion_storms(&mut self) {
+        let Some(arena) = self.config.arena.clone().filter(|a| !a.ion_storms.is_empty()) else { return };
+        let cat = self.catalog.clone();
+        for s in self.ships.iter_mut().filter(|s| s.alive && !s.retreated && in_zone(&arena.ion_storms, s.pos) && cat.ship(s.def).nebula) {
+            s.shield = 0.0;
+            s.shield_lock = s.shield_lock.max(cat.ion_storm_shield_disable);
+        }
+    }
+
     fn upkeep(&mut self, dt: f32) {
         self.asteroid_fields(dt);
         self.nebulae(dt);
+        self.ion_storms();
         let cat = self.catalog.clone();
         let tick = self.tick;
         if tick.is_multiple_of(60) {

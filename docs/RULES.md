@@ -598,6 +598,11 @@ with `speed_mult > 1.05` when fleeing or when the target is over twice the weapo
   toggle can still be switched off (the data names only the disable time). The ability button shows the wait like a
   recharge. An own unit entering a nebula says its `SFXEvent_Move_Into_Nebula` line (same rule as the asteroid line).
   No Remake GC map places a nebula zone (see the asteroid bullet above: `Nebula_Ultra_Huge` is a backdrop).
+* Ion storms: a ship whose centre lies within an `Is_Ion_Storm` zone (map plane; the `Nebula_*_Ion` props are also
+  nebulae) loses its whole shield, and the shield stays down for `Ion_Storm_Shield_Disable_Time` 5 s after it left,
+  then recharges as usual. Estimate: only ships with `NEBULA` are affected (units have no ion-storm behaviour; `NEBULA`
+  is their only space-field one, so stations without it keep their shields). The view shows the empty shield bar; the
+  data names no ion-storm sound or particle. No Remake GC map places an ion-storm zone.
 
 ## 2.9 Navigation, hulls, formations
 
