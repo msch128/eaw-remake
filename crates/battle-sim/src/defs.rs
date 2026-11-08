@@ -189,6 +189,8 @@ pub struct HpDef {
     /// Weapons: the bins of `ShipDef::bearing_dps` (bit k = bearing k x 15 degrees) the weapon can bear on, and its damage per second there.
     pub arc_bins: u32,
     pub dps: f32,
+    /// The spawn script of the hardpoint's `Death_Breakoff_Prop` (`Lua_Script`): it runs when the hardpoint is destroyed.
+    pub breakoff_script: Option<Arc<SpawnScriptDef>>,
 }
 
 /// Active ability with `Mod_Multiplier` effects.
@@ -716,6 +718,39 @@ pub struct TractorDef {
     pub classes: u16,
 }
 
+/// Where a spawn script puts its units (the `Find_All_Objects_Of_Type` argument of its `SpawnReinforcements`).
+#[derive(Debug, Clone, PartialEq)]
+pub enum SpawnPlace {
+    /// At the units of this type (lower case) in the battle, whatever their side, one after the other in id order (the hero escort
+    /// scripts name the hero itself).
+    ObjectsOfType(String),
+    /// The map's `Attacker Entry Position` markers (the attacker's start places without a map).
+    AttackerEntries,
+    /// The map's `Defending Forces Position` markers (the defender's start places without a map).
+    DefenderPositions,
+}
+
+/// An object script that brings units into the battle (`Spawn_Unit` with `Cinematic_Hyperspace_In`), read from the mod's Lua
+/// (`scripts.rs`): hero escorts when the hero enters, Subjugator reinforcements when a hardpoint breaks off.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SpawnScriptDef {
+    /// Script name (`Lua_Script`).
+    pub script: String,
+    /// The outcomes of the script's `GameRandom` roll, equally likely: the units each spawns, in order (empty = nothing).
+    pub choices: Vec<Vec<ShipId>>,
+    /// Where the units appear.
+    pub place: SpawnPlace,
+    /// `Find_Player` faction the units belong to (the side of that name; the script owner's side when no side has it).
+    pub faction: String,
+    /// Seconds before the first unit (`Sleep` in `State_Init`).
+    pub delay: f32,
+    /// Seconds from a unit's spawn to its arrival: `Cinematic_Hyperspace_In` frames at 30 frames per second (estimate: the frames are
+    /// read as the hyperspace delay).
+    pub hyperspace_in: f32,
+    /// Pause between two units: `base + GameRandom(lo, hi) / div` seconds.
+    pub gap: crate::scripts::SpawnGap,
+}
+
 /// Squadrons at one owner tech level: `(tech, launched at the start, in reserve)`.
 pub type SpawnedAt = (u8, Vec<(ShipId, u32)>, Vec<(ShipId, u32)>);
 
@@ -865,9 +900,21 @@ pub struct ShipDef {
     pub on_create: Option<(String, i32)>,
     /// What the script of its `Death_Clone` sets when it dies (`Death_Clone_Viscount_Phase`: `("Viscount_Level", 0)`).
     pub on_death: Option<(String, i32)>,
+    /// The unit's `Lua_Script` when it is a spawn script: it runs when the unit enters the battle (hero escorts).
+    pub spawn_script: Option<Arc<SpawnScriptDef>>,
 }
 
 impl ShipDef {
+    /// Every type this unit's scripts and hardpoints can bring into the battle (escorts, breakoff reinforcements), for warming up their
+    /// models.
+    pub fn script_spawns(&self) -> Vec<ShipId> {
+        let scripts = self.spawn_script.iter().chain(self.hardpoints.iter().filter_map(|h| h.breakoff_script.as_ref()));
+        let mut out: Vec<ShipId> = scripts.flat_map(|s| s.choices.iter().flatten().copied()).collect();
+        out.sort_unstable();
+        out.dedup();
+        out
+    }
+
     /// Plan-view hull that other ships keep out of: the model's capsule, else the circle of the rule before the model hull (0.85 of the
     /// collision radius, of 0.75 of it from frigates up). The collision radius is clamped per class: 700 for a 9000 unit long Executor.
     pub fn footprint(&self) -> crate::nav::Hull {
@@ -2183,6 +2230,7 @@ impl Catalog {
             formation_spacing: unit_field("formationspacing").and_then(alamo_data::xml::parse_num).unwrap_or(1.0),
             formation_solo: unit_field("formationgrouping").is_some_and(|v| v.trim().eq_ignore_ascii_case("solo")),
             formation_no_wait: unit_field("waitsforformationformup").is_some_and(|v| !alamo_data::xml::parse_bool(v)),
+            spawn_script: None,
         }
     }
 
@@ -2344,6 +2392,7 @@ impl Catalog {
             arc_bins: 0,
             dps: 0.0,
             blast_projectile,
+            breakoff_script: None,
         }
     }
 

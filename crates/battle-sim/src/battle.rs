@@ -500,6 +500,18 @@ pub enum Event {
         /// Where it landed.
         pos: Vec3,
     },
+    /// An object script brought a unit into the battle (a hero's escort, Subjugator reinforcements; see `spawns.rs`). Such units belong
+    /// to the battle only.
+    Spawned {
+        /// Side the unit fights for.
+        side: u8,
+        /// New ships (a squadron's craft).
+        ships: Vec<u32>,
+        /// The unit whose script spawned it.
+        by: u32,
+        /// It dropped out of hyperspace (else it appeared in place).
+        hyperspace: bool,
+    },
     /// The battle ended.
     BattleOver {
         /// Winning side, `None` for a draw.
@@ -841,6 +853,10 @@ pub struct Battle {
     pub(crate) ai: Vec<crate::ai::AiSide>,
     /// Group moves under way, in the order they were given (see `formation.rs`).
     pub(crate) formations: Vec<crate::formation::Formation>,
+    /// Units object scripts spawned that have not arrived yet (see `spawns.rs`).
+    pub(crate) scripted: Vec<crate::spawns::ScriptedArrival>,
+    /// Ships below this index have had their spawn script started.
+    pub(crate) scripts_seen: usize,
 }
 
 impl Battle {

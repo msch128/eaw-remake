@@ -145,7 +145,7 @@ arcs, projectiles, damage matrix) from the data; `battle.rs` holds state, comman
 weapons, projectiles, abilities, retreat, reinforcements, fog of war); `ai.rs` the side-level AI after the Remake's space scripts (formation
 advance, priority target, free-store targeting, station defence, reserve, retreat rule); `formation.rs` and `nav.rs` group-move formations, A*
 paths around rocks and stations, hull volumes and fighter keep-out; `arena.rs` bounds, spawn markers and obstacles from a `.ted` map; `placement.rs`
-the reinforcement-zone rule shared with the view. All player and AI actions are `Command`s. Data values come from the Remake XML; engine rules
+the reinforcement-zone rule shared with the view; `scripts.rs` reads the mod's object scripts (spawn lists, timings) and `spawns.rs` brings their units in. All player and AI actions are `Command`s. Data values come from the Remake XML; engine rules
 that are not in the data are named estimates in `BattleConfig` or `defs.rs` and listed in docs/RULES.md. Hit points of a unit with destroyable
 hardpoints are the sum of its hardpoints (a project rule, not game data).
 

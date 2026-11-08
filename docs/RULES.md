@@ -624,6 +624,17 @@ with `speed_mult > 1.05` when fleeing or when the target is over twice the weapo
   the others are lost. Units spawned in the battle do not escape on their own: a carrier's launched squadrons escape
   only with the carrier; called-in reinforcements are lost. Pressing Retreat again while the timer runs calls it off
   (`Command::CancelRetreat`).
+* Units of object scripts (`spawns.rs`, Lua read by `scripts.rs`; no battle Lua runs). Data (the script text): a spawn
+  script rolls `GameRandom(lo, hi)`, each outcome spawns its `assault_list` (or nothing), unit by unit at the objects
+  of `Find_All_Objects_Of_Type` (a unit type, or the map's `Attacker Entry Position` / `Defending Forces Position`
+  markers; the sides' start places without a map), cycling through them, for the side of the `Find_Player` faction (the
+  owner's side when that faction is not in the battle), with `Sleep(1 + GameRandom(0, 9) / 10)` between two units. It
+  runs when a unit that has it enters the battle, and when a hardpoint whose `Death_Breakoff_Prop` has it is destroyed.
+  Estimates: `Cinematic_Hyperspace_In(90)` is read as 90 frames (3 s at 30 fps) from the spawn to the arrival; units
+  arrive beside their marker on free hull space (rings of `reinforce_clearance` spacing; `Teleport_And_Face` stacks them
+  and the engine pushes them apart). Project rule: they belong to the battle only (no results group, nothing returns to
+  the galaxy; no data or script hands them to the galactic fleet), ignore the unit cap like `Spawn_Unit`, and do not
+  keep their side in the fight (as the garrison below). `Event::Spawned` reports each arrival.
 * A side stays in the fight while any unit it brought lives (ships, squadrons, star base and structures of the setup,
   and called-in reinforcements). Units spawned during the battle (a star base's garrison, squadrons a carrier
   launches from its reserve) do not count and are removed with the loser. A side whose brought units are all

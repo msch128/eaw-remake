@@ -249,6 +249,8 @@ impl Battle {
             search: vec![(0, 0.0); sides.len()],
             ai: (0..sides.len()).map(|i| crate::ai::AiSide::new(config.ai_reserve.get(i).cloned().unwrap_or_default())).collect(),
             formations: Vec::new(),
+            scripted: Vec::new(),
+            scripts_seen: 0,
             sides,
             ships: Vec::new(),
             projectiles: Vec::new(),
@@ -460,7 +462,7 @@ impl Battle {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn spawn_ship(&mut self, def_id: ShipId, side: u8, pos: Vec3, yaw: f32, group: u32, squad: u32, formation: Vec3) -> u32 {
+    pub(crate) fn spawn_ship(&mut self, def_id: ShipId, side: u8, pos: Vec3, yaw: f32, group: u32, squad: u32, formation: Vec3) -> u32 {
         let def = self.catalog.ship(def_id);
         // Its `GameObject` script runs when it appears (`Set_SSD_*_State`: the phase level).
         if let Some(set) = &def.on_create {
@@ -661,7 +663,7 @@ impl Battle {
     /// Puts the members of squadron `squad` in the order they take the lead: the one whose formation place is nearest the middle of the
     /// formation first (spawn order among equals). The formation turns about its leader, and a leader in a corner would swing the far side
     /// of the formation twice as far at every turn and put the formation beside a move goal instead of on it.
-    fn lead_order(&mut self, squad: u32) {
+    pub(crate) fn lead_order(&mut self, squad: u32) {
         let ships = &self.ships;
         let members = &mut self.squads[squad as usize];
         let n = members.len().max(1) as f32;
@@ -1232,6 +1234,8 @@ impl Battle {
         self.tick += 1;
         self.time += dt;
         self.spawn_reinforcements();
+        self.start_scripts();
+        self.scripted_arrivals();
         self.retreat_jumps();
 
         let cat = self.catalog.clone();
@@ -1845,6 +1849,12 @@ impl Battle {
             for other in &mut self.ships {
                 if other.target == id && other.target_hp != NO_HP && dead_hps.contains(&other.target_hp) {
                     other.target_hp = NO_HP;
+                }
+            }
+            // A hardpoint that breaks off leaves its `Death_Breakoff_Prop`, whose spawn script runs (Subjugator reinforcements).
+            for &h in &dead_hps {
+                if let Some(script) = cat.ship(self.ships[id as usize].def).hardpoints[h as usize].breakoff_script.clone() {
+                    self.run_spawn_script(id, &script, h as u64 + 1);
                 }
             }
         }

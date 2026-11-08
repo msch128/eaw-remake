@@ -6,7 +6,7 @@
 //! projectiles, damage matrix) from the game data and the `.alo` models; `battle.rs` holds state, commands, events and
 //! results; `sim.rs` the step systems; `ai.rs` the side-level tactical AI; `formation.rs` and `nav.rs` group moves and
 //! steering; `arena.rs` the playable area read from a `.ted` map; `placement.rs` the reinforcement-zone rule shared with
-//! the view. Engine rules the data does not state are named estimates in `BattleConfig` or `defs.rs`.
+//! the view; `scripts.rs` reads the object scripts of the mod and `spawns.rs` brings in the units they spawn. Engine rules the data does not state are named estimates in `BattleConfig` or `defs.rs`.
 //!
 //! ```no_run
 //! # use battle_sim::*;
@@ -41,13 +41,15 @@ mod math;
 mod placement;
 pub mod nav;
 mod rng;
+mod scripts;
 mod sim;
+mod spawns;
 
 pub use battle::{
     AbilityState, Battle, BattleConfig, SideMult, StartHealth, BattleResult, BattleSetup, Command, CommandError, Event, GroupResult, HitKind, HpState,
     HUNT_GRID, NONE, NO_CELL, NO_HP, NO_PROJ, NO_TAG, PHASE_TAG, REINFORCE_TAG, GuardTarget, Order, Projectile, Ship, SideSetup, SquadSlot, Stance, UnitSetup,
 };
-pub use defs::{Bonus, ChaseRules, BonusDef, CombatMod, ModKind, WeakenDef, LureDef, BombDef, EnergyDef, ClusterDef, HealDef, CorruptDef, RedirectDef, SuperLaserDef, ZoneDef, 
+pub use defs::{SpawnPlace, SpawnScriptDef, Bonus, ChaseRules, BonusDef, CombatMod, ModKind, WeakenDef, LureDef, BombDef, EnergyDef, ClusterDef, HealDef, CorruptDef, RedirectDef, SuperLaserDef, ZoneDef, 
     AbilityDef, Catalog, DamageMatrix, DirectWeaponDef, FormationRules, HpDef, HpKind, PrioritySet, ProjDef, ProjId, ShipDef, ShipId, SpecialWeaponDef, TargetClass,
     TractorDef, FieldModDef, SalvageDef,
 };
@@ -55,5 +57,6 @@ pub use arena::{Arena, Marker, Obstacle, PropZones, prop_zones};
 pub use math::Vec3;
 pub use placement::{no_spawn_zones, placement_check, PlacementUnit};
 pub use rng::Rng;
+pub use scripts::{parse_spawn_script, SpawnGap, SpawnScript};
 pub use sim::{setup, simulate};
 pub use cheats::{BattleCheat, Cheats};
