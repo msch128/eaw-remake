@@ -10,6 +10,8 @@ use crate::math::Vec3;
 pub const NO_TAG: u32 = u32::MAX;
 /// Tag of the results groups of reinforcements (`Command::Reinforce`).
 pub const REINFORCE_TAG: u32 = u32::MAX - 1;
+/// Tag of the results groups of super ship phases that came out of a destroyed phase (`Destruction_Survivors`): not units the galaxy sent.
+pub const PHASE_TAG: u32 = u32::MAX - 2;
 /// "No entity" marker for projectile targets.
 pub const NONE: u32 = u32::MAX;
 
@@ -464,6 +466,13 @@ pub enum Event {
         /// Where it was destroyed.
         pos: Vec3,
     },
+    /// A destroyed super ship phase gave way to the next (`Destruction_Survivors`).
+    PhaseSpawned {
+        /// The destroyed ship.
+        ship: u32,
+        /// The new ship.
+        into: u32,
+    },
     /// A ship entered an `Is_Nebula` zone (any ship; only `NEBULA` ships lose their abilities there).
     EnteredNebula {
         /// Ship.
@@ -641,6 +650,8 @@ pub struct Ship {
     pub target_age: f32,
     /// Where the ship last rested idle without a target: the place `Idle_Chase_Range` is measured from.
     pub rest_at: Vec3,
+    /// A destroyed ship whose `Destruction_Survivors` ships were spawned.
+    pub phase_done: bool,
     /// Seconds left before the ship may use special abilities again (`Nebula_Ability_Disable_Time` after it left a nebula).
     pub ability_lock: f32,
     /// Tractor beam speed reduction currently applied to this ship (0..1).

@@ -680,6 +680,8 @@ pub struct ShipDef {
     pub nebula: bool,
     /// Chase and target rules.
     pub chase: ChaseRules,
+    /// `Destruction_Survivors` that are ships (a super ship's next phase): spawned where this one dies, `(definition, count)`.
+    pub survivors: Vec<(ShipId, u32)>,
 }
 
 impl ShipDef {
@@ -1175,6 +1177,34 @@ fn load_source(data: &GameData, name: &str) -> Option<Source> {
     data.objects.structure(name).map(|s| Source::Structure(Box::new(s)))
 }
 
+/// `Destruction_Survivors` as `(object, count)`: a name, optionally followed by its count (`Viscount_Star_Defender_P2, 1.0`).
+fn survivor_list(s: &str) -> Vec<(String, u32)> {
+    let toks = alamo_data::xml::split_list(s);
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < toks.len() {
+        let name = toks[i].clone();
+        i += 1;
+        let count = match toks.get(i).and_then(|t| t.parse::<f32>().ok()) {
+            Some(c) => {
+                i += 1;
+                c.max(0.0).round() as u32
+            }
+            None => 1,
+        };
+        if count > 0 {
+            out.push((name, count));
+        }
+    }
+    out
+}
+
+/// Whether a `Destruction_Survivors` object is a ship that fights in space (the next phase of a super ship): a space unit with a model and
+/// hit points. Penalty and refund dummies, map reveals, debuff spawners (no space model) and destroyable asteroids (structures) are not.
+fn survivor_ship(data: &GameData, name: &str) -> bool {
+    matches!(load_source(data, name), Some(Source::Unit(u)) if u.space_model.is_some() && u.hull > 0.0)
+}
+
 /// Whether any `Behavior` / `SpaceBehavior` copy of the object lists a token (upper case).
 fn behaviour_check(objects: &alamo_data::GameObjects, name: &str) -> impl Fn(&str) -> bool + use<> {
     let tokens: Vec<String> = objects
@@ -1259,6 +1289,9 @@ impl Catalog {
             }
             if let Some(src) = load_source(data, &n) {
                 queue.extend(src.spawned_names());
+                if let Source::Unit(u) = &src {
+                    queue.extend(u.destruction_survivors.iter().flat_map(|s| survivor_list(s)).map(|x| x.0).filter(|x| survivor_ship(data, x)));
+                }
                 sources.push(src);
             }
         }
@@ -1791,6 +1824,10 @@ impl Catalog {
             asteroid_field_damage: behaves("ASTEROID_FIELD_DAMAGE"),
             nebula: behaves("NEBULA"),
             chase: ChaseRules::read(|t| unit_field(t).and_then(alamo_data::xml::parse_num)),
+            survivors: match src {
+                Source::Unit(u) => u.destruction_survivors.iter().flat_map(|s| survivor_list(s)).filter_map(|(n, c)| self.ship_index.get(&n.to_ascii_lowercase()).map(|&id| (id, c))).collect(),
+                _ => Vec::new(),
+            },
             name,
             text_id,
             heals,

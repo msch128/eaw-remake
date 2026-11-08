@@ -635,6 +635,13 @@ with `speed_mult > 1.05` when fleeing or when the target is over twice the weapo
   then recharges as usual. Estimate: only ships with `NEBULA` are affected (units have no ion-storm behaviour; `NEBULA`
   is their only space-field one, so stations without it keep their shields). The view shows the empty shield bar; the
   data names no ion-storm sound or particle. No Remake GC map places an ion-storm zone.
+* Super ship phases: a destroyed ship whose `Destruction_Survivors` names a space unit with a model and hit points (the
+  phases of the Executor, Eclipse, Piett's Executor, the Viscount P1 to P5 and the Subjugator Zann P1 to P4, e.g.
+  `Viscount_Star_Defender_P2, 1.0`) gives way to that ship in the same battle: at full `Tactical_Health`, where it died,
+  facing the same way, with its orders and stance, launching the squadrons it starts with (estimate: the data gives
+  only the object and the count). Penalty dummies, map reveals, debuff spawners and destroyable asteroids are not
+  ships and are not spawned. The new ship is not a unit the galaxy sent (results group `PHASE_TAG`); the last phase
+  leaves its `Death_Clone`.
 
 ## 2.9 Navigation, hulls, formations
 

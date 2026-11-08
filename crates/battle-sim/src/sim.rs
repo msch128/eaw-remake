@@ -516,6 +516,7 @@ impl Battle {
             in_nebula: false,
             target_age: 0.0,
             rest_at: pos,
+            phase_done: false,
             ability_lock: 0.0,
             stun: 0.0,
             stun_speed_cut: 0.0,
@@ -555,6 +556,13 @@ impl Battle {
     fn launch_initial(&mut self) {
         let carriers: Vec<u32> = self.ships.iter().filter(|s| !self.spawned_for(self.catalog.ship(s.def), s.side).0.is_empty()).map(|s| s.id).collect();
         for c in carriers {
+            self.launch_carried(c);
+        }
+    }
+
+    /// Launches (or stages, see [`Battle::launch_initial`]) the squadrons carrier `c` starts with.
+    fn launch_carried(&mut self, c: u32) {
+        {
             let def = self.catalog.ship(self.ships[c as usize].def);
             let carried = self.spawned_for(def, self.ships[c as usize].side).0;
             let delay = def.spawn_delay.max(0.5);
@@ -1309,11 +1317,43 @@ impl Battle {
 
         self.grid_cells = grid.cells;
         self.upkeep(dt);
+        self.spawn_phases();
         self.check_over();
         if self.over && cfg.record_events {
             self.events.push(Event::BattleOver { winner: self.winner });
         }
         &self.events
+    }
+
+    /// `Destruction_Survivors` that are ships: a destroyed super ship gives way to its next phase, a new ship of that type at full strength
+    /// where it died, facing the same way, with its orders and stance, launching the squadrons it starts with. The new ship reports in its
+    /// own results group (`PHASE_TAG`): it is not a unit the galaxy sent (the galaxy's `Story_SSD_*_Damage` plots bring the phase back).
+    fn spawn_phases(&mut self) {
+        let cat = self.catalog.clone();
+        let due: Vec<u32> = self.ships.iter().filter(|s| !s.alive && !s.retreated && !s.phase_done && !cat.ship(s.def).survivors.is_empty()).map(|s| s.id).collect();
+        for id in due {
+            let old = &mut self.ships[id as usize];
+            old.phase_done = true;
+            let (side, pos, yaw, order, stance, def) = (old.side, old.pos, old.yaw, old.order, old.stance, old.def);
+            for &(next, count) in &cat.ship(def).survivors {
+                if cat.ship(next).is_squadron {
+                    continue;
+                }
+                for _ in 0..count {
+                    let group = self.groups.len() as u32;
+                    self.groups.push(Group { side, tag: PHASE_TAG, ship: next, members: Vec::new() });
+                    let into = self.spawn_ship(next, side, pos, yaw, group, NONE, Vec3::ZERO);
+                    self.groups[group as usize].members.push(into);
+                    let s = &mut self.ships[into as usize];
+                    s.order = order;
+                    s.stance = stance;
+                    self.launch_carried(into);
+                    if self.config.record_events {
+                        self.events.push(Event::PhaseSpawned { ship: id, into });
+                    }
+                }
+            }
+        }
     }
 
     fn spawn_reinforcements(&mut self) {
