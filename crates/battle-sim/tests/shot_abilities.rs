@@ -329,3 +329,95 @@ fn the_ravager_leeches_400_shield_per_second_and_triples_its_damage() {
     b.ships[rav as usize].abilities[k].cooldown = 0.0;
     assert!(b.command(0, Command::UseAbility { ship: rav, ability: k as u16 }).is_err());
 }
+
+#[test]
+fn concentrate_fire_marks_the_target_for_half_again_the_damage() {
+    // Before: CONCENTRATE_FIRE was an estimated self buff (delay x0.65, damage dealt and taken x1.25); the data marks the target.
+    let Some((data, fs)) = load() else { return };
+    let cat = Arc::new(Catalog::build(&data, Some(&fs as &dyn FileSource), &["TF-24_Requiem", "Star_Destroyer"]));
+    let req = cat.ship(cat.ship_id("TF-24_Requiem").unwrap());
+    let a = req.abilities.iter().find(|a| a.kind == "CONCENTRATE_FIRE").expect("the Requiem has it");
+    let c = a.concentrate.as_ref().expect("Requiem_Home_One_Ability");
+    assert_eq!((a.recharge, a.duration, c.radius, c.take_increase, c.speed_cut), (20.0, 15.0, 3000.0, 0.5, 0.0));
+    assert_eq!((a.weapon_delay_mult, a.cause_damage_mult, a.take_damage_mult), (1.0, 1.0, 1.0), "no self buff");
+    // The Requiem marks a Star Destroyer that another Star Destroyer shoots; the Requiem itself holds fire.
+    let run = |mark: bool, gap: f32| -> Result<f32, CommandError> {
+        let unit = |n: &str| UnitSetup { ship: cat.ship_id(n).unwrap(), count: 1, tag: 0 };
+        let sides = vec![
+            SideSetup { name: "Empire".into(), units: vec![unit("TF-24_Requiem"), unit("Star_Destroyer")], structures: vec![], ai: false },
+            SideSetup { name: "Rebel".into(), units: vec![unit("Star_Destroyer")], structures: vec![], ai: false },
+        ];
+        let mut b = Battle::new(BattleSetup { catalog: cat.clone(), sides, config: BattleConfig { seed: 4, fog_of_war: false, ..BattleConfig::default() } });
+        let find = |b: &Battle, n: &str| b.ships.iter().position(|s| s.carrier == NONE && cat.ship(s.def).name == n).unwrap() as u32;
+        let r = find(&b, "TF-24_Requiem");
+        let side_sd = |b: &Battle, side: u8| b.ships.iter().position(|s| s.side == side && s.carrier == NONE && cat.ship(s.def).name == "Star_Destroyer").unwrap() as u32;
+        let (gunner, sd) = (side_sd(&b, 0), side_sd(&b, 1));
+        let at = b.ships[r as usize].pos;
+        b.ships[sd as usize].pos = at + Vec3::new(gap, 0.0, 0.0);
+        b.ships[gunner as usize].pos = at + Vec3::new(gap, 900.0, 0.0);
+        b.ships[sd as usize].stance = Stance::HoldFire;
+        b.ships[r as usize].stance = Stance::HoldFire;
+        b.command(0, Command::Attack { ships: vec![gunner], target: sd }).unwrap();
+        b.ships[r as usize].target = sd;
+        // The frigate is firing before the mark.
+        for _ in 0..10 * 30 {
+            b.step();
+        }
+        if mark {
+            let k = req.abilities.iter().position(|a| a.concentrate.is_some()).unwrap() as u16;
+            let pos = b.ships[sd as usize].pos;
+            b.command(0, Command::UseAbilityAt { ship: r, ability: k, pos })?;
+            assert_eq!(b.ships[sd as usize].mod_value(ModKind::TakeDamage), 0.5);
+        }
+        // What the other Star Destroyer's hits do (shield and hull; the shield regenerates in between, so the health left would not show it).
+        let mut lost = 0.0;
+        for _ in 0..10 * 30 {
+            for e in b.step() {
+                if let Event::Hit { ship, attacker, damage, .. } = *e
+                    && ship == sd
+                    && attacker == gunner
+                {
+                    lost += damage;
+                }
+            }
+        }
+        for _ in 0..6 * 30 {
+            b.step();
+        }
+        assert_eq!(b.ships[sd as usize].mod_value(ModKind::TakeDamage), 0.0, "after 15 s the mark is gone");
+        Ok(lost)
+    };
+    let (plain, marked) = (run(false, 2500.0).unwrap(), run(true, 2500.0).unwrap());
+    eprintln!("Star Destroyer hits in 10 s: {plain} plain, {marked} marked");
+    assert!(plain > 0.0 && (marked / plain - 1.5).abs() < 0.2, "x1.5: {}", marked / plain);
+    assert!(run(true, 5000.0).is_err(), "beyond Effective_Radius 3000");
+}
+
+#[test]
+fn the_ai_concentrates_fire_on_capital_ships_only() {
+    let Some((data, fs)) = load() else { return };
+    let cat = Arc::new(Catalog::build(&data, Some(&fs as &dyn FileSource), &["TF-24_Requiem", "Star_Destroyer", "Nebulon_B_Frigate"]));
+    let used = |enemy: &str| {
+        let unit = |n: &str| UnitSetup { ship: cat.ship_id(n).unwrap(), count: 1, tag: 0 };
+        let sides = vec![
+            SideSetup { name: "Empire".into(), units: vec![unit("TF-24_Requiem")], structures: vec![], ai: true },
+            SideSetup { name: "Rebel".into(), units: vec![unit(enemy)], structures: vec![], ai: false },
+        ];
+        let mut b = Battle::new(BattleSetup { catalog: cat.clone(), sides, config: BattleConfig { seed: 4, fog_of_war: false, ..BattleConfig::default() } });
+        let r = b.ships.iter().position(|s| s.side == 0 && cat.ship(s.def).name == "TF-24_Requiem").unwrap();
+        let e = b.ships.iter().position(|s| s.side == 1 && s.carrier == NONE).unwrap();
+        b.ships[e].pos = b.ships[r].pos + Vec3::new(2000.0, 0.0, 0.0);
+        b.ships[e].stance = Stance::HoldFire;
+        let k = cat.ship(b.ships[r].def).abilities.iter().position(|a| a.concentrate.is_some()).unwrap();
+        (0..30 * 30).any(|_| {
+            b.step();
+            for s in b.ships.iter_mut().filter(|s| s.side == 1 && s.carrier != NONE) {
+                s.alive = false;
+            }
+            b.ships[r].abilities[k].cooldown > 0.0
+        })
+    };
+    let (capital, frigate) = (used("Star_Destroyer"), used("Nebulon_B_Frigate"));
+    eprintln!("AI concentrate fire: on a Star Destroyer {capital}, on a Nebulon-B {frigate}");
+    assert!(capital && !frigate, "Default_Unit_Target_In_Range: Super or Capital targets");
+}

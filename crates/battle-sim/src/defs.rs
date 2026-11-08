@@ -264,6 +264,8 @@ pub struct AbilityDef {
     pub flare: Option<FlareDef>,
     /// `LEECH_SHIELDS`: the shield-draining beam.
     pub leech: Option<LeechDef>,
+    /// `CONCENTRATE_FIRE`: the mark on one enemy.
+    pub concentrate: Option<ConcentrateDef>,
     /// `FOW_REVEAL_PING`: radius of the area it reveals to the owner for the duration (`Effective_Radius`; 0 = not a reveal ping).
     pub reveal_radius: f32,
 }
@@ -322,6 +324,21 @@ pub struct LeechDef {
     pub classes: u16,
     /// `Applicable_Unit_Types` (lower case), allowed whatever their class.
     pub types: Vec<String>,
+}
+
+/// `CONCENTRATE_FIRE` (`Concentrate_Fire_Attack_Ability`): the caster turns all its weapons on one enemy of `classes` within `radius`
+/// (`Effective_Radius`) and reloads them; for the ability's duration that ship takes `take_increase` more damage from everyone
+/// (`Target_Damage_Increase_Percent`) and flies `speed_cut` slower (`Target_Speed_Decrease_Percent`).
+#[derive(Debug, Clone, Default)]
+pub struct ConcentrateDef {
+    /// `Effective_Radius`.
+    pub radius: f32,
+    /// `Applicable_Unit_Categories` as a class bit mask.
+    pub classes: u16,
+    /// `Target_Damage_Increase_Percent`.
+    pub take_increase: f32,
+    /// `Target_Speed_Decrease_Percent`.
+    pub speed_cut: f32,
 }
 
 /// How long an armed shot ability waits for the craft to fire at its target before it lapses (estimate; the data gives no expiration).
@@ -579,10 +596,12 @@ pub enum ModKind {
     Shield,
     /// `Projectile_Weaken_Enemy_Cause_Damage_Reduction_Percent` (as a negative value): damage the ship deals.
     CauseDamage,
+    /// `Target_Damage_Increase_Percent` of `CONCENTRATE_FIRE`: all damage the marked ship takes is multiplied by `1 + value`.
+    TakeDamage,
 }
 
 impl ModKind {
-    pub(crate) const COUNT: usize = 6;
+    pub(crate) const COUNT: usize = 7;
 }
 
 /// A `Projectile_Combat_Mod`: for `duration` seconds the ships hit (and those within the blast range of the impact)
@@ -2307,6 +2326,22 @@ fn ability_defs(u: &SpaceUnitDef, projectiles: &[ProjDef], proj_index: &HashMap<
                     types: list("applicable_unit_types").iter().map(|t| t.to_ascii_lowercase()).collect(),
                 }
             }).filter(|l| l.max_range > 0.0 && l.drain > 0.0);
+            // The TF-24 Requiem's entry names `Akbar_Home_One_Ability`, which it does not have; its only concentrate-fire sub-ability
+            // (`Requiem_Home_One_Ability`) is used.
+            let concentrate = a.kind.eq_ignore_ascii_case("CONCENTRATE_FIRE").then(|| {
+                let sub = a
+                    .activated_ability
+                    .as_ref()
+                    .and_then(|n| u.sub_abilities.iter().find(|s| s.name.eq_ignore_ascii_case(n)))
+                    .or_else(|| u.sub_abilities.iter().find(|s| s.kind.eq_ignore_ascii_case("Concentrate_Fire_Attack_Ability")))?;
+                let f = |k: &str| sub.fields.get(k).and_then(|v| alamo_data::xml::parse_num::<f32>(v));
+                Some(ConcentrateDef {
+                    radius: a.fields.get("effective_radius").and_then(|v| alamo_data::xml::parse_num(v)).unwrap_or(0.0),
+                    classes: sub.fields.get("applicable_unit_categories").map_or(0, |v| alamo_data::xml::split_list(v).iter().filter_map(|t| TargetClass::from_token(t)).fold(0u16, |m, c| m | c.bit())),
+                    take_increase: f("target_damage_increase_percent").unwrap_or(0.0).max(0.0),
+                    speed_cut: f("target_speed_decrease_percent").unwrap_or(0.0).clamp(0.0, 0.95),
+                })
+            }).flatten();
             let lucky = a.kind.eq_ignore_ascii_case("LUCKY_SHOT");
             let shot = (lucky || a.kind.eq_ignore_ascii_case("ION_CANNON_SHOT")).then(|| {
                 let sub = a.activated_ability.as_ref().and_then(|n| u.sub_abilities.iter().find(|s| s.name.eq_ignore_ascii_case(n)));
@@ -2337,11 +2372,6 @@ fn ability_defs(u: &SpaceUnitDef, projectiles: &[ProjDef], proj_index: &HashMap<
                     if speed_mult == 1.0 { speed_mult = 1.8; }
                     if weapon_delay_mult == 1.0 { weapon_delay_mult = 10.0; }
                 }
-                "CONCENTRATE_FIRE" => {
-                    if weapon_delay_mult == 1.0 { weapon_delay_mult = 0.65; }
-                    if cause_damage_mult == 1.0 { cause_damage_mult = 1.25; }
-                    if take_damage_mult == 1.0 { take_damage_mult = 1.25; }
-                }
                 "MAXIMUM_FIREPOWER" => {
                     if weapon_delay_mult == 1.0 { weapon_delay_mult = 0.5; }
                     if cause_damage_mult == 1.0 { cause_damage_mult = 1.35; }
@@ -2369,6 +2399,7 @@ fn ability_defs(u: &SpaceUnitDef, projectiles: &[ProjDef], proj_index: &HashMap<
                 blast,
                 flare,
                 leech,
+                concentrate,
                 reveal_radius: if ping { a.fields.get("effective_radius").and_then(|v| alamo_data::xml::parse_num(v)).unwrap_or(1000.0) } else { 0.0 },
                 interdict: a.kind.eq_ignore_ascii_case("INTERDICT"),
                 hunt: a.kind.eq_ignore_ascii_case("HUNT"),

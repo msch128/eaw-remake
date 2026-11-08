@@ -1028,6 +1028,22 @@ impl Battle {
         self.ships.iter().filter(|o| ok(o)).min_by(|a, b| a.pos.dist(from).total_cmp(&b.pos.dist(from)).then(a.id.cmp(&b.id))).map(|o| o.id)
     }
 
+    /// Target of a concentrated fire: an enemy of an allowed class whose hull is within the radius, the one nearest to the aimed point
+    /// (`UseAbilityAt`), else the current target if allowed, else the nearest one.
+    fn concentrate_target(&self, ship: u32, c: &ConcentrateDef) -> Option<u32> {
+        let s = &self.ships[ship as usize];
+        let cat = &self.catalog;
+        let ok = |o: &Ship| {
+            let d = cat.ship(o.def);
+            o.alive && !o.retreated && o.side != s.side && (c.classes == 0 || c.classes & d.class.bit() != 0) && o.pos.dist(s.pos) - d.radius <= c.radius
+        };
+        let from = self.ability_at.unwrap_or(s.pos);
+        if self.ability_at.is_none() && s.target != NONE && ok(&self.ships[s.target as usize]) {
+            return Some(s.target);
+        }
+        self.ships.iter().filter(|o| ok(o)).min_by(|a, b| a.pos.dist(from).total_cmp(&b.pos.dist(from)).then(a.id.cmp(&b.id))).map(|o| o.id)
+    }
+
     fn activate_ability(&mut self, ship: u32, ability: usize, from_command: bool) -> bool {
         let def = self.catalog.ship(self.ships[ship as usize].def);
         let Some(a) = def.abilities.get(ability) else { return false };
@@ -1103,6 +1119,13 @@ impl Battle {
             }
         }
         let leech = a.leech.is_some();
+        let concentrate = a.concentrate.clone();
+        if let Some(c) = &concentrate {
+            match self.concentrate_target(ship, c) {
+                Some(x) => target = x,
+                None => return false,
+            }
+        }
         let no_cooldown = self.cheats.has_no_cooldowns(self.ships[ship as usize].side);
         let shot = a.shot.is_some();
         let st = &mut self.ships[ship as usize].abilities[ability];
@@ -1155,6 +1178,20 @@ impl Battle {
         }
         if leech {
             self.leeches.push((ship, ability as u16, target));
+        }
+        if let Some(c) = concentrate {
+            // The mark on the target; the caster's weapons turn on it (they were reloaded above).
+            let dur = self.catalog.ship(self.ships[ship as usize].def).abilities[ability].duration;
+            let t = &mut self.ships[target as usize];
+            for (kind, value) in [(ModKind::TakeDamage, c.take_increase), (ModKind::Speed, -c.speed_cut)] {
+                let slot = &mut t.mods[kind as usize];
+                if value != 0.0 && (value.abs() >= slot.0.abs() || slot.1 <= 0.0) {
+                    *slot = (value, dur);
+                }
+            }
+            let s = &mut self.ships[ship as usize];
+            s.target = target;
+            s.target_hp = NO_HP;
         }
         if self.config.record_events {
             // A command runs between two steps and the next step clears `events` first: its report waits in `cmd_events` (an ability the
@@ -1665,7 +1702,7 @@ impl Battle {
             .map(|(a, _)| a.take_damage_mult)
             .product();
         s.since_hit = 0.0;
-        let dmg = raw * take * atk_damage * atk_cause_damage / (1.0 + s.mods[ModKind::Defense as usize].0);
+        let dmg = raw * take * atk_damage * atk_cause_damage * (1.0 + s.mods[ModKind::TakeDamage as usize].0) / (1.0 + s.mods[ModKind::Defense as usize].0);
         let mut hull_part = 0.0;
         let mut shield_hit = false;
         let mut dead_hps = Vec::new();
@@ -2072,6 +2109,15 @@ impl Battle {
                 let tdef = cat.ship(t.def);
                 let tclass = tdef.class;
                 for (k, a) in def.abilities.iter().enumerate() {
+                    if let Some(c) = &a.concentrate {
+                        // `Default_Unit_Target_In_Range` (`PGEvents.lua`): concentrated fire on a capital or super ship.
+                        let ready = s.abilities[k].cooldown <= 0.0 && s.abilities[k].active <= 0.0;
+                        if ready && (ai_side || s.abilities[k].autocast) && matches!(tclass, TargetClass::Capital | TargetClass::Super) && dist - tdef.radius <= c.radius {
+                            auto_use.push(k);
+                            break;
+                        }
+                        continue;
+                    }
                     if a.blast.is_some() {
                         // `Default_Unit_Target_In_Range` (`PGEvents.lua`): the AI fires its blast when a target is in range.
                         let ready = s.abilities[k].cooldown <= 0.0 && s.abilities[k].active <= 0.0;
