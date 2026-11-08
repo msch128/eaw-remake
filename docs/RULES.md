@@ -964,5 +964,7 @@ Estimates and data that shape what the player sees and hears. Behaviour is in `b
 * Data: dying craft with `Spin_Away_On_Death` roll against `Spin_Away_On_Death_Chance` to spin out of control for `Spin_Away_On_Death_Time` seconds with `Spin_Away_On_Death_SFXEvent_Start_Die` before exploding into `Spin_Away_On_Death_Explosion`.
 * Data: destroyed hardpoints with `Death_Breakoff_Prop` spawn their break-off prop model, drifting along the prop's `Debris_Movement_Vector` (30 Hz tick scale to units/s) and tumbling along `Debris_Facing_Rotate_Vector` for their configured debris lifetime.
 * Data: dying ships without a death clone play the unit's own `Death_Explosions` particle effect when defined, falling back to the class table when absent (`ship_events`).
-* Estimate: the hyperspace arrival flash is additive at 0.6 r (no tactical hyperspace effect exists in the data); fighters are drawn
-  at their real model scale with a size floor of 3.6% of screen height.
+* Estimate: the hyperspace arrival flash is additive at 0.6 r (no tactical hyperspace effect exists in the data); the tactical camera
+  draws a squadron as its leader alone at 3.2% of the screen height (bounding sphere, Remake video b0703s, b0732s, b0760s: one
+  silhouette per squadron at one screen size), never below its model scale and fixed beyond camera 7277 (the Remake's widest view);
+  lone fighters and bombers too; the battle cam shows every craft at its model scale (Remake cinematic b0685s-b0695s).

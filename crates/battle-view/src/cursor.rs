@@ -557,6 +557,7 @@ mod tests {
                 squad: u32::MAX,
                 group: 0,
                 visible: true,
+                drawn: true,
                 order: battle_sim::Order::Idle,
                 path: Vec::new(),
                 hp_alive: hardpoint.iter().map(|_| true).collect(),

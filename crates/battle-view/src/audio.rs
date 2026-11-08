@@ -1761,6 +1761,7 @@ mod tests {
             hull: 1000.0,
             shield: 0.0,
             squad: u32::MAX,
+            lead: false,
             group: 0,
             seen_by,
             order: battle_sim::Order::Idle,

@@ -109,6 +109,9 @@ pub struct ShipRender {
     pub group: u32,
     /// The player's side sees this ship (false for enemies in the fog of war).
     pub visible: bool,
+    /// The model is drawn: false for the members of a squadron other than its leader while the tactical camera is on, which shows a
+    /// squadron as its leader alone (see [`small_craft_boost`]). Such a member has no `drawn_radius` either.
+    pub drawn: bool,
     /// Current order (sim space).
     pub order: battle_sim::Order,
     /// Planned path ahead in Bevy space (waypoints, the last one is the destination); empty for fighters and idle ships.
@@ -141,6 +144,7 @@ impl ShipRender {
             squad,
             group: 0,
             visible: true,
+            drawn: true,
             order: battle_sim::Order::Idle,
             path: Vec::new(),
             hp_alive: Vec::new(),
@@ -375,6 +379,8 @@ pub fn update_ships(
     mut touch: ModelTouch,
     mut views: Query<(&mut ShipView, &mut Transform), Without<Dying>>,
     arrivals: Query<&HyperspaceArrival>,
+    cameras: Query<(&Camera, &GlobalTransform, &Projection), With<Camera3d>>,
+    action: Option<Res<crate::camera::ActionCam>>,
     mut sfx: MessageWriter<alamo_audio::PlaySfx>,
     mut flash_spots: Local<Vec<Vec3>>,
     // One quad and one glow texture for every arrival and departure flash.
@@ -387,6 +393,14 @@ pub fn update_ships(
         return;
     };
     let sim_dt = rt.dt.max(0.01);
+    // The tactical camera shows each squadron as one craft of the original's screen size; the battle cam (the cinematic view) shows every
+    // craft at its real size, as the Remake's cinematic camera does (video b0685s-b0695s).
+    let tactical = !action.is_some_and(|a| a.active);
+    // Camera data for the screen size of small craft: (eye, pixels per world unit at distance 1, screen height in pixels).
+    let eye = cameras.iter().find(|(c, _, _)| c.is_active).and_then(|(c, gt, p)| match (p, c.physical_target_size()) {
+        (Projection::Perspective(p), Some(size)) => Some((gt.translation(), size.y as f32 / (2.0 * (p.fov * 0.5).tan()), size.y as f32)),
+        _ => None,
+    });
     let next = rt.next.clone();
     let visuals = rt.visuals.clone();
     let catalog = rt.catalog.clone();
@@ -486,6 +500,9 @@ pub fn update_ships(
             0.0
         };
         let visible = s.side == settings.player_side || (s.seen_by >> settings.player_side.min(7)) & 1 == 1;
+        let small = matches!(def.class, TargetClass::Fighter | TargetClass::Bomber) || s.squad != u32::MAX;
+        // In the tactical view a squadron is its leader alone (Remake video b0703s, v0700s: one silhouette per squadron).
+        let stand_in = stands_in(tactical, s.squad, s.lead);
         let hp_alive: Vec<bool> = s.hps.iter().map(|h| h.alive).collect();
         let hp_health: Vec<f32> = s
             .hps
@@ -507,9 +524,10 @@ pub fn update_ships(
             if view.visual_radius > 0.0 {
                 radius = view.visual_radius * 0.8;
             }
-            if view.shown != visible {
-                view.shown = visible;
-                commands.entity(entity).insert(if visible { Visibility::Inherited } else { Visibility::Hidden });
+            let shown = visible && stand_in;
+            if view.shown != shown {
+                view.shown = shown;
+                commands.entity(entity).insert(if shown { Visibility::Inherited } else { Visibility::Hidden });
             }
 
             // Bank into turns and pitch with climbs from the step's motion; small craft also weave around their place (`flight`).
@@ -530,9 +548,18 @@ pub fn update_ships(
             }
             tf.translation = drawn;
             tf.rotation = attitude_rotation(heading, pitch, bank);
-            // Every craft is drawn at its model scale (`Scale_Factor`), fighters like capital ships: nothing enlarges them.
-            tf.scale = Vec3::splat(vis.scale);
-            drawn_radius = view.visual_radius;
+            // A small craft that stands for its squadron (or for itself) keeps the original's screen size in the tactical view; everything
+            // else is drawn at its model scale (`Scale_Factor`).
+            let mut boost = 1.0;
+            if tactical
+                && small
+                && let Some((eye, px_per_unit, height)) = eye
+                && view.visual_radius > 0.0
+            {
+                boost = small_craft_boost(view.visual_radius, drawn.distance(eye), px_per_unit, height);
+            }
+            tf.scale = Vec3::splat(vis.scale * boost);
+            drawn_radius = if stand_in { view.visual_radius * boost } else { 0.0 };
             if let Ok(a) = arrivals.get(entity) {
                 if apply_arrival(a, cur.time, radius, &mut tf) {
                     // Still streaming in from hyperspace: nothing marks its place (no bar) until it is there.
@@ -576,6 +603,7 @@ pub fn update_ships(
                 squad: s.squad,
                 group: s.group,
                 visible,
+                drawn: stand_in,
                 order: s.order,
                 path: if s.squad == u32::MAX { s.path.iter().map(|p| sim_to_bevy(*p)).collect() } else { Vec::new() },
                 hp_alive,
@@ -1175,6 +1203,31 @@ fn bone_names(clip: &alamo_model::Animation, keep: impl Fn(&[bool]) -> bool) -> 
     names
 }
 
+/// Whether a craft is drawn (see [`ShipRender::drawn`]): every ship outside a squadron and every squadron member in the battle cam, only the
+/// leader of a squadron (`squad` its index, `u32::MAX` for none) in the tactical view.
+pub fn stands_in(tactical: bool, squad: u32, lead: bool) -> bool {
+    !(tactical && squad != u32::MAX && !lead)
+}
+
+/// Share of the screen height that the bounding sphere of a small craft standing for its squadron keeps at every zoom of the tactical camera.
+/// The Remake draws a squadron as one fighter of one screen size whatever the zoom (the owner's 1080p video, battle1s: TIE silhouettes
+/// 22-25 px across at the default camera b0703s / b0732s and still 24-25 px far out in b0760s, where a Star Destroyer is 54 px), far above
+/// true scale (a TIE is 2.9 units in radius next to a Star Destroyer's 453). Set so that our TIE fighter measures the same, wings included,
+/// in a 1080p render at the same camera: its bounding sphere is then 35 px across, its silhouette about 23 x 25 px.
+pub const SMALL_CRAFT_SCREEN_FRACTION: f32 = 0.032;
+/// Camera distance (at our fov of 60 degrees) beyond which small craft stop keeping their screen size: the Remake's widest view,
+/// `Tactical_Overview2` 6000 at fov 70 in TacticalCameras.xml, sees as much as 7277 at fov 60. Farther out the enlargement stays at its
+/// value there and the craft shrinks with the world.
+pub const SMALL_CRAFT_FREEZE_DISTANCE: f32 = 7277.0;
+
+/// Scale factor that draws a small craft of bounding radius `radius` that is `dist` from the eye at the original's screen size
+/// ([`SMALL_CRAFT_SCREEN_FRACTION`] of `screen_height`; `px_per_unit` is pixels per world unit at distance 1): never below its true size
+/// (1 close in), proportional to the distance up to [`SMALL_CRAFT_FREEZE_DISTANCE`] and constant beyond, so it changes without jumps.
+pub fn small_craft_boost(radius: f32, dist: f32, px_per_unit: f32, screen_height: f32) -> f32 {
+    let px = 2.0 * radius * px_per_unit / dist.clamp(1.0, SMALL_CRAFT_FREEZE_DISTANCE);
+    (SMALL_CRAFT_SCREEN_FRACTION * screen_height / px.max(1e-3)).max(1.0)
+}
+
 /// Seconds a burning wreck stays on the battlefield.
 const WRECK_SECONDS: f32 = 45.0;
 
@@ -1564,7 +1617,31 @@ mod tests {
     }
 
     #[test]
-    fn fighters_are_drawn_at_their_model_scale_like_capital_ships_whatever_the_camera() {
+    fn the_tactical_view_draws_a_squadron_as_its_leader_and_the_battle_cam_every_craft() {
+        let squad = 3;
+        assert!(stands_in(true, squad, true), "the leader stands for its squadron");
+        assert!(!stands_in(true, squad, false), "the other members are not drawn in the tactical view");
+        assert!(stands_in(false, squad, false), "the battle cam shows every craft");
+        assert!(stands_in(true, u32::MAX, false), "ships outside a squadron are always drawn");
+    }
+
+    #[test]
+    fn a_squadron_keeps_the_remakes_screen_size_up_to_the_widest_view() {
+        // A TIE fighter (2.93 units in radius) at 1080p with our fov of 60 degrees: 935 px per unit at distance 1.
+        let (r, ppu, h) = (2.93, 1080.0 / (2.0 * 30f32.to_radians().tan()), 1080.0);
+        let px = |dist: f32| 2.0 * r * small_craft_boost(r, dist, ppu, h) * ppu / dist;
+        // 0.032 of the height (34.6 px) at the default camera and far out, as the Remake's 22-25 px silhouettes (b0703s, b0760s).
+        for dist in [2000.0, 4000.0, 7277.0] {
+            assert!((px(dist) - 34.56).abs() < 0.05, "{dist}: {} px", px(dist));
+        }
+        assert!((small_craft_boost(r, 2000.0, ppu, h) - 12.6).abs() < 0.1, "12.6 times its model size at camera 2000");
+        // Beyond the widest view it shrinks with the world; close in it is never smaller than the model.
+        assert!(px(14_554.0) < 17.5 && px(14_554.0) > 17.1);
+        assert_eq!(small_craft_boost(r, 50.0, ppu, h), 1.0);
+    }
+
+    #[test]
+    fn without_a_camera_picture_every_craft_keeps_its_model_scale() {
         // The data's `Scale_Factor` is 0.85 for the fighter (a Y-wing's) and 1 for the capital ship; their models are 4 and 800 units in radius.
         let visual = |model: &str, scale: f32| crate::visuals::ShipVisual { model: Some(model.into()), scale, ..Default::default() };
         let visuals = crate::visuals::VisualCatalog { ships: vec![visual("fighter.alo", 0.85), visual("capital.alo", 1.0)], ..Default::default() };
@@ -1600,7 +1677,7 @@ mod tests {
         }
         app.update();
         let scale = |app: &App, id: u32| app.world().get::<Transform>(entity_of(app, id)).expect("transform").scale;
-        assert_eq!(scale(&app, fighter), Vec3::splat(0.85), "the fighter is drawn at its data scale, no enlargement");
+        assert_eq!(scale(&app, fighter), Vec3::splat(0.85), "the fighter is drawn at its data scale: no picture, no screen size to keep");
         assert_eq!(scale(&app, capital), Vec3::ONE);
         // The drawn spheres are the models' own, times the data scales: their ratio is the model ratio.
         let rendered = app.world().resource::<RenderedShips>();

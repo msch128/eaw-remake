@@ -47,6 +47,9 @@ pub struct ShipSnap {
     pub shield: f32,
     /// Squadron index for fighters, `u32::MAX` otherwise.
     pub squad: u32,
+    /// Leads its squadron (the member the sim's formation turns about, `Battle::squad_leader`); false outside a squadron. The tactical view
+    /// draws a squadron as its leader alone.
+    pub lead: bool,
     /// Setup group index.
     pub group: u32,
     /// Bit s set = side s sees this ship (fog of war; everything is seen without it).
@@ -156,6 +159,7 @@ fn snapshot(battle: &Battle, events: Vec<Event>, step_ms: f32) -> Snapshot {
                 hull: s.hull,
                 shield: s.shield,
                 squad: s.squad,
+                lead: s.squad != battle_sim::NONE && battle.squad_leader(s.squad) == Some(s.id),
                 group: s.group,
                 order: s.order,
                 path: s.path.clone(),

@@ -294,7 +294,8 @@ fn project_ships(
     let right = gt.right();
     let mut out = Vec::with_capacity(ships.0.len() + 16);
     let mut squads: std::collections::HashMap<(u8, u32), (Vec2, usize, u32)> = std::collections::HashMap::new();
-    for (&id, s) in ships.0.iter().filter(|(_, s)| s.visible) {
+    // A squadron member the tactical view does not draw is not under the cursor either: its squadron is picked by its leader's silhouette.
+    for (&id, s) in ships.0.iter().filter(|(_, s)| s.visible && s.drawn) {
         let Ok(c) = camera.world_to_viewport(gt, s.pos) else {
             continue;
         };
@@ -309,7 +310,8 @@ fn project_ships(
                     _ => (c, c, s.radius),
                 }
             }
-            None => (c, c, s.radius),
+            // A small craft is drawn larger than its collision radius at the original's screen size: its drawn sphere counts.
+            None => (c, c, s.radius.max(s.drawn_radius)),
         };
         let edge = camera
             .world_to_viewport(gt, s.pos + right * reach)
