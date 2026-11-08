@@ -336,22 +336,22 @@ fn main() {
     app.run();
 }
 
-/// The EaW interface draws over the battle camera.
+/// The EaW interface draws over the battle camera. Interface roots spawned before the camera existed (the overlay layer of bars, icons and
+/// reticles is spawned at startup) target it too, else they would draw into no picture.
 fn ui_camera(
     mut commands: Commands,
-    cams: Query<Entity, Added<BattleCamera>>,
+    cams: Query<Entity, With<BattleCamera>>,
     settings: Option<ResMut<eaw_ui::EawUiSettings>>,
-    untargeted: Query<Entity, (With<eaw_ui::EawPanel>, Without<bevy::ui::UiTargetCamera>)>,
+    roots: Query<Entity, (With<Node>, Without<ChildOf>, Without<bevy::ui::UiTargetCamera>)>,
 ) {
-    let Some(mut s) = settings else { return };
-    if let Some(e) = cams.iter().next() {
-        s.camera = Some(e);
+    let Some(cam) = cams.iter().next() else { return };
+    if let Some(mut s) = settings
+        && s.camera != Some(cam)
+    {
+        s.camera = Some(cam);
     }
-    // The command bar can be spawned before the battle camera exists; offscreen there is no window camera to fall back on.
-    if let Some(c) = s.camera {
-        for e in &untargeted {
-            commands.entity(e).insert(bevy::ui::UiTargetCamera(c));
-        }
+    for e in &roots {
+        commands.entity(e).insert(bevy::ui::UiTargetCamera(cam));
     }
 }
 
@@ -929,6 +929,14 @@ fn capture_driver(
             bc.target_distance = d;
         }
         let _ = &hover;
+    }
+    // `SP_DEMO_SELECT=<ship name>`: the player's ships whose definition name contains the text are selected and nothing is hovered (the look of a
+    // selected unit: bars, brackets, reticles).
+    if let Ok(name) = std::env::var("SP_DEMO_SELECT") {
+        let (name, player) = (name.to_ascii_lowercase(), settings.player_side);
+        selection.ships = ships.0.iter().filter(|(_, s)| s.side == player && rt.catalog.ship(s.def).name.to_ascii_lowercase().contains(&name)).map(|(id, _)| *id).collect();
+        selection.ships.sort_unstable();
+        pointer.cursor = None;
     }
 
     // Frame time statistics start once the first step has been reached.

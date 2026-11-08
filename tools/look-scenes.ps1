@@ -10,7 +10,7 @@
 param(
     [string]$Exe = (Join-Path $PSScriptRoot '..\target\release\examples\battle_demo.exe'),
     [string]$Out = (Join-Path $env:TEMP 'eaw-remake-look'),
-    [string[]]$Scene = @('Missiles', 'Death', 'OrbitExecutor', 'OrbitStarDestroyer', 'Reticles'),
+    [string[]]$Scene = @('Missiles', 'Death', 'OrbitExecutor', 'OrbitStarDestroyer', 'Reticles', 'Squadrons', 'SquadronsSelected', 'Hunt', 'SelectedExecutor'),
     [string]$Size = '1280x720',
     [int]$TimeoutSeconds = 600
 )
@@ -74,6 +74,32 @@ function Invoke-LookReticles([string]$Exe, [string]$Out) {
         @('--ui', '--overlay', '--shadows', '--cam', '0,45,2500', '--times', (Get-LookTimes 20 20.5 0.016)) $TimeoutSeconds
 }
 
+# The EaW interface over the TIE and X-wing squadrons of the default demo next to a Star Destroyer, nothing selected or hovered: at play zoom
+# (camera 4000, 20 to 22 s, every 0.5 s), far out (8000, 23 s) and close (1500, 24 s).
+function Invoke-LookSquadrons([string]$Exe, [string]$Out) {
+    Invoke-LookScene $Exe $Out 'squadrons' @{ SP_DEMO_FOCUS = 'star_destroyer' } `
+        @('--ui', '--shadows', '--cam', '0,45,4000', '--cam', '0,45,4000', '--cam', '0,45,4000', '--cam', '0,45,4000', '--cam', '0,45,4000', '--cam', '0,45,8000', '--cam', '0,45,1500', '--times', '20,20.5,21,21.5,22,23,24') $TimeoutSeconds
+}
+
+# The same with every own TIE squadron selected (20 to 22 s, every 0.5 s, camera 4000).
+function Invoke-LookSquadronsSelected([string]$Exe, [string]$Out) {
+    Invoke-LookScene $Exe $Out 'squadrons_selected' @{ SP_DEMO_FOCUS = 'star_destroyer'; SP_DEMO_SELECT = 'tie_fighter' } `
+        @('--ui', '--shadows', '--cam', '0,45,4000', '--times', (Get-LookTimes 20 22 0.5)) $TimeoutSeconds
+}
+
+# The player's TIE squadrons switch HUNT on at 3 s with the Rebels still in the fog; the camera follows the first TIE fighter (3 to 63 s, every 4 s,
+# camera 6000): the squadrons search, then fly to the enemies once they are revealed.
+function Invoke-LookHunt([string]$Exe, [string]$Out) {
+    Invoke-LookScene $Exe $Out 'hunt' @{ SP_DEMO_ABILITY = 'HUNT@3'; SP_DEMO_FOCUS = 'tie_fighter' } `
+        @('--ui', '--cam', '0,50,6000', '--times', (Get-LookTimes 3 63 4)) $TimeoutSeconds
+}
+
+# An own Executor, selected alone and not hovered (8 to 9 s, every 0.25 s, camera 6000).
+function Invoke-LookSelectedExecutor([string]$Exe, [string]$Out) {
+    Invoke-LookScene $Exe $Out 'selected_executor' @{ SP_DEMO_EXTRA = 'Executor_Star_Dreadnought:1'; SP_DEMO_SELECT = 'executor'; SP_DEMO_FOCUS = 'executor' } `
+        @('--ui', '--shadows', '--cam', '30,40,6000', '--times', (Get-LookTimes 8 9 0.25)) $TimeoutSeconds
+}
+
 if ($MyInvocation.InvocationName -ne '.') {
     $Exe = (Resolve-Path $Exe).Path
     foreach ($s in $Scene) {
@@ -83,7 +109,11 @@ if ($MyInvocation.InvocationName -ne '.') {
             'OrbitExecutor' { Invoke-LookOrbitExecutor $Exe $Out }
             'OrbitStarDestroyer' { Invoke-LookOrbitStarDestroyer $Exe $Out }
             'Reticles' { Invoke-LookReticles $Exe $Out }
-            default { Write-Host "unknown scene $s (Missiles, Death, OrbitExecutor, OrbitStarDestroyer, Reticles)" -ForegroundColor Red }
+            'Squadrons' { Invoke-LookSquadrons $Exe $Out }
+            'SquadronsSelected' { Invoke-LookSquadronsSelected $Exe $Out }
+            'Hunt' { Invoke-LookHunt $Exe $Out }
+            'SelectedExecutor' { Invoke-LookSelectedExecutor $Exe $Out }
+            default { Write-Host "unknown scene $s (Missiles, Death, OrbitExecutor, OrbitStarDestroyer, Reticles, Squadrons, SquadronsSelected, Hunt, SelectedExecutor)" -ForegroundColor Red }
         }
     }
 }

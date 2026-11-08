@@ -87,9 +87,10 @@ about 30 s.
 * `.\tools\test-setup.ps1` installs the setup silently into a scratch folder, runs the installed game, uninstalls and
   checks what is left. It writes and removes the real Start menu entry and uninstall key of the current user.
 * `.\tools\audio-audit.ps1` checks which sound events a galaxy and a battle run play.
-* `.\tools\look-scenes.ps1 -Exe <battle_demo.exe> -Out <folder> [-Scene Missiles,Death,OrbitExecutor,OrbitStarDestroyer,Reticles]`
+* `.\tools\look-scenes.ps1 -Exe <battle_demo.exe> -Out <folder> [-Scene Missiles,Death,OrbitExecutor,OrbitStarDestroyer,Reticles,Squadrons,SquadronsSelected,Hunt,SelectedExecutor]`
   renders offscreen frame sequences of the battle view (a missile salvo, a capital ship's death, the camera turning round an
-  Executor and a Star Destroyer, the hardpoint reticles while the camera turns). Run it with the build before and after a look
+  Executor and a Star Destroyer, the hardpoint reticles while the camera turns, squadrons at three zooms, selected squadrons, squadrons
+  hunting, a selected Executor). Run it with the build before and after a look
   change and compare the frames: it is the reference set for look changes.
 
 Hidden or windowed runs and the input tests (`SP_UI_TEST`, `SP_INPUT_TEST`, `SP_ORGANIZER_TEST`) move the real mouse,
