@@ -8,6 +8,7 @@
 //!             [--station Rebel_Star_Base_2]   give the Rebels a star base
 //!             [--overlay]   select the player's capital ships and hover an enemy (offscreen)
 //!             [--msaa N] [--no-bloom] [--small]
+//!             [--ui]   the game's EaW interface (command bar, unit bars, hardpoint reticles)
 //! ```
 //! Without `--offscreen` the demo opens a window. With it, no window is created: frames are
 //! rendered into a texture at fixed 16 ms steps and saved as `out_t<ms>.png` for every capture time.
@@ -37,6 +38,10 @@ static ABILITY_USED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBo
 static RETREAT_ORDERED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 static STRAFE_ORDERED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 static BOOM_AT: std::sync::Mutex<Option<Vec3>> = std::sync::Mutex::new(None);
+/// Where the first ship of `SP_DEMO_DEATH` size died, and the demo frame it died in.
+static DEATH_AT: std::sync::Mutex<Option<(Vec3, u32)>> = std::sync::Mutex::new(None);
+/// Definition of every ship seen so far, by simulation id (for `SP_DEMO_DEATH`).
+static SEEN_DEFS: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<u32, battle_sim::ShipId>>> = std::sync::LazyLock::new(Default::default);
 
 fn parse_vec(s: &str) -> Vec<f32> {
     s.split(',').filter_map(|v| v.trim().parse().ok()).collect()
@@ -83,6 +88,7 @@ fn main() {
     let (mut shadows, mut quality) = (false, None::<battle_view::QualityPreset>);
     let mut auto = false;
     let mut station: Option<String> = None;
+    let mut ui = false;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
@@ -108,6 +114,7 @@ fn main() {
             "--small" => small = true,
             "--auto" => auto = true,
             "--station" => station = it.next().cloned(),
+            "--ui" => ui = true,
             other => eprintln!("ignoring argument {other}"),
         }
     }
@@ -117,7 +124,7 @@ fn main() {
 
     let install = GameInstall::detect().expect("Empire at War install");
     let fs = Arc::new(GameFs::for_mod(&install, Some("1770851727")).expect("game files"));
-    let (data, _) = load_galaxy(&*fs);
+    let data = Arc::new(load_galaxy(&*fs).0);
     let map_path = format!("Art/Maps/{map}.TED");
     let mut scene = SpaceScene::load(&*fs, &data, &map_path).expect("space map");
     if std::env::var("NOPROPS").is_ok() {
@@ -282,7 +289,7 @@ fn main() {
                 cam_applied: false,
                 auto,
             })
-            .add_systems(Last, (capture_driver, flight_probe.after(capture_driver), hide_small_craft));
+            .add_systems(Last, (capture_driver, flight_probe.after(capture_driver), marker_probe.after(capture_driver), hide_small_craft));
         }
         None => {
             app.add_plugins(DefaultPlugins.set(WindowPlugin {
@@ -305,7 +312,24 @@ fn main() {
         .add_plugins(AlamoRenderPlugin::new(fs.clone()))
         .add_plugins(BattleViewPlugin)
         .insert_resource(BattleSession::new(setup, visuals, scene));
+    if ui {
+        // The EaW interface of the game: command bar, unit brackets and bars, hardpoint reticles.
+        let height = size.get(1).copied().unwrap_or(1080.0);
+        app.add_plugins(eaw_ui::EawUiPlugin::new(fs.clone()).with_game_data(data.clone()).with_settings(eaw_ui::EawUiSettings {
+            scale: eaw_ui::UiScaleMode::Fixed(height / 768.0),
+            ..default()
+        }))
+        .add_plugins(battle_view::tactical_ui::TacticalUiPlugin)
+        .add_systems(Update, ui_camera);
+    }
     app.run();
+}
+
+/// The EaW interface draws over the battle camera.
+fn ui_camera(cams: Query<Entity, Added<BattleCamera>>, settings: Option<ResMut<eaw_ui::EawUiSettings>>) {
+    if let (Some(mut s), Some(e)) = (settings, cams.iter().next()) {
+        s.camera = Some(e);
+    }
 }
 
 /// `SP_DEMO_HIDE_SMALL=1`: hides every squadron member, for a picture of everything else: told apart from the normal picture of the same
@@ -465,6 +489,40 @@ fn flight_probe(
         "lean t={:.2}s: turning small craft {} banked into the turn, {} out of it, steepest {:.0} deg; turning bigger ships {} into, {} out, steepest {:.1} deg; bigger ships on one heading for 10 s: {calm}, {calm_leaning} of them leaning (most {calm_most:.3} deg)",
         status.time, small.0, small.1, small.2, big.0, big.1, big.2
     );
+}
+
+/// `SP_DEMO_MARKER_LOG=1`: every frame, how far the hardpoint reticles on screen are from where their hardpoints are drawn in the same
+/// frame (pixels: mean and largest over the shown reticles). It runs after the transforms of the frame are final, as the picture is
+/// rendered: a reticle placed from the camera or the hull of an earlier frame trails its hardpoint while the camera turns.
+fn marker_probe(
+    rt: Option<Res<battle_view::BattleRuntime>>,
+    ships: Res<RenderedShips>,
+    status: Res<BattleStatus>,
+    scale: Res<UiScale>,
+    nodes: Query<(&Name, &Node), With<eaw_ui::HardpointNode>>,
+    camera: Option<Single<(&Camera, &GlobalTransform), With<BattleCamera>>>,
+) {
+    if std::env::var_os("SP_DEMO_MARKER_LOG").is_none() {
+        return;
+    }
+    let (Some(rt), Some(camera)) = (rt, camera) else { return };
+    let (cam, gt) = *camera;
+    let mut err: Vec<f32> = Vec::new();
+    for (name, node) in &nodes {
+        let Some((ship, hp)) = name.as_str().strip_prefix("hardpoint ").and_then(|id| id.split_once(':')) else { continue };
+        let (Ok(ship), Ok(hp)) = (ship.parse::<u32>(), hp.parse::<usize>()) else { continue };
+        let (Val::Px(left), Val::Px(top)) = (node.left, node.top) else { continue };
+        let Some(s) = ships.0.get(&ship) else { continue };
+        let Ok(now) = cam.world_to_viewport(gt, battle_view::control::hardpoint_world(&rt, s, hp)) else { continue };
+        // eaw-ui places the 30 px reticle by its top left corner, in UI-scaled pixels.
+        let drawn = Vec2::new(left, top) * scale.0 + Vec2::splat(15.0);
+        err.push(drawn.distance(now));
+    }
+    if !err.is_empty() {
+        let mean = err.iter().sum::<f32>() / err.len() as f32;
+        let max = err.iter().copied().fold(0.0f32, f32::max);
+        println!("marker t={:.3} reticles {} off by mean {mean:.1} px, max {max:.1} px", status.time, err.len());
+    }
 }
 
 /// Positions of the map's rocks and other props (for `SP_DEMO_MOVE`).
@@ -667,6 +725,33 @@ fn capture_driver(
         bc.target_focus = p;
         bc.target_distance = 2500.0;
     }
+    // `SP_DEMO_DEATH=<radius>`: from the death of the first ship at least that big (sim radius) on, the camera stays on the place it died
+    // (its break-up or burning hull, the explosions and the debris); `--cam` sets the view. `--times` then count from the death, in frames of
+    // the demo clock (a death often ends the battle, and the battle clock stops there while the explosion plays on).
+    let mut death = DEATH_AT.lock().unwrap();
+    if death.is_none()
+        && let Some(min) = std::env::var("SP_DEMO_DEATH").ok().and_then(|v| v.parse::<f32>().ok())
+    {
+        // A dead ship has left this frame's snapshot: its type is looked up in the ships of the frames before.
+        let mut seen = SEEN_DEFS.lock().unwrap();
+        for ev in &rt.fresh_events {
+            if let battle_sim::Event::ShipDestroyed { ship, pos } = ev
+                && let Some(def) = ships.0.get(ship).map(|s| s.def).or_else(|| seen.get(ship).copied()).map(|d| rt.catalog.ship(d))
+                && def.radius >= min
+            {
+                println!("demo death: {} (radius {:.0}) at t={:.1}", def.name, def.radius, status.time);
+                *death = Some((battle_view::convert::sim_to_bevy(*pos), cap.frames));
+                break;
+            }
+        }
+        seen.extend(ships.0.iter().map(|(id, s)| (*id, s.def)));
+    }
+    if let Some((p, _)) = *death {
+        bc.snap = true;
+        bc.target_focus = p;
+        bc.bounds_min = Vec2::splat(-30_000.0);
+        bc.bounds_max = Vec2::splat(30_000.0);
+    }
     // `SP_DEMO_ARRIVAL=1` (with `SP_DEMO_REINFORCE=<secs>`): the camera frames the player's newest capital ship, the reinforcement that drops
     // out of hyperspace; `--times` with a short step then makes a frame burst of the arrival.
     if std::env::var_os("SP_DEMO_ARRIVAL").is_some()
@@ -715,9 +800,13 @@ fn capture_driver(
     }
     if let Some(want) = std::env::var("SP_DEMO_PROJ").ok()
         && let Some(cur) = rt.cur.as_ref()
-        && let Some(p) = cur.projectiles.iter().find(|p| rt.catalog.projectiles.get(p.def as usize).is_some_and(|d| d.category.eq_ignore_ascii_case(&want)))
+        && let of_kind = cur.projectiles.iter().filter(|p| rt.catalog.projectiles.get(p.def as usize).is_some_and(|d| d.category.eq_ignore_ascii_case(&want))).collect::<Vec<_>>()
+        && let Some(p) = of_kind.first().copied()
     {
-        // Close view of the first projectile of the category (`missile`, `laser`, `rocket`).
+        // Close view of the first projectile of the category (`missile`, `laser`, `rocket`); `SP_DEMO_PROJ_LOG=1` prints how many are in flight.
+        if std::env::var_os("SP_DEMO_PROJ_LOG").is_some() && status.tick.is_multiple_of(30) {
+            println!("demo proj {want}: {} in flight at t={:.1} first {:?}", of_kind.len(), cur.time, p.pos);
+        }
         bc.snap = true;
         bc.target_focus = battle_view::convert::sim_to_bevy(p.pos);
         bc.target_distance = 300.0;
@@ -745,6 +834,23 @@ fn capture_driver(
             bc.target_focus = (a.pos + b.pos) * 0.5;
             bc.target_distance = 700.0;
         }
+    }
+    // `SP_DEMO_FOCUS=<ship name>` frames the first ship whose definition name contains the text. `SP_DEMO_ORBIT=<degrees per second>` then turns
+    // the camera round the focus at that steady rate from the first `--cam` yaw, through the smoothing of a played battle (no snapping), so a part
+    // that trails the camera shows in the pictures.
+    if let Ok(name) = std::env::var("SP_DEMO_FOCUS") {
+        let name = name.to_ascii_lowercase();
+        if let Some(s) = ships.0.values().filter(|s| rt.catalog.ship(s.def).name.to_ascii_lowercase().contains(&name)).min_by_key(|s| s.id) {
+            bc.bounds_min = Vec2::splat(-30_000.0);
+            bc.bounds_max = Vec2::splat(30_000.0);
+            bc.snap = true;
+            bc.target_focus = s.pos;
+        }
+    }
+    if let Some(rate) = std::env::var("SP_DEMO_ORBIT").ok().and_then(|v| v.parse::<f32>().ok()) {
+        let t = rt.cur.as_ref().map_or(0.0, |c| c.time);
+        bc.snap = false;
+        bc.target_yaw = (cap.cams.first().map_or(0.0, |c| c[0]) + rate * t).to_radians();
     }
     if let Some(pitch) = std::env::var("SP_DEMO_PITCH").ok().and_then(|v| v.parse::<f32>().ok()) {
         bc.pitch = pitch.to_radians();
@@ -805,7 +911,12 @@ fn capture_driver(
             );
         }
     }
-    if cap.next < cap.times.len() && status.time >= cap.times[cap.next] && cap.warm > 30 {
+    let clock = match std::env::var_os("SP_DEMO_DEATH").map(|_| *death) {
+        Some(Some((_, at))) => cap.frames.saturating_sub(at) as f32 * STEP_MS as f32 / 1000.0,
+        Some(None) => -1.0,
+        None => status.time,
+    };
+    if cap.next < cap.times.len() && clock >= cap.times[cap.next] && cap.warm > 30 {
         let t = cap.times[cap.next];
         let path = if cap.times.len() > 1 {
             format!("{}_t{:04}.png", cap.out.trim_end_matches(".png"), (t * 1000.0) as u32)
