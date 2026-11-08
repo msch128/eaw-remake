@@ -164,8 +164,8 @@ Deterministic, `Send`, no Bevy.
 - Utility: value x aggression, minus risk x caution, minus a distance term; bonuses for the frontier, for neutral-planet expansion (fading with
   share of the map, with a brake on the leading faction), flanking a target held below half of the owner's main stack, and pockets that isolate
   owner planets; own planets use a defend term. A consolidation phase after recent losses damps offence. All weights are estimates.
-- Honest information: a faction sees its own planets and fleets plus a few lanes around them (tiered: Easy 1, Normal 2, Hard 3 lanes; Brutal sees
-  everything) and remembers the last seen strength.
+- Information: the data's `AIUsesFogOfWarGalactic` False lets the AI of every difficulty see everything; with fog-bound data it sees its own
+  planets and fleets plus two lanes around them and remembers the last seen strength.
 - Force sizing: attack forces are sized to the believed defence times a margin and contrast factor; free-store ships are reused first; when a
   target needs 50 to 90 percent of everything the player owns, two plans attack together and rally so they arrive at the same time.
 - Difficulty: Easy, Normal and Hard come from `Xml/DifficultyAdjustments.xml` (credit, build time, battle multipliers, contrast, goal sleep).

@@ -119,7 +119,7 @@ pub enum DifficultyTier {
     Hard,
     /// Estimate: `Hard_*` with credits x4 (instead of x3) and full map knowledge.
     Brutal,
-    /// Estimate: no economic or combat cheats at all (credits 1.0, build time 1.0, battle multipliers 1.0), `Normal` contrast, honest information.
+    /// Estimate: no economic or combat cheats at all (credits 1.0, build time 1.0, battle multipliers 1.0), `Normal` contrast.
     Fair,
 }
 
@@ -337,13 +337,13 @@ impl ScriptedSim {
             load_warnings: Vec::new(),
         };
         if config.remake_ai {
-            sim.start_ai(&fs_for_ai, campaign, &config);
+            sim.start_ai(&fs_for_ai, campaign, &config, ai_uses_galactic_fog(&data));
         }
         sim
     }
 
     /// Switches from galaxy-sim's built-in AI to the Remake AI for all AI factions of the campaign.
-    fn start_ai(&mut self, fs: &Arc<dyn FileSource>, campaign: &Campaign, config: &ScriptedConfig) {
+    fn start_ai(&mut self, fs: &Arc<dyn FileSource>, campaign: &Campaign, config: &ScriptedConfig, ai_uses_fog: bool) {
         let data = galaxy_ai::AiData::load(&**fs);
         let plans = galaxy_ai::discover_plans(&**fs);
         let mut engine = galaxy_ai::AiEngine::new(Arc::new(data), plans);
@@ -403,7 +403,7 @@ impl ScriptedSim {
             engine.strategy.config.personalities.insert(id, pers);
             engine.strategy.config.openings.insert(id, opening);
             if let Some(tier) = config.difficulty {
-                let (diff, ai_tier) = tier_settings(&table, tier, minor.contains(&id));
+                let (diff, ai_tier) = tier_settings(&table, tier, minor.contains(&id), ai_uses_fog);
                 i.sim.set_faction_difficulty(id, diff);
                 engine.strategy.tiers.insert(id, ai_tier);
             }
@@ -632,24 +632,32 @@ pub const BRUTAL_CREDIT_MULTIPLIER: f32 = 4.0;
 /// estimate: design decision 2026-10-14, no XML value.
 pub const BRUTAL_BUILD_TIME_MULTIPLIER: f32 = 0.8;
 
-/// Maps a tier to the sim multipliers and the AI tier (see [`DifficultyTier`]).
-fn tier_settings(table: &alamo_data::DifficultyTable, tier: DifficultyTier, minor: bool) -> (galaxy_sim::Difficulty, AiTier) {
+/// Maps a tier to the sim multipliers and the AI tier (see [`DifficultyTier`]); `ai_uses_fog` is the data's `AIUsesFogOfWarGalactic`.
+fn tier_settings(table: &alamo_data::DifficultyTable, tier: DifficultyTier, minor: bool, ai_uses_fog: bool) -> (galaxy_sim::Difficulty, AiTier) {
     let (mut diff, mut ai) = tier_settings_raw(table, tier, minor);
-    let hops = ai_sight_hops(tier, minor);
+    let hops = ai_sight_hops(tier, ai_uses_fog);
     diff.ai_sight_hops = hops;
     ai.vision_hops = hops;
+    ai.full_map_knowledge = hops.is_none();
     (diff, ai)
 }
 
-/// How far the AI sees (project rule, docs/RULES.md "AI knowledge per difficulty"): Easy 1 lane around its planets and fleets, Normal 2, Hard 3, Brutal everything. Minor factions use
-/// Normal (estimate), Fair plays Normal. `None` = sees everything.
-pub fn ai_sight_hops(tier: DifficultyTier, minor: bool) -> Option<u8> {
+/// Estimate: lanes around its planets and fleets a fog-bound AI knows exactly (docs/RULES.md "AI knowledge").
+pub const AI_FOG_SIGHT_HOPS: u8 = 2;
+
+/// Data: `AIUsesFogOfWarGalactic` (`Xml/Gameconstants.xml`); fog-bound where the data gives no value.
+pub fn ai_uses_galactic_fog(data: &GameData) -> bool {
+    data.game_constants.get("aiusesfogofwargalactic").is_none_or(|v| alamo_data::xml::parse_bool(v))
+}
+
+/// How far the AI sees (docs/RULES.md "AI knowledge"). Data: with `AIUsesFogOfWarGalactic` False (Remake 4.0, Clone Wars) the AI of every
+/// difficulty knows everything. Data that turns the AI fog on limits every tier but Brutal (full map knowledge, a project tier) to
+/// [`AI_FOG_SIGHT_HOPS`] lanes. `None` = sees everything.
+pub fn ai_sight_hops(tier: DifficultyTier, ai_uses_fog: bool) -> Option<u8> {
     match tier {
         DifficultyTier::Brutal => None,
-        _ if minor => Some(2),
-        DifficultyTier::Easy => Some(1),
-        DifficultyTier::Normal | DifficultyTier::Fair => Some(2),
-        DifficultyTier::Hard => Some(3),
+        _ if ai_uses_fog => Some(AI_FOG_SIGHT_HOPS),
+        _ => None,
     }
 }
 
@@ -707,7 +715,7 @@ mod minor_tests {
         for (tier, name) in [(DifficultyTier::Easy, "Easy"), (DifficultyTier::Normal, "Normal"), (DifficultyTier::Hard, "Hard")] {
             for (minor, suffix) in [(false, "Default"), (true, "Minor")] {
                 let want = table.get(&format!("{name}_{suffix}")).expect("entry in the data");
-                let (d, _) = tier_settings(&table, tier, minor);
+                let (d, _) = tier_settings(&table, tier, minor, false);
                 assert_eq!((d.credit, d.build_time, d.damage, d.health, d.shield), (want.credit_multiplier, want.galactic_build_time, want.damage, want.health, want.shield), "{name}_{suffix}");
             }
         }
@@ -715,8 +723,8 @@ mod minor_tests {
         assert!(hard.credit_multiplier > easy.credit_multiplier && hard.galactic_build_time < easy.galactic_build_time);
         // Brutal is Hard plus our estimates: more income, faster builds, same battle multipliers.
         for minor in [false, true] {
-            let (h, _) = tier_settings(&table, DifficultyTier::Hard, minor);
-            let (b, ai) = tier_settings(&table, DifficultyTier::Brutal, minor);
+            let (h, _) = tier_settings(&table, DifficultyTier::Hard, minor, false);
+            let (b, ai) = tier_settings(&table, DifficultyTier::Brutal, minor, false);
             assert!(b.credit > h.credit && b.build_time < h.build_time, "brutal {b:?} vs hard {h:?}");
             assert_eq!((b.credit, b.build_time), (BRUTAL_CREDIT_MULTIPLIER, BRUTAL_BUILD_TIME_MULTIPLIER));
             assert_eq!((b.damage, b.health, b.shield), (h.damage, h.health, h.shield));
@@ -729,5 +737,31 @@ mod minor_tests {
         for tier in [DifficultyTier::Easy, DifficultyTier::Normal, DifficultyTier::Hard, DifficultyTier::Brutal, DifficultyTier::Fair] {
             assert_eq!(player_difficulty(tier), galaxy_sim::Difficulty::default());
         }
+    }
+
+    /// `AIUsesFogOfWarGalactic` False (Remake 4.0 and Clone Wars): the AI of every difficulty knows every planet.
+    #[test]
+    fn the_galactic_ai_ignores_the_fog_when_the_data_says_so() {
+        let table = alamo_data::DifficultyTable::default();
+        for tier in [DifficultyTier::Easy, DifficultyTier::Normal, DifficultyTier::Hard, DifficultyTier::Brutal, DifficultyTier::Fair] {
+            for minor in [false, true] {
+                let (d, ai) = tier_settings(&table, tier, minor, false);
+                assert_eq!(d.ai_sight_hops, None, "{tier:?} knows everything");
+                assert!(ai.full_map_knowledge, "{tier:?} strategy layer sees everything");
+            }
+        }
+        // Data that turns the AI fog on: every tier but Brutal is fog-bound.
+        let (hard, ai) = tier_settings(&table, DifficultyTier::Hard, false, true);
+        assert_eq!((hard.ai_sight_hops, ai.full_map_knowledge), (Some(AI_FOG_SIGHT_HOPS), false));
+        let (brutal, _) = tier_settings(&table, DifficultyTier::Brutal, false, true);
+        assert_eq!(brutal.ai_sight_hops, None);
+    }
+
+    #[test]
+    fn the_remake_data_lets_the_galactic_ai_ignore_the_fog() {
+        let Some(install) = alamo_fs::GameInstall::detect().filter(|i| i.mod_data("1770851727").is_dir()) else { return };
+        let fs = alamo_fs::GameFs::for_mod(&install, Some("1770851727")).unwrap();
+        let (data, _) = alamo_data::load_galaxy(&fs);
+        assert!(!ai_uses_galactic_fog(&data));
     }
 }

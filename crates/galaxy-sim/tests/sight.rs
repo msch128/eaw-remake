@@ -127,7 +127,7 @@ fn at_hops(w: &World, from: &[PlanetId], hops: u32) -> Vec<PlanetId> {
     (0..w.planets.len() as u32).filter(|&p| dist[p as usize] == hops && w.real[p as usize]).collect()
 }
 
-/// Design rule 2026-10-15: AI knowledge Easy 1 lane, Normal 2, Hard 3, Brutal everything; spy/presence reveals.
+/// A fog-bound AI (data with `AIUsesFogOfWarGalactic` True) knows enemy forces within its lane range; spy/presence reveals.
 #[test]
 fn the_ai_knows_enemy_forces_only_within_its_difficulty_range() {
     let Some(data) = load() else { return };

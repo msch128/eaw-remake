@@ -255,12 +255,13 @@ build-menu filters, not a start mode. The mode is this project's own:
   multipliers, `Galactic_AI_Contrast_Multiplier`, `Galactic_AI_Goal_Cycle_Sleep_Duration`; the unit of the sleep is an
   estimate). Brutal is a project tier (estimate): Hard plus AI credits x4 (`BRUTAL_CREDIT_MULTIPLIER`, Hard is 3.0),
   build time x0.8 (`BRUTAL_BUILD_TIME_MULTIPLIER`, Hard 0.9) and full map knowledge. Fair is a project tier: no
-  multipliers, Normal contrast, fog.
-* Project rule, AI knowledge per difficulty: the AI knows enemy forces exactly only at planets within N lanes of any
-  planet it owns or any fleet it has (Easy 1, Normal 2, Hard 3, minors 2 as estimate, plus every planet it sees
-  `Detailed` through 1.8). Brutal and tierless factions see everything. Outside its knowledge the AI assumes only what
-  the map shows (the owner's star base with garrison, no fleets, no armed structures; estimate). The AI can therefore
-  be surprised by hidden fleets.
+  multipliers, Normal contrast.
+* AI knowledge. Data: `AIUsesFogOfWarGalactic` False (`Xml/Gameconstants.xml`, Remake 4.0 and Clone Wars), so the AI
+  of every difficulty knows every planet and fleet, tierless factions too. The player's fog (1.8) is unchanged. Only
+  if the data turns the AI fog on, every tier but Brutal is limited: the AI knows enemy forces
+  exactly only at planets within `AI_FOG_SIGHT_HOPS` = 2 lanes (estimate) of any planet it owns or any fleet it has,
+  plus every planet it sees `Detailed` through 1.8; outside that it assumes only what the map shows (the owner's star
+  base with garrison, no fleets, no armed structures; estimate).
 * Strategy layer (`strategy.rs`, all weights are estimates): see [ARCHITECTURE.md](ARCHITECTURE.md), galaxy-ai.
 * Data: the 4.0 AI budget gives the `Hero` category 0% and the only hero goals are `Remove_Corruption` and the Death
   Star, so the AI keeps heroes at home.
@@ -474,7 +475,8 @@ with `speed_mult > 1.05` when fleeing or when the target is over twice the weapo
 * Fog of war (`BattleConfig::fog_of_war`, default on): a ship sees `Space_FOW_Reveal_Range` (data, `ShipDef::sensor_range`,
   1250 where missing); an enemy it saw stays visible for `fog_linger` = `SpaceFOWRegrowTime` (15 s, data). Targeting
   only considers visible enemies, and so does the AI, except that an enemy that damaged a unit of the side in the last
-  `fog_linger` s counts as known (data: `Default_Unit_Damaged` hands the AI the attacker).
+  `fog_linger` s counts as known (data: `Default_Unit_Damaged` hands the AI the attacker). Known difference: the data
+  says `AIUsesFogOfWarSpace` False (the Remake's battle AI ignores the fog); see KNOWN-GAPS.
 * Arena: `BattleConfig::arena` (from `Arena::load` and the `.ted` map) gives the playable bounds, `Attacker Entry
   Position` markers (attackers at -Y), `Defending Forces Position` markers (defenders at +Y), the `Space Station
   Position`, structure marker spots and asteroids as round obstacles that absorb projectiles and push ships away
