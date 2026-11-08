@@ -790,6 +790,11 @@ fn build_quads(e: &Emitter, rt: &mut EmitterRuntime, cx: &StepCtx) {
     }
 }
 
+/// Whether a particle system is shown: it has no visibility of its own (a free effect) or its unit is visible.
+fn shown(vis: Option<&InheritedVisibility>) -> bool {
+    vis.is_none_or(|v| v.get())
+}
+
 /// Advances all particle systems.
 #[allow(clippy::too_many_arguments)]
 pub fn simulate_particles(
@@ -827,7 +832,7 @@ pub fn simulate_particles(
         .par_iter_mut()
         .for_each(|(spec, gt, vis, mut inst)| {
             let inst = &mut *inst;
-            let visible = vis.is_none_or(|v| v.get());
+            let visible = shown(vis);
             let enabled = spec.enabled && visible;
             if enabled && !inst.was_enabled {
                 for rt in &mut inst.emitters {
@@ -1124,13 +1129,15 @@ pub fn update_particle_batches(
     mut batches: ResMut<ParticleBatches>,
     mut stats: ResMut<ParticleStats>,
     mut extra: ResMut<ExtraBatchGeometry>,
-    systems: Query<&ParticleInstance>,
+    systems: Query<(&ParticleInstance, Option<&InheritedVisibility>)>,
     mut visibility: Query<&mut Visibility>,
 ) {
     let started = std::time::Instant::now();
     // The quads of every batch stay where the emitters keep them; they are packed from there (only the sorted alpha batches are copied).
+    // A hidden system (its unit is hidden: fog of war, a squadron member the tactical view does not draw) draws nothing, not even the
+    // particles it emitted before it was hidden (a glow that lives for ever would stay where the hidden unit is).
     let mut gathered: HashMap<(&str, u32), Vec<&[Quad]>> = HashMap::new();
-    for inst in &systems {
+    for (inst, _) in systems.iter().filter(|(_, vis)| shown(*vis)) {
         for rt in &inst.emitters {
             if rt.quads.is_empty() {
                 continue;
@@ -1371,6 +1378,14 @@ pub fn build(app: &mut App) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_hidden_units_particles_are_not_drawn() {
+        // A squadron member the tactical view hides, or an enemy in the fog: its glows and trails stay out of the batches.
+        assert!(!shown(Some(&InheritedVisibility::HIDDEN)));
+        assert!(shown(Some(&InheritedVisibility::VISIBLE)));
+        assert!(shown(None), "an effect of its own (an explosion) has no unit to follow");
+    }
 
     #[test]
     fn paths_and_event_effects() {

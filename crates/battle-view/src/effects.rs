@@ -623,6 +623,12 @@ pub fn configure_engine_trail_gizmos(mut store: ResMut<GizmoConfigStore>) {
     cfg.depth_bias = -0.5;
 }
 
+/// Whether a ship draws its engine trail: the player sees it and it is drawn. A squadron member the tactical view does not draw leaves
+/// none (its squadron shows as its leader): the trail lines are 2.2 px wide at any distance, so twelve of them read as a cloud of dots.
+fn leaves_trail(s: &crate::ships::ShipRender) -> bool {
+    s.visible && s.drawn
+}
+
 /// Draws dynamic engine glows and ribbon exhaust trails behind active ships,
 /// and smoke plumes behind destroyed engines (U67).
 pub fn draw_engine_trails(
@@ -631,10 +637,7 @@ pub fn draw_engine_trails(
     mut gizmos: Gizmos<EngineTrailGizmos>,
 ) {
     let Some(rendered) = rendered else { return };
-    for ship in rendered.0.values() {
-        if !ship.visible {
-            continue;
-        }
+    for ship in rendered.0.values().filter(|s| leaves_trail(s)) {
         let def = rt.catalog.ship(ship.def);
         let max_speed = def.max_speed.max(1.0);
         let cur_speed = if let (Some(cur), Some(nxt)) = (rt.cur.as_ref(), rt.next.as_ref()) {
@@ -897,6 +900,17 @@ mod tests {
         let reb_tail = Color::srgba(1.0, 0.45, 0.1, 0.0);
         assert!(reb_core.to_srgba().red > 0.9);
         assert_eq!(reb_tail.to_srgba().alpha, 0.0);
+    }
+
+    #[test]
+    fn a_squadron_member_that_is_not_drawn_leaves_no_engine_trail() {
+        let mut s = crate::ships::ShipRender::test_craft(1, 0, 0, 3, Vec3::ZERO, 1.0);
+        assert!(leaves_trail(&s), "the craft that stands for its squadron");
+        s.drawn = false;
+        assert!(!leaves_trail(&s), "the other members of the squadron in the tactical view");
+        s.drawn = true;
+        s.visible = false;
+        assert!(!leaves_trail(&s), "an enemy in the fog of war");
     }
 
     #[test]
