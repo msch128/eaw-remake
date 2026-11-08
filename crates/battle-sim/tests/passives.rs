@@ -265,3 +265,87 @@ fn battlefield_modifiers_are_read_from_the_upgrades() {
     assert_eq!(mods("US_Cloaking_Generator_L2_Upgrade"), vec![FieldModDef { fow_reveal: 1.0, stealth_duration: 1.5, stacking: 3 }]);
     assert!(mods("Advanced_Targeting_Systems_Fighters_Empire").is_empty(), "a combat bonus is no battlefield modifier");
 }
+
+fn gun() -> HpDef {
+    HpDef {
+        name: "g".into(),
+        kind: HpKind::Weapon,
+        targetable: true,
+        forward: Vec3::new(1.0, 0.0, 0.0),
+        projectile: Some(0),
+        range: 6000.0,
+        half_yaw: std::f32::consts::PI,
+        half_pitch: std::f32::consts::FRAC_PI_2,
+        arc_yaw: std::f32::consts::PI,
+        arc_pitch: std::f32::consts::FRAC_PI_2,
+        recharge_min: 0.5,
+        recharge_max: 0.5,
+        pulses: 1,
+        ..HpDef::default()
+    }
+}
+
+/// A gunner of faction `Empire` destroys a `Rebel` ship worth `Override_Bounty_SP` 200; returns the result's salvage and credit deltas.
+fn salvage_run(carried: Vec<SalvageDef>, granted: Vec<SalvageDef>) -> (Vec<i32>, Vec<i32>) {
+    let gunner = ShipDef { hardpoints: vec![gun()], salvage: carried, ..ship("gunner", 1.0e6) };
+    let prey = ShipDef { bounty: 200.0, ..ship("prey", 50.0) };
+    let laser = ProjDef { name: "laser".into(), category: "laser".into(), speed: 2000.0, ..missile() };
+    let mut s = setup(Catalog::from_defs(vec![gunner, prey], vec![laser]), "gunner", "prey");
+    s.sides[0].name = "Empire".into();
+    s.sides[1].name = "Rebel".into();
+    s.sides[0].ai = true;
+    s.config.side_salvage = vec![granted];
+    let mut b = Battle::new(s);
+    let (g, p) = (b.ships.iter().find(|s| s.side == 0).unwrap().id, b.ships.iter().find(|s| s.side == 1).unwrap().id);
+    b.ships[p as usize].pos = b.ships[g as usize].pos + Vec3::new(1000.0, 0.0, 0.0);
+    b.run_to_end(30 * 60);
+    assert!(!b.ships[p as usize].alive, "the prey is destroyed");
+    let r = b.result();
+    (r.salvage_credits, r.attrition_credits)
+}
+
+#[test]
+fn salvage_pays_a_share_of_the_bounty_of_destroyed_enemies() {
+    let mtc = SalvageDef { share: 0.1, factions: vec!["rebel".into(), "empire".into()], stacking: 1 };
+    assert_eq!(salvage_run(vec![], vec![]), (vec![0, 0], vec![0, 0]), "no salvage ability, no credits");
+    assert_eq!(salvage_run(vec![mtc.clone()], vec![]), (vec![20, 0], vec![20, 0]), "10% of 200, paid with the credit delta");
+    let racket = SalvageDef { share: 1.0, factions: vec!["rebel".into()], stacking: 1 };
+    assert_eq!(salvage_run(vec![mtc.clone()], vec![racket]).0, vec![200, 0], "one stacking category: the largest share");
+    let other = SalvageDef { share: 0.15, factions: vec!["underworld".into()], stacking: 2 };
+    assert_eq!(salvage_run(vec![mtc], vec![other]).0, vec![20, 0], "a share for another faction does not pay");
+}
+
+#[test]
+fn salvage_and_bounties_are_read_from_the_data() {
+    let Some((data, fs)) = load() else { return };
+    let cat = Catalog::build(&data, Some(&fs), &["MTC_Repair", "TIE_Fighter_Squadron", "X-Wing_Squadron", "Star_Destroyer"]);
+    let def = |n: &str| cat.ship(cat.ship_id(n).unwrap_or_else(|| panic!("{n}")));
+    let s = &def("MTC_Repair").salvage;
+    assert_eq!(s.len(), 1, "{s:?}");
+    assert_eq!((s[0].share, s[0].stacking, s[0].factions.len()), (0.1, 1, 23));
+    assert!(s[0].pays_for("Rebel") && s[0].pays_for("Underworld"));
+    assert_eq!([def("TIE_Fighter").bounty, def("X-Wing").bounty, def("Star_Destroyer").bounty], [20.0, 50.0, 0.0]);
+    assert_eq!(SalvageDef::of_object(&data.objects, "NalHutta_Planetary_Advantage"), vec![SalvageDef { share: 0.15, factions: vec!["underworld".into()], stacking: 1 }]);
+}
+
+#[test]
+fn an_mtc_fleet_collects_salvage_for_the_fighters_it_kills() {
+    let Some((data, fs)) = load() else { return };
+    let cat = Arc::new(Catalog::build(&data, Some(&fs), &["MTC_Repair", "Star_Destroyer", "X-Wing_Squadron"]));
+    let side = |name: &str, units: &[(&str, u32)]| SideSetup {
+        name: name.into(),
+        units: units.iter().map(|&(n, c)| UnitSetup { ship: cat.ship_id(n).unwrap(), count: c, tag: 1 }).collect(),
+        structures: vec![],
+        ai: true,
+    };
+    let config = BattleConfig { record_events: false, seed: 3, ..BattleConfig::default() };
+    let mut b = Battle::new(BattleSetup { catalog: cat.clone(), sides: vec![side("Empire", &[("MTC_Repair", 1), ("Star_Destroyer", 2)]), side("Rebel", &[("X-Wing_Squadron", 2)])], config });
+    b.run_to_end(30 * 600);
+    let r = b.result();
+    let xwing = cat.ship_id("X-Wing").unwrap();
+    let lost = b.ships.iter().filter(|s| s.def == xwing && !s.alive && !s.retreated).count() as i32;
+    let mtc_alive = b.ships.iter().any(|s| cat.ship(s.def).name == "MTC_Repair" && s.alive);
+    println!("x-wings lost {lost}, MTC alive {mtc_alive}, salvage {:?}, credits {:?}", r.salvage_credits, r.attrition_credits);
+    assert!(lost > 0 && mtc_alive, "the Empire wins and the MTC lives");
+    assert_eq!(r.salvage_credits, vec![5 * lost, 0], "10% of an X-wing's 50 for each one destroyed");
+}

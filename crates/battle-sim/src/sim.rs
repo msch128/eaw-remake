@@ -239,6 +239,7 @@ impl Battle {
             clusters: Vec::new(),
             reveals: Vec::new(),
             zones: Vec::new(),
+            salvage: vec![0.0; sides.len()],
             lasers: Vec::new(),
             drains: Vec::new(),
             shots: Vec::new(),
@@ -1737,6 +1738,7 @@ impl Battle {
         let mut hull_part = 0.0;
         let mut shield_hit = false;
         let mut dead_hps = Vec::new();
+        let mut killed = false;
         if s.shield > 0.0 && pd.shield_damage {
             let sd = dmg * cat.damage.multiplier(pd.damage_type, def.shield_armor) / tgt_shield * s.bonus.taken_shield / (1.0 + s.mods[ModKind::Shield as usize].0);
             if sd <= s.shield {
@@ -1826,6 +1828,7 @@ impl Battle {
             }
             if s.hull <= 0.0 {
                 s.alive = false;
+                killed = true;
                 if record {
                     self.events.push(Event::ShipDestroyed { ship: id, pos: s.pos });
                 }
@@ -1834,6 +1837,9 @@ impl Battle {
             s.stun = s.stun.max(pd.ion_duration);
             s.stun_speed_cut = s.stun_speed_cut.max(pd.ion_speed_cut);
             s.stun_rate_cut = s.stun_rate_cut.max(pd.ion_rate_cut);
+        }
+        if killed {
+            self.pay_salvage(id, attacker);
         }
         if !dead_hps.is_empty() {
             for other in &mut self.ships {
@@ -1854,6 +1860,30 @@ impl Battle {
                 && s.side != side
                 && (d.interdictor || d.abilities.iter().zip(&s.abilities).any(|(a, st)| a.interdict && st.active > 0.0))
         })
+    }
+
+    /// `Bounty_On_Faction_Ability` (salvage): the side whose unit destroyed `victim` earns `Bounty_Percentage_Amount` of the victim's
+    /// bounty (`Override_Bounty_SP`) when the victim's faction is a target. The shares come from the side's living units and
+    /// `BattleConfig::side_salvage`; per `Stacking_Category` the largest counts, categories add (estimate).
+    fn pay_salvage(&mut self, victim: u32, attacker: u32) {
+        let Some(side) = self.ships.get(attacker as usize).map(|a| a.side) else { return };
+        let v = &self.ships[victim as usize];
+        let bounty = self.catalog.ship(v.def).bounty;
+        if bounty <= 0.0 || v.side == side {
+            return;
+        }
+        let faction = self.sides.get(v.side as usize).map_or("", |s| s.name.as_str());
+        let granted = self.config.side_salvage.get(side as usize).into_iter().flatten();
+        let carried = self.ships.iter().filter(|s| s.side == side && s.alive && !s.retreated).flat_map(|s| &self.catalog.ship(s.def).salvage);
+        let mut by_cat: std::collections::BTreeMap<u8, f32> = std::collections::BTreeMap::new();
+        for m in granted.chain(carried).filter(|m| m.pays_for(faction)) {
+            let e = by_cat.entry(m.stacking).or_insert(0.0);
+            *e = e.max(m.share);
+        }
+        let share: f32 = by_cat.values().sum();
+        if let Some(total) = self.salvage.get_mut(side as usize) {
+            *total += share * bounty;
+        }
     }
 
     /// True while a living unit of `side` has a `Retreat_Prevention_Ability` (Death Star II, Titan; the faction's "Reason 2: Friendly Hero

@@ -461,6 +461,40 @@ impl FieldModDef {
     }
 }
 
+/// A `Bounty_On_Faction_Ability` (salvage): its side earns a share of the bounty of the enemy units it destroys. Carried by a unit (the
+/// Modular Taskforce Cruiser's `Salvage_Effect`) or by an upgrade the battle grants (`BattleConfig::side_salvage`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct SalvageDef {
+    /// `Bounty_Percentage_Amount`: the share of the destroyed unit's bounty paid (0.1 = 10%).
+    pub share: f32,
+    /// `Target_Faction_Names`, lower-cased: only units of these factions pay (empty = every faction).
+    pub factions: Vec<String>,
+    /// `Stacking_Category`: shares of one category do not add up, the largest applies.
+    pub stacking: u8,
+}
+
+impl SalvageDef {
+    /// Reads a `Bounty_On_Faction_Ability`; `None` for other abilities and for a share of 0.
+    pub fn from_sub_ability(a: &alamo_data::space::SubAbility) -> Option<Self> {
+        if !a.kind.eq_ignore_ascii_case("Bounty_On_Faction_Ability") {
+            return None;
+        }
+        let num = |k: &str| a.fields.get(k).and_then(|v| alamo_data::xml::parse_num::<f32>(v)).unwrap_or(0.0);
+        let factions = a.fields.get("target_faction_names").map(|v| alamo_data::xml::split_list(v).iter().map(|f| f.to_ascii_lowercase()).collect()).unwrap_or_default();
+        (num("bounty_percentage_amount") > 0.0).then(|| SalvageDef { share: num("bounty_percentage_amount"), factions, stacking: num("stacking_category").max(0.0) as u8 })
+    }
+
+    /// The salvage abilities of an object's `Abilities` (a unit or an `UpgradeObject`).
+    pub fn of_object(objects: &alamo_data::GameObjects, name: &str) -> Vec<Self> {
+        objects.sub_abilities(name).iter().filter_map(Self::from_sub_ability).collect()
+    }
+
+    /// True if destroying a unit of `faction` pays.
+    pub fn pays_for(&self, faction: &str) -> bool {
+        self.factions.is_empty() || self.factions.iter().any(|f| f.eq_ignore_ascii_case(faction))
+    }
+}
+
 /// Multipliers a ship gets from friendly combat bonus auras; `1.0` = none.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Bonus {
@@ -705,6 +739,11 @@ pub struct ShipDef {
     pub bonuses: Vec<BonusDef>,
     /// Battlefield modifiers it gives its side while it lives (`Battlefield_Modifier_Ability`).
     pub field_mods: Vec<FieldModDef>,
+    /// Salvage it earns its side while it lives (`Bounty_On_Faction_Ability`).
+    pub salvage: Vec<SalvageDef>,
+    /// `Override_Bounty_SP`: credits this unit is worth to an enemy with salvage (TIE fighter 20, K-wing 1250). The Remake's
+    /// `Default_Bounty_By_Category_SP` table is 0 for every category, so a unit without the tag is worth nothing.
+    pub bounty: f32,
     /// `Space_FOW_Reveal_Range`: how far this ship sees (fog of war); 1250 where the data gives none.
     pub sensor_range: f32,
     /// `Passive_Missile_Shield_Radius`: an always-on missile shield around the unit (Star Home 500, Reaver 300, A-wing 50; 0 = none).
@@ -2074,6 +2113,11 @@ impl Catalog {
                 Source::Base(b) => b.sub_abilities.iter().filter_map(FieldModDef::from_sub_ability).collect(),
                 Source::Structure(_) => Vec::new(),
             },
+            salvage: match src {
+                Source::Unit(u) => u.sub_abilities.iter().filter_map(SalvageDef::from_sub_ability).collect(),
+                _ => Vec::new(),
+            },
+            bounty: unit_field("override_bounty_sp").and_then(alamo_data::xml::parse_num).unwrap_or(0.0f32).max(0.0),
             sensor_range,
             passive_missile_radius: unit_field("passive_missile_shield_radius").and_then(alamo_data::xml::parse_num).unwrap_or(0.0),
             redirect_to_teammates: unit_field("redirect_damage_to_teammates").is_some_and(alamo_data::xml::parse_bool),

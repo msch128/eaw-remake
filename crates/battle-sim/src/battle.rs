@@ -91,6 +91,9 @@ pub struct BattleConfig {
     /// Per side: battlefield modifiers the side brings besides those of its units, e.g. from upgrades (`FieldModDef::of_object`).
     /// Missing entries mean none.
     pub side_field_mods: Vec<Vec<crate::defs::FieldModDef>>,
+    /// Per side: salvage abilities the side brings besides those of its units, e.g. from upgrades (`SalvageDef::of_object`). Missing
+    /// entries mean none.
+    pub side_salvage: Vec<Vec<crate::defs::SalvageDef>>,
 }
 
 impl Default for BattleConfig {
@@ -127,6 +130,7 @@ impl Default for BattleConfig {
             defenders: Vec::new(),
             powers: Vec::new(),
             side_field_mods: Vec::new(),
+            side_salvage: Vec::new(),
         }
     }
 }
@@ -532,8 +536,10 @@ pub struct BattleResult {
     pub duration: f32,
     /// Survivors per setup group.
     pub groups: Vec<GroupResult>,
-    /// Net attrition credits delta per side (penalties negative, refunds positive).
+    /// Net credits delta per side: attrition penalties (negative) and refunds (positive), plus the salvage credits.
     pub attrition_credits: Vec<i32>,
+    /// Salvage credits per side (`Bounty_On_Faction_Ability`; the summary's "Salvage collected"). Already included in `attrition_credits`.
+    pub salvage_credits: Vec<i32>,
     /// `GlobalValue.Set` calls the ships' `GameObject` scripts made in the battle, in order (`Set_SSD_*_State`: the phase level of a super
     /// ship when it appears, 0 when its last phase dies), see [`ShipDef::on_create`].
     pub globals: Vec<(String, i32)>,
@@ -825,6 +831,8 @@ pub struct Battle {
     pub(crate) leeches: Vec<(u32, u16, u32)>,
     /// Areas dropped by `BUZZ_DROIDS`: side, centre, radius, enemy damage per second, end time, missile-jamming radius (0 = none).
     pub(crate) zones: Vec<(u8, Vec3, f32, f32, f32, f32)>,
+    /// Salvage credits each side earned so far (`Bounty_On_Faction_Ability`).
+    pub(crate) salvage: Vec<f32>,
     /// Distance field of rocks and stations for path planning (`None` without navigation or obstacles).
     pub(crate) nav_grid: Option<crate::nav::NavGrid>,
     /// Per side: `(search point index, time it was set)` of the AI search for hidden enemies.
@@ -960,7 +968,11 @@ impl Battle {
                 }
             }
         }
-        BattleResult { winner: self.winner, duration: self.time, groups, attrition_credits, globals: self.globals.clone() }
+        let salvage_credits: Vec<i32> = (0..self.sides.len()).map(|i| self.salvage.get(i).copied().unwrap_or(0.0).round() as i32).collect();
+        for (a, s) in attrition_credits.iter_mut().zip(&salvage_credits) {
+            *a += s;
+        }
+        BattleResult { winner: self.winner, duration: self.time, groups, attrition_credits, salvage_credits, globals: self.globals.clone() }
     }
 }
 
