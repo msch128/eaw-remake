@@ -260,6 +260,8 @@ pub struct AbilityDef {
     pub shot: Option<ShotDef>,
     /// `BLAST`: the charged shot of the blast hardpoints.
     pub blast: Option<BlastDef>,
+    /// `SHIELD_FLARE`: the charged wave around the ship.
+    pub flare: Option<FlareDef>,
     /// `FOW_REVEAL_PING`: radius of the area it reveals to the owner for the duration (`Effective_Radius`; 0 = not a reveal ping).
     pub reveal_radius: f32,
 }
@@ -286,6 +288,21 @@ pub struct BlastDef {
     pub charge: f32,
     /// `Damage_Multiplier`.
     pub mult: f32,
+}
+
+/// `SHIELD_FLARE` (`Shield_Flare_Ability`): `charge` seconds after the use the ship's `Spawned_Object_Type` goes off on it: every enemy within
+/// `radius` (nearest first, up to the projectile's `Projectile_Blast_Area_Max_Victims`) takes the projectile's blast damage with its dropoff
+/// tiers, at most `max_per_victim`, and the ship's own shield is spent.
+#[derive(Debug, Clone, Default)]
+pub struct FlareDef {
+    /// `Charge_Up_Seconds`.
+    pub charge: f32,
+    /// `Damage_Radius`.
+    pub radius: f32,
+    /// `Max_Damage_Per_Victim`.
+    pub max_per_victim: f32,
+    /// `Spawned_Object_Type`: the blast projectile.
+    pub proj: ProjId,
 }
 
 /// How long an armed shot ability waits for the craft to fire at its target before it lapses (estimate; the data gives no expiration).
@@ -1457,7 +1474,7 @@ impl Catalog {
                             proj_names.push(n.trim().to_string());
                         }
                     }
-                    for a in u.abilities.iter().filter(|a| a.kind.eq_ignore_ascii_case("WEAKEN_ENEMY") || a.kind.eq_ignore_ascii_case("HARMONIC_BOMB")) {
+                    for a in u.abilities.iter().filter(|a| a.kind.eq_ignore_ascii_case("WEAKEN_ENEMY") || a.kind.eq_ignore_ascii_case("HARMONIC_BOMB") || a.kind.eq_ignore_ascii_case("SHIELD_FLARE")) {
                         if let Some(n) = a.fields.get("spawned_object_type") {
                             proj_names.push(n.trim().to_string());
                         }
@@ -2222,7 +2239,7 @@ fn ability_defs(u: &SpaceUnitDef, projectiles: &[ProjDef], proj_index: &HashMap<
         .filter(|a| {
             a.expiration_seconds.unwrap_or(0.0) > 0.0
                 || (a.kind.eq_ignore_ascii_case("LURE") && a.fields.contains_key("effective_radius"))
-                || ["FULL_SALVO", "TRACTOR_BEAM", "MISSILE_SHIELD", "INTERDICT", "STEALTH", "FOW_REVEAL_PING", "LASER_DEFENSE", "ROCKET_ATTACK", "SWAP_WEAPONS", "SENSOR_JAMMING", "BUZZ_DROIDS", "SUPER_LASER", "CORRUPT_SYSTEMS", "HUNT", "SPOILER_LOCK", "REPLENISH_WINGMEN", "WEAKEN_ENEMY", "HARMONIC_BOMB", "ENERGY_WEAPON", "CLUSTER_BOMB", "LUCKY_SHOT", "BLAST", "ION_CANNON_SHOT"].iter().any(|k| a.kind.eq_ignore_ascii_case(k))
+                || ["FULL_SALVO", "TRACTOR_BEAM", "MISSILE_SHIELD", "INTERDICT", "STEALTH", "FOW_REVEAL_PING", "LASER_DEFENSE", "ROCKET_ATTACK", "SWAP_WEAPONS", "SENSOR_JAMMING", "BUZZ_DROIDS", "SUPER_LASER", "CORRUPT_SYSTEMS", "HUNT", "SPOILER_LOCK", "REPLENISH_WINGMEN", "WEAKEN_ENEMY", "HARMONIC_BOMB", "ENERGY_WEAPON", "CLUSTER_BOMB", "LUCKY_SHOT", "BLAST", "ION_CANNON_SHOT", "SHIELD_FLARE"].iter().any(|k| a.kind.eq_ignore_ascii_case(k))
         })
         .map(|a| {
             let toggle = a.expiration_seconds.unwrap_or(0.0) <= 0.0 && ["MISSILE_SHIELD", "INTERDICT", "STEALTH", "HUNT", "SPOILER_LOCK"].iter().any(|k| a.kind.eq_ignore_ascii_case(k));
@@ -2247,6 +2264,13 @@ fn ability_defs(u: &SpaceUnitDef, projectiles: &[ProjDef], proj_index: &HashMap<
                 let f = |k: &str| sub.and_then(|s| s.fields.get(k)).and_then(|v| alamo_data::xml::parse_num::<f32>(v));
                 BlastDef { charge: f("charge_up_seconds").unwrap_or(0.0).max(0.0), mult: f("damage_multiplier").unwrap_or(1.0) }
             });
+            let flare = a.kind.eq_ignore_ascii_case("SHIELD_FLARE").then(|| {
+                let sub = a.activated_ability.as_ref().and_then(|n| u.sub_abilities.iter().find(|s| s.name.eq_ignore_ascii_case(n)));
+                let f = |k: &str| sub.and_then(|s| s.fields.get(k)).and_then(|v| alamo_data::xml::parse_num::<f32>(v));
+                let proj = a.fields.get("spawned_object_type").and_then(|n| proj_index.get(&n.trim().to_ascii_lowercase())).copied()?;
+                let p = &projectiles[proj as usize];
+                Some(FlareDef { charge: f("charge_up_seconds").unwrap_or(0.0).max(0.0), radius: f("damage_radius").unwrap_or(p.blast_range), max_per_victim: f("max_damage_per_victim").unwrap_or(p.blast_damage), proj })
+            }).flatten();
             let lucky = a.kind.eq_ignore_ascii_case("LUCKY_SHOT");
             let shot = (lucky || a.kind.eq_ignore_ascii_case("ION_CANNON_SHOT")).then(|| {
                 let sub = a.activated_ability.as_ref().and_then(|n| u.sub_abilities.iter().find(|s| s.name.eq_ignore_ascii_case(n)));
@@ -2303,10 +2327,11 @@ fn ability_defs(u: &SpaceUnitDef, projectiles: &[ProjDef], proj_index: &HashMap<
                 cause_damage_mult,
                 recharge: a.recharge_seconds.unwrap_or(30.0),
                 // A reveal ping has no expiration in the data: it shows the area for 5 s (estimate).
-                duration: if toggle { f32::MAX / 4.0 } else if shot.is_some() { SHOT_WINDOW_SECONDS } else if let Some(b) = &blast { b.charge + SHOT_WINDOW_SECONDS } else if ping { a.expiration_seconds.filter(|&x| x > 0.0).unwrap_or(5.0) } else if let Some(secs) = defence_secs { secs } else if a.kind.eq_ignore_ascii_case("CORRUPT_SYSTEMS") { a.activated_ability.as_ref().and_then(|n| u.sub_abilities.iter().find(|s| s.name.eq_ignore_ascii_case(n))).and_then(|s| s.fields.get("duration_in_seconds")).and_then(|v| alamo_data::xml::parse_num(v)).unwrap_or(30.0) } else { a.expiration_seconds.unwrap_or(12.0) },
+                duration: if toggle { f32::MAX / 4.0 } else if shot.is_some() { SHOT_WINDOW_SECONDS } else if let Some(b) = &blast { b.charge + SHOT_WINDOW_SECONDS } else if let Some(f) = &flare { f.charge } else if ping { a.expiration_seconds.filter(|&x| x > 0.0).unwrap_or(5.0) } else if let Some(secs) = defence_secs { secs } else if a.kind.eq_ignore_ascii_case("CORRUPT_SYSTEMS") { a.activated_ability.as_ref().and_then(|n| u.sub_abilities.iter().find(|s| s.name.eq_ignore_ascii_case(n))).and_then(|s| s.fields.get("duration_in_seconds")).and_then(|v| alamo_data::xml::parse_num(v)).unwrap_or(30.0) } else { a.expiration_seconds.unwrap_or(12.0) },
                 stealth: a.kind.eq_ignore_ascii_case("STEALTH"),
                 shot,
                 blast,
+                flare,
                 reveal_radius: if ping { a.fields.get("effective_radius").and_then(|v| alamo_data::xml::parse_num(v)).unwrap_or(1000.0) } else { 0.0 },
                 interdict: a.kind.eq_ignore_ascii_case("INTERDICT"),
                 hunt: a.kind.eq_ignore_ascii_case("HUNT"),

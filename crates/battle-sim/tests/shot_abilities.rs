@@ -217,3 +217,80 @@ fn an_ai_v_wing_squadron_spends_its_ion_shots_on_a_frigate() {
     assert_eq!(player, 0, "a player side without autofire keeps them");
     assert!(ai >= 5, "each of the 5 V-wings fires at least one (recharge 20 s): {ai}");
 }
+
+#[test]
+fn the_viscount_shield_flare_hits_everything_within_12500_after_8_s() {
+    // Before: SHIELD_FLARE was not in the ability list.
+    let Some((data, fs)) = load() else { return };
+    let cat = Arc::new(Catalog::build(&data, Some(&fs as &dyn FileSource), &["Viscount_Star_Defender_P4", "Nebulon_B_Frigate"]));
+    let v = cat.ship(cat.ship_id("Viscount_Star_Defender_P4").unwrap());
+    let a = v.abilities.iter().find(|a| a.kind == "SHIELD_FLARE").expect("P4 has the shield flare");
+    let f = a.flare.as_ref().unwrap();
+    assert_eq!((a.recharge, f.charge, f.radius, f.max_per_victim), (180.0, 8.0, 12500.0, 10000.0), "Jury_Rig_Shield");
+    assert_eq!(cat.projectiles[f.proj as usize].name, "Proj_Viscount_Jury_Rig_Shield_Blast");
+    let unit = |n: &str, count| UnitSetup { ship: cat.ship_id(n).unwrap(), count, tag: 0 };
+    let sides = vec![
+        SideSetup { name: "Rebel".into(), units: vec![unit("Viscount_Star_Defender_P4", 1)], structures: vec![], ai: false },
+        SideSetup { name: "Empire".into(), units: vec![unit("Nebulon_B_Frigate", 3)], structures: vec![], ai: false },
+    ];
+    let mut b = Battle::new(BattleSetup { catalog: cat.clone(), sides, config: BattleConfig { seed: 2, fog_of_war: false, ..BattleConfig::default() } });
+    let vis = b.ships.iter().position(|s| s.side == 0 && s.carrier == NONE && cat.ship(s.def).name.starts_with("Viscount")).unwrap() as u32;
+    let frigates: Vec<u32> = b.ships.iter().filter(|s| s.side == 1 && cat.ship(s.def).name == "Nebulon_B_Frigate").map(|s| s.id).collect();
+    let at = b.ships[vis as usize].pos;
+    for (i, &fr) in frigates.iter().enumerate() {
+        b.ships[fr as usize].pos = at + Vec3::new([2000.0, 9000.0, 16000.0][i], 0.0, 0.0);
+        b.ships[fr as usize].stance = Stance::HoldFire;
+    }
+    b.ships[vis as usize].stance = Stance::HoldFire;
+    b.step();
+    let health = |b: &Battle| frigates.iter().map(|&f| b.ships[f as usize].hull + b.ships[f as usize].shield).collect::<Vec<f32>>();
+    let start = health(&b);
+    let k = ability(&b, vis, "SHIELD_FLARE").unwrap() as u16;
+    b.command(0, Command::UseAbility { ship: vis, ability: k }).expect("flare");
+    for _ in 0..(7.8 * 30.0) as usize {
+        b.step();
+    }
+    assert_eq!(health(&b), start, "nothing while it charges");
+    assert!(b.ships[vis as usize].shield > 0.0);
+    for _ in 0..15 {
+        b.step();
+    }
+    let end = health(&b);
+    let lost: Vec<f32> = start.iter().zip(&end).map(|(a, e)| a - e).collect();
+    eprintln!("lost by the frigates at 2000 / 9000 / 16000: {lost:?}; Viscount shield {}", b.ships[vis as usize].shield);
+    assert!(lost[0] > lost[1] && lost[1] > 0.0, "nearer takes more (5 dropoff tiers)");
+    assert_eq!(lost[2], 0.0, "outside the 12500 radius");
+    assert_eq!(b.ships[vis as usize].shield, 0.0, "the shield went into the wave");
+}
+
+#[test]
+fn an_ai_viscount_flares_when_three_frigates_are_near() {
+    let Some((data, fs)) = load() else { return };
+    let used = |frigates: u32| {
+        let cat = Arc::new(Catalog::build(&data, Some(&fs as &dyn FileSource), &["Viscount_Star_Defender_P4", "Nebulon_B_Frigate"]));
+        let unit = |n: &str, count| UnitSetup { ship: cat.ship_id(n).unwrap(), count, tag: 0 };
+        let sides = vec![
+            SideSetup { name: "Rebel".into(), units: vec![unit("Viscount_Star_Defender_P4", 1)], structures: vec![], ai: true },
+            SideSetup { name: "Empire".into(), units: vec![unit("Nebulon_B_Frigate", frigates)], structures: vec![], ai: false },
+        ];
+        let mut b = Battle::new(BattleSetup { catalog: cat.clone(), sides, config: BattleConfig { seed: 2, fog_of_war: false, ..BattleConfig::default() } });
+        let vis = b.ships.iter().position(|s| s.side == 0 && cat.ship(s.def).name.starts_with("Viscount")).unwrap();
+        let at = b.ships[vis].pos;
+        for (i, s) in b.ships.iter_mut().filter(|s| s.side == 1).enumerate() {
+            s.pos = at + Vec3::new(3000.0, 1500.0 * i as f32, 0.0);
+            s.stance = Stance::HoldFire;
+        }
+        let k = b.catalog().ship(b.ships[vis].def).abilities.iter().position(|a| a.flare.is_some()).unwrap();
+        (0..30 * 20).any(|_| {
+            b.step();
+            // Only the frigates: their fighters are taken out as they launch.
+            for s in b.ships.iter_mut().filter(|s| s.side == 1 && s.carrier != NONE) {
+                s.alive = false;
+            }
+            b.ships[vis].abilities[k].cooldown > 0.0
+        })
+    };
+    let (two, three) = (used(2), used(3));
+    eprintln!("AI flare with 2 frigates near: {two}, with 3: {three}");
+    assert!(!two && three);
+}

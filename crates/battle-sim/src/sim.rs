@@ -242,6 +242,7 @@ impl Battle {
             lasers: Vec::new(),
             drains: Vec::new(),
             shots: Vec::new(),
+            flares: Vec::new(),
             nav_grid: None,
             search: vec![(0, 0.0); sides.len()],
             ai: (0..sides.len()).map(|i| crate::ai::AiSide::new(config.ai_reserve.get(i).cloned().unwrap_or_default())).collect(),
@@ -1017,6 +1018,7 @@ impl Battle {
         let weaken = a.weaken.clone();
         let bomb = a.bomb.clone();
         let cluster = a.cluster.clone();
+        let flare = a.flare.clone();
         let mut beam: Option<(u32, f32)> = None;
         if let Some(e) = &a.energy {
             // The enemy ship nearest to the aimed point (else to the caster) inside the beam range and of an allowed class.
@@ -1122,6 +1124,9 @@ impl Battle {
         if let Some(b) = bomb {
             let (side, pos) = (self.ships[ship as usize].side, self.ships[ship as usize].pos);
             self.bombs.push((side, pos, self.time + b.countdown, b));
+        }
+        if let Some(f) = flare {
+            self.flares.push((ship, self.time + f.charge));
         }
         if self.config.record_events {
             // A command runs between two steps and the next step clears `events` first: its report waits in `cmd_events` (an ability the
@@ -2153,6 +2158,7 @@ impl Battle {
         self.run_lasers();
         self.run_drains(dt);
         self.run_blasts();
+        self.run_flares();
         let now = self.time;
         self.shots.retain(|s| s.4 >= now);
         if self.tick.is_multiple_of(30) {
@@ -2209,6 +2215,14 @@ impl Battle {
                         let near_hurt = self.ships.iter().filter(|o| o.alive && !o.retreated && o.side == side && o.id != s.id && o.pos.dist(s.pos) <= b.heal_radius && (b.heal_classes == 0 || b.heal_classes & cat.ship(o.def).class.bit() != 0) && o.hull < cat.ship(o.def).hull * 0.8).count();
                         let near_foes = enemies.iter().filter(|&&e| self.ships[e as usize].pos.dist(s.pos) <= b.blast_radius + 100.0).count();
                         if (b.heal_amount > 0.0 && near_hurt >= 2) || (b.blast_damage > 0.0 && near_foes >= 2) {
+                            uses.push((side, s.id, k, None));
+                        }
+                    } else if let Some(f) = &a.flare {
+                        // Estimate (the Remake scripts have no rule for it): the wave when enemies worth three or more (a capital counts as
+                        // three) are within its radius.
+                        let weight = |id: u32| if cat.ship(self.ships[id as usize].def).class as u8 >= TargetClass::Capital as u8 { 3 } else { 1 };
+                        let worth: u32 = enemies.iter().filter(|&&e| self.ships[e as usize].pos.dist(s.pos) - cat.ship(self.ships[e as usize].def).radius <= f.radius).map(|&e| weight(e)).sum();
+                        if worth >= 3 {
                             uses.push((side, s.id, k, None));
                         }
                     } else if let Some(l) = &a.lure {
@@ -2647,6 +2661,49 @@ impl Battle {
                 s.abilities[k].active = 0.0;
                 s.blast_pending = None;
             }
+        }
+    }
+
+    /// `SHIELD_FLARE` waves whose charge is over go off on a ship that still lives (see [`FlareDef`]). The dropoff follows the projectile's
+    /// tiers as a harmonic bomb's does; the damage goes through the normal hit (shield, hardpoints, the projectile's ion stun).
+    fn run_flares(&mut self) {
+        if self.flares.is_empty() {
+            return;
+        }
+        let now = self.time;
+        let (due, wait): (Vec<_>, Vec<_>) = std::mem::take(&mut self.flares).into_iter().partition(|f| f.1 <= now);
+        self.flares = wait;
+        let cat = self.catalog.clone();
+        for (ship, _) in due {
+            let s = &self.ships[ship as usize];
+            if !s.alive || s.retreated {
+                continue;
+            }
+            let Some(f) = cat.ship(s.def).abilities.iter().find_map(|a| a.flare.clone()) else { continue };
+            let (side, pos) = (s.side, s.pos);
+            let pd = &cat.projectiles[f.proj as usize];
+            let mut near: Vec<(f32, u32)> = self
+                .ships
+                .iter()
+                .filter(|o| o.alive && !o.retreated && o.side != side)
+                .map(|o| (o.pos.dist(pos) - cat.ship(o.def).radius, o.id))
+                .filter(|&(d, _)| d <= f.radius)
+                .collect();
+            near.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+            if pd.blast_victims > 0 {
+                near.truncate(pd.blast_victims as usize);
+            }
+            for (d, v) in near {
+                let tier = if pd.blast_tiers > 0 { ((d.max(0.0) / f.radius) * pd.blast_tiers as f32).floor().min(pd.blast_tiers as f32 - 1.0) } else { 0.0 };
+                let factor = if pd.blast_tiers > 0 { 1.0 - tier / pd.blast_tiers as f32 } else { 1.0 };
+                let at = self.ships[v as usize].pos;
+                self.damage_ship(v, ship, pd, f.proj, (pd.blast_damage * factor).min(f.max_per_victim), at, NO_HP);
+            }
+            // Estimate: the wave takes the whole shield ("This ability drains the shield for a powerful blast").
+            let lock = cat.depleted_shield_disable;
+            let s = &mut self.ships[ship as usize];
+            s.shield = 0.0;
+            s.shield_lock = lock;
         }
     }
 
