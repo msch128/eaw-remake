@@ -57,6 +57,8 @@ pub struct BuildableDef {
     pub debuff_delay: f32,
     /// The map marker its script places the dummies on: without one on the map the script spawns nothing.
     pub debuff_marker: Option<String>,
+    /// `CategoryMask` Upgrade: what the AI's `Purchase_Space_Upgrades_Generic` plan (`Upgrade = 0,1`) may buy.
+    pub upgrade: bool,
 }
 
 /// `Tactical_Buildable_Objects_Campaign` of object `name`: `(faction, item)` pairs, faction lower case. The tag is a list in which a
@@ -120,6 +122,7 @@ pub fn buildable_defs(data: &GameData, items: &[String]) -> Vec<BuildableDef> {
                 debuffs: Vec::new(),
                 debuff_delay: 0.0,
                 debuff_marker: None,
+                upgrade: r.list("categorymask").iter().any(|c| c.eq_ignore_ascii_case("Upgrade")),
             }
         })
         .collect()
@@ -283,6 +286,34 @@ impl Battle {
             return Err(CommandError::NotEnoughCredits);
         }
         Ok(())
+    }
+
+    /// The AI's `Purchase_Space_Upgrades_Generic` goal (`AI/Goals/Space_BuildUpgrades_Default.xml`, in the space goal sets of every
+    /// campaign AI player): its desire is `MediumImportance` (4) times `SelfIsRich`, which holds while the side's credits are above
+    /// `MediumCashResources` 7500 (star base level 1 or none), `HighCashResources` 10000 (level 2) or `VeryHighCashResources` 15000
+    /// (level 3 to 5; `Space_Skirmish_Common.xml`). Its plan `PurchaseSpaceUpgradesGeneric.lua` produces one object of category
+    /// `Upgrade` and ends when it is built; the goal excludes itself (`Global_Exclusions`), so an AI side buys one item at a time.
+    /// Estimates: the goal is looked at once a second, and the plan takes the first item it may buy in bar order (the engine's pick is
+    /// not in the data).
+    pub(crate) fn ai_builds(&mut self) {
+        for side in 0..self.sides.len() as u8 {
+            if !self.is_ai(side) || self.build_jobs.iter().any(|j| j.side == side) {
+                continue;
+            }
+            let level = self.config.side_base_level.get(side as usize).copied().unwrap_or(0);
+            let rich = match level {
+                0 | 1 => 7500,
+                2 => 10000,
+                _ => 15000,
+            };
+            if self.credits(side) <= rich {
+                continue;
+            }
+            let pick = self.build_options(side).into_iter().find(|o| o.ready.is_ok() && self.catalog.buildables[o.item as usize].upgrade).map(|o| o.item);
+            if let Some(item) = pick {
+                let _ = self.queue_build(side, item);
+            }
+        }
     }
 
     /// `Command::TacticalBuild`: pays and queues the item.

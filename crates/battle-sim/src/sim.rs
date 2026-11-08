@@ -1256,6 +1256,9 @@ impl Battle {
         self.start_scripts();
         self.scripted_arrivals();
         self.run_decay(self.config.dt);
+        if self.tick.is_multiple_of(30) {
+            self.ai_builds();
+        }
         self.run_builds(self.config.dt);
         self.retreat_jumps();
 

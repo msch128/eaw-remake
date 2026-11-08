@@ -834,6 +834,13 @@ Escort, Reinforce, Retreat); the engine part that matters here is implemented as
   `Determine_Targeting_Priority_Set` (hardpoint sets, tried with no measurable effect); `Default_Space_Targeting_Priority`;
   the map-wide `Find_All_Objects_Of_Type` for the priority target (the priority target is chosen from the enemies the
   AI knows, see 2.8 fog of war).
+* Data, tactical builds (`Purchase_Space_Upgrades_Generic`, in the space goal sets of every campaign AI player): an AI
+  side buys from its stations' build bars while its credits are above 7500 (no star base or level 1), 10000 (level 2) or
+  15000 (levels 3 to 5) (`SelfIsRich`, `Space_Skirmish_Common.xml`), one object of category `Upgrade` at a time
+  (`PurchaseSpaceUpgradesGeneric.lua`: `Upgrade = 0,1`; the goal excludes itself). Estimates: the goal is checked once a
+  second and takes the first item it may buy in bar order. Not modelled: `Activation_Tracking_Duration` 20 and
+  `Per_Activation_Failure_Desire_Adjust` -15 (a purchase that is tried cannot fail here) and the weighing of its desire
+  (`MediumImportance` 4) against other goals.
 
 ## 2.11 Death Star II and ground-to-space weapons
 

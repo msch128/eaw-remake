@@ -1027,6 +1027,9 @@ fn tactical_build_purchases_are_paid_from_the_galactic_credits() {
     let catalog = catalog_for(&ctx, &req);
     let config = req.battle_config(None);
     assert_eq!(config.side_credits[ds], start as i64);
+    // The AI's `SelfIsRich` reads the defender's star base level.
+    assert!(req.starbase_level >= 1);
+    assert_eq!((config.side_base_level[ds], config.side_base_level[1 - ds]), (req.starbase_level, 0));
     let mut b = battle_sim::Battle::new(req.battle_setup(&catalog, config, |_| true).unwrap());
     let offered = b.buildable(ds as u8);
     assert!(!offered.is_empty(), "the Coruscant star base offers tactical builds");

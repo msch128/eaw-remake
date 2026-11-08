@@ -96,6 +96,8 @@ pub struct BattleConfig {
     pub side_salvage: Vec<Vec<crate::defs::SalvageDef>>,
     /// Per side: galactic credits the side may spend on tactical builds (`Tactical_Build_Cost_Campaign`). Missing entries: none.
     pub side_credits: Vec<i64>,
+    /// Per side: level of its star base (`Variable_Self.BaseLevel` of the AI; 0 without one). Missing entries: 0.
+    pub side_base_level: Vec<u32>,
 }
 
 impl Default for BattleConfig {
@@ -134,6 +136,7 @@ impl Default for BattleConfig {
             side_field_mods: Vec::new(),
             side_salvage: Vec::new(),
             side_credits: Vec::new(),
+            side_base_level: Vec::new(),
         }
     }
 }

@@ -294,9 +294,10 @@ impl TacticalRequest {
         let side_tech = self.sides.iter().map(|s| s.tech).collect();
         let powers = self.sides.iter().map(|s| s.powers.clone()).collect();
         let side_credits = self.sides.iter().map(|s| s.credits).collect();
+        let side_base_level = self.sides.iter().map(|s| if s.defender { self.starbase_level } else { 0 }).collect();
         let jump = BattleConfig::default().retreat_jump_seconds;
         let side_retreat_jump = self.sides.iter().map(|s| s.retreat_jump.unwrap_or(jump)).collect();
-        BattleConfig { side_tech, seed: self.seed, max_time: self.max_seconds, half_size, arena, side_mults, retreat_allowed, defenders, unit_cap, powers, side_retreat_jump, side_credits, ..BattleConfig::default() }
+        BattleConfig { side_tech, seed: self.seed, max_time: self.max_seconds, half_size, arena, side_mults, retreat_allowed, defenders, unit_cap, powers, side_retreat_jump, side_credits, side_base_level, ..BattleConfig::default() }
     }
 
     /// Builds the `battle-sim` setup. Fleet groups carry their group index as the tag; side `i` of the request is

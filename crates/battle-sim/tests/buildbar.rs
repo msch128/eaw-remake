@@ -396,3 +396,34 @@ fn the_build_bar_shows_the_next_level_of_each_line() {
     assert_eq!((w2.ready.clone(), w2.progress), (Err(CommandError::NotEnoughCredits), None));
     assert!(b.build_options(0).is_empty());
 }
+
+/// An AI defender `faction` with `base` (star base level `level`) and `credits`; the attacker idles far away.
+fn ai_defended(cat: &Arc<Catalog>, base: &str, level: u32, credits: i64) -> Battle {
+    let ship = |n: &str| cat.ship_id(n).unwrap_or_else(|| panic!("{n}"));
+    let attacker = SideSetup { name: "Rebel".into(), units: vec![UnitSetup { ship: ship("Nebulon_B_Frigate"), count: 1, tag: 1 }], structures: vec![], ai: false };
+    let defender = SideSetup { name: "Empire".into(), units: vec![], structures: vec![ship(base)], ai: true };
+    let config = BattleConfig { side_credits: vec![0, credits], side_base_level: vec![0, level], fog_of_war: false, ..BattleConfig::default() };
+    Battle::new(BattleSetup { catalog: cat.clone(), sides: vec![attacker, defender], config })
+}
+
+#[test]
+fn the_ai_buys_one_upgrade_at_a_time_while_it_is_rich() {
+    let Some((data, fs)) = load() else { return };
+    let cat = Arc::new(Catalog::build(&data, Some(&fs), &["Empire_Star_Base_1", "Empire_Star_Base_3", "Nebulon_B_Frigate"]));
+    let run = |base: &str, level: u32, credits: i64, seconds: u32| {
+        let mut b = ai_defended(&cat, base, level, credits);
+        for _ in 0..30 * seconds {
+            b.step();
+        }
+        (b.credits(1), names(&cat, b.built(1).iter().copied()), b.build_queue(1).len())
+    };
+    // `SelfIsRich`: above 7500 credits at level 1, above 15000 at level 3.
+    assert_eq!(run("Empire_Star_Base_1", 1, 7500, 5), (7500, vec![], 0));
+    let (left, _, queued) = run("Empire_Star_Base_1", 1, 7501, 2);
+    assert_eq!((left, queued), (7341, 1), "one item, 160 credits");
+    assert_eq!(run("Empire_Star_Base_3", 3, 15000, 5), (15000, vec![], 0));
+    // One after the other, the first item in bar order each time: reactors L1 (20 s), then L2 (30 s, it replaces L1), then the next.
+    let (left, built, queued) = run("Empire_Star_Base_3", 3, 15641, 60);
+    assert_eq!(built, ["ES_Enhanced_Reactors_L2_Upgrade"]);
+    assert_eq!((left, queued), (15161, 1), "the third purchase is building; 15161 is still above 15000");
+}
