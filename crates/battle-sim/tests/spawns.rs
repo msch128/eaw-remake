@@ -261,6 +261,10 @@ fn zaarin_arrives_with_two_vindicators_beside_him() {
     let mut again = Battle::new(BattleSetup { catalog: cat.clone(), sides: vec![side("Empire", "Predominant_Star_Destroyer"), side("Rebel", "Nebulon_B_Frigate")], config: BattleConfig { seed: 9, ..BattleConfig::default() } });
     spawned(&mut again, 8.0);
     assert_eq!(again.state_hash(), b.state_hash());
+    // Losing one costs its `Destruction_Survivors` death penalty (`Zaarin_Vindi_Penalty_Dummy`, 9000 credits), as in the Remake.
+    assert_eq!(b.result().attrition_credits[0], 0);
+    b.ships[got[0].2[0] as usize].alive = false;
+    assert_eq!(b.result().attrition_credits[0], -9000);
 }
 
 #[test]
@@ -566,4 +570,23 @@ fn a_passive_missile_shield_destroys_enemy_missiles_only() {
     assert!(hits > 0 && stopped == 0, "{hits} {stopped}");
     let (hits, stopped) = run(500.0);
     assert!(hits == 0 && stopped > 0, "{hits} {stopped}");
+}
+
+#[test]
+fn every_spawned_type_has_its_model_for_the_view() {
+    use alamo_fs::FileSource;
+    let Some((data, fs)) = load() else { return };
+    let spawners = ["Predominant_Star_Destroyer", "TF-24_Requiem", "Voca_Blade", "Savrip", "VSD_Protector", "Subjugator_Zann_P3", "Nebulon_B_Frigate", "U-Wing_Squadron", "TIE_Interdictor_Squadron"];
+    let cat = Catalog::build(&data, Some(&fs), &spawners);
+    let mut types: Vec<ShipId> = spawners.iter().flat_map(|n| cat.ship(cat.ship_id(n).unwrap()).script_spawns()).collect();
+    // Squadrons are drawn as their craft.
+    types = types.into_iter().flat_map(|t| if cat.ship(t).is_squadron { cat.ship(t).members.iter().map(|m| m.0).collect() } else { vec![t] }).collect();
+    types.sort_unstable();
+    types.dedup();
+    assert!(types.len() >= 29, "{} types", types.len());
+    for t in types {
+        let d = cat.ship(t);
+        let model = d.model.as_deref().unwrap_or_else(|| panic!("{} has no model", d.name));
+        assert!(fs.exists(&format!("Art/Models/{model}")), "{}: {model} missing", d.name);
+    }
 }

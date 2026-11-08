@@ -74,7 +74,8 @@ fn publish_waiting(cache: Res<PipelineCache>, waiting: Res<PipelinesWaiting>) {
 }
 
 /// Every `(ship type, side)` the battle can show: the deployed and reserve groups of each side of the request, their
-/// squadron members and the fighters their hangars launch.
+/// squadron members, the fighters their hangars launch and what their scripts and abilities spawn (escorts, helper objects; warmed for the
+/// spawner's side, which a script's faction nearly always is).
 fn unit_types(rt: &BattleRuntime) -> Vec<(ShipId, u8)> {
     let Some(request) = rt.request.as_ref() else { return Vec::new() };
     let roots: Vec<Vec<ShipId>> =
@@ -82,7 +83,7 @@ fn unit_types(rt: &BattleRuntime) -> Vec<(ShipId, u8)> {
     reachable(&roots, |id| {
         let d = rt.catalog.ship(id);
         let launched = d.spawned_by_tech.iter().flat_map(|t| t.1.iter().chain(&t.2));
-        d.members.iter().chain(&d.carried).chain(&d.reserve).chain(launched).map(|m| m.0).collect()
+        d.members.iter().chain(&d.carried).chain(&d.reserve).chain(launched).map(|m| m.0).chain(d.script_spawns()).collect()
     })
 }
 

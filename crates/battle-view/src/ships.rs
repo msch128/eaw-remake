@@ -392,11 +392,15 @@ pub fn update_ships(
     let catalog = rt.catalog.clone();
     let mut present: HashSet<u32> = HashSet::with_capacity(cur.ships.len());
     flash_spots.clear();
-    // Fighters launched from a carrier or station leave a bay: no hyperspace arrival for them (no drop-out, flash or sound).
+    // Fighters launched from a carrier or station leave a bay, and helper objects (repair droids, jamming pods) appear in place: no
+    // hyperspace arrival for them (no drop-out, flash or sound).
     let launched: HashSet<u32> = rt
         .fresh_events
         .iter()
-        .filter_map(|e| if let battle_sim::Event::SquadronLaunched { ships, .. } = e { Some(ships.iter().copied()) } else { None })
+        .filter_map(|e| match e {
+            battle_sim::Event::SquadronLaunched { ships, .. } | battle_sim::Event::Spawned { ships, hyperspace: false, .. } => Some(ships.iter().copied()),
+            _ => None,
+        })
         .flatten()
         .collect();
     rendered.0.clear();

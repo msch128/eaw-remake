@@ -634,7 +634,9 @@ with `speed_mult > 1.05` when fleeing or when the target is over twice the weapo
   arrive beside their marker on free hull space (rings of `reinforce_clearance` spacing; `Teleport_And_Face` stacks them
   and the engine pushes them apart). Project rule: they belong to the battle only (no results group, nothing returns to
   the galaxy; no data or script hands them to the galactic fleet), ignore the unit cap like `Spawn_Unit`, and do not
-  keep their side in the fight (as the garrison below). `Event::Spawned` reports each arrival. Scripts in use in 4.0
+  keep their side in the fight (as the garrison below); their `Destruction_Survivors` death penalties apply (a lost
+  `Vindicator_Cruiser_Kas` costs 9000). `Event::Spawned` reports each arrival; the view drops escorts out of hyperspace
+  and warms up their models. Scripts in use in 4.0
   (`Lua_Script` of the unit): Zaarin's `Predominant_Star_Destroyer` (2 `Vindicator_Cruiser_Kas`), `TF-24_Requiem`
   (`TF-24_Relentless`, `TF-24_Ravenous`), `Voca_Blade` (`Voca_Destruction`, `Voca_Fist`, `Secutor_Inferno`,
   `Voca_Lancer`), Noira's `Savrip` (`Renegades_Blood`), Harkov's `VSD_Protector` (four `Neb_*` Nebulon-Bs, for

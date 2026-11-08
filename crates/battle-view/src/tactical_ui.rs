@@ -805,9 +805,10 @@ Follows the selected unit; you can rotate around it".to_string());
     }
 }
 
-/// Abilities that are aimed at a point: the reveal ping, the lightning storm (zone), the super laser and the weakening area.
+/// Abilities that are aimed at a point: the reveal ping, the lightning storm (zone), the super laser, the weakening area and the helper objects
+/// (repair droids, jamming pods).
 fn is_targeted(d: &battle_sim::AbilityDef) -> bool {
-    d.reveal_radius > 0.0 || d.zone.is_some() || d.super_laser.is_some() || d.weaken.is_some() || d.energy.is_some()
+    d.reveal_radius > 0.0 || d.zone.is_some() || d.super_laser.is_some() || d.weaken.is_some() || d.energy.is_some() || d.helper.is_some()
 }
 
 /// Radius within which the sim looks for a super laser target around the aimed point (`Battle::command`, `UseAbilityAt`).
@@ -899,6 +900,18 @@ pub(crate) fn ability_at(
         }
         colour = Color::srgb(0.8, 0.5, 1.0);
     }
+    if let Some(h) = &def.helper {
+        // The object's own reach (repair range or missile shield) at the cursor, the placing range around the caster.
+        let object = rt.catalog.ship(h.ship);
+        radius = object.heals.first().map_or(object.passive_missile_radius, |x| x.range).max(60.0);
+        if h.max_range < 1.0e6 {
+            shape(crate::convert::sim_to_bevy(caster.pos), h.max_range, Color::srgba(0.6, 1.0, 0.7, 0.4), &mut gizmos);
+            if caster.pos.dist(pos) > h.max_range {
+                verdict = verdict.and(Err("Out of range"));
+            }
+        }
+        colour = Color::srgb(0.45, 1.0, 0.55);
+    }
     if let Some(w) = &def.weaken {
         radius = w.radius;
         colour = Color::srgb(1.0, 0.75, 0.3);
@@ -940,7 +953,7 @@ pub(crate) fn ability_at(
     let casters: Vec<u32> = group.iter().copied().filter(|id| cur.ship(*id).is_some_and(|s| s.id == caster.id)).collect();
     if let Some(&id) = casters.first() {
         rt.command(settings.player_side, Command::UseAbilityAt { ship: id, ability: idx as u16, pos });
-        if def.reveal_radius > 0.0 || def.kind.eq_ignore_ascii_case("FOW_REVEAL_PING") {
+        if (def.reveal_radius > 0.0 || def.kind.eq_ignore_ascii_case("FOW_REVEAL_PING")) && def.helper.is_none() {
             commands.spawn((
                 crate::BattleEntity,
                 crate::effects::TacticalSensorPing {
@@ -2502,6 +2515,14 @@ mod tests {
         assert_eq!(death_star_seconds([(laser, a)].into_iter()), Some(90.0));
         assert_eq!(death_star_seconds([(laser, a), (laser, b)].into_iter()), Some(30.0), "charging counts as the larger of the two");
         assert_eq!(death_star_seconds([(none, &a[..1])].into_iter()), None);
+    }
+
+    #[test]
+    fn helper_objects_are_placed_with_a_click() {
+        let helper = battle_sim::HelperDef { ship: 0, max_range: 1000.0, delay: 0.0, own_dps: 0.0 };
+        let droids = battle_sim::AbilityDef { kind: "FOW_REVEAL_PING".into(), helper: Some(helper), ..default() };
+        assert!(is_targeted(&droids), "the click picks the place, and only one ship of the slot uses it");
+        assert!(!is_targeted(&battle_sim::AbilityDef { kind: "FOW_REVEAL_PING".into(), ..default() }));
     }
 
     #[test]
