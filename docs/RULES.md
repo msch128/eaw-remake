@@ -77,16 +77,9 @@ every owned planet, the planet's `Additional_Population_Capacity`, its star base
   dummy and icon planets 0 or 1); nothing is classified or guessed. A unit whose required structures all need a
   higher level than the cap is hidden from that planet's menu. Star base levels chain through `Prev_Level_Base` /
   `Next_Level_Base`; minor factions define unlinked levels (`Minor_Starbase_X`, `_2`, `_3`) that are chained by name.
-* Heroes, project rule (deviation from the data): the first ship of five hero chains costs 1 credit in the data
-  (`Strikefast`, `Piett_Procursator`, `Ackbar_Wingless`, `Profundity`, `Sykes_Venator`), which would make the hero free.
-  A recruitable hero ship (a `UniqueUnit` with `Build_Tab_Space_Units`) whose own price is 1 credit or less costs the
-  first price above 1 up its `Variant_Of_Existing_Type` chain, the price of its ship class (Strikefast 12000,
-  Piett_Procursator 13000, Ackbar_Wingless 14000, Sykes_Venator 15000, Profundity 16000; its `Profundity_Template` is 1
-  too and is skipped). Without a class price up the chain (the Hapan `Star_Home`) the data price stays. Other kinds,
-  units outside a build menu and the upgrade items keep their data price; the follow-up `Vessel_Upgrade_Template`
-  item (25000 and more) replaces a ship in orbit (`Required_Orbiting_Units`, enforced). The rule lives in
-  `alamo_data::GameObjects::build_cost`, so the build menu, the AI, the scripts' `Get_Build_Cost` and saves see the
-  same price. Super ships with `Required_Planets` or `E_Shipyard_3` follow the data
+* Heroes: the hero ship itself costs 1 credit in the data (`Piett_Procursator`); the real cost is the follow-up
+  `Vessel_Upgrade_Template` item (25000 and more) that replaces a ship in orbit (`Required_Orbiting_Units`, enforced).
+  The menu shows the data value. Super ships with `Required_Planets` or `E_Shipyard_3` follow the data
   (`galaxy-sim/tests/super_ships.rs`).
 * The build bar lists items in object load order (`GameObjectFiles.XML`) with `GUI_Row` 0 (upgrade items) before 1.
 * Tech levels in the Remake and Clone Wars data: upgrade objects with `Build_Advances_Tech_Level`

@@ -196,34 +196,3 @@ fn campaign_sets_list_the_playable_factions() {
     println!("opponents in {}: {opponents:?}", rebel.campaign.name);
     assert!(opponents.contains(&"Empire") && opponents.contains(&"Underworld") && !opponents.contains(&"Rebel"));
 }
-
-#[test]
-fn hero_ships_cost_the_price_of_their_ship_class() {
-    let Some(src) = open() else { return };
-    let (data, _) = load_galaxy(&src);
-    // The mod prices the first ship of these hero chains at 1 credit; recruiting one costs its class instead.
-    for (hero, class_price) in [
-        ("Strikefast", 12000.0),
-        ("Piett_Procursator", 13000.0),
-        ("Ackbar_Wingless", 14000.0),
-        ("Sykes_Venator", 15000.0),
-        ("Profundity", 16000.0),
-    ] {
-        let hero_def = data.objects.space_unit(hero).unwrap_or_else(|| panic!("{hero} exists"));
-        assert_eq!(hero_def.build_cost, class_price, "{hero}");
-        assert_eq!(data.objects.build_cost(hero), Some(class_price), "{hero}");
-    }
-    // A recruitable hero ship stays at 1 credit only when its chain has no class price to take (the Hapan Star_Home has none).
-    let stuck: Vec<String> = data
-        .objects
-        .space_units()
-        .into_iter()
-        .filter(|u| u.kind.eq_ignore_ascii_case("UniqueUnit") && u.build_cost > 0.0 && u.build_cost <= 1.0 && u.fields.get("build_tab_space_units").is_some_and(|v| alamo_data::xml::parse_bool(v)))
-        .filter(|u| {
-            let chain = data.objects.resolve(&u.name).expect("resolves").chain;
-            chain.iter().skip(1).any(|o| o.element.child_text("build_cost_credits").and_then(|t| t.trim().parse::<f32>().ok()).is_some_and(|c| c > 1.0))
-        })
-        .map(|u| u.name)
-        .collect();
-    assert!(stuck.is_empty(), "recruitable heroes at 1 credit although their class has a price: {stuck:?}");
-}

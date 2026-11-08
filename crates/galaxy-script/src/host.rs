@@ -825,8 +825,7 @@ impl SimHost {
         if let Some(r) = s.objects.resolve(type_name)
             && let Some(v) = r.num::<f32>(tag)
         {
-            // Same price as the build menu (hero ships the mod prices at 1 credit cost their class).
-            return Some(if what == "build_cost" { s.objects.build_cost(type_name).unwrap_or(v) } else { v });
+            return Some(v);
         }
         if what == "combat_rating" {
             // The engine derives the rating from unit stats; no XML tag carries it. Use `AI_Combat_Power`
