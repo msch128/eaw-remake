@@ -262,6 +262,8 @@ pub struct AbilityDef {
     pub blast: Option<BlastDef>,
     /// `SHIELD_FLARE`: the charged wave around the ship.
     pub flare: Option<FlareDef>,
+    /// `LEECH_SHIELDS`: the shield-draining beam.
+    pub leech: Option<LeechDef>,
     /// `FOW_REVEAL_PING`: radius of the area it reveals to the owner for the duration (`Effective_Radius`; 0 = not a reveal ping).
     pub reveal_radius: f32,
 }
@@ -303,6 +305,23 @@ pub struct FlareDef {
     pub max_per_victim: f32,
     /// `Spawned_Object_Type`: the blast projectile.
     pub proj: ProjId,
+}
+
+/// `LEECH_SHIELDS` (`Leech_Shields_Ability`): a beam drains `drain` shield points per second from an enemy ship of `classes` or `types` within
+/// `min_range`..`max_range` for the ability's duration; while the ability runs the caster's damage is multiplied by its
+/// [`AbilityDef::cause_damage_mult`] (`Damage_Multiplier`).
+#[derive(Debug, Clone, Default)]
+pub struct LeechDef {
+    /// `Activation_Min_Range`.
+    pub min_range: f32,
+    /// `Activation_Max_Range`.
+    pub max_range: f32,
+    /// `Shield_Damage_Per_Second`.
+    pub drain: f32,
+    /// `Applicable_Unit_Categories` as a class bit mask.
+    pub classes: u16,
+    /// `Applicable_Unit_Types` (lower case), allowed whatever their class.
+    pub types: Vec<String>,
 }
 
 /// How long an armed shot ability waits for the craft to fire at its target before it lapses (estimate; the data gives no expiration).
@@ -2239,7 +2258,7 @@ fn ability_defs(u: &SpaceUnitDef, projectiles: &[ProjDef], proj_index: &HashMap<
         .filter(|a| {
             a.expiration_seconds.unwrap_or(0.0) > 0.0
                 || (a.kind.eq_ignore_ascii_case("LURE") && a.fields.contains_key("effective_radius"))
-                || ["FULL_SALVO", "TRACTOR_BEAM", "MISSILE_SHIELD", "INTERDICT", "STEALTH", "FOW_REVEAL_PING", "LASER_DEFENSE", "ROCKET_ATTACK", "SWAP_WEAPONS", "SENSOR_JAMMING", "BUZZ_DROIDS", "SUPER_LASER", "CORRUPT_SYSTEMS", "HUNT", "SPOILER_LOCK", "REPLENISH_WINGMEN", "WEAKEN_ENEMY", "HARMONIC_BOMB", "ENERGY_WEAPON", "CLUSTER_BOMB", "LUCKY_SHOT", "BLAST", "ION_CANNON_SHOT", "SHIELD_FLARE"].iter().any(|k| a.kind.eq_ignore_ascii_case(k))
+                || ["FULL_SALVO", "TRACTOR_BEAM", "MISSILE_SHIELD", "INTERDICT", "STEALTH", "FOW_REVEAL_PING", "LASER_DEFENSE", "ROCKET_ATTACK", "SWAP_WEAPONS", "SENSOR_JAMMING", "BUZZ_DROIDS", "SUPER_LASER", "CORRUPT_SYSTEMS", "HUNT", "SPOILER_LOCK", "REPLENISH_WINGMEN", "WEAKEN_ENEMY", "HARMONIC_BOMB", "ENERGY_WEAPON", "CLUSTER_BOMB", "LUCKY_SHOT", "BLAST", "ION_CANNON_SHOT", "SHIELD_FLARE", "LEECH_SHIELDS"].iter().any(|k| a.kind.eq_ignore_ascii_case(k))
         })
         .map(|a| {
             let toggle = a.expiration_seconds.unwrap_or(0.0) <= 0.0 && ["MISSILE_SHIELD", "INTERDICT", "STEALTH", "HUNT", "SPOILER_LOCK"].iter().any(|k| a.kind.eq_ignore_ascii_case(k));
@@ -2271,6 +2290,23 @@ fn ability_defs(u: &SpaceUnitDef, projectiles: &[ProjDef], proj_index: &HashMap<
                 let p = &projectiles[proj as usize];
                 Some(FlareDef { charge: f("charge_up_seconds").unwrap_or(0.0).max(0.0), radius: f("damage_radius").unwrap_or(p.blast_range), max_per_victim: f("max_damage_per_victim").unwrap_or(p.blast_damage), proj })
             }).flatten();
+            let mut leech_secs = None;
+            let leech = a.kind.eq_ignore_ascii_case("LEECH_SHIELDS").then(|| {
+                let sub = a.activated_ability.as_ref().and_then(|n| u.sub_abilities.iter().find(|s| s.name.eq_ignore_ascii_case(n)));
+                let f = |k: &str| sub.and_then(|s| s.fields.get(k)).and_then(|v| alamo_data::xml::parse_num::<f32>(v));
+                let list = |k: &str| sub.and_then(|s| s.fields.get(k)).map(|v| alamo_data::xml::split_list(v)).unwrap_or_default();
+                leech_secs = f("duration_in_secs");
+                if cause_damage_mult == 1.0 {
+                    cause_damage_mult = f("damage_multiplier").unwrap_or(1.0);
+                }
+                LeechDef {
+                    min_range: f("activation_min_range").unwrap_or(0.0),
+                    max_range: f("activation_max_range").unwrap_or(0.0),
+                    drain: f("shield_damage_per_second").unwrap_or(0.0),
+                    classes: list("applicable_unit_categories").iter().filter_map(|t| TargetClass::from_token(t)).fold(0u16, |m, c| m | c.bit()),
+                    types: list("applicable_unit_types").iter().map(|t| t.to_ascii_lowercase()).collect(),
+                }
+            }).filter(|l| l.max_range > 0.0 && l.drain > 0.0);
             let lucky = a.kind.eq_ignore_ascii_case("LUCKY_SHOT");
             let shot = (lucky || a.kind.eq_ignore_ascii_case("ION_CANNON_SHOT")).then(|| {
                 let sub = a.activated_ability.as_ref().and_then(|n| u.sub_abilities.iter().find(|s| s.name.eq_ignore_ascii_case(n)));
@@ -2327,11 +2363,12 @@ fn ability_defs(u: &SpaceUnitDef, projectiles: &[ProjDef], proj_index: &HashMap<
                 cause_damage_mult,
                 recharge: a.recharge_seconds.unwrap_or(30.0),
                 // A reveal ping has no expiration in the data: it shows the area for 5 s (estimate).
-                duration: if toggle { f32::MAX / 4.0 } else if shot.is_some() { SHOT_WINDOW_SECONDS } else if let Some(b) = &blast { b.charge + SHOT_WINDOW_SECONDS } else if let Some(f) = &flare { f.charge } else if ping { a.expiration_seconds.filter(|&x| x > 0.0).unwrap_or(5.0) } else if let Some(secs) = defence_secs { secs } else if a.kind.eq_ignore_ascii_case("CORRUPT_SYSTEMS") { a.activated_ability.as_ref().and_then(|n| u.sub_abilities.iter().find(|s| s.name.eq_ignore_ascii_case(n))).and_then(|s| s.fields.get("duration_in_seconds")).and_then(|v| alamo_data::xml::parse_num(v)).unwrap_or(30.0) } else { a.expiration_seconds.unwrap_or(12.0) },
+                duration: if toggle { f32::MAX / 4.0 } else if shot.is_some() { SHOT_WINDOW_SECONDS } else if let Some(b) = &blast { b.charge + SHOT_WINDOW_SECONDS } else if let Some(f) = &flare { f.charge } else if let (Some(_), Some(secs)) = (&leech, leech_secs) { secs } else if ping { a.expiration_seconds.filter(|&x| x > 0.0).unwrap_or(5.0) } else if let Some(secs) = defence_secs { secs } else if a.kind.eq_ignore_ascii_case("CORRUPT_SYSTEMS") { a.activated_ability.as_ref().and_then(|n| u.sub_abilities.iter().find(|s| s.name.eq_ignore_ascii_case(n))).and_then(|s| s.fields.get("duration_in_seconds")).and_then(|v| alamo_data::xml::parse_num(v)).unwrap_or(30.0) } else { a.expiration_seconds.unwrap_or(12.0) },
                 stealth: a.kind.eq_ignore_ascii_case("STEALTH"),
                 shot,
                 blast,
                 flare,
+                leech,
                 reveal_radius: if ping { a.fields.get("effective_radius").and_then(|v| alamo_data::xml::parse_num(v)).unwrap_or(1000.0) } else { 0.0 },
                 interdict: a.kind.eq_ignore_ascii_case("INTERDICT"),
                 hunt: a.kind.eq_ignore_ascii_case("HUNT"),

@@ -815,6 +815,8 @@ pub struct Battle {
     pub(crate) shots: Vec<(u32, ProjId, u32, f32, f32)>,
     /// Charging shield flares (`SHIELD_FLARE`): ship, time the wave goes off.
     pub(crate) flares: Vec<(u32, f32)>,
+    /// Shield leech beams (`LEECH_SHIELDS`): caster, ability index, target.
+    pub(crate) leeches: Vec<(u32, u16, u32)>,
     pub(crate) zones: Vec<(u8, Vec3, f32, f32, f32)>,
     /// Distance field of rocks and stations for path planning (`None` without navigation or obstacles).
     pub(crate) nav_grid: Option<crate::nav::NavGrid>,

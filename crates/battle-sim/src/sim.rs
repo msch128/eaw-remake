@@ -243,6 +243,7 @@ impl Battle {
             drains: Vec::new(),
             shots: Vec::new(),
             flares: Vec::new(),
+            leeches: Vec::new(),
             nav_grid: None,
             search: vec![(0, 0.0); sides.len()],
             ai: (0..sides.len()).map(|i| crate::ai::AiSide::new(config.ai_reserve.get(i).cloned().unwrap_or_default())).collect(),
@@ -1010,6 +1011,23 @@ impl Battle {
         }
     }
 
+    /// Target of a shield leech: the enemy of an allowed class or type within the activation range that is nearest to the aimed point
+    /// (`UseAbilityAt`), else the current target if allowed, else the nearest allowed one.
+    fn leech_target(&self, ship: u32, l: &LeechDef) -> Option<u32> {
+        let s = &self.ships[ship as usize];
+        let cat = &self.catalog;
+        let ok = |o: &Ship| {
+            let d = cat.ship(o.def);
+            let gap = o.pos.dist(s.pos) - d.radius;
+            o.alive && !o.retreated && o.side != s.side && (l.classes & d.class.bit() != 0 || l.types.contains(&d.name.to_ascii_lowercase())) && gap <= l.max_range && o.pos.dist(s.pos) >= l.min_range
+        };
+        let from = self.ability_at.unwrap_or(s.pos);
+        if self.ability_at.is_none() && s.target != NONE && ok(&self.ships[s.target as usize]) {
+            return Some(s.target);
+        }
+        self.ships.iter().filter(|o| ok(o)).min_by(|a, b| a.pos.dist(from).total_cmp(&b.pos.dist(from)).then(a.id.cmp(&b.id))).map(|o| o.id)
+    }
+
     fn activate_ability(&mut self, ship: u32, ability: usize, from_command: bool) -> bool {
         let def = self.catalog.ship(self.ships[ship as usize].def);
         let Some(a) = def.abilities.get(ability) else { return false };
@@ -1078,6 +1096,13 @@ impl Battle {
                 None => return false,
             }
         }
+        if let Some(l) = &a.leech {
+            match self.leech_target(ship, l) {
+                Some(x) => target = x,
+                None => return false,
+            }
+        }
+        let leech = a.leech.is_some();
         let no_cooldown = self.cheats.has_no_cooldowns(self.ships[ship as usize].side);
         let shot = a.shot.is_some();
         let st = &mut self.ships[ship as usize].abilities[ability];
@@ -1127,6 +1152,9 @@ impl Battle {
         }
         if let Some(f) = flare {
             self.flares.push((ship, self.time + f.charge));
+        }
+        if leech {
+            self.leeches.push((ship, ability as u16, target));
         }
         if self.config.record_events {
             // A command runs between two steps and the next step clears `events` first: its report waits in `cmd_events` (an ability the
@@ -2159,6 +2187,7 @@ impl Battle {
         self.run_drains(dt);
         self.run_blasts();
         self.run_flares();
+        self.run_leeches(dt);
         let now = self.time;
         self.shots.retain(|s| s.4 >= now);
         if self.tick.is_multiple_of(30) {
@@ -2215,6 +2244,12 @@ impl Battle {
                         let near_hurt = self.ships.iter().filter(|o| o.alive && !o.retreated && o.side == side && o.id != s.id && o.pos.dist(s.pos) <= b.heal_radius && (b.heal_classes == 0 || b.heal_classes & cat.ship(o.def).class.bit() != 0) && o.hull < cat.ship(o.def).hull * 0.8).count();
                         let near_foes = enemies.iter().filter(|&&e| self.ships[e as usize].pos.dist(s.pos) <= b.blast_radius + 100.0).count();
                         if (b.heal_amount > 0.0 && near_hurt >= 2) || (b.blast_damage > 0.0 && near_foes >= 2) {
+                            uses.push((side, s.id, k, None));
+                        }
+                    } else if let Some(l) = &a.leech {
+                        // Estimate (the ability supports autofire; the Remake scripts have no rule for it): drain an allowed enemy in range that
+                        // still has shield.
+                        if self.leech_target(s.id, l).is_some_and(|t| self.ships[t as usize].shield > 0.0) {
                             uses.push((side, s.id, k, None));
                         }
                     } else if let Some(f) = &a.flare {
@@ -2705,6 +2740,35 @@ impl Battle {
             s.shield = 0.0;
             s.shield_lock = lock;
         }
+    }
+
+    /// `LEECH_SHIELDS` beams drain their target's shield while the ability runs. A beam breaks (and the ability with its damage bonus ends)
+    /// when the caster or the target is gone or the target is more than 1.2 times the activation range away (estimate, as for the energy beam).
+    fn run_leeches(&mut self, dt: f32) {
+        if self.leeches.is_empty() {
+            return;
+        }
+        let cat = self.catalog.clone();
+        let lock = cat.depleted_shield_disable;
+        let mut keep = Vec::new();
+        for (c, k, t) in std::mem::take(&mut self.leeches) {
+            let (caster, target) = (&self.ships[c as usize], &self.ships[t as usize]);
+            let Some(l) = cat.ship(caster.def).abilities[k as usize].leech.as_ref() else { continue };
+            let holds = caster.alive && !caster.retreated && caster.abilities[k as usize].active > 0.0 && target.alive && !target.retreated && target.pos.dist(caster.pos) - cat.ship(target.def).radius <= l.max_range * 1.2;
+            if !holds {
+                self.ships[c as usize].abilities[k as usize].active = 0.0;
+                continue;
+            }
+            let s = &mut self.ships[t as usize];
+            if s.shield > 0.0 {
+                s.shield = (s.shield - l.drain * dt).max(0.0);
+                if s.shield <= 0.0 {
+                    s.shield_lock = lock;
+                }
+            }
+            keep.push((c, k, t));
+        }
+        self.leeches = keep;
     }
 
     /// `SUPER_LASER` shots that reach their firing time destroy the target if the shooter still lives. An ion super laser

@@ -294,3 +294,38 @@ fn an_ai_viscount_flares_when_three_frigates_are_near() {
     eprintln!("AI flare with 2 frigates near: {two}, with 3: {three}");
     assert!(!two && three);
 }
+
+#[test]
+fn the_ravager_leeches_400_shield_per_second_and_triples_its_damage() {
+    // Before: LEECH_SHIELDS was not in the ability list.
+    let Some((data, fs)) = load() else { return };
+    let mut b = duel(&data, &fs, "Ravager", "Nebulon_B_Frigate", 1500.0);
+    let cat = b.catalog().clone();
+    let (rav, t) = (b.ships.iter().position(|s| s.side == 0 && cat.ship(s.def).name == "Ravager").unwrap() as u32, b.ships.iter().position(|s| s.side == 1).unwrap() as u32);
+    let k = ability(&b, rav, "LEECH_SHIELDS").expect("the Ravager has it");
+    let a = &cat.ship(b.ships[rav as usize].def).abilities[k];
+    let l = a.leech.as_ref().unwrap();
+    assert_eq!((a.recharge, a.duration, a.cause_damage_mult, l.drain, l.min_range, l.max_range), (75.0, 30.0, 3.0, 400.0, 10.0, 2000.0), "Nihilus_Eat_You_Now");
+    assert_eq!(l.types, ["millennium_falcon"]);
+    assert!(a.supports_autofire);
+    b.ships[rav as usize].stance = Stance::HoldFire;
+    b.step();
+    let shield0 = b.ships[t as usize].shield;
+    b.command(0, Command::UseAbility { ship: rav, ability: k as u16 }).expect("a frigate 1500 away");
+    for _ in 0..5 * 30 {
+        b.step();
+    }
+    let drained = shield0 - b.ships[t as usize].shield;
+    eprintln!("frigate shield {shield0} -> {} in 5 s", b.ships[t as usize].shield);
+    assert!(drained >= 1500.0_f32.min(shield0 - 1.0), "about 400 per second: {drained}");
+    assert!(b.ships[rav as usize].abilities[k].active > 0.0);
+    // The beam breaks when the target is out of reach, and the bonus with it.
+    let far = b.ships[rav as usize].pos + Vec3::new(6000.0, 0.0, 0.0);
+    b.ships[t as usize].pos = far;
+    b.step();
+    b.step();
+    assert_eq!(b.ships[rav as usize].abilities[k].active, 0.0);
+    // Too far to start.
+    b.ships[rav as usize].abilities[k].cooldown = 0.0;
+    assert!(b.command(0, Command::UseAbility { ship: rav, ability: k as u16 }).is_err());
+}
