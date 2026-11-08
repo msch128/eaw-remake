@@ -472,6 +472,11 @@ impl SpaceUnitDef {
     pub fn upkeep(&self) -> f32 {
         self.income_modifiers.iter().map(|m| m.absolute).sum()
     }
+
+    /// Sum of percentage income modifiers (e.g. freighters, Errant Venture).
+    pub fn income_pct(&self) -> f32 {
+        self.income_modifiers.iter().map(|m| m.percentage).sum()
+    }
 }
 
 /// Turret rotation limits of a hardpoint.

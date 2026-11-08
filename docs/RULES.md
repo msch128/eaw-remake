@@ -29,7 +29,7 @@ and here. Known holes are in [KNOWN-GAPS.md](KNOWN-GAPS.md).
 | Rule | Kind and source | Implementation |
 |---|---|---|
 | Planet income = `Planet_Credit_Value` | Data: `Xml/Planets_WW.xml` (Coruscant_WW 607) | per week per owned planet |
-| Structures and star bases change income through `Planet_Income_Bonus_Ability` (`Absolute_Income_Modifier`, `Percentage_Income_Modifier`) | Data: `Buildings/Space/GC/Shipyard_*.xml` (upkeep -35), `Buildings/Ground/GC/**/Mining_*.xml` (+25) | `World::planet_income`: `base * (1 + sum(pct)) + sum(abs)` |
+| Structures, star bases and units change income through `Planet_Income_Bonus_Ability` (`Absolute_Income_Modifier`, `Percentage_Income_Modifier`) | Data: `Buildings/Space/GC/Shipyard_*.xml` (upkeep -35), `Buildings/Ground/GC/**/Mining_*.xml` (+25), units (freighters +10% to +150%, Errant Venture +40%) | `World::planet_income`: `base * (1 + sum(pct)) + sum(abs)`; unit percentage modifiers apply while orbiting an owned planet |
 | Ships cost upkeep through the same ability (Star Destroyer -800) | Data: `Units/Space/Units_Space_Empire_Star_Destroyer_Imperial.xml` | summed over all ships of a faction |
 | Faction multiplier `Credits_Accumulation_Factor` | Data: `Xml/FACTIONS.XML` (Rebel 0.95) | multiplies the faction's total income |
 | Credit cap `Credit_Cap_Per_Planet` 400000 | Data: `Xml/Gameconstants.xml` | Project rule: off by default (credits never expire); `SimConfig::credit_cap_per_planet` > 0 enables it |

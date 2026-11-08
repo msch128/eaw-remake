@@ -437,6 +437,16 @@ impl World {
             pct += sb.income_pct;
             abs += sb.income_abs;
         }
+        if let Some(owner) = ps.owner {
+            for f in galaxy.fleets.values() {
+                if f.owner == owner && f.location == FleetLocation::AtPlanet(planet) {
+                    for (&u, &c) in &f.units {
+                        let ut = &self.units[u as usize];
+                        pct += ut.income_pct * c as f32;
+                    }
+                }
+            }
+        }
         base * (1.0 + pct) + abs
     }
 

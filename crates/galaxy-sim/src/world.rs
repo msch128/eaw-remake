@@ -382,6 +382,8 @@ pub struct UnitType {
     pub system_spy: bool,
     /// Income change per week while the unit exists (negative = upkeep).
     pub upkeep: f32,
+    /// Percentage modifier on base planet income while orbiting an owned planet (e.g. freighters, Errant Venture).
+    pub income_pct: f32,
     /// `AI_Combat_Power`.
     pub ai_power: f32,
     /// True if the unit can appear in a build menu at all.

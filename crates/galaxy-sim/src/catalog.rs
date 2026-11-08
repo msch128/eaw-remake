@@ -199,6 +199,7 @@ fn unit_from_def(def: &SpaceUnitDef, combat: CombatStats) -> UnitType {
         galactic_stealth: def.sub_abilities.iter().any(|a| a.kind.eq_ignore_ascii_case("galactic_stealth_ability")),
         system_spy: def.sub_abilities.iter().any(|a| a.kind.eq_ignore_ascii_case("system_spy_ability")),
         upkeep: def.upkeep(),
+        income_pct: def.income_pct(),
         ai_power: def.ai_combat_power,
         buildable: def.build_cost > 0.0 && yes("build_tab_space_units") && !def.affiliation.is_empty(),
         carries: def.starting_spawned_units.clone(),
@@ -370,6 +371,9 @@ impl World {
             u.category = category;
             u.hyperspace_speed = if speed == f32::MAX { 0.5 } else { speed };
             u.buildable &= ok;
+            if u.income_pct == 0.0 {
+                u.income_pct = def.squadron_units.iter().filter_map(|m| self.unit_index.get(&key(m))).map(|&mid| self.units[mid as usize].income_pct).sum();
+            }
             self.resolve_unit_requirements(&mut u, &def);
             self.units.push(u);
         }
