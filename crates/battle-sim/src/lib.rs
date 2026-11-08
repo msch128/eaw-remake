@@ -51,7 +51,7 @@ pub use defs::{Bonus, BonusDef, CombatMod, ModKind, WeakenDef, LureDef, BombDef,
     AbilityDef, Catalog, DamageMatrix, DirectWeaponDef, FormationRules, HpDef, HpKind, PrioritySet, ProjDef, ProjId, ShipDef, ShipId, SpecialWeaponDef, TargetClass,
     TractorDef,
 };
-pub use arena::{Arena, Marker, Obstacle};
+pub use arena::{Arena, Marker, Obstacle, PropZones, prop_zones};
 pub use math::Vec3;
 pub use placement::{no_spawn_zones, placement_check, PlacementUnit};
 pub use rng::Rng;

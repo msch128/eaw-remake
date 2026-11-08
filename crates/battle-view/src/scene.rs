@@ -142,7 +142,7 @@ impl SpaceScene {
             let class = o.class();
             if !matches!(
                 class,
-                ObjectClass::Prop | ObjectClass::BackdropPlanet | ObjectClass::Asteroid
+                ObjectClass::Prop | ObjectClass::BackdropPlanet
             ) {
                 continue;
             }

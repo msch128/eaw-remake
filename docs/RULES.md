@@ -568,9 +568,17 @@ with `speed_mult > 1.05` when fleeing or when the target is over twice the weapo
   `Default_Unit_Damaged` hands the AI the attacker).
 * Arena: `BattleConfig::arena` (from `Arena::load` and the `.ted` map) gives the playable bounds, `Attacker Entry
   Position` markers (attackers at -Y), `Defending Forces Position` markers (defenders at +Y), the `Space Station
-  Position`, structure marker spots and asteroids as round obstacles that absorb projectiles and push ships away
-  (radius by name, estimate: huge 600, large 350, medium 180, small 80). Without an arena fleets start in rows by size
-  class in an empty square of `half_size` = 10000. Nebulae, the planet and backdrop props are not obstacles.
+  Position` and structure marker spots. A prop is a round obstacle that absorbs projectiles and pushes ships away
+  when `Is_Impassable_Asteroid` is true, `Is_Asteroid_Field` is not, and `Space_Obstacle_Radius` is greater than 0
+  (`Xml/SpaceProps.xml`: `Asteroid_Huge` 280, `Asteroid_Super_Huge` 350, `Star_Destroyer_Construction` 300). The
+  centre is the map position plus `Space_Obstacle_Offset` rotated by yaw only (estimate: the full Euler of a tumbling
+  prop is unverified). `Is_Asteroid_Field` with a radius is a damage field, not a rock
+  (`Asteroid_Field_Huge_Obstacle_Damage_8000` radius 3500). `Is_Nebula` and `Is_Ion_Storm` with a radius are effect
+  zones, not rocks (`Nebula_Small` 135; `Nebula_Ultra_Huge` is both, radius 40000). A name that contains "asteroid"
+  is not enough: `Asteroid Field Small` has the field flag but its radius is commented out, so it is neither a rock
+  nor a field. `Is_Impassable_Asteroid` without `Space_Obstacle_Radius` (`Destroyable_Asteroid_Huge`, footprint 320)
+  is not a nav rock. Without an arena fleets start in rows by size class in an empty square of `half_size` = 10000.
+  The planet and backdrop props are not obstacles.
 
 ## 2.9 Navigation, hulls, formations
 

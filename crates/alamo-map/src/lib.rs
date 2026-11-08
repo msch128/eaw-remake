@@ -306,8 +306,6 @@ impl MapObject {
             ObjectClass::Marker
         } else if u.starts_with("AAA_PLANET") {
             ObjectClass::BackdropPlanet
-        } else if u.contains("ASTEROID") {
-            ObjectClass::Asteroid
         } else {
             ObjectClass::Prop
         }
@@ -321,9 +319,7 @@ pub enum ObjectClass {
     Marker,
     /// Far-away decorative planet (`AAA_Planet_*`).
     BackdropPlanet,
-    /// Asteroid or asteroid field.
-    Asteroid,
-    /// Any other prop, structure or ship.
+    /// Any other prop, structure or ship. Collision comes from the object's XML, not this name.
     Prop,
     /// Name not resolved.
     Unknown,

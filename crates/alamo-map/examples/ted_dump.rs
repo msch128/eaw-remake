@@ -123,11 +123,7 @@ fn summary(map: &SpaceMap) {
         .or_default() += 1;
     }
     println!("types: {by:?}");
-    for o in map
-        .objects
-        .iter()
-        .filter(|o| o.class() != ObjectClass::Asteroid)
-    {
+    for o in &map.objects {
         println!(
             "  #{:<6} {:<36} pos {} rot {} {:?}",
             o.id,
