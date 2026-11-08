@@ -16,7 +16,7 @@ use alamo_fs::FileSource;
 use rayon::prelude::*;
 
 use crate::math::Vec3;
-use crate::scripts::{parse_spawn_script, SpawnScript};
+use crate::scripts::{parse_decay_script, parse_spawn_script, DecayScript, SpawnScript};
 
 /// Index of a ship definition in [`Catalog::ships`].
 pub type ShipId = u32;
@@ -231,8 +231,7 @@ pub struct AbilityDef {
     /// ([`SuperLaserDef::ion`]).
     pub super_laser: Option<SuperLaserDef>,
     /// `BUZZ_DROIDS` that damages enemies in an area (estimate: the area lasts `duration`, 20 s where the data gives no expiration; the
-    /// `Own_Damage_Per_Second` of 1 and the repair-drone variants are not modelled) or, for jamming pods, jams enemy missiles in it
-    /// ([`ZoneDef::missile_radius`]; `duration` is the pods' life).
+    /// `Own_Damage_Per_Second` of 1 is not modelled). The harmless variants place helper objects instead (`AbilityDef::helper`).
     pub zone: Option<ZoneDef>,
     /// `MISSILE_SHIELD`: radius in which enemy missiles and torpedoes are destroyed (0 = not a missile shield).
     pub missile_radius: f32,
@@ -272,6 +271,8 @@ pub struct AbilityDef {
     pub concentrate: Option<ConcentrateDef>,
     /// `FOW_REVEAL_PING`: radius of the area it reveals to the owner for the duration (`Effective_Radius`; 0 = not a reveal ping).
     pub reveal_radius: f32,
+    /// The helper object the ability places ([`HelperDef`]); such an ability neither reveals nor damages.
+    pub helper: Option<HelperDef>,
 }
 
 /// `LUCKY_SHOT`, `ION_CANNON_SHOT`: the next shot of the craft at the ability's target ([`AbilityState::target`]) uses the ability's
@@ -719,6 +720,20 @@ pub struct TractorDef {
     pub classes: u16,
 }
 
+/// A `FOW_REVEAL_PING` whose `Spawned_Object_Type` is a unit, or a `BUZZ_DROIDS` whose `Buzz_Droids_Ability` does no damage: the
+/// ability places a helper object (repair droids, missile jamming pods) instead of revealing an area.
+#[derive(Debug, Clone, PartialEq)]
+pub struct HelperDef {
+    /// The object.
+    pub ship: ShipId,
+    /// How far from the caster it may be placed (`Effective_Radius` of a ping, `Activation_Max_Range` of the buzz droids).
+    pub max_range: f32,
+    /// Seconds before it appears (`Activation_Time_In_Seconds`; 0 for a ping).
+    pub delay: f32,
+    /// Hit points it loses per second (`Own_Damage_Per_Second`), on top of what its own script takes ([`ShipDef::decay`]).
+    pub own_dps: f32,
+}
+
 /// Where a spawn script puts its units (the `Find_All_Objects_Of_Type` argument of its `SpawnReinforcements`).
 #[derive(Debug, Clone, PartialEq)]
 pub enum SpawnPlace {
@@ -782,8 +797,6 @@ pub struct ShipDef {
     pub bounty: f32,
     /// `Space_FOW_Reveal_Range`: how far this ship sees (fog of war); 1250 where the data gives none.
     pub sensor_range: f32,
-    /// `Passive_Missile_Shield_Radius`: an always-on missile shield around the unit (Star Home 500, Reaver 300, A-wing 50; 0 = none).
-    pub passive_missile_radius: f32,
     /// `Redirect_Damage_To_Teammates`: the hits this squadron leader takes go to its living wingmen (Vader's TIE Advanced, Rogue 1).
     pub redirect_to_teammates: bool,
     /// `Reinforcement_Prevention_Radius` of a structure: enemy reinforcements may not arrive this close (0 = the data has none; `BattleConfig::no_spawn_radius` applies).
@@ -903,14 +916,23 @@ pub struct ShipDef {
     pub on_death: Option<(String, i32)>,
     /// The unit's `Lua_Script` when it is a spawn script: it runs when the unit enters the battle (hero escorts).
     pub spawn_script: Option<Arc<SpawnScriptDef>>,
+    /// `Is_Valid_Target` False (helper objects): nothing aims at it, and the AI neither orders it nor counts it as an enemy.
+    pub untargetable: bool,
+    /// `Collidable_By_Projectile_Living` No: projectiles fly through it.
+    pub no_collide: bool,
+    /// Hit points the unit loses per second by its own `Lua_Script` (`ObjectScript_TakeDamage`).
+    pub decay: f32,
+    /// `Passive_Missile_Shield_Radius`: enemy missiles, torpedoes and rockets that come this close are destroyed (0 = none).
+    pub passive_missile_radius: f32,
 }
 
 impl ShipDef {
-    /// Every type this unit's scripts and hardpoints can bring into the battle (escorts, breakoff reinforcements), for warming up their
-    /// models.
+    /// Every type this unit's scripts, abilities and hardpoints can bring into the battle (escorts, helper objects, breakoff
+    /// reinforcements), for warming up their models.
     pub fn script_spawns(&self) -> Vec<ShipId> {
         let scripts = self.spawn_script.iter().chain(self.hardpoints.iter().filter_map(|h| h.breakoff_script.as_ref()));
-        let mut out: Vec<ShipId> = scripts.flat_map(|s| s.choices.iter().flatten().copied()).collect();
+        let helpers = self.abilities.iter().filter_map(|a| a.helper.as_ref().map(|h| h.ship));
+        let mut out: Vec<ShipId> = scripts.flat_map(|s| s.choices.iter().flatten().copied()).chain(helpers).collect();
         out.sort_unstable();
         out.dedup();
         out
@@ -1397,14 +1419,18 @@ impl Source {
         }
     }
 
-    /// `Lua_Script` of the object.
-    fn lua_script(&self) -> Option<&str> {
-        let fields = match self {
+    /// Raw tags of the object.
+    fn fields(&self) -> &HashMap<String, String> {
+        match self {
             Source::Unit(u) => &u.fields,
             Source::Base(b) => &b.fields,
             Source::Structure(s) => &s.fields,
-        };
-        fields.get("lua_script").map(|s| s.trim()).filter(|s| !s.is_empty())
+        }
+    }
+
+    /// `Lua_Script` of the object.
+    fn lua_script(&self) -> Option<&str> {
+        self.fields().get("lua_script").map(|s| s.trim()).filter(|s| !s.is_empty())
     }
 }
 
@@ -1414,29 +1440,48 @@ fn breakoff_script<'a>(h: &HardpointDef, objects: &'a alamo_data::GameObjects) -
     objects.resolve(prop)?.get("lua_script").filter(|s| !s.is_empty())
 }
 
+/// What one object script is to the battle (see `scripts.rs`).
+#[derive(Default)]
+struct ScriptFile {
+    spawn: Option<Arc<SpawnScript>>,
+    decay: Option<DecayScript>,
+}
+
 /// The object scripts (`Scripts/GameObject/<name>.lua`) of the catalog's units, each read once.
 #[derive(Default)]
 struct ScriptCache {
-    spawn: HashMap<String, Option<Arc<SpawnScript>>>,
+    files: HashMap<String, ScriptFile>,
+}
+
+fn script_key(name: &str) -> String {
+    name.trim().trim_end_matches(".lua").trim_end_matches(".LUA").to_ascii_lowercase()
 }
 
 impl ScriptCache {
-    /// The spawn script `name` (`None` without a file source, when the file is missing, or when it is no spawn script).
+    /// Reads the script `name` once (nothing without a file source or when the file is missing).
+    fn load(&mut self, fs: Option<&dyn FileSource>, name: &str) -> &ScriptFile {
+        let key = script_key(name);
+        self.files.entry(key.clone()).or_insert_with(|| {
+            let Some(bytes) = fs.and_then(|fs| fs.read(&format!("Scripts/GameObject/{key}.lua")).ok()) else { return ScriptFile::default() };
+            let src = String::from_utf8_lossy(&bytes);
+            ScriptFile { spawn: parse_spawn_script(&src).map(Arc::new), decay: parse_decay_script(&src) }
+        })
+    }
+
+    /// The spawn script `name`, if it is one.
     fn spawn(&mut self, fs: Option<&dyn FileSource>, name: &str) -> Option<Arc<SpawnScript>> {
-        let key = name.trim().trim_end_matches(".lua").trim_end_matches(".LUA").to_ascii_lowercase();
-        self.spawn
-            .entry(key.clone())
-            .or_insert_with(|| {
-                let bytes = fs?.read(&format!("Scripts/GameObject/{key}.lua")).ok()?;
-                parse_spawn_script(&String::from_utf8_lossy(&bytes)).map(Arc::new)
-            })
-            .clone()
+        self.load(fs, name).spawn.clone()
+    }
+
+    /// Hit points per second the script `name` (read before) takes from a unit of type `unit`.
+    fn decay(&self, name: Option<&str>, unit: &str) -> f32 {
+        name.and_then(|n| self.files.get(&script_key(n))).and_then(|f| f.decay.as_ref()).map_or(0.0, |d| d.per_second(unit))
     }
 
     /// The spawn script `name`, read before, with its units resolved in the catalog (units it does not know are left out).
     fn resolved(&self, name: Option<&str>, ships: &HashMap<String, ShipId>) -> Option<Arc<SpawnScriptDef>> {
         let name = name?.trim();
-        let s = self.spawn.get(&name.trim_end_matches(".lua").trim_end_matches(".LUA").to_ascii_lowercase())?.as_ref()?;
+        let s = self.files.get(&script_key(name))?.spawn.as_ref()?;
         let place = match s.marker.to_ascii_lowercase().as_str() {
             "attacker entry position" => SpawnPlace::AttackerEntries,
             "defending forces position" => SpawnPlace::DefenderPositions,
@@ -1655,6 +1700,10 @@ impl Catalog {
                     if let Some(s) = scripts.spawn(fs, script) {
                         queue.extend(s.names().map(str::to_string));
                     }
+                }
+                // Helper objects its abilities place (projectiles in that place are no units and drop out here).
+                if let Source::Unit(u) = &src {
+                    queue.extend(u.abilities.iter().filter_map(|a| helper_spawn(u, a)).map(|h| h.0.to_string()));
                 }
                 sources.push(src);
             }
@@ -2057,7 +2106,7 @@ impl Catalog {
                 }
                 let offsets = u.squadron_offsets.iter().map(|o| Vec3::from_array(*o)).collect();
                 let delay = u.fields.get("spawned_squadron_delay_seconds").and_then(|v| alamo_data::xml::parse_num(v)).unwrap_or(2.0);
-                (members, offsets, at_tech0.map(|t| resolve(&t.starting)).unwrap_or_default(), at_tech0.map(|t| resolve(&t.reserve)).unwrap_or_default(), delay, ability_defs(u, &self.projectiles, &self.proj_index, objects))
+                (members, offsets, at_tech0.map(|t| resolve(&t.starting)).unwrap_or_default(), at_tech0.map(|t| resolve(&t.reserve)).unwrap_or_default(), delay, ability_defs(u, &self.projectiles, &self.proj_index, &self.ship_index))
             }
             Source::Base(b) => {
                 let delay = b.fields.get("spawned_squadron_delay_seconds").and_then(|v| alamo_data::xml::parse_num(v)).unwrap_or(2.0);
@@ -2233,7 +2282,6 @@ impl Catalog {
             },
             bounty: unit_field("override_bounty_sp").and_then(alamo_data::xml::parse_num).unwrap_or(0.0f32).max(0.0),
             sensor_range,
-            passive_missile_radius: unit_field("passive_missile_shield_radius").and_then(alamo_data::xml::parse_num).unwrap_or(0.0),
             redirect_to_teammates: unit_field("redirect_damage_to_teammates").is_some_and(alamo_data::xml::parse_bool),
             no_spawn_radius,
             class,
@@ -2298,6 +2346,10 @@ impl Catalog {
             formation_solo: unit_field("formationgrouping").is_some_and(|v| v.trim().eq_ignore_ascii_case("solo")),
             formation_no_wait: unit_field("waitsforformationformup").is_some_and(|v| !alamo_data::xml::parse_bool(v)),
             spawn_script: scripts.resolved(src.lua_script(), &self.ship_index),
+            untargetable: src.fields().get("is_valid_target").is_some_and(|v| !alamo_data::xml::parse_bool(v)),
+            no_collide: src.fields().get("collidable_by_projectile_living").is_some_and(|v| !alamo_data::xml::parse_bool(v)),
+            decay: scripts.decay(src.lua_script(), src.name()),
+            passive_missile_radius: src.fields().get("passive_missile_shield_radius").and_then(|v| alamo_data::xml::parse_num(v)).unwrap_or(0.0),
         }
     }
 
@@ -2487,7 +2539,7 @@ impl Catalog {
     }
 }
 
-fn ability_defs(u: &SpaceUnitDef, projectiles: &[ProjDef], proj_index: &HashMap<String, ProjId>, objects: &alamo_data::GameObjects) -> Vec<AbilityDef> {
+fn ability_defs(u: &SpaceUnitDef, projectiles: &[ProjDef], proj_index: &HashMap<String, ProjId>, ships: &HashMap<String, ShipId>) -> Vec<AbilityDef> {
     u.abilities
         .iter()
         .filter(|a| {
@@ -2497,7 +2549,8 @@ fn ability_defs(u: &SpaceUnitDef, projectiles: &[ProjDef], proj_index: &HashMap<
         })
         .map(|a| {
             let toggle = a.expiration_seconds.unwrap_or(0.0) <= 0.0 && ["MISSILE_SHIELD", "INTERDICT", "STEALTH", "HUNT", "SPOILER_LOCK"].iter().any(|k| a.kind.eq_ignore_ascii_case(k));
-            let ping = a.kind.eq_ignore_ascii_case("FOW_REVEAL_PING");
+            let helper = helper_def(u, a, ships);
+            let ping = a.kind.eq_ignore_ascii_case("FOW_REVEAL_PING") && helper.is_none();
             // `LASER_DEFENSE` (point defence turrets) shoots down missiles, rockets and torpedoes inside `Effective_Radius` for `Defense_Duration_In_Secs` of the linked ability.
             let laser = a.kind.eq_ignore_ascii_case("LASER_DEFENSE");
             let defence_secs = laser.then(|| {
@@ -2572,18 +2625,12 @@ fn ability_defs(u: &SpaceUnitDef, projectiles: &[ProjDef], proj_index: &HashMap<
             });
             // `BUZZ_DROIDS` drops its `Object_Type`. The jamming pods (`Missile_Jamming_Pods_Empire` of the TIE Interdictor and Scimitar)
             // carry a `Passive_Missile_Shield_Radius` and decay by `Own_Damage_Per_Second` from their `Tactical_Health` (60 / 1 = 60 s).
-            let mut pod_secs = None;
+            // `BUZZ_DROIDS` with damage (Eclipse lightning storm): a damaging area placed where the ability is used.
             let zone = a.kind.eq_ignore_ascii_case("BUZZ_DROIDS").then(|| {
                 let sub = a.activated_ability.as_ref().and_then(|n| u.sub_abilities.iter().find(|s| s.name.eq_ignore_ascii_case(n)));
                 let f = |k: &str| sub.and_then(|s| s.fields.get(k)).and_then(|v| alamo_data::xml::parse_num::<f32>(v)).unwrap_or(0.0);
-                let pod = sub.and_then(|s| s.fields.get("object_type")).and_then(|n| objects.space_unit(n.trim()));
-                let jam = pod.as_ref().and_then(|p| p.fields.get("passive_missile_shield_radius")).and_then(|v| alamo_data::xml::parse_num::<f32>(v)).unwrap_or(0.0);
-                if let Some(p) = pod.as_ref().filter(|p| jam > 0.0 && p.hull > 0.0 && f("own_damage_per_second") > 0.0) {
-                    pod_secs = Some(p.hull / f("own_damage_per_second"));
-                }
-                let radius = f("damage_radius");
-                ZoneDef { radius: if radius > 0.0 { radius } else { jam }, enemy_dps: f("enemy_damage_per_second"), max_range: f("activation_max_range"), missile_radius: jam }
-            }).filter(|z| z.radius > 0.0 && (z.enemy_dps > 0.0 || z.missile_radius > 0.0));
+                ZoneDef { radius: f("damage_radius"), enemy_dps: f("enemy_damage_per_second"), max_range: f("activation_max_range"), missile_radius: 0.0 }
+            }).filter(|z| z.radius > 0.0 && z.enemy_dps > 0.0);
 
             let k = a.kind.to_ascii_uppercase();
             match k.as_str() {
@@ -2623,7 +2670,7 @@ fn ability_defs(u: &SpaceUnitDef, projectiles: &[ProjDef], proj_index: &HashMap<
                 cause_damage_mult,
                 recharge: a.recharge_seconds.unwrap_or(30.0),
                 // A reveal ping has no expiration in the data: it shows the area for 5 s (estimate).
-                duration: if toggle { f32::MAX / 4.0 } else if shot.is_some() { SHOT_WINDOW_SECONDS } else if let Some(b) = &blast { b.charge + SHOT_WINDOW_SECONDS } else if let Some(f) = &flare { f.charge } else if let (Some(_), Some(secs)) = (&leech, leech_secs) { secs } else if ping { a.expiration_seconds.filter(|&x| x > 0.0).unwrap_or(5.0) } else if let Some(secs) = defence_secs.or(pod_secs) { secs } else if a.kind.eq_ignore_ascii_case("CORRUPT_SYSTEMS") { a.activated_ability.as_ref().and_then(|n| u.sub_abilities.iter().find(|s| s.name.eq_ignore_ascii_case(n))).and_then(|s| s.fields.get("duration_in_seconds")).and_then(|v| alamo_data::xml::parse_num(v)).unwrap_or(30.0) } else { a.expiration_seconds.unwrap_or(12.0) },
+                duration: if helper.is_some() { 0.0 } else if toggle { f32::MAX / 4.0 } else if shot.is_some() { SHOT_WINDOW_SECONDS } else if let Some(b) = &blast { b.charge + SHOT_WINDOW_SECONDS } else if let Some(f) = &flare { f.charge } else if let (Some(_), Some(secs)) = (&leech, leech_secs) { secs } else if ping { a.expiration_seconds.filter(|&x| x > 0.0).unwrap_or(5.0) } else if let Some(secs) = defence_secs { secs } else if a.kind.eq_ignore_ascii_case("CORRUPT_SYSTEMS") { a.activated_ability.as_ref().and_then(|n| u.sub_abilities.iter().find(|s| s.name.eq_ignore_ascii_case(n))).and_then(|s| s.fields.get("duration_in_seconds")).and_then(|v| alamo_data::xml::parse_num(v)).unwrap_or(30.0) } else { a.expiration_seconds.unwrap_or(12.0) },
                 stealth: a.kind.eq_ignore_ascii_case("STEALTH"),
                 shot,
                 blast,
@@ -2631,6 +2678,7 @@ fn ability_defs(u: &SpaceUnitDef, projectiles: &[ProjDef], proj_index: &HashMap<
                 leech,
                 concentrate,
                 reveal_radius: if ping { a.fields.get("effective_radius").and_then(|v| alamo_data::xml::parse_num(v)).unwrap_or(1000.0) } else { 0.0 },
+                helper,
                 interdict: a.kind.eq_ignore_ascii_case("INTERDICT"),
                 hunt: a.kind.eq_ignore_ascii_case("HUNT"),
                 replenish: a.kind.eq_ignore_ascii_case("REPLENISH_WINGMEN"),
@@ -2717,6 +2765,32 @@ fn ability_defs(u: &SpaceUnitDef, projectiles: &[ProjDef], proj_index: &HashMap<
             }
         })
         .collect()
+}
+
+/// The object a `FOW_REVEAL_PING` (`Spawned_Object_Type`) or a harmless `BUZZ_DROIDS` (`Object_Type` of its `Buzz_Droids_Ability`, no
+/// `Enemy_Damage_Per_Second`) places, with the numbers of the placing ability: `(name, max range, delay, own damage per second)`.
+fn helper_spawn<'a>(u: &'a SpaceUnitDef, a: &'a alamo_data::UnitAbility) -> Option<(&'a str, f32, f32, f32)> {
+    let num = |m: &HashMap<String, String>, k: &str| m.get(k).and_then(|v| alamo_data::xml::parse_num::<f32>(v)).unwrap_or(0.0);
+    if a.kind.eq_ignore_ascii_case("FOW_REVEAL_PING") {
+        // `Effective_Radius` 0 "means no distance factor, unlimited to entire map" (comment in the data).
+        let reach = num(&a.fields, "effective_radius");
+        return a.fields.get("spawned_object_type").map(|n| (n.trim(), if reach > 0.0 { reach } else { f32::MAX }, 0.0, 0.0));
+    }
+    if !a.kind.eq_ignore_ascii_case("BUZZ_DROIDS") {
+        return None;
+    }
+    let sub = a.activated_ability.as_ref().and_then(|n| u.sub_abilities.iter().find(|s| s.name.eq_ignore_ascii_case(n)))?;
+    if num(&sub.fields, "enemy_damage_per_second") > 0.0 {
+        return None;
+    }
+    let f = &sub.fields;
+    f.get("object_type").map(|n| (n.trim(), num(f, "activation_max_range"), num(f, "activation_time_in_seconds"), num(f, "own_damage_per_second")))
+}
+
+/// [`helper_spawn`] when its object is a unit of the catalog (a projectile makes the ping a real reveal ping).
+fn helper_def(u: &SpaceUnitDef, a: &alamo_data::UnitAbility, ships: &HashMap<String, ShipId>) -> Option<HelperDef> {
+    let (name, max_range, delay, own_dps) = helper_spawn(u, a)?;
+    ships.get(&name.to_ascii_lowercase()).map(|&ship| HelperDef { ship, max_range, delay, own_dps })
 }
 
 fn kind_is_weapon(h: &HardpointDef) -> bool {

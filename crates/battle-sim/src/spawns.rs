@@ -5,6 +5,9 @@
 //!
 //! Scripted units belong to the battle only: they get no results group (nothing is returned to the galaxy) and, like a station's garrison,
 //! do not keep their side in the fight (docs/RULES.md 2.8).
+//!
+//! The same path places the helper objects of abilities ([`HelperDef`]: repair droids, missile jamming pods): they appear in place, hold
+//! position and fire, and wear out by `Ship::decay` (docs/RULES.md 2.6).
 
 use crate::battle::*;
 use crate::defs::*;
@@ -30,8 +33,10 @@ pub(crate) struct ScriptedArrival {
     pub place: SpawnAt,
     /// Drops out of hyperspace (else it appears where it is placed).
     pub hyperspace: bool,
-    /// The unit whose script spawned it.
+    /// The unit whose script (or ability) spawned it.
     pub by: u32,
+    /// Hit points per second it loses on top of its definition's `decay` (helper objects).
+    pub decay: f32,
 }
 
 impl Battle {
@@ -63,7 +68,7 @@ impl Battle {
         }
         let mut t = self.time + script.delay;
         for (k, &ship) in units.iter().enumerate() {
-            self.scripted.push(ScriptedArrival { at: t + script.hyperspace_in, side, ship, place: markers[k % markers.len()], hyperspace: true, by: owner });
+            self.scripted.push(ScriptedArrival { at: t + script.hyperspace_in, side, ship, place: markers[k % markers.len()], hyperspace: true, by: owner, decay: 0.0 });
             let g = script.gap;
             let roll = if g.hi > g.lo { g.lo + (rng.next_u64() % (g.hi - g.lo + 1) as u64) as i32 } else { g.lo };
             t += g.base + roll as f32 / g.div;
@@ -101,11 +106,18 @@ impl Battle {
                 SpawnAt::Unit(id) => (self.ships[id as usize].pos, self.ships[id as usize].yaw),
                 SpawnAt::Place(p, y) => (p, y),
             };
-            let pos = self.free_spot(origin, a.ship);
+            // A helper object stays exactly where its ability put it; it does nothing but its own abilities.
+            let helper = !a.hyperspace;
+            let pos = if helper { origin } else { self.free_spot(origin, a.ship) };
             let ids = self.spawn_battle_unit(a.ship, a.side, pos, yaw);
-            let order = if self.is_ai(a.side) { Order::AttackMove(self.spawn_pos[(a.side as usize + 1) % self.sides.len()]) } else { Order::Idle };
+            let order = if self.is_ai(a.side) && !helper { Order::AttackMove(self.spawn_pos[(a.side as usize + 1) % self.sides.len()]) } else { Order::Idle };
             for &i in &ids {
-                self.ships[i as usize].order = order;
+                let s = &mut self.ships[i as usize];
+                s.order = order;
+                s.decay += a.decay;
+                if helper {
+                    s.stance = Stance::HoldFire;
+                }
             }
             if self.config.record_events {
                 self.events.push(Event::Spawned { side: a.side, ships: ids, by: a.by, hyperspace: a.hyperspace });
@@ -138,6 +150,42 @@ impl Battle {
             }
         }
         origin
+    }
+
+    /// Helper ability `ability` (`AbilityDef::helper`) of `ship` was used: its object appears after the ability's delay at the aimed point,
+    /// pulled back to the ability's reach, or at the ship. A squadron uses it as one unit: its other craft wait out the same recharge (the
+    /// data wants one field per squadron).
+    pub(crate) fn place_helper(&mut self, ship: u32, ability: usize, h: &HelperDef) {
+        let s = &self.ships[ship as usize];
+        let to = self.ability_at.unwrap_or(s.pos) - s.pos;
+        let at = if to.len() > h.max_range { s.pos + to.normalized() * h.max_range } else { s.pos + to };
+        let (squad, cooldown) = (s.squad, s.abilities[ability].cooldown);
+        self.scripted.push(ScriptedArrival { at: self.time + h.delay, side: s.side, ship: h.ship, place: SpawnAt::Place(at, s.yaw), hyperspace: false, by: ship, decay: h.own_dps });
+        if squad != NONE {
+            for &m in &self.squads[squad as usize] {
+                if let Some(st) = self.ships[m as usize].abilities.get_mut(ability) {
+                    st.cooldown = st.cooldown.max(cooldown);
+                }
+            }
+        }
+    }
+
+    /// Helper objects wear out: `Ship::decay` hit points per second (`ObjectScript_TakeDamage` takes 1 per `ServiceRate` of 1 s from
+    /// `Repair_Droids`; the buzz droid objects take their ability's `Own_Damage_Per_Second`). Helpers have no hardpoints, so the hull pays.
+    pub(crate) fn run_decay(&mut self, dt: f32) {
+        for i in 0..self.ships.len() {
+            let s = &mut self.ships[i];
+            if !s.alive || s.retreated || s.decay <= 0.0 {
+                continue;
+            }
+            s.hull -= s.decay * dt;
+            if s.hull <= 0.0 {
+                s.alive = false;
+                if self.config.record_events {
+                    self.events.push(Event::ShipDestroyed { ship: i as u32, pos: s.pos });
+                }
+            }
+        }
     }
 
     /// Spawns one unit (a squadron expands into its craft) that belongs to the battle only (no results group).

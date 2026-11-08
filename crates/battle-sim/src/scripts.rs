@@ -3,7 +3,9 @@
 //! * spawn scripts (`Reinforcements_*`, `Reinforcement_Subjugator-*`): `State_Init` rolls `GameRandom(lo, hi)` and calls
 //!   `SpawnReinforcements(list, "Faction")` for the outcome (one of the `assault_list` tables), which spawns the list's units one by one
 //!   at the objects `Find_All_Objects_Of_Type` returns, each with `Cinematic_Hyperspace_In(frames)` and `Sleep(a + GameRandom(b, c) / d)`
-//!   between two units.
+//!   between two units;
+//! * damage-over-time scripts (`ObjectScript_TakeDamage`): every `ServiceRate` seconds the object takes `Object.Take_Damage(n)`, `n` picked
+//!   by comparing `Object.Get_Type().Get_Name()` (the upper-case type name) with the names of each `if` branch.
 
 #[derive(Debug, Clone, PartialEq)]
 enum Tok {
@@ -258,6 +260,58 @@ pub fn parse_spawn_script(src: &str) -> Option<SpawnScript> {
     Some(SpawnScript { choices, marker, faction, delay, hyperspace_frames, gap })
 }
 
+
+/// A damage-over-time script.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DecayScript {
+    /// `ServiceRate`: seconds between two `Take_Damage` calls.
+    pub interval: f32,
+    /// `(type names, damage)` per branch, in order.
+    pub branches: Vec<(Vec<String>, f32)>,
+    /// Damage of the `else` branch.
+    pub default: f32,
+}
+
+impl DecayScript {
+    /// Hit points per second the script takes from an object of type `name`. The script compares `Get_Name()`, which is the upper-case
+    /// type name, with each branch's names as written (Lua compares case-sensitively).
+    pub fn per_second(&self, name: &str) -> f32 {
+        let upper = name.to_ascii_uppercase();
+        let dmg = self.branches.iter().find(|b| b.0.iter().any(|n| *n == upper)).map_or(self.default, |b| b.1);
+        dmg / self.interval.max(0.01)
+    }
+}
+
+/// Reads a damage-over-time script; `None` when the source calls no `Take_Damage`.
+pub fn parse_decay_script(src: &str) -> Option<DecayScript> {
+    let toks = lex(src);
+    if !toks.iter().any(|t| is_ident(Some(t), "Take_Damage")) || toks.iter().any(|t| is_ident(Some(t), "Spawn_Unit")) {
+        return None;
+    }
+    let interval = (0..toks.len()).find(|&i| is_ident(toks.get(i), "ServiceRate") && is_sym(toks.get(i + 1), '=')).and_then(|i| num(toks.get(i + 2))).unwrap_or(1.0);
+    let (mut branches, mut names, mut default, mut in_else) = (Vec::new(), Vec::new(), 0.0, false);
+    for i in 0..toks.len() {
+        if is_ident(toks.get(i), "name") && is_sym(toks.get(i + 1), '=') && is_sym(toks.get(i + 2), '=') {
+            if let Some(n) = string(toks.get(i + 3)) {
+                names.push(n.to_string());
+            }
+        } else if is_ident(toks.get(i), "else") {
+            in_else = true;
+        } else if is_ident(toks.get(i), "Take_Damage") {
+            let dmg = num(toks.get(i + 2)).unwrap_or(0.0);
+            if in_else {
+                default = dmg;
+                in_else = false;
+            } else if names.is_empty() {
+                default = dmg;
+            } else {
+                branches.push((std::mem::take(&mut names), dmg));
+            }
+        }
+    }
+    Some(DecayScript { interval, branches, default })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -329,5 +383,28 @@ end"#;
     #[test]
     fn scripts_without_spawns_are_not_spawn_scripts() {
         assert!(parse_spawn_script("function State_Init(message)\n Object.Take_Damage(1)\nend").is_none());
+    }
+
+    #[test]
+    fn decay_script_matches_upper_case_names_only() {
+        let src = r#"
+function Definitions()
+    ServiceRate = 0.5
+end
+function State_Init(message)
+    if message == OnUpdate then
+        if name == "Mixed_Case" or name == "Other" then
+            Object.Take_Damage(20)
+        elseif name == "UPPER_ONE" then
+            Object.Take_Damage(3)
+        else
+            Object.Take_Damage(1)
+        end
+    end
+end"#;
+        let d = parse_decay_script(src).unwrap();
+        assert_eq!(d.per_second("upper_one"), 6.0);
+        // `Get_Name()` is upper case, so a branch written in mixed case never matches.
+        assert_eq!(d.per_second("Mixed_Case"), 2.0);
     }
 }

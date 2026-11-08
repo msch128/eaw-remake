@@ -124,12 +124,13 @@ impl Battle {
     }
 
     /// Whether the AI plan may (re)order a unit: its standing orders are its own, not a lure's, a hunt's or a retreat's (a fighter's move
-    /// order is the plan's escort order).
+    /// order is the plan's escort order). Structures and helper objects are never ordered.
     fn planned(&self, s: &Ship) -> bool {
         let d = self.catalog.ship(s.def);
         s.alive
             && !s.retreated
             && !d.is_static
+            && !d.untargetable
             && (matches!(s.order, Order::Idle | Order::AttackMove(_) | Order::Guard(_)) || (small(d) && matches!(s.order, Order::Move(_))))
             && s.hunt_cell == NO_CELL
             && !d.abilities.iter().zip(&s.abilities).any(|(a, st)| a.hunt && st.active > 0.0)
@@ -221,13 +222,14 @@ impl Battle {
                     && o.side != side
                     && cat.ship(o.def).special_weapon.is_none()
                     && !cat.ship(o.def).background
+                    && !cat.ship(o.def).untargetable
                     && (self.ai_knows(side, o.id) || time - o.hit_side_at[si] <= linger)
             })
             .map(|o| o.id)
             .collect();
         let structures: Vec<u32> = self.ships.iter().filter(|s| s.alive && s.side == side && cat.ship(s.def).is_static && cat.ship(s.def).special_weapon.is_none()).map(|s| s.id).collect();
         // Big ships, gunship pairs and the corvettes a carrier launches included (fighters and bombers follow their squadron leader).
-        let warships: Vec<u32> = self.ships.iter().filter(|s| s.alive && !s.retreated && s.side == side && !cat.ship(s.def).is_static && !small(cat.ship(s.def))).map(|s| s.id).collect();
+        let warships: Vec<u32> = self.ships.iter().filter(|s| s.alive && !s.retreated && s.side == side && !cat.ship(s.def).is_static && !cat.ship(s.def).untargetable && !small(cat.ship(s.def))).map(|s| s.id).collect();
 
         // Where the enemy is; with nothing in sight the fleet sweeps the map along the search points.
         let seen = self.enemy_location(&enemies);

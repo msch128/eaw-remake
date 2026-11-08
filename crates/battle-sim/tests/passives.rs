@@ -105,9 +105,9 @@ fn passive_missile_shields_and_jamming_pods_are_read_from_the_data() {
     assert_eq!([radius("Star_Home"), radius("Reaver"), radius("A-Wing"), radius("Xyston_Star_Destroyer_Hero"), radius("Star_Destroyer")], [500.0, 300.0, 50.0, 100.0, 0.0]);
     let tie = cat.ship(cat.ship_id("TIE_Interdictor").unwrap());
     let pods = tie.abilities.iter().find(|a| a.kind.eq_ignore_ascii_case("BUZZ_DROIDS")).expect("jamming pods");
-    let z = pods.zone.as_ref().expect("pods zone");
-    assert_eq!((z.missile_radius, z.radius, z.enemy_dps, z.max_range), (500.0, 500.0, 0.0, 500.0), "{z:?}");
-    assert_eq!((pods.duration, pods.recharge), (60.0, 450.0), "Tactical_Health 60 / Own_Damage_Per_Second 1; Recharge_Seconds 450");
+    let h = pods.helper.as_ref().expect("pods helper");
+    let pod = cat.ship(h.ship);
+    assert_eq!((pod.passive_missile_radius, h.max_range, pod.hull, h.own_dps, pods.recharge), (500.0, 500.0, 60.0, 1.0, 450.0));
 }
 
 /// A hero squadron: leader (id 0, hull 1000) with `Redirect_Damage_To_Teammates`, two wingmen (id 1, hull 1000 each), and a target-less

@@ -72,8 +72,10 @@ struct Snap {
     jammed: bool,
     /// Ship that carries this one (`NONE` = none): carried ships dock with it and do not keep out of its hull.
     carrier: u32,
-    /// Special ground-to-space weapon on the planet surface.
+    /// Not a target: a special ground-to-space weapon on the planet surface, a backdrop object or a helper object (`Is_Valid_Target` False).
     special: bool,
+    /// Projectiles can hit it (not a ground weapon, a backdrop or `Collidable_By_Projectile_Living` No).
+    solid: bool,
     /// Targeted hardpoint index.
     target_hp: u16,
     /// Squadron formation place ([`Ship::formation`]): members keep their place relative to the leader's own.
@@ -111,7 +113,7 @@ impl Grid {
             c.clear();
         }
         for (i, s) in snaps.iter().enumerate() {
-            if !s.alive || s.special {
+            if !s.alive || !s.solid {
                 continue;
             }
             let (x0, x1) = (self.coord(s.pos.x - s.radius), self.coord(s.pos.x + s.radius));
@@ -548,6 +550,7 @@ impl Battle {
             group_slot: None,
             move_slot: None,
             focus: NONE,
+            decay: def.decay,
         });
         id
     }
@@ -768,7 +771,7 @@ impl Battle {
                 self.form_up(&ships, to, attack);
             }
             Command::Attack { ships, target } => {
-                if !own(self, &ships) || !self.ships.get(target as usize).is_some_and(|t| t.alive && t.side != side) {
+                if !own(self, &ships) || !self.ships.get(target as usize).is_some_and(|t| t.alive && t.side != side && !self.catalog.ship(t.def).untargetable) {
                     return Err(CommandError::InvalidShip);
                 }
                 for &i in &ships {
@@ -782,7 +785,7 @@ impl Battle {
                 }
             }
             Command::AttackHardpoint { ships, target, hardpoint } => {
-                if !own(self, &ships) || !self.ships.get(target as usize).is_some_and(|t| t.alive && t.side != side) {
+                if !own(self, &ships) || !self.ships.get(target as usize).is_some_and(|t| t.alive && t.side != side && !self.catalog.ship(t.def).untargetable) {
                     return Err(CommandError::InvalidShip);
                 }
                 let tdef = self.catalog.ship(self.ships[target as usize].def);
@@ -847,7 +850,7 @@ impl Battle {
                     shot = self
                         .ships
                         .iter()
-                        .filter(|o| o.alive && !o.retreated && o.side != side && (l.classes == 0 || l.classes & cat.ship(o.def).class.bit() != 0) && o.pos.dist(pos) <= 600.0 + cat.ship(o.def).radius)
+                        .filter(|o| o.alive && !o.retreated && o.side != side && !cat.ship(o.def).untargetable && (l.classes == 0 || l.classes & cat.ship(o.def).class.bit() != 0) && o.pos.dist(pos) <= 600.0 + cat.ship(o.def).radius)
                         .min_by(|a, b| a.pos.dist(pos).total_cmp(&b.pos.dist(pos)).then(a.id.cmp(&b.id)))
                         .map(|o| o.id);
                     if shot.is_none() {
@@ -863,7 +866,7 @@ impl Battle {
                     drained = self
                         .ships
                         .iter()
-                        .filter(|o| o.alive && !o.retreated && o.side != side && o.pos.dist(from) <= c.max_range && o.pos.dist(pos) <= c.pick_radius + cat.ship(o.def).radius && cat.ship(o.def).shield > 0.0)
+                        .filter(|o| o.alive && !o.retreated && o.side != side && !cat.ship(o.def).untargetable && o.pos.dist(from) <= c.max_range && o.pos.dist(pos) <= c.pick_radius + cat.ship(o.def).radius && cat.ship(o.def).shield > 0.0)
                         .min_by(|a, b| a.pos.dist(pos).total_cmp(&b.pos.dist(pos)).then(a.id.cmp(&b.id)))
                         .map(|o| o.id);
                     if drained.is_none() {
@@ -1005,6 +1008,7 @@ impl Battle {
                 && !o.retreated
                 && o.side != s.side
                 && !od.is_static
+                && !od.untargetable
                 && (t.classes == 0 || t.classes & od.class.bit() != 0)
                 && o.pos.dist(s.pos) <= t.range
         };
@@ -1067,6 +1071,7 @@ impl Battle {
         let bomb = a.bomb.clone();
         let cluster = a.cluster.clone();
         let flare = a.flare.clone();
+        let helper = a.helper.clone();
         let mut beam: Option<(u32, f32)> = None;
         if let Some(e) = &a.energy {
             // The enemy ship nearest to the aimed point (else to the caster) inside the beam range and of an allowed class.
@@ -1074,7 +1079,7 @@ impl Battle {
             let from = at.unwrap_or(me.pos);
             let cat = self.catalog.clone();
             let dur = a.duration;
-            let t = self.ships.iter().filter(|o| o.alive && !o.retreated && o.side != me.side && o.pos.dist(me.pos) <= e.max_range && (e.classes == 0 || e.classes & cat.ship(o.def).class.bit() != 0)).min_by(|x, y| x.pos.dist(from).total_cmp(&y.pos.dist(from)).then(x.id.cmp(&y.id))).map(|o| o.id);
+            let t = self.ships.iter().filter(|o| o.alive && !o.retreated && o.side != me.side && !cat.ship(o.def).untargetable && o.pos.dist(me.pos) <= e.max_range && (e.classes == 0 || e.classes & cat.ship(o.def).class.bit() != 0)).min_by(|x, y| x.pos.dist(from).total_cmp(&y.pos.dist(from)).then(x.id.cmp(&y.id))).map(|o| o.id);
             match t {
                 Some(t) => beam = Some((t, e.dps * dur)),
                 None => return false,
@@ -1185,6 +1190,9 @@ impl Battle {
             let (side, pos) = (self.ships[ship as usize].side, self.ships[ship as usize].pos);
             self.clusters.push((side, pos, self.time + c.delay, c));
         }
+        if let Some(h) = helper {
+            self.place_helper(ship, ability, &h);
+        }
         if let Some(b) = bomb {
             let (side, pos) = (self.ships[ship as usize].side, self.ships[ship as usize].pos);
             self.bombs.push((side, pos, self.time + b.countdown, b));
@@ -1236,6 +1244,7 @@ impl Battle {
         self.spawn_reinforcements();
         self.start_scripts();
         self.scripted_arrivals();
+        self.run_decay(self.config.dt);
         self.retreat_jumps();
 
         let cat = self.catalog.clone();
@@ -1282,7 +1291,8 @@ impl Battle {
                         0xFF
                     },
                     known_by: blind_ai,
-                    special: d.special_weapon.is_some() || d.background,
+                    special: d.special_weapon.is_some() || d.background || d.untargetable,
+                    solid: !(d.special_weapon.is_some() || d.background || d.no_collide),
                     target_hp: s.target_hp,
                     formation: s.formation,
                     move_group: s.move_slot.map_or(NONE, |m| m.formation),
@@ -1300,10 +1310,10 @@ impl Battle {
         // Sides the AI plays (their attack-moves are the AI plan's, see `scan`).
         let ai_sides: u8 = (0..self.sides.len().min(8) as u8).filter(|&i| self.sides[i as usize].ai).fold(0, |m, i| m | 1 << i);
         let obstacles: &[crate::arena::Obstacle] = arena.as_ref().map_or(&[], |a| a.obstacles.as_slice());
-        // Mobile ships that keep each other apart (fighters and stations excluded).
-        let big: Vec<u32> = self.ships.iter().filter(|s| s.alive && !s.retreated && !cat.ship(s.def).is_static && !matches!(cat.ship(s.def).class, TargetClass::Fighter | TargetClass::Bomber)).map(|s| s.id).collect();
+        // Mobile ships that keep each other apart (fighters, stations and helper objects excluded).
+        let big: Vec<u32> = self.ships.iter().filter(|s| s.alive && !s.retreated && !cat.ship(s.def).is_static && !cat.ship(s.def).untargetable && !matches!(cat.ship(s.def).class, TargetClass::Fighter | TargetClass::Bomber)).map(|s| s.id).collect();
         // Hulls that block big ships: every big ship and station (the last two lists are used for steering and for keeping fighters out of hulls).
-        let hulls: Vec<u32> = if cfg.navigation { self.ships.iter().filter(|s| s.alive && !s.retreated && !matches!(cat.ship(s.def).class, TargetClass::Fighter | TargetClass::Bomber)).map(|s| s.id).collect() } else { big.clone() };
+        let hulls: Vec<u32> = if cfg.navigation { self.ships.iter().filter(|s| s.alive && !s.retreated && !cat.ship(s.def).untargetable && !matches!(cat.ship(s.def).class, TargetClass::Fighter | TargetClass::Bomber)).map(|s| s.id).collect() } else { big.clone() };
         let squad_leaders: Vec<u32> = self
             .squads
             .iter()
@@ -1428,20 +1438,20 @@ impl Battle {
             });
         }
 
-        // Projectile flight and collision. Missile shields: active abilities, the always-on `Passive_Missile_Shield_Radius` and
-        // dropped jamming pods.
+        // Projectile flight and collision. Missile shields: active `MISSILE_SHIELD` / `LASER_DEFENSE` abilities,
+        // every `Passive_Missile_Shield_Radius` and dropped jamming pods.
         let shields: Vec<(Vec3, f32, u8)> = self
             .ships
             .iter()
             .filter(|s| s.alive && !s.retreated)
             .flat_map(|s| {
-                let def = cat.ship(s.def);
-                def.abilities
+                let d = cat.ship(s.def);
+                d.abilities
                     .iter()
                     .zip(&s.abilities)
                     .filter(|(a, st)| a.missile_radius > 0.0 && st.active > 0.0)
                     .map(|(a, _)| (s.pos, a.missile_radius, s.side))
-                    .chain((def.passive_missile_radius > 0.0).then_some((s.pos, def.passive_missile_radius, s.side)))
+                    .chain((d.passive_missile_radius > 0.0).then_some((s.pos, d.passive_missile_radius, s.side)))
                     .collect::<Vec<_>>()
             })
             .chain(self.zones.iter().filter(|z| z.5 > 0.0 && z.4 > self.time).map(|z| (z.1, z.5, z.0)))
@@ -2352,7 +2362,7 @@ impl Battle {
             let enemies: Vec<u32> = self
                 .ships
                 .iter()
-                .filter(|o| o.alive && !o.retreated && o.side != side && self.ai_knows(side, o.id))
+                .filter(|o| o.alive && !o.retreated && o.side != side && !cat.ship(o.def).untargetable && self.ai_knows(side, o.id))
                 .map(|o| o.id)
                 .collect();
             // `Enemy_Retreating`: the other side has ordered its retreat (the jump is charging).
@@ -2476,6 +2486,17 @@ impl Battle {
                             .max_by(|&x, &y| cat.ship(self.ships[x as usize].def).hull.total_cmp(&cat.ship(self.ships[y as usize].def).hull).then(y.cmp(&x)));
                         if let Some(e) = target {
                             uses.push((side, s.id, k, Some(self.ships[e as usize].pos)));
+                        }
+                    } else if let Some(h) = &a.helper {
+                        // `Default_Target_In_Range` (`PGEvents.lua`) tries `BUZZ_DROIDS` at the unit's target once it is in range: the drones or
+                        // pods go to the target, within the ability's reach; a squadron (its leader) places one. No Remake AI script uses a
+                        // `FOW_REVEAL_PING`, and the repair droid pings have no `Supports_Autofire`: those stay the player's.
+                        let leader = s.squad == NONE || self.squad_leader(s.squad) == Some(s.id);
+                        if a.kind.eq_ignore_ascii_case("BUZZ_DROIDS") && leader && s.target != NONE {
+                            let t = &self.ships[s.target as usize];
+                            if t.alive && !t.retreated && t.pos.dist(s.pos) <= h.max_range + cat.ship(t.def).radius {
+                                uses.push((side, s.id, k, Some(t.pos)));
+                            }
                         }
                     } else if a.reveal_radius > 0.0 && self.config.fog_of_war && !enemies.iter().any(|&e| !cat.ship(self.ships[e as usize].def).is_static) {
                         let (idx, _) = self.search[side as usize];
@@ -2722,7 +2743,7 @@ impl Battle {
                 on_target[t as usize] = on_target[t as usize].saturating_sub(1);
             }
             let mut best: Option<(f32, u32)> = None;
-            for t in self.ships.iter().filter(|t| t.alive && !t.retreated && t.side != side && (!fog || self.ai_knows(side, t.id))) {
+            for t in self.ships.iter().filter(|t| t.alive && !t.retreated && t.side != side && !cat.ship(t.def).untargetable && (!fog || self.ai_knows(side, t.id))) {
                 let tdef = cat.ship(t.def);
                 if tdef.special_weapon.is_some() || tdef.background {
                     continue;
@@ -3020,6 +3041,9 @@ impl Battle {
         for (i, k) in pulses {
             let h = &cat.ship(self.ships[i].def).heals[k];
             let (pos, side) = (self.ships[i].pos, self.ships[i].side);
+            let excluded = |j: usize| !h.excluded.is_empty() && h.excluded.contains(&cat.ship(self.ships[j].def).name.to_ascii_lowercase());
+            // `Excluded_Unit_Types` are never candidates: a single-target healer picks the most damaged ship it may heal (the repair droids
+            // exclude themselves, and a wearing-out droid is always the most damaged ship near it).
             let mut targets: Vec<usize> = if h.range <= 0.0 {
                 vec![i]
             } else {
@@ -3027,7 +3051,7 @@ impl Battle {
                     .filter(|&j| {
                         let o = &self.ships[j];
                         let od = cat.ship(o.def);
-                        o.alive && !o.retreated && o.side == side && o.pos.dist(pos) <= h.range && (h.classes == 0 || h.classes & od.class.bit() != 0)
+                        o.alive && !o.retreated && o.side == side && o.pos.dist(pos) <= h.range && (h.classes == 0 || h.classes & od.class.bit() != 0) && !excluded(j)
                     })
                     .collect()
             };
@@ -3039,11 +3063,9 @@ impl Battle {
                 targets.sort_by(|a, b| hurt(a).total_cmp(&hurt(b)));
                 targets.truncate(1);
             }
+            targets.retain(|&j| !excluded(j));
             for j in targets {
                 let od = cat.ship(self.ships[j].def);
-                if !h.excluded.is_empty() && h.excluded.contains(&od.name.to_ascii_lowercase()) {
-                    continue;
-                }
                 heal(od, &mut self.ships[j], h.amount + h.percent * od.hull);
             }
         }

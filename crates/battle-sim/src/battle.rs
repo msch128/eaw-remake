@@ -500,8 +500,8 @@ pub enum Event {
         /// Where it landed.
         pos: Vec3,
     },
-    /// An object script brought a unit into the battle (a hero's escort, Subjugator reinforcements; see `spawns.rs`). Such units belong
-    /// to the battle only.
+    /// An object script brought a unit into the battle (a hero's escort, Subjugator reinforcements), or an ability placed a helper object
+    /// (repair droids, jamming pods; `hyperspace` false). See `spawns.rs`. Such units belong to the battle only.
     Spawned {
         /// Side the unit fights for.
         side: u8,
@@ -730,6 +730,8 @@ pub struct Ship {
     pub(crate) move_slot: Option<crate::formation::MoveSlot>,
     /// AI: the side's priority target, focused when it is within reach (`NONE` = none).
     pub(crate) focus: u32,
+    /// Hit points lost per second on its own (helper objects: `ShipDef::decay` plus the placing ability's `Own_Damage_Per_Second`).
+    pub decay: f32,
 }
 
 
