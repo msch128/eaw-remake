@@ -117,6 +117,9 @@ pub struct TacticalResult {
     pub reserve_called: Vec<Vec<u32>>,
     /// Per side and reserve group: how many of the called units survived (only meaningful where `reserve_called` is above 0).
     pub reserve_survived: Vec<Vec<u32>>,
+    /// Net attrition credits delta per side (penalties negative, refunds positive).
+    #[serde(default)]
+    pub attrition_credits: Vec<i32>,
 }
 
 /// Why a tactical result could not be applied.
@@ -391,7 +394,7 @@ impl TacticalRequest {
             retreated.push(r_row);
             health.push(h_row);
         }
-        Some(TacticalResult { winner: result.winner.map(|w| w as usize), survived, retreated, duration: result.duration, health, reserve_called: res_called, reserve_survived: res_survived })
+        Some(TacticalResult { winner: result.winner.map(|w| w as usize), survived, retreated, duration: result.duration, health, reserve_called: res_called, reserve_survived: res_survived, attrition_credits: result.attrition_credits.clone() })
     }
 
     /// Total units per `(source, fleet)` of a side including its reserve, in first-seen order (a group split by the cap is one member again).
@@ -468,7 +471,7 @@ impl TacticalRequest {
             }
             retreated.extend(fleet_gone.into_iter().filter(|x| x.1).map(|x| x.0));
         }
-        let combat = CombatResult { survivors, winner: result.winner, rounds: (result.duration / 4.0) as u32, retreated };
+        let combat = CombatResult { survivors, winner: result.winner, rounds: (result.duration / 4.0) as u32, retreated, attrition_credits: result.attrition_credits.clone() };
         (sides, combat)
     }
 
@@ -555,6 +558,14 @@ impl Sim {
         let planet = request.planet;
         self.galaxy.sync_ships();
         let (events, _) = self.apply_losses(planet, &sides, &combat.survivors);
+        for (si, side) in sides.iter().enumerate() {
+            if let Some(&delta) = combat.attrition_credits.get(si) {
+                if delta != 0 {
+                    let fac = &mut self.galaxy.factions[side.faction as usize];
+                    fac.credits = (fac.credits + delta as f64).max(0.0);
+                }
+            }
+        }
         self.write_health(&request, partial);
         Ok(events)
     }

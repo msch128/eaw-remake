@@ -1,6 +1,6 @@
 //! Tests against the real Empire at War Remake mod data; skipped when it is not installed.
 
-use alamo_data::{TextTable, load_galaxy};
+use alamo_data::{TextTable, load_galaxy, parse_attrition_credits};
 use alamo_fs::{GameFs, GameInstall};
 
 /// Layered mod + base game files; `None` (test skipped) when the game is not installed.
@@ -195,4 +195,46 @@ fn campaign_sets_list_the_playable_factions() {
     let opponents: Vec<&str> = data.campaign_opponents(rebel.campaign).iter().map(|(f, _)| f.name.as_str()).collect();
     println!("opponents in {}: {opponents:?}", rebel.campaign.name);
     assert!(opponents.contains(&"Empire") && opponents.contains(&"Underworld") && !opponents.contains(&"Rebel"));
+}
+
+#[test]
+fn attrition_credits_from_real_data() {
+    let Some(src) = open() else { return };
+    let (data, _) = load_galaxy(&src);
+
+    // 1. Units with a penalty dummy:
+    let tie = data.objects.space_unit("TIE_Fighter_G").expect("TIE_Fighter_G");
+    assert_eq!(tie.attrition_credits(&data.objects), -20);
+
+    let defender = data.objects.space_unit("TIE_Defender_G").expect("TIE_Defender_G");
+    assert_eq!(defender.attrition_credits(&data.objects), -110);
+
+    let tartan = data.objects.space_unit("Tartan_Gunship_G").expect("Tartan_Gunship_G");
+    assert_eq!(tartan.attrition_credits(&data.objects), -550);
+
+    // Hero units with custom named penalty dummies:
+    let zaarin = data.objects.space_unit("Vindicator_Cruiser_Kas").expect("Vindicator_Cruiser_Kas");
+    assert_eq!(zaarin.attrition_credits(&data.objects), -9000);
+
+    let harkov = data.objects.space_unit("Neb_Akaga").expect("Neb_Akaga");
+    assert_eq!(harkov.attrition_credits(&data.objects), -3000);
+
+    // 2. Hero with a refund dummy:
+    let tarkin = data.objects.space_unit("Havelon").expect("Havelon");
+    assert_eq!(tarkin.attrition_credits(&data.objects), 2400);
+
+    let ackbar = data.objects.space_unit("Home_One").expect("Home_One");
+    assert_eq!(ackbar.attrition_credits(&data.objects), 10125);
+
+    // 3. Super ship phase object that must give 0:
+    let viscount = data.objects.space_unit("Viscount_Star_Defender").expect("Viscount_Star_Defender");
+    assert_eq!(viscount.attrition_credits(&data.objects), 0);
+
+    // 4. A unit listing several pairs:
+    let grav = data.objects.structure("E_Gravity_Well_Station").expect("E_Gravity_Well_Station");
+    assert_eq!(grav.attrition_credits(&data.objects), 0);
+
+    // Multi-pair string resolving against real dummy objects from _Attrition.xml:
+    let multi = "20_Death_Penalty_Dummy, 2\n110_Death_Penalty_Dummy, 1.0\nViscount_Star_Defender_P2, 1.0\n2400_Reverse_Death_Penalty_Dummy, 1.0";
+    assert_eq!(parse_attrition_credits(Some(multi), &data.objects), 2 * -20 + -110 + 0 + 2400);
 }

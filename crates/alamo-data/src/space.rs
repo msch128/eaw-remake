@@ -349,6 +349,8 @@ pub struct SpaceUnitDef {
     pub income_modifiers: Vec<IncomeModifier>,
     /// `Death_Clone` (wreck object), if any.
     pub death_clone: Option<String>,
+    /// `Destruction_Survivors` entry (spawns death penalty dummies).
+    pub destruction_survivors: Option<String>,
     /// File the leaf definition came from.
     pub source_file: String,
     /// Raw resolved tags.
@@ -458,6 +460,7 @@ impl SpaceUnitDef {
             sub_abilities,
             income_modifiers,
             death_clone: r.string("death_clone"),
+            destruction_survivors: r.string("destruction_survivors"),
             source_file: r.object.source_file.clone(),
             fields: field_map(r),
         }
@@ -477,6 +480,57 @@ impl SpaceUnitDef {
     pub fn income_pct(&self) -> f32 {
         self.income_modifiers.iter().map(|m| m.percentage).sum()
     }
+
+    /// Credits granted (refund, positive) or deducted (penalty, negative) to the owner when destroyed.
+    pub fn attrition_credits(&self, store: &GameObjects) -> i32 {
+        parse_attrition_credits(self.destruction_survivors.as_deref(), store)
+    }
+}
+
+/// Credits granted (refund, positive) or deducted (penalty, negative) on destruction via `Destruction_Survivors`
+/// (`DEATHPENALTY.lua` / `DEATHPENALTYUNOREVERSE.lua`).
+pub fn parse_attrition_credits(survivors: Option<&str>, store: &GameObjects) -> i32 {
+    let Some(s) = survivors else { return 0 };
+    let mut total = 0i32;
+    for line in s.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let toks = split_list(line);
+        let mut i = 0;
+        while i < toks.len() {
+            let name = &toks[i];
+            i += 1;
+            let count = if i < toks.len() {
+                if let Ok(c) = toks[i].parse::<i32>() {
+                    i += 1;
+                    c.max(0)
+                } else if let Ok(f) = toks[i].parse::<f32>() {
+                    i += 1;
+                    f.max(0.0).round() as i32
+                } else {
+                    1
+                }
+            } else {
+                1
+            };
+            if count == 0 {
+                continue;
+            }
+            if let Some(r) = store.resolve(name) {
+                let script = r.get("lua_script").unwrap_or("").trim();
+                let script = script.strip_suffix(".lua").unwrap_or(script).trim();
+                let cost = r.num::<i32>("build_cost_credits").unwrap_or(0);
+                if script.eq_ignore_ascii_case("deathpenaltyunoreverse") {
+                    total += cost * count;
+                } else if script.eq_ignore_ascii_case("deathpenalty") {
+                    total -= cost * count;
+                }
+            }
+        }
+    }
+    total
 }
 
 /// Turret rotation limits of a hardpoint.
@@ -770,6 +824,8 @@ pub struct StarBaseDef {
     pub income_modifiers: Vec<IncomeModifier>,
     /// Sub-abilities (e.g. production modifiers).
     pub sub_abilities: Vec<SubAbility>,
+    /// `Destruction_Survivors` entry (spawns death penalty dummies).
+    pub destruction_survivors: Option<String>,
     /// File the definition came from.
     pub source_file: String,
     /// Raw resolved tags.
@@ -827,9 +883,15 @@ impl StarBaseDef {
             unlocks,
             income_modifiers,
             sub_abilities,
+            destruction_survivors: r.string("destruction_survivors"),
             source_file: r.object.source_file.clone(),
             fields: field_map(r),
         }
+    }
+
+    /// Credits granted (refund, positive) or deducted (penalty, negative) to the owner when destroyed.
+    pub fn attrition_credits(&self, store: &GameObjects) -> i32 {
+        parse_attrition_credits(self.destruction_survivors.as_deref(), store)
     }
 }
 
@@ -883,6 +945,8 @@ pub struct StructureDef {
     pub income_modifiers: Vec<IncomeModifier>,
     /// Named sub-abilities.
     pub sub_abilities: Vec<SubAbility>,
+    /// `Destruction_Survivors` entry (spawns death penalty dummies).
+    pub destruction_survivors: Option<String>,
     /// File the definition came from.
     pub source_file: String,
     /// Raw resolved tags.
@@ -925,6 +989,7 @@ impl StructureDef {
             unlocks,
             income_modifiers,
             sub_abilities,
+            destruction_survivors: r.string("destruction_survivors"),
             source_file: r.object.source_file.clone(),
             fields: field_map(r),
         }
@@ -933,6 +998,11 @@ impl StructureDef {
     /// Sum of absolute income modifiers in credits.
     pub fn absolute_income(&self) -> f32 {
         self.income_modifiers.iter().map(|m| m.absolute).sum()
+    }
+
+    /// Credits granted (refund, positive) or deducted (penalty, negative) to the owner when destroyed.
+    pub fn attrition_credits(&self, store: &GameObjects) -> i32 {
+        parse_attrition_credits(self.destruction_survivors.as_deref(), store)
     }
 }
 

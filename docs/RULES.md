@@ -38,6 +38,7 @@ and here. Known holes are in [KNOWN-GAPS.md](KNOWN-GAPS.md).
 | `Income_Stream_Ability` on mines | Data: `Buildings/Ground/GC/**/Mining_Facility*.xml` | ignored: its comment says it exists in tactical modes only |
 | `Additional_Multiplier_On_Mining_Colonies` | Data: mining facilities | on a planet with `Planet_Is_Mining_Colony` the facility modifiers count (1 + multiplier) times |
 | `Planet_Income_Gambling_Ability` (Underworld structures, heroes: Mon Mothma +-25%, Jabba, Tyber, Xizor -50%/+100%) | Data: `Evaluation_Interval_In_Secs`, `Chance_To_Win`, `Max/Min_Income_Modifier`; Estimate: when both a gambling structure and a hero are present, both roll independently on their own timers and stack additively | uses the galaxy RNG, so it is deterministic; heroes evaluate while orbiting an owned planet |
+| Attrition credits (`Destruction_Survivors` spawning `N_Death_Penalty_Dummy` or `N_Reverse_Death_Penalty_Dummy`) | Data: `Units/Space/_Attrition.xml`, `DEATHPENALTY.lua` / `DEATHPENALTYUNOREVERSE.lua` | Craft and garrison losses cost 20 to 300 credits per craft lost; destroyed heroes and stations refund 2400 to 12860 credits to their owner; applied in tactical and auto-resolved battles |
 | Starting credits, tech levels, home planets, forces | Data: `Xml/Campaigns_*.xml` (`Starting_Credits`, `Starting_Tech_Level`, `Home_Location`, `Starting_Forces`) | `FactionInfo` |
 | Trade route `Credit_Gain_Factor`, `Political_Control_Gain`, black market, corruption | Data: `Xml/TradeRoutes_Web_Way.xml` | not modelled; every Web Way lane has both at 0 |
 

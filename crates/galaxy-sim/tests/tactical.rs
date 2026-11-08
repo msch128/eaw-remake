@@ -916,3 +916,85 @@ fn a_story_power_reaches_the_battle_on_its_own_side() {
     assert!(req.sides[rs].powers.contains(&pair));
     assert!(cfg.powers[es].is_empty());
 }
+
+#[test]
+fn attrition_credits_lost_tie_squadron_and_lost_hero() {
+    let Some(ctx) = load() else { return };
+    let campaign = ctx.data.campaign("GC_Full_Web_Way_Rebel").expect("campaign");
+    let mut sim = Sim::new(&ctx.data, campaign, SimConfig { auto_resolve_battles: true, victory_enabled: false, ..SimConfig::default() }).expect("sim");
+    let w = sim.world().clone();
+    let empire = w.faction_id("Empire").unwrap();
+    let rebel = w.faction_id("Rebel").unwrap();
+
+    let tie_squad = w.unit_id("TIE_Fighter_Garrison").expect("TIE_Fighter_Garrison");
+    let tie_fighter = w.unit_id("TIE_Fighter_G").expect("TIE_Fighter_G");
+    let tie_def = ctx.data.objects.space_unit("TIE_Fighter_G").expect("TIE_Fighter_G def");
+    assert_eq!(tie_def.destruction_survivors.as_deref(), Some("20_Death_Penalty_Dummy, 1.0"));
+    assert_eq!(tie_def.attrition_credits(&ctx.data.objects), -20);
+    assert_eq!(w.units[tie_fighter as usize].attrition_credits, -20);
+    assert_eq!(w.units[tie_squad as usize].attrition_credits, -240);
+
+    let tarkin = w.unit_id("Havelon").expect("Havelon");
+    let tarkin_def = ctx.data.objects.space_unit("Havelon").expect("Tarkin def");
+    assert_eq!(tarkin_def.destruction_survivors.as_deref(), Some("2400_Reverse_Death_Penalty_Dummy, 1.0"));
+    assert_eq!(tarkin_def.attrition_credits(&ctx.data.objects), 2400);
+    assert_eq!(w.units[tarkin as usize].attrition_credits, 2400);
+
+    // Auto-resolve battle: losing a TIE squadron costs 240 credits compared to baseline
+    let p = empty_planet(&sim);
+    let from = neighbour(&w, p);
+
+    let mut baseline_sim = Sim::new(&ctx.data, campaign, SimConfig { auto_resolve_battles: true, victory_enabled: false, ..SimConfig::default() }).expect("sim");
+    baseline_sim.step(1.0);
+    let baseline_credits = baseline_sim.galaxy().factions[empire as usize].credits;
+
+    add_fleet(&mut sim, empire, tie_squad, 1, p, from);
+    let mc80 = w.unit_id("MC-80_Star_Cruiser").unwrap();
+    add_fleet(&mut sim, rebel, mc80, 5, p, from);
+    sim.step(1.0);
+    let after_credits = sim.galaxy().factions[empire as usize].credits;
+    assert_eq!((after_credits - baseline_credits).round(), -240.0, "lost TIE squadron should deduct 240 credits");
+
+    // Auto-resolve battle: losing Tarkin refunds 2400 credits compared to baseline
+    let mut sim_tarkin = Sim::new(&ctx.data, campaign, SimConfig { auto_resolve_battles: true, victory_enabled: false, ..SimConfig::default() }).expect("sim");
+    add_fleet(&mut sim_tarkin, empire, tarkin, 1, p, from);
+    add_fleet(&mut sim_tarkin, rebel, mc80, 5, p, from);
+    sim_tarkin.step(1.0);
+    let after_tarkin_credits = sim_tarkin.galaxy().factions[empire as usize].credits;
+    assert_eq!((after_tarkin_credits - baseline_credits).round(), 2400.0, "lost Tarkin should refund 2400 credits");
+
+    // Tactical battle: losing a TIE squadron deducts 240 credits
+    let mut tac_sim = new_sim(&ctx);
+    let tac_p = empty_planet(&tac_sim);
+    add_fleet(&mut tac_sim, empire, tie_squad, 1, tac_p, tac_p);
+    add_fleet(&mut tac_sim, rebel, mc80, 2, tac_p, tac_p);
+    let battle = pending(&mut tac_sim);
+    let req = tac_sim.tactical_setup(battle.id).expect("tactical request");
+    let catalog = catalog_for(&ctx, &req);
+    let arena = req.map.as_ref().and_then(|m| Arena::load(&ctx.data, &ctx.fs, m)).map(Arc::new);
+    let result = run_headless(&req, &catalog, arena).expect("result");
+    let es = req.sides.iter().position(|s| s.faction == empire).unwrap();
+    assert_eq!(result.attrition_credits[es], -240, "tactical battle attrition credits for lost TIE squadron");
+    let credits_before_apply = tac_sim.galaxy().factions[empire as usize].credits;
+    tac_sim.apply_tactical_result(battle.id, &result).unwrap();
+    let credits_after_apply = tac_sim.galaxy().factions[empire as usize].credits;
+    assert_eq!((credits_after_apply - credits_before_apply).round(), -240.0);
+
+    // Tactical battle: losing Tarkin refunds 2400 credits
+    let mut tac_sim2 = new_sim(&ctx);
+    let tac_p2 = empty_planet(&tac_sim2);
+    add_fleet(&mut tac_sim2, empire, tarkin, 1, tac_p2, tac_p2);
+    add_fleet(&mut tac_sim2, rebel, mc80, 2, tac_p2, tac_p2);
+    let battle2 = pending(&mut tac_sim2);
+    let req2 = tac_sim2.tactical_setup(battle2.id).expect("tactical request");
+    let catalog2 = catalog_for(&ctx, &req2);
+    let arena2 = req2.map.as_ref().and_then(|m| Arena::load(&ctx.data, &ctx.fs, m)).map(Arc::new);
+    let result2 = run_headless(&req2, &catalog2, arena2).expect("result");
+    let es2 = req2.sides.iter().position(|s| s.faction == empire).unwrap();
+    // Tarkin (+2400) minus his destroyed garrison fighters (-3435) = -1035
+    assert_eq!(result2.attrition_credits[es2], -1035, "tactical battle net attrition credits for Tarkin and his garrison");
+    let credits_before_apply2 = tac_sim2.galaxy().factions[empire as usize].credits;
+    tac_sim2.apply_tactical_result(battle2.id, &result2).unwrap();
+    let credits_after_apply2 = tac_sim2.galaxy().factions[empire as usize].credits;
+    assert_eq!((credits_after_apply2 - credits_before_apply2).round(), -1035.0);
+}

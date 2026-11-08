@@ -1192,6 +1192,40 @@ impl Sim {
         let ps = self.galaxy.planets[p as usize].clone();
         let (mut events, losses) = self.apply_losses(p, sides, &result.survivors);
 
+        let mut attrition_credits = result.attrition_credits;
+        if attrition_credits.is_empty() {
+            attrition_credits = vec![0i32; sides.len()];
+            for (si, side) in sides.iter().enumerate() {
+                let mut surviving: BTreeMap<(Source, Option<FleetId>), u32> = BTreeMap::new();
+                if let Some(surv) = result.survivors.get(si) {
+                    for m in surv {
+                        *surviving.entry((m.source, m.fleet)).or_default() += m.count;
+                    }
+                }
+                for m in &side.members {
+                    let left = surviving.get(&(m.source, m.fleet)).copied().unwrap_or(0);
+                    let lost = m.count.saturating_sub(left);
+                    if lost > 0 {
+                        let per = match m.source {
+                            Source::Unit(u) => w.units[u as usize].attrition_credits,
+                            Source::Starbase(sb) => w.starbases[sb as usize].attrition_credits,
+                            Source::Structure(s) => w.structures[s as usize].attrition_credits,
+                            Source::Garrison(_) => 0,
+                        };
+                        attrition_credits[si] += lost as i32 * per;
+                    }
+                }
+            }
+        }
+        for (si, side) in sides.iter().enumerate() {
+            if let Some(&delta) = attrition_credits.get(si) {
+                if delta != 0 {
+                    let fac = &mut self.galaxy.factions[side.faction as usize];
+                    fac.credits = (fac.credits + delta as f64).max(0.0);
+                }
+            }
+        }
+
         let winner = result.winner.map(|i| sides[i].faction);
         for (si, side) in sides.iter().enumerate() {
             if result.winner == Some(si) {

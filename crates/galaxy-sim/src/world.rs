@@ -386,6 +386,8 @@ pub struct UnitType {
     pub income_pct: f32,
     /// `Planet_Income_Gambling_Ability`: periodic income swing at the orbiting planet (Mon Mothma, Jabba, Tyber, Xizor).
     pub gamble: Option<IncomeGamble>,
+    /// Credits granted (refund, positive) or deducted (penalty, negative) to the owner when destroyed.
+    pub attrition_credits: i32,
     /// `AI_Combat_Power`.
     pub ai_power: f32,
     /// True if the unit can appear in a build menu at all.
@@ -442,6 +444,8 @@ pub struct StructureType {
     pub income_abs_mining: f32,
     /// `Planet_Income_Gambling_Ability` (Underworld cantinas): income that swings between a loss and a win.
     pub gamble: Option<IncomeGamble>,
+    /// Credits granted (refund, positive) or deducted (penalty, negative) to the owner when destroyed.
+    pub attrition_credits: i32,
     /// Population capacity granted.
     pub population_capacity: i32,
     /// True if it occupies an orbital slot, false for a ground slot.
@@ -530,6 +534,8 @@ pub struct StarbaseType {
     pub income_abs: f32,
     /// Fractional income change.
     pub income_pct: f32,
+    /// Credits granted (refund, positive) or deducted (penalty, negative) to the owner when destroyed.
+    pub attrition_credits: i32,
     /// Combat numbers.
     pub combat: CombatStats,
     /// Fighter garrison spawned in battle (unit type, count).

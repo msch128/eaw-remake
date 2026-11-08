@@ -10,7 +10,7 @@ use crate::rng::Rng;
 use crate::world::*;
 
 /// What a combatant is made from.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Source {
     /// A ship or squadron of a fleet.
     Unit(UnitTypeId),
@@ -53,6 +53,8 @@ pub struct CombatResult {
     pub rounds: u32,
     /// Fleets that left the battle by retreating (tactical battles only).
     pub retreated: Vec<FleetId>,
+    /// Net attrition credits delta per side (penalties negative, refunds positive; tactical battles only).
+    pub attrition_credits: Vec<i32>,
 }
 
 struct Inst {
@@ -352,5 +354,5 @@ pub fn resolve_damaged(
         .collect();
     let alive: Vec<usize> = (0..survivors.len()).filter(|&i| survivors[i].iter().any(|m| !world.untargetable(m.source))).collect();
     let winner = (alive.len() == 1 && rounds < world.config.combat_max_rounds).then(|| alive[0]);
-    CombatResult { survivors, winner, rounds, retreated: Vec::new() }
+    CombatResult { survivors, winner, rounds, retreated: Vec::new(), attrition_credits: Vec::new() }
 }

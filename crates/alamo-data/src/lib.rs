@@ -30,7 +30,7 @@ pub use model::{
 pub use objects::{GameObject, GameObjects, Resolved};
 pub use space::{
     DirectWeapon, HardpointDef, IncomeModifier, ProjectileDef, ShipCategory, SpaceUnitDef,
-    StarBaseDef, StructureDef, SubAbility, TurretDef, UnitAbility,
+    StarBaseDef, StructureDef, SubAbility, TurretDef, UnitAbility, parse_attrition_credits,
 };
 pub use space::{SpawnedUnits, spawned_for_tech};
 pub use text::{TextError, TextTable};

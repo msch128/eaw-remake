@@ -167,7 +167,7 @@ fn production_mods(subs: &[alamo_data::SubAbility]) -> Vec<ProductionMod> {
     out
 }
 
-fn unit_from_def(def: &SpaceUnitDef, combat: CombatStats) -> UnitType {
+fn unit_from_def(def: &SpaceUnitDef, combat: CombatStats, objects: &alamo_data::GameObjects) -> UnitType {
     let role = match def.name.strip_prefix("Research_").or_else(|| def.name.strip_prefix("RESEARCH_")) {
         Some(target) if def.hardpoints.is_empty() && def.space_model.is_none() => UnitRole::Research(target.to_string()),
         _ => UnitRole::Ship,
@@ -209,6 +209,7 @@ fn unit_from_def(def: &SpaceUnitDef, combat: CombatStats) -> UnitType {
                 chance: num("chance_to_win").unwrap_or(0.5).clamp(0.0, 1.0),
             }
         }),
+        attrition_credits: def.attrition_credits(objects),
         ai_power: def.ai_combat_power,
         buildable: def.build_cost > 0.0 && yes("build_tab_space_units") && !def.affiliation.is_empty(),
         carries: def.starting_spawned_units.clone(),
@@ -281,6 +282,7 @@ impl World {
                     let num = |k: &str| a.fields.get(k).and_then(|v| v.trim().parse::<f32>().ok());
                     IncomeGamble { interval: num("evaluation_interval_in_secs").unwrap_or(30.0).max(1.0), min: num("min_income_modifier").unwrap_or(0.0), max: num("max_income_modifier").unwrap_or(0.0), chance: num("chance_to_win").unwrap_or(0.5).clamp(0.0, 1.0) }
                 }),
+                attrition_credits: def.attrition_credits(&data.objects),
                 population_capacity: def.population_capacity,
                 orbital,
                 max_per_planet: def.max_instances_per_planet.unwrap_or(1).max(1),
@@ -351,7 +353,7 @@ impl World {
             );
             let id = self.units.len() as UnitTypeId;
             self.unit_index.insert(key(&def.name), id);
-            let mut u = unit_from_def(&def, combat);
+            let mut u = unit_from_def(&def, combat, &data.objects);
             self.resolve_unit_requirements(&mut u, &def);
             self.units.push(u);
         }
@@ -376,7 +378,7 @@ impl World {
             }
             let id = self.units.len() as UnitTypeId;
             self.unit_index.insert(key(&def.name), id);
-            let mut u = unit_from_def(&def, combat);
+            let mut u = unit_from_def(&def, combat, &data.objects);
             u.category = category;
             u.hyperspace_speed = if speed == f32::MAX { 0.5 } else { speed };
             u.buildable &= ok;
@@ -385,6 +387,9 @@ impl World {
             }
             if u.gamble.is_none() {
                 u.gamble = def.squadron_units.iter().filter_map(|m| self.unit_index.get(&key(m))).find_map(|&mid| self.units[mid as usize].gamble);
+            }
+            if u.attrition_credits == 0 {
+                u.attrition_credits = def.squadron_units.iter().filter_map(|m| self.unit_index.get(&key(m))).map(|&mid| self.units[mid as usize].attrition_credits).sum();
             }
             self.resolve_unit_requirements(&mut u, &def);
             self.units.push(u);
@@ -429,6 +434,7 @@ impl World {
                 population_capacity: def.population_capacity,
                 income_abs: def.income_modifiers.iter().map(|m| m.absolute).sum(),
                 income_pct: def.income_modifiers.iter().map(|m| m.percentage).sum(),
+                attrition_credits: def.attrition_credits(&data.objects),
                 combat,
                 garrison,
                 prod_mods: production_mods(&def.sub_abilities),
@@ -546,7 +552,7 @@ impl World {
             if def.space_model.is_some() || !tab || def.build_cost <= 0.0 {
                 continue;
             }
-            let mut u = unit_from_def(&def, CombatStats::default());
+            let mut u = unit_from_def(&def, CombatStats::default(), &data.objects);
             u.role = UnitRole::Dummy;
             self.resolve_unit_requirements(&mut u, &def);
             self.unit_index.insert(key(&def.name), self.units.len() as UnitTypeId);
@@ -581,7 +587,7 @@ impl World {
                 continue;
             }
             let Some(def) = data.objects.space_unit(item) else { continue };
-            let mut u = unit_from_def(&def, CombatStats::default());
+            let mut u = unit_from_def(&def, CombatStats::default(), &data.objects);
             u.role = UnitRole::Upgrade { from: f, to: t };
             u.category = ShipCategory::Other;
             u.hero = false;

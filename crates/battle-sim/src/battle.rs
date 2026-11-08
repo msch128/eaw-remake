@@ -488,6 +488,8 @@ pub struct BattleResult {
     pub duration: f32,
     /// Survivors per setup group.
     pub groups: Vec<GroupResult>,
+    /// Net attrition credits delta per side (penalties negative, refunds positive).
+    pub attrition_credits: Vec<i32>,
 }
 
 /// Ability runtime state.
@@ -891,7 +893,16 @@ impl Battle {
         for g in &mut groups {
             g.health.sort_by(|a, b| b.0.total_cmp(&a.0).then(b.1.total_cmp(&a.1)));
         }
-        BattleResult { winner: self.winner, duration: self.time, groups }
+        let mut attrition_credits = vec![0i32; self.sides.len()];
+        for s in &self.ships {
+            if !s.alive && !s.retreated {
+                let def = self.catalog.ship(s.def);
+                if (s.side as usize) < attrition_credits.len() {
+                    attrition_credits[s.side as usize] += def.attrition_credits;
+                }
+            }
+        }
+        BattleResult { winner: self.winner, duration: self.time, groups, attrition_credits }
     }
 }
 

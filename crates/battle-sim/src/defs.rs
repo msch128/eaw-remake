@@ -520,6 +520,8 @@ pub struct ShipDef {
     pub population: i32,
     /// `AI_Combat_Power`: what the unit counts in the AI's force perception (`FriendlyForceUnnormalized`); 0 where the data has none.
     pub ai_power: f32,
+    /// Credits granted (refund, positive) or deducted (penalty, negative) to the owner when destroyed.
+    pub attrition_credits: i32,
     /// `CategoryMask` names `AntiFighter`: the AI's free store sends it after fighters, bombers, gunships and transports.
     pub anti_fighter: bool,
     /// Hardpoints.
@@ -1190,7 +1192,7 @@ impl Catalog {
                 Arc::new(ModelInfo { bones, radius: m.radius * k, hull, height: m.height.map(|(lo, hi)| (lo * k, hi * k)) })
             });
             let model = scaled.as_ref();
-            let def = cat.ship_def(s, &hp_defs[i], model.map(|m| &**m), &attach);
+            let def = cat.ship_def(s, &hp_defs[i], model.map(|m| &**m), &attach, &data.objects);
             cat.ships.push(def);
         }
         cat
@@ -1251,7 +1253,7 @@ impl Catalog {
         }
     }
 
-    fn ship_def(&self, src: &Source, hps: &[HardpointDef], model: Option<&ModelInfo>, attach: &HashMap<String, Arc<AttachInfo>>) -> ShipDef {
+    fn ship_def(&self, src: &Source, hps: &[HardpointDef], model: Option<&ModelInfo>, attach: &HashMap<String, Arc<AttachInfo>>, objects: &alamo_data::GameObjects) -> ShipDef {
         // Common numbers.
         let (name, text_id, class, is_static, is_squadron, hull, shield, regen, armor, sarmor, pop) = match src {
             Source::Unit(u) => (
@@ -1649,6 +1651,11 @@ impl Catalog {
                 Source::Structure(s) => s.fields.get("ai_combat_power").and_then(|v| v.trim().parse().ok()).unwrap_or(0.0),
             }
             .max(0.0),
+            attrition_credits: match src {
+                Source::Unit(u) => u.attrition_credits(objects),
+                Source::Base(b) => b.attrition_credits(objects),
+                Source::Structure(s) => s.attrition_credits(objects),
+            },
             anti_fighter: matches!(src, Source::Unit(u) if u.category_mask.iter().any(|c| c.eq_ignore_ascii_case("AntiFighter"))),
             hardpoints,
             direct,
