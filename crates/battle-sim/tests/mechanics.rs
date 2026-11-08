@@ -1651,6 +1651,68 @@ fn squadrons_fight_on_when_their_carrier_is_lost() {
     assert_eq!(b.winner(), Some(0));
 }
 
+/// A carrier that launches one squadron of two fighters, a squadron def of those fighters and a frigate (defs 0 to 3).
+fn carrier_catalog() -> Arc<Catalog> {
+    let mut cat = Catalog::default();
+    cat.ships.push(ShipDef { name: "carrier".into(), class: TargetClass::Capital, hull: 100.0, radius: 200.0, carried: vec![(1, 1)], ..ShipDef::default() });
+    cat.ships.push(ShipDef { name: "fighter_sq".into(), is_squadron: true, members: vec![(2, 2)], ..ShipDef::default() });
+    cat.ships.push(ShipDef { name: "fighter".into(), class: TargetClass::Fighter, hull: 50.0, radius: 10.0, ..ShipDef::default() });
+    cat.ships.push(ShipDef { name: "frigate".into(), class: TargetClass::Frigate, hull: 1000.0, radius: 100.0, ..ShipDef::default() });
+    Arc::new(cat)
+}
+
+#[test]
+fn a_side_whose_last_brought_unit_dies_loses_at_once_and_its_launched_squadrons_go_with_it() {
+    // The enemy brought only its carrier (a Star Destroyer with its TIEs): when it dies, the launched squadron does not keep the side in the
+    // battle, the battle ends in that step and the squadron is removed with the loser.
+    let cat = carrier_catalog();
+    let sides = vec![
+        SideSetup { name: "player".into(), units: vec![UnitSetup { ship: 3, count: 1, tag: 0 }], structures: vec![], ai: false },
+        SideSetup { name: "enemy".into(), units: vec![UnitSetup { ship: 0, count: 1, tag: 0 }], structures: vec![], ai: true },
+    ];
+    let mut b = Battle::new(BattleSetup { catalog: cat, sides, config: BattleConfig { dt: 0.1, ..BattleConfig::default() } });
+    let carrier = b.ships.iter().position(|s| s.side == 1 && s.def == 0).unwrap();
+    let fighters: Vec<usize> = b.ships.iter().filter(|s| s.side == 1 && s.def == 2).map(|s| s.id as usize).collect();
+    assert_eq!(fighters.len(), 2, "the carrier's squadron is out");
+    for _ in 0..20 {
+        b.step();
+    }
+    assert!(!b.is_over());
+    b.ships[carrier].hull = 0.0;
+    b.ships[carrier].alive = false;
+    b.step();
+    assert!(b.is_over(), "over in the step the carrier dies");
+    assert_eq!(b.winner(), Some(0), "the carrier's side lost");
+    assert!(fighters.iter().all(|&f| !b.ships[f].alive), "its launched fighters are removed with it");
+}
+
+#[test]
+fn a_squadron_the_side_brought_keeps_it_in_the_battle() {
+    // The enemy brought a frigate and a squadron of its own (a unit of the setup, not launched): it fights on while the squadron lives.
+    let cat = carrier_catalog();
+    let sides = vec![
+        SideSetup { name: "player".into(), units: vec![UnitSetup { ship: 3, count: 1, tag: 0 }], structures: vec![], ai: false },
+        SideSetup { name: "enemy".into(), units: vec![UnitSetup { ship: 3, count: 1, tag: 0 }, UnitSetup { ship: 1, count: 1, tag: 0 }], structures: vec![], ai: true },
+    ];
+    let mut b = Battle::new(BattleSetup { catalog: cat, sides, config: BattleConfig { dt: 0.1, ..BattleConfig::default() } });
+    let frigate = b.ships.iter().position(|s| s.side == 1 && s.def == 3).unwrap();
+    let fighters: Vec<usize> = b.ships.iter().filter(|s| s.side == 1 && s.def == 2).map(|s| s.id as usize).collect();
+    assert_eq!(fighters.len(), 2);
+    b.ships[frigate].hull = 0.0;
+    b.ships[frigate].alive = false;
+    for _ in 0..30 {
+        b.step();
+    }
+    assert!(!b.is_over(), "the brought squadron still lives");
+    for &f in &fighters {
+        b.ships[f].hull = 0.0;
+        b.ships[f].alive = false;
+    }
+    b.step();
+    assert!(b.is_over(), "with the squadron gone the side has lost");
+    assert_eq!(b.winner(), Some(0));
+}
+
 #[test]
 fn orphaned_station_fighters_leave_with_the_lost_station_and_victory_resolves_cleanly() {
     let mut cat = Catalog::default();
