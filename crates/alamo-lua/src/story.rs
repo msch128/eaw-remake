@@ -7,8 +7,9 @@
 //! (`TRIGGER_EVENT`, `RESET_BRANCH`, `DISABLE_BRANCH`, `DISABLE_STORY_EVENT`) are handled here, all
 //! others are handed to the host.
 //!
-//! **Semantics are reconstructed**, not verified against the engine: in particular `STORY_TRIGGER` events
-//! fire only when another event triggers them by name (exceptions: `*_Auto` events and hero spawns with prerequisites fire when activated), and several `Prereq` tags mean "all of them".
+//! **Semantics are reconstructed**, not verified against the engine. A `STORY_TRIGGER` with prerequisites fires once those have fired
+//! (the Web Way plots chain heroes, locks, tech followers, shield grants and the 181st on prerequisites alone; nothing triggers them by name).
+//! One with no prerequisites waits until a `TRIGGER_EVENT` names it. Several `Prereq` tags mean "all of them".
 
 use std::collections::HashMap;
 
@@ -216,6 +217,8 @@ impl StoryEngine {
 /// An event that fired: the runtime calls the script and hands the rewards to the host.
 #[derive(Debug, Clone)]
 pub struct Fired {
+    /// Plot file the event belongs to.
+    pub file: String,
     /// Script instance to notify.
     pub script: usize,
     /// Event name.
@@ -401,23 +404,8 @@ impl StoryEngine {
                     };
                     now - base >= secs
                 }
-                // `*_Auto` events (the tech-level followers of `Research/Story/Tech_Levels_*.xml`) are STORY_TRIGGERs with prerequisites that nothing
-                // triggers by name; they fire as soon as their prerequisites have (inferred from the naming, not verified against the engine).
-                // The bookkeeping events of the hero respawn chains (`Story_Sandbox_Hero_Timers_*.xml`: Completed, Reset) are STORY_TRIGGERs with prerequisites and only graph rewards that nothing
-                // triggers by name; they run as soon as their prerequisites have (inferred).
-                "STORY_TRIGGER" => {
-                    r.triggered[ei]
-                        || (!ev.prereqs.is_empty()
-                            && !r.done[ei]
-                            && (ev.name.to_ascii_lowercase().ends_with("_auto")
-                                || (!ev.rewards.is_empty() && ev.rewards.iter().all(|w| matches!(w.kind.as_str(), "RESET_BRANCH" | "REMOVE_STORY_GOAL"))
-                                // Era locks of the Clone Wars plots (`Story_SandBox_Minors_*_WW_CW*.xml`): `LOCK_UNIT` at `Universal_Story_Start`, nothing triggers them by name (inferred).
-                                || (!ev.rewards.is_empty() && ev.rewards.iter().all(|w| w.kind == "LOCK_UNIT"))
-                                // Hero spawns of the Remake plots (`Spawn_Tyber`, `Spawn_Darth_Vader`, `Empire_AI_Heroes_01` ...: 333 of them):
-                                // `SPAWN_HERO` after `Universal_Story_Start` or a respawn timer; nothing triggers them by name, yet the heroes
-                                // are there in the game (inferred).
-                                || (!ev.rewards.is_empty() && ev.rewards.iter().all(|w| w.kind == "SPAWN_HERO")))))
-                }
+                // Prerequisites are the gate. A trigger with none waits for `TRIGGER_EVENT`.
+                "STORY_TRIGGER" => r.triggered[ei] || (!ev.prereqs.is_empty() && !r.done[ei]),
                 "STORY_WIN_BATTLES" | "STORY_LOSE_BATTLES" => {
                     let need: u32 = ev.params.first().and_then(|p| p.parse().ok()).unwrap_or(1);
                     notify.is_some_and(|(_, param)| param == "{0}battle") && r.battles[ei] >= need.max(1)
@@ -471,6 +459,7 @@ impl StoryEngine {
         }
         let r = &self.plots[pi];
         out.push(Fired {
+            file: r.plot.file.clone(),
             script: r.script,
             event: r.plot.events[ei].name.clone(),
             faction: r.faction.clone(),
@@ -700,8 +689,9 @@ mod tests {
             <Event Name="Universal_Story_Start"><Event_Type>STORY_ELAPSED</Event_Type><Event_Param1>0</Event_Param1></Event>
             <Event Name="Spawn_Tyber"><Event_Type>STORY_TRIGGER</Event_Type><Reward_Type>SPAWN_HERO</Reward_Type>
               <Reward_Param1>Tyber_Zann_Javelin</Reward_Param1><Reward_Param2>Ryloth_WW</Reward_Param2><Prereq>Universal_Story_Start</Prereq></Event>
-            <Event Name="Waits"><Event_Type>STORY_TRIGGER</Event_Type><Reward_Type>CREDITS</Reward_Type><Reward_Param1>5</Reward_Param1>
-              <Prereq>Universal_Story_Start</Prereq></Event>
+            <Event Name="Grant"><Event_Type>STORY_TRIGGER</Event_Type><Reward_Type>NEW_POWER_FOR_ALL</Reward_Type>
+              <Reward_Param1>CR-90_Corvette</Reward_Param1><Reward_Param2>Reflector_Shield</Reward_Param2><Prereq>Universal_Story_Start</Prereq></Event>
+            <Event Name="Waits"><Event_Type>STORY_TRIGGER</Event_Type><Reward_Type>CREDITS</Reward_Type><Reward_Param1>5</Reward_Param1></Event>
             </Story>"#,
         );
         let mut s = StoryEngine::default();
@@ -709,6 +699,7 @@ mod tests {
         let mut fired: Vec<String> = s.tick(0.0).into_iter().map(|f| f.event).collect();
         fired.extend(s.tick(1.0).into_iter().map(|f| f.event));
         assert!(fired.iter().any(|e| e == "Spawn_Tyber"), "the hero spawn fires after the story start: {fired:?}");
-        assert!(!fired.iter().any(|e| e == "Waits"), "a plain STORY_TRIGGER still waits to be triggered by name");
+        assert!(fired.iter().any(|e| e == "Grant"), "a gated trigger fires whatever its reward is: {fired:?}");
+        assert!(!fired.iter().any(|e| e == "Waits"), "a STORY_TRIGGER with no prerequisite waits to be triggered by name");
     }
 }

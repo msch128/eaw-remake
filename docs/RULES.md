@@ -234,9 +234,11 @@ build-menu filters, not a start mode. The mode is this project's own:
 * Data: besides the three `*_Story_Name` tags, every playable faction's `Story_Name` entry of the campaign is started.
 * Data-derived, unverified against the submod: UI skin, announcer and HUD voice set follow the faction icon named in
   `FACTIONS.XML` (Republic `i_icon_rebel.tga` uses the Rebel set, CIS `i_icon_pirate.tga` the Underworld set).
-* Data: Clone Wars plots `LOCK_UNIT` the GCW-era heroes at `Universal_Story_Start`; `STORY_TRIGGER` events whose rewards
-  are all `LOCK_UNIT` fire when their prerequisites have (inferred in `alamo-lua` `story.rs`). `story_locked` makes the
-  build checks refuse the object until a story `UNLOCK_UNIT`. Rosters otherwise stay the data `Affiliation`.
+* Data: Clone Wars plots `LOCK_UNIT` the GCW-era heroes at `Universal_Story_Start`. A `STORY_TRIGGER` fires when its
+  prerequisites have, whatever the reward (inferred in `alamo-lua` `story.rs` from the Web Way plots: nothing triggers
+  the hero spawns, locks, tech followers, shield grants or the 181st chain by name). A `STORY_TRIGGER` with no
+  prerequisite waits until a `TRIGGER_EVENT` names it. `story_locked` makes the build checks refuse the object until a
+  story `UNLOCK_UNIT`. Rosters otherwise stay the data `Affiliation`.
 * Data, deliberately unchanged: the Shatterpoint campaigns give the full-AI opposing side 500000 credits against the
   human's 50000; a Republic human starts at about 497 credits per week.
 * Estimate: history chart colours of non-classic factions are the XML faction colour lifted (`0.35 + 0.65 * c`).
