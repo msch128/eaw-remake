@@ -321,7 +321,7 @@ impl BuildMenu {
                     category: BuildCategory::Tech,
                     target: BuildTarget::Tech(tech_idx),
                     name: format!("Tech level {}", fs.tech + 1),
-                    cost: up.cost,
+                    cost: world.tech_cost(galaxy, faction, tech_idx),
                     build_seconds: up.time * scale,
                     population: 0,
                     availability: a,

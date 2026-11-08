@@ -185,14 +185,15 @@ impl Sim {
             Command::UpgradeTech { faction, planet } => {
                 let idx = world.check_upgrade_tech(g, faction, planet)?;
                 let up = &world.factions[faction as usize].tech_upgrades[idx];
-                g.factions[faction as usize].credits -= up.cost as f64;
-                g.factions[faction as usize].stats.credits_spent += f64::from(up.cost);
+                let cost = world.tech_cost(g, faction, idx);
+                g.factions[faction as usize].credits -= cost as f64;
+                g.factions[faction as usize].stats.credits_spent += f64::from(cost);
                 let t = up.time * world.config.build_time_scale * g.factions[faction as usize].difficulty.build_time;
                 g.planets[planet as usize].queues[Lane::Base as usize].push_back(ProductionItem {
                     kind: ProductionKind::Tech(idx),
                     remaining: t,
                     total: t,
-                    cost: up.cost,
+                    cost,
                 });
                 Ok(CommandOk::Done)
             }

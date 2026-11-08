@@ -501,7 +501,7 @@ pub struct IncomeGamble {
     pub chance: f32,
 }
 
-/// One `Reduce_Production_Price_Ability` or `Reduce_Production_Time_Ability`.
+/// One `Reduce_Production_Price_Ability`, `Reduce_Production_Time_Ability` or `Reduce_Technology_Price_Ability`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProductionMod {
     /// Ability name.
@@ -510,6 +510,10 @@ pub struct ProductionMod {
     pub price: f32,
     /// Fraction taken off the build time.
     pub time: f32,
+    /// Modifies technology prices (`Reduce_Technology_Price_Ability`).
+    pub tech: bool,
+    /// Ability applies galaxy-wide (`Galaxy_Wide` Yes) rather than to the planet only.
+    pub galaxy_wide: bool,
     /// `Applicable_Unit_Categories` is `All`.
     pub all: bool,
     /// Applicable size classes.
@@ -525,6 +529,9 @@ pub struct ProductionMod {
 impl ProductionMod {
     /// True if the ability applies to a unit of this name and size class.
     pub fn applies(&self, name: &str, category: alamo_data::ShipCategory) -> bool {
+        if self.tech {
+            return false;
+        }
         let lower = name.to_ascii_lowercase();
         if self.excluded.contains(&lower) {
             return false;

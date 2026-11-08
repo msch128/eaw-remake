@@ -142,10 +142,12 @@ fn production_mods(subs: &[alamo_data::SubAbility]) -> Vec<ProductionMod> {
         s.map(|v| v.split(|c: char| c == ',' || c == '|' || c.is_whitespace()).filter(|t| !t.is_empty()).map(str::to_ascii_lowercase).collect()).unwrap_or_default()
     };
     let num = |v: Option<&String>| v.and_then(|v| v.trim().parse::<f32>().ok()).unwrap_or(0.0);
+    let yes = |k: &str, a: &alamo_data::SubAbility| a.fields.get(k).is_some_and(|v| v.eq_ignore_ascii_case("yes") || v.eq_ignore_ascii_case("true"));
     let mut out = Vec::new();
     for a in subs {
+        let is_tech = a.kind.eq_ignore_ascii_case("reduce_technology_price_ability");
         let (price, time) = match a.kind.to_ascii_lowercase().as_str() {
-            "reduce_production_price_ability" => (num(a.fields.get("price_reduction_percentage")), 0.0),
+            "reduce_production_price_ability" | "reduce_technology_price_ability" => (num(a.fields.get("price_reduction_percentage")), 0.0),
             "reduce_production_time_ability" => (0.0, num(a.fields.get("time_reduction_percentage"))),
             _ => continue,
         };
@@ -154,6 +156,8 @@ fn production_mods(subs: &[alamo_data::SubAbility]) -> Vec<ProductionMod> {
             name: a.name.clone(),
             price,
             time,
+            tech: is_tech,
+            galaxy_wide: yes("galaxy_wide", a),
             all: cats.iter().any(|c| c == "all"),
             categories: cats.iter().map(|c| alamo_data::ShipCategory::from_mask(std::slice::from_ref(c))).filter(|c| *c != alamo_data::ShipCategory::Other).collect(),
             types: list(a.fields.get("applicable_unit_types")),

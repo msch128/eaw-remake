@@ -391,6 +391,28 @@ impl World {
         self.victory.active_player == Some(faction)
     }
 
+    /// Price of the faction's tech upgrade at index `idx` after planetary technology discounts
+    /// (`Reduce_Technology_Price_Ability` at The Maw, Scarif, etc.).
+    /// Abilities in the same `Stacking_Category` do not add up, the strongest wins; categories multiply.
+    pub fn tech_cost(&self, galaxy: &Galaxy, faction: FactionId, idx: usize) -> f32 {
+        let Some(up) = self.factions.get(faction as usize).and_then(|f| f.tech_upgrades.get(idx)) else {
+            return 0.0;
+        };
+        let mut price_mods: std::collections::BTreeMap<i32, f32> = std::collections::BTreeMap::new();
+        for (pl_id, ps) in galaxy.planets.iter().enumerate() {
+            if ps.owner == Some(faction) {
+                for m in &self.planets[pl_id].prod_mods {
+                    if m.tech && m.price != 0.0 {
+                        let e = price_mods.entry(m.stacking).or_insert(0.0);
+                        *e = e.max(m.price);
+                    }
+                }
+            }
+        }
+        let apply = |base: f32, m: std::collections::BTreeMap<i32, f32>| m.values().fold(base, |c, r| c * (1.0 - r.min(1.0)));
+        apply(up.cost, price_mods)
+    }
+
     /// Checks whether the next tech level can be bought at this planet.
     pub fn check_upgrade_tech(&self, galaxy: &Galaxy, faction: FactionId, planet: PlanetId) -> Result<usize, CommandError> {
         let fs = galaxy.factions.get(faction as usize).ok_or(CommandError::Invalid)?;
@@ -421,7 +443,8 @@ impl World {
         {
             return Err(CommandError::RequirementsNotMet(missing));
         }
-        if fs.credits < up.cost as f64 {
+        let cost = self.tech_cost(galaxy, faction, idx);
+        if fs.credits < cost as f64 {
             return Err(CommandError::InsufficientCredits);
         }
         Ok(idx)

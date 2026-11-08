@@ -88,3 +88,54 @@ fn the_ai_buys_levels_without_the_institute() {
     let planet = sim.galaxy().owned_planets(empire).find(|&p| w.starbase_level(sim.galaxy(), p) >= 1).expect("an Empire planet with a star base");
     assert!(w.check_upgrade_tech(sim.galaxy(), empire, planet).is_ok(), "the AI needs no Research Institute");
 }
+
+#[test]
+fn reduce_technology_price_ability_at_maw_and_scarif() {
+    let Some(data) = load("1770851727", &["1770851727"]) else { return };
+    let c = data.campaign("GC_Full_Web_Way_Imperial").unwrap();
+    let mut sim = Sim::new(&data, c, SimConfig { victory_enabled: false, ..SimConfig::default() }).unwrap();
+    let w = sim.world().clone();
+    let empire = w.faction_id("Empire").unwrap();
+
+    let maw = w.planet_id("The_Maw_WW").expect("The Maw in campaign");
+    let scarif = w.planet_id("Scarif_WW").expect("Scarif in campaign");
+
+    // Verify abilities loaded from data on the planets
+    let maw_mods: Vec<_> = w.planets[maw as usize].prod_mods.iter().filter(|m| m.tech).collect();
+    assert_eq!(maw_mods.len(), 1, "The Maw has one tech discount mod");
+    assert_eq!(maw_mods[0].price, 0.33, "The Maw tech price reduction is 0.33 in data");
+
+    let scarif_mods: Vec<_> = w.planets[scarif as usize].prod_mods.iter().filter(|m| m.tech).collect();
+    assert_eq!(scarif_mods.len(), 1, "Scarif has one tech discount mod");
+    assert_eq!(scarif_mods[0].price, 0.25, "Scarif tech price reduction is 0.25 in data");
+
+    let base_cost = w.factions[empire as usize].tech_upgrades[0].cost; // level 2 price of the data
+
+    // Without Maw or Scarif: full base cost
+    sim.galaxy_mut().planets[maw as usize].owner = None;
+    sim.galaxy_mut().planets[scarif as usize].owner = None;
+    assert_eq!(w.tech_cost(sim.galaxy(), empire, 0), base_cost);
+
+    // Owning The Maw: 0.33 discount
+    sim.galaxy_mut().planets[maw as usize].owner = Some(empire);
+    let maw_cost = w.tech_cost(sim.galaxy(), empire, 0);
+    assert!((maw_cost - base_cost * 0.67).abs() < 0.01, "Maw discount: expected {}, got {}", base_cost * 0.67, maw_cost);
+
+    // Owning Scarif: 0.25 discount
+    sim.galaxy_mut().planets[maw as usize].owner = None;
+    sim.galaxy_mut().planets[scarif as usize].owner = Some(empire);
+    let scarif_cost = w.tech_cost(sim.galaxy(), empire, 0);
+    assert!((scarif_cost - base_cost * 0.75).abs() < 0.01, "Scarif discount: expected {}, got {}", base_cost * 0.75, scarif_cost);
+
+    // Stacking: owning both Maw (0.33) and Scarif (0.25) in same stacking category (0) -> max discount (0.33)
+    sim.galaxy_mut().planets[maw as usize].owner = Some(empire);
+    let both_cost = w.tech_cost(sim.galaxy(), empire, 0);
+    assert!((both_cost - base_cost * 0.67).abs() < 0.01, "Both discount: expected {}, got {}", base_cost * 0.67, both_cost);
+
+    // Verify Command::UpgradeTech charges the discounted price
+    sim.galaxy_mut().factions[empire as usize].credits = 100000.0;
+    let p = sim.galaxy().owned_planets(empire).find(|&p| w.check_upgrade_tech(sim.galaxy(), empire, p).is_ok()).expect("valid upgrade planet");
+    sim.apply(Command::UpgradeTech { faction: empire, planet: p }).unwrap();
+    let credits_left = sim.galaxy().factions[empire as usize].credits;
+    assert!((credits_left - (100000.0 - both_cost as f64)).abs() < 0.01, "charged discounted tech price: expected {}, got {}", 100000.0 - both_cost as f64, credits_left);
+}
