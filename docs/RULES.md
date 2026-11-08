@@ -753,12 +753,15 @@ Estimates and data that shape what the player sees and hears. Behaviour is in `b
 * `alamo_audio::hooks` scans every `Xml/**/*.xml` for tags containing `SFX` or `Music` (39,047 references in 223 tags);
   `hooks::WIRED_TAGS` lists the ones the game plays; `tests/hook_audit.rs` fails on any new unplayable event, with the
   Remake's own broken references in `tests/known_audio_gaps.txt`.
-* `SFXEvent_Turret_Rotating_Loop` (164 references, ground units and structures; no space-unit file names it) loops while
-  a turret of that unit is turning. Estimate `turret_rotating_epsilon`: the aim yaw or pitch moved by more than 0.001
-  radian since the last sample. The data says the loop plays while the turret rotates and gives no dead zone.
-* `SFXEvent_Engine_Cinematic_Focus_Loop` (550 references) loops while cinematic camera focus is on that unit (C; the
-  Space battle cam is not this). Estimate `cinematic_focus_stacks`: the loop plays as well as the idle or moving engine
-  loop. The data does not say that it replaces that loop. An empty value or `SFX_NA` stays silent.
+* `SFXEvent_Turret_Rotating_Loop` (86 opening tags in the mod `Xml`, 85 name an event and 1 is empty; none are under
+  `Units\Space`) loops while a turret of that unit is turning. Estimate `turret_rotating_epsilon`: the aim yaw or pitch
+  moved by more than 0.001 radian since the last sample. The data says the loop plays while the turret rotates and gives
+  no dead zone.
+* `SFXEvent_Engine_Cinematic_Focus_Loop` (272 opening tags once comments are removed, 266 name an event and 6 are
+  empty; 193 of the opening tags are under `Units\Space`) loops while cinematic camera focus is on that unit (C; the
+  Space battle cam is not this).
+  Estimate `cinematic_focus_stacks`: the loop plays as well as the idle or moving engine loop. The data does not say
+  that it replaces that loop. An empty value or `SFX_NA` stays silent.
 * `Kills_Previous_Object_SFX` is set on 15 events once XML comments are removed (4 fighter deaths, 3 ground slams,
   3 detonations, 4 deploy or build stops, and `Unit_Magnepulse_Fire`). Starting one stops every live voice whose source
   is that object. A battle shot or death of such an event is sent with the ship entity as its source.
