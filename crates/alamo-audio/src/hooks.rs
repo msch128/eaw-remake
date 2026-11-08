@@ -34,6 +34,7 @@ pub const WIRED_TAGS: &[&str] = &[
     "sfxevent_enemy_damaged_health_critical_warning",
     "sfxevent_hardpoint_destroyed",
     "sfxevent_move_into_asteroid_field",
+    "sfxevent_move_into_nebula",
     "sfxevent_gui_unit_ability_activated",
     "sfxevent_ability_activated",
     "sfxevent_special_ability",

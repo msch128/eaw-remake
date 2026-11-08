@@ -676,6 +676,8 @@ pub struct ShipDef {
     pub formation_no_wait: bool,
     /// A `Behavior` / `SpaceBehavior` copy lists `ASTEROID_FIELD_DAMAGE` (`Vessel_Base` gives it to corvettes, frigates and capitals; fighters have none).
     pub asteroid_field_damage: bool,
+    /// A `Behavior` / `SpaceBehavior` copy lists `NEBULA` (`Vessel_Base` and `Spacecraft_Base` both give it).
+    pub nebula: bool,
 }
 
 impl ShipDef {
@@ -905,6 +907,8 @@ pub struct Catalog {
     pub asteroid_field_damage: f32,
     /// `Asteroid_Field_Damage_Rate`: probability a proc lands on each 30 Hz frame (0.05).
     pub asteroid_field_damage_rate: f32,
+    /// `Nebula_Ability_Disable_Time`: seconds a ship stays without special abilities after it left a nebula (5).
+    pub nebula_ability_disable: f32,
     /// Formation constants.
     pub formation: FormationRules,
     /// `AIUsesFogOfWarSpace` False: AI sides know every enemy ship. The fog of the view and of player sides is unchanged. False (fog-bound
@@ -1241,7 +1245,7 @@ impl Catalog {
             facing_min_angle: constant("finalformationfacingminimumangle").map_or(rules.facing_min_angle, f32::to_radians),
         };
         let ai_ignores_fog = data.game_constants.get("aiusesfogofwarspace").is_some_and(|v| !alamo_data::xml::parse_bool(v));
-        let mut cat = Catalog { damage, speed_scale: 30.0, shield_interval, depleted_shield_disable, asteroid_field_damage: constant("asteroid_field_damage").unwrap_or(0.0).max(0.0), asteroid_field_damage_rate: constant("asteroid_field_damage_rate").unwrap_or(0.0).clamp(0.0, 1.0), formation, ai_ignores_fog, priority_sets, priority_index, ..Catalog::default() };
+        let mut cat = Catalog { damage, speed_scale: 30.0, shield_interval, depleted_shield_disable, asteroid_field_damage: constant("asteroid_field_damage").unwrap_or(0.0).max(0.0), asteroid_field_damage_rate: constant("asteroid_field_damage_rate").unwrap_or(0.0).clamp(0.0, 1.0), nebula_ability_disable: constant("nebula_ability_disable_time").unwrap_or(0.0).max(0.0), formation, ai_ignores_fog, priority_sets, priority_index, ..Catalog::default() };
         // Projectiles.
         let mut proj_names: Vec<String> = Vec::new();
         let hp_defs: Vec<Vec<HardpointDef>> = sources
@@ -1733,6 +1737,7 @@ impl Catalog {
         let behaves = behaviour_check(objects, &name);
         ShipDef {
             asteroid_field_damage: behaves("ASTEROID_FIELD_DAMAGE"),
+            nebula: behaves("NEBULA"),
             name,
             text_id,
             heals,

@@ -162,13 +162,18 @@ fn space_maps_with_fields_nebulae_or_ion_storms() {
 /// A battle on an empty test map with one `Asteroid_Field_Huge_Obstacle_Damage_8000` (radius 3500) at the origin. Side 0 holds `units`,
 /// side 1 one `Star_Destroyer` far outside the field (so the battle does not end).
 fn field_battle(data: &alamo_data::GameData, fs: &GameFs, units: &[&str]) -> Battle {
+    zone_battle(data, fs, "Asteroid_Field_Huge_Obstacle_Damage_8000", units)
+}
+
+/// Like [`field_battle`] with the prop `zone` at the origin.
+fn zone_battle(data: &alamo_data::GameData, fs: &GameFs, zone: &str, units: &[&str]) -> Battle {
     let mut names: Vec<&str> = units.to_vec();
     names.push("Star_Destroyer");
     let cat = Arc::new(Catalog::build(data, Some(fs as &dyn FileSource), &names));
     let mut map = SpaceMap::default();
     map.bounds.min = [-30000.0, -30000.0, 0.0];
     map.bounds.max = [30000.0, 30000.0, 0.0];
-    map.objects.push(MapObject { type_name: Some("Asteroid_Field_Huge_Obstacle_Damage_8000".into()), ..MapObject::default() });
+    map.objects.push(MapObject { type_name: Some(zone.into()), ..MapObject::default() });
     let arena = Arena::from_space_map(data, &map);
     let unit = |n: &str| UnitSetup { ship: cat.ship_id(n).unwrap_or_else(|| panic!("{n}")), count: 1, tag: 1 };
     let sides = vec![
@@ -225,4 +230,35 @@ fn asteroid_field_damages_ships_with_the_behaviour() {
     assert!(entered.contains(&victory) && fighters.iter().all(|f| entered.contains(f)), "every ship inside reports the entry");
     assert!(enemies.iter().all(|e| !entered.contains(e)), "the ships outside the field");
     assert!(fighters.iter().all(|f| entered.iter().filter(|e| *e == f).count() == 1), "once per entry");
+}
+
+#[test]
+fn a_nebula_blocks_special_abilities_until_five_seconds_after_leaving() {
+    let Some((data, fs)) = load_fs() else { return };
+    let mut b = zone_battle(&data, &fs, "Nebula_Medium", &["Victory_Destroyer"]);
+    let cat = b.catalog().clone();
+    assert_eq!(cat.nebula_ability_disable, 5.0, "Nebula_Ability_Disable_Time");
+    assert_eq!(b.config().arena.as_ref().map(|a| a.nebulae[0].radius), Some(570.0));
+    let vsd = cat.ship_id("Victory_Destroyer").unwrap();
+    assert!(cat.ship(vsd).nebula, "Vessel_Base SpaceBehavior");
+    let ship = b.ships.iter().find(|s| s.def == vsd).unwrap().id;
+    let salvo = cat.ship(vsd).abilities.iter().position(|a| a.kind.eq_ignore_ascii_case("FULL_SALVO")).expect("FULL_SALVO") as u16;
+    b.ships[ship as usize].pos = Vec3::new(0.0, 0.0, 0.0);
+    let entered = b.step().iter().filter(|e| matches!(e, Event::EnteredNebula { ship: s } if *s == ship)).count();
+    assert_eq!(entered, 1);
+    assert_eq!(b.ships[ship as usize].ability_lock, 5.0);
+    let use_it = |b: &mut Battle| b.command(0, Command::UseAbility { ship, ability: salvo });
+    assert_eq!(use_it(&mut b), Err(CommandError::AbilityUnavailable), "inside the nebula");
+
+    // Out of the nebula: still blocked for 5 s.
+    b.ships[ship as usize].pos = Vec3::new(5000.0, 0.0, 0.0);
+    let mut waited = 0;
+    while b.ships[ship as usize].ability_lock > 0.0 {
+        assert_eq!(use_it(&mut b), Err(CommandError::AbilityUnavailable), "{waited} frames after leaving");
+        b.step();
+        waited += 1;
+    }
+    eprintln!("abilities back {waited} frames after leaving");
+    assert!((149..=151).contains(&waited), "5 s at 30 Hz, got {waited} frames");
+    assert_eq!(use_it(&mut b), Ok(()));
 }

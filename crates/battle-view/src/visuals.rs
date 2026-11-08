@@ -89,6 +89,8 @@ pub struct UnitSfx {
     pub death_end: Option<String>,
     /// `SFXEvent_Move_Into_Asteroid_Field`: the unit's line when it enters an asteroid field.
     pub move_into_asteroid_field: Option<String>,
+    /// `SFXEvent_Move_Into_Nebula`: the unit's line when it enters a nebula.
+    pub move_into_nebula: Option<String>,
     /// `SFXEvent_Damaged_By_Asteroid`: the sound of an asteroid-field hit on the unit.
     pub damaged_by_asteroid: Option<String>,
     /// Sounds of each `Unit_Ability` of `Unit_Abilities_Data`.
@@ -330,6 +332,7 @@ impl VisualCatalog {
                 assist_attack: sfx("sfxevent_assist_attack").filter(|n| !n.eq_ignore_ascii_case("sfx_na")),
                 death_end: sfx("death_sfxevent_end_die"),
                 move_into_asteroid_field: sfx("sfxevent_move_into_asteroid_field").filter(|n| !n.eq_ignore_ascii_case("sfx_na")),
+                move_into_nebula: sfx("sfxevent_move_into_nebula").filter(|n| !n.eq_ignore_ascii_case("sfx_na")),
                 damaged_by_asteroid: sfx("sfxevent_damaged_by_asteroid").filter(|n| !n.eq_ignore_ascii_case("sfx_na")),
                 abilities: r
                     .as_ref()

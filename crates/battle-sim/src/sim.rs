@@ -513,6 +513,8 @@ impl Battle {
             since_hit: 1.0e3,
             shield_lock: 0.0,
             in_asteroid_field: false,
+            in_nebula: false,
+            ability_lock: 0.0,
             stun: 0.0,
             stun_speed_cut: 0.0,
             stun_rate_cut: 0.0,
@@ -994,6 +996,10 @@ impl Battle {
                 }
             }
             return true;
+        }
+        // In a nebula and for `Nebula_Ability_Disable_Time` after it (a running toggle could still be switched off above).
+        if self.ships[ship as usize].ability_lock > 0.0 {
+            return false;
         }
         if self.ships[ship as usize].abilities[ability].cooldown > 0.0 || self.ships[ship as usize].abilities[ability].active > 0.0 {
             return false;
@@ -1750,8 +1756,7 @@ impl Battle {
     /// takes `Asteroid_Field_Damage` of type `Damage_Asteroid` with probability `Asteroid_Field_Damage_Rate` per 30 Hz frame, shield first.
     /// Estimate: the hit lands half the ship's radius from its centre in a random direction (which hardpoint it reaches).
     fn asteroid_fields(&mut self, dt: f32) {
-        let Some(arena) = self.config.arena.as_ref().filter(|a| !a.asteroid_fields.is_empty()) else { return };
-        let fields: Vec<(Vec3, f32)> = arena.asteroid_fields.iter().map(|f| (f.pos, f.radius * f.radius)).collect();
+        let Some(arena) = self.config.arena.clone().filter(|a| !a.asteroid_fields.is_empty()) else { return };
         let cat = self.catalog.clone();
         let chance = (cat.asteroid_field_damage_rate * dt * 30.0).min(1.0);
         let pd = ProjDef {
@@ -1765,7 +1770,7 @@ impl Battle {
         let record = self.config.record_events;
         for i in 0..self.ships.len() {
             let s = &self.ships[i];
-            let inside = s.alive && !s.retreated && fields.iter().any(|&(c, r2)| (s.pos.x - c.x).powi(2) + (s.pos.y - c.y).powi(2) <= r2);
+            let inside = s.alive && !s.retreated && in_zone(&arena.asteroid_fields, s.pos);
             let entered = inside && !s.in_asteroid_field;
             let def = cat.ship(s.def);
             let (hurts, radius) = (def.asteroid_field_damage, def.radius);
@@ -1790,8 +1795,24 @@ impl Battle {
         }
     }
 
+    /// `Is_Nebula` zones (centre within the radius, map plane). A ship with `NEBULA` cannot start special abilities while inside and for
+    /// `Nebula_Ability_Disable_Time` after it left; one that runs keeps running and a toggle may still be switched off.
+    fn nebulae(&mut self, dt: f32) {
+        let Some(arena) = self.config.arena.clone().filter(|a| !a.nebulae.is_empty()) else { return };
+        let (cat, record) = (self.catalog.clone(), self.config.record_events);
+        for s in &mut self.ships {
+            let inside = s.alive && !s.retreated && in_zone(&arena.nebulae, s.pos);
+            if inside && !s.in_nebula && record {
+                self.events.push(Event::EnteredNebula { ship: s.id });
+            }
+            s.in_nebula = inside;
+            s.ability_lock = if inside && cat.ship(s.def).nebula { cat.nebula_ability_disable } else { (s.ability_lock - dt).max(0.0) };
+        }
+    }
+
     fn upkeep(&mut self, dt: f32) {
         self.asteroid_fields(dt);
+        self.nebulae(dt);
         let cat = self.catalog.clone();
         let tick = self.tick;
         if tick.is_multiple_of(60) {
@@ -2826,6 +2847,11 @@ fn scan(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig) {
             }
         }
     }
+}
+
+/// Whether `pos` lies within one of the round `zones` on the map plane.
+fn in_zone(zones: &[crate::arena::Obstacle], pos: Vec3) -> bool {
+    zones.iter().any(|z| (pos.x - z.pos.x).powi(2) + (pos.y - z.pos.y).powi(2) <= z.radius * z.radius)
 }
 
 fn turn_towards(s: &mut Ship, desired: f32, rate: f32, dt: f32) -> f32 {

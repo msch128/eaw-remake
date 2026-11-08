@@ -58,7 +58,7 @@ pub struct ShipSnap {
     pub path: Vec<Vec3>,
     /// Hardpoint states (empty for fighters).
     pub hps: Vec<HpSnap>,
-    /// Ability state per ability of the definition: (seconds of effect left, seconds until usable).
+    /// Ability state per ability of the definition: (seconds of effect left, seconds until usable, a nebula lock included).
     pub abilities: Vec<(f32, f32)>,
     /// Squadrons a carrier or station still holds in reserve (replacements for destroyed ones); 0 for everything else.
     pub reserve_squadrons: u32,
@@ -157,7 +157,8 @@ fn snapshot(battle: &Battle, events: Vec<Event>, step_ms: f32) -> Snapshot {
                         target_hp: s.target_hp,
                     })
                     .collect(),
-                abilities: s.abilities.iter().map(|a| (a.active, a.cooldown)).collect(),
+                // A nebula blocks the ability start (`Nebula_Ability_Disable_Time`): the button shows the wait like a recharge.
+                abilities: s.abilities.iter().map(|a| (a.active, if a.active > 0.0 { a.cooldown } else { a.cooldown.max(s.ability_lock) })).collect(),
                 autocast: s.abilities.iter().map(|a| a.autocast).collect(),
                 reserve_squadrons: s.reserve.iter().map(|r| r.1).sum(),
                 can_retreat: battle.can_retreat(s.id),

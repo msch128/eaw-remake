@@ -592,6 +592,12 @@ with `speed_mult > 1.05` when fleeing or when the target is over twice the weapo
   `SFXEvent_Damaged_By_Asteroid` (`SFX_Asteroid_Detonation`) where it lands; an own unit entering a field says its
   `SFXEvent_Move_Into_Asteroid_Field` line (estimate: on entering, once per unit type per 12 s; the data does not
   say when the engine plays it).
+* Nebulae: a ship with `NEBULA` in a `Behavior` / `SpaceBehavior` copy (`Vessel_Base` and `Spacecraft_Base` give it)
+  cannot start a special ability while its centre lies within an `Is_Nebula` zone (map plane) and for
+  `Nebula_Ability_Disable_Time` 5 s after it left. Estimate: an ability that already runs keeps running and a running
+  toggle can still be switched off (the data names only the disable time). The ability button shows the wait like a
+  recharge. An own unit entering a nebula says its `SFXEvent_Move_Into_Nebula` line (same rule as the asteroid line).
+  No Remake GC map places a nebula zone (see the asteroid bullet above: `Nebula_Ultra_Huge` is a backdrop).
 
 ## 2.9 Navigation, hulls, formations
 

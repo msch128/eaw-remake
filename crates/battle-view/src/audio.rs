@@ -295,13 +295,14 @@ pub fn battle_audio(
                     send(n, None, None, &mut stats, &mut out);
                 }
             }
-            // `SFXEvent_Move_Into_Asteroid_Field`: the line of an own unit that enters a field (estimate: when the engine plays it is not in the
-            // data; once per unit type per `UNDER_ATTACK_GAP`).
-            Event::EnteredAsteroidField { ship } => {
+            // `SFXEvent_Move_Into_Asteroid_Field` / `SFXEvent_Move_Into_Nebula`: the line of an own unit that enters a field or a nebula
+            // (estimate: when the engine plays it is not in the data; once per unit type per `UNDER_ATTACK_GAP`).
+            Event::EnteredAsteroidField { ship } | Event::EnteredNebula { ship } => {
+                let nebula = matches!(ev, Event::EnteredNebula { .. });
                 if let Some(s) = cur.ship(*ship)
                     && s.side == player
                     && mem.zone_lines.get(&s.def).is_none_or(|t| clock - t >= UNDER_ATTACK_GAP)
-                    && let Some(n) = visuals.ship(s.def).sfx.move_into_asteroid_field.as_deref()
+                    && let Some(n) = if nebula { &visuals.ship(s.def).sfx.move_into_nebula } else { &visuals.ship(s.def).sfx.move_into_asteroid_field }.as_deref()
                 {
                     mem.zone_lines.insert(s.def, clock);
                     send(n, None, None, &mut stats, &mut out);
@@ -2089,10 +2090,12 @@ mod tests {
         let (catalog, mut visuals) = ability_world();
         let sfx = &mut visuals.ships[0].sfx;
         sfx.move_into_asteroid_field = Some("Unit_Asteroids_Victory_Destroyer".into());
+        sfx.move_into_nebula = Some("Unit_Nebula_Victory_Destroyer".into());
         sfx.damaged_by_asteroid = Some("SFX_Asteroid_Detonation".into());
         let files = sfx_files(
             r#"<SFXEvent Name="Unit_Asteroids_Victory_Destroyer"><Samples>a.wav</Samples></SFXEvent>
-            <SFXEvent Name="SFX_Asteroid_Detonation"><Samples>a.wav</Samples></SFXEvent>"#,
+            <SFXEvent Name="SFX_Asteroid_Detonation"><Samples>a.wav</Samples></SFXEvent>
+            <SFXEvent Name="Unit_Nebula_Victory_Destroyer"><Samples>a.wav</Samples></SFXEvent>"#,
         );
         let battle = fighter_battle(&[&["x"]]);
         let snap = Snapshot { ships: vec![snap_ship(7, 0, 0, 0b01, &[]), snap_ship(8, 0, 1, 0b01, &[])], ..Snapshot::default() };
@@ -2119,6 +2122,12 @@ mod tests {
     }
 
     #[test]
+    fn an_own_unit_entering_a_nebula_says_its_nebula_line() {
+        let sent = zone_sounds(vec![Event::EnteredNebula { ship: 8 }, Event::EnteredNebula { ship: 7 }]);
+        assert_eq!(sent, [("Unit_Nebula_Victory_Destroyer".to_string(), None)]);
+    }
+
+    #[test]
     fn an_asteroid_hit_sounds_where_it_lands_on_any_side() {
         let pos = battle_sim::Vec3::new(1.0, 2.0, 3.0);
         let sent = zone_sounds(vec![Event::AsteroidFieldHit { ship: 8, pos }]);
@@ -2135,6 +2144,7 @@ mod tests {
         let visuals = crate::visuals::VisualCatalog::build(&data, &catalog, vec![Color::WHITE; 2]);
         let v = visuals.ship(catalog.ship_id("Victory_Destroyer").expect("in the catalog"));
         assert_eq!(v.sfx.move_into_asteroid_field.as_deref(), Some("Unit_Asteroids_Victory_Destroyer"));
+        assert_eq!(v.sfx.move_into_nebula.as_deref(), Some("Unit_Nebula_Victory_Destroyer"));
         // `Vessel_Base` in `Units/Space/_Default_Base.xml`.
         assert_eq!(v.sfx.damaged_by_asteroid.as_deref(), Some("SFX_Asteroid_Detonation"));
         assert_eq!(v.asteroid_hit_particles.as_deref(), Some("Large_Damage_Space"));

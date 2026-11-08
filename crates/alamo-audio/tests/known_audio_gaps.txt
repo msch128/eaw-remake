@@ -39,6 +39,9 @@ Unit_Lost_Bay_Sabaoth: missing file Data\Audio\Voiceovers\UnderworldSabaoth\saba
 Unit_Move_Angler: missing file Data\Audio\Voiceovers\GuP\start_battle_01.wav
 Unit_Move_Endurance: missing file Data\Audio\Voiceovers\RebelNebula\Nebula_Move_9_Carrier.wav
 Unit_Move_Tie_Mauler: missing file U000_TMC0212_ENG.wav
+Unit_Nebula_Munificent: missing file Data\Audio\Voiceovers\NeutralMunificent\munificient_move_nebula_01.wav
+Unit_Nebula_RecuscantI: missing file Data\Audio\Voiceovers\NeutralRecuscantI\rec_move_asteroid_02.wav
+Unit_Nebula_XG1: missing file Data\Audio\Voiceovers\EmpireAssaultGunboat\XG-1_Into_Nebula_00.wav
 Unit_Select_Angler: missing file Data\Audio\Voiceovers\GuP\start_battle_03.wav
 Unit_Select_Bellator_Star_Destroyer: missing file Data\Audio\Voiceovers\NeutralBellator\Empire_Bellator_Select1.wav
 Unit_Select_E_Wing: missing file Data\Audio\Voiceovers\RebelEwing\Ewing_Select_05.wav

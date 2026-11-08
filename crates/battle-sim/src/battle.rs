@@ -455,6 +455,11 @@ pub enum Event {
         /// Where it was destroyed.
         pos: Vec3,
     },
+    /// A ship entered an `Is_Nebula` zone (any ship; only `NEBULA` ships lose their abilities there).
+    EnteredNebula {
+        /// Ship.
+        ship: u32,
+    },
     /// A ship entered an `Is_Asteroid_Field` zone (any ship; only `ASTEROID_FIELD_DAMAGE` ships take damage there).
     EnteredAsteroidField {
         /// Ship.
@@ -621,6 +626,10 @@ pub struct Ship {
     pub shield_lock: f32,
     /// Inside an `Is_Asteroid_Field` zone this step.
     pub in_asteroid_field: bool,
+    /// Inside an `Is_Nebula` zone this step.
+    pub in_nebula: bool,
+    /// Seconds left before the ship may use special abilities again (`Nebula_Ability_Disable_Time` after it left a nebula).
+    pub ability_lock: f32,
     /// Tractor beam speed reduction currently applied to this ship (0..1).
     pub tractor_cut: f32,
     /// Planned route of a big ship that is going somewhere: the waypoints still ahead, the last one being the destination. Empty when the
