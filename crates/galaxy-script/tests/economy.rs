@@ -24,7 +24,8 @@ fn income_from_data(w: &World, g: &galaxy_sim::Galaxy, f: FactionId) -> f64 {
             continue;
         }
         let info = &w.planets[i];
-        let (mut pct, mut abs) = (ps.gamble, 0.0f32);
+        // Gambling structures and gambling heroes in orbit swing the base income independently (`Planet_Income_Gambling_Ability`).
+        let (mut pct, mut abs) = (ps.gamble + ps.hero_gamble, 0.0f32);
         for &s in &ps.structures {
             let st = &w.structures[s as usize];
             pct += st.income_pct;
@@ -37,6 +38,12 @@ fn income_from_data(w: &World, g: &galaxy_sim::Galaxy, f: FactionId) -> f64 {
         if let Some(sb) = ps.starbase {
             pct += w.starbases[sb as usize].income_pct;
             abs += w.starbases[sb as usize].income_abs;
+        }
+        // Own units in orbit with a `Percentage_Income_Modifier` (freighters, Errant Venture's Shadowport).
+        for fl in g.fleets.values().filter(|x| x.owner == f && x.location == galaxy_sim::FleetLocation::AtPlanet(i as PlanetId)) {
+            for (&u, &n) in &fl.units {
+                pct += w.units[u as usize].income_pct * n as f32;
+            }
         }
         total += f64::from(info.credit_value * (1.0 + pct) + abs);
     }
