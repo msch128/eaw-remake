@@ -808,6 +808,9 @@ pub struct Battle {
     pub(crate) lasers: Vec<(u32, u32, f32)>,
     /// Shield drains (`CORRUPT_SYSTEMS`): target, shield points per second, end time.
     pub(crate) drains: Vec<(u32, f32, f32)>,
+    /// Shot abilities fired (`LUCKY_SHOT`): shooter, projectile, target, damage factor, time the factor lapses. The first hit of that shooter's
+    /// projectile on the target takes it.
+    pub(crate) shots: Vec<(u32, ProjId, u32, f32, f32)>,
     pub(crate) zones: Vec<(u8, Vec3, f32, f32, f32)>,
     /// Distance field of rocks and stations for path planning (`None` without navigation or obstacles).
     pub(crate) nav_grid: Option<crate::nav::NavGrid>,

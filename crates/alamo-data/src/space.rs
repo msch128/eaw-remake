@@ -1097,6 +1097,12 @@ impl GameObjects {
     pub fn sub_abilities(&self, name: &str) -> Vec<SubAbility> {
         self.resolve(name).map(|r| parse_sub_abilities(&r).0).unwrap_or_default()
     }
+
+    /// The `Unit_Abilities_Data` entries of any object (inheritance resolved), also of kinds without a typed view such as the `Container`
+    /// a squadron names in `Create_Team_Type`. Empty if the object does not exist.
+    pub fn unit_abilities(&self, name: &str) -> Vec<UnitAbility> {
+        self.resolve(name).map(|r| parse_unit_abilities(&r)).unwrap_or_default()
+    }
 }
 
 #[cfg(test)]

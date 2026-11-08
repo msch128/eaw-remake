@@ -241,6 +241,7 @@ impl Battle {
             zones: Vec::new(),
             lasers: Vec::new(),
             drains: Vec::new(),
+            shots: Vec::new(),
             nav_grid: None,
             search: vec![(0, 0.0); sides.len()],
             ai: (0..sides.len()).map(|i| crate::ai::AiSide::new(config.ai_reserve.get(i).cloned().unwrap_or_default())).collect(),
@@ -996,6 +997,17 @@ impl Battle {
         self.ships.iter().filter(|o| eligible(o)).min_by(|a, b| a.pos.dist(s.pos).total_cmp(&b.pos.dist(s.pos)).then(a.id.cmp(&b.id))).map(|o| o.id)
     }
 
+    /// Target of a shot ability: the enemy nearest to the aimed point (`UseAbilityAt`, within 600 units), else the ship's current target, of an
+    /// allowed class (`classes` 0 = any).
+    fn shot_target(&self, ship: u32, classes: u16) -> Option<u32> {
+        let s = &self.ships[ship as usize];
+        let ok = |o: &Ship| o.alive && !o.retreated && o.side != s.side && (classes == 0 || classes & self.catalog.ship(o.def).class.bit() != 0);
+        match self.ability_at {
+            Some(at) => self.ships.iter().filter(|o| ok(o) && o.pos.dist(at) <= 600.0 + self.catalog.ship(o.def).radius).min_by(|a, b| a.pos.dist(at).total_cmp(&b.pos.dist(at)).then(a.id.cmp(&b.id))).map(|o| o.id),
+            None => (s.target != NONE && ok(&self.ships[s.target as usize])).then_some(s.target),
+        }
+    }
+
     fn activate_ability(&mut self, ship: u32, ability: usize, from_command: bool) -> bool {
         let def = self.catalog.ship(self.ships[ship as usize].def);
         let Some(a) = def.abilities.get(ability) else { return false };
@@ -1057,11 +1069,30 @@ impl Battle {
                 None => return false,
             }
         }
+        if let Some(sh) = &a.shot {
+            match self.shot_target(ship, sh.classes) {
+                Some(x) => target = x,
+                None => return false,
+            }
+        }
         let no_cooldown = self.cheats.has_no_cooldowns(self.ships[ship as usize].side);
+        let shot = a.shot.is_some();
         let st = &mut self.ships[ship as usize].abilities[ability];
         st.target = target;
         st.active = a.duration;
-        st.cooldown = if a.toggle || no_cooldown { 0.0 } else { a.recharge + a.duration };
+        // A shot ability recharges from the moment it is used (it ends as soon as the shot is fired).
+        st.cooldown = if a.toggle || no_cooldown { 0.0 } else if shot { a.recharge } else { a.recharge + a.duration };
+        if shot {
+            // The craft fires at the chosen target now.
+            let s = &mut self.ships[ship as usize];
+            s.target = target;
+            s.target_hp = NO_HP;
+            s.direct_cd = 0.0;
+            s.direct_timer = 0.0;
+            for hp_st in &mut s.hps {
+                hp_st.cooldown = 0.0;
+            }
+        }
         if a.salvo
             || a.kind.eq_ignore_ascii_case("FULL_SALVO")
             || a.kind.eq_ignore_ascii_case("POWER_TO_WEAPONS")
@@ -1244,7 +1275,22 @@ impl Battle {
                 self.ships.iter_mut().map(work).collect()
             }
         };
-        for r in reqs.into_iter().flatten() {
+        for mut r in reqs.into_iter().flatten() {
+            // An armed shot ability (`LUCKY_SHOT`) is the ship's next shot at its target.
+            let shooter = &self.ships[r.ship as usize];
+            if let Some((k, sh)) = cat.ship(shooter.def).abilities.iter().enumerate().find_map(|(k, a)| a.shot.as_ref().filter(|_| shooter.abilities[k].active > 0.0 && shooter.abilities[k].target == r.target).map(|sh| (k, sh))) {
+                if let Some(p) = sh.proj {
+                    let (old, new) = (cat.projectiles[r.proj as usize].speed, cat.projectiles[p as usize].speed);
+                    if old > 0.0 && new > 0.0 {
+                        r.vel = r.vel * (new / old);
+                    }
+                    r.proj = p;
+                }
+                if sh.mult != 1.0 {
+                    self.shots.push((r.ship, r.proj, r.target, sh.mult, self.time + SHOT_FLIGHT_SECONDS));
+                }
+                self.ships[r.ship as usize].abilities[k].active = 0.0;
+            }
             if cfg.record_events {
                 self.events.push(Event::ProjectileFired {
                     ship: r.ship,
@@ -1504,7 +1550,12 @@ impl Battle {
             }
             Deflect::None => {}
         }
-        self.damage_ship(ship, p.owner, pd, p.def, pd.damage, pos, p.aim_hp);
+        // The fired shot of a shot ability: the first hit of that projectile of the shooter on the target.
+        let mut raw = pd.damage;
+        if let Some(i) = self.shots.iter().position(|&(o, d, t, _, until)| o == p.owner && d == p.def && t == ship && until >= self.time) {
+            raw *= self.shots.swap_remove(i).3;
+        }
+        self.damage_ship(ship, p.owner, pd, p.def, raw, pos, p.aim_hp);
         self.apply_combat_mod(p, pd, ship, pos);
         if pd.blast_range > 0.0 && pd.blast_damage > 0.0 {
             let mut near: Vec<(f32, u32)> = snaps
@@ -1971,6 +2022,16 @@ impl Battle {
                 let tdef = cat.ship(t.def);
                 let tclass = tdef.class;
                 for (k, a) in def.abilities.iter().enumerate() {
+                    if let Some(sh) = &a.shot {
+                        // Estimate (no AI rule in the Remake scripts; the ability supports autofire): the strong shot goes to a frigate or
+                        // bigger in weapon range.
+                        let ready = s.abilities[k].cooldown <= 0.0 && s.abilities[k].active <= 0.0;
+                        if ready && (ai_side || s.abilities[k].autocast) && tclass as u8 >= TargetClass::Frigate as u8 && (sh.classes == 0 || sh.classes & tclass.bit() != 0) && dist <= def.max_weapon_range {
+                            auto_use.push(k);
+                            break;
+                        }
+                        continue;
+                    }
                     let boosts_weapons = a.salvo || a.rocket || a.weapon_delay_mult < 0.99;
                     // Rocket salvos are kept for frigates and bigger.
                     if a.rocket && (tclass as u8) < TargetClass::Frigate as u8 {
@@ -2066,6 +2127,8 @@ impl Battle {
         self.run_beams(dt);
         self.run_lasers();
         self.run_drains(dt);
+        let now = self.time;
+        self.shots.retain(|s| s.4 >= now);
         if self.tick.is_multiple_of(30) {
             self.run_bonuses();
         }

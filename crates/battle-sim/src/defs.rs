@@ -254,9 +254,29 @@ pub struct AbilityDef {
     pub tractor: Option<TractorDef>,
     /// `STEALTH`: while active the ship is hidden from enemies unless one of them is within `BattleConfig::stealth_detection`.
     pub stealth: bool,
+    /// `LUCKY_SHOT`: the one strong shot.
+    pub shot: Option<ShotDef>,
     /// `FOW_REVEAL_PING`: radius of the area it reveals to the owner for the duration (`Effective_Radius`; 0 = not a reveal ping).
     pub reveal_radius: f32,
 }
+
+/// `LUCKY_SHOT`: the next shot of the craft at the ability's target ([`AbilityState::target`]) uses the ability's
+/// `Projectile_Types_Override` (else its own weapon) and does `mult` times its damage (`CAUSE_DAMAGE_MULTIPLIER`, `Red_Squadron_Container`: 600).
+#[derive(Debug, Clone, Default)]
+pub struct ShotDef {
+    /// `Projectile_Types_Override`; `None` = the craft's own projectile.
+    pub proj: Option<ProjId>,
+    /// Damage factor of that one shot.
+    pub mult: f32,
+    /// `Applicable_Unit_Categories` of the linked `*_Attack_Ability` as a class bit mask (0 = any).
+    pub classes: u16,
+}
+
+/// How long an armed shot ability waits for the craft to fire at its target before it lapses (estimate; the data gives no expiration).
+pub const SHOT_WINDOW_SECONDS: f32 = 10.0;
+
+/// How long the damage factor of an armed shot that was fired waits for the hit (estimate: the flight time of a laser bolt is well below it).
+pub const SHOT_FLIGHT_SECONDS: f32 = 5.0;
 
 /// A `Force_Healing_Ability` with `Space_Automatic` activation (astromech self repair, repair droids, station repair).
 #[derive(Debug, Clone, Default)]
@@ -1237,6 +1257,49 @@ fn survivor_ship(data: &GameData, name: &str) -> bool {
 }
 
 /// Whether any `Behavior` / `SpaceBehavior` copy of the object lists a token (upper case).
+/// A squadron's `Create_Team_Type` container holds the data of team abilities its craft only name (`Red_Squadron_Container`: `LUCKY_SHOT`
+/// with `Recharge_Seconds` 60 and `CAUSE_DAMAGE_MULTIPLIER` 600, while each X-wing lists a bare `LUCKY_SHOT`). A craft's ability of the
+/// same type takes what it leaves out from the container (recharge, expiration, multipliers, linked ability, other tags; its own tags such
+/// as `Projectile_Types_Override` stay), and the craft gets the container's named sub-abilities.
+fn merge_team_abilities(data: &GameData, sources: &mut [Source]) {
+    let mut teams: HashMap<String, (Vec<alamo_data::UnitAbility>, Vec<alamo_data::SubAbility>)> = HashMap::new();
+    for s in sources.iter() {
+        let Source::Unit(u) = s else { continue };
+        let Some(team) = u.fields.get("create_team_type").map(|t| t.trim()).filter(|t| u.is_squadron() && !t.is_empty()) else { continue };
+        let abilities = data.objects.unit_abilities(team);
+        if abilities.is_empty() {
+            continue;
+        }
+        let subs = data.objects.sub_abilities(team);
+        for m in &u.squadron_units {
+            teams.entry(m.trim().to_ascii_lowercase()).or_insert_with(|| (abilities.clone(), subs.clone()));
+        }
+    }
+    for s in sources.iter_mut() {
+        let Source::Unit(u) = s else { continue };
+        let Some((abilities, subs)) = teams.get(&u.name.to_ascii_lowercase()) else { continue };
+        for a in &mut u.abilities {
+            let Some(t) = abilities.iter().find(|t| t.kind.eq_ignore_ascii_case(&a.kind)) else { continue };
+            a.recharge_seconds = a.recharge_seconds.or(t.recharge_seconds);
+            a.expiration_seconds = a.expiration_seconds.or(t.expiration_seconds);
+            a.activated_ability = a.activated_ability.clone().or_else(|| t.activated_ability.clone());
+            if a.mod_multipliers.is_empty() {
+                a.mod_multipliers = t.mod_multipliers.clone();
+            }
+            for (k, v) in &t.fields {
+                if a.fields.get(k).is_none_or(|x| x.trim().is_empty()) {
+                    a.fields.insert(k.clone(), v.clone());
+                }
+            }
+        }
+        for sub in subs {
+            if !u.sub_abilities.iter().any(|x| x.name.eq_ignore_ascii_case(&sub.name)) {
+                u.sub_abilities.push(sub.clone());
+            }
+        }
+    }
+}
+
 fn behaviour_check(objects: &alamo_data::GameObjects, name: &str) -> impl Fn(&str) -> bool + use<> {
     let tokens: Vec<String> = objects
         .resolve(name)
@@ -1327,6 +1390,7 @@ impl Catalog {
             }
         }
         sources.sort_by_key(|s| s.name().to_ascii_lowercase());
+        merge_team_abilities(data, &mut sources);
 
         // Models in parallel.
         let mut model_names: Vec<String> = sources.iter().filter_map(|s| s.model().map(str::to_string)).collect();
@@ -1381,6 +1445,8 @@ impl Catalog {
                             proj_names.push(n.trim().to_string());
                         }
                     }
+                    // The projectile of a shot ability (`LUCKY_SHOT`).
+                    proj_names.extend(u.abilities.iter().filter_map(|a| a.fields.get("projectile_types_override")).map(|n| n.trim().to_string()).filter(|n| !n.is_empty()));
                 }
                 if let Source::Structure(st) = s {
                     if let Some(pts) = st.fields.get("projectile_types") {
@@ -2133,7 +2199,7 @@ fn ability_defs(u: &SpaceUnitDef, projectiles: &[ProjDef], proj_index: &HashMap<
         .filter(|a| {
             a.expiration_seconds.unwrap_or(0.0) > 0.0
                 || (a.kind.eq_ignore_ascii_case("LURE") && a.fields.contains_key("effective_radius"))
-                || ["FULL_SALVO", "TRACTOR_BEAM", "MISSILE_SHIELD", "INTERDICT", "STEALTH", "FOW_REVEAL_PING", "LASER_DEFENSE", "ROCKET_ATTACK", "SWAP_WEAPONS", "SENSOR_JAMMING", "BUZZ_DROIDS", "SUPER_LASER", "CORRUPT_SYSTEMS", "HUNT", "SPOILER_LOCK", "REPLENISH_WINGMEN", "WEAKEN_ENEMY", "HARMONIC_BOMB", "ENERGY_WEAPON", "CLUSTER_BOMB"].iter().any(|k| a.kind.eq_ignore_ascii_case(k))
+                || ["FULL_SALVO", "TRACTOR_BEAM", "MISSILE_SHIELD", "INTERDICT", "STEALTH", "FOW_REVEAL_PING", "LASER_DEFENSE", "ROCKET_ATTACK", "SWAP_WEAPONS", "SENSOR_JAMMING", "BUZZ_DROIDS", "SUPER_LASER", "CORRUPT_SYSTEMS", "HUNT", "SPOILER_LOCK", "REPLENISH_WINGMEN", "WEAKEN_ENEMY", "HARMONIC_BOMB", "ENERGY_WEAPON", "CLUSTER_BOMB", "LUCKY_SHOT"].iter().any(|k| a.kind.eq_ignore_ascii_case(k))
         })
         .map(|a| {
             let toggle = a.expiration_seconds.unwrap_or(0.0) <= 0.0 && ["MISSILE_SHIELD", "INTERDICT", "STEALTH", "HUNT", "SPOILER_LOCK"].iter().any(|k| a.kind.eq_ignore_ascii_case(k));
@@ -2152,6 +2218,15 @@ fn ability_defs(u: &SpaceUnitDef, projectiles: &[ProjDef], proj_index: &HashMap<
             let mut weapon_delay_mult = m("WEAPON_DELAY_MULTIPLIER").unwrap_or(1.0);
             let mut take_damage_mult = m("TAKE_DAMAGE_MULTIPLIER").unwrap_or(1.0);
             let mut cause_damage_mult = m("CAUSE_DAMAGE_MULTIPLIER").unwrap_or(1.0);
+            // A shot ability multiplies the damage of its one shot, not of everything the craft fires while it waits.
+            let shot = a.kind.eq_ignore_ascii_case("LUCKY_SHOT").then(|| {
+                let sub = a.activated_ability.as_ref().and_then(|n| u.sub_abilities.iter().find(|s| s.name.eq_ignore_ascii_case(n)));
+                ShotDef {
+                    proj: a.fields.get("projectile_types_override").and_then(|n| proj_index.get(&n.trim().to_ascii_lowercase())).copied(),
+                    mult: std::mem::replace(&mut cause_damage_mult, 1.0),
+                    classes: sub.and_then(|s| s.fields.get("applicable_unit_categories")).map_or(0, |v| alamo_data::xml::split_list(v).iter().filter_map(|t| TargetClass::from_token(t)).fold(0u16, |m, c| m | c.bit())),
+                }
+            });
 
             let k = a.kind.to_ascii_uppercase();
             match k.as_str() {
@@ -2196,8 +2271,9 @@ fn ability_defs(u: &SpaceUnitDef, projectiles: &[ProjDef], proj_index: &HashMap<
                 cause_damage_mult,
                 recharge: a.recharge_seconds.unwrap_or(30.0),
                 // A reveal ping has no expiration in the data: it shows the area for 5 s (estimate).
-                duration: if toggle { f32::MAX / 4.0 } else if ping { a.expiration_seconds.filter(|&x| x > 0.0).unwrap_or(5.0) } else if let Some(secs) = defence_secs { secs } else if a.kind.eq_ignore_ascii_case("CORRUPT_SYSTEMS") { a.activated_ability.as_ref().and_then(|n| u.sub_abilities.iter().find(|s| s.name.eq_ignore_ascii_case(n))).and_then(|s| s.fields.get("duration_in_seconds")).and_then(|v| alamo_data::xml::parse_num(v)).unwrap_or(30.0) } else { a.expiration_seconds.unwrap_or(12.0) },
+                duration: if toggle { f32::MAX / 4.0 } else if shot.is_some() { SHOT_WINDOW_SECONDS } else if ping { a.expiration_seconds.filter(|&x| x > 0.0).unwrap_or(5.0) } else if let Some(secs) = defence_secs { secs } else if a.kind.eq_ignore_ascii_case("CORRUPT_SYSTEMS") { a.activated_ability.as_ref().and_then(|n| u.sub_abilities.iter().find(|s| s.name.eq_ignore_ascii_case(n))).and_then(|s| s.fields.get("duration_in_seconds")).and_then(|v| alamo_data::xml::parse_num(v)).unwrap_or(30.0) } else { a.expiration_seconds.unwrap_or(12.0) },
                 stealth: a.kind.eq_ignore_ascii_case("STEALTH"),
+                shot,
                 reveal_radius: if ping { a.fields.get("effective_radius").and_then(|v| alamo_data::xml::parse_num(v)).unwrap_or(1000.0) } else { 0.0 },
                 interdict: a.kind.eq_ignore_ascii_case("INTERDICT"),
                 hunt: a.kind.eq_ignore_ascii_case("HUNT"),
