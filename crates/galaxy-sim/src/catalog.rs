@@ -374,6 +374,7 @@ impl World {
             self.units.push(u);
         }
         self.add_vessel_upgrades(data);
+        self.add_dummy_purchases(data);
         self.classify_ground_structures(&struct_raw);
 
         // Star bases.
@@ -441,10 +442,10 @@ impl World {
             });
             self.starbases[i].next = found.map(|j| j as StarbaseTypeId);
         }
-        // How many buildable units each structure unlocks.
+        // How many buildable units each structure unlocks. A dummy purchase spawns no ship, so it does not change that count.
         self.structure_unlocks = vec![0; self.structures.len()];
         for u in &self.units {
-            if u.buildable {
+            if u.buildable && !matches!(u.role, UnitRole::Dummy) {
                 for &r in u.req_structures.iter().flatten() {
                     self.structure_unlocks[r as usize] += 1;
                 }
@@ -514,6 +515,27 @@ impl World {
         u.req_structures = groups;
         u.req_planets = planets;
         u.buildable &= ok && planets_ok;
+    }
+
+    /// `Rebel_Shield_Upgrade`: a `DUMMY_STARSHIP` with `Build_Tab_Space_Units` and no `Space_Model_Name`, so [`alamo_data::GameObjects::space_units`] drops it.
+    /// Price, time, tech, affiliation and requirements stay the object's. Completing it spawns no ship.
+    fn add_dummy_purchases(&mut self, data: &GameData) {
+        const NAMES: &[&str] = &["Rebel_Shield_Upgrade"];
+        for name in NAMES {
+            if self.unit_index.contains_key(&key(name)) {
+                continue;
+            }
+            let Some(def) = data.objects.space_unit(name) else { continue };
+            let tab = def.fields.get("build_tab_space_units").is_some_and(|v| alamo_data::xml::parse_bool(v));
+            if def.space_model.is_some() || !tab || def.build_cost <= 0.0 {
+                continue;
+            }
+            let mut u = unit_from_def(&def, CombatStats::default());
+            u.role = UnitRole::Dummy;
+            self.resolve_unit_requirements(&mut u, &def);
+            self.unit_index.insert(key(&def.name), self.units.len() as UnitTypeId);
+            self.units.push(u);
+        }
     }
 
     /// Ship and hero upgrade items. They have no space model (`SpaceUnits` drops them), and the target ship is named only by the Remake script

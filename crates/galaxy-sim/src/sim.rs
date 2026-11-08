@@ -728,6 +728,7 @@ impl Sim {
                     UnitRole::Upgrade { from, to } => {
                         replace_unit(&mut self.galaxy, owner, planet, *from, *to);
                     }
+                    UnitRole::Dummy => {}
                 }
             }
             ProductionKind::Structure(s) => self.galaxy.planets[pi].structures.push(s),
@@ -739,7 +740,8 @@ impl Sim {
         }
         let st = &mut self.galaxy.factions[owner as usize].stats;
         match item.kind {
-            ProductionKind::Unit(_) => st.ships_built += 1,
+            ProductionKind::Unit(u) if !matches!(w.units[u as usize].role, UnitRole::Dummy) => st.ships_built += 1,
+            ProductionKind::Unit(_) => {}
             ProductionKind::Structure(_) | ProductionKind::Starbase(_) => st.structures_built += 1,
             ProductionKind::Tech(_) => {}
         }

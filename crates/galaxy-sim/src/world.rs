@@ -324,6 +324,8 @@ pub enum UnitRole {
         /// Ship that takes its place.
         to: UnitTypeId,
     },
+    /// A `DUMMY_STARSHIP` purchase with no hull (`Rebel_Shield_Upgrade`). Completing it spawns nothing; the story hears `STORY_CONSTRUCT`.
+    Dummy,
 }
 
 /// A buildable ship, squadron or research item.

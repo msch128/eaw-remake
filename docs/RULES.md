@@ -270,8 +270,11 @@ build-menu filters, not a start mode. The mode is this project's own:
 
 * Data: `NEW_POWER_FOR_ALL` (`Reward_Param1` the unit type, `Reward_Param2` the ability) turns that ability on for
   every unit of that type the plot's faction fields, including ships built later, for the rest of the campaign.
-  `Rebel_Shield_Upgrade` (75000 credits, tech 4) grants `Reflector_Shield` to the 25 types in
+  `Rebel_Shield_Upgrade` (75000 credits, tech 4, 600 s) grants `Reflector_Shield` to the 25 types in
   `Story_SandBox_Rebel_Shield_Upgrade.xml`. The grant is saved with the faction and is not part of `Galaxy::state_hash`.
+* Data: `Rebel_Shield_Upgrade` is a `DUMMY_STARSHIP` variant of `Dummy_R` (`Build_Tab_Space_Units`, no `Space_Model_Name`).
+  The Rebel space build tab offers it at tech 4, with a level-1 star base, `R_Research_Institute`, and a build limit of 1
+  current and 1 lifetime. Finishing it spawns no ship; the construct notify is what grants the shields.
 
 # Part 2: Space battles (`battle-sim`)
 
