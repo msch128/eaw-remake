@@ -1327,6 +1327,20 @@ mod tests {
     }
 
     #[test]
+    fn a_shield_bubble_authored_black_stays_dark_when_hit() {
+        // `Pirate_Starbase.alo`'s hidden `Shield` mesh (MeshShield.fx, textures `None.dds`, a flat lavender 32x32) has vertex colour
+        // 1/255 on all 323 vertices: MeshShield multiplies by it, so the original adds nothing there. The hit flash must keep that
+        // factor; without it the bubble lit up as a flat lavender band behind the station.
+        let m = material("MeshShield.fx", &[("Color", ParamValue::Float4([1.0; 4])), ("BaseTexture", ParamValue::Texture("None.dds".into()))]);
+        let (a, _) = describe_material(&m, false, true, |_| None, |_| {});
+        assert_ne!(a.params.flags & FLAG_VERTEX_COLOR, 0, "the bubble's vertex colour reaches the shader");
+        let wgsl = include_str!("alamo.wgsl");
+        let hit = &wgsl[wgsl.find("if has(FLAG_SHIELD_HITS)").expect("hit branch")..];
+        let colour = hit[..hit.find("return").expect("hit colour")].lines().filter(|l| l.trim_start().starts_with("let c =")).collect::<String>();
+        assert!(colour.contains("vcol.rgb"), "the hit flash ignores the vertex colour: {colour}");
+    }
+
+    #[test]
     fn shield_params_follow_the_effect_constants() {
         // The Eclipse's `Engine_Glow_Red`.
         let m = material(
