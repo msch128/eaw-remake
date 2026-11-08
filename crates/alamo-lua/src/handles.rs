@@ -139,12 +139,11 @@ pub fn make(lua: &Lua, data: HandleData) -> mlua::Result<Value> {
             t
         }
     };
-    let key = ((data.handle.kind as u64) << 56) | (data.handle.id & 0x00FF_FFFF_FFFF_FFFF);
-    let key = key as f64;
-    if let Value::UserData(ud) = registry.get::<Value>(key)? {
+    let key = format!("{}:{}", data.handle.kind as u8, data.handle.id);
+    if let Value::UserData(ud) = registry.get::<Value>(key.as_str())? {
         return Ok(Value::UserData(ud));
     }
     let ud = lua.create_userdata(data)?;
-    registry.set(key, ud.clone())?;
+    registry.set(key.as_str(), ud.clone())?;
     Ok(Value::UserData(ud))
 }

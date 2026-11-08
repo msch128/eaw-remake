@@ -258,3 +258,33 @@ fn script_errors_are_reported_not_fatal() {
     assert_eq!(rt.errors()[0].script, "Bad");
     assert_eq!(rt.alive_scripts(), 1);
 }
+
+#[test]
+fn distinct_type_handles_do_not_collide_in_registry() {
+    let mut rt = runtime(&[(
+        "Scripts/Test.lua",
+        r#"
+        function main()
+            local t0 = Find_Object_Type("Type_0")
+            local t1 = Find_Object_Type("Type_1")
+            local t16 = Find_Object_Type("Type_16")
+            ScriptError("same_0_1:" .. tostring(t0 == t1))
+            ScriptError("name_0:" .. t0.Get_Name())
+            ScriptError("name_1:" .. t1.Get_Name())
+            ScriptError("name_16:" .. t16.Get_Name())
+        end
+        "#,
+    )]);
+    rt.spawn_script("Test", &[]).unwrap();
+    run(&mut rt, 1.0);
+    assert_eq!(
+        rt.log(),
+        vec![
+            "[Test] ScriptError: same_0_1:false".to_string(),
+            "[Test] ScriptError: name_0:Type_0".to_string(),
+            "[Test] ScriptError: name_1:Type_1".to_string(),
+            "[Test] ScriptError: name_16:Type_16".to_string(),
+        ]
+    );
+}
+
