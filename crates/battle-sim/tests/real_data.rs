@@ -355,3 +355,17 @@ fn ion_stun_cuts_are_the_data_fractions() {
         assert!(p.ion_speed_cut >= 0.2, "{}: {}", p.name, p.ion_speed_cut);
     }
 }
+
+/// The CIS Subjugator's `SUPER_LASER` (`Damage_Per_Frame` 1, `TEXT_TOOLTIP_ABILITY_SBJ_ION`) is an ion shot with `Proj_SBJ_Ion`; the
+/// Eclipse's (2500 per frame) still destroys its target.
+#[test]
+fn the_subjugator_super_laser_is_an_ion_shot() {
+    let Some((data, fs)) = load() else { return };
+    let cat = Catalog::build(&data, Some(&fs), &["Subjugator", "Eclipse_Star_Dreadnought"]);
+    let laser = |name: &str| cat.ship(cat.ship_id(name).unwrap()).abilities.iter().find_map(|a| a.super_laser.clone()).expect("a super laser");
+    let ion = laser("Subjugator").ion.expect("an ion shot");
+    let p = &cat.projectiles[ion as usize];
+    assert_eq!(p.name.to_ascii_lowercase(), "proj_sbj_ion");
+    assert_eq!((p.ion_duration, p.ion_speed_cut, p.hull_damage), (900.0, 0.75, false));
+    assert!(laser("Eclipse_Star_Dreadnought").ion.is_none(), "the Eclipse super laser kills");
+}

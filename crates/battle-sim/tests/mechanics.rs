@@ -779,7 +779,7 @@ fn buzz_droid_storm_damages_enemies_in_the_area_over_time() {
 #[test]
 fn super_laser_destroys_the_chosen_ship_after_charging() {
     let mut station = ship("deathstar", 1.0e9, 0.0, vec![]);
-    station.abilities.push(AbilityDef { kind: "SUPER_LASER".into(), super_laser: Some(SuperLaserDef { initial_cooldown: 0.0, delay: 1.5, classes: TargetClass::Frigate.bit() }), duration: 25.0, recharge: 45.0, speed_mult: 1.0, shield_regen_mult: 1.0, weapon_delay_mult: 1.0, take_damage_mult: 1.0, ..Default::default() });
+    station.abilities.push(AbilityDef { kind: "SUPER_LASER".into(), super_laser: Some(SuperLaserDef { initial_cooldown: 0.0, delay: 1.5, classes: TargetClass::Frigate.bit(), ..Default::default() }), duration: 25.0, recharge: 45.0, speed_mult: 1.0, shield_regen_mult: 1.0, weapon_delay_mult: 1.0, take_damage_mult: 1.0, ..Default::default() });
     let victim = ship("victim", 1.0e6, 1.0e5, vec![]);
     let cat = Catalog::from_defs(vec![station, victim], vec![laser()]);
     let mut b = Battle::new(setup(cat, "deathstar", "victim", 1, 1, cfg()));
@@ -800,6 +800,32 @@ fn super_laser_destroys_the_chosen_ship_after_charging() {
     }
     assert!(!b.ships[v as usize].alive, "destroyed after the charge time");
     assert!(events.iter().any(|e| matches!(e, Event::SuperLaserFired { ship, target, .. } if *ship == c && *target == v)), "the shot is announced");
+}
+
+#[test]
+fn an_ion_super_laser_stuns_instead_of_destroying() {
+    // The CIS Subjugator's `SUPER_LASER` does `Damage_Per_Frame` 1 and is an ion shot (`TEXT_TOOLTIP_ABILITY_SBJ_ION`): it hits with the ship's
+    // own stunning ion projectile (`Proj_SBJ_Ion`: shields only, ion stun 900 s at 75%) instead of destroying the target outright.
+    let mut ion = laser();
+    ion.name = "sbj_ion".into();
+    ion.damage = 99_900.0;
+    ion.hull_damage = false;
+    ion.ion_duration = 900.0;
+    ion.ion_speed_cut = 0.75;
+    ion.ion_rate_cut = 0.75;
+    let mut sbj = ship("sbj", 1.0e6, 0.0, vec![]);
+    sbj.abilities.push(AbilityDef { super_laser: Some(SuperLaserDef { delay: 1.0, ion: Some(0), ..Default::default() }), cause_damage_mult: 1.0, ..ability("SUPER_LASER") });
+    let target = ship("target", 5000.0, 2000.0, vec![]);
+    let mut b = Battle::new(setup(Catalog::from_defs(vec![sbj, target], vec![ion]), "sbj", "target", 1, 1, cfg()));
+    let t = b.ships.iter().find(|s| s.side == 1).unwrap().id;
+    for _ in 0..30 * 3 {
+        b.step();
+    }
+    assert!(used(&b, 0), "the AI fires it");
+    let s = &b.ships[t as usize];
+    assert!(s.alive && s.hull == 5000.0, "no hull damage: alive {} hull {}", s.alive, s.hull);
+    assert_eq!(s.shield, 0.0, "the shield is gone");
+    assert!(s.stun > 800.0 && s.stun_speed_cut == 0.75 && s.stun_rate_cut == 0.75, "stunned: {} {} {}", s.stun, s.stun_speed_cut, s.stun_rate_cut);
 }
 
 fn ability(kind: &str) -> AbilityDef {
@@ -852,7 +878,7 @@ fn the_ai_uses_each_new_ability_in_a_suitable_scenario() {
     assert!(used(&b, 0), "storm on a cluster");
 
     let mut dstar = ship("dstar", 1.0e6, 0.0, vec![]);
-    dstar.abilities.push(AbilityDef { super_laser: Some(SuperLaserDef { initial_cooldown: 0.0, delay: 1.0, classes: TargetClass::Frigate.bit() }), ..ability("SUPER_LASER") });
+    dstar.abilities.push(AbilityDef { super_laser: Some(SuperLaserDef { initial_cooldown: 0.0, delay: 1.0, classes: TargetClass::Frigate.bit(), ..Default::default() }), ..ability("SUPER_LASER") });
     let mut b = Battle::new(setup(Catalog::from_defs(vec![dstar, dummy()], vec![laser()]), "dstar", "dummy", 1, 1, cfg()));
     for _ in 0..30 * 3 {
         b.step();
@@ -1590,7 +1616,7 @@ fn a_placed_reinforcement_arrives_turned_by_the_ghost_rotation() {
 fn death_star_super_laser_waits_for_its_approach_countdown() {
     let dummy = || ship("dummy", 1.0e7, 0.0, vec![]);
     let mut dstar = ship("dstar", 1.0e6, 0.0, vec![]);
-    dstar.abilities.push(AbilityDef { super_laser: Some(SuperLaserDef { initial_cooldown: 10.0, delay: 1.0, classes: TargetClass::Frigate.bit() }), ..ability("SUPER_LASER") });
+    dstar.abilities.push(AbilityDef { super_laser: Some(SuperLaserDef { initial_cooldown: 10.0, delay: 1.0, classes: TargetClass::Frigate.bit(), ..Default::default() }), ..ability("SUPER_LASER") });
     let mut b = Battle::new(setup(Catalog::from_defs(vec![dstar, dummy()], vec![laser()]), "dstar", "dummy", 1, 1, cfg()));
     let id = b.ships.iter().find(|s| s.side == 0).unwrap().id as usize;
     assert!((b.ships[id].abilities[0].cooldown - 10.0).abs() < 1e-3, "starts on the countdown");

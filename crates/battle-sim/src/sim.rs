@@ -2374,7 +2374,8 @@ impl Battle {
         }
     }
 
-    /// `SUPER_LASER` shots that reach their firing time destroy the target if the shooter still lives.
+    /// `SUPER_LASER` shots that reach their firing time destroy the target if the shooter still lives. An ion super laser
+    /// ([`SuperLaserDef::ion`]) hits it with its projectile instead and stuns it on detonation (`Projectile_Ion_Stun_On_Detonation`).
     fn run_lasers(&mut self) {
         if self.lasers.is_empty() {
             return;
@@ -2384,6 +2385,25 @@ impl Battle {
         self.lasers.retain(|l| l.2 > now);
         for (shooter, target, _) in due {
             if !self.ships[shooter as usize].alive {
+                continue;
+            }
+            let ion = self.catalog.ship(self.ships[shooter as usize].def).abilities.iter().find_map(|a| a.super_laser.as_ref()).and_then(|l| l.ion);
+            if let Some(proj) = ion.filter(|&p| (p as usize) < self.catalog.projectiles.len()) {
+                if !self.ships[target as usize].alive {
+                    continue;
+                }
+                let pd = self.catalog.projectiles[proj as usize].clone();
+                let pos = self.ships[target as usize].pos;
+                if self.config.record_events {
+                    self.events.push(Event::SuperLaserFired { ship: shooter, target, at: pos });
+                }
+                self.damage_ship(target, shooter, &pd, proj, pd.damage, pos, NO_HP);
+                let t = &mut self.ships[target as usize];
+                if t.alive && !self.cheats.is_invulnerable(t.side) {
+                    t.stun = t.stun.max(pd.ion_duration);
+                    t.stun_speed_cut = t.stun_speed_cut.max(pd.ion_speed_cut);
+                    t.stun_rate_cut = t.stun_rate_cut.max(pd.ion_rate_cut);
+                }
                 continue;
             }
             let t = &mut self.ships[target as usize];

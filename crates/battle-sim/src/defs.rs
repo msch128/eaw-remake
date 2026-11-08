@@ -212,7 +212,8 @@ pub struct AbilityDef {
     /// `SENSOR_JAMMING` (flares): while active, enemy homing missiles aimed at this ship lose their lock and fly straight on.
     pub jam: bool,
     /// `SUPER_LASER`: aimed with `Command::UseAbilityAt`; the chosen ship is destroyed outright after the charge time (estimate: the data
-    /// gives `Damage_Per_Frame` 10, which cannot be what kills a capital ship in one shot in the game).
+    /// gives `Damage_Per_Frame` 10, which cannot be what kills a capital ship in one shot in the game), unless it is an ion shot
+    /// ([`SuperLaserDef::ion`]).
     pub super_laser: Option<SuperLaserDef>,
     /// `BUZZ_DROIDS` that damages enemies in an area (estimate: the area lasts `duration`, 20 s where the data gives no expiration; the
     /// `Own_Damage_Per_Second` of 1 and the repair-drone variants are not modelled).
@@ -394,7 +395,15 @@ pub struct SuperLaserDef {
     pub classes: u16,
     /// Seconds before the first shot: the Death Star flies into range first (estimate, see `TSW_SPEED_SCALE`); 0 for super lasers without that data.
     pub initial_cooldown: f32,
+    /// Ion shot instead of a kill: the projectile the target is hit with. Set for a super laser of at most
+    /// `ION_SUPER_LASER_DAMAGE_PER_FRAME` (the CIS Subjugator's, `TEXT_TOOLTIP_ABILITY_SBJ_ION`) on a ship whose hardpoints fire a stunning
+    /// ion projectile: the one that stuns longest (`Proj_SBJ_Ion`: shields only, ion stun 900 s at 75%).
+    pub ion: Option<ProjId>,
 }
+
+/// Estimate: a super laser doing at most this `Damage_Per_Frame` is an ion shot, not a kill (Subjugator 1; Death Star II 10, Piett 500,
+/// Eclipse 2500).
+pub const ION_SUPER_LASER_DAMAGE_PER_FRAME: f32 = 1.0;
 
 /// What a `Projectile_Combat_Mod` changes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1446,7 +1455,7 @@ impl Catalog {
         };
         let spawned_by_tech: Vec<SpawnedAt> = spawned_lists.iter().map(|t| (t.tech, resolve(&t.starting), resolve(&t.reserve))).collect();
         let at_tech0 = alamo_data::spawned_for_tech(spawned_lists, 0);
-        let (members, offsets, carried, reserve, spawn_delay, abilities) = match src {
+        let (members, offsets, carried, reserve, spawn_delay, mut abilities) = match src {
             Source::Unit(u) => {
                 let mut members: Vec<(ShipId, u32)> = Vec::new();
                 for m in &u.squadron_units {
@@ -1615,6 +1624,15 @@ impl Catalog {
             }
             _ => None,
         };
+        // An ion super laser hits with the ship's longest-stunning ion projectile.
+        let stunner = hardpoints.iter().filter_map(|h| h.projectile).filter(|&p| self.projectiles[p as usize].ion_duration > 0.0).max_by(|&a, &b| {
+            self.projectiles[a as usize].ion_duration.total_cmp(&self.projectiles[b as usize].ion_duration).then(b.cmp(&a))
+        });
+        for laser in abilities.iter_mut().filter_map(|a| a.super_laser.as_mut()) {
+            if laser.ion.is_some() {
+                laser.ion = stunner;
+            }
+        }
         ShipDef {
             name,
             text_id,
@@ -1990,6 +2008,8 @@ fn ability_defs(u: &SpaceUnitDef, projectiles: &[ProjDef], proj_index: &HashMap<
                             u.fields.get("tsw_attack_distance_from_target").and_then(|v| alamo_data::xml::parse_num(v)).unwrap_or(0.0),
                             u.fields.get("max_speed").and_then(|v| alamo_data::xml::parse_num(v)).unwrap_or(0.0),
                         ),
+                        // Marked here, resolved to the ship's stunning projectile once its hardpoints are known (`ship_def`).
+                        ion: alamo_data::xml::parse_num::<f32>(&f("damage_per_frame")).is_some_and(|d| d <= ION_SUPER_LASER_DAMAGE_PER_FRAME).then_some(ProjId::MAX),
                     }
                 }),
                 zone: a.kind.eq_ignore_ascii_case("BUZZ_DROIDS").then(|| {
