@@ -759,6 +759,9 @@ Estimates and data that shape what the player sees and hears. Behaviour is in `b
 * `SFXEvent_Engine_Cinematic_Focus_Loop` (550 references) loops while cinematic camera focus is on that unit (C; the
   Space battle cam is not this). Estimate `cinematic_focus_stacks`: the loop plays as well as the idle or moving engine
   loop. The data does not say that it replaces that loop. An empty value or `SFX_NA` stays silent.
+* `Kills_Previous_Object_SFX` is set on 15 events once XML comments are removed (4 fighter deaths, 3 ground slams,
+  3 detonations, 4 deploy or build stops, and `Unit_Magnepulse_Fire`). Starting one stops every live voice whose source
+  is that object. A battle shot or death of such an event is sent with the ship entity as its source.
 
 ## 3.2 Cameras and interaction
 

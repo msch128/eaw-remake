@@ -68,6 +68,7 @@ fn fs() -> Arc<MemFs> {
         <SFXEvent Name="Unit_Select_B"><Use_Preset>Preset_VO</Use_Preset><Samples>boom_b.wav</Samples><Overlap_Test>vb</Overlap_Test></SFXEvent>
         <SFXEvent Name="Chain_1"><Samples>boom_a.wav</Samples><Is_2D>Yes</Is_2D><Chained_SFXEvent>Boom</Chained_SFXEvent></SFXEvent>
         <SFXEvent Name="Hum"><Samples>boom_a.wav</Samples><Play_Count>-1</Play_Count><Min_Pitch>90</Min_Pitch><Max_Pitch>125</Max_Pitch></SFXEvent>
+        <SFXEvent Name="Die"><Samples>boom_b.wav</Samples><Is_2D>Yes</Is_2D><Kills_Previous_Object_SFX>Yes</Kills_Previous_Object_SFX></SFXEvent>
         </SFXEvents>"#
             .to_vec(),
     );
@@ -142,10 +143,14 @@ fn update_until(app: &mut App, mut done: impl FnMut(&mut App) -> bool) -> bool {
 }
 
 fn play(app: &mut App, event: &str) {
+    play_on(app, event, None);
+}
+
+fn play_on(app: &mut App, event: &str, source: Option<Entity>) {
     app.world_mut().write_message(PlaySfx {
         event: event.into(),
         position: None,
-        source: None,
+        source,
     });
 }
 
@@ -182,6 +187,32 @@ fn voice_events(app: &mut App) -> Vec<String> {
     let mut v: Vec<String> = q.iter(app.world()).filter(|v| !v.is_stopping()).map(|v| v.event().to_string()).collect();
     v.sort();
     v
+}
+
+#[test]
+fn kills_previous_object_sfx_stops_that_objects_earlier_voices() {
+    let mut app = app();
+    // A loop follows its source and fades out when that entity has no transform (it counts as gone).
+    let a = app.world_mut().spawn(GlobalTransform::IDENTITY).id();
+    let b = app.world_mut().spawn(GlobalTransform::IDENTITY).id();
+    play_on(&mut app, "Hum", Some(a));
+    play_on(&mut app, "Hum", Some(b));
+    app.update();
+    assert_eq!(voice_events(&mut app), vec!["hum", "hum"]);
+    // A new event with the flag stops the earlier voices of the same object. The other object's hum stays.
+    play_on(&mut app, "Die", Some(a));
+    app.update();
+    let mut q = app.world_mut().query::<&SfxVoice>();
+    // `Entity` does not sort in spawn order, so the ship is 0 for `a` and 1 for `b`.
+    let who = |src: Option<Entity>| if src == Some(a) { 0 } else if src == Some(b) { 1 } else { 2 };
+    let mut rows: Vec<(String, u8, bool)> = q.iter(app.world()).map(|v| (v.event().to_string(), who(v.source()), v.is_stopping())).collect();
+    rows.sort();
+    assert_eq!(rows, vec![("die".into(), 0, false), ("hum".into(), 0, true), ("hum".into(), 1, false)]);
+    // Without a source the flag has nothing to stop.
+    play_on(&mut app, "Die", None);
+    app.update();
+    let mut q = app.world_mut().query::<&SfxVoice>();
+    assert_eq!(q.iter(app.world()).filter(|v| v.event() == "hum" && v.source() == Some(b) && !v.is_stopping()).count(), 1);
 }
 
 #[test]

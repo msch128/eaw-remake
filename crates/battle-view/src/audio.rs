@@ -113,7 +113,8 @@ pub fn battle_audio(
     mem.ships.extend(cur.ships.iter().map(|s| (s.id, (s.def, s.side))));
     let mut per_name: HashMap<String, u32> = HashMap::new();
     let mut budget = PER_FRAME;
-    let mut send = |names: &str, pos: Option<Vec3>, stats: &mut BattleAudioStats, out: &mut MessageWriter<PlaySfx>| {
+    // `source` is the ship the sound belongs to. It is kept only when the event has `Kills_Previous_Object_SFX`, so a new instance stops that ship's earlier voices.
+    let mut send = |names: &str, pos: Option<Vec3>, source: Option<Entity>, stats: &mut BattleAudioStats, out: &mut MessageWriter<PlaySfx>| {
         // Some tags hold a comma separated list of events (`HARD_POINT_WEAPON_LASER, Unit_Lost_...`): play each.
         for name in names.split(',').map(str::trim).filter(|n| !n.is_empty() && !n.starts_with("HARD_POINT_")) {
             if budget == 0 {
@@ -135,7 +136,8 @@ pub fn battle_audio(
             }
             *n += 1;
             budget -= 1;
-            out.write(PlaySfx { event: name.to_string(), position: pos, source: None });
+            let source = source.filter(|_| audio.as_ref().and_then(|a| a.sfx.get(name)).is_some_and(|e| e.kills_previous));
+            out.write(PlaySfx { event: name.to_string(), position: pos, source });
             stats.sent += 1;
             if stats.recent.len() >= 32 {
                 stats.recent.remove(0);
@@ -162,7 +164,7 @@ pub fn battle_audio(
                     None => v.sfx.fire.as_deref(),
                 };
                 if let Some(n) = name {
-                    send(n, Some(sim_to_bevy(*from)), &mut stats, &mut out);
+                    send(n, Some(sim_to_bevy(*from)), rt.entities.get(ship).copied(), &mut stats, &mut out);
                 }
             }
             Event::Hit { ship, attacker, projectile, pos, kind, .. } => {
@@ -190,7 +192,7 @@ pub fn battle_audio(
                             && let Some(n) = sfx.under_attack.as_deref()
                         {
                             mem.under_attack.insert(v.def, clock);
-                            send(n, None, &mut stats, &mut out);
+                            send(n, None, None, &mut stats, &mut out);
                         }
 
                         // Shield collapse warning ("Shields are down!") for capital ships, supers and stations
@@ -215,12 +217,12 @@ pub fn battle_audio(
                         if frac <= health_critical && *flags & 2 == 0 {
                             *flags |= 3;
                             if let Some(n) = crit {
-                                send(n, None, &mut stats, &mut out);
+                                send(n, None, None, &mut stats, &mut out);
                             }
                         } else if frac <= health_low && *flags & 1 == 0 {
                             *flags |= 1;
                             if let Some(n) = low {
-                                send(n, None, &mut stats, &mut out);
+                                send(n, None, None, &mut stats, &mut out);
                             }
                         }
                     }
@@ -237,7 +239,7 @@ pub fn battle_audio(
                     visuals.proj_detonate_armor.get(pi)
                 };
                 if let Some(Some(n)) = name {
-                    send(n, Some(sim_to_bevy(*pos)), &mut stats, &mut out);
+                    send(n, Some(sim_to_bevy(*pos)), None, &mut stats, &mut out);
                 }
             }
             Event::ShipDestroyed { ship, pos } => {
@@ -246,7 +248,7 @@ pub fn battle_audio(
                 let Some(&(def, side)) = mem.ships.get(ship) else { continue };
                 let vis = visuals.ship(def);
                 if let Some(n) = vis.sfx.death.as_deref() {
-                    send(n, Some(sim_to_bevy(*pos)), &mut stats, &mut out);
+                    send(n, Some(sim_to_bevy(*pos)), rt.entities.get(ship).copied(), &mut stats, &mut out);
                 }
                 if let Some(n) = vis.sfx.death_end.as_deref() {
                     mem.end_die.push((clock + DEATH_SEQUENCE_SECONDS, n.to_string(), sim_to_bevy(*pos)));
@@ -259,7 +261,7 @@ pub fn battle_audio(
                 let capital = matches!(class, TargetClass::Capital | TargetClass::Super);
                 if side == player {
                     if let Some(n) = vis.sfx.unit_lost.as_deref() {
-                        send(n, None, &mut stats, &mut out);
+                        send(n, None, None, &mut stats, &mut out);
                     }
                     say(
                         match (vis.hero, structure, capital) {
@@ -288,7 +290,7 @@ pub fn battle_audio(
                     && s.side == player
                     && let Some(n) = hardpoint_destroyed_line(visuals.ship(s.def), *hardpoint)
                 {
-                    send(n, None, &mut stats, &mut out);
+                    send(n, None, None, &mut stats, &mut out);
                 }
             }
             Event::ReinforcementsCalled { side, .. } if *side == player => say(GalaxyEvent::ReinforcementsEnRoute, &mut stats),
@@ -297,7 +299,7 @@ pub fn battle_audio(
             // A missile shield destroys a missile: the projectile's own detonation.
             Event::ProjectileIntercepted { projectile, pos } => {
                 if let Some(Some(n)) = visuals.proj_detonate.get(*projectile as usize) {
-                    send(n, Some(sim_to_bevy(*pos)), &mut stats, &mut out);
+                    send(n, Some(sim_to_bevy(*pos)), None, &mut stats, &mut out);
                 }
             }
             // The retreat order was accepted (button, Esc menu or the AI): the own announcement, or the enemy's `Space_Retreat_Enemy_Begin_SFXEvent`.
@@ -305,7 +307,7 @@ pub fn battle_audio(
                 if *side == player {
                     say(GalaxyEvent::RetreatStarted, &mut stats);
                 } else if let Some(n) = faction.as_deref().and_then(|f| constants.faction_sfx(f, "space_retreat_enemy_begin_sfxevent")) {
-                    send(n, None, &mut stats, &mut out);
+                    send(n, None, None, &mut stats, &mut out);
                 }
             }
             // An enemy gravity well came up while the fleet charged its hyperdrives (`Event::RetreatAborted`): the faction's "interdicted"
@@ -318,13 +320,13 @@ pub fn battle_audio(
                         .or_else(|| constants.faction_sfx(f, "space_retreat_cancel_sfxevent"))
                 });
                 if let Some(n) = line {
-                    send(n, None, &mut stats, &mut out);
+                    send(n, None, None, &mut stats, &mut out);
                 }
             }
             // The player called the own retreat off (Retreat pressed again during the countdown): `Space_Retreat_Cancel_SFXEvent`.
             Event::RetreatCancelled { side } if *side == player => {
                 if let Some(n) = faction.as_deref().and_then(|f| constants.faction_sfx(f, "space_retreat_cancel_sfxevent")) {
-                    send(n, None, &mut stats, &mut out);
+                    send(n, None, None, &mut stats, &mut out);
                 }
             }
             Event::ShipRetreated { ship } => {
@@ -349,11 +351,11 @@ pub fn battle_audio(
                         line = own.and_then(|a| a.activated.as_deref()).or(vis.sfx.ability.as_deref())
                             .or_else(|| if vis.hero { vis.sfx.attack.as_deref() } else { None });
                         if let Some(n) = line {
-                            send(n, None, &mut stats, &mut out);
+                            send(n, None, None, &mut stats, &mut out);
                         }
                         // A non-hero ability switched on also plays the faction's GUI toggle sound (`SFXEvent_GUI_Toggle_Non_Hero_Ability_On`).
                         if !vis.hero && let Some(n) = faction.as_deref().and_then(|f| constants.toggle_sfx(f, &kind, true)) {
-                            send(n, None, &mut stats, &mut out);
+                            send(n, None, None, &mut stats, &mut out);
                         }
                     }
                     // The ability's own start sound sits on the unit and is heard from every unit the player sees (estimate: the data names
@@ -364,7 +366,7 @@ pub fn battle_audio(
                         && let Some(n) = own.and_then(|a| a.start.as_deref()).filter(|n| line.is_none_or(|l| !l.eq_ignore_ascii_case(n)))
                         && audio.as_ref().and_then(|a| a.sfx.get(n)).is_some_and(|e| !e.is_2d)
                     {
-                        send(n, Some(sim_to_bevy(s.pos)), &mut stats, &mut out);
+                        send(n, Some(sim_to_bevy(s.pos)), None, &mut stats, &mut out);
                     }
                 }
             }
@@ -376,7 +378,7 @@ pub fn battle_audio(
     let (due, waiting): (Vec<_>, Vec<_>) = std::mem::take(&mut mem.end_die).into_iter().partition(|d| d.0 <= clock);
     mem.end_die = waiting;
     for (_, name, at) in due {
-        send(&name, Some(at), &mut stats, &mut out);
+        send(&name, Some(at), None, &mut stats, &mut out);
     }
     // An ability of the player's ships ran out: its deactivation sound and the faction's toggle-off sound.
     for s in cur.ships.iter().filter(|s| s.side == player) {
@@ -387,10 +389,10 @@ pub fn battle_audio(
                 let vis = visuals.ship(s.def);
                 let kind = rt.catalog.ship(s.def).abilities.get(i).map(|a| a.kind.to_ascii_uppercase()).unwrap_or_default();
                 if let Some(n) = vis.sfx.abilities.iter().find(|a| a.kind == kind).and_then(|a| a.deactivated.as_deref()) {
-                    send(n, None, &mut stats, &mut out);
+                    send(n, None, None, &mut stats, &mut out);
                 }
                 if !vis.hero && let Some(n) = faction.as_deref().and_then(|f| constants.toggle_sfx(f, &kind, false)) {
-                    send(n, None, &mut stats, &mut out);
+                    send(n, None, None, &mut stats, &mut out);
                 }
             }
         }
@@ -401,7 +403,7 @@ pub fn battle_audio(
         if s.side == player && visuals.ship(s.def).hero && mem.own_heroes_entered.insert(s.id) {
             let vis = visuals.ship(s.def);
             if let Some(n) = vis.sfx.select.as_deref().or_else(|| vis.sfx.fleet_move.as_deref()) {
-                send(n, None, &mut stats, &mut out);
+                send(n, None, None, &mut stats, &mut out);
             }
         }
     }
@@ -416,7 +418,7 @@ pub fn battle_audio(
         if s.side != player && s.seen_by & (1 << player) != 0 && mem.types_spotted.insert(s.def) {
             let line = faction.as_deref().and_then(|f| constants.spotted_line(f, &rt.catalog.ship(s.def).name)).map(str::to_owned);
             if let Some(n) = line {
-                send(&n, None, &mut stats, &mut out);
+                send(&n, None, None, &mut stats, &mut out);
             }
         }
     }
@@ -461,7 +463,7 @@ pub fn battle_audio(
                 });
             if let Some(n) = line {
                 mem.last_select_voice = Some(clock);
-                send(n, None, &mut stats, &mut out);
+                send(n, None, None, &mut stats, &mut out);
             }
         }
     }
@@ -473,7 +475,7 @@ pub fn battle_audio(
         let ty = visuals.ship(target.def).hardpoints.get(o.hardpoint as usize).map_or("", |h| h.hp_type.as_str());
         let line = attack_hardpoint_line(visuals, &ranked, ty, faction.as_deref());
         if let Some(n) = line {
-            send(n, None, &mut stats, &mut out);
+            send(n, None, None, &mut stats, &mut out);
             hardpoint_line = true;
         }
     }
@@ -535,7 +537,7 @@ pub fn battle_audio(
             .or_else(|| lines.iter().find_map(|&def| fallback(def)))
             .or(faction_fallback);
         if let Some(n) = name {
-            send(n, None, &mut stats, &mut out);
+            send(n, None, None, &mut stats, &mut out);
         }
     }
 }
@@ -2015,6 +2017,50 @@ mod tests {
         world.init_resource::<Messages<crate::control::HardpointOrderIssued>>();
         world.run_system_once(battle_audio).expect("battle audio");
         world.resource_mut::<Messages<PlaySfx>>().drain().map(|m| (m.event, m.position)).collect()
+    }
+
+    #[test]
+    fn a_death_that_kills_previous_sounds_names_the_ship() {
+        use bevy::ecs::system::RunSystemOnce;
+        let (catalog, mut visuals) = ability_world();
+        visuals.ships[0].sfx.death = Some("Unit_TIE_Fighter_Death_SFX".into());
+        visuals.ships[1].sfx.death = Some("Plain_Boom".into());
+        let files = sfx_files(
+            r#"<SFXEvent Name="Unit_TIE_Fighter_Death_SFX"><Samples>die.wav</Samples><Kills_Previous_Object_SFX>Yes</Kills_Previous_Object_SFX></SFXEvent>
+            <SFXEvent Name="Plain_Boom"><Samples>die.wav</Samples></SFXEvent>
+            <SFXEvent Name="Unit_Magnepulse_Fire"><Samples>die.wav</Samples><Kills_Previous_Object_SFX>Yes</Kills_Previous_Object_SFX></SFXEvent>"#,
+        );
+        let battle = fighter_battle(&[&["x"]]);
+        let tie = snap_ship(7, 0, 0, 0b01, &[]);
+        let plain = snap_ship(8, 1, 0, 0b01, &[]);
+        let snap = Snapshot { ships: vec![tie, plain], ..Snapshot::default() };
+        let mut rt = flyby_runtime((battle.0, catalog, snap), visuals);
+        let mut world = World::new();
+        let tie_e = world.spawn_empty().id();
+        let plain_e = world.spawn_empty().id();
+        rt.entities.insert(7, tie_e);
+        rt.entities.insert(8, plain_e);
+        rt.fresh_events = vec![
+            Event::ShipDestroyed { ship: 7, pos: battle_sim::Vec3::new(1.0, 2.0, 3.0) },
+            Event::ShipDestroyed { ship: 8, pos: battle_sim::Vec3::new(0.0, 0.0, 0.0) },
+            Event::ProjectileFired { ship: 7, hardpoint: None, projectile: 0, from: battle_sim::Vec3::new(0.0, 0.0, 0.0), velocity: battle_sim::Vec3::new(1.0, 0.0, 0.0) },
+        ];
+        // The firing ship uses its unit `SFXEvent_Fire` only when the hardpoint is absent. Give def 0 that event.
+        std::sync::Arc::make_mut(&mut rt.visuals).ships[0].sfx.fire = Some("Unit_Magnepulse_Fire".into());
+        world.insert_resource(BattleViewSettings::default());
+        world.insert_resource(AlamoAudio::load(std::sync::Arc::new(MemFs(files))));
+        world.insert_resource(rt);
+        world.init_resource::<Selection>();
+        world.init_resource::<BattleAudioStats>();
+        world.init_resource::<Messages<PlaySfx>>();
+        world.init_resource::<Messages<alamo_audio::plugin::GalaxyAudio>>();
+        world.init_resource::<Messages<OrderIssued>>();
+        world.init_resource::<Messages<crate::control::HardpointOrderIssued>>();
+        world.run_system_once(battle_audio).expect("battle audio");
+        let sent: Vec<_> = world.resource_mut::<Messages<PlaySfx>>().drain().map(|m| (m.event, m.source)).collect();
+        assert!(sent.iter().any(|(e, s)| e == "Unit_TIE_Fighter_Death_SFX" && *s == Some(tie_e)), "{sent:?}");
+        assert!(sent.iter().any(|(e, s)| e == "Plain_Boom" && s.is_none()), "{sent:?}");
+        assert!(sent.iter().any(|(e, s)| e == "Unit_Magnepulse_Fire" && *s == Some(tie_e)), "{sent:?}");
     }
 
     /// The Remake's ability sounds through the whole chain (skipped without the game files): the units' data names the loops and start sounds the view
