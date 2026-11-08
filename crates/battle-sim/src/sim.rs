@@ -514,6 +514,8 @@ impl Battle {
             shield_lock: 0.0,
             in_asteroid_field: false,
             in_nebula: false,
+            target_age: 0.0,
+            rest_at: pos,
             ability_lock: 0.0,
             stun: 0.0,
             stun_speed_cut: 0.0,
@@ -1142,6 +1144,8 @@ impl Battle {
         let tick = self.tick;
         let spawn = self.spawn_pos.clone();
         let arena = cfg.arena.clone();
+        // Sides the AI plays (their attack-moves are the AI plan's, see `scan`).
+        let ai_sides: u8 = (0..self.sides.len().min(8) as u8).filter(|&i| self.sides[i as usize].ai).fold(0, |m, i| m | 1 << i);
         let obstacles: &[crate::arena::Obstacle] = arena.as_ref().map_or(&[], |a| a.obstacles.as_slice());
         // Mobile ships that keep each other apart (fighters and stations excluded).
         let big: Vec<u32> = self.ships.iter().filter(|s| s.alive && !s.retreated && !cat.ship(s.def).is_static && !matches!(cat.ship(s.def).class, TargetClass::Fighter | TargetClass::Bomber)).map(|s| s.id).collect();
@@ -1180,7 +1184,7 @@ impl Battle {
                 if !s.alive || s.retreated {
                     return;
                 }
-                scan(s, &snaps, &cat, &cfg);
+                scan(s, &snaps, &cat, &cfg, ai_sides);
                 let mut rng = Rng::for_entity(cfg.seed, tick, s.id, 0x30FE);
                 mov(s, &snaps, &cat, &cfg, &spawn, &squad_leaders, &squad_lags, obstacles, &big, &Nav { grid: self.nav_grid.as_ref(), hulls: &hulls }, &mut rng);
             };
@@ -2762,8 +2766,9 @@ fn ability_product(def: &ShipDef, s: &Ship, f: impl Fn(&AbilityDef) -> f32) -> f
 }
 
 /// Refreshes the sorted target candidate list and the auto target.
-fn scan(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig) {
+fn scan(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, ai_sides: u8) {
     s.scan_in -= cfg.dt;
+    s.target_age += cfg.dt;
     let explicit = if let Order::Attack(t) = s.order { Some(t) } else { None };
     let def = cat.ship(s.def);
     let me = snaps[s.id as usize];
@@ -2776,11 +2781,21 @@ fn scan(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig) {
         return;
     }
     s.scan_in = cfg.retarget_interval;
+    // `Attack_Move_Response_Range`: an attack-move order takes up enemies that far beyond the unit's own range. The AI plan's attack-moves
+    // (`Service_Attack` of the free store, `ai.rs`) are not that order and keep taking up every enemy the side sees.
+    let player_side = s.side >= 8 || ai_sides & (1 << s.side) == 0;
+    let own_range = def.max_weapon_range.max(def.targeting_range);
     let range = match (s.stance, s.order) {
-        (Stance::Aggressive, Order::AttackMove(_) | Order::Idle) => f32::MAX,
+        (Stance::Aggressive, Order::AttackMove(_)) => def.chase.attack_move.filter(|_| player_side).map_or(f32::MAX, |r| own_range + r),
+        (Stance::Aggressive, Order::Idle) => f32::MAX,
         (Stance::Aggressive, Order::Guard(_)) => 5000.0,
         (Stance::Defensive, Order::Guard(_)) => 4000.0,
         _ => reach,
+    };
+    // `Idle_Chase_Range`: an idle unit that pursues takes up only enemies it can reach from where it rests (its carrier for a launched craft).
+    let leash = match (s.stance, s.order, def.chase.idle) {
+        (Stance::Aggressive, Order::Idle, Some(r)) if r > 0.0 => Some((idle_anchor(s, snaps), r + own_range)),
+        _ => None,
     };
     // Priority table: AI attack-move orders use the `<set>_Attack_Move` variant.
     let set = if cfg.attack_move_sets && matches!(s.order, Order::AttackMove(_)) { def.priority_attack_move } else { def.priority }
@@ -2791,7 +2806,7 @@ fn scan(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig) {
             continue;
         }
         let d = t.pos.dist(me.pos) - t.radius;
-        if d > range {
+        if d > range || leash.is_some_and(|(at, r)| t.pos.dist(at) - t.radius > r) {
             continue;
         }
         let mut weight = match set {
@@ -2825,6 +2840,19 @@ fn scan(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig) {
         found.push((weight, d, i as u32));
     }
     found.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.total_cmp(&b.1)).then(a.2.cmp(&b.2)));
+    // `Targeting_Stickiness_Time_Threshold`: a target the unit took up less than that long ago stays first while it is still a candidate (a
+    // dead, unseen or out-of-range target is dropped at once). The AI side's priority target is an order of the plan (the Remake free
+    // store attacks it with `Service_Attack`) and takes over at once.
+    let before = s.target;
+    if explicit.is_none()
+        && before != NONE
+        && found.first().is_none_or(|f| f.2 != s.focus)
+        && def.chase.stickiness.is_some_and(|t| s.target_age < t)
+        && let Some(k) = found.iter().position(|f| f.2 == before)
+    {
+        let kept = found.remove(k);
+        found.insert(0, kept);
+    }
     found.truncate(24);
     s.candidates.clear();
     if let Some(t) = explicit
@@ -2834,6 +2862,9 @@ fn scan(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig) {
     }
     s.candidates.extend(found.iter().map(|f| f.2).filter(|&i| Some(i) != explicit));
     s.target = if s.stance == Stance::HoldFire && explicit.is_none() { NONE } else { s.candidates.first().copied().unwrap_or(NONE) };
+    if s.target != before {
+        s.target_age = 0.0;
+    }
     if explicit.is_none_or(|t| !snaps[t as usize].alive) && s.target_hp != NO_HP && s.target == NONE {
         s.target_hp = NO_HP;
     }
@@ -2858,6 +2889,14 @@ fn scan(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig) {
                 }
             }
         }
+    }
+}
+
+/// Where an idle unit's `Idle_Chase_Range` is measured from: its carrier for a launched craft, else where it last rested.
+fn idle_anchor(s: &Ship, snaps: &[Snap]) -> Vec3 {
+    match snaps.get(s.carrier as usize) {
+        Some(c) if c.alive => c.pos,
+        _ => s.rest_at,
     }
 }
 
@@ -3095,6 +3134,14 @@ fn mov(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, spawn: &
     };
     let target = (mover != NONE && snaps[mover as usize].alive).then(|| snaps[mover as usize]);
     let aggressive = s.stance == Stance::Aggressive;
+    // `Idle_Chase_Range`: an idle unit pursues an enemy it can reach from where it rests (`scan` takes up no other); a range of 0 (the
+    // Remake's corvettes, frigates and capitals) holds the place. With nothing to fight it rests where it is.
+    let idle_chase = matches!(s.order, Order::Idle)
+        && def.chase.idle.is_some_and(|r| r > 0.0)
+        && target.is_some_and(|t| t.pos.dist(idle_anchor(s, snaps)) - t.radius <= def.chase.idle.unwrap_or(0.0) + def.max_weapon_range.max(def.targeting_range));
+    if matches!(s.order, Order::Idle) && s.target == NONE && s.speed < 0.05 * def.max_speed.max(1.0) {
+        s.rest_at = s.pos;
+    }
 
     // (point, stop radius, face-target-when-arrived)
     enum Goal {
@@ -3187,7 +3234,7 @@ fn mov(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, spawn: &
                 Goal::Point(p, def.radius.max(50.0))
             }
         }
-        Order::Attack(_) | Order::AttackMove(_) if target.is_some() && (aggressive || matches!(s.order, Order::Attack(_))) => {
+        Order::Attack(_) | Order::AttackMove(_) | Order::Idle if target.is_some() && (matches!(s.order, Order::Attack(_)) || aggressive && (!matches!(s.order, Order::Idle) || idle_chase)) => {
             let t = target.expect("checked");
             let tdef = cat.ship(t.def);
             let hp_aim = if s.target_hp != NO_HP && t.hp_alive.test(s.target_hp as usize) {
@@ -3316,13 +3363,25 @@ fn mov(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, spawn: &
         Order::Guard(p) => {
             if let Some(t) = target {
                 let dist = t.pos.dist(s.pos);
-                if dist < (def.max_weapon_range * 1.3).max(2500.0) || t.pos.dist(p) < 4500.0 {
+                let stand = if def.preferred_range > 0.0 {
+                    (def.preferred_range * cfg.engage_range_scale).max(def.radius + t.radius + 50.0)
+                } else {
+                    (def.max_weapon_range * 0.8).max(def.radius + t.radius + 50.0)
+                };
+                if let Some(leash) = def.chase.guard {
+                    // `Guard_Chase_Range`: the guard closes on the enemy but goes no further than that from the guarded place; at the limit it
+                    // stops and fires what it reaches, and it turns back when the enemy leaves.
                     face = Some(t.pos);
-                    let stand = if def.preferred_range > 0.0 {
-                        (def.preferred_range * cfg.engage_range_scale).max(def.radius + t.radius + 50.0)
+                    if dist <= stand * 1.1 {
+                        Goal::Hold
                     } else {
-                        (def.max_weapon_range * 0.8).max(def.radius + t.radius + 50.0)
-                    };
+                        let want = t.pos + (s.pos - t.pos).normalized() * stand;
+                        let off = want - p;
+                        let q = if off.len() > leash { p + off.normalized() * leash } else { want };
+                        Goal::Point(q, (def.radius * 0.5).max(50.0))
+                    }
+                } else if dist < (def.max_weapon_range * 1.3).max(2500.0) || t.pos.dist(p) < 4500.0 {
+                    face = Some(t.pos);
                     if dist > stand * 1.1 {
                         Goal::Point(t.pos, stand)
                     } else {

@@ -628,6 +628,10 @@ pub struct Ship {
     pub in_asteroid_field: bool,
     /// Inside an `Is_Nebula` zone this step.
     pub in_nebula: bool,
+    /// Seconds the current target has been the target (`Targeting_Stickiness_Time_Threshold`).
+    pub target_age: f32,
+    /// Where the ship last rested idle without a target: the place `Idle_Chase_Range` is measured from.
+    pub rest_at: Vec3,
     /// Seconds left before the ship may use special abilities again (`Nebula_Ability_Disable_Time` after it left a nebula).
     pub ability_lock: f32,
     /// Tractor beam speed reduction currently applied to this ship (0..1).

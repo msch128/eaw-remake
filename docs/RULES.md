@@ -437,7 +437,11 @@ stays as a derived figure for bars and decisions (`ShipDef::hull` times the shar
 ## 2.5 Targeting and movement
 
 * Data: every 0.4 s (estimate) a ship scans enemies and keeps a candidate list sorted by `Targeting_Priority_Set` weight
-  (lower first, then distance). Sets come from `Xml/TARGETINGPRIORITYSETFILES.XML`: `Attack_Priorities`,
+  (lower first, then distance). Data: `Targeting_Stickiness_Time_Threshold` (5 s on `Vessel_Base` and `Spacecraft_Base`
+  in `Units/Space/_Default_Base.xml`): a target taken up less than that long ago stays the target while it is still a
+  candidate, even when a better one appears; a dead, unseen or out-of-range target is dropped at the next scan. Estimate:
+  the AI side's priority target (`FREE_STORE_ATTACK_RANGE`, the free store's `Service_Attack` order) takes over at once.
+  Sets come from `Xml/TARGETINGPRIORITYSETFILES.XML`: `Attack_Priorities`,
   `Category_Exclusions`, `Hard_Point_Priorities`. A ship uses its own set (the A-Wing has `Fighter`, so interceptors
   prefer bombers). The `<set>_Attack_Move` variants (hardpoint sniping order: shield generator, engines, hangar,
   weapons) exist but the Remake scripts only assign them to ground task forces; `BattleConfig::attack_move_sets`
@@ -458,6 +462,22 @@ stays as a derived figure for bars and decisions (`ShipDef::hull` times the shar
   (`ShipDef::bearing_dps`, from the arcs; a damaged ship counts only the guns it still has), stop with an arrival speed
   profile (no overshoot) and restart at 1.12 x the standoff. Fighters and bombers are fired at but not chased unless
   ordered.
+* Data, chase ranges (`Units/Space/_Default_Base.xml`: `Vessel_Base` `Idle_Chase_Range` 0, `Guard_Chase_Range` 1000,
+  `Attack_Move_Response_Range` 400; the Remake squadrons 1500 / 1500 / 1500, which their craft fly by). The data gives
+  only the numbers; what each measures from is an estimate:
+  * `Idle_Chase_Range`: an idle aggressive unit takes up only enemies within that range plus its own reach
+    (`max(weapon range, Targeting_Max_Attack_Distance)`) of where it last rested (its carrier for a launched craft) and
+    pursues them; 0 (all corvettes, frigates and capitals) holds the place as before. An idle squadron now attacks what
+    comes near instead of waiting by its carrier.
+  * `Guard_Chase_Range`: a guard closes on its target but never goes further than that from the guarded place; at the
+    limit it stops and fires at what it reaches, with nothing to fight it returns. Replaces the estimate "engage within
+    max(1.3 x weapon range, 2500) of the ship or 4500 of the place".
+  * `Attack_Move_Response_Range`: a player's attack-move takes up enemies within that range plus its own reach (before:
+    any enemy the side saw). The Remake's own tooltip (`TEXT_TOOLTIP_ATTACK_MOVE_01`) says its attack-move button
+    issues a plain move. The AI plan's attack-moves (`ai.rs`, the free store's `Service_Attack`) keep taking up every
+    enemy they see (estimate: they are not that order).
+  * Not modelled: `Autonomous_Move_Extension_Vs_Attacker` (only the squadrons have it, 1500, the same as their idle
+    chase; no ship records who attacked it).
 * Orders: `Move`, `AttackMove`, `Attack(ship)`, `AttackHardpoint(ship, hardpoint)`, `Stop`, `Retreat`, stances
   Aggressive / Defensive / HoldFire.
 * Estimate: a broadside approach curve starts at 2.2 x standoff with a tangential offset of 0.45 x standoff; stop

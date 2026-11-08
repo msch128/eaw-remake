@@ -678,6 +678,8 @@ pub struct ShipDef {
     pub asteroid_field_damage: bool,
     /// A `Behavior` / `SpaceBehavior` copy lists `NEBULA` (`Vessel_Base` and `Spacecraft_Base` both give it).
     pub nebula: bool,
+    /// Chase and target rules.
+    pub chase: ChaseRules,
 }
 
 impl ShipDef {
@@ -868,6 +870,43 @@ impl PrioritySet {
     pub fn weight(&self, class: TargetClass, golan: bool) -> f32 {
         let w = self.weights[class as usize];
         if golan { w.min(self.weights[9]) } else { w }
+    }
+}
+
+/// Chase and target rules of a unit type (`Idle_Chase_Range`, `Guard_Chase_Range`, `Attack_Move_Response_Range`,
+/// `Targeting_Stickiness_Time_Threshold`). `None` where the type has no value (a negative value counts as none); the members of a
+/// squadron take the squadron's ranges (`Vessel_Base`: 0 / 1000 / 400 / 5; the Remake squadrons: 1500 / 1500 / 1500).
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct ChaseRules {
+    /// `Idle_Chase_Range`: how far from where it rests an idle unit pursues an enemy.
+    pub idle: Option<f32>,
+    /// `Guard_Chase_Range`: how far from the guarded place a guarding unit pursues an enemy.
+    pub guard: Option<f32>,
+    /// `Attack_Move_Response_Range`: how far beyond its own reach a unit on an attack-move takes up an enemy.
+    pub attack_move: Option<f32>,
+    /// `Targeting_Stickiness_Time_Threshold`: seconds a unit keeps its target before it switches to a better one.
+    pub stickiness: Option<f32>,
+}
+
+impl ChaseRules {
+    fn read(field: impl Fn(&str) -> Option<f32>) -> Self {
+        let get = |tag: &str| field(tag).filter(|v| *v >= 0.0);
+        ChaseRules {
+            idle: get("idle_chase_range"),
+            guard: get("guard_chase_range"),
+            attack_move: get("attack_move_response_range"),
+            stickiness: get("targeting_stickiness_time_threshold"),
+        }
+    }
+
+    /// `self` with the values it lacks taken from `other`.
+    fn or(self, other: ChaseRules) -> Self {
+        ChaseRules {
+            idle: self.idle.or(other.idle),
+            guard: self.guard.or(other.guard),
+            attack_move: self.attack_move.or(other.attack_move),
+            stickiness: self.stickiness.or(other.stickiness),
+        }
     }
 }
 
@@ -1324,6 +1363,15 @@ impl Catalog {
             let def = cat.ship_def(s, &hp_defs[i], model.map(|m| &**m), &attach, &data.objects);
             cat.ships.push(def);
         }
+        // The chase ranges sit on the squadron object; its craft fly by them.
+        for sq in 0..cat.ships.len() {
+            let (rules, members) = (cat.ships[sq].chase, cat.ships[sq].members.clone());
+            for (m, _) in members {
+                if let Some(d) = cat.ships.get_mut(m as usize) {
+                    d.chase = d.chase.or(rules);
+                }
+            }
+        }
         cat
     }
 
@@ -1740,6 +1788,7 @@ impl Catalog {
         ShipDef {
             asteroid_field_damage: behaves("ASTEROID_FIELD_DAMAGE"),
             nebula: behaves("NEBULA"),
+            chase: ChaseRules::read(|t| unit_field(t).and_then(alamo_data::xml::parse_num)),
             name,
             text_id,
             heals,

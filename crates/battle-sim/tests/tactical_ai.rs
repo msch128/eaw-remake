@@ -651,7 +651,7 @@ fn an_ai_defender_with_a_fair_chance_fights_on_after_losing_its_station() {
 fn an_ai_attacker_that_is_losing_badly_retreats() {
     // An AI fleet (6 MC-80s, 4 Nebulon-Bs: force 11700) jumps in 4500 units from a planet held by an Executor and a star base (67250): the
     // attacker leaves once the retreat countdown allows (60 s) instead of after the 120 s of `Retreat_From_Space`. Main f9710b3: order at 80 s,
-    // 4 of the 10 ships lost.
+    // 4 of the 10 ships lost. Since the Executor's and the base's idle squadrons pursue (`Idle_Chase_Range` 1500), 6 are lost and 4 get away.
     let Some((data, fs)) = load() else { return };
     let cat = Arc::new(Catalog::build(&data, Some(&fs), &["Executor_Star_Dreadnought", "MC-80_Star_Cruiser", "Nebulon_B_Frigate", "Empire_Star_Base_2"]));
     let r = retreat_run(&cat, 0, &[("MC-80_Star_Cruiser", 6), ("Nebulon_B_Frigate", 4)], &[("Executor_Star_Dreadnought", 1)], &["Empire_Star_Base_2"], Some(4500.0), 1);
@@ -659,7 +659,7 @@ fn an_ai_attacker_that_is_losing_badly_retreats() {
     let (at, ratio) = r.ordered.expect("the attacker retreats");
     assert!(at <= 64.0, "{at:.0} s");
     assert!(ratio >= 2.95, "{ratio:.2}");
-    assert!(r.big.2 * 2 >= r.big.0, "most of the fleet gets away: {:?}", r.big);
+    assert!(r.big.2 * 5 >= r.big.0 * 2, "at least 4 of 10 get away: {:?}", r.big);
 }
 
 #[test]
