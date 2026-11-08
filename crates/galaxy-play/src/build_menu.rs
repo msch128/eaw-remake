@@ -336,12 +336,13 @@ impl BuildMenu {
             }
             let Some(a) = availability(world.check_build_unit(galaxy, faction, planet, u)).map(|a| shown_requirement(world, names, a)) else { continue };
             let ut = &world.units[u as usize];
+            let (cost, time) = world.unit_cost(galaxy, faction, planet, u);
             options.push(BuildOption {
                 category: category_of(world, u),
                 target: BuildTarget::Unit(u),
                 name: names.unit(u).to_owned(),
-                cost: ut.cost,
-                build_seconds: ut.build_time * scale,
+                cost,
+                build_seconds: time * scale,
                 population: ut.population,
                 availability: a,
                 reasons: Vec::new(),

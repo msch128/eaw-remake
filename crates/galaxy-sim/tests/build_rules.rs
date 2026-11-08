@@ -296,3 +296,49 @@ fn planet_star_base_caps_come_from_the_planet_data() {
     bare_planet(&mut sim, empire, open, 1);
     assert_ne!(w.check_build_structure(sim.galaxy(), empire, open, y3), Err(CommandError::RequirementsNotMet("planet".into())));
 }
+
+#[test]
+fn corellia_galaxy_wide_corvette_production_boost() {
+    let Some(data) = load() else { return };
+    let mut sim = new_sim(&data);
+    let w = sim.world().clone();
+    let rebel = w.faction_id("Rebel").unwrap();
+    let corellia = w.planet_id("Corellia_WW").expect("Corellia in campaign");
+    let alderaan = w.planet_id("Alderaan_WW").expect("Alderaan in campaign");
+
+    // Verify Corellia's parsed production mod
+    let cor_mods: Vec<_> = w.planets[corellia as usize].prod_mods.iter().filter(|m| m.galaxy_wide).collect();
+    assert_eq!(cor_mods.len(), 1, "Corellia has one galaxy-wide production mod");
+    assert_eq!(cor_mods[0].time, 0.25, "Corellia corvette build time reduction is 0.25");
+    assert_eq!(cor_mods[0].stacking, 9, "Corellia stacking category is 9");
+
+    let cr90 = w.unit_id("CR-90_Corvette").expect("CR-90 Corvette");
+    let mc80 = w.unit_id("MC-80_Star_Cruiser").expect("MC-80 Star Cruiser");
+
+    bare_planet(&mut sim, rebel, alderaan, 2);
+
+    // Without owning Corellia: base build time (15s)
+    sim.set_planet_owner(corellia, None);
+    let (_cost0, time0) = w.unit_cost(sim.galaxy(), rebel, alderaan, cr90);
+    assert_eq!(time0, 15.0, "Base CR-90 build time is 15s");
+
+    // Owning Corellia: 25% time reduction at Alderaan for CR-90 (15s * 0.75 = 11.25s)
+    sim.set_planet_owner(corellia, Some(rebel));
+    let (_cost1, time1) = w.unit_cost(sim.galaxy(), rebel, alderaan, cr90);
+    assert!((time1 - time0 * 0.75).abs() < 0.01, "CR-90 build time at Alderaan reduced by 25%: {} -> {}", time0, time1);
+
+    // Non-corvette unit (MC-80) does not get Corellia's discount
+    let (_mc_cost0, mc_time0) = w.unit_cost(sim.galaxy(), rebel, alderaan, mc80);
+    sim.set_planet_owner(corellia, None);
+    let (_mc_cost1, mc_time1) = w.unit_cost(sim.galaxy(), rebel, alderaan, mc80);
+    assert_eq!(mc_time0, mc_time1, "MC-80 does not receive corvette time reduction");
+
+    // Verify Command::BuildUnit at Alderaan queues with discounted build time when owning Corellia
+    sim.set_planet_owner(corellia, Some(rebel));
+    assert!(sim.add_structure(alderaan, w.structure_id("R_Shipyard_1").unwrap()));
+    sim.galaxy_mut().factions[rebel as usize].credits = 10000.0;
+    sim.apply(Command::BuildUnit { faction: rebel, planet: alderaan, unit: cr90 }).unwrap();
+    let q = &sim.galaxy().planets[alderaan as usize].queues[0];
+    let build_time = q.front().expect("CR-90 in unit queue").remaining;
+    assert!((build_time - 11.25).abs() < 0.01, "queued CR-90 build time is 11.25s: got {}", build_time);
+}

@@ -198,6 +198,30 @@ impl World {
                 add(&self.structures[s as usize].prod_mods);
             }
         }
+        // Galaxy-wide abilities from other owned planets, starbases, or structures (e.g. Corellia corvette build speed)
+        for (pl_id, other_ps) in galaxy.planets.iter().enumerate() {
+            if other_ps.owner == Some(faction) && pl_id != planet as usize {
+                for m in &self.planets[pl_id].prod_mods {
+                    if m.galaxy_wide {
+                        add(std::slice::from_ref(m));
+                    }
+                }
+                if let Some(sb) = other_ps.starbase {
+                    for m in &self.starbases[sb as usize].prod_mods {
+                        if m.galaxy_wide {
+                            add(std::slice::from_ref(m));
+                        }
+                    }
+                }
+                for &s in &other_ps.structures {
+                    for m in &self.structures[s as usize].prod_mods {
+                        if m.galaxy_wide {
+                            add(std::slice::from_ref(m));
+                        }
+                    }
+                }
+            }
+        }
         let apply = |base: f32, m: BTreeMap<i32, f32>, floor: f32| m.values().fold(base, |c, r| c * (1.0 - r.min(1.0))).max(base * floor);
         (apply(ut.cost, price, 0.0), apply(ut.build_time, time, 0.01))
     }

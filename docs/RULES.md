@@ -116,7 +116,8 @@ every owned planet, the planet's `Additional_Population_Capacity`, its star base
   "13K"); the script rule is the truth.
 * Production discounts: per `Stacking_Category` the strongest ability applies, categories multiply (estimate). A
   hero's or ship's discount applies galaxy-wide while any fleet of the owner holds it (estimate); a structure's
-  discount applies at its own planet. Time floor 1% of the list time (estimate).
+  or planet's discount applies at its own planet, unless flagged `Galaxy_Wide` (e.g. Corellia's 25% corvette build
+  time reduction) which applies to all planets owned by the faction (data). Time floor 1% of the list time (estimate).
 * Capture bonus: `Planet_Capture_Bonus_Reward` (data) x `SimConfig::capture_bonus_scale` (1.0, estimate), once per
   planet and faction when the capture completes.
 
