@@ -289,3 +289,42 @@ fn a_broken_subjugator_turret_brings_reinforcements_to_the_attacker_entries() {
     let markers: Vec<usize> = got.iter().take(3).map(|e| nearest(b.ships[e.2[0] as usize].pos)).collect();
     assert_eq!(markers, vec![0, 1, 2]);
 }
+
+#[test]
+fn station_defence_fleet_scripts_are_switched_off_in_the_data() {
+    use alamo_fs::FileSource;
+    let Some((data, fs)) = load() else { return };
+    // `Buildings/Space/GC/Minors/Starbase.xml` and `Pirates/Starbase.xml` comment out every `Lua_Script` of the star bases.
+    let minors = ["CIS", "Republic", "CSA", "Hapan", "Mandalorian", "Warlords", "Cartels", "Sith"];
+    let mut bases: Vec<String> = minors.iter().flat_map(|m| [format!("Minor_Starbase_{m}"), format!("Minor_Starbase_{m}_2"), format!("Minor_Starbase_{m}_3")]).collect();
+    bases.extend(["Pirate_Starbase_Lv1".to_string(), "Pirate_Starbase_Lv2".to_string()]);
+    let refs: Vec<&str> = bases.iter().map(String::as_str).collect();
+    let cat = Catalog::build(&data, Some(&fs), &refs);
+    for b in &bases {
+        let id = cat.ship_id(b).unwrap_or_else(|| panic!("{b}"));
+        assert!(cat.ship(id).spawn_script.is_none(), "{b} has a spawn script");
+    }
+    // The scripts themselves read fine: switched back on, a base would roll one of its lists for the defender markers.
+    let script = |name: &str| parse_spawn_script(&String::from_utf8_lossy(&fs.read(&format!("Scripts/GameObject/{name}.lua")).unwrap())).unwrap();
+    let rolls = [
+        ("Cartels", [3, 3, 2]),
+        ("CIS", [4, 4, 4]),
+        ("CSA", [3, 5, 4]),
+        ("Hapan", [2, 3, 3]),
+        ("Mandalorians", [3, 3, 4]),
+        ("Republic", [4, 4, 4]),
+        ("Sith", [2, 3, 5]),
+        ("Warlords", [5, 5, 5]),
+    ];
+    for (faction, lists) in rolls {
+        for (level, n) in ["", "_Lvl2", "_Lvl3"].iter().zip(lists) {
+            let s = script(&format!("Reinforcements_Starbase_{faction}{level}"));
+            assert_eq!((s.choices.len(), s.marker.as_str(), s.faction.as_str()), (n, "Defending Forces Position", faction), "{faction}{level}");
+            assert!(s.choices.iter().all(|c| !c.is_empty()), "{faction}{level}: {:?}", s.choices);
+        }
+    }
+    let cis = script("Reinforcements_Starbase_CIS");
+    assert_eq!(cis.choices[1], ["Gozanti_Squadron_CIS", "Recusant_Destroyer_CIS"]);
+    let pirates = script("Reinforcements_Pirate_Base_Lv2");
+    assert_eq!(pirates.choices.iter().map(|c| c.join(",")).collect::<Vec<_>>(), ["Dreadnaught_Cruiser", "Victory_Destroyer", "Providence_Destroyer", "Nebulon_B_Frigate", "Corellian_Destroyer", "Acclamator"]);
+}
