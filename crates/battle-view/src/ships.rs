@@ -57,7 +57,7 @@ pub struct Dying {
     tumble: Vec3,
     next_boom: f32,
     radius: f32,
-    effect: &'static str,
+    pub effect: String,
     seed: u32,
 }
 
@@ -722,7 +722,13 @@ pub fn ship_events(
                 let seed = *ship ^ 0x9E37_79B9;
                 let mut s = seed;
                 let fighter = matches!(class, TargetClass::Fighter | TargetClass::Bomber);
-                let effect: &'static str = ship_death_effect(class);
+                let effect: String = visuals
+                    .ship(view.def)
+                    .death_effects
+                    .first()
+                    .filter(|s| !s.trim().is_empty())
+                    .cloned()
+                    .unwrap_or_else(|| ship_death_effect(class).to_string());
                 if fighter {
                     if let Some(spin) = visuals.ship(view.def).spin_away.as_ref() {
                         if lcg(&mut s) < spin.chance {
@@ -737,7 +743,7 @@ pub fn ship_events(
                             let pitch = (lcg(&mut s) - 0.5) * 4.0;
                             let yaw_spin = (lcg(&mut s) - 0.5) * 4.0;
                             let ang_vel = Vec3::new(pitch, yaw_spin, roll);
-                            let explosion = spin.explosion.clone().unwrap_or_else(|| effect.to_string());
+                            let explosion = spin.explosion.clone().unwrap_or_else(|| effect.clone());
                             commands.entity(e).insert(SpinningAway {
                                 time_left: spin.time,
                                 velocity,
@@ -750,7 +756,7 @@ pub fn ship_events(
                         }
                     }
                     commands.trigger(SpawnParticleEffect {
-                        particle: effect.into(),
+                        particle: effect,
                         position: sim_to_bevy(*pos),
                         normal: Vec3::Y,
                     });
@@ -961,14 +967,14 @@ pub fn update_dying(
                 * 1.4;
             let local = tf.rotation * offset;
             commands.trigger(SpawnParticleEffect {
-                particle: d.effect.into(),
+                particle: d.effect.clone(),
                 position: tf.translation + local,
                 normal: Vec3::Y,
             });
         }
         if d.age >= d.duration {
             commands.trigger(SpawnParticleEffect {
-                particle: d.effect.into(),
+                particle: d.effect.clone(),
                 position: tf.translation,
                 normal: Vec3::Y,
             });
@@ -2120,5 +2126,95 @@ mod tests {
         world.get_mut::<BreakoffProp>(e_prop).unwrap().timer = 0.0;
         world.run_system_once(update_breakoff_props).expect("finish update");
         assert!(world.get_entity(e_prop).is_err(), "breakoff prop entity despawns after lifetime");
+    }
+
+    #[test]
+    fn custom_death_explosions_used_for_ships_without_death_clone() {
+        use battle_sim::{Battle, BattleConfig, BattleSetup, Catalog, ProjDef, ShipDef, SideSetup, UnitSetup};
+        use bevy::ecs::system::RunSystemOnce;
+
+        let frigate_def1 = ShipDef { name: "frigate_custom".into(), class: TargetClass::Frigate, hull: 1000.0, radius: 80.0, population: 2, max_speed: 200.0, ..ShipDef::default() };
+        let frigate_def2 = ShipDef { name: "frigate_default".into(), class: TargetClass::Frigate, hull: 1000.0, radius: 80.0, population: 2, max_speed: 200.0, ..ShipDef::default() };
+        let catalog = std::sync::Arc::new(Catalog::from_defs(vec![frigate_def1, frigate_def2], vec![ProjDef { name: "laser".into(), ..ProjDef::default() }]));
+        let side = SideSetup {
+            name: "rebel".into(),
+            units: vec![
+                UnitSetup { ship: 0, count: 1, tag: 1 },
+                UnitSetup { ship: 1, count: 1, tag: 2 },
+            ],
+            structures: vec![],
+            ai: false,
+        };
+        let sim = crate::sim::SimHandle::spawn(Battle::new(BattleSetup { sides: vec![side], catalog: catalog.clone(), config: BattleConfig::default() }));
+        sim.request(1);
+        let cur = sim.fetch(0, true).0.expect("snapshot");
+        let ship0 = cur.ships[0].clone();
+        let ship1 = cur.ships[1].clone();
+
+        let mut ships = vec![crate::visuals::ShipVisual::default(); 2];
+        ships[0].death_effects = vec!["Custom_Frigate_Explosion".into()];
+        // ships[1] has empty death_effects (should fall back to class table)
+
+        let visuals = crate::visuals::VisualCatalog {
+            ships,
+            team_colors: vec![Color::WHITE; 1],
+            proj_detonate: vec![None],
+            proj_detonate_armor: vec![None],
+            proj_detonate_shield: vec![None],
+        };
+
+        let mut world = World::new();
+        world.init_resource::<crate::effects::BloomPulses>();
+        world.init_resource::<crate::effects::BeamArt>();
+        world.init_resource::<BattleViewSettings>();
+        world.init_resource::<Assets<Mesh>>();
+        world.init_resource::<Assets<StandardMaterial>>();
+        world.init_resource::<Assets<Image>>();
+
+        let view0 = ShipView { id: ship0.id, def: ship0.def, side: 0, hp_applied: vec![], bones: None, hp_parts: vec![], attitude: Attitude::default(), born: 0.0, visual_radius: 0.0, shown: true };
+        let view1 = ShipView { id: ship1.id, def: ship1.def, side: 0, hp_applied: vec![], bones: None, hp_parts: vec![], attitude: Attitude::default(), born: 0.0, visual_radius: 0.0, shown: true };
+
+        let e0 = world.spawn((view0, Transform::from_translation(Vec3::new(0.0, 0.0, 0.0)))).id();
+        let e1 = world.spawn((view1, Transform::from_translation(Vec3::new(100.0, 0.0, 0.0)))).id();
+
+        world.insert_resource(BattleRuntime {
+            sim,
+            catalog,
+            visuals: std::sync::Arc::new(visuals),
+            dt: 1.0 / 30.0,
+            clock: 0.0,
+            cur: Some(cur),
+            next: None,
+            alpha: 0.0,
+            fresh_events: vec![
+                Event::ShipDestroyed { ship: ship0.id, pos: ship0.pos },
+                Event::ShipDestroyed { ship: ship1.id, pos: ship1.pos },
+            ],
+            entities: HashMap::from([(ship0.id, e0), (ship1.id, e1)]),
+            dying: HashSet::new(),
+            request: None,
+            player_faction: None,
+            start_alive: vec![2],
+            retreat_countdown: 0.0,
+            unit_cap: 0,
+            no_spawn_radius: 0.0,
+            reinforce_clearance: 0.0,
+            arena_half: 10_000.0,
+            fog_of_war: false,
+            speed: 1.0,
+            framed: false,
+            reported: false,
+            minimap_planets: vec![],
+            minimap_props: vec![],
+            minimap_tint: Color::BLACK,
+        });
+
+        world.run_system_once(ship_events).expect("ship_events");
+
+        let dying0 = world.get::<Dying>(e0).expect("ship0 is dying");
+        assert_eq!(dying0.effect, "Custom_Frigate_Explosion");
+
+        let dying1 = world.get::<Dying>(e1).expect("ship1 is dying");
+        assert_eq!(dying1.effect, crate::visuals::ship_death_effect(TargetClass::Frigate));
     }
 }

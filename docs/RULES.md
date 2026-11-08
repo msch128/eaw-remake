@@ -814,6 +814,6 @@ Estimates and data that shape what the player sees and hears. Behaviour is in `b
   (`galaxy-play/src/carry.rs`).
 * Data: dying craft with `Spin_Away_On_Death` roll against `Spin_Away_On_Death_Chance` to spin out of control for `Spin_Away_On_Death_Time` seconds with `Spin_Away_On_Death_SFXEvent_Start_Die` before exploding into `Spin_Away_On_Death_Explosion`.
 * Data: destroyed hardpoints with `Death_Breakoff_Prop` spawn their break-off prop model, drifting along the prop's `Debris_Movement_Vector` (30 Hz tick scale to units/s) and tumbling along `Debris_Facing_Rotate_Vector` for their configured debris lifetime.
-* Estimate: death effects are chosen by ship class (`ship_events`), not by the unit's own `Death_Explosions`; the
-  hyperspace arrival flash is additive at 0.6 r (no tactical hyperspace effect exists in the data); fighters are drawn
+* Data: dying ships without a death clone play the unit's own `Death_Explosions` particle effect when defined, falling back to the class table when absent (`ship_events`).
+* Estimate: the hyperspace arrival flash is additive at 0.6 r (no tactical hyperspace effect exists in the data); fighters are drawn
   at their real model scale with a size floor of 3.6% of screen height.
