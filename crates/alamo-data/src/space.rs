@@ -1089,6 +1089,12 @@ impl GameObjects {
             k == "starbase" || STRUCTURE_KINDS.contains(&k.as_str())
         })
     }
+
+    /// The `Abilities` sub-objects of any object (inheritance resolved), also of kinds without a typed view such as the
+    /// `GenericHeroUnit` members of a `HeroCompany`. Empty if the object does not exist.
+    pub fn sub_abilities(&self, name: &str) -> Vec<SubAbility> {
+        self.resolve(name).map(|r| parse_sub_abilities(&r).0).unwrap_or_default()
+    }
 }
 
 #[cfg(test)]
@@ -1135,5 +1141,21 @@ mod tests {
         assert_eq!(s.hardpoints_of(&u.hardpoints).len(), 1);
         assert_eq!(s.projectile("p").unwrap().damage, 12.0);
         assert!(s.space_unit("HP_A").is_none());
+    }
+
+    #[test]
+    fn sub_abilities_of_an_untyped_object_follow_its_template() {
+        let s = store(
+            "<R>\
+             <GenericHeroUnit Name=\"Template\"><Abilities SubObjectList=\"Yes\">\
+             <Siphon_Credits_Ability Name=\"Siphon\"><Siphon_Duration_In_Cycles>5</Siphon_Duration_In_Cycles></Siphon_Credits_Ability>\
+             </Abilities></GenericHeroUnit>\
+             <GenericHeroUnit Name=\"Agent\"><Variant_Of_Existing_Type>Template</Variant_Of_Existing_Type></GenericHeroUnit></R>",
+        );
+        let subs = s.sub_abilities("Agent");
+        assert_eq!(subs.len(), 1);
+        assert_eq!(subs[0].kind, "Siphon_Credits_Ability");
+        assert_eq!(subs[0].fields.get("siphon_duration_in_cycles").map(String::as_str), Some("5"));
+        assert!(s.sub_abilities("Missing").is_empty());
     }
 }

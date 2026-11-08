@@ -149,6 +149,10 @@ pub fn describe_event(
                 None,
             ))
         }
+        Event::AgentUsed { faction, planet: p, unit } if me(*faction) => {
+            let what = if world.units.get(*unit as usize).is_some_and(|u| u.siphon.is_some()) { "is siphoning credits at" } else { "reports from" };
+            Some((NotificationKind::Campaign, format!("{} {what} {}.", names.unit(*unit), planet(*p)), Some(*p)))
+        }
         Event::FactionEliminated { faction } => Some((NotificationKind::Campaign, format!("{} has been eliminated.", names.faction(*faction)), None)),
         Event::Victory { faction } => Some((NotificationKind::Campaign, format!("{} wins the campaign.", names.faction(*faction)), None)),
         _ => None,

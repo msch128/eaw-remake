@@ -50,6 +50,13 @@ impl Galaxy {
                 }
             }
         }
+        // A field agent's report shows the planet's fleets (`See_Num_Fleets`, `See_Fleet_Contents`) while it runs.
+        for r in self.spy_reports.iter().filter(|r| self.is_friend(viewer, r.faction)) {
+            let s = if r.see.fleet_contents { Sight::Detailed } else if r.see.num_fleets { Sight::Seen } else { continue };
+            if let Some(o) = out.get_mut(r.planet as usize) {
+                *o = (*o).max(s);
+            }
+        }
         out
     }
 

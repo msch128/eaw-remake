@@ -125,6 +125,9 @@ pub struct PlanetState {
     pub gamble: f32,
     /// Game time of the next gambling evaluation for structures.
     pub gamble_at: f64,
+    /// A credit siphon of an enemy agent running here (see [`crate::agents`]).
+    #[serde(default)]
+    pub siphon: Option<crate::agents::ActiveSiphon>,
     /// Current income swing of a gambling hero orbiting the planet (see `IncomeGamble`).
     pub hero_gamble: f32,
     /// Game time of the next gambling evaluation for heroes.
@@ -266,6 +269,9 @@ pub struct Galaxy {
     /// The galaxy AI is stopped (cheat).
     #[serde(default)]
     pub ai_paused: bool,
+    /// Running reports of field agents (see [`crate::agents`]).
+    #[serde(default)]
+    pub spy_reports: Vec<crate::agents::SpyReport>,
     pub(crate) next_ship_id: u64,
     pub(crate) next_fleet_id: FleetId,
     pub(crate) next_battle_id: u32,
@@ -475,6 +481,14 @@ pub enum Command {
         /// Unit type to sell (one ship of it leaves the fleet).
         unit: UnitTypeId,
     },
+    /// Use the credit siphon of an agent of `fleet` at the hostile planet the fleet orbits (the agent is used up; see [`crate::agents`] and
+    /// [`crate::World::siphon_ready`]). Field agents need no order: they report as soon as they reach a hostile planet.
+    ActivateAgent {
+        /// Issuing faction.
+        faction: FactionId,
+        /// Fleet that holds the agent.
+        fleet: FleetId,
+    },
     /// A cheat of the F2 menu (see [`crate::cheats`]); marks the game as cheated.
     Cheat {
         /// Issuing faction.
@@ -631,6 +645,15 @@ pub enum Event {
         /// Ships lost in orbit.
         ships_lost: u32,
     },
+    /// An agent used its ability and left the map: a smuggler or underboss started siphoning `planet`, a field agent reported on it.
+    AgentUsed {
+        /// Owner of the agent.
+        faction: FactionId,
+        /// Target planet.
+        planet: PlanetId,
+        /// Agent type.
+        unit: UnitTypeId,
+    },
     /// A faction lost its last planet and fleet.
     FactionEliminated {
         /// Faction.
@@ -671,6 +694,7 @@ impl Galaxy {
             merged_into: Default::default(),
             cheated: false,
             ai_paused: false,
+            spy_reports: Vec::new(),
             next_ship_id: 1,
             next_fleet_id: 1,
             next_battle_id: 1,
@@ -875,6 +899,10 @@ impl Galaxy {
             p.destroyed.hash(&mut h);
             p.gamble.to_bits().hash(&mut h);
             p.hero_gamble.to_bits().hash(&mut h);
+            // Only when present, so the checkpoints of older saves stay valid.
+            if let Some(s) = &p.siphon {
+                (s.by, s.agent, s.share.to_bits(), s.cycles_left, s.cycle_end.to_bits()).hash(&mut h);
+            }
             for q in &p.queues {
                 for it in q {
                     it.remaining.to_bits().hash(&mut h);
@@ -907,6 +935,9 @@ impl Galaxy {
             fl.slot.hash(&mut h);
         }
         (self.cheated, self.ai_paused).hash(&mut h);
+        for r in &self.spy_reports {
+            (r.faction, r.planet, r.until.to_bits(), r.see).hash(&mut h);
+        }
         h.finish()
     }
 }

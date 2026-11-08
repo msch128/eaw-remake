@@ -237,6 +237,9 @@ impl World {
         if self.starbase_level(galaxy, planet) < ut.req_starbase {
             return Err(CommandError::RequirementsNotMet(format!("star base level {}", ut.req_starbase)));
         }
+        if self.ground_base_level(galaxy, planet) < ut.req_ground_base {
+            return Err(CommandError::RequirementsNotMet(format!("ground base level {}", ut.req_ground_base)));
+        }
         if let Some(missing) = self.missing_structures(ps, &ut.req_structures) {
             return Err(CommandError::RequirementsNotMet(missing));
         }
@@ -460,7 +463,14 @@ impl World {
             let Some(o) = ps.owner else { continue };
             let o = o as usize;
             owned[o] += 1;
-            income[o] += self.planet_income(galaxy, i as PlanetId) as f64;
+            let planet_income = self.planet_income(galaxy, i as PlanetId) as f64;
+            income[o] += planet_income;
+            // An enemy agent's siphon diverts its share of the planet's income (see `crate::agents`).
+            if let Some(s) = ps.siphon.filter(|s| (s.by as usize) < n && planet_income > 0.0) {
+                let taken = planet_income * f64::from(s.share);
+                income[o] -= taken;
+                income[s.by as usize] += taken;
+            }
             cap[o] += self.planets[i].population_capacity;
             if let Some(sb) = ps.starbase {
                 cap[o] += self.starbases[sb as usize].population_capacity;

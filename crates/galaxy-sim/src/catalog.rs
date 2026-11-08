@@ -11,7 +11,7 @@ fn key(s: &str) -> String {
 }
 
 /// `Required_Special_Structures` as groups: names separated by whitespace or commas are all required, names joined by `|` are alternatives.
-fn parse_requirement(raw: &str) -> Vec<Vec<String>> {
+pub(crate) fn parse_requirement(raw: &str) -> Vec<Vec<String>> {
     let mut groups: Vec<Vec<String>> = Vec::new();
     let mut join = false;
     for tok in raw.replace('|', " | ").split(|c: char| c.is_whitespace() || c == ',').filter(|t| !t.is_empty()) {
@@ -29,7 +29,7 @@ fn parse_requirement(raw: &str) -> Vec<Vec<String>> {
 }
 
 /// A name list (`Required_Planets`): separated by whitespace, commas or `|`.
-fn name_list(raw: &str) -> Vec<String> {
+pub(crate) fn name_list(raw: &str) -> Vec<String> {
     raw.split(|c: char| c.is_whitespace() || c == ',' || c == '|').filter(|t| !t.is_empty()).map(str::to_string).collect()
 }
 
@@ -198,6 +198,9 @@ fn unit_from_def(def: &SpaceUnitDef, combat: CombatStats, objects: &alamo_data::
         planet_destroyer: def.sub_abilities.iter().any(|a| a.kind.eq_ignore_ascii_case("planet_destruction_ability")),
         galactic_stealth: def.sub_abilities.iter().any(|a| a.kind.eq_ignore_ascii_case("galactic_stealth_ability")),
         system_spy: def.sub_abilities.iter().any(|a| a.kind.eq_ignore_ascii_case("system_spy_ability")),
+        spy: crate::agents::spy_ability(&def.sub_abilities, &def.fields),
+        siphon: None,
+        req_ground_base: def.fields.get("required_ground_base_level").and_then(|v| v.trim().parse().ok()).unwrap_or(0),
         upkeep: def.upkeep(),
         income_pct: def.income_pct(),
         gamble: def.sub_abilities.iter().find(|a| a.kind.eq_ignore_ascii_case("planet_income_gambling_ability")).map(|a| {
@@ -292,6 +295,7 @@ impl World {
                     && (yes("build_tab_space_station") || yes("build_tab_special_structures")),
                 combat,
                 prod_mods: production_mods(&def.sub_abilities),
+                spy: crate::agents::spy_ability(&def.sub_abilities, &def.fields),
             });
         }
         for i in 0..self.structures.len() {
@@ -396,6 +400,7 @@ impl World {
         }
         self.add_vessel_upgrades(data);
         self.add_dummy_purchases(data);
+        self.add_agents(data);
         self.classify_ground_structures(&struct_raw);
 
         // Star bases.
@@ -510,7 +515,7 @@ impl World {
     }
 
     /// Resolves `Required_Special_Structures` groups; the flag is false if a group has no structure that exists at all.
-    fn resolve_requirement(&self, groups: &[Vec<String>]) -> (Vec<Vec<StructureTypeId>>, bool) {
+    pub(crate) fn resolve_requirement(&self, groups: &[Vec<String>]) -> (Vec<Vec<StructureTypeId>>, bool) {
         let mut out = Vec::new();
         let mut ok = true;
         for g in groups {
@@ -525,7 +530,7 @@ impl World {
     }
 
     /// Resolves `Required_Planets`: any one listed planet suffices, so only a list without a single planet of this galaxy blocks the item.
-    fn resolve_planets(&self, names: &[String]) -> (Vec<PlanetId>, bool) {
+    pub(crate) fn resolve_planets(&self, names: &[String]) -> (Vec<PlanetId>, bool) {
         let ids: Vec<PlanetId> = names.iter().filter_map(|n| self.planet_index.get(&key(n)).copied()).collect();
         let ok = names.is_empty() || !ids.is_empty();
         (ids, ok)

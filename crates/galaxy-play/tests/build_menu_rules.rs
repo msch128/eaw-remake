@@ -210,3 +210,31 @@ fn a_full_queue_does_not_reveal_items_of_a_higher_tech_level() {
     assert!(menu.options.iter().any(|o| o.availability == Availability::Full), "the queue is full");
     assert_eq!(listed(&sim), 0, "a full queue lists no item of a higher tech level, locked item or hero of Tech_Level 99");
 }
+
+#[test]
+fn the_smuggler_is_on_the_rebel_menu_and_names_the_ground_base_level_it_lacks() {
+    let Some(install) = GameInstall::detect() else { return };
+    if !install.mod_data("1770851727").is_dir() {
+        eprintln!("skipping: Remake workshop mod not found");
+        return;
+    }
+    let data = load_galaxy(&GameFs::for_mod(&install, Some("1770851727")).unwrap()).0;
+    let campaign = data.campaign("GC_Full_Web_Way_Rebel").unwrap();
+    let mut sim = Sim::new(&data, campaign, SimConfig { victory_enabled: false, ..SimConfig::default() }).unwrap();
+    let w = sim.world().clone();
+    let names = PlayCatalog::from_data(&w, &data);
+    let rebel = w.faction_id("Rebel").unwrap();
+    let yavin = w.planet_id("Yavin_WW").unwrap();
+    let smuggler = w.unit_id("Rebel_Smuggler_Team").unwrap();
+    sim.add_credits(rebel, 1.0e6);
+    let menu = BuildMenu::for_planet(&w, sim.galaxy(), &names, rebel, yavin).expect("menu");
+    let entry = menu.options.iter().find(|o| o.target == BuildTarget::Unit(smuggler)).expect("the smuggler is offered");
+    assert_eq!((entry.cost, entry.build_seconds, entry.population, entry.availability.clone()), (500.0, 60.0, 1, Availability::Available));
+    assert_eq!(names.unit(smuggler), "Allied Smuggler");
+    // Without ground structures the planet has ground base level 0.
+    sim.galaxy_mut().planets[yavin as usize].structures.retain(|&s| w.structures[s as usize].orbital);
+    let menu = BuildMenu::for_planet(&w, sim.galaxy(), &names, rebel, yavin).expect("menu");
+    let entry = menu.options.iter().find(|o| o.target == BuildTarget::Unit(smuggler)).expect("still listed, greyed");
+    assert!(!entry.availability.is_available());
+    assert!(entry.reasons.iter().any(|r| r == "Required : Ground Base Level 1"), "{:?}", entry.reasons);
+}

@@ -278,6 +278,43 @@ build-menu filters, not a start mode. The mode is this project's own:
   The Rebel space build tab offers it at tech 4, with a level-1 star base, `R_Research_Institute`, and a build limit of 1
   current and 1 lifetime. Finishing it spawns no ship; the construct notify is what grants the shields.
 
+## 1.14 Agents (`agents.rs`)
+
+* Data: agents are the `HeroCompany` objects with `CategoryMask` `NonCombatHero` and `Build_Tab_Heroes` whose company units
+  carry a `Siphon_Credits_Ability` or a `System_Spy_Ability` (`Units/Ground/Non-Combat_Heroes.xml`): `Rebel_Smuggler_Team`
+  (Rebel), `Underboss_Team` (Underworld), `Rebel_Spy_Team` (Rebel); `ISB_Agent_Team` and `Underworld_Saboteur_Team` are
+  `Neutral`. Cost 500, 60 s, tech 0, population 1, `Required_Star_Base_Level` 0, `Required_Ground_Base_Level` 1, limits and
+  locks from the company; hyperspace speed from the `Company_Transport_Unit` (`Alliance_Shuttle`, `Shuttle_Tyderium`: 0.75);
+  `Galactic_Stealth_Ability` from the company unit. Smuggler: a Rebel outpost or Base One on the planet; underboss: a cantina
+  or criminal palace; field agent: the `Spy_Center`.
+* Data: the `Spy_Center` has `Affiliation` `<!--Rebel-->,Neutral`, so no Rebel can build it and the field agent is never
+  offered in the Remake unless a Spy Center stands on a Rebel planet.
+* Data: ground base level. `GroundBases.xml` says ground bases are no longer built and their level is kept in step with the
+  number of special structures; `World::ground_base_level` is the number of ground (non-orbital) structures on the planet,
+  capped at the highest `GroundBase` `Base_Level` (5). The build checks refuse a unit below its `Required_Ground_Base_Level`
+  ("Required : Ground Base Level"). The only structure with the tag (`Space_Mode_Ground_Rebel_Ion_Cannon`) has `Tech_Level`
+  99, so structures do not check it.
+* Estimate: agents are queued in the ship lane (the game has a ground queue this project does not model) and join the
+  idle fleet at the planet like ships. They move like any fleet.
+* Estimate: agents never fight (`Combat_Power_Value` 0, `Is_Stealth_Company`). A fleet of agents only is no party of a
+  battle, does not contest or capture a planet and does not blockade; in a mixed fleet the agents are not battle members
+  and stay when the warships are lost. A faction whose fleets are all agents and that owns no planet is eliminated and
+  its agents leave the map.
+* Credit siphon (data: `Min_Siphon_Percentage` 0.20, `Max_Siphon_Percentage` 0.30, `Siphon_Duration_In_Cycles` 5,
+  `Causes_Despawn`, `Activation_Style` `Ground_Activated`; the cycle is `Fiscal_Cycle_Time_In_Secs` 45 s of
+  `Gameconstants.xml`; text: "Siphons 20% to 30% credit income of an Imperial or Criminal system for 5 months").
+  `Command::ActivateAgent` (the galaxy's "Siphon credits at ..." button) at a planet owned by a hostile faction uses up
+  the agent; for 5 cycles of 45 s a share of the planet's income goes to the agent's faction instead of the owner.
+  Estimates: the share is drawn from the galaxy RNG at the start and at every new cycle; the siphon runs on without the
+  agent and ends early when the planet is no longer a hostile faction's; one siphon per planet (the Remake AI's
+  `Suitable_Smuggler_Target`: "Can't have multiple smugglers on a target"). "Ground_Activated" (landing the agent) is the
+  order, as there is no ground layer.
+* Field agent (data: `Probe_Droid_System_Spy`, `Galactic_Automatic`, `Duration_In_Secs` 60, `Causes_Despawn`, `See_*`
+  flags): when it orbits a planet of a hostile faction it is used up and its faction gets a spy report on that planet for
+  60 s (`Galaxy::spy_reports`, saved). Estimate: one report per planet and faction at a time.
+* Not modelled: the AI does not recruit or use agents; agents cannot be caught (`AntiStealthEffectiveness` in the AI
+  equations); `Neutralize_Hero_Ability` of the neutral ISB agent.
+
 # Part 2: Space battles (`battle-sim`)
 
 Everything is derived from the Remake data plus the `.alo` models for hardpoint positions. Values the engine defines

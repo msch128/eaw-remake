@@ -188,7 +188,7 @@ impl Plugin for PlayUiPlugin {
             .add_systems(Update, (result_return, result_scroll))
             .add_systems(
                 Update,
-                (track_game_end, force_end_script, show_end_dialog, end_dialog_result, superweapon_button, superweapon_dialog, explode_on_destroy, expire_explosions)
+                (track_game_end, force_end_script, show_end_dialog, end_dialog_result, superweapon_button, superweapon_dialog, siphon_button, explode_on_destroy, expire_explosions)
                     .chain()
                     .run_if(resource_exists::<PlayBridge>.and_then(resource_exists::<SimState>)),
             )
@@ -2159,6 +2159,68 @@ struct SuperweaponLabel;
 /// Pending confirmation: the dialog entity and the planet it is about.
 #[derive(Resource, Default)]
 struct SuperweaponAsk(Option<(Entity, galaxy_sim::PlanetId)>);
+
+/// The "siphon credits" button of a selected fleet whose smuggler or underboss orbits an enemy planet; it holds that fleet.
+#[derive(Component)]
+struct SiphonButton(u32);
+
+/// First selected fleet of the player whose agent can start a credit siphon where it is (`World::siphon_ready`), with the planet.
+fn siphon_target(state: &SimState, player: &PlayerFaction, selection: &PlayerSelection) -> Option<(u32, galaxy_sim::PlanetId)> {
+    let me = player.0?;
+    let g = state.galaxy();
+    selection.fleets.iter().find_map(|&id| {
+        let f = g.fleets.get(&id).filter(|f| f.owner == me)?;
+        state.world.siphon_ready(g, id).ok()?;
+        Some((id, f.planet()?))
+    })
+}
+
+/// Shows the siphon button above the superweapon button's place and sends [`PlayAction::ActivateAgent`] on a click.
+fn siphon_button(
+    mut commands: Commands,
+    state: Res<SimState>,
+    player: Res<PlayerFaction>,
+    selection: Res<PlayerSelection>,
+    existing: Query<(Entity, &SiphonButton)>,
+    interaction: Query<(&Interaction, &SiphonButton), Changed<Interaction>>,
+    mut actions: MessageWriter<PlayAction>,
+) {
+    let target = siphon_target(&state, &player, &selection);
+    let shown = existing.iter().next().map(|(e, b)| (e, b.0));
+    if shown.map(|s| s.1) != target.map(|t| t.0) {
+        if let Some((e, _)) = shown {
+            commands.entity(e).despawn();
+        }
+        if let Some((fleet, p)) = target {
+            let text = format!("Siphon credits at {}", state.world.planets[p as usize].display_name);
+            commands
+                .spawn((
+                    SiphonButton(fleet),
+                    Button,
+                    PlayHud,
+                    GalaxyEntity,
+                    Node {
+                        position_type: PositionType::Absolute,
+                        bottom: Val::Px(440.0),
+                        left: Val::Px(40.0),
+                        padding: UiRect::axes(Val::Px(14.0), Val::Px(8.0)),
+                        border: UiRect::all(Val::Px(1.0)),
+                        ..default()
+                    },
+                    BackgroundColor(Color::srgba(0.08, 0.12, 0.2, 0.95)),
+                    BorderColor::all(Color::srgb(0.5, 0.7, 1.0)),
+                ))
+                .with_children(|b| {
+                    b.spawn(text_bundle(&text, 18.0, Color::WHITE));
+                });
+        }
+    }
+    for (i, b) in &interaction {
+        if *i == Interaction::Pressed {
+            actions.write(PlayAction::ActivateAgent(b.0));
+        }
+    }
+}
 
 /// Planet the selected fleets can fire at right now (armed fleet in orbit, planet destroyable, weapon ready).
 fn superweapon_target(state: &SimState, player: &PlayerFaction, selection: &PlayerSelection) -> Option<(galaxy_sim::PlanetId, Result<(), galaxy_sim::DestroyRefusal>)> {

@@ -172,6 +172,11 @@ pub fn handle_actions(
                     state.driver.send_command(Command::DestroyPlanet { faction: h, planet: *planet });
                 }
             }
+            PlayAction::ActivateAgent(fleet) => {
+                if let Some(h) = player.0 {
+                    state.driver.send_command(Command::ActivateAgent { faction: h, fleet: *fleet });
+                }
+            }
             PlayAction::Save(path) => state.driver.save(path.clone()),
             PlayAction::Load(path) => state.driver.load(path.clone()),
             PlayAction::SelectPlanet(p) => selection.planet = *p,

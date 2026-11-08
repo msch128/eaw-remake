@@ -11,6 +11,8 @@ pub enum Unmet {
     TechLevel(i32),
     /// The planet's star base is below `Required_Star_Base_Level`.
     StarBaseLevel(i32),
+    /// The planet's ground base level ([`World::ground_base_level`]) is below `Required_Ground_Base_Level`.
+    GroundBaseLevel(i32),
     /// None of these structures (alternatives, `A | B`) stands on the planet.
     Structures(Vec<StructureTypeId>),
     /// The item can only be built on these planets (`Required_Planets`) and this is not one of them.
@@ -38,6 +40,9 @@ impl World {
         }
         if self.starbase_level(galaxy, planet) < ut.req_starbase {
             out.push(Unmet::StarBaseLevel(ut.req_starbase));
+        }
+        if self.ground_base_level(galaxy, planet) < ut.req_ground_base {
+            out.push(Unmet::GroundBaseLevel(ut.req_ground_base));
         }
         out.extend(self.unmet_structures(ps, &ut.req_structures, false));
         if let UnitRole::Upgrade { from, .. } = ut.role

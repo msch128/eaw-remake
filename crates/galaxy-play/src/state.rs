@@ -363,6 +363,9 @@ pub enum PlayAction {
     /// Fire the superweapon (Death Star, Galaxy Gun) of the player's fleet orbiting `planet`; answered by a `PlanetDestroyed` notification.
     /// Whether a planet can be fired at: `PlanetInfo::destroyable` and an armed fleet in orbit (`UnitType::planet_destroyer`).
     DestroyPlanet(PlanetId),
+    /// Start the credit siphon of the agent in the player's fleet `fleet` at the hostile planet it orbits ([`galaxy_sim::Command::ActivateAgent`]);
+    /// whether it can: [`galaxy_sim::World::siphon_ready`].
+    ActivateAgent(u32),
     /// Write a save file (needs [`PlayInit::scripted`]); answered by [`PlayEvent::SaveFinished`].
     Save(std::path::PathBuf),
     /// Replace the running game with a save of the same game; answered by [`PlayEvent::LoadFinished`]. Progress: `SimState::driver.load_progress()`.

@@ -90,6 +90,7 @@ impl Command {
             | Retreat { faction, .. }
             | SellStructure { faction, .. }
             | SellUnit { faction, .. }
+            | ActivateAgent { faction, .. }
             | Cheat { faction, .. } => Some(*faction),
         }
     }

@@ -43,6 +43,8 @@ pub struct RuleTexts {
     pub tech: String,
     /// `TEXT_REQUIRED_STAR_BASE_LEVEL` ("Required : Space Station Level"), the level follows.
     pub starbase: String,
+    /// `TEXT_REQUIRED_GROUND_BASE_LEVEL` ("Required : Ground Base Level"), the level follows.
+    pub ground_base: String,
     /// `TEXT_REQUIRED_SPECIAL_STRUCTURE` ("Required :"), the structure names follow.
     pub structure: String,
     /// `TEXT_REQUIRED_PLANET` ("Required :"), the planet names follow.
@@ -64,6 +66,7 @@ impl Default for RuleTexts {
         Self {
             tech: "Required : Tech Level".into(),
             starbase: "Required : Space Station Level".into(),
+            ground_base: "Required : Ground Base Level".into(),
             structure: "Required :".into(),
             planet: "Required :".into(),
             planet_restriction: "Cannot be built on this planet".into(),
@@ -84,6 +87,7 @@ impl RuleTexts {
         Self {
             tech: get("TEXT_REQUIRED_TECH_LEVEL", d.tech),
             starbase: get("TEXT_REQUIRED_STAR_BASE_LEVEL", d.starbase),
+            ground_base: get("TEXT_REQUIRED_GROUND_BASE_LEVEL", d.ground_base),
             structure: get("TEXT_REQUIRED_SPECIAL_STRUCTURE", d.structure),
             planet: get("TEXT_REQUIRED_PLANET", d.planet),
             planet_restriction: get("TEXT_REQUIRED_PLANET_RESTRICTION", d.planet_restriction),

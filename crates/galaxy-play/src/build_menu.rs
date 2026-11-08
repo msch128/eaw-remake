@@ -209,6 +209,7 @@ fn reasons_for(world: &World, galaxy: &Galaxy, names: &PlayCatalog, faction: Fac
         match u {
             Unmet::TechLevel(n) => out.push(format!("{} {n}", rules.tech)),
             Unmet::StarBaseLevel(n) => out.push(format!("{} {n}", rules.starbase)),
+            Unmet::GroundBaseLevel(n) => out.push(format!("{} {n}", rules.ground_base)),
             Unmet::Structures(group) => {
                 let mut shown: Vec<&str> = Vec::new();
                 for s in group {

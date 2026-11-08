@@ -328,6 +328,9 @@ pub enum UnitRole {
     },
     /// A `DUMMY_STARSHIP` purchase with no hull (`Rebel_Shield_Upgrade`). Completing it spawns nothing; the story hears `STORY_CONSTRUCT`.
     Dummy,
+    /// A non-combat agent (`HeroCompany` with a credit siphon or a system spy, see [`crate::agents`]): it travels in a fleet, takes no part in
+    /// battles and uses its ability ([`UnitType::siphon`], [`UnitType::spy`]) at a hostile planet.
+    Agent,
 }
 
 /// A buildable ship, squadron or research item.
@@ -382,6 +385,12 @@ pub struct UnitType {
     pub galactic_stealth: bool,
     /// Has a `System_Spy_Ability`: the fleet learns everything about the planet it is at.
     pub system_spy: bool,
+    /// The `System_Spy_Ability` (flags, duration, despawn, `Galactic_Influence_Range`), if any.
+    pub spy: Option<crate::agents::SpyAbility>,
+    /// The `Siphon_Credits_Ability` of an agent, if any.
+    pub siphon: Option<crate::agents::SiphonAbility>,
+    /// `Required_Ground_Base_Level` at the building planet (see [`World::ground_base_level`]).
+    pub req_ground_base: i32,
     /// Income change per week while the unit exists (negative = upkeep).
     pub upkeep: f32,
     /// Percentage modifier on base planet income while orbiting an owned planet (e.g. freighters, Errant Venture).
@@ -462,6 +471,8 @@ pub struct StructureType {
     pub combat: Option<CombatStats>,
     /// `Reduce_Production_*_Ability` entries that apply to builds at the planet it stands on.
     pub prod_mods: Vec<ProductionMod>,
+    /// The `System_Spy_Ability` of the structure (the Rebel `Spy_Center`'s spy network), if any.
+    pub spy: Option<crate::agents::SpyAbility>,
 }
 
 /// `Planet_Income_Gambling_Ability`: every `interval` seconds the planet's income changes by `max` (with probability `chance`) or `min` times its base value.
@@ -676,6 +687,10 @@ pub struct World {
     /// Ground units, heroes and other objects that are named in the data but not simulated
     /// (lower-case name to kind). Ships, structures and star bases are looked up in their catalogs.
     pub unsimulated: HashMap<String, ObjectKind>,
+    /// `Fiscal_Cycle_Time_In_Secs` (`Xml/Gameconstants.xml`, 45): the "cycle" of `Siphon_Duration_In_Cycles`.
+    pub fiscal_cycle_seconds: f32,
+    /// Highest `Base_Level` of the `GroundBase` objects (`GroundBases.xml`, 5): the cap of [`World::ground_base_level`].
+    pub ground_base_max: i32,
 }
 
 /// Why a world could not be built.
@@ -851,6 +866,9 @@ impl World {
                     Some((o.name.to_ascii_lowercase(), kind))
                 })
                 .collect(),
+            // Fallbacks only without the files; the Remake and the base game both say 45 s and levels 1 to 5.
+            fiscal_cycle_seconds: data.game_constants.get("fiscal_cycle_time_in_secs").and_then(|v| v.trim().parse().ok()).filter(|v: &f32| *v > 0.0).unwrap_or(45.0),
+            ground_base_max: data.objects.of_kind("groundbase").filter_map(|o| data.objects.resolve(&o.name)?.num::<i32>("base_level")).max().unwrap_or(5),
         };
         world.build_catalogs(data);
         world.build_tech_upgrades(data);

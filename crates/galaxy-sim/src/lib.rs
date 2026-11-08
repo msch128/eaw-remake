@@ -22,6 +22,7 @@
 pub mod ai;
 pub mod cheats;
 mod ground_up;
+pub mod agents;
 mod catalog;
 pub mod combat;
 mod api;
@@ -46,4 +47,5 @@ pub use world::{IncomeGamble,
 pub use production::{DestroyRefusal, PlanetCapacity, SlotUse};
 pub use requirements::Unmet;
 pub use sight::Sight;
+pub use agents::{ActiveSiphon, SiphonAbility, SpyAbility, SpyFlags, SpyReport};
 pub use tactical::{GroupKind, TacticalError, TacticalGroup, TacticalRequest, TacticalResult, TacticalSide, run_headless, run_headless_observed};

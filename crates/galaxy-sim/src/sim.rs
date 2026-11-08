@@ -223,6 +223,7 @@ impl Sim {
                 Ok(CommandOk::NewFleet(id))
             }
             Command::Cheat { faction, cheat } => crate::cheats::apply(&world, g, faction, cheat),
+            Command::ActivateAgent { faction, fleet } => self.activate_siphon(faction, fleet),
             Command::MoveFleetToSlot { .. } | Command::MoveFleetAroundToSlot { .. } | Command::TransferUnitsToSlot { .. } => unreachable!("rewritten to the plain commands above"),
             Command::SellStructure { faction, planet, structure } => {
                 let ps = g.planets.get_mut(planet as usize).ok_or(CommandError::Invalid)?;
@@ -599,6 +600,7 @@ impl Sim {
         self.produce(dt, events);
         self.move_fleets(dt, events);
         self.galaxy.normalize_slots(w);
+        self.run_agents(events);
         self.detect_battles(events);
         self.capture(dt, events);
         self.check_elimination(events);
@@ -719,7 +721,7 @@ impl Sim {
                 let fs = &mut self.galaxy.factions[owner as usize];
                 *fs.built_lifetime.entry(u).or_default() += 1;
                 match &w.units[u as usize].role {
-                    UnitRole::Ship => {
+                    UnitRole::Ship | UnitRole::Agent => {
                         add_units(&mut self.galaxy, owner, planet, u, 1);
                     }
                     UnitRole::Research(target) => {
@@ -844,7 +846,8 @@ impl Sim {
         let world = self.world.clone();
         let w = &*world;
         let mut by_planet: BTreeMap<PlanetId, Vec<FactionId>> = BTreeMap::new();
-        for f in self.galaxy.fleets.values() {
+        // Agents alone are no party (`Combat_Power_Value` 0, `Is_Stealth_Company`).
+        for f in self.galaxy.fleets.values().filter(|f| w.is_combat_fleet(f)) {
             if let FleetLocation::AtPlanet(p) = f.location {
                 let v = by_planet.entry(p).or_default();
                 if !v.contains(&f.owner) {
@@ -872,7 +875,7 @@ impl Sim {
                 .galaxy
                 .fleets
                 .values()
-                .filter(|f| f.location == FleetLocation::AtPlanet(p))
+                .filter(|f| f.location == FleetLocation::AtPlanet(p) && w.is_combat_fleet(f))
                 .map(|f| f.id)
                 .collect();
             let id = self.galaxy.next_battle_id;
@@ -983,7 +986,7 @@ impl Sim {
                 if f.owner != fac || f.location != FleetLocation::AtPlanet(p) {
                     continue;
                 }
-                for (&u, &c) in &f.units {
+                for (&u, &c) in f.units.iter().filter(|&(&u, _)| !w.is_agent(u)) {
                     let take = if is_passive_defense {
                         let t = c.min(passive_units_left);
                         passive_units_left = passive_units_left.saturating_sub(t);
@@ -1272,7 +1275,7 @@ impl Sim {
         let world = self.world.clone();
         let w = &*world;
         let mut present: BTreeMap<PlanetId, Vec<FactionId>> = BTreeMap::new();
-        for f in self.galaxy.fleets.values() {
+        for f in self.galaxy.fleets.values().filter(|f| w.is_combat_fleet(f)) {
             if let FleetLocation::AtPlanet(p) = f.location {
                 let v = present.entry(p).or_default();
                 if !v.contains(&f.owner) {
@@ -1359,8 +1362,11 @@ impl Sim {
                 continue;
             }
             let has_planet = self.galaxy.planets.iter().any(|p| p.owner == Some(f));
-            let has_fleet = self.galaxy.fleets.values().any(|fl| fl.owner == f);
+            let has_fleet = self.galaxy.fleets.values().any(|fl| fl.owner == f && self.world.is_combat_fleet(fl));
             if !has_planet && !has_fleet {
+                // Agents left on the map do not keep a faction alive; they leave with it.
+                self.galaxy.fleets.retain(|_, fl| fl.owner != f);
+                self.galaxy.sync_ships();
                 self.galaxy.factions[f as usize].eliminated = true;
                 events.push(Event::FactionEliminated { faction: f });
             }
@@ -1477,7 +1483,7 @@ impl World {
         {
             return true;
         }
-        galaxy.fleets.values().any(|f| f.location == FleetLocation::AtPlanet(planet) && galaxy.hostile(self, owner, f.owner))
+        galaxy.fleets.values().any(|f| f.location == FleetLocation::AtPlanet(planet) && galaxy.hostile(self, owner, f.owner) && self.is_combat_fleet(f))
     }
 
     /// Escape route of a fleet of `owner` that lost the battle at `from`: the fastest path to the nearest friendly planet (own or allied, not `from`);
