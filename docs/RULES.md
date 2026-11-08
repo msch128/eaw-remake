@@ -443,9 +443,10 @@ stays as a derived figure for bars and decisions (`ShipDef::hull` times the shar
 ## 2.4 Squadrons, carriers, stations
 
 * Data: a `Squadron` object expands into `Squadron_Units` fighters placed with `Squadron_Offsets`
-  (`Starfighter_Formations.xml`). `Starting_Spawned_Units_Tech_0` of ships and star bases launch at battle start; a
-  wiped-out squadron is replaced from `Reserve_Spawned_Units_Tech_0` after `Spawned_Squadron_Delay_Seconds`, while a
-  fighter-bay hardpoint (if the ship has any) lives.
+  (`Starfighter_Formations.xml`); every `Squadron_Units` line adds its craft (`Red_Squadron` 6 X-wings on 3 lines,
+  `Darth_Vader_TIE_Fighter_Squadron` 9 fighters, `Hutt_V-Wing_Squadron` 5). `Starting_Spawned_Units_Tech_0` of ships and
+  star bases launch at battle start; a wiped-out squadron is replaced from `Reserve_Spawned_Units_Tech_0` after
+  `Spawned_Squadron_Delay_Seconds`, while a fighter-bay hardpoint (if the ship has any) lives.
 * Project rule (the EaW behaviour; the data has no rule): launched squadrons fight on when their carrier or station is
   destroyed. They stay spawned units (2.8): they do not keep their side in the battle, are removed with the loser and
   cannot jump on their own. Squadrons whose carrier jumped out without them are lost.

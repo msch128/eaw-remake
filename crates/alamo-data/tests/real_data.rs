@@ -249,3 +249,16 @@ fn ion_stun_fractions_parse_with_a_float_suffix() {
     let large = data.objects.projectile("Proj_Ship_Ion_Cannon_Large_Dual").expect("large dual ion cannon shot");
     assert_eq!((large.ion_stun_speed_reduction, large.ion_stun_shot_rate_reduction, large.ion_stun_duration), (0.4, 0.4, 4.5));
 }
+
+#[test]
+fn every_squadron_units_line_adds_craft() {
+    // Before, only the first `Squadron_Units` line was read: Red Squadron had 2 X-wings (no Luke), Vader's squadron 3 fighters.
+    let Some(fs) = open() else { return };
+    let data = load_galaxy(&fs).0;
+    let units = |n: &str| data.objects.space_unit(n).unwrap().squadron_units;
+    let red = units("Red_Squadron");
+    assert_eq!(red, ["Red_Leader_XWing", "Wedge_XWing", "Biggs_XWing", "Hobbie_XWing", "Luke_XWing", "Porkins_XWing"]);
+    let vader = units("Darth_Vader_TIE_Fighter_Squadron");
+    assert_eq!((vader.len(), vader.iter().filter(|u| *u == "TIE_Fighter_Black_Squadron").count()), (9, 8));
+    assert_eq!(units("Hutt_V-Wing_Squadron").len(), 5, "Number_per_Squadron 5");
+}

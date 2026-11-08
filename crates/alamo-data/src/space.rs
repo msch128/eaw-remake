@@ -362,7 +362,9 @@ impl SpaceUnitDef {
         let f32_or = |t: &str| r.num::<f32>(t).unwrap_or(0.0);
         let i32_or = |t: &str| r.num::<i32>(t).unwrap_or(0);
         let category_mask = r.list("categorymask");
-        let squadron_units = r.list("squadron_units");
+        // Every `Squadron_Units` line adds craft (`Red_Squadron` names its six X-wings on three lines, `Darth_Vader_TIE_Fighter_Squadron` nine
+        // fighters on three).
+        let squadron_units: Vec<String> = r.get_all("squadron_units").into_iter().flat_map(split_list).collect();
         let mut category = ShipCategory::from_mask(&category_mask);
         if category == ShipCategory::Other
             && let Some(first) = squadron_units.first().and_then(|u| store.resolve(u))
