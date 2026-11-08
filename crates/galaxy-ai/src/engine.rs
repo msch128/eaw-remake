@@ -450,7 +450,7 @@ impl AiEngine {
         if let Some(t) = &self.brains[i].template {
             let mut total = 0.0;
             for (cat, eq) in &t.budget {
-                let mut ctx = PerceptionCtx { snap, player, target: None, brain: &view, equations: &data.equations, rng: &mut rng, stats: &mut EvalStats::default() };
+                let mut ctx = PerceptionCtx { snap, player, target: None, brain: &view, equations: &data.equations, hints: &data.hints, rng: &mut rng, stats: &mut EvalStats::default() };
                 let w = data.equations.evaluate(eq, &mut ctx, &mut stats).max(0.0);
                 evals += 1;
                 fractions.insert(cat.to_ascii_lowercase(), w);
@@ -543,7 +543,7 @@ impl AiEngine {
             }
             let owner = snap.owner[pl as usize];
             cache.clear();
-            let mut ctx = PerceptionCtx { snap, player, target: Some(pl), brain: &view, equations: &data.equations, rng: &mut rng, stats: &mut EvalStats::default() };
+            let mut ctx = PerceptionCtx { snap, player, target: Some(pl), brain: &view, equations: &data.equations, hints: &data.hints, rng: &mut rng, stats: &mut EvalStats::default() };
             for e in &eligible {
                 let ok = match owner {
                     Some(o) if o == player => e.friendly,
@@ -677,7 +677,7 @@ impl AiEngine {
         self.snapshot(sim, 1.0);
         let snap = self.snap.as_ref().unwrap();
         let mut stats = EvalStats::default();
-        let mut ctx = PerceptionCtx { snap, player, target, brain: &view, equations: &data.equations, rng: &mut rng, stats: &mut EvalStats::default() };
+        let mut ctx = PerceptionCtx { snap, player, target, brain: &view, equations: &data.equations, hints: &data.hints, rng: &mut rng, stats: &mut EvalStats::default() };
         let v = data.equations.evaluate(&key, &mut ctx, &mut stats);
         self.rng = rng;
         for (k, n) in stats.unknown_variables {
@@ -806,7 +806,7 @@ impl AiEngine {
             if !ok {
                 continue;
             }
-            let mut ctx = PerceptionCtx { snap, player, target: Some(pl), brain: &view, equations: &data.equations, rng: &mut rng, stats: &mut EvalStats::default() };
+            let mut ctx = PerceptionCtx { snap, player, target: Some(pl), brain: &view, equations: &data.equations, hints: &data.hints, rng: &mut rng, stats: &mut EvalStats::default() };
             let v = data.equations.evaluate(&key, &mut ctx, &mut stats);
             if v > 0.0 {
                 scored.push((v, pl));

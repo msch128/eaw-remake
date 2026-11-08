@@ -199,6 +199,8 @@ pub struct PerceptionCtx<'a> {
     pub brain: &'a PlayerBrainView,
     /// Equations (for the native evaluator scripts).
     pub equations: &'a EquationSet,
+    /// Active planet hints (`hint_name` -> value).
+    pub hints: &'a HashMap<String, HashMap<String, f64>>,
     /// Random state.
     pub rng: &'a mut u64,
     /// Statistics sink for nested evaluations.
@@ -393,9 +395,31 @@ impl PerceptionCtx<'_> {
             "FriendlyExternalConnectivity" => self.two_hop_frac(pl, |o| o == Some(self.player)),
             "EnemyInternalConnectivity" => self.neighbors_frac(pl, |o| o.is_some_and(|x| self.is_foe(x))),
             "EnemyExternalConnectivity" => self.two_hop_frac(pl, |o| o.is_some_and(|x| self.is_foe(x))),
-            "Hints.ChokePoint" | "Hints.Chokepoint" | "Hints.PriorityTarget" => 0.0,
+            "Hints.ChokePoint" | "Hints.Chokepoint" => {
+                let name = &self.snap.short_names[idx];
+                self.hint_value(name, "chokepoint")
+            }
+            "Hints.PriorityTarget" => {
+                let name = &self.snap.short_names[idx];
+                self.hint_value(name, "prioritytarget")
+            }
+            h if h.starts_with("Hints.") => {
+                let hint_name = h.strip_prefix("Hints.").unwrap().to_ascii_lowercase();
+                let name = &self.snap.short_names[idx];
+                self.hint_value(name, &hint_name)
+            }
             _ => return None,
         })
+    }
+
+    fn hint_value(&self, planet: &str, hint: &str) -> f64 {
+        let p = planet.to_ascii_lowercase();
+        let h = hint.to_ascii_lowercase();
+        if let Some(val) = self.hints.get(&p).and_then(|m| m.get(&h)) {
+            return *val;
+        }
+        let short = p.strip_suffix("_ww").unwrap_or(&p);
+        self.hints.get(short).and_then(|m| m.get(&h)).copied().unwrap_or(0.0)
     }
 
     fn snap_planet_full(&self, pl: PlanetId) -> String {
@@ -450,6 +474,7 @@ impl EquationContext for PerceptionCtx<'_> {
                         target: Some(target),
                         brain: self.brain,
                         equations: self.equations,
+                        hints: self.hints,
                         rng: &mut *self.rng,
                         stats: &mut EvalStats::default(),
                     };

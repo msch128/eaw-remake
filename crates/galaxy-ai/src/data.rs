@@ -90,6 +90,10 @@ pub struct AiData {
     pub equations: EquationSet,
     /// Templates by lower-cased name.
     pub templates: HashMap<String, AiTemplate>,
+    /// Markup files loaded from `Xml/AI/GalacticMarkup`: file name (lower) -> planet name (lower) -> hint name (lower) -> value.
+    pub markup: HashMap<String, HashMap<String, HashMap<String, f64>>>,
+    /// Active / aggregate planet hints: planet name (lower) -> hint name (lower) -> value.
+    pub hints: HashMap<String, HashMap<String, f64>>,
     /// XML problems.
     pub warnings: Vec<Warning>,
     /// Files read.
@@ -122,7 +126,7 @@ impl AiData {
             let Ok(bytes) = src.read(&path) else { continue };
             let Some(root) = xml::parse(&bytes, &path, &mut d.warnings) else { continue };
             d.files += 1;
-            match dir {
+            match dir.to_ascii_uppercase().as_str() {
                 "PLAYERS" => d.add_player(&root),
                 "GOALFUNCTIONS" => d.add_function_set(&path, &root),
                 "GOALS" => d.add_goals(&root),
@@ -132,6 +136,7 @@ impl AiData {
                     }
                 }
                 "TEMPLATES" => d.add_templates(&root),
+                "GALACTICMARKUP" => d.add_galactic_markup(&path, &root),
                 _ => {}
             }
         }
@@ -203,6 +208,50 @@ impl AiData {
             }
             self.templates.insert(e.name.clone(), t);
         }
+    }
+
+    fn add_galactic_markup(&mut self, path: &str, root: &Element) {
+        let file = path.rsplit('/').next().unwrap_or(path).trim_end_matches(".XML").to_ascii_lowercase();
+        let mut file_hints: HashMap<String, HashMap<String, f64>> = HashMap::new();
+        for planets in root.children_named("planets") {
+            for planet in &planets.children {
+                let name = planet.name.clone();
+                let short = name.strip_suffix("_ww").unwrap_or(&name).to_string();
+                let mut hints = HashMap::new();
+                for hint in &planet.children {
+                    if let Ok(val) = hint.text_trimmed().parse::<f64>() {
+                        hints.insert(hint.name.clone(), val);
+                    }
+                }
+                file_hints.entry(name.clone()).or_default().extend(hints.clone());
+                if short != name {
+                    file_hints.entry(short).or_default().extend(hints);
+                }
+            }
+        }
+        let is_remake = file == "remakehints";
+        for (planet, hints) in &file_hints {
+            let entry = self.hints.entry(planet.clone()).or_default();
+            for (k, v) in hints {
+                if is_remake {
+                    entry.insert(k.clone(), *v);
+                } else {
+                    entry.entry(k.clone()).or_insert(*v);
+                }
+            }
+        }
+        self.markup.insert(file, file_hints);
+    }
+
+    /// The hint value for a planet and hint name if defined.
+    pub fn hint(&self, planet: &str, hint: &str) -> Option<f64> {
+        let p = planet.to_ascii_lowercase();
+        let h = hint.to_ascii_lowercase();
+        if let Some(val) = self.hints.get(&p).and_then(|m| m.get(&h)) {
+            return Some(*val);
+        }
+        let short = p.strip_suffix("_ww").unwrap_or(&p);
+        self.hints.get(short).and_then(|m| m.get(&h)).copied()
     }
 
     /// The desire equation name of a goal in the given function sets (first set that defines it wins).

@@ -294,6 +294,7 @@ build-menu filters, not a start mode. The mode is this project's own:
   Star, so the AI keeps heroes at home.
 * Estimate: AI tech research. The Remake has no galactic research plan; with no human player the engine queues levels
   on a timer.
+* Data: AI map hints from `Data/Xml/AI/GalacticMarkup` (`RemakeHints.xml`: 17 chokepoint planets, 7 sectors at 1.0, 7 systems at 0.75, 3 gas giants at 0.5) are loaded and used by perceptual equations (`Hints.Chokepoint`, `Hints.PriorityTarget`).
 
 ## 1.13 Story ability grants
 
