@@ -951,8 +951,9 @@ Estimates and data that shape what the player sees and hears. Behaviour is in `b
   the item's `Icon_Name` and price; a click buys it. The command bar's `tqueue00` .. `tqueue09` (group
   `Tactical_Build_Queue`) show the queue, the first entry with its progress (a click takes a job out again), and
   `Text_Credits_tactical` the credits left. Project rule: of an upgrade line only the next level shows (the levels whose
-  prerequisites are built or queued). Estimate: the shell sits at the screen centre; the game places it itself
-  (`Manual_Offset`).
+  prerequisites are built or queued). Data: the shell is `Manual_Offset` and its buttons sit 67 and 120 px below its
+  origin (`i_build_buttons.alo`, two rows of three, `Build_00` top left); estimate: the origin follows the selected structure's
+  centre on screen (hidden while it is off screen).
 * Data, tactical camera: pitch 60, fov 60 (`TacticalCameras.xml`); `Tactical_Min/Max_Scroll_Speed` 1000/4000,
   `Push_Scroll_Speed_Modifier` 2.0, `Tactical_Edge_Scroll_Region` 2 (4.0 `Gameconstants.xml`); zoom-out cap 6000.
 * Data, galaxy camera: `GMC_InitialPullbackDistance` 470, `GMC_ZoomedPitchAngleDegrees` -20, `GMC_ZoomTime` 1.0 s,

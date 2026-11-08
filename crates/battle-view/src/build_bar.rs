@@ -22,11 +22,15 @@ pub struct BuildBarUi {
     pub root: Option<Entity>,
     /// Item per button.
     pub items: Vec<BuildId>,
+    /// The structure the buttons belong to.
+    pub station: Option<u32>,
+    /// Offset of the shell's box from its origin (design px, read once after the spawn: the root's left / bottom at offset 0).
+    lo: Option<Vec2>,
 }
 
 pub(crate) fn build(app: &mut App) {
     app.init_resource::<BuildBarUi>();
-    app.add_systems(Update, (build_bar_sync, build_bar_clicks).chain().run_if(resource_exists::<BattleRuntime>));
+    app.add_systems(Update, (build_bar_sync, build_bar_clicks, build_bar_follow).chain().run_if(resource_exists::<BattleRuntime>));
     app.add_systems(Update, build_bar_close.run_if(resource_removed::<BattleRuntime>));
 }
 
@@ -74,14 +78,16 @@ fn build_bar_sync(
     let Some(cur) = rt.cur.as_ref() else { return };
     let player = settings.player_side;
     let snap = cur.builds.get(player as usize).cloned().unwrap_or_default();
-    let offers = sel.ships.iter().filter_map(|&id| cur.ship(id)).any(|s| s.side == player && !rt.catalog.ship(s.def).buildable.is_empty());
+    let station = sel.ships.iter().filter_map(|&id| cur.ship(id)).find(|s| s.side == player && !rt.catalog.ship(s.def).buildable.is_empty()).map(|s| s.id);
+    let offers = station.is_some();
+    ui.station = station;
     let open = offers && !snap.options.is_empty() && !cur.over;
     if open && ui.root.is_none() {
         let faction = UiFaction::from_name(rt.player_faction.as_deref().unwrap_or("Empire"));
-        // `Manual_Offset`: the game places the shell itself; estimate: the screen centre.
+        // `Manual_Offset`: the game places the shell at the selected object; `build_bar_follow` keeps its origin on the structure.
         commands.queue(move |world: &mut World| {
             let mut spec = ShellSpec::new("I_Build_Buttons.ALO", faction);
-            spec.anchor = ShellAnchor::Center;
+            spec.anchor = ShellAnchor::BottomLeft;
             spec.offset = Vec2::ZERO;
             let e = spawn_shell(world, &spec);
             let mut panel = world.resource_mut::<PanelData>();
@@ -94,6 +100,7 @@ fn build_bar_sync(
         });
         ui.root = Some(Entity::PLACEHOLDER);
     } else if !open && let Some(e) = ui.root.take() {
+        ui.lo = None;
         if e != Entity::PLACEHOLDER {
             commands.entity(e).try_despawn();
         }
@@ -122,6 +129,41 @@ fn build_bar_sync(
     }
     if bar.credits != snap.credits {
         bar.credits = snap.credits;
+    }
+}
+
+/// Where the shell's origin goes for a structure seen at `screen` (logical viewport px, y down) in a viewport `height` px high, at UI
+/// scale `scale`: its root's left / bottom (design px). `lo` is the box's offset from the origin; `i_build_buttons.alo` puts its buttons
+/// 67 and 120 px below the origin, so they hang under the structure's centre.
+fn shell_place(screen: Vec2, height: f32, scale: f32, lo: Vec2) -> Vec2 {
+    Vec2::new(screen.x / scale + lo.x, (height - screen.y) / scale + lo.y)
+}
+
+/// `Manual_Offset`: keeps the build buttons' origin on the selected structure's screen position (hidden while it is off screen).
+fn build_bar_follow(
+    mut ui: ResMut<BuildBarUi>,
+    ships: Res<crate::RenderedShips>,
+    scale: Res<UiScale>,
+    camera: Single<(&Camera, &GlobalTransform), With<crate::camera::BattleCamera>>,
+    mut roots: Query<(&mut Node, &mut Visibility)>,
+) {
+    let (Some(root), Some(station)) = (ui.root.filter(|&e| e != Entity::PLACEHOLDER), ui.station) else { return };
+    let Ok((mut node, mut vis)) = roots.get_mut(root) else { return };
+    let lo = *ui.lo.get_or_insert_with(|| {
+        let px = |v: Val| if let Val::Px(p) = v { p } else { 0.0 };
+        Vec2::new(px(node.left), px(node.bottom))
+    });
+    let (cam, gt) = *camera;
+    let seen = ships.0.get(&station).and_then(|s| cam.world_to_viewport(gt, s.pos).ok());
+    let (Some(screen), Some(size)) = (seen, cam.logical_viewport_size()) else {
+        vis.set_if_neq(Visibility::Hidden);
+        return;
+    };
+    vis.set_if_neq(Visibility::Inherited);
+    let at = shell_place(screen, size.y, scale.0.max(1e-3), lo);
+    if node.left != Val::Px(at.x) || node.bottom != Val::Px(at.y) {
+        node.left = Val::Px(at.x);
+        node.bottom = Val::Px(at.y);
     }
 }
 
@@ -171,6 +213,17 @@ mod tests {
         let rebel = side("Rebel", vec![], vec![1]);
         let config = BattleConfig { side_credits: vec![0, 300], fog_of_war: false, ..BattleConfig::default() };
         (Battle::new(BattleSetup { sides: vec![empire, rebel], catalog: cat.clone(), config }), cat)
+    }
+
+    #[test]
+    fn the_buttons_hang_below_the_structure_on_screen() {
+        // `i_build_buttons.alo`: Build_00 .. 05 at x -54, 0, 52 and y -67, -120 (52 px squares) round the origin; the box spans -80..78 by
+        // -146..-41. A structure at the centre of a 1080 px viewport (UI scale 1): the box's top edge sits 41 px below it.
+        let at = shell_place(Vec2::new(960.0, 540.0), 1080.0, 1.0, Vec2::new(-80.0, -146.0));
+        assert_eq!(at, Vec2::new(880.0, 394.0));
+        assert_eq!(at.y + 105.0, 540.0 - 41.0);
+        // UI scale 1.5 (1620 px): the same place in design px.
+        assert_eq!(shell_place(Vec2::new(1440.0, 810.0), 1620.0, 1.5, Vec2::new(-80.0, -146.0)), at);
     }
 
     #[test]
