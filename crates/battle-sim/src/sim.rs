@@ -3499,18 +3499,18 @@ fn mov(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, spawn: &
             }
             let is_escort = matches!(def.class, TargetClass::Corvette | TargetClass::Frigate);
             let is_cap = matches!(o.class, TargetClass::Capital | TargetClass::Super | TargetClass::Structure);
+            let odef = cat.ship(o.def);
+            // Capital ships hold course and escorts yield to them, keeping `ESCORT_GAP` more. An escort that cannot make way (on a rock's
+            // edge, or between two capital ships) was ground into the hull, so a capital ship takes its half of the pair once the two
+            // circles overlap (0.85 of the radii, as for any pair); a model hull alone does not move it.
             let am_cap = matches!(def.class, TargetClass::Capital | TargetClass::Super | TargetClass::Structure);
             let o_escort = matches!(o.class, TargetClass::Corvette | TargetClass::Frigate);
-            if am_cap && o_escort {
-                // Capital ships hold course; escorts yield to them
-                continue;
-            }
-            let odef = cat.ship(o.def);
+            let holds = am_cap && o_escort;
             // Escorts keep a gap around capital ships (U65).
             let margin = if is_escort && is_cap { ESCORT_GAP } else { 0.0 };
             let min = if is_escort && is_cap { (me.radius + o.radius + margin).max((me.radius + o.radius) * 0.85) } else { (me.radius + o.radius) * 0.85 };
             let o_hull = odef.footprint();
-            let models = def.hull_shape.is_some() || odef.hull_shape.is_some();
+            let models = !holds && (def.hull_shape.is_some() || odef.hull_shape.is_some());
             let reach = if models { min.max(me_hull.reach() + o_hull.reach() + margin) } else { min };
             let (dx, dy) = (s.pos.x - o.pos.x, s.pos.y - o.pos.y);
             if dx.abs() >= reach || dy.abs() >= reach {

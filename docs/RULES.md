@@ -381,8 +381,9 @@ stays as a derived figure for bars and decisions (`ShipDef::hull` times the shar
   ship with a hull it peels off like a fighter. Hardpoint order: shield generator, engine, fighter bay, weapon.
 * Estimate, dogfights: squadrons leave formation within 650 u of fighters or bombers; close-run distance `max(70 +
   slack, 180)`; slot blend radius 80 u; speed catch-up 1.5 u/s per u behind, 2.0 per u ahead.
-* Estimate, escort avoidance: corvettes and frigates keep capital hull + own radius + 150 u away; capitals never yield
-  to escorts.
+* Estimate, escort avoidance: corvettes and frigates keep capital hull + own radius + 150 u away; capitals yield to
+  escorts only when their circles overlap (0.85 of the radii; an escort on a rock's edge or between two capitals cannot
+  make way), then the pair splits the overlap.
 * Estimate, carrier screen: fighters near their carrier prefer bombers within 3500 u of it (weight x0.3).
 * Estimate, flanking: corvettes and units faster than 250 u/s swing 3200 + 600 x (id % 3) u to the side on an
   attack-move (3500 + 500 x (id % 4) on a move). The Remake has flanking but no distances in the XML.

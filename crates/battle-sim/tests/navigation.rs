@@ -128,7 +128,12 @@ fn fleet_battle(data: &alamo_data::GameData, fs: &GameFs, map: &str, seed: u64) 
         let big: Vec<&Ship> = b.ships.iter().filter(|s| s.alive && !s.retreated && !cat.ship(s.def).is_static && !matches!(cat.ship(s.def).class, TargetClass::Fighter | TargetClass::Bomber)).collect();
         for (i, a) in big.iter().enumerate() {
             for o in big[i + 1..].iter().filter(|o| a.carrier != o.id && o.carrier != a.id) {
-                worst = worst.min(a.pos.dist(o.pos) / ((radius(a) + radius(o)) * 0.85));
+                let r = a.pos.dist(o.pos) / ((radius(a) + radius(o)) * 0.85);
+                if r < 0.7 && (b.time() * 30.0).round() as i64 % 10 == 0 {
+                    println!("DBG t={:.1} pair {} {} share {r:.2} rad {:.0} {:.0}", b.time(), a.id, o.id, radius(a), radius(o));
+                    for x in big.iter().filter(|x| x.pos.dist(a.pos) < 1200.0) { println!("DBG    {} {} side {} class {:?} pos ({:.0},{:.0},{:.0}) yaw {:.2} speed {:.0} order {:?}", x.id, cat.ship(x.def).name, x.side, cat.ship(x.def).class, x.pos.x, x.pos.y, x.pos.z, x.yaw, x.speed, x.order); }
+                }
+                worst = worst.min(r);
             }
             in_rock += arena.obstacles.iter().filter(|r| a.pos.dist(r.pos) < r.radius * 0.9).count() as u32;
         }
@@ -483,5 +488,54 @@ fn bombers_and_fighters_hurt_the_ships_they_attack_as_much_as_before() {
     for (&(target, squadron, main), damage) in cases.iter().zip(damages) {
         println!("{squadron} on {target}: {damage:.0} (main {main:.0})");
         assert!(damage >= 0.8 * main, "{squadron} still hurt a {target}: {damage:.0}, main {main:.0}");
+    }
+}
+
+#[test]
+fn a_capital_ship_yields_to_an_escort_pinned_against_a_rock() {
+    // Escorts make way for capital ships; one that cannot (a rock behind it) must not end up inside the capital ship's hull.
+    let cap = ship("cap", TargetClass::Capital, 0.0, 200.0, false);
+    let escort = ship("escort", TargetClass::Frigate, 0.0, 50.0, false);
+    let dummy = ship("dummy", TargetClass::Frigate, 0.0, 50.0, true);
+    let cat = Arc::new(Catalog::from_defs(vec![cap, escort, dummy], vec![]));
+    let config = BattleConfig { arena: Some(arena(&[(0.0, 0.0, 500.0)])), record_events: false, ..BattleConfig::default() };
+    let mut own = side("a", "cap", &cat, 1);
+    own.units.push(UnitSetup { ship: cat.ship_id("escort").unwrap(), count: 1, tag: 1 });
+    let mut b = Battle::new(BattleSetup { catalog: cat.clone(), sides: vec![own, side("b", "dummy", &cat, 1)], config });
+    let (c, e) = (b.ships.iter().find(|s| s.side == 0 && s.def == cat.ship_id("cap").unwrap()).unwrap().id, b.ships.iter().find(|s| s.side == 0 && s.def == cat.ship_id("escort").unwrap()).unwrap().id);
+    b.ships[e as usize].pos = Vec3::new(530.0, 0.0, 0.0);
+    b.ships[c as usize].pos = Vec3::new(650.0, 0.0, 0.0);
+    for _ in 0..30 * 5 {
+        b.step();
+    }
+    let keep_out = (200.0 + 50.0) * 0.75 * 0.85;
+    let d = b.ships[c as usize].pos.dist(b.ships[e as usize].pos);
+    assert!(d >= keep_out * 0.95, "the hulls are apart: {d:.0} of {keep_out:.0}");
+}
+
+#[test]
+fn an_escort_squeezed_between_two_capital_ships_is_not_ground_into_them() {
+    // Two capital ships hold course on both sides of an escort: it cannot yield to both, so they take their half of the overlap once the
+    // hulls themselves overlap (Bilbringi fleet battle: a Nebulon-B ended inside an MC-80 at 60% of the keep-out).
+    let cap = ship("cap", TargetClass::Capital, 0.0, 200.0, false);
+    let escort = ship("escort", TargetClass::Frigate, 0.0, 50.0, false);
+    let dummy = ship("dummy", TargetClass::Frigate, 0.0, 50.0, true);
+    let cat = Arc::new(Catalog::from_defs(vec![cap, escort, dummy], vec![]));
+    let config = BattleConfig { arena: Some(arena(&[])), record_events: false, ..BattleConfig::default() };
+    let mut own = side("a", "cap", &cat, 2);
+    own.units.push(UnitSetup { ship: cat.ship_id("escort").unwrap(), count: 1, tag: 1 });
+    let mut b = Battle::new(BattleSetup { catalog: cat.clone(), sides: vec![own, side("b", "dummy", &cat, 1)], config });
+    let caps: Vec<u32> = b.ships.iter().filter(|s| s.side == 0 && s.def == cat.ship_id("cap").unwrap()).map(|s| s.id).collect();
+    let e = b.ships.iter().find(|s| s.side == 0 && s.def == cat.ship_id("escort").unwrap()).unwrap().id;
+    b.ships[e as usize].pos = Vec3::new(0.0, 0.0, 0.0);
+    b.ships[caps[0] as usize].pos = Vec3::new(-130.0, 0.0, 0.0);
+    b.ships[caps[1] as usize].pos = Vec3::new(130.0, 0.0, 0.0);
+    for _ in 0..30 * 5 {
+        b.step();
+    }
+    let keep_out = (200.0 + 50.0) * 0.75 * 0.85;
+    for &c in &caps {
+        let d = b.ships[c as usize].pos.dist(b.ships[e as usize].pos);
+        assert!(d >= keep_out * 0.95, "the hulls are apart: {d:.0} of {keep_out:.0}");
     }
 }
