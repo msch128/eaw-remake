@@ -2451,12 +2451,13 @@ impl Battle {
         }
         for s in self.ships.iter_mut() {
             let class = cat.ship(s.def).class;
+            let name = cat.ship(s.def).name.to_ascii_lowercase();
             let (mut dmg, mut health, mut shield, mut defense, mut range, mut speed) = (0.0f32, 0.0f32, 0.0f32, 0.0f32, 0.0f32, 0.0f32);
             for ((side, _), list) in &best {
                 if *side != s.side {
                     continue;
                 }
-                let hit = list.iter().filter(|b| b.classes == 0 || b.classes & class.bit() != 0);
+                let hit = list.iter().filter(|b| b.applies(class, &name));
                 let max = |f: fn(&BonusDef) -> f32| hit.clone().map(|b| f(b)).fold(0.0f32, |m, v| if v.abs() > m.abs() { v } else { m });
                 dmg += max(|b| b.damage);
                 health += max(|b| b.health);

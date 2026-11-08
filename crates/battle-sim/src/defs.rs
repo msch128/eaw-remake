@@ -283,10 +283,24 @@ pub struct BonusDef {
     pub range: f32,
     /// `Movement_Speed_Bonus_Percentage`: top speed.
     pub speed: f32,
-    /// Bit mask of boosted classes (`Applicable_Unit_Categories`; 0 = any).
+    /// Bit mask of boosted classes (`Applicable_Unit_Categories`).
     pub classes: u16,
+    /// `Applicable_Unit_Types`, lower case. A ship is boosted when its class is in `classes` or its type is listed here; with neither
+    /// given, every ship of the side is.
+    pub types: Vec<String>,
+    /// `Excluded_Unit_Types`, lower case: never boosted.
+    pub excluded: Vec<String>,
     /// `Stacking_Category`: bonuses of one category do not add up, the strongest applies.
     pub stacking: u8,
+}
+
+impl BonusDef {
+    /// True if the aura boosts a ship of `class` named `name` (lower case).
+    pub fn applies(&self, class: TargetClass, name: &str) -> bool {
+        let listed = self.types.iter().any(|t| t == name);
+        let open = self.classes == 0 && self.types.is_empty();
+        (open || self.classes & class.bit() != 0 || listed) && !self.excluded.iter().any(|t| t == name)
+    }
 }
 
 /// A `Redirect_Blaster_Ability` that is on from the start (lightsaber heroes, reflector shields): incoming shots are
@@ -1552,6 +1566,7 @@ impl Catalog {
                 .filter(|a| a.kind.eq_ignore_ascii_case("Combat_Bonus_Ability") && a.fields.get("activation_style").is_some_and(|v| v.trim().eq_ignore_ascii_case("Space_Automatic")))
                 .map(|a| {
                     let num = |k: &str| a.fields.get(k).and_then(|v| alamo_data::xml::parse_num::<f32>(v)).unwrap_or(0.0).clamp(-0.9, 10.0);
+                    let type_list = |k: &str| a.fields.get(k).map(|v| alamo_data::xml::split_list(v).iter().map(|t| t.to_ascii_lowercase()).collect()).unwrap_or_default();
                     BonusDef {
                         damage: num("damage_bonus_percentage"),
                         health: num("health_bonus_percentage"),
@@ -1560,6 +1575,8 @@ impl Catalog {
                         range: num("fire_range_bonus_percentage"),
                         speed: num("movement_speed_bonus_percentage"),
                         classes: a.fields.get("applicable_unit_categories").map_or(0, |v| alamo_data::xml::split_list(v).iter().filter_map(|t| TargetClass::from_token(t)).fold(0u16, |m, c| m | c.bit())),
+                        types: type_list("applicable_unit_types"),
+                        excluded: type_list("excluded_unit_types"),
                         stacking: num("stacking_category") as u8,
                     }
                 })
@@ -1900,6 +1917,9 @@ fn ability_defs(u: &SpaceUnitDef, projectiles: &[ProjDef], proj_index: &HashMap<
             let m = |k: &str| a.mod_multipliers.iter().find(|(n, _)| n == k).map(|&(_, v)| v);
             let mut speed_mult = m("SPEED_MULTIPLIER").unwrap_or(1.0);
             let mut shield_regen_mult = m("SHIELD_REGEN_MULTIPLIER").unwrap_or(1.0).max(0.0);
+            // `SHIELD_REGEN_INTERVAL_MULTIPLIER` shortens the interval between shield gains: the rate is divided by it (Mon Cal DEFEND 0.27 =
+            // 3.7x as fast). Estimate: at least 0.05 (a 0 comes only with no regeneration at all).
+            let regen_interval = m("SHIELD_REGEN_INTERVAL_MULTIPLIER");
             let mut weapon_delay_mult = m("WEAPON_DELAY_MULTIPLIER").unwrap_or(1.0);
             let mut take_damage_mult = m("TAKE_DAMAGE_MULTIPLIER").unwrap_or(1.0);
             let mut cause_damage_mult = m("CAUSE_DAMAGE_MULTIPLIER").unwrap_or(1.0);
@@ -1912,7 +1932,7 @@ fn ability_defs(u: &SpaceUnitDef, projectiles: &[ProjDef], proj_index: &HashMap<
                     if shield_regen_mult == 1.0 { shield_regen_mult = 0.0; }
                     if speed_mult == 1.0 { speed_mult = 0.75; }
                 }
-                "DEFEND" => {
+                "DEFEND" if a.mod_multipliers.is_empty() => {
                     if take_damage_mult == 1.0 { take_damage_mult = 0.65; }
                     if shield_regen_mult == 1.0 { shield_regen_mult = 1.6; }
                     if speed_mult == 1.0 { speed_mult = 0.65; }
@@ -1931,6 +1951,11 @@ fn ability_defs(u: &SpaceUnitDef, projectiles: &[ProjDef], proj_index: &HashMap<
                     if cause_damage_mult == 1.0 { cause_damage_mult = 1.35; }
                 }
                 _ => {}
+            }
+            if let Some(iv) = regen_interval
+                && shield_regen_mult > 0.0
+            {
+                shield_regen_mult /= iv.max(0.05);
             }
 
             AbilityDef {

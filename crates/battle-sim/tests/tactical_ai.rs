@@ -586,7 +586,8 @@ fn an_ai_defender_holds_while_its_station_stands_and_leaves_when_it_falls() {
     // The user's Super Star Destroyer fleet (Executor, 3 Star Destroyers, 3 Victorys, 4 TIE squadrons) against a defended Rebel base: 15 big ships, the
     // enemy is 4.5-5.7x stronger from the start. `Retreat_From_Space` makes a defender with a station wait 120 s ("wait for the defense fleet to spawn");
     // our emergency rule U94 had sent it away at 62 s while the station stood (main add6915, seeds 1-3: 5 / 2 / 4 big ships lost). Now it holds and leaves
-    // as soon as the station is gone (it falls at 104 s and 106 s on seeds 1 and 2, 5 / 6 big ships lost, 10 / 9 escaped).
+    // as soon as the station is gone (it falls at 104 s and 106 s on seeds 1 and 2, 5 / 6 big ships lost, 10 / 9 escaped; with the data's 30 s jump
+    // and DEFEND's own multipliers it falls at 104 / 105 s and 9 / 10 escape).
     let Some((data, fs)) = load() else { return };
     let names = ["Executor_Star_Dreadnought", "Star_Destroyer", "Victory_Destroyer", "TIE_Fighter_Squadron", "MC-80_Star_Cruiser", "Nebulon_B_Frigate", "Assault_Frigate_Mark_II", "CR-90_Corvette", "X-Wing_Squadron", "Rebel_Star_Base_3"];
     let cat = Arc::new(Catalog::build(&data, Some(&fs), &names));

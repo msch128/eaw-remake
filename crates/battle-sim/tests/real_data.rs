@@ -369,3 +369,17 @@ fn the_subjugator_super_laser_is_an_ion_shot() {
     assert_eq!((p.ion_duration, p.ion_speed_cut, p.hull_damage), (900.0, 0.75, false));
     assert!(laser("Eclipse_Star_Dreadnought").ion.is_none(), "the Eclipse super laser kills");
 }
+
+/// `DEFEND` with `SHIELD_REGEN_INTERVAL_MULTIPLIER`: Home One (0.5, `SHIELD_REGEN_MULTIPLIER` 1.0) regenerates twice as fast, TF-24's Ravenous
+/// (0.27) 3.7 times.
+#[test]
+fn defend_shortens_the_shield_regeneration_interval() {
+    let Some((data, fs)) = load() else { return };
+    let cat = Catalog::build(&data, Some(&fs), &["Home_One", "TF-24_Ravenous"]);
+    let defend = |name: &str| cat.ship(cat.ship_id(name).unwrap()).abilities.iter().find(|a| a.kind.eq_ignore_ascii_case("DEFEND")).map(|a| a.shield_regen_mult).expect("DEFEND");
+    assert!((defend("Home_One") - 2.0).abs() < 1e-3, "{}", defend("Home_One"));
+    assert!((defend("TF-24_Ravenous") - 1.0 / 0.27).abs() < 1e-2, "{}", defend("TF-24_Ravenous"));
+    // Home One's DEFEND names no `TAKE_DAMAGE_MULTIPLIER`: no estimated damage cut is added to the data's own multipliers.
+    let home_one = cat.ship(cat.ship_id("Home_One").unwrap()).abilities.iter().find(|a| a.kind.eq_ignore_ascii_case("DEFEND")).unwrap();
+    assert_eq!((home_one.take_damage_mult, home_one.speed_mult, home_one.weapon_delay_mult), (1.0, 0.25, 2.0));
+}
