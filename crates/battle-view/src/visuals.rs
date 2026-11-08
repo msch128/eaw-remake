@@ -141,6 +141,21 @@ pub struct ShipVisual {
     pub squadron_gap: Option<f32>,
     /// Look and sound of the unit's `SUPER_LASER` shot, if it has one.
     pub super_laser: Option<SuperLaserVisual>,
+    /// How the unit spins away on death, if enabled (`Spin_Away_On_Death`).
+    pub spin_away: Option<SpinAwayVisual>,
+}
+
+/// How a dying unit spins out of control (`Spin_Away_On_Death`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct SpinAwayVisual {
+    /// `Spin_Away_On_Death_Chance` (0.0..1.0).
+    pub chance: f32,
+    /// `Spin_Away_On_Death_Time` in seconds.
+    pub time: f32,
+    /// `Spin_Away_On_Death_Explosion` particle object name played when it blows up.
+    pub explosion: Option<String>,
+    /// `Spin_Away_On_Death_SFXEvent_Start_Die` sound played when the spin begins.
+    pub sfx: Option<String>,
 }
 
 /// Look and sound of a `SUPER_LASER` shot: the `Super_Laser_Ability` the unit's `Unit_Ability` names (`GUI_Activated_Ability_Name`),
@@ -378,6 +393,15 @@ impl VisualCatalog {
                 max_speed: xml_num("max_speed"),
             };
             let flight = FlightLook::new(def.class, squadron_members.contains(&(id as ShipId)), flight_xml, def.turn_rate, def.max_speed);
+            let spin_away = if r.as_ref().and_then(|r| r.flag("spin_away_on_death")).unwrap_or(false) {
+                let chance = r.as_ref().and_then(|r| r.num::<f32>("spin_away_on_death_chance")).unwrap_or(0.5);
+                let time = r.as_ref().and_then(|r| r.num::<f32>("spin_away_on_death_time")).unwrap_or(2.0);
+                let explosion = r.as_ref().and_then(|r| r.get("spin_away_on_death_explosion")).map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+                let sfx = r.as_ref().and_then(|r| r.get("spin_away_on_death_sfxevent_start_die")).map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+                Some(SpinAwayVisual { chance, time, explosion, sfx })
+            } else {
+                None
+            };
             ships.push(ShipVisual {
                 model: def.model.clone(),
                 scale,
@@ -390,6 +414,7 @@ impl VisualCatalog {
                 flight,
                 squadron_gap: gaps.get(&(id as ShipId)).copied(),
                 super_laser: r.as_ref().and_then(SuperLaserVisual::from_unit),
+                spin_away,
             });
         }
         let proj_tag = |tags: &[&str]| -> Vec<Option<String>> {

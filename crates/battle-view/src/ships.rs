@@ -61,6 +61,15 @@ pub struct Dying {
     seed: u32,
 }
 
+/// A dying unit spinning out of control before exploding (`Spin_Away_On_Death`).
+#[derive(Component, Debug, Clone)]
+pub struct SpinningAway {
+    pub time_left: f32,
+    pub velocity: Vec3,
+    pub angular_velocity: Vec3,
+    pub explosion: String,
+}
+
 /// Interpolated state of a living ship, refreshed every frame for picking and overlays.
 #[derive(Debug, Clone)]
 pub struct ShipRender {
@@ -138,7 +147,7 @@ impl ShipRender {
 #[derive(Resource, Default)]
 pub struct RenderedShips(pub HashMap<u32, ShipRender>);
 
-fn lcg(seed: &mut u32) -> f32 {
+pub(crate) fn lcg(seed: &mut u32) -> f32 {
     *seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
     (*seed >> 8) as f32 / (1u32 << 24) as f32
 }
@@ -640,6 +649,7 @@ pub fn ship_events(
     mut rt: ResMut<BattleRuntime>,
     mut touch: ModelTouch,
     mut views: Query<&mut ShipView>,
+    transforms: Query<&Transform>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     fs: Option<Res<alamo_render::AlamoFs>>,
@@ -666,6 +676,31 @@ pub fn ship_events(
                 let fighter = matches!(class, TargetClass::Fighter | TargetClass::Bomber);
                 let effect: &'static str = ship_death_effect(class);
                 if fighter {
+                    if let Some(spin) = visuals.ship(view.def).spin_away.as_ref() {
+                        if lcg(&mut s) < spin.chance {
+                            let rot = transforms.get(e).map(|tf| tf.rotation).unwrap_or(Quat::IDENTITY);
+                            let speed = rt
+                                .cur
+                                .as_ref()
+                                .and_then(|c| c.ship(*ship))
+                                .map_or(def.max_speed, |s| s.speed.max(def.max_speed * 0.5));
+                            let velocity = rot * Vec3::Z * speed;
+                            let roll = (if lcg(&mut s) > 0.5 { 1.0 } else { -1.0 }) * (8.0 + lcg(&mut s) * 6.0);
+                            let pitch = (lcg(&mut s) - 0.5) * 4.0;
+                            let yaw_spin = (lcg(&mut s) - 0.5) * 4.0;
+                            let ang_vel = Vec3::new(pitch, yaw_spin, roll);
+                            let explosion = spin.explosion.clone().unwrap_or_else(|| effect.to_string());
+                            commands.entity(e).insert(SpinningAway {
+                                time_left: spin.time,
+                                velocity,
+                                angular_velocity: ang_vel,
+                                explosion,
+                            });
+                            rt.entities.remove(ship);
+                            rt.dying.insert(*ship);
+                            continue;
+                        }
+                    }
                     commands.trigger(SpawnParticleEffect {
                         particle: effect.into(),
                         position: sim_to_bevy(*pos),
@@ -1099,6 +1134,31 @@ pub fn update_wrecks(time: Res<Time>, rt: Res<BattleRuntime>, mut q: Query<(&Wre
         tf.translation += w.velocity * dt;
         let t = w.tumble * dt;
         tf.rotation = Quat::from_euler(EulerRot::XYZ, t.x, t.y, t.z) * tf.rotation;
+    }
+}
+
+/// Updates dying small craft spinning out of control before exploding (`Spin_Away_On_Death`).
+pub fn update_spinning_away(
+    mut commands: Commands,
+    time: Res<Time>,
+    rt: Res<BattleRuntime>,
+    mut q: Query<(Entity, &mut SpinningAway, &mut Transform)>,
+) {
+    let dt = time.delta_secs().min(0.1) * rt.speed_factor();
+    for (entity, mut spin, mut tf) in &mut q {
+        spin.time_left -= dt;
+        if spin.time_left <= 0.0 {
+            commands.trigger(SpawnParticleEffect {
+                particle: spin.explosion.clone(),
+                position: tf.translation,
+                normal: Vec3::Y,
+            });
+            commands.entity(entity).try_despawn();
+            continue;
+        }
+        tf.translation += spin.velocity * dt;
+        let av = spin.angular_velocity * dt;
+        tf.rotation = Quat::from_euler(EulerRot::XYZ, av.x, av.y, av.z) * tf.rotation;
     }
 }
 
@@ -1842,5 +1902,81 @@ mod tests {
         world.insert_resource(sources);
         let hold = world.run_system_once(|sounds: ShotSounds| sounds.hold("Unit_Death_Star_2_Fire")).expect("hold").expect("sound on");
         assert!((hold - (3.4535 - 0.05 - SHOT_SOUND_MARGIN)).abs() < 0.01, "{hold}");
+    }
+
+    #[test]
+    fn small_craft_with_spin_away_spins_out_of_control_before_exploding() {
+        use battle_sim::{Battle, BattleConfig, BattleSetup, Catalog, ProjDef, ShipDef, SideSetup, UnitSetup};
+        use bevy::ecs::system::RunSystemOnce;
+        let fighter_def = ShipDef { name: "xwing".into(), class: TargetClass::Fighter, hull: 100.0, radius: 15.0, population: 1, max_speed: 400.0, ..ShipDef::default() };
+        let catalog = std::sync::Arc::new(Catalog::from_defs(vec![fighter_def], vec![ProjDef { name: "laser".into(), ..ProjDef::default() }]));
+        let side = |n: &str| SideSetup { name: n.into(), units: vec![UnitSetup { ship: catalog.ship_id(n).unwrap(), count: 1, tag: 1 }], structures: vec![], ai: false };
+        let sim = crate::sim::SimHandle::spawn(Battle::new(BattleSetup { sides: vec![side("xwing")], catalog: catalog.clone(), config: BattleConfig::default() }));
+        sim.request(1);
+        let cur = sim.fetch(0, true).0.expect("snapshot");
+        let fighter = cur.ships.first().expect("fighter").clone();
+        let mut ships = vec![crate::visuals::ShipVisual::default(); 1];
+        ships[0].spin_away = Some(crate::visuals::SpinAwayVisual {
+            chance: 1.0,
+            time: 1.75,
+            explosion: Some("Small_Explosion_Space_Fighter".into()),
+            sfx: Some("Unit_X_Wing_Spinning_By".into()),
+        });
+        let visuals = crate::visuals::VisualCatalog { ships, team_colors: vec![Color::WHITE; 1], proj_detonate: vec![None], proj_detonate_armor: vec![None], proj_detonate_shield: vec![None] };
+
+        let mut world = World::new();
+        world.init_resource::<crate::effects::BloomPulses>();
+        world.init_resource::<crate::effects::BeamArt>();
+        world.init_resource::<BattleViewSettings>();
+        world.init_resource::<Assets<Mesh>>();
+        world.init_resource::<Assets<StandardMaterial>>();
+        world.init_resource::<Assets<Image>>();
+        let view = ShipView { id: fighter.id, def: fighter.def, side: 0, hp_applied: vec![], bones: None, hp_parts: vec![], attitude: Attitude::default(), born: 0.0, visual_radius: 0.0, shown: true };
+        let e = world.spawn((view, Transform::from_translation(Vec3::new(10.0, 0.0, 20.0)))).id();
+        world.insert_resource(BattleRuntime {
+            sim,
+            catalog,
+            visuals: std::sync::Arc::new(visuals),
+            dt: 1.0 / 30.0,
+            clock: 0.0,
+            cur: Some(cur.clone()),
+            next: None,
+            alpha: 0.0,
+            fresh_events: vec![Event::ShipDestroyed { ship: fighter.id, pos: fighter.pos }],
+            entities: HashMap::from([(fighter.id, e)]),
+            dying: HashSet::new(),
+            request: None,
+            player_faction: None,
+            start_alive: vec![1],
+            retreat_countdown: 0.0,
+            unit_cap: 0,
+            no_spawn_radius: 0.0,
+            reinforce_clearance: 0.0,
+            arena_half: 10_000.0,
+            fog_of_war: false,
+            speed: 1.0,
+            framed: false,
+            reported: false,
+            minimap_planets: vec![],
+            minimap_props: vec![],
+            minimap_tint: Color::BLACK,
+        });
+
+        world.run_system_once(ship_events).expect("ship_events");
+        let spin = world.get::<SpinningAway>(e).expect("entity should have SpinningAway component");
+        assert_eq!(spin.time_left, 1.75);
+        assert_eq!(spin.explosion, "Small_Explosion_Space_Fighter");
+        let rt = world.resource::<BattleRuntime>();
+        assert!(!rt.entities.contains_key(&fighter.id), "fighter removed from living entities");
+        assert!(rt.dying.contains(&fighter.id), "fighter marked in dying set");
+
+        world.init_resource::<Time>();
+        world.run_system_once(update_spinning_away).expect("update");
+        let spin_after = world.get::<SpinningAway>(e).expect("still spinning");
+        assert!(spin_after.time_left <= 1.75);
+
+        world.get_mut::<SpinningAway>(e).unwrap().time_left = 0.0;
+        world.run_system_once(update_spinning_away).expect("finish update");
+        assert!(world.get_entity(e).is_err(), "entity despawns after spin time elapses");
     }
 }

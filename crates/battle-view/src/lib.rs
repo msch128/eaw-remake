@@ -323,6 +323,7 @@ impl BattleSession {
         let mut particles: Vec<String> = Vec::new();
         for s in &self.visuals.ships {
             particles.extend(s.death_effects.iter().cloned());
+            particles.extend(s.spin_away.as_ref().and_then(|spin| spin.explosion.clone()));
             particles.extend(s.hardpoints.iter().filter_map(|h| h.death_effect.clone()));
             particles.extend(s.asteroid_hit_particles.clone());
             // `Damage_Particles` names a bone with fire proxies or a particle object (`request_particles` keeps the objects).
@@ -532,7 +533,7 @@ impl Plugin for BattleViewPlugin {
                             ships::update_ships,
                             ships::update_arrival_flashes,
                             ships::update_departures,
-                            (ships::update_dying, ships::update_wrecks, effects::bloom_pulse).chain(),
+                            (ships::update_dying, ships::update_wrecks, ships::update_spinning_away, effects::bloom_pulse).chain(),
                             ships::update_debris_chunks,
                             ships::remove_after,
                             effects::update_projectiles,

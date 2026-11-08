@@ -249,7 +249,16 @@ pub fn battle_audio(
                 mem.shield_down_warned.remove(ship);
                 let Some(&(def, side)) = mem.ships.get(ship) else { continue };
                 let vis = visuals.ship(def);
-                if let Some(n) = vis.sfx.death.as_deref() {
+                let seed = *ship ^ 0x9E37_79B9;
+                let mut s = seed;
+                let will_spin = vis.spin_away.as_ref().map_or(false, |spin| crate::ships::lcg(&mut s) < spin.chance);
+                if will_spin {
+                    if let Some(n) = vis.spin_away.as_ref().and_then(|spin| spin.sfx.as_deref()) {
+                        send(n, Some(sim_to_bevy(*pos)), rt.entities.get(ship).copied(), &mut stats, &mut out);
+                    } else if let Some(n) = vis.sfx.death.as_deref() {
+                        send(n, Some(sim_to_bevy(*pos)), rt.entities.get(ship).copied(), &mut stats, &mut out);
+                    }
+                } else if let Some(n) = vis.sfx.death.as_deref() {
                     send(n, Some(sim_to_bevy(*pos)), rt.entities.get(ship).copied(), &mut stats, &mut out);
                 }
                 if let Some(n) = vis.sfx.death_end.as_deref() {
