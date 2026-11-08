@@ -263,6 +263,8 @@ pub struct HealDef {
     pub single: bool,
     /// Bit mask of healed classes (`Applicable_Unit_Categories`; 0 = any).
     pub classes: u16,
+    /// `Excluded_Unit_Types`, lower case: these ship types are never healed.
+    pub excluded: Vec<String>,
 }
 
 /// A `Combat_Bonus_Ability` with `Space_Automatic` activation: an aura that boosts the friendly ships of some classes
@@ -1536,6 +1538,7 @@ impl Catalog {
                         interval: num("heal_interval_in_secs").max(0.5),
                         single: a.fields.get("single_target_heal").is_some_and(|v| alamo_data::xml::parse_bool(v)),
                         classes: a.fields.get("applicable_unit_categories").map_or(0, |v| alamo_data::xml::split_list(v).iter().filter_map(|t| TargetClass::from_token(t)).fold(0u16, |m, c| m | c.bit())),
+                        excluded: a.fields.get("excluded_unit_types").map(|v| alamo_data::xml::split_list(v).iter().map(|t| t.to_ascii_lowercase()).collect()).unwrap_or_default(),
                     }
                 })
                 .filter(|h| h.amount > 0.0 || h.percent > 0.0)

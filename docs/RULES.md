@@ -343,6 +343,9 @@ stays as a derived figure for bars and decisions (`ShipDef::hull` times the shar
 * Estimate: ships with destroyable hardpoints and none of type engine get a synthesised engine hardpoint 0.75 radii
   astern (health 8% of their destroyable hardpoint health, clamped to 1000 to 3000), because some capitals have none
   in the XML.
+* Estimate, healing (`Force_Healing_Ability`, the healing harmonic bomb): a heal of N hull points mends N / `ShipDef::hull`
+  of the unit's total hardpoint health, the most damaged living hardpoint (by share of its health) first, each up to its
+  maximum; destroyed hardpoints stay destroyed (the data has no rule that rebuilds them). The hull figure follows.
 
 ## 2.4 Squadrons, carriers, stations
 
@@ -416,7 +419,7 @@ the ability under the AI's rules (`Command::SetAutocast`).
 | `STEALTH` | Data: toggle or timed. Estimate: hidden from enemies unless within `stealth_detection` (500) |
 | `FOW_REVEAL_PING` | Data: `Effective_Radius`. Estimate: reveals the area for 5 s |
 | `CORRUPT_SYSTEMS` | Data: `Activation_Max_Range`, `Duration_In_Seconds`, `Shield_Drain_Per_Second`, `Inaccuracy_Radius`. Drains the shield of an enemy ship at the chosen point; a drained shield stays down the usual 4 s. The AI uses it on the enemy with the most shield in range |
-| `Force_Healing_Ability` | Data: hull `Heal_Amount` + `Heal_Percent` of max per `Heal_Interval_In_Secs`, on the ship or friends within `Heal_Range` (single target = most damaged) |
+| `Force_Healing_Ability` | Data: hull `Heal_Amount` + `Heal_Percent` of max per `Heal_Interval_In_Secs`, on the ship or friends within `Heal_Range` (single target = most damaged), never on `Excluded_Unit_Types`; ships with destroyable hardpoints heal those (2.3) |
 | `Combat_Bonus_Ability` | Data: `Damage_Bonus_Percentage`, `Health/Shield/Defense_Bonus_Percentage` (damage taken divided by 1 + bonus), `Fire_Range_Bonus_Percentage`, `Movement_Speed_Bonus_Percentage`, `Applicable_Unit_Categories`. Estimate: the data has no radius, so the aura covers the whole side. Per `Stacking_Category` the strongest bonus applies, categories add; negative values (Gorgon -40% shields) are maluses |
 | `Redirect_Blaster_Ability` | Data: `Reaction_Arc_In_Degrees`, `Block_Chance`, `Redirect_Chance`. Estimate: a redirected shot deals its damage to the shooter instead of re-aiming the bolt. An ability that starts disabled stays off until a story grant (`NEW_POWER_FOR_ALL`) names that unit and ability; `Reflector_Shield` is block 0.15, redirect 0, arc 350 |
 | `ROCKET_ATTACK`, `SWAP_WEAPONS` | Estimate: for the duration (10 s where the data has none) missile, rocket and torpedo hardpoints reload at 0.4x delay |

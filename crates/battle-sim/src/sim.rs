@@ -1549,15 +1549,7 @@ impl Battle {
                     }
                     incoming = (over / 2.0).floor();
                 }
-                // The hull figure everything else reads (bars, retreat and targeting decisions) is the share of hardpoint health that is left.
-                let (left, total) = def
-                    .hardpoints
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, d)| d.destroyable)
-                    .fold((0.0f32, 0.0f32), |(l, t), (i, d)| (l + if s.hps[i].alive { s.hps[i].health.max(0.0) } else { 0.0 }, t + d.health));
-                let any_alive = def.hardpoints.iter().enumerate().any(|(i, d)| d.destroyable && s.hps[i].alive);
-                s.hull = if any_alive { (def.hull * left / total.max(1.0)).max(0.01) } else { 0.0 };
+                s.hull = hardpoint_hull(def, s);
             }
             if record {
                 self.events.push(Event::Hit { ship: id, attacker, projectile: proj, pos, kind, damage: h });
@@ -2129,7 +2121,7 @@ impl Battle {
                 let d = cat.ship(s.def);
                 let dist = s.pos.dist(pos) - d.radius;
                 if s.side == side && b.heal_amount > 0.0 && dist <= b.heal_radius && (b.heal_classes == 0 || b.heal_classes & d.class.bit() != 0) {
-                    s.hull = (s.hull + b.heal_amount).min(d.hull);
+                    heal(d, s, b.heal_amount);
                 }
                 if s.side != side && b.blast_damage > 0.0 && dist <= b.blast_radius {
                     let tier = if b.blast_tiers > 0 { ((dist.max(0.0) / b.blast_radius) * b.blast_tiers as f32).floor().min(b.blast_tiers as f32 - 1.0) } else { 0.0 };
@@ -2516,11 +2508,11 @@ impl Battle {
                 targets.truncate(1);
             }
             for j in targets {
-                let max = cat.ship(self.ships[j].def).hull;
-                let o = &mut self.ships[j];
-                if max > 0.0 && o.hull < max {
-                    o.hull = (o.hull + h.amount + h.percent * max).min(max);
+                let od = cat.ship(self.ships[j].def);
+                if !h.excluded.is_empty() && h.excluded.contains(&od.name.to_ascii_lowercase()) {
+                    continue;
                 }
+                heal(od, &mut self.ships[j], h.amount + h.percent * od.hull);
             }
         }
     }
@@ -2649,6 +2641,46 @@ pub fn simulate(setup: BattleSetup, max_steps: u64) -> (BattleResult, u64) {
     let mut b = Battle::new(setup);
     let steps = b.run_to_end(max_steps);
     (b.result(), steps)
+}
+
+/// The hull figure of a ship with destroyable hardpoints (docs/RULES.md 2.3): `ShipDef::hull` times the share of their health that is left,
+/// 0 once the last one is destroyed. Everything else reads it (bars, retreat and targeting decisions).
+fn hardpoint_hull(def: &ShipDef, s: &Ship) -> f32 {
+    let (left, total) = def
+        .hardpoints
+        .iter()
+        .enumerate()
+        .filter(|(_, d)| d.destroyable)
+        .fold((0.0f32, 0.0f32), |(l, t), (i, d)| (l + if s.hps[i].alive { s.hps[i].health.max(0.0) } else { 0.0 }, t + d.health));
+    let any_alive = def.hardpoints.iter().enumerate().any(|(i, d)| d.destroyable && s.hps[i].alive);
+    if any_alive { (def.hull * left / total.max(1.0)).max(0.01) } else { 0.0 }
+}
+
+/// Heals `amount` hull points. A ship with destroyable hardpoints has no hull pool, so the heal mends their health instead (estimate,
+/// docs/RULES.md 2.3): `amount / ShipDef::hull` of their total health, the most damaged living hardpoint (by share) first, each up to its
+/// maximum; destroyed hardpoints stay destroyed.
+fn heal(def: &ShipDef, s: &mut Ship, amount: f32) {
+    if amount <= 0.0 || def.hull <= 0.0 {
+        return;
+    }
+    if !def.hardpoints.iter().any(|d| d.destroyable) {
+        s.hull = (s.hull + amount).min(def.hull.max(s.hull));
+        return;
+    }
+    let total: f32 = def.hardpoints.iter().filter(|d| d.destroyable).map(|d| d.health).sum();
+    let mut points = amount * total / def.hull;
+    let mut hurt: Vec<usize> = (0..def.hardpoints.len()).filter(|&i| def.hardpoints[i].destroyable && s.hps[i].alive && s.hps[i].health < def.hardpoints[i].health).collect();
+    let share = |i: usize| s.hps[i].health / def.hardpoints[i].health.max(1e-3);
+    hurt.sort_by(|&a, &b| share(a).total_cmp(&share(b)).then(a.cmp(&b)));
+    for i in hurt {
+        if points <= 0.0 {
+            break;
+        }
+        let gain = (def.hardpoints[i].health - s.hps[i].health).min(points);
+        s.hps[i].health += gain;
+        points -= gain;
+    }
+    s.hull = hardpoint_hull(def, s);
 }
 
 fn ability_product(def: &ShipDef, s: &Ship, f: impl Fn(&AbilityDef) -> f32) -> f32 {

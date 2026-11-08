@@ -395,9 +395,9 @@ fn stealth_and_reveal_pings_change_what_is_seen() {
 #[test]
 fn healing_abilities_repair_the_ship_or_friends_in_range() {
     let mut medic = ship("medic", 10000.0, 0.0, vec![]);
-    medic.heals.push(battle_sim::HealDef { range: 0.0, amount: 4.0, percent: 0.01, interval: 2.0, single: false, classes: 0 });
+    medic.heals.push(battle_sim::HealDef { range: 0.0, amount: 4.0, percent: 0.01, interval: 2.0, single: false, classes: 0, excluded: Vec::new() });
     let mut tender = ship("tender", 1000.0, 0.0, vec![]);
-    tender.heals.push(battle_sim::HealDef { range: 5000.0, amount: 100.0, percent: 0.0, interval: 1.0, single: true, classes: 0 });
+    tender.heals.push(battle_sim::HealDef { range: 5000.0, amount: 100.0, percent: 0.0, interval: 1.0, single: true, classes: 0, excluded: Vec::new() });
     let cat = Catalog::from_defs(vec![medic, tender], vec![laser()]);
     let mut b = Battle::new(setup(cat, "medic", "tender", 1, 1, cfg()));
     let (m, t) = (b.ships.iter().find(|s| s.side == 0).unwrap().id, b.ships.iter().find(|s| s.side == 1).unwrap().id);
@@ -826,6 +826,51 @@ fn an_ion_super_laser_stuns_instead_of_destroying() {
     assert!(s.alive && s.hull == 5000.0, "no hull damage: alive {} hull {}", s.alive, s.hull);
     assert_eq!(s.shield, 0.0, "the shield is gone");
     assert!(s.stun > 800.0 && s.stun_speed_cut == 0.75 && s.stun_rate_cut == 0.75, "stunned: {} {} {}", s.stun, s.stun_speed_cut, s.stun_rate_cut);
+}
+
+#[test]
+fn healing_repairs_the_hardpoints_of_ships_that_have_them() {
+    // A ship with destroyable hardpoints has no hull pool of its own (docs/RULES.md 2.3): a heal of 100 hull points mends 100 / 1000 of its
+    // hardpoint health, the most damaged living hardpoint first; a destroyed one stays destroyed.
+    let mut a = gun("a", 100.0);
+    a.offset = Vec3::new(0.0, 50.0, 0.0);
+    let mut c = gun("c", 100.0);
+    c.offset = Vec3::new(0.0, -50.0, 0.0);
+    let mut healer = ship("healer", 1000.0, 0.0, vec![a, gun("b", 100.0), c]);
+    healer.heals.push(HealDef { range: 0.0, amount: 100.0, interval: 1.0, ..HealDef::default() });
+    let mut b = Battle::new(setup(Catalog::from_defs(vec![healer, ship("idle", 1.0e6, 0.0, vec![])], vec![laser()]), "healer", "idle", 1, 1, BattleConfig { half_size: 20_000.0, ..cfg() }));
+    let h = b.ships.iter().find(|s| s.side == 0).unwrap().id as usize;
+    b.ships[h].hps[0].health = 20.0;
+    b.ships[h].hps[1].health = 80.0;
+    b.ships[h].hps[2].health = 0.0;
+    b.ships[h].hps[2].alive = false;
+    b.ships[h].hull = 1000.0 * 100.0 / 300.0;
+    // One pulse: the first comes at once, the next after `interval`.
+    for _ in 0..15 {
+        b.step();
+    }
+    let s = &b.ships[h];
+    // 100 hull points of a 1000 hull over 300 hardpoint health: 30 points, all to the most damaged hardpoint.
+    assert_eq!((s.hps[0].health, s.hps[1].health, s.hps[2].alive), (50.0, 80.0, false));
+    assert!((s.hull - 1000.0 * 130.0 / 300.0).abs() < 0.5, "the hull figure follows the hardpoints: {}", s.hull);
+}
+
+#[test]
+fn heals_skip_their_excluded_unit_types() {
+    let mut medic = ship("medic", 1000.0, 0.0, vec![]);
+    medic.heals.push(HealDef { range: 5000.0, amount: 50.0, interval: 1.0, excluded: vec!["patient".into()], ..HealDef::default() });
+    let cat = Catalog::from_defs(vec![medic, ship("patient", 1000.0, 0.0, vec![]), ship("idle", 1.0e6, 0.0, vec![])], vec![laser()]);
+    let mut su = setup(cat, "medic", "idle", 1, 1, cfg());
+    su.sides[0].units.push(UnitSetup { ship: 1, count: 1, tag: 7 });
+    let mut b = Battle::new(su);
+    let (m, p) = (b.ships.iter().find(|s| s.def == 0).unwrap().id as usize, b.ships.iter().find(|s| s.def == 1).unwrap().id as usize);
+    b.ships[m].hull = 500.0;
+    b.ships[p].hull = 500.0;
+    for _ in 0..15 {
+        b.step();
+    }
+    assert!(b.ships[m].hull > 500.0, "the medic heals itself");
+    assert_eq!(b.ships[p].hull, 500.0, "an excluded type is not healed");
 }
 
 fn ability(kind: &str) -> AbilityDef {
