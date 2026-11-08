@@ -80,3 +80,41 @@ fn a_viscount_that_ends_a_battle_in_phase_3_is_back_on_the_map_as_phase_3() {
     assert!(at, "at the planet of the battle, which the Rebels still hold");
     assert_eq!(sim.runtime().global_number("Viscount_Level"), Some(0.0), "the plot resets the level");
 }
+
+#[test]
+fn an_auto_resolved_battle_sets_no_level_and_a_lost_phase_stays_lost() {
+    // The object scripts exit outside space battles (`Get_Game_Mode() ~= "Space"`): auto-resolve has no phase outcome in the Remake.
+    let Some(mut sim) = scripted() else { return };
+    for _ in 0..5 {
+        sim.step(1.0);
+    }
+    let (w, rebel, empire) = sim.with_sim(|s| (s.world().clone(), s.world().faction_id("Rebel").unwrap(), s.world().faction_id("Empire").unwrap()));
+    let p1 = w.unit_id("Viscount_Star_Defender_P1").unwrap();
+    let planet = sim
+        .with_sim(|s| (0..w.planets.len() as u32).find(|&p| w.real[p as usize] && s.galaxy().planets[p as usize].owner.is_none() && s.galaxy().fleets_at(p).next().is_none()))
+        .expect("an empty planet");
+    sim.with_sim_mut(|s| {
+        s.set_planet_owner(planet, Some(rebel));
+        s.spawn_units(rebel, planet, p1, 1);
+        s.spawn_units(empire, planet, w.unit_id("Executor_Star_Dreadnought").unwrap(), 6);
+    });
+    let mut battle = None;
+    for _ in 0..30 {
+        sim.step(1.0);
+        battle = sim.with_sim(|s| s.pending_battles().iter().find(|b| b.planet == planet).map(|b| b.id));
+        if battle.is_some() {
+            break;
+        }
+    }
+    let events = sim.resolve_battle_auto(battle.expect("a battle")).expect("resolved");
+    assert!(events.iter().any(|e| matches!(e, galaxy_sim::Event::BattleLost { faction, .. } if *faction == rebel)), "six Executors win");
+    for _ in 0..5 {
+        sim.step(1.0);
+    }
+    let phases: u32 = sim.with_sim(|s| {
+        s.galaxy().fleets.values().filter(|f| f.owner == rebel).flat_map(|f| f.units.iter()).filter(|(u, _)| w.units[**u as usize].name.starts_with("Viscount_Star_Defender_P")).map(|(_, n)| *n).sum()
+    });
+    eprintln!("Viscount phases left {phases}, Viscount_Level {:?}", sim.runtime().global_number("Viscount_Level"));
+    assert_eq!(phases, 0, "no phase comes back");
+    assert_eq!(sim.runtime().global_number("Viscount_Level").unwrap_or(0.0), 0.0);
+}

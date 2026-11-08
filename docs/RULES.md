@@ -367,6 +367,9 @@ build-menu filters, not a start mode. The mode is this project's own:
 * Data, repair (`Scripts/GameObject/Upgrade_Units.lua`): `Repair_Phase_<n>_<ship>` (Executor, Eclipse, Piett and Viscount 2
   to 5, Subjugator 2 to 4; `Vessel_Upgrade_Template`, `Required_Orbiting_Units` the damaged phase, 140000 credits and
   200 s for the Viscount) turns phase n of the ship in orbit into phase n - 1, like the hero upgrades.
+* Data, auto-resolve: the object scripts exit outside space battles (`Get_Game_Mode() ~= "Space"`), so the Remake has no
+  phase outcome without a tactical battle: an auto-resolved battle sets no level and a destroyed phase is lost (the
+  plots run on its `STORY_LOSE_BATTLES` and find level 0).
 
 # Part 2: Space battles (`battle-sim`)
 
