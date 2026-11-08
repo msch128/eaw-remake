@@ -534,11 +534,11 @@ fn marker_probe(
     for (name, node) in &nodes {
         let Some((ship, hp)) = name.as_str().strip_prefix("hardpoint ").and_then(|id| id.split_once(':')) else { continue };
         let (Ok(ship), Ok(hp)) = (ship.parse::<u32>(), hp.parse::<usize>()) else { continue };
-        let (Val::Px(left), Val::Px(top)) = (node.left, node.top) else { continue };
+        let (Val::Px(left), Val::Px(top), Val::Px(width)) = (node.left, node.top, node.width) else { continue };
         let Some(s) = ships.0.get(&ship) else { continue };
         let Ok(now) = cam.world_to_viewport(gt, battle_view::control::hardpoint_world(&rt, s, hp)) else { continue };
-        // eaw-ui places the 30 px reticle by its top left corner, in UI-scaled pixels.
-        let drawn = Vec2::new(left, top) * scale.0 + Vec2::splat(15.0);
+        // eaw-ui places the reticle by its top left corner, in UI-scaled pixels.
+        let drawn = (Vec2::new(left, top) + Vec2::splat(width * 0.5)) * scale.0;
         err.push(drawn.distance(now));
     }
     if !err.is_empty() {

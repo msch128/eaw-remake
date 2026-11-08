@@ -1091,8 +1091,18 @@ fn autocast_rings(
     }
 }
 
-/// Reticle kind of a hardpoint (`I_HARD_POINT_RETICLE_<KIND>`).
-fn reticle_kind(kind: HpKind) -> &'static str {
+/// The ship whose hardpoints carry reticles: the one under the cursor, own or enemy (Remake video b0853s), else the selected enemy. A
+/// selected own ship that is not under the cursor has none (b0854s-b0859s: an own ship selected alone, no reticles).
+fn reticle_target(hover: &Hover, sel: &Selection) -> Option<u32> {
+    hover.ship.or(sel.enemy)
+}
+
+/// Reticle kind of a hardpoint (`I_HARD_POINT_RETICLE_<KIND>`): from the reticle art the data names for its type (`art`, see
+/// [`crate::visuals::HpVisual::reticle`]), else by its function.
+fn reticle_kind(art: Option<&str>, kind: HpKind) -> String {
+    if let Some(k) = art.and_then(|a| a.strip_prefix("I_HARD_POINT_RETICLE_")).filter(|k| !k.is_empty()) {
+        return k.to_string();
+    }
     match kind {
         HpKind::Weapon => "WEAPONS",
         HpKind::ShieldGenerator => "SHIELD_GEN",
@@ -1101,6 +1111,7 @@ fn reticle_kind(kind: HpKind) -> &'static str {
         HpKind::TractorBeam => "GRAV_WELL",
         _ => "GENERIC",
     }
+    .to_string()
 }
 
 /// Whether a unit's overlay carries the icon box: a squadron only while it is selected or hovered, any other unit when it shows
@@ -1335,12 +1346,11 @@ fn sync_overlays(
     let (overlays, icons) = unit_overlays(&inputs, &mut icon_names, &mut craft_units.0, &view);
     let mut next = TacticalOverlays { ships: overlays, hardpoints: Vec::new() };
     let next_icons = SquadIcons { items: icons };
-    // Hardpoint reticles with their health on the hovered ship, the selected enemy or a lone selected ship. They are clickable
-    // (attack that hardpoint) when they belong to an enemy and own ships are selected.
-    let lone = (sel.ships.len() == 1).then(|| sel.ships[0]);
-    let target = hover.ship.or(sel.enemy).or(lone);
-    if let Some(s) = target.and_then(|id| ships.0.get(&id)) {
+    // Hardpoint reticles on the ship under the cursor (own or enemy) or the selected enemy. They are clickable (attack that hardpoint) when
+    // they belong to an enemy and own ships are selected.
+    if let Some(s) = reticle_target(&hover, &sel).and_then(|id| ships.0.get(&id)) {
         let def = rt.catalog.ship(s.def);
+        let vis = rt.visuals.ship(s.def);
         let can_attack = s.side != player && !sel.ships.is_empty();
         for (i, h) in def.hardpoints.iter().enumerate() {
             if !h.destroyable || !is_markable(h.kind) {
@@ -1353,7 +1363,7 @@ fn sync_overlays(
             let Some(p) = project(control::hardpoint_world(&rt, s, i)) else { continue };
             next.hardpoints.push(HardpointMarker {
                 id: hardpoint_id(s.id, i),
-                kind: reticle_kind(h.kind).to_string(),
+                kind: reticle_kind(vis.hardpoints.get(i).and_then(|v| v.reticle[usize::from(s.side == player)].as_deref()), h.kind),
                 tracked: hover.hardpoint == Some((s.id, i as u16)),
                 screen_pos: p,
                 health: s.hp_health.get(i).copied().unwrap_or(1.0),
@@ -2202,6 +2212,24 @@ mod tests {
         assert_eq!(radar.mouse_over_sfx.as_deref(), Some("GUI_Highlight_Mouse_Over"));
         assert!(db.get("radar_galactic").expect("radar_galactic").click_sfx.is_none());
         assert!(db.get("radar_galactic_adv_map").expect("radar_galactic_adv_map").click_sfx.is_none());
+    }
+
+    #[test]
+    fn reticles_mark_the_ship_under_the_cursor_not_a_selected_own_ship() {
+        let lone = Selection { ships: vec![5], enemy: None };
+        assert_eq!(reticle_target(&Hover::default(), &lone), None, "an own ship selected alone and not hovered has no reticles");
+        let over_own = Hover { ship: Some(5), ..Hover::default() };
+        assert_eq!(reticle_target(&over_own, &lone), Some(5), "the cursor on an own ship shows its reticles");
+        let enemy = Selection { ships: vec![5], enemy: Some(9) };
+        assert_eq!(reticle_target(&Hover::default(), &enemy), Some(9), "a selected enemy keeps them");
+        assert_eq!(reticle_target(&Hover { ship: Some(7), ..Hover::default() }, &enemy), Some(7), "the ship under the cursor first");
+    }
+
+    #[test]
+    fn reticle_art_follows_the_hardpoint_type_of_the_data() {
+        assert_eq!(reticle_kind(Some("I_HARD_POINT_RETICLE_WEAPONS_TURBO"), HpKind::Weapon), "WEAPONS_TURBO");
+        assert_eq!(reticle_kind(Some("I_HARD_POINT_RETICLE_GENERIC"), HpKind::TractorBeam), "GENERIC");
+        assert_eq!(reticle_kind(None, HpKind::Engine), "ENGINES", "no art in the data: by the hardpoint's function");
     }
 
     #[test]

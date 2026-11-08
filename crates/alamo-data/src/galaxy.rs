@@ -26,6 +26,9 @@ pub struct GameData {
     pub factions: Vec<Faction>,
     /// `Gameconstants.xml` as `lower-case tag -> trimmed text` (last occurrence wins).
     pub game_constants: HashMap<String, String>,
+    /// `Gameconstants.xml` tags that occur more than once (`HardPoint_Target_Reticle_Enemy_Texture`, one per hardpoint type), as
+    /// `lower-case tag -> every trimmed text in file order`; single tags are here too, with one entry.
+    pub game_constant_lists: HashMap<String, Vec<String>>,
     /// Damage type vs armor type multipliers from `Gameconstants.xml`.
     pub combat: CombatTable,
     /// Localized strings (empty if the `.dat` was not found).
@@ -319,6 +322,7 @@ pub fn load_galaxy(src: &dyn FileSource) -> (GameData, Vec<Warning>) {
         for c in &root.children {
             data.game_constants
                 .insert(c.name.clone(), c.text_trimmed().to_string());
+            data.game_constant_lists.entry(c.name.clone()).or_default().push(c.text_trimmed().to_string());
         }
         data.combat = CombatTable::from_constants(&root);
     }

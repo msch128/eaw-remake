@@ -24,6 +24,10 @@ pub struct HpVisual {
     pub hp_type: String,
     /// Break-off prop model that detaches and drifts on destruction (`Death_Breakoff_Prop`).
     pub breakoff: Option<BreakoffVisual>,
+    /// Reticle art of the hardpoint's `Type` on an enemy and on an own ship (`HardPoint_Target_Reticle_Enemy_Texture` /
+    /// `_Friendly_Texture` in `Gameconstants.xml`, e.g. `I_HARD_POINT_RETICLE_WEAPONS_TURBO` for `HARD_POINT_WEAPON_LASER`); `None` where
+    /// the data names none.
+    pub reticle: [Option<String>; 2],
 }
 
 /// Detaching break-off prop description when a hardpoint is destroyed (`Death_Breakoff_Prop`).
@@ -324,6 +328,7 @@ impl VisualCatalog {
                         fire_sfx: field("fire_sfxevent"),
                         hp_type: hd.hp_type.trim().to_ascii_uppercase(),
                         breakoff,
+                        reticle: [reticle_art(data, "hardpoint_target_reticle_enemy_texture", &hd.hp_type), reticle_art(data, "hardpoint_target_reticle_friendly_texture", &hd.hp_type)],
                     }
                 })
                 .collect();
@@ -525,5 +530,39 @@ pub fn is_markable(kind: HpKind) -> bool {
     !matches!(kind, HpKind::Facing | HpKind::Other)
 }
 
+/// Reticle art that the `Gameconstants.xml` list `tag` (`HardPoint_Target_Reticle_Enemy_Texture`, entries `HARD_POINT_ENGINE,
+/// I_Hard_Point_Reticle_Engines`) names for the hardpoint type `hp_type`, upper-case without extension; the last entry for a type wins.
+pub fn reticle_art(data: &GameData, tag: &str, hp_type: &str) -> Option<String> {
+    let hp_type = hp_type.trim();
+    data.game_constant_lists
+        .get(tag)?
+        .iter()
+        .filter_map(|v| v.split_once(','))
+        .filter(|(t, _)| t.trim().eq_ignore_ascii_case(hp_type))
+        .map(|(_, art)| art.trim())
+        .filter(|art| !art.is_empty())
+        .last()
+        .map(|art| art.rsplit_once('.').map_or(art, |(stem, _)| stem).to_ascii_uppercase())
+}
+
 /// Lower-cased bone name lookup for a loaded model.
 pub type BoneMap = HashMap<String, Entity>;
+
+#[cfg(test)]
+mod reticle_tests {
+    use super::*;
+
+    #[test]
+    fn reticle_art_is_the_one_the_constants_name_for_the_hardpoint_type() {
+        let mut data = GameData::default();
+        data.game_constant_lists.insert(
+            "hardpoint_target_reticle_enemy_texture".into(),
+            vec!["HARD_POINT_ENGINE, I_Hard_Point_Reticle_Engines".into(), "HARD_POINT_WEAPON_LASER, I_HARD_POINT_RETICLE_WEAPONS_TURBO".into()],
+        );
+        let art = |t: &str| reticle_art(&data, "hardpoint_target_reticle_enemy_texture", t);
+        assert_eq!(art("HARD_POINT_WEAPON_LASER").as_deref(), Some("I_HARD_POINT_RETICLE_WEAPONS_TURBO"));
+        assert_eq!(art(" hard_point_engine ").as_deref(), Some("I_HARD_POINT_RETICLE_ENGINES"));
+        assert_eq!(art("HARD_POINT_WEAPON_MISSILE"), None, "a type the list does not name");
+        assert_eq!(reticle_art(&data, "hardpoint_target_reticle_friendly_texture", "HARD_POINT_ENGINE"), None);
+    }
+}

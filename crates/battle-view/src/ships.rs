@@ -2070,6 +2070,7 @@ mod tests {
             death_effect: None,
             fire_sfx: None,
             hp_type: "HARD_POINT_WEAPON_LASER".into(),
+            reticle: [None, None],
             breakoff: Some(crate::visuals::BreakoffVisual {
                 model: "EV_StarDestroyer_HP00_L-F.alo".into(),
                 scale: 1.0,

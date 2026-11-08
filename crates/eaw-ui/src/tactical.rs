@@ -505,7 +505,6 @@ pub struct ShipOverlayNode {
 #[derive(Component)]
 pub struct HardpointNode {
     id: String,
-    fill: Entity,
 }
 
 /// Spawns the overlay layer (Startup).
@@ -870,16 +869,37 @@ pub fn hardpoint_reticle(kind: &str, tracked: bool) -> String {
     )
 }
 
-/// Creates, moves and removes hardpoint markers; emits [`EawHardpointClicked`].
+/// `HardPoint_Target_Reticle_Enemy_Screen_Size` of the Remake (`Gameconstants.xml`, the friendly one is the same): a reticle is this share
+/// of the screen height (23.8 px at 1080p; the Remake video measures 20-24 px, b0853s). Used when the data has no value.
+pub const RETICLE_SCREEN_SIZE: f32 = 0.022;
+
+/// Reticle size in design pixels (1/768 of the screen height, the unit [`UiScale`] scales) for the data's screen share, if any.
+pub fn reticle_design_px(game: Option<&GameData>) -> f32 {
+    let share = game
+        .and_then(|g| g.game_constants.get("hardpoint_target_reticle_enemy_screen_size"))
+        .and_then(|v| v.trim().parse::<f32>().ok())
+        .filter(|v| *v > 0.0 && *v < 1.0)
+        .unwrap_or(RETICLE_SCREEN_SIZE);
+    share * 768.0
+}
+
+/// Colour a reticle is drawn in: the white art tinted by the hardpoint's health like a bar (green in the Remake at full health, v0750s,
+/// b0853s), dark once destroyed.
+pub fn reticle_tint(health: f32, destroyed: bool) -> Color {
+    if destroyed { Color::srgba(0.3, 0.3, 0.3, 0.55) } else { bar_color(health) }
+}
+
+/// Creates, moves and removes hardpoint markers; emits [`EawHardpointClicked`]. Each is the reticle art of its hardpoint at the data's
+/// screen size, tinted by its health; there is no health line under it (the Remake shows a hardpoint's health in its tooltip).
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub(crate) fn hardpoint_markers(
     tac: Res<TacticalOverlays>,
     scale: Res<UiScale>,
+    assets: Option<Res<crate::EawUiAssets>>,
     root: Query<Entity, With<TacticalOverlayRoot>>,
     mut existing: Local<HashMap<String, Entity>>,
     clicks: Query<(&HardpointNode, &Interaction), Changed<Interaction>>,
-    mut markers: Query<(&HardpointNode, &mut Node, &mut ImageNode)>,
-    mut fills: Query<(&mut Node, &mut BackgroundColor), Without<HardpointNode>>,
+    mut markers: Query<(&mut Node, &mut ImageNode), With<HardpointNode>>,
     mut textures: ResMut<UiTextures>,
     mut images: ResMut<Assets<Image>>,
     mut commands: Commands,
@@ -899,15 +919,9 @@ pub(crate) fn hardpoint_markers(
         keep
     });
     let s = scale.0;
-    const SIZE: f32 = 30.0;
+    let size = reticle_design_px(assets.as_ref().and_then(|a| a.game.as_deref()));
     for h in &tac.hardpoints {
-        let tint = if h.destroyed {
-            Color::srgba(0.3, 0.3, 0.3, 0.55)
-        } else if h.targetable {
-            Color::WHITE
-        } else {
-            Color::srgba(0.6, 0.6, 0.65, 0.7)
-        };
+        let tint = reticle_tint(h.health, h.destroyed);
         let handle = textures
             .get(&mut images, &hardpoint_reticle(&h.kind, h.tracked))
             .or_else(|| textures.get(&mut images, &hardpoint_reticle("GENERIC", h.tracked)))
@@ -918,6 +932,8 @@ pub(crate) fn hardpoint_markers(
                 .map_or_else(ImageNode::default, ImageNode::new)
                 .with_color(tint)
         };
+        // The node is `size` design px wide, `size * s` logical px: centred on the hardpoint.
+        let (left, top) = (px(h.screen_pos.x - size * 0.5 * s, s), px(h.screen_pos.y - size * 0.5 * s, s));
         match existing.get(&h.id) {
             None => {
                 let e = commands
@@ -926,47 +942,27 @@ pub(crate) fn hardpoint_markers(
                         Button,
                         Node {
                             position_type: PositionType::Absolute,
-                            left: px(h.screen_pos.x - SIZE * 0.5, s),
-                            top: px(h.screen_pos.y - SIZE * 0.5, s),
-                            width: Val::Px(SIZE),
-                            height: Val::Px(SIZE),
+                            left,
+                            top,
+                            width: Val::Px(size),
+                            height: Val::Px(size),
                             ..default()
                         },
                         image(),
                         FocusPolicy::Pass,
                         ChildOf(root),
+                        HardpointNode { id: h.id.clone() },
                     ))
                     .id();
-                let fill = commands
-                    .spawn((
-                        Node {
-                            position_type: PositionType::Absolute,
-                            left: Val::Px(3.0),
-                            bottom: Val::Px(-3.0),
-                            height: Val::Px(2.0),
-                            width: Val::Percent(h.health.clamp(0.0, 1.0) * 84.0),
-                            ..default()
-                        },
-                        BackgroundColor(bar_color(h.health)),
-                        FocusPolicy::Pass,
-                        ChildOf(e),
-                    ))
-                    .id();
-                commands.entity(e).insert(HardpointNode {
-                    id: h.id.clone(),
-                    fill,
-                });
                 existing.insert(h.id.clone(), e);
             }
             Some(&e) => {
-                if let Ok((m, mut n, mut img)) = markers.get_mut(e) {
-                    n.left = px(h.screen_pos.x - SIZE * 0.5, s);
-                    n.top = px(h.screen_pos.y - SIZE * 0.5, s);
+                if let Ok((mut n, mut img)) = markers.get_mut(e) {
+                    n.left = left;
+                    n.top = top;
+                    n.width = Val::Px(size);
+                    n.height = Val::Px(size);
                     *img = image();
-                    if let Ok((mut f, mut bg)) = fills.get_mut(m.fill) {
-                        f.width = Val::Percent(h.health.clamp(0.0, 1.0) * 84.0);
-                        bg.0 = bar_color(h.health);
-                    }
                 }
             }
         }
@@ -1389,6 +1385,19 @@ mod tests {
         assert_eq!(hardpoint_reticle("weapons_ion", true), "I_HARD_POINT_RETICLE_WEAPONS_ION_TRACKED.DDS");
         assert_eq!(hardpoint_reticle("", false), "I_HARD_POINT_RETICLE_GENERIC.DDS");
         assert_eq!((bar_class(10.0), bar_class(40.0), bar_class(120.0)), (0, 1, 2));
+    }
+
+    #[test]
+    fn reticles_are_the_data_share_of_the_screen_height_and_tinted_by_health() {
+        // 0.022 of the height: 16.9 design px, 23.8 px at 1080p (it was 30 design px, 42 px).
+        assert!((reticle_design_px(None) - 16.896).abs() < 1e-3);
+        let mut game = GameData::default();
+        game.game_constants.insert("hardpoint_target_reticle_enemy_screen_size".into(), " 0.03 ".into());
+        assert!((reticle_design_px(Some(&game)) - 23.04).abs() < 1e-3);
+        // Green at full health like the Remake's (v0750s), the bar colours below, dark when destroyed; no grey for own hardpoints.
+        assert_eq!(reticle_tint(1.0, false), bar_color(1.0));
+        assert_eq!(reticle_tint(0.2, false), bar_color(0.2));
+        assert_ne!(reticle_tint(1.0, true), bar_color(1.0));
     }
 
     #[test]
