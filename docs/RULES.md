@@ -455,6 +455,15 @@ stays as a derived figure for bars and decisions (`ShipDef::hull` times the shar
 * Data: star bases, shipyards and defence structures are static combatants with their own hardpoints. Golan I to III
   stand in a battle as their `*_Golan_N_Orbital` form and the Uplink Command as its control station, linked through
   `Place_Other_Type_At_Every_Specific_Marker_Position` and `Tactical_Additional_Structure_Type`.
+* Data: tactical build bars (`buildables.rs`). A star base or station offers its `Tactical_Buildable_Objects_Campaign`
+  items to its own faction (the list names a faction, then that faction's items; a captured base of another faction offers
+  nothing). An item costs `Tactical_Build_Cost_Campaign` galactic credits, paid when it is queued, and builds for
+  `Tactical_Build_Time_Seconds` in the side's queue (`Tactical_Production_Queue` `Tactical_Upgrades`), one item after the other. `Tactical_Build_Prerequisites` must be built
+  or queued first, `Build_Limit_Current_For_All_Allies` (1 for every upgrade) caps the count, and an item with
+  `Destroy_Previous_Upgrade_Level` replaces its `Previous_Upgrade_Level_Type` when it finishes (the replaced level cannot be
+  bought again). Purchases and cancellations are journaled commands. The credits a side spent leave the battle with its
+  result (`attrition_credits`, so the galaxy pays them when the result is applied). Estimate: a queued item whose last
+  offering structure is destroyed leaves the queue and its credits come back (the data says nothing).
 * Estimate: fighters stay with their squad leader or carrier when idle and fly strafing runs (approach, break away 1 to
   2.5 s).
 * Launch out of the hangar (estimate): fighters leave along the bay bone's X axis (data: the opening) until 40 u clear

@@ -924,6 +924,8 @@ pub struct ShipDef {
     pub decay: f32,
     /// `Passive_Missile_Shield_Radius`: enemy missiles, torpedoes and rockets that come this close are destroyed (0 = none).
     pub passive_missile_radius: f32,
+    /// `Tactical_Buildable_Objects_Campaign`: `(faction, item)` the structure offers in a battle (faction lower case).
+    pub buildable: Vec<(String, crate::buildables::BuildId)>,
 }
 
 impl ShipDef {
@@ -1214,6 +1216,8 @@ pub struct Catalog {
     pub ai_ignores_fog: bool,
     /// Targeting priority sets.
     pub priority_sets: Vec<PrioritySet>,
+    /// Items of the tactical build bars (see `buildables.rs`).
+    pub buildables: Vec<crate::buildables::BuildableDef>,
     priority_index: HashMap<String, u16>,
     ship_index: HashMap<String, ShipId>,
     proj_index: HashMap<String, ProjId>,
@@ -1736,6 +1740,10 @@ impl Catalog {
         };
         let ai_ignores_fog = data.game_constants.get("aiusesfogofwarspace").is_some_and(|v| !alamo_data::xml::parse_bool(v));
         let mut cat = Catalog { damage, speed_scale: 30.0, shield_interval, depleted_shield_disable, asteroid_field_damage: constant("asteroid_field_damage").unwrap_or(0.0).max(0.0), asteroid_field_damage_rate: constant("asteroid_field_damage_rate").unwrap_or(0.0).clamp(0.0, 1.0), nebula_ability_disable: constant("nebula_ability_disable_time").unwrap_or(0.0).max(0.0), ion_storm_shield_disable: constant("ion_storm_shield_disable_time").unwrap_or(0.0).max(0.0), space_guard_range: constant("space_guard_range").unwrap_or(0.0).max(0.0), formation, ai_ignores_fog, priority_sets, priority_index, ..Catalog::default() };
+        // Tactical build bars of the structures.
+        let bars: Vec<Vec<(String, String)>> = sources.iter().map(|s| crate::buildables::buildable_lists(data, s.name())).collect();
+        let items = crate::buildables::buildable_closure(data, bars.iter().flatten().map(|(_, n)| n.clone()));
+        cat.buildables = crate::buildables::buildable_defs(data, &items);
         // Projectiles.
         let mut proj_names: Vec<String> = Vec::new();
         let hp_defs: Vec<Vec<HardpointDef>> = sources
@@ -1828,6 +1836,7 @@ impl Catalog {
                     set_by(&c, script.as_deref())
                 });
             }
+            def.buildable = bars[i].iter().filter_map(|(f, n)| cat.buildable_id(n).map(|b| (f.clone(), b))).collect();
             cat.ships.push(def);
         }
         // The chase ranges sit on the squadron object; its craft fly by them.
@@ -2350,6 +2359,7 @@ impl Catalog {
             no_collide: src.fields().get("collidable_by_projectile_living").is_some_and(|v| !alamo_data::xml::parse_bool(v)),
             decay: scripts.decay(src.lua_script(), src.name()),
             passive_missile_radius: src.fields().get("passive_missile_shield_radius").and_then(|v| alamo_data::xml::parse_num(v)).unwrap_or(0.0),
+            buildable: Vec::new(),
         }
     }
 
@@ -2526,6 +2536,16 @@ impl Catalog {
     /// Ship definition by id.
     pub fn ship(&self, id: ShipId) -> &ShipDef {
         &self.ships[id as usize]
+    }
+
+    /// Tactical build item id by case-insensitive name.
+    pub fn buildable_id(&self, name: &str) -> Option<crate::buildables::BuildId> {
+        self.buildables.iter().position(|b| b.name.eq_ignore_ascii_case(name.trim())).map(|i| i as crate::buildables::BuildId)
+    }
+
+    /// Tactical build item by id.
+    pub fn buildable(&self, id: crate::buildables::BuildId) -> &crate::buildables::BuildableDef {
+        &self.buildables[id as usize]
     }
 
     /// Ship id by case-insensitive name.

@@ -34,6 +34,7 @@
 mod ai;
 mod arena;
 mod battle;
+pub mod buildables;
 pub mod cheats;
 mod defs;
 mod formation;

@@ -1008,3 +1008,38 @@ fn attrition_credits_lost_tie_squadron_and_lost_hero() {
     let credits_after_apply2 = tac_sim2.galaxy().factions[empire as usize].credits;
     assert_eq!((credits_after_apply2 - credits_before_apply2).round(), 1045.0);
 }
+
+#[test]
+fn tactical_build_purchases_are_paid_from_the_galactic_credits() {
+    let Some(ctx) = load() else { return };
+    let mut sim = new_sim(&ctx);
+    let w = sim.world().clone();
+    let (empire, rebel) = (w.faction_id("Empire").unwrap(), w.faction_id("Rebel").unwrap());
+    let home = w.planet_id("Coruscant_WW").unwrap();
+    sim.galaxy_mut().factions[empire as usize].credits = 5000.0;
+    let xw = w.unit_id("X-Wing_Squadron").unwrap();
+    add_fleet(&mut sim, rebel, xw, 1, home, neighbour(&w, home));
+    let battle = pending(&mut sim);
+    let req = sim.tactical_setup(battle.id).unwrap();
+    let ds = req.sides.iter().position(|s| s.faction == empire).unwrap();
+    let start = sim.galaxy().factions[empire as usize].credits;
+    assert_eq!(req.sides[ds].credits, start as i64);
+    let catalog = catalog_for(&ctx, &req);
+    let config = req.battle_config(None);
+    assert_eq!(config.side_credits[ds], start as i64);
+    let mut b = battle_sim::Battle::new(req.battle_setup(&catalog, config, |_| true).unwrap());
+    let offered = b.buildable(ds as u8);
+    assert!(!offered.is_empty(), "the Coruscant star base offers tactical builds");
+    let item = offered[0];
+    let cost = catalog.buildable(item).cost;
+    assert!(cost > 0);
+    b.command(ds as u8, battle_sim::Command::TacticalBuild { item }).unwrap();
+    // Right after the purchase, against the same battle without it.
+    let plain = battle_sim::Battle::new(req.battle_setup(&catalog, req.battle_config(None), |_| true).unwrap());
+    let baseline = req.result_from(&catalog, &plain.result()).expect("result");
+    let result = req.result_from(&catalog, &b.result()).expect("result");
+    assert_eq!(result.attrition_credits[ds], baseline.attrition_credits[ds] - cost as i32);
+    sim.apply_tactical_result(battle.id, &result).unwrap();
+    let after = sim.galaxy().factions[empire as usize].credits;
+    assert_eq!((after - start).round() as i64, baseline.attrition_credits[ds] as i64 - cost);
+}

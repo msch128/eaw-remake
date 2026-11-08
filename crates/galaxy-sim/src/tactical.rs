@@ -78,6 +78,9 @@ pub struct TacticalSide {
     pub unit_cap: i32,
     /// Story ability grants for this faction (`(unit, ability)`, lower-cased). Copied onto [`BattleConfig::powers`].
     pub powers: BTreeSet<(String, String)>,
+    /// Galactic credits of the faction when the battle starts: what it may spend on the tactical build bars of its stations
+    /// (`BattleConfig::side_credits`; the credits spent come back as a negative `TacticalResult::attrition_credits`).
+    pub credits: i64,
 }
 
 /// Everything a tactical front end needs to build a space battle.
@@ -265,6 +268,7 @@ impl TacticalRequest {
                     shield_mult: world_diff(side.faction).shield,
                     groups,
                     powers: galaxy.factions.get(side.faction as usize).map(|f| f.powers.clone()).unwrap_or_default(),
+                    credits: galaxy.factions.get(side.faction as usize).map_or(0, |f| f.credits.max(0.0) as i64),
                 }
             })
             .collect();
@@ -289,9 +293,10 @@ impl TacticalRequest {
         let unit_cap = self.sides.iter().map(|s| s.unit_cap).max().unwrap_or(150);
         let side_tech = self.sides.iter().map(|s| s.tech).collect();
         let powers = self.sides.iter().map(|s| s.powers.clone()).collect();
+        let side_credits = self.sides.iter().map(|s| s.credits).collect();
         let jump = BattleConfig::default().retreat_jump_seconds;
         let side_retreat_jump = self.sides.iter().map(|s| s.retreat_jump.unwrap_or(jump)).collect();
-        BattleConfig { side_tech, seed: self.seed, max_time: self.max_seconds, half_size, arena, side_mults, retreat_allowed, defenders, unit_cap, powers, side_retreat_jump, ..BattleConfig::default() }
+        BattleConfig { side_tech, seed: self.seed, max_time: self.max_seconds, half_size, arena, side_mults, retreat_allowed, defenders, unit_cap, powers, side_retreat_jump, side_credits, ..BattleConfig::default() }
     }
 
     /// Builds the `battle-sim` setup. Fleet groups carry their group index as the tag; side `i` of the request is

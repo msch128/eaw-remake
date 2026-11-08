@@ -94,6 +94,8 @@ pub struct BattleConfig {
     /// Per side: salvage abilities the side brings besides those of its units, e.g. from upgrades (`SalvageDef::of_object`). Missing
     /// entries mean none.
     pub side_salvage: Vec<Vec<crate::defs::SalvageDef>>,
+    /// Per side: galactic credits the side may spend on tactical builds (`Tactical_Build_Cost_Campaign`). Missing entries: none.
+    pub side_credits: Vec<i64>,
 }
 
 impl Default for BattleConfig {
@@ -131,6 +133,7 @@ impl Default for BattleConfig {
             powers: Vec::new(),
             side_field_mods: Vec::new(),
             side_salvage: Vec::new(),
+            side_credits: Vec::new(),
         }
     }
 }
@@ -284,6 +287,16 @@ pub enum Command {
     CancelRetreat,
     /// A cheat of the F2 menu (see [`crate::cheats`]).
     Cheat(crate::cheats::BattleCheat),
+    /// Buy a tactical build item offered by one of the side's structures (pays now, builds in the side's queue; see `buildables.rs`).
+    TacticalBuild {
+        /// Item (`Catalog::buildables`).
+        item: crate::buildables::BuildId,
+    },
+    /// Take the last queued job of a tactical build item out of the queue; its credits come back.
+    CancelTacticalBuild {
+        /// Item.
+        item: crate::buildables::BuildId,
+    },
     /// Call in reinforcements (limited by the unit cap, arrive after a delay) at the side's reinforcement point.
     Reinforce {
         /// Definition.
@@ -330,6 +343,14 @@ pub enum CommandError {
     InNoSpawnZone,
     /// The chosen reinforcement position is outside the battle area.
     OutsideBattleArea,
+    /// None of the side's structures offers this tactical build (or nothing to cancel).
+    NotBuildable,
+    /// The side has too few credits for the tactical build.
+    NotEnoughCredits,
+    /// The side already has (or builds) as many of the item as `Build_Limit_Current_For_All_Allies` allows.
+    BuildLimit,
+    /// A `Tactical_Build_Prerequisites` item is neither built nor queued.
+    MissingPrerequisite,
 }
 
 /// What was hit.
@@ -512,6 +533,27 @@ pub enum Event {
         /// It dropped out of hyperspace (else it appeared in place).
         hyperspace: bool,
     },
+    /// A tactical build was paid and queued (`Command::TacticalBuild`).
+    BuildQueued {
+        /// Side.
+        side: u8,
+        /// Item (`Catalog::buildables`).
+        item: crate::buildables::BuildId,
+    },
+    /// A queued tactical build left the queue and its credits came back.
+    BuildCancelled {
+        /// Side.
+        side: u8,
+        /// Item.
+        item: crate::buildables::BuildId,
+    },
+    /// A tactical build finished.
+    BuildFinished {
+        /// Side.
+        side: u8,
+        /// Item.
+        item: crate::buildables::BuildId,
+    },
     /// The battle ended.
     BattleOver {
         /// Winning side, `None` for a draw.
@@ -548,7 +590,8 @@ pub struct BattleResult {
     pub duration: f32,
     /// Survivors per setup group.
     pub groups: Vec<GroupResult>,
-    /// Net credits delta per side: attrition penalties (negative) and refunds (positive), plus the salvage credits.
+    /// Net credits delta per side for the galaxy: attrition penalties (negative) and refunds (positive), minus the credits spent on
+    /// tactical builds, plus the salvage credits.
     pub attrition_credits: Vec<i32>,
     /// Salvage credits per side (`Bounty_On_Faction_Ability`; the summary's "Salvage collected"). Already included in `attrition_credits`.
     pub salvage_credits: Vec<i32>,
@@ -859,6 +902,13 @@ pub struct Battle {
     pub(crate) scripted: Vec<crate::spawns::ScriptedArrival>,
     /// Ships below this index have had their spawn script started.
     pub(crate) scripts_seen: usize,
+    /// Per side: galactic credits left for tactical builds, and spent so far (net of refunds).
+    pub(crate) credits: Vec<i64>,
+    pub(crate) spent: Vec<i64>,
+    /// Production queues of all sides, in order (see `buildables.rs`).
+    pub(crate) build_jobs: Vec<crate::buildables::BuildJob>,
+    /// Per side: finished tactical builds.
+    pub(crate) built: Vec<Vec<crate::buildables::BuildId>>,
 }
 
 impl Battle {
@@ -989,6 +1039,10 @@ impl Battle {
         let salvage_credits: Vec<i32> = (0..self.sides.len()).map(|i| self.salvage.get(i).copied().unwrap_or(0.0).round() as i32).collect();
         for (a, s) in attrition_credits.iter_mut().zip(&salvage_credits) {
             *a += s;
+        }
+        // Credits spent on tactical builds leave the battle with the result.
+        for (a, s) in attrition_credits.iter_mut().zip(&self.spent) {
+            *a -= *s as i32;
         }
         BattleResult { winner: self.winner, duration: self.time, groups, attrition_credits, salvage_credits, globals: self.globals.clone() }
     }

@@ -253,6 +253,10 @@ impl Battle {
             formations: Vec::new(),
             scripted: Vec::new(),
             scripts_seen: 0,
+            credits: (0..sides.len()).map(|i| config.side_credits.get(i).copied().unwrap_or(0).max(0)).collect(),
+            spent: vec![0; sides.len()],
+            build_jobs: Vec::new(),
+            built: vec![Vec::new(); sides.len()],
             sides,
             ships: Vec::new(),
             projectiles: Vec::new(),
@@ -965,6 +969,8 @@ impl Battle {
                 }
             }
             Command::Cheat(cheat) => self.apply_cheat(side, cheat),
+            Command::TacticalBuild { item } => self.queue_build(side, item)?,
+            Command::CancelTacticalBuild { item } => self.cancel_build(side, item)?,
             Command::ReinforceAt { ship, count, pos, yaw_offset } => {
                 self.reinforcement_zone_check(side, pos)?;
                 let pop = self.catalog.ship(ship).population * count as i32;
@@ -1245,6 +1251,7 @@ impl Battle {
         self.start_scripts();
         self.scripted_arrivals();
         self.run_decay(self.config.dt);
+        self.run_builds(self.config.dt);
         self.retreat_jumps();
 
         let cat = self.catalog.clone();
