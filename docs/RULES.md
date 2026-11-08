@@ -634,7 +634,14 @@ with `speed_mult > 1.05` when fleeing or when the target is over twice the weapo
   arrive beside their marker on free hull space (rings of `reinforce_clearance` spacing; `Teleport_And_Face` stacks them
   and the engine pushes them apart). Project rule: they belong to the battle only (no results group, nothing returns to
   the galaxy; no data or script hands them to the galactic fleet), ignore the unit cap like `Spawn_Unit`, and do not
-  keep their side in the fight (as the garrison below). `Event::Spawned` reports each arrival.
+  keep their side in the fight (as the garrison below). `Event::Spawned` reports each arrival. Scripts in use in 4.0
+  (`Lua_Script` of the unit): Zaarin's `Predominant_Star_Destroyer` (2 `Vindicator_Cruiser_Kas`), `TF-24_Requiem`
+  (`TF-24_Relentless`, `TF-24_Ravenous`), `Voca_Blade` (`Voca_Destruction`, `Voca_Fist`, `Secutor_Inferno`,
+  `Voca_Lancer`), Noira's `Savrip` (`Renegades_Blood`), Harkov's `VSD_Protector` (four `Neb_*` Nebulon-Bs, for
+  `Warlords`), and the breakoff props of the `Subjugator_Zann_P3` ion turrets (`HP_SBJZ_P3_ICT_01` / `_02`:
+  `Reinforcement_Subjugator-Attack` / `-Defend`, one of three lists of 19, 22 or 15 Underworld units at the attacker /
+  defender markers). The `Reinforcements_Starbase_*` scripts of the minor-faction star bases, the pirate
+  `Reinforcements_Pirate_Base_Lv2` and the Warlord Voca's `Reinforcements_Voca_Warlord` are commented out in the data.
 * A side stays in the fight while any unit it brought lives (ships, squadrons, star base and structures of the setup,
   and called-in reinforcements). Units spawned during the battle (a star base's garrison, squadrons a carrier
   launches from its reserve) do not count and are removed with the loser. A side whose brought units are all

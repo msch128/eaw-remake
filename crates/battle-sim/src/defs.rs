@@ -16,6 +16,7 @@ use alamo_fs::FileSource;
 use rayon::prelude::*;
 
 use crate::math::Vec3;
+use crate::scripts::{parse_spawn_script, SpawnScript};
 
 /// Index of a ship definition in [`Catalog::ships`].
 pub type ShipId = u32;
@@ -1395,6 +1396,62 @@ impl Source {
             Source::Structure(s) => &s.hardpoints,
         }
     }
+
+    /// `Lua_Script` of the object.
+    fn lua_script(&self) -> Option<&str> {
+        let fields = match self {
+            Source::Unit(u) => &u.fields,
+            Source::Base(b) => &b.fields,
+            Source::Structure(s) => &s.fields,
+        };
+        fields.get("lua_script").map(|s| s.trim()).filter(|s| !s.is_empty())
+    }
+}
+
+/// `Lua_Script` of a hardpoint's `Death_Breakoff_Prop`.
+fn breakoff_script<'a>(h: &HardpointDef, objects: &'a alamo_data::GameObjects) -> Option<&'a str> {
+    let prop = h.fields.get("death_breakoff_prop").map(|p| p.trim()).filter(|p| !p.is_empty())?;
+    objects.resolve(prop)?.get("lua_script").filter(|s| !s.is_empty())
+}
+
+/// The object scripts (`Scripts/GameObject/<name>.lua`) of the catalog's units, each read once.
+#[derive(Default)]
+struct ScriptCache {
+    spawn: HashMap<String, Option<Arc<SpawnScript>>>,
+}
+
+impl ScriptCache {
+    /// The spawn script `name` (`None` without a file source, when the file is missing, or when it is no spawn script).
+    fn spawn(&mut self, fs: Option<&dyn FileSource>, name: &str) -> Option<Arc<SpawnScript>> {
+        let key = name.trim().trim_end_matches(".lua").trim_end_matches(".LUA").to_ascii_lowercase();
+        self.spawn
+            .entry(key.clone())
+            .or_insert_with(|| {
+                let bytes = fs?.read(&format!("Scripts/GameObject/{key}.lua")).ok()?;
+                parse_spawn_script(&String::from_utf8_lossy(&bytes)).map(Arc::new)
+            })
+            .clone()
+    }
+
+    /// The spawn script `name`, read before, with its units resolved in the catalog (units it does not know are left out).
+    fn resolved(&self, name: Option<&str>, ships: &HashMap<String, ShipId>) -> Option<Arc<SpawnScriptDef>> {
+        let name = name?.trim();
+        let s = self.spawn.get(&name.trim_end_matches(".lua").trim_end_matches(".LUA").to_ascii_lowercase())?.as_ref()?;
+        let place = match s.marker.to_ascii_lowercase().as_str() {
+            "attacker entry position" => SpawnPlace::AttackerEntries,
+            "defending forces position" => SpawnPlace::DefenderPositions,
+            other => SpawnPlace::ObjectsOfType(other.to_string()),
+        };
+        Some(Arc::new(SpawnScriptDef {
+            script: name.to_string(),
+            choices: s.choices.iter().map(|c| c.iter().filter_map(|n| ships.get(&n.to_ascii_lowercase()).copied()).collect()).collect(),
+            place,
+            faction: s.faction.clone(),
+            delay: s.delay,
+            hyperspace_in: s.hyperspace_frames / 30.0,
+            gap: s.gap,
+        }))
+    }
 }
 
 fn load_source(data: &GameData, name: &str) -> Option<Source> {
@@ -1582,6 +1639,7 @@ impl Catalog {
         let mut sources: Vec<Source> = Vec::new();
         let mut seen: HashSet<String> = HashSet::new();
         let mut queue: Vec<String> = names.iter().map(|s| s.to_string()).collect();
+        let mut scripts = ScriptCache::default();
         while let Some(n) = queue.pop() {
             if !seen.insert(n.to_ascii_lowercase()) {
                 continue;
@@ -1590,6 +1648,13 @@ impl Catalog {
                 queue.extend(src.spawned_names());
                 if let Source::Unit(u) = &src {
                     queue.extend(u.destruction_survivors.iter().flat_map(|s| survivor_list(s)).map(|x| x.0).filter(|x| survivor_ship(data, x)));
+                }
+                // What the unit's own script and its hardpoints' breakoff props spawn.
+                let hps = data.objects.hardpoints_of(src.hardpoints());
+                for script in src.lua_script().into_iter().chain(hps.iter().filter_map(|h| breakoff_script(h, &data.objects))) {
+                    if let Some(s) = scripts.spawn(fs, script) {
+                        queue.extend(s.names().map(str::to_string));
+                    }
                 }
                 sources.push(src);
             }
@@ -1686,7 +1751,7 @@ impl Catalog {
         for (i, s) in sources.iter().enumerate() {
             cat.ship_index.insert(s.name().to_ascii_lowercase(), i as ShipId);
         }
-        let mut scripts: HashMap<String, HashMap<String, (String, i32)>> = HashMap::new();
+        let mut globals: HashMap<String, HashMap<String, (String, i32)>> = HashMap::new();
         for (i, s) in sources.iter().enumerate() {
             let model = s.model().and_then(|m| models.get(&m.to_ascii_lowercase()));
             let scaled = model.map(|m| {
@@ -1699,12 +1764,12 @@ impl Catalog {
                 Arc::new(ModelInfo { bones, radius: m.radius * k, hull, height: m.height.map(|(lo, hi)| (lo * k, hi * k)) })
             });
             let model = scaled.as_ref();
-            let mut def = cat.ship_def(s, &hp_defs[i], model.map(|m| &**m), &attach, &data.objects);
+            let mut def = cat.ship_def(s, &hp_defs[i], model.map(|m| &**m), &attach, &data.objects, &scripts);
             if let (Some(fs), Source::Unit(u)) = (fs, s) {
                 // The `GlobalValue.Set` of its own script when it appears, and of its `Death_Clone`'s when it dies.
                 let mut set_by = |name: &str, script: Option<&str>| {
                     let script = script?.trim().to_ascii_lowercase();
-                    let table = scripts.entry(script.clone()).or_insert_with(|| created_globals(fs, &script));
+                    let table = globals.entry(script.clone()).or_insert_with(|| created_globals(fs, &script));
                     table.get(&name.to_ascii_uppercase()).cloned()
                 };
                 def.on_create = set_by(&u.name, u.fields.get("lua_script").map(String::as_str));
@@ -1784,7 +1849,7 @@ impl Catalog {
         }
     }
 
-    fn ship_def(&self, src: &Source, hps: &[HardpointDef], model: Option<&ModelInfo>, attach: &HashMap<String, Arc<AttachInfo>>, objects: &alamo_data::GameObjects) -> ShipDef {
+    fn ship_def(&self, src: &Source, hps: &[HardpointDef], model: Option<&ModelInfo>, attach: &HashMap<String, Arc<AttachInfo>>, objects: &alamo_data::GameObjects, scripts: &ScriptCache) -> ShipDef {
         // Common numbers.
         let (name, text_id, class, is_static, is_squadron, hull, shield, regen, armor, sarmor, pop) = match src {
             Source::Unit(u) => (
@@ -1850,7 +1915,9 @@ impl Catalog {
         let mut hardpoints = Vec::with_capacity(hps.len());
         let has_blast = matches!(src, Source::Unit(u) if u.abilities.iter().any(|a| a.kind.eq_ignore_ascii_case("BLAST")));
         for (i, h) in hps.iter().enumerate() {
-            hardpoints.push(self.hp_def(h, i, model, attach, radius, class, has_blast));
+            let mut hd = self.hp_def(h, i, model, attach, radius, class, has_blast);
+            hd.breakoff_script = scripts.resolved(breakoff_script(h, objects), &self.ship_index);
+            hardpoints.push(hd);
         }
 
         // Mobile warships with destroyable hardpoints have engine hitboxes at the rear.
@@ -2230,7 +2297,7 @@ impl Catalog {
             formation_spacing: unit_field("formationspacing").and_then(alamo_data::xml::parse_num).unwrap_or(1.0),
             formation_solo: unit_field("formationgrouping").is_some_and(|v| v.trim().eq_ignore_ascii_case("solo")),
             formation_no_wait: unit_field("waitsforformationformup").is_some_and(|v| !alamo_data::xml::parse_bool(v)),
-            spawn_script: None,
+            spawn_script: scripts.resolved(src.lua_script(), &self.ship_index),
         }
     }
 
