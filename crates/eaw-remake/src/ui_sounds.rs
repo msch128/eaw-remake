@@ -150,10 +150,16 @@ fn load_button_sfx(audio: Res<AlamoAudio>, mut table: ResMut<ButtonSfx>) {
 }
 
 /// Hover (pointer enters a button) and click (the button reports a click) sounds.
+/// The battle HUD plays `special_button_*` clicks itself, from the component `Click_SFX`. Galaxy button sounds skip those while a battle is running so the click is not played twice.
+fn battle_owns_ability_click(in_battle: bool, name: &str) -> bool {
+    in_battle && name.starts_with("special_button_")
+}
+
 fn button_sounds(
     hovered: Query<(&Interaction, &EawButton), Changed<Interaction>>,
     mut clicks: MessageReader<EawButtonClicked>,
     table: Res<ButtonSfx>,
+    battle: Option<Res<battle_view::BattleRuntime>>,
     mut out: MessageWriter<PlaySfx>,
 ) {
     let mut play = |event: &str| {
@@ -164,7 +170,11 @@ fn button_sounds(
             play(table.hover(&b.name));
         }
     }
+    let in_battle = battle.is_some();
     for c in clicks.read() {
+        if battle_owns_ability_click(in_battle, &c.name) {
+            continue;
+        }
         play(table.click(&c.name));
     }
 }
@@ -635,6 +645,16 @@ mod tests {
         assert_eq!(t.hover("b_other"), "GUI_Text_SFX");
         assert_eq!(t.click("b_other"), DEFAULT_CLICK);
         assert_eq!(t.click("unknown_button"), DEFAULT_CLICK);
+        assert_eq!(t.click("special_button_00"), DEFAULT_CLICK);
+    }
+
+    #[test]
+    fn a_battle_plays_ability_button_clicks_itself() {
+        assert!(battle_owns_ability_click(true, "special_button_00"));
+        assert!(battle_owns_ability_click(true, "special_button_23"));
+        assert!(!battle_owns_ability_click(false, "special_button_00"));
+        assert!(!battle_owns_ability_click(true, "b_retreat"));
+        assert!(!battle_owns_ability_click(true, "radar"));
     }
 
     #[test]

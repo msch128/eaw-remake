@@ -762,6 +762,11 @@ Estimates and data that shape what the player sees and hears. Behaviour is in `b
 * `Kills_Previous_Object_SFX` is set on 15 events once XML comments are removed (4 fighter deaths, 3 ground slams,
   3 detonations, 4 deploy or build stops, and `Unit_Magnepulse_Fire`). Starting one stops every live voice whose source
   is that object. A battle shot or death of such an event is sent with the ship entity as its source.
+* Ability buttons `special_button_00` through `special_button_23` (24 components) each name `Click_SFX`
+  `GUI_Button_Press_2_SFX`. A click plays that event. The battle minimap `radar` (169 by 169) names
+  `Mouse_Over_SFX` `GUI_Highlight_Mouse_Over` and no `Click_SFX`. `radar_galactic` and `radar_galactic_adv_map` name
+  no click either. Hardpoint reticles are not command-bar components. Those clicks stay silent. `GUI_Zoom` is an event
+  and is not a click of the radar.
 
 ## 3.2 Cameras and interaction
 

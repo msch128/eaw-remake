@@ -53,7 +53,7 @@ impl Plugin for TacticalUiPlugin {
                 spawn_bar.run_if(resource_exists::<crate::BattleSession>.and_then(not(resource_exists::<TacticalBarSpawned>))),
                 remove_reinforce.run_if(resource_removed::<BattleRuntime>),
                 remove_bar.run_if(resource_removed::<BattleRuntime>.or_eager(resource_removed::<crate::BattleSession>)),
-                (sync_data, sync_overlays, handle_clicks, ability_keys, autocast_toggle, autocast_rings, ability_at, hardpoint_clicks, reinforce_drag, reinforce_clicks, reinforce_place, reinforce_events, reinforce_panel, sync_minimap, minimap_pan, command_buttons_state, retreat_banner, victory_banner, pause_banner).chain().run_if(resource_exists::<BattleRuntime>),
+                (sync_data, sync_overlays, handle_clicks, battle_hud_clicks, ability_keys, autocast_toggle, autocast_rings, ability_at, hardpoint_clicks, reinforce_drag, reinforce_clicks, reinforce_place, reinforce_events, reinforce_panel, sync_minimap, minimap_pan, command_buttons_state, retreat_banner, victory_banner, pause_banner).chain().run_if(resource_exists::<BattleRuntime>),
             )
                 .chain(),
         );
@@ -224,6 +224,20 @@ fn sync_data(
         *tac = new;
     }
     state.groups = groups;
+}
+
+/// Plays the `Click_SFX` an ability button names (`special_button_00` .. `special_button_23`).
+/// The radar and the hardpoint reticles name no click, so those clicks stay silent. A keyboard ability
+/// (`EawAbilityClicked` with no button) is not a click.
+fn battle_hud_clicks(db: Option<Res<eaw_ui::CommandBarDb>>, mut clicks: MessageReader<EawButtonClicked>, mut sfx: MessageWriter<alamo_audio::PlaySfx>) {
+    let Some(db) = db else { return };
+    for c in clicks.read() {
+        if !c.name.starts_with("special_button_") {
+            continue;
+        }
+        let Some(event) = db.get(&c.name).and_then(|comp| comp.click_sfx.as_deref()).filter(|n| !n.is_empty()) else { continue };
+        sfx.write(alamo_audio::PlaySfx { event: event.to_string(), position: None, source: None });
+    }
 }
 
 /// Turns clicks on the bar into selection changes and commands.
@@ -2106,6 +2120,78 @@ fn game_font(ui: &eaw_ui::EawUiSettings, size: f32) -> TextFont {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_ability_button_plays_its_click_sfx_and_the_radar_and_hardpoints_stay_silent() {
+        use alamo_fs::{FileSource, normalize};
+        use std::io;
+        struct Mem(HashMap<String, Vec<u8>>);
+        impl FileSource for Mem {
+            fn read(&self, path: &str) -> io::Result<Vec<u8>> {
+                self.0.get(&normalize(path)).cloned().ok_or_else(|| io::ErrorKind::NotFound.into())
+            }
+            fn exists(&self, path: &str) -> bool {
+                self.0.contains_key(&normalize(path))
+            }
+            fn list(&self, dir: &str) -> Vec<String> {
+                let p = normalize(dir);
+                let mut v: Vec<String> = self.0.keys().filter(|k| k.starts_with(&p)).cloned().collect();
+                v.sort();
+                v
+            }
+        }
+        // The names are the ones `CommandBarComponents.xml` stores on these components.
+        let xml = br#"<CommandBarComponents>
+            <CommandBarComponent Name="special_button_00"><Type>Button</Type><Click_SFX>GUI_Button_Press_2_SFX</Click_SFX><Mouse_Over_SFX>GUI_Highlight_Mouse_Over</Mouse_Over_SFX></CommandBarComponent>
+            <CommandBarComponent Name="special_button_23"><Type>Button</Type><Click_SFX>GUI_Button_Press_2_SFX</Click_SFX></CommandBarComponent>
+            <CommandBarComponent Name="radar"><Type>Button</Type><Mouse_Over_SFX>GUI_Highlight_Mouse_Over</Mouse_Over_SFX></CommandBarComponent>
+        </CommandBarComponents>"#;
+        let mut files = HashMap::new();
+        files.insert(normalize("Xml/CommandBarComponents.xml"), xml.to_vec());
+        let (db, warnings) = eaw_ui::CommandBarDb::load(&Mem(files));
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(db.get("special_button_00").and_then(|c| c.click_sfx.as_deref()), Some("GUI_Button_Press_2_SFX"));
+        assert!(db.get("radar").and_then(|c| c.click_sfx.as_deref()).is_none());
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .insert_resource(db)
+            .add_message::<EawButtonClicked>()
+            .add_message::<EawHardpointClicked>()
+            .add_message::<EawMinimapClicked>()
+            .add_message::<EawAbilityClicked>()
+            .add_message::<alamo_audio::PlaySfx>()
+            .add_systems(Update, battle_hud_clicks);
+        let button = app.world_mut().spawn_empty().id();
+        app.world_mut().write_message(EawButtonClicked { name: "special_button_00".into(), entity: button, shift: false });
+        app.world_mut().write_message(EawButtonClicked { name: "radar".into(), entity: button, shift: false });
+        app.world_mut().write_message(EawHardpointClicked { id: "7:0".into() });
+        app.world_mut().write_message(EawMinimapClicked { world: Vec2::ZERO, normalized: Vec2::ZERO, just_pressed: true });
+        app.world_mut().write_message(EawAbilityClicked { unit_type: "TIE_Fighter".into(), ability: "HUNT".into() });
+        app.update();
+        let sent: Vec<String> = app.world_mut().resource_mut::<Messages<alamo_audio::PlaySfx>>().drain().map(|m| m.event).collect();
+        assert_eq!(sent, vec!["GUI_Button_Press_2_SFX".to_string()]);
+        app.world_mut().write_message(EawButtonClicked { name: "special_button_23".into(), entity: button, shift: false });
+        app.update();
+        let sent: Vec<String> = app.world_mut().resource_mut::<Messages<alamo_audio::PlaySfx>>().drain().map(|m| m.event).collect();
+        assert_eq!(sent, vec!["GUI_Button_Press_2_SFX".to_string()]);
+    }
+
+    /// The Remake's command bar (skipped without the game files): every ability button names the same click, and the radar names none.
+    #[test]
+    fn the_remake_ability_buttons_name_gui_button_press_and_the_radar_names_no_click() {
+        let Some(install) = alamo_fs::GameInstall::detect().filter(|i| i.mod_data("1770851727").is_dir()) else { return };
+        let fs = alamo_fs::GameFs::for_mod(&install, Some("1770851727")).expect("game files");
+        let (db, _) = eaw_ui::CommandBarDb::load(&fs);
+        for i in 0..24 {
+            let name = format!("special_button_{i:02}");
+            assert_eq!(db.get(&name).and_then(|c| c.click_sfx.as_deref()), Some("GUI_Button_Press_2_SFX"), "{name}");
+        }
+        let radar = db.get("radar").expect("radar");
+        assert!(radar.click_sfx.is_none());
+        assert_eq!(radar.mouse_over_sfx.as_deref(), Some("GUI_Highlight_Mouse_Over"));
+        assert!(db.get("radar_galactic").expect("radar_galactic").click_sfx.is_none());
+        assert!(db.get("radar_galactic_adv_map").expect("radar_galactic_adv_map").click_sfx.is_none());
+    }
 
     #[test]
     fn squadrons_carry_the_icon_box_only_while_selected_or_hovered() {
