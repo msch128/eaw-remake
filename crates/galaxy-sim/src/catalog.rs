@@ -597,7 +597,13 @@ impl World {
             ("Jared_Sykes_Upgrade", "Sykes_Venator", "End_of_Days"),
             ("Jabba_Upgrade", "Star_Jewel", "Jabba_Destroyer"),
         ];
-        for &(item, from, to) in UPGRADES {
+        // The same script repairs a super ship by one phase: `Repair_Phase_<n>_<ship>` turns phase n into phase n - 1.
+        const PHASED: &[(&str, &str, u32)] =
+            &[("Executor", "Executor_Star_Dreadnought_P", 5), ("Eclipse", "Eclipse_Star_Dreadnought_P", 5), ("Piett", "Piett_Executor_P", 5), ("Viscount", "Viscount_Star_Defender_P", 5), ("Subjugator", "Subjugator_Zann_P", 4)];
+        let repairs: Vec<(String, String, String)> =
+            PHASED.iter().flat_map(|&(tag, ship, last)| (2..=last).map(move |n| (format!("Repair_Phase_{n}_{tag}"), format!("{ship}{n}"), format!("{ship}{}", n - 1)))).collect();
+        let all = UPGRADES.iter().map(|&(i, f, t)| (i, f, t)).chain(repairs.iter().map(|(i, f, t)| (i.as_str(), f.as_str(), t.as_str())));
+        for (item, from, to) in all {
             let (Some(&f), Some(&t)) = (self.unit_index.get(&key(from)), self.unit_index.get(&key(to))) else { continue };
             if self.unit_index.contains_key(&key(item)) {
                 continue;

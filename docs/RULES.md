@@ -364,6 +364,9 @@ build-menu filters, not a start mode. The mode is this project's own:
   Estimate: a planet without one counts 1e9 s (the plots start their search at 10000).
 * Battles the player settles (tactical result, auto-resolve, abandon) reach the story like those the sim settles in
   its step (before, their `STORY_WIN_BATTLES` / `STORY_LOSE_BATTLES` / `STORY_TACTICAL_DESTROY` were not reported).
+* Data, repair (`Scripts/GameObject/Upgrade_Units.lua`): `Repair_Phase_<n>_<ship>` (Executor, Eclipse, Piett and Viscount 2
+  to 5, Subjugator 2 to 4; `Vessel_Upgrade_Template`, `Required_Orbiting_Units` the damaged phase, 140000 credits and
+  200 s for the Viscount) turns phase n of the ship in orbit into phase n - 1, like the hero upgrades.
 
 # Part 2: Space battles (`battle-sim`)
 

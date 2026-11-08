@@ -89,3 +89,31 @@ fn every_hero_upgrade_of_the_data_leads_to_a_ship_that_exists() {
         assert_eq!(w.units[i as usize].role, UnitRole::Upgrade { from: match w.units[i as usize].role { UnitRole::Upgrade { from, .. } => from, _ => unreachable!() }, to: w.unit_id(to).unwrap() }, "{item} leads to {to}");
     }
 }
+
+#[test]
+fn a_damaged_viscount_is_repaired_one_phase_at_a_time() {
+    // `Upgrade_Units.lua`: `REPAIR_PHASE_3_VISCOUNT` turns `Viscount_Star_Defender_P3` into `_P2`. Before, the repair items were not in the catalog.
+    let Some(data) = load() else { return };
+    let campaign = data.campaign("GC_Full_Web_Way_Rebel").expect("campaign");
+    let mut sim = Sim::new(&data, campaign, SimConfig { victory_enabled: false, ..SimConfig::default() }).expect("sim");
+    let w = sim.world().clone();
+    for (n, tag, ship) in [(2, "Executor", "Executor_Star_Dreadnought_P"), (5, "Eclipse", "Eclipse_Star_Dreadnought_P"), (3, "Piett", "Piett_Executor_P"), (4, "Subjugator", "Subjugator_Zann_P")] {
+        let item = w.unit_id(&format!("Repair_Phase_{n}_{tag}")).unwrap_or_else(|| panic!("Repair_Phase_{n}_{tag}"));
+        let to = w.unit_id(&format!("{ship}{}", n - 1)).unwrap();
+        assert!(matches!(w.units[item as usize].role, UnitRole::Upgrade { to: t, .. } if t == to), "Repair_Phase_{n}_{tag} leads to phase {}", n - 1);
+    }
+    let (rebel, planet) = prepare(&mut sim, "Rebel", "R", "Kuat_WW");
+    let item = w.unit_id("Repair_Phase_3_Viscount").expect("the repair item is in the catalog");
+    assert!(w.check_build_unit(sim.galaxy(), rebel, planet, item).is_err(), "needs the damaged Viscount in orbit");
+    give(&mut sim, rebel, planet, "Viscount_Star_Defender_P3");
+    w.check_build_unit(sim.galaxy(), rebel, planet, item).expect("with phase 3 in orbit the repair can be queued");
+    sim.apply(Command::BuildUnit { faction: rebel, planet, unit: item }).expect("queued");
+    for _ in 0..2000 {
+        sim.step(1.0);
+        if count(&sim, rebel, planet, "Viscount_Star_Defender_P2") > 0 {
+            break;
+        }
+    }
+    assert_eq!(count(&sim, rebel, planet, "Viscount_Star_Defender_P2"), 1, "repaired to phase 2");
+    assert_eq!(count(&sim, rebel, planet, "Viscount_Star_Defender_P3"), 0);
+}
