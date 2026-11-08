@@ -89,7 +89,7 @@ fn alternatives_and_groups_are_parsed_from_the_requirement_text() {
 }
 
 #[test]
-fn hero_needs_the_uplink_and_its_cost_is_the_data_value() {
+fn hero_needs_the_uplink_and_costs_the_price_of_its_ship_class() {
     let Some(data) = load() else { return };
     let mut sim = new_sim(&data);
     let w = sim.world().clone();
@@ -100,8 +100,8 @@ fn hero_needs_the_uplink_and_its_cost_is_the_data_value() {
         assert!(sim.add_structure(p, w.structure_id(n).unwrap()));
     }
     let piett = w.unit_id("Piett_Procursator").unwrap();
-    // Build_Cost_Credits is 1 in Units_Hero_Empire_Piett.xml (the hero is a cheap commander; his upgrades cost 25000).
-    assert_eq!(w.units[piett as usize].cost, 1.0);
+    // Build_Cost_Credits is 1 in Units_Hero_Empire_Piett.xml; recruiting him costs the price of his ship class (Procursator_Template, 13000), see RULES.md "Heroes".
+    assert_eq!(w.units[piett as usize].cost, 13000.0);
     assert_eq!(unmet(w.check_build_unit(sim.galaxy(), empire, p, piett)), "E_Uplink_Command");
     assert!(sim.add_structure(p, w.structure_id("E_Uplink_Command").unwrap()));
     w.check_build_unit(sim.galaxy(), empire, p, piett).expect("hero after the uplink");

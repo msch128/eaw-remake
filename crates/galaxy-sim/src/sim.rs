@@ -20,7 +20,7 @@ pub struct Sim {
     pub(crate) tactical_requests: BTreeMap<u32, crate::tactical::TacticalRequest>,
     /// Events produced by commands, delivered by the next [`Sim::step`].
     pub(crate) queued_events: Vec<Event>,
-    /// Ship types the passive faction has fielded at each of its planets (the campaign's own composition there); `rearm_passive` adds only these (not saved: rebuilt from the fleets present).
+    /// Ship types the passive faction has fielded at each of its planets (the campaign's own composition there); `rearm_passive` adds only these (part of [`SimSnapshot`]).
     pub(crate) passive_types: BTreeMap<PlanetId, Vec<UnitTypeId>>,
 }
 
@@ -1523,12 +1523,15 @@ pub struct SimSnapshot {
     pub galaxy: Galaxy,
     /// Factions run by galaxy-sim's built-in AI.
     pub ai: Vec<FactionId>,
+    /// Ship types the passive faction fielded at each of its planets; older saves have none and rebuild them from the fleets present.
+    #[serde(default)]
+    pub passive_types: BTreeMap<PlanetId, Vec<UnitTypeId>>,
 }
 
 impl Sim {
     /// Copies the complete mutable state.
     pub fn snapshot(&self) -> SimSnapshot {
-        SimSnapshot { galaxy: self.galaxy.clone(), ai: self.ai.clone() }
+        SimSnapshot { galaxy: self.galaxy.clone(), ai: self.ai.clone(), passive_types: self.passive_types.clone() }
     }
 
     /// Replaces the mutable state with a snapshot taken from a sim built from the same data and campaign. Refuses a snapshot whose dimensions
@@ -1553,6 +1556,7 @@ impl Sim {
         }
         self.galaxy = snap.galaxy;
         self.ai = snap.ai;
+        self.passive_types = snap.passive_types;
         self.tactical_requests.clear();
         self.queued_events.clear();
         self.galaxy.sync_ships();

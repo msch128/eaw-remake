@@ -414,7 +414,7 @@ impl SpaceUnitDef {
             targeting_priority_set: r.string("targeting_priority_set"),
             hardpoints: r.list("hardpoints"),
             direct_weapon,
-            build_cost: f32_or("build_cost_credits"),
+            build_cost: recruit_cost(r),
             build_time: f32_or("build_time_seconds"),
             tech_level: i32_or("tech_level"),
             population_value: i32_or("population_value"),
@@ -942,6 +942,24 @@ const STRUCTURE_KINDS: [&str; 5] = [
     "groundbase",
 ];
 
+/// Credits to recruit the object `r`. Deviation from the data (RULES.md): the Remake prices the first ship of some hero chains at 1 credit, which makes the
+/// hero free. A recruitable hero ship (`UniqueUnit` with a build tab entry) that costs 1 credit or less takes the first price above 1 up its
+/// `Variant_Of_Existing_Type` chain, the price of its ship class. Everything else keeps its `Build_Cost_Credits`; the upgrade items of a hero chain
+/// are separate objects with their own price.
+fn recruit_cost(r: &Resolved) -> f32 {
+    let own = r.num::<f32>("build_cost_credits").unwrap_or(0.0);
+    let hero_ship = r.kind().eq_ignore_ascii_case("uniqueunit") && r.flag("build_tab_space_units").unwrap_or(false);
+    if !hero_ship || own <= 0.0 || own > 1.0 {
+        return own;
+    }
+    r.chain
+        .iter()
+        .skip(1)
+        .filter_map(|o| o.element.child_text("build_cost_credits").and_then(|t| t.split([',', ' ']).find(|t| !t.is_empty())?.parse::<f32>().ok()))
+        .find(|&c| c > 1.0)
+        .unwrap_or(own)
+}
+
 impl GameObjects {
     /// Typed ship/squadron definition (inheritance resolved). `None` if the object does not exist
     /// or is not a space unit kind.
@@ -960,6 +978,11 @@ impl GameObjects {
             .filter_map(|o| self.space_unit(&o.name))
             .filter(|u| u.space_model.is_some() || u.is_squadron())
             .collect()
+    }
+
+    /// Credits to recruit `name`: its `Build_Cost_Credits`, except for hero ships (see [`recruit_cost`]).
+    pub fn build_cost(&self, name: &str) -> Option<f32> {
+        self.resolve(name).map(|r| recruit_cost(&r))
     }
 
     /// Typed hardpoint definition.
@@ -1060,5 +1083,33 @@ mod tests {
         assert_eq!(s.hardpoints_of(&u.hardpoints).len(), 1);
         assert_eq!(s.projectile("p").unwrap().damage, 12.0);
         assert!(s.space_unit("HP_A").is_none());
+    }
+
+    #[test]
+    fn a_recruitable_hero_ship_at_one_credit_costs_the_first_price_above_one_up_its_chain() {
+        let s = store(
+            "<R>\
+             <SpaceUnit Name=\"Class\"><Build_Cost_Credits>12000</Build_Cost_Credits></SpaceUnit>\
+             <SpaceUnit Name=\"Class_Template\"><Variant_Of_Existing_Type>Class</Variant_Of_Existing_Type><Build_Cost_Credits>1</Build_Cost_Credits></SpaceUnit>\
+             <UniqueUnit Name=\"Hero\"><Variant_Of_Existing_Type>Class</Variant_Of_Existing_Type><Build_Cost_Credits>1</Build_Cost_Credits><Build_Tab_Space_Units>Yes</Build_Tab_Space_Units></UniqueUnit>\
+             <UniqueUnit Name=\"Hero_Skips_One\"><Variant_Of_Existing_Type>Class_Template</Variant_Of_Existing_Type><Build_Cost_Credits>1</Build_Cost_Credits><Build_Tab_Space_Units>Yes</Build_Tab_Space_Units></UniqueUnit>\
+             <UniqueUnit Name=\"Hero_Upgrade\"><Variant_Of_Existing_Type>Class</Variant_Of_Existing_Type><Build_Cost_Credits>2500</Build_Cost_Credits><Build_Tab_Space_Units>Yes</Build_Tab_Space_Units></UniqueUnit>\
+             <UniqueUnit Name=\"Hero_Not_In_Menu\"><Variant_Of_Existing_Type>Class</Variant_Of_Existing_Type><Build_Cost_Credits>1</Build_Cost_Credits></UniqueUnit>\
+             <UniqueUnit Name=\"Hero_Not_For_Sale\"><Variant_Of_Existing_Type>Class</Variant_Of_Existing_Type><Build_Tab_Space_Units>Yes</Build_Tab_Space_Units><Build_Cost_Credits>0</Build_Cost_Credits></UniqueUnit>\
+             <UniqueUnit Name=\"Hero_Orphan\"><Build_Cost_Credits>1</Build_Cost_Credits><Build_Tab_Space_Units>Yes</Build_Tab_Space_Units></UniqueUnit>\
+             <SpaceUnit Name=\"Helper\"><Variant_Of_Existing_Type>Class</Variant_Of_Existing_Type><Build_Cost_Credits>1</Build_Cost_Credits><Build_Tab_Space_Units>Yes</Build_Tab_Space_Units></SpaceUnit>\
+             </R>",
+        );
+        let cost = |n: &str| s.space_unit(n).unwrap().build_cost;
+        assert_eq!(cost("Hero"), 12000.0);
+        assert_eq!(s.build_cost("Hero"), Some(12000.0), "the script host reads the same price");
+        assert_eq!(cost("Hero_Skips_One"), 12000.0, "a template at 1 credit is skipped");
+        assert_eq!(cost("Hero_Upgrade"), 2500.0, "a real price stays");
+        assert_eq!(cost("Hero_Not_In_Menu"), 1.0, "only units that can be recruited");
+        assert_eq!(cost("Hero_Not_For_Sale"), 0.0);
+        assert_eq!(cost("Hero_Orphan"), 1.0, "no class price to take: the data price stays");
+        assert_eq!(cost("Helper"), 1.0, "only hero ships (UniqueUnit)");
+        assert_eq!(cost("Class_Template"), 1.0);
+        assert_eq!(s.build_cost("Nothing"), None);
     }
 }

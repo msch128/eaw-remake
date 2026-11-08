@@ -34,7 +34,7 @@ fn missing_requirements_show_display_names() {
     let piett = w.unit_id("Piett_Procursator").unwrap();
     let menu = BuildMenu::for_planet(&w, sim.galaxy(), &names, empire, p).expect("menu");
     let entry = menu.options.iter().find(|o| o.target == BuildTarget::Unit(piett)).expect("hero entry");
-    assert_eq!(entry.cost, 1.0, "Build_Cost_Credits of the hero is 1 in the data");
+    assert_eq!(entry.cost, 13000.0, "the hero costs the price of its ship class, not the 1 credit of the data");
     let Availability::Requires(text) = &entry.availability else { panic!("{:?}", entry.availability) };
     assert!(!text.contains("E_Uplink_Command") && !text.contains('_'), "raw object name in {text:?}");
     assert_eq!(text, names.structure(w.structure_id("E_Uplink_Command").unwrap()));
