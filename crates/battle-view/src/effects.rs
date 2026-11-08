@@ -256,6 +256,8 @@ pub fn impact_effects(
                             kind: ImpactKind::Shield,
                             position: at,
                             normal,
+                            // The simulation stops the shot on the round hit sphere; the absorb effect is put on the hull.
+                            on: Some((entity, center)),
                         });
                     }
                 }
@@ -274,6 +276,7 @@ pub fn impact_effects(
                         kind: ImpactKind::Hull,
                         position: target_at,
                         normal: if hit_normal.length_squared() > 1e-4 { hit_normal } else { normal },
+                        on: None,
                     });
                 }
             }
@@ -296,6 +299,7 @@ pub fn impact_effects(
                         kind: ImpactKind::Hull,
                         position: target_at,
                         normal: if hit_normal.length_squared() > 1e-4 { hit_normal } else { normal },
+                        on: None,
                     });
                 }
             }

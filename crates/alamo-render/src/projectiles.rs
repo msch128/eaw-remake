@@ -257,6 +257,7 @@ pub(crate) fn fly_bolts(
                 kind: ImpactKind::Lifetime,
                 position: gt.translation(),
                 normal: -*fwd,
+                on: None,
             });
             commands.entity(e).despawn();
         }
@@ -326,6 +327,10 @@ pub struct ProjectileImpact {
     pub position: Vec3,
     /// Surface normal (particle `+Y` is aligned with it).
     pub normal: Vec3,
+    /// The unit hit and its centre as the simulation has it: a shield impact is moved from the round hit sphere the simulation stops
+    /// shots on onto the unit's hull ([`ModelBox::surface_point`](crate::ModelBox::surface_point)), `position` taken relative to that
+    /// centre. `None` keeps `position`.
+    pub on: Option<(Entity, Vec3)>,
 }
 
 /// Spawns a `<Particle>` object (by XML name, e.g. a hardpoint death explosion).
@@ -375,7 +380,12 @@ fn spawn_effect(
 }
 
 /// Observer: [`ProjectileImpact`].
-pub fn on_projectile_impact(ev: On<ProjectileImpact>, mut commands: Commands, defs: Res<XmlDefs>) {
+pub fn on_projectile_impact(
+    ev: On<ProjectileImpact>,
+    mut commands: Commands,
+    defs: Res<XmlDefs>,
+    models: Query<(&GlobalTransform, &crate::ModelBox)>,
+) {
     let Some(p) = defs.projectile(&ev.projectile) else {
         return;
     };
@@ -392,9 +402,17 @@ pub fn on_projectile_impact(ev: On<ProjectileImpact>, mut commands: Commands, de
         ImpactKind::Ground => &p.ground_detonation,
         ImpactKind::Shield => &p.shield_absorb,
     };
-    if let Some(name) = name {
-        spawn_effect(&mut commands, &defs, name, ev.position, ev.normal, ev.kind == ImpactKind::Shield);
-    }
+    let Some(name) = name else {
+        return;
+    };
+    let (position, normal) = match ev.on.and_then(|(model, center)| models.get(model).ok().map(|m| (m, center))) {
+        Some(((gt, b), center)) => {
+            let (p, n) = b.surface_point(gt.affine().inverse().transform_point3(gt.translation() + (ev.position - center)));
+            (gt.transform_point(p), gt.affine().transform_vector3(n).normalize_or(ev.normal))
+        }
+        None => (ev.position, ev.normal),
+    };
+    spawn_effect(&mut commands, &defs, name, position, normal, ev.kind == ImpactKind::Shield);
 }
 
 /// Observer: [`SpawnParticleEffect`].

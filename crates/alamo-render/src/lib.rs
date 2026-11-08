@@ -42,7 +42,7 @@ pub use lighting::{SunLight, spawn_sun, spawn_sun_shadowed};
 pub use lod::LodSettings;
 pub use model::{
     AlamoBillboard, AlamoBone, AlamoFs, AlamoHardpoint, AlamoModel, AlamoModelLoaded, AlamoPart,
-    AlamoProxy, AlamoRenderSettings, LodSelect, ModelCache, ModelLoadFailed, ModelLoaded,
+    AlamoProxy, AlamoRenderSettings, LodSelect, ModelBox, ModelCache, ModelLoadFailed, ModelLoaded,
 };
 pub use particles::{
     AlamoParticles, EngineThrottle, ParticleInstance, ParticleSettings, ParticleStats,

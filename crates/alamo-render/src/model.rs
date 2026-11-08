@@ -148,6 +148,52 @@ pub struct AlamoModelLoaded {
     pub radius: f32,
 }
 
+/// Boxes round the visible geometry of a loaded model, in the model root's space (inserted next to [`AlamoModelLoaded`]): one round the
+/// whole model and one per visible mesh, each as `(centre, half size along each axis)`.
+#[derive(Component, Debug, Clone, PartialEq)]
+pub struct ModelBox {
+    /// Centre of the whole box (= [`AlamoModelLoaded::center`]).
+    pub center: Vec3,
+    /// Half the size of the whole box along each axis.
+    pub half_extents: Vec3,
+    /// The box of every visible mesh.
+    pub meshes: Vec<(Vec3, Vec3)>,
+}
+
+/// Where the line from `origin` along the unit vector `dir` first meets the surface of the box `(c, h)`, as the distance along `dir`; from
+/// inside the box, where it left it behind `origin` (a negative distance).
+fn box_entry(origin: Vec3, dir: Vec3, (c, h): (Vec3, Vec3)) -> Option<f32> {
+    let inv = dir.recip();
+    let (t0, t1) = ((c - h - origin) * inv, (c + h - origin) * inv);
+    let near = t0.min(t1).max_element();
+    let far = t0.max(t1).min_element();
+    (near <= far && far >= 0.0).then_some(near)
+}
+
+impl ModelBox {
+    /// The hull point a shot that stopped at `point` hit, and the outward normal there (both in the model root's space): where the line
+    /// from `point` to the model's centre first meets the box of a visible mesh (the whole box when it meets none), the normal that of the
+    /// ellipsoid in that box (a smooth hull, not the box's six faces). The boxes stand in for the hull: the simulation stops a shot on
+    /// the unit's round hit sphere, well off a long or uneven hull; a box is never inside the hull, so the effect is never hidden in it.
+    /// Estimate: the data's collision meshes are not read.
+    pub fn surface_point(&self, point: Vec3) -> (Vec3, Vec3) {
+        let whole = (self.center, self.half_extents);
+        let dir = (self.center - point).normalize_or(Vec3::NEG_Y);
+        let hit = self
+            .meshes
+            .iter()
+            .filter_map(|&b| box_entry(point, dir, b).map(|t| (t, b)))
+            .min_by(|a, b| a.0.total_cmp(&b.0))
+            .or_else(|| box_entry(point, dir, whole).map(|t| (t, whole)));
+        let Some((t, (c, h))) = hit else {
+            return (self.center, -dir);
+        };
+        let p = point + dir * t;
+        let h = h.max(Vec3::splat(1e-3));
+        (p, ((p - c) / (h * h)).normalize_or(-dir))
+    }
+}
+
 /// A hardpoint of a ship: a named attachment (turret, shield generator, art piece) on a bone.
 #[derive(Component, Debug, Clone)]
 pub struct AlamoHardpoint {
@@ -950,7 +996,8 @@ pub fn spawn_models(
                 parts.push(e.id());
             }
         }
-        let (center, radius) = visible_bounds(&cached, &selected_meshes, axis_rot);
+        let (center, half_extents, mesh_boxes) = visible_bounds(&cached, &selected_meshes, axis_rot);
+        let radius = half_extents.length();
         let mut hardpoint_entities = Vec::new();
         if let Some(unit) = spec.unit.as_deref().and_then(|u| loader.defs.unit(u)) {
             let bone_ids: HashMap<String, Entity> = model
@@ -1015,6 +1062,7 @@ pub fn spawn_models(
             center,
             radius,
         });
+        commands.entity(root).insert(ModelBox { center, half_extents, meshes: mesh_boxes });
         commands.trigger(ModelLoaded { entity: root });
     }
     if spawned > 0 && started.elapsed().as_millis() >= 15 {
@@ -1026,9 +1074,10 @@ pub fn spawn_models(
     }
 }
 
-/// Bounding sphere of the selected, visible meshes in root space.
-fn visible_bounds(cached: &CachedModel, selected: &[usize], axis_rot: Quat) -> (Vec3, f32) {
+/// Centre and half size of the box round the selected, visible meshes in root space, and the same of each of them.
+fn visible_bounds(cached: &CachedModel, selected: &[usize], axis_rot: Quat) -> (Vec3, Vec3, Vec<(Vec3, Vec3)>) {
     let (mut lo, mut hi) = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
+    let mut boxes = Vec::new();
     for &mi in selected {
         let mesh = &cached.model.meshes[mi];
         if mesh.hidden {
@@ -1044,6 +1093,7 @@ fn visible_bounds(cached: &CachedModel, selected: &[usize], axis_rot: Quat) -> (
                     .world_transform(cached.model.bone_of_object(mi)),
             )
         };
+        let (mut mesh_lo, mut mesh_hi) = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
         for c in 0..8 {
             let pick = |bit: usize, a: [f32; 3], b: [f32; 3], k: usize| {
                 if c >> bit & 1 == 0 { a[k] } else { b[k] }
@@ -1054,14 +1104,18 @@ fn visible_bounds(cached: &CachedModel, selected: &[usize], axis_rot: Quat) -> (
                 pick(2, mesh.bbox_min, mesh.bbox_max, 2),
             );
             let w = axis_rot * m.transform_point3(p);
-            lo = lo.min(w);
-            hi = hi.max(w);
+            mesh_lo = mesh_lo.min(w);
+            mesh_hi = mesh_hi.max(w);
         }
+        lo = lo.min(mesh_lo);
+        hi = hi.max(mesh_hi);
+        boxes.push(((mesh_lo + mesh_hi) * 0.5, (mesh_hi - mesh_lo) * 0.5));
     }
     if lo.x > hi.x {
-        return (Vec3::ZERO, 1.0);
+        // Radius 1 round the origin, as before the boxes.
+        return (Vec3::ZERO, Vec3::X, boxes);
     }
-    ((lo + hi) * 0.5, ((hi - lo) * 0.5).length())
+    ((lo + hi) * 0.5, (hi - lo) * 0.5, boxes)
 }
 
 /// Marker for models that failed to load, so they are not retried every frame.
@@ -1232,6 +1286,35 @@ mod tests {
         assert_ne!(kind("MeshGloss.fx").1 & FLAG_SPEC_FROM_BASE_ALPHA, 0);
         assert_eq!(kind("Nebula.fx").0, ShaderKind::Additive as u32);
         assert_eq!(kind("Tree.fx").3, 1);
+    }
+
+    #[test]
+    fn a_hit_on_the_round_hit_sphere_is_moved_onto_the_long_hull() {
+        // A station 1200 long, 600 wide, 300 high; the simulation stops a shot on a sphere of radius 700 round it.
+        let b = ModelBox { center: Vec3::new(0.0, 50.0, 0.0), half_extents: Vec3::new(600.0, 150.0, 300.0), meshes: Vec::new() };
+        // From the side: onto the hull's flank, normal straight out.
+        let (p, n) = b.surface_point(Vec3::new(0.0, 50.0, 700.0));
+        assert!(p.distance(Vec3::new(0.0, 50.0, 300.0)) < 1e-3 && n.distance(Vec3::Z) < 1e-5, "{p} {n}");
+        // From above at a slant: on the top of the box where the line to the centre crosses it, the normal mostly up (the ellipsoid's).
+        let (p, n) = b.surface_point(Vec3::new(400.0, 650.0, 0.0));
+        assert!(p.distance(Vec3::new(100.0, 200.0, 0.0)) < 1e-3, "{p}");
+        assert!(n.y > 0.99 && n.x > 0.0, "normal {n}");
+        // A point inside comes out to the surface too.
+        let (p, _) = b.surface_point(Vec3::new(-60.0, 50.0, 0.0));
+        assert!(p.distance(Vec3::new(-600.0, 50.0, 0.0)) < 1e-3, "{p}");
+    }
+
+    #[test]
+    fn a_hit_beside_a_mushroom_station_lands_on_its_column_not_in_the_air_below_its_disc() {
+        // A disc 1000 across on a column 200 thick (the Empire star base's shape); the whole box is 1000 x 800 x 1000.
+        let (disc, column) = ((Vec3::new(0.0, 400.0, 0.0), Vec3::new(500.0, 50.0, 500.0)), (Vec3::ZERO, Vec3::new(100.0, 350.0, 100.0)));
+        let b = ModelBox { center: Vec3::new(0.0, 50.0, 0.0), half_extents: Vec3::new(500.0, 400.0, 500.0), meshes: vec![disc, column] };
+        let (p, n) = b.surface_point(Vec3::new(-700.0, 0.0, 0.0));
+        assert!((p.x + 100.0).abs() < 1e-3, "{p}: the whole box puts it at x -500, in the air");
+        assert!(n.x < -0.9, "normal {n}");
+        // From above: on top of the disc.
+        let (p, n) = b.surface_point(Vec3::new(0.0, 900.0, 0.0));
+        assert!((p.y - 450.0).abs() < 1e-3 && n.y > 0.999, "{p} {n}");
     }
 
     #[test]

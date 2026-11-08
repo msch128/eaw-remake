@@ -368,6 +368,7 @@ fn fly(
                     kind: ImpactKind::Shield,
                     position: f.end,
                     normal: -f.velocity.normalize(),
+                    on: None,
                 });
             } else {
                 commands.trigger(ProjectileImpact {
@@ -375,6 +376,7 @@ fn fly(
                     kind: ImpactKind::Hull,
                     position: f.end,
                     normal: -f.velocity.normalize(),
+                    on: None,
                 });
             }
             commands.entity(e).despawn();
