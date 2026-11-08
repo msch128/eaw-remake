@@ -383,3 +383,16 @@ fn defend_shortens_the_shield_regeneration_interval() {
     let home_one = cat.ship(cat.ship_id("Home_One").unwrap()).abilities.iter().find(|a| a.kind.eq_ignore_ascii_case("DEFEND")).unwrap();
     assert_eq!((home_one.take_damage_mult, home_one.speed_mult, home_one.weapon_delay_mult), (1.0, 0.25, 2.0));
 }
+
+/// The Broadside DB's MPML launchers fire only in rocket attack mode (`Fire_When_In_Normal_Attack_Mode` No); most hardpoints allow opportunity fire.
+#[test]
+fn hardpoint_fire_modes_come_from_the_data() {
+    let Some((data, fs)) = load() else { return };
+    let cat = Catalog::build(&data, Some(&fs), &["Broadside_Cruiser_DB", "Star_Destroyer"]);
+    let broadside = cat.ship(cat.ship_id("Broadside_Cruiser_DB").unwrap());
+    let mpml: Vec<&HpDef> = broadside.hardpoints.iter().filter(|h| h.name.to_ascii_lowercase().starts_with("hp_broadside_mpml")).collect();
+    assert!(!mpml.is_empty() && mpml.iter().all(|h| h.off_in_normal), "{:?}", mpml.iter().map(|h| (&h.name, h.off_in_normal)).collect::<Vec<_>>());
+    let isd = cat.ship(cat.ship_id("Star_Destroyer").unwrap());
+    let weapons = isd.hardpoints.iter().filter(|h| h.kind == HpKind::Weapon).count();
+    assert!(isd.hardpoints.iter().filter(|h| h.kind == HpKind::Weapon && !h.target_only).count() * 2 > weapons, "opportunity fire is the default");
+}

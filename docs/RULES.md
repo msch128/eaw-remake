@@ -374,7 +374,15 @@ stays as a derived figure for bars and decisions (`ShipDef::hull` times the shar
   weapons) exist but the Remake scripts only assign them to ground task forces; `BattleConfig::attack_move_sets`
   (default off) enables them for AI attack-move orders. Classes missing from a set are opportunity targets.
 * Each weapon fires at the first candidate in range, inside its arc and allowed (estimate). Heavy guns (damage >= 150)
-  and shield-only weapons never fire at fighters or bombers (estimate).
+  and shield-only weapons never fire at fighters or bombers (estimate). Data: a hardpoint with
+  `Allow_Opportunity_Fire_When_Targeting` False fires only at the ship's own target while it has one, one with
+  `_When_Idle` False not at all while it has none (both true where the data gives none). Not modelled:
+  `Hardpoint_Recharge_Cutoff_For_Opportunity_Fire` 0.5 (meaning unknown).
+* Data: `Fire_When_In_Normal_Attack_Mode` No = the hardpoint fires only while `ROCKET_ATTACK` is on,
+  `Fire_When_In_Rocket_Attack_Mode` No = only while it is off, `Fire_When_In_Power_To_Weapons_Mode` No = not during
+  `POWER_TO_WEAPONS` (all default to Yes; the data only ever writes Yes for the last one). Hardpoints a unit can only
+  use in rocket mode stay silent when the unit has no `ROCKET_ATTACK` (`Broadside_Cruiser_DB`, whose ability is
+  commented out).
 * Estimate: large ships close to the range that puts 80% of their weapon damage in reach (x0.95) and hold there; a
   long-range specialist (e.g. a missile ship) holds at 0.8 of its longest range plus half the target radius. They turn
   to the bearing (bow, broadside or stern) at which the largest share of their hardpoint damage bears
@@ -422,7 +430,7 @@ the ability under the AI's rules (`Command::SetAutocast`).
 | `Force_Healing_Ability` | Data: hull `Heal_Amount` + `Heal_Percent` of max per `Heal_Interval_In_Secs`, on the ship or friends within `Heal_Range` (single target = most damaged), never on `Excluded_Unit_Types`; ships with destroyable hardpoints heal those (2.3) |
 | `Combat_Bonus_Ability` | Data: `Damage_Bonus_Percentage`, `Health/Shield/Defense_Bonus_Percentage` (damage taken divided by 1 + bonus), `Fire_Range_Bonus_Percentage`, `Movement_Speed_Bonus_Percentage`, `Applicable_Unit_Categories` or `Applicable_Unit_Types` (either matches; neither = every ship), never `Excluded_Unit_Types`. Estimate: the data has no radius, so the aura covers the whole side. Per `Stacking_Category` the strongest bonus applies, categories add; negative values (Gorgon -40% shields) are maluses |
 | `Redirect_Blaster_Ability` | Data: `Reaction_Arc_In_Degrees`, `Block_Chance`, `Redirect_Chance`. Estimate: a redirected shot deals its damage to the shooter instead of re-aiming the bolt. An ability that starts disabled stays off until a story grant (`NEW_POWER_FOR_ALL`) names that unit and ability; `Reflector_Shield` is block 0.15, redirect 0, arc 350 |
-| `ROCKET_ATTACK`, `SWAP_WEAPONS` | Estimate: for the duration (10 s where the data has none) missile, rocket and torpedo hardpoints reload at 0.4x delay |
+| `ROCKET_ATTACK`, `SWAP_WEAPONS` | Data: for the duration (10 s where the data has none, estimate) the ship fires its rocket-mode hardpoint set instead of the normal one (2.5). Estimate, only for ships whose data names no such sets: missile, rocket and torpedo hardpoints reload at 0.4x delay |
 | `SENSOR_JAMMING` | Data: `Expiration_Seconds` 15. Enemy homing missiles aimed at the ship lose their lock |
 | `BUZZ_DROIDS` | Data: `Damage_Radius`, `Enemy_Damage_Per_Second`, `Activation_Max_Range` (Eclipse lightning storm: 5000, 250 dps). A damage zone at the chosen point for the ability duration (20 s where the data has none, estimate) |
 | `SUPER_LASER` | Data: `Fire_Frame` 50, `Damage_Per_Frame` 10, categories. Estimate: destroys the nearest enemy of those categories within 600 units outright after `Fire_Frame`/30 s (10 damage per frame cannot be the one-shot kill). Estimate: a super laser of at most `ION_SUPER_LASER_DAMAGE_PER_FRAME` = 1 (the CIS Subjugator's ion shot, `TEXT_TOOLTIP_ABILITY_SBJ_ION`) does not kill: it hits the target with the ship's longest-stunning ion projectile (`Proj_SBJ_Ion`: 99900 shield damage, no hull damage) and stuns it on detonation (900 s, speed and fire rate -75%). `Projectile_Disable_Engines_Duration` 900 is not modelled (it needs the energy pool) |

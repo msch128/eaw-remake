@@ -166,6 +166,16 @@ pub struct HpDef {
     pub full_salvo_mult: f32,
     /// `Power_To_Weapons_Mode_Weapon_Delay_Multiplier`.
     pub power_weapons_mult: f32,
+    /// `Fire_When_In_Normal_Attack_Mode` No: fires only while `ROCKET_ATTACK` is on.
+    pub off_in_normal: bool,
+    /// `Fire_When_In_Rocket_Attack_Mode` No: holds fire while `ROCKET_ATTACK` is on.
+    pub off_in_rocket: bool,
+    /// `Fire_When_In_Power_To_Weapons_Mode` No: holds fire while `POWER_TO_WEAPONS` is on (the data only ever says Yes).
+    pub off_in_power: bool,
+    /// `Allow_Opportunity_Fire_When_Targeting` False: while the ship has a target, fires at that target only.
+    pub target_only: bool,
+    /// `Allow_Opportunity_Fire_When_Idle` False: does not fire while the ship has no target of its own.
+    pub no_idle_fire: bool,
     /// True if the mount bone has a mirrored (left-handed) transform.
     pub mirrored: bool,
     /// Bone Y axis in ship-local battle space (diagnostics).
@@ -1835,6 +1845,8 @@ impl Catalog {
         let forbidden = h.fire_category_restrictions.iter().filter_map(|t| TargetClass::from_token(t)).fold(0u16, |m, c| m | c.bit());
         let allowed = if forbidden == 0 { 0 } else { 0x1FF & !forbidden };
         let f = |k: &str, d: f32| h.fields.get(k).and_then(|v| alamo_data::xml::parse_num::<f32>(v)).unwrap_or(d);
+        // A mode flag that is given and not true.
+        let no = |k: &str| h.fields.get(k).is_some_and(|v| !alamo_data::xml::parse_bool(v));
         let _ = (index, class);
         HpDef {
             name: h.name.clone(),
@@ -1867,6 +1879,11 @@ impl Catalog {
             allowed,
             full_salvo_mult: f("full_salvo_weapon_delay_multiplier", 1.0),
             power_weapons_mult: f("power_to_weapons_mode_weapon_delay_multiplier", 1.0),
+            off_in_normal: no("fire_when_in_normal_attack_mode"),
+            off_in_rocket: no("fire_when_in_rocket_attack_mode"),
+            off_in_power: no("fire_when_in_power_to_weapons_mode"),
+            target_only: !h.opportunity_fire_targeting,
+            no_idle_fire: !h.opportunity_fire_idle,
             from_bone,
             flyout: if kind == HpKind::FighterBay { f("fighter_bay_flyout_distance", 0.0).max(0.0) } else { 0.0 },
             arc_bins: 0,

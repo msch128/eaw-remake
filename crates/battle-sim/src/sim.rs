@@ -3704,6 +3704,9 @@ fn weapons(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, rng:
     let rocket_active = def.abilities.iter().zip(&s.abilities).any(|(a, st)| a.rocket && st.active > 0.0);
     let salvo_active = def.abilities.iter().zip(&s.abilities).any(|(a, st)| a.salvo && st.active > 0.0);
     let power_active = def.abilities.iter().zip(&s.abilities).any(|(a, st)| st.active > 0.0 && a.kind.eq_ignore_ascii_case("POWER_TO_WEAPONS"));
+    // Data: `ROCKET_ATTACK` switches between the hardpoints that fire in normal and in rocket attack mode; only a ship whose data names no
+    // such sets keeps the faster missile reload (estimate, `ROCKET_RELOAD_MULT`).
+    let mode_sets = def.hardpoints.iter().any(|h| h.off_in_normal || h.off_in_rocket);
     if delay_mult <= 0.0 {
         delay_mult = 1.0;
     }
@@ -3792,7 +3795,7 @@ fn weapons(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, rng:
                 if power_active {
                     m *= hp.power_weapons_mult;
                 }
-                if rocket_active && matches!(pd.category.as_str(), "missile" | "rocket" | "torpedo") {
+                if rocket_active && !mode_sets && matches!(pd.category.as_str(), "missile" | "rocket" | "torpedo") {
                     m *= ROCKET_RELOAD_MULT;
                 }
                 st.cooldown = rng.range(hp.recharge_min, hp.recharge_max) * m;
@@ -3800,14 +3803,17 @@ fn weapons(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, rng:
             continue;
         }
         let cd = cooldown - dt;
-        if cd > 0.0 || !may_start {
+        let mode_off = (rocket_active && hp.off_in_rocket) || (!rocket_active && hp.off_in_normal) || (power_active && hp.off_in_power);
+        if cd > 0.0 || !may_start || mode_off {
             s.hps[i].cooldown = cd.max(0.0);
             continue;
         }
         s.hps[i].cooldown = 0.0;
-        // Look for a target among the candidates.
+        // Look for a target among the candidates. Without opportunity fire a hardpoint takes only the ship's own target (when targeting) or
+        // nothing (when idle).
         let mut chosen = NONE;
-        for &c in &s.candidates {
+        let own = s.target;
+        for &c in s.candidates.iter().filter(|&&c| if own == NONE { !hp.no_idle_fire } else { !hp.target_only || c == own }) {
             let t = &snaps[c as usize];
             let can_shoot = if s.target_hp != NO_HP && c == s.target && t.hp_alive.test(s.target_hp as usize) {
                 let tdef = cat.ship(t.def);

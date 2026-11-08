@@ -722,6 +722,78 @@ fn rocket_attack_speeds_up_missile_reloads_only() {
 }
 
 #[test]
+fn rocket_attack_switches_to_the_rocket_mode_hardpoints() {
+    // `Fire_When_In_Normal_Attack_Mode` No: the hardpoint fires only while `ROCKET_ATTACK` is on; `Fire_When_In_Rocket_Attack_Mode` No: only
+    // while it is off. A ship with such hardpoints swaps sets instead of reloading its missiles faster.
+    let mut missile = laser();
+    missile.name = "missile".into();
+    missile.category = "missile".into();
+    let run = |use_ability: bool| {
+        let rockets = HpDef { off_in_normal: true, projectile: Some(1), ..gun("rockets", 0.0) };
+        let guns = HpDef { off_in_rocket: true, ..gun("guns", 0.0) };
+        let mut boat = ship("boat", 1.0e6, 0.0, vec![rockets, guns]);
+        boat.abilities.push(AbilityDef { kind: "ROCKET_ATTACK".into(), rocket: true, duration: 10.0, recharge: 30.0, speed_mult: 1.0, shield_regen_mult: 1.0, weapon_delay_mult: 1.0, take_damage_mult: 1.0, ..Default::default() });
+        let cat = Catalog::from_defs(vec![boat, ship("dummy", 1.0e7, 0.0, vec![])], vec![laser(), missile.clone()]);
+        let mut b = Battle::new(setup(cat, "boat", "dummy", 1, 1, cfg()));
+        let id = b.ships.iter().find(|s| s.side == 0).unwrap().id;
+        if use_ability {
+            b.command(0, Command::UseAbility { ship: id, ability: 0 }).unwrap();
+        }
+        let mut shots = [0u32; 2];
+        for _ in 0..30 * 8 {
+            for e in b.step() {
+                if let Event::ProjectileFired { hardpoint: Some(hp), .. } = e {
+                    shots[*hp as usize] += 1;
+                }
+            }
+        }
+        shots
+    };
+    let (normal, rocket) = (run(false), run(true));
+    assert!(normal[0] == 0 && normal[1] > 0, "normal mode: the guns fire, the rockets do not: {normal:?}");
+    assert!(rocket[0] > 0 && rocket[1] == 0, "rocket mode: the rockets fire, the guns do not: {rocket:?}");
+    assert!(rocket[0] <= normal[1] + 2, "no faster reload on top of the swap: {rocket:?} vs {normal:?}");
+}
+
+#[test]
+fn hardpoints_without_opportunity_fire_shoot_only_the_ships_target() {
+    // `Allow_Opportunity_Fire_When_Targeting` False: while the ship has a target, the hardpoint fires at that target only, not at another
+    // ship that happens to be in its reach.
+    let run = |target_only: bool| {
+        let mut torp = gun("torpedo", 0.0);
+        torp.target_only = target_only;
+        torp.range = 1500.0;
+        let mut boat = ship("boat", 1.0e6, 0.0, vec![torp]);
+        boat.max_weapon_range = 6000.0;
+        let cat = Catalog::from_defs(vec![boat, ship("far", 1.0e7, 0.0, vec![]), ship("near", 1.0e7, 0.0, vec![])], vec![laser()]);
+        let mut su = setup(cat, "boat", "far", 1, 1, cfg());
+        su.sides[1].units.push(UnitSetup { ship: 2, count: 1, tag: 7 });
+        su.sides[0].ai = false;
+        let mut b = Battle::new(su);
+        let (me, far, near) = (b.ships.iter().find(|s| s.def == 0).unwrap().id, b.ships.iter().find(|s| s.def == 1).unwrap().id, b.ships.iter().find(|s| s.def == 2).unwrap().id);
+        // The ordered target is out of the torpedo's reach, another enemy is inside it.
+        let p = b.ships[me as usize].pos;
+        b.ships[far as usize].pos = p + Vec3::new(4000.0, 0.0, 0.0);
+        b.ships[near as usize].pos = p + Vec3::new(0.0, 900.0, 0.0);
+        b.command(0, Command::Attack { ships: vec![me], target: far }).unwrap();
+        let mut at_near = 0;
+        for _ in 0..30 * 5 {
+            for e in b.step() {
+                if let Event::Hit { ship, attacker, .. } = e
+                    && *ship == near
+                    && *attacker == me
+                {
+                    at_near += 1;
+                }
+            }
+        }
+        at_near
+    };
+    assert!(run(false) > 0, "an opportunity shot at the near ship");
+    assert_eq!(run(true), 0, "none without opportunity fire");
+}
+
+#[test]
 fn sensor_jamming_breaks_missile_locks() {
     let mut homing = laser();
     homing.name = "homer".into();

@@ -597,9 +597,9 @@ pub struct HardpointDef {
     pub fire_inaccuracy: Vec<(String, f32)>,
     /// `Fire_Category_Restrictions`: target categories this weapon may attack.
     pub fire_category_restrictions: Vec<String>,
-    /// `Allow_Opportunity_Fire_When_Idle`.
+    /// `Allow_Opportunity_Fire_When_Idle` (true where the data gives none).
     pub opportunity_fire_idle: bool,
-    /// `Allow_Opportunity_Fire_When_Targeting`.
+    /// `Allow_Opportunity_Fire_When_Targeting` (true where the data gives none).
     pub opportunity_fire_targeting: bool,
     /// Turret limits when `Is_Turret`.
     pub turret: Option<TurretDef>,
@@ -659,8 +659,8 @@ impl HardpointDef {
                 })
                 .collect(),
             fire_category_restrictions: r.list("fire_category_restrictions"),
-            opportunity_fire_idle: flag("allow_opportunity_fire_when_idle"),
-            opportunity_fire_targeting: flag("allow_opportunity_fire_when_targeting"),
+            opportunity_fire_idle: r.flag("allow_opportunity_fire_when_idle").unwrap_or(true),
+            opportunity_fire_targeting: r.flag("allow_opportunity_fire_when_targeting").unwrap_or(true),
             turret,
             damage_type: r.string("damage_type"),
             repair_amount_per_frame: f32_or("repair_amount_per_frame"),
