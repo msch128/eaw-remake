@@ -81,7 +81,7 @@ pub fn fleet_slot_name(fleet: u32, row: u32, col: u32) -> String {
 
 /// True for components that are filled from [`PanelData::slots`].
 pub(crate) fn is_panel_slot(lname: &str) -> bool {
-    const PREFIXES: [&str; 12] = [
+    const PREFIXES: [&str; 13] = [
         "build_pad",
         "unit_pad",
         "space_pad_",
@@ -94,6 +94,8 @@ pub(crate) fn is_panel_slot(lname: &str) -> bool {
         "land_fleet_",
         "r_0",
         "hero_slot_",
+        // `i_build_buttons.alo`: the tactical build buttons of a station.
+        "build_0",
     ];
     lname.ends_with(|c: char| c.is_ascii_digit()) && PREFIXES.iter().any(|p| lname.starts_with(p))
 }
@@ -888,6 +890,7 @@ mod tests {
             "r_0302",
             "hero_slot_good10",
             "land_fleet_19",
+            "build_03",
         ] {
             assert!(is_panel_slot(n), "{n}");
         }

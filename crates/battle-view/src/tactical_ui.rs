@@ -34,6 +34,7 @@ impl Plugin for TacticalUiPlugin {
         app.init_resource::<RetreatNotice>().init_resource::<InterdictNotice>().init_resource::<TacticalUiState>().init_resource::<CraftBarUnits>().init_resource::<ReinforceUi>().init_resource::<crate::hud::HudState>().insert_resource(OverlaysActive);
         app.init_resource::<crate::retreat_prompt::RetreatPrompt>().add_message::<crate::retreat_prompt::RetreatChoice>();
         crate::input_test::build(app);
+        crate::build_bar::build(app);
         app.add_systems(Update, death_star_gauge.run_if(resource_exists::<BattleRuntime>));
         app.add_systems(
             Update,

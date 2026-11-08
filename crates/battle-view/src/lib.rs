@@ -24,6 +24,7 @@
 //! A finished battle is reported as the `BattleFinished` message carrying the sim's `TacticalResult`.
 
 pub mod audio;
+pub mod build_bar;
 pub mod camera;
 pub mod control;
 pub mod convert;

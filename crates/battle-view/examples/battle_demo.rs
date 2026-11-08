@@ -34,6 +34,7 @@ use bevy::window::ExitCondition;
 
 const STEP_MS: u64 = 16;
 
+static BUILD_ORDERED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 static ABILITY_USED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 static RETREAT_ORDERED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 static STRAFE_ORDERED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -211,14 +212,19 @@ fn main() {
         Some(h) => (None, h),
         None => (arena, half),
     };
+    // `SP_DEMO_CREDITS=n`: every side may spend n credits on the tactical build bar of its station; the Rebel side then carries the faction name
+    // the star bases' build lists use.
+    let credits: Option<i64> = std::env::var("SP_DEMO_CREDITS").ok().and_then(|v| v.parse().ok());
     let config = BattleConfig {
         half_size: half,
         arena,
         seed,
         fog_of_war: std::env::var_os("SP_DEMO_NOFOG").is_none(),
+        side_credits: credits.map(|c| vec![c; 2]).unwrap_or_default(),
         ..BattleConfig::default()
     };
-    let mut sides = vec![side("Empire", empire, vec![]), side("Rebel_Alliance", rebel, station_ids)];
+    let rebel_name = if credits.is_some() { "Rebel" } else { "Rebel_Alliance" };
+    let mut sides = vec![side("Empire", empire, vec![]), side(rebel_name, rebel, station_ids)];
     // `SP_DEMO_IDLE=<side>`: that side gets no AI, so its units wait where they arrived (a squadron at rest).
     if let Some(s) = std::env::var("SP_DEMO_IDLE").ok().and_then(|v| v.parse::<usize>().ok()).and_then(|i| sides.get_mut(i)) {
         s.ai = false;
@@ -331,9 +337,21 @@ fn main() {
 }
 
 /// The EaW interface draws over the battle camera.
-fn ui_camera(cams: Query<Entity, Added<BattleCamera>>, settings: Option<ResMut<eaw_ui::EawUiSettings>>) {
-    if let (Some(mut s), Some(e)) = (settings, cams.iter().next()) {
+fn ui_camera(
+    mut commands: Commands,
+    cams: Query<Entity, Added<BattleCamera>>,
+    settings: Option<ResMut<eaw_ui::EawUiSettings>>,
+    untargeted: Query<Entity, (With<eaw_ui::EawPanel>, Without<bevy::ui::UiTargetCamera>)>,
+) {
+    let Some(mut s) = settings else { return };
+    if let Some(e) = cams.iter().next() {
         s.camera = Some(e);
+    }
+    // The command bar can be spawned before the battle camera exists; offscreen there is no window camera to fall back on.
+    if let Some(c) = s.camera {
+        for e in &untargeted {
+            commands.entity(e).insert(bevy::ui::UiTargetCamera(c));
+        }
     }
 }
 
@@ -582,6 +600,21 @@ fn capture_driver(
         let ships: Vec<u32> = cur.ships.iter().filter(|s| s.side == 1).map(|s| s.id).collect();
         rt.command(1, battle_sim::Command::Attack { ships, target });
         STRAFE_ORDERED.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+    // `SP_DEMO_BUILD=<secs>`: from that battle time the player's station stays selected (its build bar opens), and the first item it offers
+    // is bought once.
+    if let Some(at) = std::env::var("SP_DEMO_BUILD").ok().and_then(|v| v.parse::<f32>().ok())
+        && let Some(cur) = rt.cur.as_ref()
+        && cur.time >= at
+        && let Some(station) = cur.ships.iter().find(|s| s.side == settings.player_side && !rt.catalog.ship(s.def).buildable.is_empty())
+    {
+        selection.ships = vec![station.id];
+        if !BUILD_ORDERED.load(std::sync::atomic::Ordering::Relaxed)
+            && let Some(item) = cur.builds.get(settings.player_side as usize).and_then(|b| b.options.iter().find(|o| o.ready.is_ok())).map(|o| o.item)
+        {
+            rt.command(settings.player_side, battle_sim::Command::TacticalBuild { item });
+            BUILD_ORDERED.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
     }
     // `SP_DEMO_RETREAT=<secs>` (60 or more, the sim allows a retreat from then on): the player's side orders its retreat at that battle time and
     // jumps away `retreat_jump_seconds` (30) later, each ship with its departure flash.

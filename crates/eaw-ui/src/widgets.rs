@@ -18,7 +18,7 @@ use crate::faction::UiFaction;
 use crate::panels::{
     MinimapKind, MinimapSurface, PanelBarName, PanelData, PanelSlotName, PanelText, is_panel_slot,
 };
-use crate::shell::{ShellLayout, rasterize};
+use crate::shell::{ShellArt, ShellLayout, rasterize};
 use crate::textures::{UiTexture, UiTextures};
 
 /// Which command bar to build.
@@ -397,7 +397,7 @@ pub fn spawn_shell(world: &mut World, spec: &ShellSpec) -> Option<Entity> {
         .filter(|a| a.alt.is_none_or(|n| n == alt))
         .filter(|a| !is_ground_component(&a.name.to_lowercase()))
         .collect();
-    let (lo, hi) = bounds_of(arts.iter().map(|a| a.bounds()));
+    let (lo, hi) = shell_bounds(&arts, &layout);
     let (width, height) = ((hi.x - lo.x).max(1.0), (hi.y - lo.y).max(1.0));
 
     let mut node = Node {
@@ -534,6 +534,15 @@ fn within(p: Vec2, lo: Vec2, hi: Vec2) -> bool {
 }
 
 /// Union of `(min, max)` rectangles; an empty iterator gives `(0, 0)..(1, 1)`.
+/// The box of a shell panel: its frame art, or for a shell without art (`i_build_buttons.alo`: only button hit areas) its components.
+fn shell_bounds(arts: &[&ShellArt], layout: &ShellLayout) -> (Vec2, Vec2) {
+    if arts.is_empty() {
+        bounds_of(layout.items.values().map(|i| (i.center - i.size * 0.5, i.center + i.size * 0.5)))
+    } else {
+        bounds_of(arts.iter().map(|a| a.bounds()))
+    }
+}
+
 pub fn bounds_of(rects: impl Iterator<Item = (Vec2, Vec2)>) -> (Vec2, Vec2) {
     let (mut lo, mut hi) = (Vec2::splat(f32::MAX), Vec2::splat(f32::MIN));
     for (l, h) in rects {
@@ -2123,6 +2132,14 @@ fn roman(level: u8) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_shell_without_art_spans_its_components() {
+        // `i_build_buttons.alo`: six button hit areas below its origin and no frame art; before, the art-only box dropped every button.
+        let item = |name: &str, x: f32, y: f32| (name.to_lowercase(), crate::shell::ShellItem { name: name.into(), center: Vec2::new(x, y), size: Vec2::new(52.0, 52.0), z: 0.0 });
+        let layout = ShellLayout { model: "I_Build_Buttons.ALO".into(), items: [item("Build_00", -54.0, -67.0), item("Build_05", 52.0, -120.0)].into_iter().collect(), order: Vec::new(), art: Vec::new() };
+        assert_eq!(shell_bounds(&[], &layout), (Vec2::new(-80.0, -146.0), Vec2::new(78.0, -41.0)));
+    }
 
     #[test]
     fn an_ability_that_is_on_shows_the_running_outline_and_off_hides_it() {

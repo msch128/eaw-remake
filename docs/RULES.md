@@ -933,6 +933,13 @@ Estimates and data that shape what the player sees and hears. Behaviour is in `b
 
 ## 3.2 Cameras and interaction
 
+* Tactical build bar (`build_bar.rs`). Data: selecting one of the player's structures that offers tactical builds opens
+  the `i_build_buttons` shell (`Build_00` .. `Build_05`, `CommandBarComponents.xml` group `Tactical Build Buttons`) with
+  the item's `Icon_Name` and price; a click buys it. The command bar's `tqueue00` .. `tqueue09` (group
+  `Tactical_Build_Queue`) show the queue, the first entry with its progress (a click takes a job out again), and
+  `Text_Credits_tactical` the credits left. Project rule: of an upgrade line only the next level shows (the levels whose
+  prerequisites are built or queued). Estimate: the shell sits at the screen centre; the game places it itself
+  (`Manual_Offset`).
 * Data, tactical camera: pitch 60, fov 60 (`TacticalCameras.xml`); `Tactical_Min/Max_Scroll_Speed` 1000/4000,
   `Push_Scroll_Speed_Modifier` 2.0, `Tactical_Edge_Scroll_Region` 2 (4.0 `Gameconstants.xml`); zoom-out cap 6000.
 * Data, galaxy camera: `GMC_InitialPullbackDistance` 470, `GMC_ZoomedPitchAngleDegrees` -20, `GMC_ZoomTime` 1.0 s,

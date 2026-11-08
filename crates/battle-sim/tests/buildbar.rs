@@ -372,3 +372,27 @@ fn mercenary_debuffs_weaken_the_enemy_factions_after_the_dummys_countdown() {
     }
     assert!((of(&c, "Nebulon_B_Frigate").speed - 0.83).abs() < 1e-5);
 }
+
+#[test]
+fn the_build_bar_shows_the_next_level_of_each_line() {
+    let Some((data, fs)) = load() else { return };
+    let cat = Arc::new(Catalog::build(&data, Some(&fs), &["Empire_Star_Base_3", "Nebulon_B_Frigate"]));
+    let mut b = defended(&cat, "Empire", "Empire_Star_Base_3", &[], 200);
+    let id = |n: &str| cat.buildable_id(n).unwrap();
+    let shown = |b: &Battle| names(&cat, b.build_options(1).iter().map(|o| o.item));
+    // Of the base's 7 items: the four L1s (the L2s wait for their L1).
+    assert_eq!(shown(&b), ["ES_Enhanced_Reactors_L1_Upgrade", "ES_Improved_Defenses_L1_Upgrade", "ES_Improved_Weapons_L1_Upgrade", "ES_Reinforced_Armor_L1_Upgrade"]);
+    assert!(b.build_options(1).iter().all(|o| o.ready.is_ok() && o.progress.is_none()));
+    b.command(1, Command::TacticalBuild { item: id("ES_Improved_Weapons_L1_Upgrade") }).unwrap();
+    for _ in 0..30 * 5 {
+        b.step();
+    }
+    // Queued: L1 shows its progress (5 of 25 s), L2 shows up; 40 credits are left, too few for anything.
+    let opts = b.build_options(1);
+    let w1 = opts.iter().find(|o| o.item == id("ES_Improved_Weapons_L1_Upgrade")).unwrap();
+    assert_eq!(w1.ready, Err(CommandError::BuildLimit));
+    assert!((w1.progress.unwrap() - 0.2).abs() < 0.01, "{w1:?}");
+    let w2 = opts.iter().find(|o| o.item == id("ES_Improved_Weapons_L2_Upgrade")).unwrap();
+    assert_eq!((w2.ready.clone(), w2.progress), (Err(CommandError::NotEnoughCredits), None));
+    assert!(b.build_options(0).is_empty());
+}

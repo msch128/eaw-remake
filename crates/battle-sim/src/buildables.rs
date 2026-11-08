@@ -171,6 +171,16 @@ pub(crate) fn buildable_closure(data: &GameData, roots: impl IntoIterator<Item =
     out
 }
 
+/// One button of a side's build bar (see [`Battle::build_options`]).
+#[derive(Debug, Clone, PartialEq)]
+pub struct BuildOption {
+    pub item: BuildId,
+    /// May it be bought now (why not).
+    pub ready: Result<(), CommandError>,
+    /// Build progress 0..1 while it is in the queue.
+    pub progress: Option<f32>,
+}
+
 /// A purchase in a side's production queue.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct BuildJob {
@@ -230,6 +240,27 @@ impl Battle {
     /// The production queue of `side`: items and seconds left, the one being built first.
     pub fn build_queue(&self, side: u8) -> Vec<(BuildId, f32)> {
         self.build_jobs.iter().filter(|j| j.side == side).map(|j| (j.item, j.left)).collect()
+    }
+
+    /// What the build bar of `side` shows, in catalog order: every offered item that is not built (or replaced by a later level) and whose
+    /// prerequisites are built or queued, so of an upgrade line only the next level. `ready` is [`Battle::build_check`]; `progress` is
+    /// 0..1 for the first job of the item in the queue.
+    pub fn build_options(&self, side: u8) -> Vec<BuildOption> {
+        let built = self.built(side);
+        let queued = |p: BuildId| self.build_jobs.iter().any(|j| j.side == side && j.item == p);
+        self.buildable(side)
+            .into_iter()
+            .filter(|&item| {
+                let def = &self.catalog.buildables[item as usize];
+                let superseded = built.iter().any(|&b| self.catalog.buildables[b as usize].replaces == Some(item));
+                !built.contains(&item) && !superseded && def.prerequisites.iter().all(|&p| built.contains(&p) || queued(p))
+            })
+            .map(|item| {
+                let time = self.catalog.buildables[item as usize].time;
+                let progress = self.build_jobs.iter().find(|j| j.side == side && j.item == item).map(|j| if time > 0.0 { (1.0 - j.left / time).clamp(0.0, 1.0) } else { 0.0 });
+                BuildOption { item, ready: self.build_check(side, item), progress }
+            })
+            .collect()
     }
 
     /// Whether `side` may queue `item` now (the reason when not).

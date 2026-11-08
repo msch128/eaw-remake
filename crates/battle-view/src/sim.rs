@@ -79,6 +79,17 @@ pub struct ProjSnap {
     pub def: ProjId,
 }
 
+/// A side's tactical build bar (`battle_sim::buildables`).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct BuildBarSnap {
+    /// Credits left to spend.
+    pub credits: i64,
+    /// The buttons (`Battle::build_options`).
+    pub options: Vec<battle_sim::buildables::BuildOption>,
+    /// The production queue: item and seconds left, the one being built first.
+    pub queue: Vec<(battle_sim::buildables::BuildId, f32)>,
+}
+
 /// The battle state after `tick` steps.
 #[derive(Debug, Clone, Default)]
 pub struct Snapshot {
@@ -108,6 +119,8 @@ pub struct Snapshot {
     pub retreat_jump_in: Vec<Option<f32>>,
     /// Initial spawn / arrival yaw for each side.
     pub spawn_yaw: Vec<f32>,
+    /// Per side: the tactical build bar of its stations.
+    pub builds: Vec<BuildBarSnap>,
     /// Wall-clock milliseconds the worker needed for the step.
     pub step_ms: f32,
 }
@@ -187,6 +200,7 @@ fn snapshot(battle: &Battle, events: Vec<Event>, step_ms: f32) -> Snapshot {
         losses: if battle.is_over() { lost_ships(battle) } else { Vec::new() },
         retreat_jump_in: (0..battle.side_count() as u8).map(|s| battle.retreat_jump_in(s)).collect(),
         spawn_yaw: (0..battle.side_count() as u8).map(|s| battle.spawn_yaw(s)).collect(),
+        builds: (0..battle.side_count() as u8).map(|s| BuildBarSnap { credits: battle.credits(s), options: battle.build_options(s), queue: battle.build_queue(s) }).collect(),
         step_ms,
     }
 }
