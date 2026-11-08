@@ -231,6 +231,7 @@ impl Battle {
             catalog,
             cmd_events: Vec::new(),
             retreat_ordered: vec![false; sides.len()],
+            retreat_battered: vec![None; sides.len()],
             cheats: crate::cheats::Cheats::new(sides.len()),
             retreat_jump_at: vec![None; sides.len()],
             hunt_seen: [0; 4],
@@ -1944,6 +1945,12 @@ impl Battle {
         by_cat.values().product()
     }
 
+    /// Whether the AI's fleet of `side` was battered (lost half of its peak strength, the nearly-destroyed clause) when the AI ordered its
+    /// retreat; `None` while the AI ordered none.
+    pub fn ai_retreat_battered(&self, side: u8) -> Option<bool> {
+        self.retreat_battered.get(side as usize).copied().flatten()
+    }
+
     /// Seconds until the retreat jump of `side` (`None` when it has not ordered a retreat or the jump is done). For the countdown on the tactical screen.
     pub fn retreat_jump_in(&self, side: u8) -> Option<f32> {
         self.retreat_jump_at.get(side as usize).copied().flatten().map(|t| (t - self.time).max(0.0))
@@ -2082,7 +2089,9 @@ impl Battle {
             }
             let factor = if defender { 3.0 + f32::from(u8::from(stations > 0)) } else { 2.0 };
             if (theirs > 0.0 && theirs >= factor * mine) || mainly_transports || emergency_retreat {
-                let _ = self.command(side, Command::Retreat);
+                if self.command(side, Command::Retreat).is_ok() {
+                    self.retreat_battered[si] = Some(battered);
+                }
             }
         }
     }

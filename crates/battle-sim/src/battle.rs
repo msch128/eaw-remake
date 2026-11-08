@@ -858,6 +858,8 @@ pub struct Battle {
     /// Events caused by commands; they are reported with the next step (a step starts with a clean event list).
     pub(crate) cmd_events: Vec<Event>,
     pub(crate) retreat_ordered: Vec<bool>,
+    /// Per side: whether its fleet was battered (the nearly-destroyed clause of `ai_retreat`) when the AI ordered its retreat.
+    pub(crate) retreat_battered: Vec<Option<bool>>,
     /// Cheats in force (the F2 menu); see [`crate::cheats`].
     pub cheats: crate::cheats::Cheats,
     /// Per side: battle time at which the retreat jump happens (`None` = no retreat ordered).

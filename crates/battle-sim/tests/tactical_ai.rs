@@ -482,6 +482,8 @@ struct RetreatRun {
     winner: Option<u8>,
     /// The player side ordered a retreat (it never may on its own).
     player_retreat: bool,
+    /// The AI's fleet was battered (lost half of its peak strength, the nearly-destroyed clause) when it ordered its retreat.
+    battered: bool,
 }
 
 /// A side's force as the Remake AI counts it (`FriendlyForceUnnormalized`): the `AI_Combat_Power` of its units, each weighted by the share of
@@ -556,6 +558,7 @@ fn retreat_run(cat: &Arc<Catalog>, ai: u8, attacker: &[(&str, u32)], defender: &
     let ships = |f: fn(&Ship) -> bool| ai_big.iter().filter(|&&i| f(&b.ships[i as usize])).count() as u32;
     run.big = (ai_big.len() as u32, ships(|s| !s.alive), ships(|s| s.alive && s.retreated));
     run.winner = b.winner();
+    run.battered = b.ai_retreat_battered(ai).unwrap_or(false);
     run
 }
 
@@ -605,9 +608,8 @@ fn an_ai_defender_holds_while_its_station_stands_and_leaves_when_it_falls() {
         let down = r.station_down.expect("the station falls");
         let (at, ratio) = r.ordered.expect("the defender retreats");
         assert!(r.start_ratio >= 4.0 && down > 70.0, "no chance from the start, and the station stands well past 62 s: {:.2}, {down:.0} s", r.start_ratio);
-        // The nearly-destroyed rule may still send it a check or two before the fall: with the A-wing garrison's passive missile shields,
-        // seed 2 is down to half its peak strength (8206 of 16535) at 98 s, the station falls at 99.8 s.
-        assert!(at >= down - 0.1 || (at >= down - 4.1 && at > 90.0), "no retreat while the station stands: station {down:.1} s, order {at:.1} s");
+        // The station holds the defender unless its fleet is already battered (the nearly-destroyed clause, docs/RULES.md 2.10).
+        assert!(at >= down - 0.1 || r.battered, "no retreat while the station stands unless battered: station {down:.1} s, order {at:.1} s");
         assert!(at <= down + 2.2, "it leaves at the next check after the station's fall: station {down:.1} s, order {at:.1} s");
         assert!(ratio >= 2.95, "it leaves because the enemy is 3x stronger: {ratio:.2}");
         assert!(r.big.2 * 2 >= r.big.0, "most of the fleet gets away: {:?}", r.big);
