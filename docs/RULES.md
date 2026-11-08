@@ -482,9 +482,11 @@ stays as a derived figure for bars and decisions (`ShipDef::hull` times the shar
   item's `Debuff_*` script spawns a `Destruction_Space_Dummy` variant at the map's `Debuff Marker` (a map without one gets
   nothing: 74 of 151 space maps have it); the speed dummy is built at the structure. The dummy destroys itself after its
   `SELF_DESTRUCT` `Expiration_Seconds` (10 s) and leaves its `Destruction_Survivors`, one aura object per other faction with a
-  `Combat_Bonus_Ability` for `Corvette | Frigate | Capital` (`Stacking_Category` 0). Project reading (the engine's owner of a
-  destruction survivor is not verified): each aura acts on the side of the faction its `Affiliation` names, for the rest of the
-  battle; the dummies and auras are no battle units.
+  `Combat_Bonus_Ability` for `Corvette | Frigate | Capital` (`Stacking_Category` 0). Estimate "debuff affiliation" (the engine's owner of a
+  destruction survivor is not verified; the script spawns the dummy for `Neutral`): each aura acts on the side of the faction its
+  `Affiliation` names, for the rest of the battle. Evidence: every `<Faction>_Enemies_*` dummy lists one survivor per other
+  faction and none for its own (`Empire_-7%_Damage` has `Affiliation` Empire only), and the items read `TEXT_DEBUFF_ENEMIES_*`.
+  The dummies and auras are no battle units.
 * Estimate: fighters stay with their squad leader or carrier when idle and fly strafing runs (approach, break away 1 to
   2.5 s).
 * Launch out of the hangar (estimate): fighters leave along the bay bone's X axis (data: the opening) until 40 u clear
