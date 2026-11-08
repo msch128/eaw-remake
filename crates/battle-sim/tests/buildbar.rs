@@ -261,3 +261,55 @@ fn a_stealth_duration_upgrade_lengthens_timed_stealth() {
     assert_eq!(active(false), 180.0);
     assert_eq!(active(true), 270.0);
 }
+
+#[test]
+fn purchased_reinforcements_arrive_from_the_items_script() {
+    let Some((data, fs)) = load() else { return };
+    // No structure's bar offers them in 4.0 (the Uplink Command's list is commented out), so the item is put on a level 1 base's bar.
+    let mut cat = Catalog::build(&data, Some(&fs), &["Empire_Star_Base_1", "Nebulon_B_Frigate", "Empire_Purchased_Reinforcements_Light"]);
+    let item = cat.buildable_id("Empire_Purchased_Reinforcements_Light").unwrap();
+    let def = cat.buildable(item);
+    assert_eq!((def.cost, def.time, def.script.as_deref()), (5000, 30.0, Some("Reinforcements_Purchase_Empire_Taskforce")));
+    // `Reinforcements_Purchase_Empire_Taskforce.lua`: both rolls spawn `assault_list1` after Sleep(10) and Sleep(1).
+    let script = def.spawn.clone().expect("a spawn script");
+    let names = |list: &[ShipId]| list.iter().map(|&s| cat.ship(s).name.clone()).collect::<Vec<_>>();
+    assert_eq!(script.choices.iter().map(|c| names(c)).collect::<Vec<_>>(), vec![vec!["Vigil_Corvette", "Vigil_Corvette", "Gladiator_Star_Destroyer"]; 2]);
+    assert_eq!((script.delay, script.place.clone(), script.faction.as_str()), (11.0, SpawnPlace::DefenderPositions, "Empire"));
+    let base = cat.ship_id("Empire_Star_Base_1").unwrap();
+    cat.ships[base as usize].buildable.push(("empire".into(), item));
+    let cat = Arc::new(cat);
+    let mut b = defended(&cat, "Empire", "Empire_Star_Base_1", &[], 6000);
+    b.command(1, Command::TacticalBuild { item }).unwrap();
+    assert_eq!(b.credits(1), 1000);
+    let mut came = Vec::new();
+    while b.time() < 60.0 {
+        let t = b.time();
+        let events = b.step().to_vec();
+        for e in events {
+            if let Event::Spawned { side, ships, hyperspace, .. } = e {
+                came.push((t, side, cat.ship(b.ships[ships[0] as usize].def).name.clone(), hyperspace));
+            }
+        }
+    }
+    assert_eq!(came.iter().map(|c| c.2.as_str()).collect::<Vec<_>>(), ["Vigil_Corvette", "Vigil_Corvette", "Gladiator_Star_Destroyer"], "{came:?}");
+    assert!(came.iter().all(|c| c.1 == 1 && c.3));
+    // 30 s to build, the script's 11 s, 3 s out of hyperspace.
+    assert!((came[0].0 - 44.0).abs() < 0.1, "{came:?}");
+    assert_eq!(b.result().attrition_credits[1], -5000);
+}
+
+#[test]
+fn every_purchased_reinforcement_script_resolves_its_units() {
+    let Some((data, fs)) = load() else { return };
+    let items = ["Empire", "Rebel", "Underworld"].map(|f| [format!("{f}_Starbase_Special_Reinforces_Upgrade_Fighter"), format!("{f}_Purchased_Reinforcements_Light")]).concat();
+    let names: Vec<&str> = items.iter().map(String::as_str).collect();
+    let cat = Catalog::build(&data, Some(&fs), &names);
+    for n in &items {
+        let def = cat.buildable(cat.buildable_id(n).unwrap());
+        let script = def.spawn.as_ref().unwrap_or_else(|| panic!("{n}: {:?}", def.script));
+        let units: Vec<String> = script.choices[0].iter().map(|&s| cat.ship(s).name.clone()).collect();
+        eprintln!("{n}: {} credits, {} s, {} units {units:?}", def.cost, def.time, units.len());
+        assert!(!units.is_empty() && script.choices.iter().all(|c| c.len() == units.len()), "{n}: an unknown unit in {:?}", script.choices);
+        assert_eq!((def.cost, def.time), if n.contains("Fighter") { (1500, 20.0) } else { (5000, 30.0) });
+    }
+}

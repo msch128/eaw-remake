@@ -1689,9 +1689,22 @@ impl Catalog {
         let mut seen: HashSet<String> = HashSet::new();
         let mut queue: Vec<String> = names.iter().map(|s| s.to_string()).collect();
         let mut scripts = ScriptCache::default();
+        // Tactical build items asked for by name (not only through a structure's build bar).
+        let mut extra_items: Vec<String> = Vec::new();
         while let Some(n) = queue.pop() {
             if !seen.insert(n.to_ascii_lowercase()) {
                 continue;
+            }
+            // The units the spawn scripts of its tactical build items bring in (purchased reinforcements).
+            let own_items: Vec<String> = crate::buildables::buildable_lists(data, &n).into_iter().map(|(_, i)| i).collect();
+            let as_item = data.objects.resolve(&n).is_some_and(|r| r.kind().eq_ignore_ascii_case("UpgradeObject"));
+            if as_item {
+                extra_items.push(n.clone());
+            }
+            for item in crate::buildables::buildable_closure(data, own_items.into_iter().chain(as_item.then(|| n.clone()))) {
+                if let Some(s) = data.objects.resolve(&item).and_then(|r| r.get("lua_script")).and_then(|l| scripts.spawn(fs, l)) {
+                    queue.extend(s.names().map(str::to_string));
+                }
             }
             if let Some(src) = load_source(data, &n) {
                 queue.extend(src.spawned_names());
@@ -1742,7 +1755,7 @@ impl Catalog {
         let mut cat = Catalog { damage, speed_scale: 30.0, shield_interval, depleted_shield_disable, asteroid_field_damage: constant("asteroid_field_damage").unwrap_or(0.0).max(0.0), asteroid_field_damage_rate: constant("asteroid_field_damage_rate").unwrap_or(0.0).clamp(0.0, 1.0), nebula_ability_disable: constant("nebula_ability_disable_time").unwrap_or(0.0).max(0.0), ion_storm_shield_disable: constant("ion_storm_shield_disable_time").unwrap_or(0.0).max(0.0), space_guard_range: constant("space_guard_range").unwrap_or(0.0).max(0.0), formation, ai_ignores_fog, priority_sets, priority_index, ..Catalog::default() };
         // Tactical build bars of the structures.
         let bars: Vec<Vec<(String, String)>> = sources.iter().map(|s| crate::buildables::buildable_lists(data, s.name())).collect();
-        let items = crate::buildables::buildable_closure(data, bars.iter().flatten().map(|(_, n)| n.clone()));
+        let items = crate::buildables::buildable_closure(data, bars.iter().flatten().map(|(_, n)| n.clone()).chain(extra_items));
         cat.buildables = crate::buildables::buildable_defs(data, &items);
         // Projectiles.
         let mut proj_names: Vec<String> = Vec::new();
@@ -1847,6 +1860,10 @@ impl Catalog {
                     d.chase = d.chase.or(rules);
                 }
             }
+        }
+        // Purchased reinforcements: the units of their spawn scripts.
+        for b in &mut cat.buildables {
+            b.spawn = scripts.resolved(b.script.as_deref(), &cat.ship_index);
         }
         cat
     }

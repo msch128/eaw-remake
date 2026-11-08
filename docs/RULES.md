@@ -471,6 +471,12 @@ stays as a derived figure for bars and decisions (`ShipDef::hull` times the shar
   `Stealth_Duration_Multiplier` lengthens the side's timed `STEALTH`. Bonuses update with the aura pulse (once a second).
   In 4.0 the Underworld `US_Reinforced_Structure_L1..L3` bonuses are `Ground_Automatic` and do nothing in space, and the
   `US_Magnetically_Sealed_Armor` upgrades enable an ability that only `Xizor_Virago` has, which they do not list.
+* Data: purchased reinforcements are tactical build items with a spawn `Lua_Script`
+  (`Reinforcements_Purchase_{Empire,Rebel,Underworld}_{Fighter,Taskforce}`, 1500 credits / 20 s and 5000 credits / 30 s): when
+  finished, the script runs on the offering structure like any spawn script (2.8, scripted units): after its `Sleep(10)` and
+  `Sleep(1)` the list's units drop out of hyperspace at the `Defending Forces Position` markers, one after the other. Like
+  every scripted unit they belong to the battle only. In 4.0 no structure offers them: the fighter wings are on no build
+  bar and the Uplink Command's `Tactical_Buildable_Objects_Campaign` (the light task forces) is commented out.
 * Estimate: fighters stay with their squad leader or carrier when idle and fly strafing runs (approach, break away 1 to
   2.5 s).
 * Launch out of the hangar (estimate): fighters leave along the bay bone's X axis (data: the opening) until 40 u clear

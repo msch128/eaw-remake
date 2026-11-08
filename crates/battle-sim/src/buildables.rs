@@ -47,6 +47,10 @@ pub struct BuildableDef {
     pub enables: Vec<EnableDef>,
     /// `Battlefield_Modifier_Ability` `Stealth_Duration_Multiplier` (1 = none): timed stealth abilities of the side last this much longer.
     pub stealth_duration: f32,
+    /// `Lua_Script`.
+    pub script: Option<String>,
+    /// What `script` spawns when the item is finished, if it is a spawn script (purchased reinforcements; see `spawns.rs`).
+    pub spawn: Option<std::sync::Arc<crate::SpawnScriptDef>>,
 }
 
 /// `Tactical_Buildable_Objects_Campaign` of object `name`: `(faction, item)` pairs, faction lower case. The tag is a list in which a
@@ -105,6 +109,8 @@ pub fn buildable_defs(data: &GameData, items: &[String]) -> Vec<BuildableDef> {
                     .filter(|a| a.kind.eq_ignore_ascii_case("Battlefield_Modifier_Ability"))
                     .filter_map(|a| a.fields.get("stealth_duration_multiplier").and_then(|v| alamo_data::xml::parse_num::<f32>(v)))
                     .fold(1.0, f32::max),
+                script: r.string("lua_script").filter(|s| !s.trim().is_empty()),
+                spawn: None,
             }
         })
         .collect()
@@ -262,6 +268,14 @@ impl Battle {
             built.retain(|&b| b != old);
         }
         built.push(item);
+        if let Some(script) = self.catalog.buildables[item as usize].spawn.clone() {
+            // The script runs on the structure that offers the item (`Find_Player` decides the side of the units).
+            let faction = self.sides[side as usize].name.to_ascii_lowercase();
+            let owner = self.ships.iter().find(|s| s.side == side && s.alive && !s.retreated && self.catalog.ship(s.def).buildable.iter().any(|(f, b)| *f == faction && *b == item));
+            if let Some(owner) = owner.map(|s| s.id) {
+                self.run_spawn_script(owner, &script, 0x8000 | item as u64);
+            }
+        }
         if self.config.record_events {
             self.events.push(Event::BuildFinished { side, item });
         }
