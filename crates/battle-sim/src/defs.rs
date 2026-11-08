@@ -228,7 +228,8 @@ pub struct AbilityDef {
     /// ([`SuperLaserDef::ion`]).
     pub super_laser: Option<SuperLaserDef>,
     /// `BUZZ_DROIDS` that damages enemies in an area (estimate: the area lasts `duration`, 20 s where the data gives no expiration; the
-    /// `Own_Damage_Per_Second` of 1 and the repair-drone variants are not modelled).
+    /// `Own_Damage_Per_Second` of 1 and the repair-drone variants are not modelled) or, for jamming pods, jams enemy missiles in it
+    /// ([`ZoneDef::missile_radius`]; `duration` is the pods' life).
     pub zone: Option<ZoneDef>,
     /// `MISSILE_SHIELD`: radius in which enemy missiles and torpedoes are destroyed (0 = not a missile shield).
     pub missile_radius: f32,
@@ -560,6 +561,9 @@ pub struct ZoneDef {
     pub enemy_dps: f32,
     /// `Activation_Max_Range`: how far from the ship the area may be placed.
     pub max_range: f32,
+    /// `Passive_Missile_Shield_Radius` of the dropped `Object_Type` (jamming pods 500): enemy missiles, torpedoes and rockets that enter
+    /// it are destroyed, as by a missile shield (0 = none).
+    pub missile_radius: f32,
 }
 
 /// `SUPER_LASER` (Death Star): a shot at one chosen ship.
@@ -666,6 +670,8 @@ pub struct ShipDef {
     pub bonuses: Vec<BonusDef>,
     /// `Space_FOW_Reveal_Range`: how far this ship sees (fog of war); 1250 where the data gives none.
     pub sensor_range: f32,
+    /// `Passive_Missile_Shield_Radius`: an always-on missile shield around the unit (Star Home 500, Reaver 300, A-wing 50; 0 = none).
+    pub passive_missile_radius: f32,
     /// `Reinforcement_Prevention_Radius` of a structure: enemy reinforcements may not arrive this close (0 = the data has none; `BattleConfig::no_spawn_radius` applies).
     pub no_spawn_radius: f32,
     /// True for stations and structures (never move).
@@ -1856,7 +1862,7 @@ impl Catalog {
                 }
                 let offsets = u.squadron_offsets.iter().map(|o| Vec3::from_array(*o)).collect();
                 let delay = u.fields.get("spawned_squadron_delay_seconds").and_then(|v| alamo_data::xml::parse_num(v)).unwrap_or(2.0);
-                (members, offsets, at_tech0.map(|t| resolve(&t.starting)).unwrap_or_default(), at_tech0.map(|t| resolve(&t.reserve)).unwrap_or_default(), delay, ability_defs(u, &self.projectiles, &self.proj_index))
+                (members, offsets, at_tech0.map(|t| resolve(&t.starting)).unwrap_or_default(), at_tech0.map(|t| resolve(&t.reserve)).unwrap_or_default(), delay, ability_defs(u, &self.projectiles, &self.proj_index, objects))
             }
             Source::Base(b) => {
                 let delay = b.fields.get("spawned_squadron_delay_seconds").and_then(|v| alamo_data::xml::parse_num(v)).unwrap_or(2.0);
@@ -2022,6 +2028,7 @@ impl Catalog {
             locked_redirects,
             bonuses,
             sensor_range,
+            passive_missile_radius: unit_field("passive_missile_shield_radius").and_then(alamo_data::xml::parse_num).unwrap_or(0.0),
             no_spawn_radius,
             class,
             is_static,
@@ -2271,7 +2278,7 @@ impl Catalog {
     }
 }
 
-fn ability_defs(u: &SpaceUnitDef, projectiles: &[ProjDef], proj_index: &HashMap<String, ProjId>) -> Vec<AbilityDef> {
+fn ability_defs(u: &SpaceUnitDef, projectiles: &[ProjDef], proj_index: &HashMap<String, ProjId>, objects: &alamo_data::GameObjects) -> Vec<AbilityDef> {
     u.abilities
         .iter()
         .filter(|a| {
@@ -2354,6 +2361,20 @@ fn ability_defs(u: &SpaceUnitDef, projectiles: &[ProjDef], proj_index: &HashMap<
                     ai_classes: [TargetClass::Frigate, TargetClass::Capital, TargetClass::Super].into_iter().chain(lucky.then_some(TargetClass::Structure)).fold(0u16, |m, c| m | c.bit()),
                 }
             });
+            // `BUZZ_DROIDS` drops its `Object_Type`. The jamming pods (`Missile_Jamming_Pods_Empire` of the TIE Interdictor and Scimitar)
+            // carry a `Passive_Missile_Shield_Radius` and decay by `Own_Damage_Per_Second` from their `Tactical_Health` (60 / 1 = 60 s).
+            let mut pod_secs = None;
+            let zone = a.kind.eq_ignore_ascii_case("BUZZ_DROIDS").then(|| {
+                let sub = a.activated_ability.as_ref().and_then(|n| u.sub_abilities.iter().find(|s| s.name.eq_ignore_ascii_case(n)));
+                let f = |k: &str| sub.and_then(|s| s.fields.get(k)).and_then(|v| alamo_data::xml::parse_num::<f32>(v)).unwrap_or(0.0);
+                let pod = sub.and_then(|s| s.fields.get("object_type")).and_then(|n| objects.space_unit(n.trim()));
+                let jam = pod.as_ref().and_then(|p| p.fields.get("passive_missile_shield_radius")).and_then(|v| alamo_data::xml::parse_num::<f32>(v)).unwrap_or(0.0);
+                if let Some(p) = pod.as_ref().filter(|p| jam > 0.0 && p.hull > 0.0 && f("own_damage_per_second") > 0.0) {
+                    pod_secs = Some(p.hull / f("own_damage_per_second"));
+                }
+                let radius = f("damage_radius");
+                ZoneDef { radius: if radius > 0.0 { radius } else { jam }, enemy_dps: f("enemy_damage_per_second"), max_range: f("activation_max_range"), missile_radius: jam }
+            }).filter(|z| z.radius > 0.0 && (z.enemy_dps > 0.0 || z.missile_radius > 0.0));
 
             let k = a.kind.to_ascii_uppercase();
             match k.as_str() {
@@ -2393,7 +2414,7 @@ fn ability_defs(u: &SpaceUnitDef, projectiles: &[ProjDef], proj_index: &HashMap<
                 cause_damage_mult,
                 recharge: a.recharge_seconds.unwrap_or(30.0),
                 // A reveal ping has no expiration in the data: it shows the area for 5 s (estimate).
-                duration: if toggle { f32::MAX / 4.0 } else if shot.is_some() { SHOT_WINDOW_SECONDS } else if let Some(b) = &blast { b.charge + SHOT_WINDOW_SECONDS } else if let Some(f) = &flare { f.charge } else if let (Some(_), Some(secs)) = (&leech, leech_secs) { secs } else if ping { a.expiration_seconds.filter(|&x| x > 0.0).unwrap_or(5.0) } else if let Some(secs) = defence_secs { secs } else if a.kind.eq_ignore_ascii_case("CORRUPT_SYSTEMS") { a.activated_ability.as_ref().and_then(|n| u.sub_abilities.iter().find(|s| s.name.eq_ignore_ascii_case(n))).and_then(|s| s.fields.get("duration_in_seconds")).and_then(|v| alamo_data::xml::parse_num(v)).unwrap_or(30.0) } else { a.expiration_seconds.unwrap_or(12.0) },
+                duration: if toggle { f32::MAX / 4.0 } else if shot.is_some() { SHOT_WINDOW_SECONDS } else if let Some(b) = &blast { b.charge + SHOT_WINDOW_SECONDS } else if let Some(f) = &flare { f.charge } else if let (Some(_), Some(secs)) = (&leech, leech_secs) { secs } else if ping { a.expiration_seconds.filter(|&x| x > 0.0).unwrap_or(5.0) } else if let Some(secs) = defence_secs.or(pod_secs) { secs } else if a.kind.eq_ignore_ascii_case("CORRUPT_SYSTEMS") { a.activated_ability.as_ref().and_then(|n| u.sub_abilities.iter().find(|s| s.name.eq_ignore_ascii_case(n))).and_then(|s| s.fields.get("duration_in_seconds")).and_then(|v| alamo_data::xml::parse_num(v)).unwrap_or(30.0) } else { a.expiration_seconds.unwrap_or(12.0) },
                 stealth: a.kind.eq_ignore_ascii_case("STEALTH"),
                 shot,
                 blast,
@@ -2471,11 +2492,7 @@ fn ability_defs(u: &SpaceUnitDef, projectiles: &[ProjDef], proj_index: &HashMap<
                         ion: alamo_data::xml::parse_num::<f32>(&f("damage_per_frame")).is_some_and(|d| d <= ION_SUPER_LASER_DAMAGE_PER_FRAME).then_some(ProjId::MAX),
                     }
                 }),
-                zone: a.kind.eq_ignore_ascii_case("BUZZ_DROIDS").then(|| {
-                    let sub = a.activated_ability.as_ref().and_then(|n| u.sub_abilities.iter().find(|s| s.name.eq_ignore_ascii_case(n)));
-                    let f = |k: &str| sub.and_then(|s| s.fields.get(k)).and_then(|v| alamo_data::xml::parse_num::<f32>(v)).unwrap_or(0.0);
-                    ZoneDef { radius: f("damage_radius"), enemy_dps: f("enemy_damage_per_second"), max_range: f("activation_max_range") }
-                }).filter(|z| z.radius > 0.0 && z.enemy_dps > 0.0),
+                zone,
                 rocket: a.kind.eq_ignore_ascii_case("ROCKET_ATTACK") || a.kind.eq_ignore_ascii_case("SWAP_WEAPONS"),
                 missile_radius: if a.kind.eq_ignore_ascii_case("MISSILE_SHIELD") || laser { a.fields.get("effective_radius").and_then(|v| alamo_data::xml::parse_num(v)).unwrap_or(750.0) } else { 0.0 },
                 disable_movement: a.fields.get("disable_movement").is_some_and(|v| alamo_data::xml::parse_bool(v)),

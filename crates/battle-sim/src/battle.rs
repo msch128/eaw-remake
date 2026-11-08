@@ -817,7 +817,8 @@ pub struct Battle {
     pub(crate) flares: Vec<(u32, f32)>,
     /// Shield leech beams (`LEECH_SHIELDS`): caster, ability index, target.
     pub(crate) leeches: Vec<(u32, u16, u32)>,
-    pub(crate) zones: Vec<(u8, Vec3, f32, f32, f32)>,
+    /// Areas dropped by `BUZZ_DROIDS`: side, centre, radius, enemy damage per second, end time, missile-jamming radius (0 = none).
+    pub(crate) zones: Vec<(u8, Vec3, f32, f32, f32, f32)>,
     /// Distance field of rocks and stations for path planning (`None` without navigation or obstacles).
     pub(crate) nav_grid: Option<crate::nav::NavGrid>,
     /// Per side: `(search point index, time it was set)` of the AI search for hidden enemies.

@@ -1098,7 +1098,7 @@ impl Battle {
         if let Some(z) = &a.zone {
             // Used without a place: the area around the ship itself (a point-targeted use adds its own area in `UseAbilityAt`).
             let (side, pos) = (self.ships[ship as usize].side, self.ships[ship as usize].pos);
-            self.zones.push((side, pos, z.radius, z.enemy_dps, self.time + a.duration));
+            self.zones.push((side, pos, z.radius, z.enemy_dps, self.time + a.duration, z.missile_radius));
         }
         if let Some(t) = &a.tractor {
             match self.tractor_target(ship, t) {
@@ -1410,20 +1410,23 @@ impl Battle {
             });
         }
 
-        // Projectile flight and collision.
+        // Projectile flight and collision. Missile shields: active abilities, the always-on `Passive_Missile_Shield_Radius` and
+        // dropped jamming pods.
         let shields: Vec<(Vec3, f32, u8)> = self
             .ships
             .iter()
             .filter(|s| s.alive && !s.retreated)
             .flat_map(|s| {
-                cat.ship(s.def)
-                    .abilities
+                let def = cat.ship(s.def);
+                def.abilities
                     .iter()
                     .zip(&s.abilities)
                     .filter(|(a, st)| a.missile_radius > 0.0 && st.active > 0.0)
                     .map(|(a, _)| (s.pos, a.missile_radius, s.side))
+                    .chain((def.passive_missile_radius > 0.0).then_some((s.pos, def.passive_missile_radius, s.side)))
                     .collect::<Vec<_>>()
             })
+            .chain(self.zones.iter().filter(|z| z.5 > 0.0 && z.4 > self.time).map(|z| (z.1, z.5, z.0)))
             .collect();
         let env = FlyEnv { obstacles, shields: &shields };
         let outs: Vec<Out> = {
@@ -2189,12 +2192,15 @@ impl Battle {
                     } else if !a.toggle && s.since_hit < 3.0 && ((a.shield_regen_mult > 1.05 && def.shield > 0.0 && s.shield < 0.5 * def.shield) || (a.take_damage_mult < 0.95 && s.hull < 0.6 * def.hull)) {
                         // Shield and damage-reduction abilities: when hurt and under fire.
                         auto_use.push(k);
-                    } else if a.missile_radius > 0.0 {
+                    } else if let jam = a.missile_radius.max(a.zone.as_ref().map_or(0.0, |z| z.missile_radius))
+                        && jam > 0.0
+                    {
+                        // Missile shields and jamming pods (dropped at the ship): under missile fire.
                         let incoming = self
                             .projectiles
                             .iter()
                             .filter(|p| p.side != s.side && matches!(cat.projectiles[p.def as usize].category.as_str(), "missile" | "torpedo" | "rocket"))
-                            .filter(|p| p.pos.dist(s.pos) < a.missile_radius * 2.0)
+                            .filter(|p| p.pos.dist(s.pos) < jam * 2.0)
                             .count();
                         if incoming >= 3 {
                             auto_use.push(k);
@@ -2345,7 +2351,7 @@ impl Battle {
                         if homing > 0 {
                             uses.push((side, s.id, k, None));
                         }
-                    } else if let Some(z) = &a.zone {
+                    } else if let Some(z) = a.zone.as_ref().filter(|z| z.enemy_dps > 0.0) {
                         // The enemy whose surroundings hold the most enemies (a capital counts as three).
                         let weight = |id: u32| if cat.ship(self.ships[id as usize].def).class as u8 >= TargetClass::Capital as u8 { 3 } else { 1 };
                         let best = enemies
@@ -2870,7 +2876,7 @@ impl Battle {
             return;
         }
         let record = self.config.record_events;
-        for z in self.zones.clone() {
+        for z in self.zones.clone().into_iter().filter(|z| z.3 > 0.0) {
             for s in self.ships.iter_mut().filter(|s| s.alive && !s.retreated && s.side != z.0 && s.pos.dist(z.1) <= z.2) {
                 let mut dmg = z.3 * dt * s.bonus.taken_hull;
                 let soak = dmg.min(s.shield.max(0.0));
