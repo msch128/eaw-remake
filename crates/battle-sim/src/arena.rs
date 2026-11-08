@@ -81,10 +81,14 @@ fn zones_of(r: &alamo_data::Resolved<'_>) -> PropZones {
         off.get(1).copied().unwrap_or(0.0),
         off.get(2).copied().unwrap_or(0.0),
     ];
-    let live = radius > 0.0;
+    // Only a `SPACE_OBSTACLE` object is a rock or a zone, in any `Behavior` / `SpaceBehavior` copy (`Asteroid_Huge` lists
+    // `Behavior` twice, the first copy has it). `Nebula_Ultra_Huge` (radius 40000, `In_Background`) has `IDLE` only: a backdrop.
+    let obstacle = ["behavior", "spacebehavior"]
+        .iter()
+        .flat_map(|t| r.get_all(t))
+        .any(|v| v.split([',', ' ', '\t', '\n', '\r']).any(|t| t.eq_ignore_ascii_case("space_obstacle")));
+    let live = radius > 0.0 && obstacle;
     let field = r.flag("is_asteroid_field") == Some(true);
-    // `Is_Impassable_Asteroid` is the rock flag. Do not also require the `SPACE_OBSTACLE` token:
-    // `Asteroid_Huge` repeats `Behavior` and the first copy is the one `resolve` keeps.
     let rock = r.flag("is_impassable_asteroid") == Some(true) && !field && live;
     PropZones {
         rock: rock.then_some(radius),

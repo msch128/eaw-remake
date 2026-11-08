@@ -57,10 +57,13 @@ fn prop_radii_come_from_the_object_not_the_name() {
     assert_eq!(named_ion.nebula, Some(2800.0));
     assert_eq!(named_ion.ion, None, "Is_Ion_Storm is No");
 
-    let both = prop_zones(&data, "Nebula_Ultra_Huge");
-    assert_eq!(both.nebula, Some(40000.0));
-    assert_eq!(both.ion, Some(40000.0));
-    assert_eq!(both.rock, None);
+    let small_ion = prop_zones(&data, "Nebula_Small_Ion");
+    assert_eq!((small_ion.nebula, small_ion.ion), (Some(135.0), Some(135.0)));
+
+    // Is_Nebula and Is_Ion_Storm with radius 40000, but Behavior IDLE only (no SPACE_OBSTACLE) and In_Background.
+    let backdrop = prop_zones(&data, "Nebula_Ultra_Huge");
+    assert_eq!(backdrop.nebula, None, "was nebula 40000");
+    assert_eq!(backdrop.ion, None, "was ion storm 40000");
 
     let destroyable = prop_zones(&data, "Destroyable_Asteroid_Huge");
     assert_eq!(destroyable.rock, None, "footprint 320 is not Space_Obstacle_Radius; was name-guess 600");
@@ -130,11 +133,10 @@ fn space_maps_with_fields_nebulae_or_ion_storms() {
     for line in &lines {
         eprintln!("  {line}");
     }
-    assert_eq!((ted, parsed, lines.len()), (372, 372, 18));
+    assert_eq!((ted, parsed, lines.len()), (372, 372, 16));
     assert_eq!(
         lines,
         [
-            "MENUSPACEHAPES.TED nebula=1 ion=1 field=0 rocks=0 props=Nebula_Ultra_Huge",
             "MENUSPACEVULCANICPLANET.TED nebula=0 ion=0 field=3 rocks=1 props=Asteroid_Field_Huge_Obstacle_Damage_4000,Asteroid_Field_Huge_Obstacle_Damage_6000,Asteroid_Field_Huge_Obstacle_Damage_8000",
             "_SPACE_PLANET_AETENII_01.TED nebula=0 ion=0 field=5 rocks=1 props=Asteroid_Field_Huge_Obstacle_Damage_4000,Asteroid_Field_Huge_Obstacle_Damage_6000,Asteroid_Field_Huge_Obstacle_Damage_8000",
             "_SPACE_PLANET_ERAIDU_01.TED nebula=0 ion=0 field=4 rocks=1 props=Asteroid_Field_Huge_Obstacle_Damage_4000,Asteroid_Field_Huge_Obstacle_Damage_6000,Asteroid_Field_Huge_Obstacle_Damage_8000",
@@ -147,7 +149,6 @@ fn space_maps_with_fields_nebulae_or_ion_storms() {
             "_SPACE_PLANET_MUSTAFAR_01.TED nebula=0 ion=0 field=2 rocks=1 props=Asteroid_Field_Huge_Obstacle_Damage_8000",
             "_SPACE_PLANET_MUUNILINST_01.TED nebula=0 ion=0 field=3 rocks=1 props=Asteroid_Field_Huge_Obstacle_Damage_4000,Asteroid_Field_Huge_Obstacle_Damage_6000,Asteroid_Field_Huge_Obstacle_Damage_8000",
             "_SPACE_PLANET_SULLUST_01.TED nebula=0 ion=0 field=4 rocks=1 props=Asteroid_Field_Huge_Obstacle_Damage_4000,Asteroid_Field_Huge_Obstacle_Damage_6000,Asteroid_Field_Huge_Obstacle_Damage_8000",
-            "_SPACE_PLANET_TRANSIT_MISTS_01.TED nebula=1 ion=1 field=0 rocks=0 props=Nebula_Ultra_Huge",
             "_SPACE_PLANET_VERGESSOASTEROIDS_01.TED nebula=0 ion=0 field=1 rocks=0 props=Asteroid_Field_Huge_Obstacle_Damage_4000",
             "_SPACE_PLANET_VERGESSOASTEROIDS_02.TED nebula=0 ion=0 field=1 rocks=0 props=Asteroid_Field_Huge_Obstacle_Damage_4000",
             "_SPACE_PLANET_VERGESSOASTEROIDS_03.TED nebula=0 ion=0 field=1 rocks=0 props=Asteroid_Field_Huge_Obstacle_Damage_4000",
