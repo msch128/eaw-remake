@@ -128,6 +128,25 @@ impl Sim {
         events
     }
 
+    /// Turns `ability` on for every unit of type `unit` this faction fields, including ships built later
+    /// (`NEW_POWER_FOR_ALL`). Names match case-insensitively. Empty names do nothing.
+    pub fn grant_power(&mut self, faction: FactionId, unit: &str, ability: &str) {
+        let (unit, ability) = (unit.trim(), ability.trim());
+        if unit.is_empty() || ability.is_empty() {
+            return;
+        }
+        if let Some(fs) = self.galaxy.factions.get_mut(faction as usize) {
+            fs.powers.insert((unit.to_ascii_lowercase(), ability.to_ascii_lowercase()));
+        }
+    }
+
+    /// True if [`Sim::grant_power`] has turned `ability` on for `unit` on this faction.
+    pub fn has_power(&self, faction: FactionId, unit: &str, ability: &str) -> bool {
+        self.galaxy.factions.get(faction as usize).is_some_and(|fs| {
+            fs.powers.contains(&(unit.trim().to_ascii_lowercase(), ability.trim().to_ascii_lowercase()))
+        })
+    }
+
     /// Unlocks or locks an object (unit, structure) for a faction, as a research item would.
     pub fn set_unlocked(&mut self, faction: FactionId, object: &str, unlocked: bool) {
         if let Some(fs) = self.galaxy.factions.get_mut(faction as usize) {

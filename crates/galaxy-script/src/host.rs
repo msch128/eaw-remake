@@ -295,6 +295,15 @@ impl Inner {
                 }
                 true
             }
+            "NEW_POWER_FOR_ALL" => {
+                let Some(f) = plot_faction else { return false };
+                let (unit, ability) = (p(0).trim(), p(1).trim());
+                if unit.is_empty() || ability.is_empty() {
+                    return false;
+                }
+                self.sim.grant_power(f, unit, ability);
+                true
+            }
             "REMOVE_UNIT" => {
                 let (Some(f), Some(&u)) = (
                     plot_faction,
@@ -326,8 +335,7 @@ impl Inner {
             | "ADD_OBJECTIVE"
             | "ENABLE_OBJECTIVE_DISPLAY"
             | "SET_SANDBOX_OBJECTIVES"
-            | "FORCE_CLICK_GUI"
-            | "NEW_POWER_FOR_ALL" => false,
+            | "FORCE_CLICK_GUI" => false,
             _ => false,
         }
     }

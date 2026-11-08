@@ -158,6 +158,9 @@ pub struct FactionState {
     /// Objects a story plot locked (`LOCK_UNIT`, lower-cased names): unbuildable until a story unlocks them again, whatever the data says.
     #[serde(default)]
     pub story_locked: BTreeSet<String>,
+    /// Abilities a story reward turned on for every unit of a type (`NEW_POWER_FOR_ALL`): `(unit, ability)`, both lower-cased. Ships built later keep it. Left out of [`Galaxy::state_hash`]: hashing an empty set would change every old save's checkpoint.
+    #[serde(default)]
+    pub powers: BTreeSet<(String, String)>,
     /// Units built over the whole game, for lifetime build limits.
     pub built_lifetime: BTreeMap<UnitTypeId, u32>,
     /// True once the faction has no planets and no fleets.
@@ -875,6 +878,7 @@ impl Galaxy {
             }
         }
         for f in &self.factions {
+            // `unlocked`, `story_locked` and `powers` stay out of the hash on purpose.
             f.credits.to_bits().hash(&mut h);
             f.tech.hash(&mut h);
             f.eliminated.hash(&mut h);
@@ -932,5 +936,18 @@ impl Difficulty {
     /// From a table entry (galactic build time).
     pub fn from_adjustment(a: &alamo_data::DifficultyAdjustment) -> Self {
         Self { credit: a.credit_multiplier, build_time: a.galactic_build_time, damage: a.damage, health: a.health, shield: a.shield, ai_sight_hops: None }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_old_faction_state_without_powers_loads_empty() {
+        let mut v = serde_json::to_value(FactionState::default()).unwrap();
+        v.as_object_mut().unwrap().remove("powers");
+        let fs: FactionState = serde_json::from_value(v).unwrap();
+        assert!(fs.powers.is_empty());
     }
 }

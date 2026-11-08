@@ -266,6 +266,13 @@ build-menu filters, not a start mode. The mode is this project's own:
 * Estimate: AI tech research. The Remake has no galactic research plan; with no human player the engine queues levels
   on a timer.
 
+## 1.13 Story ability grants
+
+* Data: `NEW_POWER_FOR_ALL` (`Reward_Param1` the unit type, `Reward_Param2` the ability) turns that ability on for
+  every unit of that type the plot's faction fields, including ships built later, for the rest of the campaign.
+  `Rebel_Shield_Upgrade` (75000 credits, tech 4) grants `Reflector_Shield` to the 25 types in
+  `Story_SandBox_Rebel_Shield_Upgrade.xml`. The grant is saved with the faction and is not part of `Galaxy::state_hash`.
+
 # Part 2: Space battles (`battle-sim`)
 
 Everything is derived from the Remake data plus the `.alo` models for hardpoint positions. Values the engine defines
