@@ -235,12 +235,22 @@ pub struct SightView {
     pub planets: Vec<galaxy_sim::Sight>,
     /// Fleets that are drawn, with how much is known (`Detailed` = contents, `Seen` = "?"). A fleet that is missing is not drawn.
     pub fleets: std::collections::BTreeMap<u32, galaxy_sim::Sight>,
+    /// Per planet id: what the viewer's spies reveal of a planet that is not its own or an ally's (`See_*` flags; empty for own planets and
+    /// where no spy reaches).
+    pub spied: Vec<galaxy_sim::SpyFlags>,
 }
 
 impl Snapshot {
     /// The fog of war for `viewer` (the human faction): compute it once per snapshot and use it for every marker, orbit box and tooltip.
     pub fn sight(&self, world: &World, viewer: FactionId) -> SightView {
-        SightView { planets: self.galaxy.sight_map(world, viewer), fleets: self.galaxy.visible_fleets(world, viewer).into_iter().collect() }
+        let g = &self.galaxy;
+        let spied = g
+            .intel_map(world, viewer)
+            .into_iter()
+            .zip(&g.planets)
+            .map(|(i, p)| if p.owner.is_some_and(|o| g.is_friend(viewer, o)) { galaxy_sim::SpyFlags::default() } else { i })
+            .collect();
+        SightView { planets: g.sight_map(world, viewer), fleets: g.visible_fleets(world, viewer).into_iter().collect(), spied }
     }
 
     /// Statistics of a faction so far (battles, ships, planets, credits), rebuilt by a save replay.

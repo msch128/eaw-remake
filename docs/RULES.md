@@ -178,11 +178,23 @@ range for planets and fleets, so the model is an estimate.
 * A faction (and its allies) is present at planets it owns or has a fleet at: `Sight::Detailed`. Planets one lane away
   are `Seen`; all others `Hidden`.
 * Own and allied fleets are always detailed. A fleet in orbit is seen like its planet; a fleet in hyperspace is `Seen`
-  when either end of its lane is not hidden. A fleet with a `Galactic_Stealth_Ability` unit is found only by those
-  present in its system and never in hyperspace. `Detailed` shows contents, `Seen` shows the fleet with "?", `Hidden`
-  is not drawn.
-* A corvette or any unit with `System_Spy_Ability` does not reveal neighbouring systems: the data gives that ability
-  the system the unit is in, which presence already covers. The Spy Network range is not modelled.
+  when either end of its lane is not hidden. A fleet with a `Galactic_Stealth_Ability` unit is found by those present in
+  its system, elsewhere only through a spy that sees its kind (below), and never in hyperspace. `Detailed` shows
+  contents, `Seen` shows the fleet with "?", `Hidden` is not drawn.
+* Data, spies (`Galaxy::intel_map`): every `System_Spy_Ability` that lasts (`Duration_In_Secs` -1, no `Causes_Despawn`)
+  on a unit in orbit or a structure on an own planet, and every running field agent report (1.14), reveals what its
+  `See_*` flags name: `See_Base_Levels` (star base and ground base level), `See_Credit_Income`, `See_Special_Structures`,
+  `See_Current_Production`, `See_Num_Fleets` (planet at least `Seen`), `See_Fleet_Contents` (`Detailed`),
+  `See_Minor_Stealth_Heroes` (stealthy agents) and `See_Major_Stealth_Heroes` (other stealthy units). A missing flag is
+  No. Own and allied planets are known in full.
+* Data, range: the spy covers its own planet and every real planet within its `Galactic_Influence_Range` (galaxy map
+  distance, x/y of `Galactic_Position`; on the ability or the object): `Spy_Center` 350, `MTC_Spy*` 180, Dodonna 50, the
+  rest 0. Fleets in hyperspace within `Hyperspace_Fleet_Reveal_Range` of the spy's planet (`Spy_Center` 350, MTC 180)
+  are `Seen`, `Detailed` with `See_Fleet_Contents`. Estimate: the moving fleet's position is interpolated along its lane.
+  The `Spy_Center` and both `*_Orbital_Long_Range_Scanner` are `Neutral` in the Remake, so in 4.0 only units spy at range.
+* The galaxy hover card of an enemy or neutral planet shows what the player's spies reveal: the planet's current income
+  instead of its base value, star base and ground base level, structures and what it is building. Fleets follow the
+  sight rules above. The AI's knowledge (1.12) counts spied planets as `Detailed`.
 
 ## 1.9 Pirates: the passive faction
 

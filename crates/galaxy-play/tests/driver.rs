@@ -238,6 +238,30 @@ fn the_snapshot_gives_the_fog_of_war_of_a_faction() {
     let total = snap.galaxy.fleets.len();
     assert!(sight.fleets.len() < total, "some fleets are in the fog: {} of {total}", sight.fleets.len());
     assert!(snap.galaxy.fleets.values().filter(|f| f.owner == rebel).all(|f| sight.fleets.get(&f.id) == Some(&galaxy_sim::Sight::Detailed)));
+    // Own planets never count as spied.
+    assert_eq!(sight.spied.len(), w.planets.len());
+    assert!(snap.galaxy.owned_planets(rebel).all(|p| !sight.spied[p as usize].any()));
+}
+
+#[test]
+fn the_fog_lists_what_a_field_agent_reveals_of_an_enemy_planet() {
+    let Some(data) = load() else { return };
+    let mut sim = new_sim(&data, 1);
+    let w = sim.world().clone();
+    let (rebel, empire) = (w.faction_id("Rebel").unwrap(), w.faction_id("Empire").unwrap());
+    let target = sim.galaxy().owned_planets(empire).next().unwrap();
+    let agent = w.unit_id("Rebel_Spy_Team").unwrap();
+    let id = sim.galaxy().fleets.keys().max().copied().unwrap_or(0) + 1;
+    let g = sim.galaxy_mut();
+    g.fleets.insert(id, galaxy_sim::Fleet { id, owner: rebel, units: [(agent, 1)].into(), location: galaxy_sim::FleetLocation::AtPlanet(target), previous_planet: target, slot: 0 });
+    g.sync_ships();
+    sim.step(1.0);
+    let mut driver = SimDriver::spawn(sim, Some(rebel));
+    let snap = driver.wait_initial();
+    let sight = snap.sight(&w, rebel);
+    assert_eq!(sight.spied[target as usize], w.units[agent as usize].spy.unwrap().see);
+    assert_eq!(sight.planets[target as usize], galaxy_sim::Sight::Detailed);
+    assert!(snap.galaxy.owned_planets(rebel).all(|p| !sight.spied[p as usize].any()));
 }
 
 #[test]

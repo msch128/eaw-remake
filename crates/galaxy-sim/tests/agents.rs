@@ -299,3 +299,138 @@ fn the_underboss_needs_a_cantina_or_criminal_palace() {
     let rebel = w.faction_id("Rebel").unwrap();
     assert!(!w.buildable_units[rebel as usize].contains(&boss));
 }
+
+fn dist(w: &World, a: PlanetId, b: PlanetId) -> f32 {
+    let (p, q) = (w.planets[a as usize].position, w.planets[b as usize].position);
+    ((p[0] - q[0]).powi(2) + (p[1] - q[1]).powi(2)).sqrt()
+}
+
+/// A real planet owned by `owner` with another real `owner` planet in `(0, range]` and a third beyond `range` (but within twice of it).
+fn spy_layout(sim: &Sim, owner: FactionId, range: f32) -> Option<(PlanetId, PlanetId, PlanetId)> {
+    let w = sim.world();
+    let mine: Vec<PlanetId> = sim.galaxy().owned_planets(owner).filter(|&p| w.real[p as usize]).collect();
+    mine.iter().find_map(|&a| {
+        let near = mine.iter().copied().find(|&b| b != a && dist(w, a, b) <= range)?;
+        let far = mine.iter().copied().find(|&c| dist(w, a, c) > range && dist(w, a, c) < 2.0 * range)?;
+        Some((a, near, far))
+    })
+}
+
+#[test]
+fn a_spy_unit_reveals_what_its_flags_name_within_its_galactic_influence_range() {
+    let Some(data) = load() else { return };
+    let mut sim = rebel_sim(&data);
+    let w = sim.world().clone();
+    let (rebel, empire) = (w.faction_id("Rebel").unwrap(), w.faction_id("Empire").unwrap());
+    sim.galaxy_mut().fleets.clear();
+    // MTC_Spy_R (Galactic_Influence_Range 180, Hyperspace_Fleet_Reveal_Range 180, every See_* flag).
+    let mtc = w.unit_id("MTC_Spy_R").unwrap();
+    let spy = w.units[mtc as usize].spy.unwrap();
+    assert_eq!((spy.range, spy.fleet_reveal_range), (180.0, 180.0));
+    let (at, near, far) = spy_layout(&sim, empire, 180.0).expect("Empire planets 180 apart");
+    let before = sim.galaxy().intel_map(&w, rebel);
+    assert!(!before[near as usize].any() && sim.galaxy().planet_sight(&w, rebel, near) != Sight::Detailed);
+    fleet(&mut sim, rebel, &[(mtc, 1)], FleetLocation::AtPlanet(at));
+    let intel = sim.galaxy().intel_map(&w, rebel);
+    assert_eq!(intel[near as usize], spy.see, "within 180: {} map units", dist(&w, at, near));
+    assert!(intel[near as usize].credit_income && intel[near as usize].base_levels && intel[near as usize].current_production);
+    assert!(!intel[far as usize].any(), "beyond 180: {} map units", dist(&w, at, far));
+    assert_eq!(sim.galaxy().planet_sight(&w, rebel, near), Sight::Detailed);
+    // An Empire fleet at the near planet shows its contents.
+    let isd = w.unit_id("Star_Destroyer").unwrap();
+    let enemy = fleet(&mut sim, empire, &[(isd, 1)], FleetLocation::AtPlanet(near));
+    assert_eq!(sim.galaxy().fleet_sight(&w, rebel, enemy), Sight::Detailed);
+    // Own planets are known in full, without spies.
+    let yavin = w.planet_id("Yavin_WW").unwrap();
+    assert_eq!(intel[yavin as usize], SpyFlags::ALL);
+}
+
+#[test]
+fn dodonna_sees_the_number_of_fleets_but_not_their_contents_or_stealthy_heroes() {
+    let Some(data) = load() else { return };
+    let mut sim = rebel_sim(&data);
+    let w = sim.world().clone();
+    let (rebel, empire) = (w.faction_id("Rebel").unwrap(), w.faction_id("Empire").unwrap());
+    sim.galaxy_mut().fleets.clear();
+    // Dodonna_Ship_Reveal: See_Num_Fleets Yes, See_Fleet_Contents No, no stealth flags; Galactic_Influence_Range 50.
+    let dodonna = w.unit_id("Dodonna_Quasar").unwrap();
+    let spy = w.units[dodonna as usize].spy.unwrap();
+    assert!(spy.see.num_fleets && !spy.see.fleet_contents && !spy.see.major_stealth && spy.range == 50.0);
+    let Some((at, near, _)) = spy_layout(&sim, empire, 50.0) else {
+        eprintln!("no Empire planets 50 map units apart; range check skipped");
+        return;
+    };
+    fleet(&mut sim, rebel, &[(dodonna, 1)], FleetLocation::AtPlanet(at));
+    assert_eq!(sim.galaxy().planet_sight(&w, rebel, near), Sight::Seen);
+    let isd = w.unit_id("Star_Destroyer").unwrap();
+    let plain = fleet(&mut sim, empire, &[(isd, 1)], FleetLocation::AtPlanet(near));
+    assert_eq!(sim.galaxy().fleet_sight(&w, rebel, plain), Sight::Seen);
+    let stealthy = (0..w.units.len() as u32).find(|&u| w.units[u as usize].galactic_stealth && w.units[u as usize].role == UnitRole::Ship).unwrap();
+    let hidden = fleet(&mut sim, empire, &[(stealthy, 1)], FleetLocation::AtPlanet(near));
+    assert_eq!(sim.galaxy().fleet_sight(&w, rebel, hidden), Sight::Hidden);
+}
+
+#[test]
+fn a_spy_center_spies_350_around_and_reveals_hyperspace_fleets_and_agents() {
+    let Some(data) = load() else { return };
+    let mut sim = rebel_sim(&data);
+    let w = sim.world().clone();
+    let (rebel, empire) = (w.faction_id("Rebel").unwrap(), w.faction_id("Empire").unwrap());
+    sim.galaxy_mut().fleets.clear();
+    // Buildings/Ground/GC/Rebel/Spy_Center.xml: Galactic_Influence_Range 350, Hyperspace_Fleet_Reveal_Range 350, every See_* flag.
+    let center = w.structure_id("Spy_Center").unwrap();
+    let spy = w.structures[center as usize].spy.unwrap();
+    assert_eq!((spy.range, spy.fleet_reveal_range), (350.0, 350.0));
+    assert!(spy.see.minor_stealth && spy.see.major_stealth && spy.see.current_production);
+    // The center on a Rebel planet next to an Empire planet.
+    let (host, target) = (0..w.planets.len() as u32)
+        .filter(|&p| w.real[p as usize] && sim.galaxy().planets[p as usize].owner == Some(empire))
+        .find_map(|t| w.adjacency[t as usize].iter().map(|&(n, _)| n).find(|&n| sim.galaxy().planets[n as usize].owner == Some(rebel) && dist(&w, n, t) <= 350.0).map(|h| (h, t)))
+        .expect("a Rebel planet within 350 of an Empire planet");
+    sim.galaxy_mut().planets[host as usize].structures.push(center);
+    let intel = sim.galaxy().intel_map(&w, rebel);
+    assert_eq!(intel[target as usize], spy.see, "{} map units", dist(&w, host, target));
+    // A stealthy minor hero (an Underworld agent) at the target is found: See_Minor_Stealth_Heroes.
+    let underworld = w.faction_id("Underworld").unwrap();
+    let boss = w.unit_id("Underboss_Team").unwrap();
+    let agent = fleet(&mut sim, underworld, &[(boss, 1)], FleetLocation::AtPlanet(target));
+    assert_eq!(sim.galaxy().fleet_sight(&w, rebel, agent), Sight::Detailed);
+    // A fleet in hyperspace just off the center's planet is revealed with its contents.
+    let route = w.adjacency[host as usize][0].1;
+    let r = &w.routes[route as usize];
+    let (from, to) = if r.a == host { (r.a, r.b) } else { (r.b, r.a) };
+    let isd = w.unit_id("Star_Destroyer").unwrap();
+    let moving = fleet(&mut sim, empire, &[(isd, 1)], FleetLocation::Moving { from, to, route, progress: 1.0, rest: Vec::new() });
+    assert_eq!(sim.galaxy().fleet_sight(&w, rebel, moving), Sight::Detailed);
+    // Without the center the lane rule alone applies: the Rebel planet is one end, so only "Seen".
+    sim.galaxy_mut().planets[host as usize].structures.retain(|&s| s != center);
+    assert_eq!(sim.galaxy().fleet_sight(&w, rebel, moving), Sight::Seen);
+    assert_eq!(sim.galaxy().fleet_sight(&w, rebel, agent), Sight::Hidden);
+}
+
+#[test]
+fn a_field_agent_report_carries_its_flags_and_is_saved() {
+    let Some(data) = load() else { return };
+    let mut sim = rebel_sim(&data);
+    let w = sim.world().clone();
+    let (rebel, empire) = (w.faction_id("Rebel").unwrap(), w.faction_id("Empire").unwrap());
+    let spy = w.unit_id("Rebel_Spy_Team").unwrap();
+    let target = empire_base(&sim, empire);
+    fleet(&mut sim, rebel, &[(spy, 1)], FleetLocation::AtPlanet(target));
+    sim.step(1.0);
+    let see = w.units[spy as usize].spy.unwrap().see;
+    let intel = sim.galaxy().intel_map(&w, rebel)[target as usize];
+    assert_eq!(intel.union(see), intel);
+    assert!(intel.current_production && intel.credit_income && intel.base_levels);
+    // The Empire's own view of its planet is unchanged.
+    assert_eq!(sim.galaxy().intel_map(&w, empire)[target as usize], SpyFlags::ALL);
+    let json = serde_json::to_string(&sim.snapshot().galaxy).unwrap();
+    let mut other = rebel_sim(&data);
+    let mut snap = other.snapshot();
+    snap.galaxy = serde_json::from_str(&json).unwrap();
+    other.restore(snap).unwrap();
+    assert_eq!(other.galaxy().spy_reports, sim.galaxy().spy_reports);
+    assert_eq!(other.galaxy().intel_map(&w, rebel), sim.galaxy().intel_map(&w, rebel));
+    other.step(60.0);
+    assert!(other.galaxy().spy_reports.is_empty());
+}

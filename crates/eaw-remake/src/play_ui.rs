@@ -1332,7 +1332,8 @@ pub(crate) fn fleet_tooltip(
     let fleet = hover.fleet.and_then(|id| state.galaxy().fleets.get(&id).map(|f| (f, fog.fleet(id)))).filter(|(_, s)| *s != galaxy_sim::Sight::Hidden);
     let hovered_planet = hover.planet.or_else(|| args.hover_selected.then_some(selection.planet).flatten());
     let planet = hovered_planet.and_then(|p| bridge.sim_to_planet.get(p as usize).copied().flatten().map(|i| (i, fog.planet(p)))).and_then(|(i, s)| view.planets.get(i).map(|pv| (i, pv, s)));
-    let text = cursor.and_then(|_| fleet.map(|(f, s)| fleet_text(f, s, &state, &catalog)).or_else(|| planet.map(|(i, pv, s)| planet_text(i, pv, s, &view))));
+    let spied = hovered_planet.map(|p| spy_lines(&state, &catalog, p, fog.spied(p))).unwrap_or_default();
+    let text = cursor.and_then(|_| fleet.map(|(f, s)| fleet_text(f, s, &state, &catalog)).or_else(|| planet.map(|(i, pv, s)| planet_text(i, pv, s, &view, &spied))));
     if tip.text != text {
         tip.text = text;
     }
@@ -1401,7 +1402,46 @@ fn fleet_text(f: &galaxy_sim::Fleet, sight: galaxy_sim::Sight, state: &SimState,
     lines.join("\n")
 }
 
-fn planet_text(i: usize, p: &crate::galaxy_view::PlanetView, sight: galaxy_sim::Sight, view: &crate::galaxy_view::GalaxyView) -> String {
+/// What the player's spies add to the hover card of an enemy or neutral planet (`System_Spy_Ability` `See_*` flags, `Fog::spied`).
+#[derive(Debug, Default, PartialEq)]
+struct SpyLines {
+    /// The planet's current income per week (`See_Credit_Income`), shown instead of its base value.
+    income: Option<i64>,
+    /// Star base and ground base level (`See_Base_Levels`), structures (`See_Special_Structures`), production (`See_Current_Production`).
+    lines: Vec<String>,
+}
+
+fn spy_lines(state: &SimState, catalog: &galaxy_play::PlayCatalog, p: galaxy_sim::PlanetId, see: galaxy_sim::SpyFlags) -> SpyLines {
+    let (w, g) = (&state.world, state.galaxy());
+    let Some(ps) = g.planets.get(p as usize) else { return SpyLines::default() };
+    let mut out = SpyLines { income: see.credit_income.then(|| w.planet_income(g, p).round() as i64), lines: Vec::new() };
+    if see.base_levels {
+        let station = ps.starbase.map_or_else(|| "None".to_owned(), |b| format!("Level {}", w.starbases[b as usize].level));
+        out.lines.push(format!("@Space station\t{station}"));
+        out.lines.push(format!("@Ground base\tLevel {}", w.ground_base_level(g, p)));
+    }
+    if see.special_structures {
+        let names: Vec<&str> = ps.structures.iter().map(|&s| catalog.structure(s)).collect();
+        out.lines.push(format!("@Structures\t{}", if names.is_empty() { "None".to_owned() } else { names.join(", ") }));
+    }
+    if see.current_production {
+        let building: Vec<String> = ps
+            .queues
+            .iter()
+            .filter_map(|q| q.front())
+            .map(|item| match item.kind {
+                galaxy_sim::ProductionKind::Unit(u) => catalog.unit(u).to_owned(),
+                galaxy_sim::ProductionKind::Structure(s) => catalog.structure(s).to_owned(),
+                galaxy_sim::ProductionKind::Starbase(b) => catalog.starbase(b).to_owned(),
+                galaxy_sim::ProductionKind::Tech(t) => ps.owner.map_or_else(|| "Tech level".to_owned(), |o| format!("Tech level {}", w.factions[o as usize].start_tech + t as i32 + 1)),
+            })
+            .collect();
+        out.lines.push(format!("@Building\t{}", if building.is_empty() { "Nothing".to_owned() } else { building.join(", ") }));
+    }
+    out
+}
+
+fn planet_text(i: usize, p: &crate::galaxy_view::PlanetView, sight: galaxy_sim::Sight, view: &crate::galaxy_view::GalaxyView, spied: &SpyLines) -> String {
     let mut lines = vec![p.display_name.clone()];
     if sight != galaxy_sim::Sight::Hidden
         && let Some((name, desc)) = &p.ability
@@ -1412,12 +1452,13 @@ fn planet_text(i: usize, p: &crate::galaxy_view::PlanetView, sight: galaxy_sim::
         }
     }
     lines.push(format!("@Owner\t{}", view.owner_of(i).map_or("Neutral", |f| f.name.as_str())));
-    lines.push(format!("@Income\t{} credits", crate::ui::thousands(i64::from(p.income))));
+    lines.push(format!("@Income\t{} credits", crate::ui::thousands(spied.income.unwrap_or(i64::from(p.income)))));
     // Out of sight: the video shows name, owner colour and income of distant planets, nothing about their defences.
     if sight != galaxy_sim::Sight::Hidden {
         lines.push(format!("@Space slots\t{}", p.max_space_base));
         lines.push(format!("@Ground slots\t{}", p.land_slots));
     }
+    lines.extend(spied.lines.iter().cloned());
     lines.join("\n")
 }
 
@@ -2561,11 +2602,21 @@ mod tests {
     #[test]
     fn planet_tooltip_lists_owner_income_and_slots() {
         let view = crate::galaxy_view::GalaxyView::demo();
-        let text = planet_text(0, &view.planets[0], galaxy_sim::Sight::Detailed, &view);
+        let text = planet_text(0, &view.planets[0], galaxy_sim::Sight::Detailed, &view, &SpyLines::default());
         assert!(text.starts_with(&view.planets[0].display_name));
         assert!(text.contains("@Owner	"));
         assert!(text.contains("@Income	"));
         assert!(text.contains("@Space slots	"));
+        assert!(!text.contains("@Building"));
+    }
+
+    #[test]
+    fn a_spied_planet_shows_its_real_income_and_the_spied_lines() {
+        let view = crate::galaxy_view::GalaxyView::demo();
+        let spied = SpyLines { income: Some(1234), lines: vec!["@Space station\tLevel 3".into(), "@Building\tNothing".into()] };
+        let text = planet_text(0, &view.planets[0], galaxy_sim::Sight::Detailed, &view, &spied);
+        assert!(text.contains("@Income\t1,234 credits") || text.contains("@Income\t1234 credits"), "{text}");
+        assert!(text.ends_with("@Space station\tLevel 3\n@Building\tNothing"), "{text}");
     }
 
 

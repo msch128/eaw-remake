@@ -39,6 +39,11 @@ impl Fog {
         }
     }
 
+    /// What the player's spies reveal of a planet that is not its own (empty for a spectator, own planets and unspied ones).
+    pub fn spied(&self, p: PlanetId) -> galaxy_sim::SpyFlags {
+        self.view.as_ref().and_then(|v| v.spied.get(p as usize).copied()).unwrap_or_default()
+    }
+
     /// Recomputes the view when the snapshot changed.
     pub fn refresh(&mut self, state: &SimState, player: Option<FactionId>) {
         if self.seq == Some(state.current.seq) {
@@ -525,7 +530,7 @@ mod tests {
         let spectator = Fog::default();
         assert_eq!(spectator.fleet(7), Sight::Detailed);
         assert_eq!(spectator.planet(3), Sight::Detailed);
-        let view = crate::SightView { planets: vec![Sight::Detailed, Sight::Seen, Sight::Hidden], fleets: [(1, Sight::Detailed), (2, Sight::Seen)].into_iter().collect() };
+        let view = crate::SightView { planets: vec![Sight::Detailed, Sight::Seen, Sight::Hidden], fleets: [(1, Sight::Detailed), (2, Sight::Seen)].into_iter().collect(), spied: Vec::new() };
         let fog = Fog { seq: Some(0), view: Some(view) };
         assert_eq!((fog.fleet(1), fog.fleet(2), fog.fleet(3)), (Sight::Detailed, Sight::Seen, Sight::Hidden));
         assert_eq!((fog.planet(1), fog.planet(2), fog.planet(9)), (Sight::Seen, Sight::Hidden, Sight::Hidden));
