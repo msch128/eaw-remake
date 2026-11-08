@@ -126,8 +126,9 @@ every owned planet, the planet's `Additional_Population_Capacity`, its star base
 * Data: lanes are the campaign's `Trade_Routes` between real planets (`Xml/TradeRoutes_Web_Way.xml`: `Point_A`,
   `Point_B`, `HS_Speed_Factor` 1 to 3). Length is the Euclidean distance of `Galactic_Position` x/y.
 * Fleet speed = slowest ship's `Hyperspace_Speed` (data, clamped 0.1 to 1.5) x lane `HS_Speed_Factor` (data) x
-  `galactic_speed_scale` (6.0 map units per second, estimate). Paths minimise travel time (Dijkstra). A fleet that
-  passes a planet holding hostile fleets or a hostile star base is stopped there (blockade; estimate).
+  `galactic_speed_scale` (6.0 map units per second, estimate). Paths minimise travel time (Dijkstra). A trip takes
+  the sum of its lanes' travel times (passing a planet costs no time and gains none). A fleet that passes a planet holding
+  hostile fleets or a hostile star base is stopped there (blockade; estimate).
 * `Retreat` sends a fleet back to the planet it came from; a fleet in hyperspace turns around. A fleet already in
   hyperspace cannot be redirected, only retreated.
 * Escape after a lost tactical battle (retreated losers, attackers after a draw): the fleet flies the fastest path to

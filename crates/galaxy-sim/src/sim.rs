@@ -766,11 +766,13 @@ impl Sim {
             .collect();
         for id in ids {
             let speed = w.fleet_speed(&self.galaxy.fleets[&id]);
+            // Seconds of this step still to travel; a stopover passes the rest on to the next leg.
+            let mut time_left = dt;
             loop {
                 let f = self.galaxy.fleets.get_mut(&id).expect("fleet exists");
                 let FleetLocation::Moving { from, to, route, progress, rest } = f.location.clone() else { break };
                 let r = &w.routes[route as usize];
-                let new_progress = progress + speed * r.hs_factor * w.config.galactic_speed_scale * dt;
+                let new_progress = progress + speed * r.hs_factor * w.config.galactic_speed_scale * time_left;
                 if new_progress < r.length {
                     f.location = FleetLocation::Moving { from, to, route, progress: new_progress, rest };
                     break;
@@ -795,14 +797,15 @@ impl Sim {
                     events.push(Event::FleetArrived { fleet: id, planet: to });
                     break;
                 }
-                // Continue along the path.
+                // Continue along the path with the time left over (the next pass of the loop moves the fleet on by it).
                 let next = rest[0];
                 let next_route = w.route_between(to, next).expect("path edges exist");
+                time_left = leftover_time;
                 f.location = FleetLocation::Moving {
                     from: to,
                     to: next,
                     route: next_route,
-                    progress: leftover_time * speed * w.routes[next_route as usize].hs_factor * w.config.galactic_speed_scale,
+                    progress: 0.0,
                     rest: rest[1..].to_vec(),
                 };
             }
