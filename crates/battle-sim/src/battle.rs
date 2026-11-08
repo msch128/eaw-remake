@@ -670,6 +670,8 @@ pub struct Ship {
     pub stun_speed_cut: f32,
     /// Ion fire rate reduction fraction while stunned.
     pub stun_rate_cut: f32,
+    /// `BLAST` charged: the blast hardpoints that have not fired their blast shot yet (`None` = no blast armed).
+    pub blast_pending: Option<Vec<u16>>,
     /// Shield generator still alive (or none exists).
     pub shield_gen_ok: bool,
     /// Speed factor from destroyed engines.

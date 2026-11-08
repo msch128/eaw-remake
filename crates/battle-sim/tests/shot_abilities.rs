@@ -92,3 +92,61 @@ fn luke_lands_one_shot_of_600_times_the_damage() {
     assert!((cooldown - 56.0).abs() < 0.5, "60 s from the use: {cooldown}");
     assert!(lucky > plain + 100.0 * 12.0, "the lucky shot does hundreds of times a laser bolt (12): {lucky} vs {plain}");
 }
+
+#[test]
+fn blast_data_and_which_hardpoints_carry_it() {
+    let Some((data, fs)) = load() else { return };
+    let cat = Catalog::build(&data, Some(&fs as &dyn FileSource), &["Krayt_Class_Destroyer", "Savage_Destroyer", "Tyber_Zann_The_Merciless", "Death_Star_II"]);
+    let def = |n: &str| cat.ship(cat.ship_id(n).unwrap_or_else(|| panic!("{n}")));
+    let blast = |n: &str| def(n).abilities.iter().find(|a| a.kind == "BLAST").and_then(|a| a.blast.clone().map(|b| (a.recharge, b.charge, b.mult))).unwrap_or_else(|| panic!("{n} has BLAST"));
+    assert_eq!(blast("Krayt_Class_Destroyer"), (90.0, 5.0, 1.0), "Aggressor_Blast: Charge_Up_Seconds 5");
+    assert_eq!(blast("Tyber_Zann_The_Merciless"), (90.0, 5.0, 1.0), "Peacebringer_Blast");
+    assert_eq!(blast("Savage_Destroyer"), (90.0, 1.0, 1.0), "Savage_Blast: 1 s, Damage_Multiplier 1");
+    let armed = |n: &str| -> Vec<(String, String, String)> {
+        let d = def(n);
+        d.hardpoints.iter().filter_map(|h| Some((h.name.clone(), cat.projectiles[h.projectile? as usize].name.clone(), cat.projectiles[h.blast_projectile? as usize].name.clone()))).collect()
+    };
+    assert_eq!(armed("Krayt_Class_Destroyer"), [("HP_Aggressor_Mega_Plasma".to_string(), "Proj_Ship_Krayt_Megaweapon_Damage".to_string(), "Proj_Ship_Krayt_Special_Megaweapon_Damage".to_string())], "the main gun fires normally and blasts");
+    assert_eq!(armed("Savage_Destroyer").len(), 5, "mass driver and 4 ion cannons");
+    // The Death Star has no BLAST: its super laser hardpoint stays ability-only.
+    let ds = def("Death_Star_II");
+    let sl = ds.hardpoints.iter().find(|h| h.name.eq_ignore_ascii_case("HP_Death_Star_Superlaser")).expect("super laser hardpoint");
+    assert!(sl.projectile.is_none() && sl.blast_projectile.is_none());
+}
+
+#[test]
+fn a_charged_krayt_blast_fires_the_special_megaweapon_once() {
+    let Some((data, fs)) = load() else { return };
+    let mut b = duel(&data, &fs, "Krayt_Class_Destroyer", "Star_Destroyer", 2500.0);
+    let (krayt, t) = (b.ships.iter().position(|s| s.side == 0).unwrap() as u32, b.ships.iter().position(|s| s.side == 1).unwrap() as u32);
+    b.command(0, Command::Attack { ships: vec![krayt], target: t }).unwrap();
+    let cat = b.catalog().clone();
+    let (normal, special) = (cat.projectile_id("Proj_Ship_Krayt_Megaweapon_Damage").unwrap(), cat.projectile_id("Proj_Ship_Krayt_Special_Megaweapon_Damage").unwrap());
+    let fired = |b: &mut Battle, steps: usize| -> (usize, usize) {
+        let mut n = (0, 0);
+        for _ in 0..steps {
+            for e in b.step() {
+                if let Event::ProjectileFired { ship, projectile, .. } = *e
+                    && ship == krayt
+                {
+                    n.0 += (projectile == normal) as usize;
+                    n.1 += (projectile == special) as usize;
+                }
+            }
+        }
+        n
+    };
+    // 20 s: the main gun fires on its own (every 10 s).
+    let before = fired(&mut b, 600);
+    assert!(before.0 >= 1 && before.1 == 0, "normal shots only: {before:?}");
+    let k = ability(&b, krayt, "BLAST").unwrap();
+    b.command(0, Command::UseAbility { ship: krayt, ability: k as u16 }).expect("blast");
+    let charging = fired(&mut b, 4 * 30);
+    assert_eq!(charging.1, 0, "nothing special during the 5 s charge");
+    let after = fired(&mut b, 3 * 30);
+    eprintln!("before {before:?}, charging {charging:?}, after {after:?}");
+    assert_eq!(after.1, 1, "one blast shot right after the charge");
+    let later = fired(&mut b, 20 * 30);
+    assert_eq!(later.1, 0, "only one");
+    assert!(later.0 >= 1, "then normal fire again");
+}

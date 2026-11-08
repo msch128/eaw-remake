@@ -142,6 +142,8 @@ pub struct HpDef {
     pub turret_pitch: f32,
     /// Projectile fired.
     pub projectile: Option<ProjId>,
+    /// `Blast_Ability_Fire_Projectile_Type`: the projectile of its next shot after a `BLAST` has charged (ships with that ability only).
+    pub blast_projectile: Option<ProjId>,
     /// Maximum range.
     pub range: f32,
     /// Minimum range.
@@ -256,6 +258,8 @@ pub struct AbilityDef {
     pub stealth: bool,
     /// `LUCKY_SHOT`: the one strong shot.
     pub shot: Option<ShotDef>,
+    /// `BLAST`: the charged shot of the blast hardpoints.
+    pub blast: Option<BlastDef>,
     /// `FOW_REVEAL_PING`: radius of the area it reveals to the owner for the duration (`Effective_Radius`; 0 = not a reveal ping).
     pub reveal_radius: f32,
 }
@@ -270,6 +274,16 @@ pub struct ShotDef {
     pub mult: f32,
     /// `Applicable_Unit_Categories` of the linked `*_Attack_Ability` as a class bit mask (0 = any).
     pub classes: u16,
+}
+
+/// `BLAST` (`Blast_Ability`): after `charge` seconds every hardpoint with a `Blast_Ability_Fire_Projectile_Type` ([`HpDef::blast_projectile`])
+/// fires that projectile once, at `mult` times its damage (`Damage_Multiplier`, 1 where the data has none).
+#[derive(Debug, Clone, Default)]
+pub struct BlastDef {
+    /// `Charge_Up_Seconds`.
+    pub charge: f32,
+    /// `Damage_Multiplier`.
+    pub mult: f32,
 }
 
 /// How long an armed shot ability waits for the craft to fire at its target before it lapses (estimate; the data gives no expiration).
@@ -1427,6 +1441,7 @@ impl Catalog {
                     if let Some(p) = &h.projectile {
                         proj_names.push(p.clone());
                     }
+                    proj_names.extend(h.fields.get("blast_ability_fire_projectile_type").map(|p| p.trim().to_string()).filter(|p| !p.is_empty()));
                 }
                 if let Source::Unit(u) = s
                     && let Some(d) = &u.direct_weapon
@@ -1642,8 +1657,9 @@ impl Catalog {
 
         // Hardpoints.
         let mut hardpoints = Vec::with_capacity(hps.len());
+        let has_blast = matches!(src, Source::Unit(u) if u.abilities.iter().any(|a| a.kind.eq_ignore_ascii_case("BLAST")));
         for (i, h) in hps.iter().enumerate() {
-            hardpoints.push(self.hp_def(h, i, model, attach, radius, class));
+            hardpoints.push(self.hp_def(h, i, model, attach, radius, class, has_blast));
         }
 
         // Mobile warships with destroyable hardpoints have engine hitboxes at the rear.
@@ -2013,7 +2029,7 @@ impl Catalog {
         }
     }
 
-    fn hp_def(&self, h: &HardpointDef, index: usize, model: Option<&ModelInfo>, attach: &HashMap<String, Arc<AttachInfo>>, radius: f32, class: TargetClass) -> HpDef {
+    fn hp_def(&self, h: &HardpointDef, index: usize, model: Option<&ModelInfo>, attach: &HashMap<String, Arc<AttachInfo>>, radius: f32, class: TargetClass, blast: bool) -> HpDef {
         let bone = [h.fire_bone_a.as_deref(), h.attachment_bone.as_deref()]
             .into_iter()
             .flatten()
@@ -2090,8 +2106,12 @@ impl Catalog {
                 arc_pitch = arc_pitch.max(45f32.to_radians());
             }
         }
-        // A weapon that only the super laser ability uses (`Blast_Ability_Fire_Projectile_Type`) never fires on its own.
-        let ability_only = h.fields.get("blast_ability_fire_projectile_type").is_some_and(|v| !v.trim().is_empty());
+        // A `Blast_Ability_Fire_Projectile_Type` is what the hardpoint fires during a `BLAST` (`blast`: the ship has the ability; the Krayt's
+        // and the Savage's main guns fire their normal projectile otherwise). On a ship without the ability it marks a weapon only the super
+        // laser uses (Death Star), which never fires on its own.
+        let blast_field = h.fields.get("blast_ability_fire_projectile_type").map(|v| v.trim()).filter(|v| !v.is_empty());
+        let ability_only = !blast && blast_field.is_some();
+        let blast_projectile = blast_field.filter(|_| blast).and_then(|p| self.proj_index.get(&p.to_ascii_lowercase()).copied());
         let projectile = h.projectile.as_deref().filter(|_| !ability_only).and_then(|p| self.proj_index.get(&p.to_ascii_lowercase()).copied());
         let proj = projectile.map(|p| &self.projectiles[p as usize]);
         let t = h.hp_type.to_ascii_uppercase();
@@ -2166,6 +2186,7 @@ impl Catalog {
             flyout: if kind == HpKind::FighterBay { f("fighter_bay_flyout_distance", 0.0).max(0.0) } else { 0.0 },
             arc_bins: 0,
             dps: 0.0,
+            blast_projectile,
         }
     }
 
@@ -2199,7 +2220,7 @@ fn ability_defs(u: &SpaceUnitDef, projectiles: &[ProjDef], proj_index: &HashMap<
         .filter(|a| {
             a.expiration_seconds.unwrap_or(0.0) > 0.0
                 || (a.kind.eq_ignore_ascii_case("LURE") && a.fields.contains_key("effective_radius"))
-                || ["FULL_SALVO", "TRACTOR_BEAM", "MISSILE_SHIELD", "INTERDICT", "STEALTH", "FOW_REVEAL_PING", "LASER_DEFENSE", "ROCKET_ATTACK", "SWAP_WEAPONS", "SENSOR_JAMMING", "BUZZ_DROIDS", "SUPER_LASER", "CORRUPT_SYSTEMS", "HUNT", "SPOILER_LOCK", "REPLENISH_WINGMEN", "WEAKEN_ENEMY", "HARMONIC_BOMB", "ENERGY_WEAPON", "CLUSTER_BOMB", "LUCKY_SHOT"].iter().any(|k| a.kind.eq_ignore_ascii_case(k))
+                || ["FULL_SALVO", "TRACTOR_BEAM", "MISSILE_SHIELD", "INTERDICT", "STEALTH", "FOW_REVEAL_PING", "LASER_DEFENSE", "ROCKET_ATTACK", "SWAP_WEAPONS", "SENSOR_JAMMING", "BUZZ_DROIDS", "SUPER_LASER", "CORRUPT_SYSTEMS", "HUNT", "SPOILER_LOCK", "REPLENISH_WINGMEN", "WEAKEN_ENEMY", "HARMONIC_BOMB", "ENERGY_WEAPON", "CLUSTER_BOMB", "LUCKY_SHOT", "BLAST"].iter().any(|k| a.kind.eq_ignore_ascii_case(k))
         })
         .map(|a| {
             let toggle = a.expiration_seconds.unwrap_or(0.0) <= 0.0 && ["MISSILE_SHIELD", "INTERDICT", "STEALTH", "HUNT", "SPOILER_LOCK"].iter().any(|k| a.kind.eq_ignore_ascii_case(k));
@@ -2219,6 +2240,11 @@ fn ability_defs(u: &SpaceUnitDef, projectiles: &[ProjDef], proj_index: &HashMap<
             let mut take_damage_mult = m("TAKE_DAMAGE_MULTIPLIER").unwrap_or(1.0);
             let mut cause_damage_mult = m("CAUSE_DAMAGE_MULTIPLIER").unwrap_or(1.0);
             // A shot ability multiplies the damage of its one shot, not of everything the craft fires while it waits.
+            let blast = a.kind.eq_ignore_ascii_case("BLAST").then(|| {
+                let sub = a.activated_ability.as_ref().and_then(|n| u.sub_abilities.iter().find(|s| s.name.eq_ignore_ascii_case(n)));
+                let f = |k: &str| sub.and_then(|s| s.fields.get(k)).and_then(|v| alamo_data::xml::parse_num::<f32>(v));
+                BlastDef { charge: f("charge_up_seconds").unwrap_or(0.0).max(0.0), mult: f("damage_multiplier").unwrap_or(1.0) }
+            });
             let shot = a.kind.eq_ignore_ascii_case("LUCKY_SHOT").then(|| {
                 let sub = a.activated_ability.as_ref().and_then(|n| u.sub_abilities.iter().find(|s| s.name.eq_ignore_ascii_case(n)));
                 ShotDef {
@@ -2271,9 +2297,10 @@ fn ability_defs(u: &SpaceUnitDef, projectiles: &[ProjDef], proj_index: &HashMap<
                 cause_damage_mult,
                 recharge: a.recharge_seconds.unwrap_or(30.0),
                 // A reveal ping has no expiration in the data: it shows the area for 5 s (estimate).
-                duration: if toggle { f32::MAX / 4.0 } else if shot.is_some() { SHOT_WINDOW_SECONDS } else if ping { a.expiration_seconds.filter(|&x| x > 0.0).unwrap_or(5.0) } else if let Some(secs) = defence_secs { secs } else if a.kind.eq_ignore_ascii_case("CORRUPT_SYSTEMS") { a.activated_ability.as_ref().and_then(|n| u.sub_abilities.iter().find(|s| s.name.eq_ignore_ascii_case(n))).and_then(|s| s.fields.get("duration_in_seconds")).and_then(|v| alamo_data::xml::parse_num(v)).unwrap_or(30.0) } else { a.expiration_seconds.unwrap_or(12.0) },
+                duration: if toggle { f32::MAX / 4.0 } else if shot.is_some() { SHOT_WINDOW_SECONDS } else if let Some(b) = &blast { b.charge + SHOT_WINDOW_SECONDS } else if ping { a.expiration_seconds.filter(|&x| x > 0.0).unwrap_or(5.0) } else if let Some(secs) = defence_secs { secs } else if a.kind.eq_ignore_ascii_case("CORRUPT_SYSTEMS") { a.activated_ability.as_ref().and_then(|n| u.sub_abilities.iter().find(|s| s.name.eq_ignore_ascii_case(n))).and_then(|s| s.fields.get("duration_in_seconds")).and_then(|v| alamo_data::xml::parse_num(v)).unwrap_or(30.0) } else { a.expiration_seconds.unwrap_or(12.0) },
                 stealth: a.kind.eq_ignore_ascii_case("STEALTH"),
                 shot,
+                blast,
                 reveal_radius: if ping { a.fields.get("effective_radius").and_then(|v| alamo_data::xml::parse_num(v)).unwrap_or(1000.0) } else { 0.0 },
                 interdict: a.kind.eq_ignore_ascii_case("INTERDICT"),
                 hunt: a.kind.eq_ignore_ascii_case("HUNT"),

@@ -527,6 +527,7 @@ impl Battle {
             stun: 0.0,
             stun_speed_cut: 0.0,
             stun_rate_cut: 0.0,
+            blast_pending: None,
             shield_gen_ok: true,
             engine_factor: 1.0,
             phase: 0.0,
@@ -1081,7 +1082,7 @@ impl Battle {
         st.target = target;
         st.active = a.duration;
         // A shot ability recharges from the moment it is used (it ends as soon as the shot is fired).
-        st.cooldown = if a.toggle || no_cooldown { 0.0 } else if shot { a.recharge } else { a.recharge + a.duration };
+        st.cooldown = if a.toggle || no_cooldown { 0.0 } else if shot { a.recharge } else if let Some(b) = &a.blast { a.recharge + b.charge } else { a.recharge + a.duration };
         if shot {
             // The craft fires at the chosen target now.
             let s = &mut self.ships[ship as usize];
@@ -1290,6 +1291,22 @@ impl Battle {
                     self.shots.push((r.ship, r.proj, r.target, sh.mult, self.time + SHOT_FLIGHT_SECONDS));
                 }
                 self.ships[r.ship as usize].abilities[k].active = 0.0;
+            }
+            // A charged `BLAST`: the next shot of each blast hardpoint is its blast projectile.
+            let blast_shot = r.hp != NO_HP && self.ships[r.ship as usize].blast_pending.as_mut().and_then(|p| p.iter().position(|&h| h == r.hp).map(|i| p.swap_remove(i))).is_some();
+            if blast_shot {
+                let def = cat.ship(self.ships[r.ship as usize].def);
+                if let Some(p) = def.hardpoints[r.hp as usize].blast_projectile {
+                    let (old, new) = (cat.projectiles[r.proj as usize].speed, cat.projectiles[p as usize].speed);
+                    if old > 0.0 && new > 0.0 {
+                        r.vel = r.vel * (new / old);
+                    }
+                    r.proj = p;
+                }
+                let mult = def.abilities.iter().find_map(|a| a.blast.as_ref()).map_or(1.0, |b| b.mult);
+                if mult != 1.0 {
+                    self.shots.push((r.ship, r.proj, r.target, mult, self.time + SHOT_FLIGHT_SECONDS));
+                }
             }
             if cfg.record_events {
                 self.events.push(Event::ProjectileFired {
@@ -2022,6 +2039,15 @@ impl Battle {
                 let tdef = cat.ship(t.def);
                 let tclass = tdef.class;
                 for (k, a) in def.abilities.iter().enumerate() {
+                    if a.blast.is_some() {
+                        // `Default_Unit_Target_In_Range` (`PGEvents.lua`): the AI fires its blast when a target is in range.
+                        let ready = s.abilities[k].cooldown <= 0.0 && s.abilities[k].active <= 0.0;
+                        if ready && (ai_side || s.abilities[k].autocast) && dist <= def.max_weapon_range {
+                            auto_use.push(k);
+                            break;
+                        }
+                        continue;
+                    }
                     if let Some(sh) = &a.shot {
                         // Estimate (no AI rule in the Remake scripts; the ability supports autofire): the strong shot goes to a frigate or
                         // bigger in weapon range.
@@ -2127,6 +2153,7 @@ impl Battle {
         self.run_beams(dt);
         self.run_lasers();
         self.run_drains(dt);
+        self.run_blasts();
         let now = self.time;
         self.shots.retain(|s| s.4 >= now);
         if self.tick.is_multiple_of(30) {
@@ -2593,6 +2620,33 @@ impl Battle {
                 if s.shield <= 0.0 {
                     s.shield_lock = shield_lock;
                 }
+            }
+        }
+    }
+
+    /// `BLAST`: when the charge is over the blast hardpoints are armed and reloaded; the blast ends when each has fired its blast shot or
+    /// the window (`SHOT_WINDOW_SECONDS`, estimate) is over.
+    fn run_blasts(&mut self) {
+        let cat = self.catalog.clone();
+        for s in self.ships.iter_mut().filter(|s| s.alive && !s.retreated) {
+            let def = cat.ship(s.def);
+            let Some((k, b)) = def.abilities.iter().enumerate().find_map(|(k, a)| a.blast.as_ref().map(|b| (k, b))) else { continue };
+            let active = s.abilities[k].active;
+            if active <= 0.0 {
+                s.blast_pending = None;
+                continue;
+            }
+            if s.blast_pending.is_none() && def.abilities[k].duration - active >= b.charge {
+                let hps: Vec<u16> = def.hardpoints.iter().enumerate().filter(|&(i, h)| h.blast_projectile.is_some() && s.hps[i].alive).map(|(i, _)| i as u16).collect();
+                for &i in &hps {
+                    s.hps[i as usize].cooldown = 0.0;
+                    s.hps[i as usize].pulse_timer = 0.0;
+                }
+                s.blast_pending = Some(hps);
+            }
+            if s.blast_pending.as_ref().is_some_and(|p| p.is_empty()) {
+                s.abilities[k].active = 0.0;
+                s.blast_pending = None;
             }
         }
     }
