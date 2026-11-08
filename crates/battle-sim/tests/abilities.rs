@@ -236,6 +236,99 @@ fn hunters_search_the_map_and_find_hidden_enemies() {
     assert!(engaged, "and attack the enemy once their sensors detect it");
 }
 
+/// A squadron of four hunting fighters against four prey ships 700 apart, far beyond the fighters' sensors (fog of war on). With `scout` a
+/// ship of the hunters' side that sees the whole map stands still at its start: the prey are revealed from the first step.
+fn squadron_hunt_battle(scout: bool) -> Battle {
+    let mut f = mobile("fighter", 900.0);
+    f.class = TargetClass::Fighter;
+    f.radius = 5.0;
+    f.sensor_range = 1500.0;
+    f.abilities.push(hunt());
+    let squad = ShipDef { name: "squad".into(), is_squadron: true, members: vec![(0, 4)], class: TargetClass::Fighter, ..ShipDef::default() };
+    let mut p = mobile("prey", 0.0);
+    p.radius = 60.0;
+    let mut eye = mobile("scout", 0.0);
+    eye.sensor_range = 30_000.0;
+    let cat = Arc::new(Catalog::from_defs(vec![f, squad, p, eye], vec![laser()]));
+    let unit = |n: &str, count: u32| UnitSetup { ship: cat.ship_id(n).unwrap(), count, tag: 7 };
+    let mut own = vec![unit("squad", 1)];
+    if scout {
+        own.push(unit("scout", 1));
+    }
+    let sides = vec![
+        SideSetup { name: "a".into(), units: own, structures: vec![], ai: false },
+        SideSetup { name: "b".into(), units: vec![unit("prey", 4)], structures: vec![], ai: false },
+    ];
+    let config = BattleConfig { half_size: 6000.0, fog_of_war: true, ..BattleConfig::default() };
+    let mut b = Battle::new(BattleSetup { sides, catalog: cat, config });
+    let origin = b.ships.iter().find(|s| s.side == 1).unwrap().pos;
+    for (n, id) in ids(&b, 1).into_iter().enumerate() {
+        b.ships[id as usize].pos = origin + Vec3::new(0.0, n as f32 * 700.0, 0.0);
+    }
+    b
+}
+
+/// The squadron's fighters (side 0), with HUNT switched on for each.
+fn hunting_squadron(b: &mut Battle) -> Vec<u32> {
+    let members: Vec<u32> = b.ships.iter().filter(|s| s.side == 0 && s.squad != NONE).map(|s| s.id).collect();
+    for &m in &members {
+        b.command(0, Command::UseAbility { ship: m, ability: 0 }).unwrap();
+    }
+    members
+}
+
+#[test]
+fn a_squadron_hunts_the_revealed_enemies_as_one_unit() {
+    let mut b = squadron_hunt_battle(true);
+    let members = hunting_squadron(&mut b);
+    assert_eq!(members.len(), 4);
+    let prey = ids(&b, 1);
+    let gap = |b: &Battle| {
+        let c = members.iter().fold(Vec3::ZERO, |a, &m| a + b.ships[m as usize].pos) * 0.25;
+        prey.iter().map(|&p| b.ships[p as usize].pos.dist(c)).fold(f32::MAX, f32::min)
+    };
+    let before = gap(&b);
+    for _ in 0..30 {
+        b.step();
+    }
+    let orders: Vec<Order> = members.iter().map(|&m| b.ships[m as usize].order).collect();
+    assert!(matches!(orders[0], Order::Attack(t) if prey.contains(&t)), "the revealed enemies are hunted at once: {orders:?}");
+    assert!(orders.iter().all(|o| *o == orders[0]), "the whole squadron takes its leader's target, not one each: {orders:?}");
+    for _ in 0..30 * 6 {
+        b.step();
+    }
+    let after = gap(&b);
+    assert!(after < 900.0 && after + 3000.0 < before, "the squadron flies to them: {before:.0} -> {after:.0}");
+}
+
+#[test]
+fn a_squadron_with_nothing_in_sight_searches_the_map_as_one_unit() {
+    let mut b = squadron_hunt_battle(false);
+    let members = hunting_squadron(&mut b);
+    let prey = ids(&b, 1);
+    let mut searched = false;
+    let mut engaged = false;
+    for _ in 0..30 * 150 {
+        b.step();
+        let first = &b.ships[members[0] as usize];
+        if first.hunt_cell != NO_CELL {
+            searched = true;
+            assert!(matches!(first.order, Order::AttackMove(_)), "searching a cell is an attack-move: {:?}", first.order);
+            for &m in &members[1..] {
+                let s = &b.ships[m as usize];
+                assert!(s.hunt_cell == first.hunt_cell && s.order == first.order, "one cell for the squadron: {} {:?} / {} {:?}", s.hunt_cell, s.order, first.hunt_cell, first.order);
+            }
+        }
+        if let Order::Attack(t) = first.order {
+            assert!(prey.contains(&t));
+            engaged = true;
+            break;
+        }
+    }
+    assert!(searched, "with nothing in sight the squadron searches cells of the map");
+    assert!(engaged, "and attacks once its sensors find the enemy");
+}
+
 #[test]
 fn a_move_order_or_toggling_off_ends_the_hunt() {
     let mut b = hunt_battle(false, 2, 1, false);

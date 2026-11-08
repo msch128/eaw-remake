@@ -7,6 +7,7 @@
 //! only read an immutable snapshot and draw randomness from per-entity generators, so results do
 //! not depend on thread scheduling.
 
+use std::collections::HashSet;
 use std::f32::consts::PI;
 use std::sync::Arc;
 
@@ -2716,9 +2717,11 @@ impl Battle {
         }
     }
 
-    /// `HUNT` ("Hunt for Enemies": scout the map for hostile targets, destroy the ones found). Every hunter flies alone, out of its squadron
-    /// formation: it takes the visible enemy its `Targeting_Priority_Set` ranks best (then the nearest, with a penalty for each other hunter
-    /// already on that enemy, so the group spreads over the enemy fleet) and chases it across the map until it is dead. With nothing in
+    /// `HUNT` ("Hunt for Enemies": scout the map for hostile targets, destroy the ones found). A squadron hunts as one unit, as in the Remake
+    /// (one Hunt icon per squadron, the squadron flies onto the enemy together, video b0850s-b0861s): its leader decides and every hunting
+    /// member takes the same order, so the squadron keeps its formation and attacks one enemy. A hunter (a squadron's leader or a ship of its
+    /// own) takes the visible enemy its `Targeting_Priority_Set` ranks best (then the nearest, with a penalty for each other hunting unit
+    /// already on that enemy, so several squadrons spread over the enemy fleet) and chases it across the map until it is dead. With nothing in
     /// sight it searches the map cell by cell, the nearest cell no hunter of the side has searched yet (estimate: the data names no search
     /// pattern; cell size, the search time limit and the spreading penalty are mine). Runs twice a second.
     fn run_hunts(&mut self) {
@@ -2743,9 +2746,20 @@ impl Battle {
             (c(p.y) * HUNT_GRID + c(p.x)) as u8
         };
         let centre_of = |c: u8| Vec3::new(-half + ((c as usize % HUNT_GRID) as f32 + 0.5) * cell_size, -half + ((c as usize / HUNT_GRID) as f32 + 0.5) * cell_size, 0.0);
+        // The unit each hunter hunts with: the first hunting member of its squadron in lead order (the leader while it hunts), else itself.
+        let hunting: HashSet<u32> = hunters.iter().copied().collect();
+        let lead_of: Vec<(u32, u32)> = hunters
+            .iter()
+            .map(|&h| {
+                let squad = self.ships[h as usize].squad;
+                let lead = if squad == NONE { h } else { self.squads[squad as usize].iter().copied().find(|m| hunting.contains(m)).unwrap_or(h) };
+                (h, lead)
+            })
+            .collect();
+        let leads: Vec<u32> = lead_of.iter().filter(|(h, l)| h == l).map(|&(h, _)| h).collect();
         let mut on_target = vec![0u32; self.ships.len()];
         let mut claimed = [0u64; 4];
-        for &h in &hunters {
+        for &h in &leads {
             let s = &self.ships[h as usize];
             let side = (s.side as usize).min(3);
             // Cells and targets already taken by hunters that keep their choice.
@@ -2755,7 +2769,7 @@ impl Battle {
                 claimed[side] |= 1u64 << s.hunt_cell;
             }
         }
-        for &h in &hunters {
+        for &h in &leads {
             let (side, pos, cur) = {
                 let s = &self.ships[h as usize];
                 (s.side, s.pos, if let Order::Attack(t) = s.order { Some(t) } else { None })
@@ -2829,6 +2843,21 @@ impl Battle {
             s.hunt_since = 0.0;
             s.order = Order::AttackMove(centre_of(pick));
             s.target_hp = NO_HP;
+        }
+        // The other hunting members of a squadron follow their leader's choice.
+        for &(h, lead) in lead_of.iter().filter(|(h, l)| h != l) {
+            let (order, target, cell, since) = {
+                let l = &self.ships[lead as usize];
+                (l.order, l.target, l.hunt_cell, l.hunt_since)
+            };
+            let s = &mut self.ships[h as usize];
+            if s.order != order {
+                s.order = order;
+                s.target = target;
+                s.target_hp = NO_HP;
+            }
+            s.hunt_cell = cell;
+            s.hunt_since = since;
         }
     }
 
