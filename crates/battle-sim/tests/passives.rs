@@ -212,3 +212,56 @@ fn retreat_prevention_keeps_its_own_side_in_the_battle() {
     b.ships[titan as usize].alive = false;
     assert_eq!(b.command(0, Command::Retreat), Ok(()), "with the Titan gone the side may retreat");
 }
+
+/// Whether side 0's seer (sensor 1000, static) sees side 1's ship 1150 units away (centre to centre, radius 100: 1050 to its edge).
+fn seen_at_1150(seer_mods: Vec<FieldModDef>, granted: Vec<FieldModDef>) -> bool {
+    let seer = ShipDef { sensor_range: 1000.0, field_mods: seer_mods, ..ship("seer", 1.0e6) };
+    // Structures are always known: the far ship is mobile (it does not move without orders).
+    let far = ShipDef { sensor_range: 1000.0, is_static: false, ..ship("far", 1.0e6) };
+    let mut s = setup(Catalog::from_defs(vec![seer, far], vec![missile()]), "seer", "far");
+    s.config.fog_of_war = true;
+    s.config.side_field_mods = vec![granted];
+    let mut b = Battle::new(s);
+    let (s0, s1) = (b.ships.iter().find(|s| s.side == 0).unwrap().id, b.ships.iter().find(|s| s.side == 1).unwrap().id);
+    b.ships[s1 as usize].pos = b.ships[s0 as usize].pos + Vec3::new(1150.0, 0.0, 0.0);
+    for _ in 0..20 {
+        b.step();
+    }
+    b.is_visible_to(0, s1)
+}
+
+#[test]
+fn battlefield_modifiers_lengthen_sensor_range() {
+    let sensors = FieldModDef { fow_reveal: 1.2, stealth_duration: 1.0, stacking: 3 };
+    assert!(!seen_at_1150(vec![], vec![]), "1050 is beyond the 1000 sensor range");
+    assert!(seen_at_1150(vec![], vec![sensors]), "an upgrade's x1.2 reaches 1200");
+    assert!(seen_at_1150(vec![sensors], vec![]), "a unit that carries it does the same");
+    let weak = FieldModDef { fow_reveal: 1.01, ..sensors };
+    assert!(!seen_at_1150(vec![], vec![weak, weak]), "one stacking category does not multiply");
+}
+
+#[test]
+fn battlefield_modifiers_lengthen_timed_cloaks() {
+    let cloak = AbilityDef { kind: "STEALTH".into(), stealth: true, duration: 10.0, recharge: 30.0, speed_mult: 1.0, shield_regen_mult: 1.0, weapon_delay_mult: 1.0, take_damage_mult: 1.0, ..Default::default() };
+    let run = |granted: Vec<FieldModDef>| {
+        let ghost = ShipDef { abilities: vec![cloak.clone()], ..ship("ghost", 1.0e6) };
+        let mut s = setup(Catalog::from_defs(vec![ghost, ship("other", 1.0e6)], vec![missile()]), "ghost", "other");
+        s.config.side_field_mods = vec![granted];
+        let mut b = Battle::new(s);
+        let g = b.ships.iter().find(|s| s.side == 0).unwrap().id;
+        b.command(0, Command::UseAbility { ship: g, ability: 0 }).unwrap();
+        (b.ships[g as usize].abilities[0].active, b.ships[g as usize].abilities[0].cooldown)
+    };
+    assert_eq!(run(vec![]), (10.0, 40.0));
+    assert_eq!(run(vec![FieldModDef { fow_reveal: 1.0, stealth_duration: 1.5, stacking: 3 }]), (15.0, 45.0), "US_Cloaking_Generator_L2: x1.5");
+}
+
+#[test]
+fn battlefield_modifiers_are_read_from_the_upgrades() {
+    let Some((data, _fs)) = load() else { return };
+    let mods = |n: &str| FieldModDef::of_object(&data.objects, n);
+    assert_eq!(mods("Advanced_Ship_Sensors_Empire"), vec![FieldModDef { fow_reveal: 1.2, stealth_duration: 1.0, stacking: 3 }]);
+    assert_eq!(mods("US_Cloaking_Generator_L1_Upgrade"), vec![FieldModDef { fow_reveal: 1.0, stealth_duration: 1.25, stacking: 3 }]);
+    assert_eq!(mods("US_Cloaking_Generator_L2_Upgrade"), vec![FieldModDef { fow_reveal: 1.0, stealth_duration: 1.5, stacking: 3 }]);
+    assert!(mods("Advanced_Targeting_Systems_Fighters_Empire").is_empty(), "a combat bonus is no battlefield modifier");
+}

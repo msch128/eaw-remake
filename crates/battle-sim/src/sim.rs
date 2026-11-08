@@ -677,7 +677,8 @@ impl Battle {
         self.reveals.retain(|r| r.3 > time);
         let sides = self.sides.len().min(4);
         for side in 0..sides as u8 {
-            let observers: Vec<(Vec3, f32)> = self.ships.iter().filter(|s| s.alive && !s.retreated && s.side == side).map(|s| (s.pos, if cat.ship(s.def).sensor_range > 0.0 { cat.ship(s.def).sensor_range } else { f32::MAX })).collect();
+            let fow = self.field_modifier(side, |m| m.fow_reveal);
+            let observers: Vec<(Vec3, f32)> = self.ships.iter().filter(|s| s.alive && !s.retreated && s.side == side).map(|s| (s.pos, if cat.ship(s.def).sensor_range > 0.0 { cat.ship(s.def).sensor_range * fow } else { f32::MAX })).collect();
             let reveals: Vec<(Vec3, f32)> = self.reveals.iter().filter(|r| r.0 == side).map(|r| (r.1, r.2)).collect();
             for s in self.ships.iter_mut().filter(|s| s.alive && !s.retreated && s.side != side) {
                 let d = cat.ship(s.def);
@@ -710,11 +711,18 @@ impl Battle {
     /// Whether `side` may call in reinforcements at `pos` (see [`crate::placement_check`]): inside the battle area, outside the no-spawn zones of enemy
     /// structures and in an area the side sees. The UI evaluates the same rule on the snapshot to colour the reinforcement ghost.
     pub fn reinforcement_zone_check(&self, side: u8, pos: Vec3) -> Result<(), CommandError> {
+        let fow = self.field_modifier(side, |m| m.fow_reveal);
         let units: Vec<crate::PlacementUnit> = self
             .ships
             .iter()
             .filter(|s| s.alive && !s.retreated)
-            .map(|s| crate::PlacementUnit::new(self.catalog.ship(s.def), s.side, s.pos, self.config.no_spawn_radius))
+            .map(|s| {
+                let mut u = crate::PlacementUnit::new(self.catalog.ship(s.def), s.side, s.pos, self.config.no_spawn_radius);
+                if s.side == side && u.sensor < f32::MAX {
+                    u.sensor *= fow;
+                }
+                u
+            })
             .collect();
         let reveals: Vec<(Vec3, f32)> = self.reveals.iter().filter(|r| r.0 == side).map(|r| (r.1, r.2)).collect();
         crate::placement_check(self.config.half_size - 300.0, self.config.fog_of_war, side, pos, &units, &reveals)
@@ -1131,11 +1139,13 @@ impl Battle {
         }
         let no_cooldown = self.cheats.has_no_cooldowns(self.ships[ship as usize].side);
         let shot = a.shot.is_some();
+        // `Stealth_Duration_Multiplier` of the side's battlefield modifiers lengthens a timed cloak.
+        let duration = if a.stealth && !a.toggle { a.duration * self.field_modifier(self.ships[ship as usize].side, |m| m.stealth_duration) } else { a.duration };
         let st = &mut self.ships[ship as usize].abilities[ability];
         st.target = target;
-        st.active = a.duration;
+        st.active = duration;
         // A shot ability recharges from the moment it is used (it ends as soon as the shot is fired).
-        st.cooldown = if a.toggle || no_cooldown { 0.0 } else if shot { a.recharge } else if let Some(b) = &a.blast { a.recharge + b.charge } else { a.recharge + a.duration };
+        st.cooldown = if a.toggle || no_cooldown { 0.0 } else if shot { a.recharge } else if let Some(b) = &a.blast { a.recharge + b.charge } else { a.recharge + duration };
         if shot {
             // The craft fires at the chosen target now.
             let s = &mut self.ships[ship as usize];
@@ -1850,6 +1860,23 @@ impl Battle {
     /// Preventing", Tarkin's "Unable to contemplate retreat as a viable option"): the side cannot order a retreat.
     pub fn retreat_prevented(&self, side: u8) -> bool {
         self.ships.iter().any(|s| s.side == side && s.alive && !s.retreated && self.catalog.ship(s.def).prevents_retreat)
+    }
+
+    /// The product of one `Battlefield_Modifier_Ability` multiplier (`pick`) over the modifiers of `side`: those the battle grants it
+    /// (`BattleConfig::side_field_mods`, upgrades) and those of its living units. Per `Stacking_Category` the strongest counts, categories
+    /// multiply (1.0 = none).
+    pub fn field_modifier(&self, side: u8, pick: fn(&FieldModDef) -> f32) -> f32 {
+        let granted = self.config.side_field_mods.get(side as usize).into_iter().flatten();
+        let carried = self.ships.iter().filter(|s| s.side == side && s.alive && !s.retreated).flat_map(|s| &self.catalog.ship(s.def).field_mods);
+        let mut by_cat: std::collections::BTreeMap<u8, f32> = std::collections::BTreeMap::new();
+        for m in granted.chain(carried) {
+            let v = pick(m);
+            let e = by_cat.entry(m.stacking).or_insert(1.0);
+            if (v - 1.0).abs() > (*e - 1.0).abs() {
+                *e = v;
+            }
+        }
+        by_cat.values().product()
     }
 
     /// Seconds until the retreat jump of `side` (`None` when it has not ordered a retreat or the jump is done). For the countdown on the tactical screen.

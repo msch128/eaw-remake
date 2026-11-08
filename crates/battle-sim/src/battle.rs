@@ -88,6 +88,9 @@ pub struct BattleConfig {
     pub defenders: Vec<bool>,
     /// Per side: story grants `(unit name, ability name)`, both lower-cased. A locked redirect applies when this side's set contains the ship.
     pub powers: Vec<BTreeSet<(String, String)>>,
+    /// Per side: battlefield modifiers the side brings besides those of its units, e.g. from upgrades (`FieldModDef::of_object`).
+    /// Missing entries mean none.
+    pub side_field_mods: Vec<Vec<crate::defs::FieldModDef>>,
 }
 
 impl Default for BattleConfig {
@@ -123,6 +126,7 @@ impl Default for BattleConfig {
             ai_reserve: Vec::new(),
             defenders: Vec::new(),
             powers: Vec::new(),
+            side_field_mods: Vec::new(),
         }
     }
 }

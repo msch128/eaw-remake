@@ -426,6 +426,41 @@ impl BonusDef {
     }
 }
 
+/// A `Battlefield_Modifier_Ability` that changes a space battle for its side: carried by a unit, or by an upgrade the battle grants
+/// (`BattleConfig::side_field_mods`). Only the space multipliers are read; ground ones (`Enable_Bombing_Runs`, `Base_Shield_Upgrade`,
+/// `Reinforcement_Time_Multiplier`, `Capture_Point_Time_Multiplier`) are not.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FieldModDef {
+    /// `FOW_Reveal_Range_Multiplier`: the side's ships see this much farther (`Advanced_Ship_Sensors_*` 1.2).
+    pub fow_reveal: f32,
+    /// `Stealth_Duration_Multiplier`: the side's timed cloaks last this much longer (`US_Cloaking_Generator_L1/L2` 1.25 / 1.5).
+    pub stealth_duration: f32,
+    /// `Stacking_Category`: modifiers of one category do not multiply, the strongest applies.
+    pub stacking: u8,
+}
+
+impl FieldModDef {
+    /// Reads a `Battlefield_Modifier_Ability`; `None` for other abilities and for modifiers without a space multiplier. The activation
+    /// style is not checked: the Remake marks space upgrades `Ground_Automatic` too (`US_Cloaking_Generator_L1_Upgrade_Effect`).
+    pub fn from_sub_ability(a: &alamo_data::space::SubAbility) -> Option<Self> {
+        if !a.kind.eq_ignore_ascii_case("Battlefield_Modifier_Ability") || a.fields.get("initially_enabled").is_some_and(|v| !alamo_data::xml::parse_bool(v)) {
+            return None;
+        }
+        let num = |k: &str| a.fields.get(k).and_then(|v| alamo_data::xml::parse_num::<f32>(v)).filter(|v| *v > 0.0);
+        let (fow, stealth) = (num("fow_reveal_range_multiplier"), num("stealth_duration_multiplier"));
+        (fow.is_some() || stealth.is_some()).then(|| FieldModDef {
+            fow_reveal: fow.unwrap_or(1.0),
+            stealth_duration: stealth.unwrap_or(1.0),
+            stacking: num("stacking_category").unwrap_or(0.0) as u8,
+        })
+    }
+
+    /// The modifiers of an object's `Abilities` (a unit or an `UpgradeObject`).
+    pub fn of_object(objects: &alamo_data::GameObjects, name: &str) -> Vec<Self> {
+        objects.sub_abilities(name).iter().filter_map(Self::from_sub_ability).collect()
+    }
+}
+
 /// Multipliers a ship gets from friendly combat bonus auras; `1.0` = none.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Bonus {
@@ -668,6 +703,8 @@ pub struct ShipDef {
     pub locked_redirects: Vec<(String, RedirectDef)>,
     /// Aura bonuses given to the friendly fleet (`Combat_Bonus_Ability`).
     pub bonuses: Vec<BonusDef>,
+    /// Battlefield modifiers it gives its side while it lives (`Battlefield_Modifier_Ability`).
+    pub field_mods: Vec<FieldModDef>,
     /// `Space_FOW_Reveal_Range`: how far this ship sees (fog of war); 1250 where the data gives none.
     pub sensor_range: f32,
     /// `Passive_Missile_Shield_Radius`: an always-on missile shield around the unit (Star Home 500, Reaver 300, A-wing 50; 0 = none).
@@ -2032,6 +2069,11 @@ impl Catalog {
             redirects,
             locked_redirects,
             bonuses,
+            field_mods: match src {
+                Source::Unit(u) => u.sub_abilities.iter().filter_map(FieldModDef::from_sub_ability).collect(),
+                Source::Base(b) => b.sub_abilities.iter().filter_map(FieldModDef::from_sub_ability).collect(),
+                Source::Structure(_) => Vec::new(),
+            },
             sensor_range,
             passive_missile_radius: unit_field("passive_missile_shield_radius").and_then(alamo_data::xml::parse_num).unwrap_or(0.0),
             redirect_to_teammates: unit_field("redirect_damage_to_teammates").is_some_and(alamo_data::xml::parse_bool),

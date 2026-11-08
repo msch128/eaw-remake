@@ -49,7 +49,7 @@ pub use battle::{
 };
 pub use defs::{Bonus, ChaseRules, BonusDef, CombatMod, ModKind, WeakenDef, LureDef, BombDef, EnergyDef, ClusterDef, HealDef, CorruptDef, RedirectDef, SuperLaserDef, ZoneDef, 
     AbilityDef, Catalog, DamageMatrix, DirectWeaponDef, FormationRules, HpDef, HpKind, PrioritySet, ProjDef, ProjId, ShipDef, ShipId, SpecialWeaponDef, TargetClass,
-    TractorDef,
+    TractorDef, FieldModDef,
 };
 pub use arena::{Arena, Marker, Obstacle, PropZones, prop_zones};
 pub use math::Vec3;
