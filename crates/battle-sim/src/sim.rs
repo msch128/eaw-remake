@@ -1668,6 +1668,21 @@ impl Battle {
         if self.cheats.is_invulnerable(self.ships[id as usize].side) {
             return;
         }
+        // `Redirect_Damage_To_Teammates` (Vader's TIE Advanced: "can only be damaged if the wingmen are destroyed"): the hit goes to the
+        // nearest living wingman of the squadron instead (estimate: the nearest one takes all of it).
+        let victim = &self.ships[id as usize];
+        if victim.squad != NONE && self.catalog.ship(victim.def).redirect_to_teammates {
+            let mate = self
+                .ships
+                .iter()
+                .filter(|o| o.id != id && o.squad == victim.squad && o.side == victim.side && o.alive && !o.retreated && !self.catalog.ship(o.def).redirect_to_teammates)
+                .min_by(|a, b| a.pos.dist(victim.pos).total_cmp(&b.pos.dist(victim.pos)).then(a.id.cmp(&b.id)))
+                .map(|o| (o.id, o.pos));
+            if let Some((mate, at)) = mate {
+                self.damage_ship(mate, attacker, pd, proj, raw, at, NO_HP);
+                return;
+            }
+        }
         let victim_side = self.ships[id as usize].side as usize;
         if victim_side < 4
             && let Some(a) = self.ships.get_mut(attacker as usize)

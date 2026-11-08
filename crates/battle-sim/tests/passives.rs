@@ -109,3 +109,90 @@ fn passive_missile_shields_and_jamming_pods_are_read_from_the_data() {
     assert_eq!((z.missile_radius, z.radius, z.enemy_dps, z.max_range), (500.0, 500.0, 0.0, 500.0), "{z:?}");
     assert_eq!((pods.duration, pods.recharge), (60.0, 450.0), "Tactical_Health 60 / Own_Damage_Per_Second 1; Recharge_Seconds 450");
 }
+
+/// A hero squadron: leader (id 0, hull 1000) with `Redirect_Damage_To_Teammates`, two wingmen (id 1, hull 1000 each), and a target-less
+/// shooter. Returns the battle, the leader and the wingmen.
+fn hero_squadron(redirect: bool) -> (Battle, u32, Vec<u32>) {
+    let fighter = |name: &str| ShipDef { class: TargetClass::Fighter, radius: 10.0, ..ship(name, 1000.0) };
+    let leader = ShipDef { redirect_to_teammates: redirect, ..fighter("leader") };
+    let squad = ShipDef {
+        name: "hero_squad".into(),
+        is_squadron: true,
+        class: TargetClass::Fighter,
+        members: vec![(0, 1), (1, 2)],
+        offsets: vec![Vec3::ZERO, Vec3::new(0.0, 400.0, 0.0), Vec3::new(0.0, -400.0, 0.0)],
+        ..ShipDef::default()
+    };
+    let shot = ProjDef { name: "laser".into(), category: "laser".into(), ..missile() };
+    let b = Battle::new(setup(Catalog::from_defs(vec![leader, fighter("wingman"), squad, ship("shooter", 1.0e6)], vec![shot]), "hero_squad", "shooter"));
+    let lead = b.ships.iter().find(|s| s.def == 0).unwrap().id;
+    let wings = b.ships.iter().filter(|s| s.def == 1).map(|s| s.id).collect();
+    (b, lead, wings)
+}
+
+/// Fires one bolt of `proj` at `target` from 30 units in front of it (fighters bob up and down) and runs 2 s; returns the ships it hit.
+fn bolt_at(b: &mut Battle, target: u32, proj: ProjId) -> Vec<u32> {
+    let shooter = b.ships.iter().find(|s| s.side == 1).unwrap().id;
+    let tp = b.ships[target as usize].pos;
+    b.projectiles.push(Projectile { pos: tp + Vec3::new(30.0, 0.0, 0.0), vel: Vec3::new(-500.0, 0.0, 0.0), def: proj, side: 1, owner: shooter, target, aim_hp: u16::MAX, range_left: 9000.0 });
+    let mut hits = Vec::new();
+    for _ in 0..60 {
+        hits.extend(b.step().iter().filter_map(|e| if let Event::Hit { ship, .. } = e { Some(*ship) } else { None }));
+    }
+    hits
+}
+
+#[test]
+fn hero_leader_hits_go_to_the_wingmen_until_they_are_gone() {
+    let (mut b, lead, wings) = hero_squadron(true);
+    assert!(wings.iter().all(|&w| b.ships[w as usize].pos.dist(b.ships[lead as usize].pos) > 200.0), "the wingmen fly apart from the leader");
+    bolt_at(&mut b, lead, 0);
+    let wing_hull: f32 = wings.iter().map(|&w| b.ships[w as usize].hull).sum();
+    assert_eq!((b.ships[lead as usize].hull, wing_hull), (1000.0, 1900.0), "the leader's hit lands on a wingman");
+    for &w in &wings {
+        b.ships[w as usize].alive = false;
+    }
+    bolt_at(&mut b, lead, 0);
+    assert_eq!(b.ships[lead as usize].hull, 900.0, "without wingmen the leader is hit");
+
+    let (mut b, lead, _) = hero_squadron(false);
+    bolt_at(&mut b, lead, 0);
+    assert_eq!(b.ships[lead as usize].hull, 900.0, "a plain leader takes its own hits");
+}
+
+#[test]
+fn hero_leaders_redirect_damage_in_the_data() {
+    let Some((data, fs)) = load() else { return };
+    let leaders = ["TIE_Advanced", "Rogue_1", "Green_Leader", "Defender_Leader_Y", "Defender_Leader_K", "Sipal_StarViper", "Luke_XWing"];
+    let wingmen = ["Black_TIE_Fighter", "Rogue_2", "Defender_Y", "Peggat_2"];
+    let names: Vec<&str> = leaders.iter().chain(&wingmen).copied().collect();
+    let cat = Catalog::build(&data, Some(&fs), &names);
+    for n in leaders {
+        assert!(cat.ship(cat.ship_id(n).unwrap_or_else(|| panic!("{n}"))).redirect_to_teammates, "{n}");
+    }
+    for n in wingmen {
+        assert!(!cat.ship(cat.ship_id(n).unwrap_or_else(|| panic!("{n}"))).redirect_to_teammates, "{n}");
+    }
+}
+
+#[test]
+fn vaders_wingmen_take_his_hits() {
+    let Some((data, fs)) = load() else { return };
+    let cat = Arc::new(Catalog::build(&data, Some(&fs), &["Black_Squadron", "Star_Destroyer"]));
+    let side = |n: &str, ai| SideSetup { name: "s".into(), units: vec![UnitSetup { ship: cat.ship_id(n).unwrap(), count: 1, tag: 1 }], structures: vec![], ai };
+    let config = BattleConfig { half_size: 8000.0, fog_of_war: false, ..BattleConfig::default() };
+    let mut b = Battle::new(BattleSetup { catalog: cat.clone(), sides: vec![side("Black_Squadron", false), side("Star_Destroyer", false)], config });
+    let vader = b.ships.iter().find(|s| cat.ship(s.def).name == "TIE_Advanced").expect("Vader").id;
+    let wings: Vec<u32> = b.ships.iter().filter(|s| cat.ship(s.def).name == "Black_TIE_Fighter").map(|s| s.id).collect();
+    assert_eq!(wings.len(), 8);
+    assert!(wings.iter().all(|&w| b.ships[w as usize].squad == b.ships[vader as usize].squad), "one squadron");
+    let full = |b: &Battle, id: u32| b.ships[id as usize].hull + b.ships[id as usize].shield;
+    let vader_hp = full(&b, vader);
+    // A laser that hurts the Black TIEs (shield and hull).
+    let wing = cat.ship(b.ships[wings[0] as usize].def);
+    let hurts = |p: &ProjDef| p.category == "laser" && p.damage > 0.0 && p.shield_damage && p.hull_damage && cat.damage.multiplier(p.damage_type, wing.armor) > 0.0 && cat.damage.multiplier(p.damage_type, wing.shield_armor) > 0.0;
+    let laser = cat.projectiles.iter().position(hurts).expect("a laser") as ProjId;
+    let hits = bolt_at(&mut b, vader, laser);
+    assert!(!hits.is_empty() && hits.iter().all(|h| wings.contains(h)), "the bolt hits a wingman, not Vader: {hits:?}");
+    assert_eq!(full(&b, vader), vader_hp, "Vader is not damaged while his wingmen live");
+}

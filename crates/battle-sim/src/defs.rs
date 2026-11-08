@@ -672,6 +672,8 @@ pub struct ShipDef {
     pub sensor_range: f32,
     /// `Passive_Missile_Shield_Radius`: an always-on missile shield around the unit (Star Home 500, Reaver 300, A-wing 50; 0 = none).
     pub passive_missile_radius: f32,
+    /// `Redirect_Damage_To_Teammates`: the hits this squadron leader takes go to its living wingmen (Vader's TIE Advanced, Rogue 1).
+    pub redirect_to_teammates: bool,
     /// `Reinforcement_Prevention_Radius` of a structure: enemy reinforcements may not arrive this close (0 = the data has none; `BattleConfig::no_spawn_radius` applies).
     pub no_spawn_radius: f32,
     /// True for stations and structures (never move).
@@ -2029,6 +2031,7 @@ impl Catalog {
             bonuses,
             sensor_range,
             passive_missile_radius: unit_field("passive_missile_shield_radius").and_then(alamo_data::xml::parse_num).unwrap_or(0.0),
+            redirect_to_teammates: unit_field("redirect_damage_to_teammates").is_some_and(alamo_data::xml::parse_bool),
             no_spawn_radius,
             class,
             is_static,
