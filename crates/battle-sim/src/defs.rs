@@ -682,6 +682,11 @@ pub struct ShipDef {
     pub chase: ChaseRules,
     /// `Destruction_Survivors` that are ships (a super ship's next phase): spawned where this one dies, `(definition, count)`.
     pub survivors: Vec<(ShipId, u32)>,
+    /// What its `Lua_Script` sets with `GlobalValue.Set` when it appears in a space battle (`Set_SSD_Viscount_State` on
+    /// `Viscount_Star_Defender_P3`: `("Viscount_Level", 3)`).
+    pub on_create: Option<(String, i32)>,
+    /// What the script of its `Death_Clone` sets when it dies (`Death_Clone_Viscount_Phase`: `("Viscount_Level", 0)`).
+    pub on_death: Option<(String, i32)>,
 }
 
 impl ShipDef {
@@ -1177,6 +1182,32 @@ fn load_source(data: &GameData, name: &str) -> Option<Source> {
     data.objects.structure(name).map(|s| Source::Structure(Box::new(s)))
 }
 
+/// What a `GameObject` Lua script sets with `GlobalValue.Set` when an object appears, per object type (upper case): the
+/// `Set_SSD_*_State` scripts branch on `object_name == "TYPE"` and set one number each (`GlobalValue.Set("Viscount_Level", 3)`).
+/// Read from `Scripts/GameObject/<script>.lua`; empty when the script is missing or sets nothing that way.
+fn created_globals(fs: &dyn FileSource, script: &str) -> HashMap<String, (String, i32)> {
+    let script = script.trim();
+    let script = script.strip_suffix(".lua").unwrap_or(script);
+    let Ok(bytes) = fs.read(&format!("Scripts/GameObject/{script}.lua")) else { return HashMap::new() };
+    let text = String::from_utf8_lossy(&bytes);
+    let quoted = |s: &str| s.split('"').nth(1).map(str::to_string);
+    let mut out = HashMap::new();
+    let mut current: Option<String> = None;
+    for line in text.lines() {
+        let line = line.split("--").next().unwrap_or("");
+        if line.contains("object_name ==") {
+            current = quoted(line).map(|n| n.to_ascii_uppercase());
+        } else if let (Some(name), Some(at)) = (current.as_ref(), line.find("GlobalValue.Set(")) {
+            let args = &line[at + "GlobalValue.Set(".len()..];
+            let value = args.split(',').nth(1).and_then(|v| v.trim().trim_end_matches(')').trim().parse::<i32>().ok());
+            if let (Some(key), Some(value)) = (quoted(args), value) {
+                out.entry(name.clone()).or_insert((key, value));
+            }
+        }
+    }
+    out
+}
+
 /// `Destruction_Survivors` as `(object, count)`: a name, optionally followed by its count (`Viscount_Star_Defender_P2, 1.0`).
 fn survivor_list(s: &str) -> Vec<(String, u32)> {
     let toks = alamo_data::xml::split_list(s);
@@ -1383,6 +1414,7 @@ impl Catalog {
         for (i, s) in sources.iter().enumerate() {
             cat.ship_index.insert(s.name().to_ascii_lowercase(), i as ShipId);
         }
+        let mut scripts: HashMap<String, HashMap<String, (String, i32)>> = HashMap::new();
         for (i, s) in sources.iter().enumerate() {
             let model = s.model().and_then(|m| models.get(&m.to_ascii_lowercase()));
             let scaled = model.map(|m| {
@@ -1395,7 +1427,21 @@ impl Catalog {
                 Arc::new(ModelInfo { bones, radius: m.radius * k, hull, height: m.height.map(|(lo, hi)| (lo * k, hi * k)) })
             });
             let model = scaled.as_ref();
-            let def = cat.ship_def(s, &hp_defs[i], model.map(|m| &**m), &attach, &data.objects);
+            let mut def = cat.ship_def(s, &hp_defs[i], model.map(|m| &**m), &attach, &data.objects);
+            if let (Some(fs), Source::Unit(u)) = (fs, s) {
+                // The `GlobalValue.Set` of its own script when it appears, and of its `Death_Clone`'s when it dies.
+                let mut set_by = |name: &str, script: Option<&str>| {
+                    let script = script?.trim().to_ascii_lowercase();
+                    let table = scripts.entry(script.clone()).or_insert_with(|| created_globals(fs, &script));
+                    table.get(&name.to_ascii_uppercase()).cloned()
+                };
+                def.on_create = set_by(&u.name, u.fields.get("lua_script").map(String::as_str));
+                let clone = u.death_clone.as_deref().and_then(|c| alamo_data::xml::split_list(c).pop());
+                def.on_death = clone.and_then(|c| {
+                    let script = data.objects.resolve(&c).and_then(|r| r.string("lua_script"));
+                    set_by(&c, script.as_deref())
+                });
+            }
             cat.ships.push(def);
         }
         // The chase ranges sit on the squadron object; its craft fly by them.
@@ -1828,6 +1874,8 @@ impl Catalog {
                 Source::Unit(u) => u.destruction_survivors.iter().flat_map(|s| survivor_list(s)).filter_map(|(n, c)| self.ship_index.get(&n.to_ascii_lowercase()).map(|&id| (id, c))).collect(),
                 _ => Vec::new(),
             },
+            on_create: None,
+            on_death: None,
             name,
             text_id,
             heals,

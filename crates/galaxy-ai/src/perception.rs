@@ -69,7 +69,13 @@ pub struct Snapshot {
     pub strength: Vec<Vec<(PlayerId, f64)>>,
     /// Strength of the fixed defenses of each planet for its owner.
     pub static_defense: Vec<f64>,
+    /// Seconds since the last space battle per planet (`TimeSinceSpaceConflict`); [`NO_CONFLICT_SECONDS`] where there was none.
+    pub since_conflict: Vec<f64>,
 }
+
+/// `TimeSinceSpaceConflict` of a planet that saw no space battle yet (estimate: "a very long time"; the Remake's `Story_SSD_*_Damage`
+/// plots start their search at 10000).
+pub const NO_CONFLICT_SECONDS: f64 = 1.0e9;
 
 impl Snapshot {
     /// Builds a snapshot; `adjacency` and names are re-read only when `static_part` is `None`.
@@ -109,6 +115,7 @@ impl Snapshot {
             }
         }
         s.owner = (0..n as u32).map(|p| sim.planet_owner(p)).collect();
+        s.since_conflict = (0..n as u32).map(|p| sim.time_since_space_conflict(p).unwrap_or(NO_CONFLICT_SECONDS)).collect();
         s.structures = (0..n as u32).map(|p| sim.structures(p)).collect();
         s.queued = (0..n as u32).map(|p| sim.build_queue(p).into_iter().map(|q| q.name).collect()).collect();
         s.starbase = (0..n as u32).map(|p| sim.starbase_level(p)).collect();
@@ -360,6 +367,7 @@ impl PerceptionCtx<'_> {
                 s.adjacency[idx].iter().filter(|&&n| s.owner[n as usize] == Some(self.player)).count() as f64 / s.max_neighbors
             }
             "BaseIncome" => s.income[idx] / s.max_income,
+            "TimeSinceSpaceConflict" => s.since_conflict[idx],
             "BaseIncomeNBTP" => s.income[idx],
             "StarbaseLevelUnnormalized" => f64::from(s.starbase[idx].0),
             "StarbaseLevel" => f64::from(s.starbase[idx].0) / f64::from(s.starbase[idx].1.max(1)),

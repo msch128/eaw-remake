@@ -347,6 +347,24 @@ build-menu filters, not a start mode. The mode is this project's own:
 * Not modelled: the AI does not recruit or use agents; agents cannot be caught (`AntiStealthEffectiveness` in the AI
   equations); `Neutralize_Hero_Ability` of the neutral ISB agent.
 
+## 1.15 Super ship damage phases on the galaxy map
+
+* Data: in a space battle the `Set_SSD_{Executor,Eclipse,Piett,Viscount,Subjugator}_State` object scripts set
+  `GlobalValue` `<Name>_Level` to the phase of each phase object as it appears (1 to 5, Subjugator 1 to 4) and to 0 when
+  the last phase's `Death_Clone` (`Death_Clone_*_Phase`) appears. `battle-sim` reads the branches of those scripts
+  (`object_name == "TYPE"` then `GlobalValue.Set("KEY", N)`) and reports the sets in order (`BattleResult::globals`,
+  `TacticalResult::globals`, `Event::TacticalGlobals`); `galaxy-script` writes them into the store before the battle's
+  story events. The galactic `Story_SSD_*_Damage.lua` plots then run as in the Remake on `STORY_WIN_BATTLES` /
+  `STORY_LOSE_BATTLES`: with a level other than 0 they spawn that phase (if none of that type exists) at the planet of
+  the most recent space battle, or at the owner's nearest planet when an enemy holds its orbit
+  (`Should_Despawn_Orbital_Unit`), and reset the level to 0. The phase that was destroyed is removed by the battle (and
+  the plot's `REMOVE_UNIT`).
+* Data: `Time_Since_Space_Conflict` (`Remake_SSD_PhaseEquations.xml`, `Variable_Target.TimeSinceSpaceConflict`) is the
+  game seconds since the last space battle at the planet was decided (`PlanetState::last_space_battle`, saved).
+  Estimate: a planet without one counts 1e9 s (the plots start their search at 10000).
+* Battles the player settles (tactical result, auto-resolve, abandon) reach the story like those the sim settles in
+  its step (before, their `STORY_WIN_BATTLES` / `STORY_LOSE_BATTLES` / `STORY_TACTICAL_DESTROY` were not reported).
+
 # Part 2: Space battles (`battle-sim`)
 
 Everything is derived from the Remake data plus the `.alo` models for hardpoint positions. Values the engine defines

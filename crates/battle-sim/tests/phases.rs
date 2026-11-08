@@ -101,6 +101,9 @@ fn a_destroyed_viscount_goes_through_its_five_phases_in_one_battle() {
     let sent: Vec<&GroupResult> = r.groups.iter().filter(|g| g.side == 0 && g.tag != PHASE_TAG && b.catalog().ship(g.ship).name.starts_with("Viscount")).collect();
     assert_eq!(sent.len(), 1);
     assert_eq!(sent[0].survived, 0);
+    // `Set_SSD_Viscount_State` ran on each phase as it appeared, and on the last phase's `Death_Clone`.
+    let levels: Vec<i32> = r.globals.iter().filter(|g| g.0 == "Viscount_Level").map(|g| g.1).collect();
+    assert_eq!(levels, [1, 2, 3, 4, 5, 0]);
 }
 
 #[test]
@@ -117,4 +120,19 @@ fn subjugator_zann_p3_brings_its_ion_turrets_and_fights() {
     let weapons = def.hardpoints.iter().filter(|h| h.kind == HpKind::Weapon).count();
     eprintln!("Subjugator_Zann_P3: {} hardpoints, {weapons} weapons", def.hardpoints.len());
     assert!(weapons > 0, "the phase is armed");
+}
+
+#[test]
+fn the_set_ssd_state_scripts_give_each_phase_its_level() {
+    let Some((data, fs)) = load() else { return };
+    let cat = Catalog::build(&data, Some(&fs as &dyn FileSource), &["Viscount_Star_Defender_P1", "Subjugator_Zann_P1", "Executor_Star_Dreadnought_P1", "Star_Destroyer"]);
+    let def = |n: &str| cat.ship(cat.ship_id(n).unwrap_or_else(|| panic!("{n}")));
+    let set = |k: &str, v: i32| Some((k.to_string(), v));
+    assert_eq!(def("Viscount_Star_Defender_P3").on_create, set("Viscount_Level", 3));
+    assert_eq!(def("Viscount_Star_Defender_P5").on_death, set("Viscount_Level", 0), "Death_Clone_Viscount_Phase");
+    assert_eq!(def("Viscount_Star_Defender_P4").on_death, None, "it has Destruction_Survivors, no Death_Clone");
+    assert_eq!(def("Subjugator_Zann_P4").on_create, set("Subjugator_Level", 4));
+    assert_eq!(def("Subjugator_Zann_P4").on_death, set("Subjugator_Level", 0));
+    assert_eq!(def("Executor_Star_Dreadnought_P1").on_create, set("Executor_Level", 1));
+    assert_eq!(def("Star_Destroyer").on_create, None);
 }

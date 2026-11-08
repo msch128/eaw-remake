@@ -112,6 +112,10 @@ pub trait AiSim {
     fn neighbors(&self, pl: PlanetId) -> Vec<PlanetId>;
     /// Base income per week of the planet.
     fn planet_income(&self, pl: PlanetId) -> f64;
+    /// Seconds since the last space battle at the planet was decided; `None` if there was none.
+    fn time_since_space_conflict(&self, _pl: PlanetId) -> Option<f64> {
+        None
+    }
     /// `(orbital, ground)` structure slots.
     fn structure_slots(&self, pl: PlanetId) -> (i32, i32);
     /// Names of the built structures.

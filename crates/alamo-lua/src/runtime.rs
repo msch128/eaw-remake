@@ -609,6 +609,19 @@ impl ScriptRuntime {
         self.dispatch(fired);
     }
 
+    /// Sets a number in the `GlobalValue` store as a script's `GlobalValue.Set` would (the levels a tactical battle's object scripts set).
+    pub fn set_global_value(&mut self, key: &str, value: f64) {
+        self.shared.borrow_mut().global_values.insert(key.to_string(), crate::api::GVal::Num(value));
+    }
+
+    /// A number of the `GlobalValue` store; `None` when it is unset or not a number.
+    pub fn global_number(&self, key: &str) -> Option<f64> {
+        match self.shared.borrow().global_values.get(key) {
+            Some(crate::api::GVal::Num(n)) => Some(*n),
+            _ => None,
+        }
+    }
+
     /// Advances game time by `dt` seconds: story timers, script services.
     pub fn update(&mut self, dt: f64) {
         self.sweep_finished_plans();

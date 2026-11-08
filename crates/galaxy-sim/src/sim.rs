@@ -1052,7 +1052,11 @@ impl Sim {
             let request = crate::tactical::TacticalRequest::from_sides(w, &battle, &sides, seed, &self.galaxy);
             if let Some(result) = crate::tactical::run_headless(&request, &catalog, arena) {
                 let (sides, combat) = request.combat_result(&result);
-                let events = self.apply_combat(&battle, &sides, combat);
+                let mut events = Vec::new();
+                if !result.globals.is_empty() {
+                    events.push(Event::TacticalGlobals { planet: p, values: result.globals.clone() });
+                }
+                events.extend(self.apply_combat(&battle, &sides, combat));
                 self.apply_health(&request, &result);
                 return Some(events);
             }
@@ -1198,6 +1202,7 @@ impl Sim {
         let (id, p) = (battle.id, battle.planet);
         let ps = self.galaxy.planets[p as usize].clone();
         let (mut events, losses) = self.apply_losses(p, sides, &result.survivors);
+        self.galaxy.planets[p as usize].last_space_battle = Some(self.galaxy.time);
 
         let mut attrition_credits = result.attrition_credits;
         if attrition_credits.is_empty() {

@@ -176,27 +176,40 @@ impl ScriptedSim {
 
     /// `Sim::apply_tactical_result`.
     pub fn apply_tactical_result(&mut self, battle_id: u32, result: &TacticalResult) -> Result<Vec<Event>, TacticalError> {
-        self.inner.borrow_mut().sim.apply_tactical_result(battle_id, result)
+        let events = self.inner.borrow_mut().sim.apply_tactical_result(battle_id, result)?;
+        Ok(self.told(events))
     }
 
     /// `Sim::abandon_tactical`.
     pub fn abandon_tactical(&mut self, battle_id: u32, partial: &TacticalResult) -> Result<Vec<Event>, TacticalError> {
-        self.inner.borrow_mut().sim.abandon_tactical(battle_id, partial)
+        let events = self.inner.borrow_mut().sim.abandon_tactical(battle_id, partial)?;
+        Ok(self.told(events))
     }
 
     /// `Sim::resolve_battle_auto`.
     pub fn resolve_battle_auto(&mut self, battle_id: u32) -> Option<Vec<Event>> {
-        self.inner.borrow_mut().sim.resolve_battle_auto(battle_id)
+        let events = self.inner.borrow_mut().sim.resolve_battle_auto(battle_id)?;
+        Some(self.told(events))
     }
 
     /// `Sim::resolve_battle`.
     pub fn resolve_battle(&mut self, battle_id: u32) -> Option<Vec<Event>> {
-        self.inner.borrow_mut().sim.resolve_battle(battle_id)
+        let events = self.inner.borrow_mut().sim.resolve_battle(battle_id)?;
+        Some(self.told(events))
     }
 
     /// `Sim::resolve_battle_tactical`.
     pub fn resolve_battle_tactical(&mut self, battle_id: u32) -> Option<Vec<Event>> {
-        self.inner.borrow_mut().sim.resolve_battle_tactical(battle_id)
+        let events = self.inner.borrow_mut().sim.resolve_battle_tactical(battle_id)?;
+        Some(self.told(events))
+    }
+
+    /// Hands the events of a battle settled from outside the step to the scripts and the AI (the step only reads the sim's own events): the
+    /// story's `STORY_WIN_BATTLES` / `STORY_LOSE_BATTLES` / `STORY_TACTICAL_DESTROY` and the levels of `Event::TacticalGlobals`.
+    fn told(&mut self, events: Vec<Event>) -> Vec<Event> {
+        self.note_attack_results(&events);
+        self.notify_story(&events);
+        events
     }
 
     /// `Sim::cancel_tactical`.

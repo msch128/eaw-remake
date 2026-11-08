@@ -285,6 +285,13 @@ impl AiEngine {
         self.snap.as_ref().unwrap()
     }
 
+    /// Makes the next perception take a new snapshot: a battle result changed fleets and planets at the same game time.
+    pub fn refresh_snapshot(&mut self) {
+        if let Some(s) = self.snap.as_mut() {
+            s.time = f64::NEG_INFINITY;
+        }
+    }
+
     /// An attack of `player` on `planet` was lost (its fleet was destroyed there): offensive goals leave that planet alone for a while, longer
     /// after every further loss in a row. The AI's own estimate of the defence was wrong (fog, rearmed garrisons), and the plan itself counts as
     /// "worked" once its force arrived, so without this it sends the next fleet to the same wall.

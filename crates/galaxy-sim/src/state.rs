@@ -132,6 +132,9 @@ pub struct PlanetState {
     pub hero_gamble: f32,
     /// Game time of the next gambling evaluation for heroes.
     pub hero_gamble_at: f64,
+    /// Game time the last space battle here was decided (`Time_Since_Space_Conflict`); `None` before the first one.
+    #[serde(default)]
+    pub last_space_battle: Option<f64>,
 }
 
 /// Hull and shield of a ship or star base as a fraction of the maximum (1.0 = undamaged).
@@ -588,6 +591,14 @@ pub enum Event {
         faction: FactionId,
         /// New tech level.
         level: i32,
+    },
+    /// The ships' `GameObject` scripts of a tactical battle set these `GlobalValue`s (`Set_SSD_*_State`: a super ship's phase level);
+    /// reported before the battle's `BattleWon` / `BattleLost`.
+    TacticalGlobals {
+        /// Planet.
+        planet: PlanetId,
+        /// `(name, value)` in the order they were set.
+        values: Vec<(String, i32)>,
     },
     /// A faction won a battle (it was the only side left).
     BattleWon {

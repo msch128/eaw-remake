@@ -250,6 +250,7 @@ impl Battle {
             projectiles: Vec::new(),
             squads: Vec::new(),
             groups: Vec::new(),
+            globals: Vec::new(),
             start_health_used: std::collections::HashMap::new(),
             pending: Vec::new(),
             events: Vec::new(),
@@ -457,6 +458,10 @@ impl Battle {
     #[allow(clippy::too_many_arguments)]
     fn spawn_ship(&mut self, def_id: ShipId, side: u8, pos: Vec3, yaw: f32, group: u32, squad: u32, formation: Vec3) -> u32 {
         let def = self.catalog.ship(def_id);
+        // Its `GameObject` script runs when it appears (`Set_SSD_*_State`: the phase level).
+        if let Some(set) = &def.on_create {
+            self.globals.push(set.clone());
+        }
         let id = self.ships.len() as u32;
         let mut rng = Rng::for_entity(self.config.seed, 0, id, 0x5111);
         let hps = def
@@ -1330,11 +1335,20 @@ impl Battle {
     /// own results group (`PHASE_TAG`): it is not a unit the galaxy sent (the galaxy's `Story_SSD_*_Damage` plots bring the phase back).
     fn spawn_phases(&mut self) {
         let cat = self.catalog.clone();
-        let due: Vec<u32> = self.ships.iter().filter(|s| !s.alive && !s.retreated && !s.phase_done && !cat.ship(s.def).survivors.is_empty()).map(|s| s.id).collect();
+        let due: Vec<u32> = self
+            .ships
+            .iter()
+            .filter(|s| !s.alive && !s.retreated && !s.phase_done && (!cat.ship(s.def).survivors.is_empty() || cat.ship(s.def).on_death.is_some()))
+            .map(|s| s.id)
+            .collect();
         for id in due {
             let old = &mut self.ships[id as usize];
             old.phase_done = true;
             let (side, pos, yaw, order, stance, def) = (old.side, old.pos, old.yaw, old.order, old.stance, old.def);
+            // The last phase's `Death_Clone` script (`Death_Clone_Viscount_Phase`: level 0).
+            if let Some(set) = &cat.ship(def).on_death {
+                self.globals.push(set.clone());
+            }
             for &(next, count) in &cat.ship(def).survivors {
                 if cat.ship(next).is_squadron {
                     continue;

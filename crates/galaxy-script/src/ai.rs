@@ -105,6 +105,10 @@ impl AiSim for SimAdapter<'_> {
     fn planet_income(&self, pl: PlanetId) -> f64 {
         f64::from(self.world.planets[pl as usize].credit_value)
     }
+    fn time_since_space_conflict(&self, pl: PlanetId) -> Option<f64> {
+        let g = self.sim.galaxy();
+        g.planets[pl as usize].last_space_battle.map(|t| g.time - t)
+    }
     fn structure_slots(&self, pl: PlanetId) -> (i32, i32) {
         let p = &self.world.planets[pl as usize];
         (p.space_slots, p.ground_slots)

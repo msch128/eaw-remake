@@ -563,11 +563,14 @@ impl ScriptedSim {
         // Collect first: notifications call back into the host, which borrows the shared state.
         let mut notes: Vec<(&'static str, String)> = Vec::new();
         let mut battles: Vec<(bool, String)> = Vec::new();
+        let mut globals: Vec<(String, i32)> = Vec::new();
         {
             let s = self.inner.borrow();
             let w = &s.world;
             for e in events {
                 match e {
+                    // What the ships' object scripts set in the battle (`Set_SSD_*_State`), before the battle's story events read it.
+                    Event::TacticalGlobals { values, .. } => globals.extend(values.iter().cloned()),
                     Event::PlanetCaptured { planet, .. } => {
                         let full = w.planets[*planet as usize].name.clone();
                         let short = full
@@ -599,8 +602,17 @@ impl ScriptedSim {
                 }
             }
         }
+        for (key, value) in globals {
+            self.runtime.set_global_value(&key, f64::from(value));
+        }
         for (kind, param) in notes {
             self.runtime.story_notify(kind, &param);
+        }
+        if !battles.is_empty()
+            && let Some(ai) = self.inner.borrow_mut().ai.as_mut()
+        {
+            // The plots ask perceptions about the battle that was just decided (`Story_SSD_*_Damage`: where the last space conflict was).
+            ai.refresh_snapshot();
         }
         for (won, faction) in battles {
             self.runtime.story_battle(won, &faction);

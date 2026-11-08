@@ -528,6 +528,9 @@ pub struct BattleResult {
     pub groups: Vec<GroupResult>,
     /// Net attrition credits delta per side (penalties negative, refunds positive).
     pub attrition_credits: Vec<i32>,
+    /// `GlobalValue.Set` calls the ships' `GameObject` scripts made in the battle, in order (`Set_SSD_*_State`: the phase level of a super
+    /// ship when it appears, 0 when its last phase dies), see [`ShipDef::on_create`].
+    pub globals: Vec<(String, i32)>,
 }
 
 /// Ability runtime state.
@@ -650,7 +653,7 @@ pub struct Ship {
     pub target_age: f32,
     /// Where the ship last rested idle without a target: the place `Idle_Chase_Range` is measured from.
     pub rest_at: Vec3,
-    /// A destroyed ship whose `Destruction_Survivors` ships were spawned.
+    /// A destroyed ship whose `Destruction_Survivors` ships were spawned and whose `Death_Clone` script ran.
     pub phase_done: bool,
     /// Seconds left before the ship may use special abilities again (`Nebula_Ability_Disable_Time` after it left a nebula).
     pub ability_lock: f32,
@@ -767,6 +770,8 @@ pub struct Battle {
     pub projectiles: Vec<Projectile>,
     pub(crate) squads: Vec<Vec<u32>>,
     pub(crate) groups: Vec<Group>,
+    /// `GlobalValue.Set` calls of the ships' scripts so far ([`BattleResult::globals`]).
+    pub(crate) globals: Vec<(String, i32)>,
     pub(crate) start_health_used: std::collections::HashMap<(u8, u32, ShipId), usize>,
     pub(crate) pending: Vec<Reinforcement>,
     pub(crate) events: Vec<Event>,
@@ -939,7 +944,7 @@ impl Battle {
                 }
             }
         }
-        BattleResult { winner: self.winner, duration: self.time, groups, attrition_credits }
+        BattleResult { winner: self.winner, duration: self.time, groups, attrition_credits, globals: self.globals.clone() }
     }
 }
 

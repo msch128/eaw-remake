@@ -122,6 +122,9 @@ pub struct TacticalResult {
     /// Net attrition credits delta per side (penalties negative, refunds positive).
     #[serde(default)]
     pub attrition_credits: Vec<i32>,
+    /// `GlobalValue.Set` calls of the ships' `GameObject` scripts in the battle, in order (`battle_sim::BattleResult::globals`).
+    #[serde(default)]
+    pub globals: Vec<(String, i32)>,
 }
 
 /// Why a tactical result could not be applied.
@@ -399,7 +402,7 @@ impl TacticalRequest {
             retreated.push(r_row);
             health.push(h_row);
         }
-        Some(TacticalResult { winner: result.winner.map(|w| w as usize), survived, retreated, duration: result.duration, health, reserve_called: res_called, reserve_survived: res_survived, attrition_credits: result.attrition_credits.clone() })
+        Some(TacticalResult { winner: result.winner.map(|w| w as usize), survived, retreated, duration: result.duration, health, reserve_called: res_called, reserve_survived: res_survived, attrition_credits: result.attrition_credits.clone(), globals: result.globals.clone() })
     }
 
     /// Total units per `(source, fleet)` of a side including its reserve, in first-seen order (a group split by the cap is one member again).
@@ -541,7 +544,11 @@ impl Sim {
         let battle = self.galaxy.battles.remove(pos);
         self.tactical_requests.remove(&battle_id);
         let (sides, combat) = request.combat_result(result);
-        let events = self.apply_combat(&battle, &sides, combat);
+        let mut events = Vec::new();
+        if !result.globals.is_empty() {
+            events.push(Event::TacticalGlobals { planet: battle.planet, values: result.globals.clone() });
+        }
+        events.extend(self.apply_combat(&battle, &sides, combat));
         self.apply_health(&request, result);
         Ok(events)
     }
@@ -562,7 +569,10 @@ impl Sim {
         let (sides, combat) = request.combat_result(partial);
         let planet = request.planet;
         self.galaxy.sync_ships();
-        let (events, _) = self.apply_losses(planet, &sides, &combat.survivors);
+        let (mut events, _) = self.apply_losses(planet, &sides, &combat.survivors);
+        if !partial.globals.is_empty() {
+            events.insert(0, Event::TacticalGlobals { planet, values: partial.globals.clone() });
+        }
         for (si, side) in sides.iter().enumerate() {
             if let Some(&delta) = combat.attrition_credits.get(si) {
                 if delta != 0 {
