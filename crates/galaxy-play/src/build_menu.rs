@@ -170,6 +170,9 @@ fn category_of(world: &World, unit: UnitTypeId) -> BuildCategory {
     if matches!(ut.role, UnitRole::Research(_)) {
         return BuildCategory::Research;
     }
+    if matches!(ut.role, UnitRole::StructureSwap { .. }) {
+        return BuildCategory::Structures;
+    }
     match ut.category {
         ShipCategory::Fighter | ShipCategory::Bomber => BuildCategory::Squadrons,
         ShipCategory::Corvette => BuildCategory::Corvettes,
@@ -326,8 +329,11 @@ impl BuildMenu {
                 });
             }
         }
-        // Units.
+        // Units. A structure swap whose `from` structure is not on the planet is omitted (the Lua item does nothing useful until it is there).
         for &u in &world.buildable_units[faction as usize] {
+            if matches!(world.units[u as usize].role, UnitRole::StructureSwap { from, .. } if !world.has_structure(ps, from)) {
+                continue;
+            }
             let Some(a) = availability(world.check_build_unit(galaxy, faction, planet, u)).map(|a| shown_requirement(world, names, a)) else { continue };
             let ut = &world.units[u as usize];
             options.push(BuildOption {

@@ -34,6 +34,8 @@ pub struct GameData {
     pub objects: GameObjects,
     /// Files listed by `GameObjectFiles.XML`.
     pub game_object_files: Vec<String>,
+    /// `Scripts/GameObject/Upgrade_*.lua`, keyed by the file name without the extension. Structure level swaps are named only there.
+    pub upgrade_scripts: HashMap<String, String>,
     planet_index: HashMap<String, usize>,
     route_index: HashMap<String, usize>,
     faction_index: HashMap<String, usize>,
@@ -223,6 +225,19 @@ pub fn load_galaxy(src: &dyn FileSource) -> (GameData, Vec<Warning>) {
     // Object definitions (units, structures, hardpoints, projectiles, planets ...).
     data.objects = GameObjects::load(src, &mut w);
     data.game_object_files = index_files(src, "Xml/GameObjectFiles.XML", &mut w);
+    // Structure level swaps are named only in `Scripts/GameObject/Upgrade_*.lua` (the build item's XML has the price).
+    for path in src.list("Scripts/GameObject") {
+        let file = path.rsplit('/').next().unwrap_or(path.as_str());
+        let Some(stem) = file.strip_suffix(".LUA").filter(|s| s.starts_with("UPGRADE_")) else {
+            continue;
+        };
+        match src.read(&path) {
+            Ok(bytes) => {
+                data.upgrade_scripts.insert(stem.to_string(), String::from_utf8_lossy(&bytes).into_owned());
+            }
+            Err(e) => w.push(Warning::new(&path, 0, format!("cannot read upgrade script: {e}"))),
+        }
+    }
     for obj in data.objects.of_kind("planet") {
         match Planet::from_element(&obj.element, &obj.source_file) {
             Some(p) => data.planets.push(p),

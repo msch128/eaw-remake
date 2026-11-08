@@ -26,6 +26,7 @@ data are labelled in [RULES.md](RULES.md).
 - **Random `INTERVENTION_*` events (pirate ambush, smuggler, revolt, refugee escort) are not triggered.** Observe: the Web Way plot list never loads them, so none occurs in a campaign. Where: `crates/galaxy-script/src/lib.rs` (story plot list).
 - **Objects with `Tech_Level` 90 or higher are never offered.** Observe: `Planet_Shield_E`, `Communications_Array_E`, `Imperial_Command_Center` do not appear in any build menu (story-unlocked in the data). Where: `crates/galaxy-sim/src/catalog.rs`, `production.rs`.
 - **`Required_Ground_Base_Level` is checked for units only.** The ground base level is the number of ground structures (RULES 1.14); the one structure with the tag has `Tech_Level` 99. Observe: no buildable structure carries it. Where: `crates/galaxy-sim/src/production.rs`.
+- **Structure upgrade items do not spawn or remove `*_ORBITAL_DUMMY` units.** The script despawns `{previous}_ORBITAL_DUMMY` when that type exists; those objects have no space model and are not in the unit catalog, so nothing is removed. Observe: upgrading a Golan leaves the fleet list unchanged. Where: `crates/galaxy-sim/src/structure_upgrades.rs`.
 - **A missing planet name in `Required_Planets` is assumed to be ignored (any one listed planet suffices).** Observe: items with a list containing an unknown planet name are buildable at the known ones. Where: `crates/galaxy-sim/src/requirements.rs`.
 - **Persistent battle damage covers only ship and star base hull and shield.** Observe: hardpoint damage, squadron fighters, structures and statistical auto-resolve results are repaired or not carried over. Where: `crates/galaxy-sim/src/tactical.rs`, `state.rs`.
 - **Repair rates, week length, capture delay and several other galactic rules are estimates.** Observe: `SimConfig` fields named in docs/RULES.md; no data source. Where: `crates/galaxy-sim/src/state.rs`.
@@ -52,6 +53,7 @@ data are labelled in [RULES.md](RULES.md).
 - **The AI floats very large credit reserves late in a long game.** Observe: an all-AI run of 100 weeks; spending is gated by the Remake's own desire equations (one plan builds 1 to 3 ships). Where: `crates/galaxy-ai/src/engine.rs`.
 - **The pincer only triggers when one force would need 50 to 90 percent of the player's strength, and fog applies to the strategy layer, not to the original equations.** Observe: `crates/galaxy-ai/tests/strategy.rs`. Where: `crates/galaxy-ai/src/strategy.rs`.
 - **AI tech research is a project heuristic, not the Remake's.** The Remake has no galactic research plan; with no human player the engine queues levels on a timer (estimate). Observe: all-AI game; `AiStats::tech_upgrades`. Where: `crates/galaxy-ai/src/engine.rs`.
+- **The galaxy AI does not buy structure level upgrades or downgrades.** The built-in planner and the scripted Remake AI only queue `UnitRole::Ship`, so a Golan I never becomes a Golan II on its own. Observe: an AI planet that has a Golan I still has it after many weeks. Where: `crates/galaxy-sim/src/ai.rs`, `crates/galaxy-script/src/ai.rs` (`buildable_units`).
 
 ## Space battle simulation
 

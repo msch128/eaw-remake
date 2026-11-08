@@ -272,6 +272,13 @@ impl World {
         {
             return Err(CommandError::RequirementsNotMet(format!("{} in orbit", self.units[from as usize].name)));
         }
+        // `Build_Max_Instances_Per_Planet` on a structure swap counts copies in this planet's ship queue. The finished item does not stay.
+        if let UnitRole::StructureSwap { max_per_planet: Some(max), .. } = ut.role
+            && max >= 0
+            && ps.queues[Lane::Units as usize].iter().filter(|i| i.kind == ProductionKind::Unit(unit)).count() as i32 >= max
+        {
+            return Err(CommandError::BuildLimit);
+        }
         if ut.population > 0 && fs.population_used + self.queued_population(galaxy, faction) + ut.population > fs.population_cap {
             return Err(CommandError::PopulationCap);
         }

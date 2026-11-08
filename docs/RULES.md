@@ -51,8 +51,10 @@ every owned planet, the planet's `Additional_Population_Capacity`, its star base
 
 ## 1.3 Production
 
-* Three lanes per planet, one item at a time per lane: ships and research items (lane 0), structures (lane 1), star
-  base and tech upgrades (lane 2). Estimate: cost is paid when queued (the real game charges progressively).
+* Three lanes per planet, one item at a time per lane: ships, research items and structure level swaps (lane 0),
+  structures (lane 1), star base and tech upgrades (lane 2). Estimate: cost is paid when queued (the real game
+  charges progressively). Structure swaps share the ship queue: the structure lane only advances a non-structure
+  when it is the first item, so an upgrade queued behind a real structure would never finish.
 * Time = `Build_Time_Seconds` (data) x `build_time_scale`. `Production_Speed_Mod_Base_Vs_Tech_*` are all 1.0 in the
   Remake, so a higher star base level does not speed production up.
 * A ship may be queued when all of these hold (`World::check_build_unit`, data tags): `Affiliation` contains the
@@ -92,6 +94,19 @@ every owned planet, the planet's `Additional_Population_Capacity`, its star base
 * Tech levels in vanilla data: `*_Level_N_Tech_Upgrade` objects (`Tactical_Build_Increments_Tech_Level`, cost
   `Tactical_Build_Cost_Campaign`), star base only. Estimate: factions without them get upgrades at 3000 x level.
 * New ships join the idle fleet of that faction at the planet, or create one.
+* Structure level upgrades and downgrades (`Scripts/GameObject/Upgrade_*.lua`, `Upgrade_Structure` /
+  `Downgrade_Structure` in `Scripts/Library/libUpgradeFunctions.lua`). The build item is the space unit the script
+  names, or the `GroundCompany` whose `Company_Units` is that ground dummy. Price, time, tech, star base level,
+  affiliation, build tab and `Required_Special_Structures` come from that object. The item is offered only while the
+  planet has the `from` structure (a `Variant_Of_Existing_Type` spawner of it counts; that is what the build menu
+  places). Completing it replaces every exact `from` in place, or one spawner stand-in when no exact `from` is
+  present. The slot stays taken. An upgrade refunds nothing when it replaced a structure, and
+  `(to build cost - from build cost) * 0.8` once when it did not. A downgrade refunds
+  `(from build cost - to build cost) * 0.5 + 1` per structure replaced, or 1 credit when none was. Those costs are
+  the structure objects' `Build_Cost_Credits`, not the item price (already paid at queue). The script does not copy
+  health, and structures have no per-instance health here. `Build_Max_Instances_Per_Planet` caps how many of that
+  item sit in the planet's ship queue. `Required_Ground_Base_Level` is not enforced. `*_ORBITAL_DUMMY` objects are
+  not spawned, so the script's despawn of them does nothing.
 * Selling (`Command::SellStructure`): Data: refund = build cost / 2 + 1, from `Delete_Building` in
   `Scripts/Library/libUpgradeFunctions.lua`. Ground structures use the same rule (estimate; no sell dummy exists).
   Ships (`Command::SellUnit`): Project rule: 35% of the build cost for fighters, bombers, transports and corvettes,

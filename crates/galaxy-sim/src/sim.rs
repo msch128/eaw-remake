@@ -731,6 +731,9 @@ impl Sim {
                         replace_unit(&mut self.galaxy, owner, planet, *from, *to);
                     }
                     UnitRole::Dummy => {}
+                    UnitRole::StructureSwap { from, to, downgrade, .. } => {
+                        crate::structure_upgrades::apply(&mut self.galaxy, w, owner, pi, *from, *to, *downgrade);
+                    }
                 }
             }
             ProductionKind::Structure(s) => self.galaxy.planets[pi].structures.push(s),

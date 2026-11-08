@@ -331,6 +331,18 @@ pub enum UnitRole {
     /// A non-combat agent (`HeroCompany` with a credit siphon or a system spy, see [`crate::agents`]): it travels in a fleet, takes no part in
     /// battles and uses its ability ([`UnitType::siphon`], [`UnitType::spy`]) at a hostile planet.
     Agent,
+    /// A structure upgrade or downgrade (`Scripts/GameObject/Upgrade_*.lua`). Completing it replaces `from` on the planet with `to`.
+    /// `max_per_planet` is the item's `Build_Max_Instances_Per_Planet` (`None` or negative = no cap).
+    StructureSwap {
+        /// Structure the script removes (a spawner variant of it also counts; that is what the build menu places).
+        from: StructureTypeId,
+        /// Structure the script spawns.
+        to: StructureTypeId,
+        /// `Downgrade_Structure`: the refund is `(from_cost - to_cost) * 0.5 + 1` per structure, or 1 when none was there.
+        downgrade: bool,
+        /// How many of this item may be queued on one planet at once.
+        max_per_planet: Option<i32>,
+    },
 }
 
 /// A buildable ship, squadron or research item.

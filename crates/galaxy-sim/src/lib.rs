@@ -29,6 +29,7 @@ mod api;
 pub mod production;
 pub mod requirements;
 mod sight;
+mod structure_upgrades;
 pub mod rng;
 pub mod sim;
 pub mod tactical;

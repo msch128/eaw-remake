@@ -470,6 +470,8 @@ impl World {
             self.starbases[i].next = found.map(|j| j as StarbaseTypeId);
         }
         // How many buildable units each structure unlocks. A dummy purchase spawns no ship, so it does not change that count.
+        // Counted before structure swaps, so a Golan I does not score higher for unlocking its own upgrade item
+        // (the galaxy AI does not queue those items).
         self.structure_unlocks = vec![0; self.structures.len()];
         for u in &self.units {
             if u.buildable && !matches!(u.role, UnitRole::Dummy) {
@@ -478,6 +480,7 @@ impl World {
                 }
             }
         }
+        self.add_structure_upgrades(data);
 
         // Per-faction buildable lists.
         for f in &self.factions {
@@ -600,6 +603,99 @@ impl World {
             self.unit_index.insert(key(&def.name), self.units.len() as UnitTypeId);
             self.units.push(u);
         }
+    }
+
+    /// Structure level swaps. `Upgrade_*.lua` names the object the script runs on and the two structures; the price and the requirements stay on
+    /// that object when it is a space unit, or on the `GroundCompany` whose `Company_Units` is the ground dummy. Appended after every other unit
+    /// so existing ids do not move.
+    fn add_structure_upgrades(&mut self, data: &GameData) {
+        let mut keys: Vec<&String> = data.upgrade_scripts.keys().collect();
+        keys.sort();
+        let swaps = crate::structure_upgrades::parse_swaps(keys.iter().filter_map(|k| data.upgrade_scripts.get(*k)));
+        let mut companies: HashMap<String, Vec<String>> = HashMap::new();
+        for obj in data.objects.of_kind("groundcompany") {
+            let Some(r) = data.objects.resolve(&obj.name) else { continue };
+            for unit in r.list("company_units") {
+                companies.entry(key(&unit)).or_default().push(obj.name.clone());
+            }
+        }
+        for swap in swaps {
+            let (Some(&from), Some(&to)) = (self.structure_index.get(&key(&swap.from)), self.structure_index.get(&key(&swap.to))) else { continue };
+            if let Some(def) = data.objects.space_unit(&swap.actor) {
+                let mut u = unit_from_def(&def, CombatStats::default(), &data.objects);
+                self.resolve_unit_requirements(&mut u, &def);
+                let max = def.fields.get("build_max_instances_per_planet").and_then(|v| v.trim().parse().ok());
+                self.push_structure_swap(u, from, to, swap.downgrade, max);
+                continue;
+            }
+            let Some(names) = companies.get(&key(&swap.actor)) else { continue };
+            for name in names {
+                let Some(r) = data.objects.resolve(name) else { continue };
+                let cost = r.num::<f32>("build_cost_credits").unwrap_or(0.0);
+                let affiliation: Vec<String> = r.list("affiliation").into_iter().map(|a| key(&a)).collect();
+                let tab = ["build_tab_space_units", "build_tab_land_units", "build_tab_special_structures", "build_tab_space_station"]
+                    .iter()
+                    .any(|t| r.flag(t).unwrap_or(false));
+                let (groups, groups_ok) = self.resolve_requirement(&parse_requirement(r.get("required_special_structures").unwrap_or("")));
+                let (planets, planets_ok) = self.resolve_planets(&name_list(r.get("required_planets").unwrap_or("")));
+                let buildable = cost > 0.0 && !affiliation.is_empty() && tab && groups_ok && planets_ok;
+                let max = r.num::<i32>("build_max_instances_per_planet");
+                self.push_structure_swap(
+                    UnitType {
+                        name: r.name().to_string(),
+                        text_id: r.string("text_id"),
+                        role: UnitRole::Ship,
+                        category: ShipCategory::from_mask(&r.list("categorymask")),
+                        affiliation,
+                        combat: CombatStats::default(),
+                        hyperspace_speed: 0.0,
+                        cost,
+                        build_time: r.num::<f32>("build_time_seconds").unwrap_or(0.0),
+                        tech: r.num::<i32>("tech_level").unwrap_or(0),
+                        gui_row: r.num::<i32>("gui_row").unwrap_or(1),
+                        population: 0,
+                        space_population: 0,
+                        req_starbase: r.num::<i32>("required_star_base_level").unwrap_or(0),
+                        req_structures: groups,
+                        req_planets: planets,
+                        locked: r.flag("build_initially_locked").unwrap_or(false),
+                        limit_current: r.num("build_limit_current_per_player"),
+                        limit_lifetime: r.num("build_limit_lifetime_per_player"),
+                        hero: false,
+                        prod_mods: Vec::new(),
+                        planet_destroyer: false,
+                        galactic_stealth: false,
+                        system_spy: false,
+                        upkeep: 0.0,
+                        income_pct: 0.0,
+                        gamble: None,
+                        attrition_credits: 0,
+                        spy: None,
+                        siphon: None,
+                        req_ground_base: r.num::<i32>("required_ground_base_level").unwrap_or(0),
+                        ai_power: 0.0,
+                        buildable,
+                        carries: Vec::new(),
+                    },
+                    from,
+                    to,
+                    swap.downgrade,
+                    max,
+                );
+            }
+        }
+    }
+
+    fn push_structure_swap(&mut self, mut u: UnitType, from: StructureTypeId, to: StructureTypeId, downgrade: bool, max_per_planet: Option<i32>) {
+        if self.unit_index.contains_key(&key(&u.name)) {
+            return;
+        }
+        if !u.req_structures.iter().any(|g| g.contains(&from)) {
+            u.req_structures.push(vec![from]);
+        }
+        u.role = UnitRole::StructureSwap { from, to, downgrade, max_per_planet };
+        self.unit_index.insert(key(&u.name), self.units.len() as UnitTypeId);
+        self.units.push(u);
     }
 
     /// Decides which ground structures stay in the build menus (see `StructureType::galactic`).

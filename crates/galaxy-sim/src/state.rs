@@ -96,7 +96,7 @@ pub struct ProductionItem {
 /// Production lane of a planet; each lane builds one item at a time.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Lane {
-    /// Ships, squadrons, research.
+    /// Ships, squadrons, research and structure level swaps.
     Units = 0,
     /// Structures.
     Structures = 1,
