@@ -2453,31 +2453,14 @@ impl Battle {
         if !self.ships.iter().any(|s| !cat.ship(s.def).bonuses.is_empty()) {
             return;
         }
-        // (side, stacking category) -> strongest source bonus per stat.
-        let mut best: std::collections::BTreeMap<(u8, u8), Vec<&BonusDef>> = std::collections::BTreeMap::new();
+        // Every aura of a living ship, per side.
+        let mut auras: std::collections::BTreeMap<u8, Vec<&BonusDef>> = std::collections::BTreeMap::new();
         for s in self.ships.iter().filter(|s| s.alive && !s.retreated) {
-            for b in &cat.ship(s.def).bonuses {
-                best.entry((s.side, b.stacking)).or_default().push(b);
-            }
+            auras.entry(s.side).or_default().extend(&cat.ship(s.def).bonuses);
         }
         for s in self.ships.iter_mut() {
-            let class = cat.ship(s.def).class;
-            let name = cat.ship(s.def).name.to_ascii_lowercase();
-            let (mut dmg, mut health, mut shield, mut defense, mut range, mut speed) = (0.0f32, 0.0f32, 0.0f32, 0.0f32, 0.0f32, 0.0f32);
-            for ((side, _), list) in &best {
-                if *side != s.side {
-                    continue;
-                }
-                let hit = list.iter().filter(|b| b.applies(class, &name));
-                let max = |f: fn(&BonusDef) -> f32| hit.clone().map(|b| f(b)).fold(0.0f32, |m, v| if v.abs() > m.abs() { v } else { m });
-                dmg += max(|b| b.damage);
-                health += max(|b| b.health);
-                shield += max(|b| b.shield);
-                defense += max(|b| b.defense);
-                range += max(|b| b.range);
-                speed += max(|b| b.speed);
-            }
-            s.bonus = Bonus { damage: 1.0 + dmg, taken_hull: 1.0 / ((1.0 + health) * (1.0 + defense)), taken_shield: 1.0 / ((1.0 + shield) * (1.0 + defense)), range: 1.0 + range, speed: 1.0 + speed };
+            let def = cat.ship(s.def);
+            s.bonus = Bonus::compute(&def.name, def.class, auras.get(&s.side).into_iter().flatten().copied());
         }
     }
 

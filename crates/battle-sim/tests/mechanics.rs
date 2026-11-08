@@ -687,11 +687,11 @@ fn auras_reach_only_their_applicable_and_not_their_excluded_types() {
         s.bonuses.push(BonusDef { damage: 0.5, stacking: 3, ..bonus });
         duel_loss(s, target.clone(), 10).1
     };
-    let listed = with(BonusDef { types: vec!["boosted".into()], ..BonusDef::default() });
+    let listed = with(BonusDef { unit_types: vec!["boosted".into()], ..BonusDef::default() });
     assert!(listed > base * 1.35, "a listed type is boosted: base {base}, {listed}");
-    let other = with(BonusDef { types: vec!["someone_else".into()], ..BonusDef::default() });
+    let other = with(BonusDef { unit_types: vec!["someone_else".into()], ..BonusDef::default() });
     assert!((other - base).abs() < base * 0.05, "an unlisted type is not: base {base}, {other}");
-    let excluded = with(BonusDef { excluded: vec!["boosted".into()], ..BonusDef::default() });
+    let excluded = with(BonusDef { excluded_types: vec!["boosted".into()], ..BonusDef::default() });
     assert!((excluded - base).abs() < base * 0.05, "an excluded type is not: base {base}, {excluded}");
 }
 

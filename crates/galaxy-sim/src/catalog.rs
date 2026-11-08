@@ -217,6 +217,7 @@ fn unit_from_def(def: &SpaceUnitDef, combat: CombatStats, objects: &alamo_data::
             }
         }),
         attrition_credits: def.attrition_credits(objects),
+        bonuses: def.sub_abilities.iter().filter_map(battle_sim::BonusDef::from_sub_ability).collect(),
         ai_power: def.ai_combat_power,
         buildable: def.build_cost > 0.0 && yes("build_tab_space_units") && !def.affiliation.is_empty(),
         carries: def.starting_spawned_units.clone(),
@@ -398,6 +399,9 @@ impl World {
             }
             if u.attrition_credits == 0 {
                 u.attrition_credits = def.squadron_units.iter().filter_map(|m| self.unit_index.get(&key(m))).map(|&mid| self.units[mid as usize].attrition_credits).sum();
+            }
+            if u.bonuses.is_empty() {
+                u.bonuses = def.squadron_units.iter().filter_map(|m| self.unit_index.get(&key(m))).flat_map(|&mid| self.units[mid as usize].bonuses.clone()).collect();
             }
             self.resolve_unit_requirements(&mut u, &def);
             self.units.push(u);
@@ -676,6 +680,7 @@ impl World {
                         attrition_credits: 0,
                         spy: None,
                         siphon: None,
+                        bonuses: Vec::new(),
                         req_ground_base: r.num::<i32>("required_ground_base_level").unwrap_or(0),
                         ai_power: 0.0,
                         buildable,

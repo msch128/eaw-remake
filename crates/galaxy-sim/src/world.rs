@@ -415,6 +415,8 @@ pub struct UnitType {
     pub ai_power: f32,
     /// True if the unit can appear in a build menu at all.
     pub buildable: bool,
+    /// Combat aura bonuses given to friendly ships (`Combat_Bonus_Ability`).
+    pub bonuses: Vec<battle_sim::BonusDef>,
     /// Fighter groups carried (name, count); informational.
     pub carries: Vec<(String, u32)>,
 }

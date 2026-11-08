@@ -238,6 +238,7 @@ impl World {
                 system_spy: spy.is_some(),
                 spy,
                 siphon,
+                bonuses: Vec::new(),
                 req_ground_base: i32_of("required_ground_base_level"),
                 upkeep: 0.0,
                 income_pct: 0.0,

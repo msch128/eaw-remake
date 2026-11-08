@@ -65,7 +65,7 @@ impl TargetClass {
         })
     }
 
-    fn from_category(c: ShipCategory) -> Self {
+    pub fn from_category(c: ShipCategory) -> Self {
         match c {
             ShipCategory::Fighter => Self::Fighter,
             ShipCategory::Bomber => Self::Bomber,
@@ -295,21 +295,82 @@ pub struct BonusDef {
     pub speed: f32,
     /// Bit mask of boosted classes (`Applicable_Unit_Categories`).
     pub classes: u16,
-    /// `Applicable_Unit_Types`, lower case. A ship is boosted when its class is in `classes` or its type is listed here; with neither
-    /// given, every ship of the side is.
-    pub types: Vec<String>,
-    /// `Excluded_Unit_Types`, lower case: never boosted.
-    pub excluded: Vec<String>,
     /// `Stacking_Category`: bonuses of one category do not add up, the strongest applies.
     pub stacking: u8,
+    /// `Applicable_Unit_Types`. A ship is boosted when its class is in `classes` or its type is listed here; with neither
+    /// given, every ship of the side is.
+    pub unit_types: Vec<String>,
+    /// `Excluded_Unit_Types`: never boosted.
+    pub excluded_types: Vec<String>,
 }
 
 impl BonusDef {
-    /// True if the aura boosts a ship of `class` named `name` (lower case).
-    pub fn applies(&self, class: TargetClass, name: &str) -> bool {
-        let listed = self.types.iter().any(|t| t == name);
-        let open = self.classes == 0 && self.types.is_empty();
-        (open || self.classes & class.bit() != 0 || listed) && !self.excluded.iter().any(|t| t == name)
+    /// Reads a `Combat_Bonus_Ability` with `Space_Automatic` activation; `None` for other abilities and for auras without
+    /// any bonus. Shared by the tactical battle and the galactic auto-resolve.
+    pub fn from_sub_ability(a: &alamo_data::space::SubAbility) -> Option<Self> {
+        if !a.kind.eq_ignore_ascii_case("Combat_Bonus_Ability") || !a.fields.get("activation_style").is_some_and(|v| v.trim().eq_ignore_ascii_case("Space_Automatic")) {
+            return None;
+        }
+        let num = |k: &str| a.fields.get(k).and_then(|v| alamo_data::xml::parse_num::<f32>(v)).unwrap_or(0.0).clamp(-0.9, 10.0);
+        let list = |k: &str| a.fields.get(k).map(|v| alamo_data::xml::split_list(v)).unwrap_or_default();
+        let b = BonusDef {
+            damage: num("damage_bonus_percentage"),
+            health: num("health_bonus_percentage"),
+            shield: num("shield_bonus_percentage"),
+            defense: num("defense_bonus_percentage"),
+            range: num("fire_range_bonus_percentage"),
+            speed: num("movement_speed_bonus_percentage"),
+            classes: a.fields.get("applicable_unit_categories").map_or(0, |v| alamo_data::xml::split_list(v).iter().filter_map(|t| TargetClass::from_token(t)).fold(0u16, |m, c| m | c.bit())),
+            stacking: num("stacking_category") as u8,
+            unit_types: list("applicable_unit_types"),
+            excluded_types: list("excluded_unit_types"),
+        };
+        (b.damage.abs() + b.health.abs() + b.shield.abs() + b.defense.abs() + b.range.abs() + b.speed.abs() > 0.0).then_some(b)
+    }
+
+    /// True if the aura boosts a ship of `class` whose object type is `name` (any case).
+    pub fn applies(&self, name: &str, class: TargetClass) -> bool {
+        let listed = self.unit_types.iter().any(|t| t.eq_ignore_ascii_case(name));
+        let open = self.classes == 0 && self.unit_types.is_empty();
+        (open || self.classes & class.bit() != 0 || listed) && !self.excluded_types.iter().any(|t| t.eq_ignore_ascii_case(name))
+    }
+}
+
+/// Multipliers a ship gets from friendly combat bonus auras; `1.0` = none.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Bonus {
+    pub damage: f32,
+    pub taken_hull: f32,
+    pub taken_shield: f32,
+    pub range: f32,
+    pub speed: f32,
+}
+
+impl Default for Bonus {
+    fn default() -> Self {
+        Bonus { damage: 1.0, taken_hull: 1.0, taken_shield: 1.0, range: 1.0, speed: 1.0 }
+    }
+}
+
+impl Bonus {
+    /// The multipliers for a ship of `class` and object type `name` under its side's auras: per `Stacking_Category` the
+    /// strongest bonus per stat applies, categories add.
+    pub fn compute<'a>(name: &str, class: TargetClass, auras: impl IntoIterator<Item = &'a BonusDef>) -> Self {
+        let mut by_cat: std::collections::BTreeMap<u8, Vec<&BonusDef>> = std::collections::BTreeMap::new();
+        for b in auras.into_iter().filter(|b| b.applies(name, class)) {
+            by_cat.entry(b.stacking).or_default().push(b);
+        }
+        let (mut dmg, mut health, mut shield, mut defense, mut range, mut speed) = (0.0f32, 0.0f32, 0.0f32, 0.0f32, 0.0f32, 0.0f32);
+        for list in by_cat.values() {
+            let max = |f: fn(&BonusDef) -> f32| list.iter().map(|b| f(b)).fold(0.0f32, |m, v| if v.abs() > m.abs() { v } else { m });
+            dmg += max(|b| b.damage);
+            health += max(|b| b.health);
+            shield += max(|b| b.shield);
+            defense += max(|b| b.defense);
+            range += max(|b| b.range);
+            speed += max(|b| b.speed);
+        }
+        Bonus { damage: 1.0 + dmg, taken_hull: 1.0 / ((1.0 + health) * (1.0 + defense)), taken_shield: 1.0 / ((1.0 + shield) * (1.0 + defense)), range: 1.0 + range, speed: 1.0 + speed }
     }
 }
 
@@ -1574,28 +1635,7 @@ impl Catalog {
             _ => Vec::new(),
         };
         let bonuses: Vec<BonusDef> = match src {
-            Source::Unit(u) => u
-                .sub_abilities
-                .iter()
-                .filter(|a| a.kind.eq_ignore_ascii_case("Combat_Bonus_Ability") && a.fields.get("activation_style").is_some_and(|v| v.trim().eq_ignore_ascii_case("Space_Automatic")))
-                .map(|a| {
-                    let num = |k: &str| a.fields.get(k).and_then(|v| alamo_data::xml::parse_num::<f32>(v)).unwrap_or(0.0).clamp(-0.9, 10.0);
-                    let type_list = |k: &str| a.fields.get(k).map(|v| alamo_data::xml::split_list(v).iter().map(|t| t.to_ascii_lowercase()).collect()).unwrap_or_default();
-                    BonusDef {
-                        damage: num("damage_bonus_percentage"),
-                        health: num("health_bonus_percentage"),
-                        shield: num("shield_bonus_percentage"),
-                        defense: num("defense_bonus_percentage"),
-                        range: num("fire_range_bonus_percentage"),
-                        speed: num("movement_speed_bonus_percentage"),
-                        classes: a.fields.get("applicable_unit_categories").map_or(0, |v| alamo_data::xml::split_list(v).iter().filter_map(|t| TargetClass::from_token(t)).fold(0u16, |m, c| m | c.bit())),
-                        types: type_list("applicable_unit_types"),
-                        excluded: type_list("excluded_unit_types"),
-                        stacking: num("stacking_category") as u8,
-                    }
-                })
-                .filter(|b| b.damage.abs() + b.health.abs() + b.shield.abs() + b.defense.abs() + b.range.abs() + b.speed.abs() > 0.0)
-                .collect(),
+            Source::Unit(u) => u.sub_abilities.iter().filter_map(BonusDef::from_sub_ability).collect(),
             _ => Vec::new(),
         };
         let (redirects, locked_redirects) = match src {

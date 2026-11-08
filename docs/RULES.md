@@ -144,10 +144,12 @@ every owned planet, the planet's `Additional_Population_Capacity`, its star base
 * Auto-resolve (`combat.rs`) is a statistical placeholder. Every ship, star base, armed structure and garrison
   squadron is a combatant with shield and hull from `Shield_Points` / `Tactical_Health`, and weapons aggregated per
   damage type from `HardPoint` and `Projectile` data. The damage-type versus armor-type matrix (`Damage_To_Armor_Mod`,
-  673 entries in `Xml/Gameconstants.xml`) scales hits. Hardpoint health, ranges, cones and speeds are not simulated.
-  Estimates: rounds of 4 s; a fight with no damage or over 600 rounds is a draw and the attackers retreat. Units
-  start with the hull and shield share they carry; only an abandoned tactical fight leaves damage, and survivors heal
-  after every battle.
+  673 entries in `Xml/Gameconstants.xml`) scales hits. Friendly `Combat_Bonus_Ability` auras with `Space_Automatic` on heroes
+  and fleet commanders apply their damage, health, shield, defense, range and speed bonuses (filtered by `Applicable_Unit_Categories`,
+  `Applicable_Unit_Types`, and `Excluded_Unit_Types`, stacked by `Stacking_Category`). Hardpoint health, ranges, cones and
+  speeds are not simulated. Estimates: rounds of 4 s; a fight with no damage or over 600 rounds is a draw and the attackers
+  retreat. Units start with the hull and shield share they carry; only an abandoned tactical fight leaves damage, and survivors
+  heal after every battle.
 * Calibration (estimates in `SimConfig`, `galaxy-sim/examples/calibrate.rs` compares the resolver with the tactical
   sim): `combat_base_factor` 1.5 (star base, structures, garrison), `combat_efficiency` (0.5 fighters and bombers, 0.5
   corvettes, 1 frigates and capitals), `combat_escape` 0.12 (share of a losing fleet that retreats alive when its
@@ -495,7 +497,7 @@ the ability under the AI's rules (`Command::SetAutocast`).
 | `FOW_REVEAL_PING` | Data: `Effective_Radius`. Estimate: reveals the area for 5 s |
 | `CORRUPT_SYSTEMS` | Data: `Activation_Max_Range`, `Duration_In_Seconds`, `Shield_Drain_Per_Second`, `Inaccuracy_Radius`. Drains the shield of an enemy ship at the chosen point; a drained shield stays down the usual 4 s. The AI uses it on the enemy with the most shield in range |
 | `Force_Healing_Ability` | Data: hull `Heal_Amount` + `Heal_Percent` of max per `Heal_Interval_In_Secs`, on the ship or friends within `Heal_Range` (single target = most damaged), never on `Excluded_Unit_Types`; ships with destroyable hardpoints heal those (2.3) |
-| `Combat_Bonus_Ability` | Data: `Damage_Bonus_Percentage`, `Health/Shield/Defense_Bonus_Percentage` (damage taken divided by 1 + bonus), `Fire_Range_Bonus_Percentage`, `Movement_Speed_Bonus_Percentage`, `Applicable_Unit_Categories` or `Applicable_Unit_Types` (either matches; neither = every ship), never `Excluded_Unit_Types`. Estimate: the data has no radius, so the aura covers the whole side. Per `Stacking_Category` the strongest bonus applies, categories add; negative values (Gorgon -40% shields) are maluses |
+| `Combat_Bonus_Ability` | Data: `Damage_Bonus_Percentage`, `Health/Shield/Defense_Bonus_Percentage` (damage taken divided by 1 + bonus), `Fire_Range_Bonus_Percentage`, `Movement_Speed_Bonus_Percentage`, `Applicable_Unit_Categories` or `Applicable_Unit_Types` (either matches; neither = every ship), never `Excluded_Unit_Types`. Estimate: the data has no radius, so the aura covers the whole side. Per `Stacking_Category` the strongest bonus applies, categories add; negative values (Gorgon -40% shields) are maluses. Applied in tactical battles and auto-resolve |
 | `Redirect_Blaster_Ability` | Data: `Reaction_Arc_In_Degrees`, `Block_Chance`, `Redirect_Chance`. Estimate: a redirected shot deals its damage to the shooter instead of re-aiming the bolt. An ability that starts disabled stays off until a story grant (`NEW_POWER_FOR_ALL`) names that unit and ability; `Reflector_Shield` is block 0.15, redirect 0, arc 350 |
 | `ROCKET_ATTACK`, `SWAP_WEAPONS` | Data: for the duration (10 s where the data has none, estimate) the ship fires its rocket-mode hardpoint set instead of the normal one (2.5). Estimate, only for ships whose data names no such sets: missile, rocket and torpedo hardpoints reload at 0.4x delay |
 | `SENSOR_JAMMING` | Data: `Expiration_Seconds` 15. Enemy homing missiles aimed at the ship lose their lock |

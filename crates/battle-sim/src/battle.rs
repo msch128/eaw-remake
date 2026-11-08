@@ -656,21 +656,6 @@ pub struct Ship {
     pub(crate) focus: u32,
 }
 
-/// Multipliers a ship gets from friendly combat bonus auras; `1.0` = none.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) struct Bonus {
-    pub damage: f32,
-    pub taken_hull: f32,
-    pub taken_shield: f32,
-    pub range: f32,
-    pub speed: f32,
-}
-
-impl Default for Bonus {
-    fn default() -> Self {
-        Bonus { damage: 1.0, taken_hull: 1.0, taken_shield: 1.0, range: 1.0, speed: 1.0 }
-    }
-}
 
 /// A projectile in flight.
 #[derive(Debug, Clone, Copy)]

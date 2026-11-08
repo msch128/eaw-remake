@@ -258,6 +258,38 @@ pub fn resolve_damaged(
             break;
         }
         rounds += 1;
+        // Combat bonus auras active this round (heroes and fleet commanders currently on the field).
+        let active_bonuses: Vec<Vec<&battle_sim::BonusDef>> = insts
+            .iter()
+            .map(|side| {
+                side.iter()
+                    .filter(|i| !i.immune)
+                    .flat_map(|i| match i.src {
+                        Source::Unit(u) | Source::Garrison(u) => world.units[u as usize].bonuses.as_slice(),
+                        _ => &[],
+                    })
+                    .collect()
+            })
+            .collect();
+        let inst_bonuses: Vec<Vec<battle_sim::Bonus>> = insts
+            .iter()
+            .enumerate()
+            .map(|(si, side)| {
+                side.iter()
+                    .map(|i| {
+                        let (name, class) = match i.src {
+                            Source::Unit(u) | Source::Garrison(u) => {
+                                let un = &world.units[u as usize];
+                                (un.name.as_str(), battle_sim::TargetClass::from_category(un.category))
+                            }
+                            Source::Starbase(s) => (world.starbases[s as usize].name.as_str(), battle_sim::TargetClass::Structure),
+                            Source::Structure(s) => (world.structures[s as usize].name.as_str(), battle_sim::TargetClass::Structure),
+                        };
+                        battle_sim::Bonus::compute(name, class, active_bonuses[si].iter().copied())
+                    })
+                    .collect()
+            })
+            .collect();
         // Damage accumulators: (shield damage, hull damage that needs shields down, direct hull damage).
         let mut acc: Vec<Vec<(f32, f32, f32)>> = insts.iter().map(|v| vec![(0.0, 0.0, 0.0); v.len()]).collect();
         let mut dealt = false;
@@ -274,7 +306,7 @@ pub fn resolve_damaged(
             let dmg_mult0 = mult(sides[si].faction).damage;
             for a in 0..insts[si].len() {
                 let Some(att) = world.stats_of(insts[si][a].src) else { continue };
-                let dmg_mult = dmg_mult0 * base(insts[si][a].src) * eff(insts[si][a].src) * crowd[si];
+                let dmg_mult = dmg_mult0 * base(insts[si][a].src) * eff(insts[si][a].src) * crowd[si] * inst_bonuses[si][a].damage;
                 for w in &att.weapons {
                     dealt = true;
                     let ts = enemies[rng.below(enemies.len() as u64) as usize];
@@ -291,15 +323,16 @@ pub fn resolve_damaged(
                     let tstats = world.stats_of(insts[ts][ti].src).expect("target has stats");
                     let sm = world.damage.multiplier(w.damage_type, tstats.shield_armor);
                     let hm = world.damage.multiplier(w.damage_type, tstats.armor);
+                    let tgt_bonus = inst_bonuses[ts][ti];
                     let e = &mut acc[ts][ti];
                     if w.shield_dps > 0.0 {
-                        e.0 += w.shield_dps * sm * dt * dmg_mult;
+                        e.0 += w.shield_dps * sm * dt * dmg_mult * tgt_bonus.taken_shield;
                     }
                     if w.hull_dps > 0.0 {
                         if w.shield_dps > 0.0 {
-                            e.1 += w.hull_dps * hm * dt * dmg_mult;
+                            e.1 += w.hull_dps * hm * dt * dmg_mult * tgt_bonus.taken_hull;
                         } else {
-                            e.2 += w.hull_dps * hm * dt * dmg_mult;
+                            e.2 += w.hull_dps * hm * dt * dmg_mult * tgt_bonus.taken_hull;
                         }
                     }
                 }
