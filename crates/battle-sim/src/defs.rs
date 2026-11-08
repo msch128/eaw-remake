@@ -32,7 +32,7 @@ pub enum TargetClass {
     Bomber = 1,
     /// Transport.
     Transport = 2,
-    /// Corvette / gunship.
+    /// Corvette.
     Corvette = 3,
     /// Frigate.
     Frigate = 4,
@@ -51,13 +51,14 @@ impl TargetClass {
     /// Number of classes.
     pub const COUNT: usize = 9;
 
-    /// Parses a category token such as `Fighter` or `SpaceStructure`.
+    /// Parses a category token such as `Fighter` or `SpaceStructure`. `Gunship` is none: no unit of the data has it in its `CategoryMask`
+    /// (the tactical upgrades list it next to `Corvette`, which their level 2 adds separately), so in space it matches nothing.
     pub fn from_token(t: &str) -> Option<Self> {
         Some(match t.to_ascii_lowercase().as_str() {
             "fighter" => Self::Fighter,
             "bomber" => Self::Bomber,
             "transport" => Self::Transport,
-            "corvette" | "gunship" => Self::Corvette,
+            "corvette" => Self::Corvette,
             "frigate" => Self::Frigate,
             "capital" => Self::Capital,
             "super" | "supercapital" => Self::Super,
@@ -2507,7 +2508,7 @@ impl Catalog {
             }
         }
         // `Fire_Category_Restrictions` lists the classes the weapon must NOT fire at (only ion cannons
-        // use it, forbidding fighters, bombers, gunships, transports and corvettes).
+        // use it, forbidding fighters, bombers, gunships, transports and corvettes; `Gunship` matches no unit).
         let forbidden = h.fire_category_restrictions.iter().filter_map(|t| TargetClass::from_token(t)).fold(0u16, |m, c| m | c.bit());
         let allowed = if forbidden == 0 { 0 } else { 0x1FF & !forbidden };
         let f = |k: &str, d: f32| h.fields.get(k).and_then(|v| alamo_data::xml::parse_num::<f32>(v)).unwrap_or(d);

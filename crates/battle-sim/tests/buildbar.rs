@@ -427,3 +427,19 @@ fn the_ai_buys_one_upgrade_at_a_time_while_it_is_rich() {
     assert_eq!(built, ["ES_Enhanced_Reactors_L2_Upgrade"]);
     assert_eq!((left, queued), (15161, 1), "the third purchase is building; 15161 is still above 15000");
 }
+
+#[test]
+fn gunship_in_a_category_list_matches_no_corvette() {
+    let Some((data, fs)) = load() else { return };
+    // `ES_Improved_Weapons_L1` boosts `Fighter, Bomber, Gunship`, L2 adds `Corvette`: no unit has `Gunship` in its `CategoryMask`.
+    assert_eq!(TargetClass::from_token("Gunship"), None);
+    let cat = Arc::new(Catalog::build(&data, Some(&fs), &["Empire_Star_Base_3", "Nebulon_B_Frigate", "Tartan_Patrol_Cruiser"]));
+    assert_eq!(cat.ship(cat.ship_id("Tartan_Gunship").unwrap()).class, TargetClass::Corvette);
+    let mut b = defended(&cat, "Empire", "Empire_Star_Base_3", &[("Tartan_Patrol_Cruiser", 1)], 10_000);
+    let id = |n: &str| cat.buildable_id(n).unwrap();
+    let tartan = |b: &Battle| b.ships.iter().find(|s| s.alive && cat.ship(s.def).name == "Tartan_Gunship").unwrap().bonus().damage;
+    build(&mut b, 1, id("ES_Improved_Weapons_L1_Upgrade"), 26.0);
+    assert_eq!(tartan(&b), 1.0, "L1 does not boost a corvette");
+    build(&mut b, 1, id("ES_Improved_Weapons_L2_Upgrade"), 36.0);
+    assert!((tartan(&b) - 1.25).abs() < 1e-5, "L2 does");
+}

@@ -495,6 +495,10 @@ stays as a derived figure for bars and decisions (`ShipDef::hull` times the shar
 
 ## 2.5 Targeting and movement
 
+* Data: the category token `Gunship` matches no unit (no `CategoryMask` in the data has it; the tactical upgrades list it next
+  to `Corvette`, which their level 2 adds separately). So the `Fighter`, `AntiFighter` and `Corvette_Attack_Move` priority sets,
+  which name `Gunship` but not `Corvette`, do not prefer corvettes, and a `Gunship` line of `Fire_Inaccuracy_Distance` changes
+  nothing.
 * Data: every 0.4 s (estimate) a ship scans enemies and keeps a candidate list sorted by `Targeting_Priority_Set` weight
   (lower first, then distance). Data: `Targeting_Stickiness_Time_Threshold` (5 s on `Vessel_Base` and `Spacecraft_Base`
   in `Units/Space/_Default_Base.xml`): a target taken up less than that long ago stays the target while it is still a
