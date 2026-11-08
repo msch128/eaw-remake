@@ -895,3 +895,24 @@ fn a_retreat_takes_the_uncalled_reserve_along() {
     assert_ne!(sim.galaxy().fleets[&ef].location, FleetLocation::AtPlanet(target));
     assert!(sim.galaxy().escaping.contains(&ef));
 }
+
+#[test]
+fn a_story_power_reaches_the_battle_on_its_own_side() {
+    let Some(ctx) = load() else { return };
+    let mut sim = new_sim(&ctx);
+    let w = sim.world().clone();
+    let (empire, rebel) = (w.faction_id("Empire").unwrap(), w.faction_id("Rebel").unwrap());
+    sim.grant_power(rebel, "CR-90_Corvette", "Reflector_Shield");
+    let target = empty_planet(&sim);
+    add_fleet(&mut sim, empire, w.unit_id("Star_Destroyer").unwrap(), 1, target, target);
+    add_fleet(&mut sim, rebel, w.unit_id("CR-90_Corvette").unwrap(), 1, target, target);
+    let battle = pending(&mut sim);
+    let req = sim.tactical_setup(battle.id).unwrap();
+    let cfg = req.battle_config(None);
+    let rs = req.sides.iter().position(|s| s.faction == rebel).unwrap();
+    let es = req.sides.iter().position(|s| s.faction == empire).unwrap();
+    let pair = ("cr-90_corvette".into(), "reflector_shield".into());
+    assert!(cfg.powers[rs].contains(&pair));
+    assert!(req.sides[rs].powers.contains(&pair));
+    assert!(cfg.powers[es].is_empty());
+}

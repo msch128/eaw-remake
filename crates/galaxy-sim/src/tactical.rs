@@ -5,6 +5,7 @@
 //! [`run_headless`]) reports a [`TacticalResult`] and [`Sim::apply_tactical_result`] writes losses,
 //! retreats and the winner back into the galaxy. Both types are plain data (no `Arc`, no references).
 
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use battle_sim::{Arena, Battle, BattleConfig, BattleResult, BattleSetup, Catalog, NO_TAG, SideSetup, UnitSetup};
@@ -73,6 +74,8 @@ pub struct TacticalSide {
     pub reserve: Vec<TacticalGroup>,
     /// Population cap of this side in the battle.
     pub unit_cap: i32,
+    /// Story ability grants for this faction (`(unit, ability)`, lower-cased). Copied onto [`BattleConfig::powers`].
+    pub powers: BTreeSet<(String, String)>,
 }
 
 /// Everything a tactical front end needs to build a space battle.
@@ -252,6 +255,7 @@ impl TacticalRequest {
                     may_retreat: galaxy.factions.get(side.faction as usize).is_some_and(|f| f.planets_owned > 1) && !world.factions[side.faction as usize].name.eq_ignore_ascii_case("pirates"),
                     shield_mult: world_diff(side.faction).shield,
                     groups,
+                    powers: galaxy.factions.get(side.faction as usize).map(|f| f.powers.clone()).unwrap_or_default(),
                 }
             })
             .collect();
@@ -275,7 +279,8 @@ impl TacticalRequest {
         let defenders = self.sides.iter().map(|s| s.defender).collect();
         let unit_cap = self.sides.iter().map(|s| s.unit_cap).max().unwrap_or(150);
         let side_tech = self.sides.iter().map(|s| s.tech).collect();
-        BattleConfig { side_tech, seed: self.seed, max_time: self.max_seconds, half_size, arena, side_mults, retreat_allowed, defenders, unit_cap, ..BattleConfig::default() }
+        let powers = self.sides.iter().map(|s| s.powers.clone()).collect();
+        BattleConfig { side_tech, seed: self.seed, max_time: self.max_seconds, half_size, arena, side_mults, retreat_allowed, defenders, unit_cap, powers, ..BattleConfig::default() }
     }
 
     /// Builds the `battle-sim` setup. Fleet groups carry their group index as the tag; side `i` of the request is

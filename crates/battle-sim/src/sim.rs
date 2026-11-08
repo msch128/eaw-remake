@@ -1367,7 +1367,13 @@ impl Battle {
         let cat = &self.catalog;
         let s = &self.ships[ship as usize];
         let def = cat.ship(s.def);
-        if def.redirects.is_empty() {
+        let granted = |name: &str| {
+            self.config.powers.get(s.side as usize).is_some_and(|set| {
+                set.iter().any(|(u, a)| u.eq_ignore_ascii_case(&def.name) && a.eq_ignore_ascii_case(name))
+            })
+        };
+        // No grant: a disabled ability is not there, and the roll stays the one an ungranted battle already used.
+        if def.redirects.is_empty() && !def.locked_redirects.iter().any(|(n, _)| granted(n)) {
             return Deflect::None;
         }
         let Some(shooter) = self.ships.get(p.owner as usize).filter(|o| o.alive) else { return Deflect::None };
@@ -1376,7 +1382,8 @@ impl Battle {
         let incoming = if speed > 1.0 { (-p.vel.y).atan2(-p.vel.x) } else { s.yaw };
         let off = crate::math::wrap_angle(incoming - s.yaw).abs();
         let mut rng = Rng::for_entity(self.config.seed, self.tick, ship, 0xB10C0000 + p.owner as u64 * 31 + p.def as u64);
-        for r in def.redirects.iter().filter(|r| off <= r.half_arc && (r.classes == 0 || r.classes & class.bit() != 0)) {
+        let locked = def.locked_redirects.iter().filter(|(n, _)| granted(n)).map(|(_, r)| r);
+        for r in def.redirects.iter().chain(locked).filter(|r| off <= r.half_arc && (r.classes == 0 || r.classes & class.bit() != 0)) {
             let roll = rng.range(0.0, 1.0);
             if roll < r.redirect {
                 return Deflect::Reflected;

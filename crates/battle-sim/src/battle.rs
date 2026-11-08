@@ -1,5 +1,6 @@
 //! Battle state, setup, commands, events and results.
 
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use crate::defs::*;
@@ -81,6 +82,8 @@ pub struct BattleConfig {
     /// Per side: the side defends the planet (`Variable_Self.IsDefender` of the AI retreat rule), with or without a station. Missing entries:
     /// a side that brought structures defends.
     pub defenders: Vec<bool>,
+    /// Per side: story grants `(unit name, ability name)`, both lower-cased. A locked redirect applies when this side's set contains the ship.
+    pub powers: Vec<BTreeSet<(String, String)>>,
 }
 
 impl Default for BattleConfig {
@@ -114,6 +117,7 @@ impl Default for BattleConfig {
             staged_hangar_launch: true,
             ai_reserve: Vec::new(),
             defenders: Vec::new(),
+            powers: Vec::new(),
         }
     }
 }

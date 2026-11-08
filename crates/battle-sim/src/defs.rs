@@ -470,8 +470,11 @@ pub struct ShipDef {
     pub class: TargetClass,
     /// Automatic healing abilities (`Force_Healing_Ability`).
     pub heals: Vec<HealDef>,
-    /// Shot blocking (`Redirect_Blaster_Ability`).
+    /// Shot blocking (`Redirect_Blaster_Ability`) that is on from the start.
     pub redirects: Vec<RedirectDef>,
+    /// `Redirect_Blaster_Ability` entries that start disabled. Each is `(ability name, lower-cased)`.
+    /// It blocks only when the battle grants that ability for this unit type (`BattleConfig::powers`).
+    pub locked_redirects: Vec<(String, RedirectDef)>,
     /// Aura bonuses given to the friendly fleet (`Combat_Bonus_Ability`).
     pub bonuses: Vec<BonusDef>,
     /// `Space_FOW_Reveal_Range`: how far this ship sees (fog of war); 1250 where the data gives none.
@@ -1549,23 +1552,34 @@ impl Catalog {
                 .collect(),
             _ => Vec::new(),
         };
-        let redirects: Vec<RedirectDef> = match src {
-            Source::Unit(u) => u
-                .sub_abilities
-                .iter()
-                .filter(|a| a.kind.eq_ignore_ascii_case("Redirect_Blaster_Ability") && !a.fields.get("initially_enabled").is_some_and(|v| !alamo_data::xml::parse_bool(v)))
-                .map(|a| {
+        let (redirects, locked_redirects) = match src {
+            Source::Unit(u) => {
+                let mut on = Vec::new();
+                let mut locked = Vec::new();
+                for a in u.sub_abilities.iter().filter(|a| a.kind.eq_ignore_ascii_case("Redirect_Blaster_Ability")) {
                     let num = |k: &str| a.fields.get(k).and_then(|v| v.trim().parse::<f32>().ok()).unwrap_or(0.0).clamp(0.0, 1.0);
-                    RedirectDef {
+                    let def = RedirectDef {
                         block: num("block_chance"),
                         redirect: num("redirect_chance"),
                         half_arc: a.fields.get("reaction_arc_in_degrees").and_then(|v| v.trim().parse::<f32>().ok()).unwrap_or(360.0).clamp(0.0, 360.0).to_radians() / 2.0,
                         classes: a.fields.get("applicable_unit_categories").map_or(0, |v| alamo_data::xml::split_list(v).iter().filter_map(|t| TargetClass::from_token(t)).fold(0u16, |m, c| m | c.bit())),
+                    };
+                    if def.block + def.redirect <= 0.0 {
+                        continue;
                     }
-                })
-                .filter(|r| r.block + r.redirect > 0.0)
-                .collect(),
-            _ => Vec::new(),
+                    // Absent `Initially_Enabled` means on. `No` waits for a story grant.
+                    if a.fields.get("initially_enabled").is_some_and(|v| !alamo_data::xml::parse_bool(v)) {
+                        let name = a.name.trim().to_ascii_lowercase();
+                        if !name.is_empty() {
+                            locked.push((name, def));
+                        }
+                    } else {
+                        on.push(def);
+                    }
+                }
+                (on, locked)
+            }
+            _ => (Vec::new(), Vec::new()),
         };
         let special_weapon = match src {
             Source::Structure(s) => {
@@ -1603,6 +1617,7 @@ impl Catalog {
             text_id,
             heals,
             redirects,
+            locked_redirects,
             bonuses,
             sensor_range,
             no_spawn_radius,
