@@ -73,6 +73,41 @@ pub struct FleetVisual {
 #[derive(Component)]
 pub struct FleetPad;
 
+/// How a fleet root glides: corrections (a snapshot that disagrees with the extrapolation, the arrival in an orbit slot) are eased
+/// out instead of snapping.
+#[derive(Component, Debug, Clone, Copy, PartialEq)]
+pub struct FleetMotion {
+    /// Where the latest snapshot put the fleet in the previous frame.
+    pub target: Vec3,
+    /// Drawn position minus `target`; decays to zero.
+    pub offset: Vec3,
+    /// Drawn orientation.
+    pub rotation: Quat,
+}
+
+/// Time constant of the correction glide, real seconds.
+const EASE_SECONDS: f32 = 0.12;
+/// Jumps longer than this many planet units (a fleet retreating to another system) are not glided.
+const SNAP_UNITS: f32 = 4.0;
+/// Real seconds the map may run ahead of the latest snapshot on top of one tick (worker latency).
+const MAX_LAG_SECONDS: f32 = 0.5;
+
+impl FleetMotion {
+    /// The drawn position for this frame. `target` is where the latest snapshot puts the fleet now and `was` where it puts it at
+    /// the map time of the previous frame: if that is not where the fleet was drawn from, the difference is a correction that
+    /// glides out over `EASE_SECONDS`. Jumps beyond `snap` are taken at once.
+    pub fn step(&mut self, target: Vec3, was: Vec3, rotation: Quat, dt: f32, snap: f32) -> (Vec3, Quat) {
+        let keep = (-dt.max(0.0) / EASE_SECONDS).exp();
+        self.offset = (self.offset + self.target - was) * keep;
+        if self.offset.length() > snap {
+            self.offset = Vec3::ZERO;
+        }
+        self.target = target;
+        self.rotation = self.rotation.slerp(rotation, 1.0 - keep);
+        (target + self.offset, self.rotation)
+    }
+}
+
 /// The model child of a [`FleetVisual`].
 #[derive(Component)]
 pub struct FleetModel;
@@ -143,7 +178,7 @@ fn spawn_model(commands: &mut Commands, assets: &FleetAssets, mats: &mut Assets<
 #[allow(clippy::too_many_arguments)]
 pub fn sync_fleets(
     mut commands: Commands,
-    state: Res<SimState>,
+    mut state: ResMut<SimState>,
     layout: Res<GalaxyLayout>,
     catalog: Res<PlayCatalog>,
     clock: Res<GameClock>,
@@ -154,20 +189,25 @@ pub fn sync_fleets(
     mut mats: ResMut<Assets<StandardMaterial>>,
     mut entities: ResMut<FleetEntities>,
     mut fog: ResMut<Fog>,
-    mut fleets: Query<(&mut FleetVisual, &mut Transform, &Children)>,
+    mut fleets: Query<(&mut FleetVisual, &mut Transform, &mut FleetMotion, &Children)>,
     models: Query<Entity, With<FleetModel>>,
     mut pads: Query<&mut Transform, (With<FleetPad>, Without<FleetVisual>)>,
     labels: Query<(Entity, &FleetLabel)>,
 ) {
+    let dt = time.delta_secs().min(0.25);
+    let rate = if state.current.human_battles.is_empty() { clock.rate() } else { 0.0 };
+    let shown_before = state.view.time;
+    let max_lead = state.world.config.tick_seconds + rate * MAX_LAG_SECONDS;
+    let snapshot_time = state.current.time;
+    let lead = state.view.advance(snapshot_time, dt, rate, max_lead);
+    // Map time of the previous frame, relative to the latest snapshot.
+    let lead_before = (shown_before - snapshot_time) as f32;
+    let state = &*state;
     let world = &state.world;
     let g = state.galaxy();
-    fog.refresh(&state, player.0);
+    fog.refresh(state, player.0);
     let fog = &*fog;
     let shown = |id: &FleetId| fog.fleet(*id) != galaxy_sim::Sight::Hidden;
-    let now = time.elapsed_secs_f64();
-    let rate = if state.current.human_battles.is_empty() { clock.rate() } else { 0.0 };
-    let extra = state.extrapolation(now, rate);
-    let t = time.elapsed_secs();
 
     // Removed fleets.
     entities.0.retain(|id, e| {
@@ -191,46 +231,42 @@ pub fn sync_fleets(
             parked.entry(p).or_default().push(f.id);
         }
     }
-    let slot_of = |p: PlanetId, id: FleetId| -> (usize, usize) {
-        let v = &parked[&p];
-        (v.iter().position(|&x| x == id).unwrap_or(0), v.len())
+    let slot_of = |p: PlanetId, id: FleetId| -> usize { parked[&p].iter().position(|&x| x == id).unwrap_or(0) };
+    // Root position, heading and pad radius of a fleet at a place.
+    let draw_at = |f: &galaxy_sim::Fleet, place: FleetPlace| -> (Vec3, Vec3, f32) {
+        match place {
+            FleetPlace::Orbit(p) => {
+                // Three fixed GUI fleet slots above the planet (no fleet limit in the data); extra fleets share a slot.
+                // The fleet's own slot (the sim keeps three per faction and planet); fleets without one share by index.
+                let i = slot_of(p, f.id);
+                let (s, k) = if (1..=3).contains(&f.slot) { (f.slot as usize - 1, 0) } else { (i % 3, i / 3) };
+                let a = slot_angle(s);
+                let r = layout.orbit_radius(p) + k as f32 * layout.pad_radius(p) * 0.9;
+                let c = layout.positions[p as usize];
+                (c + Vec3::new(a.cos() * r, layout.pad_radius(p) * PAD_LIFT, a.sin() * r), Vec3::new(1.0, 0.0, 0.0), layout.pad_radius(p))
+            }
+            FleetPlace::Lane { from, to, t, .. } => {
+                let (a, b) = (layout.positions[from as usize], layout.positions[to as usize]);
+                // The pad grows or shrinks from the size at the planet left to the one at the next planet (no step at a stopover).
+                let pad = layout.pad_radius(from) + (layout.pad_radius(to) - layout.pad_radius(from)) * t;
+                (a.lerp(b, t) + Vec3::Y * pad * PAD_LIFT, (b - a).normalize_or_zero(), pad)
+            }
+        }
     };
+    let snap = layout.unit * SNAP_UNITS;
 
     for f in g.fleets.values().filter(|f| shown(&f.id)) {
         let flag = flagship(world, f);
         let model = catalog.fleet_model(cfg.fleet_model_style, f.units.keys().copied(), flag).map(str::to_owned);
         let bow = cfg.fleet_model_style == FleetModelStyle::Flagship;
         let team = faction_color(world, f.owner);
-        let place = fleet_place(world, f, extra);
-        let (pos, heading) = match place {
-            FleetPlace::Orbit(p) => {
-                let (i, n) = slot_of(p, f.id);
-                // Three fixed GUI fleet slots above the planet (no fleet limit in the data); extra fleets share a slot.
-                let _ = n;
-                // The fleet's own slot (the sim keeps three per faction and planet); fleets without one share by index.
-                let (s, k) = if (1..=3).contains(&f.slot) { (f.slot as usize - 1, 0) } else { (i % 3, i / 3) };
-                let a = slot_angle(s);
-                let r = layout.orbit_radius(p) + k as f32 * layout.pad_radius(p) * 0.9;
-                let c = layout.positions[p as usize];
-                let pos = c + Vec3::new(a.cos() * r, layout.pad_radius(p) * PAD_LIFT, a.sin() * r);
-                let _ = t;
-                (pos, Vec3::new(1.0, 0.0, 0.0))
-            }
-            FleetPlace::Lane { from, to, t, .. } => {
-                let (a, b) = (layout.positions[from as usize], layout.positions[to as usize]);
-                (a.lerp(b, t) + Vec3::Y * layout.pad_radius(from) * PAD_LIFT, (b - a).normalize_or_zero())
-            }
-        };
-        let pad = match place {
-            FleetPlace::Orbit(p) => layout.pad_radius(p),
-            FleetPlace::Lane { from, .. } => layout.pad_radius(from),
-        };
+        let (pos, heading, pad) = draw_at(f, fleet_place(world, g, f, lead));
         let tf = Transform::from_translation(pos).looking_to(if heading == Vec3::ZERO { Vec3::NEG_Z } else { heading }, Vec3::Y);
         match entities.0.get(&f.id) {
             Some(&e) => {
-                if let Ok((mut v, mut t, children)) = fleets.get_mut(e) {
-                    t.translation = tf.translation;
-                    t.rotation = tf.rotation;
+                if let Ok((mut v, mut t, mut motion, children)) = fleets.get_mut(e) {
+                    let was = draw_at(f, fleet_place(world, g, f, lead_before)).0;
+                    (t.translation, t.rotation) = motion.step(tf.translation, was, tf.rotation, dt, snap);
                     v.heading = heading;
                     v.pad = pad;
                     for &c in children {
@@ -251,7 +287,12 @@ pub fn sync_fleets(
             }
             None => {
                 let root = commands
-                    .spawn((tf, Visibility::default(), FleetVisual { id: f.id, owner: f.owner, model: model.clone(), heading, pad }))
+                    .spawn((
+                        tf,
+                        Visibility::default(),
+                        FleetVisual { id: f.id, owner: f.owner, model: model.clone(), heading, pad },
+                        FleetMotion { target: tf.translation, offset: Vec3::ZERO, rotation: tf.rotation },
+                    ))
                     .id();
                 spawn_model(&mut commands, &assets, &mut mats, alamo.is_some(), model.as_deref(), bow, team, root);
                 // The flat translucent base disc the fleet stands on (faction coloured, like the original).
@@ -596,5 +637,29 @@ mod tests {
         // Spawned visible, the model showed at scale 1 in the frame it loaded: the hull filled the map (the white flash).
         let old = new_fleet_model(6, true);
         assert!(old.iter().any(|&(shown, scale)| shown && scale == 1.0), "{old:?}");
+    }
+
+    #[test]
+    fn corrections_glide_and_steady_motion_is_drawn_as_it_is() {
+        let dt = 1.0 / 60.0;
+        let mut m = FleetMotion { target: Vec3::ZERO, offset: Vec3::ZERO, rotation: Quat::IDENTITY };
+        // Steady flight along x: drawn exactly where the snapshot puts it.
+        for i in 1..=30 {
+            let x = i as f32 * 0.1;
+            let (p, _) = m.step(Vec3::X * x, Vec3::X * (x - 0.1), Quat::IDENTITY, dt, 4.0);
+            assert!((p.x - x).abs() < 1e-5, "{p}");
+        }
+        // The fleet arrives and settles in an orbit slot one unit to the side: the map glides there, no frame step above a third of
+        // the way, and it is there (within 1 %) after 0.6 s.
+        let slot = Vec3::new(3.0, 0.0, 1.0);
+        let mut drawn = vec![Vec3::X * 3.0];
+        for _ in 0..36 {
+            drawn.push(m.step(slot, slot, Quat::IDENTITY, dt, 4.0).0);
+        }
+        assert!(drawn.windows(2).all(|w| w[0].distance(w[1]) < 0.34), "{drawn:?}");
+        assert!(drawn.last().unwrap().distance(slot) < 0.01, "{drawn:?}");
+        // A retreat to another system is no glide across the map.
+        let far = Vec3::new(40.0, 0.0, 0.0);
+        assert_eq!(m.step(far, far, Quat::IDENTITY, dt, 4.0).0, far);
     }
 }

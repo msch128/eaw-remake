@@ -72,7 +72,6 @@ pub fn pump_snapshots(
     }
     state.previous = Some(if snaps.len() >= 2 { snaps[snaps.len() - 2].clone() } else { state.current.clone() });
     state.current = last;
-    state.received_at = now;
     for s in &snaps {
         for r in &s.tactical {
             out.write(PlayEvent::TacticalReady(Box::new(r.clone())));

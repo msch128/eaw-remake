@@ -136,15 +136,35 @@ pub fn lane_speed(world: &World, fleet: &Fleet, route: u32) -> f32 {
     world.fleet_speed(fleet) * world.routes[route as usize].hs_factor * world.config.galactic_speed_scale
 }
 
-/// Where `fleet` is, advanced by `extra_secs` of galactic time past the snapshot (clamped to the
-/// end of the current leg, since the next leg is only known to the simulation).
-pub fn fleet_place(world: &World, fleet: &Fleet, extra_secs: f32) -> FleetPlace {
+/// Where `fleet` of the snapshot `galaxy` is, `extra_secs` of galactic time later. Past the end of its leg it carries on along the
+/// rest of its route as `Sim::move_fleets` moves it (the time left over goes on at the next lane's speed) and stops where the
+/// simulation stops it: at the destination, or at a planet on the way that blockades it. A negative `extra_secs` goes back along
+/// the current leg, not past its start.
+pub fn fleet_place(world: &World, galaxy: &Galaxy, fleet: &Fleet, extra_secs: f32) -> FleetPlace {
     match &fleet.location {
         FleetLocation::AtPlanet(p) => FleetPlace::Orbit(*p),
-        FleetLocation::Moving { from, to, route, progress, .. } => {
-            let len = world.routes[*route as usize].length.max(0.001);
-            let travelled = (progress + lane_speed(world, fleet, *route) * extra_secs.max(0.0)).min(len);
-            FleetPlace::Lane { from: *from, to: *to, t: (travelled / len).clamp(0.0, 1.0), travelled }
+        FleetLocation::Moving { from, to, route, progress, rest } => {
+            let (mut from, mut to, mut route) = (*from, *to, *route);
+            let mut travelled = progress + lane_speed(world, fleet, route) * extra_secs;
+            let mut rest = rest.iter();
+            loop {
+                let len = world.routes[route as usize].length.max(0.001);
+                if travelled < len {
+                    break;
+                }
+                let blocked = !galaxy.escaping.contains(&fleet.id) && world.blockades(galaxy, to, fleet.owner);
+                let next = rest.next().filter(|_| !blocked).and_then(|&n| Some((n, world.route_between(to, n)?)));
+                let Some((next, next_route)) = next else {
+                    travelled = len;
+                    break;
+                };
+                let left = (travelled - len) / lane_speed(world, fleet, route).max(1e-6);
+                (from, to, route) = (to, next, next_route);
+                travelled = left * lane_speed(world, fleet, route);
+            }
+            let len = world.routes[route as usize].length.max(0.001);
+            let travelled = travelled.max(0.0);
+            FleetPlace::Lane { from, to, t: (travelled / len).clamp(0.0, 1.0), travelled }
         }
     }
 }

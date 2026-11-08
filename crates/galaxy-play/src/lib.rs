@@ -50,7 +50,7 @@ pub struct PlayMapHidden(pub bool);
 pub use notify::{Notification, NotificationKind, Notifications};
 pub use state::{
     BattleChoice, BattleDialog, BattleSide, FleetRow, GameClock, PlayAction, PlayConfig, PlayEvent, PlayInit, PlayUiModel, PlayerFaction,
-    PlayerSelection, SimState, SpeedModel, TopBarModel,
+    PlayerSelection, SimState, SpeedModel, TopBarModel, ViewClock,
 };
 pub use ui::GalaxyPlayUiPlugin;
 pub use visuals::{FleetEntities, FleetVisual, Fog};
@@ -127,7 +127,7 @@ pub fn start_play(world: &mut World, init: PlayInit) {
     world.insert_resource(GalaxyLayout::from_world(&sim_world));
     world.insert_resource(GameClock::new(&config));
     world.insert_resource(PlayerFaction(human));
-    world.insert_resource(SimState { driver, current, previous: None, received_at: 0.0, world: sim_world, awaiting_external: Default::default() });
+    world.insert_resource(SimState { driver, current, previous: None, view: Default::default(), world: sim_world, awaiting_external: Default::default() });
     world.insert_resource(catalog);
     world.insert_resource(config);
     world.insert_resource(PlayerSelection::default());

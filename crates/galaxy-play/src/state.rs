@@ -143,8 +143,8 @@ pub struct SimState {
     pub current: Arc<Snapshot>,
     /// The snapshot before it, for tweening.
     pub previous: Option<Arc<Snapshot>>,
-    /// Real time (app clock) the latest snapshot arrived.
-    pub received_at: f64,
+    /// Galactic time the map shows (fleets are drawn there).
+    pub view: ViewClock,
     /// Immutable world data.
     pub world: Arc<World>,
     /// Battles handed to the host for a tactical fight, waiting for [`PlayAction::ResolveBattle`].
@@ -156,12 +156,31 @@ impl SimState {
     pub fn galaxy(&self) -> &Galaxy {
         &self.current.galaxy
     }
+}
 
-    /// Galactic seconds to extrapolate fleets past the latest snapshot at `now` (real seconds)
-    /// when the simulation runs at `rate` galactic seconds per real second. Capped so a stalled
-    /// worker does not make ships run away from their lane.
-    pub fn extrapolation(&self, now: f64, rate: f32) -> f32 {
-        ((now - self.received_at).clamp(0.0, 0.25) as f32) * rate
+/// The galactic time the map is drawn at. The simulation moves fleets in whole ticks (1 s) and its snapshots arrive about every
+/// frame, so between two ticks every snapshot has the fleet at the same place: extrapolating from the arrival of the latest
+/// snapshot made fleets stand still for a tick and then jump. The map instead runs its own clock at the game speed and places
+/// fleets at that time, ahead of the latest snapshot by the part of a tick not yet simulated.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct ViewClock {
+    /// Galactic seconds the map shows.
+    pub time: f64,
+    /// Galactic time of the snapshot seen at the last advance.
+    pub snapshot: f64,
+}
+
+impl ViewClock {
+    /// Advances the clock by `dt` real seconds at `rate` galactic seconds per real second and returns the galactic seconds it is
+    /// ahead of the snapshot at `snapshot_time`. It never falls behind the snapshot, runs at most `max_lead` seconds ahead of it
+    /// (a stalled worker), and restarts at the snapshot when the snapshot's time goes back (a loaded save). `rate` 0 stops it.
+    pub fn advance(&mut self, snapshot_time: f64, dt: f32, rate: f32, max_lead: f32) -> f32 {
+        if snapshot_time < self.snapshot {
+            self.time = snapshot_time;
+        }
+        self.snapshot = snapshot_time;
+        self.time = (self.time + f64::from(dt * rate.max(0.0))).clamp(snapshot_time, snapshot_time + f64::from(max_lead.max(0.0)));
+        (self.time - snapshot_time) as f32
     }
 }
 
@@ -521,3 +540,60 @@ pub struct PlayUiModel {
     pub route_hint: Option<String>,
 }
 
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The worker as the map sees it: it gets each frame's galactic seconds two frames late and moves fleets only in whole ticks,
+    /// while a snapshot arrives every frame. Returns the map time of every frame at `rate` (1/60 s frames) for the view clock and
+    /// for the extrapolation it replaces (from the arrival of the latest snapshot, at most 0.25 s).
+    fn frames(rate: f32, n: usize) -> (Vec<f64>, Vec<f64>) {
+        let dt = 1.0 / 60.0;
+        let (mut sent, mut view) = (Vec::new(), ViewClock::default());
+        let (mut new, mut old) = (Vec::new(), Vec::new());
+        for i in 0..n {
+            sent.push(f64::from(dt * rate) * (i + 1) as f64);
+            let simulated = if i >= 2 { sent[i - 2] } else { 0.0 };
+            let snapshot = (simulated + 1e-9).floor();
+            new.push(snapshot + f64::from(view.advance(snapshot, dt, rate, 1.0 + rate * 0.5)));
+            // The old extrapolation: a snapshot arrived this very frame, so nothing was added to its time.
+            old.push(snapshot);
+        }
+        (new, old)
+    }
+
+    #[test]
+    fn the_map_clock_moves_every_frame_by_the_game_speed() {
+        for rate in [1.0, 2.0, 4.0, 8.0] {
+            let (new, old) = frames(rate, 600);
+            let step = f64::from(rate / 60.0);
+            for w in new.windows(2).skip(1) {
+                assert!(((w[1] - w[0]) - step).abs() < 1e-5, "{rate}x: step {} instead of {step}", w[1] - w[0]);
+            }
+            // The replaced extrapolation stood still between ticks and then jumped a whole tick.
+            let still = old.windows(2).filter(|w| w[1] == w[0]).count();
+            assert!(still as f32 > 0.8 * 599.0 * (1.0 - rate / 60.0), "{rate}x: {still} still frames");
+        }
+    }
+
+    #[test]
+    fn the_map_clock_stops_on_pause_and_follows_loads_and_stalls() {
+        let mut v = ViewClock::default();
+        // A fresh clock starts at the snapshot.
+        assert_eq!(v.advance(10.0, 0.0, 1.0, 1.5), 0.0);
+        assert_eq!(v.advance(10.0, 0.5, 1.0, 1.5), 0.5);
+        // Paused: the map time stays.
+        assert_eq!(v.advance(10.0, 0.5, 0.0, 1.5), 0.5);
+        // The tick lands: same map time, smaller lead.
+        assert_eq!(v.advance(11.0, 0.0, 0.0, 1.5), 0.0);
+        // A stalled worker: at most `max_lead` ahead.
+        assert_eq!(v.advance(11.0, 5.0, 1.0, 1.5), 1.5);
+        // A save from earlier: back to its time.
+        assert_eq!(v.advance(3.0, 0.1, 1.0, 1.5), 0.1);
+        assert!((v.time - 3.1).abs() < 1e-6);
+        // Never behind the snapshot.
+        assert_eq!(v.advance(20.0, 0.0, 1.0, 1.5), 0.0);
+        assert_eq!(v.time, 20.0);
+    }
+}
