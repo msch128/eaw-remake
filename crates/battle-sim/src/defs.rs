@@ -840,6 +840,9 @@ pub struct Catalog {
     pub depleted_shield_disable: f32,
     /// Formation constants.
     pub formation: FormationRules,
+    /// `AIUsesFogOfWarSpace` False: AI sides know every enemy ship. The fog of the view and of player sides is unchanged. False (fog-bound
+    /// AI) where the data gives no value.
+    pub ai_ignores_fog: bool,
     /// Targeting priority sets.
     pub priority_sets: Vec<PrioritySet>,
     priority_index: HashMap<String, u16>,
@@ -1153,7 +1156,8 @@ impl Catalog {
             rotate_facing: data.game_constants.get("rotate_formation_facing_moves").map_or(rules.rotate_facing, |v| alamo_data::xml::parse_bool(v)),
             facing_min_angle: constant("finalformationfacingminimumangle").map_or(rules.facing_min_angle, f32::to_radians),
         };
-        let mut cat = Catalog { damage, speed_scale: 30.0, shield_interval, depleted_shield_disable, formation, priority_sets, priority_index, ..Catalog::default() };
+        let ai_ignores_fog = data.game_constants.get("aiusesfogofwarspace").is_some_and(|v| !alamo_data::xml::parse_bool(v));
+        let mut cat = Catalog { damage, speed_scale: 30.0, shield_interval, depleted_shield_disable, formation, ai_ignores_fog, priority_sets, priority_index, ..Catalog::default() };
         // Projectiles.
         let mut proj_names: Vec<String> = Vec::new();
         let hp_defs: Vec<Vec<HardpointDef>> = sources

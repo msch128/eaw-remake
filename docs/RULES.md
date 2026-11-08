@@ -491,9 +491,12 @@ with `speed_mult > 1.05` when fleeing or when the target is over twice the weapo
   draw after `max_time` (60 min; the data has no limit, this guards headless runs).
 * Fog of war (`BattleConfig::fog_of_war`, default on): a ship sees `Space_FOW_Reveal_Range` (data, `ShipDef::sensor_range`,
   1250 where missing); an enemy it saw stays visible for `fog_linger` = `SpaceFOWRegrowTime` (15 s, data). Targeting
-  only considers visible enemies, and so does the AI, except that an enemy that damaged a unit of the side in the last
-  `fog_linger` s counts as known (data: `Default_Unit_Damaged` hands the AI the attacker). Known difference: the data
-  says `AIUsesFogOfWarSpace` False (the Remake's battle AI ignores the fog); see KNOWN-GAPS.
+  only considers visible enemies. Data: `AIUsesFogOfWarSpace` False (`Xml/Gameconstants.xml`, `Catalog::ai_ignores_fog`),
+  so an AI-controlled side plans, hunts and uses its abilities against every enemy, and its ships may engage an unseen
+  enemy within their own weapon reach (an aggressive order's unbounded range stays limited to what the side sees,
+  estimate); what it sees (the view, the player's fog, reinforcement placement) is unchanged. With fog-bound data the AI
+  knows what it sees, and an enemy that damaged a unit of the side in the last `fog_linger` s (data:
+  `Default_Unit_Damaged` hands the AI the attacker).
 * Arena: `BattleConfig::arena` (from `Arena::load` and the `.ted` map) gives the playable bounds, `Attacker Entry
   Position` markers (attackers at -Y), `Defending Forces Position` markers (defenders at +Y), the `Space Station
   Position`, structure marker spots and asteroids as round obstacles that absorb projectiles and push ships away
@@ -600,7 +603,8 @@ Escort, Reinforce, Retreat); the engine part that matters here is implemented as
 * Not implemented: Flank, Escort and Bombing-run goals as separate behaviours (bombers use their priority sets); kiting
   (`Service_Kite`) and the pull-back of a dying task-force unit; the defensive abilities of `Default_Unit_Damaged`;
   `Determine_Targeting_Priority_Set` (hardpoint sets, tried with no measurable effect); `Default_Space_Targeting_Priority`;
-  the map-wide `Find_All_Objects_Of_Type` for the priority target (the AI only knows what it sees or what hit it).
+  the map-wide `Find_All_Objects_Of_Type` for the priority target (the priority target is chosen from the enemies the
+  AI knows, see 2.8 fog of war).
 
 ## 2.11 Death Star II and ground-to-space weapons
 

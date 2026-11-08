@@ -187,7 +187,8 @@ fn ai_station_launches_active_fighters_and_defenders_engage_approaching_enemies(
     for _ in 0..30 * 180 {
         b.step();
         let isd = b.ships.iter().find(|s| s.alive && s.side == 1 && !cat.ship(s.def).is_static && !matches!(cat.ship(s.def).class, TargetClass::Fighter | TargetClass::Bomber)).unwrap();
-        let nearest = b.ships.iter().filter(|s| s.alive && s.side == 0 && !matches!(cat.ship(s.def).class, TargetClass::Fighter | TargetClass::Bomber)).map(|s| s.pos.dist(station)).fold(f32::MAX, f32::min);
+        // Near the station or near its big ship (`SpaceTacticalFreeStore.lua`; the AI knows the enemy before it sees it).
+        let nearest = b.ships.iter().filter(|s| s.alive && s.side == 0 && !matches!(cat.ship(s.def).class, TargetClass::Fighter | TargetClass::Bomber)).map(|s| s.pos.dist(station).min(s.pos.dist(isd.pos))).fold(f32::MAX, f32::min);
         if nearest < 3600.0 && threat_at.is_none() {
             threat_at = Some(b.time());
         }
@@ -375,7 +376,10 @@ fn ai_attack(cat: &Arc<Catalog>, arena: Option<Arc<Arena>>, ai: &[(&str, u32)], 
             {
                 shaped = true;
                 let centre = alive.iter().fold(Vec3::ZERO, |a, s| a + s.pos) * (1.0 / alive.len() as f32);
-                let axis = (enemy - centre).normalized();
+                // Depth along the way the fleet flies: an AI that knows every enemy (`AIUsesFogOfWarSpace` False) heads for the enemy's main
+                // group, and the nearest enemy ship that starts the measurement can stand off to the side.
+                let heading = alive.iter().fold(Vec3::ZERO, |a, s| a + Vec3::from_yaw(s.yaw));
+                let axis = if heading.len() > 0.5 * alive.len() as f32 { heading.normalized() } else { (enemy - centre).normalized() };
                 let spread = |v: Vec3| {
                     let k: Vec<f32> = alive.iter().map(|s| (s.pos - centre).dot(v)).collect();
                     k.iter().copied().fold(f32::MIN, f32::max) - k.iter().copied().fold(f32::MAX, f32::min)
@@ -457,8 +461,10 @@ fn the_ai_fleet_advances_as_one_line_and_attacks_together() {
         }
         let mean = runs.iter().map(|m| m.half_in).sum::<f32>() / runs.len() as f32;
         assert!(mean <= 40.0, "half the fleet fires within 40 s of the first shot on average: {mean:.1} s");
+        // Since the AI knows every enemy (`AIUsesFogOfWarSpace` False) it engages the defenders sooner: half the fleet fires within 16.3 s on
+        // average (33.8 s fog-bound) and 6.9 of 10 ships are left (8.75 fog-bound; 6 to 7 on every seed).
         let left = runs.iter().map(|m| m.ai_left.0 as f32).sum::<f32>() / runs.len() as f32;
-        assert!(left >= 8.0, "the corvettes escort the big ships instead of charging the station: {left:.1} of 10 left on average");
+        assert!(left >= 6.5, "the corvettes escort the big ships instead of charging the station: {left:.1} of 10 left on average");
     }
 }
 
@@ -587,7 +593,7 @@ fn an_ai_defender_holds_while_its_station_stands_and_leaves_when_it_falls() {
     // enemy is 4.5-5.7x stronger from the start. `Retreat_From_Space` makes a defender with a station wait 120 s ("wait for the defense fleet to spawn");
     // our emergency rule U94 had sent it away at 62 s while the station stood (main add6915, seeds 1-3: 5 / 2 / 4 big ships lost). Now it holds and leaves
     // as soon as the station is gone (it falls at 104 s and 106 s on seeds 1 and 2, 5 / 6 big ships lost, 10 / 9 escaped; with the data's 30 s jump
-    // and DEFEND's own multipliers it falls at 104 / 105 s and 9 / 10 escape).
+    // and DEFEND's own multipliers it falls at 104 / 105 s and 9 / 10 escape; with the fog-free battle AI at 106 / 103 s, 8 / 10 escape).
     let Some((data, fs)) = load() else { return };
     let names = ["Executor_Star_Dreadnought", "Star_Destroyer", "Victory_Destroyer", "TIE_Fighter_Squadron", "MC-80_Star_Cruiser", "Nebulon_B_Frigate", "Assault_Frigate_Mark_II", "CR-90_Corvette", "X-Wing_Squadron", "Rebel_Star_Base_3"];
     let cat = Arc::new(Catalog::build(&data, Some(&fs), &names));
@@ -680,7 +686,8 @@ fn a_nearly_destroyed_ai_fleet_retreats_before_it_is_wiped_out() {
         (ordered, escaped)
     };
     // The jump takes the faction's `Space_Retreat_Countdown_Seconds` (30 s; it was a 10 s estimate, when 3 / 3 units escaped): a fleet that
-    // orders its retreat this late loses most of the rest while the drives charge (seeds 1 / 2: ordered at 118 / 112 s, 2 / 0 escaped).
+    // orders its retreat this late loses most of the rest while the drives charge (seeds 1 / 2: ordered at 118 / 112 s, 2 / 0 escaped with the
+    // fog-bound battle AI; 114 / 118 s, 0 / 0 since the AI knows every enemy).
     for seed in [1, 2] {
         let (ordered, escaped) = attack(&[("Acclamator", 3), ("Tartan_Patrol_Cruiser", 3)], seed);
         println!("frigates and corvettes, seed {seed}: retreat ordered at {ordered:?}, {escaped} escaped");

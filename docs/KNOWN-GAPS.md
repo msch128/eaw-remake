@@ -53,8 +53,6 @@ data are labelled in [RULES.md](RULES.md).
 
 ## Space battle simulation
 
-- **The battle AI is fog-bound although the data says it is not.** `AIUsesFogOfWarSpace` is False in the Remake and Clone Wars `Gameconstants.xml`; our tactical AI only knows what it sees or what hit it. A trial that let it know every enemy moved several tuned AI scenarios (Kuat attack: 6.75 instead of about 9 of 10 ships left; retreat orders shifted) and exposed an escort being squeezed between capital ships. Observe: `battle-sim` tests `tactical_ai`. Where: `crates/battle-sim/src/ai.rs` (`plan_side`), `crates/battle-sim/src/sim.rs` (`scan`).
-
 - **Super ship phases are not modelled.** `Destruction_Survivors` (Executor phase 1 to 2) and `Repair_Phase_*` items do not exist, so losing an Executor ends it. Observe: grant `Executor_Star_Dreadnought_P1` and destroy it in a battle. Where: `crates/battle-sim`, story scripts.
 - **The Subjugator superlaser is not checked in play.** The largest ship of the Remake (213 hardpoints, `Super_Laser_Ability`) fires an ion shot (`Proj_SBJ_Ion`: shields stripped, 900 s stun at -75%); its engine disable (`Projectile_Disable_Engines_Duration` 900) is missing and its strength against a fleet was never measured. Observe: `cargo run --release -p galaxy-sim --example audit_battle -- Empire Rebel Subjugator_E 1 3`. Where: `crates/battle-sim/src/sim.rs`. (unverified)
 - **The player cannot aim or trigger the ground-to-space weapons** (Hypervelocity Gun, Seismic Cannon, Nuke Launcher). They fire on their own, first after 15 s (estimate), then every 80 s; the real game has a special weapon button. Observe: fight at a planet with a Hypervelocity Gun. Where: `crates/battle-view/src/tactical_ui.rs`, `crates/battle-sim/src/sim.rs`.

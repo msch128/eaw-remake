@@ -7,8 +7,9 @@
 //! * the side focuses one priority target: the weakest enemy of the most important class near its fleet, or the nearest threat to its
 //!   station (`SpaceTacticalFreeStore.lua`: `priority_target_preference`, `Service_Attack`, `Service_Move`); every unit outside the
 //!   formation gets the free store's own target (`Service_Attack`: capital ships take frigates, frigates corvettes, corvettes fighters);
-//! * the plan knows the enemies the side sees and those that hit one of its units within the fog's regrow time (`Default_Unit_Damaged`
-//!   hands the Remake AI the attacker);
+//! * the plan knows every enemy when the data lets the AI ignore the fog (`AIUsesFogOfWarSpace` False, as in the Remake), otherwise the
+//!   enemies the side sees and those that hit one of its units within the fog's regrow time (`Default_Unit_Damaged` hands the Remake AI
+//!   the attacker);
 //! * a defender guards its station until the free store's aggressive mode starts (station below 70%, enemies near the station or near its
 //!   big ships, or a fleet twice the enemy's after 120 s: `Allowed_As_Defender_Space_Untargeted`);
 //! * reserve units are called in one at a time while the population cap has room (`ReinforceSpace.lua`, `Want_To_Reinforce_Units`), and
@@ -220,7 +221,7 @@ impl Battle {
                     && o.side != side
                     && cat.ship(o.def).special_weapon.is_none()
                     && !cat.ship(o.def).background
-                    && (self.is_visible_to(side, o.id) || time - o.hit_side_at[si] <= linger)
+                    && (self.ai_knows(side, o.id) || time - o.hit_side_at[si] <= linger)
             })
             .map(|o| o.id)
             .collect();

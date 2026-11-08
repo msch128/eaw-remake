@@ -65,6 +65,9 @@ struct Snap {
     health: f32,
     /// Bit s set = side s sees this ship (fog of war).
     seen_by: u8,
+    /// Bit s set = side s is AI-controlled and ignores the fog (`AIUsesFogOfWarSpace` False): it may engage this ship unseen within its
+    /// weapon range.
+    known_by: u8,
     /// `SENSOR_JAMMING` active: homing missiles cannot hold a lock on it.
     jammed: bool,
     /// Ship that carries this one (`NONE` = none): carried ships dock with it and do not keep out of its hull.
@@ -670,6 +673,12 @@ impl Battle {
         }
     }
 
+    /// True if the AI plan of `side` knows ship `id`: what the side sees, or every ship when the side is AI-controlled and the data lets the
+    /// AI ignore the fog (`AIUsesFogOfWarSpace` False, [`Catalog::ai_ignores_fog`]).
+    pub(crate) fn ai_knows(&self, side: u8, id: u32) -> bool {
+        (self.catalog.ai_ignores_fog && (side as usize) < self.sides.len() && self.is_ai(side)) || self.is_visible_to(side, id)
+    }
+
     /// True if `side` currently sees ship `id` (always true for its own ships and without fog of war).
     pub fn is_visible_to(&self, side: u8, id: u32) -> bool {
         let Some(s) = self.ships.get(id as usize) else { return false };
@@ -1082,6 +1091,7 @@ impl Battle {
         // Snapshot and grid.
         let time_now = self.time;
         let fog = cfg.fog_of_war;
+        let blind_ai = if cat.ai_ignores_fog { (0..self.sides.len().min(4) as u8).filter(|&k| self.is_ai(k)).fold(0u8, |m, k| m | (1 << k)) } else { 0 };
         let snaps: Vec<Snap> = self
             .ships
             .iter()
@@ -1109,6 +1119,7 @@ impl Battle {
                     } else {
                         0xFF
                     },
+                    known_by: blind_ai,
                     special: d.special_weapon.is_some() || d.background,
                     target_hp: s.target_hp,
                     formation: s.formation,
@@ -1917,7 +1928,7 @@ impl Battle {
             let enemies: Vec<u32> = self
                 .ships
                 .iter()
-                .filter(|o| o.alive && !o.retreated && o.side != side && self.is_visible_to(side, o.id))
+                .filter(|o| o.alive && !o.retreated && o.side != side && self.ai_knows(side, o.id))
                 .map(|o| o.id)
                 .collect();
             // `Enemy_Retreating`: the other side has ordered its retreat (the jump is charging).
@@ -2273,7 +2284,7 @@ impl Battle {
                 on_target[t as usize] = on_target[t as usize].saturating_sub(1);
             }
             let mut best: Option<(f32, u32)> = None;
-            for t in self.ships.iter().filter(|t| t.alive && !t.retreated && t.side != side && (!fog || self.is_visible_to(side, t.id))) {
+            for t in self.ships.iter().filter(|t| t.alive && !t.retreated && t.side != side && (!fog || self.ai_knows(side, t.id))) {
                 let tdef = cat.ship(t.def);
                 if tdef.special_weapon.is_some() || tdef.background {
                     continue;
@@ -2692,20 +2703,23 @@ fn ability_product(def: &ShipDef, s: &Ship, f: impl Fn(&AbilityDef) -> f32) -> f
 fn scan(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig) {
     s.scan_in -= cfg.dt;
     let explicit = if let Order::Attack(t) = s.order { Some(t) } else { None };
-    let sees = |t: &Snap| s.side >= 4 || t.seen_by & (1 << s.side) != 0;
+    let def = cat.ship(s.def);
+    let me = snaps[s.id as usize];
+    // An AI side that ignores the fog engages unseen enemies within its own reach (the unbounded range of an aggressive order stays bounded
+    // by what it sees).
+    let reach = (def.max_weapon_range.max(def.targeting_range) * 1.25).max(400.0);
+    let sees = |t: &Snap| s.side >= 4 || t.seen_by & (1 << s.side) != 0 || (t.known_by & (1 << s.side) != 0 && t.pos.dist(me.pos) - t.radius <= reach);
     let target_ok = s.target != NONE && snaps[s.target as usize].alive && sees(&snaps[s.target as usize]);
     if s.scan_in > 0.0 && (target_ok || s.target == NONE) {
         return;
     }
     s.scan_in = cfg.retarget_interval;
-    let def = cat.ship(s.def);
     let range = match (s.stance, s.order) {
         (Stance::Aggressive, Order::AttackMove(_) | Order::Idle) => f32::MAX,
         (Stance::Aggressive, Order::Guard(_)) => 5000.0,
         (Stance::Defensive, Order::Guard(_)) => 4000.0,
-        _ => (def.max_weapon_range.max(def.targeting_range) * 1.25).max(400.0),
+        _ => reach,
     };
-    let me = snaps[s.id as usize];
     // Priority table: AI attack-move orders use the `<set>_Attack_Move` variant.
     let set = if cfg.attack_move_sets && matches!(s.order, Order::AttackMove(_)) { def.priority_attack_move } else { def.priority }
         .and_then(|i| cat.priority_sets.get(i as usize));

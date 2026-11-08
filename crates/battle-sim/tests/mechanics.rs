@@ -351,6 +351,34 @@ fn fog_of_war_hides_ships_outside_sensor_range_until_seen() {
 }
 
 #[test]
+fn the_ai_ignores_the_fog_when_the_data_says_so() {
+    // `AIUsesFogOfWarSpace` False: the AI side knows every enemy, while what it "sees" (the player's fog, the view) is unchanged.
+    let run = |ai_ignores_fog: bool| {
+        let mut seer = ship("seer", 1.0e6, 0.0, vec![gun("g", 0.0)]);
+        seer.is_static = false;
+        seer.sensor_range = 1500.0;
+        seer.max_weapon_range = 6000.0;
+        let mut cat = Catalog::from_defs(vec![seer], vec![laser()]);
+        cat.ai_ignores_fog = ai_ignores_fog;
+        let mut su = setup(cat, "seer", "seer", 1, 1, BattleConfig { fog_of_war: true, ..cfg() });
+        su.sides[0].ai = false;
+        let mut b = Battle::new(su);
+        let (s0, s1) = (b.ships.iter().find(|s| s.side == 0).unwrap().id, b.ships.iter().find(|s| s.side == 1).unwrap().id);
+        // The player's ship has left its entry point, where a fog-bound AI looks first.
+        b.ships[s0 as usize].pos = Vec3::new(0.0, 4500.0, 0.0);
+        for _ in 0..30 * 2 {
+            b.step();
+        }
+        assert!(b.ships[s0 as usize].pos.dist(b.ships[s1 as usize].pos) > 1500.0, "out of sensor range");
+        assert!(!b.is_visible_to(1, s0), "the AI side does not see the player's ship");
+        let enemy = b.ships[s0 as usize].pos;
+        matches!(b.ships[s1 as usize].order, Order::AttackMove(p) if p.dist(enemy) < 1000.0)
+    };
+    assert!(!run(false), "a fog-bound AI searches the map");
+    assert!(run(true), "an AI that ignores the fog sends its fleet at the hidden ship");
+}
+
+#[test]
 fn stealth_and_reveal_pings_change_what_is_seen() {
     let mut ghost = ship("ghost", 1.0e6, 0.0, vec![]);
     ghost.is_static = false;
