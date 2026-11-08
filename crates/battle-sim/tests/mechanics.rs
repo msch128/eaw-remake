@@ -1404,7 +1404,42 @@ fn ground_to_space_special_weapon_fires_at_enemy_capital_ship() {
 }
 
 #[test]
-fn orphaned_carrier_fighters_die_and_victory_resolves_cleanly() {
+fn squadrons_fight_on_when_their_carrier_is_lost() {
+    // EaW keeps launched fighters when their carrier or station dies. They are spawned units: they do not keep their side in the battle
+    // (docs/RULES.md 2.8), so the side loses once its brought units are gone, and they are removed with it.
+    let mut cat = Catalog::default();
+    cat.ships.push(ShipDef { name: "carrier".into(), class: TargetClass::Frigate, hull: 100.0, radius: 200.0, carried: vec![(1, 1)], ..ShipDef::default() });
+    cat.ships.push(ShipDef { name: "fighter_sq".into(), is_squadron: true, members: vec![(2, 2)], ..ShipDef::default() });
+    cat.ships.push(ShipDef { name: "fighter".into(), class: TargetClass::Fighter, hull: 50.0, radius: 10.0, ..ShipDef::default() });
+    cat.ships.push(ShipDef { name: "frigate".into(), class: TargetClass::Frigate, hull: 1000.0, radius: 100.0, ..ShipDef::default() });
+    let cat = Arc::new(cat);
+    let sides = vec![
+        SideSetup { name: "player".into(), units: vec![UnitSetup { ship: 3, count: 1, tag: 0 }], structures: vec![], ai: false },
+        SideSetup { name: "enemy".into(), units: vec![UnitSetup { ship: 0, count: 1, tag: 0 }, UnitSetup { ship: 3, count: 1, tag: 0 }], structures: vec![], ai: true },
+    ];
+    let mut b = Battle::new(BattleSetup { catalog: cat, sides, config: BattleConfig { dt: 0.1, ..BattleConfig::default() } });
+    let carrier = b.ships.iter().position(|s| s.side == 1 && s.def == 0).unwrap();
+    let escort = b.ships.iter().position(|s| s.side == 1 && s.def == 3).unwrap();
+    let fighters: Vec<usize> = b.ships.iter().filter(|s| s.side == 1 && s.carrier == carrier as u32).map(|s| s.id as usize).collect();
+    assert_eq!(fighters.len(), 2, "the carrier's squadron is out");
+    b.ships[carrier].hull = 0.0;
+    b.ships[carrier].alive = false;
+    for _ in 0..30 {
+        b.step();
+    }
+    assert!(fighters.iter().all(|&f| b.ships[f].alive), "the fighters outlive their carrier");
+    assert!(!b.is_over(), "the side still has a ship it brought");
+    b.ships[escort].hull = 0.0;
+    b.ships[escort].alive = false;
+    for _ in 0..10 {
+        b.step();
+    }
+    assert!(b.is_over(), "the spawned fighters alone do not hold the battle");
+    assert_eq!(b.winner(), Some(0));
+}
+
+#[test]
+fn orphaned_station_fighters_leave_with_the_lost_station_and_victory_resolves_cleanly() {
     let mut cat = Catalog::default();
     cat.ships.push(ShipDef {
         name: "carrier".into(),
@@ -1457,10 +1492,10 @@ fn orphaned_carrier_fighters_die_and_victory_resolves_cleanly() {
     b.ships[enemy_station].hull = 0.0;
     b.ships[enemy_station].alive = false;
     b.step();
-    // Orphaned fighters must be dead
-    let surviving_enemy: Vec<_> = b.ships.iter().filter(|s| s.side == 1 && s.alive).collect();
-    assert!(surviving_enemy.is_empty(), "all enemy fighters should be destroyed with the station");
+    // The station was the side's only brought unit: the side loses and its spawned fighters are removed with it.
     assert!(b.is_over(), "battle should be over");
+    let surviving_enemy: Vec<_> = b.ships.iter().filter(|s| s.side == 1 && s.alive && !s.retreated).collect();
+    assert!(surviving_enemy.is_empty(), "the loser's spawned fighters are removed: {}", surviving_enemy.len());
     assert_eq!(b.winner(), Some(0), "player should be victorious");
 }
 

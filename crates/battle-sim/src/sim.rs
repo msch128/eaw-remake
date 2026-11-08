@@ -1881,11 +1881,12 @@ impl Battle {
             }
         }
         self.run_carriers(dt);
-        // Orphaned carrier and station squadrons are destroyed when their mother ship is lost
+        // Squadrons whose carrier jumped out without them are lost. Those of a destroyed carrier or station fight on (as in EaW); they are
+        // spawned units, so they do not keep their side in the battle and cannot jump on their own.
         for i in 0..self.ships.len() {
             let s = &self.ships[i];
             if s.alive && !s.retreated && s.carrier != NONE {
-                if !self.ships[s.carrier as usize].alive || self.ships[s.carrier as usize].retreated {
+                if self.ships[s.carrier as usize].retreated {
                     self.ships[i].alive = false;
                     if self.config.record_events {
                         self.events.push(Event::ShipDestroyed { ship: i as u32, pos: self.ships[i].pos });

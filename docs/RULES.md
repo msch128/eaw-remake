@@ -348,6 +348,9 @@ stays as a derived figure for bars and decisions (`ShipDef::hull` times the shar
   (`Starfighter_Formations.xml`). `Starting_Spawned_Units_Tech_0` of ships and star bases launch at battle start; a
   wiped-out squadron is replaced from `Reserve_Spawned_Units_Tech_0` after `Spawned_Squadron_Delay_Seconds`, while a
   fighter-bay hardpoint (if the ship has any) lives.
+* Project rule (the EaW behaviour; the data has no rule): launched squadrons fight on when their carrier or station is
+  destroyed. They stay spawned units (2.8): they do not keep their side in the battle, are removed with the loser and
+  cannot jump on their own. Squadrons whose carrier jumped out without them are lost.
 * Data: star bases, shipyards and defence structures are static combatants with their own hardpoints. Golan I to III
   stand in a battle as their `*_Golan_N_Orbital` form and the Uplink Command as its control station, linked through
   `Place_Other_Type_At_Every_Specific_Marker_Position` and `Tactical_Additional_Structure_Type`.
