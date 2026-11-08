@@ -1702,8 +1702,9 @@ impl Catalog {
                 extra_items.push(n.clone());
             }
             for item in crate::buildables::buildable_closure(data, own_items.into_iter().chain(as_item.then(|| n.clone()))) {
-                if let Some(s) = data.objects.resolve(&item).and_then(|r| r.get("lua_script")).and_then(|l| scripts.spawn(fs, l)) {
-                    queue.extend(s.names().map(str::to_string));
+                if let Some(s) = data.objects.resolve(&item).filter(|r| r.kind().eq_ignore_ascii_case("UpgradeObject")).and_then(|r| r.get("lua_script")).and_then(|l| scripts.spawn(fs, l)) {
+                    // Debuff dummies are no battle units (see `buildables::dummy_debuffs`).
+                    queue.extend(s.names().filter(|u| crate::buildables::dummy_debuffs(data, u).is_none()).map(str::to_string));
                 }
             }
             if let Some(src) = load_source(data, &n) {
@@ -1861,9 +1862,25 @@ impl Catalog {
                 }
             }
         }
-        // Purchased reinforcements: the units of their spawn scripts.
+        // What a finished item brings in: the debuff dummies of a mercenary structure (a unit on the bar, or what the item's script
+        // spawns) leave auras on the enemy factions; any other spawn script brings in its units (purchased reinforcements).
         for b in &mut cat.buildables {
-            b.spawn = scripts.resolved(b.script.as_deref(), &cat.ship_index);
+            let upgrade = data.objects.resolve(&b.name).is_some_and(|r| r.kind().eq_ignore_ascii_case("UpgradeObject"));
+            let script = if upgrade { b.script.as_deref().and_then(|l| scripts.spawn(fs, l)) } else { None };
+            let (dummies, marker, lead): (Vec<String>, Option<String>, f32) = match &script {
+                _ if !upgrade => (vec![b.name.clone()], None, 0.0),
+                // Its roll picks one list (the debuff scripts give both rolls the same one).
+                Some(s) => (s.choices.first().cloned().unwrap_or_default(), Some(s.marker.clone()), s.delay),
+                None => (Vec::new(), None, 0.0),
+            };
+            let found: Vec<(f32, Vec<crate::buildables::DebuffDef>)> = dummies.iter().filter_map(|d| crate::buildables::dummy_debuffs(data, d)).collect();
+            if found.is_empty() {
+                b.spawn = if upgrade { scripts.resolved(b.script.as_deref(), &cat.ship_index) } else { None };
+            } else {
+                b.debuff_delay = lead + found.iter().map(|f| f.0).fold(0.0, f32::max);
+                b.debuffs = found.into_iter().flat_map(|f| f.1).collect();
+                b.debuff_marker = marker;
+            }
         }
         cat
     }

@@ -909,6 +909,8 @@ pub struct Battle {
     pub(crate) build_jobs: Vec<crate::buildables::BuildJob>,
     /// Per side: finished tactical builds.
     pub(crate) built: Vec<Vec<crate::buildables::BuildId>>,
+    /// Debuff items finished in this battle: (time their auras start, item).
+    pub(crate) debuffs: Vec<(f32, crate::buildables::BuildId)>,
 }
 
 impl Battle {

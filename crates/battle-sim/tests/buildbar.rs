@@ -313,3 +313,62 @@ fn every_purchased_reinforcement_script_resolves_its_units() {
         assert_eq!((def.cost, def.time), if n.contains("Fighter") { (1500, 20.0) } else { (5000, 30.0) });
     }
 }
+
+/// Like [`defended`], on map `map`.
+fn defended_on(cat: &Arc<Catalog>, arena: Option<Arc<Arena>>, faction: &str, base: &str) -> Battle {
+    let ship = |n: &str| cat.ship_id(n).unwrap_or_else(|| panic!("{n}"));
+    let attacker = SideSetup { name: "Rebel".into(), units: vec![UnitSetup { ship: ship("Nebulon_B_Frigate"), count: 1, tag: 1 }], structures: vec![], ai: false };
+    let defender = SideSetup { name: faction.into(), units: vec![UnitSetup { ship: ship("Broadside_Cruiser"), count: 1, tag: 2 }], structures: vec![ship(base)], ai: false };
+    let half_size = arena.as_ref().map_or(BattleConfig::default().half_size, |a| a.half_size());
+    Battle::new(BattleSetup { catalog: cat.clone(), sides: vec![attacker, defender], config: BattleConfig { arena, half_size, fog_of_war: false, ..BattleConfig::default() } })
+}
+
+#[test]
+fn mercenary_debuffs_weaken_the_enemy_factions_after_the_dummys_countdown() {
+    let Some((data, fs)) = load() else { return };
+    let cat = Arc::new(Catalog::build(&data, Some(&fs), &["E_Mercenary_Outpost", "E_Mercenary_Citadel", "Nebulon_B_Frigate", "Broadside_Cruiser"]));
+    let id = |n: &str| cat.buildable_id(n).unwrap();
+    let damage = cat.buildable(id("Empire_Enemies_-7%_Damage_Debuff"));
+    // `Debuff_Empire_Enemies__Damage.lua` spawns `Empire_Enemies_-7%_Damage` at the `Debuff Marker`; it destroys itself after 10 s and
+    // leaves one `<faction>_-7%_Damage` aura per other faction.
+    assert_eq!((damage.cost, damage.time, damage.debuff_delay, damage.debuff_marker.as_deref()), (0, 0.0, 10.0, Some("Debuff Marker")));
+    let factions: Vec<&str> = damage.debuffs.iter().map(|d| d.faction.as_str()).collect();
+    assert_eq!(factions, ["rebel", "underworld", "cis", "republic", "sith", "csa", "warlords", "hapan", "mandalorians", "cartels"]);
+    assert!(damage.spawn.is_none(), "the dummy is no battle unit");
+    assert!(cat.ship_id("Empire_Enemies_-7%_Damage").is_none());
+    let arena = Arena::load(&data, &fs, "_SPACE_PLANET_ALDERAAN_01.TED").map(Arc::new);
+    assert!(arena.as_ref().unwrap().markers.iter().any(|m| m.name.eq_ignore_ascii_case("Debuff Marker")));
+    let of = |b: &Battle, n: &str| b.ships.iter().find(|s| s.alive && cat.ship(s.def).name == n).unwrap().bonus();
+
+    let mut b = defended_on(&cat, arena.clone(), "Empire", "E_Mercenary_Outpost");
+    b.command(1, Command::TacticalBuild { item: id("Empire_Enemies_-7%_Damage_Debuff") }).unwrap();
+    for _ in 0..30 * 9 {
+        b.step();
+    }
+    assert_eq!(of(&b, "Nebulon_B_Frigate").damage, 1.0, "the dummy still counts down");
+    for _ in 0..30 * 3 {
+        b.step();
+    }
+    assert!((of(&b, "Nebulon_B_Frigate").damage - 0.93).abs() < 1e-5);
+    assert_eq!(of(&b, "Broadside_Cruiser").damage, 1.0, "the owner's faction is not hit");
+    assert_eq!(b.command(1, Command::TacticalBuild { item: id("Empire_Enemies_-7%_Damage_Debuff") }), Err(CommandError::BuildLimit));
+    assert_eq!(b.result().attrition_credits[1], 0);
+
+    // Without a `Debuff Marker` the script finds no place and spawns nothing.
+    let mut bare = defended_on(&cat, None, "Empire", "E_Mercenary_Outpost");
+    bare.command(1, Command::TacticalBuild { item: id("Empire_Enemies_-7%_Damage_Debuff") }).unwrap();
+    for _ in 0..30 * 12 {
+        bare.step();
+    }
+    assert_eq!(of(&bare, "Nebulon_B_Frigate").damage, 1.0);
+
+    // The citadel's speed debuff is the dummy unit itself on the bar: built at the station, no marker needed.
+    let speed = cat.buildable(id("Empire_Enemies_-17%_Speed"));
+    assert_eq!((speed.debuff_delay, speed.debuff_marker.as_deref()), (10.0, None));
+    let mut c = defended_on(&cat, None, "Empire", "E_Mercenary_Citadel");
+    c.command(1, Command::TacticalBuild { item: id("Empire_Enemies_-17%_Speed") }).unwrap();
+    for _ in 0..30 * 12 {
+        c.step();
+    }
+    assert!((of(&c, "Nebulon_B_Frigate").speed - 0.83).abs() < 1e-5);
+}

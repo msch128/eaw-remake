@@ -51,6 +51,12 @@ pub struct BuildableDef {
     pub script: Option<String>,
     /// What `script` spawns when the item is finished, if it is a spawn script (purchased reinforcements; see `spawns.rs`).
     pub spawn: Option<std::sync::Arc<crate::SpawnScriptDef>>,
+    /// Auras its debuff dummies leave for the enemy factions (mercenary structures; see [`dummy_debuffs`]).
+    pub debuffs: Vec<DebuffDef>,
+    /// Seconds from finishing the item to the debuffs (the dummies' countdown).
+    pub debuff_delay: f32,
+    /// The map marker its script places the dummies on: without one on the map the script spawns nothing.
+    pub debuff_marker: Option<String>,
 }
 
 /// `Tactical_Buildable_Objects_Campaign` of object `name`: `(faction, item)` pairs, faction lower case. The tag is a list in which a
@@ -111,9 +117,40 @@ pub fn buildable_defs(data: &GameData, items: &[String]) -> Vec<BuildableDef> {
                     .fold(1.0, f32::max),
                 script: r.string("lua_script").filter(|s| !s.trim().is_empty()),
                 spawn: None,
+                debuffs: Vec::new(),
+                debuff_delay: 0.0,
+                debuff_marker: None,
             }
         })
         .collect()
+}
+
+/// The aura a debuff dummy leaves behind (see [`dummy_debuffs`]): `bonus` acts on the ships of the side whose faction is `faction`.
+#[derive(Debug, Clone, Default)]
+pub struct DebuffDef {
+    /// Lower-case faction name (the `Affiliation` of the aura object).
+    pub faction: String,
+    /// Its `Combat_Bonus_Ability`.
+    pub bonus: crate::BonusDef,
+}
+
+/// A mercenary debuff dummy (`Destruction_Space_Dummy` variants such as `Empire_Enemies_-7%_Damage`): it destroys itself after its
+/// `SELF_DESTRUCT` `Expiration_Seconds` and leaves its `Destruction_Survivors`, one aura object per enemy faction. Returns that delay and
+/// the auras; `None` if `name` is no such dummy.
+pub(crate) fn dummy_debuffs(data: &GameData, name: &str) -> Option<(f32, Vec<DebuffDef>)> {
+    let unit = data.objects.space_unit(name)?;
+    let countdown = unit.abilities.iter().find(|a| a.kind.eq_ignore_ascii_case("SELF_DESTRUCT"))?.expiration_seconds.unwrap_or(0.0).max(0.0);
+    let survivors = unit.destruction_survivors.as_deref()?;
+    let toks = alamo_data::xml::split_list(survivors);
+    let mut out = Vec::new();
+    for survivor in toks.iter().filter(|t| alamo_data::xml::parse_num::<f32>(t).is_none()) {
+        let Some(r) = data.objects.resolve(survivor) else { continue };
+        let bonuses: Vec<crate::BonusDef> = data.objects.sub_abilities(survivor).iter().filter_map(crate::BonusDef::from_sub_ability).collect();
+        for faction in r.list("affiliation") {
+            out.extend(bonuses.iter().map(|b| DebuffDef { faction: faction.to_ascii_lowercase(), bonus: b.clone() }));
+        }
+    }
+    (!out.is_empty()).then_some((countdown, out))
 }
 
 /// Every item reachable from `roots` through prerequisites and previous levels, roots first.
@@ -166,6 +203,18 @@ impl Battle {
     /// Items `side` has finished in this battle (an item replaced by a later level is gone).
     pub fn built(&self, side: u8) -> &[BuildId] {
         self.built.get(side as usize).map_or(&[], Vec::as_slice)
+    }
+
+    /// The debuff auras that act on `side` now (mercenary structures of its enemies).
+    pub fn debuffs_on(&self, side: u8) -> Vec<&crate::BonusDef> {
+        let Some(faction) = self.sides.get(side as usize).map(|s| s.name.to_ascii_lowercase()) else { return Vec::new() };
+        self.debuffs
+            .iter()
+            .filter(|&&(at, _)| at <= self.time)
+            .flat_map(|&(_, b)| self.catalog.buildables[b as usize].debuffs.iter())
+            .filter(|d| d.faction == faction)
+            .map(|d| &d.bonus)
+            .collect()
     }
 
     /// True if a built item of `side` enables ability `ability` of unit type `unit` (`Enable_Ability`).
@@ -274,6 +323,13 @@ impl Battle {
             let owner = self.ships.iter().find(|s| s.side == side && s.alive && !s.retreated && self.catalog.ship(s.def).buildable.iter().any(|(f, b)| *f == faction && *b == item));
             if let Some(owner) = owner.map(|s| s.id) {
                 self.run_spawn_script(owner, &script, 0x8000 | item as u64);
+            }
+        }
+        let def = &self.catalog.buildables[item as usize];
+        if !def.debuffs.is_empty() {
+            let marker_ok = def.debuff_marker.as_ref().is_none_or(|m| self.config.arena.as_ref().is_some_and(|a| a.markers.iter().any(|k| k.name.eq_ignore_ascii_case(m))));
+            if marker_ok {
+                self.debuffs.push((self.time + def.debuff_delay, item));
             }
         }
         if self.config.record_events {

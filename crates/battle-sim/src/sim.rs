@@ -257,6 +257,7 @@ impl Battle {
             spent: vec![0; sides.len()],
             build_jobs: Vec::new(),
             built: vec![Vec::new(); sides.len()],
+            debuffs: Vec::new(),
             sides,
             ships: Vec::new(),
             projectiles: Vec::new(),
@@ -3019,16 +3020,22 @@ impl Battle {
     /// `Combat_Bonus_Ability` auras: per side, the strongest bonus of each stacking category counts, categories add up.
     fn run_bonuses(&mut self) {
         let cat = self.catalog.clone();
-        if !self.ships.iter().any(|s| !cat.ship(s.def).bonuses.is_empty()) && self.built.iter().all(Vec::is_empty) {
+        if !self.ships.iter().any(|s| !cat.ship(s.def).bonuses.is_empty()) && self.built.iter().all(Vec::is_empty) && self.debuffs.is_empty() {
             return;
         }
-        // Every aura of a living ship, per side, and the bonuses of the side's finished tactical builds.
+        // Every aura of a living ship, per side, the bonuses of the side's finished tactical builds and the debuffs its enemies' mercenary
+        // structures leave on its faction.
         let mut auras: std::collections::BTreeMap<u8, Vec<&BonusDef>> = std::collections::BTreeMap::new();
         for s in self.ships.iter().filter(|s| s.alive && !s.retreated) {
             auras.entry(s.side).or_default().extend(&cat.ship(s.def).bonuses);
         }
         for side in 0..self.sides.len() as u8 {
             auras.entry(side).or_default().extend(self.built[side as usize].iter().flat_map(|&b| cat.buildables[b as usize].bonuses.iter()));
+        }
+        for d in self.debuffs.iter().filter(|d| d.0 <= self.time).flat_map(|&(_, b)| cat.buildables[b as usize].debuffs.iter()) {
+            if let Some(side) = self.sides.iter().position(|s| s.name.eq_ignore_ascii_case(&d.faction)) {
+                auras.entry(side as u8).or_default().push(&d.bonus);
+            }
         }
         for s in self.ships.iter_mut() {
             let def = cat.ship(s.def);

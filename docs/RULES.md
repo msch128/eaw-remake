@@ -477,6 +477,14 @@ stays as a derived figure for bars and decisions (`ShipDef::hull` times the shar
   `Sleep(1)` the list's units drop out of hyperspace at the `Defending Forces Position` markers, one after the other. Like
   every scripted unit they belong to the battle only. In 4.0 no structure offers them: the fighter wings are on no build
   bar and the Uplink Command's `Tactical_Buildable_Objects_Campaign` (the light task forces) is commented out.
+* Mercenary debuffs (Mercenary Outpost / Settlement / Citadel bars: `<Faction>_Enemies_-7%_Damage_Debuff`, `-13%_Shield`,
+  `-10%_Health`, `-32%_Range`, 0 credits and 0 s each, and the dummy unit `<Faction>_Enemies_-17%_Speed` itself). Data: the
+  item's `Debuff_*` script spawns a `Destruction_Space_Dummy` variant at the map's `Debuff Marker` (a map without one gets
+  nothing: 74 of 151 space maps have it); the speed dummy is built at the structure. The dummy destroys itself after its
+  `SELF_DESTRUCT` `Expiration_Seconds` (10 s) and leaves its `Destruction_Survivors`, one aura object per other faction with a
+  `Combat_Bonus_Ability` for `Corvette | Frigate | Capital` (`Stacking_Category` 0). Project reading (the engine's owner of a
+  destruction survivor is not verified): each aura acts on the side of the faction its `Affiliation` names, for the rest of the
+  battle; the dummies and auras are no battle units.
 * Estimate: fighters stay with their squad leader or carrier when idle and fly strafing runs (approach, break away 1 to
   2.5 s).
 * Launch out of the hangar (estimate): fighters leave along the bay bone's X axis (data: the opening) until 40 u clear
