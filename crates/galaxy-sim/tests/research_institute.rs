@@ -1,6 +1,6 @@
 //! Remake tech levels come from the Research Institute: `E_Tech-2` ... `R_Tech-5` (`Build_Advances_Tech_Level`, variants of `Dummy_<F>`) need the
 //! faction's `<F>_Research_Institute` on the planet, take 300 / 450 / 600 / 750 s, and the Clone Wars stack adds `CIS_Tech-*` / `Republic_Tech-*`.
-//! Prices are the design rule (`tech_level_cost`), not the object's. Skipped when a mod folder is missing.
+//! Prices are the objects' own `Build_Cost_Credits` (1000 for level 1, then 20000 / 30000 / 40000 / 50000). Skipped when a mod folder is missing.
 
 use alamo_data::{GameData, load_galaxy};
 use alamo_fs::{GameFs, GameInstall};
@@ -30,6 +30,8 @@ fn check_chain(data: &GameData, campaign: &str, name: &str, prefix: &str) -> boo
         assert_eq!(up.name, format!("{prefix}_Tech-{level}"), "{name}: level {level} is the mod's upgrade object");
         let seconds = match level { 1 => 50.0, 2 => 300.0, 3 => 450.0, 4 => 600.0, _ => 750.0 };
         assert_eq!(up.time, seconds, "{name} level {level} time");
+        let price = match level { 1 => 1000.0, 2 => 20000.0, 3 => 30000.0, 4 => 40000.0, _ => 50000.0 };
+        assert_eq!(up.cost, price, "{name} level {level} costs the object's Build_Cost_Credits");
         assert_eq!(up.req_structures.len(), 1, "{name} level {level} needs one structure group");
         let inst = &w.structures[up.req_structures[0][0] as usize].name;
         assert!(inst.to_ascii_lowercase().ends_with("research_institute"), "{name} level {level} needs {inst}");

@@ -23,7 +23,6 @@ pub mod ai;
 pub mod cheats;
 mod ground_up;
 mod catalog;
-pub use catalog::tech_level_cost;
 pub mod combat;
 mod api;
 pub mod production;

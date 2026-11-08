@@ -85,10 +85,10 @@ every owned planet, the planet's `Additional_Population_Capacity`, its star base
 * The build bar lists items in object load order (`GameObjectFiles.XML`) with `GUI_Row` 0 (upgrade items) before 1.
 * Tech levels in the Remake and Clone Wars data: upgrade objects with `Build_Advances_Tech_Level`
   (`Research/Units/Upgrade_Dummies.xml`). Data: time 300 / 450 / 600 / 750 s, star base level 1, and the faction's
-  `<F>_Research_Institute` on the planet where it is bought. Project rule: the price is `tech_level_cost` (5000 /
-  10000 / 20000 / 50000), not the object's `Build_Cost_Credits`. The institute requirement binds only the human
-  player because the Remake scripts lock the institute for the AI; the built-in AI buys levels at any star base
-  planet (estimate). The `Research_<F>_Shipyard_N` units have empty names and no effect.
+  `<F>_Research_Institute` on the planet where it is bought. Data: the price is the object's `Build_Cost_Credits`
+  (20000 / 30000 / 40000 / 50000 for levels 2 to 5, 1000 for `CIS_Tech-1` and `Republic_Tech-1`). The institute
+  requirement binds only the human player because the Remake scripts lock the institute for the AI; the built-in AI
+  buys levels at any star base planet (estimate). The `Research_<F>_Shipyard_N` units have empty names and no effect.
 * Tech levels in vanilla data: `*_Level_N_Tech_Upgrade` objects (`Tactical_Build_Increments_Tech_Level`, cost
   `Tactical_Build_Cost_Campaign`), star base only. Estimate: factions without them get upgrades at 3000 x level.
 * New ships join the idle fleet of that faction at the planet, or create one.
