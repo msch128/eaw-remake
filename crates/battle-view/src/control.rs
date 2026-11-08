@@ -249,17 +249,46 @@ pub fn ui_block(
     }
 }
 
-/// Screen-space description of a ship for picking.
+/// Screen-space description of a ship for picking: a capsule, the points within `radius_px` of the segment `screen`..`tail` (a circle
+/// round `screen` where both ends are the same).
 struct Projected {
     id: u32,
     screen: Vec2,
+    tail: Vec2,
     radius_px: f32,
+}
+
+impl Projected {
+    /// A round pick area.
+    fn circle(id: u32, screen: Vec2, radius_px: f32) -> Self {
+        Self { id, screen, tail: screen, radius_px }
+    }
+
+    /// Distance of `cursor` from the pick area's middle line in units of its radius: 1 or less is inside.
+    fn under(&self, cursor: Vec2) -> f32 {
+        let seg = self.tail - self.screen;
+        let t = if seg.length_squared() > 1e-6 { ((cursor - self.screen).dot(seg) / seg.length_squared()).clamp(0.0, 1.0) } else { 0.0 };
+        (self.screen + seg * t).distance(cursor) / self.radius_px.max(1e-3)
+    }
+}
+
+/// Ends of the middle line of a hull's plan view (battle-sim's capsule: `front` ahead of the centre, `back` behind, `half_width` to each
+/// side) for a ship at Bevy position `pos` with sim heading `yaw`, in Bevy space; one point for a hull no longer than it is wide.
+fn hull_core(hull: &battle_sim::nav::Hull, pos: Vec3, yaw: f32) -> (Vec3, Vec3) {
+    let (mut lo, mut hi) = (hull.half_width - hull.back, hull.front - hull.half_width);
+    if lo > hi {
+        let mid = (hull.front - hull.back) * 0.5;
+        (lo, hi) = (mid, mid);
+    }
+    let along = |d: f32| pos + sim_dir_to_bevy(battle_sim::Vec3::new(yaw.cos() * d, yaw.sin() * d, 0.0));
+    (along(lo), along(hi))
 }
 
 fn project_ships(
     camera: &Camera,
     gt: &GlobalTransform,
     ships: &RenderedShips,
+    catalog: &battle_sim::Catalog,
     scale: f32,
 ) -> Vec<Projected> {
     let right = gt.right();
@@ -269,14 +298,23 @@ fn project_ships(
         let Ok(c) = camera.world_to_viewport(gt, s.pos) else {
             continue;
         };
+        // A ship with a hull is under the cursor where its hull is (the Remake picks the model): a capsule along the hull, not a circle
+        // of the collision radius round its centre, which reaches beside a long hull and misses its bow and stern.
+        let hull = catalog.ship(s.def).hull_shape.filter(|_| s.squad == u32::MAX);
+        let (head, tail, reach) = match hull {
+            Some(h) => {
+                let (a, b) = hull_core(&h, s.pos, s.yaw);
+                match (camera.world_to_viewport(gt, a), camera.world_to_viewport(gt, b)) {
+                    (Ok(a), Ok(b)) => (a, b, h.half_width),
+                    _ => (c, c, s.radius),
+                }
+            }
+            None => (c, c, s.radius),
+        };
         let edge = camera
-            .world_to_viewport(gt, s.pos + right * s.radius)
+            .world_to_viewport(gt, s.pos + right * reach)
             .map_or(8.0, |e| (e - c).length());
-        out.push(Projected {
-            id,
-            screen: c,
-            radius_px: edge.max(9.0 * scale),
-        });
+        out.push(Projected { id, screen: head, tail, radius_px: edge.max(9.0 * scale) });
         if s.squad != u32::MAX {
             let entry = squads.entry((s.side, s.squad)).or_insert((Vec2::ZERO, 0, id));
             entry.0 += c;
@@ -289,11 +327,7 @@ fn project_ships(
     // its icon even where its craft are a few pixels across.
     for (_, (sum_c, count, lead_id)) in squads {
         if count > 0 {
-            out.push(Projected {
-                id: lead_id,
-                screen: sum_c / (count as f32),
-                radius_px: 18.0 * scale,
-            });
+            out.push(Projected::circle(lead_id, sum_c / (count as f32), 18.0 * scale));
         }
     }
     out
@@ -302,7 +336,7 @@ fn project_ships(
 /// The accepted ship whose pick circle is closest to the cursor. `prev` (last frame's hover) stays picked while the cursor is still on it:
 /// the overlapping circles of moving ships would otherwise hand the hover back and forth every frame (flickering bars, tooltip, cursor).
 fn pick(projected: &[Projected], cursor: Vec2, accept: impl Fn(u32) -> bool, prev: Option<u32>) -> Option<u32> {
-    let under = |p: &Projected| (p.screen - cursor).length() / p.radius_px;
+    let under = |p: &Projected| p.under(cursor);
     if let Some(keep) = prev.and_then(|id| projected.iter().find(|p| p.id == id)).filter(|p| accept(p.id) && under(p) <= 1.0) {
         return Some(keep.id);
     }
@@ -389,7 +423,7 @@ pub fn selection(
         return;
     };
     let scale = settings.ui_scale;
-    let projected = project_ships(cam, gt, &ships, scale);
+    let projected = project_ships(cam, gt, &ships, &rt.catalog, scale);
     // Over the interface only a drag that started in the world may end; nothing is hovered or started.
     let is_enemy = |id: u32| ships.0.get(&id).is_some_and(|s| s.side != player);
     hover.ship = if block.0 { None } else { pick_enemy_first(&projected, cursor, !sel.ships.is_empty(), is_enemy, prev.ship) };
@@ -1051,11 +1085,27 @@ mod pick_tests {
     }
 
     #[test]
+    fn a_long_hull_is_picked_along_its_length_not_round_its_centre() {
+        // An Executor-like hull, 9000 long and 3000 wide, heading along sim x: its middle line runs 3000 either side of the centre.
+        let hull = battle_sim::nav::Hull { front: 4500.0, back: 4500.0, half_width: 1500.0 };
+        let (a, b) = hull_core(&hull, Vec3::ZERO, 0.0);
+        assert!((a - Vec3::new(-3000.0, 0.0, 0.0)).length() < 1e-2 && (b - Vec3::new(3000.0, 0.0, 0.0)).length() < 1e-2, "{a:?} {b:?}");
+        // On screen: the middle line from (100, 300) to (700, 300), 150 px to each side.
+        let ship = Projected { id: 1, screen: Vec2::new(100.0, 300.0), tail: Vec2::new(700.0, 300.0), radius_px: 150.0 };
+        assert!(ship.under(Vec2::new(690.0, 420.0)) <= 1.0, "over the bow");
+        assert!(ship.under(Vec2::new(400.0, 500.0)) > 1.0, "beside the hull, 200 px below its middle");
+        // The cursor beside the hull: a circle of 250 px round the centre took it for the ship, the hull does not.
+        let cursor = Vec2::new(400.0, 520.0);
+        assert_eq!(pick(&[Projected::circle(1, Vec2::new(400.0, 300.0), 250.0)], cursor, |_| true, None), Some(1));
+        assert_eq!(pick(&[ship], cursor, |_| true, None), None);
+    }
+
+    #[test]
     fn enemy_hull_wins_over_a_closer_own_badge_when_own_ships_are_selected() {
         // Own fighter badge (id 1) is closer in relative terms than the big enemy hull (id 2) under the same cursor.
         let projected = [
-            Projected { id: 1, screen: Vec2::new(101.0, 100.0), radius_px: 18.0 },
-            Projected { id: 2, screen: Vec2::new(180.0, 100.0), radius_px: 400.0 },
+            Projected::circle(1, Vec2::new(101.0, 100.0), 18.0),
+            Projected::circle(2, Vec2::new(180.0, 100.0), 400.0),
         ];
         let cursor = Vec2::new(100.0, 100.0);
         let enemy = |id: u32| id == 2;
@@ -1077,8 +1127,8 @@ mod pick_tests {
         for frame in 0..12 {
             let j = if frame % 2 == 0 { 1.0 } else { -1.0 };
             let projected = [
-                Projected { id: 1, screen: Vec2::new(110.0 + j, 100.0), radius_px: 60.0 },
-                Projected { id: 2, screen: Vec2::new(90.0 + j, 100.0), radius_px: 60.0 },
+                Projected::circle(1, Vec2::new(110.0 + j, 100.0), 60.0),
+                Projected::circle(2, Vec2::new(90.0 + j, 100.0), 60.0),
             ];
             hover = pick_enemy_first(&projected, cursor, true, |_| true, hover);
             seen.push(hover);
@@ -1089,15 +1139,15 @@ mod pick_tests {
             .map(|frame| {
                 let j = if frame % 2 == 0 { 1.0 } else { -1.0 };
                 let projected = [
-                    Projected { id: 1, screen: Vec2::new(110.0 + j, 100.0), radius_px: 60.0 },
-                    Projected { id: 2, screen: Vec2::new(90.0 + j, 100.0), radius_px: 60.0 },
+                    Projected::circle(1, Vec2::new(110.0 + j, 100.0), 60.0),
+                    Projected::circle(2, Vec2::new(90.0 + j, 100.0), 60.0),
                 ];
                 pick_enemy_first(&projected, cursor, true, |_| true, None)
             })
             .collect();
         assert_ne!(raw[0], raw[1]);
         // Leaving the hovered hull hands the hover on.
-        let projected = [Projected { id: 1, screen: Vec2::new(300.0, 100.0), radius_px: 60.0 }, Projected { id: 2, screen: Vec2::new(90.0, 100.0), radius_px: 60.0 }];
+        let projected = [Projected::circle(1, Vec2::new(300.0, 100.0), 60.0), Projected::circle(2, Vec2::new(90.0, 100.0), 60.0)];
         assert_eq!(pick_enemy_first(&projected, cursor, true, |_| true, Some(1)), Some(2));
     }
 
