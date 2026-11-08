@@ -22,6 +22,20 @@ pub struct HpVisual {
     pub fire_sfx: Option<String>,
     /// `Type`, e.g. `HARD_POINT_ENGINE` (upper-case); picks the unit's `SFXEvent_Hardpoint_Destroyed` line.
     pub hp_type: String,
+    /// Break-off prop model that detaches and drifts on destruction (`Death_Breakoff_Prop`).
+    pub breakoff: Option<BreakoffVisual>,
+}
+
+/// Detaching break-off prop description when a hardpoint is destroyed (`Death_Breakoff_Prop`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct BreakoffVisual {
+    pub model: String,
+    pub scale: f32,
+    pub movement: Vec3,
+    pub rotate: Vec3,
+    pub min_lifetime: f32,
+    pub max_lifetime: f32,
+    pub particle: Option<String>,
 }
 
 /// Sound events of a unit type (names of `SFXEvents.xml` entries).
@@ -274,12 +288,42 @@ impl VisualCatalog {
                             .map(|v| v.trim().to_string())
                             .filter(|v| !v.is_empty())
                     };
+                    let breakoff = field("death_breakoff_prop").and_then(|prop_name| {
+                        let prop = data.objects.resolve(&prop_name)?;
+                        let model = prop.string("space_model_name").filter(|m| !m.is_empty())?;
+                        let scale = prop.num::<f32>("scale_factor").unwrap_or(1.0);
+                        let movement_raw = prop.floats("debris_movement_vector");
+                        let movement = if movement_raw.len() >= 3 {
+                            Vec3::new(movement_raw[0], movement_raw[2], -movement_raw[1])
+                        } else {
+                            Vec3::new(0.0, 0.0, -0.5)
+                        };
+                        let rot_raw = prop.floats("debris_facing_rotate_vector");
+                        let rotate = if rot_raw.len() >= 3 {
+                            Vec3::new(rot_raw[0], rot_raw[2], -rot_raw[1])
+                        } else {
+                            Vec3::new(0.5, 0.5, 0.5)
+                        };
+                        let min_lifetime = prop.num::<f32>("debris_min_lifetime_seconds").unwrap_or(10.0);
+                        let max_lifetime = prop.num::<f32>("debris_max_lifetime_seconds").unwrap_or(20.0);
+                        let particle = prop.get("debris_attached_particle").map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+                        Some(BreakoffVisual {
+                            model,
+                            scale,
+                            movement,
+                            rotate,
+                            min_lifetime,
+                            max_lifetime,
+                            particle,
+                        })
+                    });
                     HpVisual {
                         bone: hd.attachment_bone.clone().filter(|b| !b.is_empty()),
                         damage_bone: field("damage_particles"),
                         death_effect: field("death_explosion_particles"),
                         fire_sfx: field("fire_sfxevent"),
                         hp_type: hd.hp_type.trim().to_ascii_uppercase(),
+                        breakoff,
                     }
                 })
                 .collect();

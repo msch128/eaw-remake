@@ -70,6 +70,14 @@ pub struct SpinningAway {
     pub explosion: String,
 }
 
+/// A hardpoint break-off prop that has detached and drifts/tumbles (`Death_Breakoff_Prop`).
+#[derive(Component, Debug, Clone)]
+pub struct BreakoffProp {
+    pub timer: f32,
+    pub velocity: Vec3,
+    pub angular_velocity: Vec3,
+}
+
 /// Interpolated state of a living ship, refreshed every frame for picking and overlays.
 #[derive(Debug, Clone)]
 pub struct ShipRender {
@@ -284,6 +292,14 @@ impl ModelTouch<'_, '_> {
     fn bone_world(&self, view: &ShipView, bone: &str) -> Option<Vec3> {
         let e = *view.bones.as_ref()?.get(&bone.to_ascii_lowercase())?;
         self.globals.get(e).ok().map(|g| g.translation())
+    }
+
+    fn bone_transform(&self, view: &ShipView, bone: &str) -> Option<(Vec3, Quat)> {
+        let e = *view.bones.as_ref()?.get(&bone.to_ascii_lowercase())?;
+        self.globals.get(e).ok().map(|g| {
+            let tf = g.compute_transform();
+            (tf.translation, tf.rotation)
+        })
     }
 
     /// World position of the model bone called `name`, else of the first proxy whose name starts with it (`Owner_Particle_Bone_Name`
@@ -635,6 +651,38 @@ fn apply_hardpoint_death(
                 position: at,
                 normal: Vec3::Y,
             });
+        }
+    }
+    if let Some(breakoff) = &hv.breakoff {
+        let (at, rot) = hv
+            .bone
+            .as_deref()
+            .and_then(|b| touch.bone_transform(view, b))
+            .unwrap_or((Vec3::ZERO, Quat::IDENTITY));
+        let timer = (breakoff.min_lifetime + breakoff.max_lifetime) * 0.5;
+        let velocity = rot * (breakoff.movement * 30.0);
+        let angular_velocity = breakoff.rotate;
+        commands.spawn((
+            Name::new("breakoff_prop"),
+            BattleEntity,
+            alamo_render::AlamoModel::new(breakoff.model.clone()),
+            Transform::from_translation(at)
+                .with_rotation(rot)
+                .with_scale(Vec3::splat(breakoff.scale)),
+            BreakoffProp {
+                timer,
+                velocity,
+                angular_velocity,
+            },
+        ));
+        if let Some(particle) = &breakoff.particle {
+            if at != Vec3::ZERO {
+                commands.trigger(SpawnParticleEffect {
+                    particle: particle.clone(),
+                    position: at,
+                    normal: Vec3::Y,
+                });
+            }
         }
     }
     let _ = kind;
@@ -1158,6 +1206,26 @@ pub fn update_spinning_away(
         }
         tf.translation += spin.velocity * dt;
         let av = spin.angular_velocity * dt;
+        tf.rotation = Quat::from_euler(EulerRot::XYZ, av.x, av.y, av.z) * tf.rotation;
+    }
+}
+
+/// Moves and tumbles hardpoint break-off props until their lifetime expires (`Death_Breakoff_Prop`).
+pub fn update_breakoff_props(
+    mut commands: Commands,
+    time: Res<Time>,
+    rt: Res<BattleRuntime>,
+    mut q: Query<(Entity, &mut BreakoffProp, &mut Transform)>,
+) {
+    let dt = time.delta_secs().min(0.1) * rt.speed_factor();
+    for (entity, mut prop, mut tf) in &mut q {
+        prop.timer -= dt;
+        if prop.timer <= 0.0 {
+            commands.entity(entity).try_despawn();
+            continue;
+        }
+        tf.translation += prop.velocity * dt;
+        let av = prop.angular_velocity * dt;
         tf.rotation = Quat::from_euler(EulerRot::XYZ, av.x, av.y, av.z) * tf.rotation;
     }
 }
@@ -1978,5 +2046,79 @@ mod tests {
         world.get_mut::<SpinningAway>(e).unwrap().time_left = 0.0;
         world.run_system_once(update_spinning_away).expect("finish update");
         assert!(world.get_entity(e).is_err(), "entity despawns after spin time elapses");
+    }
+
+    #[test]
+    fn hardpoint_breakoff_prop_detaches_and_drifts_on_death() {
+        use bevy::ecs::system::RunSystemOnce;
+        let mut world = World::new();
+        world.init_resource::<crate::effects::BloomPulses>();
+        let view = ShipView { id: 1, def: 0, side: 0, hp_applied: vec![false], bones: None, hp_parts: vec![], attitude: Attitude::default(), born: 0.0, visual_radius: 0.0, shown: true };
+        let hv = crate::visuals::HpVisual {
+            bone: None,
+            damage_bone: None,
+            death_effect: None,
+            fire_sfx: None,
+            hp_type: "HARD_POINT_WEAPON_LASER".into(),
+            breakoff: Some(crate::visuals::BreakoffVisual {
+                model: "EV_StarDestroyer_HP00_L-F.alo".into(),
+                scale: 1.0,
+                movement: Vec3::new(-0.2, -0.5, 0.0),
+                rotate: Vec3::new(0.9, 0.3, -0.4),
+                min_lifetime: 15.0,
+                max_lifetime: 25.0,
+                particle: Some("Space_Debris_Fire_Large_Empire".into()),
+            }),
+        };
+
+        world.run_system_once(move |mut commands: Commands, mut touch: ModelTouch| {
+            apply_hardpoint_death(&mut commands, &mut touch, &view, 0, &hv, HpKind::Weapon);
+        }).expect("apply");
+
+        let mut q = world.query::<(&BreakoffProp, &alamo_render::AlamoModel, &Transform)>();
+        let (prop, model, _tf) = q.iter(&world).next().expect("breakoff prop entity should be spawned");
+        assert_eq!(model.path, "EV_StarDestroyer_HP00_L-F.alo");
+        assert_eq!(prop.timer, 20.0);
+        assert_eq!(prop.velocity, Vec3::new(-0.2, -0.5, 0.0) * 30.0);
+
+        let e_prop = world.query_filtered::<Entity, With<BreakoffProp>>().single(&world).expect("single prop");
+        world.init_resource::<Time>();
+        let catalog = std::sync::Arc::new(battle_sim::Catalog::default());
+        let sim = crate::sim::SimHandle::spawn(battle_sim::Battle::new(battle_sim::BattleSetup { sides: vec![], catalog: catalog.clone(), config: battle_sim::BattleConfig::default() }));
+        world.insert_resource(crate::BattleRuntime {
+            sim,
+            catalog,
+            visuals: std::sync::Arc::new(crate::visuals::VisualCatalog::default()),
+            dt: 1.0 / 30.0,
+            clock: 0.0,
+            cur: None,
+            next: None,
+            alpha: 0.0,
+            fresh_events: vec![],
+            entities: HashMap::new(),
+            dying: HashSet::new(),
+            request: None,
+            player_faction: None,
+            start_alive: vec![],
+            retreat_countdown: 0.0,
+            unit_cap: 0,
+            no_spawn_radius: 0.0,
+            reinforce_clearance: 0.0,
+            arena_half: 10_000.0,
+            fog_of_war: false,
+            speed: 1.0,
+            framed: false,
+            reported: false,
+            minimap_planets: vec![],
+            minimap_props: vec![],
+            minimap_tint: Color::BLACK,
+        });
+        world.run_system_once(update_breakoff_props).expect("update");
+        let prop = world.get::<BreakoffProp>(e_prop).expect("still drifting");
+        assert!(prop.timer <= 20.0);
+
+        world.get_mut::<BreakoffProp>(e_prop).unwrap().timer = 0.0;
+        world.run_system_once(update_breakoff_props).expect("finish update");
+        assert!(world.get_entity(e_prop).is_err(), "breakoff prop entity despawns after lifetime");
     }
 }

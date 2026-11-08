@@ -326,6 +326,7 @@ impl BattleSession {
             particles.extend(s.spin_away.as_ref().and_then(|spin| spin.explosion.clone()));
             particles.extend(s.hardpoints.iter().filter_map(|h| h.death_effect.clone()));
             particles.extend(s.asteroid_hit_particles.clone());
+            particles.extend(s.hardpoints.iter().filter_map(|h| h.breakoff.as_ref().and_then(|b| b.particle.clone())));
             // `Damage_Particles` names a bone with fire proxies or a particle object (`request_particles` keeps the objects).
             particles.extend(s.hardpoints.iter().filter_map(|h| h.damage_bone.clone()));
         }
@@ -533,8 +534,7 @@ impl Plugin for BattleViewPlugin {
                             ships::update_ships,
                             ships::update_arrival_flashes,
                             ships::update_departures,
-                            (ships::update_dying, ships::update_wrecks, ships::update_spinning_away, effects::bloom_pulse).chain(),
-                            ships::update_debris_chunks,
+                            (ships::update_dying, ships::update_wrecks, ships::update_spinning_away, ships::update_debris_chunks, ships::update_breakoff_props, effects::bloom_pulse).chain(),
                             ships::remove_after,
                             effects::update_projectiles,
                         )
