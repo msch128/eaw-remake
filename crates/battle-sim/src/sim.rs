@@ -876,9 +876,10 @@ impl Battle {
                     return Ok(());
                 }
                 self.retreat_ordered[side as usize] = true;
-                self.retreat_jump_at[side as usize] = Some(self.time + self.config.retreat_jump_seconds.max(0.0));
+                let jump = self.config.side_retreat_jump.get(side as usize).copied().unwrap_or(self.config.retreat_jump_seconds).max(0.0);
+                self.retreat_jump_at[side as usize] = Some(self.time + jump);
                 if self.config.record_events {
-                    self.cmd_events.push(Event::RetreatOrdered { side, jump_in: self.config.retreat_jump_seconds });
+                    self.cmd_events.push(Event::RetreatOrdered { side, jump_in: jump });
                 }
                 for s in self.ships.iter_mut().filter(|s| s.side == side && s.alive && !self.catalog.ship(s.def).is_static) {
                     s.order = Order::Retreat;

@@ -546,6 +546,15 @@ fn defender_retreating_leaves_the_planet_to_the_attacker_by_the_normal_rule() {
     assert_eq!(sim.galaxy().planets[target as usize].owner, Some(empire), "the winner alone in orbit captures");
 }
 
+/// The retreat jump of each side takes its faction's `Space_Retreat_Countdown_Seconds` (`FACTIONS.XML`: 30 for the Empire and the Rebels).
+#[test]
+fn each_side_jumps_after_its_factions_retreat_countdown() {
+    let Some(ctx) = load() else { return };
+    let (mut sim, id, ..) = defended_planet_battle(&ctx);
+    let req = sim.tactical_setup(id).unwrap();
+    assert_eq!(req.battle_config(None).side_retreat_jump, vec![30.0; req.sides.len()]);
+}
+
 /// The app path of Esc -> Retreat: `Command::Retreat` once the countdown allows it, the jump timer runs, the battle ends and its normal result
 /// (winner = defender, `retreated` set) is applied. No capture, the attacker flees, no second battle.
 #[test]
@@ -991,10 +1000,10 @@ fn attrition_credits_lost_tie_squadron_and_lost_hero() {
     let arena2 = req2.map.as_ref().and_then(|m| Arena::load(&ctx.data, &ctx.fs, m)).map(Arc::new);
     let result2 = run_headless(&req2, &catalog2, arena2).expect("result");
     let es2 = req2.sides.iter().position(|s| s.faction == empire).unwrap();
-    // Tarkin (+2400) minus his destroyed garrison fighters (-3435) = -1035
-    assert_eq!(result2.attrition_credits[es2], -1035, "tactical battle net attrition credits for Tarkin and his garrison");
+    // Tarkin (+2400) minus his destroyed garrison fighters (-2230 with the faction's 30 s retreat jump; -3435 with the old 10 s estimate) = 170
+    assert_eq!(result2.attrition_credits[es2], 170, "tactical battle net attrition credits for Tarkin and his garrison");
     let credits_before_apply2 = tac_sim2.galaxy().factions[empire as usize].credits;
     tac_sim2.apply_tactical_result(battle2.id, &result2).unwrap();
     let credits_after_apply2 = tac_sim2.galaxy().factions[empire as usize].credits;
-    assert_eq!((credits_after_apply2 - credits_before_apply2).round(), -1035.0);
+    assert_eq!((credits_after_apply2 - credits_before_apply2).round(), 170.0);
 }

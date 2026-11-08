@@ -34,8 +34,10 @@ pub struct BattleConfig {
     /// Seconds before retreat becomes possible (`Space_Retreat_Allowed_Countdown_Seconds`).
     pub retreat_countdown: f32,
     /// Seconds between a retreat order and the jump to hyperspace: ships turn to their spawn side and fly there meanwhile; when it runs out, units with a living drive
-    /// escape. **Estimate** (the user named 10 or 20 s; the data has no value).
+    /// escape. For sides without an entry in `side_retreat_jump`: 30, the faction `Space_Retreat_Countdown_Seconds` every Remake faction has.
     pub retreat_jump_seconds: f32,
+    /// Per side: the faction's `Space_Retreat_Countdown_Seconds` (`FACTIONS.XML`). Missing entries use `retreat_jump_seconds`.
+    pub side_retreat_jump: Vec<f32>,
     /// Seconds between target scans per ship.
     pub retarget_interval: f32,
     /// Population cap per side for reinforcements (`Space_Tactical_Unit_Cap`).
@@ -97,7 +99,8 @@ impl Default for BattleConfig {
             record_events: true,
             max_time: 3600.0,
             retreat_countdown: 60.0,
-            retreat_jump_seconds: 10.0,
+            retreat_jump_seconds: 30.0,
+            side_retreat_jump: Vec::new(),
             retarget_interval: 0.4,
             unit_cap: 150,
             reinforce_delay: 5.0,

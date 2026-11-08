@@ -224,6 +224,8 @@ pub struct FactionInfo {
     pub home: Option<PlanetId>,
     /// `Space_Tactical_Unit_Cap`: population a side may have in a space battle (units beyond it wait in the reinforcement pool); 150 if the data has none.
     pub space_unit_cap: i32,
+    /// `Space_Retreat_Countdown_Seconds`: seconds from a retreat order to the jump in a space battle; `None` when the faction has none.
+    pub space_retreat_countdown: Option<f32>,
     /// Tech upgrade chain: `tech_upgrades[n]` raises tech from `start_tech + n` to `+ 1`.
     pub tech_upgrades: Vec<TechUpgrade>,
 }
@@ -789,6 +791,7 @@ impl World {
                 // Design rule: 1000 population per side in a space battle, so super ships (Purifier and Annihilator together) fit.
                 // The data's `Space_Tactical_Unit_Cap` (180 in Remake 4.0) is replaced on purpose.
                 space_unit_cap: USER_SPACE_UNIT_CAP.max(def.space_unit_cap),
+                space_retreat_countdown: def.fields.get("space_retreat_countdown_seconds").and_then(|v| alamo_data::xml::parse_num(v)),
             });
         }
         for (i, f) in factions.iter_mut().enumerate() {

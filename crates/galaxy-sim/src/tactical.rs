@@ -64,6 +64,8 @@ pub struct TacticalSide {
     pub health_mult: f32,
     /// May the battle AI of this side order a retreat (`Allowed_To_Retreat_Space`: holds more than one planet, not Pirates).
     pub may_retreat: bool,
+    /// Seconds from a retreat order to the jump: the faction's `Space_Retreat_Countdown_Seconds`, `None` = the battle default.
+    pub retreat_jump: Option<f32>,
     /// Shield multiplier.
     pub shield_mult: f32,
     /// Groups; indices are used by [`TacticalResult`].
@@ -256,6 +258,7 @@ impl TacticalRequest {
                     damage_mult: world_diff(side.faction).damage,
                     health_mult: world_diff(side.faction).health,
                     may_retreat: galaxy.factions.get(side.faction as usize).is_some_and(|f| f.planets_owned > 1) && !world.factions[side.faction as usize].name.eq_ignore_ascii_case("pirates"),
+                    retreat_jump: world.factions[side.faction as usize].space_retreat_countdown,
                     shield_mult: world_diff(side.faction).shield,
                     groups,
                     powers: galaxy.factions.get(side.faction as usize).map(|f| f.powers.clone()).unwrap_or_default(),
@@ -283,7 +286,9 @@ impl TacticalRequest {
         let unit_cap = self.sides.iter().map(|s| s.unit_cap).max().unwrap_or(150);
         let side_tech = self.sides.iter().map(|s| s.tech).collect();
         let powers = self.sides.iter().map(|s| s.powers.clone()).collect();
-        BattleConfig { side_tech, seed: self.seed, max_time: self.max_seconds, half_size, arena, side_mults, retreat_allowed, defenders, unit_cap, powers, ..BattleConfig::default() }
+        let jump = BattleConfig::default().retreat_jump_seconds;
+        let side_retreat_jump = self.sides.iter().map(|s| s.retreat_jump.unwrap_or(jump)).collect();
+        BattleConfig { side_tech, seed: self.seed, max_time: self.max_seconds, half_size, arena, side_mults, retreat_allowed, defenders, unit_cap, powers, side_retreat_jump, ..BattleConfig::default() }
     }
 
     /// Builds the `battle-sim` setup. Fleet groups carry their group index as the tag; side `i` of the request is

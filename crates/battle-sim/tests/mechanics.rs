@@ -164,7 +164,8 @@ fn retreat_needs_countdown_and_ships_leave() {
         b.step();
     }
     b.command(0, Command::Retreat).unwrap();
-    for _ in 0..900 {
+    // The jump comes `Space_Retreat_Countdown_Seconds` (30) after the order.
+    for _ in 0..30 * 40 {
         b.step();
         if b.is_over() {
             break;
@@ -175,6 +176,26 @@ fn retreat_needs_countdown_and_ships_leave() {
     assert_eq!(r.winner, Some(1));
     let g = r.groups.iter().find(|g| g.side == 0).unwrap();
     assert_eq!((g.total, g.survived, g.retreated), (2, 2, 2));
+}
+
+#[test]
+fn the_retreat_jump_takes_each_sides_own_countdown() {
+    // `Space_Retreat_Countdown_Seconds` is a faction value (30 for every Remake faction); a side without one uses the default, 30.
+    assert_eq!(BattleConfig::default().retreat_jump_seconds, 30.0);
+    let mut mobile = ship("runner", 1000.0, 0.0, vec![]);
+    mobile.is_static = false;
+    let cat = Catalog::from_defs(vec![mobile], vec![laser()]);
+    let mut c = cfg();
+    c.retreat_countdown = 0.0;
+    c.side_retreat_jump = vec![12.0, 25.0];
+    let mut b = Battle::new(setup(cat, "runner", "runner", 1, 1, c));
+    b.command(0, Command::Retreat).unwrap();
+    b.command(1, Command::Retreat).unwrap();
+    let events = b.step().to_vec();
+    assert!(events.contains(&Event::RetreatOrdered { side: 0, jump_in: 12.0 }), "{events:?}");
+    assert!(events.contains(&Event::RetreatOrdered { side: 1, jump_in: 25.0 }), "{events:?}");
+    let left = |b: &Battle, side: u8| b.retreat_jump_in(side);
+    assert!(left(&b, 0).is_some_and(|t| (t - 12.0).abs() < 0.1) && left(&b, 1).is_some_and(|t| (t - 25.0).abs() < 0.1));
 }
 
 #[test]

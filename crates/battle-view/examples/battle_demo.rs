@@ -579,7 +579,7 @@ fn capture_driver(
         STRAFE_ORDERED.store(true, std::sync::atomic::Ordering::Relaxed);
     }
     // `SP_DEMO_RETREAT=<secs>` (60 or more, the sim allows a retreat from then on): the player's side orders its retreat at that battle time and
-    // jumps away `retreat_jump_seconds` (10) later, each ship with its departure flash.
+    // jumps away `retreat_jump_seconds` (30) later, each ship with its departure flash.
     if !RETREAT_ORDERED.load(std::sync::atomic::Ordering::Relaxed)
         && let Some(at) = std::env::var("SP_DEMO_RETREAT").ok().and_then(|v| v.parse::<f32>().ok())
         && let Some(cur) = rt.cur.as_ref()

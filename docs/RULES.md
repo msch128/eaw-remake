@@ -467,7 +467,8 @@ with `speed_mult > 1.05` when fleeing or when the target is over twice the weapo
   nearest enemy. Enemy mobile ships do not block a spot.
 * Data: retreat becomes available after `Space_Retreat_Allowed_Countdown_Seconds` (60 s) and is blocked by enemy
   interdictors; `Space_Retreat_Attrition_Factor` is 0. Estimate: on the order every mobile unit heads for its own spawn
-  point and a jump timer (`retreat_jump_seconds` 10 s; the data has no value) runs; at zero every living unit with a
+  point. Data: the jump timer is the faction's `Space_Retreat_Countdown_Seconds` (`FACTIONS.XML`, 30 s for every Remake
+  faction; `BattleConfig::side_retreat_jump`, 30 s where a faction has none); at zero every living unit with a
   living engine hardpoint (ships without engine hardpoints count as having drives) escapes and counts as a survivor,
   the others are lost. Units spawned in the battle do not escape on their own: a carrier's launched squadrons escape
   only with the carrier; called-in reinforcements are lost. Pressing Retreat again while the timer runs calls it off
@@ -635,7 +636,6 @@ Kept in `sim.rs` and `defs.rs`; they shape how ships move, never damage, health,
 | Launch | `LAUNCH_CLEARANCE` 40 u, `LAUNCH_EXIT_MAX` 150 u | the data gives bay bones and flyout distance only |
 | Missile arc | `MISSILE_ARC_PER_TURN_RATE` 0.17, `MISSILE_ARC_MAX` 0.6 rad | no launch angle in the data |
 | Death Star countdown | `TSW_SPEED_SCALE` 10 | no scale from `Max_Speed` to units per second |
-| Retreat jump | `retreat_jump_seconds` 10 s | no value in the data |
 | No-spawn radius | `no_spawn_radius` 2000 u | taken from the AI equations' "near" |
 
 The hold of the victory/defeat banner before the summary (`OUTCOME_HOLD_SECONDS` in `battle-view`, 5 s) is a project
