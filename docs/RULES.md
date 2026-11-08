@@ -464,6 +464,13 @@ stays as a derived figure for bars and decisions (`ShipDef::hull` times the shar
   bought again). Purchases and cancellations are journaled commands. The credits a side spent leave the battle with its
   result (`attrition_credits`, so the galaxy pays them when the result is applied). Estimate: a queued item whose last
   offering structure is destroyed leaves the queue and its credits come back (the data says nothing).
+* Data: what a finished tactical build does, for the rest of that battle only (nothing in the data or the Lua carries it
+  to the galaxy or the next battle): its `Combat_Bonus_Ability` entries act like auras of the whole side (2.6; the
+  `Applicable_Unit_Categories` / `Applicable_Unit_Types` decide which ships, `Stacking_Category` 3 for every upgrade), its
+  `Enable_Ability` switches the named disabled ability of the listed unit types on, and a `Battlefield_Modifier_Ability`
+  `Stealth_Duration_Multiplier` lengthens the side's timed `STEALTH`. Bonuses update with the aura pulse (once a second).
+  In 4.0 the Underworld `US_Reinforced_Structure_L1..L3` bonuses are `Ground_Automatic` and do nothing in space, and the
+  `US_Magnetically_Sealed_Armor` upgrades enable an ability that only `Xizor_Virago` has, which they do not list.
 * Estimate: fighters stay with their squad leader or carrier when idle and fly strafing runs (approach, break away 1 to
   2.5 s).
 * Launch out of the hangar (estimate): fighters leave along the bay bone's X axis (data: the opening) until 40 u clear

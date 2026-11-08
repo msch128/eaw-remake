@@ -1153,8 +1153,12 @@ impl Battle {
         }
         let no_cooldown = self.cheats.has_no_cooldowns(self.ships[ship as usize].side);
         let shot = a.shot.is_some();
-        // `Stealth_Duration_Multiplier` of the side's battlefield modifiers lengthens a timed cloak.
-        let duration = if a.stealth && !a.toggle { a.duration * self.field_modifier(self.ships[ship as usize].side, |m| m.stealth_duration) } else { a.duration };
+        // A tactical build or battlefield modifier's `Stealth_Duration_Multiplier` lengthens timed stealth (the recharge still starts when it ends).
+        let duration = if a.stealth && !a.toggle {
+            a.duration * self.field_modifier(self.ships[ship as usize].side, |m| m.stealth_duration) * self.build_stealth_duration(self.ships[ship as usize].side)
+        } else {
+            a.duration
+        };
         let st = &mut self.ships[ship as usize].abilities[ability];
         st.target = target;
         st.active = duration;
@@ -1638,7 +1642,7 @@ impl Battle {
         let granted = |name: &str| {
             self.config.powers.get(s.side as usize).is_some_and(|set| {
                 set.iter().any(|(u, a)| u.eq_ignore_ascii_case(&def.name) && a.eq_ignore_ascii_case(name))
-            })
+            }) || self.build_enables(s.side, &def.name, name)
         };
         // No grant: a disabled ability is not there, and the roll stays the one an ungranted battle already used.
         if def.redirects.is_empty() && !def.locked_redirects.iter().any(|(n, _)| granted(n)) {
@@ -3015,13 +3019,16 @@ impl Battle {
     /// `Combat_Bonus_Ability` auras: per side, the strongest bonus of each stacking category counts, categories add up.
     fn run_bonuses(&mut self) {
         let cat = self.catalog.clone();
-        if !self.ships.iter().any(|s| !cat.ship(s.def).bonuses.is_empty()) {
+        if !self.ships.iter().any(|s| !cat.ship(s.def).bonuses.is_empty()) && self.built.iter().all(Vec::is_empty) {
             return;
         }
-        // Every aura of a living ship, per side.
+        // Every aura of a living ship, per side, and the bonuses of the side's finished tactical builds.
         let mut auras: std::collections::BTreeMap<u8, Vec<&BonusDef>> = std::collections::BTreeMap::new();
         for s in self.ships.iter().filter(|s| s.alive && !s.retreated) {
             auras.entry(s.side).or_default().extend(&cat.ship(s.def).bonuses);
+        }
+        for side in 0..self.sides.len() as u8 {
+            auras.entry(side).or_default().extend(self.built[side as usize].iter().flat_map(|&b| cat.buildables[b as usize].bonuses.iter()));
         }
         for s in self.ships.iter_mut() {
             let def = cat.ship(s.def);

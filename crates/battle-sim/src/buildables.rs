@@ -13,16 +13,17 @@ use crate::battle::*;
 /// Index of a buildable in [`Catalog::buildables`].
 pub type BuildId = u32;
 
-/// What a finished purchase does.
-#[derive(Debug, Clone, Default, PartialEq)]
-pub enum BuildEffect {
-    /// Nothing the battle models.
-    #[default]
-    None,
+/// `Enable_Ability` of an upgrade: switches a disabled ability (`Initially_Enabled` No) of the listed unit types on.
+#[derive(Debug, Clone, Default)]
+pub struct EnableDef {
+    /// `Ability_Name`.
+    pub ability: String,
+    /// `Applicable_Unit_Types`.
+    pub unit_types: Vec<String>,
 }
 
 /// An item of a tactical build bar (`UpgradeObject` and the like).
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default)]
 pub struct BuildableDef {
     /// Object name.
     pub name: String,
@@ -40,8 +41,12 @@ pub struct BuildableDef {
     pub replaces: Option<BuildId>,
     /// `Build_Limit_Current_For_All_Allies` (or `_Per_Player`): how often a side may own it at once (0 = no limit).
     pub limit: u32,
-    /// What it does when finished.
-    pub effect: BuildEffect,
+    /// `Combat_Bonus_Ability` sub-abilities (`Space_Automatic`): bonuses for the side's ships while the item stays built.
+    pub bonuses: Vec<crate::BonusDef>,
+    /// `Enable_Ability` sub-abilities.
+    pub enables: Vec<EnableDef>,
+    /// `Battlefield_Modifier_Ability` `Stealth_Duration_Multiplier` (1 = none): timed stealth abilities of the side last this much longer.
+    pub stealth_duration: f32,
 }
 
 /// `Tactical_Buildable_Objects_Campaign` of object `name`: `(faction, item)` pairs, faction lower case. The tag is a list in which a
@@ -66,7 +71,7 @@ pub(crate) fn buildable_lists(data: &GameData, name: &str) -> Vec<(String, Strin
 
 /// Builds the definitions of `items` (object names), in that order; references between them (prerequisites, previous levels) are
 /// resolved by name, so every item they name must be in the list (callers pass the closure).
-pub(crate) fn buildable_defs(data: &GameData, items: &[String]) -> Vec<BuildableDef> {
+pub fn buildable_defs(data: &GameData, items: &[String]) -> Vec<BuildableDef> {
     let index: HashMap<String, BuildId> = items.iter().enumerate().map(|(i, n)| (n.to_ascii_lowercase(), i as BuildId)).collect();
     let id = |n: &str| index.get(&n.trim().to_ascii_lowercase()).copied();
     items
@@ -74,6 +79,7 @@ pub(crate) fn buildable_defs(data: &GameData, items: &[String]) -> Vec<Buildable
         .map(|name| {
             let Some(r) = data.objects.resolve(name) else { return BuildableDef { name: name.clone(), ..BuildableDef::default() } };
             let num = |t: &str| r.num::<f32>(t);
+            let subs = data.objects.sub_abilities(name);
             let replaces = r.flag("destroy_previous_upgrade_level").unwrap_or(false).then(|| r.get("previous_upgrade_level_type").and_then(id)).flatten();
             BuildableDef {
                 name: r.name().to_string(),
@@ -84,7 +90,21 @@ pub(crate) fn buildable_defs(data: &GameData, items: &[String]) -> Vec<Buildable
                 prerequisites: r.list("tactical_build_prerequisites").iter().filter_map(|p| id(p)).collect(),
                 replaces,
                 limit: num("build_limit_current_for_all_allies").or_else(|| num("build_limit_current_per_player")).unwrap_or(0.0).max(0.0) as u32,
-                effect: BuildEffect::None,
+                bonuses: subs.iter().filter_map(crate::BonusDef::from_sub_ability).collect(),
+                enables: subs
+                    .iter()
+                    .filter(|a| a.kind.eq_ignore_ascii_case("Enable_Ability"))
+                    .filter_map(|a| {
+                        let ability = a.fields.get("ability_name")?.trim().to_string();
+                        let unit_types = a.fields.get("applicable_unit_types").map(|v| alamo_data::xml::split_list(v)).unwrap_or_default();
+                        Some(EnableDef { ability, unit_types })
+                    })
+                    .collect(),
+                stealth_duration: subs
+                    .iter()
+                    .filter(|a| a.kind.eq_ignore_ascii_case("Battlefield_Modifier_Ability"))
+                    .filter_map(|a| a.fields.get("stealth_duration_multiplier").and_then(|v| alamo_data::xml::parse_num::<f32>(v)))
+                    .fold(1.0, f32::max),
             }
         })
         .collect()
@@ -140,6 +160,16 @@ impl Battle {
     /// Items `side` has finished in this battle (an item replaced by a later level is gone).
     pub fn built(&self, side: u8) -> &[BuildId] {
         self.built.get(side as usize).map_or(&[], Vec::as_slice)
+    }
+
+    /// True if a built item of `side` enables ability `ability` of unit type `unit` (`Enable_Ability`).
+    pub(crate) fn build_enables(&self, side: u8, unit: &str, ability: &str) -> bool {
+        self.built(side).iter().flat_map(|&b| self.catalog.buildables[b as usize].enables.iter()).any(|e| e.ability.eq_ignore_ascii_case(ability) && e.unit_types.iter().any(|t| t.eq_ignore_ascii_case(unit)))
+    }
+
+    /// Stealth duration multiplier from the items `side` has built (the strongest one).
+    pub(crate) fn build_stealth_duration(&self, side: u8) -> f32 {
+        self.built(side).iter().map(|&b| self.catalog.buildables[b as usize].stealth_duration).fold(1.0, f32::max)
     }
 
     /// The production queue of `side`: items and seconds left, the one being built first.
@@ -226,15 +256,12 @@ impl Battle {
     }
 
     fn finish_build(&mut self, side: u8, item: BuildId) {
-        let def = self.catalog.buildables[item as usize].clone();
+        let replaces = self.catalog.buildables[item as usize].replaces;
         let built = &mut self.built[side as usize];
-        if let Some(old) = def.replaces {
+        if let Some(old) = replaces {
             built.retain(|&b| b != old);
         }
         built.push(item);
-        match &def.effect {
-            BuildEffect::None => {}
-        }
         if self.config.record_events {
             self.events.push(Event::BuildFinished { side, item });
         }

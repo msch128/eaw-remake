@@ -19,13 +19,12 @@ fn names(cat: &Catalog, ids: impl IntoIterator<Item = buildables::BuildId>) -> V
     ids.into_iter().map(|b| cat.buildable(b).name.clone()).collect()
 }
 
-/// An attacker fleet far away and a defender `faction` with `base` (and `extra` structures), `credits` for the defender.
-fn defended(cat: &Arc<Catalog>, faction: &str, base: &str, extra: &[&str], credits: i64) -> Battle {
+/// A Rebel frigate and a defender `faction` with `base` and `units`; `credits` for the defender.
+fn defended(cat: &Arc<Catalog>, faction: &str, base: &str, units: &[(&str, u32)], credits: i64) -> Battle {
     let ship = |n: &str| cat.ship_id(n).unwrap_or_else(|| panic!("{n}"));
     let attacker = SideSetup { name: "Rebel".into(), units: vec![UnitSetup { ship: ship("Nebulon_B_Frigate"), count: 1, tag: 1 }], structures: vec![], ai: false };
-    let mut structures = vec![ship(base)];
-    structures.extend(extra.iter().map(|n| ship(n)));
-    let defender = SideSetup { name: faction.into(), units: vec![], structures, ai: false };
+    let units = units.iter().map(|&(n, count)| UnitSetup { ship: ship(n), count, tag: 2 }).collect();
+    let defender = SideSetup { name: faction.into(), units, structures: vec![ship(base)], ai: false };
     Battle::new(BattleSetup { catalog: cat.clone(), sides: vec![attacker, defender], config: BattleConfig { side_credits: vec![0, credits], fog_of_war: false, ..BattleConfig::default() } })
 }
 
@@ -118,4 +117,147 @@ fn only_the_stations_faction_may_buy_from_it() {
     assert!(b.buildable(1).is_empty());
     let w1 = cat.buildable_id("ES_Improved_Weapons_L1_Upgrade").unwrap();
     assert_eq!(b.build_check(1, w1), Err(CommandError::NotBuildable));
+}
+
+/// Steps `b` until `side` has finished `item` (panics after `limit` seconds).
+fn build(b: &mut Battle, side: u8, item: buildables::BuildId, limit: f32) {
+    b.command(side, Command::TacticalBuild { item }).unwrap();
+    let end = b.time() + limit;
+    while !b.built(side).contains(&item) {
+        assert!(b.time() < end, "{item} not built in {limit} s");
+        b.step();
+    }
+    // Bonuses are recomputed once a second.
+    for _ in 0..30 {
+        b.step();
+    }
+}
+
+#[test]
+fn the_space_upgrades_read_their_effects() {
+    let Some((data, _)) = load() else { return };
+    // Every `UpgradeObject` of `Upgrades/GC/Space/{Empire,Rebel,Underworld}`.
+    let names: Vec<String> = data
+        .objects
+        .iter()
+        .filter(|o| o.kind.eq_ignore_ascii_case("UpgradeObject"))
+        .filter(|o| ["Empire", "Rebel", "Underworld"].iter().any(|f| o.source_file.eq_ignore_ascii_case(&format!("Upgrades/GC/Space/{f}/{}", o.source_file.rsplit('/').next().unwrap()))))
+        .map(|o| o.name.clone())
+        .collect();
+    assert_eq!(names.len(), 45);
+    let defs = buildables::buildable_defs(&data, &names);
+    let bonus = defs.iter().filter(|d| !d.bonuses.is_empty()).count();
+    let enable = defs.iter().filter(|d| !d.enables.is_empty()).count();
+    let stealth = defs.iter().filter(|d| d.stealth_duration > 1.0).count();
+    // 3 x 2 purchased reinforcements are Lua scripts (`Reinforcements.xml`); the Underworld `US_Reinforced_Structure_L1..L3` bonuses
+    // have `Activation_Style` Ground_Automatic, so they do nothing in space.
+    let none: Vec<&str> = defs.iter().filter(|d| d.bonuses.is_empty() && d.enables.is_empty() && d.stealth_duration == 1.0).map(|d| d.name.as_str()).collect();
+    assert_eq!((bonus, enable, stealth), (31, 3, 2), "{none:?}");
+    let def = |n: &str| defs.iter().find(|d| d.name == n).unwrap();
+    let w2 = &def("ES_Improved_Weapons_L2_Upgrade").bonuses[0];
+    assert_eq!((w2.damage, w2.stacking), (0.25, 3));
+    assert!(w2.applies("TIE_Fighter", TargetClass::Fighter) && w2.applies("Tartan_Patrol_Cruiser", TargetClass::Corvette) && !w2.applies("Star_Destroyer", TargetClass::Capital));
+    assert_eq!(def("US_Targeting_Systems_L1_Upgrade").bonuses[0].range, 0.15);
+    assert_eq!(def("US_Cloaking_Generator_L2_Upgrade").stealth_duration, 1.5);
+    let armor = &def("US_Magnetically_Sealed_Armor_L3_Upgrade").enables[0];
+    assert_eq!((armor.ability.as_str(), armor.unit_types.clone()), ("US_Magnetically_Sealed_Armor_Bonus_L3", vec!["Starviper".to_string(), "Crusader_Gunship".into(), "Kedalbe_Battleship".into()]));
+}
+
+#[test]
+fn finished_upgrades_boost_the_sides_ships_of_their_classes() {
+    let Some((data, fs)) = load() else { return };
+    let cat = Arc::new(Catalog::build(&data, Some(&fs), &["Empire_Star_Base_3", "Nebulon_B_Frigate", "TIE_Fighter_Squadron", "Broadside_Cruiser"]));
+    let mut b = defended(&cat, "Empire", "Empire_Star_Base_3", &[("TIE_Fighter_Squadron", 1), ("Broadside_Cruiser", 1)], 10_000);
+    let id = |n: &str| cat.buildable_id(n).unwrap();
+    let of = |b: &Battle, n: &str| b.ships.iter().find(|s| s.alive && cat.ship(s.def).name.starts_with(n)).unwrap().bonus();
+    b.step();
+    assert_eq!(of(&b, "TIE_Fighter").speed, 1.0);
+    build(&mut b, 1, id("ES_Enhanced_Reactors_L1_Upgrade"), 21.0);
+    // L1: fighters, bombers and gunships only (a frigate is not).
+    assert!((of(&b, "TIE_Fighter").speed - 1.25).abs() < 1e-5);
+    assert_eq!(of(&b, "Broadside_Cruiser").speed, 1.0);
+    build(&mut b, 1, id("ES_Enhanced_Reactors_L2_Upgrade"), 31.0);
+    // L2 replaces L1 and adds corvettes and frigates; bonuses of one stacking category do not add up.
+    assert!((of(&b, "TIE_Fighter").speed - 1.25).abs() < 1e-5);
+    assert!((of(&b, "Broadside_Cruiser").speed - 1.25).abs() < 1e-5);
+    build(&mut b, 1, id("ES_Reinforced_Armor_L1_Upgrade"), 31.0);
+    assert!((of(&b, "TIE_Fighter").taken_hull - 0.8).abs() < 1e-5 && (of(&b, "TIE_Fighter").taken_shield - 0.8).abs() < 1e-5);
+    // `Applicable_Unit_Types` Empire_Star_Base_3: the station's own guns.
+    build(&mut b, 1, id("ES_Improved_Defenses_L1_Upgrade"), 26.0);
+    assert!((of(&b, "Empire_Star_Base_3").damage - 1.15).abs() < 1e-5);
+    assert_eq!(of(&b, "TIE_Fighter").damage, 1.0);
+    // The enemy gets nothing.
+    assert_eq!(of(&b, "Nebulon_B_Frigate"), Bonus::default());
+}
+
+#[test]
+fn an_enable_ability_upgrade_switches_the_listed_types_locked_ability_on() {
+    let Some((data, fs)) = load() else { return };
+    // In the data the armour upgrades name Starviper, Crusader_Gunship and Kedalbe_Battleship, which have no ability of that name;
+    // only Xizor_Virago has `US_Magnetically_Sealed_Armor_Bonus_L1` (disabled). The rule is checked with Xizor listed.
+    let mut cat = Catalog::build(&data, Some(&fs), &["Underworld_Star_Base_1", "Star_Destroyer", "Xizor_Virago", "Starviper"]);
+    let xizor = cat.ship(cat.ship_id("Xizor_Virago").unwrap());
+    assert!(xizor.locked_redirects.iter().any(|(n, _)| n == "us_magnetically_sealed_armor_bonus_l1"), "{:?}", xizor.locked_redirects);
+    assert!(cat.ship(cat.ship_id("Starviper").unwrap()).locked_redirects.iter().all(|(n, _)| !n.starts_with("us_magnetically")));
+    let item = cat.buildable_id("US_Reinforced_Structure_L1_Upgrade").unwrap();
+    cat.buildables[item as usize].bonuses.clear();
+    cat.buildables[item as usize].enables = vec![buildables::EnableDef { ability: "US_Magnetically_Sealed_Armor_Bonus_L1".into(), unit_types: vec!["Xizor_Virago".into()] }];
+    let cat = Arc::new(cat);
+    let hull_left = |buy: bool| {
+        let ship = |n: &str| cat.ship_id(n).unwrap();
+        let empire = SideSetup { name: "Empire".into(), units: vec![UnitSetup { ship: ship("Star_Destroyer"), count: 1, tag: 1 }], structures: vec![], ai: false };
+        let uw = SideSetup { name: "Underworld".into(), units: vec![UnitSetup { ship: ship("Xizor_Virago"), count: 1, tag: 2 }], structures: vec![ship("Underworld_Star_Base_1")], ai: false };
+        let config = BattleConfig {
+            side_credits: vec![0, 1000],
+            fog_of_war: false,
+            record_events: false,
+            seed: 1,
+            shield_regen_delay: 10_000.0,
+            retreat_allowed: vec![false, false],
+            side_mults: vec![SideMult { damage: 1.0, health: 1.0, shield: 1.0 }, SideMult { damage: 0.0, health: 80.0, shield: 80.0 }],
+            ..BattleConfig::default()
+        };
+        let mut b = Battle::new(BattleSetup { catalog: cat.clone(), sides: vec![empire, uw], config });
+        if buy {
+            build(&mut b, 1, item, 26.0);
+        }
+        let isd = b.ships.iter().find(|s| s.side == 0).unwrap().id;
+        let x = b.ships.iter().find(|s| s.side == 1 && cat.ship(s.def).name == "Xizor_Virago").unwrap().id;
+        b.ships[isd as usize].pos = Vec3::new(0.0, 0.0, 0.0);
+        b.ships[x as usize].pos = Vec3::new(600.0, 0.0, 0.0);
+        b.command(0, Command::Attack { ships: vec![isd], target: x }).unwrap();
+        for _ in 0..30 * 12 {
+            b.step();
+        }
+        let s = &b.ships[x as usize];
+        assert!(s.alive);
+        s.hull + s.shield
+    };
+    let (bare, armoured) = (hull_left(false), hull_left(true));
+    assert!(armoured > bare + 1.0, "blocked shots: {armoured} vs {bare}");
+}
+
+#[test]
+fn a_stealth_duration_upgrade_lengthens_timed_stealth() {
+    let Some((data, fs)) = load() else { return };
+    // The cloaking generators (`Stealth_Duration_Multiplier` 1.25 / 1.5) are on no campaign build bar; the rule is checked with the
+    // multiplier on an item the Underworld level 1 base offers.
+    let mut cat = Catalog::build(&data, Some(&fs), &["Underworld_Star_Base_1", "Nebulon_B_Frigate", "Tyber_Zann_Interceptor-IV"]);
+    let item = cat.buildable_id("US_Reinforced_Structure_L1_Upgrade").unwrap();
+    cat.buildables[item as usize].stealth_duration = 1.5;
+    let cat = Arc::new(cat);
+    let tz = cat.ship(cat.ship_id("Tyber_Zann_Interceptor-IV").unwrap());
+    let (k, a) = tz.abilities.iter().enumerate().find(|(_, a)| a.stealth && !a.toggle).expect("a timed stealth ability");
+    assert_eq!(a.duration, 180.0);
+    let active = |buy: bool| {
+        let mut b = defended(&cat, "Underworld", "Underworld_Star_Base_1", &[("Tyber_Zann_Interceptor-IV", 1)], 1000);
+        if buy {
+            build(&mut b, 1, item, 26.0);
+        }
+        let s = b.ships.iter().find(|s| cat.ship(s.def).name == "Tyber_Zann_Interceptor-IV").unwrap().id;
+        b.command(1, Command::UseAbility { ship: s, ability: k as u16 }).unwrap();
+        b.ships[s as usize].abilities[k].active
+    };
+    assert_eq!(active(false), 180.0);
+    assert_eq!(active(true), 270.0);
 }

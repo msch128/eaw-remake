@@ -1080,6 +1080,11 @@ impl Default for SideMult {
 }
 
 impl Ship {
+    /// Multipliers from friendly combat bonuses (auras and tactical builds) at the last step.
+    pub fn bonus(&self) -> Bonus {
+        self.bonus
+    }
+
     /// Current value of a timed `Projectile_Combat_Mod` / `WEAKEN_ENEMY` effect on this ship (0 = none; -0.25 = 25% less).
     pub fn mod_value(&self, kind: ModKind) -> f32 {
         self.mods[kind as usize].0
