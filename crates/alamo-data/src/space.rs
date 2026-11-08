@@ -942,7 +942,7 @@ const STRUCTURE_KINDS: [&str; 5] = [
     "groundbase",
 ];
 
-/// Credits to recruit the object `r`. Deviation from the data (RULES.md): the Remake prices the first ship of some hero chains at 1 credit, which makes the
+/// Credits to recruit the object `r`. Deviation from the data (docs/RULES.md): the Remake prices the first ship of some hero chains at 1 credit, which makes the
 /// hero free. A recruitable hero ship (`UniqueUnit` with a build tab entry) that costs 1 credit or less takes the first price above 1 up its
 /// `Variant_Of_Existing_Type` chain, the price of its ship class. Everything else keeps its `Build_Cost_Credits`; the upgrade items of a hero chain
 /// are separate objects with their own price.
