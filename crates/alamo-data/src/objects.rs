@@ -258,13 +258,7 @@ impl<'a> Resolved<'a> {
 
     /// First `tag` parsed as a number, `None` when absent or unparsable.
     pub fn num<T: std::str::FromStr>(&self, tag: &str) -> Option<T> {
-        self.get(tag).and_then(|s| {
-            s.split([',', ' '])
-                .find(|t| !t.is_empty())
-                .unwrap_or("")
-                .parse()
-                .ok()
-        })
+        self.get(tag).and_then(|s| crate::xml::parse_num(s.split([',', ' ']).find(|t| !t.is_empty()).unwrap_or("")))
     }
 
     /// First `tag` parsed as a boolean, `None` when absent.

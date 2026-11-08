@@ -341,3 +341,17 @@ fn fighter_vs_bomber_targeting_follows_the_priority_set_of_the_unit() {
         assert_eq!(bombers == picked.len(), wants_bomber, "{mine}: {picked:?}");
     }
 }
+
+/// `Projectile_Ion_Stun_Speed_Reduction_Percent` and `_Shot_Rate_Reduction_Percent` are fractions (0.4 = 40% slower, "-50% halves pulse count").
+#[test]
+fn ion_stun_cuts_are_the_data_fractions() {
+    let Some((data, fs)) = load() else { return };
+    let cat = Catalog::build(&data, Some(&fs), &["Star_Destroyer", "MC-80_Star_Cruiser"]);
+    let ions: Vec<&ProjDef> = cat.projectiles.iter().filter(|p| p.ion_duration > 0.0).collect();
+    assert!(!ions.is_empty(), "the Star Destroyer and MC-80 carry ion cannons");
+    for p in ions {
+        let want = data.objects.projectile(&p.name).expect("projectile in the data");
+        assert_eq!((p.ion_speed_cut, p.ion_rate_cut), (want.ion_stun_speed_reduction, want.ion_stun_shot_rate_reduction), "{}", p.name);
+        assert!(p.ion_speed_cut >= 0.2, "{}: {}", p.name, p.ion_speed_cut);
+    }
+}

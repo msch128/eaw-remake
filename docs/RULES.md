@@ -320,7 +320,9 @@ shield damage bypass shields; ion cannons (no hull damage) only hurt shields.
 
 Destroyed hardpoints (estimate): weapons stop firing; all shield generators gone collapse the shield and stop
 regeneration; engines scale speed by `0.20 + 0.80 x alive/total` (see 2.13); fighter bays stop squadron replacement.
-Ion stun slows the target and its fire rate for `Projectile_Ion_Stun_Duration` (data).
+Ion stun slows the target and its fire rate for `Projectile_Ion_Stun_Duration` (data). Data: `Projectile_Ion_Stun_Speed_Reduction_Percent`
+and `_Shot_Rate_Reduction_Percent` are fractions (0.2 to 0.999): speed x `(1 - cut)`, recharge / `(1 - cut)` (estimate: at most 10x;
+the data's comment says -50% also halves the pulse count, which is not modelled). Numbers may carry a C float suffix (`0.999f`).
 
 ## 2.3 Hit points are the hardpoints
 

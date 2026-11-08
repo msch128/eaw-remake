@@ -238,3 +238,14 @@ fn attrition_credits_from_real_data() {
     let multi = "20_Death_Penalty_Dummy, 2\n110_Death_Penalty_Dummy, 1.0\nViscount_Star_Defender_P2, 1.0\n2400_Reverse_Death_Penalty_Dummy, 1.0";
     assert_eq!(parse_attrition_credits(Some(multi), &data.objects), 2 * -20 + -110 + 0 + 2400);
 }
+
+/// `Projectile_Ion_Stun_*_Percent` are fractions in the data; three are written with a float suffix (`0.999f`).
+#[test]
+fn ion_stun_fractions_parse_with_a_float_suffix() {
+    let Some(src) = open() else { return };
+    let (data, _) = load_galaxy(&src);
+    let planetary = data.objects.projectile("Proj_Ion_Cannon_Planetary").expect("planetary ion cannon shot");
+    assert_eq!(planetary.ion_stun_speed_reduction, 0.999);
+    let large = data.objects.projectile("Proj_Ship_Ion_Cannon_Large_Dual").expect("large dual ion cannon shot");
+    assert_eq!((large.ion_stun_speed_reduction, large.ion_stun_shot_rate_reduction, large.ion_stun_duration), (0.4, 0.4, 4.5));
+}

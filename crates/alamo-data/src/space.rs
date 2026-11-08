@@ -162,8 +162,8 @@ fn parse_unit_abilities(r: &Resolved) -> Vec<UnitAbility> {
             let f = sub_fields(a);
             UnitAbility {
                 kind: f.get("type").cloned().unwrap_or_default(),
-                recharge_seconds: f.get("recharge_seconds").and_then(|v| v.parse().ok()),
-                expiration_seconds: f.get("expiration_seconds").and_then(|v| v.parse().ok()),
+                recharge_seconds: f.get("recharge_seconds").and_then(|v| crate::xml::parse_num(v)),
+                expiration_seconds: f.get("expiration_seconds").and_then(|v| crate::xml::parse_num(v)),
                 activated_ability: f
                     .get("gui_activated_ability_name")
                     .filter(|s| !s.is_empty())
@@ -192,7 +192,7 @@ fn parse_sub_abilities(r: &Resolved) -> (Vec<SubAbility>, Vec<IncomeModifier>) {
         let name = a.attr("name").unwrap_or_default().trim().to_string();
         let f = sub_fields(a);
         if a.name == "planet_income_bonus_ability" {
-            let num = |k: &str| f.get(k).and_then(|v| v.parse::<f32>().ok());
+            let num = |k: &str| f.get(k).and_then(|v| crate::xml::parse_num::<f32>(v));
             income.push(IncomeModifier {
                 name: name.clone(),
                 source_text: f

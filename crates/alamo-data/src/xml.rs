@@ -451,6 +451,12 @@ pub fn split_list(s: &str) -> Vec<String> {
         .collect()
 }
 
+/// Parses a number as the Alamo data writes it: surrounding space and a C-style float suffix are allowed (`0.999f`, `30.0f `).
+pub fn parse_num<T: std::str::FromStr>(s: &str) -> Option<T> {
+    let t = s.trim();
+    t.parse().ok().or_else(|| t.strip_suffix(['f', 'F']).and_then(|n| n.parse().ok()))
+}
+
 /// Parses an Alamo boolean (`yes`/`true`/`1` are true, anything else false).
 pub fn parse_bool(s: &str) -> bool {
     matches!(
@@ -475,6 +481,15 @@ mod tests {
         let mut w = Vec::new();
         let e = parse(s.as_bytes(), "t.xml", &mut w);
         (e, w)
+    }
+
+    #[test]
+    fn numbers_may_carry_a_float_suffix() {
+        assert_eq!(parse_num::<f32>("0.999f"), Some(0.999));
+        assert_eq!(parse_num::<f32>(" 30.0f "), Some(30.0));
+        assert_eq!(parse_num::<f32>("0.4"), Some(0.4));
+        assert_eq!(parse_num::<f32>("f"), None);
+        assert_eq!(parse_num::<i32>("12"), Some(12));
     }
 
     #[test]

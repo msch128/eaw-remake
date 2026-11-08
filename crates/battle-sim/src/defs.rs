@@ -1001,7 +1001,7 @@ impl Source {
             Source::Base(b) => &b.fields,
             Source::Structure(s) => &s.fields,
         };
-        fields.get("scale_factor").and_then(|v| v.trim().parse::<f32>().ok()).filter(|s| *s > 0.0).unwrap_or(1.0)
+        fields.get("scale_factor").and_then(|v| alamo_data::xml::parse_num::<f32>(v)).filter(|s| *s > 0.0).unwrap_or(1.0)
     }
 
     fn hardpoints(&self) -> &[String] {
@@ -1109,9 +1109,9 @@ impl Catalog {
 
         let priority_sets = fs.map(parse_priority_sets).unwrap_or_default();
         let priority_index: HashMap<String, u16> = priority_sets.iter().enumerate().map(|(i, s)| (s.name.clone(), i as u16)).collect();
-        let shield_interval = data.game_constants.get("shieldrechargeintervalinsecs").and_then(|v| v.parse().ok()).unwrap_or(2.0f32).max(0.1);
-        let depleted_shield_disable = data.game_constants.get("depleted_shield_disable_time").and_then(|v| v.parse().ok()).unwrap_or(0.0f32).max(0.0);
-        let constant = |tag: &str| data.game_constants.get(tag).and_then(|v| v.trim().parse::<f32>().ok());
+        let shield_interval = data.game_constants.get("shieldrechargeintervalinsecs").and_then(|v| alamo_data::xml::parse_num(v)).unwrap_or(2.0f32).max(0.1);
+        let depleted_shield_disable = data.game_constants.get("depleted_shield_disable_time").and_then(|v| alamo_data::xml::parse_num(v)).unwrap_or(0.0f32).max(0.0);
+        let constant = |tag: &str| data.game_constants.get(tag).and_then(|v| alamo_data::xml::parse_num::<f32>(v));
         let rules = FormationRules::default();
         let formation = FormationRules {
             spacing: constant("betweenformationspacing").unwrap_or(rules.spacing).max(0.0),
@@ -1201,7 +1201,7 @@ impl Catalog {
     fn proj_def(&self, p: &ProjectileDef) -> ProjDef {
         let speed = p.max_speed * self.speed_scale;
         let max_distance = if p.max_flight_distance > 0.0 { p.max_flight_distance } else { 4000.0 };
-        let f = |k: &str| p.fields.get(k).and_then(|v| v.parse::<f32>().ok()).unwrap_or(0.0);
+        let f = |k: &str| p.fields.get(k).and_then(|v| alamo_data::xml::parse_num::<f32>(v)).unwrap_or(0.0);
         let is_rocket = p.category.as_deref().is_some_and(|c| c.eq_ignore_ascii_case("rocket"));
         ProjDef {
             name: p.name.clone(),
@@ -1247,8 +1247,9 @@ impl Catalog {
                 speed_cut: if p.fields.get("projectile_combat_mod").is_some_and(|v| v.trim().eq_ignore_ascii_case("COMBAT_MOD_SPEED")) { (-f("projectile_combat_mod_value")).clamp(0.0, 0.9) } else { 0.0 },
             }),
             ion_duration: p.ion_stun_duration,
-            ion_speed_cut: (p.ion_stun_speed_reduction / 100.0).clamp(0.0, 1.0),
-            ion_rate_cut: (p.ion_stun_shot_rate_reduction / 100.0).clamp(0.0, 1.0),
+            // Data: fractions (0.2 to 0.999), not percentages.
+            ion_speed_cut: p.ion_stun_speed_reduction.clamp(0.0, 1.0),
+            ion_rate_cut: p.ion_stun_shot_rate_reduction.clamp(0.0, 1.0),
             model: p.space_model.clone().filter(|_| f("scale_factor") >= 0.0),
         }
     }
@@ -1290,7 +1291,7 @@ impl Catalog {
                 false,
                 s.hull,
                 s.shield_points,
-                s.fields.get("shield_refresh_rate").and_then(|v| v.parse().ok()).unwrap_or(0.0),
+                s.fields.get("shield_refresh_rate").and_then(|v| alamo_data::xml::parse_num(v)).unwrap_or(0.0),
                 s.armor_type.clone(),
                 s.fields.get("shield_armor_type").cloned(),
                 0,
@@ -1379,7 +1380,7 @@ impl Catalog {
             && let Some(&pid) = d.projectile_types.first().and_then(|p| self.proj_index.get(&p.to_ascii_lowercase()))
         {
             let range = if u.targeting_max_distance > 0.0 { u.targeting_max_distance } else { 600.0 };
-            let cone = u.fields.get("turret_rotate_extent_degrees").and_then(|v| v.parse::<f32>().ok()).unwrap_or(30.0);
+            let cone = u.fields.get("turret_rotate_extent_degrees").and_then(|v| alamo_data::xml::parse_num::<f32>(v)).unwrap_or(30.0);
             direct = Some(DirectWeaponDef {
                 projectile: pid,
                 pulses: d.pulse_count.max(1),
@@ -1457,11 +1458,11 @@ impl Catalog {
                     }
                 }
                 let offsets = u.squadron_offsets.iter().map(|o| Vec3::from_array(*o)).collect();
-                let delay = u.fields.get("spawned_squadron_delay_seconds").and_then(|v| v.parse().ok()).unwrap_or(2.0);
+                let delay = u.fields.get("spawned_squadron_delay_seconds").and_then(|v| alamo_data::xml::parse_num(v)).unwrap_or(2.0);
                 (members, offsets, at_tech0.map(|t| resolve(&t.starting)).unwrap_or_default(), at_tech0.map(|t| resolve(&t.reserve)).unwrap_or_default(), delay, ability_defs(u, &self.projectiles, &self.proj_index))
             }
             Source::Base(b) => {
-                let delay = b.fields.get("spawned_squadron_delay_seconds").and_then(|v| v.parse().ok()).unwrap_or(2.0);
+                let delay = b.fields.get("spawned_squadron_delay_seconds").and_then(|v| alamo_data::xml::parse_num(v)).unwrap_or(2.0);
                 (Vec::new(), Vec::new(), at_tech0.map(|t| resolve(&t.starting)).unwrap_or_default(), at_tech0.map(|t| resolve(&t.reserve)).unwrap_or_default(), delay, Vec::new())
             }
             Source::Structure(_) => (Vec::new(), Vec::new(), Vec::new(), Vec::new(), 2.0, Vec::new()),
@@ -1499,15 +1500,15 @@ impl Catalog {
             _ => None,
         };
         let no_spawn_radius = match src {
-            Source::Unit(u) => u.fields.get("reinforcement_prevention_radius").and_then(|v| v.trim().parse::<f32>().ok()),
-            Source::Structure(s) => s.fields.get("reinforcement_prevention_radius").and_then(|v| v.trim().parse::<f32>().ok()),
+            Source::Unit(u) => u.fields.get("reinforcement_prevention_radius").and_then(|v| alamo_data::xml::parse_num::<f32>(v)),
+            Source::Structure(s) => s.fields.get("reinforcement_prevention_radius").and_then(|v| alamo_data::xml::parse_num::<f32>(v)),
             Source::Base(b) => Some(b.reinforcement_prevention_radius),
         }
         .filter(|&r| r > 0.0)
         .unwrap_or(0.0);
         let sensor_range = match src {
-            Source::Unit(u) => u.fields.get("space_fow_reveal_range").and_then(|v| v.trim().parse::<f32>().ok()),
-            Source::Structure(s) => s.fields.get("space_fow_reveal_range").and_then(|v| v.trim().parse::<f32>().ok()),
+            Source::Unit(u) => u.fields.get("space_fow_reveal_range").and_then(|v| alamo_data::xml::parse_num::<f32>(v)),
+            Source::Structure(s) => s.fields.get("space_fow_reveal_range").and_then(|v| alamo_data::xml::parse_num::<f32>(v)),
             Source::Base(b) => Some(b.fow_reveal_range),
         }
         .filter(|&r| r > 0.0)
@@ -1518,7 +1519,7 @@ impl Catalog {
                 .iter()
                 .filter(|a| a.kind.eq_ignore_ascii_case("Force_Healing_Ability") && a.fields.get("activation_style").is_some_and(|v| v.trim().eq_ignore_ascii_case("Space_Automatic")))
                 .map(|a| {
-                    let num = |k: &str| a.fields.get(k).and_then(|v| v.trim().parse::<f32>().ok()).unwrap_or(0.0);
+                    let num = |k: &str| a.fields.get(k).and_then(|v| alamo_data::xml::parse_num::<f32>(v)).unwrap_or(0.0);
                     HealDef {
                         range: num("heal_range"),
                         amount: num("heal_amount"),
@@ -1538,7 +1539,7 @@ impl Catalog {
                 .iter()
                 .filter(|a| a.kind.eq_ignore_ascii_case("Combat_Bonus_Ability") && a.fields.get("activation_style").is_some_and(|v| v.trim().eq_ignore_ascii_case("Space_Automatic")))
                 .map(|a| {
-                    let num = |k: &str| a.fields.get(k).and_then(|v| v.trim().parse::<f32>().ok()).unwrap_or(0.0).clamp(-0.9, 10.0);
+                    let num = |k: &str| a.fields.get(k).and_then(|v| alamo_data::xml::parse_num::<f32>(v)).unwrap_or(0.0).clamp(-0.9, 10.0);
                     BonusDef {
                         damage: num("damage_bonus_percentage"),
                         health: num("health_bonus_percentage"),
@@ -1559,11 +1560,11 @@ impl Catalog {
                 let mut on = Vec::new();
                 let mut locked = Vec::new();
                 for a in u.sub_abilities.iter().filter(|a| a.kind.eq_ignore_ascii_case("Redirect_Blaster_Ability")) {
-                    let num = |k: &str| a.fields.get(k).and_then(|v| v.trim().parse::<f32>().ok()).unwrap_or(0.0).clamp(0.0, 1.0);
+                    let num = |k: &str| a.fields.get(k).and_then(|v| alamo_data::xml::parse_num::<f32>(v)).unwrap_or(0.0).clamp(0.0, 1.0);
                     let def = RedirectDef {
                         block: num("block_chance"),
                         redirect: num("redirect_chance"),
-                        half_arc: a.fields.get("reaction_arc_in_degrees").and_then(|v| v.trim().parse::<f32>().ok()).unwrap_or(360.0).clamp(0.0, 360.0).to_radians() / 2.0,
+                        half_arc: a.fields.get("reaction_arc_in_degrees").and_then(|v| alamo_data::xml::parse_num::<f32>(v)).unwrap_or(360.0).clamp(0.0, 360.0).to_radians() / 2.0,
                         classes: a.fields.get("applicable_unit_categories").map_or(0, |v| alamo_data::xml::split_list(v).iter().filter_map(|t| TargetClass::from_token(t)).fold(0u16, |m, c| m | c.bit())),
                     };
                     if def.block + def.redirect <= 0.0 {
@@ -1591,9 +1592,9 @@ impl Catalog {
                         alamo_data::xml::split_list(pts).first().and_then(|p| self.proj_index.get(&p.to_ascii_lowercase()).copied())
                     });
                     proj.map(|projectile| {
-                        let recharge = s.fields.get("projectile_fire_recharge_seconds").and_then(|v| v.trim().parse::<f32>().ok()).unwrap_or(80.0);
+                        let recharge = s.fields.get("projectile_fire_recharge_seconds").and_then(|v| alamo_data::xml::parse_num::<f32>(v)).unwrap_or(80.0);
                         let pulse_count = s.fields.get("projectile_fire_pulse_count").and_then(|v| v.trim().parse::<u32>().ok()).unwrap_or(1);
-                        let pulse_delay = s.fields.get("projectile_fire_pulse_delay_seconds").and_then(|v| v.trim().parse::<f32>().ok()).unwrap_or(0.5);
+                        let pulse_delay = s.fields.get("projectile_fire_pulse_delay_seconds").and_then(|v| alamo_data::xml::parse_num::<f32>(v)).unwrap_or(0.5);
                         let valid_targets = s.fields.get("special_weapon_valid_targets").map_or(
                             TargetClass::Frigate.bit() | TargetClass::Capital.bit() | TargetClass::Super.bit(),
                             |v| alamo_data::xml::split_list(v).iter().filter_map(|t| TargetClass::from_token(t)).fold(0u16, |m, c| m | c.bit()),
@@ -1648,7 +1649,7 @@ impl Catalog {
             ai_power: match src {
                 Source::Unit(u) => u.ai_combat_power,
                 Source::Base(b) => b.ai_combat_power,
-                Source::Structure(s) => s.fields.get("ai_combat_power").and_then(|v| v.trim().parse().ok()).unwrap_or(0.0),
+                Source::Structure(s) => s.fields.get("ai_combat_power").and_then(|v| alamo_data::xml::parse_num(v)).unwrap_or(0.0),
             }
             .max(0.0),
             attrition_credits: match src {
@@ -1678,9 +1679,9 @@ impl Catalog {
             interdictor,
             special_weapon,
             background: matches!(src, Source::Unit(u) if u.fields.get("in_background").is_some_and(|v| alamo_data::xml::parse_bool(v))),
-            formation_order: unit_field("formationorder").and_then(|v| v.trim().parse().ok()).unwrap_or(1),
-            formation_priority: unit_field("formation_priority").and_then(|v| v.trim().parse().ok()).unwrap_or(1),
-            formation_spacing: unit_field("formationspacing").and_then(|v| v.trim().parse().ok()).unwrap_or(1.0),
+            formation_order: unit_field("formationorder").and_then(alamo_data::xml::parse_num).unwrap_or(1),
+            formation_priority: unit_field("formation_priority").and_then(alamo_data::xml::parse_num).unwrap_or(1),
+            formation_spacing: unit_field("formationspacing").and_then(alamo_data::xml::parse_num).unwrap_or(1.0),
             formation_solo: unit_field("formationgrouping").is_some_and(|v| v.trim().eq_ignore_ascii_case("solo")),
             formation_no_wait: unit_field("waitsforformationformup").is_some_and(|v| !alamo_data::xml::parse_bool(v)),
         }
@@ -1795,7 +1796,7 @@ impl Catalog {
         // use it, forbidding fighters, bombers, gunships, transports and corvettes).
         let forbidden = h.fire_category_restrictions.iter().filter_map(|t| TargetClass::from_token(t)).fold(0u16, |m, c| m | c.bit());
         let allowed = if forbidden == 0 { 0 } else { 0x1FF & !forbidden };
-        let f = |k: &str, d: f32| h.fields.get(k).and_then(|v| v.parse::<f32>().ok()).unwrap_or(d);
+        let f = |k: &str, d: f32| h.fields.get(k).and_then(|v| alamo_data::xml::parse_num::<f32>(v)).unwrap_or(d);
         let _ = (index, class);
         HpDef {
             name: h.name.clone(),
@@ -1873,7 +1874,7 @@ fn ability_defs(u: &SpaceUnitDef, projectiles: &[ProjDef], proj_index: &HashMap<
             // `LASER_DEFENSE` (point defence turrets) shoots down missiles, rockets and torpedoes inside `Effective_Radius` for `Defense_Duration_In_Secs` of the linked ability.
             let laser = a.kind.eq_ignore_ascii_case("LASER_DEFENSE");
             let defence_secs = laser.then(|| {
-                a.activated_ability.as_ref().and_then(|n| u.sub_abilities.iter().find(|s| s.name.eq_ignore_ascii_case(n))).and_then(|s| s.fields.get("defense_duration_in_secs")).and_then(|v| v.trim().parse::<f32>().ok()).unwrap_or(30.0)
+                a.activated_ability.as_ref().and_then(|n| u.sub_abilities.iter().find(|s| s.name.eq_ignore_ascii_case(n))).and_then(|s| s.fields.get("defense_duration_in_secs")).and_then(|v| alamo_data::xml::parse_num::<f32>(v)).unwrap_or(30.0)
             });
             let m = |k: &str| a.mod_multipliers.iter().find(|(n, _)| n == k).map(|&(_, v)| v);
             let mut speed_mult = m("SPEED_MULTIPLIER").unwrap_or(1.0);
@@ -1920,19 +1921,19 @@ fn ability_defs(u: &SpaceUnitDef, projectiles: &[ProjDef], proj_index: &HashMap<
                 cause_damage_mult,
                 recharge: a.recharge_seconds.unwrap_or(30.0),
                 // A reveal ping has no expiration in the data: it shows the area for 5 s (estimate).
-                duration: if toggle { f32::MAX / 4.0 } else if ping { a.expiration_seconds.filter(|&x| x > 0.0).unwrap_or(5.0) } else if let Some(secs) = defence_secs { secs } else if a.kind.eq_ignore_ascii_case("CORRUPT_SYSTEMS") { a.activated_ability.as_ref().and_then(|n| u.sub_abilities.iter().find(|s| s.name.eq_ignore_ascii_case(n))).and_then(|s| s.fields.get("duration_in_seconds")).and_then(|v| v.trim().parse().ok()).unwrap_or(30.0) } else { a.expiration_seconds.unwrap_or(12.0) },
+                duration: if toggle { f32::MAX / 4.0 } else if ping { a.expiration_seconds.filter(|&x| x > 0.0).unwrap_or(5.0) } else if let Some(secs) = defence_secs { secs } else if a.kind.eq_ignore_ascii_case("CORRUPT_SYSTEMS") { a.activated_ability.as_ref().and_then(|n| u.sub_abilities.iter().find(|s| s.name.eq_ignore_ascii_case(n))).and_then(|s| s.fields.get("duration_in_seconds")).and_then(|v| alamo_data::xml::parse_num(v)).unwrap_or(30.0) } else { a.expiration_seconds.unwrap_or(12.0) },
                 stealth: a.kind.eq_ignore_ascii_case("STEALTH"),
-                reveal_radius: if ping { a.fields.get("effective_radius").and_then(|v| v.parse().ok()).unwrap_or(1000.0) } else { 0.0 },
+                reveal_radius: if ping { a.fields.get("effective_radius").and_then(|v| alamo_data::xml::parse_num(v)).unwrap_or(1000.0) } else { 0.0 },
                 interdict: a.kind.eq_ignore_ascii_case("INTERDICT"),
                 hunt: a.kind.eq_ignore_ascii_case("HUNT"),
                 replenish: a.kind.eq_ignore_ascii_case("REPLENISH_WINGMEN"),
                 lure: a.kind.eq_ignore_ascii_case("LURE").then(|| LureDef {
-                    radius: a.fields.get("effective_radius").and_then(|v| v.trim().parse().ok()).unwrap_or(0.0),
+                    radius: a.fields.get("effective_radius").and_then(|v| alamo_data::xml::parse_num(v)).unwrap_or(0.0),
                     types: a.fields.get("target_types").map(|v| alamo_data::xml::split_list(v).iter().map(|t| t.to_ascii_lowercase()).collect()).unwrap_or_default(),
                 }).filter(|l| l.radius > 0.0),
                 energy: a.kind.eq_ignore_ascii_case("ENERGY_WEAPON").then(|| {
                     let sub = a.activated_ability.as_ref().and_then(|n| u.sub_abilities.iter().find(|s| s.name.eq_ignore_ascii_case(n)));
-                    let f = |k: &str| sub.and_then(|s| s.fields.get(k)).and_then(|v| v.trim().parse::<f32>().ok()).unwrap_or(0.0);
+                    let f = |k: &str| sub.and_then(|s| s.fields.get(k)).and_then(|v| alamo_data::xml::parse_num::<f32>(v)).unwrap_or(0.0);
                     EnergyDef {
                         max_range: f("activation_max_range"),
                         dps: f("damage_per_frame") * 30.0,
@@ -1941,7 +1942,7 @@ fn ability_defs(u: &SpaceUnitDef, projectiles: &[ProjDef], proj_index: &HashMap<
                 }).filter(|e| e.dps > 0.0 && e.max_range > 0.0),
                 cluster: a.kind.eq_ignore_ascii_case("CLUSTER_BOMB").then(|| {
                     let sub = a.activated_ability.as_ref().and_then(|n| u.sub_abilities.iter().find(|s| s.name.eq_ignore_ascii_case(n)));
-                    let f = |k: &str| sub.and_then(|s| s.fields.get(k)).and_then(|v| v.trim().parse::<f32>().ok()).unwrap_or(0.0);
+                    let f = |k: &str| sub.and_then(|s| s.fields.get(k)).and_then(|v| alamo_data::xml::parse_num::<f32>(v)).unwrap_or(0.0);
                     let p = sub.and_then(|s| s.fields.get("bomb_type")).and_then(|n| proj_index.get(&n.trim().to_ascii_lowercase())).and_then(|&i| projectiles.get(i as usize));
                     ClusterDef {
                         delay: f("detonation_time_in_secs"),
@@ -1955,7 +1956,7 @@ fn ability_defs(u: &SpaceUnitDef, projectiles: &[ProjDef], proj_index: &HashMap<
                     let p = a.fields.get("spawned_object_type").and_then(|n| proj_index.get(&n.trim().to_ascii_lowercase())).and_then(|&i| projectiles.get(i as usize));
                     let (heal_radius, heal_amount, heal_classes) = p.and_then(|p| p.instant_heal).unwrap_or_default();
                     BombDef {
-                        countdown: a.fields.get("bomb_countdown_seconds").and_then(|v| v.trim().parse().ok()).unwrap_or(0.0),
+                        countdown: a.fields.get("bomb_countdown_seconds").and_then(|v| alamo_data::xml::parse_num(v)).unwrap_or(0.0),
                         heal_radius,
                         heal_amount,
                         heal_classes,
@@ -1966,7 +1967,7 @@ fn ability_defs(u: &SpaceUnitDef, projectiles: &[ProjDef], proj_index: &HashMap<
                 }).filter(|b| b.heal_amount > 0.0 || b.blast_damage > 0.0),
                 weaken: a.kind.eq_ignore_ascii_case("WEAKEN_ENEMY").then(|| {
                     let p = a.fields.get("spawned_object_type").and_then(|n| proj_index.get(&n.trim().to_ascii_lowercase())).and_then(|&i| projectiles.get(i as usize)).and_then(|p| p.weaken.clone()).unwrap_or(WeakenDef { radius: 2000.0, duration: 60.0, cause_reduction: 0.25, take_increase: 0.0, speed_cut: 0.25 });
-                    WeakenDef { radius: a.fields.get("effective_radius").and_then(|v| v.trim().parse().ok()).unwrap_or(p.radius), ..p }
+                    WeakenDef { radius: a.fields.get("effective_radius").and_then(|v| alamo_data::xml::parse_num(v)).unwrap_or(p.radius), ..p }
                 }),
                 toggle,
                 salvo: a.kind.eq_ignore_ascii_case("FULL_SALVO"),
@@ -1974,7 +1975,7 @@ fn ability_defs(u: &SpaceUnitDef, projectiles: &[ProjDef], proj_index: &HashMap<
                 autocast_default: a.fields.get("active_by_default").is_some_and(|v| alamo_data::xml::parse_bool(v)),
                 corrupt: a.kind.eq_ignore_ascii_case("CORRUPT_SYSTEMS").then(|| {
                     let sub = a.activated_ability.as_ref().and_then(|n| u.sub_abilities.iter().find(|s| s.name.eq_ignore_ascii_case(n)));
-                    let f = |k: &str, d: f32| sub.and_then(|s| s.fields.get(k)).and_then(|v| v.trim().parse::<f32>().ok()).unwrap_or(d);
+                    let f = |k: &str, d: f32| sub.and_then(|s| s.fields.get(k)).and_then(|v| alamo_data::xml::parse_num::<f32>(v)).unwrap_or(d);
                     CorruptDef { max_range: f("activation_max_range", 1000.0), duration: f("duration_in_seconds", 30.0), drain: f("shield_drain_per_second", 100.0), pick_radius: f("inaccuracy_radius", 100.0) }
                 }),
                 jam: a.kind.eq_ignore_ascii_case("SENSOR_JAMMING"),
@@ -1985,19 +1986,19 @@ fn ability_defs(u: &SpaceUnitDef, projectiles: &[ProjDef], proj_index: &HashMap<
                         delay: f("fire_frame").trim().parse::<f32>().unwrap_or(50.0) / 30.0,
                         classes: alamo_data::xml::split_list(&f("applicable_unit_categories")).iter().filter_map(|t| TargetClass::from_token(t)).fold(0u16, |m, c| m | c.bit()),
                         initial_cooldown: tsw_approach_seconds(
-                            u.fields.get("tsw_start_distance_from_target").and_then(|v| v.trim().parse().ok()).unwrap_or(0.0),
-                            u.fields.get("tsw_attack_distance_from_target").and_then(|v| v.trim().parse().ok()).unwrap_or(0.0),
-                            u.fields.get("max_speed").and_then(|v| v.trim().parse().ok()).unwrap_or(0.0),
+                            u.fields.get("tsw_start_distance_from_target").and_then(|v| alamo_data::xml::parse_num(v)).unwrap_or(0.0),
+                            u.fields.get("tsw_attack_distance_from_target").and_then(|v| alamo_data::xml::parse_num(v)).unwrap_or(0.0),
+                            u.fields.get("max_speed").and_then(|v| alamo_data::xml::parse_num(v)).unwrap_or(0.0),
                         ),
                     }
                 }),
                 zone: a.kind.eq_ignore_ascii_case("BUZZ_DROIDS").then(|| {
                     let sub = a.activated_ability.as_ref().and_then(|n| u.sub_abilities.iter().find(|s| s.name.eq_ignore_ascii_case(n)));
-                    let f = |k: &str| sub.and_then(|s| s.fields.get(k)).and_then(|v| v.trim().parse::<f32>().ok()).unwrap_or(0.0);
+                    let f = |k: &str| sub.and_then(|s| s.fields.get(k)).and_then(|v| alamo_data::xml::parse_num::<f32>(v)).unwrap_or(0.0);
                     ZoneDef { radius: f("damage_radius"), enemy_dps: f("enemy_damage_per_second"), max_range: f("activation_max_range") }
                 }).filter(|z| z.radius > 0.0 && z.enemy_dps > 0.0),
                 rocket: a.kind.eq_ignore_ascii_case("ROCKET_ATTACK") || a.kind.eq_ignore_ascii_case("SWAP_WEAPONS"),
-                missile_radius: if a.kind.eq_ignore_ascii_case("MISSILE_SHIELD") || laser { a.fields.get("effective_radius").and_then(|v| v.parse().ok()).unwrap_or(750.0) } else { 0.0 },
+                missile_radius: if a.kind.eq_ignore_ascii_case("MISSILE_SHIELD") || laser { a.fields.get("effective_radius").and_then(|v| alamo_data::xml::parse_num(v)).unwrap_or(750.0) } else { 0.0 },
                 disable_movement: a.fields.get("disable_movement").is_some_and(|v| alamo_data::xml::parse_bool(v)),
                 tractor: a.kind.eq_ignore_ascii_case("TRACTOR_BEAM").then(|| {
                     let sub = a.activated_ability.as_ref().and_then(|n| u.sub_abilities.iter().find(|s| s.name.eq_ignore_ascii_case(n)));
