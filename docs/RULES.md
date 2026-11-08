@@ -478,8 +478,20 @@ stays as a derived figure for bars and decisions (`ShipDef::hull` times the shar
     enemy they see (estimate: they are not that order).
   * Not modelled: `Autonomous_Move_Extension_Vs_Attacker` (only the squadrons have it, 1500, the same as their idle
     chase; no ship records who attacked it).
-* Orders: `Move`, `AttackMove`, `Attack(ship)`, `AttackHardpoint(ship, hardpoint)`, `Stop`, `Retreat`, stances
-  Aggressive / Defensive / HoldFire.
+* Orders: `Move`, `AttackMove`, `Attack(ship)`, `AttackHardpoint(ship, hardpoint)`, `Guard(place)`, `GuardShip(ship)`,
+  `Stop`, `Retreat`, stances Aggressive / Defensive / HoldFire.
+* Guard (`Command::Guard`; the command bar's `c_button05`, `TEXT_TOOLTIP_GUARD_BUTTON` "Follow unit or guard location",
+  `_01` "Guarding units will only pursue enemies to a limited range and then return"): the button arms the guard
+  pointer (`POINTER_GUARD`); the next left click on an own ship guards (follows) it, elsewhere guards the place; the
+  ordered unit says its `SFXEvent_Guard` line. A player's guard takes up what it reaches and every enemy within
+  `Space_Guard_Range` 2000 (`Gameconstants.xml`; 750 in the base game) of the guarded place or ship (estimate of what
+  the range measures), pursues within `Guard_Chase_Range` (above) and with nothing to fight stays at the place or
+  beside the ship (its radius + own radius + 150, like the AI's corvette escort). A ship cannot guard itself or an
+  enemy. When the guarded ship is lost the guards hold where it was. The AI's `Service_Guard` maps onto `Guard(place)`
+  (a defender at its station, a corvette beside its capital ship, re-planned every second); those guards keep the
+  pick-up ranges of before (estimate: 5000 from the ship when aggressive, 4000 when defensive) and the
+  `Guard_Chase_Range` leash. Not shown: `GUI_Guard_Move_Command_Ack_Effect` (the view draws no order acknowledgement
+  particle of `Gameconstants.xml`; it marks orders with its own rings).
 * Estimate: a broadside approach curve starts at 2.2 x standoff with a tangential offset of 0.45 x standoff; stop
   distance `max(2.5 x braking + 1.5 x radius, 400)`.
 * Estimate, bomber attack run: a bomber that reaches a frigate-or-larger target flies on 3 to 5 s (turn at most 0.15

@@ -182,8 +182,10 @@ pub enum Order {
     AttackMove(Vec3),
     /// Attack a specific ship.
     Attack(u32),
-    /// Hold a position, engaging within weapon range only.
+    /// Guard a place: engage enemies near it, pursue them a limited way (`Guard_Chase_Range`) and return.
     Guard(Vec3),
+    /// Guard (follow) a friendly ship: stay with it, engage enemies near it, pursue them a limited way and return.
+    GuardShip(u32),
     /// Leave the battle area.
     Retreat,
 }
@@ -229,6 +231,13 @@ pub enum Command {
         target: u32,
         /// Hardpoint index in the target's definition.
         hardpoint: u16,
+    },
+    /// Guard a place or follow and protect a friendly ship (the command bar's guard button, `TEXT_TOOLTIP_GUARD_BUTTON`).
+    Guard {
+        /// Ships.
+        ships: Vec<u32>,
+        /// What to guard.
+        target: GuardTarget,
     },
     /// Stop moving and attacking.
     Stop {
@@ -959,4 +968,13 @@ impl Ship {
     pub fn mod_value(&self, kind: ModKind) -> f32 {
         self.mods[kind as usize].0
     }
+}
+
+/// What a [`Command::Guard`] protects.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum GuardTarget {
+    /// A place.
+    Place(Vec3),
+    /// A ship of the own side (the guards follow it).
+    Ship(u32),
 }

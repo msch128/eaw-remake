@@ -163,3 +163,53 @@ fn a_guard_pursues_no_further_than_its_guard_chase_range() {
     assert!(farthest > 300.0, "it closes on the enemy");
     assert!(farthest <= 1000.0 + 150.0, "Guard_Chase_Range 1000 (plus the arrival tolerance), was up to the standoff of an enemy 4500 out");
 }
+
+#[test]
+fn a_guard_follows_its_ship_and_holds_where_it_was_lost() {
+    let Some((data, fs)) = load() else { return };
+    let mut b = battle(&data, &fs, &["Victory_Destroyer", "Star_Destroyer"], &["Nebulon_B_Frigate"]);
+    assert_eq!(b.catalog().space_guard_range, 2000.0, "Gameconstants.xml Space_Guard_Range");
+    let guard = place(&mut b, 0, "Victory_Destroyer", Vec3::new(-4000.0, 0.0, 0.0))[0];
+    let isd = place(&mut b, 0, "Star_Destroyer", Vec3::new(0.0, 0.0, 0.0))[0];
+    let enemy = b.ships.iter().find(|s| s.side == 1).unwrap().id;
+    b.ships[enemy as usize].pos = Vec3::new(0.0, 30000.0, 0.0);
+    b.ships[enemy as usize].stance = Stance::HoldFire;
+    assert_eq!(b.command(0, Command::Guard { ships: vec![guard], target: GuardTarget::Ship(enemy) }), Err(CommandError::InvalidShip), "not an enemy");
+    assert_eq!(b.command(0, Command::Guard { ships: vec![isd], target: GuardTarget::Ship(isd) }), Err(CommandError::InvalidShip), "not itself");
+    b.command(0, Command::Guard { ships: vec![guard], target: GuardTarget::Ship(isd) }).unwrap();
+    assert_eq!(b.ships[guard as usize].order, Order::GuardShip(isd));
+    // The guarded ship moves away; the guard follows it.
+    b.command(0, Command::Move { ships: vec![isd], to: Vec3::new(0.0, -8000.0, 0.0) }).unwrap();
+    for _ in 0..30 * 120 {
+        b.step();
+    }
+    let apart = b.ships[guard as usize].pos.dist(b.ships[isd as usize].pos);
+    eprintln!("guard {apart:.0} from the Star Destroyer after it moved 8000");
+    assert!(apart < 2500.0, "follows: {apart:.0}");
+    // The guarded ship dies: the guard holds where it was.
+    let at = b.ships[isd as usize].pos;
+    b.ships[isd as usize].alive = false;
+    b.step();
+    assert_eq!(b.ships[guard as usize].order, Order::Guard(at));
+}
+
+#[test]
+fn a_guarding_squadron_takes_up_an_enemy_beyond_its_reach_within_space_guard_range() {
+    let Some((data, fs)) = load() else { return };
+    let mut b = battle(&data, &fs, &["TIE_Fighter_Squadron", "Star_Destroyer"], &["Nebulon_B_Frigate"]);
+    let ties = place(&mut b, 0, "TIE_Fighter_Squadron", Vec3::new(-1500.0, 0.0, 0.0));
+    let isd = place(&mut b, 0, "Star_Destroyer", Vec3::new(0.0, 0.0, 0.0))[0];
+    let enemy = b.ships.iter().find(|s| s.side == 1).unwrap().id;
+    b.ships[enemy as usize].pos = Vec3::new(1900.0, 0.0, 0.0);
+    b.ships[enemy as usize].stance = Stance::HoldFire;
+    let cat = b.catalog().clone();
+    let d = cat.ship(b.ships[ties[0] as usize].def);
+    let reach = (d.max_weapon_range.max(d.targeting_range) * 1.25).max(400.0);
+    eprintln!("TIE reach {reach}, frigate 3400 from the squadron, 1900 from the Star Destroyer");
+    assert!(3400.0 > reach + 1000.0);
+    b.command(0, Command::Guard { ships: ties.clone(), target: GuardTarget::Ship(isd) }).unwrap();
+    for _ in 0..30 {
+        b.step();
+    }
+    assert!(ties.iter().all(|&t| b.ships[t as usize].candidates.contains(&enemy)), "within Space_Guard_Range 2000 of the guarded ship");
+}

@@ -787,6 +787,26 @@ impl Battle {
                     s.target_hp = NO_HP;
                 }
             }
+            Command::Guard { ships, target } => {
+                let order = match target {
+                    GuardTarget::Place(p) => Order::Guard(p),
+                    GuardTarget::Ship(t) if own(self, &[t]) => Order::GuardShip(t),
+                    GuardTarget::Ship(_) => return Err(CommandError::InvalidShip),
+                };
+                // A ship does not guard itself.
+                let ships: Vec<u32> = ships.into_iter().filter(|&i| order != Order::GuardShip(i)).collect();
+                if ships.is_empty() || !own(self, &ships) {
+                    return Err(CommandError::InvalidShip);
+                }
+                for &i in &ships {
+                    self.stop_hunt(i);
+                }
+                for i in ships {
+                    let s = &mut self.ships[i as usize];
+                    s.order = order;
+                    s.target_hp = NO_HP;
+                }
+            }
             Command::UseAbilityAt { ship, ability, pos } => {
                 if !own(self, &[ship]) {
                     return Err(CommandError::InvalidShip);
@@ -2769,6 +2789,12 @@ fn ability_product(def: &ShipDef, s: &Ship, f: impl Fn(&AbilityDef) -> f32) -> f
 fn scan(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, ai_sides: u8) {
     s.scan_in -= cfg.dt;
     s.target_age += cfg.dt;
+    // The guarded ship is gone: the guards hold the place where it was.
+    if let Order::GuardShip(g) = s.order
+        && snaps.get(g as usize).is_none_or(|t| !t.alive)
+    {
+        s.order = Order::Guard(snaps.get(g as usize).map_or(s.pos, |t| t.pos));
+    }
     let explicit = if let Order::Attack(t) = s.order { Some(t) } else { None };
     let def = cat.ship(s.def);
     let me = snaps[s.id as usize];
@@ -2788,10 +2814,13 @@ fn scan(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, ai_side
     let range = match (s.stance, s.order) {
         (Stance::Aggressive, Order::AttackMove(_)) => def.chase.attack_move.filter(|_| player_side).map_or(f32::MAX, |r| own_range + r),
         (Stance::Aggressive, Order::Idle) => f32::MAX,
-        (Stance::Aggressive, Order::Guard(_)) => 5000.0,
-        (Stance::Defensive, Order::Guard(_)) => 4000.0,
+        // The AI plan's guards (`Service_Guard` at a station, a corvette beside its capital ship) keep their own pick-up ranges (estimate).
+        (Stance::Aggressive, Order::Guard(_)) if !player_side => 5000.0,
+        (Stance::Defensive, Order::Guard(_)) if !player_side => 4000.0,
         _ => reach,
     };
+    // A player's guard takes up what it reaches and every enemy within `Space_Guard_Range` of what it guards.
+    let guard_zone = guard_anchor(s.order, snaps).filter(|_| player_side).map(|a| (a, cat.space_guard_range));
     // `Idle_Chase_Range`: an idle unit that pursues takes up only enemies it can reach from where it rests (its carrier for a launched craft).
     let leash = match (s.stance, s.order, def.chase.idle) {
         (Stance::Aggressive, Order::Idle, Some(r)) if r > 0.0 => Some((idle_anchor(s, snaps), r + own_range)),
@@ -2806,7 +2835,8 @@ fn scan(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, ai_side
             continue;
         }
         let d = t.pos.dist(me.pos) - t.radius;
-        if d > range || leash.is_some_and(|(at, r)| t.pos.dist(at) - t.radius > r) {
+        let guarded = guard_zone.is_some_and(|(at, r)| t.pos.dist(at) - t.radius <= r);
+        if (d > range && !guarded) || leash.is_some_and(|(at, r)| t.pos.dist(at) - t.radius > r) {
             continue;
         }
         let mut weight = match set {
@@ -2889,6 +2919,15 @@ fn scan(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, ai_side
                 }
             }
         }
+    }
+}
+
+/// The place a guard protects: its place, or where the guarded ship is.
+fn guard_anchor(order: Order, snaps: &[Snap]) -> Option<Vec3> {
+    match order {
+        Order::Guard(p) => Some(p),
+        Order::GuardShip(g) => snaps.get(g as usize).map(|t| t.pos),
+        _ => None,
     }
 }
 
@@ -3360,7 +3399,13 @@ fn mov(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, spawn: &
                 Goal::Point(q, def.radius.max(100.0))
             }
         }
-        Order::Guard(p) => {
+        Order::Guard(_) | Order::GuardShip(_) => {
+            let p = guard_anchor(s.order, snaps).unwrap_or(s.pos);
+            // With nothing to fight: at the guarded place, or beside the guarded ship (the AI's corvette escort keeps 150 units, `ai.rs`).
+            let home = match s.order {
+                Order::GuardShip(g) => cat.ship(snaps[g as usize].def).radius + def.radius + 150.0,
+                _ => (def.radius + 300.0).max(200.0),
+            };
             if let Some(t) = target {
                 let dist = t.pos.dist(s.pos);
                 let stand = if def.preferred_range > 0.0 {
@@ -3388,10 +3433,10 @@ fn mov(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, spawn: &
                         Goal::Hold
                     }
                 } else {
-                    Goal::Point(p, (def.radius + 300.0).max(200.0))
+                    Goal::Point(p, home)
                 }
             } else {
-                Goal::Point(p, (def.radius + 300.0).max(200.0))
+                Goal::Point(p, home)
             }
         }
         Order::Idle | Order::Attack(_) => {

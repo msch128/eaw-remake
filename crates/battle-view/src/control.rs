@@ -50,6 +50,8 @@ pub enum ArmedKind {
     AttackMove,
     /// Move to the clicked point.
     Move,
+    /// Guard the clicked own ship (follow it) or the clicked place (`c_button05`).
+    Guard,
     /// Place a reinforcement wave (handled by `tactical_ui::reinforce_place`).
     Reinforce,
     /// Pick the target point of a targeted ability (handled by `tactical_ui::ability_at`).
@@ -69,7 +71,7 @@ pub enum OrderKind {
     Attack,
     /// Stop.
     Stop,
-    /// Guard (hold position, shoot what comes in range).
+    /// Guard a place or follow a ship.
     Guard,
 }
 
@@ -666,6 +668,24 @@ pub fn orders(
             armed.0 = None;
         }
         Some(ArmedKind::Reinforce | ArmedKind::AbilityAt) => {}
+        Some(ArmedKind::Guard) => {
+            // An own ship under the cursor is followed and protected, else the clicked place is guarded (`TEXT_TOOLTIP_GUARD_BUTTON`:
+            // "Follow unit or guard location").
+            let friend = hover.ship.filter(|id| ships.0.get(id).is_some_and(|s| s.side == player));
+            let target = match (friend, target_sim) {
+                (Some(id), _) => battle_sim::GuardTarget::Ship(id),
+                (None, Some(to)) => battle_sim::GuardTarget::Place(to),
+                (None, None) => return,
+            };
+            rt.sim.command(player, Command::Guard { ships: mine, target });
+            issued.write(OrderIssued { kind: OrderKind::Guard, lead });
+            match (friend.and_then(|id| ships.0.get(&id)), target_ground) {
+                (Some(s), _) => markers.0.push((s.pos, 1.2, Color::srgb(0.3, 1.0, 0.4))),
+                (None, Some(g)) => markers.0.push((g, 1.2, Color::srgb(0.3, 1.0, 0.4))),
+                (None, None) => {}
+            }
+            armed.0 = None;
+        }
         Some(kind) => {
             let (Some(g), Some(to)) = (target_ground, target_sim) else { return };
             if kind == ArmedKind::AttackMove {
@@ -912,6 +932,11 @@ pub fn overlays(
             // Attack lines show only for a moment after the order, not for the plain selection (EaW draws none persistently).
             battle_sim::Order::Attack(t) if recent.0.contains_key(&id) => match ships.0.get(&t) {
                 Some(target) => (target.pos, Color::srgb(1.0, 0.35, 0.3)),
+                None => continue,
+            },
+            // A guard's line to the ship it follows, like an attack line only for a moment after the order.
+            battle_sim::Order::GuardShip(t) if recent.0.contains_key(&id) => match ships.0.get(&t) {
+                Some(guarded) => (guarded.pos, Color::srgb(0.35, 1.0, 0.4)),
                 None => continue,
             },
             _ => continue,

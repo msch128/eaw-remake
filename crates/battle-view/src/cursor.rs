@@ -38,12 +38,14 @@ pub mod names {
     pub const ATTACK_MOVE: &str = "POINTER_ATTACK_MOVE";
     /// The move button armed.
     pub const MOVE_ONLY: &str = "POINTER_MOVE_ONLY_MODE_PASSABLE_TARGETED";
+    /// The guard button armed.
+    pub const GUARD: &str = "POINTER_GUARD";
     /// A targeted ability armed, the position is valid.
     pub const ABILITY: &str = "POINTER_TARGET_SPECIAL_ABILITY_TO_SPACE_POSITION";
     /// A targeted ability armed, the sim would refuse the position.
     pub const ABILITY_INVALID: &str = "POINTER_TARGET_SPECIAL_ABILITY_TO_SPACE_POSITION_INVALID";
     /// All of the above.
-    pub const ALL: [&str; 7] = [ATTACK, ATTACK_ONLY_TARGET, ATTACK_ONLY_NO_TARGET, ATTACK_MOVE, MOVE_ONLY, ABILITY, ABILITY_INVALID];
+    pub const ALL: [&str; 8] = [ATTACK, ATTACK_ONLY_TARGET, ATTACK_ONLY_NO_TARGET, ATTACK_MOVE, MOVE_ONLY, GUARD, ABILITY, ABILITY_INVALID];
 }
 
 /// Seconds one `Anim_Frame_Delay` step lasts. Estimate: the data counts engine frames, not seconds, and the engine's rate is not in
@@ -229,6 +231,7 @@ fn wanted(armed: Option<ArmedKind>, own_selected: bool, over_enemy: bool, abilit
         Some(ArmedKind::Attack) => Some(if over_enemy { names::ATTACK_ONLY_TARGET } else { names::ATTACK_ONLY_NO_TARGET }),
         Some(ArmedKind::AttackMove) => Some(names::ATTACK_MOVE),
         Some(ArmedKind::Move) => Some(names::MOVE_ONLY),
+        Some(ArmedKind::Guard) => Some(names::GUARD),
         Some(ArmedKind::AbilityAt) => Some(if ability_ok { names::ABILITY } else { names::ABILITY_INVALID }),
         // The reinforcement ghost is the cue there.
         Some(ArmedKind::Reinforce) => None,
@@ -436,6 +439,7 @@ mod tests {
         // The other buttons: red arrow, green arrow, the ability's burst (crossed where the sim would refuse the position).
         assert_eq!(wanted(Some(AttackMove), true, true, true), Some(names::ATTACK_MOVE));
         assert_eq!(wanted(Some(Move), true, true, true), Some(names::MOVE_ONLY));
+        assert_eq!(wanted(Some(Guard), true, false, true), Some(names::GUARD));
         assert_eq!(wanted(Some(AbilityAt), true, false, true), Some(names::ABILITY));
         assert_eq!(wanted(Some(AbilityAt), true, false, false), Some(names::ABILITY_INVALID));
         // The reinforcement ghost is the cue while a reinforcement is placed.
@@ -698,6 +702,19 @@ mod tests {
     }
 
     #[test]
+    fn the_armed_guard_shows_its_pointer_and_a_left_click_on_open_space_guards_the_place() {
+        let mut scene = Scene::new(1);
+        let open = scene.cruiser.0 + Vec2::new(400.0, 300.0);
+        scene.app.world_mut().resource_mut::<ArmedOrder>().0 = Some(ArmedKind::Guard);
+        assert_eq!(scene.frame(open).0, Some(names::GUARD));
+        scene.app.world_mut().resource_mut::<Pointer>().left_released = true;
+        scene.frame(open);
+        scene.app.world_mut().resource_mut::<Pointer>().left_released = false;
+        assert_eq!(scene.app.world().resource::<Orders>().0, [OrderKind::Guard]);
+        assert_eq!(scene.app.world().resource::<ArmedOrder>().0, None, "the click used the armed order");
+    }
+
+    #[test]
     fn the_crosshair_animation_runs_in_order_and_writes_the_window_only_when_the_picture_changes() {
         let mut scene = Scene::new(8);
         let centre = scene.cruiser.0;
@@ -744,6 +761,7 @@ mod tests {
         assert_eq!(art.get(names::ATTACK_ONLY_NO_TARGET).map(|p| p.frames.len()), Some(1), "the greyed crosshair has one picture");
         assert_eq!(art.get(names::ATTACK_MOVE).map(|p| p.frames.len()), Some(8));
         assert_eq!(art.get(names::MOVE_ONLY).map(|p| p.frames.len()), Some(8));
-        assert_eq!(images.len(), 34, "crosshair 8, greyed 1, red arrow 8, green arrow 8, burst 8, crossed 1: the attack button's pointer shares the crosshair's pictures");
+        assert_eq!(art.get(names::GUARD).map(|p| p.frames.len()), Some(10), "GUARDPOINTER_00.TGA and on");
+        assert_eq!(images.len(), 44, "crosshair 8, greyed 1, red arrow 8, green arrow 8, guard 10, burst 8, crossed 1: the attack button's pointer shares the crosshair's pictures");
     }
 }

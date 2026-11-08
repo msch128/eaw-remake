@@ -295,17 +295,14 @@ fn handle_clicks(
             "c_button01" => armed.0 = (armed.0 != Some(control::ArmedKind::AttackMove)).then_some(control::ArmedKind::AttackMove),
             // Waypoint mode (c_button03) needs path orders in the sim; until then it acts as a plain move.
             "c_button02" | "c_button03" => armed.0 = (armed.0 != Some(control::ArmedKind::Move)).then_some(control::ArmedKind::Move),
-            "c_button04" | "c_button05" => {
+            // Guard: the next click picks the own ship to follow or the place to guard (`control::orders`).
+            "c_button05" => armed.0 = (armed.0 != Some(control::ArmedKind::Guard)).then_some(control::ArmedKind::Guard),
+            "c_button04" => {
                 let ships_ordered = mine();
                 if let Some(&lead) = ships_ordered.first() {
                     armed.0 = None;
-                    if b.name == "c_button05" {
-                        // Guard: hold the place and shoot what comes in range.
-                        rt.command(player, Command::SetStance { ships: ships_ordered.clone(), stance: battle_sim::Stance::Defensive });
-                    }
                     rt.command(player, Command::Stop { ships: ships_ordered });
-                    let kind = if b.name == "c_button05" { control::OrderKind::Guard } else { control::OrderKind::Stop };
-                    issued.write(control::OrderIssued { kind, lead });
+                    issued.write(control::OrderIssued { kind: control::OrderKind::Stop, lead });
                 }
             }
             _ => {}

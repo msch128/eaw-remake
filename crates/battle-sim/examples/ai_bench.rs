@@ -367,7 +367,7 @@ fn run(cat: &Arc<Catalog>, arena: Option<Arc<Arena>>, s: &Scenario, seed: u64) -
                             Order::Move(_) | Order::Retreat => 1,
                             Order::AttackMove(_) => 2,
                             Order::Attack(_) => 3,
-                            Order::Guard(_) => 4,
+                            Order::Guard(_) | Order::GuardShip(_) => 4,
                         }] += 1.0;
                         if x.target != NONE && small(cat.ship(b.ships[x.target as usize].def)) {
                             a.on_small += 1.0;
