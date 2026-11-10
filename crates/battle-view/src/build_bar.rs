@@ -34,6 +34,37 @@ pub(crate) fn build(app: &mut App) {
     app.add_systems(Update, build_bar_close.run_if(resource_removed::<BattleRuntime>));
 }
 
+/// Orders build options by the station's `Tactical_Buildable_Objects_Campaign` definition order.
+pub fn sort_options_by_data_order(
+    options: &mut [BuildOption],
+    station_buildable: &[(String, BuildId)],
+    catalog: &battle_sim::Catalog,
+) {
+    let position = |mut item: BuildId| -> usize {
+        let mut visited = [false; 256];
+        loop {
+            if let Some(pos) = station_buildable.iter().position(|&(_, b)| b == item) {
+                return pos;
+            }
+            if (item as usize) < visited.len() {
+                if visited[item as usize] {
+                    return usize::MAX;
+                }
+                visited[item as usize] = true;
+            }
+            let def = catalog.buildable(item);
+            if let Some(repl) = def.replaces {
+                item = repl;
+            } else if let Some(&prereq) = def.prerequisites.first() {
+                item = prereq;
+            } else {
+                return usize::MAX;
+            }
+        }
+    };
+    options.sort_by_key(|o| position(o.item));
+}
+
 /// The build buttons: the item's icon, its price (none while it builds, the progress shows instead), greyed while it cannot be bought.
 fn button_slots(options: &[BuildOption], catalog: &battle_sim::Catalog) -> Vec<PanelSlot> {
     options
@@ -78,9 +109,9 @@ pub fn build_bar_sync(
     let Some(cur) = rt.cur.as_ref() else { return };
     let player = settings.player_side;
     let snap = cur.builds.get(player as usize).cloned().unwrap_or_default();
-    let station = sel.ships.iter().filter_map(|&id| cur.ship(id)).find(|s| s.side == player && !rt.catalog.ship(s.def).buildable.is_empty()).map(|s| s.id);
-    let offers = station.is_some();
-    ui.station = station;
+    let station_ship = sel.ships.iter().filter_map(|&id| cur.ship(id)).find(|s| s.side == player && !rt.catalog.ship(s.def).buildable.is_empty());
+    let offers = station_ship.is_some();
+    ui.station = station_ship.map(|s| s.id);
     let open = offers && !snap.options.is_empty() && !cur.over;
     if open && ui.root.is_none() {
         let faction = UiFaction::from_name(rt.player_faction.as_deref().unwrap_or("Empire"));
@@ -110,8 +141,12 @@ pub fn build_bar_sync(
     }
     // The slots are filled once the shell exists: a change of `PanelData` before that reaches no button.
     if open && ui.root.is_some_and(|e| e != Entity::PLACEHOLDER) {
-        ui.items = snap.options.iter().take(BUTTONS).map(|o| o.item).collect();
-        let slots = button_slots(&snap.options, &rt.catalog);
+        let mut options = snap.options.clone();
+        if let Some(s) = station_ship {
+            sort_options_by_data_order(&mut options, &rt.catalog.ship(s.def).buildable, &rt.catalog);
+        }
+        ui.items = options.iter().take(BUTTONS).map(|o| o.item).collect();
+        let slots = button_slots(&options, &rt.catalog);
         for k in 0..BUTTONS {
             let name = format!("build_{k:02}");
             match slots.get(k) {
@@ -256,6 +291,54 @@ mod tests {
         assert_eq!(queue.len(), 1);
         assert_eq!(queue[0].icon, "i_multi_improved_weapons1.tga");
         assert!((queue[0].progress - 0.5).abs() < 0.02);
+    }
+
+    #[test]
+    fn build_bar_buttons_follow_station_definition_order_not_alphabetical() {
+        let frigate = ShipDef { name: "frigate".into(), class: TargetClass::Frigate, ..ShipDef::default() };
+        // Station definition order: Reactors (0), Armor (1), Weapons (2), Defenses (3)
+        let station = ShipDef {
+            name: "station".into(),
+            class: TargetClass::Structure,
+            buildable: vec![
+                ("empire".into(), 0),
+                ("empire".into(), 1),
+                ("empire".into(), 2),
+                ("empire".into(), 3),
+            ],
+            ..ShipDef::default()
+        };
+        let mut cat = Catalog::from_defs(vec![frigate, station], vec![]);
+        let item = |name: &str, replaces: Option<BuildId>| BuildableDef {
+            name: name.into(),
+            cost: 100,
+            time: 10.0,
+            replaces,
+            ..BuildableDef::default()
+        };
+        // 0: Reactors L1, 1: Armor L1, 2: Weapons L1, 3: Defenses L1, 4: Weapons L2 (replaces 2)
+        cat.buildables = vec![
+            item("reactors_l1", None),
+            item("armor_l1", None),
+            item("weapons_l1", None),
+            item("defenses_l1", None),
+            item("weapons_l2", Some(2)),
+        ];
+
+        // Suppose sim returned options in alphabetical sort:
+        // Armor (1), Defenses (3), Reactors (0), Weapons (2)
+        let opt = |id| BuildOption { item: id, ready: Ok(()), progress: None };
+        let mut options = vec![opt(1), opt(3), opt(0), opt(2)];
+
+        sort_options_by_data_order(&mut options, &cat.ships[1].buildable, &cat);
+        let items: Vec<BuildId> = options.iter().map(|o| o.item).collect();
+        assert_eq!(items, vec![0, 1, 2, 3], "must follow station data order (Reactors, Armor, Weapons, Defenses)");
+
+        // Now suppose Weapons L1 was replaced by Weapons L2 (item 4):
+        let mut upgraded_options = vec![opt(3), opt(4), opt(1), opt(0)];
+        sort_options_by_data_order(&mut upgraded_options, &cat.ships[1].buildable, &cat);
+        let upgraded_items: Vec<BuildId> = upgraded_options.iter().map(|o| o.item).collect();
+        assert_eq!(upgraded_items, vec![0, 1, 4, 3], "replacement upgrade retains original slot in data order");
     }
 }
 
