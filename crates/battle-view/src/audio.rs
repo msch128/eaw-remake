@@ -918,10 +918,26 @@ pub struct UnitLoop {
     pub kind: UnitLoopKind,
 }
 
+/// Scratch buffers for [`battle_unit_loops`], reused across frames to remain allocation-free in steady state.
+#[derive(Resource, Default)]
+pub struct UnitLoopsScratch {
+    pub prev_aim: HashMap<Entity, (f32, f32)>,
+    pub seen_turrets: HashSet<Entity>,
+    pub rotating: HashSet<u32>,
+    pub wanted: Vec<(u32, UnitLoopKind, u32)>,
+    pub have: HashSet<(u32, UnitLoopKind)>,
+}
+
 /// Ships whose turrets turned since the last sample, from the change in [`TurretAim`] yaw and pitch.
-fn rotating_ships(ships: &Query<(&crate::ships::ShipView, &AlamoModelLoaded)>, hardpoints: &Query<&AlamoHardpoint>, turrets: &Query<&TurretAim>, prev: &mut HashMap<Entity, (f32, f32)>) -> HashSet<u32> {
-    let mut rotating = HashSet::new();
-    let mut seen = HashSet::new();
+fn update_rotating_ships(
+    ships: &Query<(&crate::ships::ShipView, &AlamoModelLoaded)>,
+    hardpoints: &Query<&AlamoHardpoint>,
+    turrets: &Query<&TurretAim>,
+    scratch: &mut UnitLoopsScratch,
+) {
+    scratch.rotating.clear();
+    scratch.seen_turrets.clear();
+    let mut any_new = false;
     for (view, loaded) in ships {
         for &hp in &loaded.hardpoints {
             let Ok(hp) = hardpoints.get(hp) else { continue };
@@ -930,16 +946,25 @@ fn rotating_ships(ships: &Query<(&crate::ships::ShipView, &AlamoModelLoaded)>, h
             }
             let Some(turret) = hp.turret else { continue };
             let Ok(aim) = turrets.get(turret) else { continue };
-            seen.insert(turret);
+            scratch.seen_turrets.insert(turret);
             let now = (aim.yaw, aim.pitch);
-            if prev.get(&turret).is_some_and(|old| turret_rotated(*old, now)) {
-                rotating.insert(view.id);
+            match scratch.prev_aim.get_mut(&turret) {
+                Some(old) => {
+                    if turret_rotated(*old, now) {
+                        scratch.rotating.insert(view.id);
+                    }
+                    *old = now;
+                }
+                None => {
+                    any_new = true;
+                    scratch.prev_aim.insert(turret, now);
+                }
             }
-            prev.insert(turret, now);
         }
     }
-    prev.retain(|e, _| seen.contains(e));
-    rotating
+    if any_new || scratch.prev_aim.len() != scratch.seen_turrets.len() {
+        scratch.prev_aim.retain(|e, _| scratch.seen_turrets.contains(e));
+    }
 }
 
 /// `SFXEvent_Turret_Rotating_Loop` while a turret of the unit is turning, and `SFXEvent_Engine_Cinematic_Focus_Loop` while
@@ -958,39 +983,40 @@ pub fn battle_unit_loops(
     hardpoints: Query<&AlamoHardpoint>,
     turrets: Query<&TurretAim>,
     mut emitters: Query<(Entity, &UnitLoop, &mut alamo_audio::SfxEmitter)>,
-    mut prev_aim: Local<HashMap<Entity, (f32, f32)>>,
+    mut scratch: Local<UnitLoopsScratch>,
 ) {
     if !settings.audio || audio.is_none() {
         return;
     }
     let Some(cur) = rt.cur.as_ref() else { return };
     let player = settings.player_side;
-    let rotating = rotating_ships(&ships, &hardpoints, &turrets, &mut prev_aim);
-    let mut wanted: Vec<(u32, UnitLoopKind, String)> = Vec::new();
+    update_rotating_ships(&ships, &hardpoints, &turrets, &mut scratch);
+    scratch.wanted.clear();
     for s in &cur.ships {
         let seen = s.side == player || (s.seen_by >> player.min(7)) & 1 == 1;
         if !seen {
             continue;
         }
         let v = &rt.visuals.ship(s.def).sfx;
-        if rotating.contains(&s.id)
-            && let Some(event) = v.turret_rotating.clone()
-        {
-            wanted.push((s.id, UnitLoopKind::TurretRotating, event));
+        if scratch.rotating.contains(&s.id) && v.turret_rotating.is_some() {
+            scratch.wanted.push((s.id, UnitLoopKind::TurretRotating, s.def));
         }
-        if action.as_ref().is_some_and(|cam| cinematic_focus_on(cam, s.id))
-            && let Some(event) = v.cinematic_engine.clone()
-        {
-            wanted.push((s.id, UnitLoopKind::CinematicFocus, event));
+        if action.as_ref().is_some_and(|cam| cinematic_focus_on(cam, s.id)) && v.cinematic_engine.is_some() {
+            scratch.wanted.push((s.id, UnitLoopKind::CinematicFocus, s.def));
         }
     }
-    let mut have: HashSet<(u32, UnitLoopKind)> = HashSet::new();
+    scratch.have.clear();
     for (entity, key, mut emitter) in &mut emitters {
-        have.insert((key.ship, key.kind));
-        match wanted.iter().find(|(ship, kind, _)| *ship == key.ship && *kind == key.kind) {
-            Some((_, _, event)) => {
-                if emitter.event.as_deref() != Some(event.as_str()) {
-                    emitter.event = Some(event.clone());
+        scratch.have.insert((key.ship, key.kind));
+        let target = scratch.wanted.iter().find(|(ship, kind, _)| *ship == key.ship && *kind == key.kind);
+        match target {
+            Some((_, kind, def)) => {
+                let event = match kind {
+                    UnitLoopKind::TurretRotating => rt.visuals.ship(*def).sfx.turret_rotating.as_deref(),
+                    UnitLoopKind::CinematicFocus => rt.visuals.ship(*def).sfx.cinematic_engine.as_deref(),
+                };
+                if emitter.event.as_deref() != event {
+                    emitter.event = event.map(|s| s.to_string());
                 }
             }
             None if emitter.event.is_some() => emitter.event = None,
@@ -998,8 +1024,16 @@ pub fn battle_unit_loops(
             None => {}
         }
     }
-    for (ship, kind, event) in wanted {
-        let Some(&parent) = rt.entities.get(&ship).filter(|e| ship_ok.contains(**e) && !have.contains(&(ship, kind))) else { continue };
+    for &(ship, kind, def) in &scratch.wanted {
+        if scratch.have.contains(&(ship, kind)) {
+            continue;
+        }
+        let Some(&parent) = rt.entities.get(&ship).filter(|e| ship_ok.contains(**e)) else { continue };
+        let event = match kind {
+            UnitLoopKind::TurretRotating => rt.visuals.ship(def).sfx.turret_rotating.clone(),
+            UnitLoopKind::CinematicFocus => rt.visuals.ship(def).sfx.cinematic_engine.clone(),
+        };
+        let Some(event) = event else { continue };
         let at = cur.ship(ship).map_or(Vec3::ZERO, |s| sim_to_bevy(s.pos));
         let label = match kind {
             UnitLoopKind::TurretRotating => "turret rotating",
@@ -1986,6 +2020,59 @@ mod tests {
             app.update();
         }
         assert!(unit_voices(&mut app).iter().all(|v| v.1) || unit_voices(&mut app).is_empty(), "held aim stops the loop");
+    }
+
+    #[test]
+    fn unit_loops_scratch_steady_state_retains_capacities() {
+        use bevy::ecs::system::RunSystemOnce;
+        let mut world = World::new();
+        let turret1 = world.spawn(TurretAim::idle()).id();
+        let turret2 = world.spawn(TurretAim::idle()).id();
+        let hp1 = world.spawn(AlamoHardpoint { name: "hp1".into(), destroyed: false, turret: Some(turret1) }).id();
+        let hp2 = world.spawn(AlamoHardpoint { name: "hp2".into(), destroyed: false, turret: Some(turret2) }).id();
+        let loaded = AlamoModelLoaded { bones: vec![], parts: vec![], proxies: vec![], axis: Entity::PLACEHOLDER, hardpoints: vec![hp1, hp2], bone_by_name: HashMap::new(), center: Vec3::ZERO, radius: 1.0 };
+        world.spawn((crate::ships::ShipView::unloaded(1, 0, 0), loaded));
+        world.init_resource::<UnitLoopsScratch>();
+
+        // Frame 1: warm up scratch collections
+        world.run_system_once(|ships: Query<(&crate::ships::ShipView, &AlamoModelLoaded)>, hardpoints: Query<&AlamoHardpoint>, turrets: Query<&TurretAim>, mut scratch: ResMut<UnitLoopsScratch>| {
+            update_rotating_ships(&ships, &hardpoints, &turrets, &mut scratch);
+        }).expect("frame 1");
+
+        let (prev_cap, seen_cap) = {
+            let scratch = world.resource::<UnitLoopsScratch>();
+            assert_eq!(scratch.prev_aim.len(), 2);
+            assert_eq!(scratch.seen_turrets.len(), 2);
+            assert!(scratch.rotating.is_empty());
+            (scratch.prev_aim.capacity(), scratch.seen_turrets.capacity())
+        };
+
+        // Frame 2: turret1 rotates, turret2 holds
+        world.get_mut::<TurretAim>(turret1).expect("turret1").yaw = 0.5;
+        world.run_system_once(|ships: Query<(&crate::ships::ShipView, &AlamoModelLoaded)>, hardpoints: Query<&AlamoHardpoint>, turrets: Query<&TurretAim>, mut scratch: ResMut<UnitLoopsScratch>| {
+            update_rotating_ships(&ships, &hardpoints, &turrets, &mut scratch);
+        }).expect("frame 2");
+
+        {
+            let scratch = world.resource::<UnitLoopsScratch>();
+            assert_eq!(scratch.prev_aim.len(), 2);
+            assert_eq!(scratch.seen_turrets.len(), 2);
+            assert!(scratch.rotating.contains(&1), "ship 1 rotated");
+            assert_eq!(scratch.prev_aim.capacity(), prev_cap, "no reallocation in steady state");
+            assert_eq!(scratch.seen_turrets.capacity(), seen_cap, "no reallocation in steady state");
+        }
+
+        // Frame 3: turrets hold
+        world.run_system_once(|ships: Query<(&crate::ships::ShipView, &AlamoModelLoaded)>, hardpoints: Query<&AlamoHardpoint>, turrets: Query<&TurretAim>, mut scratch: ResMut<UnitLoopsScratch>| {
+            update_rotating_ships(&ships, &hardpoints, &turrets, &mut scratch);
+        }).expect("frame 3");
+
+        {
+            let scratch = world.resource::<UnitLoopsScratch>();
+            assert!(scratch.rotating.is_empty(), "turrets held, not rotating");
+            assert_eq!(scratch.prev_aim.capacity(), prev_cap);
+            assert_eq!(scratch.seen_turrets.capacity(), seen_cap);
+        }
     }
 
     #[test]
