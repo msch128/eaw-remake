@@ -686,11 +686,13 @@ fn apply_hardpoint_death(
         }
     }
     if let Some(breakoff) = &hv.breakoff {
-        let (at, rot) = hv
+        let Some((at, rot)) = hv
             .bone
             .as_deref()
             .and_then(|b| touch.bone_transform(view, b))
-            .unwrap_or((Vec3::ZERO, Quat::IDENTITY));
+        else {
+            return;
+        };
         let timer = (breakoff.min_lifetime + breakoff.max_lifetime) * 0.5;
         let velocity = rot * (breakoff.movement * 30.0);
         let angular_velocity = breakoff.rotate;
@@ -2141,9 +2143,12 @@ mod tests {
         use bevy::ecs::system::RunSystemOnce;
         let mut world = World::new();
         world.init_resource::<crate::effects::BloomPulses>();
-        let view = ShipView { id: 1, def: 0, side: 0, hp_applied: vec![false], bones: None, hp_parts: vec![], attitude: Attitude::default(), born: 0.0, visual_radius: 0.0, shown: true };
+        let bone_ent = world.spawn(GlobalTransform::from_translation(Vec3::new(10.0, 20.0, 30.0))).id();
+        let mut bones = HashMap::new();
+        bones.insert("hp_bone".to_string(), bone_ent);
+        let view = ShipView { id: 1, def: 0, side: 0, hp_applied: vec![false], bones: Some(bones), hp_parts: vec![], attitude: Attitude::default(), born: 0.0, visual_radius: 0.0, shown: true };
         let hv = crate::visuals::HpVisual {
-            bone: None,
+            bone: Some("hp_bone".into()),
             damage_bone: None,
             death_effect: None,
             fire_sfx: None,
@@ -2165,10 +2170,11 @@ mod tests {
         }).expect("apply");
 
         let mut q = world.query::<(&BreakoffProp, &alamo_render::AlamoModel, &Transform)>();
-        let (prop, model, _tf) = q.iter(&world).next().expect("breakoff prop entity should be spawned");
+        let (prop, model, tf) = q.iter(&world).next().expect("breakoff prop entity should be spawned");
         assert_eq!(model.path, "EV_StarDestroyer_HP00_L-F.alo");
         assert_eq!(prop.timer, 20.0);
         assert_eq!(prop.velocity, Vec3::new(-0.2, -0.5, 0.0) * 30.0);
+        assert_eq!(tf.translation, Vec3::new(10.0, 20.0, 30.0));
 
         let e_prop = world.query_filtered::<Entity, With<BreakoffProp>>().single(&world).expect("single prop");
         world.init_resource::<Time>();
@@ -2209,6 +2215,38 @@ mod tests {
         world.get_mut::<BreakoffProp>(e_prop).unwrap().timer = 0.0;
         world.run_system_once(update_breakoff_props).expect("finish update");
         assert!(world.get_entity(e_prop).is_err(), "breakoff prop entity despawns after lifetime");
+    }
+
+    #[test]
+    fn hardpoint_breakoff_prop_skipped_when_bone_is_missing() {
+        use bevy::ecs::system::RunSystemOnce;
+        let mut world = World::new();
+        world.init_resource::<crate::effects::BloomPulses>();
+        let view = ShipView { id: 1, def: 0, side: 0, hp_applied: vec![false], bones: None, hp_parts: vec![], attitude: Attitude::default(), born: 0.0, visual_radius: 0.0, shown: true };
+        let hv = crate::visuals::HpVisual {
+            bone: Some("hp_bone".into()),
+            damage_bone: None,
+            death_effect: None,
+            fire_sfx: None,
+            hp_type: "HARD_POINT_WEAPON_LASER".into(),
+            reticle: [None, None],
+            breakoff: Some(crate::visuals::BreakoffVisual {
+                model: "EV_StarDestroyer_HP00_L-F.alo".into(),
+                scale: 1.0,
+                movement: Vec3::new(-0.2, -0.5, 0.0),
+                rotate: Vec3::new(0.9, 0.3, -0.4),
+                min_lifetime: 15.0,
+                max_lifetime: 25.0,
+                particle: Some("Space_Debris_Fire_Large_Empire".into()),
+            }),
+        };
+
+        world.run_system_once(move |mut commands: Commands, mut touch: ModelTouch| {
+            apply_hardpoint_death(&mut commands, &mut touch, &view, 0, &hv, HpKind::Weapon);
+        }).expect("apply");
+
+        let mut q = world.query::<&BreakoffProp>();
+        assert_eq!(q.iter(&world).count(), 0, "no prop spawned when bone transform cannot be found");
     }
 
     #[test]
