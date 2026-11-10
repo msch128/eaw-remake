@@ -40,7 +40,7 @@ fn plan_economy(world: &World, galaxy: &Galaxy, faction: FactionId, rng: &mut Rn
     if let Some(&p) = owned.iter().max_by_key(|&&p| (world.starbase_level(galaxy, p), std::cmp::Reverse(p)))
         && let Ok(idx) = world.check_upgrade_tech(galaxy, faction, p)
     {
-        let cost = world.factions[faction as usize].tech_upgrades[idx].cost as f64;
+        let cost = f64::from(world.tech_cost(galaxy, faction, idx));
         if cost <= budget && saving.is_none_or(|(goal, _)| budget - cost >= goal) {
             budget -= cost;
             cmds.push(Command::UpgradeTech { faction, planet: p });

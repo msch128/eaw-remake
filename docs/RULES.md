@@ -92,7 +92,7 @@ every owned planet, the planet's `Additional_Population_Capacity`, its star base
   (20000 / 30000 / 40000 / 50000 for levels 2 to 5, 1000 for `CIS_Tech-1` and `Republic_Tech-1`). The institute
   requirement binds only the human player because the Remake scripts lock the institute for the AI; the built-in AI
   buys levels at any star base planet (estimate). The `Research_<F>_Shipyard_N` units have empty names and no effect.
-* Technology price discounts: `Reduce_Technology_Price_Ability` on planets (The Maw 33%, Scarif 25% in Remake 4.0 data) reduces tech level upgrade prices for the owner of the planet. Stacking follows `Stacking_Category` (strongest in category wins, categories multiply); both Maw and Scarif share category 0 so controlling both gives 33% discount.
+* Technology price discounts: `Reduce_Technology_Price_Ability` on planets (The Maw 33%, Scarif 25% in Remake 4.0 data) reduces tech level upgrade prices for the owner of the planet. Stacking follows `Stacking_Category` (strongest in category wins, categories multiply); both Maw and Scarif share category 0 so controlling both gives 33% discount. The build menu, the charge (`World::tech_cost`) and the built-in AI (`ai::plan`) all use that price. Empire's level-2 upgrade is 20000 credits, 13400 at The Maw.
 * Tech levels in vanilla data: `*_Level_N_Tech_Upgrade` objects (`Tactical_Build_Increments_Tech_Level`, cost
   `Tactical_Build_Cost_Campaign`), star base only. Estimate: factions without them get upgrades at 3000 x level.
 * New ships join the idle fleet of that faction at the planet, or create one.

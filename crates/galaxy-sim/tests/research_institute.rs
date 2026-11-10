@@ -139,3 +139,43 @@ fn reduce_technology_price_ability_at_maw_and_scarif() {
     let credits_left = sim.galaxy().factions[empire as usize].credits;
     assert!((credits_left - (100000.0 - both_cost as f64)).abs() < 0.01, "charged discounted tech price: expected {}, got {}", 100000.0 - both_cost as f64, credits_left);
 }
+
+#[test]
+fn built_in_ai_plans_tech_at_the_discounted_maw_price() {
+    let Some(data) = load("1770851727", &["1770851727"]) else { return };
+    let c = data.campaign("GC_Full_Web_Way_Imperial").unwrap();
+    // Rebel is the human, so Empire does not need a Research Institute on the planet.
+    let mut sim = Sim::new(&data, c, SimConfig { victory_enabled: false, faction_override: Some("Rebel".into()), ..SimConfig::default() }).unwrap();
+    let w = sim.world().clone();
+    let empire = w.faction_id("Empire").unwrap();
+    assert_ne!(w.victory.active_player, Some(empire));
+    let maw = w.planet_id("The_Maw_WW").expect("The Maw");
+    sim.galaxy_mut().planets[maw as usize].owner = Some(empire);
+    for planet in &mut sim.galaxy_mut().planets {
+        if planet.owner == Some(empire) {
+            planet.queues[Lane::Base as usize].clear();
+        }
+    }
+
+    let info = &w.factions[empire as usize];
+    let idx = (sim.galaxy().factions[empire as usize].tech - info.start_tech).max(0) as usize;
+    let full = f64::from(info.tech_upgrades[idx].cost);
+    let discounted = f64::from(w.tech_cost(sim.galaxy(), empire, idx));
+    assert!((discounted - full * 0.67).abs() < 0.01, "The Maw is 33% off: full {full}, discounted {discounted}");
+
+    let planet = sim.galaxy().owned_planets(empire).max_by_key(|&p| (w.starbase_level(sim.galaxy(), p), std::cmp::Reverse(p))).expect("planet");
+    if w.starbase_level(sim.galaxy(), planet) < info.tech_upgrades[idx].req_starbase {
+        sim.galaxy_mut().planets[planet as usize].starbase = w.first_starbase[empire as usize];
+    }
+    assert!(w.check_upgrade_tech(sim.galaxy(), empire, planet).is_ok(), "the planet plan() picks can take the upgrade");
+
+    // ai.rs keeps 1500 credits back. The budget sits strictly between the discounted price and the list price.
+    let reserve = 1500.0;
+    let budget = discounted + (full - discounted) / 2.0;
+    sim.galaxy_mut().factions[empire as usize].credits = budget + reserve;
+    let buy = |sim: &Sim| ai::plan(sim.world(), sim.galaxy(), empire, &mut rng::Rng::new(1)).into_iter().any(|c| matches!(c, Command::UpgradeTech { faction, .. } if faction == empire));
+    assert!(buy(&sim), "budget {budget} is at least the Maw price {discounted} and under the list price {full}");
+
+    sim.galaxy_mut().factions[empire as usize].credits = discounted + reserve - 1.0;
+    assert!(!buy(&sim), "one credit under the Maw price does not buy");
+}
