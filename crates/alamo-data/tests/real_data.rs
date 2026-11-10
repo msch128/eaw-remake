@@ -250,6 +250,71 @@ fn ion_stun_fractions_parse_with_a_float_suffix() {
     assert_eq!((large.ion_stun_speed_reduction, large.ion_stun_shot_rate_reduction, large.ion_stun_duration), (0.4, 0.4, 4.5));
 }
 
+/// Roots `<181st>` and `<80s_Visor_Man>` start with a digit. Both files are in `GameObjectFiles.XML`.
+#[test]
+fn digit_root_files_load_every_named_object() {
+    let Some(src) = open() else { return };
+    let (data, warnings) = load_galaxy(&src);
+    let lost: Vec<_> = warnings
+        .iter()
+        .filter(|w| w.message.contains("multiple top-level") || w.message.contains("stray end tag </181st>") || w.message.contains("stray end tag </80s_visor_man>"))
+        .map(|w| w.to_string())
+        .collect();
+    assert!(lost.is_empty(), "{lost:?}");
+
+    let wing = [
+        "TIE_Fighter_181st_Soontir",
+        "TIE_Fighter_181st",
+        "181st_Fighter_Squadron",
+        "181st_Fighter_Squadron_Container",
+        "181ST_UPGRADE_LN_TO_IN",
+        "TIE_Interceptor_181st_Soontir",
+        "TIE_Interceptor_181st",
+        "181st_Interceptor_Squadron",
+        "181st_Interceptor_Squadron_Container",
+        "181ST_UPGRADE_IN_TO_D",
+        "TIE_Defender_181st_Soontir",
+        "TIE_Defender_181st",
+        "181st_Defender_Squadron",
+        "181st_Defender_Squadron_Container",
+    ];
+    for name in wing {
+        let obj = data.objects.get(name).unwrap_or_else(|| panic!("{name} missing"));
+        assert!(
+            obj.source_file.to_ascii_lowercase().ends_with("units_hero_empire_181st_fighter_wing.xml"),
+            "{name} came from {}",
+            obj.source_file
+        );
+    }
+    let tagge = data.objects.get("Tagge_Lucrehulk").expect("Tagge");
+    assert!(tagge.source_file.to_ascii_lowercase().ends_with("units_hero_minors_csa_tagge.xml"));
+    assert_eq!(tagge.kind, "UniqueUnit");
+
+    let fel = data.objects.space_unit("TIE_Fighter_181st_Soontir").expect("Soontir");
+    assert_eq!((fel.hull, fel.shield_points), (33.0, 15.0));
+    assert_eq!(fel.fields.get("redirect_damage_to_teammates").map(String::as_str), Some("Yes"));
+    assert_eq!(fel.fields.get("is_named_hero").map(String::as_str), Some("Yes"));
+    let wingman = data.objects.space_unit("TIE_Fighter_181st").expect("wingman");
+    assert_eq!(wingman.fields.get("redirect_damage_to_teammates").map(String::as_str), Some("No"));
+
+    let sq = data.objects.space_unit("181st_Fighter_Squadron").expect("squadron");
+    assert_eq!(sq.squadron_units.len(), 36);
+    assert_eq!(sq.squadron_units.iter().filter(|u| *u == "TIE_Fighter_181st_Soontir").count(), 1);
+    assert_eq!(sq.tech_level, 99);
+    assert_eq!(sq.affiliation, ["Neutral"]);
+    assert!(sq.fields.get("build_tab_space_units").is_none());
+
+    let def = data.objects.space_unit("181st_Defender_Squadron").expect("defender squadron");
+    assert_eq!((def.tech_level, def.build_cost), (4, 9800.0));
+    assert_eq!(def.affiliation, ["Empire"]);
+    assert_eq!(def.squadron_units.len(), 36);
+
+    let up = data.objects.space_unit("181ST_UPGRADE_LN_TO_IN").expect("upgrade");
+    assert_eq!((up.tech_level, up.build_cost), (2, 5000.0));
+    assert_eq!(up.affiliation, ["Empire"]);
+    assert_eq!(up.fields.get("build_tab_space_units").map(String::as_str), Some("Yes"));
+}
+
 #[test]
 fn every_squadron_units_line_adds_craft() {
     // Before, only the first `Squadron_Units` line was read: Red Squadron had 2 X-wings (no Luke), Vader's squadron 3 fighters.

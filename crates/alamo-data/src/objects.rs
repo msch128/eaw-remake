@@ -312,6 +312,16 @@ mod tests {
     }
 
     #[test]
+    fn digit_root_tag_keeps_its_objects() {
+        let s = store(
+            "<181st><UniqueUnit Name=\"TIE_Fighter_181st_Soontir\"><Text_ID>X</Text_ID></UniqueUnit><UniqueUnit Name=\"Tagge_Lucrehulk\"/></181st>",
+        );
+        assert_eq!(s.len(), 2);
+        assert_eq!(s.get("TIE_Fighter_181st_Soontir").unwrap().kind, "UniqueUnit");
+        assert!(s.get("Tagge_Lucrehulk").is_some());
+    }
+
+    #[test]
     fn duplicates_first_wins() {
         let mut w = Vec::new();
         let root = parse_str(

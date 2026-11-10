@@ -2,8 +2,9 @@
 //!
 //! The original engine's XML parser is very forgiving and mod authors rely on that: comments
 //! containing `--`, stray `&`, duplicate attributes, mismatched tag case, unclosed or stray end
-//! tags, BOMs in various encodings and trailing garbage are all common. This module implements a
-//! small tolerant parser that never fails; problems are reported as [`Warning`]s instead.
+//! tags, tag names that start with a digit (`<181st>`, `<80s_Visor_Man>`), BOMs in various
+//! encodings and trailing garbage are all common. This module implements a small tolerant parser
+//! that never fails; problems are reported as [`Warning`]s instead.
 //!
 //! Tag and attribute names are lower-cased while parsing, so all lookups are case-insensitive
 //! as long as callers pass lower-case names. Attribute *values* and text keep their case.
@@ -186,7 +187,8 @@ impl Lines {
 }
 
 fn is_name_start(c: char) -> bool {
-    c.is_alphabetic() || c == '_' || c == ':'
+    // Digit: Alamo object files use roots such as `<181st>` and `<80s_Visor_Man>`, which are not XML names.
+    c.is_alphabetic() || c.is_ascii_digit() || c == '_' || c == ':'
 }
 
 /// Parses `bytes` leniently and returns the root element, or `None` if the document contains
@@ -559,6 +561,22 @@ mod tests {
         assert!(parse_bool(" Yes "));
         assert!(!parse_bool("No"));
         assert_eq!(parse_floats("1.5, 2 ,x"), [1.5, 2.0, 0.0]);
+    }
+
+    #[test]
+    fn tag_names_may_start_with_a_digit() {
+        // `<181st>` is the root of Units_Hero_Empire_181st_Fighter_Wing.xml. A name that
+        // starts with a digit is not XML, and dropping the tag made every child a second
+        // root so only the first unit survived.
+        let (e, w) = p(
+            "<181st><UniqueUnit Name=\"TIE_Fighter_181st_Soontir\"><Text_ID>X</Text_ID></UniqueUnit><UniqueUnit Name=\"TIE_Fighter_181st\"/></181st>",
+        );
+        let e = e.unwrap();
+        assert_eq!(e.raw_name, "181st");
+        assert_eq!(e.children.len(), 2);
+        assert_eq!(e.children[0].attr("name"), Some("TIE_Fighter_181st_Soontir"));
+        assert_eq!(e.children[1].attr("name"), Some("TIE_Fighter_181st"));
+        assert!(w.iter().all(|x| !x.message.contains("multiple top-level")), "{w:?}");
     }
 
     #[test]
