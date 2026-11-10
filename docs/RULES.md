@@ -164,7 +164,9 @@ every owned planet, the planet's `Additional_Population_Capacity`, its star base
   sim): `combat_base_factor` 1.5 (star base, structures, garrison), `combat_efficiency` (0.5 fighters and bombers, 0.5
   corvettes, 1 frigates and capitals), `combat_escape` 0.12 (share of a losing fleet that retreats alive when its
   faction owns more than one planet). `combat_waves` (on): the first ships up to the population cap fight, the rest
-  arrive 2 rounds after room appears. Data: `Space_Tactical_Unit_Cap` (150). With waves, winner agreement with the
+  arrive 2 rounds after room appears. Project rule: that cap stays 1000 per side. `USER_SPACE_UNIT_CAP` is
+  `galaxy-sim/src/world.rs` line 11, and `space_unit_cap` is set from it when the faction is built (line 832).
+  `Xml/FACTIONS.XML` `Space_Tactical_Unit_Cap` is 150, and 180 for 8 factions. With waves, winner agreement with the
   tactical sim on 40+ ship battles is 75 to 94% (noise floor about 0.2 in win share with 3 tactical seeds).
 * A tactical battle reports survivors per group; losses, star base and structures are applied like the statistical
   result. Units that left by `Retreat` count as survivors and escape (see 1.4). Estimate: damage is not carried over
@@ -668,8 +670,10 @@ with `speed_mult > 1.05` when fleeing or when the target is over twice the weapo
 ## 2.8 Reinforcements, unit cap, retreat, victory
 
 * Data: `Command::Reinforce` adds ships at the side's spawn after `reinforce_delay` (5 s = `Skirmish_Reinforcement_Delay_Frames`
-  150 at 30 fps) if the population of everything in play plus the request is within `unit_cap` (150, `Space_Tactical_Unit_Cap`
-  of the faction XML). Units over the cap wait in a reserve and are called in as losses make room.
+  150 at 30 fps) if the population of everything in play plus the request is within `unit_cap`. Project rule: `unit_cap` stays
+  1000 per side. `USER_SPACE_UNIT_CAP` is `galaxy-sim/src/world.rs` line 11, and `space_unit_cap` is set from it when the
+  faction is built (line 832). Data: `Xml/FACTIONS.XML` `Space_Tactical_Unit_Cap` is 150, and 180 for 8 factions. Units over the cap wait in a
+  reserve and are called in as losses make room.
 * Positional reinforcements (`Command::ReinforceAt`): allowed when the position is inside the battle area, outside the
   no-spawn zone of every enemy structure and inside an area the side sees (`placement.rs`, shared with the UI). Zone
   radius: the structure's `Reinforcement_Prevention_Radius` where the data has it, else `no_spawn_radius` 2000
