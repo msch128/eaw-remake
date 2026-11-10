@@ -394,12 +394,8 @@ fn squadrons_attacking_an_executor_never_fly_into_it_and_still_hurt_it() {
     }
 }
 
-/// How deep a big ship may graze another's hull without counting. Seed 2 has a Nebulon-B 3 units deep for 27 ticks at 61 s since targeting
-/// stickiness (`Targeting_Stickiness_Time_Threshold`) changed who positions against whom; every other run stays at 0.
-const BIG_SHIP_GRAZE: f32 = 5.0;
-
 /// `seconds` of a standard fleet battle (both sides AI) of `seed`: the unit-ticks of craft (fighters, bombers, hangar craft) and of big ships
-/// inside another unit's model hull (big ships deeper than [`BIG_SHIP_GRAZE`]).
+/// inside another unit's model hull.
 fn craft_and_ships_inside_hulls(data: &alamo_data::GameData, fs: &GameFs, seed: u64, seconds: f32) -> (u32, u32) {
     let empire = [("Star_Destroyer", 4), ("Victory_Destroyer", 3), ("Arquitens_E", 2), ("Acclamator", 1), ("TIE_Fighter_Squadron", 4), ("TIE_Bomber_Squadron", 2)];
     let rebel = [("MC-80_Star_Cruiser", 3), ("Nebulon_B_Frigate", 3), ("Assault_Frigate_Mark_II", 2), ("CR-90_Corvette", 3), ("X-Wing_Squadron", 4), ("Y-Wing_Squadron", 2)];
@@ -415,7 +411,7 @@ fn craft_and_ships_inside_hulls(data: &alamo_data::GameData, fs: &GameFs, seed: 
             let s = &b.ships[i.craft as usize];
             if matches!(cat.ship(s.def).class, TargetClass::Fighter | TargetClass::Bomber) || s.carrier != u32::MAX {
                 craft += 1;
-            } else if i.depth > BIG_SHIP_GRAZE {
+            } else {
                 big += 1;
             }
         }
