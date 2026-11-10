@@ -234,8 +234,13 @@ impl Sim {
                     return Err(CommandError::NotOwner);
                 }
                 world.structures.get(structure as usize).ok_or(CommandError::Invalid)?;
-                let at = ps.structures.iter().position(|&s| s == structure).ok_or(CommandError::Invalid)?;
-                ps.structures.remove(at);
+                if let Some(at) = ps.structures.iter().position(|&s| s == structure) {
+                    ps.structures.remove(at);
+                } else if let Some(at) = ps.suspended_structures.iter().position(|&s| s == structure) {
+                    ps.suspended_structures.remove(at);
+                } else {
+                    return Err(CommandError::Invalid);
+                }
                 let refund = world.sell_value(structure);
                 g.factions[faction as usize].credits += refund;
                 Ok(CommandOk::Refunded(refund))
@@ -754,7 +759,12 @@ impl Sim {
                 let fs = &mut self.galaxy.factions[owner as usize];
                 *fs.built_structures_lifetime.entry(s).or_default() += 1;
             }
-            ProductionKind::Starbase(sb) => self.galaxy.planets[pi].starbase = Some(sb),
+            ProductionKind::Starbase(sb) => {
+                let ps = &mut self.galaxy.planets[pi];
+                ps.starbase = Some(sb);
+                let suspended = std::mem::take(&mut ps.suspended_structures);
+                ps.structures.extend(suspended);
+            }
             ProductionKind::Tech(_) => {
                 let max = self.world.factions[owner as usize].max_tech;
                 let fs = &mut self.galaxy.factions[owner as usize];
@@ -1214,6 +1224,20 @@ impl Sim {
                 }
             }
         }
+        let ps = &mut self.galaxy.planets[p as usize];
+        if ps.starbase.is_none() {
+            let mut ground = Vec::new();
+            let mut orbital = Vec::new();
+            for &s in &ps.structures {
+                if w.structures[s as usize].orbital {
+                    orbital.push(s);
+                } else {
+                    ground.push(s);
+                }
+            }
+            ps.structures = ground;
+            ps.suspended_structures.extend(orbital);
+        }
         self.galaxy.fleets.retain(|_, f| !f.units.is_empty());
         (events, losses)
     }
@@ -1377,6 +1401,7 @@ impl Sim {
         if !keep_buildings {
             ps.starbase = None;
             ps.structures.clear();
+            ps.suspended_structures.clear();
         }
         if let Some(x) = new {
             events.push(Event::PlanetCaptured { planet: p, old_owner: old, new_owner: x });

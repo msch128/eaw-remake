@@ -195,7 +195,7 @@ impl Remap<'_> {
     }
 
     fn planet_state(&mut self, p: PlanetState) -> PlanetState {
-        let PlanetState { owner, starbase, structures, queues, capture, base_health, destroyed, gamble, gamble_at, siphon, hero_gamble, hero_gamble_at, last_space_battle } = p;
+        let PlanetState { owner, starbase, structures, queues, capture, base_health, destroyed, gamble, gamble_at, siphon, hero_gamble, hero_gamble_at, last_space_battle, suspended_structures } = p;
         PlanetState {
             owner: owner.map(|f| self.faction(f)),
             starbase: starbase.map(|b| self.starbase(b)),
@@ -213,6 +213,7 @@ impl Remap<'_> {
             hero_gamble,
             hero_gamble_at,
             last_space_battle,
+            suspended_structures: suspended_structures.into_iter().map(|s| self.structure(s)).collect(),
         }
     }
 

@@ -92,6 +92,10 @@ every owned planet, the planet's `Additional_Population_Capacity`, its star base
   dummy and icon planets 0 or 1); nothing is classified or guessed. A unit whose required structures all need a
   higher level than the cap is hidden from that planet's menu. Star base levels chain through `Prev_Level_Base` /
   `Next_Level_Base`; minor factions define unlinked levels (`Minor_Starbase_X`, `_2`, `_3`) that are chained by name.
+  When a star base is destroyed without planet capture, orbital structures on the planet are suspended
+  (`Orbital_Structure.lua`, `Orbital_Unit.lua`): they stop providing income, upkeep, population and requirements,
+  while keeping their space slot reserved (`planet_capacity`). Rebuilding the star base restores the suspended
+  structures; a change of planet ownership clears them.
 * Heroes: the hero ship itself costs 1 credit in the data (`Piett_Procursator`); the real cost is the follow-up
   `Vessel_Upgrade_Template` item (25000 and more) that replaces a ship in orbit (`Required_Orbiting_Units`, enforced).
   The menu shows the data value. Super ships with `Required_Planets` or `E_Shipyard_3` follow the data

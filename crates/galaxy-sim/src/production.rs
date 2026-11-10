@@ -113,7 +113,12 @@ impl World {
         let ps = &galaxy.planets[planet as usize];
         let info = &self.planets[planet as usize];
         let count = |orbital: bool, total: i32| SlotUse {
-            built: ps.structures.iter().filter(|&&s| self.structures[s as usize].orbital == orbital).count() as i32,
+            built: ps
+                .structures
+                .iter()
+                .chain(ps.suspended_structures.iter())
+                .filter(|&&s| self.structures[s as usize].orbital == orbital)
+                .count() as i32,
             queued: ps.queues[Lane::Structures as usize]
                 .iter()
                 .filter(|i| matches!(i.kind, ProductionKind::Structure(s) if self.structures[s as usize].orbital == orbital))
@@ -362,7 +367,7 @@ impl World {
                 .planets
                 .iter()
                 .filter(|p| p.owner == Some(faction))
-                .map(|p| p.structures.iter().filter(|&&s| s == structure).count() as u32)
+                .map(|p| p.structures.iter().chain(p.suspended_structures.iter()).filter(|&&s| s == structure).count() as u32)
                 .sum();
             let queued = self
                 .queued(galaxy, faction)
@@ -380,7 +385,7 @@ impl World {
             }
         }
         let queued_same = ps.queues[Lane::Structures as usize].iter().filter(|i| i.kind == ProductionKind::Structure(structure)).count();
-        let existing_same = ps.structures.iter().filter(|&&s| s == structure).count();
+        let existing_same = ps.structures.iter().chain(ps.suspended_structures.iter()).filter(|&&s| s == structure).count();
         if (queued_same + existing_same) as i32 >= st.max_per_planet {
             return Err(CommandError::NoSlot);
         }

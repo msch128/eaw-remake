@@ -40,13 +40,17 @@ impl Sim {
         let w = self.world.clone();
         let (Some(info), Some(st)) = (w.planets.get(planet as usize), w.structures.get(structure as usize)) else { return false };
         let ps = &mut self.galaxy.planets[planet as usize];
-        let same = ps.structures.iter().filter(|&&s| s == structure).count() as i32;
-        let used = ps.structures.iter().filter(|&&s| w.structures[s as usize].orbital == st.orbital).count() as i32;
+        let same = ps.structures.iter().chain(ps.suspended_structures.iter()).filter(|&&s| s == structure).count() as i32;
+        let used = ps.structures.iter().chain(ps.suspended_structures.iter()).filter(|&&s| w.structures[s as usize].orbital == st.orbital).count() as i32;
         let slots = if st.orbital { info.space_slots } else { info.ground_slots };
         if same >= st.max_per_planet || used >= slots {
             return false;
         }
-        ps.structures.push(structure);
+        if st.orbital && ps.starbase.is_none() {
+            ps.suspended_structures.push(structure);
+        } else {
+            ps.structures.push(structure);
+        }
         w.refresh_economy(&mut self.galaxy);
         true
     }
@@ -54,16 +58,40 @@ impl Sim {
     /// Removes one instance of a structure. Returns whether there was one.
     pub fn remove_structure(&mut self, planet: PlanetId, structure: StructureTypeId) -> bool {
         let Some(ps) = self.galaxy.planets.get_mut(planet as usize) else { return false };
-        let Some(pos) = ps.structures.iter().position(|&s| s == structure) else { return false };
-        ps.structures.remove(pos);
-        self.world.clone().refresh_economy(&mut self.galaxy);
-        true
+        if let Some(pos) = ps.structures.iter().position(|&s| s == structure) {
+            ps.structures.remove(pos);
+            self.world.clone().refresh_economy(&mut self.galaxy);
+            return true;
+        }
+        if let Some(pos) = ps.suspended_structures.iter().position(|&s| s == structure) {
+            ps.suspended_structures.remove(pos);
+            self.world.clone().refresh_economy(&mut self.galaxy);
+            return true;
+        }
+        false
     }
 
     /// Sets (or with `None` removes) the star base of a planet.
     pub fn set_starbase(&mut self, planet: PlanetId, level: Option<StarbaseTypeId>) {
         if let Some(ps) = self.galaxy.planets.get_mut(planet as usize) {
             ps.starbase = level;
+            if level.is_some() {
+                let suspended = std::mem::take(&mut ps.suspended_structures);
+                ps.structures.extend(suspended);
+            } else {
+                let w = &self.world;
+                let mut ground = Vec::new();
+                let mut orbital = Vec::new();
+                for &s in &ps.structures {
+                    if w.structures[s as usize].orbital {
+                        orbital.push(s);
+                    } else {
+                        ground.push(s);
+                    }
+                }
+                ps.structures = ground;
+                ps.suspended_structures.extend(orbital);
+            }
             self.world.clone().refresh_economy(&mut self.galaxy);
         }
     }

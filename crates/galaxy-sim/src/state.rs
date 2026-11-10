@@ -137,6 +137,9 @@ pub struct PlanetState {
     /// Game time the last space battle here was decided (`Time_Since_Space_Conflict`); `None` before the first one.
     #[serde(default)]
     pub last_space_battle: Option<f64>,
+    /// Orbital structures suspended while the star base is destroyed (restored when rebuilt).
+    #[serde(default)]
+    pub suspended_structures: Vec<StructureTypeId>,
 }
 
 /// Hull and shield of a ship or star base as a fraction of the maximum (1.0 = undamaged).
@@ -928,6 +931,9 @@ impl Galaxy {
             p.owner.hash(&mut h);
             p.starbase.hash(&mut h);
             p.structures.hash(&mut h);
+            if !p.suspended_structures.is_empty() {
+                p.suspended_structures.hash(&mut h);
+            }
             p.destroyed.hash(&mut h);
             p.gamble.to_bits().hash(&mut h);
             if era >= HashEra::HeroGamble {
