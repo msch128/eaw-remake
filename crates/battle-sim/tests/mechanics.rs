@@ -879,6 +879,46 @@ fn hardpoints_without_opportunity_fire_shoot_only_the_ships_target() {
 }
 
 #[test]
+fn an_idle_target_only_gun_still_fires_at_the_ship_in_its_arc() {
+    // The preferred enemy is a far capital. The gun cannot reach it. `_When_Idle` true, so the fighter in the arc is a shot.
+    let mut torp = gun("torpedo", 0.0);
+    torp.target_only = true;
+    torp.range = 1500.0;
+    let mut boat = ship("boat", 1.0e6, 0.0, vec![torp]);
+    boat.class = TargetClass::Frigate;
+    boat.max_weapon_range = 6000.0;
+    let mut far = ship("far", 1.0e7, 0.0, vec![]);
+    far.class = TargetClass::Capital;
+    far.max_speed = 0.0;
+    let mut near = ship("near", 1.0e7, 0.0, vec![]);
+    near.class = TargetClass::Fighter;
+    near.max_speed = 0.0;
+    let cat = Catalog::from_defs(vec![boat, far, near], vec![laser()]);
+    let mut su = setup(cat, "boat", "far", 1, 1, cfg());
+    su.sides[1].units.push(UnitSetup { ship: 2, count: 1, tag: 7 });
+    su.sides[0].ai = false;
+    let mut b = Battle::new(su);
+    let (me, far_id, near_id) = (b.ships.iter().find(|s| s.def == 0).unwrap().id, b.ships.iter().find(|s| s.def == 1).unwrap().id, b.ships.iter().find(|s| s.def == 2).unwrap().id);
+    let p = b.ships[me as usize].pos;
+    b.ships[far_id as usize].pos = p + Vec3::new(4000.0, 0.0, 0.0);
+    b.ships[near_id as usize].pos = p + Vec3::new(0.0, 900.0, 0.0);
+    let mut at_near = 0;
+    for _ in 0..30 * 5 {
+        b.ships[far_id as usize].pos = p + Vec3::new(4000.0, 0.0, 0.0);
+        b.ships[near_id as usize].pos = p + Vec3::new(0.0, 900.0, 0.0);
+        for e in b.step() {
+            if let Event::Hit { ship, attacker, .. } = e
+                && *ship == near_id
+                && *attacker == me
+            {
+                at_near += 1;
+            }
+        }
+    }
+    assert!(at_near > 0, "the gun is not engaging the far capital, so the fighter in arc is a target");
+}
+
+#[test]
 fn sensor_jamming_breaks_missile_locks() {
     let mut homing = laser();
     homing.name = "homer".into();

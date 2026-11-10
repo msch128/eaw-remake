@@ -4541,11 +4541,14 @@ fn weapons(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, rng:
             continue;
         }
         s.hps[i].cooldown = 0.0;
-        // Look for a target among the candidates. Without opportunity fire a hardpoint takes only the ship's own target (when targeting) or
-        // nothing (when idle).
+        // `Allow_Opportunity_Fire_When_Targeting` applies while the ship is engaging a target this hardpoint can shoot: an Attack order, or
+        // the auto target inside this hardpoint's range and arc. An idle capital's preferred enemy can sit beyond the gun (`Idle_Chase_Range`
+        // 0), and that is not engaging: `_When_Idle` decides, so a quad still shoots the fighter in its arc.
         let mut chosen = NONE;
         let own = s.target;
-        for &c in s.candidates.iter().filter(|&&c| if own == NONE { !hp.no_idle_fire } else { !hp.target_only || c == own }) {
+        let own_alive = (own != NONE).then(|| &snaps[own as usize]).filter(|t| t.alive);
+        let engaging = explicit_attack || own_alive.is_some_and(|t| can_fire(hp, s.yaw, s.bonus.range, muzzle, t, pd, None, craft));
+        for &c in s.candidates.iter().filter(|&&c| if engaging { !hp.target_only || c == own } else { !hp.no_idle_fire }) {
             let t = &snaps[c as usize];
             let can_shoot = if s.target_hp != NO_HP && c == s.target && t.hp_alive.test(s.target_hp as usize) {
                 let tdef = cat.ship(t.def);

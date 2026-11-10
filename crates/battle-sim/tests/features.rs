@@ -256,3 +256,97 @@ fn corrupt_systems_is_read_from_the_corellian_destroyer() {
     let c = chg.abilities.iter().find_map(|a| a.corrupt.as_ref()).expect("corrupt systems");
     assert!((c.drain - 100.0).abs() < 1e-3 && (c.duration - 30.0).abs() < 1e-3 && (c.max_range - 1000.0).abs() < 1e-3, "{c:?}");
 }
+
+/// True when `hp` could shoot an enemy of `class` at `at` from a ship at the origin facing +X. Mirrors `can_fire` for a capital shooter.
+fn gun_bears(cat: &Catalog, hp: &HpDef, class: TargetClass, mask: u32, at: Vec3, radius: f32) -> bool {
+    let Some(pid) = hp.projectile else { return false };
+    if hp.kind != HpKind::Weapon || hp.off_in_normal {
+        return false;
+    }
+    let proj = &cat.projectiles[pid as usize];
+    let muzzle = hp.offset;
+    let dist = muzzle.dist(at);
+    let reach = (dist - radius * 0.6).max(0.0);
+    if reach > hp.range || reach < hp.min_range {
+        return false;
+    }
+    if hp.allowed != 0 && hp.allowed & class.bit() == 0 {
+        return false;
+    }
+    if hp.forbid_exact.iter().any(|&m| category_contains(mask, m)) {
+        return false;
+    }
+    if matches!(class, TargetClass::Fighter | TargetClass::Bomber) && (proj.damage >= 150.0 || !proj.hull_damage) {
+        return false;
+    }
+    if hp.arc_yaw >= std::f32::consts::PI - 0.01 && hp.arc_pitch >= std::f32::consts::FRAC_PI_2 - 0.01 {
+        return true;
+    }
+    let to = at - muzzle;
+    if to.len() < 1.0 {
+        return true;
+    }
+    let d = to.normalized();
+    let slack = (radius / dist.max(1.0)).atan();
+    let yaw_off = d.dot(hp.left).atan2(d.dot(hp.forward)).abs();
+    let pitch_off = d.dot(hp.normal).clamp(-1.0, 1.0).asin().abs();
+    yaw_off <= hp.arc_yaw + slack && pitch_off <= hp.arc_pitch + slack
+}
+
+#[test]
+fn an_idle_providence_fires_every_gun_that_has_a_target_in_arc() {
+    let Some((data, fs)) = load() else { return };
+    let cat = Arc::new(Catalog::build(&data, Some(&fs), &["Providence_Destroyer", "CR-90_Corvette", "Star_Destroyer", "TIE_Fighter"]));
+    let mut b = Battle::new(BattleSetup {
+        catalog: cat.clone(),
+        sides: vec![
+            side(&cat, "Neutral", &[("Providence_Destroyer", 1)], &[], false),
+            side(&cat, "Empire", &[("CR-90_Corvette", 12), ("Star_Destroyer", 1), ("TIE_Fighter", 8)], &[], false),
+        ],
+        config: BattleConfig { fog_of_war: false, ..BattleConfig::default() },
+    });
+    let prov = b.ships.iter().find(|s| cat.ship(s.def).name == "Providence_Destroyer").unwrap().id;
+    let origin = b.ships[prov as usize].pos;
+    let enemies: Vec<u32> = b.ships.iter().filter(|s| s.id != prov).map(|s| s.id).collect();
+    let place = |i: usize| {
+        let ang = i as f32 * std::f32::consts::TAU / enemies.len() as f32;
+        origin + Vec3::new(ang.cos(), ang.sin(), 0.0) * 1600.0
+    };
+    let mut fired = std::collections::BTreeSet::new();
+    for _ in 0..30 * 60 {
+        b.ships[prov as usize].pos = origin;
+        b.ships[prov as usize].yaw = 0.0;
+        b.ships[prov as usize].speed = 0.0;
+        for (i, &id) in enemies.iter().enumerate() {
+            b.ships[id as usize].pos = place(i);
+            b.ships[id as usize].speed = 0.0;
+        }
+        for e in b.step() {
+            if let Event::ProjectileFired { ship, hardpoint: Some(hp), .. } = e
+                && *ship == prov
+            {
+                fired.insert(*hp);
+            }
+        }
+    }
+    let def = cat.ship(b.ships[prov as usize].def);
+    let target_only = def.hardpoints.iter().filter(|h| h.target_only && h.kind == HpKind::Weapon && h.projectile.is_some()).count();
+    assert_eq!(target_only, 14, "Providence hardpoints with Allow_Opportunity_Fire_When_Targeting false");
+    let mut silent = Vec::new();
+    let mut quads = 0;
+    for (i, hp) in def.hardpoints.iter().enumerate() {
+        let covered = enemies.iter().any(|&id| {
+            let s = &b.ships[id as usize];
+            let d = cat.ship(s.def);
+            gun_bears(&cat, hp, d.class, d.category_mask, place(enemies.iter().position(|&e| e == id).unwrap()) - origin, d.radius)
+        });
+        if covered && hp.target_only {
+            quads += 1;
+        }
+        if covered && !fired.contains(&(i as u16)) {
+            silent.push(hp.name.clone());
+        }
+    }
+    assert_eq!(quads, 14, "each targeting-only quad had a ship in range and arc");
+    assert!(silent.is_empty(), "guns with a target in range and arc that stayed silent: {silent:?}");
+}

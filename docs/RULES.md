@@ -568,9 +568,11 @@ stays as a derived figure for bars and decisions (`ShipDef::hull` times the shar
   (default off) enables them for AI attack-move orders. Classes missing from a set are opportunity targets.
 * Each weapon fires at the first candidate in range, inside its arc and allowed (estimate). Heavy guns (damage >= 150)
   and shield-only weapons never fire at fighters or bombers (estimate). Data: a hardpoint with
-  `Allow_Opportunity_Fire_When_Targeting` False fires only at the ship's own target while it has one, one with
-  `_When_Idle` False not at all while it has none (both true where the data gives none). Not modelled:
-  `Hardpoint_Recharge_Cutoff_For_Opportunity_Fire` 0.5 (meaning unknown).
+  `Allow_Opportunity_Fire_When_Targeting` False fires only at the ship's target while this hardpoint is engaging it
+  (an Attack order, or the auto target inside this hardpoint's range and arc). `_When_Idle` False fires not at all
+  otherwise. An auto-picked enemy beyond the gun is not engaging: a Providence quad (`HP_Providence_QTL_*`, range 2500,
+  idle yes, targeting no; 14 of the destroyer's hardpoints) still shoots the ship in its arc. Both flags are true where
+  the data gives none. Not modelled: `Hardpoint_Recharge_Cutoff_For_Opportunity_Fire` 0.5 (meaning unknown).
 * Data: `Fire_When_In_Normal_Attack_Mode` No = the hardpoint fires only while `ROCKET_ATTACK` is on,
   `Fire_When_In_Rocket_Attack_Mode` No = only while it is off, `Fire_When_In_Power_To_Weapons_Mode` No = not during
   `POWER_TO_WEAPONS` (all default to Yes; the data only ever writes Yes for the last one). Hardpoints a unit can only
