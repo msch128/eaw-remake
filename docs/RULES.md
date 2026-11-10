@@ -789,7 +789,10 @@ with `speed_mult > 1.05` when fleeing or when the target is over twice the weapo
   which picks the hardpoint. View: the unit's `Asteroid_Damage_Hit_Particles` (`Large_Damage_Space` for vessels) and
   `SFXEvent_Damaged_By_Asteroid` (`SFX_Asteroid_Detonation`) where it lands; an own unit entering a field says its
   `SFXEvent_Move_Into_Asteroid_Field` line (estimate: on entering, once per unit type per 12 s; the data does not
-  say when the engine plays it).
+  say when the engine plays it). The Remake scripts do not route around fields (`UnitListIsObscured` only treats one
+  as hiding). Estimate: a ship with `ASTEROID_FIELD_DAMAGE` plans around a field the way it plans around a rock, unless
+  its destination lies inside that field (an order into it, including the tactical AI's attack point when the enemy is
+  in the field). Fighters have neither the flag nor the path grid, so they fly through.
 * Nebulae: a ship with `NEBULA` in a `Behavior` / `SpaceBehavior` copy (`Vessel_Base` and `Spacecraft_Base` give it)
   cannot start a special ability while its centre lies within an `Is_Nebula` zone (map plane) and for
   `Nebula_Ability_Disable_Time` 5 s after it left. Estimate: an ability that already runs keeps running and a running

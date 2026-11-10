@@ -902,6 +902,9 @@ pub struct Battle {
     pub(crate) salvage: Vec<f32>,
     /// Distance field of rocks and stations for path planning (`None` without navigation or obstacles).
     pub(crate) nav_grid: Option<crate::nav::NavGrid>,
+    /// Rocks, stations and damaging asteroid fields. Ships with `ASTEROID_FIELD_DAMAGE` plan on this grid when their
+    /// destination is outside every field, so a path goes around. `None` when the map has no field.
+    pub(crate) field_grid: Option<crate::nav::NavGrid>,
     /// Per side: `(search point index, time it was set)` of the AI search for hidden enemies.
     pub(crate) search: Vec<(u32, f32)>,
     /// Per side: the tactical AI's formation, priority target and reserve (see `ai.rs`).

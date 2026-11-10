@@ -252,6 +252,7 @@ impl Battle {
             flares: Vec::new(),
             leeches: Vec::new(),
             nav_grid: None,
+            field_grid: None,
             search: vec![(0, 0.0); sides.len()],
             ai: (0..sides.len()).map(|i| crate::ai::AiSide::new(config.ai_reserve.get(i).cloned().unwrap_or_default())).collect(),
             formations: Vec::new(),
@@ -296,6 +297,18 @@ impl Battle {
                 .chain(b.ships.iter().filter(|s| cat.ship(s.def).is_static).map(|s| crate::nav::Blocker { pos: s.pos, radius: cat.ship(s.def).radius * 0.75 * 0.9 }))
                 .collect();
             b.nav_grid = crate::nav::NavGrid::build(b.config.half_size, 250.0, &blockers);
+            // Damaging fields are not rocks: a destination inside one is still reachable (ordered through). Other paths go around.
+            let fields: Vec<crate::nav::Blocker> = b
+                .config
+                .arena
+                .iter()
+                .flat_map(|a| a.asteroid_fields.iter().map(|o| crate::nav::Blocker { pos: o.pos, radius: o.radius }))
+                .collect();
+            if !fields.is_empty() {
+                let mut with_fields = blockers;
+                with_fields.extend(fields);
+                b.field_grid = crate::nav::NavGrid::build(b.config.half_size, 250.0, &with_fields);
+            }
         }
         b
     }
@@ -1404,7 +1417,7 @@ impl Battle {
                 }
                 scan(s, &snaps, &cat, &cfg, ai_sides);
                 let mut rng = Rng::for_entity(cfg.seed, tick, s.id, 0x30FE);
-                mov(s, &snaps, &cat, &cfg, &spawn, &squad_leaders, &squad_lags, obstacles, &big, &Nav { grid: self.nav_grid.as_ref(), hulls: &hulls }, &mut rng);
+                mov(s, &snaps, &cat, &cfg, &spawn, &squad_leaders, &squad_lags, obstacles, &big, &Nav { grid: self.nav_grid.as_ref(), field_grid: self.field_grid.as_ref(), hulls: &hulls }, &mut rng);
             };
             if par && self.ships.len() > 16 {
                 self.ships.par_iter_mut().for_each(work);
@@ -3552,6 +3565,8 @@ fn align_to_target(s: &mut Ship, def: &ShipDef, tpos: Vec3, dt: f32) {
 struct Nav<'a> {
     /// Distance field of rocks and stations a path goes around.
     grid: Option<&'a crate::nav::NavGrid>,
+    /// Rocks, stations and damaging asteroid fields. Used when the ship takes field damage and the destination is outside them.
+    field_grid: Option<&'a crate::nav::NavGrid>,
     /// All big ships and stations (ids), for local steering and for keeping fighters out of hulls.
     hulls: &'a [u32],
 }
@@ -4061,7 +4076,14 @@ fn mov(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, spawn: &
             if !fighter {
                 s.path_age += dt;
                 if s.path_age >= PATH_REPLAN_SECS || s.path_goal.dist(p) > 300.0 || s.path.is_empty() {
-                    s.path = nav.grid.map_or_else(|| vec![p], |g| g.plan(s.pos, p, def.radius * 0.75 + 40.0));
+                    // `ASTEROID_FIELD_DAMAGE` ships path around fields. A destination inside a field keeps the rock grid, so an order into one goes through.
+                    let clearance = def.radius * 0.75 + 40.0;
+                    let grid = if def.asteroid_field_damage {
+                        nav.field_grid.filter(|g| g.clearance_at(p) >= clearance).or(nav.grid)
+                    } else {
+                        nav.grid
+                    };
+                    s.path = grid.map_or_else(|| vec![p], |g| g.plan(s.pos, p, clearance));
                     s.path_goal = p;
                     s.path_age = 0.0;
                 } else if let Some(last) = s.path.last_mut() {

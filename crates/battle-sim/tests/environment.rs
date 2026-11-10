@@ -232,6 +232,35 @@ fn asteroid_field_damages_ships_with_the_behaviour() {
     assert!(fighters.iter().all(|f| entered.iter().filter(|e| *e == f).count() == 1), "once per entry");
 }
 
+/// A Victory Destroyer (it takes field damage) from the left of a radius-3500 field to `to`. Returns whether its centre entered the field.
+fn victory_crosses_the_field(data: &alamo_data::GameData, fs: &GameFs, to: Vec3) -> bool {
+    let mut b = zone_battle(data, fs, "Asteroid_Field_Huge_Obstacle_Damage_8000", &["Victory_Destroyer"]);
+    let victory = b.ships.iter().find(|s| s.side == 0 && s.carrier == NONE).unwrap().id;
+    b.ships[victory as usize].pos = Vec3::new(-6000.0, 0.0, 0.0);
+    b.ships[victory as usize].yaw = 0.0;
+    b.command(0, Command::Move { ships: vec![victory], to }).unwrap();
+    let mut entered = false;
+    // A Victory covers about 66 u/s. The field edge is 2500 from the start, so 50 s reaches an order into it.
+    for _ in 0..30 * 50 {
+        for e in b.step() {
+            if matches!(e, Event::EnteredAsteroidField { ship } if *ship == victory) {
+                entered = true;
+            }
+        }
+    }
+    let p = b.ships[victory as usize].pos;
+    eprintln!("Victory toward {to:?} ended at {p:?}, entered {entered}");
+    assert!(p.dist(Vec3::new(-6000.0, 0.0, 0.0)) > 400.0, "it left the start: {p:?}");
+    entered
+}
+
+#[test]
+fn a_capital_paths_around_an_asteroid_field_unless_ordered_into_it() {
+    let Some((data, fs)) = load_fs() else { return };
+    assert!(!victory_crosses_the_field(&data, &fs, Vec3::new(6000.0, 0.0, 0.0)), "the way to the far side goes around the field");
+    assert!(victory_crosses_the_field(&data, &fs, Vec3::ZERO), "an order into the field goes through");
+}
+
 #[test]
 fn a_nebula_blocks_special_abilities_until_five_seconds_after_leaving() {
     let Some((data, fs)) = load_fs() else { return };
