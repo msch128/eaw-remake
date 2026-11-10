@@ -281,7 +281,9 @@ build-menu filters, not a start mode. The mode is this project's own:
   back on without forgetting that an event already fired (`Disabled` becomes `Inactive`). Live `Story*.xml` after comments:
   51 calls pass `1`, 38 pass `0`, none omit the parameter. `RESET_BRANCH` then clears the firing so the branch can run again.
   `DISABLE_STORY_EVENT` still names one event. A repair of Piett's phase 2 therefore shuts the death branch and the later
-  enable opens it again. `story_locked` makes the build checks refuse the object until a
+  enable opens it again. `UNIQUE_UNIT` adds that ship at the named planet when the plot faction owns it, otherwise at
+  home, and does not unlock it. When the production upgrade already swapped in the same hull this step, the story does
+  not add a second one. `story_locked` makes the build checks refuse the object until a
   story `UNLOCK_UNIT`. Rosters otherwise stay the data `Affiliation`.
 * Data, deliberately unchanged: the Shatterpoint campaigns give the full-AI opposing side 500000 credits against the
   human's 50000; a Republic human starts at about 497 credits per week.

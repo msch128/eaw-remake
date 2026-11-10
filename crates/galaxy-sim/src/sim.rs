@@ -22,6 +22,8 @@ pub struct Sim {
     pub(crate) queued_events: Vec<Event>,
     /// Ship types the passive faction has fielded at each of its planets (the campaign's own composition there); `rearm_passive` adds only these (part of [`SimSnapshot`]).
     pub(crate) passive_types: BTreeMap<PlanetId, Vec<UnitTypeId>>,
+    /// Hulls a production upgrade swapped in during the current step. Story `UNIQUE_UNIT` of the same hull must not add a second one. Cleared at the start of the next step, so it is still set when the story reads the step's events.
+    upgraded_to: Vec<(FactionId, UnitTypeId)>,
 }
 
 impl Sim {
@@ -57,7 +59,7 @@ impl Sim {
                 add_units(&mut galaxy, f, p, u, 1);
             }
         }
-        let mut sim = Sim { world, galaxy, ai: Vec::new(), tactical: None, arenas: std::collections::HashMap::new(), tactical_requests: BTreeMap::new(), queued_events: Vec::new(), passive_types: BTreeMap::new() };
+        let mut sim = Sim { world, galaxy, ai: Vec::new(), tactical: None, arenas: std::collections::HashMap::new(), tactical_requests: BTreeMap::new(), queued_events: Vec::new(), passive_types: BTreeMap::new(), upgraded_to: Vec::new() };
         if sim.world.config.ground_up {
             let human = sim.world.victory.active_player;
             sim.apply_ground_up(human);
@@ -559,8 +561,14 @@ impl Sim {
         }
     }
 
+    /// True when this step's production upgrade already placed `unit` for `faction`.
+    pub fn replaced_by_upgrade(&self, faction: FactionId, unit: UnitTypeId) -> bool {
+        self.upgraded_to.contains(&(faction, unit))
+    }
+
     /// Advances the simulation by `dt` seconds (in internal ticks) and returns what happened.
     pub fn step(&mut self, dt: f32) -> Vec<Event> {
+        self.upgraded_to.clear();
         let mut events = std::mem::take(&mut self.queued_events);
         self.galaxy.tick_accum += dt;
         let tick = self.world.config.tick_seconds;
@@ -729,7 +737,9 @@ impl Sim {
                         fs.unlocked.insert(target.to_ascii_lowercase());
                     }
                     UnitRole::Upgrade { from, to } => {
-                        replace_unit(&mut self.galaxy, owner, planet, *from, *to);
+                        if replace_unit(&mut self.galaxy, owner, planet, *from, *to) {
+                            self.upgraded_to.push((owner, *to));
+                        }
                     }
                     UnitRole::Dummy => {}
                     UnitRole::StructureSwap { from, to, downgrade, .. } => {
@@ -1419,10 +1429,10 @@ impl Sim {
     }
 }
 
-/// Adds `count` units of type `u` to the faction's idle fleet at `planet` (creating one if needed).
 /// Swaps one `from` ship of `owner` at `planet` for a `to` ship in the same fleet (a hero or ship upgrade, `Upgrade_Unit` of the Remake script).
-pub(crate) fn replace_unit(g: &mut Galaxy, owner: FactionId, planet: PlanetId, from: UnitTypeId, to: UnitTypeId) {
-    let Some(f) = g.fleets.values_mut().filter(|f| f.owner == owner && f.location == FleetLocation::AtPlanet(planet) && f.units.get(&from).is_some_and(|&n| n > 0)).min_by_key(|f| f.id) else { return };
+/// False when no such ship was there.
+pub(crate) fn replace_unit(g: &mut Galaxy, owner: FactionId, planet: PlanetId, from: UnitTypeId, to: UnitTypeId) -> bool {
+    let Some(f) = g.fleets.values_mut().filter(|f| f.owner == owner && f.location == FleetLocation::AtPlanet(planet) && f.units.get(&from).is_some_and(|&n| n > 0)).min_by_key(|f| f.id) else { return false };
     if let Some(n) = f.units.get_mut(&from) {
         *n -= 1;
         if *n == 0 {
@@ -1430,7 +1440,10 @@ pub(crate) fn replace_unit(g: &mut Galaxy, owner: FactionId, planet: PlanetId, f
         }
     }
     *f.units.entry(to).or_default() += 1;
+    true
 }
+
+/// Adds `count` units of type `u` to the faction's idle fleet at `planet` (creating one if needed).
 
 pub(crate) fn add_units(g: &mut Galaxy, owner: FactionId, planet: PlanetId, u: UnitTypeId, count: u32) -> FleetId {
     // New ships always join the fleet in slot 1 of the planet, or start a new one there: fleets the player keeps in slots 2 and 3

@@ -260,25 +260,24 @@ impl Inner {
             "SPAWN_HERO" | "UNIQUE_UNIT" => {
                 let Some(f) = plot_faction else { return false };
                 let lower = p(0).to_ascii_lowercase();
-                // Unique units become buildable at their planet; heroes appear there directly.
-                if r.kind == "UNIQUE_UNIT" {
-                    self.unlock(f, p(0), true);
-                }
+                // Both add the ship at the named planet when this faction owns it, otherwise at home.
+                // A phase repair's Lua already swapped in this hull; spawning again would leave two.
                 let planet = self
                     .find_planet(p(1))
                     .filter(|&pl| self.sim.galaxy().planets[pl as usize].owner == Some(f))
                     .or(self.world.factions[f as usize].home);
                 let (Some(&unit), Some(pl)) = (self.world.unit_index.get(&lower), planet) else {
-                    return r.kind == "UNIQUE_UNIT";
+                    return false;
                 };
-                if r.kind == "SPAWN_HERO" {
-                    self.add_ships(f, pl, unit, 1);
-                    self.events.push(ScriptEvent::UnitSpawned {
-                        unit: p(0).to_string(),
-                        planet: self.planet_name(pl),
-                        faction: self.world.factions[f as usize].name.clone(),
-                    });
+                if r.kind == "UNIQUE_UNIT" && self.sim.replaced_by_upgrade(f, unit) {
+                    return true;
                 }
+                self.add_ships(f, pl, unit, 1);
+                self.events.push(ScriptEvent::UnitSpawned {
+                    unit: p(0).to_string(),
+                    planet: self.planet_name(pl),
+                    faction: self.world.factions[f as usize].name.clone(),
+                });
                 true
             }
             "BUILDABLE_UNIT" | "LOCK_UNIT" | "UNLOCK_UNIT" => {
