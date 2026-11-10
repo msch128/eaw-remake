@@ -61,6 +61,32 @@ fn the_unite_plan_brings_its_force_to_the_target() {
     assert!(sim.runtime().errors().is_empty());
 }
 
+/// `Needs_Income_Gases` is `500 + ...` on every friendly planet ("we ALWAYS want gas refineries/depots"), but `Gas_Depot_Default` and
+/// `Gas_Refinery_Default` name the gas giants in `Required_Planets`. A plan that could build nothing at its target is not started: it would
+/// only use up the goal starts of the evaluation (three per evaluation here) with a script that fails after a second.
+#[test]
+fn structure_plans_that_can_build_nothing_are_not_started() {
+    let Some(mut sim) = build("GC_Full_Web_Way_Imperial", 1) else { return };
+    let empire = sim.with_sim(|s| s.world().faction_id("Empire")).expect("Empire");
+    let mut weeks = 0;
+    while weeks < 15 {
+        for e in sim.step(1.0).sim_events {
+            if let Event::WeekEnded { week } = e {
+                weeks = week;
+            }
+        }
+    }
+    let st = sim.ai_stats().expect("Remake AI is on");
+    let gas = (empire, "Build_Income_Gases".to_string());
+    let (started, failed) = (st.plans_started.get(&gas).copied().unwrap_or(0), st.plans_failed.get(&gas).copied().unwrap_or(0));
+    let infrastructure: u32 = st.plans_started.iter().filter(|((p, g), _)| *p == empire && g.starts_with("Build_")).map(|(_, n)| *n).sum();
+    println!("15 weeks: Empire started {started} gas plans ({failed} failed) of {infrastructure} build plans, {} activations refused", st.activation_failures);
+    // The first plans of a script show the engine what it builds (up to three start in one evaluation); from then on the check runs before the start.
+    assert!(failed <= 3, "{failed} of {started} gas plans failed: the Empire holds no gas giant it could build on");
+    assert!(st.activation_failures > 0);
+    assert!(infrastructure > started, "the Empire still builds");
+}
+
 /// The front garrisons (an estimate, `TaskForces::update_garrisons`) may tie up at most `GARRISON_TOTAL_CAP` of a player's fleet strength; the
 /// rest is the free store the plans' `Are_All_Units_On_Free_Store` and `Produce_Force` draw on.
 #[test]

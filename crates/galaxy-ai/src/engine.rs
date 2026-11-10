@@ -109,6 +109,8 @@ pub struct AiStats {
     pub strategy_nanos: u128,
     /// Tech upgrades the AI queued.
     pub tech_upgrades: u32,
+    /// Goals that won on desire but were not started because their plan could build nothing at the target (see [`FAILED_BUILD_RETRY`]).
+    pub activation_failures: u32,
     /// Per goal: finished plans, total seconds they ran, plans that ran into 90% of their limit, plans that failed after less than 30 s.
     pub plan_timing: BTreeMap<String, PlanTiming>,
     /// Why plans failed within 30 s, per goal and cause (`refused: needs E_Shipyard_2 (Star_Destroyer)`, `deadline`, `other`).
@@ -343,7 +345,7 @@ impl AiEngine {
                 // do wait longer than ones that built something.
                 let cooldown = match (failed, worked, offensive) {
                     (true, _, true) => tracking.max(60.0),
-                    (true, _, false) => 300.0,
+                    (true, _, false) => FAILED_BUILD_RETRY,
                     (false, false, _) => 600.0,
                     // An offensive plan that only assembled its force is proposed again at once: the next plan finds the ships ready and attacks.
                     (false, true, true) => self.interval * 2.0,
@@ -443,7 +445,7 @@ impl AiEngine {
         for i in due {
             let sleep = self.strategy.tier(self.brains[i].player).goal_sleep;
             self.brains[i].next_eval = now + self.interval * (1.0 + sleep);
-            self.evaluate_player(i, &snap, now, &mut requests);
+            self.evaluate_player(i, &*sim, &snap, now, &mut requests);
         }
         self.stats.eval_nanos += t0.elapsed().as_nanos();
         requests
@@ -459,7 +461,7 @@ impl AiEngine {
         v
     }
 
-    fn evaluate_player(&mut self, i: usize, snap: &Snapshot, now: f64, out: &mut Vec<PlanRequest>) {
+    fn evaluate_player(&mut self, i: usize, sim: &dyn AiSim, snap: &Snapshot, now: f64, out: &mut Vec<PlanRequest>) {
         let data = self.data.clone();
         let player = self.brains[i].player;
         let hints = data.file_hints(&self.brains[i].markup_file);
@@ -646,6 +648,14 @@ impl AiEngine {
                 *self.stats.goals_without_plan.entry(goal).or_default() += 1;
                 continue;
             };
+            // Activation failure: a plan that could build nothing at the target is not started. The goal waits as after a failed plan, and the start goes to the next goal.
+            if let Some(tp) = target
+                && self.task_forces.builds_nothing(sim, &scripts[(self.next_plan as usize) % scripts.len()], player, tp)
+            {
+                self.stats.activation_failures += 1;
+                self.brains[i].failures.push(Outcome { goal, target, time: now, cooldown: FAILED_BUILD_RETRY, failed: true });
+                continue;
+            }
             // Pincer: a target too strong for one force but within reach of two is attacked by two coordinated plans.
             let copies = match target.filter(|_| PINCER_ENABLED) {
                 Some(tp) if self.strategy.config.enabled && category.eq_ignore_ascii_case("offensive") && snap.owner[tp as usize].is_some_and(|o| snap.enemy[me][o as usize]) && self.brains[i].active.len() + 2 <= max_total => {
@@ -672,6 +682,7 @@ impl AiEngine {
                 let plan = self.next_plan;
                 *self.stats.plans_started.entry((player, goal.clone())).or_default() += 1;
                 self.task_forces.set_plan_category(plan, &category);
+                self.task_forces.set_plan_script(plan, &script);
                 self.brains[i].active.push(ActiveGoal { goal: goal.clone(), category: category.clone(), target, plan, started: now, limit });
                 out.push(PlanRequest { plan, script, player, target, goal: goal.clone() });
             }
@@ -1004,6 +1015,12 @@ impl AiEngine {
         warnings
     }
 }
+
+/// Seconds before a build goal is tried again at a planet where its plan failed, or where the plan could build nothing and was therefore not started (**estimate**).
+/// The data only shows that the engine tells the two apart: goals carry `Per_Failure_Desire_Adjust` and `Per_Activation_Failure_Desire_Adjust`. Build plans list
+/// their structures as optional groups (`E_Gas_Depot | ... = 0, 1`) under desires like `500 + ...` on every friendly planet, so a planet that can take none of
+/// them must not cost the goal system anything: such a goal is skipped before its script runs and the start goes to the next goal. See docs/RULES.md 1.12.
+const FAILED_BUILD_RETRY: f64 = 300.0;
 
 /// Weeks of income the AI keeps unbudgeted in its treasury; everything above is earmarked for plans (estimate, the data has no rule).
 const AI_RESERVE_WEEKS: f64 = 4.0;

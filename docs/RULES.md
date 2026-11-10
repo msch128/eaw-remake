@@ -339,6 +339,16 @@ build-menu filters, not a start mode. The mode is this project's own:
   owner's fleet strength, less half its static defence; at most `GARRISON_PLANET_CAP` 15% per planet and
   `GARRISON_TOTAL_CAP` 30% overall. A fleet is held whole and its whole strength counts against both caps; a fleet
   that does not fit stays free.
+* Estimate (activation failure, `FAILED_BUILD_RETRY` = 300 s): a build goal whose plan could build nothing at its
+  target is not started. Data: the build plans list their structures as optional groups
+  (`E_Gas_Depot | R_Gas_Depot | ... = 0, 1`), `Needs_Income_Gases` is `500 + ...` on every friendly planet, and the
+  gas structures name the gas giants in `Required_Planets`; goals carry `Per_Activation_Failure_Desire_Adjust` next
+  to `Per_Failure_Desire_Adjust`, so the engine tells a goal that could not be activated from a plan that failed.
+  Here: once a plan of a script has run, its structure forces are known; before a start the engine checks whether
+  any group could be queued at the target (money aside). If none can, the script does not run, the goal waits 300 s
+  for that planet (as after a failed build plan) and the start goes to the next goal. Before, such plans ran, failed
+  after a second and used up the three goal starts of an evaluation. Not known: how the original engine tests this,
+  and the two `Activation` tags are not applied.
 * Data: AI map hints come from the one file a faction's campaign `Markup_Filename` names (`Empire, RemakeHints`). The GC factions name `RemakeHints.xml`: 17 chokepoint planets, 7 sectors at 1.0, 7 systems at 0.75, 3 gas giants at 0.5. The other markup files (`ShipyardsOfKuatHints` Kuat `PriorityTarget` 7, Fondor 5, Corulag chokepoint 2) are not mixed in. A faction with no `Markup_Filename` reads no hints. Perceptual equations use `Hints.Chokepoint` and `Hints.PriorityTarget`.
 
 ## 1.13 Story ability grants

@@ -206,6 +206,9 @@ pub struct TaskForces {
     /// Diagnostics per task force: what the last `Produce_Force` asked for and how it ended.
     produce_note: HashMap<u64, String>,
     plan_category: HashMap<u64, String>,
+    plan_script: HashMap<u64, String>,
+    /// The forces a plan script declares (`TaskForce = { ... }` in its `Definitions`), known once a plan of the script has run: name, kind, requirements.
+    definitions: HashMap<String, Vec<(String, ForceKind, Requirements)>>,
     /// Believed hostile strength per player and planet (set by the engine from the strategic layer; empty = use AI power).
     pub(crate) believed: HashMap<PlayerId, Vec<f64>>,
     sizing: HashMap<PlayerId, f64>,
@@ -315,6 +318,46 @@ impl TaskForces {
         self.plan_category.insert(plan, category.to_ascii_lowercase());
     }
 
+    /// Names the script a plan instance runs, so the forces it declares are remembered per script (see [`TaskForces::builds_nothing`]).
+    pub fn set_plan_script(&mut self, plan: u64, script: &str) {
+        self.plan_script.insert(plan, script.to_ascii_lowercase());
+    }
+
+    /// Whether a plan of `script` would end without building anything at `planet`: every force it declares is a structure force, and
+    /// each of their groups either stands there already or cannot be queued there (money aside). `false` while no plan of the script has
+    /// run yet. Mirrors what [`TaskForces::tick_structures`] decides once the plan runs.
+    pub fn builds_nothing(&self, sim: &dyn AiSim, script: &str, player: PlayerId, planet: PlanetId) -> bool {
+        let Some(forces) = self.definitions.get(&script.to_ascii_lowercase()) else { return false };
+        if forces.is_empty() || forces.iter().any(|f| f.1 != ForceKind::Structure) {
+            return false;
+        }
+        let built = sim.structures(planet);
+        let can_queue = |ty: &String| {
+            let ok = if sim.is_starbase_type(ty) { sim.can_upgrade_starbase(player, planet) } else { sim.can_build_structure(player, planet, ty) };
+            matches!(ok, Ok(()) | Err(Refused::NoCredits))
+        };
+        let builds = |reqs: &Requirements| {
+            let mut groups = reqs.groups.iter().filter(|g| g.max > 0).peekable();
+            if groups.peek().is_none() {
+                return true; // nothing asked for: the job succeeds at once
+            }
+            for g in groups {
+                let stands = g.types.iter().any(|ty| built.iter().any(|b| b.eq_ignore_ascii_case(ty))) && !g.types.iter().any(|ty| sim.is_starbase_type(ty));
+                if stands {
+                    continue;
+                }
+                if g.types.iter().any(can_queue) {
+                    return true;
+                }
+                if g.min > 0 {
+                    return false; // a required group nothing here can take: the job fails at it
+                }
+            }
+            false
+        };
+        !forces.iter().any(|f| builds(&f.2))
+    }
+
     /// Earmarks `amount` credits for the categories of `player` in proportion to `fractions` (the budget equations of the
     /// player's template). Plans may only spend what their category holds; money nobody can use stays in the treasury, which
     /// is what makes a player "wealthy" (an estimate inferred from how the budget and wealth equations fit together; the
@@ -402,6 +445,12 @@ impl TaskForces {
         let id = self.next_id;
         let reqs = requirements::parse(&spec.requirements);
         let kind = kind_of(&spec.name);
+        if let Some(script) = self.plan_script.get(&spec.plan) {
+            let known = self.definitions.entry(script.clone()).or_default();
+            if !known.iter().any(|d| d.0 == spec.name) {
+                known.push((spec.name.clone(), kind, reqs.clone()));
+            }
+        }
         *self.stats.created.entry(spec.name.clone()).or_default() += 1;
         self.forces.insert(
             id,
@@ -449,6 +498,7 @@ impl TaskForces {
         }
         self.forces.retain(|_, t| t.plan != plan);
         self.plan_category.remove(&plan);
+        self.plan_script.remove(&plan);
         self.jobs.retain(|j| !ids.contains(&job_tf(j)));
     }
 
