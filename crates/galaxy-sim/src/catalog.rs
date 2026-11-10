@@ -557,17 +557,21 @@ impl World {
         u.buildable &= ok && planets_ok;
     }
 
-    /// `Rebel_Shield_Upgrade`: a `DUMMY_STARSHIP` with `Build_Tab_Space_Units` and no `Space_Model_Name`, so [`alamo_data::GameObjects::space_units`] drops it.
-    /// Price, time, tech, affiliation and requirements stay the object's. Completing it spawns no ship.
+    /// Space-tab purchases with no hull and no script (`Rebel_Shield_Upgrade`). [`alamo_data::GameObjects::space_units`] drops them
+    /// because they have no `Space_Model_Name`. Vessel upgrades, structure sells and encyclopedia buttons carry a `Lua_Script`, so they are not here.
+    /// Price, time, tech, affiliation and requirements stay the object's. Completing one spawns no ship.
     fn add_dummy_purchases(&mut self, data: &GameData) {
-        const NAMES: &[&str] = &["Rebel_Shield_Upgrade"];
-        for name in NAMES {
+        let mut names: Vec<&str> = data.objects.iter().map(|o| o.name.as_str()).collect();
+        names.sort();
+        for name in names {
             if self.unit_index.contains_key(&key(name)) {
                 continue;
             }
             let Some(def) = data.objects.space_unit(name) else { continue };
             let tab = def.fields.get("build_tab_space_units").is_some_and(|v| alamo_data::xml::parse_bool(v));
-            if def.space_model.is_some() || !tab || def.build_cost <= 0.0 {
+            let dummy_ship = def.fields.get("behavior").is_some_and(|v| v.split(|c: char| c.is_whitespace() || c == ',').any(|t| t.eq_ignore_ascii_case("DUMMY_STARSHIP")));
+            let script = def.fields.get("lua_script").map(|v| v.trim()).unwrap_or("");
+            if def.is_squadron() || def.space_model.is_some() || !tab || !dummy_ship || def.build_cost <= 0.0 || !script.is_empty() || def.affiliation.is_empty() {
                 continue;
             }
             let mut u = unit_from_def(&def, CombatStats::default(), &data.objects);
@@ -599,11 +603,13 @@ impl World {
             ("Jared_Sykes_Upgrade", "Sykes_Venator", "End_of_Days"),
             ("Jabba_Upgrade", "Star_Jewel", "Jabba_Destroyer"),
         ];
-        // The same script repairs a super ship by one phase: `Repair_Phase_<n>_<ship>` turns phase n into phase n - 1.
-        const PHASED: &[(&str, &str, u32)] =
-            &[("Executor", "Executor_Star_Dreadnought_P", 5), ("Eclipse", "Eclipse_Star_Dreadnought_P", 5), ("Piett", "Piett_Executor_P", 5), ("Viscount", "Viscount_Star_Defender_P", 5), ("Subjugator", "Subjugator_Zann_P", 4)];
-        let repairs: Vec<(String, String, String)> =
-            PHASED.iter().flat_map(|&(tag, ship, last)| (2..=last).map(move |n| (format!("Repair_Phase_{n}_{tag}"), format!("{ship}{n}"), format!("{ship}{}", n - 1)))).collect();
+        // The same script repairs a super ship by one phase: `REPAIR_PHASE_<n>_<ship>` turns phase n into phase n - 1.
+        let script = data.upgrade_scripts.iter().find(|(k, _)| k.eq_ignore_ascii_case("UPGRADE_UNITS")).map(|(_, s)| s.as_str()).unwrap_or("");
+        let repairs: Vec<(String, String, String)> = crate::structure_upgrades::parse_unit_swaps(script)
+            .into_iter()
+            .filter(|s| s.actor.to_ascii_uppercase().starts_with("REPAIR_PHASE_"))
+            .map(|s| (s.actor, s.from, s.to))
+            .collect();
         let all = UPGRADES.iter().map(|&(i, f, t)| (i, f, t)).chain(repairs.iter().map(|(i, f, t)| (i.as_str(), f.as_str(), t.as_str())));
         for (item, from, to) in all {
             let (Some(&f), Some(&t)) = (self.unit_index.get(&key(from)), self.unit_index.get(&key(to))) else { continue };

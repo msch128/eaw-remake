@@ -310,7 +310,10 @@ build-menu filters, not a start mode. The mode is this project's own:
   every unit of that type the plot's faction fields, including ships built later, for the rest of the campaign.
   `Rebel_Shield_Upgrade` (75000 credits, tech 4, 600 s) grants `Reflector_Shield` to the 25 types in
   `Story_SandBox_Rebel_Shield_Upgrade.xml`. The grant is saved with the faction and is not part of `Galaxy::state_hash`.
-* Data: `Rebel_Shield_Upgrade` is a `DUMMY_STARSHIP` variant of `Dummy_R` (`Build_Tab_Space_Units`, no `Space_Model_Name`).
+* Data: `Rebel_Shield_Upgrade` is a `DUMMY_STARSHIP` variant of `Dummy_R` (`Build_Tab_Space_Units`, no `Space_Model_Name`, no `Lua_Script`).
+  The catalog offers every such object that also has an `Affiliation` (`Upgrade_Trade_Hub` has none, so it is not a purchase).
+  A `Lua_Script` means something else: `Upgrade_Units` swaps a ship, `Delete_Building` sells a structure,
+  `ObjectScript_Despawn1Second` is an encyclopedia button.
   The Rebel space build tab offers it at tech 4, with a level-1 star base, `R_Research_Institute`, and a build limit of 1
   current and 1 lifetime. Finishing it spawns no ship; the construct notify is what grants the shields.
 
@@ -368,9 +371,9 @@ build-menu filters, not a start mode. The mode is this project's own:
   Estimate: a planet without one counts 1e9 s (the plots start their search at 10000).
 * Battles the player settles (tactical result, auto-resolve, abandon) reach the story like those the sim settles in
   its step (before, their `STORY_WIN_BATTLES` / `STORY_LOSE_BATTLES` / `STORY_TACTICAL_DESTROY` were not reported).
-* Data, repair (`Scripts/GameObject/Upgrade_Units.lua`): `Repair_Phase_<n>_<ship>` (Executor, Eclipse, Piett and Viscount 2
-  to 5, Subjugator 2 to 4; `Vessel_Upgrade_Template`, `Required_Orbiting_Units` the damaged phase, 140000 credits and
-  200 s for the Viscount) turns phase n of the ship in orbit into phase n - 1, like the hero upgrades.
+* Data, repair (`Scripts/GameObject/Upgrade_Units.lua`): each `REPAIR_PHASE_<n>_<ship>` branch (19: Executor, Eclipse, Piett and Viscount
+  phases 2 to 5, Subjugator 2 to 4) is read from that script. `Vessel_Upgrade_Template`, `Required_Orbiting_Units` the damaged phase, 140000 credits and
+  200 s for the Viscount. It turns phase n of the ship in orbit into phase n - 1, like the hero upgrades.
 * Data, auto-resolve: the object scripts exit outside space battles (`Get_Game_Mode() ~= "Space"`), so the Remake has no
   phase outcome without a tactical battle: an auto-resolved battle sets no level and a destroyed phase is lost (the
   plots run on its `STORY_LOSE_BATTLES` and find level 0).

@@ -52,6 +52,38 @@ pub(crate) fn parse_swaps(scripts: impl IntoIterator<Item = impl AsRef<str>>) ->
     out
 }
 
+/// One `Upgrade_Unit` branch: the object the script runs on, the ship it removes, the ship it spawns.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct UnitSwap {
+    /// `Object.Get_Type().Get_Name()`.
+    pub actor: String,
+    /// Ship removed.
+    pub from: String,
+    /// Ship spawned.
+    pub to: String,
+}
+
+/// Every `Upgrade_Unit` branch in `Upgrade_Units.lua`. The phase repairs are the actors whose name starts with `REPAIR_PHASE_`.
+pub(crate) fn parse_unit_swaps(script: &str) -> Vec<UnitSwap> {
+    let mut out = Vec::new();
+    let mut actor: Option<String> = None;
+    for line in script.lines() {
+        let line = strip_comment(line);
+        let q = quoted(&line);
+        if line.contains("Get_Name()") && line.contains("==") && let Some(name) = q.first() {
+            actor = Some(name.clone());
+        }
+        if !line.contains("Upgrade_Unit(") {
+            continue;
+        }
+        let Some(name) = actor.clone() else { continue };
+        if q.len() >= 2 {
+            out.push(UnitSwap { actor: name, from: q[0].clone(), to: q[1].clone() });
+        }
+    }
+    out
+}
+
 fn strip_comment(line: &str) -> String {
     let b = line.as_bytes();
     let mut in_str = false;

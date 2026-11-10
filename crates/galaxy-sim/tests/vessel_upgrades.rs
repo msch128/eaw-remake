@@ -117,3 +117,73 @@ fn a_damaged_viscount_is_repaired_one_phase_at_a_time() {
     assert_eq!(count(&sim, rebel, planet, "Viscount_Star_Defender_P2"), 1, "repaired to phase 2");
     assert_eq!(count(&sim, rebel, planet, "Viscount_Star_Defender_P3"), 0);
 }
+
+fn quoted(line: &str) -> Vec<String> {
+    let mut rest = line.split("--").next().unwrap_or(line);
+    let mut out = Vec::new();
+    while let Some(i) = rest.find('"') {
+        rest = &rest[i + 1..];
+        let Some(j) = rest.find('"') else { break };
+        out.push(rest[..j].to_string());
+        rest = &rest[j + 1..];
+    }
+    out
+}
+
+#[test]
+fn phase_repairs_and_dummy_purchases_come_from_the_data() {
+    let Some(data) = load() else { return };
+    let script = data
+        .upgrade_scripts
+        .iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case("UPGRADE_UNITS"))
+        .map(|(_, s)| s.as_str())
+        .expect("Upgrade_Units.lua");
+    let mut actor = None;
+    let mut repairs = Vec::new();
+    for line in script.lines() {
+        let q = quoted(line);
+        if line.contains("Get_Name()") && line.contains("==") {
+            actor = q.first().cloned();
+        }
+        if line.contains("Upgrade_Unit(") && q.len() >= 2 && actor.as_ref().is_some_and(|a| a.to_ascii_uppercase().starts_with("REPAIR_PHASE_")) {
+            repairs.push((actor.clone().unwrap(), q[0].clone(), q[1].clone()));
+        }
+    }
+    assert_eq!(repairs.len(), 19, "four phases each for Executor, Eclipse, Piett and Viscount, three for Subjugator");
+    let campaign = data.campaign("GC_Full_Web_Way_Rebel").expect("campaign");
+    let sim = Sim::new(&data, campaign, SimConfig { victory_enabled: false, ..SimConfig::default() }).expect("sim");
+    let w = sim.world();
+    for (item, from, to) in &repairs {
+        let id = w.unit_id(item).unwrap_or_else(|| panic!("{item} is not in the catalog"));
+        match w.units[id as usize].role {
+            UnitRole::Upgrade { from: f, to: t } => {
+                assert_eq!(w.units[f as usize].name, *from, "{item} replaces");
+                assert_eq!(w.units[t as usize].name, *to, "{item} becomes");
+            }
+            ref other => panic!("{item} role is {other:?}"),
+        }
+    }
+    let mut expected = Vec::new();
+    for obj in data.objects.iter() {
+        let Some(def) = data.objects.space_unit(&obj.name) else { continue };
+        let tab = def.fields.get("build_tab_space_units").is_some_and(|v| alamo_data::xml::parse_bool(v));
+        let dummy_ship = def.fields.get("behavior").is_some_and(|v| v.split(|c: char| c.is_whitespace() || c == ',').any(|t| t.eq_ignore_ascii_case("DUMMY_STARSHIP")));
+        let script = def.fields.get("lua_script").map(|v| v.trim()).unwrap_or("");
+        // A purchase with no hull and no script. Vessel repairs name Upgrade_Units, sells name Delete_Building,
+        // encyclopedia buttons name ObjectScript_Despawn1Second. Those are not this list.
+        if def.is_squadron() || def.space_model.is_some() || !tab || !dummy_ship || def.build_cost <= 0.0 || !script.is_empty() || def.affiliation.is_empty() {
+            continue;
+        }
+        if w.unit_id(&def.name).is_some_and(|id| w.units[id as usize].role != UnitRole::Dummy) {
+            continue;
+        }
+        expected.push(def.name);
+    }
+    expected.sort();
+    expected.dedup();
+    let mut got: Vec<String> = w.units.iter().filter(|u| u.role == UnitRole::Dummy).map(|u| u.name.clone()).collect();
+    got.sort();
+    assert_eq!(got, expected, "dummy purchases are the space units the model filter drops that still have a space-tab price");
+    assert!(got.iter().any(|n| n == "Rebel_Shield_Upgrade"), "Rebel_Shield_Upgrade stays a dummy: {got:?}");
+}
