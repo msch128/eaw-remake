@@ -12,6 +12,17 @@ combat, story campaigns or movies. Windows, edition 2024. English only (no local
 **No game files in the repo, ever.** All assets and data are read at run time from the player's own Steam install
 (see `.claude/skills/remake-data`). The repository is public on GitHub.
 
+**The engine is a faithful converter of the mod.** It plays what the Remake data, scripts and assets define. It does not
+rebalance, simplify or improve the mod. Every rule is one of three kinds, and [docs/RULES.md](docs/RULES.md) names the
+kind for each:
+
+* **Data**: read from the mod (quote file and tag). The default, and the only source of numbers.
+* **Estimate**: behaviour of the original engine that the data does not spell out. Named, backed by evidence, in a config
+  struct. Evidence in this order: the base game's own scripts, the mod's scripts and their comments, patterns across
+  many data entries, public modding documentation. The original executable is not disassembled.
+* **Project rule**: a deliberate deviation from the Remake. Only the repository owner decides one. Never introduce one
+  on your own, and never tune a threshold or price to make play "feel better": report the measurement and ask.
+
 Where to read first:
 
 | For | Read |
@@ -32,13 +43,15 @@ Each crate's `src/lib.rs` (or `main.rs`) starts with a `//!` module doc that say
    no `--hidden` / `windowed-*` smoke scenarios, no input tests (`SP_UI_TEST`, `SP_INPUT_TEST`, `SP_ORGANIZER_TEST`)
    because they open a real window, can move the real mouse and open the audio device, and no desktop screenshots.
    Visual checks are offscreen renders of the engine's own scene (PNG into a scratch folder or `target/`, never the repo).
-3. **Never touch real settings or saves** in `%APPDATA%\SpacePeace`. Test runs use a scratch `APPDATA`
-   (`tools/smoke.ps1` does), `SP_SAVES_DIR` for scripted runs, and `--volume 0` (implies `--no-audio`). No audible
-   playback in tests.
+3. **Never touch real settings or saves** in `%APPDATA%\EAW-Remake` (copy a save elsewhere before you load it). Test
+   runs use a scratch `APPDATA` (`tools/smoke.ps1` does), `SP_SAVES_DIR` for scripted runs, and `--volume 0` (implies
+   `--no-audio`). No audible playback in tests.
 4. **One item per commit.** Commit only the files you changed for it; never `git add -A` blindly. Subject at most 72
-   characters, blank line, short body. No co-author or tool attribution trailers.
+   characters, blank line, short body that says what was wrong and what is true now, with the measured numbers. No
+   co-author or tool attribution trailers. Never use `git stash`: all worktrees of a repository share one stash.
 5. **Before every commit:** `cargo check --workspace --all-targets` passes, plus the tests of the crates you changed
-   (`cargo test -p <crate>`). A behaviour change needs a test that fails before the fix.
+   (`cargo test --no-fail-fast -p <crate>`; without `--no-fail-fast` the first failing crate hides the rest). A
+   behaviour change needs a test on the real mod data that fails before the fix.
 6. **Gameplay numbers come from the Remake XML data**, never invented. A rule the data does not define is a named
    estimate in a config struct (`SimConfig`, `BattleConfig`, `defs.rs`) and in [docs/RULES.md](docs/RULES.md).
 7. Sims (`galaxy-sim`, `battle-sim`) stay deterministic (seeded RNG, no global state), `Send` and Bevy-free; player and
@@ -50,6 +63,16 @@ Each crate's `src/lib.rs` (or `main.rs`) starts with a `//!` module doc that say
 10. Code, comments and docs are English. Reply to people in the language they write in.
 11. **No silent regressions.** Never drop a feature to make something else work. Play a full battle and a few galaxy weeks
     before shipping a change that touches both.
+12. **Never loosen a test to make it pass.** If a pinned number changes because behaviour now follows the data, keep the
+    assertion as strict as before and write old -> new with the reason in the commit body. If a test only passed by
+    accident (a fixture that assumed nothing happens), fix the fixture and say so.
+13. **A rule ships complete.** A change to how units fight, build or move includes its consequences: what the AI does
+    with it, what auto-resolve computes for the same fight, what the player sees, old saves. "Reported, not done" is
+    not an acceptable state for a consequence of your own change.
+14. **Every number you report comes from the data or from a run you executed.** No figures from memory. Mark anything you
+    did not verify as unverified.
+15. **Prove a feature where the player meets it.** A HUD or battle feature is shown in a real campaign battle or galaxy
+    session (offscreen), not only in a look scene or demo that skips part of the app.
 
 ## Conventions
 
@@ -58,6 +81,13 @@ Each crate's `src/lib.rs` (or `main.rs`) starts with a `//!` module doc that say
 * Alamo space is Z-up with the bow at -Y. To Bevy: `(x, y, z) -> (x, z, -y)`. To battle-sim: `(x, y, z) -> (-y, x, z)`.
 * Keep crates clippy-clean. Docs describe the current state, not a diary: no dates in file names; update
   [docs/KNOWN-GAPS.md](docs/KNOWN-GAPS.md) and [docs/RULES.md](docs/RULES.md) when a gap closes or a rule changes.
+* Every file the mod's index files list must load. A unit, hardpoint or particle that silently fails to load is a bug;
+  an effect whose texture or model cannot be resolved is not drawn (and logged once), never drawn as a placeholder.
+* Saved structs: every new field gets `#[serde(default)]`, and ids in a save are tied to names (the header's name
+  tables), so a larger catalog or a new field never refuses an existing save. Add a save test with the old field set.
+* Category lists use the bit masks of `XML/Enum/GAMEOBJECTCATEGORYTYPE.XML`; do not map category names by hand.
+* Time on the galactic map: one displayed week is the data's fiscal cycle (`Fiscal_Cycle_Time_In_Secs`). Tests that
+  mean an amount of time count seconds, not weeks.
 
 ## Build and verify
 
@@ -78,4 +108,6 @@ Each crate's `src/lib.rs` (or `main.rs`) starts with a `//!` module doc that say
 ## When unsure
 
 Ask instead of guessing. Report honestly what is verified and what is not; an offscreen PNG does not prove that clicking
-works.
+works. Look at a proof frame yourself before you cite it. When you find that the data itself produces a result that
+looks wrong (a hero for 1 credit, a faction that cannot build its heroes in one campaign), change nothing and report it
+with the file and tag.
