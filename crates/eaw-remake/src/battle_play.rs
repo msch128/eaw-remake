@@ -80,7 +80,7 @@ impl Plugin for BattlePlayPlugin {
             .init_resource::<BattleShot>()
             .add_systems(
                 OnEnter(AppScreen::SpaceBattle),
-                (suspend_galaxy_look, spawn_loading_art).chain().run_if(resource_exists::<PendingTactical>),
+                (suspend_galaxy_look, spawn_loading_art, enter_battle_bar).chain().run_if(resource_exists::<PendingTactical>),
             )
             .add_systems(Update, attach_loading_art.run_if(resource_exists::<PendingTactical>))
             .add_systems(Update, start_after_loading_art.run_if(in_state(AppScreen::SpaceBattle).and_then(resource_exists::<PendingTactical>)).before(finish_battle_view))
@@ -88,7 +88,23 @@ impl Plugin for BattlePlayPlugin {
             .add_systems(OnExit(AppScreen::SpaceBattle), end_session)
             .add_systems(
                 Update,
-                (finish_battle_view, abort_key, retreat_auto_resolve, begin_button, loading_shot, battle_menu, battle_ui_camera, battle_shot, battle_header, battle_orders, tactical_hotkeys, select_squad_hook, test_ability, test_camera)
+                (
+                    finish_battle_view,
+                    abort_key,
+                    retreat_auto_resolve,
+                    begin_button,
+                    loading_shot,
+                    battle_menu,
+                    battle_ui_camera,
+                    battle_shot,
+                    battle_header.before(battle_view::build_bar::build_bar_sync),
+                    battle_orders,
+                    tactical_hotkeys,
+                    select_squad_hook,
+                    select_base_hook,
+                    test_ability,
+                    test_camera,
+                )
                     .run_if(in_state(AppScreen::SpaceBattle).and_then(resource_exists::<PendingTactical>)),
             );
     }
@@ -709,6 +725,38 @@ fn select_squad_hook(
     }
 }
 
+/// Test hook (`SP_SELECT_BASE=1`): selects the player's star base / station that offers tactical builds,
+/// and centers the camera on it so the floating tactical build buttons appear.
+fn select_base_hook(
+    status: Res<BattleStatus>,
+    ships: Res<battle_view::RenderedShips>,
+    rt: Option<Res<battle_view::BattleRuntime>>,
+    settings: Res<BattleViewSettings>,
+    mut camera: Single<&mut BattleCamera>,
+    mut sel: ResMut<battle_view::Selection>,
+    mut frames: Local<u32>,
+) {
+    if std::env::var("SP_SELECT_BASE").is_err() {
+        return;
+    }
+    if status.tick == 0 || ships.0.is_empty() {
+        return;
+    }
+    let Some(rt) = rt else { return };
+    let Some(cur) = rt.cur.as_ref() else { return };
+    *frames += 1;
+    if *frames == 20 {
+        let player = settings.player_side;
+        if let Some(base) = cur.ships.iter().find(|s| s.side == player && !rt.catalog.ship(s.def).buildable.is_empty()) {
+            sel.ships = vec![base.id];
+            let pos = battle_view::convert::sim_to_bevy(base.pos);
+            camera.focus = pos;
+            camera.target_focus = pos;
+            info!("battle: test hook selected station {} at {pos:?}", base.id);
+        }
+    }
+}
+
 /// Offscreen scenario: one capture in the middle of the battle (`<out>_battle.png`).
 fn battle_shot(
     mut commands: Commands,
@@ -848,22 +896,33 @@ fn end_session(
     hold.done_at = Some(std::time::Instant::now());
 }
 
+/// Clears leftover galaxy build queue and pads so they never leak into the tactical battle bar.
+fn enter_battle_bar(data: Option<ResMut<eaw_ui::CommandBarData>>) {
+    let Some(mut data) = data else { return };
+    data.queue.clear();
+    data.pads.clear();
+    data.planet_color = Some(Color::WHITE);
+}
+
 /// Header of the tactical bar: the planet the battle is at (the bar shares `CommandBarData` with the
 /// galactic bar).
 fn battle_header(pending: Res<PendingTactical>, state: Option<Res<galaxy_play::SimState>>, data: Option<ResMut<eaw_ui::CommandBarData>>) {
-    let (Some(state), Some(mut data)) = (state, data) else { return };
-    let name = state.world.planets[pending.0.planet as usize].display_name.clone();
+    let Some(mut data) = data else { return };
+    let name = if let Some(state) = state {
+        state.world.planets.get(pending.0.planet as usize).map(|p| p.display_name.clone()).unwrap_or_else(|| pending.0.planet_name.clone())
+    } else {
+        pending.0.planet_name.clone()
+    };
     if data.planet_name != name {
         data.planet_name = name;
         data.planet_owner = None;
         data.planet_income = 0;
     }
-    // White name like the Remake tactical bar, and no galaxy build queue or pads leaking into the battle bar.
+    // White name like the Remake tactical bar, and no galaxy pads leaking into the battle bar.
     if data.planet_color != Some(Color::WHITE) {
         data.planet_color = Some(Color::WHITE);
     }
-    if !data.queue.is_empty() || !data.pads.is_empty() {
-        data.queue.clear();
+    if !data.pads.is_empty() {
         data.pads.clear();
     }
 }
@@ -1110,5 +1169,60 @@ mod script_tests {
         assert!(!abort_due(Some(90.0), 10.0, true));
         assert!(!abort_due(None, 1000.0, true));
         assert_eq!(crate::play_ui::scripted_clicks_end_frame(1), 80);
+    }
+
+    #[test]
+    fn enter_battle_bar_clears_galaxy_queue_and_pads() {
+        use bevy::prelude::*;
+        let mut app = App::new();
+        let mut data = eaw_ui::CommandBarData::default();
+        data.queue.push(eaw_ui::QueueEntry {
+            icon: "test_icon.tga".into(),
+            progress: 0.5,
+            count: 1,
+            ..Default::default()
+        });
+        data.pads.push(eaw_ui::BuildPadEntry::default());
+        app.insert_resource(data);
+        app.add_systems(Update, super::enter_battle_bar);
+        app.update();
+
+        let bar = app.world().resource::<eaw_ui::CommandBarData>();
+        assert!(bar.queue.is_empty(), "galaxy build queue must be cleared on entering battle");
+        assert!(bar.pads.is_empty(), "galaxy pads must be cleared on entering battle");
+        assert_eq!(bar.planet_color, Some(Color::WHITE));
+    }
+
+    #[test]
+    fn battle_header_preserves_tactical_production_queue() {
+        use bevy::prelude::*;
+        let mut app = App::new();
+        let mut data = eaw_ui::CommandBarData::default();
+        data.queue.push(eaw_ui::QueueEntry {
+            icon: "test_icon.tga".into(),
+            progress: 0.5,
+            count: 1,
+            ..Default::default()
+        });
+        data.pads.push(eaw_ui::BuildPadEntry::default());
+        app.insert_resource(data);
+        app.insert_resource(super::PendingTactical(Box::new(galaxy_sim::TacticalRequest {
+            battle_id: 1,
+            planet: 0,
+            planet_name: "Coruscant".into(),
+            map: None,
+            starbase_level: 1,
+            seed: 42,
+            max_seconds: 600.0,
+            sides: Vec::new(),
+        })));
+        app.add_systems(Update, super::battle_header);
+        app.update();
+
+        let bar = app.world().resource::<eaw_ui::CommandBarData>();
+        assert_eq!(bar.queue.len(), 1, "tactical build queue must not be cleared by battle_header");
+        assert!(bar.pads.is_empty(), "galaxy pads must be cleared");
+        assert_eq!(bar.planet_name, "Coruscant");
+        assert_eq!(bar.planet_color, Some(Color::WHITE));
     }
 }

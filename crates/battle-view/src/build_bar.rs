@@ -66,7 +66,7 @@ fn queue_entries(queue: &[(BuildId, f32)], catalog: &battle_sim::Catalog) -> Vec
 }
 
 /// Opens or closes the shell with the selection and fills its buttons, the queue and the credits.
-fn build_bar_sync(
+pub fn build_bar_sync(
     mut commands: Commands,
     rt: Res<BattleRuntime>,
     sel: Res<Selection>,
