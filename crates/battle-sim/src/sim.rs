@@ -69,7 +69,7 @@ struct Snap {
     /// Bit s set = side s sees this ship (fog of war).
     seen_by: u8,
     /// Bit s set = side s is AI-controlled and ignores the fog (`AIUsesFogOfWarSpace` False): it may engage this ship unseen within its
-    /// weapon range.
+    /// weapon range. A ship with `STEALTH` active keeps a bit only while that side sees it.
     known_by: u8,
     /// `SENSOR_JAMMING` active: homing missiles cannot hold a lock on it.
     jammed: bool,
@@ -712,9 +712,20 @@ impl Battle {
     }
 
     /// True if the AI plan of `side` knows ship `id`: what the side sees, or every ship when the side is AI-controlled and the data lets the
-    /// AI ignore the fog (`AIUsesFogOfWarSpace` False, [`Catalog::ai_ignores_fog`]).
+    /// AI ignore the fog (`AIUsesFogOfWarSpace` False, [`Catalog::ai_ignores_fog`]). A ship with `STEALTH` active is known only when the
+    /// side sees it, the same reveal a human gets (`stealth_detection`, a reveal ping, then `fog_linger`).
     pub(crate) fn ai_knows(&self, side: u8, id: u32) -> bool {
-        (self.catalog.ai_ignores_fog && (side as usize) < self.sides.len() && self.is_ai(side)) || self.is_visible_to(side, id)
+        let visible = self.is_visible_to(side, id);
+        if self.ships.get(id as usize).is_some_and(|s| self.stealthed(s)) {
+            return visible;
+        }
+        (self.catalog.ai_ignores_fog && (side as usize) < self.sides.len() && self.is_ai(side)) || visible
+    }
+
+    /// `STEALTH` is active on this ship.
+    fn stealthed(&self, s: &Ship) -> bool {
+        let d = self.catalog.ship(s.def);
+        d.abilities.iter().zip(&s.abilities).any(|(a, st)| a.stealth && st.active > 0.0)
     }
 
     /// True if `side` currently sees ship `id` (always true for its own ships and without fog of war).
@@ -1288,6 +1299,13 @@ impl Battle {
             .map(|s| {
                 let d = cat.ship(s.def);
                 let radius = if d.class as u8 >= TargetClass::Frigate as u8 { d.radius * 0.75 } else { d.radius };
+                let stealthed = d.abilities.iter().zip(&s.abilities).any(|(a, st)| a.stealth && st.active > 0.0);
+                // Stations and structures are known from the start (the map shows them); only mobile ships hide in the fog.
+                let seen_by = if fog && !d.is_static {
+                    (0..4u8).filter(|&k| k == s.side || time_now <= s.seen_until[k as usize]).fold(!0u8 << 4, |m, k| m | (1 << k))
+                } else {
+                    0xFF
+                };
                 Snap {
                     pos: s.pos,
                     vel: Vec3::from_yaw(s.yaw) * s.speed,
@@ -1304,13 +1322,9 @@ impl Battle {
                     carrier: s.carrier,
                     jammed: d.abilities.iter().zip(&s.abilities).any(|(a, st)| a.jam && st.active > 0.0),
                     health: ((s.hull.max(0.0) + s.shield.max(0.0)) / (d.hull.max(1.0) + d.shield)).clamp(0.0, 1.0),
-                    // Stations and structures are known from the start (the map shows them); only mobile ships hide in the fog.
-                    seen_by: if fog && !d.is_static {
-                        (0..4u8).filter(|&k| k == s.side || time_now <= s.seen_until[k as usize]).fold(!0u8 << 4, |m, k| m | (1 << k))
-                    } else {
-                        0xFF
-                    },
-                    known_by: blind_ai,
+                    seen_by,
+                    // A cloak is not fog. The AI that ignores the fog still has to detect it.
+                    known_by: if stealthed { blind_ai & seen_by } else { blind_ai },
                     special: d.special_weapon.is_some() || d.background || d.untargetable,
                     solid: !(d.special_weapon.is_some() || d.background || d.no_collide),
                     target_hp: s.target_hp,

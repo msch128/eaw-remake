@@ -402,7 +402,7 @@ pub struct AbilityDef {
     pub toggle: bool,
     /// `TRACTOR_BEAM`: beam parameters from the linked `Tractor_Beam_Attack_Ability`.
     pub tractor: Option<TractorDef>,
-    /// `STEALTH`: while active the ship is hidden from enemies unless one of them is within `BattleConfig::stealth_detection`.
+    /// `STEALTH`: while active the ship is hidden from enemies, including an AI side that ignores the fog, unless one of them is within `BattleConfig::stealth_detection`.
     pub stealth: bool,
     /// `LUCKY_SHOT`: the one strong shot.
     pub shot: Option<ShotDef>,

@@ -9,7 +9,7 @@
 //!   formation gets the free store's own target (`Service_Attack`: capital ships take frigates, frigates corvettes, corvettes fighters);
 //! * the plan knows every enemy when the data lets the AI ignore the fog (`AIUsesFogOfWarSpace` False, as in the Remake), otherwise the
 //!   enemies the side sees and those that hit one of its units within the fog's regrow time (`Default_Unit_Damaged` hands the Remake AI
-//!   the attacker);
+//!   the attacker); a ship with `STEALTH` active is known only once the side sees it;
 //! * a defender guards its station until the free store's aggressive mode starts (station below 70%, enemies near the station or near its
 //!   big ships, or a fleet twice the enemy's after 120 s: `Allowed_As_Defender_Space_Untargeted`);
 //! * reserve units are called in one at a time while the population cap has room (`ReinforceSpace.lua`, `Want_To_Reinforce_Units`), and

@@ -379,6 +379,63 @@ fn the_ai_ignores_the_fog_when_the_data_says_so() {
 }
 
 #[test]
+fn a_fog_free_ai_does_not_engage_a_cloaked_ship_until_it_is_detected() {
+    // `AIUsesFogOfWarSpace` False does not reveal `STEALTH`. Detection is `stealth_detection` (500), then `fog_linger`, the same rule as a human.
+    let mut ghost = ship("ghost", 1.0e6, 0.0, vec![]);
+    ghost.is_static = false;
+    ghost.max_speed = 0.0;
+    ghost.sensor_range = 4000.0;
+    ghost.abilities.push(battle_sim::AbilityDef {
+        kind: "STEALTH".into(),
+        stealth: true,
+        toggle: true,
+        duration: f32::MAX / 4.0,
+        speed_mult: 1.0,
+        shield_regen_mult: 1.0,
+        weapon_delay_mult: 1.0,
+        take_damage_mult: 1.0,
+        ..Default::default()
+    });
+    let mut watcher = ship("watcher", 1.0e6, 0.0, vec![gun("g", 0.0)]);
+    watcher.is_static = false;
+    watcher.max_speed = 0.0;
+    watcher.sensor_range = 4000.0;
+    watcher.max_weapon_range = 6000.0;
+    watcher.targeting_range = 6000.0;
+    let mut cat = Catalog::from_defs(vec![ghost, watcher], vec![laser()]);
+    cat.ai_ignores_fog = true;
+    let mut su = setup(cat, "ghost", "watcher", 1, 1, cfg());
+    su.sides[0].ai = false;
+    let mut b = Battle::new(su);
+    let (g, w) = (b.ships.iter().find(|s| s.side == 0).unwrap().id, b.ships.iter().find(|s| s.side == 1).unwrap().id);
+    let wp = b.ships[w as usize].pos;
+    b.ships[g as usize].pos = wp + Vec3::new(3000.0, 0.0, 0.0);
+    for _ in 0..20 {
+        b.step();
+    }
+    assert!(b.is_visible_to(1, g), "visible before the cloak");
+    b.command(0, Command::UseAbility { ship: g, ability: 0 }).unwrap();
+    for _ in 0..30 * 20 {
+        b.step();
+    }
+    assert!(!b.is_visible_to(1, g), "hidden once the linger ends");
+    // A new spot, still inside the 6000 weapon range and outside the 500 detection range.
+    b.ships[g as usize].pos = wp + Vec3::new(0.0, 3000.0, 0.0);
+    let hidden = b.ships[g as usize].hull;
+    for _ in 0..30 * 4 {
+        b.step();
+    }
+    assert_eq!(b.ships[g as usize].hull, hidden, "the AI does not shoot a cloak it has not detected");
+    assert_ne!(b.ships[w as usize].target, g);
+    b.ships[g as usize].pos = wp + Vec3::new(400.0, 0.0, 0.0);
+    for _ in 0..30 * 3 {
+        b.step();
+    }
+    assert!(b.is_visible_to(1, g), "inside the detection range");
+    assert!(b.ships[g as usize].hull < hidden - 100.0, "the guns fire once it is detected: {}", b.ships[g as usize].hull);
+}
+
+#[test]
 fn stealth_and_reveal_pings_change_what_is_seen() {
     let mut ghost = ship("ghost", 1.0e6, 0.0, vec![]);
     ghost.is_static = false;
