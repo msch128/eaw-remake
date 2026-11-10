@@ -366,6 +366,8 @@ impl ScriptedSim {
             added.insert(id);
             if let Err(e) = engine.add_player(id, &ai_type) {
                 self.start_errors.push(e);
+            } else if let Some(file) = campaign.factions.iter().find(|f| f.name.eq_ignore_ascii_case(&faction)).and_then(|f| f.markup_filename.clone()) {
+                engine.set_markup(id, &file);
             }
         }
         // The campaign's own active player has no `AI_Player_Control` entry; when nobody is human (headless AI-vs-AI
@@ -374,12 +376,12 @@ impl ScriptedSim {
             for (id, f) in world.factions.iter().enumerate() {
                 let id = id as u32;
                 let passive = ["neutral", "pirates", "hostile"].iter().any(|n| f.name.eq_ignore_ascii_case(n));
-                if id != human
-                    && !added.contains(&id)
-                    && !passive
-                    && let Err(e) = engine.add_player(id, &ai_type)
-                {
-                    self.start_errors.push(e);
+                if id != human && !added.contains(&id) && !passive {
+                    if let Err(e) = engine.add_player(id, &ai_type) {
+                        self.start_errors.push(e);
+                    } else if let Some(file) = campaign.factions.iter().find(|cf| cf.name.eq_ignore_ascii_case(&f.name)).and_then(|cf| cf.markup_filename.clone()) {
+                        engine.set_markup(id, &file);
+                    }
                 }
             }
         }

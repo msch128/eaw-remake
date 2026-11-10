@@ -300,7 +300,7 @@ build-menu filters, not a start mode. The mode is this project's own:
   Star, so the AI keeps heroes at home.
 * Estimate: AI tech research. The Remake has no galactic research plan; with no human player the engine queues levels
   on a timer.
-* Data: AI map hints from `Data/Xml/AI/GalacticMarkup` (`RemakeHints.xml`: 17 chokepoint planets, 7 sectors at 1.0, 7 systems at 0.75, 3 gas giants at 0.5) are loaded and used by perceptual equations (`Hints.Chokepoint`, `Hints.PriorityTarget`).
+* Data: AI map hints come from the one file a faction's campaign `Markup_Filename` names (`Empire, RemakeHints`). The GC factions name `RemakeHints.xml`: 17 chokepoint planets, 7 sectors at 1.0, 7 systems at 0.75, 3 gas giants at 0.5. The other markup files (`ShipyardsOfKuatHints` Kuat `PriorityTarget` 7, Fondor 5, Corulag chokepoint 2) are not mixed in. A faction with no `Markup_Filename` reads no hints. Perceptual equations use `Hints.Chokepoint` and `Hints.PriorityTarget`.
 
 ## 1.13 Story ability grants
 

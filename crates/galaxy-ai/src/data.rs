@@ -91,13 +91,20 @@ pub struct AiData {
     /// Templates by lower-cased name.
     pub templates: HashMap<String, AiTemplate>,
     /// Markup files loaded from `Xml/AI/GalacticMarkup`: file name (lower) -> planet name (lower) -> hint name (lower) -> value.
+    /// Files stay separate. A player reads the one file its campaign `Markup_Filename` names.
     pub markup: HashMap<String, HashMap<String, HashMap<String, f64>>>,
-    /// Active / aggregate planet hints: planet name (lower) -> hint name (lower) -> value.
-    pub hints: HashMap<String, HashMap<String, f64>>,
+    /// Empty table for a player that names no file, or a file that is not loaded.
+    no_hints: HashMap<String, HashMap<String, f64>>,
     /// XML problems.
     pub warnings: Vec<Warning>,
     /// Files read.
     pub files: usize,
+}
+
+fn markup_key(file: &str) -> String {
+    let base = file.trim().rsplit(['/', '\\']).next().unwrap_or(file.trim());
+    let lower = base.to_ascii_lowercase();
+    lower.strip_suffix(".xml").unwrap_or(&lower).to_string()
 }
 
 fn text(e: &Element, tag: &str) -> Option<String> {
@@ -229,29 +236,26 @@ impl AiData {
                 }
             }
         }
-        let is_remake = file == "remakehints";
-        for (planet, hints) in &file_hints {
-            let entry = self.hints.entry(planet.clone()).or_default();
-            for (k, v) in hints {
-                if is_remake {
-                    entry.insert(k.clone(), *v);
-                } else {
-                    entry.entry(k.clone()).or_insert(*v);
-                }
-            }
-        }
         self.markup.insert(file, file_hints);
     }
 
-    /// The hint value for a planet and hint name if defined.
-    pub fn hint(&self, planet: &str, hint: &str) -> Option<f64> {
+    /// Planet hints from one markup file. The name is the campaign `Markup_Filename` value (`RemakeHints`)
+    /// or a file stem. An unknown file is empty: other files are not a fallback.
+    pub fn file_hints(&self, file: &str) -> &HashMap<String, HashMap<String, f64>> {
+        let key = markup_key(file);
+        self.markup.get(&key).unwrap_or(&self.no_hints)
+    }
+
+    /// One hint from the named markup file, if that file sets it.
+    pub fn hint_in(&self, file: &str, planet: &str, hint: &str) -> Option<f64> {
+        let map = self.file_hints(file);
         let p = planet.to_ascii_lowercase();
         let h = hint.to_ascii_lowercase();
-        if let Some(val) = self.hints.get(&p).and_then(|m| m.get(&h)) {
+        if let Some(val) = map.get(&p).and_then(|m| m.get(&h)) {
             return Some(*val);
         }
         let short = p.strip_suffix("_ww").unwrap_or(&p);
-        self.hints.get(short).and_then(|m| m.get(&h)).copied()
+        map.get(short).and_then(|m| m.get(&h)).copied()
     }
 
     /// The desire equation name of a goal in the given function sets (first set that defines it wins).

@@ -84,6 +84,8 @@ struct PlayerBrain {
     last_fund: Option<f64>,
     /// Next time the AI considers a tech upgrade.
     next_tech: f64,
+    /// Markup file this player reads (`Markup_Filename` on the campaign). Empty = no hints.
+    markup_file: String,
 }
 
 /// Report counters.
@@ -262,8 +264,22 @@ impl AiEngine {
             bonuses: Vec::new(),
             last_fund: None,
             next_tech: 0.0,
+            markup_file: String::new(),
         });
         Ok(())
+    }
+
+    /// The campaign named this markup file for `player` (`Markup_Filename`: faction, then file stem).
+    pub fn set_markup(&mut self, player: PlayerId, file: &str) {
+        if let Some(b) = self.brains.iter_mut().find(|b| b.player == player) {
+            b.markup_file = file.trim().to_string();
+        }
+    }
+
+    /// The hint table `player` is evaluated against.
+    pub fn markup_hints(&self, player: PlayerId) -> &std::collections::HashMap<String, std::collections::HashMap<String, f64>> {
+        let file = self.brains.iter().find(|b| b.player == player).map(|b| b.markup_file.as_str()).unwrap_or("");
+        self.data.file_hints(file)
     }
 
     /// Players the engine runs.
@@ -446,6 +462,7 @@ impl AiEngine {
     fn evaluate_player(&mut self, i: usize, snap: &Snapshot, now: f64, out: &mut Vec<PlanRequest>) {
         let data = self.data.clone();
         let player = self.brains[i].player;
+        let hints = data.file_hints(&self.brains[i].markup_file);
         let me = player as usize;
         let mut rng = self.rng;
         let mut stats = EvalStats::default();
@@ -457,7 +474,7 @@ impl AiEngine {
         if let Some(t) = &self.brains[i].template {
             let mut total = 0.0;
             for (cat, eq) in &t.budget {
-                let mut ctx = PerceptionCtx { snap, player, target: None, brain: &view, equations: &data.equations, hints: &data.hints, rng: &mut rng, stats: &mut EvalStats::default() };
+                let mut ctx = PerceptionCtx { snap, player, target: None, brain: &view, equations: &data.equations, hints, rng: &mut rng, stats: &mut EvalStats::default() };
                 let w = data.equations.evaluate(eq, &mut ctx, &mut stats).max(0.0);
                 evals += 1;
                 fractions.insert(cat.to_ascii_lowercase(), w);
@@ -550,7 +567,7 @@ impl AiEngine {
             }
             let owner = snap.owner[pl as usize];
             cache.clear();
-            let mut ctx = PerceptionCtx { snap, player, target: Some(pl), brain: &view, equations: &data.equations, hints: &data.hints, rng: &mut rng, stats: &mut EvalStats::default() };
+            let mut ctx = PerceptionCtx { snap, player, target: Some(pl), brain: &view, equations: &data.equations, hints, rng: &mut rng, stats: &mut EvalStats::default() };
             for e in &eligible {
                 let ok = match owner {
                     Some(o) if o == player => e.friendly,
@@ -679,12 +696,14 @@ impl AiEngine {
         let target = target.and_then(|o| sim.object_planet(o));
         let idx = self.brains.iter().position(|b| b.player == player);
         let view = idx.map(|i| self.view(i)).unwrap_or_default();
+        let markup = self.brains.iter().find(|b| b.player == player).map(|b| b.markup_file.clone()).unwrap_or_default();
         let data = self.data.clone();
+        let hints = data.file_hints(&markup);
         let mut rng = self.rng;
         self.snapshot(sim, 1.0);
         let snap = self.snap.as_ref().unwrap();
         let mut stats = EvalStats::default();
-        let mut ctx = PerceptionCtx { snap, player, target, brain: &view, equations: &data.equations, hints: &data.hints, rng: &mut rng, stats: &mut EvalStats::default() };
+        let mut ctx = PerceptionCtx { snap, player, target, brain: &view, equations: &data.equations, hints, rng: &mut rng, stats: &mut EvalStats::default() };
         let v = data.equations.evaluate(&key, &mut ctx, &mut stats);
         self.rng = rng;
         for (k, n) in stats.unknown_variables {
@@ -791,7 +810,9 @@ impl AiEngine {
         };
         let prob = if prob.is_some() { num(prob).clamp(0.0, 1.0) } else { 1.0 };
         let key = perception.to_ascii_lowercase();
+        let markup = self.brains.iter().find(|b| b.player == player).map(|b| b.markup_file.clone()).unwrap_or_default();
         let data = self.data.clone();
+        let hints = data.file_hints(&markup);
         data.equations.get(&key)?;
         let idx = self.brains.iter().position(|b| b.player == player);
         let view = idx.map(|i| self.view(i)).unwrap_or_default();
@@ -813,7 +834,7 @@ impl AiEngine {
             if !ok {
                 continue;
             }
-            let mut ctx = PerceptionCtx { snap, player, target: Some(pl), brain: &view, equations: &data.equations, hints: &data.hints, rng: &mut rng, stats: &mut EvalStats::default() };
+            let mut ctx = PerceptionCtx { snap, player, target: Some(pl), brain: &view, equations: &data.equations, hints, rng: &mut rng, stats: &mut EvalStats::default() };
             let v = data.equations.evaluate(&key, &mut ctx, &mut stats);
             if v > 0.0 {
                 scored.push((v, pl));

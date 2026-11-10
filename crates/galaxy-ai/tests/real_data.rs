@@ -70,18 +70,23 @@ fn remake_hints_chokepoints_are_loaded_and_evaluated() {
     assert_eq!(chokepoint_count, 17, "expected 17 distinct planets with chokepoint hint in RemakeHints.xml");
 
     for p in expected_1_0 {
-        assert_eq!(d.hint(p, "chokepoint"), Some(1.0), "sector {p}");
-        assert_eq!(d.hint(&format!("{p}_ww"), "chokepoint"), Some(1.0), "sector {p}_ww");
+        assert_eq!(d.hint_in("RemakeHints", p, "chokepoint"), Some(1.0), "sector {p}");
+        assert_eq!(d.hint_in("RemakeHints", &format!("{p}_ww"), "chokepoint"), Some(1.0), "sector {p}_ww");
     }
     for p in expected_0_75 {
-        assert_eq!(d.hint(p, "chokepoint"), Some(0.75), "system {p}");
-        assert_eq!(d.hint(&format!("{p}_ww"), "chokepoint"), Some(0.75), "system {p}_ww");
+        assert_eq!(d.hint_in("RemakeHints", p, "chokepoint"), Some(0.75), "system {p}");
+        assert_eq!(d.hint_in("RemakeHints", &format!("{p}_ww"), "chokepoint"), Some(0.75), "system {p}_ww");
     }
     for p in expected_0_5 {
-        assert_eq!(d.hint(p, "chokepoint"), Some(0.5), "gas giant {p}");
-        assert_eq!(d.hint(&format!("{p}_ww"), "chokepoint"), Some(0.5), "gas giant {p}_ww");
+        assert_eq!(d.hint_in("RemakeHints", p, "chokepoint"), Some(0.5), "gas giant {p}");
+        assert_eq!(d.hint_in("RemakeHints", &format!("{p}_ww"), "chokepoint"), Some(0.5), "gas giant {p}_ww");
     }
-    assert_eq!(d.hint("coruscant", "chokepoint"), None);
+    assert_eq!(d.hint_in("RemakeHints", "coruscant", "chokepoint"), None);
+    // These values exist only in ShipyardsOfKuatHints. They must not be visible through RemakeHints.
+    assert_eq!(d.hint_in("RemakeHints", "kuat", "prioritytarget"), None, "Kuat PriorityTarget 7 belongs to ShipyardsOfKuatHints");
+    assert_eq!(d.hint_in("RemakeHints", "fondor", "prioritytarget"), None, "Fondor PriorityTarget 5 belongs to ShipyardsOfKuatHints");
+    assert_eq!(d.hint_in("RemakeHints", "corulag", "chokepoint"), None, "Corulag chokepoint 2 belongs to ShipyardsOfKuatHints");
+    assert_eq!(d.hint_in("ShipyardsOfKuatHints", "kuat", "prioritytarget"), Some(7.0));
 
     // Test equation evaluation using PerceptionCtx.
     let mut equations = d.equations.clone();
@@ -110,7 +115,7 @@ fn remake_hints_chokepoints_are_loaded_and_evaluated() {
         target: Some(0),
         brain: &brain,
         equations: &equations,
-        hints: &d.hints,
+        hints: d.file_hints("RemakeHints"),
         rng: &mut rng,
         stats: &mut stats0,
     };
@@ -126,7 +131,7 @@ fn remake_hints_chokepoints_are_loaded_and_evaluated() {
         target: Some(1),
         brain: &brain,
         equations: &equations,
-        hints: &d.hints,
+        hints: d.file_hints("RemakeHints"),
         rng: &mut rng,
         stats: &mut stats1,
     };
@@ -141,7 +146,7 @@ fn remake_hints_chokepoints_are_loaded_and_evaluated() {
         target: Some(2),
         brain: &brain,
         equations: &equations,
-        hints: &d.hints,
+        hints: d.file_hints("RemakeHints"),
         rng: &mut rng,
         stats: &mut stats2,
     };
@@ -156,10 +161,44 @@ fn remake_hints_chokepoints_are_loaded_and_evaluated() {
         target: Some(3),
         brain: &brain,
         equations: &equations,
-        hints: &d.hints,
+        hints: d.file_hints("RemakeHints"),
         rng: &mut rng,
         stats: &mut stats3,
     };
     let val_bespin = equations.evaluate("test_chokepoint", &mut ctx3, &mut eval_stats);
     assert_eq!(val_bespin, 0.5, "Bespin chokepoint evaluated");
+}
+
+#[test]
+fn a_player_reads_only_the_markup_file_it_names() {
+    let Some(install) = GameInstall::detect() else { return };
+    if !install.mod_data("1770851727").is_dir() {
+        return;
+    }
+    let fs = GameFs::for_mod(&install, Some("1770851727")).unwrap();
+    let d = AiData::load(&fs);
+    let mut engine = galaxy_ai::AiEngine::new(std::sync::Arc::new(d), std::collections::HashMap::new());
+    engine.add_player(0, "GC_EmpireAi").unwrap();
+    engine.add_player(1, "GC_RebelAi").unwrap();
+    engine.add_player(2, "GC_UnderworldAi").unwrap();
+    engine.set_markup(0, "RemakeHints");
+    engine.set_markup(1, "ShipyardsOfKuatHints");
+
+    let remake = engine.markup_hints(0);
+    let named = remake.iter().filter(|(k, h)| !k.ends_with("_ww") && h.contains_key("chokepoint")).count();
+    assert_eq!(named, 17, "RemakeHints chokepoints for the player that names that file");
+    assert_eq!(remake.get("corellia").and_then(|h| h.get("chokepoint")).copied(), Some(0.75));
+    assert!(remake.get("kuat").and_then(|h| h.get("prioritytarget")).is_none());
+    assert_eq!(engine.markup_hints(1).get("kuat").and_then(|h| h.get("prioritytarget")).copied(), Some(7.0));
+    assert_eq!(engine.markup_hints(1).get("corellia").and_then(|h| h.get("chokepoint")).copied(), Some(2.0));
+    assert!(engine.markup_hints(2).is_empty(), "a player with no Markup_Filename reads no file");
+
+    let (galaxy, _) = alamo_data::load_galaxy(&fs);
+    for name in ["GC_Full_Web_Way_Imperial", "GC_Full_Web_Way_Rebel", "GC_Full_Web_Way_Underworld"] {
+        let campaign = galaxy.campaign(name).unwrap_or_else(|| panic!("missing {name}"));
+        for faction in ["Empire", "Rebel", "Underworld"] {
+            let file = campaign.factions.iter().find(|f| f.name.eq_ignore_ascii_case(faction)).and_then(|f| f.markup_filename.as_deref());
+            assert_eq!(file, Some("RemakeHints"), "{name} {faction}");
+        }
+    }
 }
