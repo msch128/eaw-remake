@@ -333,6 +333,12 @@ build-menu filters, not a start mode. The mode is this project's own:
   assemble without the flag (`AssembleForce`, `BuildForce`) call `Move_To(Target)` themselves. Here the force gathers
   at the stage as before, then travels to the target as one fleet; the command ends when it is in orbit there or
   destroyed. Not known: whether the original gathers at the stage first or lets every ship time its own jump.
+* Estimate (front garrisons, `TaskForces::update_garrisons`): the Remake data has no active galactic defence goal, so
+  fleets on front planets are kept out of the free store the plans draw on. A planet next to an enemy planet, or
+  with enemy fleets within two jumps, keeps `GARRISON_FACTOR` 0.8 of that threat, at least `FRONT_FLOOR` 2% of the
+  owner's fleet strength, less half its static defence; at most `GARRISON_PLANET_CAP` 15% per planet and
+  `GARRISON_TOTAL_CAP` 30% overall. A fleet is held whole and its whole strength counts against both caps; a fleet
+  that does not fit stays free.
 * Data: AI map hints come from the one file a faction's campaign `Markup_Filename` names (`Empire, RemakeHints`). The GC factions name `RemakeHints.xml`: 17 chokepoint planets, 7 sectors at 1.0, 7 systems at 0.75, 3 gas giants at 0.5. The other markup files (`ShipyardsOfKuatHints` Kuat `PriorityTarget` 7, Fondor 5, Corulag chokepoint 2) are not mixed in. A faction with no `Markup_Filename` reads no hints. Perceptual equations use `Hints.Chokepoint` and `Hints.PriorityTarget`.
 
 ## 1.13 Story ability grants

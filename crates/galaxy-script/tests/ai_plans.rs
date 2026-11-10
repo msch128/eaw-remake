@@ -60,3 +60,22 @@ fn the_unite_plan_brings_its_force_to_the_target() {
     assert!(attacks_on_unite_targets > 0, "{started} unite plans, and no Empire fleet ever fought at one of their targets");
     assert!(sim.runtime().errors().is_empty());
 }
+
+/// The front garrisons (an estimate, `TaskForces::update_garrisons`) may tie up at most `GARRISON_TOTAL_CAP` of a player's fleet strength; the
+/// rest is the free store the plans' `Are_All_Units_On_Free_Store` and `Produce_Force` draw on.
+#[test]
+fn garrisons_leave_most_of_the_fleet_to_the_plans() {
+    let Some(mut sim) = build("GC_Full_Web_Way_Imperial", 1) else { return };
+    let mut weeks = 0;
+    while weeks < 20 {
+        for e in sim.step(1.0).sim_events {
+            if let Event::WeekEnded { week } = e {
+                weeks = week;
+            }
+        }
+    }
+    let share = sim.ai_stats().expect("Remake AI is on").taskforces.garrison_share_max;
+    println!("20 weeks: garrisons held at most {:.0}% of a player's fleet strength", 100.0 * share);
+    assert!(share > 0.0, "front planets keep a garrison");
+    assert!(share <= galaxy_ai::taskforce::GARRISON_TOTAL_CAP + 1e-9, "garrisons held {:.0}% of a player's fleet strength", 100.0 * share);
+}

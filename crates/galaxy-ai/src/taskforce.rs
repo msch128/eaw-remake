@@ -26,7 +26,7 @@ const FRONT_FLOOR: f64 = 0.02;
 /// At most this share of the owner's fleets sits on one planet as garrison (estimate).
 const GARRISON_PLANET_CAP: f64 = 0.15;
 /// At most this share of the owner's fleets is tied up as garrison overall, the rest stays free for attacks and as the mobile reserve (estimate).
-const GARRISON_TOTAL_CAP: f64 = 0.3;
+pub const GARRISON_TOTAL_CAP: f64 = 0.3;
 /// Time between two refreshes of the garrison assignment.
 const GARRISON_REFRESH: f64 = 5.0;
 /// How long a plan keeps its claim on an account after it last waited for money (seconds of game time).
@@ -173,6 +173,8 @@ pub struct TaskForceStats {
     pub pincers: u32,
     /// Forces a synchronized assemble sent on to the plan's target (see [`SYNC_ASSEMBLE_CONVERGES_ON_TARGET`]).
     pub converged: u32,
+    /// Largest share of one player's fleet strength the garrisons held at a refresh (see [`TaskForces::update_garrisons`]).
+    pub garrison_share_max: f64,
     /// Moves that arrived.
     pub arrivals: u32,
     /// Forces wiped out.
@@ -1115,25 +1117,30 @@ impl TaskForces {
             }
             need.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(&b.0)));
             let mut budget = GARRISON_TOTAL_CAP * own_total;
+            let planet_cap = GARRISON_PLANET_CAP * own_total;
             let mut deficits: Vec<(PlanetId, f64)> = Vec::new();
             for (p, want) in need {
                 let want = want.min(budget);
                 if want <= 0.0 {
                     break;
                 }
-                let mut have = 0.0;
+                let (mut have, mut present) = (0.0, 0.0);
                 let mut here: Vec<&FleetView> = fleets.iter().filter(|f| f.at == Some(p) && !self.owned_fleets.contains(&f.id) && !self.reserved.contains_key(&f.id)).collect();
                 here.sort_by_key(|f| f.id);
                 for f in here {
-                    if have >= want {
-                        break;
+                    // A fleet is held whole, so its whole strength counts against both caps; one that does not fit stays free for the plans.
+                    let s = sim.force_strength(&f.units);
+                    present += s;
+                    if have >= want || s > budget || have + s > planet_cap {
+                        continue;
                     }
-                    have += sim.force_strength(&f.units);
+                    have += s;
+                    budget -= s;
                     self.held.insert(f.id);
                 }
-                budget -= have.min(want);
-                if have < 0.8 * want {
-                    deficits.push((p, want - have));
+                // Reinforcements are for planets that lack the ships, not for ones whose fleet is merely too big to hold.
+                if present < 0.8 * want {
+                    deficits.push((p, want - present));
                 }
             }
             // Free fleets elsewhere reinforce the planets that miss their garrison (one fleet per planet per refresh).
@@ -1143,14 +1150,19 @@ impl TaskForces {
                     .iter()
                     .filter(|f| f.heading_to.is_none() && f.at.is_some_and(|a| a != p) && !self.owned_fleets.contains(&f.id) && !self.held.contains(&f.id) && !self.reserved.contains_key(&f.id))
                     .filter(|f| f.at.is_some_and(|a| snap.owner[a as usize] == Some(me) && dist[a as usize] != u32::MAX))
-                    .min_by_key(|f| (dist[f.at.unwrap_or(p) as usize], f.id));
-                if let Some(d) = donor {
+                    .map(|f| (f, sim.force_strength(&f.units)))
+                    .filter(|(_, s)| *s <= budget && *s <= planet_cap)
+                    .min_by_key(|(f, _)| (dist[f.at.unwrap_or(p) as usize], f.id));
+                if let Some((d, s)) = donor {
                     let safe = safe_from(snap, me, p);
                     if d.at.is_some_and(|a| safe.get(a as usize).copied().unwrap_or(false)) && sim.move_fleet(me, d.id, p).is_ok() {
                         self.held.insert(d.id);
+                        budget -= s;
                     }
                 }
             }
+            let held: f64 = fleets.iter().filter(|f| self.held.contains(&f.id)).map(|f| sim.force_strength(&f.units)).sum();
+            self.stats.garrison_share_max = self.stats.garrison_share_max.max(held / own_total);
         }
     }
 
