@@ -608,9 +608,20 @@ fn battle_menu(
 
 /// AUTO-RESOLVE in the retreat question: the fight is given up as with F10, and the sim settles the battle from the units that are left, with
 /// their hull and shield (`PlayAction::AbandonTactical`: `Sim::abandon_tactical`, then the auto-resolve).
-fn retreat_auto_resolve(mut choices: MessageReader<battle_view::retreat_prompt::RetreatChoice>, pending: Res<PendingTactical>, mut done: MessageWriter<BattleFinished>) {
+fn retreat_auto_resolve(
+    mut choices: MessageReader<battle_view::retreat_prompt::RetreatChoice>,
+    pending: Res<PendingTactical>,
+    rt: Option<Res<battle_view::BattleRuntime>>,
+    settings: Option<Res<battle_view::BattleViewSettings>>,
+    mut done: MessageWriter<BattleFinished>,
+) {
+    let player = settings.map_or(0, |s| s.player_side);
     for c in choices.read() {
         if *c == battle_view::retreat_prompt::RetreatChoice::AutoResolve {
+            if rt.as_ref().is_some_and(|r| battle_view::tactical_ui::retreat_prevented(r, player)) {
+                warn!("battle: auto-resolve refused while retreat is prevented");
+                continue;
+            }
             info!("battle: auto-resolve chosen in the retreat question");
             done.write(BattleFinished { id: pending.0.battle_id, outcome: BattleOutcome::Aborted });
         }
@@ -626,6 +637,7 @@ fn abort_key(
     status: Res<BattleStatus>,
     clicks_done: Res<ScriptedClicksDone>,
     shot: Res<BattleShot>,
+    rt: Option<Res<battle_view::BattleRuntime>>,
     mut done: MessageWriter<BattleFinished>,
     mut fired: Local<bool>,
     mut waited: Local<u32>,
@@ -643,6 +655,10 @@ fn abort_key(
         done.write(BattleFinished { id: pending.0.battle_id, outcome: BattleOutcome::Aborted });
     }
     if keys.just_pressed(KeyCode::F10) || keys.just_pressed(settings.bindings.retreat) {
+        if rt.as_ref().is_some_and(|r| battle_view::tactical_ui::retreat_prevented(r, 0)) {
+            warn!("battle: retreat/abort key ignored while retreat is prevented");
+            return;
+        }
         done.write(BattleFinished { id: pending.0.battle_id, outcome: BattleOutcome::Aborted });
     }
 }

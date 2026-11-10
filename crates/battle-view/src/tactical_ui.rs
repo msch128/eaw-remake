@@ -258,7 +258,7 @@ fn handle_clicks(
     mut issued: MessageWriter<control::OrderIssued>,
     audio: Option<Res<alamo_audio::plugin::AlamoAudio>>,
     mut sfx: MessageWriter<alamo_audio::PlaySfx>,
-    (mut interdict, mut prompt): (ResMut<InterdictNotice>, ResMut<crate::retreat_prompt::RetreatPrompt>),
+    (mut interdict, mut prompt, assets): (ResMut<InterdictNotice>, ResMut<crate::retreat_prompt::RetreatPrompt>, Option<Res<EawUiAssets>>),
 ) {
     let player = settings.player_side;
     for b in buttons.read() {
@@ -269,7 +269,7 @@ fn handle_clicks(
                 rt.command(player, Command::CancelRetreat);
             }
             // The game asks first (`BattleViewSettings::retreat_prompt`): Retreat, Auto-Resolve or Cancel.
-            "b_retreat" if settings.retreat_prompt && tac.retreat == RetreatState::Ready && !interdicted(&rt, player) => prompt.requested = true,
+            "b_retreat" if settings.retreat_prompt && tac.retreat == RetreatState::Ready && !interdicted(&rt, player) && !retreat_prevented(&rt, player) => prompt.requested = true,
             "b_retreat" => {
                 // The announcement follows the sim's `RetreatOrdered` event (`audio::battle_audio`), so a refused order is silent.
                 // Before the retreat countdown ran out the sim refuses: the faction's `Space_Retreat_Not_Allowed_SFXEvent` instead.
@@ -282,6 +282,21 @@ fn handle_clicks(
                 if interdicted(&rt, player) {
                     interdict.0 = 4.0;
                     interdict.1 = "Retreat Impossible due to presence of Interdictor".to_string();
+                }
+                // An own unit with Retreat_Prevention_Ability (Death Star II, Titan): the faction's "Reason 2: Friendly Hero Preventing" line.
+                if retreat_prevented(&rt, player) {
+                    let (tid, fallback) = retreat_prevented_text(rt.player_faction.as_deref());
+                    let line = assets.as_ref().and_then(|a| a.text.get(tid)).unwrap_or(fallback);
+                    interdict.0 = 4.0;
+                    interdict.1 = line.to_string();
+                    let sfx_event = rt.player_faction.as_deref().zip(audio.as_ref()).and_then(|(f, a)| {
+                        a.constants
+                            .faction_sfx(f, "space_retreat_not_allowed_reason_2_sfxevent")
+                            .or_else(|| a.constants.faction_sfx(f, "space_retreat_not_allowed_sfxevent"))
+                    });
+                    if let Some(n) = sfx_event {
+                        sfx.write(alamo_audio::PlaySfx { event: n.to_string(), position: None, source: None });
+                    }
                 }
                 rt.command(player, Command::Retreat);
             }
@@ -1830,6 +1845,21 @@ fn interdicted(rt: &BattleRuntime, side: u8) -> bool {
     })
 }
 
+/// An own unit with `Retreat_Prevention_Ability` (Death Star II, Titan) keeps its own side in the battle.
+pub fn retreat_prevented(rt: &BattleRuntime, side: u8) -> bool {
+    rt.cur.as_ref().is_some_and(|c| {
+        c.ships.iter().any(|s| s.side == side && rt.catalog.ship(s.def).prevents_retreat)
+    })
+}
+
+/// The text ID and fallback for "Reason 2: Friendly Hero Preventing".
+pub fn retreat_prevented_text(faction: Option<&str>) -> (&'static str, &'static str) {
+    match faction.unwrap_or("Empire").to_ascii_lowercase().as_str() {
+        "empire" => ("TEXT_SFX_TAR_RETREAT_1", "Evacuate? In our moment of triumph? I think you overestimate their chances!"),
+        _ => ("TEXT_SFX_RHD_RETREAT_TARKIN_1", "Retreat not allowed"),
+    }
+}
+
 fn retreat_banner(
     mut commands: Commands,
     ui: Res<eaw_ui::EawUiSettings>,
@@ -2458,5 +2488,48 @@ mod retreat_tests {
         let last = last.unwrap();
         assert_eq!(last.alive.first().copied(), Some(2), "nobody jumped out");
         assert!(!last.over);
+    }
+
+    #[test]
+    fn retreat_prevention_blocks_retreat_prompt_and_sets_reason_feedback() {
+        let titan = ShipDef {
+            name: "titan".into(),
+            class: TargetClass::Capital,
+            prevents_retreat: true,
+            hull: 10000.0,
+            ..ShipDef::default()
+        };
+        let idle = ShipDef {
+            name: "idle".into(),
+            class: TargetClass::Structure,
+            is_static: true,
+            hull: 1.0e6,
+            radius: 100.0,
+            ..ShipDef::default()
+        };
+        let cat = std::sync::Arc::new(Catalog::from_defs(vec![titan, idle], vec![]));
+        let side = |n: &str| SideSetup {
+            name: n.into(),
+            units: vec![UnitSetup { ship: cat.ship_id(n).unwrap(), count: 1, tag: 1 }],
+            structures: vec![],
+            ai: false,
+        };
+        let b = Battle::new(BattleSetup {
+            sides: vec![side("titan"), side("idle")],
+            catalog: cat.clone(),
+            config: BattleConfig::default(),
+        });
+        let sim = crate::sim::SimHandle::spawn(b);
+        sim.request(1);
+        let cur = sim.fetch(0, true).0.expect("snapshot");
+
+        let rt = BattleRuntime::mock(sim, cat, Some(cur), Some("Empire"));
+
+        assert!(retreat_prevented(&rt, 0), "side 0 has a titan that prevents retreat");
+        assert!(!retreat_prevented(&rt, 1), "side 1 has no retreat preventing unit");
+
+        let (tid, fallback) = retreat_prevented_text(rt.player_faction.as_deref());
+        assert_eq!(tid, "TEXT_SFX_TAR_RETREAT_1");
+        assert!(fallback.contains("Evacuate? In our moment of triumph?"));
     }
 }

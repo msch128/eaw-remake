@@ -48,7 +48,13 @@ fn spec(world: &World) -> BattleBannerSpec {
     let player = world.get_resource::<BattleViewSettings>().map_or(0, |s| s.player_side);
     let faction = UiFaction::from_name(rt.and_then(|r| r.player_faction.as_deref()).unwrap_or("Empire"));
     let planet = rt.and_then(|r| r.request.as_ref()).map(|q| q.planet_name.trim_end_matches("_WW").replace('_', " ").to_uppercase());
-    let what = text(world, "TEXT_TOOLTIP_RETREAT_BUTTON", "Retreat from battle");
+    let prevented = rt.is_some_and(|r| crate::tactical_ui::retreat_prevented(r, player));
+    let (what, auto) = if prevented {
+        let (tid, fallback) = crate::tactical_ui::retreat_prevented_text(rt.and_then(|r| r.player_faction.as_deref()));
+        (text(world, tid, fallback), String::new())
+    } else {
+        (text(world, "TEXT_TOOLTIP_RETREAT_BUTTON", "Retreat from battle"), text(world, "TEXT_BUTTON_AUTORESOLVE", "Auto-Resolve"))
+    };
     let side = |side: u8, tint: Color| -> BannerSide {
         let (mut count, mut icon) = (1, None);
         if let Some((rt, cur)) = rt.and_then(|r| r.cur.as_ref().map(|c| (r, c))) {
@@ -64,10 +70,10 @@ fn spec(world: &World) -> BattleBannerSpec {
         .and_then(|c| (0..c.alive.len() as u8).filter(|&s| s != player).max_by_key(|&s| c.alive[s as usize]))
         .unwrap_or(if player == 0 { 1 } else { 0 });
     BattleBannerSpec {
-        title: planet.map_or_else(|| what.clone(), |p| format!("{p}: {what}")),
+        title: if prevented { what.clone() } else { planet.map_or_else(|| what.clone(), |p| format!("{p}: {what}")) },
         faction,
         begin: text(world, "TEXT_BUTTON_RETREAT", "Retreat"),
-        auto: text(world, "TEXT_BUTTON_AUTORESOLVE", "Auto-Resolve"),
+        auto,
         left: side(player, Color::srgb(0.35, 1.0, 0.45)),
         right: side(enemy, Color::srgb(1.0, 0.3, 0.3)),
         cancel: Some(text(world, "TEXT_BUTTON_CANCEL", "Cancel")),
@@ -84,6 +90,14 @@ pub(crate) fn open_prompt(world: &mut World) {
         }
         if prompt.root.is_some() {
             // Asked again while it is up (Retreat pressed once more): nothing to do.
+            prompt.requested = false;
+            return;
+        }
+    }
+    let player = world.get_resource::<BattleViewSettings>().map_or(0, |s| s.player_side);
+    if let Some(rt) = world.get_resource::<BattleRuntime>() {
+        if crate::tactical_ui::retreat_prevented(&rt, player) {
+            let mut prompt = world.resource_mut::<RetreatPrompt>();
             prompt.requested = false;
             return;
         }
@@ -120,6 +134,7 @@ pub(crate) fn prompt_input(
     mut choices: MessageWriter<RetreatChoice>,
     parents: Query<&ChildOf>,
     alive: Query<()>,
+    rt: Option<Res<BattleRuntime>>,
 ) {
     let Some(root) = prompt.root else {
         clicks.clear();
@@ -136,11 +151,13 @@ pub(crate) fn prompt_input(
         }
     };
     let mut answer = None;
+    let player = settings.player_side;
+    let auto_forbidden = rt.as_ref().is_some_and(|r| crate::tactical_ui::retreat_prevented(r, player));
     for c in clicks.read() {
         if answer.is_none() && under_root(c.entity) {
             answer = match c.name.as_str() {
                 BANNER_BEGIN => Some(Some(RetreatChoice::Retreat)),
-                BANNER_AUTO => Some(Some(RetreatChoice::AutoResolve)),
+                BANNER_AUTO if !auto_forbidden => Some(Some(RetreatChoice::AutoResolve)),
                 _ => None,
             };
         }
@@ -311,5 +328,44 @@ mod tests {
             assert_eq!(root(&app), None);
         }
         assert!(answers(&mut app).is_empty());
+    }
+
+    #[test]
+    fn retreat_prompt_does_not_open_and_disallows_auto_resolve_when_prevented() {
+        let Some(mut app) = app() else { return };
+        // Set up a BattleRuntime with retreat prevented for player (side 0)
+        let titan = battle_sim::ShipDef {
+            name: "titan".into(),
+            prevents_retreat: true,
+            ..battle_sim::ShipDef::default()
+        };
+        let cat = std::sync::Arc::new(battle_sim::Catalog::from_defs(vec![titan], vec![]));
+        let side = |n: &str| battle_sim::SideSetup {
+            name: n.into(),
+            units: vec![battle_sim::UnitSetup { ship: cat.ship_id(n).unwrap(), count: 1, tag: 1 }],
+            structures: vec![],
+            ai: false,
+        };
+        let b = battle_sim::Battle::new(battle_sim::BattleSetup {
+            sides: vec![side("titan"), side("titan")],
+            catalog: cat.clone(),
+            config: battle_sim::BattleConfig::default(),
+        });
+        let sim = crate::sim::SimHandle::spawn(b);
+        sim.request(1);
+        let cur = sim.fetch(0, true).0.expect("snapshot");
+        let rt = BattleRuntime::mock(sim, cat, Some(cur), Some("Empire"));
+        app.world_mut().insert_resource(rt);
+
+        // When requested while retreat is prevented, open_prompt does NOT open the banner
+        app.world_mut().resource_mut::<RetreatPrompt>().requested = true;
+        app.update();
+        assert_eq!(root(&app), None, "prompt should not open while retreat is prevented");
+        assert!(!app.world().resource::<RetreatPrompt>().requested);
+
+        // Also check spec(): auto is empty and title shows friendly hero text
+        let s = spec(app.world());
+        assert!(s.auto.is_empty(), "auto-resolve must not be offered while retreat is prevented");
+        assert!(s.title.contains("EVACUATE") || s.title.contains("OVERESTIMATE") || s.title.contains("RETREAT"));
     }
 }

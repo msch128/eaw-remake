@@ -465,6 +465,38 @@ impl BattleRuntime {
     pub fn order_retreat(&self, side: u8) {
         self.sim.command(side, Command::Retreat);
     }
+
+    #[cfg(test)]
+    pub fn mock(sim: SimHandle, catalog: Arc<Catalog>, cur: Option<Arc<Snapshot>>, faction: Option<&str>) -> Self {
+        Self {
+            sim,
+            catalog,
+            visuals: Arc::new(VisualCatalog::default()),
+            dt: 1.0 / 30.0,
+            clock: 0.0,
+            cur,
+            next: None,
+            alpha: 0.0,
+            fresh_events: Vec::new(),
+            entities: HashMap::new(),
+            dying: HashSet::new(),
+            request: None,
+            player_faction: faction.map(|s| s.to_string()),
+            start_alive: Vec::new(),
+            retreat_countdown: 0.0,
+            unit_cap: 100,
+            no_spawn_radius: 0.0,
+            reinforce_clearance: 0.0,
+            arena_half: 50000.0,
+            fog_of_war: false,
+            speed: 1.0,
+            framed: false,
+            reported: false,
+            minimap_props: Vec::new(),
+            minimap_planets: Vec::new(),
+            minimap_tint: Color::BLACK,
+        }
+    }
 }
 
 /// Adds the battle view. Requires [`alamo_render::AlamoRenderPlugin`] to be added as well.

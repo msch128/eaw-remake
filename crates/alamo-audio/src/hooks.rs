@@ -83,6 +83,7 @@ pub const WIRED_TAGS: &[&str] = &[
     "space_retreat_enemy_begin_sfxevent",
     "space_retreat_not_allowed_sfxevent",
     "space_retreat_not_allowed_reason_1_sfxevent",
+    "space_retreat_not_allowed_reason_2_sfxevent",
     "space_retreat_cancel_sfxevent",
     "reinforcements_selection_sfxevent",
     "reinforcements_cancelled_sfxevent",

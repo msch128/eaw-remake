@@ -143,12 +143,13 @@ impl AudioConstants {
     /// The per-faction SFX tags of `Factions.xml` that carry battle announcements (`Space_Retreat_Enemy_Begin_SFXEvent` ...), as
     /// `(faction lower-case, tag lower-case, event)`.
     pub fn parse_faction_sfx(bytes: &[u8]) -> Vec<(String, String, String)> {
-        const TAGS: [&str; 22] = [
+        const TAGS: [&str; 23] = [
             "space_retreat_begin_sfxevent",
             "space_retreat_cancel_sfxevent",
             "space_retreat_enemy_begin_sfxevent",
             "space_retreat_not_allowed_sfxevent",
             "space_retreat_not_allowed_reason_1_sfxevent",
+            "space_retreat_not_allowed_reason_2_sfxevent",
             "space_surrender_sfxevent",
             "reinforcements_selection_sfxevent",
             "reinforcements_requesting_sfxevent",

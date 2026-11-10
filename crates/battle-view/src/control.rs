@@ -609,7 +609,7 @@ pub fn orders(
     let lead = voice_lead(&rt, &ships, &mine);
     // A ship whose own ability pins it (`Disable_Movement`) does not move: the sim keeps it in place, the game explains why.
     let pinned = pinned_text(&rt, &mine);
-    let mut say_pinned = |blocked: &mut Option<ResMut<crate::tactical_ui::InterdictNotice>>| {
+    let say_pinned = |blocked: &mut Option<ResMut<crate::tactical_ui::InterdictNotice>>| {
         if let (Some(t), Some(b)) = (pinned, blocked.as_mut()) {
             b.0 = 4.0;
             b.1 = t.to_string();
