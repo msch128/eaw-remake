@@ -39,6 +39,7 @@ data are labelled in [RULES.md](RULES.md).
 - **`GalacticFreeStore` is experimental and stops at the first access to the engine-provided `FreeStore` object.** Observe: `ScriptedConfig::freestore = true`. Where: `crates/galaxy-script/src/lib.rs`.
 - **Snapshot saves do not capture Lua coroutine state.** Where scripts sleep and their locals, AI plans in flight, their task forces, undelivered events and frozen tactical set-ups are lost, so a loaded game continues but is not bit-identical. Observe: the save tests print whether a loaded run matches the original (it does not). Where: `crates/galaxy-script/src/save.rs`.
 - **A save loaded into game data with other planets or factions loses the AI memory.** Ids in the state, in script object handles and in alliances follow their names; goal timers, budgets and learned failures of the Remake AI start fresh (a load warning says so). Observe: `ScriptedSim::load_warnings` after such a load. Where: `crates/galaxy-script/src/save.rs` (`translate`).
+- **A save without name tables (written before the header carried them) loads only while the game data is the data it was written with.** Its catalog is rebuilt from today's game data and proven by the fingerprint; after a mod update that renames, adds or removes a planet, faction, ship or structure no rebuilt catalog matches and the load is refused with that reason. Saves with name tables follow such changes by name. Observe: `cargo run -p galaxy-script --example save_check -- <file>`. Where: `crates/galaxy-script/src/legacy.rs`.
 
 ## Galactic AI
 

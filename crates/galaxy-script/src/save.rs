@@ -184,23 +184,13 @@ impl SaveHeader {
     }
 }
 
-/// The name tables the ids of a save refer to. `now` are the tables of the match the save is loaded into.
-fn saved_names(header: &SaveHeader, now: &NameTables) -> Result<NameTables, SaveError> {
-    let fits = |names: &NameTables| header.world == [names.planets.len(), names.units.len(), names.factions.len()] && header.fingerprint == fingerprint(names);
+/// The name tables a save carries, checked against the counts and the fingerprint of its header. `None` for a file from before the name
+/// tables: its ids are those of the catalog of the build that wrote it (see [`crate::legacy`]).
+fn own_names(header: &SaveHeader) -> Result<Option<&NameTables>, SaveError> {
     match &header.names {
-        Some(names) if fits(names) => Ok(names.clone()),
+        Some(names) if header.world == [names.planets.len(), names.units.len(), names.factions.len()] && header.fingerprint == fingerprint(names) => Ok(Some(names)),
         Some(_) => Err(SaveError::Format("the name tables do not match the counts and fingerprint of the header (a damaged file)".into())),
-        // A file from before the name tables: its ids are those of the catalog of the build that wrote it.
-        None if fits(now) => Ok(now.clone()),
-        None => Err(SaveError::DataMismatch(format!(
-            "the save has no name tables and was written with {} planets, {} unit types and {} factions; the game data now has {}, {} and {}",
-            header.world[0],
-            header.world[1],
-            header.world[2],
-            now.planets.len(),
-            now.units.len(),
-            now.factions.len()
-        ))),
+        None => Ok(None),
     }
 }
 
@@ -370,9 +360,16 @@ impl ScriptedSim {
         let week = file.checkpoint.week;
         progress(LoadProgress { done: 0, total: 1, week });
         let campaign = data.campaign(&file.header.campaign).ok_or_else(|| SaveError::UnknownCampaign(file.header.campaign.clone()))?.clone();
-        let mut sim = ScriptedSim::new(fs, data, &campaign, file.header.sim_config.clone(), file.header.config.clone()).map_err(|e| SaveError::Setup(e.to_string()))?;
+        let mut sim = ScriptedSim::new(fs, data.clone(), &campaign, file.header.sim_config.clone(), file.header.config.clone()).map_err(|e| SaveError::Setup(e.to_string()))?;
         let now = sim.with_sim(|s| s.world().name_tables());
-        let saved = saved_names(&file.header, &now)?;
+        let saved = match own_names(&file.header)? {
+            Some(names) => names.clone(),
+            None => {
+                let (names, note) = sim.with_sim(|s| crate::legacy::tables(&file.header, &now, s.world(), &data)).map_err(SaveError::DataMismatch)?;
+                sim.load_notes.push(note);
+                names
+            }
+        };
         let map = IdMap::new(&saved, &now);
         setup(&mut sim);
         let state = file.state;
@@ -551,24 +548,19 @@ mod tests {
     }
 
     #[test]
-    fn a_header_is_checked_against_its_own_name_tables_or_those_of_the_match() {
-        let now = NameTables { planets: names(&["P"]), factions: names(&["Rebel"]), units: names(&["A", "B"]), structures: Vec::new(), starbases: Vec::new() };
-        let older = NameTables { units: names(&["A"]), ..now.clone() };
+    fn a_header_is_checked_against_its_own_name_tables() {
+        let tables = NameTables { planets: names(&["P"]), factions: names(&["Rebel"]), units: names(&["A", "B"]), structures: Vec::new(), starbases: Vec::new() };
         let blank = || SaveHeader { campaign: "c".into(), sim_config: SimConfig::default(), config: ScriptedConfig::default(), world: [0; 3], fingerprint: 0, names: None };
-        // Its own tables, whatever the match has.
-        assert_eq!(saved_names(&blank().with_names(older.clone()), &now).unwrap(), older);
-        // No tables: the counts and the fingerprint must be those of the match.
-        let mut bare = blank().with_names(now.clone());
+        let sealed = blank().with_names(tables.clone());
+        assert_eq!(own_names(&sealed).unwrap(), Some(&tables));
+        // A file from before the name tables has none to check.
+        let mut bare = sealed.clone();
         bare.names = None;
-        assert_eq!(saved_names(&bare, &now).unwrap(), now);
-        let mut bare = blank().with_names(older.clone());
-        bare.names = None;
-        let why = saved_names(&bare, &now).unwrap_err().to_string();
-        assert_eq!(why, "the game data differs from the data this save was made with: the save has no name tables and was written with 1 planets, 1 unit types and 1 factions; the game data now has 1, 2 and 1");
+        assert_eq!(own_names(&bare).unwrap(), None);
         // Tables that were changed after the header was sealed.
-        let mut damaged = blank().with_names(older);
+        let mut damaged = sealed;
         damaged.names.as_mut().unwrap().units[0] = "C".into();
-        assert!(matches!(saved_names(&damaged, &now), Err(SaveError::Format(_))));
+        assert!(matches!(own_names(&damaged), Err(SaveError::Format(_))));
     }
 
     #[test]

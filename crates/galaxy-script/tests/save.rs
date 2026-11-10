@@ -374,7 +374,7 @@ fn a_save_that_uses_what_the_game_data_lacks_is_refused_by_name() {
     assert_eq!(e.to_string(), "the game data differs from the data this save was made with: the save uses 2 objects this game data does not have: structure Station_Of_Another_Mod, unit Ship_Of_Another_Mod");
 }
 
-/// The files of the builds before the name tables: no tables, only counts and a fingerprint. They load while those still describe the catalog.
+/// The files of the builds before the name tables: no tables, only counts and a fingerprint. With the catalog of this build they load as they are.
 #[test]
 fn a_save_without_name_tables_loads_while_the_catalog_is_the_same() {
     let Some(c) = ctx() else { return };
@@ -386,4 +386,89 @@ fn a_save_without_name_tables_loads_while_the_catalog_is_the_same() {
     let loaded = ScriptedSim::from_save(serde_json::from_str(&text).unwrap(), c.fs.clone(), c.data.clone(), |_| {}).expect("the old header loads");
     assert_eq!(loaded.checkpoint(), sim.checkpoint());
     assert_eq!(loaded.state().sim, file.state.sim);
+}
+
+/// The save as a build wrote it whose unit catalog was today's without the types `dropped` picks: the state moved to that catalog, the header
+/// with its counts and fingerprint and, like every file of those builds, without name tables.
+fn written_by_an_earlier_build(sim: &ScriptedSim, file: &SaveFile, names: &NameTables, dropped: impl Fn(&str) -> bool) -> (SaveFile, NameTables) {
+    let mut older = names.clone();
+    older.units.retain(|n| !dropped(n));
+    assert!(older.units.len() < names.units.len(), "nothing dropped");
+    let mut old = file.clone();
+    old.state.sim = sim.with_sim(|s| s.remap_snapshot(file.state.sim.clone(), &IdMap::new(names, &older))).expect("the state fits the smaller catalog");
+    old.checkpoint.galaxy_hash = old.state.sim.galaxy.state_hash();
+    old.header = old.header.with_names(older.clone());
+    old.header.names = None;
+    (old, older)
+}
+
+/// A file of 2026-11-08: no name tables, and the catalog had no phase repair items yet. They sit in the middle of today's catalog, so the
+/// ids of every agent and structure swap behind them moved. The catalog is found by the fingerprint and the ids follow.
+#[test]
+fn a_save_without_name_tables_from_a_build_with_a_smaller_catalog_loads() {
+    let Some(c) = ctx() else { return };
+    let (sim, _, names) = played(&c);
+    // Something behind the phase repairs in the catalog, so that an id in the state moves: an underboss at Coruscant.
+    let (underworld, coruscant, smuggler) = sim.with_sim(|s| (s.world().faction_id("Underworld").unwrap(), s.world().planet_id("Coruscant_WW").unwrap(), s.world().unit_id("Underboss_Team").expect("an agent")));
+    sim.with_sim_mut(|s| s.spawn_units(underworld, coruscant, smuggler, 1));
+    let file = sim.to_save().unwrap();
+    let repairs = names.units.iter().filter(|n| n.starts_with("Repair_Phase_")).count();
+    assert!(repairs > 0 && (smuggler as usize) > names.units.iter().position(|n| n.starts_with("Repair_Phase_")).unwrap());
+
+    let (old, older) = written_by_an_earlier_build(&sim, &file, &names, |n| n.starts_with("Repair_Phase_"));
+    assert_eq!(old.header.world[1] + repairs, names.units.len());
+    assert_ne!(old.state.sim.galaxy.fleets, file.state.sim.galaxy.fleets, "the agent's id is lower in the older file");
+    assert_eq!(fleets_by_name(&old.state.sim.galaxy, &older.units), fleets_by_name(&file.state.sim.galaxy, &names.units));
+    let text = serde_json::to_string(&old).unwrap();
+    assert!(!text.contains("\"names\""));
+
+    let loaded = ScriptedSim::from_save(serde_json::from_str(&text).unwrap(), c.fs.clone(), c.data.clone(), |_| {}).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(loaded.state().sim, file.state.sim);
+    assert_eq!(loaded.checkpoint(), sim.checkpoint());
+    assert!(loaded.load_warnings.is_empty(), "{:?}", loaded.load_warnings);
+    assert!(loaded.load_notes.iter().any(|n| n.contains("the catalog of a build without phase repairs")), "{:?}", loaded.load_notes);
+    // Saved again, the file names its ids.
+    assert_eq!(loaded.to_save().unwrap().header.names, Some(names));
+}
+
+/// A file of October 2026: only the ships and squadrons of the data and the hero upgrades.
+#[test]
+fn a_save_without_name_tables_from_a_build_with_only_the_upgrade_items_loads() {
+    let Some(c) = ctx() else { return };
+    let (sim, file, names) = played(&c);
+    let derived_later: std::collections::BTreeSet<String> = sim.with_sim(|s| {
+        s.world().units.iter().filter(|u| u.name.starts_with("Repair_Phase_") || matches!(u.role, galaxy_sim::UnitRole::Dummy | galaxy_sim::UnitRole::Agent | galaxy_sim::UnitRole::StructureSwap { .. })).map(|u| u.name.clone()).collect()
+    });
+    let (old, _) = written_by_an_earlier_build(&sim, &file, &names, |n| derived_later.contains(n));
+    assert_eq!(old.header.world[1] + derived_later.len(), names.units.len());
+    let loaded = ScriptedSim::from_save(old, c.fs.clone(), c.data.clone(), |_| {}).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(loaded.state().sim, file.state.sim);
+    assert!(loaded.load_notes.iter().any(|n| n.contains("without phase repairs, purchases without a ship, agents, structure swaps")), "{:?}", loaded.load_notes);
+}
+
+/// A file without name tables whose catalog is none this build can rebuild is refused, and the message says why.
+#[test]
+fn a_save_without_name_tables_from_an_unknown_catalog_is_refused_with_the_reason() {
+    let Some(c) = ctx() else { return };
+    let (_, file, names) = played(&c);
+    let mut old = file.clone();
+    old.header.names = None;
+    old.header.world[1] -= 3;
+    let e = ScriptedSim::from_save(old.clone(), c.fs.clone(), c.data.clone(), |_| {}).err().expect("refused");
+    assert!(matches!(e, SaveError::DataMismatch(_)));
+    let expect = format!(
+        "the game data differs from the data this save was made with: the save has no name tables, and its catalog ({} unit types, fingerprint {:016x}) is none of the earlier catalogs this build can rebuild from the game data ({} unit types now), so its ids cannot be read",
+        names.units.len() - 3,
+        file.header.fingerprint,
+        names.units.len()
+    );
+    assert_eq!(e.to_string(), expect);
+
+    // Another map: the planets are part of the header.
+    old.header.world = [names.planets.len() + 1, names.units.len(), names.factions.len()];
+    let e = ScriptedSim::from_save(old, c.fs.clone(), c.data.clone(), |_| {}).err().expect("refused");
+    assert_eq!(
+        e.to_string(),
+        format!("the game data differs from the data this save was made with: the save has no name tables and was written with {} planets and {} factions; the campaign now has {} and {}", names.planets.len() + 1, names.factions.len(), names.planets.len(), names.factions.len())
+    );
 }

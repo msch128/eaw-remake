@@ -16,6 +16,7 @@
 
 pub mod ai;
 pub mod host;
+mod legacy;
 mod save;
 
 use std::cell::RefCell;

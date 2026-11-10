@@ -198,6 +198,13 @@ fresh match. A name the save uses and the game data lacks refuses the load with 
 looked up again between its two planets. The AI memory is indexed by planet and player and is dropped (with a load warning) when either list
 changed. `SAVE_VERSION` is raised only for a change a reader cannot follow by defaults and names.
 
+The files of the builds before the name tables hold only the counts and the fingerprint. `legacy.rs` rebuilds the unit table of the writing
+build from today's catalog: the build items the converter derives (hero upgrades, phase repairs, purchases without a ship, agents, structure
+swaps) each arrived as one block, so an earlier catalog is today's without some blocks, and the first builds listed squadrons by object kind
+only. The combination whose count and fingerprint are those of the file is the catalog of the file (the fingerprint proves the planet,
+faction, unit and structure names); the ids are then translated as above. A file that matches none is refused with that reason. A new kind
+of derived build item gets a `Block` there only if saves without name tables from before it still matter; saves with tables need nothing.
+
 ## alamo-render
 Responsibility: spawns original Alamo models in Bevy with an EaW-style look. Depends on `alamo-fs` and `alamo-model`.
 * `AlamoRenderPlugin::new(Arc<GameFs>)`; `AlamoModel { path, team_color, lod, bow_forward, unit, attached }` spawns bones, rigid and skinned meshes, proxies and hardpoints. Mesh, material and texture caches are shared (500 TIEs in six team colours are 18 draw calls). DDS stays block-compressed (BC1/2/3); TGA and PNG are decoded with mips. `preload` loads models and textures on worker threads.
