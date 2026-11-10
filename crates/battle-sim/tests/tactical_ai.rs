@@ -333,7 +333,7 @@ fn big_hulls_do_not_stay_inside_each_other_and_nobody_parks_in_an_executor() {
 #[derive(Debug, Default, Clone)]
 struct Attack {
     /// Shape of the fleet when its nearest ship first comes within 6000 units of an enemy warship: spread along the line from the fleet
-    /// to that enemy (a column is deep) and across it (a line is wide).
+    /// to the enemy warships' centre (a column is deep) and across it (a line is wide).
     depth: f32,
     width: f32,
     /// Battle second of the first hit a fleet ship lands, and the seconds until half of the fleet ships have landed one (a column comes
@@ -376,10 +376,15 @@ fn ai_attack(cat: &Arc<Catalog>, arena: Option<Arc<Arena>>, ai: &[(&str, u32)], 
             {
                 shaped = true;
                 let centre = alive.iter().fold(Vec3::ZERO, |a, s| a + s.pos) * (1.0 / alive.len() as f32);
-                // Depth along the way the fleet flies: an AI that knows every enemy (`AIUsesFogOfWarSpace` False) heads for the enemy's main
-                // group, and the nearest enemy ship that starts the measurement can stand off to the side.
-                let heading = alive.iter().fold(Vec3::ZERO, |a, s| a + Vec3::from_yaw(s.yaw));
-                let axis = if heading.len() > 0.5 * alive.len() as f32 { heading.normalized() } else { (enemy - centre).normalized() };
+                // Toward the enemy warships as a group. The nearest one can stand off to the side: the AI knows every enemy
+                // (`AIUsesFogOfWarSpace` False) and heads for the main group, so that one ship measures the line's width as depth.
+                let ecentre = b
+                    .ships
+                    .iter()
+                    .filter(|o| o.alive && o.side == 1 && !small(o))
+                    .fold((Vec3::ZERO, 0u32), |a, o| (a.0 + o.pos, a.1 + 1));
+                let to_enemy = ecentre.0 * (1.0 / ecentre.1.max(1) as f32) - centre;
+                let axis = if to_enemy.len() > 1.0 { to_enemy.normalized() } else { (enemy - centre).normalized() };
                 let spread = |v: Vec3| {
                     let k: Vec<f32> = alive.iter().map(|s| (s.pos - centre).dot(v)).collect();
                     k.iter().copied().fold(f32::MIN, f32::max) - k.iter().copied().fold(f32::MAX, f32::min)
