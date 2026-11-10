@@ -350,6 +350,10 @@ fn planet_obj(p: u32) -> ObjectId {
     (1u64 << 56) | u64::from(p)
 }
 
+fn structure_obj(planet: u32, structure: u32) -> ObjectId {
+    (3u64 << 56) | (u64::from(planet) << 24) | u64::from(structure)
+}
+
 enum Obj {
     Planet(u32),
     Ships { fleet: u32, unit: u32 },
@@ -371,6 +375,21 @@ fn decode(id: ObjectId) -> Option<Obj> {
         },
         4 => Obj::Starbase(low as u32),
         _ => return None,
+    })
+}
+
+/// An object id that names nothing (no kind tag), for a saved handle whose object the game data no longer has.
+pub(crate) const NO_OBJECT: ObjectId = 0;
+
+/// The object id of a saved script handle in the ids of the loading match: planet, unit and structure ids sit inside it. `None` when the
+/// game data no longer has what it names; an id of no known kind comes back unchanged.
+pub(crate) fn remap_object(id: ObjectId, map: &galaxy_sim::IdMap) -> Option<ObjectId> {
+    Some(match decode(id) {
+        Some(Obj::Planet(p)) => planet_obj(map.planet(p)?),
+        Some(Obj::Ships { fleet, unit }) => ship_id(fleet, map.unit(unit)?),
+        Some(Obj::Structure { planet, structure }) => structure_obj(map.planet(planet)?, map.structure(structure)?),
+        Some(Obj::Starbase(planet)) => (4u64 << 56) | u64::from(map.planet(planet)?),
+        None => id,
     })
 }
 
@@ -614,7 +633,7 @@ impl ScriptHost for SimHost {
                 }
                 for &st in &ps.structures {
                     if w.structures[st as usize].name.eq_ignore_ascii_case(t) {
-                        out.push((3u64 << 56) | ((pi as u64) << 24) | u64::from(st));
+                        out.push(structure_obj(pi as u32, st));
                     }
                 }
             }
@@ -674,7 +693,7 @@ impl ScriptHost for SimHost {
                     "structure_duplicate"
                 })
                 .or_default() += 1;
-            return Some((3u64 << 56) | (u64::from(planet) << 24) | u64::from(st));
+            return Some(structure_obj(planet, st));
         }
         *s.stats
             .spawn_ignored

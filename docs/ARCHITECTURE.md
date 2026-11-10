@@ -177,15 +177,26 @@ Runs the Remake's Lua plot scripts and `GameScoring` on top of `galaxy-sim`. `Sc
 sim events into story notifications (planet captured, construction complete, tech level, battles won or lost, units destroyed) and services
 scripts at their `ServiceRate` in game time. `SimHost` implements `alamo_lua::ScriptHost`; scripts change the sim only through galaxy-sim's public
 API, so the sim stays script-agnostic. `ai.rs` implements `galaxy_ai::AiSim` so the Remake AI drives the AI factions. Defaults: Remake AI plus
-strategic layer at Normal difficulty. `save.rs` writes snapshot saves (sim state, story and Lua globals, AI memory; format-versioned with a data
-fingerprint); Lua coroutines cannot be serialised, so a loaded game restarts its scripts and AI plans and is not bit-identical to the original run.
-All player input goes through `ScriptedSim` so saves stay consistent.
+strategic layer at Normal difficulty. `save.rs` writes snapshot saves (sim state, story and Lua globals, AI memory; format-versioned, with the
+name tables of the world); Lua coroutines cannot be serialised, so a loaded game restarts its scripts and AI plans and is not bit-identical to
+the original run. All player input goes through `ScriptedSim` so saves stay consistent.
 
 Saves stay loadable by later builds. A field added to a saved struct (`galaxy_sim::state`, `SimSnapshot`, `SimConfig`, `ScriptedConfig`,
 `alamo_lua::persist`, `galaxy_ai::AiMemory`) carries `#[serde(default)]`, so a file without it loads with the default. The checkpoint of a save
 is `Galaxy::state_hash`; a load compares it with the state as the file holds it, hashed the way the writing build hashed
 (`galaxy_sim::HashEra`). A new field is therefore left out of the hash, hashed only when it differs from its default, or it starts a new era.
 `crates/galaxy-sim/tests/data/galaxy_<date>.json` are small made-up states with the field sets of earlier builds; their checkpoints are pinned.
+
+Planet, faction, unit, structure and star base ids are indices into catalogs that are rebuilt from the game data at every start, so they move
+when a build reads more of the data (a new kind of build item) or the mod changes. A save therefore carries the name behind every id
+(`galaxy_sim::NameTables` in the header, guarded by counts and a fingerprint). A load compares them with the tables of the freshly built match:
+equal tables mean the state goes in untouched; otherwise `galaxy_sim::IdMap` maps saved ids to current ones by name and
+`Sim::remap_snapshot` rewrites every id of the snapshot (`remap.rs` takes every saved struct apart field by field without `..`, so a new field
+does not compile until someone decides whether it holds an id). `save.rs` does the same for the planet, unit and structure ids inside the
+object handles of saved Lua globals and for the alliances. Names the save does not know are new: such planets and factions keep the state of a
+fresh match. A name the save uses and the game data lacks refuses the load with a message that lists it. The lane of a travelling fleet is
+looked up again between its two planets. The AI memory is indexed by planet and player and is dropped (with a load warning) when either list
+changed. `SAVE_VERSION` is raised only for a change a reader cannot follow by defaults and names.
 
 ## alamo-render
 Responsibility: spawns original Alamo models in Bevy with an EaW-style look. Depends on `alamo-fs` and `alamo-model`.

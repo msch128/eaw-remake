@@ -1,11 +1,12 @@
 //! Save/load round trip against the real data: a loaded game continues exactly like the original.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use alamo_data::{GameData, load_galaxy};
 use alamo_fs::{FileSource, GameFs, GameInstall};
 use galaxy_script::{DifficultyTier, SaveError, SaveFile, ScriptedConfig, ScriptedSim};
-use galaxy_sim::{Command, Event, HashEra, SimConfig};
+use galaxy_sim::{Command, Event, HashEra, IdMap, NameTables, SimConfig};
 
 struct Ctx {
     fs: Arc<dyn FileSource>,
@@ -94,13 +95,29 @@ fn bad_saves_are_rejected() {
     bad.checkpoint.galaxy_hash ^= 1;
     assert!(matches!(ScriptedSim::from_save(bad, c.fs.clone(), c.data.clone(), |_| {}), Err(SaveError::Corrupt { .. })));
 
+    // Name tables that are not the ones the header was sealed with: a damaged file.
     let mut bad = file.clone();
     bad.header.world[0] += 1;
-    assert!(matches!(ScriptedSim::from_save(bad, c.fs.clone(), c.data.clone(), |_| {}), Err(SaveError::DataMismatch)));
+    assert!(matches!(ScriptedSim::from_save(bad, c.fs.clone(), c.data.clone(), |_| {}), Err(SaveError::Format(_))));
 
     let mut bad = file.clone();
     bad.header.fingerprint ^= 1;
-    assert!(matches!(ScriptedSim::from_save(bad, c.fs.clone(), c.data.clone(), |_| {}), Err(SaveError::DataMismatch)));
+    assert!(matches!(ScriptedSim::from_save(bad, c.fs.clone(), c.data.clone(), |_| {}), Err(SaveError::Format(_))));
+
+    let mut bad = file.clone();
+    bad.header.names.as_mut().unwrap().units.swap(0, 1);
+    assert!(matches!(ScriptedSim::from_save(bad, c.fs.clone(), c.data.clone(), |_| {}), Err(SaveError::Format(_))));
+
+    // A file without name tables whose counts or fingerprint are not those of the game data.
+    let mut bad = file.clone();
+    bad.header.names = None;
+    bad.header.world[0] += 1;
+    assert!(matches!(ScriptedSim::from_save(bad, c.fs.clone(), c.data.clone(), |_| {}), Err(SaveError::DataMismatch(_))));
+
+    let mut bad = file.clone();
+    bad.header.names = None;
+    bad.header.fingerprint ^= 1;
+    assert!(matches!(ScriptedSim::from_save(bad, c.fs.clone(), c.data.clone(), |_| {}), Err(SaveError::DataMismatch(_))));
 
     // A state that does not fit the world is refused, not applied: by its checkpoint, and with a matching checkpoint by its shape.
     let mut bad = file.clone();
@@ -211,4 +228,162 @@ fn debug_grant_is_gated_and_survives_a_save() {
     sim.save(&path).expect("save");
     let loaded = ScriptedSim::load(&path, c.fs.clone(), c.data.clone()).expect("load");
     assert_eq!(count(&loaded), before + 2, "the replay repeats the grant");
+}
+
+/// Unit counts of every fleet by unit name: what a state means, whatever its ids are.
+fn fleets_by_name(g: &galaxy_sim::Galaxy, units: &[String]) -> BTreeMap<u32, BTreeMap<String, u32>> {
+    g.fleets.iter().map(|(id, f)| (*id, f.units.iter().map(|(u, n)| (units[*u as usize].clone(), *n)).collect())).collect()
+}
+
+/// A match a few weeks in, its save, and the name tables of its world.
+fn played(c: &Ctx) -> (ScriptedSim, SaveFile, NameTables) {
+    let mut sim = new_sim(c, ScriptedConfig { game_scoring: false, ..ai_config() });
+    weeks(&mut sim, 3);
+    let file = sim.to_save().unwrap();
+    let names = sim.with_sim(|s| s.world().name_tables());
+    (sim, file, names)
+}
+
+#[test]
+fn a_save_carries_the_names_behind_its_ids() {
+    let Some(c) = ctx() else { return };
+    let (sim, file, names) = played(&c);
+    assert_eq!(file.header.names.as_ref(), Some(&names));
+    assert_eq!(file.header.world, [names.planets.len(), names.units.len(), names.factions.len()]);
+    sim.with_sim(|s| {
+        let w = s.world();
+        assert_eq!((names.units.len(), names.structures.len(), names.starbases.len()), (w.units.len(), w.structures.len(), w.starbases.len()));
+        assert_eq!(names.units[w.unit_id("TIE_Fighter_Squadron").unwrap() as usize], "TIE_Fighter_Squadron");
+    });
+    // Written and read back, the tables are the same.
+    let text = serde_json::to_string(&file).unwrap();
+    let back: SaveFile = serde_json::from_str(&text).unwrap();
+    assert_eq!(back.header.names, file.header.names);
+}
+
+/// A save loads into the build that wrote it without a single id or value moving: saved again it is the same file, byte for byte, but for
+/// the two flags with which the story engine asks for a re-evaluation after every load.
+#[test]
+fn a_loaded_save_written_again_is_the_same_file() {
+    let Some(c) = ctx() else { return };
+    let (_, file, _) = played(&c);
+    let loaded = ScriptedSim::from_save(file.clone(), c.fs.clone(), c.data.clone(), |_| {}).expect("load");
+    assert!(loaded.load_warnings.is_empty(), "{:?}", loaded.load_warnings);
+    let mut again = loaded.to_save().unwrap();
+    assert!(again.state.runtime.story.dirty && again.state.runtime.story.next_due == Some(0.0), "a loaded story is due at once");
+    again.state.runtime.story.dirty = file.state.runtime.story.dirty;
+    again.state.runtime.story.next_due = file.state.runtime.story.next_due;
+    let (before, after) = (serde_json::to_string(&file).unwrap(), serde_json::to_string(&again).unwrap());
+    assert_eq!(after.len(), before.len());
+    assert!(after == before, "the save changed in a round trip");
+}
+
+/// What every catalog addition did to every existing save: the file was written when the catalog had fewer unit types. The newest type is
+/// at the end of the table, so the older file simply lacks the name and no id in it differs.
+#[test]
+fn a_save_written_before_a_unit_type_was_added_loads() {
+    let Some(c) = ctx() else { return };
+    let (_, file, names) = played(&c);
+    let mut older = names.clone();
+    let added = older.units.pop().unwrap();
+    let last = older.units.len() as u32;
+    assert!(file.state.sim.galaxy.fleets.values().all(|f| !f.units.contains_key(&last)), "{added} is in use, pick another");
+    let mut old = file.clone();
+    old.header = old.header.with_names(older);
+    assert_eq!(old.header.world[1] + 1, names.units.len());
+    let loaded = ScriptedSim::from_save(old, c.fs.clone(), c.data.clone(), |_| {}).unwrap_or_else(|e| panic!("a save from before {added} existed: {e}"));
+    assert_eq!(loaded.state().sim, file.state.sim);
+    assert!(loaded.load_warnings.is_empty(), "{:?}", loaded.load_warnings);
+    // Saved again it names the catalog of this build.
+    assert_eq!(loaded.to_save().unwrap().header.names, Some(names));
+}
+
+/// The same when the new type sits in the middle of the catalog (as the phase repair items do): every id above it is one lower in the
+/// older file. The older file is made by moving the state to the smaller catalog; that it means the same is checked by name.
+#[test]
+fn a_save_written_before_a_unit_type_was_inserted_loads_with_its_ids_moved() {
+    let Some(c) = ctx() else { return };
+    let (sim, file, names) = played(&c);
+    let g = &file.state.sim.galaxy;
+    // A type no fleet, queue or record uses, below the types that are in use.
+    let used: std::collections::BTreeSet<u32> = g.fleets.values().flat_map(|f| f.units.keys().copied()).collect();
+    let inserted = (0..*used.iter().next_back().unwrap()).find(|u| !used.contains(u) && g.factions.iter().all(|f| !f.built_lifetime.contains_key(u))).expect("a free unit type");
+    let mut older = names.clone();
+    let name = older.units.remove(inserted as usize);
+    let back = IdMap::new(&names, &older);
+    let mut old = file.clone();
+    old.state.sim = match sim.with_sim(|s| s.remap_snapshot(file.state.sim.clone(), &back)) {
+        Ok(snapshot) => snapshot,
+        // Something else uses the type (a queue, a siphon): the state cannot be written for the smaller catalog, which is the right answer.
+        Err(why) => panic!("{name} is in use: {why}"),
+    };
+    old.checkpoint.galaxy_hash = old.state.sim.galaxy.state_hash();
+    old.header = old.header.with_names(older.clone());
+    // The older file means the same and its ids differ.
+    assert_ne!(old.state.sim.galaxy.fleets, g.fleets, "no id moved, the test shows nothing");
+    assert_eq!(fleets_by_name(&old.state.sim.galaxy, &older.units), fleets_by_name(g, &names.units));
+
+    let loaded = ScriptedSim::from_save(old, c.fs.clone(), c.data.clone(), |_| {}).unwrap_or_else(|e| panic!("a save from before {name} existed: {e}"));
+    assert_eq!(loaded.state().sim, file.state.sim, "every id is back where the name is");
+    assert_eq!(loaded.checkpoint(), sim.checkpoint());
+    let mut loaded = loaded;
+    weeks(&mut loaded, 2);
+    assert_eq!(loaded.diagnostics().script_errors, sim.diagnostics().script_errors, "{:?}", loaded.diagnostics().last_script_error);
+}
+
+/// Ids follow the names, not the positions: a file whose table lists two unit types the other way round holds the other type's ships.
+#[test]
+fn ids_of_a_save_mean_what_its_name_table_says() {
+    let Some(c) = ctx() else { return };
+    let (_, file, names) = played(&c);
+    let g = &file.state.sim.galaxy;
+    let count = |g: &galaxy_sim::Galaxy, u: u32| g.fleets.values().map(|f| f.units.get(&u).copied().unwrap_or(0)).sum::<u32>();
+    // The most common ship type and one nobody has.
+    let common = (0..names.units.len() as u32).max_by_key(|&u| count(g, u)).unwrap();
+    let unused = (0..names.units.len() as u32).rev().find(|&u| count(g, u) == 0).unwrap();
+    let ships = count(g, common);
+    assert!(ships > 0);
+    let mut swapped = names.clone();
+    swapped.units.swap(common as usize, unused as usize);
+    let mut other = file.clone();
+    other.header = other.header.with_names(swapped);
+    let loaded = match ScriptedSim::from_save(other, c.fs.clone(), c.data.clone(), |_| {}) {
+        Ok(sim) => sim,
+        // Other records of the common type (a queue item ...) may not exist for the unused one; then the load says so by name.
+        Err(e) => panic!("{e}"),
+    };
+    let after = loaded.state().sim.galaxy;
+    assert_eq!((count(&after, common), count(&after, unused)), (0, ships), "the ships of {} are {} now", names.units[common as usize], names.units[unused as usize]);
+    assert_eq!(after.fleets.values().map(|f| f.unit_count()).sum::<u32>(), g.fleets.values().map(|f| f.unit_count()).sum::<u32>());
+}
+
+#[test]
+fn a_save_that_uses_what_the_game_data_lacks_is_refused_by_name() {
+    let Some(c) = ctx() else { return };
+    let (_, file, names) = played(&c);
+    let g = &file.state.sim.galaxy;
+    let used = *g.fleets.values().next().unwrap().units.keys().next().unwrap();
+    let structure = *g.planets.iter().find_map(|p| p.structures.first()).expect("a built structure");
+    let mut renamed = names.clone();
+    renamed.units[used as usize] = "Ship_Of_Another_Mod".into();
+    renamed.structures[structure as usize] = "Station_Of_Another_Mod".into();
+    let mut other = file.clone();
+    other.header = other.header.with_names(renamed);
+    let Err(e) = ScriptedSim::from_save(other, c.fs.clone(), c.data.clone(), |_| {}) else { panic!("loaded a save with unknown objects") };
+    assert!(matches!(e, SaveError::DataMismatch(_)), "{e}");
+    assert_eq!(e.to_string(), "the game data differs from the data this save was made with: the save uses 2 objects this game data does not have: structure Station_Of_Another_Mod, unit Ship_Of_Another_Mod");
+}
+
+/// The files of the builds before the name tables: no tables, only counts and a fingerprint. They load while those still describe the catalog.
+#[test]
+fn a_save_without_name_tables_loads_while_the_catalog_is_the_same() {
+    let Some(c) = ctx() else { return };
+    let (sim, file, _) = played(&c);
+    let mut old = file.clone();
+    old.header.names = None;
+    let text = serde_json::to_string(&old).unwrap();
+    assert!(!text.contains("\"names\""), "the old header has no such field");
+    let loaded = ScriptedSim::from_save(serde_json::from_str(&text).unwrap(), c.fs.clone(), c.data.clone(), |_| {}).expect("the old header loads");
+    assert_eq!(loaded.checkpoint(), sim.checkpoint());
+    assert_eq!(loaded.state().sim, file.state.sim);
 }

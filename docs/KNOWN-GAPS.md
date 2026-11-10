@@ -38,6 +38,7 @@ data are labelled in [RULES.md](RULES.md).
 - **Ground units, hero teams and markers are not modelled.** Observe: spawn requests for them are counted in `HostStats::spawn_ignored` and dropped. Where: `crates/galaxy-script/src/host.rs`.
 - **`GalacticFreeStore` is experimental and stops at the first access to the engine-provided `FreeStore` object.** Observe: `ScriptedConfig::freestore = true`. Where: `crates/galaxy-script/src/lib.rs`.
 - **Snapshot saves do not capture Lua coroutine state.** Where scripts sleep and their locals, AI plans in flight, their task forces, undelivered events and frozen tactical set-ups are lost, so a loaded game continues but is not bit-identical. Observe: the save tests print whether a loaded run matches the original (it does not). Where: `crates/galaxy-script/src/save.rs`.
+- **A save loaded into game data with other planets or factions loses the AI memory.** Ids in the state, in script object handles and in alliances follow their names; goal timers, budgets and learned failures of the Remake AI start fresh (a load warning says so). Observe: `ScriptedSim::load_warnings` after such a load. Where: `crates/galaxy-script/src/save.rs` (`translate`).
 
 ## Galactic AI
 

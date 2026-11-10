@@ -188,6 +188,9 @@ pub struct ScriptedSim {
     header: save::SaveHeader,
     /// Parts of a loaded save that did not fit the game (changed mod data); empty for a new game.
     pub load_warnings: Vec<String>,
+    /// What a load had to bridge without losing anything (ids of another catalog, the checkpoint of an earlier build); empty for a new game
+    /// and for a save of this build.
+    pub load_notes: Vec<String>,
 }
 
 /// CPU cost of the calling thread, from the thread cycle counter (fine grained and unaffected by other
@@ -335,6 +338,7 @@ impl ScriptedSim {
             ai_errors: Vec::new(),
             header: save::header(&campaign.name, &header_sim_config, &header_config, &world),
             load_warnings: Vec::new(),
+            load_notes: Vec::new(),
         };
         if config.remake_ai {
             sim.start_ai(&fs_for_ai, campaign, &config, ai_uses_galactic_fog(&data));
