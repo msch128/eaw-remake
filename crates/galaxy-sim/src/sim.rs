@@ -752,8 +752,12 @@ impl Sim {
             ProductionKind::Structure(s) => self.galaxy.planets[pi].structures.push(s),
             ProductionKind::Starbase(sb) => self.galaxy.planets[pi].starbase = Some(sb),
             ProductionKind::Tech(_) => {
-                self.galaxy.factions[owner as usize].tech += 1;
-                events.push(Event::TechAdvanced { faction: owner, level: self.galaxy.factions[owner as usize].tech });
+                let max = self.world.factions[owner as usize].max_tech;
+                let fs = &mut self.galaxy.factions[owner as usize];
+                if fs.tech < max {
+                    fs.tech += 1;
+                    events.push(Event::TechAdvanced { faction: owner, level: fs.tech });
+                }
             }
         }
         let st = &mut self.galaxy.factions[owner as usize].stats;

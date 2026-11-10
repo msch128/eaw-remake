@@ -179,3 +179,33 @@ fn built_in_ai_plans_tech_at_the_discounted_maw_price() {
     sim.galaxy_mut().factions[empire as usize].credits = discounted + reserve - 1.0;
     assert!(!buy(&sim), "one credit under the Maw price does not buy");
 }
+
+#[test]
+fn tech_level_clamped_to_campaign_max_tech() {
+    let Some(data) = load("1770851727", &["1770851727"]) else { return };
+    let c = data.campaign("GC_Full_Web_Way_Imperial").unwrap();
+    let mut sim = Sim::new(&data, c, SimConfig { victory_enabled: false, ..SimConfig::default() }).unwrap();
+    let w = sim.world().clone();
+    let rebel = w.faction_id("Rebel").unwrap();
+    let max_tech = w.factions[rebel as usize].max_tech;
+    assert_eq!(max_tech, 5);
+
+    sim.galaxy_mut().factions[rebel as usize].tech = 4;
+    sim.galaxy_mut().factions[rebel as usize].credits = 1.0e6;
+    let planet = sim.galaxy().owned_planets(rebel).find(|&p| w.starbase_level(sim.galaxy(), p) >= 1).expect("rebel planet");
+    sim.galaxy_mut().planets[planet as usize].queues[Lane::Base as usize].clear();
+    sim.apply(Command::UpgradeTech { faction: rebel, planet }).expect("queue tech 5");
+
+    sim.set_tech_level(rebel, max_tech);
+    assert_eq!(sim.galaxy().factions[rebel as usize].tech, 5);
+
+    sim.galaxy_mut().planets[planet as usize].queues[Lane::Base as usize][0].remaining = 0.01;
+    sim.step(1.0);
+
+    assert_eq!(
+        sim.galaxy().factions[rebel as usize].tech,
+        max_tech,
+        "tech level must not exceed max_tech ({max_tech})"
+    );
+}
+
