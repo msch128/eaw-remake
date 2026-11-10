@@ -285,7 +285,7 @@ pub fn resolve_damaged(
                             Source::Starbase(s) => (world.starbases[s as usize].name.as_str(), battle_sim::TargetClass::Structure),
                             Source::Structure(s) => (world.structures[s as usize].name.as_str(), battle_sim::TargetClass::Structure),
                         };
-                        battle_sim::Bonus::compute(name, class, active_bonuses[si].iter().copied())
+                        battle_sim::Bonus::compute(name, class, 0, active_bonuses[si].iter().copied())
                     })
                     .collect()
             })

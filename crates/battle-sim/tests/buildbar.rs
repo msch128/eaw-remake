@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use alamo_fs::FileSource;
 use battle_sim::*;
 
 fn load() -> Option<(alamo_data::GameData, alamo_fs::GameFs)> {
@@ -431,8 +432,22 @@ fn the_ai_buys_one_upgrade_at_a_time_while_it_is_rich() {
 #[test]
 fn gunship_in_a_category_list_matches_no_corvette() {
     let Some((data, fs)) = load() else { return };
-    // `ES_Improved_Weapons_L1` boosts `Fighter, Bomber, Gunship`, L2 adds `Corvette`: no unit has `Gunship` in its `CategoryMask`.
+    // `Gunship` is `0x3` in `GAMEOBJECTCATEGORYTYPE.XML` (Fighter | Bomber). A unit matches it only when its mask
+    // contains both bits. `ES_Improved_Weapons_L1` lists `Fighter, Bomber, Gunship`; L2 adds `Corvette`.
+    let bytes = fs.read("Xml/Enum/GAMEOBJECTCATEGORYTYPE.XML").expect("category enum");
+    install_category_masks(&bytes);
+    assert_eq!(category_mask("Gunship"), 0x3);
+    assert_eq!(category_mask("Hero"), 0x0640_0000, "masks come from the enum file");
+    assert_eq!(category_mask("Fighter") | category_mask("Bomber"), 0x3);
+    assert!(!category_contains(category_mask("Fighter"), category_mask("Gunship")));
+    assert!(category_contains(category_mask("Fighter") | category_mask("Bomber"), category_mask("Gunship")));
+    assert!(!category_contains(category_mask("Corvette"), category_mask("Gunship")));
     assert_eq!(TargetClass::from_token("Gunship"), None);
+    let flak = data.objects.hardpoint("HP_Flak_Satellite").expect("flak hardpoint");
+    assert!(restriction_allows(TargetClass::Fighter, category_mask("Fighter"), &flak.fire_category_restrictions), "flak still shoots fighters");
+    assert!(restriction_allows(TargetClass::Bomber, category_mask("Bomber"), &flak.fire_category_restrictions), "flak still shoots bombers");
+    assert!(!restriction_allows(TargetClass::Corvette, category_mask("Corvette"), &flak.fire_category_restrictions));
+    assert!(!restriction_allows(TargetClass::Bomber, category_mask("Fighter") | category_mask("Bomber"), &flak.fire_category_restrictions), "both bits is a gunship");
     let cat = Arc::new(Catalog::build(&data, Some(&fs), &["Empire_Star_Base_3", "Nebulon_B_Frigate", "Tartan_Patrol_Cruiser"]));
     assert_eq!(cat.ship(cat.ship_id("Tartan_Gunship").unwrap()).class, TargetClass::Corvette);
     let mut b = defended(&cat, "Empire", "Empire_Star_Base_3", &[("Tartan_Patrol_Cruiser", 1)], 10_000);

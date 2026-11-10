@@ -124,8 +124,8 @@ fn bonus_limited_to_unit_types_does_not_apply_to_other_types() {
     assert!(type_restricted_bonus.applies(isd_name, isd_cat), "Must apply to Star_Destroyer_II");
     assert!(!type_restricted_bonus.applies(cr90_name, cr90_cat), "Must NOT apply to CR-90");
 
-    let isd_bonus = battle_sim::Bonus::compute(isd_name, isd_cat, [&type_restricted_bonus]);
-    let cr90_bonus = battle_sim::Bonus::compute(cr90_name, cr90_cat, [&type_restricted_bonus]);
+    let isd_bonus = battle_sim::Bonus::compute(isd_name, isd_cat, 0, [&type_restricted_bonus]);
+    let cr90_bonus = battle_sim::Bonus::compute(cr90_name, cr90_cat, 0, [&type_restricted_bonus]);
 
     assert!(isd_bonus.taken_hull < 1.0, "ISD-II must receive hull damage reduction");
     assert_eq!(cr90_bonus.taken_hull, 1.0, "CR-90 must NOT receive hull damage reduction");

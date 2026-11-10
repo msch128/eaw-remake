@@ -57,6 +57,8 @@ struct Snap {
     hit_radius: f32,
     side: u8,
     class: TargetClass,
+    /// OR of the unit's `CategoryMask` (`Gunship` matches only when both fighter and bomber bits are set).
+    category_mask: u32,
     def: ShipId,
     alive: bool,
     golan: bool,
@@ -1294,6 +1296,7 @@ impl Battle {
                     hit_radius: if d.background { 0.0 } else { radius.max(d.hardpoint_reach) },
                     side: s.side,
                     class: d.class,
+                    category_mask: d.category_mask,
                     def: s.def,
                     alive: s.alive && !s.retreated,
                     golan: d.golan,
@@ -2788,10 +2791,10 @@ impl Battle {
                 }
                 let weight = match set {
                     Some(p) => {
-                        if p.excluded & tdef.class.bit() != 0 {
+                        if p.excludes(tdef.class, tdef.category_mask) {
                             continue;
                         }
-                        p.weight(tdef.class, tdef.golan).min(1000.0)
+                        p.weight_mask(tdef.class, tdef.golan, tdef.category_mask).min(1000.0)
                     }
                     None => f32::from(target_priority(def.class, tdef.class)) * 10.0,
                 };
@@ -3080,7 +3083,7 @@ impl Battle {
         }
         for s in self.ships.iter_mut() {
             let def = cat.ship(s.def);
-            s.bonus = Bonus::compute(&def.name, def.class, auras.get(&s.side).into_iter().flatten().copied());
+            s.bonus = Bonus::compute(&def.name, def.class, def.category_mask, auras.get(&s.side).into_iter().flatten().copied());
         }
     }
 
@@ -3359,10 +3362,10 @@ fn scan(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, ai_side
         }
         let mut weight = match set {
             Some(p) => {
-                if p.excluded & t.class.bit() != 0 && explicit != Some(i as u32) {
+                if p.excludes(t.class, t.category_mask) && explicit != Some(i as u32) {
                     continue;
                 }
-                p.weight(t.class, t.golan).min(1000.0) + 1.0
+                p.weight_mask(t.class, t.golan, t.category_mask).min(1000.0) + 1.0
             }
             None => f32::from(target_priority(me.class, t.class)) * 10.0 + 1.0,
         };
@@ -4334,6 +4337,9 @@ fn can_fire(hp: &HpDef, ship_yaw: f32, range_mult: f32, muzzle: Vec3, t: &Snap, 
     if hp.allowed != 0 && hp.allowed & t.class.bit() == 0 {
         return false;
     }
+    if hp.forbid_exact.iter().any(|&m| category_contains(t.category_mask, m)) {
+        return false;
+    }
     if matches!(t.class, TargetClass::Fighter | TargetClass::Bomber) && (proj.damage >= 150.0 || !proj.hull_damage) {
         return false;
     }
@@ -4478,7 +4484,7 @@ fn weapons(s: &mut Ship, snaps: &[Snap], cat: &Catalog, cfg: &BattleConfig, rng:
                     } else {
                         aim += rng.in_ball() * (t.radius * 0.45);
                     }
-                    aim += rng.in_ball() * hp.inaccuracy[t.class as usize];
+                    aim += rng.in_ball() * hp.inaccuracy_at(t.class, t.category_mask);
                     let base_dir = (aim - muzzle).normalized();
                     let dir = if pd.turn_rate > 0.0 && tgt != NONE && matches!(pd.category.as_str(), "missile" | "torpedo" | "rocket") {
                         missile_launch_dir(base_dir, (aim - muzzle).len(), rng)

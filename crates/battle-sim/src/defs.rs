@@ -51,20 +51,10 @@ impl TargetClass {
     /// Number of classes.
     pub const COUNT: usize = 9;
 
-    /// Parses a category token such as `Fighter` or `SpaceStructure`. `Gunship` is none: no unit of the data has it in its `CategoryMask`
-    /// (the tactical upgrades list it next to `Corvette`, which their level 2 adds separately), so in space it matches nothing.
+    /// The one space class a category token names. `Gunship` is not one class: `GAMEOBJECTCATEGORYTYPE.XML` gives it
+    /// `0x3` (Fighter | Bomber), matched by [`category_contains`], not by this function.
     pub fn from_token(t: &str) -> Option<Self> {
-        Some(match t.to_ascii_lowercase().as_str() {
-            "fighter" => Self::Fighter,
-            "bomber" => Self::Bomber,
-            "transport" => Self::Transport,
-            "corvette" => Self::Corvette,
-            "frigate" => Self::Frigate,
-            "capital" => Self::Capital,
-            "super" | "supercapital" => Self::Super,
-            "spacestructure" | "structure" => Self::Structure,
-            _ => return None,
-        })
+        single_class(t)
     }
 
     pub fn from_category(c: ShipCategory) -> Self {
@@ -85,6 +75,137 @@ impl TargetClass {
     pub fn bit(self) -> u16 {
         1 << self as u16
     }
+}
+
+/// `GAMEOBJECTCATEGORYTYPE.XML` is a bitfield. A token matches a unit when the unit's mask contains every bit of the
+/// token (`Gunship` 0x3 matches a unit that is both Fighter and Bomber, and does not match a fighter alone). A list
+/// matches when any of its tokens does. The flak satellites restrict `Gunship` and still give `Fire_Inaccuracy_Distance`
+/// for Fighter and Bomber, which is this test and not "Gunship means every fighter and bomber".
+static CATEGORY_MASKS: std::sync::OnceLock<HashMap<String, u32>> = std::sync::OnceLock::new();
+
+/// Loads `Xml/Enum/GAMEOBJECTCATEGORYTYPE.XML`. Later calls do nothing (the first catalog build wins).
+pub fn install_category_masks(bytes: &[u8]) {
+    let mut warnings = Vec::new();
+    let Some(root) = alamo_data::xml::parse(bytes, "GAMEOBJECTCATEGORYTYPE.XML", &mut warnings) else { return };
+    let mut map = HashMap::new();
+    for child in &root.children {
+        let text = child.text_trimmed().trim_start_matches("0x").trim_start_matches("0X");
+        if let Ok(v) = u32::from_str_radix(text, 16) {
+            map.insert(child.name.clone(), v);
+        }
+    }
+    if map.contains_key("gunship") {
+        let _ = CATEGORY_MASKS.set(map);
+    }
+}
+
+/// Mask of one category token from the enum file, or the same values when the file has not been loaded yet.
+pub fn category_mask(name: &str) -> u32 {
+    let key = name.trim().to_ascii_lowercase();
+    if let Some(map) = CATEGORY_MASKS.get() {
+        return map.get(&key).copied().unwrap_or(0);
+    }
+    match key.as_str() {
+        "fighter" => 0x1,
+        "bomber" => 0x2,
+        "gunship" => 0x3,
+        "transport" => 0x4,
+        "corvette" => 0x8,
+        "frigate" => 0x10,
+        "capital" => 0x20,
+        "super" | "supercapital" => 0x80,
+        "spacestructure" | "structure" => 0x0800_0100,
+        "antifighter" => 0x0001_0000,
+        "anticorvette" => 0x0002_0000,
+        "antifrigate" => 0x0004_0000,
+        "anticapital" => 0x0008_0000,
+        "spacehero" => 0x0800_0000,
+        "all" => 0xFFFF_FFFF,
+        _ => 0,
+    }
+}
+
+/// True when `unit` has every bit of `token` (`token` 0 matches nothing).
+pub fn category_contains(unit: u32, token: u32) -> bool {
+    token != 0 && unit & token == token
+}
+
+/// The one space class whose enum mask equals `token`. `Gunship` and `All` are not one class.
+/// `SpaceStructure` is `0x08000100`, not one of the low class bits, so the name is matched on its own.
+fn single_class(token: &str) -> Option<TargetClass> {
+    let key = token.trim();
+    if key.eq_ignore_ascii_case("spacestructure") || key.eq_ignore_ascii_case("structure") {
+        return Some(TargetClass::Structure);
+    }
+    if key.eq_ignore_ascii_case("all") {
+        return None;
+    }
+    Some(match category_mask(key) {
+        0x1 => TargetClass::Fighter,
+        0x2 => TargetClass::Bomber,
+        0x4 => TargetClass::Transport,
+        0x8 => TargetClass::Corvette,
+        0x10 => TargetClass::Frigate,
+        0x20 => TargetClass::Capital,
+        0x80 => TargetClass::Super,
+        _ => return None,
+    })
+}
+
+/// Enum mask of one target class (the bit a unit of that class carries).
+pub fn class_enum_mask(class: TargetClass) -> u32 {
+    match class {
+        TargetClass::Fighter => category_mask("fighter"),
+        TargetClass::Bomber => category_mask("bomber"),
+        TargetClass::Transport => category_mask("transport"),
+        TargetClass::Corvette => category_mask("corvette"),
+        TargetClass::Frigate => category_mask("frigate"),
+        TargetClass::Capital => category_mask("capital"),
+        TargetClass::Super => category_mask("super"),
+        TargetClass::Structure => category_mask("spacestructure"),
+        TargetClass::Other => 0,
+    }
+}
+
+/// Class bits of the single-class tokens in a list, and the masks of the other tokens (`Gunship`, `All` fills every class bit).
+fn split_category_list(tokens: &[String]) -> (u16, Vec<u32>) {
+    let mut bits = 0u16;
+    let mut exact = Vec::new();
+    for raw in tokens {
+        let t = raw.trim();
+        if t.is_empty() {
+            continue;
+        }
+        if t.eq_ignore_ascii_case("all") {
+            bits = (1u16 << TargetClass::COUNT) - 1;
+            continue;
+        }
+        if t.eq_ignore_ascii_case("spacestructure") || t.eq_ignore_ascii_case("structure") {
+            bits |= TargetClass::Structure.bit();
+            continue;
+        }
+        match single_class(t) {
+            Some(c) => bits |= c.bit(),
+            None => {
+                let m = category_mask(t);
+                if m != 0 {
+                    exact.push(m);
+                }
+            }
+        }
+    }
+    (bits, exact)
+}
+
+fn split_category_text(text: &str) -> (u16, Vec<u32>) {
+    split_category_list(&alamo_data::xml::split_list(text))
+}
+
+/// True if a weapon with `Fire_Category_Restrictions` `tokens` may fire at a unit of `class` and category mask `unit_mask`.
+pub fn restriction_allows(class: TargetClass, unit_mask: u32, tokens: &[String]) -> bool {
+    let (forbidden, exact) = split_category_list(tokens);
+    let class_ok = forbidden == 0 || forbidden & class.bit() == 0;
+    class_ok && !exact.iter().any(|&m| category_contains(unit_mask, m))
 }
 
 /// What a hardpoint does.
@@ -164,8 +285,14 @@ pub struct HpDef {
     pub pulse_delay: f32,
     /// Aim error in world units per target class.
     pub inaccuracy: [f32; TargetClass::COUNT],
-    /// Bit mask of target classes the weapon may fire at (0 = any); the inverse of `Fire_Category_Restrictions`.
+    /// Bit mask of target classes the weapon may fire at (0 = any); the inverse of the single-class tokens of
+    /// `Fire_Category_Restrictions`.
     pub allowed: u16,
+    /// Composite restriction masks (`Gunship` = 0x3). A target is forbidden when its category mask contains one of these.
+    pub forbid_exact: Vec<u32>,
+    /// `(mask, distance)` of `Fire_Inaccuracy_Distance` tokens that are not one class. A target that contains the mask
+    /// uses that distance when the mask has at least as many bits as its own class.
+    pub inaccuracy_exact: Vec<(u32, f32)>,
     /// `Full_Salvo_Weapon_Delay_Multiplier`.
     pub full_salvo_mult: f32,
     /// `Power_To_Weapons_Mode_Weapon_Delay_Multiplier`.
@@ -193,6 +320,23 @@ pub struct HpDef {
     pub dps: f32,
     /// The spawn script of the hardpoint's `Death_Breakoff_Prop` (`Lua_Script`): it runs when the hardpoint is destroyed.
     pub breakoff_script: Option<Arc<SpawnScriptDef>>,
+}
+
+impl HpDef {
+    /// Aim error against a target of `class` with category mask `unit_mask`. A composite token applies when the unit
+    /// contains it and it is at least as specific (as many bits) as the class's own mask.
+    pub fn inaccuracy_at(&self, class: TargetClass, unit_mask: u32) -> f32 {
+        let mut best = class_enum_mask(class).count_ones();
+        let mut value = self.inaccuracy[class as usize];
+        for &(mask, dist) in &self.inaccuracy_exact {
+            let bits = mask.count_ones();
+            if category_contains(unit_mask, mask) && bits >= best {
+                best = bits;
+                value = dist;
+            }
+        }
+        value
+    }
 }
 
 /// Active ability with `Mod_Multiplier` effects.
@@ -388,8 +532,10 @@ pub struct BonusDef {
     pub range: f32,
     /// `Movement_Speed_Bonus_Percentage`: top speed.
     pub speed: f32,
-    /// Bit mask of boosted classes (`Applicable_Unit_Categories`).
+    /// Bit mask of boosted classes (`Applicable_Unit_Categories`, single-class tokens).
     pub classes: u16,
+    /// Composite category masks from the same list (`Gunship`). A ship matches when its category mask contains one.
+    pub composites: Vec<u32>,
     /// `Stacking_Category`: bonuses of one category do not add up, the strongest applies.
     pub stacking: u8,
     /// `Applicable_Unit_Types`. A ship is boosted when its class is in `classes` or its type is listed here; with neither
@@ -408,6 +554,7 @@ impl BonusDef {
         }
         let num = |k: &str| a.fields.get(k).and_then(|v| alamo_data::xml::parse_num::<f32>(v)).unwrap_or(0.0).clamp(-0.9, 10.0);
         let list = |k: &str| a.fields.get(k).map(|v| alamo_data::xml::split_list(v)).unwrap_or_default();
+        let (classes, composites) = a.fields.get("applicable_unit_categories").map(|v| split_category_text(v)).unwrap_or((0, Vec::new()));
         let b = BonusDef {
             damage: num("damage_bonus_percentage"),
             health: num("health_bonus_percentage"),
@@ -415,7 +562,8 @@ impl BonusDef {
             defense: num("defense_bonus_percentage"),
             range: num("fire_range_bonus_percentage"),
             speed: num("movement_speed_bonus_percentage"),
-            classes: a.fields.get("applicable_unit_categories").map_or(0, |v| alamo_data::xml::split_list(v).iter().filter_map(|t| TargetClass::from_token(t)).fold(0u16, |m, c| m | c.bit())),
+            classes,
+            composites,
             stacking: num("stacking_category") as u8,
             unit_types: list("applicable_unit_types"),
             excluded_types: list("excluded_unit_types"),
@@ -423,11 +571,18 @@ impl BonusDef {
         (b.damage.abs() + b.health.abs() + b.shield.abs() + b.defense.abs() + b.range.abs() + b.speed.abs() > 0.0).then_some(b)
     }
 
-    /// True if the aura boosts a ship of `class` whose object type is `name` (any case).
+    /// True if the aura boosts a ship of `class` whose object type is `name` (any case). The ship's category mask is the
+    /// enum mask of `class` (a fighter is not a gunship).
     pub fn applies(&self, name: &str, class: TargetClass) -> bool {
+        self.applies_mask(name, class, class_enum_mask(class))
+    }
+
+    /// As [`Self::applies`], with the unit's full `CategoryMask`.
+    pub fn applies_mask(&self, name: &str, class: TargetClass, unit_mask: u32) -> bool {
         let listed = self.unit_types.iter().any(|t| t.eq_ignore_ascii_case(name));
-        let open = self.classes == 0 && self.unit_types.is_empty();
-        (open || self.classes & class.bit() != 0 || listed) && !self.excluded_types.iter().any(|t| t.eq_ignore_ascii_case(name))
+        let composite = self.composites.iter().any(|&m| category_contains(unit_mask, m));
+        let open = self.classes == 0 && self.unit_types.is_empty() && self.composites.is_empty();
+        (open || self.classes & class.bit() != 0 || composite || listed) && !self.excluded_types.iter().any(|t| t.eq_ignore_ascii_case(name))
     }
 }
 
@@ -518,10 +673,11 @@ impl Default for Bonus {
 
 impl Bonus {
     /// The multipliers for a ship of `class` and object type `name` under its side's auras: per `Stacking_Category` the
-    /// strongest bonus per stat applies, categories add.
-    pub fn compute<'a>(name: &str, class: TargetClass, auras: impl IntoIterator<Item = &'a BonusDef>) -> Self {
+    /// strongest bonus per stat applies, categories add. `unit_mask` is the ship's `CategoryMask` (0 = the class's own bit).
+    pub fn compute<'a>(name: &str, class: TargetClass, unit_mask: u32, auras: impl IntoIterator<Item = &'a BonusDef>) -> Self {
+        let unit_mask = if unit_mask == 0 { class_enum_mask(class) } else { unit_mask };
         let mut by_cat: std::collections::BTreeMap<u8, Vec<&BonusDef>> = std::collections::BTreeMap::new();
-        for b in auras.into_iter().filter(|b| b.applies(name, class)) {
+        for b in auras.into_iter().filter(|b| b.applies_mask(name, class, unit_mask)) {
             by_cat.entry(b.stacking).or_default().push(b);
         }
         let (mut dmg, mut health, mut shield, mut defense, mut range, mut speed) = (0.0f32, 0.0f32, 0.0f32, 0.0f32, 0.0f32, 0.0f32);
@@ -780,6 +936,8 @@ pub struct ShipDef {
     pub text_id: Option<String>,
     /// Target class.
     pub class: TargetClass,
+    /// OR of the unit's `CategoryMask` tokens from `GAMEOBJECTCATEGORYTYPE.XML` (a fighter is `0x1`, a gunship mask is `0x3`).
+    pub category_mask: u32,
     /// Automatic healing abilities (`Force_Healing_Ability`).
     pub heals: Vec<HealDef>,
     /// Shot blocking (`Redirect_Blaster_Ability`) that is on from the start.
@@ -1117,8 +1275,13 @@ pub struct PrioritySet {
     /// Attack priority per target class (lower = preferred); index 9 is the Golan flag. Unlisted
     /// classes are `f32::MAX` and are only engaged as opportunity targets.
     pub weights: [f32; 10],
-    /// Classes that are never attacked (`Category_Exclusions`).
+    /// `(mask, weight)` of composite tokens such as `Gunship`. A target whose category mask contains the mask takes
+    /// the better (lower) of this and its class weight.
+    pub exact: Vec<(u32, f32)>,
+    /// Classes that are never attacked (`Category_Exclusions`, single-class tokens).
     pub excluded: u16,
+    /// Composite exclusion masks from the same list.
+    pub excluded_exact: Vec<u32>,
     /// Preferred hardpoint kinds to shoot at, in order (`Hard_Point_Priorities`).
     pub hardpoints: Vec<HpKind>,
 }
@@ -1126,8 +1289,26 @@ pub struct PrioritySet {
 impl PrioritySet {
     /// Priority weight of a target (lower is better); `f32::MAX` if unlisted.
     pub fn weight(&self, class: TargetClass, golan: bool) -> f32 {
-        let w = self.weights[class as usize];
-        if golan { w.min(self.weights[9]) } else { w }
+        self.weight_mask(class, golan, class_enum_mask(class))
+    }
+
+    /// As [`Self::weight`], also applying composite tokens the unit's `CategoryMask` contains.
+    pub fn weight_mask(&self, class: TargetClass, golan: bool, unit_mask: u32) -> f32 {
+        let mut w = self.weights[class as usize];
+        if golan {
+            w = w.min(self.weights[9]);
+        }
+        for &(mask, cw) in &self.exact {
+            if category_contains(unit_mask, mask) {
+                w = w.min(cw);
+            }
+        }
+        w
+    }
+
+    /// True if `Category_Exclusions` names this class or a composite mask the unit contains.
+    pub fn excludes(&self, class: TargetClass, unit_mask: u32) -> bool {
+        self.excluded & class.bit() != 0 || self.excluded_exact.iter().any(|&m| category_contains(unit_mask, m))
     }
 }
 
@@ -1338,21 +1519,24 @@ fn parse_priority_sets(fs: &dyn FileSource) -> Vec<PrioritySet> {
         for set in root.children_named("priority_set") {
             let Some(name) = set.attr("name") else { continue };
             let mut weights = [f32::MAX; 10];
+            let mut exact: Vec<(u32, f32)> = Vec::new();
             if let Some(ap) = set.child("attack_priorities") {
                 for pair in split_list(&ap.text).chunks(2) {
                     let [class, w] = pair else { continue };
                     let Ok(w) = w.parse::<f32>() else { continue };
                     if class.eq_ignore_ascii_case("golan") {
                         weights[9] = weights[9].min(w);
-                    } else if let Some(c) = TargetClass::from_token(class) {
+                    } else if let Some(c) = single_class(class) {
                         weights[c as usize] = weights[c as usize].min(w);
+                    } else {
+                        let m = category_mask(class);
+                        if m != 0 {
+                            exact.push((m, w));
+                        }
                     }
                 }
             }
-            let excluded = set
-                .child("category_exclusions")
-                .map(|e| split_list(&e.text).iter().filter_map(|t| TargetClass::from_token(t)).fold(0u16, |m, c| m | c.bit()))
-                .unwrap_or(0);
+            let (excluded, excluded_exact) = set.child("category_exclusions").map(|e| split_category_text(&e.text)).unwrap_or((0, Vec::new()));
             let mut hardpoints: Vec<HpKind> = Vec::new();
             if let Some(h) = set.child("hard_point_priorities") {
                 for t in split_list(&h.text) {
@@ -1363,7 +1547,7 @@ fn parse_priority_sets(fs: &dyn FileSource) -> Vec<PrioritySet> {
                     }
                 }
             }
-            out.push(PrioritySet { name: name.trim().to_ascii_lowercase(), weights, excluded, hardpoints });
+            out.push(PrioritySet { name: name.trim().to_ascii_lowercase(), weights, exact, excluded, excluded_exact, hardpoints });
         }
     }
     out
@@ -1683,6 +1867,11 @@ impl Catalog {
     /// everything they spawn. `fs` supplies the `.alo` models for hardpoint positions; without it
     /// hardpoints are placed on a deterministic pseudo layout.
     pub fn build(data: &GameData, fs: Option<&dyn FileSource>, names: &[&str]) -> Catalog {
+        if let Some(fs) = fs
+            && let Ok(bytes) = fs.read("Xml/Enum/GAMEOBJECTCATEGORYTYPE.XML")
+        {
+            install_category_masks(&bytes);
+        }
         let damage = DamageMatrix::build(data);
 
         // Transitive closure over spawned units.
@@ -2329,6 +2518,10 @@ impl Catalog {
             redirect_to_teammates: unit_field("redirect_damage_to_teammates").is_some_and(alamo_data::xml::parse_bool),
             no_spawn_radius,
             class,
+            category_mask: match src {
+                Source::Unit(u) => u.category_mask.iter().fold(0u32, |m, t| m | category_mask(t)),
+                Source::Base(_) | Source::Structure(_) => category_mask("spacestructure"),
+            },
             is_static,
             is_squadron,
             hull,
@@ -2502,15 +2695,22 @@ impl Catalog {
             HpKind::Other
         };
         let mut inaccuracy = [0.0f32; TargetClass::COUNT];
+        let mut inaccuracy_exact = Vec::new();
         for (cat, dist) in &h.fire_inaccuracy {
-            if let Some(c) = TargetClass::from_token(cat) {
+            if let Some(c) = single_class(cat) {
                 inaccuracy[c as usize] = *dist;
+            } else {
+                let m = category_mask(cat);
+                if m != 0 {
+                    inaccuracy_exact.push((m, *dist));
+                }
             }
         }
-        // `Fire_Category_Restrictions` lists the classes the weapon must NOT fire at (only ion cannons
-        // use it, forbidding fighters, bombers, gunships, transports and corvettes; `Gunship` matches no unit).
-        let forbidden = h.fire_category_restrictions.iter().filter_map(|t| TargetClass::from_token(t)).fold(0u16, |m, c| m | c.bit());
-        let allowed = if forbidden == 0 { 0 } else { 0x1FF & !forbidden };
+        // `Fire_Category_Restrictions` lists the categories the weapon must NOT fire at. A single-class token
+        // forbids that class. A composite token (`Gunship` = Fighter | Bomber) forbids a unit only when the unit's
+        // mask contains every bit, so the flak satellites still shoot fighters.
+        let (forbidden, forbid_exact) = split_category_list(&h.fire_category_restrictions);
+        let allowed = if forbidden == 0 { 0 } else { ((1u16 << TargetClass::COUNT) - 1) & !forbidden };
         let f = |k: &str, d: f32| h.fields.get(k).and_then(|v| alamo_data::xml::parse_num::<f32>(v)).unwrap_or(d);
         // A mode flag that is given and not true.
         let no = |k: &str| h.fields.get(k).is_some_and(|v| !alamo_data::xml::parse_bool(v));
@@ -2534,6 +2734,9 @@ impl Catalog {
             turret_yaw,
             turret_pitch,
             projectile,
+            allowed,
+            forbid_exact,
+            inaccuracy_exact,
             range: h.fire_range,
             min_range: h.fire_min_range,
             half_yaw,
@@ -2543,7 +2746,6 @@ impl Catalog {
             pulses: h.fire_pulse_count.max(1),
             pulse_delay: h.fire_pulse_delay.max(0.0),
             inaccuracy,
-            allowed,
             full_salvo_mult: f("full_salvo_weapon_delay_multiplier", 1.0),
             power_weapons_mult: f("power_to_weapons_mode_weapon_delay_multiplier", 1.0),
             off_in_normal: no("fire_when_in_normal_attack_mode"),

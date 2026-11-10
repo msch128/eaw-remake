@@ -52,7 +52,7 @@ pub use battle::{
 };
 pub use defs::{HelperDef, SpawnPlace, SpawnScriptDef, Bonus, ChaseRules, BonusDef, CombatMod, ModKind, WeakenDef, LureDef, BombDef, EnergyDef, ClusterDef, HealDef, CorruptDef, RedirectDef, SuperLaserDef, ZoneDef, 
     AbilityDef, Catalog, DamageMatrix, DirectWeaponDef, FormationRules, HpDef, HpKind, PrioritySet, ProjDef, ProjId, ShipDef, ShipId, SpecialWeaponDef, TargetClass,
-    TractorDef, FieldModDef, SalvageDef,
+    TractorDef, FieldModDef, SalvageDef, category_contains, category_mask, class_enum_mask, install_category_masks, restriction_allows,
 };
 pub use arena::{Arena, Marker, Obstacle, PropZones, prop_zones};
 pub use math::Vec3;
