@@ -1000,13 +1000,13 @@ fn attrition_credits_lost_tie_squadron_and_lost_hero() {
     let arena2 = req2.map.as_ref().and_then(|m| Arena::load(&ctx.data, &ctx.fs, m)).map(Arc::new);
     let result2 = run_headless(&req2, &catalog2, arena2).expect("result");
     let es2 = req2.sides.iter().position(|s| s.faction == empire).unwrap();
-    // Tarkin (+2400) minus the garrison craft whose hull reached 0. Craft removed still alive when he dies are not billed
-    // (1045 counted those leftovers, -1355 of craft; 1740 is +2400 - 660).
-    assert_eq!(result2.attrition_credits[es2], 1740, "tactical battle net attrition credits for Tarkin and his garrison");
+    // Havelon +2400, minus craft whose hull reached 0: Sentinel_CT_G -300 and 22 TIE_Fighter_G at -20.
+    // 1740 was the sentinel plus 18 of those TIEs. A craft removed while it still has hull is not billed.
+    assert_eq!(result2.attrition_credits[es2], 1660, "tactical battle net attrition credits for Tarkin and his garrison");
     let credits_before_apply2 = tac_sim2.galaxy().factions[empire as usize].credits;
     tac_sim2.apply_tactical_result(battle2.id, &result2).unwrap();
     let credits_after_apply2 = tac_sim2.galaxy().factions[empire as usize].credits;
-    assert_eq!((credits_after_apply2 - credits_before_apply2).round(), 1740.0);
+    assert_eq!((credits_after_apply2 - credits_before_apply2).round(), 1660.0);
 }
 
 #[test]
