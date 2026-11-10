@@ -549,7 +549,7 @@ pub fn draw_routes(
             }
             galaxy_sim::FleetLocation::AtPlanet(at) if selected && !previewed => {
                 if let Some(target) = hover.planet.filter(|t| t != at)
-                    && let Some(plan) = crate::geometry::plan_route(world, g, v.owner, world.fleet_speed(f), *at, target)
+                    && let Some(plan) = crate::geometry::plan_route(world, g, v.owner, world.fleet_speed(f), *at, target, world.unseen_in_hyperspace(f))
                 {
                     let pts: Vec<Vec3> = plan.path.iter().map(|&p| layout.positions[p as usize] + lift).collect();
                     draw(&pts, 0.9);

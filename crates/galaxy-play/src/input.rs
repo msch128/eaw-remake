@@ -301,7 +301,7 @@ pub fn handle_mouse(
                             if from == Some(to) {
                                 model.route_hint = Some(format!("Merge into fleet at {}", dst_name));
                             } else if let (Some(from), Some(h), Some(sf)) = (from, h, g.fleets.get(&src_fid)) {
-                                if let Some(plan) = plan_route(&state.world, g, h, state.world.fleet_speed(sf), from, to) {
+                                if let Some(plan) = plan_route(&state.world, g, h, state.world.fleet_speed(sf), from, to, state.world.unseen_in_hyperspace(sf)) {
                                     let names: Vec<&str> = plan.path.iter().map(|&p| state.world.planets[p as usize].display_name.as_str()).collect();
                                     let mut hint = format!("{} > Merge into fleet at {} - ETA {}", names.join(" > "), dst_name, format_duration(plan.eta_seconds, state.world.config.week_seconds));
                                     if !plan.blockades.is_empty() {
@@ -316,7 +316,7 @@ pub fn handle_mouse(
                             let plan = sel.first().and_then(|id| g.fleets.get(id)).and_then(|f| {
                                 let from = f.planet()?;
                                 let h = player.0?;
-                                plan_route(&state.world, g, h, state.world.fleet_speed(f), from, to)
+                                plan_route(&state.world, g, h, state.world.fleet_speed(f), from, to, state.world.unseen_in_hyperspace(f))
                             });
                             // A slot that holds an own fleet merges the drop into it.
                             let merges = |s: u8| h.and_then(|h| g.fleet_in_slot(h, to, s)).is_some_and(|f| f != src_fid);

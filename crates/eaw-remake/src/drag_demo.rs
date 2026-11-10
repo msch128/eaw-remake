@@ -86,7 +86,7 @@ fn drag_demo(
         drag.cursor_ground = Some(at);
         hover.planet = Some(to);
         let g = state.galaxy();
-        drag.preview = ids.first().and_then(|id| g.fleets.get(id)).and_then(|f| galaxy_play::geometry::plan_route(&state.world, g, me, state.world.fleet_speed(f), from, to)).map(|plan| (to, plan));
+        drag.preview = ids.first().and_then(|id| g.fleets.get(id)).and_then(|f| galaxy_play::geometry::plan_route(&state.world, g, me, state.world.fleet_speed(f), from, to, state.world.unseen_in_hyperspace(f))).map(|plan| (to, plan));
     }
 }
 

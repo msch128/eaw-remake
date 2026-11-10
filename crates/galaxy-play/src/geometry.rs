@@ -152,7 +152,7 @@ pub fn fleet_place(world: &World, galaxy: &Galaxy, fleet: &Fleet, extra_secs: f3
                 if travelled < len {
                     break;
                 }
-                let blocked = !galaxy.escaping.contains(&fleet.id) && world.blockades(galaxy, to, fleet.owner);
+                let blocked = !galaxy.escaping.contains(&fleet.id) && !world.unseen_in_hyperspace(fleet) && world.blockades(galaxy, to, fleet.owner);
                 let next = rest.next().filter(|_| !blocked).and_then(|&n| Some((n, world.route_between(to, n)?)));
                 let Some((next, next_route)) = next else {
                     travelled = len;
@@ -196,8 +196,8 @@ pub struct RoutePlan {
     pub blockades: Vec<PlanetId>,
 }
 
-/// Plans the trip of a fleet of `owner` with the given hyperspace speed (`World::fleet_speed`).
-pub fn plan_route(world: &World, galaxy: &Galaxy, owner: u32, speed: f32, from: PlanetId, to: PlanetId) -> Option<RoutePlan> {
+/// Plans the trip of a fleet of `owner` with the given hyperspace speed (`World::fleet_speed`). `stealth` is `World::unseen_in_hyperspace`: those fleets are not marked as stopped on the way.
+pub fn plan_route(world: &World, galaxy: &Galaxy, owner: u32, speed: f32, from: PlanetId, to: PlanetId, stealth: bool) -> Option<RoutePlan> {
     let path = world.find_path(from, to)?;
     let speed = speed * world.config.galactic_speed_scale;
     let mut eta = 0.0;
@@ -207,7 +207,7 @@ pub fn plan_route(world: &World, galaxy: &Galaxy, owner: u32, speed: f32, from: 
     }
     // Intermediate planets only; a one-planet path (hovering the fleet's own planet) has none.
     let inner = if path.len() > 2 { &path[1..path.len() - 1] } else { &[][..] };
-    let blockades = inner.iter().copied().filter(|&p| world.blockades(galaxy, p, owner)).collect();
+    let blockades = if stealth { Vec::new() } else { inner.iter().copied().filter(|&p| world.blockades(galaxy, p, owner)).collect() };
     Some(RoutePlan { path, eta_seconds: eta, blockades })
 }
 

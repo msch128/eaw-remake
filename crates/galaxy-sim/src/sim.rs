@@ -310,6 +310,7 @@ impl Sim {
             }
             Command::MoveFleet { faction, fleet, to } | Command::MoveFleetAround { faction, fleet, to } => {
                 let f = g.fleets.get(&fleet).filter(|f| f.owner == faction).ok_or(CommandError::Invalid)?;
+                let stealth = world.unseen_in_hyperspace(f);
                 let FleetLocation::AtPlanet(from) = f.location else { return Err(CommandError::WrongState) };
                 if to as usize >= world.planets.len() {
                     return Err(CommandError::Invalid);
@@ -326,7 +327,7 @@ impl Sim {
                 // `MoveFleetAround` goes around systems that would stop the fleet, when there is a way around; `MoveFleet` takes the fastest route.
                 let path = {
                     let gal: &Galaxy = g;
-                    world.find_path_avoiding(from, to, |p| around && p != to && world.blockades(gal, p, faction))
+                    world.find_path_avoiding(from, to, |p| around && p != to && !stealth && world.blockades(gal, p, faction))
                 }
                 .ok_or(CommandError::NoPath)?;
                 g.escaping.remove(&fleet);
@@ -776,6 +777,7 @@ impl Sim {
             .collect();
         for id in ids {
             let speed = w.fleet_speed(&self.galaxy.fleets[&id]);
+            let stealth = w.unseen_in_hyperspace(&self.galaxy.fleets[&id]);
             // Seconds of this step still to travel; a stopover passes the rest on to the next leg.
             let mut time_left = dt;
             loop {
@@ -794,7 +796,7 @@ impl Sim {
                     0.0
                 };
                 let owner = f.owner;
-                let blocked = !rest.is_empty() && !self.galaxy.escaping.contains(&id) && w.blockades(&self.galaxy, to, owner);
+                let blocked = !rest.is_empty() && !self.galaxy.escaping.contains(&id) && !stealth && w.blockades(&self.galaxy, to, owner);
                 if rest.is_empty() {
                     self.galaxy.escaping.remove(&id);
                 }
@@ -1498,6 +1500,21 @@ impl World {
             .filter(|&s| s > 0.0)
             .fold(f32::MAX, f32::min)
             .clamp(0.1, 1.5)
+    }
+
+    /// Every ship aboard has `Galactic_Stealth_Ability`, so the fleet is not seen in hyperspace and a planet it only passes does not stop it. A mixed fleet is seen. An empty fleet is not stealthy.
+    pub fn unseen_in_hyperspace(&self, f: &Fleet) -> bool {
+        let mut any = false;
+        for (&u, &n) in &f.units {
+            if n == 0 {
+                continue;
+            }
+            any = true;
+            if !self.units[u as usize].galactic_stealth {
+                return false;
+            }
+        }
+        any
     }
 
     /// True if a fleet of `owner` passing through `planet` has to stop there.

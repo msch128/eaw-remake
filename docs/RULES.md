@@ -200,6 +200,10 @@ range for planets and fleets, so the model is an estimate.
 
 * A faction (and its allies) is present at planets it owns or has a fleet at: `Sight::Detailed`. Planets one lane away
   are `Seen`; all others `Hidden`.
+* A fleet whose every ship has `Galactic_Stealth_Ability` (a smuggler, a spy, or a lone stealth hero such as
+  Dodonna's Quasar) is not stopped by a hostile planet it only passes, and `MoveFleetAround` does not route around
+  those planets. It still stops at its destination. One ship without the ability stops the whole fleet. The built-in
+  AI still plans as if the blockade applied.
 * Own and allied fleets are always detailed. A fleet in orbit is seen like its planet; a fleet in hyperspace is `Seen`
   when either end of its lane is not hidden. A fleet with a `Galactic_Stealth_Ability` unit is found by those present in
   its system, elsewhere only through a spy that sees its kind (below), and never in hyperspace. `Detailed` shows

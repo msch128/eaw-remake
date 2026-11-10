@@ -434,3 +434,105 @@ fn a_field_agent_report_carries_its_flags_and_is_saved() {
     other.step(60.0);
     assert!(other.galaxy().spy_reports.is_empty());
 }
+
+/// Seconds to fly `path` at `speed` (a `World::fleet_speed`).
+fn fly_secs(w: &World, speed: f32, path: &[PlanetId]) -> f32 {
+    let speed = speed * w.config.galactic_speed_scale;
+    path.windows(2)
+        .map(|e| {
+            let r = &w.routes[w.route_between(e[0], e[1]).unwrap() as usize];
+            r.length / (speed * r.hs_factor).max(1e-3)
+        })
+        .sum()
+}
+
+#[test]
+fn a_stealth_fleet_passes_a_blockading_starbase_and_a_warship_stops() {
+    let Some(data) = load() else { return };
+    let c = data.campaign("GC_Full_Web_Way_Rebel").unwrap();
+    let mut sim = Sim::new(&data, c, SimConfig { victory_enabled: false, auto_resolve_battles: false, ..SimConfig::default() }).unwrap();
+    let w = sim.world().clone();
+    let (rebel, empire) = (w.faction_id("Rebel").unwrap(), w.faction_id("Empire").unwrap());
+    let base = w.starbases.iter().position(|b| b.level >= 1).expect("a star base") as u32;
+    let n = w.planets.len() as PlanetId;
+    let mut found = None;
+    'search: for a in (0..n).filter(|&p| w.real[p as usize]) {
+        for b in (a + 1..n).filter(|&p| w.real[p as usize]) {
+            let Some(path) = w.find_path(a, b) else { continue };
+            if path.len() < 3 {
+                continue;
+            }
+            let mid = path[1];
+            if w.find_path_avoiding(a, b, |p| p == mid).is_some_and(|alt| !alt.contains(&mid)) {
+                found = Some((a, b, mid, path));
+                break 'search;
+            }
+        }
+    }
+    let (a, b, mid, fastest) = found.expect("a route through a planet that can be bypassed");
+    let smuggler = w.unit_id("Rebel_Smuggler_Team").unwrap();
+    let isd = w.unit_id("Star_Destroyer").unwrap();
+    assert!(w.units[smuggler as usize].galactic_stealth);
+    assert!(!w.units[isd as usize].galactic_stealth);
+
+    let park = |sim: &mut Sim, units: &[(UnitTypeId, u32)]| {
+        {
+            let g = sim.galaxy_mut();
+            for p in g.planets.iter_mut() {
+                p.owner = None;
+                p.starbase = None;
+                p.structures.clear();
+            }
+            g.fleets.clear();
+            g.battles.clear();
+            g.escaping.clear();
+            // A planet keeps the Rebels alive: agents alone do not.
+            g.planets[a as usize].owner = Some(rebel);
+            g.planets[mid as usize].owner = Some(empire);
+            g.planets[mid as usize].starbase = Some(base);
+        }
+        fleet(sim, rebel, units, FleetLocation::AtPlanet(a))
+    };
+    let route_of = |sim: &mut Sim, id: FleetId, around: bool| {
+        let cmd = if around {
+            Command::MoveFleetAround { faction: rebel, fleet: id, to: b }
+        } else {
+            Command::MoveFleet { faction: rebel, fleet: id, to: b }
+        };
+        sim.apply(cmd).unwrap();
+        let FleetLocation::Moving { to, rest, .. } = sim.galaxy().fleets[&id].location.clone() else { panic!("not moving") };
+        let mut route = vec![a, to];
+        route.extend(rest);
+        route
+    };
+    let run_to = |sim: &mut Sim, id: FleetId| {
+        let speed = w.fleet_speed(&sim.galaxy().fleets[&id]);
+        let limit = fly_secs(&w, speed, &fastest) * 1.25 + 20.0;
+        let mut t = 0.0;
+        while t < limit {
+            let at = sim.galaxy().fleets[&id].location.clone();
+            if matches!(at, FleetLocation::AtPlanet(p) if p == b || p == mid) {
+                return at;
+            }
+            sim.step(10.0);
+            t += 10.0;
+        }
+        sim.galaxy().fleets[&id].location.clone()
+    };
+
+    let id = park(&mut sim, &[(smuggler, 1)]);
+    assert!(route_of(&mut sim, id, false).contains(&mid), "the direct order still crosses the star base");
+    assert_eq!(run_to(&mut sim, id), FleetLocation::AtPlanet(b), "a stealth fleet is not stopped on the way");
+    let id = park(&mut sim, &[(smuggler, 1)]);
+    assert!(route_of(&mut sim, id, true).contains(&mid), "MoveFleetAround does not detour a fleet nobody sees");
+
+    let id = park(&mut sim, &[(isd, 1)]);
+    assert!(route_of(&mut sim, id, false).contains(&mid));
+    assert_eq!(run_to(&mut sim, id), FleetLocation::AtPlanet(mid), "a warship stops at the star base");
+    let id = park(&mut sim, &[(isd, 1)]);
+    assert!(!route_of(&mut sim, id, true).contains(&mid), "a warship is sent around the star base");
+
+    let id = park(&mut sim, &[(smuggler, 1), (isd, 1)]);
+    route_of(&mut sim, id, false);
+    assert_eq!(run_to(&mut sim, id), FleetLocation::AtPlanet(mid), "one visible ship stops the fleet");
+}
