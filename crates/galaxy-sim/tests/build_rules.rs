@@ -248,6 +248,51 @@ fn a_lifetime_limit_of_minus_one_means_unlimited() {
 }
 
 #[test]
+fn structure_current_build_limit_enforced_for_research_institute() {
+    let Some(data) = load() else { return };
+    let c = data.campaign("GC_Full_Web_Way_Imperial").expect("campaign");
+    let mut sim = Sim::new(&data, c, SimConfig { victory_enabled: false, ..SimConfig::default() }).expect("sim");
+    let w = sim.world().clone();
+    let empire = w.faction_id("Empire").unwrap();
+    let cor = w.planet_id("Coruscant_WW").unwrap();
+    let fondor = w.planet_id("Fondor_WW").unwrap();
+
+    let inst = w.structure_id("E_Research_Institute").expect("E_Research_Institute");
+    assert_eq!(w.structures[inst as usize].limit_current, Some(1));
+    assert_eq!(w.structures[inst as usize].limit_lifetime, Some(-1));
+
+    // Coruscant already has E_Research_Institute in GC_Full_Web_Way_Imperial starting forces
+    assert!(sim.galaxy().planets[cor as usize].structures.contains(&inst));
+
+    // Prepare Fondor with level 3 star base and credits
+    bare_planet(&mut sim, empire, fondor, 3);
+    sim.add_credits(empire, 1.0e6);
+
+    // Attempting to build a second institute at Fondor must be refused with BuildLimit
+    let err = w.check_build_structure(sim.galaxy(), empire, fondor, inst);
+    assert!(
+        matches!(err, Err(CommandError::BuildLimit)),
+        "second institute must be refused with BuildLimit, got {err:?}"
+    );
+
+    // When Coruscant loses its institute, Fondor can queue it
+    assert!(sim.remove_structure(cor, inst));
+    let ok = w.check_build_structure(sim.galaxy(), empire, fondor, inst);
+    assert!(ok.is_ok(), "can build institute when none stands: {ok:?}");
+
+    // But if Fondor queues it, Kuat must be refused with BuildLimit while queued
+    sim.apply(Command::BuildStructure { faction: empire, planet: fondor, structure: inst }).expect("queue institute");
+    let kuat = w.planet_id("Kuat_WW").unwrap();
+    bare_planet(&mut sim, empire, kuat, 3);
+    let err2 = w.check_build_structure(sim.galaxy(), empire, kuat, inst);
+    assert!(
+        matches!(err2, Err(CommandError::BuildLimit)),
+        "queued institute must block another queue with BuildLimit, got {err2:?}"
+    );
+}
+
+
+#[test]
 fn shipyard_planet_applies_production_modifiers() {
     let Some(data) = load() else { return };
     let mut sim = new_sim(&data);

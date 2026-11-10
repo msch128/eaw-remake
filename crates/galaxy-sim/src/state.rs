@@ -175,6 +175,9 @@ pub struct FactionState {
     pub powers: BTreeSet<(String, String)>,
     /// Units built over the whole game, for lifetime build limits.
     pub built_lifetime: BTreeMap<UnitTypeId, u32>,
+    /// Structures built over the whole game, for lifetime build limits.
+    #[serde(default)]
+    pub built_structures_lifetime: BTreeMap<StructureTypeId, u32>,
     /// True once the faction has no planets and no fleets.
     pub eliminated: bool,
     /// Cached income per week (updated every tick).

@@ -78,7 +78,9 @@ every owned planet, the planet's `Additional_Population_Capacity`, its star base
 * `Build_Initially_Locked` objects are unlocked by research items: completing `Research_<Name>`
   (`Research/Units/_Default_Base.xml`, mirrored by `Scripts/Library/libResearchFunctions.lua`) unlocks `<Name>`.
 * Structures: slot limits come from the planet's `Special_Structures_Space` (orbital) and `Special_Structures_Land`
-  (ground); queued items already take a slot. Also `Build_Max_Instances_Per_Planet`, `Required_Star_Base_Level`
+  (ground); queued items already take a slot. Also `Build_Max_Instances_Per_Planet`, `Build_Limit_Current_Per_Player`
+  and `Build_Limit_Lifetime_Per_Player` (data: e.g. `Research_Institute.xml` limit 1; standing instances across all owned
+  planets plus queued items are counted), `Required_Star_Base_Level`
   (shipyards need level 2), `Required_Special_Structures`, `Required_Planets`. Terrain variants (`*_Urban`, `*_Barren`,
   `*_Sector`) and one-planet buildings (Starforge, refineries, fortresses) are selected by `Required_Planets`.
   Ground structures appear only if they matter for the galactic game (`StructureType::galactic`).

@@ -218,12 +218,48 @@ impl Remap<'_> {
 
     fn faction_state(&mut self, f: FactionState) -> FactionState {
         // `unlocked`, `story_locked` and `powers` hold names already.
-        let FactionState { credits, tech, unlocked, story_locked, powers, built_lifetime, eliminated, income_per_week, population_used, population_cap, planets_owned, difficulty, superweapon_ready_at, stats } = f;
+        let FactionState {
+            credits,
+            tech,
+            unlocked,
+            story_locked,
+            powers,
+            built_lifetime,
+            built_structures_lifetime,
+            eliminated,
+            income_per_week,
+            population_used,
+            population_cap,
+            planets_owned,
+            difficulty,
+            superweapon_ready_at,
+            stats,
+        } = f;
         let mut built = BTreeMap::new();
         for (u, n) in built_lifetime {
             *built.entry(self.unit(u)).or_default() += n;
         }
-        FactionState { credits, tech, unlocked, story_locked, powers, built_lifetime: built, eliminated, income_per_week, population_used, population_cap, planets_owned, difficulty, superweapon_ready_at, stats }
+        let mut built_structs = BTreeMap::new();
+        for (s, n) in built_structures_lifetime {
+            *built_structs.entry(self.structure(s)).or_default() += n;
+        }
+        FactionState {
+            credits,
+            tech,
+            unlocked,
+            story_locked,
+            powers,
+            built_lifetime: built,
+            built_structures_lifetime: built_structs,
+            eliminated,
+            income_per_week,
+            population_used,
+            population_cap,
+            planets_owned,
+            difficulty,
+            superweapon_ready_at,
+            stats,
+        }
     }
 
     fn location(&mut self, location: FleetLocation) -> FleetLocation {

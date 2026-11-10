@@ -357,6 +357,28 @@ impl World {
         if let Some(missing) = self.missing_structures_queued(ps, &st.req_structures) {
             return Err(CommandError::RequirementsNotMet(missing));
         }
+        if st.limit_current.is_some() || st.limit_lifetime.is_some() {
+            let standing: u32 = galaxy
+                .planets
+                .iter()
+                .filter(|p| p.owner == Some(faction))
+                .map(|p| p.structures.iter().filter(|&&s| s == structure).count() as u32)
+                .sum();
+            let queued = self
+                .queued(galaxy, faction)
+                .filter(|i| i.kind == ProductionKind::Structure(structure))
+                .count() as u32;
+            if let Some(l) = st.limit_current.filter(|l| *l >= 0)
+                && standing + queued >= l as u32
+            {
+                return Err(CommandError::BuildLimit);
+            }
+            if let Some(l) = st.limit_lifetime.filter(|l| *l >= 0)
+                && fs.built_structures_lifetime.get(&structure).copied().unwrap_or(0) + queued >= l as u32
+            {
+                return Err(CommandError::BuildLimit);
+            }
+        }
         let queued_same = ps.queues[Lane::Structures as usize].iter().filter(|i| i.kind == ProductionKind::Structure(structure)).count();
         let existing_same = ps.structures.iter().filter(|&&s| s == structure).count();
         if (queued_same + existing_same) as i32 >= st.max_per_planet {

@@ -749,7 +749,11 @@ impl Sim {
                     }
                 }
             }
-            ProductionKind::Structure(s) => self.galaxy.planets[pi].structures.push(s),
+            ProductionKind::Structure(s) => {
+                self.galaxy.planets[pi].structures.push(s);
+                let fs = &mut self.galaxy.factions[owner as usize];
+                *fs.built_structures_lifetime.entry(s).or_default() += 1;
+            }
             ProductionKind::Starbase(sb) => self.galaxy.planets[pi].starbase = Some(sb),
             ProductionKind::Tech(_) => {
                 let max = self.world.factions[owner as usize].max_tech;

@@ -487,6 +487,10 @@ pub struct StructureType {
     pub orbital: bool,
     /// Max instances per planet.
     pub max_per_planet: i32,
+    /// `Build_Limit_Current_Per_Player`.
+    pub limit_current: Option<i32>,
+    /// `Build_Limit_Lifetime_Per_Player`.
+    pub limit_lifetime: Option<i32>,
     /// `Build_Initially_Locked`.
     pub locked: bool,
     /// True if the structure appears in a build menu.

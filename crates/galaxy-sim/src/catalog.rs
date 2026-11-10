@@ -296,6 +296,8 @@ impl World {
                 population_capacity: def.population_capacity,
                 orbital,
                 max_per_planet: def.max_instances_per_planet.unwrap_or(1).max(1),
+                limit_current: def.fields.get("build_limit_current_per_player").and_then(|v| v.trim().parse().ok()),
+                limit_lifetime: def.fields.get("build_limit_lifetime_per_player").and_then(|v| v.trim().parse().ok()),
                 locked: def.build_initially_locked,
                 buildable: def.build_cost > 0.0
                     && !def.affiliation.is_empty()
