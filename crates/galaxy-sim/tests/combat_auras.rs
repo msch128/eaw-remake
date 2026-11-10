@@ -170,3 +170,28 @@ fn dodonna_y_wing_squadron_gets_the_craft_bonus_the_battle_applies() {
     assert!((applied.taken_shield - expected_shield).abs() < 1e-4, "auto-resolve taken_shield {} want {}", applied.taken_shield, expected_shield);
     assert!((applied.speed - 1.10).abs() < 1e-4, "auto-resolve speed {}", applied.speed);
 }
+
+#[test]
+fn a_multi_bit_craft_keeps_its_category_mask_in_auto_resolve() {
+    // `TIE_Bomber` is `Bomber | AntiFrigate`. The class bit is only Bomber, so a category the mask contains and the
+    // class does not was missed. `Gunship` is `Fighter | Bomber` (`0x3`): the bomber bit does not contain it.
+    let Some(ctx) = load() else { return };
+    let sim = new_sim(&ctx);
+    let w = sim.world();
+    let id = w.unit_id("TIE_Bomber").expect("TIE_Bomber");
+    let u = &w.units[id as usize];
+    let class = battle_sim::TargetClass::from_category(u.category);
+    let full = battle_sim::category_mask("Bomber") | battle_sim::category_mask("AntiFrigate");
+    assert_eq!(u.category_mask, full, "CategoryMask Bomber | AntiFrigate");
+    assert_ne!(full, battle_sim::class_enum_mask(class));
+    let anti = battle_sim::BonusDef { damage: 0.25, composites: vec![battle_sim::category_mask("AntiFrigate")], ..battle_sim::BonusDef::default() };
+    let applied = w.aura_for(galaxy_sim::combat::Source::Unit(id), &[&anti]);
+    assert!((applied.damage - 1.25).abs() < 1e-5, "the bomber's mask matches AntiFrigate: {}", applied.damage);
+    assert_eq!(battle_sim::Bonus::compute(&u.name, class, 0, [&anti]).damage, 1.0, "the class bit does not");
+    let gunship = battle_sim::category_mask("Gunship");
+    assert_eq!(gunship, 0x3);
+    let only = battle_sim::BonusDef { damage: 0.25, composites: vec![gunship], ..battle_sim::BonusDef::default() };
+    let hit = battle_sim::Bonus::for_crafts(&[("craft", battle_sim::TargetClass::Bomber, gunship)], &[&only]);
+    assert!((hit.damage - 1.25).abs() < 1e-5, "Gunship matches the full mask: {}", hit.damage);
+    assert_eq!(battle_sim::Bonus::compute("craft", battle_sim::TargetClass::Bomber, 0, [&only]).damage, 1.0);
+}

@@ -10,6 +10,11 @@ use alamo_data::{Campaign, GameData, ShipCategory};
 /// Population per side in a space battle (design rule, replaces the data's `Space_Tactical_Unit_Cap` when that is smaller).
 pub const USER_SPACE_UNIT_CAP: i32 = 1000;
 
+/// OR of a `CategoryMask` token list.
+pub fn category_bits(tokens: &[String]) -> u32 {
+    tokens.iter().fold(0, |m, t| m | battle_sim::category_mask(t))
+}
+
 /// Index of a planet in [`World::planets`].
 pub type PlanetId = u32;
 /// Index of a faction in [`World::factions`].
@@ -356,6 +361,8 @@ pub struct UnitType {
     pub role: UnitRole,
     /// Size class.
     pub category: ShipCategory,
+    /// OR of `CategoryMask`. `0` names nothing, and a bonus then uses the class's own bit. `Gunship` is Fighter | Bomber.
+    pub category_mask: u32,
     /// Lower-cased `Affiliation` faction names.
     pub affiliation: Vec<String>,
     /// Combat numbers (for squadrons: summed over members).

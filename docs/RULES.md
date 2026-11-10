@@ -159,7 +159,10 @@ every owned planet, the planet's `Additional_Population_Capacity`, its star base
   and fleet commanders apply their damage, health, shield, defense, range and speed bonuses (filtered by `Applicable_Unit_Categories`,
   `Applicable_Unit_Types`, and `Excluded_Unit_Types`, stacked by `Stacking_Category`). A squadron is matched as the crafts in
   `Squadron_Units` (the names the tactical battle spawns), and the one auto-resolve combatant gets the equal-weight mean of those
-  crafts' bonuses (`Bonus::for_crafts`). The squadron object's own name is not what the filter lists (`Y-Wing`, not `Y-Wing_Squadron`). Hardpoint health, ranges, cones and
+  crafts' bonuses (`Bonus::for_crafts`). Each craft is matched on its `CategoryMask`, the same mask the battle passes
+  to `Bonus::compute`. Mask 0 is only the class's own bit: `TIE_Bomber` is Bomber | AntiFrigate, and `Gunship` is
+  Fighter | Bomber (`0x3`), so the class bit misses a category the full mask contains. The squadron object's own name
+  is not what the filter lists (`Y-Wing`, not `Y-Wing_Squadron`). Hardpoint health, ranges, cones and
   speeds are not simulated. Estimates: rounds of 4 s; a fight with no damage or over 600 rounds is a draw and the attackers
   retreat. Units start with the hull and shield share they carry; only an abandoned tactical fight leaves damage, and survivors
   heal after every battle.

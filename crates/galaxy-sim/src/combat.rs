@@ -71,23 +71,23 @@ impl World {
     /// The auto-resolve aura for one combatant. A squadron is the equal-weight mean of its member crafts (the names
     /// the tactical battle spawns); a ship, star base or structure is its own object name.
     pub fn aura_for<'a>(&self, src: Source, auras: &[&'a battle_sim::BonusDef]) -> battle_sim::Bonus {
-        let crafts: Vec<(&str, battle_sim::TargetClass)> = match src {
+        let crafts: Vec<(&str, battle_sim::TargetClass, u32)> = match src {
             Source::Unit(u) | Source::Garrison(u) => {
                 let un = &self.units[u as usize];
                 if un.members.is_empty() {
-                    vec![(un.name.as_str(), battle_sim::TargetClass::from_category(un.category))]
+                    vec![(un.name.as_str(), battle_sim::TargetClass::from_category(un.category), un.category_mask)]
                 } else {
                     un.members
                         .iter()
                         .map(|&m| {
                             let member = &self.units[m as usize];
-                            (member.name.as_str(), battle_sim::TargetClass::from_category(member.category))
+                            (member.name.as_str(), battle_sim::TargetClass::from_category(member.category), member.category_mask)
                         })
                         .collect()
                 }
             }
-            Source::Starbase(s) => vec![(self.starbases[s as usize].name.as_str(), battle_sim::TargetClass::Structure)],
-            Source::Structure(s) => vec![(self.structures[s as usize].name.as_str(), battle_sim::TargetClass::Structure)],
+            Source::Starbase(s) => vec![(self.starbases[s as usize].name.as_str(), battle_sim::TargetClass::Structure, 0)],
+            Source::Structure(s) => vec![(self.structures[s as usize].name.as_str(), battle_sim::TargetClass::Structure, 0)],
         };
         battle_sim::Bonus::for_crafts(&crafts, auras)
     }

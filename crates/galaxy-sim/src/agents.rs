@@ -215,6 +215,7 @@ impl World {
                 text_id: r.string("text_id"),
                 role: UnitRole::Agent,
                 category: alamo_data::ShipCategory::Other,
+                category_mask: crate::world::category_bits(&r.list("categorymask")),
                 buildable: cost > 0.0 && !affiliation.is_empty() && groups_ok && planets_ok,
                 affiliation,
                 combat: CombatStats::default(),

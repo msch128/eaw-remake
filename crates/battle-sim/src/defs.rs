@@ -700,17 +700,18 @@ impl Bonus {
         Bonus { damage: 1.0 + dmg, taken_hull: 1.0 / ((1.0 + health) * (1.0 + defense)), taken_shield: 1.0 / ((1.0 + shield) * (1.0 + defense)), range: 1.0 + range, speed: 1.0 + speed }
     }
 
-    /// Equal-weight mean of [`Self::compute`] over the crafts a squadron expands into. The tactical battle calls
-    /// [`Self::compute`] once per spawned craft; auto-resolve keeps one combatant and uses this. One craft is that
-    /// craft's bonus. An empty list is no bonus.
-    pub fn for_crafts<'a>(crafts: &[(&str, TargetClass)], auras: &[&'a BonusDef]) -> Self {
+    /// Equal-weight mean of [`Self::compute`] over the crafts a squadron expands into. Each entry is
+    /// `(name, class, category mask)`; mask 0 is the class's own bit. The tactical battle passes the craft's
+    /// `CategoryMask` (`Gunship` is Fighter | Bomber, not the bomber bit alone). One craft is that craft's bonus.
+    /// An empty list is no bonus.
+    pub fn for_crafts<'a>(crafts: &[(&str, TargetClass, u32)], auras: &[&'a BonusDef]) -> Self {
         if crafts.is_empty() {
             return Self::default();
         }
         let n = crafts.len() as f32;
         let mut sum = Bonus { damage: 0.0, taken_hull: 0.0, taken_shield: 0.0, range: 0.0, speed: 0.0 };
-        for &(name, class) in crafts {
-            let b = Self::compute(name, class, 0, auras.iter().copied());
+        for &(name, class, mask) in crafts {
+            let b = Self::compute(name, class, mask, auras.iter().copied());
             sum.damage += b.damage;
             sum.taken_hull += b.taken_hull;
             sum.taken_shield += b.taken_shield;
@@ -730,9 +731,9 @@ mod bonus_crafts {
         let aura = BonusDef { shield: 0.15, unit_types: vec!["Y-Wing".into()], ..BonusDef::default() };
         let matched = Bonus::compute("Y-Wing", TargetClass::Bomber, 0, [&aura]);
         let plain = Bonus::compute("X-Wing", TargetClass::Fighter, 0, [&aura]);
-        let mean = Bonus::for_crafts(&[("Y-Wing", TargetClass::Bomber), ("X-Wing", TargetClass::Fighter)], &[&aura]);
+        let mean = Bonus::for_crafts(&[("Y-Wing", TargetClass::Bomber, 0), ("X-Wing", TargetClass::Fighter, 0)], &[&aura]);
         assert!((mean.taken_shield - (matched.taken_shield + plain.taken_shield) / 2.0).abs() < 1e-5);
-        assert_eq!(Bonus::for_crafts(&[("Y-Wing", TargetClass::Bomber)], &[&aura]).taken_shield, matched.taken_shield);
+        assert_eq!(Bonus::for_crafts(&[("Y-Wing", TargetClass::Bomber, 0)], &[&aura]).taken_shield, matched.taken_shield);
     }
 }
 
