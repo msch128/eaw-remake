@@ -276,7 +276,12 @@ build-menu filters, not a start mode. The mode is this project's own:
   prerequisite waits until a `TRIGGER_EVENT` names it. Several `<Prereq>` tags are alternatives; names in one tag, split
   on spaces or commas, are all required. On the active Web Way plots that is 8 events (the five SSD
   `Check_*_Reset_Branch` checks, and the three faction filter `FORCE_CLICK_GUI_To_Space` events) and 0 tags with more
-  than one name. A win or a loss, not both, resets an SSD damage branch one second later. `story_locked` makes the build checks refuse the object until a
+  than one name. A win or a loss, not both, resets an SSD damage branch one second later.
+* Data: `DISABLE_BRANCH` names a `Branch` tag, not an event. `Reward_Param2` `1` disables that branch and `0` turns it
+  back on without forgetting that an event already fired (`Disabled` becomes `Inactive`). Live `Story*.xml` after comments:
+  51 calls pass `1`, 38 pass `0`, none omit the parameter. `RESET_BRANCH` then clears the firing so the branch can run again.
+  `DISABLE_STORY_EVENT` still names one event. A repair of Piett's phase 2 therefore shuts the death branch and the later
+  enable opens it again. `story_locked` makes the build checks refuse the object until a
   story `UNLOCK_UNIT`. Rosters otherwise stay the data `Affiliation`.
 * Data, deliberately unchanged: the Shatterpoint campaigns give the full-AI opposing side 500000 credits against the
   human's 50000; a Republic human starts at about 497 credits per week.

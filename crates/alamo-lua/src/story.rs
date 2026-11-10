@@ -465,9 +465,8 @@ impl StoryEngine {
                     }
                 }
                 "RESET_BRANCH" => self.reset_branch(&p1, now),
-                "DISABLE_BRANCH" | "DISABLE_STORY_EVENT" => {
-                    self.disable(&p1, rw.kind == "DISABLE_BRANCH")
-                }
+                "DISABLE_BRANCH" => self.set_branch(&p1, rw.params.get(1).map(String::as_str).unwrap_or("1")),
+                "DISABLE_STORY_EVENT" => self.disable_event(&p1),
                 _ => host_rewards.push(rw),
             }
         }
@@ -523,17 +522,34 @@ impl StoryEngine {
         }
     }
 
-    fn disable(&mut self, name: &str, whole_branch: bool) {
+    /// `DISABLE_BRANCH`. `Reward_Param2` `0` or `false` turns the branch back on (`Disabled` becomes `Inactive`, and a firing
+    /// already recorded stays recorded). Any other value, including a missing parameter, disables it. The branch is every event
+    /// whose `Branch` tag is `name`, plus an event of that name. Live Story plots: 51 calls pass `1`, 38 pass `0`, none omit it.
+    fn set_branch(&mut self, name: &str, param: &str) {
+        let enable = param.eq_ignore_ascii_case("0") || param.eq_ignore_ascii_case("false");
+        let lower = name.to_ascii_lowercase();
         for r in &mut self.plots {
-            if let Some(&root) = r.by_name.get(&name.to_ascii_lowercase()) {
-                let set = if whole_branch {
-                    Self::branch(r, root)
+            for i in 0..r.plot.events.len() {
+                let on_branch = r.plot.events[i].branch.as_deref() == Some(lower.as_str()) || r.plot.events[i].name.eq_ignore_ascii_case(name);
+                if !on_branch {
+                    continue;
+                }
+                if enable {
+                    if r.states[i] == State::Disabled {
+                        r.states[i] = State::Inactive;
+                    }
                 } else {
-                    vec![root]
-                };
-                for i in set {
                     r.states[i] = State::Disabled;
                 }
+            }
+        }
+    }
+
+    /// `DISABLE_STORY_EVENT`: one event, by name.
+    fn disable_event(&mut self, name: &str) {
+        for r in &mut self.plots {
+            if let Some(&i) = r.by_name.get(&name.to_ascii_lowercase()) {
+                r.states[i] = State::Disabled;
             }
         }
     }
@@ -737,5 +753,43 @@ mod tests {
         assert!(!at_one.iter().any(|e| e == "Both"), "Win, Lose in one tag needs both: {at_one:?}");
         assert!(s.tick(100.0).iter().any(|f| f.event == "Lose"));
         assert!(s.tick(101.0).iter().any(|f| f.event == "Both"), "both names of the one tag have fired");
+    }
+
+    #[test]
+    fn disable_branch_uses_the_branch_tag_and_param2() {
+        // Story_Sandbox_Empire_Dreadnoughts.xml: repair sets DISABLE_BRANCH of Piett_P2_Death_Branch to 1, the spawn sets it back to 0.
+        let p = plot(
+            r#"<Story>
+            <Event Name="Phase2_Piett_Death">
+              <Event_Type>STORY_TACTICAL_DESTROY</Event_Type>
+              <Event_Param1>Piett_Executor_P2</Event_Param1>
+              <Reward_Type>REMOVE_UNIT</Reward_Type><Reward_Param1>Piett_Executor_P2</Reward_Param1>
+              <Branch>Piett_P2_Death_Branch</Branch></Event>
+            <Event Name="Construct_Repair_Piett_P2">
+              <Event_Type>STORY_ELAPSED</Event_Type><Event_Param1>0</Event_Param1>
+              <Reward_Type>DISABLE_BRANCH</Reward_Type>
+              <Reward_Param1>Piett_P2_Death_Branch</Reward_Param1><Reward_Param2>1</Reward_Param2></Event>
+            <Event Name="Enable_Phase1_Piett_Death">
+              <Event_Type>STORY_ELAPSED</Event_Type><Event_Param1>10</Event_Param1>
+              <Reward_Type>DISABLE_BRANCH</Reward_Type>
+              <Reward_Param1>Piett_P2_Death_Branch</Reward_Param1><Reward_Param2>0</Reward_Param2>
+              <Prereq>Construct_Repair_Piett_P2</Prereq></Event>
+            <Event Name="Reset_Phase1_Piett_Death">
+              <Event_Type>STORY_ELAPSED</Event_Type><Event_Param1>5</Event_Param1>
+              <Reward_Type>RESET_BRANCH</Reward_Type><Reward_Param1>Piett_P2_Death_Branch</Reward_Param1>
+              <Prereq>Enable_Phase1_Piett_Death</Prereq></Event>
+            </Story>"#,
+        );
+        let mut s = StoryEngine::default();
+        s.activate(p, 0, Some("Empire".into()), 0.0);
+        s.tick(0.0);
+        assert!(s.notify(&["STORY_TACTICAL_DESTROY"], "Piett_Executor_P2", 1.0).is_empty(), "param 1 disables the branch");
+        s.tick(10.0);
+        let back = s.notify(&["STORY_TACTICAL_DESTROY"], "Piett_Executor_P2", 11.0);
+        assert!(back.iter().any(|f| f.event == "Phase2_Piett_Death"), "param 0 allows the death event again: {back:?}");
+        assert!(s.notify(&["STORY_TACTICAL_DESTROY"], "Piett_Executor_P2", 12.0).is_empty(), "it has fired");
+        s.tick(15.0);
+        let again = s.notify(&["STORY_TACTICAL_DESTROY"], "Piett_Executor_P2", 16.0);
+        assert!(again.iter().any(|f| f.event == "Phase2_Piett_Death"), "RESET_BRANCH clears the firing so the next destroy counts: {again:?}");
     }
 }
