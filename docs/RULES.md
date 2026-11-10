@@ -273,7 +273,10 @@ build-menu filters, not a start mode. The mode is this project's own:
 * Data: Clone Wars plots `LOCK_UNIT` the GCW-era heroes at `Universal_Story_Start`. A `STORY_TRIGGER` fires when its
   prerequisites have, whatever the reward (inferred in `alamo-lua` `story.rs` from the Web Way plots: nothing triggers
   the hero spawns, locks, tech followers, shield grants or the 181st chain by name). A `STORY_TRIGGER` with no
-  prerequisite waits until a `TRIGGER_EVENT` names it. `story_locked` makes the build checks refuse the object until a
+  prerequisite waits until a `TRIGGER_EVENT` names it. Several `<Prereq>` tags are alternatives; names in one tag, split
+  on spaces or commas, are all required. On the active Web Way plots that is 8 events (the five SSD
+  `Check_*_Reset_Branch` checks, and the three faction filter `FORCE_CLICK_GUI_To_Space` events) and 0 tags with more
+  than one name. A win or a loss, not both, resets an SSD damage branch one second later. `story_locked` makes the build checks refuse the object until a
   story `UNLOCK_UNIT`. Rosters otherwise stay the data `Affiliation`.
 * Data, deliberately unchanged: the Shatterpoint campaigns give the full-AI opposing side 500000 credits against the
   human's 50000; a Republic human starts at about 497 credits per week.

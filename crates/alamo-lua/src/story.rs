@@ -9,11 +9,22 @@
 //!
 //! **Semantics are reconstructed**, not verified against the engine. A `STORY_TRIGGER` with prerequisites fires once those have fired
 //! (the Web Way plots chain heroes, locks, tech followers, shield grants and the 181st on prerequisites alone; nothing triggers them by name).
-//! One with no prerequisites waits until a `TRIGGER_EVENT` names it. Several `Prereq` tags mean "all of them".
+//! One with no prerequisites waits until a `TRIGGER_EVENT` names it. Several `Prereq` tags are alternatives (any one
+//! tag). Names inside one tag, separated by spaces or commas, are all required.
 
 use std::collections::HashMap;
 
 use alamo_data::xml;
+
+/// Names in one `<Prereq>` tag. Spaces and commas separate them; every name is required.
+fn split_prereq(text: &str) -> Vec<String> {
+    text.split(|c: char| c == ',' || c.is_whitespace()).filter(|t| !t.is_empty()).map(str::to_string).collect()
+}
+
+/// True when there is no prerequisite, or one whole tag has fired.
+fn prereqs_ready(groups: &[Vec<String>], fired: impl Fn(&str) -> bool) -> bool {
+    groups.is_empty() || groups.iter().any(|g| g.iter().all(|p| fired(p)))
+}
 
 /// One reward of an event.
 #[derive(Debug, Clone, PartialEq)]
@@ -33,8 +44,8 @@ pub struct PlotEvent {
     pub kind: String,
     /// `Event_Param1..`.
     pub params: Vec<String>,
-    /// `Prereq` event names.
-    pub prereqs: Vec<String>,
+    /// `Prereq` groups. Any group may be met; every name inside a group must have fired.
+    pub prereqs: Vec<Vec<String>>,
     /// Rewards in file order.
     pub rewards: Vec<Reward>,
     /// `Perpetual`: the event can fire again after firing.
@@ -89,7 +100,12 @@ impl Plot {
             for c in &e.children {
                 let text = c.text_trimmed().to_string();
                 match c.name.as_str() {
-                    "prereq" => ev.prereqs.push(text),
+                    "prereq" => {
+                        let names = split_prereq(&text);
+                        if !names.is_empty() {
+                            ev.prereqs.push(names);
+                        }
+                    }
                     "reward_type" => ev.rewards.push(Reward {
                         kind: text.to_ascii_uppercase(),
                         params: Vec::new(),
@@ -375,10 +391,8 @@ impl StoryEngine {
             {
                 let r = &mut self.plots[pi];
                 if r.states[ei] == State::Inactive {
-                    let ready = r.plot.events[ei].prereqs.iter().all(|p| {
-                        r.by_name
-                            .get(&p.to_ascii_lowercase())
-                            .is_some_and(|&i| r.states[i] == State::Fired || r.done[i])
+                    let ready = prereqs_ready(&r.plot.events[ei].prereqs, |p| {
+                        r.by_name.get(&p.to_ascii_lowercase()).is_some_and(|&i| r.states[i] == State::Fired || r.done[i])
                     });
                     if ready {
                         r.states[ei] = State::Active(now);
@@ -475,7 +489,7 @@ impl StoryEngine {
         while i < set.len() {
             let name = r.plot.events[set[i]].name.to_ascii_lowercase();
             for (ei, e) in r.plot.events.iter().enumerate() {
-                if !set.contains(&ei) && e.prereqs.iter().any(|p| p.to_ascii_lowercase() == name) {
+                if !set.contains(&ei) && e.prereqs.iter().flatten().any(|p| p.eq_ignore_ascii_case(&name)) {
                     set.push(ei);
                 }
             }
@@ -701,5 +715,27 @@ mod tests {
         assert!(fired.iter().any(|e| e == "Spawn_Tyber"), "the hero spawn fires after the story start: {fired:?}");
         assert!(fired.iter().any(|e| e == "Grant"), "a gated trigger fires whatever its reward is: {fired:?}");
         assert!(!fired.iter().any(|e| e == "Waits"), "a STORY_TRIGGER with no prerequisite waits to be triggered by name");
+    }
+
+    #[test]
+    fn prereq_tags_are_alternatives_and_names_in_one_tag_are_all_required() {
+        let p = plot(
+            r#"<Story>
+            <Event Name="Win"><Event_Type>STORY_ELAPSED</Event_Type><Event_Param1>0</Event_Param1></Event>
+            <Event Name="Lose"><Event_Type>STORY_ELAPSED</Event_Type><Event_Param1>100</Event_Param1></Event>
+            <Event Name="Reset"><Event_Type>STORY_ELAPSED</Event_Type><Event_Param1>1</Event_Param1>
+              <Prereq>Win</Prereq><Prereq>Lose</Prereq></Event>
+            <Event Name="Both"><Event_Type>STORY_ELAPSED</Event_Type><Event_Param1>1</Event_Param1>
+              <Prereq>Win, Lose</Prereq></Event>
+            </Story>"#,
+        );
+        let mut s = StoryEngine::default();
+        s.activate(p, 0, None, 0.0);
+        assert_eq!(s.tick(0.0).iter().map(|f| f.event.as_str()).collect::<Vec<_>>(), vec!["Win"]);
+        let at_one: Vec<_> = s.tick(1.0).into_iter().map(|f| f.event).collect();
+        assert!(at_one.iter().any(|e| e == "Reset"), "one of two Prereq tags is enough: {at_one:?}");
+        assert!(!at_one.iter().any(|e| e == "Both"), "Win, Lose in one tag needs both: {at_one:?}");
+        assert!(s.tick(100.0).iter().any(|f| f.event == "Lose"));
+        assert!(s.tick(101.0).iter().any(|f| f.event == "Both"), "both names of the one tag have fired");
     }
 }

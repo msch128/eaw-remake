@@ -57,6 +57,34 @@ fn active_plots(fs: &GameFs) -> Vec<Plot> {
     plots
 }
 
+#[test]
+fn a_win_alone_resets_the_executor_damage_branch() {
+    let Some(fs) = fs() else { return };
+    let bytes = fs.read("Xml/Story_SSD_Executor_Damage.xml").expect("plot");
+    let executor = Plot::parse("Story_SSD_Executor_Damage.xml", &bytes, &mut Vec::new()).expect("parse");
+    let mut or_tags = 0usize;
+    let mut and_names = 0usize;
+    for plot in active_plots(&fs) {
+        for event in &plot.events {
+            if event.prereqs.len() > 1 {
+                or_tags += 1;
+            }
+            if event.prereqs.iter().any(|g| g.len() > 1) {
+                and_names += 1;
+            }
+        }
+    }
+    assert_eq!(or_tags, 8, "five SSD reset checks and three filter clicks use several Prereq tags");
+    assert_eq!(and_names, 0, "no live Web Way tag lists more than one name");
+    let mut s = StoryEngine::default();
+    s.activate(executor, 0, Some("Empire".into()), 0.0);
+    s.tick(0.0);
+    let win = s.notify_battle("STORY_WIN_BATTLES", "Empire", 1.0);
+    assert!(win.iter().any(|f| f.event == "STORY_WIN_BATTLES_Check"), "the win counter fires");
+    let later: Vec<_> = s.tick(2.0).into_iter().map(|f| f.event).collect();
+    assert!(later.iter().any(|e| e == "Check_Executor_Reset_Branch"), "one battle is enough to reset: {later:?}");
+}
+
 fn is_trigger(plot: &Plot, name: &str) -> bool {
     plot.events
         .iter()
@@ -113,16 +141,17 @@ fn note(
             .iter()
             .find(|e| e.name == fired.event)
             .expect("event");
-        for prereq in &event.prereqs {
-            let met = seen
-                .iter()
-                .any(|(f, n)| f == &fired.file && n.eq_ignore_ascii_case(prereq));
-            if !met {
-                early.push(format!(
-                    "{} needs {prereq} before {}",
-                    fired.file, fired.event
-                ));
-            }
+        let met = event.prereqs.is_empty()
+            || event.prereqs.iter().any(|group| {
+                group.iter().all(|prereq| {
+                    seen.iter().any(|(f, n)| f == &fired.file && n.eq_ignore_ascii_case(prereq))
+                })
+            });
+        if !met {
+            early.push(format!(
+                "{} fired {} before any complete Prereq tag",
+                fired.file, fired.event
+            ));
         }
         seen.insert(key(&fired.file, &fired.event));
     }
