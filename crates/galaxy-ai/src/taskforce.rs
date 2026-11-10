@@ -6,6 +6,8 @@
 //! * `Produce_Force(stage)` composes the force from the requirements (see [`crate::requirements`]), takes
 //!   matching idle ships from the free store, queues the missing ones at planets that can build them and
 //!   gathers everything at the stage planet. Structure forces queue structures at the target / stage.
+//!   `Produce_Force(stage, true)` (the library's `SynchronizedAssemble`) also brings the gathered force to the plan's target, see
+//!   [`SYNC_ASSEMBLE_CONVERGES_ON_TARGET`].
 //! * `Move_To(planet)` sends the assembled fleet and finishes on arrival (or when it is destroyed).
 //! * `Invade()` finishes when the planet changed hands. Ground forces are not simulated: they are
 //!   instantly "assembled" and `Launch_Units` / `Land_Units` / `Form_Units` succeed at once.
@@ -31,6 +33,14 @@ const GARRISON_REFRESH: f64 = 5.0;
 const SAVING_HOLD: f64 = 60.0;
 /// Share of the account cap (20 weeks of income) up to which a fully heavy faction saves for one ship; dearer ones are not waited for (estimate).
 const SHIP_SAVING_SHARE: f64 = 0.4;
+/// What the second argument of `Produce_Force(stage, true)` does (**estimate**; the data never says, the engine is closed). `PGTaskForce.lua` passes it only in
+/// `SynchronizedAssemble`, and every plan that assembles this way acts on its target right afterwards without a `Move_To`: the Remake's
+/// `Conquer_To_Unite_Territory_Ground.lua` tests `Planet_Has_Friendly_Space_Force_In_Orbit` on the target and calls `Invade`; the original game's
+/// `LiftBlockadePlan.lua` ("converge all task force units upon the target simultaneously") and `ContrastToReconnect.lua` ("SpaceForce converged on
+/// target") do the same. All three goals have `Reachability` `Single_Hop_Disconnected`. Plans that assemble without the flag (`AssembleForce`,
+/// `BuildForce`) call `Move_To(Target)` themselves. So with the flag the force gathers at the stage as usual and then travels to the target as one
+/// fleet; the command finishes when it is in orbit there or destroyed. See docs/RULES.md 1.12.
+pub const SYNC_ASSEMBLE_CONVERGES_ON_TARGET: bool = true;
 /// Ships of one task force when the plan sets no `MaximumTotalSize` (none of the Remake attack plans does; an estimate that keeps one fleet inside the population cap of a battle).
 const DEFAULT_MAX_FORCE: u32 = 60;
 
@@ -118,6 +128,8 @@ struct UnitJob {
     block: u64,
     tf: u64,
     stage: PlanetId,
+    /// Where the gathered force goes before the command finishes (`Produce_Force(stage, true)`, see [`SYNC_ASSEMBLE_CONVERGES_ON_TARGET`]).
+    converge: Option<PlanetId>,
     wanted: Vec<String>,
     pending: Vec<Pending>,
     deadline: f64,
@@ -159,6 +171,8 @@ pub struct TaskForceStats {
     pub moves: u32,
     /// Pincer attacks whose forces left together.
     pub pincers: u32,
+    /// Forces a synchronized assemble sent on to the plan's target (see [`SYNC_ASSEMBLE_CONVERGES_ON_TARGET`]).
+    pub converged: u32,
     /// Moves that arrived.
     pub arrivals: u32,
     /// Forces wiped out.
@@ -577,7 +591,8 @@ impl TaskForces {
             "Produce_Force" => {
                 let block = self.new_block();
                 let stage_arg = obj_planet(sim, args.first());
-                self.start_produce(sim, snap, rng, tf_id, block, stage_arg, now);
+                let sync = SYNC_ASSEMBLE_CONVERGES_ON_TARGET && matches!(args.get(1), Some(HostValue::Bool(true)));
+                self.start_produce(sim, snap, rng, tf_id, block, stage_arg, sync, now);
                 HostValue::Block(block)
             }
             "Move_To" => {
@@ -985,7 +1000,7 @@ impl TaskForces {
     // ---- production --------------------------------------------------------------------------------------
 
     #[allow(clippy::too_many_arguments)]
-    fn start_produce(&mut self, sim: &mut dyn AiSim, snap: &Snapshot, rng: &mut u64, tf_id: u64, block: u64, stage_arg: Option<PlanetId>, now: f64) {
+    fn start_produce(&mut self, sim: &mut dyn AiSim, snap: &Snapshot, rng: &mut u64, tf_id: u64, block: u64, stage_arg: Option<PlanetId>, sync: bool, now: f64) {
         let Some(t) = self.forces.get(&tf_id) else { return self.finish(block, false) };
         match t.kind {
             ForceKind::Ground => self.finish(block, true),
@@ -1024,6 +1039,7 @@ impl TaskForces {
                     block,
                     tf: tf_id,
                     stage,
+                    converge: self.forces.get(&tf_id).and_then(|t| t.target).filter(|_| sync),
                     wanted,
                     pending: Vec::new(),
                     deadline: now + 1200.0,
@@ -1459,10 +1475,22 @@ impl TaskForces {
         // 4. Done when nothing is wanted/pending and all pieces are merged.
         let t = self.forces.get(&j.tf)?;
         if j.wanted.is_empty() && j.pending.is_empty() && t.pieces.is_empty() {
-            if t.fleet.is_some() {
-                self.finish(j.block, true);
-            } else {
-                self.finish(j.block, false);
+            match (t.fleet, j.converge) {
+                // Synchronized assemble: the gathered force goes on to the target as one fleet, and the command ends there.
+                (Some(_), Some(to)) => {
+                    if self.start_move(sim, j.tf, to) {
+                        self.stats.converged += 1;
+                        if let Some(t) = self.forces.get_mut(&j.tf) {
+                            t.worked = true;
+                        }
+                        self.jobs.push(Job::Move { block: j.block, tf: j.tf, to, started: now, issued: now, retries: 0 });
+                    } else {
+                        self.failure_detail.entry(plan).or_insert_with(|| "move order refused by the sim".to_string());
+                        self.finish(j.block, false);
+                    }
+                }
+                (Some(_), None) => self.finish(j.block, true),
+                (None, _) => self.finish(j.block, false),
             }
             return None;
         }

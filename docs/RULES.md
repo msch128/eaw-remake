@@ -324,6 +324,15 @@ build-menu filters, not a start mode. The mode is this project's own:
   Star, so the AI keeps heroes at home.
 * Estimate: AI tech research. The Remake has no galactic research plan; with no human player the engine queues levels
   on a timer.
+* Estimate (`SYNC_ASSEMBLE_CONVERGES_ON_TARGET`): `Produce_Force(stage, true)` brings the force to the plan's target.
+  The second argument is undocumented; `PGTaskForce.lua` passes it only in `SynchronizedAssemble`. Sources: the
+  Remake's `Conquer_To_Unite_Territory_Ground.lua` tests `Planet_Has_Friendly_Space_Force_In_Orbit` on the target and
+  calls `Invade` right after it, with no `Move_To`; the original game's `LiftBlockadePlan.lua` ("converge all task
+  force units upon the target simultaneously") and `ContrastToReconnect.lua` ("SpaceForce converged on target") do the
+  same, and their goals share the `Reachability` `Single_Hop_Disconnected` with the Remake's unite goal. Plans that
+  assemble without the flag (`AssembleForce`, `BuildForce`) call `Move_To(Target)` themselves. Here the force gathers
+  at the stage as before, then travels to the target as one fleet; the command ends when it is in orbit there or
+  destroyed. Not known: whether the original gathers at the stage first or lets every ship time its own jump.
 * Data: AI map hints come from the one file a faction's campaign `Markup_Filename` names (`Empire, RemakeHints`). The GC factions name `RemakeHints.xml`: 17 chokepoint planets, 7 sectors at 1.0, 7 systems at 0.75, 3 gas giants at 0.5. The other markup files (`ShipyardsOfKuatHints` Kuat `PriorityTarget` 7, Fondor 5, Corulag chokepoint 2) are not mixed in. A faction with no `Markup_Filename` reads no hints. Perceptual equations use `Hints.Chokepoint` and `Hints.PriorityTarget`.
 
 ## 1.13 Story ability grants
