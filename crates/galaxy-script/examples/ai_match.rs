@@ -2,7 +2,7 @@
 //! galaxy-sim's built-in AI).
 //!
 //! ```text
-//! ai_match [weeks] [campaign] [stub] [human=<faction>]
+//! ai_match [weeks] [campaign] [stub] [human=<faction>] [seed=<n>]
 //! ```
 
 use std::collections::BTreeMap;
@@ -22,6 +22,7 @@ fn main() {
         .map_or("GC_Full_Web_Way_Rebel", String::as_str);
     let stub = args.iter().any(|a| a == "stub");
     let human = args.iter().find_map(|a| a.strip_prefix("human=")).unwrap_or("none").to_string();
+    let seed: u64 = args.iter().find_map(|a| a.strip_prefix("seed=")).and_then(|s| s.parse().ok()).unwrap_or(SimConfig::default().seed);
 
     let install = GameInstall::detect().expect("game install not found");
     let fs: Arc<dyn FileSource> = Arc::new(GameFs::for_mod(&install, Some(&std::env::var("MOD").unwrap_or_else(|_| "1770851727".to_owned()))).expect("cannot open game files"));
@@ -33,7 +34,7 @@ fn main() {
         fs,
         data,
         &campaign,
-        SimConfig { victory_enabled: false, ..SimConfig::default() },
+        SimConfig { victory_enabled: false, seed, ..SimConfig::default() },
         ScriptedConfig {
             remake_ai: !stub,
             human: Some(human),
@@ -78,6 +79,10 @@ fn main() {
     let mut captures: BTreeMap<String, u32> = BTreeMap::new();
     let mut battles = 0;
     let mut enemy_caps = 0u32;
+    // Per faction: planets at weeks 0 / 10 / 20 / end, and battles it started as the attacker (a fleet of its own at a planet it does not defend).
+    let planets_now = |sim: &ScriptedSim| sim.with_sim(|s| s.galaxy().factions.iter().map(|f| f.planets_owned).collect::<Vec<u32>>());
+    let mut planet_marks: Vec<Vec<u32>> = vec![planets_now(&sim)];
+    let mut attacks = vec![0u32; names.len()];
     while weeks_done < weeks {
         let r = sim.step(1.0);
         for e in &r.sim_events {
@@ -89,6 +94,9 @@ fn main() {
                     last = t;
                     if week % 10 == 0 {
                         summary(&sim, &format!("week {week}"));
+                        if *week == 10 || *week == 20 {
+                            planet_marks.push(planets_now(&sim));
+                        }
                     }
                 }
                 Event::PlanetCaptured { new_owner, old_owner, .. } => {
@@ -96,12 +104,30 @@ fn main() {
                     enemy_caps += u32::from(old_owner.is_some_and(|o| o != 99 && names[o as usize] != "Pirates"));
                 }
                 Event::BattleResolved { .. } => battles += 1,
+                Event::BattlePending(b) => {
+                    let owners: std::collections::BTreeSet<u32> = sim.with_sim(|s| b.fleets.iter().filter_map(|f| s.galaxy().fleets.get(f)).map(|f| f.owner).filter(|o| Some(*o) != b.defender).collect());
+                    for o in owners {
+                        attacks[o as usize] += 1;
+                    }
+                }
                 _ => {}
             }
         }
     }
     summary(&sim, "final");
     println!("captures from non-pirate owners: {enemy_caps}");
+    planet_marks.push(planets_now(&sim));
+    println!("\n| Faction | Planets 0/10/20/end | Credits | Tech | Ships | Structs | Earned | Spent | Attacks |\n|---|---|---|---|---|---|---|---|---|");
+    sim.with_sim(|s| {
+        for (i, n) in names.iter().enumerate() {
+            let f = &s.galaxy().factions[i];
+            if planet_marks[0][i] == 0 && f.planets_owned == 0 {
+                continue;
+            }
+            let marks: Vec<String> = planet_marks.iter().map(|m| m[i].to_string()).collect();
+            println!("| {n} | {} | {:.0} | {} | {} | {} | {:.0} | {:.0} | {} |", marks.join("/"), f.credits, f.tech, f.stats.ships_built, f.stats.structures_built, f.stats.credits_earned, f.stats.credits_spent, attacks[i]);
+        }
+    });
     println!("battles {battles}, captures by faction {captures:?}");
 
     let n = per_week.len().max(1) as f64;
