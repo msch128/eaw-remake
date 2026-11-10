@@ -224,6 +224,7 @@ impl World {
                 build_time: r.num::<f32>("build_time_seconds").unwrap_or(0.0),
                 tech: i32_of("tech_level"),
                 gui_row: r.num::<i32>("gui_row").unwrap_or(1),
+                ground_side: crate::catalog::on_ground_tab(|t| r.flag(t).unwrap_or(false)),
                 population,
                 space_population: population,
                 req_starbase: i32_of("required_star_base_level"),

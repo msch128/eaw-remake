@@ -388,6 +388,9 @@ pub struct UnitType {
     /// `GUI_Row` of the build bar: 0 for hero and vessel upgrade items, 1 for everything else. The game orders the bar by this row, then by object load order
     /// (the catalog index).
     pub gui_row: i32,
+    /// True when the item is bought on the planet side of the production bar and waits in the ground queue: its build tab is `Build_Tab_Land_Units`
+    /// or `Build_Tab_Heroes` (structure upgrades sold as a `GroundCompany`, agents). Everything on `Build_Tab_Space_Units` is false.
+    pub ground_side: bool,
     /// Population used.
     pub population: i32,
     /// Population the unit counts in a space battle (`Space_Override_Population_Value`, else `population`).

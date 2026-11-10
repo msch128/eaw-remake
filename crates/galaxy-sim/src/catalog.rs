@@ -171,6 +171,13 @@ fn production_mods(subs: &[alamo_data::SubAbility]) -> Vec<ProductionMod> {
     out
 }
 
+/// True when an object's build tab is on the planet side of the production bar (`Build_Tab_Land_Units`, `Build_Tab_Special_Structures`,
+/// `Build_Tab_Heroes`) and not on the space side (`Build_Tab_Space_Units`, `Build_Tab_Space_Station`). `tab` answers one lower-case tag.
+pub(crate) fn on_ground_tab(tab: impl Fn(&str) -> bool) -> bool {
+    let space = tab("build_tab_space_units") || tab("build_tab_space_station");
+    !space && (tab("build_tab_land_units") || tab("build_tab_special_structures") || tab("build_tab_heroes"))
+}
+
 fn unit_from_def(def: &SpaceUnitDef, combat: CombatStats, objects: &alamo_data::GameObjects) -> UnitType {
     let role = match def.name.strip_prefix("Research_").or_else(|| def.name.strip_prefix("RESEARCH_")) {
         Some(target) if def.hardpoints.is_empty() && def.space_model.is_none() => UnitRole::Research(target.to_string()),
@@ -190,6 +197,7 @@ fn unit_from_def(def: &SpaceUnitDef, combat: CombatStats, objects: &alamo_data::
         build_time: def.build_time,
         tech: def.tech_level,
         gui_row: def.fields.get("gui_row").and_then(|v| v.trim().parse().ok()).unwrap_or(1),
+        ground_side: on_ground_tab(yes),
         population: def.population_value,
         space_population: def.space_population.unwrap_or(def.population_value),
         req_starbase: def.required_star_base_level,
@@ -746,6 +754,7 @@ impl World {
                         build_time: r.num::<f32>("build_time_seconds").unwrap_or(0.0),
                         tech: r.num::<i32>("tech_level").unwrap_or(0),
                         gui_row: r.num::<i32>("gui_row").unwrap_or(1),
+                        ground_side: on_ground_tab(|t| r.flag(t).unwrap_or(false)),
                         population: 0,
                         space_population: 0,
                         req_starbase: r.num::<i32>("required_star_base_level").unwrap_or(0),

@@ -65,6 +65,31 @@ every owned planet, the planet's `Additional_Population_Capacity`, its star base
   structures (lane 1), star base and tech upgrades (lane 2). Estimate: cost is paid when queued (the real game
   charges progressively). Structure swaps share the ship queue: the structure lane only advances a non-structure
   when it is the first item, so an upgrade queued behind a real structure would never finish.
+* Sides of the production bar (`World::on_ground_side`). Data: the build tab of an object says on which side it is bought.
+  `Build_Tab_Space_Units` and `Build_Tab_Space_Station` are the space side (`b_space_tab`, queue slots `queue00..04`,
+  tooltip `TEXT_TOOLTIP_QUEUE_SPACE`, `Left_Queue_Tint`); `Build_Tab_Land_Units`, `Build_Tab_Special_Structures` and
+  `Build_Tab_Heroes` are the planet side (`b_planet_tab`, `queue05..09`, `TEXT_TOOLTIP_QUEUE_GROUND`,
+  `Right_Queue_Tint`). The `Behavior` of the objects agrees: `DUMMY_STARSHIP`, `DUMMY_SPACE_FIGHTER_SQUADRON`,
+  `DUMMY_STAR_BASE` and `DUMMY_ORBITAL_STRUCTURE` on the space side, `DUMMY_GROUND_COMPANY` and
+  `DUMMY_GROUND_STRUCTURE` on the planet side. No buildable object of the Remake has tabs of both sides
+  (`galaxy-sim/tests/production_queues.rs`; `galaxy-sim/examples/audit_queues.rs` prints the list).
+
+  | Build item | Object in the data | Side |
+  |---|---|---|
+  | Ship, hero ship, research item | `SpaceUnit` / `UniqueUnit`, `Build_Tab_Space_Units` | space |
+  | Squadron | `Squadron`, `Build_Tab_Space_Units` | space |
+  | Hero and ship upgrade, phase repair, purchase without a ship (`Rebel_Shield_Upgrade`) | `SpaceUnit` / `UniqueUnit`, `Build_Tab_Space_Units`, `DUMMY_STARSHIP` | space |
+  | Orbital structure upgrade and downgrade (`UPGRADE_*_GOLAN_*_DUMMY`) | `SpaceUnit`, `Build_Tab_Space_Units` | space |
+  | Tech level (`E_Tech-2` ...) | `UpgradeObject`, a variant of the space unit `Upgrade_Dummy_Default`, `Build_Tab_Space_Units` | space |
+  | Star base level | `StarBase`, `Build_Tab_Space_Station` | space |
+  | Orbital structure (shipyard, Golan, trade hub, research institute ...) | `SpecialStructure`, `Build_Tab_Space_Station`, `Base_Position` Orbital | space |
+  | Ground structure (outpost, base core, mine, taxation agency ...) | `SpecialStructure`, `Build_Tab_Special_Structures`, `Base_Position` In_Base | ground |
+  | Ground structure upgrade (`UPGRADE_MINING_COMPANY_*` ...) | `GroundCompany`, `Build_Tab_Land_Units` | ground |
+  | Agent (smuggler, underboss, field agent, probe droid) | `HeroCompany`, `Build_Tab_Heroes` | ground |
+
+  Estimate: a tech level the data has no object for (the vanilla `*_Level_N_Tech_Upgrade` chain, the generic levels of
+  the minor factions) is on the space side like the Remake's; a star base level without a tab (skirmish and tutorial
+  bases) is on the space side. Ground companies and ground heroes are not part of this project.
 * Time = `Build_Time_Seconds` (data) x `build_time_scale`. `Production_Speed_Mod_Base_Vs_Tech_*` are all 1.0 in the
   Remake, so a higher star base level does not speed production up.
 * A ship may be queued when all of these hold (`World::check_build_unit`, data tags): `Affiliation` contains the

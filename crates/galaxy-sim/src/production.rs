@@ -77,11 +77,22 @@ impl World {
         }
     }
 
-    /// Queued items on one side of the production bar: ground structures on the ground side, everything else (ships, orbital structures, star base and
-    /// tech upgrades) on the space side. The bar has `max_queue_len` slots per side, so that is also where an order stops being accepted.
+    /// True when `kind` is built on the ground side of the production bar, false for the space side. The side is the build tab of the object in
+    /// the data: `Build_Tab_Land_Units`, `Build_Tab_Special_Structures` and `Build_Tab_Heroes` are the planet tab, `Build_Tab_Space_Units` and
+    /// `Build_Tab_Space_Station` the space tab (docs/RULES.md, "Production"). Star base levels are on the space station tab. Tech levels are space
+    /// units in the Remake data; a level the data has no object for goes the same way (estimate).
+    pub fn on_ground_side(&self, kind: &ProductionKind) -> bool {
+        match *kind {
+            ProductionKind::Unit(u) => self.units.get(u as usize).is_some_and(|ut| ut.ground_side),
+            ProductionKind::Structure(s) => self.structures.get(s as usize).is_some_and(|st| !st.orbital),
+            ProductionKind::Starbase(_) | ProductionKind::Tech(_) => false,
+        }
+    }
+
+    /// Queued items on one side of the production bar (see [`World::on_ground_side`]). The bar has `max_queue_len` slots per side, so that is also
+    /// where an order for a ship or a structure stops being accepted.
     pub fn queued_on_side(&self, ps: &PlanetState, ground: bool) -> usize {
-        let is_ground = |item: &&ProductionItem| matches!(item.kind, ProductionKind::Structure(s) if self.structures.get(s as usize).is_some_and(|st| !st.orbital));
-        ps.queues.iter().flatten().filter(|i| is_ground(i) == ground).count()
+        ps.queues.iter().flatten().filter(|i| self.on_ground_side(&i.kind) == ground).count()
     }
 
     /// Credits a sold structure pays back: half its build cost plus 1. The Remake script `Delete_Building` (libUpgradeFunctions.lua) gives
@@ -260,7 +271,7 @@ impl World {
             }
         }
         // Items the bar hides (tech, locked, wrong planet) are refused as such even when the queue is full.
-        if self.queued_on_side(ps, false) >= self.config.max_queue_len {
+        if self.queued_on_side(ps, ut.ground_side) >= self.config.max_queue_len {
             return Err(CommandError::NoSlot);
         }
         if self.starbase_level(galaxy, planet) < ut.req_starbase {
