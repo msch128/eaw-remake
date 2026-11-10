@@ -57,7 +57,7 @@ pub struct SaveHeader {
 /// State at the time of saving, checked after loading, and a summary for save-game lists.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Checkpoint {
-    /// `Galaxy::state_hash`.
+    /// `Galaxy::state_hash` as the writing build computed it (see `galaxy_sim::HashEra`).
     pub galaxy_hash: u64,
     /// Galactic time in seconds.
     pub time: f64,
@@ -283,6 +283,14 @@ impl ScriptedSim {
         }
         setup(&mut sim);
         let state = file.state;
+        // The checkpoint belongs to the state as the file holds it, hashed the way the writing build hashed: a file from a build that hashed
+        // less still verifies, a file whose state was altered does not.
+        let saved = &state.sim.galaxy;
+        let era = saved.hash_era(file.checkpoint.galaxy_hash).filter(|_| saved.time.to_bits() == file.checkpoint.time.to_bits());
+        let Some(era) = era else {
+            let found = Checkpoint { galaxy_hash: saved.state_hash(), time: saved.time, week: saved.week(), factions: Vec::new() };
+            return Err(SaveError::Corrupt { saved: Box::new(file.checkpoint), restored: Box::new(found) });
+        };
         {
             let mut i = sim.inner.borrow_mut();
             i.sim.restore(state.sim).map_err(SaveError::Setup)?;
@@ -295,8 +303,9 @@ impl ScriptedSim {
         let warnings = sim.runtime.restore(&state.runtime);
         sim.load_warnings.extend(warnings);
         sim.script_clock = state.script_clock;
+        // Putting the state into the match must not have changed it (in the terms of the build that wrote it).
         let restored = sim.checkpoint();
-        if restored.galaxy_hash != file.checkpoint.galaxy_hash || restored.time.to_bits() != file.checkpoint.time.to_bits() {
+        if sim.with_sim(|s| s.galaxy().state_hash_of(era)) != file.checkpoint.galaxy_hash || restored.time.to_bits() != file.checkpoint.time.to_bits() {
             return Err(SaveError::Corrupt { saved: Box::new(file.checkpoint), restored: Box::new(restored) });
         }
         progress(LoadProgress { done: 1, total: 1, week });

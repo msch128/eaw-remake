@@ -129,8 +129,10 @@ pub struct PlanetState {
     #[serde(default)]
     pub siphon: Option<crate::agents::ActiveSiphon>,
     /// Current income swing of a gambling hero orbiting the planet (see `IncomeGamble`).
+    #[serde(default)]
     pub hero_gamble: f32,
     /// Game time of the next gambling evaluation for heroes.
+    #[serde(default)]
     pub hero_gamble_at: f64,
     /// Game time the last space battle here was decided (`Time_Since_Space_Conflict`); `None` before the first one.
     #[serde(default)]
@@ -684,14 +686,16 @@ impl Galaxy {
     }
 
     pub(crate) fn new(world: &World, seed: u64) -> Self {
+        let factions = world.factions.iter().map(|f| FactionState { credits: f.start_credits, tech: f.start_tech, ..FactionState::default() }).collect();
+        Self::sized(world.planets.len(), factions, seed)
+    }
+
+    /// An empty state with `planets` planets and the given factions.
+    pub(crate) fn sized(planets: usize, factions: Vec<FactionState>, seed: u64) -> Self {
         Galaxy {
             time: 0.0,
-            planets: vec![PlanetState::default(); world.planets.len()],
-            factions: world
-                .factions
-                .iter()
-                .map(|f| FactionState { credits: f.start_credits, tech: f.start_tech, ..FactionState::default() })
-                .collect(),
+            planets: vec![PlanetState::default(); planets],
+            factions,
             fleets: BTreeMap::new(),
             battles: Vec::new(),
             winner: None,
@@ -898,8 +902,22 @@ impl Galaxy {
         self.planets.iter().enumerate().filter(move |(_, p)| p.owner == Some(faction)).map(|(i, _)| i as PlanetId)
     }
 
-    /// Stable 64-bit hash of the whole state, for determinism checks.
+    /// Stable 64-bit hash of the whole state, for determinism checks and the checkpoint of a save.
+    ///
+    /// A save stores this value and a load compares it, so what goes into it is part of the save format: a new field is either left out, hashed
+    /// only when it differs from its default (as the siphon is), or it starts a new [`HashEra`] so the saves of earlier builds still verify.
     pub fn state_hash(&self) -> u64 {
+        self.state_hash_of(HashEra::CURRENT)
+    }
+
+    /// The era whose hash of this state is `hash`: tells whether a saved checkpoint belongs to this state and which generation of builds wrote
+    /// it. The newest era is tried first.
+    pub fn hash_era(&self, hash: u64) -> Option<HashEra> {
+        HashEra::ALL.into_iter().find(|&era| self.state_hash_of(era) == hash)
+    }
+
+    /// [`Galaxy::state_hash`] as the builds of `era` computed it.
+    pub fn state_hash_of(&self, era: HashEra) -> u64 {
         use std::hash::{Hash, Hasher};
         let mut h = std::collections::hash_map::DefaultHasher::new();
         self.time.to_bits().hash(&mut h);
@@ -909,7 +927,9 @@ impl Galaxy {
             p.structures.hash(&mut h);
             p.destroyed.hash(&mut h);
             p.gamble.to_bits().hash(&mut h);
-            p.hero_gamble.to_bits().hash(&mut h);
+            if era >= HashEra::HeroGamble {
+                p.hero_gamble.to_bits().hash(&mut h);
+            }
             // Only when present, so the checkpoints of older saves stay valid.
             if let Some(s) = &p.siphon {
                 (s.by, s.agent, s.share.to_bits(), s.cycles_left, s.cycle_end.to_bits()).hash(&mut h);
@@ -943,7 +963,9 @@ impl Galaxy {
                 FleetLocation::Moving { to, progress, .. } => (1u8, *to, progress.to_bits()).hash(&mut h),
             }
             self.hyperspace.get(id).map(|h| h.0).hash(&mut h);
-            fl.slot.hash(&mut h);
+            if era >= HashEra::FleetSlots {
+                fl.slot.hash(&mut h);
+            }
         }
         (self.cheated, self.ai_paused).hash(&mut h);
         for r in &self.spy_reports {
@@ -951,6 +973,26 @@ impl Galaxy {
         }
         h.finish()
     }
+}
+
+/// Generations of [`Galaxy::state_hash`]. Every build hashes the state it knows and a save keeps that hash as its checkpoint, so a load has to
+/// compute it the way the writing build did. Ordered oldest first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum HashEra {
+    /// The builds before fleets had slots (October 2026).
+    Unslotted,
+    /// Adds the fleet slot.
+    FleetSlots,
+    /// Adds the hero gambling swing of every planet. The siphon and the spy reports came later and are hashed only when present, so they
+    /// need no era of their own.
+    HeroGamble,
+}
+
+impl HashEra {
+    /// What this build writes.
+    pub const CURRENT: HashEra = HashEra::HeroGamble;
+    /// Every era, newest first.
+    pub const ALL: [HashEra; 3] = [HashEra::HeroGamble, HashEra::FleetSlots, HashEra::Unslotted];
 }
 
 /// Per-faction difficulty multipliers (`DifficultyAdjustments.xml`, see `alamo_data::DifficultyAdjustment`). Credits
@@ -997,5 +1039,88 @@ mod tests {
         v.as_object_mut().unwrap().remove("powers");
         let fs: FactionState = serde_json::from_value(v).unwrap();
         assert!(fs.powers.is_empty());
+    }
+
+    /// A planet as the builds before hero gambling wrote it.
+    #[test]
+    fn an_old_planet_state_without_hero_gambling_loads_with_zero() {
+        let mut v = serde_json::to_value(PlanetState::default()).unwrap();
+        for field in ["hero_gamble", "hero_gamble_at", "siphon", "last_space_battle"] {
+            assert!(v.as_object_mut().unwrap().remove(field).is_some(), "{field} is not a field any more");
+        }
+        let p: PlanetState = serde_json::from_value(v).expect("the old field set still loads");
+        assert_eq!((p.hero_gamble, p.hero_gamble_at), (0.0, 0.0));
+    }
+
+    fn small_galaxy() -> Galaxy {
+        let mut g = Galaxy::sized(2, vec![FactionState::default(); 2], 9);
+        g.time = 61.0;
+        g.planets[0].owner = Some(1);
+        g.fleets.insert(3, Fleet { id: 3, owner: 1, units: BTreeMap::from([(7, 2)]), location: FleetLocation::AtPlanet(0), previous_planet: 0, slot: 2 });
+        g.sync_ships();
+        g
+    }
+
+    #[test]
+    fn the_checkpoint_of_this_build_is_the_newest_era() {
+        let g = small_galaxy();
+        assert_eq!(g.state_hash(), g.state_hash_of(HashEra::CURRENT));
+        assert_eq!(g.hash_era(g.state_hash()), Some(HashEra::CURRENT));
+        assert_eq!(HashEra::ALL[0], HashEra::CURRENT);
+    }
+
+    /// The checkpoint a build wrote is found again whatever was added to the hash later; a value no build wrote is refused.
+    #[test]
+    fn a_checkpoint_of_every_earlier_era_is_recognised() {
+        let g = small_galaxy();
+        let mut seen = std::collections::BTreeSet::new();
+        for era in HashEra::ALL {
+            let hash = g.state_hash_of(era);
+            assert_eq!(g.hash_era(hash), Some(era), "{era:?}");
+            assert!(seen.insert(hash), "{era:?} hashes like another era, so it tells nothing");
+        }
+        assert_eq!(g.hash_era(g.state_hash() ^ 1), None);
+    }
+
+    /// A state that differs only in what a later era added has the same checkpoint for the earlier builds.
+    #[test]
+    fn an_era_ignores_what_was_hashed_later() {
+        let (a, mut b) = (small_galaxy(), small_galaxy());
+        b.planets[1].hero_gamble = 0.25;
+        assert_ne!(a.state_hash(), b.state_hash());
+        assert_eq!(a.state_hash_of(HashEra::FleetSlots), b.state_hash_of(HashEra::FleetSlots));
+        b.fleets.get_mut(&3).unwrap().slot = 1;
+        assert_ne!(a.state_hash_of(HashEra::FleetSlots), b.state_hash_of(HashEra::FleetSlots));
+        assert_eq!(a.state_hash_of(HashEra::Unslotted), b.state_hash_of(HashEra::Unslotted));
+        b.cheated = true;
+        assert_ne!(a.state_hash_of(HashEra::Unslotted), b.state_hash_of(HashEra::Unslotted), "the cheat flags were hashed from the start");
+    }
+
+    /// `tests/data/galaxy_<date>.json`: one small made-up state, written with the field set the builds of that date had (the field lists are
+    /// those of real saves of the three dates). Each must still load, and the checkpoint its build would have stored must be found in its era.
+    /// The numbers are pinned: a change to how an old era hashes would lock out every save of that time.
+    #[test]
+    fn states_with_the_field_sets_of_earlier_builds_load_and_verify() {
+        let cases = [
+            (include_str!("../tests/data/galaxy_2026_10_09.json"), HashEra::Unslotted, 8582458208983620772_u64),
+            (include_str!("../tests/data/galaxy_2026_10_17.json"), HashEra::FleetSlots, 92986603445415557),
+            (include_str!("../tests/data/galaxy_2026_11_08.json"), HashEra::HeroGamble, 8936658278716100256),
+        ];
+        for (text, era, checkpoint) in cases {
+            let g: Galaxy = serde_json::from_str(text).unwrap_or_else(|e| panic!("{era:?}: {e}"));
+            assert_eq!(g.hash_era(checkpoint), Some(era));
+            assert_eq!((g.time, g.week(), g.fleets.len(), g.planets[0].structures.as_slice()), (1206.0, 20, 2, &[4, 4, 9][..]), "{era:?}");
+            assert_eq!(g.fleets[&3].units, BTreeMap::from([(7, 2), (11, 1)]), "{era:?}");
+            // What the build did not know yet starts empty.
+            assert_eq!((g.planets[0].hero_gamble, g.planets[0].siphon, g.planets[0].last_space_battle), (0.0, None, None), "{era:?}");
+            assert_eq!(g.fleets[&3].slot, if era == HashEra::Unslotted { 0 } else { 2 }, "{era:?}");
+        }
+    }
+
+    #[test]
+    fn a_damaged_old_state_matches_no_era() {
+        let mut g: Galaxy = serde_json::from_str(include_str!("../tests/data/galaxy_2026_10_17.json")).unwrap();
+        g.factions[1].credits += 1.0;
+        assert_eq!(g.hash_era(92986603445415557), None);
     }
 }

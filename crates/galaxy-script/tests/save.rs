@@ -5,7 +5,7 @@ use std::sync::Arc;
 use alamo_data::{GameData, load_galaxy};
 use alamo_fs::{FileSource, GameFs, GameInstall};
 use galaxy_script::{DifficultyTier, SaveError, SaveFile, ScriptedConfig, ScriptedSim};
-use galaxy_sim::{Command, Event, SimConfig};
+use galaxy_sim::{Command, Event, HashEra, SimConfig};
 
 struct Ctx {
     fs: Arc<dyn FileSource>,
@@ -102,13 +102,47 @@ fn bad_saves_are_rejected() {
     bad.header.fingerprint ^= 1;
     assert!(matches!(ScriptedSim::from_save(bad, c.fs.clone(), c.data.clone(), |_| {}), Err(SaveError::DataMismatch)));
 
-    // A state that does not fit the world is refused, not applied.
+    // A state that does not fit the world is refused, not applied: by its checkpoint, and with a matching checkpoint by its shape.
     let mut bad = file.clone();
     bad.state.sim.galaxy.planets.pop();
+    assert!(matches!(ScriptedSim::from_save(bad.clone(), c.fs.clone(), c.data.clone(), |_| {}), Err(SaveError::Corrupt { .. })));
+    bad.checkpoint.galaxy_hash = bad.state.sim.galaxy.state_hash();
     assert!(matches!(ScriptedSim::from_save(bad, c.fs.clone(), c.data.clone(), |_| {}), Err(SaveError::Setup(_))));
 
     file.header.campaign = "nope".into();
     assert!(matches!(ScriptedSim::from_save(file, c.fs.clone(), c.data.clone(), |_| {}), Err(SaveError::UnknownCampaign(_))));
+}
+
+/// A save of a build from before hero gambling: its planets have neither the gambling fields nor the later ones, and its checkpoint is the hash
+/// of that time (the fleet slot era). It loads, the missing values start at zero, and saved again it carries the checkpoint of this build.
+#[test]
+fn a_save_from_before_hero_gambling_loads_with_the_fields_at_their_defaults() {
+    let Some(c) = ctx() else { return };
+    let mut sim = new_sim(&c, ScriptedConfig { game_scoring: false, ..ai_config() });
+    weeks(&mut sim, 2);
+    let mut file = sim.to_save().unwrap();
+    // The old build had no swing to save.
+    for p in &mut file.state.sim.galaxy.planets {
+        (p.hero_gamble, p.hero_gamble_at) = (0.0, 0.0);
+    }
+    let old_hash = file.state.sim.galaxy.state_hash_of(HashEra::FleetSlots);
+    assert_ne!(old_hash, file.state.sim.galaxy.state_hash(), "the two eras hash differently, or the test shows nothing");
+    let mut v = serde_json::to_value(&file).unwrap();
+    for p in v["state"]["sim"]["galaxy"]["planets"].as_array_mut().unwrap() {
+        for field in ["hero_gamble", "hero_gamble_at", "siphon", "last_space_battle"] {
+            assert!(p.as_object_mut().unwrap().remove(field).is_some(), "{field}");
+        }
+    }
+    v["checkpoint"]["galaxy_hash"] = old_hash.into();
+    let old: SaveFile = serde_json::from_value(v.clone()).expect("the old field set parses");
+    let loaded = ScriptedSim::from_save(old, c.fs.clone(), c.data.clone(), |_| {}).expect("the old save loads");
+    assert_eq!(loaded.state().sim, file.state.sim);
+    assert_eq!(loaded.to_save().unwrap().checkpoint.galaxy_hash, file.state.sim.galaxy.state_hash());
+
+    // The same file with a state that is not the one its checkpoint was made of is still refused.
+    v["state"]["sim"]["galaxy"]["factions"][0]["credits"] = 1.0e9.into();
+    let tampered: SaveFile = serde_json::from_value(v).unwrap();
+    assert!(matches!(ScriptedSim::from_save(tampered, c.fs.clone(), c.data.clone(), |_| {}), Err(SaveError::Corrupt { .. })));
 }
 
 /// Files written while the game still had its working title say `space-peace-save`. They are the same format and still load.

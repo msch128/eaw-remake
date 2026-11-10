@@ -181,6 +181,12 @@ strategic layer at Normal difficulty. `save.rs` writes snapshot saves (sim state
 fingerprint); Lua coroutines cannot be serialised, so a loaded game restarts its scripts and AI plans and is not bit-identical to the original run.
 All player input goes through `ScriptedSim` so saves stay consistent.
 
+Saves stay loadable by later builds. A field added to a saved struct (`galaxy_sim::state`, `SimSnapshot`, `SimConfig`, `ScriptedConfig`,
+`alamo_lua::persist`, `galaxy_ai::AiMemory`) carries `#[serde(default)]`, so a file without it loads with the default. The checkpoint of a save
+is `Galaxy::state_hash`; a load compares it with the state as the file holds it, hashed the way the writing build hashed
+(`galaxy_sim::HashEra`). A new field is therefore left out of the hash, hashed only when it differs from its default, or it starts a new era.
+`crates/galaxy-sim/tests/data/galaxy_<date>.json` are small made-up states with the field sets of earlier builds; their checkpoints are pinned.
+
 ## alamo-render
 Responsibility: spawns original Alamo models in Bevy with an EaW-style look. Depends on `alamo-fs` and `alamo-model`.
 * `AlamoRenderPlugin::new(Arc<GameFs>)`; `AlamoModel { path, team_color, lod, bow_forward, unit, attached }` spawns bones, rigid and skinned meshes, proxies and hardpoints. Mesh, material and texture caches are shared (500 TIEs in six team colours are 18 draw calls). DDS stays block-compressed (BC1/2/3); TGA and PNG are decoded with mips. `preload` loads models and textures on worker threads.
