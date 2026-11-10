@@ -1929,7 +1929,7 @@ impl Battle {
         let faction = self.sides.get(v.side as usize).map_or("", |s| s.name.as_str());
         let granted = self.config.side_salvage.get(side as usize).into_iter().flatten();
         let carried = self.ships.iter().filter(|s| s.side == side && s.alive && !s.retreated).flat_map(|s| &self.catalog.ship(s.def).salvage);
-        let mut by_cat: std::collections::BTreeMap<u8, f32> = std::collections::BTreeMap::new();
+        let mut by_cat: std::collections::BTreeMap<i32, f32> = std::collections::BTreeMap::new();
         for m in granted.chain(carried).filter(|m| m.pays_for(faction)) {
             let e = by_cat.entry(m.stacking).or_insert(0.0);
             *e = e.max(m.share);
@@ -1952,7 +1952,7 @@ impl Battle {
     pub fn field_modifier(&self, side: u8, pick: fn(&FieldModDef) -> f32) -> f32 {
         let granted = self.config.side_field_mods.get(side as usize).into_iter().flatten();
         let carried = self.ships.iter().filter(|s| s.side == side && s.alive && !s.retreated).flat_map(|s| &self.catalog.ship(s.def).field_mods);
-        let mut by_cat: std::collections::BTreeMap<u8, f32> = std::collections::BTreeMap::new();
+        let mut by_cat: std::collections::BTreeMap<i32, f32> = std::collections::BTreeMap::new();
         for m in granted.chain(carried) {
             let v = pick(m);
             let e = by_cat.entry(m.stacking).or_insert(1.0);

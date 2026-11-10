@@ -536,13 +536,18 @@ pub struct BonusDef {
     pub classes: u16,
     /// Composite category masks from the same list (`Gunship`). A ship matches when its category mask contains one.
     pub composites: Vec<u32>,
-    /// `Stacking_Category`: bonuses of one category do not add up, the strongest applies.
-    pub stacking: u8,
+    /// `Stacking_Category`: bonuses of one category do not add up, the strongest applies. The integer the data gives (Durga is 616).
+    pub stacking: i32,
     /// `Applicable_Unit_Types`. A ship is boosted when its class is in `classes` or its type is listed here; with neither
     /// given, every ship of the side is.
     pub unit_types: Vec<String>,
     /// `Excluded_Unit_Types`: never boosted.
     pub excluded_types: Vec<String>,
+}
+
+/// `Stacking_Category` as the integer in the data. The percentage clamp (`-0.9`..=`10`) does not apply; Durga is 616.
+fn stacking_category(fields: &HashMap<String, String>) -> i32 {
+    fields.get("stacking_category").and_then(|v| alamo_data::xml::parse_num::<f32>(v)).unwrap_or(0.0) as i32
 }
 
 impl BonusDef {
@@ -564,7 +569,7 @@ impl BonusDef {
             speed: num("movement_speed_bonus_percentage"),
             classes,
             composites,
-            stacking: num("stacking_category") as u8,
+            stacking: stacking_category(&a.fields),
             unit_types: list("applicable_unit_types"),
             excluded_types: list("excluded_unit_types"),
         };
@@ -595,8 +600,8 @@ pub struct FieldModDef {
     pub fow_reveal: f32,
     /// `Stealth_Duration_Multiplier`: the side's timed cloaks last this much longer (`US_Cloaking_Generator_L1/L2` 1.25 / 1.5).
     pub stealth_duration: f32,
-    /// `Stacking_Category`: modifiers of one category do not multiply, the strongest applies.
-    pub stacking: u8,
+    /// `Stacking_Category`: modifiers of one category do not multiply, the strongest applies. The integer the data gives.
+    pub stacking: i32,
 }
 
 impl FieldModDef {
@@ -611,7 +616,7 @@ impl FieldModDef {
         (fow.is_some() || stealth.is_some()).then(|| FieldModDef {
             fow_reveal: fow.unwrap_or(1.0),
             stealth_duration: stealth.unwrap_or(1.0),
-            stacking: num("stacking_category").unwrap_or(0.0) as u8,
+            stacking: stacking_category(&a.fields),
         })
     }
 
@@ -629,8 +634,8 @@ pub struct SalvageDef {
     pub share: f32,
     /// `Target_Faction_Names`, lower-cased: only units of these factions pay (empty = every faction).
     pub factions: Vec<String>,
-    /// `Stacking_Category`: shares of one category do not add up, the largest applies.
-    pub stacking: u8,
+    /// `Stacking_Category`: shares of one category do not add up, the largest applies. The integer the data gives.
+    pub stacking: i32,
 }
 
 impl SalvageDef {
@@ -641,7 +646,7 @@ impl SalvageDef {
         }
         let num = |k: &str| a.fields.get(k).and_then(|v| alamo_data::xml::parse_num::<f32>(v)).unwrap_or(0.0);
         let factions = a.fields.get("target_faction_names").map(|v| alamo_data::xml::split_list(v).iter().map(|f| f.to_ascii_lowercase()).collect()).unwrap_or_default();
-        (num("bounty_percentage_amount") > 0.0).then(|| SalvageDef { share: num("bounty_percentage_amount"), factions, stacking: num("stacking_category").max(0.0) as u8 })
+        (num("bounty_percentage_amount") > 0.0).then(|| SalvageDef { share: num("bounty_percentage_amount"), factions, stacking: stacking_category(&a.fields) })
     }
 
     /// The salvage abilities of an object's `Abilities` (a unit or an `UpgradeObject`).
@@ -676,7 +681,7 @@ impl Bonus {
     /// strongest bonus per stat applies, categories add. `unit_mask` is the ship's `CategoryMask` (0 = the class's own bit).
     pub fn compute<'a>(name: &str, class: TargetClass, unit_mask: u32, auras: impl IntoIterator<Item = &'a BonusDef>) -> Self {
         let unit_mask = if unit_mask == 0 { class_enum_mask(class) } else { unit_mask };
-        let mut by_cat: std::collections::BTreeMap<u8, Vec<&BonusDef>> = std::collections::BTreeMap::new();
+        let mut by_cat: std::collections::BTreeMap<i32, Vec<&BonusDef>> = std::collections::BTreeMap::new();
         for b in auras.into_iter().filter(|b| b.applies_mask(name, class, unit_mask)) {
             by_cat.entry(b.stacking).or_default().push(b);
         }

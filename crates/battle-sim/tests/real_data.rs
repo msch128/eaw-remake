@@ -27,6 +27,23 @@ fn side(cat: &Catalog, name: &str, units: &[(&str, u32)], structures: &[&str], a
 }
 
 #[test]
+fn stacking_categories_above_ten_add() {
+    // `Stacking_Category` is the integer in the data. Ackbar is 16, Leia's corvette aura is 15, Durga is 616.
+    // A clamp at 10 would put Ackbar and Leia in one category, so a corvette would keep only the stronger speed bonus.
+    let Some((data, fs)) = load() else { return };
+    let cat = Catalog::build(&data, Some(&fs), &["Ackbar_Wingless", "Tantive_IV", "Durga_Destroyer", "CR-90_Corvette"]);
+    let stacking = |n: &str| cat.ship(cat.ship_id(n).unwrap()).bonuses.iter().map(|b| b.stacking).collect::<Vec<_>>();
+    assert_eq!(stacking("Ackbar_Wingless"), vec![16]);
+    assert_eq!(stacking("Tantive_IV"), vec![15]);
+    assert_eq!(stacking("Durga_Destroyer"), vec![616]);
+    let auras: Vec<_> = cat.ship(cat.ship_id("Ackbar_Wingless").unwrap()).bonuses.iter().chain(cat.ship(cat.ship_id("Tantive_IV").unwrap()).bonuses.iter()).collect();
+    let bonus = Bonus::compute("CR-90_Corvette", TargetClass::Corvette, 0, auras);
+    assert!((bonus.speed - 1.50).abs() < 1e-4, "0.40 + 0.10: {}", bonus.speed);
+    assert!((bonus.range - 0.80).abs() < 1e-4, "Ackbar -0.20 range: {}", bonus.range);
+    assert!((bonus.taken_shield - 1.0 / 1.40).abs() < 1e-4, "shield 0.30 + 0.10: {}", bonus.taken_shield);
+}
+
+#[test]
 fn catalog_uses_model_bones() {
     let Some((data, fs)) = load() else { return };
     let cat = Catalog::build(&data, Some(&fs), &["Star_Destroyer", "X-Wing_Squadron"]);
