@@ -86,6 +86,17 @@ pub enum ScriptEvent {
     UnhandledReward(StoryReward),
 }
 
+/// One story reward handed to the host.
+#[derive(Debug, Clone)]
+pub struct RewardFire {
+    /// Galactic week (`Galaxy::week`) when it fired.
+    pub week: u64,
+    /// The host or the story engine applied it. False for a reward with no effect.
+    pub applied: bool,
+    /// Kind, params, event, plot faction.
+    pub reward: StoryReward,
+}
+
 /// Counters of how scripts affected the simulation.
 #[derive(Debug, Clone, Default)]
 pub struct HostStats {
@@ -103,6 +114,8 @@ pub struct HostStats {
     pub rewards_applied: BTreeMap<String, u32>,
     /// Story rewards without effect, by kind.
     pub rewards_ignored: BTreeMap<String, u32>,
+    /// Every reward the story fired, in order. Graph rewards are `applied` (the story engine did them).
+    pub reward_log: Vec<RewardFire>,
     /// Credits given by scripts.
     pub credits_given: f64,
 }
@@ -812,16 +825,19 @@ impl ScriptHost for SimHost {
 
     fn story_reward(&mut self, reward: &StoryReward) {
         let mut s = self.inner.borrow_mut();
-        if s.apply_reward(reward) {
-            *s.stats
-                .rewards_applied
-                .entry(reward.kind.clone())
-                .or_default() += 1;
+        let week = s.sim.galaxy().week();
+        // The story engine already applied these four. Recording them must not apply them again.
+        let graph = matches!(reward.kind.as_str(), "TRIGGER_EVENT" | "RESET_BRANCH" | "DISABLE_BRANCH" | "DISABLE_STORY_EVENT");
+        if graph {
+            s.stats.reward_log.push(RewardFire { week, applied: true, reward: reward.clone() });
+            return;
+        }
+        let applied = s.apply_reward(reward);
+        s.stats.reward_log.push(RewardFire { week, applied, reward: reward.clone() });
+        if applied {
+            *s.stats.rewards_applied.entry(reward.kind.clone()).or_default() += 1;
         } else {
-            *s.stats
-                .rewards_ignored
-                .entry(reward.kind.clone())
-                .or_default() += 1;
+            *s.stats.rewards_ignored.entry(reward.kind.clone()).or_default() += 1;
             s.events.push(ScriptEvent::UnhandledReward(reward.clone()));
         }
     }

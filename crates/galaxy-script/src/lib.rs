@@ -31,7 +31,7 @@ use alamo_lua::ScriptRuntime;
 use galaxy_sim::{Event, ProductionKind, Sim, SimConfig, SimError};
 use galaxy_ai::{AiTier, Personality};
 
-pub use host::{HostStats, Inner, ScriptEvent, SimHost};
+pub use host::{HostStats, Inner, RewardFire, ScriptEvent, SimHost};
 pub use save::{Checkpoint, Diagnostics, LoadProgress, SAVE_VERSION, SaveError, SaveFile, SaveHeader};
 
 /// Options of a scripted match.

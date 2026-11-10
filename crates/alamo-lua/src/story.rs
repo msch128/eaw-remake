@@ -241,8 +241,10 @@ pub struct Fired {
     pub event: String,
     /// Plot owner faction.
     pub faction: Option<String>,
-    /// Rewards for the host (graph-only rewards already applied).
+    /// Rewards for the host.
     pub host_rewards: Vec<Reward>,
+    /// `TRIGGER_EVENT`, `RESET_BRANCH`, `DISABLE_BRANCH`, `DISABLE_STORY_EVENT`: already applied here.
+    pub graph_rewards: Vec<Reward>,
     /// Dialog (file name, chapter) the event shows.
     pub dialog: Option<(String, i32)>,
 }
@@ -454,6 +456,7 @@ impl StoryEngine {
         self.plots[pi].battles[ei] = 0;
         let rewards = self.plots[pi].plot.events[ei].rewards.clone();
         let mut host_rewards = Vec::new();
+        let mut graph_rewards = Vec::new();
         for rw in rewards {
             let p1 = rw.params.first().cloned().unwrap_or_default();
             match rw.kind.as_str() {
@@ -463,10 +466,20 @@ impl StoryEngine {
                             r.triggered[i] = true;
                         }
                     }
+                    graph_rewards.push(rw);
                 }
-                "RESET_BRANCH" => self.reset_branch(&p1, now),
-                "DISABLE_BRANCH" => self.set_branch(&p1, rw.params.get(1).map(String::as_str).unwrap_or("1")),
-                "DISABLE_STORY_EVENT" => self.disable_event(&p1),
+                "RESET_BRANCH" => {
+                    self.reset_branch(&p1, now);
+                    graph_rewards.push(rw);
+                }
+                "DISABLE_BRANCH" => {
+                    self.set_branch(&p1, rw.params.get(1).map(String::as_str).unwrap_or("1"));
+                    graph_rewards.push(rw);
+                }
+                "DISABLE_STORY_EVENT" => {
+                    self.disable_event(&p1);
+                    graph_rewards.push(rw);
+                }
                 _ => host_rewards.push(rw),
             }
         }
@@ -477,6 +490,7 @@ impl StoryEngine {
             event: r.plot.events[ei].name.clone(),
             faction: r.faction.clone(),
             host_rewards,
+            graph_rewards,
             dialog: self.plots[pi].plot.events[ei].dialog.clone(),
         });
     }

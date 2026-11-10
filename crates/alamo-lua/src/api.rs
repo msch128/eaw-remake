@@ -138,7 +138,7 @@ impl Shared {
     }
 
     /// Applies the effects of a fired story event that do not need Lua: `TRIGGER_AI` sets a story flag
-    /// (read by `Check_Story_Flag`), all non-graph rewards go to the host.
+    /// (read by `Check_Story_Flag`). Graph rewards are already applied; the host is told so it can log them.
     pub fn apply_rewards(&mut self, f: &crate::story::Fired) {
         if let Some((dialog, chapter)) = &f.dialog {
             self.host
@@ -146,32 +146,16 @@ impl Shared {
         }
         for r in &f.host_rewards {
             if r.kind == "TRIGGER_AI" {
-                let flag = r
-                    .params
-                    .first()
-                    .cloned()
-                    .unwrap_or_default()
-                    .to_ascii_lowercase();
-                let faction = r
-                    .params
-                    .get(1)
-                    .cloned()
-                    .unwrap_or_default()
-                    .to_ascii_lowercase();
+                let flag = r.params.first().cloned().unwrap_or_default().to_ascii_lowercase();
+                let faction = r.params.get(1).cloned().unwrap_or_default().to_ascii_lowercase();
                 self.wake = true;
-                self.story_flags.insert(if faction.is_empty() {
-                    flag
-                } else {
-                    format!("{flag}|{faction}")
-                });
+                self.story_flags.insert(if faction.is_empty() { flag } else { format!("{flag}|{faction}") });
             }
-            let reward = crate::host::StoryReward {
-                kind: r.kind.clone(),
-                params: r.params.clone(),
-                event: f.event.clone(),
-                faction: f.faction.clone(),
-            };
-            self.host.story_reward(&reward);
+            self.host.story_reward(&story_reward(r, f));
+        }
+        // The engine already applied these. The host only records them.
+        for r in &f.graph_rewards {
+            self.host.story_reward(&story_reward(r, f));
         }
     }
 
@@ -190,6 +174,10 @@ impl Shared {
             self.log.push(line);
         }
     }
+}
+
+fn story_reward(r: &crate::story::Reward, f: &crate::story::Fired) -> crate::host::StoryReward {
+    crate::host::StoryReward { kind: r.kind.clone(), params: r.params.clone(), event: f.event.clone(), faction: f.faction.clone() }
 }
 
 pub(crate) type Sh = Rc<RefCell<Shared>>;
