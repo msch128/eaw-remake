@@ -335,7 +335,7 @@ fn fighters_attack_a_huge_hull_from_outside_and_still_shoot_at_it() {
 }
 
 /// Rebel squadrons attack the Empire's Executor (it holds its place; harmless or not) for `seconds`: the craft-ticks inside any hull, the
-/// deepest, and the damage the Executor took (the sum of the hits: its self repair, 1% every 5 s, mends more than they do in a minute).
+/// deepest, and the Executor's net loss (shield plus hardpoint health). Its self repair is 1% of hull every 5 s, shared across living hardpoints.
 fn squadrons_attack_an_executor(data: &alamo_data::GameData, fs: &GameFs, seed: u64, seconds: f32, harmless: bool) -> (u32, f32, f32) {
     let names = ["Piett_Executor_P1", "X-Wing_Squadron", "Y-Wing_Squadron", "A-Wing_Squadron", "B-Wing_Squadron"];
     let cat = Arc::new(Catalog::build(data, Some(fs), &names));
@@ -343,7 +343,7 @@ fn squadrons_attack_an_executor(data: &alamo_data::GameData, fs: &GameFs, seed: 
     let sides = vec![mk("Empire", &[("Piett_Executor_P1", 1)], false), mk("Rebel", &[("X-Wing_Squadron", 3), ("Y-Wing_Squadron", 3), ("A-Wing_Squadron", 2), ("B-Wing_Squadron", 2)], true)];
     // A harmless Executor leaves every craft alive for the whole minute (the worst case for the count); otherwise it shoots them down as it does in play.
     let side_mults = if harmless { vec![SideMult { damage: 0.0, health: 1.0, shield: 1.0 }, SideMult { damage: 1.0, health: 1.0, shield: 1.0 }] } else { Vec::new() };
-    let config = BattleConfig { arena: None, half_size: 12_000.0, seed, record_events: true, side_mults, retreat_allowed: vec![false, false], fog_of_war: false, ..BattleConfig::default() };
+    let config = BattleConfig { arena: None, half_size: 12_000.0, seed, record_events: false, side_mults, retreat_allowed: vec![false, false], fog_of_war: false, ..BattleConfig::default() };
     let mut b = Battle::new(BattleSetup { catalog: cat.clone(), sides, config });
     let exec = b.ships.iter().find(|s| s.side == 0).unwrap().id;
     b.ships[exec as usize].pos = Vec3::ZERO;
@@ -355,29 +355,26 @@ fn squadrons_attack_an_executor(data: &alamo_data::GameData, fs: &GameFs, seed: 
         d.pos = Vec3::new(-1500.0 + (i % 8) as f32 * 150.0, -4500.0 - (i / 8) as f32 * 150.0, 0.0);
         d.yaw = std::f32::consts::FRAC_PI_2;
     }
-    let (mut watch, mut samples, mut deepest, mut taken) = (HullWatch::default(), 0u32, 0.0f32, 0.0f32);
+    let start = (b.ships[exec as usize].shield, b.ships[exec as usize].hps.iter().map(|h| h.health).sum::<f32>());
+    let (mut watch, mut samples, mut deepest) = (HullWatch::default(), 0u32, 0.0f32);
     for _ in 0..(30.0 * seconds) as usize {
-        for e in b.step() {
-            if let Event::Hit { ship, damage, .. } = e
-                && *ship == exec
-            {
-                taken += damage;
-            }
-        }
+        b.step();
         for i in watch.inside(&b, &cat) {
             samples += 1;
             deepest = deepest.max(i.depth);
         }
     }
-    (samples, deepest, taken)
+    let e = &b.ships[exec as usize];
+    (samples, deepest, (start.0 - e.shield) + (start.1 - e.hps.iter().map(|h| h.health).sum::<f32>()))
 }
 
 #[test]
 fn squadrons_attacking_an_executor_never_fly_into_it_and_still_hurt_it() {
     // The Executor of the data (4544 long in front of its middle, 1548 half wide, 683 high). On main (87ab720) the craft of that battle (the 60
     // attackers and the Executor's own squadrons) spent 293905-330214 craft-ticks inside it in a minute (seeds 1-3, up to 228 units deep); it
-    // took 6638 / 6530 / 6793 damage with it harmless and 2986 / 2805 / 2859 with it shooting back, now 8676-8838 and 6629-7006. Since healing
-    // mends hardpoints the damage is the sum of the hits (seeds 1-2: 26794 / 27061 harmless, 22727 / 21944 shooting back).
+    // took 6638 / 6530 / 6793 damage with it harmless and 2986 / 2805 / 2859 with it shooting back, then 8676-8838 and 6629-7006. The whole
+    // self repair on the most damaged hardpoint dropped the net loss to 212. Each living hardpoint now gains that fraction of its own
+    // maximum: seeds 1-2 net loss 7608 / 7745 harmless and 5857 / 5832 shooting back.
     let Some((data, fs)) = real_data() else { return };
     let runs: Vec<(bool, u64, (u32, f32, f32))> = std::thread::scope(|sc| {
         let jobs: Vec<_> = [true, false]

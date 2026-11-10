@@ -3299,8 +3299,8 @@ fn hardpoint_hull(def: &ShipDef, s: &Ship) -> f32 {
 }
 
 /// Heals `amount` hull points. A ship with destroyable hardpoints has no hull pool, so the heal mends their health instead (estimate,
-/// docs/RULES.md 2.3): `amount / ShipDef::hull` of their total health, the most damaged living hardpoint (by share) first, each up to its
-/// maximum; destroyed hardpoints stay destroyed.
+/// docs/RULES.md 2.3): each living hardpoint gains `amount / ShipDef::hull` of its own maximum. A full hardpoint gains nothing, and its
+/// share is not passed on. Destroyed hardpoints stay destroyed.
 fn heal(def: &ShipDef, s: &mut Ship, amount: f32) {
     if amount <= 0.0 || def.hull <= 0.0 {
         return;
@@ -3309,18 +3309,15 @@ fn heal(def: &ShipDef, s: &mut Ship, amount: f32) {
         s.hull = (s.hull + amount).min(def.hull.max(s.hull));
         return;
     }
-    let total: f32 = def.hardpoints.iter().filter(|d| d.destroyable).map(|d| d.health).sum();
-    let mut points = amount * total / def.hull;
-    let mut hurt: Vec<usize> = (0..def.hardpoints.len()).filter(|&i| def.hardpoints[i].destroyable && s.hps[i].alive && s.hps[i].health < def.hardpoints[i].health).collect();
-    let share = |i: usize| s.hps[i].health / def.hardpoints[i].health.max(1e-3);
-    hurt.sort_by(|&a, &b| share(a).total_cmp(&share(b)).then(a.cmp(&b)));
-    for i in hurt {
-        if points <= 0.0 {
-            break;
+    let fraction = amount / def.hull;
+    for (i, d) in def.hardpoints.iter().enumerate() {
+        if !d.destroyable || !s.hps[i].alive {
+            continue;
         }
-        let gain = (def.hardpoints[i].health - s.hps[i].health).min(points);
-        s.hps[i].health += gain;
-        points -= gain;
+        let room = d.health - s.hps[i].health;
+        if room > 0.0 {
+            s.hps[i].health += (fraction * d.health).min(room);
+        }
     }
     s.hull = hardpoint_hull(def, s);
 }

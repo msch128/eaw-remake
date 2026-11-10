@@ -1049,7 +1049,7 @@ fn an_ion_super_laser_stuns_instead_of_destroying() {
 #[test]
 fn healing_repairs_the_hardpoints_of_ships_that_have_them() {
     // A ship with destroyable hardpoints has no hull pool of its own (docs/RULES.md 2.3): a heal of 100 hull points mends 100 / 1000 of its
-    // hardpoint health, the most damaged living hardpoint first; a destroyed one stays destroyed.
+    // hardpoint health, shared across the living hardpoints in proportion to each maximum; a destroyed one stays destroyed.
     let mut a = gun("a", 100.0);
     a.offset = Vec3::new(0.0, 50.0, 0.0);
     let mut c = gun("c", 100.0);
@@ -1068,9 +1068,9 @@ fn healing_repairs_the_hardpoints_of_ships_that_have_them() {
         b.step();
     }
     let s = &b.ships[h];
-    // 100 hull points of a 1000 hull over 300 hardpoint health: 30 points, all to the most damaged hardpoint.
-    assert_eq!((s.hps[0].health, s.hps[1].health, s.hps[2].alive), (50.0, 80.0, false));
-    assert!((s.hull - 1000.0 * 130.0 / 300.0).abs() < 0.5, "the hull figure follows the hardpoints: {}", s.hull);
+    // 100 hull points of a 1000 hull is 10% of each living hardpoint. The destroyed hardpoint's 10% is not passed on.
+    assert_eq!((s.hps[0].health, s.hps[1].health, s.hps[2].alive), (30.0, 90.0, false));
+    assert!((s.hull - 1000.0 * 120.0 / 300.0).abs() < 0.5, "the hull figure follows the hardpoints: {}", s.hull);
 }
 
 #[test]

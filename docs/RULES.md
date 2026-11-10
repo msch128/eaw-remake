@@ -493,9 +493,12 @@ stays as a derived figure for bars and decisions (`ShipDef::hull` times the shar
 * Estimate: ships with destroyable hardpoints and none of type engine get a synthesised engine hardpoint 0.75 radii
   astern (health 8% of their destroyable hardpoint health, clamped to 1000 to 3000), because some capitals have none
   in the XML.
-* Estimate, healing (`Force_Healing_Ability`, the healing harmonic bomb): a heal of N hull points mends N / `ShipDef::hull`
-  of the unit's total hardpoint health, the most damaged living hardpoint (by share of its health) first, each up to its
-  maximum; destroyed hardpoints stay destroyed (the data has no rule that rebuilds them). The hull figure follows.
+* Estimate, healing (`Force_Healing_Ability`, the healing harmonic bomb): a heal of N hull points gives each living
+  hardpoint N / `ShipDef::hull` of its own maximum. `Heal_Percent` is a fraction of maximum hull and the data names no
+  per-hardpoint split; a full hardpoint gains nothing and its share is not moved onto the one under fire. Destroyed
+  hardpoints stay destroyed (the data has no rule that rebuilds them). The hull figure follows. Putting the whole budget
+  on the most damaged hardpoint repaired the Executor's 1% every 5 s into the one gun the squadrons could reach
+  (net loss 8676 -> 212).
 
 ## 2.4 Squadrons, carriers, stations
 
