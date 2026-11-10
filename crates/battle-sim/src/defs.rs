@@ -406,6 +406,8 @@ pub struct AbilityDef {
     pub stealth: bool,
     /// `LUCKY_SHOT`: the one strong shot.
     pub shot: Option<ShotDef>,
+    /// The numbers came from the squadron's `Create_Team_Type` container. One use starts the cooldown on every craft of the squadron.
+    pub team: bool,
     /// `BLAST`: the charged shot of the blast hardpoints.
     pub blast: Option<BlastDef>,
     /// `SHIELD_FLARE`: the charged wave around the ship.
@@ -1792,12 +1794,12 @@ fn survivor_ship(data: &GameData, name: &str) -> bool {
     matches!(load_source(data, name), Some(Source::Unit(u)) if u.space_model.is_some() && u.hull > 0.0)
 }
 
-/// Whether any `Behavior` / `SpaceBehavior` copy of the object lists a token (upper case).
 /// A squadron's `Create_Team_Type` container holds the data of team abilities its craft only name (`Red_Squadron_Container`: `LUCKY_SHOT`
 /// with `Recharge_Seconds` 60 and `CAUSE_DAMAGE_MULTIPLIER` 600, while each X-wing lists a bare `LUCKY_SHOT`). A craft's ability of the
 /// same type takes what it leaves out from the container (recharge, expiration, multipliers, linked ability, other tags; its own tags such
-/// as `Projectile_Types_Override` stay), and the craft gets the container's named sub-abilities.
-fn merge_team_abilities(data: &GameData, sources: &mut [Source]) {
+/// as `Projectile_Types_Override` stay), and the craft gets the container's named sub-abilities. Returns `(unit, kind)`, both lower case,
+/// for every ability filled from a container: the squadron has one use of it.
+fn merge_team_abilities(data: &GameData, sources: &mut [Source]) -> HashSet<(String, String)> {
     let mut teams: HashMap<String, (Vec<alamo_data::UnitAbility>, Vec<alamo_data::SubAbility>)> = HashMap::new();
     for s in sources.iter() {
         let Source::Unit(u) = s else { continue };
@@ -1811,11 +1813,13 @@ fn merge_team_abilities(data: &GameData, sources: &mut [Source]) {
             teams.entry(m.trim().to_ascii_lowercase()).or_insert_with(|| (abilities.clone(), subs.clone()));
         }
     }
+    let mut shared = HashSet::new();
     for s in sources.iter_mut() {
         let Source::Unit(u) = s else { continue };
         let Some((abilities, subs)) = teams.get(&u.name.to_ascii_lowercase()) else { continue };
         for a in &mut u.abilities {
             let Some(t) = abilities.iter().find(|t| t.kind.eq_ignore_ascii_case(&a.kind)) else { continue };
+            shared.insert((u.name.to_ascii_lowercase(), a.kind.to_ascii_lowercase()));
             a.recharge_seconds = a.recharge_seconds.or(t.recharge_seconds);
             a.expiration_seconds = a.expiration_seconds.or(t.expiration_seconds);
             a.activated_ability = a.activated_ability.clone().or_else(|| t.activated_ability.clone());
@@ -1834,8 +1838,10 @@ fn merge_team_abilities(data: &GameData, sources: &mut [Source]) {
             }
         }
     }
+    shared
 }
 
+/// Whether any `Behavior` / `SpaceBehavior` copy of the object lists a token (upper case).
 fn behaviour_check(objects: &alamo_data::GameObjects, name: &str) -> impl Fn(&str) -> bool + use<> {
     let tokens: Vec<String> = objects
         .resolve(name)
@@ -1957,7 +1963,7 @@ impl Catalog {
             }
         }
         sources.sort_by_key(|s| s.name().to_ascii_lowercase());
-        merge_team_abilities(data, &mut sources);
+        let team_abilities = merge_team_abilities(data, &mut sources);
 
         // Models in parallel.
         let mut model_names: Vec<String> = sources.iter().filter_map(|s| s.model().map(str::to_string)).collect();
@@ -2065,7 +2071,7 @@ impl Catalog {
                 Arc::new(ModelInfo { bones, radius: m.radius * k, hull, height: m.height.map(|(lo, hi)| (lo * k, hi * k)) })
             });
             let model = scaled.as_ref();
-            let mut def = cat.ship_def(s, &hp_defs[i], model.map(|m| &**m), &attach, &data.objects, &scripts);
+            let mut def = cat.ship_def(s, &hp_defs[i], model.map(|m| &**m), &attach, &data.objects, &scripts, &team_abilities);
             if let (Some(fs), Source::Unit(u)) = (fs, s) {
                 // The `GlobalValue.Set` of its own script when it appears, and of its `Death_Clone`'s when it dies.
                 let mut set_by = |name: &str, script: Option<&str>| {
@@ -2171,7 +2177,7 @@ impl Catalog {
         }
     }
 
-    fn ship_def(&self, src: &Source, hps: &[HardpointDef], model: Option<&ModelInfo>, attach: &HashMap<String, Arc<AttachInfo>>, objects: &alamo_data::GameObjects, scripts: &ScriptCache) -> ShipDef {
+    fn ship_def(&self, src: &Source, hps: &[HardpointDef], model: Option<&ModelInfo>, attach: &HashMap<String, Arc<AttachInfo>>, objects: &alamo_data::GameObjects, scripts: &ScriptCache, team_abilities: &HashSet<(String, String)>) -> ShipDef {
         // Common numbers.
         let (name, text_id, class, is_static, is_squadron, hull, shield, regen, armor, sarmor, pop) = match src {
             Source::Unit(u) => (
@@ -2379,7 +2385,7 @@ impl Catalog {
                 }
                 let offsets = u.squadron_offsets.iter().map(|o| Vec3::from_array(*o)).collect();
                 let delay = u.fields.get("spawned_squadron_delay_seconds").and_then(|v| alamo_data::xml::parse_num(v)).unwrap_or(2.0);
-                (members, offsets, at_tech0.map(|t| resolve(&t.starting)).unwrap_or_default(), at_tech0.map(|t| resolve(&t.reserve)).unwrap_or_default(), delay, ability_defs(u, &self.projectiles, &self.proj_index, &self.ship_index))
+                (members, offsets, at_tech0.map(|t| resolve(&t.starting)).unwrap_or_default(), at_tech0.map(|t| resolve(&t.reserve)).unwrap_or_default(), delay, ability_defs(u, &self.projectiles, &self.proj_index, &self.ship_index, team_abilities))
             }
             Source::Base(b) => {
                 let delay = b.fields.get("spawned_squadron_delay_seconds").and_then(|v| alamo_data::xml::parse_num(v)).unwrap_or(2.0);
@@ -2836,7 +2842,7 @@ impl Catalog {
     }
 }
 
-fn ability_defs(u: &SpaceUnitDef, projectiles: &[ProjDef], proj_index: &HashMap<String, ProjId>, ships: &HashMap<String, ShipId>) -> Vec<AbilityDef> {
+fn ability_defs(u: &SpaceUnitDef, projectiles: &[ProjDef], proj_index: &HashMap<String, ProjId>, ships: &HashMap<String, ShipId>, team_abilities: &HashSet<(String, String)>) -> Vec<AbilityDef> {
     u.abilities
         .iter()
         .filter(|a| {
@@ -2970,6 +2976,7 @@ fn ability_defs(u: &SpaceUnitDef, projectiles: &[ProjDef], proj_index: &HashMap<
                 duration: if helper.is_some() { 0.0 } else if toggle { f32::MAX / 4.0 } else if shot.is_some() { SHOT_WINDOW_SECONDS } else if let Some(b) = &blast { b.charge + SHOT_WINDOW_SECONDS } else if let Some(f) = &flare { f.charge } else if let (Some(_), Some(secs)) = (&leech, leech_secs) { secs } else if ping { a.expiration_seconds.filter(|&x| x > 0.0).unwrap_or(5.0) } else if let Some(secs) = defence_secs { secs } else if a.kind.eq_ignore_ascii_case("CORRUPT_SYSTEMS") { a.activated_ability.as_ref().and_then(|n| u.sub_abilities.iter().find(|s| s.name.eq_ignore_ascii_case(n))).and_then(|s| s.fields.get("duration_in_seconds")).and_then(|v| alamo_data::xml::parse_num(v)).unwrap_or(30.0) } else { a.expiration_seconds.unwrap_or(12.0) },
                 stealth: a.kind.eq_ignore_ascii_case("STEALTH"),
                 shot,
+                team: team_abilities.contains(&(u.name.to_ascii_lowercase(), a.kind.to_ascii_lowercase())),
                 blast,
                 flare,
                 leech,

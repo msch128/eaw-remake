@@ -1176,11 +1176,31 @@ impl Battle {
         } else {
             a.duration
         };
+        let team = a.team;
+        let kind = a.kind.clone();
         let st = &mut self.ships[ship as usize].abilities[ability];
         st.target = target;
         st.active = duration;
         // A shot ability recharges from the moment it is used (it ends as soon as the shot is fired).
         st.cooldown = if a.toggle || no_cooldown { 0.0 } else if shot { a.recharge } else if let Some(b) = &a.blast { a.recharge + b.charge } else { a.recharge + duration };
+        let cd = st.cooldown;
+        // A team ability is defined once on the squadron container, so the other craft of the squadron take the same cooldown.
+        if team && cd > 0.0 {
+            let squad = self.ships[ship as usize].squad;
+            if squad != NONE {
+                let cat = self.catalog.clone();
+                let mates: Vec<(usize, usize)> = self
+                    .ships
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, o)| o.squad == squad && o.id != ship)
+                    .filter_map(|(n, o)| cat.ship(o.def).abilities.iter().position(|x| x.team && x.kind.eq_ignore_ascii_case(&kind)).map(|i| (n, i)))
+                    .collect();
+                for (n, i) in mates {
+                    self.ships[n].abilities[i].cooldown = self.ships[n].abilities[i].cooldown.max(cd);
+                }
+            }
+        }
         if shot {
             // The craft fires at the chosen target now.
             let s = &mut self.ships[ship as usize];

@@ -52,6 +52,7 @@ fn red_squadron_craft_take_the_lucky_shot_data_of_their_container() {
         let d = cat.ship(cat.ship_id(n).unwrap_or_else(|| panic!("{n}")));
         let a = d.abilities.iter().find(|a| a.kind == "LUCKY_SHOT").unwrap_or_else(|| panic!("{n} has LUCKY_SHOT"));
         let shot = a.shot.as_ref().unwrap();
+        assert!(a.team, "{n}: the numbers come from the squadron container");
         assert_eq!((a.recharge, shot.mult, a.cause_damage_mult), (60.0, 600.0, 1.0), "{n}: Recharge_Seconds 60, CAUSE_DAMAGE_MULTIPLIER 600 on the one shot");
         assert!(a.supports_autofire, "{n}");
         let proj = shot.proj.map(|p| cat.projectiles[p as usize].name.clone());
@@ -91,6 +92,30 @@ fn luke_lands_one_shot_of_600_times_the_damage() {
     assert_eq!(active, 0.0, "the shot was fired");
     assert!((cooldown - 56.0).abs() < 0.5, "60 s from the use: {cooldown}");
     assert!(lucky > plain + 100.0 * 12.0, "the lucky shot does hundreds of times a laser bolt (12): {lucky} vs {plain}");
+}
+
+#[test]
+fn red_squadron_lucky_shot_is_one_use_for_the_squadron() {
+    let Some((data, fs)) = load() else { return };
+    let mut b = duel(&data, &fs, "Red_Squadron", "Nebulon_B_Frigate", 600.0);
+    let craft: Vec<u32> = b.ships.iter().filter(|s| s.side == 0).map(|s| s.id).collect();
+    assert_eq!(craft.len(), 6, "Red Squadron is six X-wings");
+    let luke = craft.iter().copied().find(|&s| b.catalog().ship(b.ships[s as usize].def).name == "Luke_XWing").expect("Luke");
+    let t = b.ships.iter().position(|s| s.side == 1).unwrap() as u32;
+    b.command(0, Command::Attack { ships: vec![luke], target: t }).unwrap();
+    for _ in 0..30 {
+        b.step();
+    }
+    let k = ability(&b, luke, "LUCKY_SHOT").expect("Luke has the lucky shot");
+    b.command(0, Command::UseAbility { ship: luke, ability: k as u16 }).expect("used");
+    for &c in &craft {
+        let i = ability(&b, c, "LUCKY_SHOT").expect("every craft names it");
+        let cd = b.ships[c as usize].abilities[i].cooldown;
+        assert!((cd - 60.0).abs() < 0.5, "{} cooldown {cd}", b.catalog().ship(b.ships[c as usize].def).name);
+        if c != luke {
+            assert!(b.command(0, Command::UseAbility { ship: c, ability: i as u16 }).is_err(), "the squadron already spent it");
+        }
+    }
 }
 
 #[test]
