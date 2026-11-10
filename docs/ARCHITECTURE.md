@@ -185,6 +185,8 @@ Saves stay loadable by later builds. A field added to a saved struct (`galaxy_si
 `alamo_lua::persist`, `galaxy_ai::AiMemory`) carries `#[serde(default)]`, so a file without it loads with the default. The checkpoint of a save
 is `Galaxy::state_hash`; a load compares it with the state as the file holds it, hashed the way the writing build hashed
 (`galaxy_sim::HashEra`). A new field is therefore left out of the hash, hashed only when it differs from its default, or it starts a new era.
+The comparison happens before the state is put into the match: `Sim::restore` brings the per-ship lists in line with the fleets, and a state
+that was saved between a battle and the next such tidy-up comes out without its stale entries (a load warning says so, the load goes on).
 `crates/galaxy-sim/tests/data/galaxy_<date>.json` are small made-up states with the field sets of earlier builds; their checkpoints are pinned.
 
 Planet, faction, unit, structure and star base ids are indices into catalogs that are rebuilt from the game data at every start, so they move

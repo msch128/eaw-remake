@@ -472,3 +472,23 @@ fn a_save_without_name_tables_from_an_unknown_catalog_is_refused_with_the_reason
         format!("the game data differs from the data this save was made with: the save has no name tables and was written with {} planets and {} factions; the campaign now has {} and {}", names.planets.len() + 1, names.factions.len(), names.planets.len(), names.factions.len())
     );
 }
+
+/// A state saved between a battle and the next tidy-up of the ship lists (the autosave after a battle of an October 2026 build is one): the
+/// hyperspace slot of a fleet still names a ship that died. The file is intact, its checkpoint is the hash of exactly this state; putting
+/// it into a match prunes the entry. That is a tidied save, not a damaged one.
+#[test]
+fn a_save_with_a_stale_hyperspace_slot_loads_and_is_tidied() {
+    let Some(c) = ctx() else { return };
+    let (_, mut file, _) = played(&c);
+    let g = &mut file.state.sim.galaxy;
+    let (fleet, unit) = g.fleets.iter().find(|(id, _)| !g.hyperspace.contains_key(id)).map(|(id, f)| (*id, *f.units.keys().next().unwrap())).expect("a fleet without a slot ship");
+    let before = g.state_hash();
+    g.hyperspace.insert(fleet, (galaxy_sim::ShipId(u64::MAX), unit));
+    file.checkpoint.galaxy_hash = g.state_hash();
+    assert_ne!(file.checkpoint.galaxy_hash, before, "the slot ship is part of the checkpoint");
+
+    let loaded = ScriptedSim::from_save(file, c.fs.clone(), c.data.clone(), |_| {}).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(loaded.state().sim.galaxy.hyperspace.get(&fleet), None);
+    assert_eq!(loaded.checkpoint().galaxy_hash, before, "the state without the stale entry");
+    assert_eq!(loaded.load_warnings, ["the ship lists of the save did not match its fleets and were tidied"]);
+}

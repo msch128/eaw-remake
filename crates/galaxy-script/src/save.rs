@@ -123,11 +123,11 @@ pub enum SaveError {
     UnknownCampaign(String),
     /// The loaded data differs from the data the save was made with in a way a load cannot follow; the text says how.
     DataMismatch(String),
-    /// The restored state does not match the checkpoint (a damaged file).
+    /// The state in the file is not the state its checkpoint was made of (a damaged file).
     Corrupt {
         /// Checkpoint in the file.
         saved: Box<Checkpoint>,
-        /// State after restoring.
+        /// Hash and time of the state the file holds.
         restored: Box<Checkpoint>,
     },
     /// The match could not be rebuilt or the state does not fit it.
@@ -143,7 +143,7 @@ impl std::fmt::Display for SaveError {
             SaveError::Version(v) => write!(f, "save file version {v} is no longer supported (this build reads version {SAVE_VERSION})"),
             SaveError::UnknownCampaign(c) => write!(f, "campaign {c} not found in the game data"),
             SaveError::DataMismatch(why) => write!(f, "the game data differs from the data this save was made with: {why}"),
-            SaveError::Corrupt { saved, restored } => write!(f, "the save is damaged: saved week {} hash {:x}, restored week {} hash {:x}", saved.week, saved.galaxy_hash, restored.week, restored.galaxy_hash),
+            SaveError::Corrupt { saved, restored } => write!(f, "the save is damaged: its checkpoint says week {} hash {:x}, its state is week {} hash {:x}", saved.week, saved.galaxy_hash, restored.week, restored.galaxy_hash),
             SaveError::Setup(e) => write!(f, "cannot rebuild the match: {e}"),
         }
     }
@@ -406,10 +406,11 @@ impl ScriptedSim {
         let warnings = sim.runtime.restore(&state.runtime);
         sim.load_warnings.extend(warnings);
         sim.script_clock = state.script_clock;
-        // Putting the state into the match must not have changed it (in the terms of the build that wrote it).
-        let restored = sim.checkpoint();
-        if sim.with_sim(|s| s.galaxy().state_hash_of(era)) != expected || restored.time.to_bits() != file.checkpoint.time.to_bits() {
-            return Err(SaveError::Corrupt { saved: Box::new(file.checkpoint), restored: Box::new(restored) });
+        // The file was verified above. `Sim::restore` brings the per-ship lists in line with the fleets, which changes nothing in a state
+        // that was saved tidy. A state saved between a battle and the next tidy-up (a hyperspace slot that still names a ship that died)
+        // comes out without the stale entries: that is said, not refused.
+        if sim.with_sim(|s| s.galaxy().state_hash_of(era)) != expected {
+            sim.load_warnings.push("the ship lists of the save did not match its fleets and were tidied".into());
         }
         progress(LoadProgress { done: 1, total: 1, week });
         Ok(sim)
