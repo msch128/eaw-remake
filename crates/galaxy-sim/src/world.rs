@@ -419,6 +419,9 @@ pub struct UnitType {
     pub bonuses: Vec<battle_sim::BonusDef>,
     /// Fighter groups carried (name, count); informational.
     pub carries: Vec<(String, u32)>,
+    /// Craft a squadron expands into (`Squadron_Units`), one id per craft. Empty for a ship: auto-resolve then matches
+    /// the unit's own name, which is the name the tactical battle spawns.
+    pub members: Vec<UnitTypeId>,
 }
 
 /// A planetary or orbital structure.

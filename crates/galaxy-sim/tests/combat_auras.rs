@@ -139,3 +139,34 @@ fn bonus_limited_to_unit_types_does_not_apply_to_other_types() {
     assert!(!excluded_bonus.applies(cr90_name, cr90_cat), "Excluded unit must not match");
     assert!(excluded_bonus.applies(isd_name, isd_cat), "Non-excluded unit must match");
 }
+
+#[test]
+fn dodonna_y_wing_squadron_gets_the_craft_bonus_the_battle_applies() {
+    let Some(ctx) = load() else { return };
+    let sim = new_sim(&ctx);
+    let w = sim.world();
+    let dodonna = w.unit_id("Dodonna_Quasar").expect("Dodonna_Quasar");
+    let ywing = w.unit_id("Y-Wing").expect("Y-Wing");
+    let squadron = w.unit_id("Y-Wing_Squadron").expect("Y-Wing_Squadron");
+    let auras: Vec<&battle_sim::BonusDef> = w.units[dodonna as usize].bonuses.iter().collect();
+    assert_eq!(auras.len(), 1, "Dodonna_Republic_Combat_Bonus");
+    assert!((auras[0].shield - 0.15).abs() < 1e-6, "Shield_Bonus_Percentage 0.15");
+    assert!((auras[0].speed - 0.10).abs() < 1e-6, "Movement_Speed_Bonus_Percentage 0.10");
+
+    let craft = &w.units[ywing as usize];
+    let craft_class = battle_sim::TargetClass::from_category(craft.category);
+    let craft_bonus = battle_sim::Bonus::compute(&craft.name, craft_class, 0, auras.iter().copied());
+    let expected_shield = 1.0 / 1.15;
+    assert!((craft_bonus.taken_shield - expected_shield).abs() < 1e-4, "Y-Wing taken_shield {} want {}", craft_bonus.taken_shield, expected_shield);
+    assert!((craft_bonus.speed - 1.10).abs() < 1e-4, "Y-Wing speed {}", craft_bonus.speed);
+
+    let sq = &w.units[squadron as usize];
+    let by_container = battle_sim::Bonus::compute(&sq.name, battle_sim::TargetClass::from_category(sq.category), 0, auras.iter().copied());
+    assert_eq!(by_container.taken_shield, 1.0, "Applicable_Unit_Types lists Y-Wing, not Y-Wing_Squadron");
+    assert_eq!(sq.members.len(), 6, "Y-Wing_Squadron_Template Squadron_Units is six Y-Wing");
+    assert!(sq.members.iter().all(|&m| w.units[m as usize].name == "Y-Wing"));
+
+    let applied = w.aura_for(galaxy_sim::combat::Source::Unit(squadron), &auras);
+    assert!((applied.taken_shield - expected_shield).abs() < 1e-4, "auto-resolve taken_shield {} want {}", applied.taken_shield, expected_shield);
+    assert!((applied.speed - 1.10).abs() < 1e-4, "auto-resolve speed {}", applied.speed);
+}

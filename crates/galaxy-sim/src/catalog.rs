@@ -221,6 +221,7 @@ fn unit_from_def(def: &SpaceUnitDef, combat: CombatStats, objects: &alamo_data::
         ai_power: def.ai_combat_power,
         buildable: def.build_cost > 0.0 && yes("build_tab_space_units") && !def.affiliation.is_empty(),
         carries: def.starting_spawned_units.clone(),
+        members: Vec::new(),
     }
 }
 
@@ -403,6 +404,7 @@ impl World {
             if u.bonuses.is_empty() {
                 u.bonuses = def.squadron_units.iter().filter_map(|m| self.unit_index.get(&key(m))).flat_map(|&mid| self.units[mid as usize].bonuses.clone()).collect();
             }
+            u.members = def.squadron_units.iter().filter_map(|m| self.unit_index.get(&key(m)).copied()).collect();
             self.resolve_unit_requirements(&mut u, &def);
             self.units.push(u);
         }
@@ -691,6 +693,7 @@ impl World {
                         ai_power: 0.0,
                         buildable,
                         carries: Vec::new(),
+                        members: Vec::new(),
                     },
                     from,
                     to,

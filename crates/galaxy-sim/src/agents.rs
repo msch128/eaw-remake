@@ -246,6 +246,7 @@ impl World {
                 attrition_credits: 0,
                 ai_power: 0.0,
                 carries: Vec::new(),
+                members: Vec::new(),
             };
             self.unit_index.insert(name.to_ascii_lowercase(), self.units.len() as UnitTypeId);
             self.units.push(unit);

@@ -68,6 +68,30 @@ struct Inst {
 }
 
 impl World {
+    /// The auto-resolve aura for one combatant. A squadron is the equal-weight mean of its member crafts (the names
+    /// the tactical battle spawns); a ship, star base or structure is its own object name.
+    pub fn aura_for<'a>(&self, src: Source, auras: &[&'a battle_sim::BonusDef]) -> battle_sim::Bonus {
+        let crafts: Vec<(&str, battle_sim::TargetClass)> = match src {
+            Source::Unit(u) | Source::Garrison(u) => {
+                let un = &self.units[u as usize];
+                if un.members.is_empty() {
+                    vec![(un.name.as_str(), battle_sim::TargetClass::from_category(un.category))]
+                } else {
+                    un.members
+                        .iter()
+                        .map(|&m| {
+                            let member = &self.units[m as usize];
+                            (member.name.as_str(), battle_sim::TargetClass::from_category(member.category))
+                        })
+                        .collect()
+                }
+            }
+            Source::Starbase(s) => vec![(self.starbases[s as usize].name.as_str(), battle_sim::TargetClass::Structure)],
+            Source::Structure(s) => vec![(self.structures[s as usize].name.as_str(), battle_sim::TargetClass::Structure)],
+        };
+        battle_sim::Bonus::for_crafts(&crafts, auras)
+    }
+
     /// Combat numbers of a source.
     pub fn stats_of(&self, src: Source) -> Option<&CombatStats> {
         match src {
@@ -277,15 +301,7 @@ pub fn resolve_damaged(
             .map(|(si, side)| {
                 side.iter()
                     .map(|i| {
-                        let (name, class) = match i.src {
-                            Source::Unit(u) | Source::Garrison(u) => {
-                                let un = &world.units[u as usize];
-                                (un.name.as_str(), battle_sim::TargetClass::from_category(un.category))
-                            }
-                            Source::Starbase(s) => (world.starbases[s as usize].name.as_str(), battle_sim::TargetClass::Structure),
-                            Source::Structure(s) => (world.structures[s as usize].name.as_str(), battle_sim::TargetClass::Structure),
-                        };
-                        battle_sim::Bonus::compute(name, class, 0, active_bonuses[si].iter().copied())
+                        world.aura_for(i.src, &active_bonuses[si])
                     })
                     .collect()
             })

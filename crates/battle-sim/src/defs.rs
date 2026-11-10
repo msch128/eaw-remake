@@ -697,6 +697,41 @@ impl Bonus {
         }
         Bonus { damage: 1.0 + dmg, taken_hull: 1.0 / ((1.0 + health) * (1.0 + defense)), taken_shield: 1.0 / ((1.0 + shield) * (1.0 + defense)), range: 1.0 + range, speed: 1.0 + speed }
     }
+
+    /// Equal-weight mean of [`Self::compute`] over the crafts a squadron expands into. The tactical battle calls
+    /// [`Self::compute`] once per spawned craft; auto-resolve keeps one combatant and uses this. One craft is that
+    /// craft's bonus. An empty list is no bonus.
+    pub fn for_crafts<'a>(crafts: &[(&str, TargetClass)], auras: &[&'a BonusDef]) -> Self {
+        if crafts.is_empty() {
+            return Self::default();
+        }
+        let n = crafts.len() as f32;
+        let mut sum = Bonus { damage: 0.0, taken_hull: 0.0, taken_shield: 0.0, range: 0.0, speed: 0.0 };
+        for &(name, class) in crafts {
+            let b = Self::compute(name, class, 0, auras.iter().copied());
+            sum.damage += b.damage;
+            sum.taken_hull += b.taken_hull;
+            sum.taken_shield += b.taken_shield;
+            sum.range += b.range;
+            sum.speed += b.speed;
+        }
+        Bonus { damage: sum.damage / n, taken_hull: sum.taken_hull / n, taken_shield: sum.taken_shield / n, range: sum.range / n, speed: sum.speed / n }
+    }
+}
+
+#[cfg(test)]
+mod bonus_crafts {
+    use super::*;
+
+    #[test]
+    fn a_mixed_squadron_gets_the_mean_of_its_crafts() {
+        let aura = BonusDef { shield: 0.15, unit_types: vec!["Y-Wing".into()], ..BonusDef::default() };
+        let matched = Bonus::compute("Y-Wing", TargetClass::Bomber, 0, [&aura]);
+        let plain = Bonus::compute("X-Wing", TargetClass::Fighter, 0, [&aura]);
+        let mean = Bonus::for_crafts(&[("Y-Wing", TargetClass::Bomber), ("X-Wing", TargetClass::Fighter)], &[&aura]);
+        assert!((mean.taken_shield - (matched.taken_shield + plain.taken_shield) / 2.0).abs() < 1e-5);
+        assert_eq!(Bonus::for_crafts(&[("Y-Wing", TargetClass::Bomber)], &[&aura]).taken_shield, matched.taken_shield);
+    }
 }
 
 /// A `Redirect_Blaster_Ability` that is on from the start (lightsaber heroes, reflector shields): incoming shots are
