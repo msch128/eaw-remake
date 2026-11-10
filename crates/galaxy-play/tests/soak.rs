@@ -18,12 +18,13 @@ fn play(campaign: &str, seed: u64, weeks: u64, classic: bool) -> Option<(u64, Ve
     let c = data.campaign(campaign)?.clone();
     let cfg = PlayConfig { sim: galaxy_sim::SimConfig { seed, victory_enabled: false, ..Default::default() }, classic_ai: classic, ..PlayConfig::default() };
     let init = PlayInit::scripted(data, fs, &c, cfg).ok()?;
+    let week_steps = init.sim.world().config.week_seconds.round().max(1.0) as u32;
     let human = init.sim.world().victory.active_player;
     let mut d = SimDriver::spawn_scripted(init.sim, init.script?, human);
     let mut last = d.wait_initial();
     let mut problems = Vec::new();
     while last.week < weeks {
-        for _ in 0..60 {
+        for _ in 0..week_steps {
             d.advance(1.0);
         }
         loop {

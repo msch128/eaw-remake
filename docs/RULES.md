@@ -18,14 +18,17 @@ and here. Known holes are in [KNOWN-GAPS.md](KNOWN-GAPS.md).
 
 ## 1.1 Time
 
-* Estimate: the week counter is not in the data. One week is `SimConfig::week_seconds` = 60 s, chosen so a Star Destroyer
-  (`Build_Time_Seconds` 70) takes about a week. Story timers, build times, AI ticks (`ai_interval_seconds` 10 s), the repair
-  estimate (`repair_*_per_week`) and the UI week counter stay on that 60 s week.
-* Data: `Xml/Gameconstants.xml` `Fiscal_Cycle_Time_In_Secs` is 45.0 (`World::fiscal_cycle_seconds`). That is how long one
-  payment of the income figure takes. The same constant is the siphon cycle (§1.14). Income still accrues every tick
-  (`tick_seconds` = 1 s). The HUD labels the figure `Credits N (+X/wk)` and the week-end line says "income +X credits/week";
-  X is the 45 s figure, so one displayed week (60 s) pays 60/45 of X. The command bar's month is four of those weeks (240 s)
-  and shows 4×X, while 240 s pays 240/45 of X.
+* Data: one galactic week is `Xml/Gameconstants.xml` `Fiscal_Cycle_Time_In_Secs`, 45.0. `SimConfig::week_seconds` defaults to 0,
+  and `World::build` copies that constant into it. The week counter, `WeekEnded`, the command-bar month (4 weeks), ETAs, the
+  built-in AI reserve `SAVING_WEEKS`, the repair estimate `repair_*_per_week` and the week stored in a save all follow
+  `week_seconds`. A save header stores the resolved length, so an old save keeps the week it was written with (the previous
+  60 s estimate). A Star Destroyer (`Build_Time_Seconds` 70) takes 70/45 of a week. Story timers, build times and AI ticks
+  (`ai_interval_seconds` 10 s) stay in the seconds the data gives them.
+* Data: the same constant is `World::fiscal_cycle_seconds`, which is how long one payment of the income figure takes, and the
+  siphon cycle (§1.14). Income still accrues every tick (`tick_seconds` = 1 s). For a new match the week and that cycle are
+  one clock, so the HUD `Credits N (+X/wk)` and the week-end line "income +X credits/week" pay X over one displayed week. A
+  month is four weeks (180 s) and shows 4×X, which is what those 180 s pay. An old save whose header still says 60 s keeps a
+  60 s week while income stays on the 45 s cycle.
 * Data, not used by the galactic layer: `Xml/Gameconstants.xml` has `Object_Max_Speed_Multiplier_Galactic` (5.0),
   `Fleet_Maintenance_Update_Delay_Seconds`, `Space_Retreat_Allowed_Countdown_Seconds` (60) and
   `Space_Capture_Allowed_Countdown_Seconds` (1); the last two are tactical-mode values.
@@ -34,7 +37,7 @@ and here. Known holes are in [KNOWN-GAPS.md](KNOWN-GAPS.md).
 
 | Rule | Kind and source | Implementation |
 |---|---|---|
-| Planet income = `Planet_Credit_Value` | Data: `Xml/Planets_WW.xml` (Coruscant_WW 607) | one fiscal cycle (45 s) per owned planet |
+| Planet income = `Planet_Credit_Value` | Data: `Xml/Planets_WW.xml` (Coruscant_WW 607) | one week, the fiscal cycle (45 s) for a new match, per owned planet |
 | Structures, star bases and units change income through `Planet_Income_Bonus_Ability` (`Absolute_Income_Modifier`, `Percentage_Income_Modifier`) | Data: `Buildings/Space/GC/Shipyard_*.xml` (upkeep -35), `Buildings/Ground/GC/**/Mining_*.xml` (+25), units (freighters +10% to +150%, Errant Venture +40%) | `World::planet_income`: `base * (1 + sum(pct)) + sum(abs)`; unit percentage modifiers apply while orbiting an owned planet |
 | Ships cost upkeep through the same ability (Star Destroyer -800) | Data: `Units/Space/Units_Space_Empire_Star_Destroyer_Imperial.xml` | summed over all ships of a faction |
 | Faction multiplier `Credits_Accumulation_Factor` | Data: `Xml/FACTIONS.XML` (Rebel 0.95) | multiplies the faction's total income |

@@ -22,6 +22,7 @@ fn new_sim(data: &GameData, config: SimConfig) -> Sim {
 fn run_ai(data: &GameData, seed: u64, weeks: u32) -> u64 {
     let mut sim = new_sim(data, SimConfig { seed, victory_enabled: false, ..SimConfig::default() });
     sim.set_ai_factions(0..sim.world().factions.len() as u32);
+    // A span of time (the old 60 s week), not N fiscal weeks. Both sides step the same seconds.
     sim.step(weeks as f32 * 60.0);
     sim.galaxy().state_hash()
 }
@@ -194,7 +195,8 @@ fn ai_match_progresses() {
     sim.set_ai_factions(0..sim.world().factions.len() as u32);
     let mut weeks = 0;
     let mut captures = 0;
-    for e in sim.step(20.0 * 60.0) {
+    let span = 20.0 * sim.world().config.week_seconds;
+    for e in sim.step(span) {
         match e {
             Event::WeekEnded { .. } => weeks += 1,
             Event::PlanetCaptured { .. } => captures += 1,

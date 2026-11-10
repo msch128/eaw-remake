@@ -1,4 +1,4 @@
-//! Every non-pirate faction plays under the Remake AI: it spends credits and builds ships within 20 weeks (skipped without the game and mod).
+//! Every non-pirate faction plays under the Remake AI: it spends credits and builds ships within the old 20 x 60 s (27 fiscal weeks). Skipped without the game and mod.
 
 use std::sync::Arc;
 
@@ -35,7 +35,7 @@ fn play(human: &str) {
     .unwrap();
     assert!(sim.start_errors.is_empty(), "{:?}", sim.start_errors);
     let mut weeks = 0;
-    while weeks < 20 {
+    while weeks < 27 {
         for e in sim.step(1.0).sim_events {
             if let Event::WeekEnded { week } = e {
                 weeks = week;
@@ -62,6 +62,6 @@ fn play(human: &str) {
             }
         }
     });
-    assert!(idle.is_empty(), "human {human}: factions that spent nothing in 20 weeks: {idle:?}");
-    assert!(no_ships.is_empty(), "human {human}: factions that built no ships in 20 weeks: {no_ships:?}");
+    assert!(idle.is_empty(), "human {human}: factions that spent nothing in 27 weeks: {idle:?}");
+    assert!(no_ships.is_empty(), "human {human}: factions that built no ships in 27 weeks: {no_ships:?}");
 }

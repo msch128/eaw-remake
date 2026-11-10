@@ -42,12 +42,17 @@ fn spawn(init: PlayInit) -> SimDriver {
     SimDriver::spawn_scripted(init.sim, script, human)
 }
 
-/// Advances whole game weeks in 1 s requests (a multiple of the 1 s tick, so batching cannot change the step sequence).
-fn run_weeks(d: &mut SimDriver, weeks: u64) -> Arc<galaxy_play::Snapshot> {
-    for _ in 0..weeks * 60 {
+/// Advances `weeks` whole game weeks in 1 s requests (a multiple of the 1 s tick, so batching cannot change the step sequence).
+fn run_weeks(d: &mut SimDriver, start_week: u64, weeks: u64) -> Arc<galaxy_play::Snapshot> {
+    let goal = start_week + weeks;
+    let mut week = start_week;
+    let mut last = None;
+    while week < goal {
         d.advance(1.0);
+        last = d.wait_idle().pop();
+        week = last.as_ref().expect("a snapshot").week;
     }
-    d.wait_idle().pop().expect("a snapshot")
+    last.expect("a snapshot")
 }
 
 #[test]
@@ -62,7 +67,8 @@ fn scripted_worker_runs_the_ai_without_stalling_the_main_thread() {
     let frame = 16.0 / 60.0;
     let t0 = Instant::now();
     let (mut last, mut worst_batch, mut worst_poll, mut work_total) = (initial.clone(), 0u64, Duration::ZERO, 0u64);
-    while last.week < 20 {
+    // 27 fiscal weeks keep the old 20 x 60 s (27 x 45 = 1215 s).
+    while last.week < 27 {
         if d.advances_in_flight(&last) < 3 {
             d.advance(frame);
         }
@@ -78,8 +84,8 @@ fn scripted_worker_runs_the_ai_without_stalling_the_main_thread() {
     }
     let wall = t0.elapsed();
     println!(
-        "20 weeks at 16x: worker {:.0} ms per game week on average, worst batch {:.0} ms, worst poll on the main thread {:?}, {:.1} s wall",
-        work_total as f64 / 1000.0 / 20.0,
+        "27 weeks at 16x: worker {:.0} ms per game week on average, worst batch {:.0} ms, worst poll on the main thread {:?}, {:.1} s wall",
+        work_total as f64 / 1000.0 / 27.0,
         worst_batch as f64 / 1000.0,
         worst_poll,
         wall.as_secs_f64()
@@ -95,14 +101,15 @@ fn save_and_load_through_the_driver_restore_the_state_and_play_on() {
     let Some(c) = ctx() else { return };
     let path = std::env::temp_dir().join("galaxy_play_test_save.json");
     let mut d = start(&c, config(2, false));
-    d.wait_initial();
-    run_weeks(&mut d, 5);
+    let opened = d.wait_initial();
+    run_weeks(&mut d, opened.week, 5);
     d.save(&path);
     let snaps = d.wait_idle();
     let saved = snaps.iter().flat_map(|s| &s.saves).next().expect("save result");
     assert_eq!(saved.result, Ok(()));
     let h5 = snaps.last().unwrap().galaxy.state_hash();
-    let h8 = run_weeks(&mut d, 3).galaxy.state_hash();
+    // 4 more fiscal weeks keep the old 3 x 60 s of play after the save.
+    let h8 = run_weeks(&mut d, snaps.last().unwrap().week, 4).galaxy.state_hash();
     assert_ne!(h5, h8);
 
     // Load into the running game: back at week 5, same continuation.
@@ -112,7 +119,7 @@ fn save_and_load_through_the_driver_restore_the_state_and_play_on() {
     assert_eq!(load.result, Ok(5));
     assert_eq!(snaps.last().unwrap().galaxy.state_hash(), h5);
     // A save is a snapshot, not a replay: the continuation is not required to equal the original (plans in flight are gone), only to run.
-    let h8_loaded = run_weeks(&mut d, 3).galaxy.state_hash();
+    let h8_loaded = run_weeks(&mut d, snaps.last().unwrap().week, 4).galaxy.state_hash();
     println!("continuation identical to the original: {}", h8_loaded == h8);
 
     // A new process starting from the save (PlayInit::from_save) sees progress and ends at the same state.
@@ -130,7 +137,7 @@ fn save_and_load_through_the_driver_restore_the_state_and_play_on() {
     assert_eq!(first.galaxy.state_hash(), h5);
     assert!(seen.windows(2).all(|w| w[1] >= w[0]) && !seen.is_empty(), "progress is monotone: {seen:?}");
     println!("load progress samples: {} (last {:.2})", seen.len(), seen.last().copied().unwrap_or(1.0));
-    run_weeks(&mut d2, 3);
+    run_weeks(&mut d2, first.week, 4);
 
     // A save of the same campaign and player loads even into a game with other AI settings (the save's settings win).
     let mut classic = start(&c, config(2, true));
@@ -146,15 +153,16 @@ fn classic_ai_games_can_be_saved_too() {
     let Some(c) = ctx() else { return };
     let path = std::env::temp_dir().join("galaxy_play_test_classic.json");
     let mut d = start(&c, config(3, true));
-    d.wait_initial();
-    run_weeks(&mut d, 4);
+    let opened = d.wait_initial();
+    // 6 fiscal weeks keep the old 4 x 60 s; 3 keep the old 2 x 60 s.
+    let saved_week = run_weeks(&mut d, opened.week, 6).week;
     d.save(&path);
     let h4 = d.wait_idle().last().unwrap().galaxy.state_hash();
-    let h6 = run_weeks(&mut d, 2).galaxy.state_hash();
+    let h6 = run_weeks(&mut d, saved_week, 3).galaxy.state_hash();
     d.load(&path);
     let snaps = d.wait_idle();
     assert_eq!(snaps.last().unwrap().galaxy.state_hash(), h4);
-    let h6_loaded = run_weeks(&mut d, 2).galaxy.state_hash();
+    let h6_loaded = run_weeks(&mut d, snaps.last().unwrap().week, 3).galaxy.state_hash();
     println!("classic continuation identical to the original: {}", h6_loaded == h6);
 }
 

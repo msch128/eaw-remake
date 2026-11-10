@@ -42,7 +42,8 @@ fn remake_ai_builds_moves_and_attacks() {
     let ships_at_start = ships(&sim);
     let (mut weeks, mut captures, mut enemy_captures, mut battles, mut week_ms) = (0, 0, 0, 0, Vec::new());
     let mut t = Instant::now();
-    while weeks < 20 {
+    // 27 fiscal weeks keep the old 20 x 60 s (27 x 45 = 1215 s).
+    while weeks < 27 {
         for e in sim.step(1.0).sim_events {
             match e {
                 Event::WeekEnded { week } => {
@@ -63,7 +64,7 @@ fn remake_ai_builds_moves_and_attacks() {
     let tf = &st.taskforces;
     week_ms.sort_by(f64::total_cmp);
     println!(
-        "20 weeks: ships {ships_at_start} -> {}, queued {} ships / {} structures, free-store claims {}, plans {}, captures {captures} ({enemy_captures} from enemy owners), battle events {battles}",
+        "27 weeks: ships {ships_at_start} -> {}, queued {} ships / {} structures, free-store claims {}, plans {}, captures {captures} ({enemy_captures} from enemy owners), battle events {battles}",
         ships(&sim),
         tf.ships_queued,
         tf.structures_queued,
@@ -75,7 +76,7 @@ fn remake_ai_builds_moves_and_attacks() {
     assert!(tf.ships_queued > 20, "the AI should build ships");
     assert!(tf.structures_queued > 20, "the AI should build structures");
     assert!(captures > 0, "the AI should conquer planets");
-    // The pirates (the only "enemy" planets near the start) now rearm with the player's tech (level 3 star base and a garrison on every planet), so in 20 weeks the AI
+    // The pirates (the only "enemy" planets near the start) now rearm with the player's tech (level 3 star base and a garrison on every planet), so in this span the AI
     // no longer takes planets from them for free; it must still fight.
     assert!(battles > 0, "the AI should fight ({enemy_captures} captures from enemy owners)");
     // Every faction, the campaign's own Rebel included, started plans.
@@ -132,7 +133,8 @@ fn run_tier(tier: galaxy_script::DifficultyTier, strategy: bool, weeks_total: u6
             match e {
                 Event::WeekEnded { week } => {
                     weeks = week;
-                    if week == 10 {
+                    // Fiscal week 14 is the old week 10 (10 x 60 s = 600 s; 14 x 45 s = 630 s). Sampling later would loosen the snowball window.
+                    if week == 14 {
                         let now = owned(&sim);
                         max_gain = (0..n).filter(|&f| Some(f as u32) != pirates).map(|f| now[f] - start[f]).max().unwrap_or(0);
                         credits10 = sim.with_sim(|s| s.galaxy().factions.iter().map(|f| f.credits).sum());
@@ -152,39 +154,39 @@ fn run_tier(tier: galaxy_script::DifficultyTier, strategy: bool, weeks_total: u6
 #[test]
 fn difficulty_tiers_scale_without_snowballing() {
     use galaxy_script::DifficultyTier::*;
-    let Some(baseline) = run_tier(Normal, false, 30, 1) else { return };
+    let Some(baseline) = run_tier(Normal, false, 40, 1) else { return };
     let mut credits = Vec::new();
     println!("normal without strategy: {} enemy captures, {:.0} ms/week", baseline.enemy_captures, baseline.week_ms);
     for (name, tier) in [("easy", Easy), ("normal", Normal), ("hard", Hard), ("brutal", Brutal), ("fair", Fair)] {
-        let r = run_tier(tier, true, 30, 1).unwrap();
+        let r = run_tier(tier, true, 40, 1).unwrap();
         println!(
-            "{name:<7} {:>2} enemy captures, best faction +{} planets by week 10, treasury sum {:.0}k at week 10, {:.0} ms/week wall, strategy layer {:.1} ms/week",
+            "{name:<7} {:>2} enemy captures, best faction +{} planets by week 14, treasury sum {:.0}k at week 14, {:.0} ms/week wall, strategy layer {:.1} ms/week",
             r.enemy_captures,
             r.max_gain_week10,
             r.credits_week10 / 1e3,
             r.week_ms,
             r.strategy_ms_per_week
         );
-        assert!(r.max_gain_week10 <= 12, "{name}: a faction snowballed (+{} planets in 10 weeks)", r.max_gain_week10);
+        assert!(r.max_gain_week10 <= 12, "{name}: a faction snowballed (+{} planets by week 14)", r.max_gain_week10);
         assert!(r.strategy_ms_per_week < 30.0);
         if matches!(name, "easy" | "normal" | "hard" | "brutal") {
             credits.push(r.credits_week10);
         }
     }
     // The treasury order is a statistical property: one seed can swap two tiers, so it is asserted on the means of seeds 1-3 (the
-    // treasury at week 10 does not depend on how long the run goes on, so seeds 2 and 3 stop there). Measured (k credits, easy /
-    // normal / hard / brutal): seed 1 208 / 316 / 347 / 321, seed 2 201 / 300 / 277 / 326, seed 3 195 / 308 / 324 / 339; means
-    // 201 / 308 / 316 / 329.
+    // treasury at the old week 10, now fiscal week 14, does not depend on how long the run goes on, so seeds 2 and 3 stop there).
+    // Measured on the 60 s week (k credits, easy / normal / hard / brutal): seed 1 208 / 316 / 347 / 321, seed 2 201 / 300 / 277 / 326,
+    // seed 3 195 / 308 / 324 / 339; means 201 / 308 / 316 / 329. Week 14 is 630 s rather than 600 s, so the print can move.
     for seed in [2, 3] {
         for (i, tier) in [Easy, Normal, Hard, Brutal].into_iter().enumerate() {
-            let r = run_tier(tier, true, 10, seed).unwrap();
-            println!("seed {seed} {tier:?}: treasury sum {:.0}k at week 10", r.credits_week10 / 1e3);
-            assert!(r.max_gain_week10 <= 12, "seed {seed}: a faction snowballed (+{} planets in 10 weeks)", r.max_gain_week10);
+            let r = run_tier(tier, true, 14, seed).unwrap();
+            println!("seed {seed} {tier:?}: treasury sum {:.0}k at week 14", r.credits_week10 / 1e3);
+            assert!(r.max_gain_week10 <= 12, "seed {seed}: a faction snowballed (+{} planets by week 14)", r.max_gain_week10);
             credits[i] += r.credits_week10;
         }
     }
     let mean: Vec<f64> = credits.iter().map(|c| c / 3.0).collect();
-    println!("treasury sum at week 10, mean of seeds 1-3: easy {:.0}k normal {:.0}k hard {:.0}k brutal {:.0}k", mean[0] / 1e3, mean[1] / 1e3, mean[2] / 1e3, mean[3] / 1e3);
+    println!("treasury sum at week 14, mean of seeds 1-3: easy {:.0}k normal {:.0}k hard {:.0}k brutal {:.0}k", mean[0] / 1e3, mean[1] / 1e3, mean[2] / 1e3, mean[3] / 1e3);
     // The multipliers are the data's (Easy 1.0, Normal 2.0, Hard 3.0 income): Easy ends poorest. Brutal is Hard with our estimates (income 4.0, build time 0.8, full map knowledge),
     // so it must end richer than Hard; a richer Hard AI also spends more than Normal, so Normal vs Hard is not asserted.
     assert!(mean[0] < mean[1] && mean[0] < mean[2] && mean[2] < mean[3], "easy must end poorest, brutal above hard: {mean:?}");
@@ -200,13 +202,13 @@ fn strategic_layer_captures_more_enemy_planets_over_several_seeds() {
     let mut runs = Vec::new();
     for chunk in all.chunks(6) {
         runs.extend(std::thread::scope(|s| {
-            let handles: Vec<_> = chunk.iter().map(|&seed| s.spawn(move || (run_tier(Normal, true, 30, seed), run_tier(Normal, false, 30, seed)))).collect();
+            let handles: Vec<_> = chunk.iter().map(|&seed| s.spawn(move || (run_tier(Normal, true, 40, seed), run_tier(Normal, false, 40, seed)))).collect();
             handles.into_iter().map(|h| h.join().expect("seed thread")).collect::<Vec<_>>()
         }));
     }
     for (seed, (a, b)) in (1..=seeds).zip(runs) {
         let (Some(a), Some(b)) = (a, b) else { return };
-        println!("seed {seed}: strategy {} vs plain {} enemy captures, {} vs {} pirate/neutral captures, largest faction {} vs {} planets (best faction +{} / +{} planets by week 10)", a.enemy_captures, b.enemy_captures, a.expansion_captures, b.expansion_captures, a.max_planets, b.max_planets, a.max_gain_week10, b.max_gain_week10);
+        println!("seed {seed}: strategy {} vs plain {} enemy captures, {} vs {} pirate/neutral captures, largest faction {} vs {} planets (best faction +{} / +{} planets by week 14)", a.enemy_captures, b.enemy_captures, a.expansion_captures, b.expansion_captures, a.max_planets, b.max_planets, a.max_gain_week10, b.max_gain_week10);
         with += a.enemy_captures;
         without += b.enemy_captures;
     }
@@ -229,7 +231,8 @@ fn remake_ai_with_strategy_is_deterministic() {
         let campaign = data.campaign("GC_Full_Web_Way_Rebel")?.clone();
         let mut sim = ScriptedSim::new(fs, data, &campaign, SimConfig { victory_enabled: false, ..SimConfig::default() }, ScriptedConfig { remake_ai: true, human: Some("none".into()), game_scoring: false, difficulty: Some(Normal), ..ScriptedConfig::default() }).ok()?;
         let mut weeks = 0;
-        while weeks < 12 {
+        // 16 fiscal weeks keep the old 12 x 60 s.
+        while weeks < 16 {
             for e in sim.step(1.0).sim_events {
                 if let Event::WeekEnded { week } = e {
                     weeks = week;
@@ -246,7 +249,8 @@ fn remake_ai_with_strategy_is_deterministic() {
 fn the_ai_spends_its_money_and_builds_star_bases() {
     let Some(mut sim) = build(true) else { return };
     let mut weeks = 0;
-    while weeks < 15 {
+    // 20 fiscal weeks keep the old 15 x 60 s.
+    while weeks < 20 {
         for e in sim.step(1.0).sim_events {
             if let Event::WeekEnded { week } = e {
                 weeks = week;

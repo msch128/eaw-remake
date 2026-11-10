@@ -63,7 +63,8 @@ fn republic_and_cis_build_and_expand_in_twenty_weeks() {
             .iter()
             .map(|&f| (planets(&sim, f), ships(&sim, f), sim.galaxy().factions[f as usize].stats.ships_built))
             .collect();
-        let weeks = 20.0 * w.config.week_seconds;
+        // The expansion check was measured over 20 of the old 60 s weeks (1200 s), not 20 fiscal weeks.
+        let weeks = 20.0 * 60.0;
         let mut t = 0.0;
         while t < weeks {
             sim.step(w.config.tick_seconds.max(1.0));

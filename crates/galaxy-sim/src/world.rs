@@ -29,7 +29,7 @@ pub type FleetId = u32;
 pub struct SimConfig {
     /// Seed for all pseudo random decisions (AI tie breaks, combat target selection).
     pub seed: u64,
-    /// Length of one galactic week in seconds (estimate, 60). The week counter and the UI use this. Income is paid over [`World::fiscal_cycle_seconds`].
+    /// Length of one galactic week in seconds. `0` asks [`World::build`] to copy `Fiscal_Cycle_Time_In_Secs` (45 s in the Remake). A save stores the resolved value, so an old header keeps its own week.
     pub week_seconds: f32,
     /// Internal fixed time step in seconds.
     pub tick_seconds: f32,
@@ -119,7 +119,7 @@ impl Default for SimConfig {
     fn default() -> Self {
         Self {
             seed: 1,
-            week_seconds: 60.0,
+            week_seconds: 0.0,
             tick_seconds: 1.0,
             galactic_speed_scale: 6.0,
             build_time_scale: 1.0,
@@ -748,7 +748,7 @@ impl World {
     }
 
     /// Builds the world for `campaign`.
-    pub fn build(data: &GameData, campaign: &Campaign, config: SimConfig) -> Result<World, SimError> {
+    pub fn build(data: &GameData, campaign: &Campaign, mut config: SimConfig) -> Result<World, SimError> {
         if !campaign.has_galaxy() {
             return Err(SimError::NoGalaxy);
         }
@@ -852,6 +852,12 @@ impl World {
             }
         }
 
+        // Fallbacks only without the files; the Remake and the base game both say 45 s and levels 1 to 5.
+        let fiscal_cycle_seconds = data.game_constants.get("fiscal_cycle_time_in_secs").and_then(|v| v.trim().parse().ok()).filter(|v: &f32| *v > 0.0).unwrap_or(45.0);
+        // A positive value is an explicit override or a week length stored in a save header. Zero means "use the fiscal cycle".
+        if config.week_seconds <= 0.0 {
+            config.week_seconds = fiscal_cycle_seconds;
+        }
         let mut world = World {
             config,
             campaign_name: campaign.name.clone(),
@@ -890,8 +896,7 @@ impl World {
                     Some((o.name.to_ascii_lowercase(), kind))
                 })
                 .collect(),
-            // Fallbacks only without the files; the Remake and the base game both say 45 s and levels 1 to 5.
-            fiscal_cycle_seconds: data.game_constants.get("fiscal_cycle_time_in_secs").and_then(|v| v.trim().parse().ok()).filter(|v: &f32| *v > 0.0).unwrap_or(45.0),
+            fiscal_cycle_seconds,
             ground_base_max: data.objects.of_kind("groundbase").filter_map(|o| data.objects.resolve(&o.name)?.num::<i32>("base_level")).max().unwrap_or(5),
         };
         world.build_catalogs(data);

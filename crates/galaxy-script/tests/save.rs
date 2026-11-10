@@ -6,7 +6,7 @@ use std::sync::Arc;
 use alamo_data::{GameData, load_galaxy};
 use alamo_fs::{FileSource, GameFs, GameInstall};
 use galaxy_script::{DifficultyTier, SaveError, SaveFile, ScriptedConfig, ScriptedSim};
-use galaxy_sim::{Command, Event, HashEra, IdMap, NameTables, SimConfig};
+use galaxy_sim::{Command, HashEra, IdMap, NameTables, SimConfig};
 
 struct Ctx {
     fs: Arc<dyn FileSource>,
@@ -29,10 +29,10 @@ fn new_sim(c: &Ctx, config: ScriptedConfig) -> ScriptedSim {
 }
 
 fn weeks(sim: &mut ScriptedSim, n: u64) {
-    let start = sim.checkpoint().week;
-    while sim.checkpoint().week < start + n {
-        let r = sim.step(1.0);
-        let _ = r.sim_events.iter().any(|e| matches!(e, Event::WeekEnded { .. }));
+    // `n` is the old 60 s week, so a 45 s fiscal week still covers the same seconds.
+    let end = sim.checkpoint().time + n as f64 * 60.0;
+    while sim.checkpoint().time + 1e-6 < end {
+        sim.step(1.0);
     }
 }
 
@@ -128,6 +128,29 @@ fn bad_saves_are_rejected() {
 
     file.header.campaign = "nope".into();
     assert!(matches!(ScriptedSim::from_save(file, c.fs.clone(), c.data.clone(), |_| {}), Err(SaveError::UnknownCampaign(_))));
+}
+
+#[test]
+fn a_new_save_stores_the_fiscal_week_and_an_old_header_keeps_its_week() {
+    let Some(c) = ctx() else { return };
+    let sim = new_sim(&c, ScriptedConfig { game_scoring: false, ..ai_config() });
+    let file = sim.to_save().unwrap();
+    assert_eq!(file.header.sim_config.week_seconds, 45.0);
+    let loaded = ScriptedSim::from_save(file.clone(), c.fs.clone(), c.data.clone(), |_| {}).unwrap();
+    loaded.with_sim(|s| {
+        assert_eq!(s.world().config.week_seconds, 45.0);
+        assert_eq!(s.world().fiscal_cycle_seconds, 45.0);
+    });
+    assert_eq!(loaded.checkpoint().galaxy_hash, sim.checkpoint().galaxy_hash);
+
+    let mut old = file;
+    old.header.sim_config.week_seconds = 60.0;
+    let loaded = ScriptedSim::from_save(old, c.fs.clone(), c.data.clone(), |_| {}).unwrap();
+    loaded.with_sim(|s| {
+        assert_eq!(s.world().config.week_seconds, 60.0, "an old header keeps the 60 s week");
+        assert_eq!(s.world().fiscal_cycle_seconds, 45.0);
+    });
+    assert_eq!(loaded.checkpoint().galaxy_hash, sim.checkpoint().galaxy_hash);
 }
 
 /// A save of a build from before hero gambling: its planets have neither the gambling fields nor the later ones, and its checkpoint is the hash

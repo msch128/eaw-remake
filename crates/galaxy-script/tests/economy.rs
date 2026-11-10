@@ -245,7 +245,8 @@ fn play(name: &str, weeks: u64) -> Option<Report> {
 }
 
 fn check(name: &str) {
-    let Some(rep) = play(name, 30) else { return };
+    // 40 fiscal weeks keep the old 30 x 60 s, so the income integral covers the same seconds.
+    let Some(rep) = play(name, 40) else { return };
     println!("== {} ({} weeks)", rep.name, rep.weeks);
     for l in &rep.lines {
         println!("   {l}");

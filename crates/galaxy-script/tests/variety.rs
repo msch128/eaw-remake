@@ -43,15 +43,16 @@ fn run(seed: u64, variety: f64, weeks: u64) -> Option<Run> {
 
 #[test]
 fn seeds_change_the_opening_and_the_same_seed_repeats() {
-    let Some(a) = run(1, 0.5, 15) else { return };
-    let a2 = run(1, 0.5, 15).unwrap();
+    // 20 fiscal weeks keep the old 15 x 60 s.
+    let Some(a) = run(1, 0.5, 20) else { return };
+    let a2 = run(1, 0.5, 20).unwrap();
     assert_eq!((a.hash, a.queued), (a2.hash, a2.queued), "same seed, same match");
     assert_eq!(a.characters, a2.characters);
-    let b = run(2, 0.5, 15).unwrap();
+    let b = run(2, 0.5, 20).unwrap();
     assert_ne!(a.characters, b.characters, "another seed draws other characters: {:?} vs {:?}", a.characters, b.characters);
     assert_ne!((a.hash, a.queued), (b.hash, b.queued), "and plays another opening");
     // The variation itself (not just the sim's own seed) changes the play.
-    let flat = run(1, 0.0, 15).unwrap();
+    let flat = run(1, 0.0, 20).unwrap();
     assert!(flat.characters.iter().all(|c| c.contains("Balanced")), "{:?}", flat.characters);
     assert_ne!((a.hash, a.queued), (flat.hash, flat.queued), "variety 0 plays the old way");
     println!("{:?}\n{:?}", a.characters, b.characters);

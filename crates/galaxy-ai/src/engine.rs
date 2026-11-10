@@ -422,7 +422,7 @@ impl AiEngine {
         // exist in the space-only game. So with a human player the AI follows the human through the story scripts. Only in games without any human (AI vs AI,
         // spectating) nothing would ever advance, so there this fallback (an **estimate**) applies: every 4 weeks a faction with more than 20000 credits tries
         // the next level at its best planet, level L only from week 10 x L on.
-        let week_seconds = if snap.weeks > 0.0 { snap.time / snap.weeks } else { 60.0 };
+        let week_seconds = if snap.weeks > 0.0 { snap.time / snap.weeks } else { sim.week_seconds() };
         for bi in 0..self.brains.len() {
             let (player, next) = (self.brains[bi].player, self.brains[bi].next_tech);
             let me = player as usize;

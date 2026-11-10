@@ -598,7 +598,7 @@ impl Sim {
             let cap = w.config.credit_cap_per_planet * fs.planets_owned as f64;
             let income = if fs.income_per_week > 0.0 { fs.income_per_week * f64::from(fs.difficulty.credit) } else { fs.income_per_week };
             let before = fs.credits;
-            // The figure is one Fiscal_Cycle_Time_In_Secs (Gameconstants.xml), not the 60 s week.
+            // One payment of the figure is one Fiscal_Cycle_Time_In_Secs. A new match's week is that same cycle; an old save may still carry its own week_seconds.
             fs.credits += income * dt as f64 / f64::from(w.fiscal_cycle_seconds);
             if w.config.credit_cap_per_planet > 0.0 && fs.planets_owned > 0 && fs.credits > cap {
                 fs.credits = cap;

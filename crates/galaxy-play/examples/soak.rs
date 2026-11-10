@@ -144,7 +144,8 @@ fn run(o: &Opts, fs: &Arc<dyn FileSource>, data: &Arc<alamo_data::GameData>) -> 
       let mut attempts = 0;
       while last.week <= week && attempts < 30 {
         attempts += 1;
-        for _ in 0..60 {
+        let week_steps = world.config.week_seconds.round().max(1.0) as u32;
+        for _ in 0..week_steps {
             d.advance(1.0);
         }
         loop {

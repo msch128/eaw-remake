@@ -1,4 +1,4 @@
-//! Forty weeks of the real campaign plots. The Devastator and 181st rewards wait on a construct
+//! Campaign plots over the old 40 x 60 s span (54 fiscal weeks, 2430 s). The Devastator and 181st rewards wait on a construct
 //! (`Black_Squadron_Upgrade`, `181ST_UPGRADE_LN_TO_IN`, `181ST_UPGRADE_IN_TO_D`) and must not fire
 //! just because the plot loaded. Skips without the game and mod.
 
@@ -97,12 +97,12 @@ fn forty_weeks_keep_the_devastator_and_181st_gates_shut() {
     }
     let Some(base) = stack(&install, "1770851727") else { return };
     for name in ["GC_Full_Web_Way_Imperial", "GC_Full_Web_Way_Rebel", "GC_Full_Web_Way_Underworld"] {
-        play(&base, name, 40);
+        play(&base, name, 54);
     }
     if ["3229239424", "2794270450", "1770851727"].iter().all(|id| install.mod_data(id).is_dir())
         && let Some(fft) = stack(&install, "fft")
     {
-        play(&fft, "GC_Full_Web_Way_Shatterpoint_Republic", 40);
+        play(&fft, "GC_Full_Web_Way_Shatterpoint_Republic", 54);
     } else {
         eprintln!("skipping Clone Wars stack");
     }

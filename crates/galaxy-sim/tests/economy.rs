@@ -1,4 +1,4 @@
-//! The income figure is one fiscal cycle (`Fiscal_Cycle_Time_In_Secs` in `Gameconstants.xml`), not the 60 s week.
+//! The income figure is one fiscal cycle (`Fiscal_Cycle_Time_In_Secs` in `Gameconstants.xml`). A new match's week is that same cycle.
 //! `examples/audit_economy.rs` checks the figure itself against the XML. Skips without the game and mod.
 
 use alamo_data::load_galaxy;
@@ -17,6 +17,7 @@ fn a_fiscal_cycle_pays_the_income_figure() {
     let mut sim = Sim::new(&data, campaign, SimConfig { victory_enabled: false, ..SimConfig::default() }).unwrap();
     let w = sim.world().clone();
     assert_eq!(w.fiscal_cycle_seconds, 45.0, "Gameconstants.xml Fiscal_Cycle_Time_In_Secs");
+    assert_eq!(w.config.week_seconds, w.fiscal_cycle_seconds, "a new match's week is the fiscal cycle");
     let secs = w.fiscal_cycle_seconds.round() as u32;
     for name in ["Rebel", "Empire"] {
         let f = w.faction_id(name).unwrap() as usize;

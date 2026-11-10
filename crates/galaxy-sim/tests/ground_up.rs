@@ -225,7 +225,8 @@ fn pirates_never_raid_or_expand_over_many_weeks() {
     let w = s.world().clone();
     let pirates = w.faction_id("Pirates").unwrap();
     let worlds_before = s.galaxy().owned_planets(pirates).count();
-    for _ in 0..12 {
+    // 16 fiscal weeks keep the old 12 x 60 s.
+    for _ in 0..16 {
         for ev in s.step(w.config.week_seconds) {
             assert!(!format!("{ev:?}").contains("Raid"), "pirates never launch raids: {ev:?}");
         }
@@ -429,8 +430,8 @@ fn advance_weeks(s: &mut Sim, weeks: u32) {
     }
 }
 
-/// Income per week below which a start does not carry an expansion (estimate for "too poor to outgrow the pirates' tech-scaled defence within 90 weeks":
-/// the Underworld's one-planet start earns 204 and takes none in 90 weeks (measured); its three-planet start earns 508 and does expand; every other start earns 497 or more and expands; a home with negative income cannot build at all).
+/// Income per week below which a start does not carry an expansion (estimate for "too poor to outgrow the pirates' tech-scaled defence within the old 90 x 60 s span, now 120 fiscal weeks":
+/// the Underworld's one-planet start earns 204 and takes none in that span (measured); its three-planet start earns 508 and does expand; every other start earns 497 or more and expands; a home with negative income cannot build at all).
 const POOR_INCOME: f64 = 300.0;
 
 fn assert_all_ai_build_and_expand(stack: &str, campaign: &str) {
@@ -446,24 +447,24 @@ fn assert_all_ai_build_and_expand(stack: &str, campaign: &str) {
             );
         }
     };
-    // Every main faction that starts with income builds ships, structures or tech within 30 weeks.
-    advance_weeks(&mut s, 30);
-    report(&s, "week 30");
+    // Every main faction that starts with income builds ships, structures or tech within the old 30 x 60 s (40 fiscal weeks).
+    advance_weeks(&mut s, 40);
+    report(&s, "week 40");
     for b in before.iter().filter(|b| b.income > 0.0) {
         let (w, g) = (s.world(), s.galaxy());
         let st = &g.factions[b.faction as usize].stats;
         let name = &w.factions[b.faction as usize].name;
-        assert!(st.ships_built > b.ships_built, "{campaign}: {name} built no ships in 30 weeks");
+        assert!(st.ships_built > b.ships_built, "{campaign}: {name} built no ships in 40 weeks");
         assert!(st.structures_built > 0 || g.factions[b.faction as usize].tech > 1, "{campaign}: {name} neither built structures nor raised tech");
     }
-    // Every faction that is not poor has expanded by week 90 (the pirates' defence scales with the attackers' tech, so it takes a while).
-    advance_weeks(&mut s, 60);
-    report(&s, "week 90");
+    // Every faction that is not poor has expanded by the old week 90 (120 fiscal weeks; the pirates' defence scales with the attackers' tech, so it takes a while).
+    advance_weeks(&mut s, 80);
+    report(&s, "week 120");
     let (w, g) = (s.world(), s.galaxy());
     for b in before.iter().filter(|b| b.income >= POOR_INCOME) {
         let st = &g.factions[b.faction as usize].stats;
         let now = g.owned_planets(b.faction).count();
-        assert!(now > b.planets || st.planets_captured > 0, "{campaign}: {} did not expand in 90 weeks ({} -> {now})", w.factions[b.faction as usize].name, b.planets);
+        assert!(now > b.planets || st.planets_captured > 0, "{campaign}: {} did not expand in 120 weeks ({} -> {now})", w.factions[b.faction as usize].name, b.planets);
     }
     let pirates = w.passive_faction().unwrap();
     assert_eq!(g.factions[pirates as usize].stats.credits_spent, 0.0, "the passive faction spends nothing");
@@ -489,7 +490,8 @@ fn the_all_ai_run_is_deterministic() {
     let Some(data) = load_stack("base") else { return };
     let run = || {
         let (mut s, _) = start_ai_run(&data, "GC_Full_Web_Way_Rebel");
-        advance_weeks(&mut s, 6);
+        // 8 fiscal weeks keep the old 6 x 60 s.
+        advance_weeks(&mut s, 8);
         s
     };
     let (a, b) = (run(), run());

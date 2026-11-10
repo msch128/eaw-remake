@@ -191,9 +191,11 @@ fn human_battle_blocks_time_until_resolved() {
 #[test]
 fn all_ai_galaxy_runs_and_reports_weeks() {
     let Some(data) = load() else { return };
-    let mut driver = SimDriver::spawn(new_sim(&data, 1), None);
+    let sim = new_sim(&data, 1);
+    let span = 6.0 * sim.world().config.week_seconds;
+    let mut driver = SimDriver::spawn(sim, None);
     driver.wait_initial();
-    driver.advance(60.0 * 6.0);
+    driver.advance(span);
     let snaps = driver.wait_idle();
     let last = snaps.last().unwrap();
     assert_eq!(last.week, 6);

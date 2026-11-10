@@ -51,7 +51,8 @@ fn run_weeks(sim: &mut ScriptedSim, weeks: u64) -> Vec<ScriptEvent> {
 fn rebel_campaign_scripts_run_clean_for_ten_weeks() {
     let Some(mut sim) = build() else { return };
     assert!(sim.start_errors.is_empty(), "{:?}", sim.start_errors);
-    let events = run_weeks(&mut sim, 10);
+    // 14 fiscal weeks keep the old 10 x 60 s.
+    let events = run_weeks(&mut sim, 14);
     let rt = sim.runtime();
     for e in rt.errors() {
         eprintln!("ERROR {}: {}", e.script, e.message);
@@ -85,8 +86,9 @@ fn scripted_match_is_deterministic() {
     let (Some(mut a), Some(mut b)) = (build(), build()) else {
         return;
     };
-    run_weeks(&mut a, 3);
-    run_weeks(&mut b, 3);
+    // 4 fiscal weeks keep the old 3 x 60 s.
+    run_weeks(&mut a, 4);
+    run_weeks(&mut b, 4);
     let ha = a.with_sim(|s| s.galaxy().state_hash());
     let hb = b.with_sim(|s| s.galaxy().state_hash());
     assert_eq!(ha, hb);

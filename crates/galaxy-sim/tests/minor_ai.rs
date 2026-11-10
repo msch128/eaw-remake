@@ -25,7 +25,8 @@ fn every_non_pirate_faction_builds_in_twenty_weeks() {
     sim.set_ai_factions(ai.clone());
     let ships = |sim: &Sim, f: FactionId| -> u32 { sim.galaxy().fleets.values().filter(|x| x.owner == f).map(|x| x.unit_count()).sum() };
     let before: Vec<(u32, f64)> = (0..w.factions.len() as FactionId).map(|f| (ships(&sim, f), sim.galaxy().factions[f as usize].stats.credits_spent)).collect();
-    let weeks = 20.0 * w.config.week_seconds;
+    // Measured over 20 of the old 60 s weeks (1200 s), not 20 fiscal weeks.
+    let weeks = 20.0 * 60.0;
     let mut t = 0.0;
     while t < weeks {
         sim.step(w.config.tick_seconds.max(1.0));
