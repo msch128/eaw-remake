@@ -501,6 +501,21 @@ pub struct StructureType {
     pub prod_mods: Vec<ProductionMod>,
     /// The `System_Spy_Ability` of the structure (the Rebel `Spy_Center`'s spy network), if any.
     pub spy: Option<crate::agents::SpyAbility>,
+    /// If this structure is a spawner (e.g. `TAXATION_AGENCY_URBAN_SPAWNER`), the rule that spawns the base structure
+    /// or aborts with an 80% refund if the base or higher level is already present.
+    pub spawner: Option<SpawnerRule>,
+    /// All structures in the same upgrade/replacement family (spawner, base, and higher levels).
+    /// Used to prevent duplicate purchases on the same planet.
+    pub family: Vec<StructureTypeId>,
+}
+
+/// Spawner replacement rule from mod scripts (e.g. `Upgrade_Empire_Gov.lua`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SpawnerRule {
+    /// Structure placed on completion when no conflicting structure is present.
+    pub base: StructureTypeId,
+    /// Higher or conflicting level structures that abort this spawner with an 80% refund.
+    pub higher: Vec<StructureTypeId>,
 }
 
 /// `Planet_Income_Gambling_Ability`: every `interval` seconds the planet's income changes by `max` (with probability `chance`) or `min` times its base value.

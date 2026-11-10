@@ -1,6 +1,6 @@
 //! Builds the unit, structure and star base catalogs from the object definitions.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use alamo_data::{Campaign, GameData, HardpointDef, ProjectileDef, ShipCategory, SpaceUnitDef};
 
@@ -305,6 +305,8 @@ impl World {
                 combat,
                 prod_mods: production_mods(&def.sub_abilities),
                 spy: crate::agents::spy_ability(&def.sub_abilities, &def.fields),
+                spawner: None,
+                family: Vec::new(),
             });
         }
         for i in 0..self.structures.len() {
@@ -637,6 +639,69 @@ impl World {
         let mut keys: Vec<&String> = data.upgrade_scripts.keys().collect();
         keys.sort();
         let swaps = crate::structure_upgrades::parse_swaps(keys.iter().filter_map(|k| data.upgrade_scripts.get(*k)));
+        let spawners = crate::structure_upgrades::parse_spawners(keys.iter().filter_map(|k| data.upgrade_scripts.get(*k)));
+
+        let mut adj: HashMap<StructureTypeId, Vec<StructureTypeId>> = HashMap::new();
+        for swap in &swaps {
+            if let (Some(&f), Some(&t)) = (self.structure_index.get(&key(&swap.from)), self.structure_index.get(&key(&swap.to))) {
+                adj.entry(f).or_default().push(t);
+                adj.entry(t).or_default().push(f);
+            }
+        }
+        for sp in &spawners {
+            let Some(&sp_id) = self.structure_index.get(&key(&sp.spawner)) else { continue };
+            let Some(&base_id) = self.structure_index.get(&key(&sp.base)) else { continue };
+            adj.entry(sp_id).or_default().push(base_id);
+            adj.entry(base_id).or_default().push(sp_id);
+            for h in &sp.higher {
+                if let Some(&h_id) = self.structure_index.get(&key(h)) {
+                    adj.entry(sp_id).or_default().push(h_id);
+                    adj.entry(h_id).or_default().push(sp_id);
+                    adj.entry(base_id).or_default().push(h_id);
+                    adj.entry(h_id).or_default().push(base_id);
+                }
+            }
+        }
+
+        let mut visited = HashSet::new();
+        for &node in adj.keys() {
+            if visited.contains(&node) {
+                continue;
+            }
+            let mut comp = Vec::new();
+            let mut q = std::collections::VecDeque::new();
+            q.push_back(node);
+            visited.insert(node);
+            while let Some(curr) = q.pop_front() {
+                comp.push(curr);
+                if let Some(neighbors) = adj.get(&curr) {
+                    for &next in neighbors {
+                        if visited.insert(next) {
+                            q.push_back(next);
+                        }
+                    }
+                }
+            }
+            comp.sort_unstable();
+            for &id in &comp {
+                self.structures[id as usize].family = comp.clone();
+            }
+        }
+
+        for sp in &spawners {
+            let Some(&sp_id) = self.structure_index.get(&key(&sp.spawner)) else { continue };
+            let Some(&base_id) = self.structure_index.get(&key(&sp.base)) else { continue };
+            let higher: Vec<StructureTypeId> = self.structures[sp_id as usize]
+                .family
+                .iter()
+                .copied()
+                .filter(|&id| id != sp_id && id != base_id)
+                .collect();
+            self.structures[sp_id as usize].spawner = Some(SpawnerRule {
+                base: base_id,
+                higher,
+            });
+        }
         let mut companies: HashMap<String, Vec<String>> = HashMap::new();
         for obj in data.objects.of_kind("groundcompany") {
             let Some(r) = data.objects.resolve(&obj.name) else { continue };

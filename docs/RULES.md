@@ -126,6 +126,12 @@ every owned planet, the planet's `Additional_Population_Capacity`, its star base
   health, and structures have no per-instance health here. `Build_Max_Instances_Per_Planet` caps how many of that
   item sit in the planet's ship queue. `Required_Ground_Base_Level` is not enforced. `*_ORBITAL_DUMMY` objects are
   not spawned, so the script's despawn of them does nothing.
+* Spawner buildings and building families (`Scripts/GameObject/Upgrade_*.lua`, `Check_For_Higher_Level` and `Set_Structure`
+  in `Scripts/Library/libUpgradeFunctions.lua`). Spawner structures (`*_SPAWNER`) and their upgrade/downgrade chains form
+  building families (e.g. `Taxation_Agency_Urban`, `Administration_Office_Urban`, `Government_Palace_Urban`). A spawner is
+  not offered / refused with `NoSlot` if any member of its family is already standing or queued on the planet. Completing
+  a spawner places the base structure; if a family member is already present when completed, the spawner aborts and refunds
+  80% of its build cost (`build_cost * 0.8`), placing nothing.
 * Selling (`Command::SellStructure`): Data: refund = build cost / 2 + 1, from `Delete_Building` in
   `Scripts/Library/libUpgradeFunctions.lua`. Ground structures use the same rule (estimate; no sell dummy exists).
   Ships (`Command::SellUnit`): Project rule: 35% of the build cost for fighters, bombers, transports and corvettes,

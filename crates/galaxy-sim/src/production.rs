@@ -384,8 +384,18 @@ impl World {
                 return Err(CommandError::BuildLimit);
             }
         }
-        let queued_same = ps.queues[Lane::Structures as usize].iter().filter(|i| i.kind == ProductionKind::Structure(structure)).count();
-        let existing_same = ps.structures.iter().chain(ps.suspended_structures.iter()).filter(|&&s| s == structure).count();
+        let queued_same = ps.queues[Lane::Structures as usize]
+            .iter()
+            .filter(|i| match i.kind {
+                ProductionKind::Structure(s) => s == structure || st.family.contains(&s),
+                _ => false,
+            })
+            .count();
+        let existing_same = ps.structures
+            .iter()
+            .chain(ps.suspended_structures.iter())
+            .filter(|&&s| s == structure || st.family.contains(&s))
+            .count();
         if (queued_same + existing_same) as i32 >= st.max_per_planet {
             return Err(CommandError::NoSlot);
         }

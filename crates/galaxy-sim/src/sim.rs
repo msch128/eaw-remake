@@ -732,6 +732,7 @@ impl Sim {
     }
 
     fn complete_production_item(&mut self, owner: FactionId, planet: PlanetId, pi: usize, item: ProductionItem, w: &World, events: &mut Vec<Event>) {
+        let mut aborted = false;
         match item.kind.clone() {
             ProductionKind::Unit(u) => {
                 let fs = &mut self.galaxy.factions[owner as usize];
@@ -755,9 +756,38 @@ impl Sim {
                 }
             }
             ProductionKind::Structure(s) => {
-                self.galaxy.planets[pi].structures.push(s);
-                let fs = &mut self.galaxy.factions[owner as usize];
-                *fs.built_structures_lifetime.entry(s).or_default() += 1;
+                let st = &w.structures[s as usize];
+                if let Some(rule) = &st.spawner {
+                    let has_base = self.galaxy.planets[pi].structures.contains(&rule.base)
+                        || self.galaxy.planets[pi].suspended_structures.contains(&rule.base);
+                    let has_higher = rule.higher.iter().any(|h| {
+                        self.galaxy.planets[pi].structures.contains(h)
+                            || self.galaxy.planets[pi].suspended_structures.contains(h)
+                    });
+                    if has_base || has_higher {
+                        self.galaxy.factions[owner as usize].credits += f64::from(st.cost) * 0.8;
+                        aborted = true;
+                    } else {
+                        let ps = &mut self.galaxy.planets[pi];
+                        if st.orbital && ps.starbase.is_none() {
+                            ps.suspended_structures.push(rule.base);
+                        } else {
+                            ps.structures.push(rule.base);
+                        }
+                        let fs = &mut self.galaxy.factions[owner as usize];
+                        *fs.built_structures_lifetime.entry(rule.base).or_default() += 1;
+                        *fs.built_structures_lifetime.entry(s).or_default() += 1;
+                    }
+                } else {
+                    let ps = &mut self.galaxy.planets[pi];
+                    if st.orbital && ps.starbase.is_none() {
+                        ps.suspended_structures.push(s);
+                    } else {
+                        ps.structures.push(s);
+                    }
+                    let fs = &mut self.galaxy.factions[owner as usize];
+                    *fs.built_structures_lifetime.entry(s).or_default() += 1;
+                }
             }
             ProductionKind::Starbase(sb) => {
                 let ps = &mut self.galaxy.planets[pi];
@@ -774,14 +804,16 @@ impl Sim {
                 }
             }
         }
-        let st = &mut self.galaxy.factions[owner as usize].stats;
-        match item.kind {
-            ProductionKind::Unit(u) if !matches!(w.units[u as usize].role, UnitRole::Dummy) => st.ships_built += 1,
-            ProductionKind::Unit(_) => {}
-            ProductionKind::Structure(_) | ProductionKind::Starbase(_) => st.structures_built += 1,
-            ProductionKind::Tech(_) => {}
+        if !aborted {
+            let st = &mut self.galaxy.factions[owner as usize].stats;
+            match item.kind {
+                ProductionKind::Unit(u) if !matches!(w.units[u as usize].role, UnitRole::Dummy) => st.ships_built += 1,
+                ProductionKind::Unit(_) => {}
+                ProductionKind::Structure(_) | ProductionKind::Starbase(_) => st.structures_built += 1,
+                ProductionKind::Tech(_) => {}
+            }
+            events.push(Event::ConstructionComplete { faction: owner, planet, kind: item.kind });
         }
-        events.push(Event::ConstructionComplete { faction: owner, planet, kind: item.kind });
     }
 
     fn move_fleets(&mut self, dt: f32, events: &mut Vec<Event>) {

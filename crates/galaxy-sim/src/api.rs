@@ -46,11 +46,7 @@ impl Sim {
         if same >= st.max_per_planet || used >= slots {
             return false;
         }
-        if st.orbital && ps.starbase.is_none() {
-            ps.suspended_structures.push(structure);
-        } else {
-            ps.structures.push(structure);
-        }
+        ps.structures.push(structure);
         w.refresh_economy(&mut self.galaxy);
         true
     }

@@ -52,6 +52,69 @@ pub(crate) fn parse_swaps(scripts: impl IntoIterator<Item = impl AsRef<str>>) ->
     out
 }
 
+/// One spawner branch named by a script: the spawner itself, the base structure it places,
+/// and higher level structures that abort it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SpawnerBranch {
+    pub spawner: String,
+    pub base: String,
+    pub higher: Vec<String>,
+}
+
+/// Parses spawner branches from `Upgrade_*.lua` scripts.
+pub(crate) fn parse_spawners(scripts: impl IntoIterator<Item = impl AsRef<str>>) -> Vec<SpawnerBranch> {
+    let mut out = Vec::new();
+    for src in scripts {
+        let mut spawner: Option<String> = None;
+        let mut base: Option<String> = None;
+        let mut higher: Vec<String> = Vec::new();
+
+        let finish = |spawner: &mut Option<String>, base: &mut Option<String>, higher: &mut Vec<String>, out: &mut Vec<SpawnerBranch>| {
+            if let Some(sp) = spawner.take() {
+                if let Some(b) = base.take() {
+                    let mut h = std::mem::take(higher);
+                    h.retain(|name| name != &b);
+                    out.push(SpawnerBranch { spawner: sp, base: b, higher: h });
+                }
+            }
+            higher.clear();
+            *base = None;
+        };
+
+        for line in src.as_ref().lines() {
+            let line = strip_comment(line);
+            if line.contains("Get_Name()") && line.contains("==") {
+                let q = quoted(&line);
+                if let Some(name) = q.first() {
+                    if name.to_ascii_uppercase().contains("SPAWNER") {
+                        finish(&mut spawner, &mut base, &mut higher, &mut out);
+                        spawner = Some(name.clone());
+                    } else if spawner.is_some() {
+                        finish(&mut spawner, &mut base, &mut higher, &mut out);
+                    }
+                }
+            } else if spawner.is_some() {
+                if line.contains("Check_For_Higher_Level(") {
+                    let q = quoted(&line);
+                    if let Some(name) = q.first() {
+                        if !higher.contains(name) {
+                            higher.push(name.clone());
+                        }
+                    }
+                }
+                if line.contains("Set_Structure(") {
+                    let q = quoted(&line);
+                    if let Some(name) = q.first() {
+                        base = Some(name.clone());
+                    }
+                }
+            }
+        }
+        finish(&mut spawner, &mut base, &mut higher, &mut out);
+    }
+    out
+}
+
 /// One `Upgrade_Unit` branch: the object the script runs on, the ship it removes, the ship it spawns.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct UnitSwap {
@@ -121,18 +184,32 @@ fn quoted(line: &str) -> Vec<String> {
 /// Upgrade with nothing to replace refunds `(to_cost - from_cost) * 0.8` once. A downgrade refunds `(from_cost - to_cost) * 0.5 + 1`
 /// per structure replaced, or 1 credit when none was.
 pub(crate) fn apply(g: &mut Galaxy, w: &World, owner: FactionId, pi: usize, from: StructureTypeId, to: StructureTypeId, downgrade: bool) {
-    let structures = &mut g.planets[pi].structures;
+    let ps = &mut g.planets[pi];
     let mut replaced = 0u32;
-    for s in structures.iter_mut() {
+    for s in ps.structures.iter_mut() {
         if *s == from {
             *s = to;
             replaced += 1;
         }
     }
+    if replaced == 0 {
+        for s in ps.suspended_structures.iter_mut() {
+            if *s == from {
+                *s = to;
+                replaced += 1;
+            }
+        }
+    }
     if replaced == 0
-        && let Some(i) = structures.iter().position(|&s| w.structures[s as usize].ancestors.contains(&from))
+        && let Some(i) = ps.structures.iter().position(|&s| w.structures[s as usize].ancestors.contains(&from))
     {
-        structures[i] = to;
+        ps.structures[i] = to;
+        replaced = 1;
+    }
+    if replaced == 0
+        && let Some(i) = ps.suspended_structures.iter().position(|&s| w.structures[s as usize].ancestors.contains(&from))
+    {
+        ps.suspended_structures[i] = to;
         replaced = 1;
     }
     let from_cost = f64::from(w.structures[from as usize].cost);
