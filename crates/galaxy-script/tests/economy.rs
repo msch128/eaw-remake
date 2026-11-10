@@ -228,7 +228,7 @@ fn play(name: &str, weeks: u64) -> Option<Report> {
         }
         // Credits: earned = integral of the income (below the cap), checked at the end.
         let inc = sim.with_sim(|s| s.galaxy().factions[me as usize].income_per_week);
-        expected_earned += inc.max(0.0) / 60.0;
+        expected_earned += inc.max(0.0) / f64::from(w.fiscal_cycle_seconds);
     }
     let st = sim.with_sim(|s| s.galaxy().factions[me as usize].stats);
     rep.lines.push(format!("stats: earned {:.0} (income integral {:.0}), spent {:.0}, ships built {}, structures built {}, planets captured {}, battles {}/{}", st.credits_earned, expected_earned, st.credits_spent, st.ships_built, st.structures_built, st.planets_captured, st.battles_won, st.battles_lost));

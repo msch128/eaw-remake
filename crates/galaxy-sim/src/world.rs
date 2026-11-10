@@ -29,7 +29,7 @@ pub type FleetId = u32;
 pub struct SimConfig {
     /// Seed for all pseudo random decisions (AI tie breaks, combat target selection).
     pub seed: u64,
-    /// Length of one galactic "week" in seconds; income is quoted per week.
+    /// Length of one galactic week in seconds (estimate, 60). The week counter and the UI use this. Income is paid over [`World::fiscal_cycle_seconds`].
     pub week_seconds: f32,
     /// Internal fixed time step in seconds.
     pub tick_seconds: f32,
@@ -711,7 +711,7 @@ pub struct World {
     /// Ground units, heroes and other objects that are named in the data but not simulated
     /// (lower-case name to kind). Ships, structures and star bases are looked up in their catalogs.
     pub unsimulated: HashMap<String, ObjectKind>,
-    /// `Fiscal_Cycle_Time_In_Secs` (`Xml/Gameconstants.xml`, 45): the "cycle" of `Siphon_Duration_In_Cycles`.
+    /// `Fiscal_Cycle_Time_In_Secs` (`Xml/Gameconstants.xml`, 45): one payment of the income figure, and the "cycle" of `Siphon_Duration_In_Cycles`.
     pub fiscal_cycle_seconds: f32,
     /// Highest `Base_Level` of the `GroundBase` objects (`GroundBases.xml`, 5): the cap of [`World::ground_base_level`].
     pub ground_base_max: i32,

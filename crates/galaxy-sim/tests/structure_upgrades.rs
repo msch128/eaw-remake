@@ -72,7 +72,7 @@ fn script_refund(sim: &mut Sim, faction: FactionId, planet: PlanetId) -> f64 {
         let fs = &sim.galaxy().factions[faction as usize];
         let income = fs.income_per_week;
         let scaled = if income > 0.0 { income * f64::from(fs.difficulty.credit) } else { income };
-        (scaled / f64::from(sim.world().config.week_seconds), fs.credits)
+        (scaled / f64::from(sim.world().fiscal_cycle_seconds), fs.credits)
     };
     sim.step(1.0);
     sim.galaxy().factions[faction as usize].credits - before - per_tick
