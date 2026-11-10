@@ -29,7 +29,7 @@ Ground battles, story campaigns and movies are out of scope.
 2. Download **`EAW-Remake-Setup-0.1.0.exe`** from the **[Releases page](https://github.com/msch128/eaw-remake/releases)** and run it.
    The setup is not code-signed, so Windows SmartScreen says "Windows protected your PC": click **More info**, then **Run anyway**.
 3. Click through the setup. It installs for your user only (no administrator rights, no Visual C++ runtime needed) and checks that the game and the mod are there; if one is missing it says so and offers the Steam page.
-4. Start **EAW Remake** from the Start menu. Uninstall it under Windows Settings > Apps; your saves and settings in `%APPDATA%\SpacePeace` stay.
+4. Start **EAW Remake** from the Start menu. Uninstall it under Windows Settings > Apps; your saves and settings in `%APPDATA%\EAW-Remake` stay.
 
 ## Build from source
 
@@ -46,7 +46,7 @@ setup (it needs Inno Setup 6). More in [CONTRIBUTING.md](CONTRIBUTING.md).
 ## Run
 
 Start `eaw-remake.exe` (or **EAW Remake** from the Start menu), pick a galaxy and your side. Settings are stored in
-`%APPDATA%\SpacePeace\settings.toml`, saves in `%APPDATA%\SpacePeace\saves` and logs in `%APPDATA%\SpacePeace\logs`.
+`%APPDATA%\EAW-Remake\settings.toml`, saves in `%APPDATA%\EAW-Remake\saves` and logs in `%APPDATA%\EAW-Remake\logs`.
 
 ### Finding the game
 

@@ -71,8 +71,8 @@ Pipeline order, as data flows: `alamo-fs` (MEG + layered VFS) -> `alamo-data` / 
 * Gameplay numbers come from the data; hidden engine rules are named estimates in config structs and in RULES.md.
 * Parsers are lenient: warnings instead of errors. Undecoded bytes stay raw; inferred fields are marked "Inferred" or
   "(guess)" in doc comments.
-* Settings live in `%APPDATA%\SpacePeace\settings.toml`, saves in `%APPDATA%\SpacePeace\saves`, logs in
-  `%APPDATA%\SpacePeace\logs` (the ten newest are kept).
+* Settings live in `%APPDATA%\EAW-Remake\settings.toml`, saves in `%APPDATA%\EAW-Remake\saves`, logs in
+  `%APPDATA%\EAW-Remake\logs` (the ten newest are kept).
 
 # Crates
 

@@ -183,8 +183,8 @@ Build under test: ____________   Date: ____________
 
 ### Logs and reporting problems
 
-Every windowed run writes a log to `%APPDATA%\SpacePeace\logs\` (the ten newest are kept, panics included); settings are
-in `%APPDATA%\SpacePeace\settings.toml`. Attach the newest log to a bug report with what you did and what you saw.
+Every windowed run writes a log to `%APPDATA%\EAW-Remake\logs\` (the ten newest are kept, panics included); settings are
+in `%APPDATA%\EAW-Remake\settings.toml`. Attach the newest log to a bug report with what you did and what you saw.
 
 ## Releasing
 
