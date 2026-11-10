@@ -100,6 +100,7 @@ fn a_cancelled_or_orphaned_purchase_gives_the_credits_back() {
     let kill = |b: &mut Battle| {
         let base = b.ships.iter().position(|s| s.side == 1 && cat.ship(s.def).is_static).unwrap();
         b.ships[base].alive = false;
+        b.ships[base].combat_death = true;
         b.step();
     };
     kill(&mut b);

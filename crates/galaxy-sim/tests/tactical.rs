@@ -1000,13 +1000,43 @@ fn attrition_credits_lost_tie_squadron_and_lost_hero() {
     let arena2 = req2.map.as_ref().and_then(|m| Arena::load(&ctx.data, &ctx.fs, m)).map(Arc::new);
     let result2 = run_headless(&req2, &catalog2, arena2).expect("result");
     let es2 = req2.sides.iter().position(|s| s.faction == empire).unwrap();
-    // Tarkin (+2400) minus his destroyed garrison fighters (-1355; the battle decides how many: -2230 with the fog-bound battle AI, -3435 with
-    // the old 10 s retreat jump) = 1045
-    assert_eq!(result2.attrition_credits[es2], 1045, "tactical battle net attrition credits for Tarkin and his garrison");
+    // Tarkin (+2400) minus the garrison craft whose hull reached 0. Craft removed still alive when he dies are not billed
+    // (1045 counted those leftovers, -1355 of craft; 1740 is +2400 - 660).
+    assert_eq!(result2.attrition_credits[es2], 1740, "tactical battle net attrition credits for Tarkin and his garrison");
     let credits_before_apply2 = tac_sim2.galaxy().factions[empire as usize].credits;
     tac_sim2.apply_tactical_result(battle2.id, &result2).unwrap();
     let credits_after_apply2 = tac_sim2.galaxy().factions[empire as usize].credits;
-    assert_eq!((credits_after_apply2 - credits_before_apply2).round(), 1045.0);
+    assert_eq!((credits_after_apply2 - credits_before_apply2).round(), 1740.0);
+}
+
+#[test]
+fn auto_resolve_bills_a_destroyed_garrison_squadron() {
+    let Some(ctx) = load() else { return };
+    let campaign = ctx.data.campaign("GC_Full_Web_Way_Rebel").expect("campaign");
+    let cfg = || SimConfig { auto_resolve_battles: true, victory_enabled: false, ..SimConfig::default() };
+    let mut quiet = Sim::new(&ctx.data, campaign, cfg()).expect("sim");
+    let mut sim = Sim::new(&ctx.data, campaign, cfg()).expect("sim");
+    let w = sim.world().clone();
+    let empire = w.faction_id("Empire").unwrap();
+    let rebel = w.faction_id("Rebel").unwrap();
+    let sb = w.starbases.iter().position(|b| b.name == "Empire_Star_Base_1").expect("Empire_Star_Base_1") as u32;
+    let base = &w.starbases[sb as usize];
+    let garrison: i32 = base.garrison.iter().map(|&(u, c)| w.units[u as usize].attrition_credits * c as i32).sum();
+    assert!(garrison < 0, "colony garrison dummies sum to {garrison}");
+    let expected = base.attrition_credits + garrison;
+    let p = empty_planet(&sim);
+    let from = neighbour(&w, p);
+    for s in [&mut quiet, &mut sim] {
+        let g = s.galaxy_mut();
+        g.planets[p as usize].owner = Some(empire);
+        g.planets[p as usize].starbase = Some(sb);
+        g.planets[p as usize].structures.clear();
+    }
+    add_fleet(&mut sim, rebel, w.unit_id("Star_Destroyer").unwrap(), 20, p, from);
+    sim.step(1.0);
+    quiet.step(1.0);
+    let delta = (sim.galaxy().factions[empire as usize].credits - quiet.galaxy().factions[empire as usize].credits).round() as i32;
+    assert_eq!(delta, expected, "station {} plus garrison {garrison}", base.attrition_credits);
 }
 
 #[test]

@@ -1221,11 +1221,12 @@ impl Sim {
                     let left = surviving.get(&(m.source, m.fleet)).copied().unwrap_or(0);
                     let lost = m.count.saturating_sub(left);
                     if lost > 0 {
+                        // Survivors are the members whose hull stayed above 0. A garrison squadron is one of those members
+                        // (`TIE_Fighter_Garrison` is -240, the sum of its craft); it pays the same dummy when it is destroyed.
                         let per = match m.source {
-                            Source::Unit(u) => w.units[u as usize].attrition_credits,
+                            Source::Unit(u) | Source::Garrison(u) => w.units[u as usize].attrition_credits,
                             Source::Starbase(sb) => w.starbases[sb as usize].attrition_credits,
                             Source::Structure(s) => w.structures[s as usize].attrition_credits,
-                            Source::Garrison(_) => 0,
                         };
                         attrition_credits[si] += lost as i32 * per;
                     }

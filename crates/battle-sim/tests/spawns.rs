@@ -261,9 +261,12 @@ fn zaarin_arrives_with_two_vindicators_beside_him() {
     let mut again = Battle::new(BattleSetup { catalog: cat.clone(), sides: vec![side("Empire", "Predominant_Star_Destroyer"), side("Rebel", "Nebulon_B_Frigate")], config: BattleConfig { seed: 9, ..BattleConfig::default() } });
     spawned(&mut again, 8.0);
     assert_eq!(again.state_hash(), b.state_hash());
-    // Losing one costs its `Destruction_Survivors` death penalty (`Zaarin_Vindi_Penalty_Dummy`, 9000 credits), as in the Remake.
+    // Destroying one costs its `Destruction_Survivors` death penalty (`Zaarin_Vindi_Penalty_Dummy`, 9000 credits). Removing the other
+    // while it still has hull (the battle ending, a failed jump) spawns no dummy.
     assert_eq!(b.result().attrition_credits[0], 0);
     b.ships[got[0].2[0] as usize].alive = false;
+    b.ships[got[0].2[0] as usize].combat_death = true;
+    b.ships[got[1].2[0] as usize].alive = false;
     assert_eq!(b.result().attrition_credits[0], -9000);
 }
 

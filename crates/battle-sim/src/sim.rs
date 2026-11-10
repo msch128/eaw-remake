@@ -504,6 +504,7 @@ impl Battle {
             hull: def.hull.max(1.0),
             shield: def.shield,
             alive: true,
+            combat_death: false,
             retreated: false,
             hps,
             order: Order::Idle,
@@ -1876,6 +1877,7 @@ impl Battle {
             }
             if s.hull <= 0.0 {
                 s.alive = false;
+                s.combat_death = true;
                 killed = true;
                 if record {
                     self.events.push(Event::ShipDestroyed { ship: id, pos: s.pos });
@@ -2034,6 +2036,7 @@ impl Battle {
                         self.events.push(Event::ShipRetreated { ship: id });
                     }
                 } else {
+                    // Still had hull: the jump leaves it behind. That is not a destruction, so no death-penalty dummy.
                     s.alive = false;
                     if record {
                         self.events.push(Event::ShipDestroyed { ship: id, pos: s.pos });
@@ -2362,6 +2365,7 @@ impl Battle {
             let s = &self.ships[i];
             if s.alive && !s.retreated && s.carrier != NONE {
                 if self.ships[s.carrier as usize].retreated {
+                    // The carrier jumped and the squadron was still out. Removed, not destroyed.
                     self.ships[i].alive = false;
                     if self.config.record_events {
                         self.events.push(Event::ShipDestroyed { ship: i as u32, pos: self.ships[i].pos });
@@ -2594,6 +2598,7 @@ impl Battle {
             t.hull -= dps * dt * t.bonus.taken_hull;
             if t.hull <= 0.0 {
                 t.alive = false;
+                t.combat_death = true;
                 if record {
                     self.events.push(Event::ShipDestroyed { ship: target, pos: t.pos });
                 }
@@ -2645,6 +2650,7 @@ impl Battle {
                     s.hull -= dmg;
                     if s.hull <= 0.0 {
                         s.alive = false;
+                        s.combat_death = true;
                         if record {
                             self.events.push(Event::ShipDestroyed { ship: s.id, pos: s.pos });
                         }
@@ -3040,6 +3046,7 @@ impl Battle {
             let t = &mut self.ships[target as usize];
             if t.alive {
                 t.alive = false;
+                t.combat_death = true;
                 t.hull = 0.0;
                 let pos = t.pos;
                 if self.config.record_events {
@@ -3067,6 +3074,7 @@ impl Battle {
                 s.hull -= dmg;
                 if s.hull <= 0.0 {
                     s.alive = false;
+                    s.combat_death = true;
                     if record {
                         self.events.push(Event::ShipDestroyed { ship: s.id, pos: s.pos });
                     }
@@ -3242,7 +3250,8 @@ impl Battle {
                     None
                 }
             };
-            // The defeated side's remaining fighters are lost with it (ground structures survive on the planet).
+            // The defeated side's remaining ships leave with it (ground structures survive on the planet). They still had hull, so no
+            // death-penalty dummy (`combat_death` stays as the fight left it).
             if let Some(w) = self.winner {
                 for s in self.ships.iter_mut().filter(|s| s.side != w && !s.retreated) {
                     if self.catalog.ship(s.def).special_weapon.as_ref().map_or(true, |sw| sw.victory_relevant) {

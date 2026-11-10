@@ -1376,7 +1376,9 @@ fn the_jump_happens_when_the_timer_runs_out_and_not_before() {
 
 #[test]
 fn a_ship_without_a_living_engine_is_lost_while_one_without_engine_hardpoints_escapes() {
-    let mut b = retreat_battle(vec![runner("runner", vec![engine(), engine()]), runner("plain", vec![]), idle_target()], "runner", 3, 3.0);
+    let mut stuck = runner("runner", vec![engine(), engine()]);
+    stuck.attrition_credits = -550;
+    let mut b = retreat_battle(vec![stuck, runner("plain", vec![]), idle_target()], "runner", 3, 3.0);
     assert!(b.can_retreat(0), "ship with intact engines can retreat");
     b.ships[0].hps[0].alive = false; // one of two engines left: still jumps
     assert!(b.can_retreat(0), "ship with 1 of 2 engines intact can retreat");
@@ -1390,6 +1392,8 @@ fn a_ship_without_a_living_engine_is_lost_while_one_without_engine_hardpoints_es
     }
     assert!(b.ships[0].retreated && b.ships[0].alive, "one living engine is enough");
     assert!(!b.ships[1].retreated && !b.ships[1].alive, "no living engine: the ship is lost");
+    assert!(!b.ships[1].combat_death, "left behind with hull, not destroyed");
+    assert_eq!(b.result().attrition_credits[0], 0, "a failed jump spawns no death-penalty dummy");
     assert!(b.ships[2].retreated && b.ships[2].alive);
     let mut p = retreat_battle(vec![runner("plain", vec![]), idle_target()], "plain", 1, 1.0);
     assert!(p.can_retreat(0), "ship without hardpoints can retreat");
@@ -1398,6 +1402,21 @@ fn a_ship_without_a_living_engine_is_lost_while_one_without_engine_hardpoints_es
         p.step();
     }
     assert!(p.ships[0].retreated, "a ship without engine hardpoints counts as having drives");
+}
+
+#[test]
+fn the_losers_living_ships_are_removed_without_a_death_penalty() {
+    let mut loser = runner("loser", vec![]);
+    loser.attrition_credits = -20;
+    let winner = runner("winner", vec![]);
+    let mut b = retreat_battle(vec![loser, winner, idle_target()], "loser", 2, 60.0);
+    b.ships[1].group = NONE;
+    b.ships[0].alive = false;
+    b.ships[0].combat_death = true;
+    b.step();
+    assert!(b.is_over());
+    assert!(!b.ships[1].alive && !b.ships[1].combat_death, "the leftover is removed with the loser");
+    assert_eq!(b.result().attrition_credits[0], -20, "only the ship whose hull was destroyed");
 }
 
 #[test]

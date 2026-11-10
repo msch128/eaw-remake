@@ -593,7 +593,7 @@ pub struct BattleResult {
     pub duration: f32,
     /// Survivors per setup group.
     pub groups: Vec<GroupResult>,
-    /// Net credits delta per side for the galaxy: attrition penalties (negative) and refunds (positive), minus the credits spent on
+    /// Net credits delta per side for the galaxy: attrition for ships destroyed in the fight (negative penalties, positive refunds), minus the credits spent on
     /// tactical builds, plus the salvage credits.
     pub attrition_credits: Vec<i32>,
     /// Salvage credits per side (`Bounty_On_Faction_Ability`; the summary's "Salvage collected"). Already included in `attrition_credits`.
@@ -664,8 +664,12 @@ pub struct Ship {
     pub hull: f32,
     /// Shield points.
     pub shield: f32,
-    /// False once destroyed.
+    /// False once destroyed or removed from the fight.
     pub alive: bool,
+    /// The hull reached 0 (a weapon, beam, bomb, zone, the super laser, or a helper's own damage). `Destruction_Survivors` spawns the
+    /// death-penalty dummy on that destruction (`DEATHPENALTY.lua`). A living ship the battle removes stays false: the loser's leftovers,
+    /// a ship that cannot jump, a squadron whose carrier jumped without it.
+    pub combat_death: bool,
     /// True once it flew out of the battle area.
     pub retreated: bool,
     /// Hardpoints.
@@ -1034,9 +1038,11 @@ impl Battle {
         for g in &mut groups {
             g.health.sort_by(|a, b| b.0.total_cmp(&a.0).then(b.1.total_cmp(&a.1)));
         }
+        // `DEATHPENALTY.lua` runs when `Destruction_Survivors` spawns, which is when the unit is destroyed. A ship removed while it still
+        // had hull (the loser's leftovers, a failed jump, a squadron left behind by its carrier) spawns no dummy.
         let mut attrition_credits = vec![0i32; self.sides.len()];
         for s in &self.ships {
-            if !s.alive && !s.retreated {
+            if s.combat_death && !s.retreated {
                 let def = self.catalog.ship(s.def);
                 if (s.side as usize) < attrition_credits.len() {
                     attrition_credits[s.side as usize] += def.attrition_credits;

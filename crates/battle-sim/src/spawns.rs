@@ -181,6 +181,7 @@ impl Battle {
             s.hull -= s.decay * dt;
             if s.hull <= 0.0 {
                 s.alive = false;
+                s.combat_death = true;
                 if self.config.record_events {
                     self.events.push(Event::ShipDestroyed { ship: i as u32, pos: s.pos });
                 }
