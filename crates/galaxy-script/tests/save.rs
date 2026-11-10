@@ -138,9 +138,10 @@ fn a_save_from_before_hero_gambling_loads_with_the_fields_at_their_defaults() {
     let mut sim = new_sim(&c, ScriptedConfig { game_scoring: false, ..ai_config() });
     weeks(&mut sim, 2);
     let mut file = sim.to_save().unwrap();
-    // The old build had no swing to save.
+    // The old build had no swing, no siphon and no battle time to save.
     for p in &mut file.state.sim.galaxy.planets {
         (p.hero_gamble, p.hero_gamble_at) = (0.0, 0.0);
+        (p.siphon, p.last_space_battle) = (None, None);
     }
     let old_hash = file.state.sim.galaxy.state_hash_of(HashEra::FleetSlots);
     assert_ne!(old_hash, file.state.sim.galaxy.state_hash(), "the two eras hash differently, or the test shows nothing");
