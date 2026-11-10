@@ -575,7 +575,8 @@ pub struct GroupResult {
     pub ship: ShipId,
     /// Units that started.
     pub total: u32,
-    /// Units still alive or retreated at the end (a squadron counts if at least half of it did).
+    /// Units still alive or retreated at the end. A squadron is one unit: at least half its craft, or, when a craft has
+    /// `Redirect_Damage_To_Teammates`, that craft.
     pub survived: u32,
     /// Units that left the battle by retreating (subset of `survived`).
     pub retreated: u32,
@@ -1008,10 +1009,18 @@ impl Battle {
             let ok = g.members.iter().filter(|&&m| self.ships[m as usize].alive).count() as u32;
             let ret = g.members.iter().filter(|&&m| self.ships[m as usize].alive && self.ships[m as usize].retreated).count() as u32;
             let def = self.catalog.ship(g.ship);
-            // A squadron is one unit made of several fighters.
+            // A squadron is one galactic unit. `Redirect_Damage_To_Teammates` (Vader) survives while that craft lives:
+            // the half test would drop him after five dead wingmen, and his own craft cannot be hit until they are gone.
+            // Any other squadron survives when at least half its craft do.
             let (t, s, r) = if def.is_squadron {
-                let half = total.div_ceil(2);
-                (1, u32::from(ok >= half && ok > 0), u32::from(ok >= half && ret >= half))
+                let leader = g.members.iter().find(|&&m| self.catalog.ship(self.ships[m as usize].def).redirect_to_teammates);
+                if let Some(&m) = leader {
+                    let ship = &self.ships[m as usize];
+                    (1, u32::from(ship.alive), u32::from(ship.alive && ship.retreated))
+                } else {
+                    let half = total.div_ceil(2);
+                    (1, u32::from(ok >= half && ok > 0), u32::from(ok >= half && ret >= half))
+                }
             } else {
                 (total, ok, ret)
             };

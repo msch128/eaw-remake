@@ -507,6 +507,12 @@ stays as a derived figure for bars and decisions (`ShipDef::hull` times the shar
   `Darth_Vader_TIE_Fighter_Squadron` 9 fighters, `Hutt_V-Wing_Squadron` 5). `Starting_Spawned_Units_Tech_0` of ships and
   star bases launch at battle start; a wiped-out squadron is replaced from `Reserve_Spawned_Units_Tech_0` after
   `Spawned_Squadron_Delay_Seconds`, while a fighter-bay hardpoint (if the ship has any) lives.
+* A squadron is one galactic unit, so the battle reports it as 0 or 1 and stores no per-craft health. A survivor's next
+  battle spawns every `Squadron_Units` line again: wingmen lost in the fight are not a galactic loss. Project rule, the
+  data gives no threshold: the squadron survives when at least half its craft are alive (`div_ceil`). A squadron with
+  `Redirect_Damage_To_Teammates` survives while that craft is alive (`Black_Squadron`: Vader plus 8 TIEs, half is 5, so
+  five dead wingmen used to remove him with his own craft undamaged). `REPLENISH_WINGMEN` is the in-battle refill, once
+  per battle.
 * Project rule (the EaW behaviour; the data has no rule): launched squadrons fight on when their carrier or station is
   destroyed. They stay spawned units (2.8): they do not keep their side in the battle, are removed with the loser and
   cannot jump on their own. Squadrons whose carrier jumped out without them are lost.

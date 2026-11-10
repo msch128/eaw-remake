@@ -198,6 +198,43 @@ fn vaders_wingmen_take_his_hits() {
 }
 
 #[test]
+fn a_hero_squadron_survives_while_its_leader_lives() {
+    // Black Squadron is 9 craft and the half test is 5. Five dead wingmen leave Vader and 3 TIEs: under half, and his
+    // own craft was never hit. The squadron is one galactic unit and survives while the redirect craft lives.
+    let Some((data, fs)) = load() else { return };
+    let cat = Arc::new(Catalog::build(&data, Some(&fs), &["Black_Squadron", "Star_Destroyer"]));
+    let side = |n: &str| SideSetup { name: "s".into(), units: vec![UnitSetup { ship: cat.ship_id(n).unwrap(), count: 1, tag: 1 }], structures: vec![], ai: false };
+    let config = BattleConfig { half_size: 8000.0, fog_of_war: false, ..BattleConfig::default() };
+    let mut b = Battle::new(BattleSetup { catalog: cat.clone(), sides: vec![side("Black_Squadron"), side("Star_Destroyer")], config });
+    let vader = b.ships.iter().find(|s| cat.ship(s.def).name == "TIE_Advanced").expect("Vader").id;
+    let wings: Vec<u32> = b.ships.iter().filter(|s| cat.ship(s.def).name == "Black_TIE_Fighter").map(|s| s.id).collect();
+    assert_eq!(wings.len(), 8);
+    for &w in wings.iter().take(5) {
+        b.ships[w as usize].alive = false;
+    }
+    let report = |b: &Battle| {
+        let result = b.result();
+        let g = result.groups.iter().find(|g| cat.ship(g.ship).name == "Black_Squadron").expect("squadron group");
+        (g.total, g.survived, g.retreated)
+    };
+    assert_eq!(report(&b), (1, 1, 0), "five dead wingmen, Vader alive");
+    b.ships[vader as usize].retreated = true;
+    assert_eq!(report(&b), (1, 1, 1), "a retreated leader still counts as survived");
+    b.ships[vader as usize].alive = false;
+    b.ships[vader as usize].retreated = false;
+    assert_eq!(report(&b), (1, 0, 0), "the leader is gone, so the squadron is gone");
+
+    // A plain squadron of 3 still uses the half rule: one craft left is lost, two are not.
+    let (mut plain, _lead, wings) = hero_squadron(false);
+    plain.ships[wings[0] as usize].alive = false;
+    let g = plain.result().groups.into_iter().find(|g| g.side == 0).unwrap();
+    assert_eq!((g.total, g.survived), (1, 1), "2 of 3");
+    plain.ships[wings[1] as usize].alive = false;
+    let g = plain.result().groups.into_iter().find(|g| g.side == 0).unwrap();
+    assert_eq!((g.total, g.survived), (1, 0), "1 of 3");
+}
+
+#[test]
 fn retreat_prevention_keeps_its_own_side_in_the_battle() {
     let Some((data, fs)) = load() else { return };
     let cat = Arc::new(Catalog::build(&data, Some(&fs), &["Titan_Star_Destroyer", "Death_Star_II", "Star_Destroyer", "MC-80_Star_Cruiser"]));
