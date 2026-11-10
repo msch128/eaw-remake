@@ -500,9 +500,9 @@ pub fn update_ships(
             0.0
         };
         let visible = s.side == settings.player_side || (s.seen_by >> settings.player_side.min(7)) & 1 == 1;
-        let small = matches!(def.class, TargetClass::Fighter | TargetClass::Bomber) || s.squad != u32::MAX;
-        // In the tactical view a squadron is its leader alone (Remake video b0703s, v0700s: one silhouette per squadron).
-        let stand_in = stands_in(tactical, s.squad, s.lead);
+        let small = matches!(def.class, TargetClass::Fighter | TargetClass::Bomber);
+        // In the tactical view a fighter or bomber squadron is its leader alone (Remake video b0703s, v0700s: one silhouette per squadron).
+        let stand_in = stands_in(tactical, s.squad, s.lead, small);
         let hp_alive: Vec<bool> = s.hps.iter().map(|h| h.alive).collect();
         let hp_health: Vec<f32> = s
             .hps
@@ -537,7 +537,7 @@ pub fn update_ships(
             view.attitude.update(cur.tick, look, motion, sim_dt);
             let (mut bank, mut pitch) = view.attitude.at(alpha);
             let mut heading = yaw;
-            if look.small || s.squad != u32::MAX {
+            if look.small || (small && s.squad != u32::MAX) {
                 let t = cur.time + alpha * sim_dt;
                 let calm = look.calm(view.attitude.speed());
                 // The drift fits the room between squadron neighbours (their data spacing less the craft's own size).
@@ -605,7 +605,7 @@ pub fn update_ships(
                 visible,
                 drawn: stand_in,
                 order: s.order,
-                path: if s.squad == u32::MAX { s.path.iter().map(|p| sim_to_bevy(*p)).collect() } else { Vec::new() },
+                path: if !small { s.path.iter().map(|p| sim_to_bevy(*p)).collect() } else { Vec::new() },
                 hp_alive,
                 hp_health,
                 hp_pos,
@@ -1203,10 +1203,10 @@ fn bone_names(clip: &alamo_model::Animation, keep: impl Fn(&[bool]) -> bool) -> 
     names
 }
 
-/// Whether a craft is drawn (see [`ShipRender::drawn`]): every ship outside a squadron and every squadron member in the battle cam, only the
-/// leader of a squadron (`squad` its index, `u32::MAX` for none) in the tactical view.
-pub fn stands_in(tactical: bool, squad: u32, lead: bool) -> bool {
-    !(tactical && squad != u32::MAX && !lead)
+/// Whether a craft is drawn (see [`ShipRender::drawn`]): every ship outside a squadron, all hulls of multi-ship non-fighter/bomber squadrons
+/// (e.g. corvette pairs), and every squadron member in the battle cam; only the leader of a fighter or bomber squadron in the tactical view.
+pub fn stands_in(tactical: bool, squad: u32, lead: bool, small: bool) -> bool {
+    !(tactical && squad != u32::MAX && small && !lead)
 }
 
 /// Share of the screen height that the bounding sphere of a small craft standing for its squadron keeps at every zoom of the tactical camera.
@@ -1619,10 +1619,11 @@ mod tests {
     #[test]
     fn the_tactical_view_draws_a_squadron_as_its_leader_and_the_battle_cam_every_craft() {
         let squad = 3;
-        assert!(stands_in(true, squad, true), "the leader stands for its squadron");
-        assert!(!stands_in(true, squad, false), "the other members are not drawn in the tactical view");
-        assert!(stands_in(false, squad, false), "the battle cam shows every craft");
-        assert!(stands_in(true, u32::MAX, false), "ships outside a squadron are always drawn");
+        assert!(stands_in(true, squad, true, true), "the leader stands for its squadron");
+        assert!(!stands_in(true, squad, false, true), "the other members are not drawn in the tactical view");
+        assert!(stands_in(false, squad, false, true), "the battle cam shows every craft");
+        assert!(stands_in(true, u32::MAX, false, false), "ships outside a squadron are always drawn");
+        assert!(stands_in(true, squad, false, false), "multi-ship non-fighter squadrons keep every hull drawn");
     }
 
     #[test]

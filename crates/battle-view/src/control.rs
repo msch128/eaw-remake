@@ -945,7 +945,7 @@ pub fn overlays(
     for id in listed {
         let Some(s) = ships.0.get(&id).filter(|s| s.side == player && s.visible) else { continue };
         // Ships only (corvettes, frigates, capitals): fighters and bombers show no line.
-        if s.squad != u32::MAX || matches!(rt.catalog.ship(s.def).class, battle_sim::TargetClass::Fighter | battle_sim::TargetClass::Bomber) {
+        if matches!(rt.catalog.ship(s.def).class, battle_sim::TargetClass::Fighter | battle_sim::TargetClass::Bomber) {
             continue;
         }
         let (dest, base) = match s.order {

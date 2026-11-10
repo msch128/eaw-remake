@@ -1352,10 +1352,9 @@ fn sync_overlays(
 /// Margin around the window inside which small craft still get a bar (logical px): a craft just off the edge keeps its bar sliding in.
 const MEMBER_BAR_MARGIN: f32 = 120.0;
 
-/// Whether a ship is one of the small craft that carry a bar and a flag of their own: fighters, bombers and the members of any squadron (a
-/// Skipray blast boat squadron is no fighter class but reads as a unit of small craft).
-fn is_small_craft(class: battle_sim::TargetClass, squad: u32) -> bool {
-    matches!(class, battle_sim::TargetClass::Fighter | battle_sim::TargetClass::Bomber) || squad != u32::MAX
+/// Whether a ship is one of the small craft that carry a bar and a flag of their own: fighters and bombers.
+fn is_small_craft(class: battle_sim::TargetClass, _squad: u32) -> bool {
+    matches!(class, battle_sim::TargetClass::Fighter | battle_sim::TargetClass::Bomber)
 }
 
 /// Unit of a small craft for its bar: its squadron, or the craft itself outside a squadron (each lone fighter is drawn on its own).
@@ -2306,7 +2305,7 @@ mod tests {
         use battle_sim::TargetClass as C;
         assert!(is_small_craft(C::Fighter, u32::MAX));
         assert!(is_small_craft(C::Bomber, u32::MAX));
-        assert!(is_small_craft(C::Corvette, 4), "a squadron member of any class is a small craft");
+        assert!(!is_small_craft(C::Corvette, 4), "a corvette squadron member is not a small craft");
         assert!(!is_small_craft(C::Capital, u32::MAX));
         assert!(!is_small_craft(C::Frigate, u32::MAX));
         let lone = |id: u32, x: f32| ship(id, 0, 0, u32::MAX, Vec3::new(x, 0.0, 100.0), 1.0);
