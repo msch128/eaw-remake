@@ -240,7 +240,8 @@ fn an_ai_v_wing_squadron_spends_its_ion_shots_on_a_frigate() {
     let (player, ai) = (ion_shots(false), ion_shots(true));
     eprintln!("ion shots in 40 s: player side {player}, AI side {ai}");
     assert_eq!(player, 0, "a player side without autofire keeps them");
-    assert!(ai >= 5, "each of the 5 V-wings fires at least one (recharge 20 s): {ai}");
+    // The container defines ION_CANNON_SHOT once (20 s). The squadron spends that one recharge, so 40 s is two shots, not one per craft.
+    assert_eq!(ai, 2, "one ion shot per squadron per recharge: {ai}");
 }
 
 #[test]
