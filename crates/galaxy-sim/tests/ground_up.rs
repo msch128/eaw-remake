@@ -198,6 +198,7 @@ fn passive_defense_scales_to_attacker_tech() {
         fleets: vec![],
         factions: vec![empire, pirates],
         defender: Some(pirates),
+        line_up: 0,
     };
     let sides_low = s.battle_sides(&battle_low_tech);
     let pirate_side_low = sides_low.iter().find(|s| s.faction == pirates).unwrap();
@@ -209,6 +210,7 @@ fn passive_defense_scales_to_attacker_tech() {
         fleets: vec![],
         factions: vec![human, pirates],
         defender: Some(pirates),
+        line_up: 0,
     };
     let sides_high = s.battle_sides(&battle_high_tech);
     let pirate_side_high = sides_high.iter().find(|s| s.faction == pirates).unwrap();

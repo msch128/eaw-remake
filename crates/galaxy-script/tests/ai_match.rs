@@ -43,8 +43,13 @@ fn remake_ai_builds_moves_and_attacks() {
     let (mut weeks, mut captures, mut enemy_captures, mut battles, mut week_ms) = (0, 0, 0, 0, Vec::new());
     let mut t = Instant::now();
     // 27 fiscal weeks keep the old 20 x 60 s (27 x 45 = 1215 s).
+    let mut watch = galaxy_sim::BattleRepeats::for_world(&sim.with_sim(|s| s.world().clone()));
     while weeks < 27 {
-        for e in sim.step(1.0).sim_events {
+        let events = sim.step(1.0).sim_events;
+        // No battle comes back with the same line-up (`SimConfig::battle_repeat_seconds`).
+        let repeated = watch.check(sim.with_sim(|s| s.galaxy().time), &events);
+        assert!(repeated.is_empty(), "battles created again with the same line-up: {repeated:?}");
+        for e in events {
             match e {
                 Event::WeekEnded { week } => {
                     weeks = week;
@@ -128,8 +133,13 @@ fn run_tier(tier: galaxy_script::DifficultyTier, strategy: bool, weeks_total: u6
     let start = owned(&sim);
     let (mut weeks, mut enemy_captures, mut expansion_captures, mut max_gain, mut credits10) = (0, 0u32, 0u32, 0i64, 0.0);
     let t0 = Instant::now();
+    let mut watch = galaxy_sim::BattleRepeats::for_world(&sim.with_sim(|s| s.world().clone()));
     while weeks < weeks_total {
-        for e in sim.step(1.0).sim_events {
+        let events = sim.step(1.0).sim_events;
+        // No battle comes back with the same line-up (`SimConfig::battle_repeat_seconds`).
+        let repeated = watch.check(sim.with_sim(|s| s.galaxy().time), &events);
+        assert!(repeated.is_empty(), "battles created again with the same line-up: {repeated:?}");
+        for e in events {
             match e {
                 Event::WeekEnded { week } => {
                     weeks = week;

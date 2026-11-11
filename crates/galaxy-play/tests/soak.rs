@@ -20,6 +20,8 @@ fn play(campaign: &str, seed: u64, weeks: u64, classic: bool) -> Option<(u64, Ve
     let init = PlayInit::scripted(data, fs, &c, cfg).ok()?;
     let week_steps = init.sim.world().config.week_seconds.round().max(1.0) as u32;
     let human = init.sim.world().victory.active_player;
+    // No battle comes back with the same line-up (`SimConfig::battle_repeat_seconds`).
+    let mut watch = galaxy_sim::BattleRepeats::for_world(init.sim.world());
     let mut d = SimDriver::spawn_scripted(init.sim, init.script?, human);
     let mut last = d.wait_initial();
     let mut problems = Vec::new();
@@ -28,7 +30,13 @@ fn play(campaign: &str, seed: u64, weeks: u64, classic: bool) -> Option<(u64, Ve
             d.advance(1.0);
         }
         loop {
-            let Some(s) = d.wait_idle().pop() else {
+            let mut snaps = d.wait_idle();
+            for s in &snaps {
+                for b in watch.check(s.time, &s.events) {
+                    problems.push(format!("week {}: battle {} at planet {} was created again with the same line-up", s.week, b.id, b.planet));
+                }
+            }
+            let Some(s) = snaps.pop() else {
                 problems.push("worker died".to_string());
                 return Some((0, problems));
             };

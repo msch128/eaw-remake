@@ -171,6 +171,13 @@ every owned planet, the planet's `Additional_Population_Capacity`, its star base
   `Fortress.xml`: `DUMMY_GROUND_STRUCTURE`, `LandBehavior` with `TURRET`, no `SpaceBehavior`); its hardpoints are for the
   land map. 61 types: 23 watchtowers, 35 fortresses, `Rocket_Tower`, `Flak_Tower`, `Command_Center_U`. They are no party
   in orbit, stop no fleet and are not in the battle. They stay in the build menus (1.3).
+* Estimate: a decided battle is not created again while the line-up it left behind still stands (the same fleets with
+  the same ships, the same star base and structures). If two hostile parties both still have something to shoot at
+  (ships, a star base, an armed structure: a draw nobody could leave), the battle is created again after
+  `battle_repeat_seconds` (10 s; the data has no such state, a battle of the original ends with one side gone). A
+  ground-to-space weapon that is the only defence gets one battle per arriving line-up (it fires, it cannot be hit),
+  then the capture rule applies. Checked on the event stream by `galaxy_sim::BattleRepeats` in the AI match and soak
+  tests; the game logs a repeat once and counts the rest.
 * `Event::BattlePending` is emitted; the app plays a tactical battle or calls `resolve_battle_auto`.
 * Auto-resolve (`combat.rs`) is a statistical placeholder. Every ship, star base, armed structure and garrison
   squadron is a combatant with shield and hull from `Shield_Points` / `Tactical_Health`, and weapons aggregated per

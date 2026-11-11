@@ -44,6 +44,11 @@ pub struct SimConfig {
     pub build_time_scale: f32,
     /// Seconds an uncontested hostile fleet must stay in orbit before a planet changes hands.
     pub capture_delay_seconds: f32,
+    /// Estimate: seconds before a battle is created again at a planet where the last one left the same line-up behind (the same fleets
+    /// with the same ships, the same defences): a fight nobody won and nobody could leave. The data has no such state, a battle of the
+    /// original always ends with one side gone. Longer than `capture_delay_seconds`. See docs/RULES.md, "Battles and auto-resolve".
+    #[serde(default = "default_battle_repeat_seconds")]
+    pub battle_repeat_seconds: f32,
     /// Credits cap per owned planet (`Credit_Cap_Per_Planet`); 0 = no cap (the default: design rule, credits never expire).
     pub credit_cap_per_planet: f64,
     /// Resolve battles automatically at the end of the step instead of emitting
@@ -109,6 +114,10 @@ fn default_true() -> bool {
     true
 }
 
+fn default_battle_repeat_seconds() -> f32 {
+    10.0
+}
+
 /// Algorithm used to settle battles.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum BattleResolver {
@@ -129,6 +138,7 @@ impl Default for SimConfig {
             galactic_speed_scale: 6.0,
             build_time_scale: 1.0,
             capture_delay_seconds: 5.0,
+            battle_repeat_seconds: default_battle_repeat_seconds(),
             credit_cap_per_planet: 0.0,
             auto_resolve_battles: true,
             ai_interval_seconds: 10.0,

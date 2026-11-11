@@ -1,5 +1,6 @@
 //! A fleet that arrives at an enemy planet: enemy fleet -> battle; only a star base or armed structures -> battle too (you fight the station);
-//! no space defenses at all -> no battle, the capture rule applies.
+//! no space defenses at all -> no battle, the capture rule applies. And no battle comes back unchanged: a ground building is no party in
+//! orbit, a ground-to-space weapon gets one battle, an undecided fight is repeated at most once per `SimConfig::battle_repeat_seconds`.
 
 use alamo_data::{GameData, load_galaxy};
 use alamo_fs::{GameFs, GameInstall};
@@ -158,4 +159,79 @@ fn a_ground_tower_does_not_hold_the_orbit() {
         assert!(battles.is_empty(), "{tower}: {} battles in 10 s", battles.len());
         assert_eq!(s.sim.galaxy().planets[s.target as usize].owner, Some(s.rebel), "{tower}: the lone fleet takes the planet");
     }
+}
+
+/// A ground-to-space weapon is the planet's only defence: the arriving fleet gets its battle (the weapon fires at it), and once that battle
+/// is decided the planet falls by the capture rule. The weapon cannot be hit, so the same battle used to come back every tick.
+#[test]
+fn a_ground_to_space_weapon_alone_gives_one_battle_and_then_the_planet_falls() {
+    let Some(data) = load() else { return };
+    for gun in ["Hypervelocity_Gun", "Ground_Ion_Cannon"] {
+        let mut s = setup(&data, |sim, target, _| {
+            sim.set_starbase(target, None);
+            let w = sim.world().clone();
+            sim.galaxy_mut().planets[target as usize].structures = vec![w.structure_id(gun).expect(gun)];
+        });
+        let b = arrive(&mut s).unwrap_or_else(|| panic!("{gun} fires at the fleet"));
+        assert_eq!(b.defender, Some(s.empire));
+        s.sim.resolve_battle_auto(b.id).expect("the battle is settled");
+        assert!(s.sim.galaxy().fleets.contains_key(&s.fleet), "{gun}: three MC-80 outlast the weapon");
+        let battles = play(&mut s.sim, s.target, 10);
+        assert!(battles.is_empty(), "{gun}: {} more battles in 10 s with nothing changed", battles.len());
+        assert_eq!(s.sim.galaxy().planets[s.target as usize].owner, Some(s.rebel), "{gun}: the planet falls");
+    }
+}
+
+/// Two hostile fleets that cannot decide their battle (no combat rounds here) and have nowhere to fall back to stay in orbit together.
+/// The battle is not created again every tick: at most once per `SimConfig::battle_repeat_seconds` while nothing changes, and at once
+/// when something does.
+#[test]
+fn an_undecided_battle_is_not_refought_every_tick() {
+    let Some(data) = load() else { return };
+    let campaign = data.campaign("GC_Full_Web_Way_Rebel").unwrap();
+    let mut sim = Sim::new(&data, campaign, SimConfig { auto_resolve_battles: false, victory_enabled: false, combat_max_rounds: 0, ..SimConfig::default() }).unwrap();
+    let w = sim.world().clone();
+    let (rebel, empire) = (w.faction_id("Rebel").unwrap(), w.faction_id("Empire").unwrap());
+    sim.galaxy_mut().fleets.clear();
+    sim.galaxy_mut().battles.clear();
+    let target = (0..w.planets.len() as u32).find(|&p| w.real[p as usize] && sim.galaxy().planets[p as usize].owner == Some(empire)).unwrap();
+    sim.set_starbase(target, None);
+    sim.galaxy_mut().planets[target as usize].structures.clear();
+    // Both fleets appear at the planet, so neither has a planet it came from.
+    sim.spawn_units(empire, target, w.unit_id("Star_Destroyer").unwrap(), 2);
+    let mc80 = w.unit_id("MC-80_Star_Cruiser").unwrap();
+    sim.spawn_units(rebel, target, mc80, 2);
+    let start = sim.galaxy().time;
+    let battles = play(&mut sim, target, 30);
+    let times: Vec<f64> = battles.iter().map(|(t, _)| t - start).collect();
+    assert_eq!(w.config.battle_repeat_seconds, 10.0);
+    assert_eq!(times, [1.0, 11.0, 21.0], "one battle per 10 s while nothing changes");
+    // The rule as the soak runs check it: none of these battles is a repeat, and they are the same line-up every time.
+    let mut watch = BattleRepeats::for_world(&w);
+    assert!(battles.iter().all(|(t, b)| watch.see(*t, b) == Sighting::Fresh { after_repeats: 0 }));
+    assert!(battles.iter().all(|(_, b)| b.line_up == battles[0].1.line_up && b.line_up != 0));
+    assert_eq!(sim.galaxy().fleets_at(target).count(), 2, "nobody was lost and nobody left");
+    // A reinforcement changes who is there: the battle is on again at once.
+    sim.spawn_units(rebel, target, mc80, 1);
+    let again = play(&mut sim, target, 1);
+    assert_eq!(again.len(), 1, "a changed line-up is fought without waiting");
+    assert_ne!(again[0].1.line_up, battles[0].1.line_up);
+    assert_eq!(watch.see(again[0].0, &again[0].1), Sighting::Fresh { after_repeats: 0 });
+}
+
+/// A save of an earlier build has neither the rule's number in its header nor the new fields in its state: it loads with the default
+/// window and judges the first battle at every planet anew.
+#[test]
+fn a_save_without_the_repeat_rule_loads_with_its_defaults() {
+    let mut config = serde_json::to_value(SimConfig::default()).unwrap();
+    assert!(config.as_object_mut().unwrap().remove("battle_repeat_seconds").is_some());
+    assert_eq!(serde_json::from_value::<SimConfig>(config).unwrap().battle_repeat_seconds, 10.0);
+    let battle: PendingBattle = serde_json::from_str(r#"{"id":7,"planet":3,"fleets":[5],"factions":[0,1],"defender":1}"#).unwrap();
+    assert_eq!((battle.id, battle.line_up), (7, 0));
+    let Some(data) = load() else { return };
+    let campaign = data.campaign("GC_Full_Web_Way_Rebel").unwrap();
+    let sim = Sim::new(&data, campaign, SimConfig::default()).unwrap();
+    let mut planet = serde_json::to_value(&sim.galaxy().planets[0]).unwrap();
+    assert!(planet.as_object_mut().unwrap().remove("battle_settled").is_some());
+    assert_eq!(serde_json::from_value::<PlanetState>(planet).unwrap().battle_settled, None);
 }

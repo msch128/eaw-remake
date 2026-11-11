@@ -931,6 +931,7 @@ impl Sim {
             }
             let ps = &self.galaxy.planets[p as usize];
             let defender = ps.owner.filter(|_| ps.starbase.is_some() || ps.structures.iter().any(|&s| w.structures[s as usize].combat.is_some() || w.structures[s as usize].space_reach));
+            let in_orbit = factions.clone();
             if let Some(d) = defender
                 && !factions.contains(&d)
             {
@@ -939,6 +940,18 @@ impl Sim {
             let hostile_pair = factions.iter().any(|&a| factions.iter().any(|&b| self.galaxy.hostile(w, a, b)));
             if !hostile_pair {
                 continue;
+            }
+            // A decided battle is not created again while the line-up it left behind still stands. Two hostile parties that both still have
+            // something to shoot at (ships, a star base, an armed structure) fight again after `battle_repeat_seconds`; a ground-to-space
+            // weapon alone, which no ship can hit, gets no second battle: the planet falls by the capture rule.
+            let line_up = w.line_up(&self.galaxy, p);
+            if ps.battle_settled == Some(line_up) {
+                let holds = |f: FactionId| in_orbit.contains(&f) || (defender == Some(f) && (ps.starbase.is_some() || ps.structures.iter().any(|&s| w.structures[s as usize].combat.is_some())));
+                let open = factions.iter().any(|&a| holds(a) && factions.iter().any(|&b| holds(b) && self.galaxy.hostile(w, a, b)));
+                let recent = ps.last_space_battle.is_some_and(|t| self.galaxy.time - t < f64::from(w.config.battle_repeat_seconds));
+                if !open || recent {
+                    continue;
+                }
             }
             factions.sort_unstable();
             let fleets = self
@@ -950,7 +963,7 @@ impl Sim {
                 .collect();
             let id = self.galaxy.next_battle_id;
             self.galaxy.next_battle_id += 1;
-            let battle = PendingBattle { id, planet: p, fleets, factions, defender };
+            let battle = PendingBattle { id, planet: p, fleets, factions, defender, line_up };
             self.galaxy.battles.push(battle.clone());
             events.push(Event::BattlePending(battle));
             if w.config.auto_resolve_battles {
@@ -1357,6 +1370,8 @@ impl Sim {
                 start_move(w, &mut self.galaxy, fid, path);
             }
         }
+        // What stands in orbit now is the outcome of this battle (see `detect_battles`).
+        self.galaxy.planets[p as usize].battle_settled = Some(w.line_up(&self.galaxy, p));
         events.push(Event::BattleResolved { id, planet: p, winner, losses: losses.into_iter().collect() });
         events
     }
@@ -1422,6 +1437,7 @@ impl Sim {
             return;
         }
         ps.owner = new;
+        ps.battle_settled = None;
         if let Some(o) = old {
             self.galaxy.factions[o as usize].stats.planets_lost += 1;
         }
@@ -1581,6 +1597,24 @@ impl World {
             }
         }
         any
+    }
+
+    /// Fingerprint of who and what stands in orbit of `planet`: its owner, star base and the structures that take part in a space battle,
+    /// and every combat fleet with its ships by type (agents aside). Equal values mean the same line-up; the value is only compared, it
+    /// holds ids and is not stable across builds.
+    pub fn line_up(&self, galaxy: &Galaxy, planet: PlanetId) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let ps = &galaxy.planets[planet as usize];
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        (planet, ps.owner, ps.starbase).hash(&mut h);
+        let mut structures: Vec<StructureTypeId> = ps.structures.iter().copied().filter(|&s| self.structures[s as usize].combat.is_some() || self.structures[s as usize].space_reach).collect();
+        structures.sort_unstable();
+        structures.hash(&mut h);
+        for f in galaxy.fleets.values().filter(|f| f.location == FleetLocation::AtPlanet(planet) && self.is_combat_fleet(f)) {
+            (f.id, f.owner).hash(&mut h);
+            f.units.iter().filter(|&(&u, _)| !self.is_agent(u)).collect::<Vec<_>>().hash(&mut h);
+        }
+        h.finish()
     }
 
     /// True if a fleet of `owner` passing through `planet` has to stop there.

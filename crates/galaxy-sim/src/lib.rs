@@ -28,6 +28,7 @@ pub mod combat;
 mod api;
 pub mod production;
 pub mod remap;
+pub mod repeat;
 pub mod requirements;
 mod sight;
 mod structure_upgrades;
@@ -48,6 +49,7 @@ pub use world::{IncomeGamble,
 };
 pub use production::{DestroyRefusal, PlanetCapacity, SlotUse};
 pub use remap::{IdMap, NameTables};
+pub use repeat::{BattleRepeats, Sighting};
 pub use requirements::Unmet;
 pub use sight::Sight;
 pub use agents::{ActiveSiphon, SiphonAbility, SpyAbility, SpyFlags, SpyReport};

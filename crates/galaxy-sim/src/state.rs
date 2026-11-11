@@ -140,6 +140,11 @@ pub struct PlanetState {
     /// Orbital structures suspended while the star base is destroyed (restored when rebuilt).
     #[serde(default)]
     pub suspended_structures: Vec<StructureTypeId>,
+    /// The line-up in orbit right after the last battle here was decided (`World::line_up`). While it still stands, that battle is not
+    /// created again (see `SimConfig::battle_repeat_seconds`). `None` before the first battle and after the planet changed hands.
+    /// Like `last_space_battle` it is not part of the state hash.
+    #[serde(default)]
+    pub battle_settled: Option<u64>,
 }
 
 /// Hull and shield of a ship or star base as a fraction of the maximum (1.0 = undamaged).
@@ -235,6 +240,10 @@ pub struct PendingBattle {
     pub factions: Vec<FactionId>,
     /// Owner of the planet whose defenses take part, if any.
     pub defender: Option<FactionId>,
+    /// The line-up in orbit when the battle was created (`World::line_up`): two battles at a planet with the same value are the same
+    /// fleets with the same ships against the same defences. 0 in the saves of earlier builds.
+    #[serde(default)]
+    pub line_up: u64,
 }
 
 /// The mutable part of a match.
@@ -1121,7 +1130,7 @@ mod tests {
             assert_eq!((g.time, g.week(), g.fleets.len(), g.planets[0].structures.as_slice()), (1206.0, 20, 2, &[4, 4, 9][..]), "{era:?}");
             assert_eq!(g.fleets[&3].units, BTreeMap::from([(7, 2), (11, 1)]), "{era:?}");
             // What the build did not know yet starts empty.
-            assert_eq!((g.planets[0].hero_gamble, g.planets[0].siphon, g.planets[0].last_space_battle), (0.0, None, None), "{era:?}");
+            assert_eq!((g.planets[0].hero_gamble, g.planets[0].siphon, g.planets[0].last_space_battle, g.planets[0].battle_settled), (0.0, None, None, None), "{era:?}");
             assert_eq!(g.fleets[&3].slot, if era == HashEra::Unslotted { 0 } else { 2 }, "{era:?}");
         }
     }

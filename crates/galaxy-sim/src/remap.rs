@@ -195,7 +195,7 @@ impl Remap<'_> {
     }
 
     fn planet_state(&mut self, p: PlanetState) -> PlanetState {
-        let PlanetState { owner, starbase, structures, queues, capture, base_health, destroyed, gamble, gamble_at, siphon, hero_gamble, hero_gamble_at, last_space_battle, suspended_structures } = p;
+        let PlanetState { owner, starbase, structures, queues, capture, base_health, destroyed, gamble, gamble_at, siphon, hero_gamble, hero_gamble_at, last_space_battle, suspended_structures, battle_settled: _ } = p;
         PlanetState {
             owner: owner.map(|f| self.faction(f)),
             starbase: starbase.map(|b| self.starbase(b)),
@@ -214,6 +214,8 @@ impl Remap<'_> {
             hero_gamble_at,
             last_space_battle,
             suspended_structures: suspended_structures.into_iter().map(|s| self.structure(s)).collect(),
+            // A fingerprint over ids cannot be translated: the next battle here is judged anew.
+            battle_settled: None,
         }
     }
 
@@ -341,8 +343,8 @@ impl Remap<'_> {
             battles: battles
                 .into_iter()
                 .map(|b| {
-                    let PendingBattle { id, planet, fleets, factions, defender } = b;
-                    PendingBattle { id, planet: self.planet(planet), fleets, factions: factions.into_iter().map(|f| self.faction(f)).collect(), defender: defender.map(|f| self.faction(f)) }
+                    let PendingBattle { id, planet, fleets, factions, defender, line_up } = b;
+                    PendingBattle { id, planet: self.planet(planet), fleets, factions: factions.into_iter().map(|f| self.faction(f)).collect(), defender: defender.map(|f| self.faction(f)), line_up }
                 })
                 .collect(),
             winner: winner.map(|f| self.faction(f)),
@@ -508,7 +510,7 @@ mod tests {
         g.fleets.insert(5, Fleet { id: 5, owner: 1, units: BTreeMap::from([(0, 2), (1, 1)]), location: FleetLocation::AtPlanet(1), previous_planet: 0, slot: 1 });
         g.sync_ships();
         g.hyperspace.insert(5, g.ships[&5][2]);
-        g.battles.push(PendingBattle { id: 1, planet: 1, fleets: vec![5], factions: vec![0, 1], defender: Some(1) });
+        g.battles.push(PendingBattle { id: 1, planet: 1, fleets: vec![5], factions: vec![0, 1], defender: Some(1), line_up: 7 });
         g.winner = Some(1);
         g.allied.insert((0, 1));
         g.rewarded.insert((1, 1));
@@ -564,7 +566,7 @@ mod tests {
         assert_eq!(g.factions[0].built_lifetime.len(), 2, "the Empire's state moved with it");
         let f = &g.fleets[&5];
         assert_eq!((f.owner, &f.location, f.previous_planet), (0, &FleetLocation::AtPlanet(0), 2));
-        assert_eq!(g.battles[0], PendingBattle { id: 1, planet: 0, fleets: vec![5], factions: vec![1, 0], defender: Some(0) });
+        assert_eq!(g.battles[0], PendingBattle { id: 1, planet: 0, fleets: vec![5], factions: vec![1, 0], defender: Some(0), line_up: 7 });
         assert_eq!(g.winner, Some(0));
         assert!(g.allied.contains(&(0, 1)), "pairs stay sorted");
         assert!(g.rewarded.contains(&(0, 0)));

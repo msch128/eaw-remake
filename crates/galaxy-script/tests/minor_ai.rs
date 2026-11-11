@@ -35,8 +35,13 @@ fn play(human: &str) {
     .unwrap();
     assert!(sim.start_errors.is_empty(), "{:?}", sim.start_errors);
     let mut weeks = 0;
+    let mut watch = galaxy_sim::BattleRepeats::for_world(&sim.with_sim(|s| s.world().clone()));
     while weeks < 27 {
-        for e in sim.step(1.0).sim_events {
+        let events = sim.step(1.0).sim_events;
+        // No battle comes back with the same line-up (`SimConfig::battle_repeat_seconds`).
+        let repeated = watch.check(sim.with_sim(|s| s.galaxy().time), &events);
+        assert!(repeated.is_empty(), "battles created again with the same line-up: {repeated:?}");
+        for e in events {
             if let Event::WeekEnded { week } = e {
                 weeks = week;
             }

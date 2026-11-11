@@ -759,7 +759,7 @@ mod tests {
 
     #[test]
     fn involves_checks_membership() {
-        let b = PendingBattle { id: 1, planet: 0, fleets: vec![], factions: vec![1, 3], defender: None };
+        let b = PendingBattle { id: 1, planet: 0, fleets: vec![], factions: vec![1, 3], defender: None, line_up: 0 };
         assert!(involves(Some(3), &b));
         assert!(!involves(Some(2), &b));
         assert!(!involves(None, &b));

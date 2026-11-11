@@ -356,3 +356,12 @@ fn the_player_takes_a_watchtower_planet_without_a_battle_dialog() {
     assert_eq!(dialogs, 0, "a ground tower is nothing to fight in space");
     assert_eq!(owner, Some(rebel));
 }
+
+/// Over a planet whose only defence is a ground-to-space weapon the player is asked once (the weapon fires at the fleet), then the planet falls.
+#[test]
+fn the_player_gets_one_battle_against_a_ground_to_space_weapon() {
+    let Some(data) = load() else { return };
+    let (dialogs, owner, rebel) = lone_human_fleet_over(&data, "Hypervelocity_Gun", 10);
+    assert_eq!(dialogs, 1, "one battle, not one per tick");
+    assert_eq!(owner, Some(rebel));
+}
