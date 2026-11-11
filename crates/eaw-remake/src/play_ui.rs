@@ -443,6 +443,8 @@ fn feed_bar(
     };
     // With only a fleet selected the panel shows the planet it orbits.
     let mut focus = selection.planet.or_else(|| selection.fleets.first().and_then(|id| state.galaxy().fleets.get(id)).and_then(|f| f.planet()));
+    // The planet card (name and income) follows the selection only: with nothing selected it is empty, like the original's.
+    let card = focus;
     // Nothing selected: keep showing the last planet, else the player's richest one (the capital), like the original.
     if focus.is_some() {
         *last_focus = focus;
@@ -454,7 +456,7 @@ fn feed_bar(
             u32::try_from(capital).ok()
         });
     }
-    if let Some(p) = focus {
+    if let Some(p) = card {
         next.planet_name = state.world.planets[p as usize].display_name.clone();
         next.planet_owner = state.galaxy().planets[p as usize].owner.map(|o| UiFaction::from_name(&state.world.factions[o as usize].name));
         let owner = state.galaxy().planets[p as usize].owner;
@@ -463,9 +465,12 @@ fn feed_bar(
             (Some(_), _) => Color::srgb(1.0, 0.3, 0.3),
             _ => Color::WHITE,
         });
-        next.planet_income = match &model.planet {
-            Some(m) => m.income as i64,
-            None => bridge.sim_to_planet[p as usize].and_then(|i| view.planets.get(i)).map_or(0, |pv| i64::from(pv.income)),
+        // One number per planet: the live income of a planet the player owns (also with only a fleet there selected), else the planet's
+        // listed credit value. It used to switch between the build menu's live figure and the static one with the selection.
+        next.planet_income = if state.galaxy().planets[p as usize].owner == player.0 && player.0.is_some() {
+            state.world.planet_income(state.galaxy(), p).round() as i64
+        } else {
+            bridge.sim_to_planet[p as usize].and_then(|i| view.planets.get(i)).map_or(0, |pv| i64::from(pv.income))
         };
     }
     let week = state.world.config.week_seconds;
