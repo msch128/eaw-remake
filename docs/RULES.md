@@ -1198,6 +1198,16 @@ Estimates and data that shape what the player sees and hears. Behaviour is in `b
   buildings). The card then moves right of, left of, above or below them, 8 px away and 4 px inside the screen
   (estimates), giving up the row first and the sell box next when the screen has no such place.
 
+## 3.5 Planet labels
+
+* A planet's name sits centred under its globe; the income figure (credit filter) is a label of its own right of the globe with
+  its foot on the top of the name, as in the Remake (v0530s: "+486" about 2.3 globe radii right of Kuat's centre, above the end
+  of the name); the bonus text (weather / ability filter; the Remake shows icons there) follows the name on its line (estimate).
+* No two labels overlap: names are laid out first (the selected and the hovered planet before the rest), a name that collides
+  takes the other side of its globe when that is free, and a name is never dropped. Then every income figure that touches no
+  placed name or figure is shown, then every bonus text that touches nothing placed: when space is short the bonus texts go
+  first and the income figures next. Labels keep 2 px apart (estimate). Offscreen runs log the overlapping label texts.
+
 ## 3.4 Bar buttons
 
 * Button states (`eaw-ui/src/widgets.rs`): a `<Click_Shift>` button moves its art 1.5 / 1 design px right and down while the

@@ -59,7 +59,6 @@ impl Plugin for GalaxyMapPlugin {
                 ..default()
             })
             .init_resource::<CaptureAnimations>()
-            .add_systems(Update, apply_filter_spans)
             .add_systems(Update, (update_pip_colors, place_sector_shadow, scripted_hover.after(update_hover)).run_if(in_state(AppScreen::Galaxy)))
             .add_systems(Startup, setup_scene)
             .add_systems(OnEnter(AppScreen::Galaxy), spawn_galaxy)
@@ -140,27 +139,20 @@ fn toggle_map_overlays_hotkey(
     }
 }
 
-/// Which filter shows a text span of a planet label.
-#[derive(Component, Clone, Copy, PartialEq, Eq)]
-enum FilterSpan {
-    Credits,
-    Ability,
+/// What a separate part of a planet label shows.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+enum LabelPartKind {
+    /// The planet's income (credit filter).
+    Income,
+    /// The planet's special ability (weather / ability filter).
+    Bonus,
 }
 
-/// Shows or hides the filtered parts of the planet labels (spans are made transparent).
-fn apply_filter_spans(filters: Res<MapFilters>, mut spans: Query<(&FilterSpan, &mut TextColor, &mut TextFont)>) {
-    for (kind, mut color, mut font) in &mut spans {
-        let (on, c) = match kind {
-            FilterSpan::Credits => (filters.credits, Color::srgb(0.6, 0.85, 1.0)),
-            FilterSpan::Ability => (filters.weather, Color::srgb(1.0, 0.85, 0.45)),
-        };
-        color.set_if_neq(TextColor(if on { c } else { Color::NONE }));
-        // The label's text shadow would still show a transparent span, so hidden spans shrink to nothing.
-        let size = FontSize::Px(if on { 9.0 } else { 0.01 });
-        if font.font_size != size {
-            font.font_size = size;
-        }
-    }
+/// A planet label's income figure or bonus text, placed by [`update_labels`].
+#[derive(Component, Clone, Copy)]
+struct LabelPart {
+    planet: usize,
+    kind: LabelPartKind,
 }
 
 /// Gizmo group for the owner rings under planets (constant pixel width).
@@ -600,7 +592,7 @@ fn spawn_galaxy(
             Emblem(i),
             GalaxyEntity,
         ));
-        let label = commands.spawn((
+        commands.spawn((
             Text::new(planet.display_name.to_uppercase()),
             TextFont {
                 font: FontSource::Family("Bahnschrift".into()),
@@ -620,24 +612,24 @@ fn spawn_galaxy(
             GlobalZIndex(LABEL_Z),
             PlanetLabel(i),
             GalaxyEntity,
-        )).id();
-        if planet.income > 0 {
-            // Small income number after the name, like the original ("+90").
+        ));
+        // The income figure and the bonus text are labels of their own: the Remake draws the small "+90" right of the globe, above
+        // the end of the name (v0530s: Kuat, Commenor, Manaan, Zeltros, Mimban), and a crowded map drops them, not the name.
+        let parts = [
+            (planet.income > 0).then(|| (LabelPartKind::Income, format!("+{}", planet.income), Color::srgb(0.6, 0.85, 1.0))),
+            planet.ability.as_ref().map(|(name, _)| (LabelPartKind::Bonus, name.clone(), Color::srgb(1.0, 0.85, 0.45))),
+        ];
+        for (kind, text, color) in parts.into_iter().flatten() {
             commands.spawn((
-                TextSpan::new(format!(" +{}", planet.income)),
+                Text::new(text),
                 TextFont { font: FontSource::Family("Bahnschrift".into()), font_size: FontSize::Px(9.0), ..default() },
-                TextColor(Color::srgb(0.6, 0.85, 1.0)),
-                FilterSpan::Credits,
-                ChildOf(label),
-            ));
-        }
-        if let Some((name, _)) = &planet.ability {
-            commands.spawn((
-                TextSpan::new(format!("  {name}")),
-                TextFont { font: FontSource::Family("Bahnschrift".into()), font_size: FontSize::Px(9.0), ..default() },
-                TextColor(Color::NONE),
-                FilterSpan::Ability,
-                ChildOf(label),
+                TextColor(color),
+                TextShadow { offset: Vec2::splat(1.0), color: Color::srgba(0.0, 0.0, 0.0, 0.9) },
+                Node { position_type: PositionType::Absolute, ..default() },
+                Visibility::Hidden,
+                GlobalZIndex(LABEL_Z),
+                LabelPart { planet: i, kind },
+                GalaxyEntity,
             ));
         }
     }
@@ -717,6 +709,9 @@ struct LabelSlot {
     /// Top-left of the same rectangle above the globe, for a name that would sit off the bottom or under the interface.
     above: Vec2,
     size: Vec2,
+    /// Centre of the globe and its radius on the screen (viewport px).
+    globe: Vec2,
+    radius: f32,
 }
 
 /// Zoom fraction (0 closest, 1 farthest) from which the map shows no planet names but the selected planet's (the hover card still
@@ -763,6 +758,71 @@ fn below_clear(lenient: bool, with_room: bool, above: bool, was_above: bool) -> 
     if was_above && above { with_room } else { lenient }
 }
 
+/// The screen rectangles (viewport px) a planet's label can take: its name block (name, emblem, slot pips) at its preferred place and
+/// at the other side of the globe if that is free of the interface, the income figure and the bonus text (`None` when not shown).
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct LabelParts {
+    pub name: Rect,
+    pub alt: Option<Rect>,
+    pub income: Option<Rect>,
+    pub bonus: Option<Rect>,
+}
+
+/// What [`declutter`] shows of a label.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct LabelShown {
+    /// The name block takes its other place.
+    pub alt: bool,
+    pub income: bool,
+    pub bonus: bool,
+}
+
+/// Space kept between two labels (viewport px; estimate).
+const LABEL_GAP: f32 = 2.0;
+
+fn rects_touch(a: &Rect, b: &Rect) -> bool {
+    a.min.x < b.max.x + LABEL_GAP && b.min.x < a.max.x + LABEL_GAP && a.min.y < b.max.y + LABEL_GAP && b.min.y < a.max.y + LABEL_GAP
+}
+
+/// Lays the labels out so that no two overlap, labels earlier in `order` first: every name stays (at its preferred place, else at
+/// its other place when that one is free; when neither is, it stays where it prefers), then every income figure that touches no
+/// placed name or figure (its own name aside: it is laid out against it), then every bonus text that touches nothing placed but
+/// its own name. So when space is short the bonus texts go first, the income figures next, and the names never.
+pub(crate) fn declutter(parts: &[LabelParts], order: &[usize]) -> Vec<LabelShown> {
+    let mut shown = vec![LabelShown::default(); parts.len()];
+    // Placed rectangles with the planet whose name they are (a figure sits against its own name, never on another one).
+    let mut placed: Vec<(Option<usize>, Rect)> = Vec::with_capacity(parts.len() * 3);
+    let free = |r: &Rect, own: usize, placed: &[(Option<usize>, Rect)]| !placed.iter().any(|(name_of, p)| *name_of != Some(own) && rects_touch(r, p));
+    for &i in order {
+        let p = &parts[i];
+        let rect = match p.alt {
+            Some(alt) if !free(&p.name, usize::MAX, &placed) && free(&alt, usize::MAX, &placed) => {
+                shown[i].alt = true;
+                alt
+            }
+            _ => p.name,
+        };
+        placed.push((Some(i), rect));
+    }
+    for &i in order {
+        if let Some(r) = parts[i].income
+            && free(&r, i, &placed)
+        {
+            shown[i].income = true;
+            placed.push((None, r));
+        }
+    }
+    for &i in order {
+        if let Some(r) = parts[i].bonus
+            && free(&r, i, &placed)
+        {
+            shown[i].bonus = true;
+            placed.push((None, r));
+        }
+    }
+    shown
+}
+
 /// `SP_NO_PLANET_NAMES=1`: the names are laid out as usual but not drawn, so a comparison render of the same view shows exactly what
 /// the names add on screen (how well a name shows through the build strip).
 fn draw_planet_names() -> bool {
@@ -785,7 +845,10 @@ fn update_labels(
     mut labels: Query<(&PlanetLabel, &mut Node, &mut Visibility, &ComputedNode, &mut TextFont, &mut TextColor), Without<PipRow>>,
     mut pip_rows: Query<(&PipRow, &mut Node, &mut Visibility), Without<PlanetLabel>>,
     mut emblems: Query<(&Emblem, &mut Node, &mut Visibility), (Without<PlanetLabel>, Without<PipRow>, Without<PipIcon>)>,
-    mut pip_icons: Query<&mut Node, (With<PipIcon>, Without<PlanetLabel>, Without<PipRow>)>,
+    (mut pip_icons, mut parts): (
+        Query<&mut Node, (With<PipIcon>, Without<PlanetLabel>, Without<PipRow>)>,
+        Query<(&LabelPart, &mut Node, &mut Visibility, &ComputedNode, &mut TextFont), (Without<PlanetLabel>, Without<PipRow>, Without<Emblem>, Without<PipIcon>)>,
+    ),
     mut last_font: Local<f32>,
     mut slots: Local<Vec<Option<LabelSlot>>>,
     (mut visible, mut was_above, mut was_far): (Local<Vec<bool>>, Local<Vec<bool>>, Local<bool>),
@@ -825,9 +888,10 @@ fn update_labels(
         } else {
             Vec2::new(planet.display_name.len() as f32 * font_px * 0.6, font_px * 1.3)
         };
-        // Room for the two rows of structure slot pips under the name.
-        let size = size + Vec2::new(0.0, font_px * 1.1);
-        slots[label.0] = Some(LabelSlot { pos: Vec2::new(p.x - size.x * 0.5, p.y), above: Vec2::new(p.x - size.x * 0.5, a.y - r_px - size.y), size });
+        // Room for the two rows of structure slot pips under the name while they show.
+        let pips = filters.base_level || hover.0 == Some(label.0);
+        let size = size + Vec2::new(0.0, if pips { font_px * 1.1 } else { 0.0 });
+        slots[label.0] = Some(LabelSlot { pos: Vec2::new(p.x - size.x * 0.5, p.y), above: Vec2::new(p.x - size.x * 0.5, a.y - r_px - size.y), size, globe: a, radius: r_px });
     }
 
     // The label colour follows the owner (a captured planet turns green).
@@ -842,10 +906,12 @@ fn update_labels(
     visible.resize(slots.len(), false);
     // Placement of this frame (`was_above` keeps last frame's for the hysteresis).
     let mut now_above = vec![false; slots.len()];
+    let mut alt_pos: Vec<Option<Vec2>> = vec![None; slots.len()];
     // Close up (names shown) only the anchor of a name has to be on screen; zoomed out, for the selected planet's, the whole name.
     let close = !far;
     for (i, slot) in slots.iter_mut().enumerate() {
         let Some(s) = slot.as_mut() else { continue };
+        let below_pos = s.pos;
         // The selected planet always keeps its label; zoomed out too far it is the only one.
         let selected = selection.0 == Some(i);
         if far && !selected {
@@ -868,8 +934,78 @@ fn update_labels(
         }
         visible[i] = selected || below || above;
         now_above[i] = visible[i] && moved_up;
+        // The other side of the globe, for a name that collides with another label there.
+        if visible[i] {
+            alt_pos[i] = if moved_up {
+                label_clear(below_pos, s.size, viewport, close, &panel, 0.0).then_some(below_pos)
+            } else {
+                above.then_some(s.above)
+            };
+        }
+    }
+
+    // No two labels overlap: names first (the selected and hovered planets' before the rest), then income figures, then bonus texts.
+    let part_font_px = (font_px * 0.75).round().max(6.0);
+    let part_node_px = (part_font_px / us).round().max(1.0);
+    let mut part_size: HashMap<(usize, LabelPartKind), Vec2> = HashMap::new();
+    for (part, _, _, computed, mut font) in &mut parts {
+        if font.font_size != FontSize::Px(part_node_px) {
+            font.font_size = FontSize::Px(part_node_px);
+        }
+        let measured = computed.size() * computed.inverse_scale_factor() * us;
+        part_size.insert((part.planet, part.kind), if measured.x > 1.0 { measured } else { Vec2::new(part_font_px * 3.0, part_font_px * 1.3) });
+    }
+    let emblem_shown = |i: usize| zoom_out < 0.3 || selection.0 == Some(i);
+    let mut layout = vec![LabelParts::default(); slots.len()];
+    let mut income_at: Vec<Option<Vec2>> = vec![None; slots.len()];
+    let mut bonus_at: Vec<Option<Vec2>> = vec![None; slots.len()];
+    for (i, slot) in slots.iter().enumerate() {
+        let Some(s) = slot.filter(|_| visible[i]) else { continue };
+        let block = |pos: Vec2| Rect::new(pos.x - if emblem_shown(i) { 14.0 * us } else { 0.0 }, pos.y - font_px * 0.4, pos.x + s.size.x, pos.y + s.size.y);
+        // The income figure sits right of the globe with its foot on the top of the name under it (Remake v0530s: about 2.3 globe
+        // radii right of the centre; the label offset `radius` is about two globe radii here), the bonus text on the name's line
+        // after its end (estimate: the Remake shows ability icons, not text).
+        let name_top = s.globe.y + s.radius;
+        let left = s.globe.x + (1.15 * s.radius).max(6.0);
+        let income = part_size.get(&(i, LabelPartKind::Income)).filter(|_| filters.credits).map(|sz| Rect::from_corners(Vec2::new(left, name_top - sz.y - 1.0), Vec2::new(left + sz.x, name_top - 1.0)));
+        let bonus = part_size.get(&(i, LabelPartKind::Bonus)).filter(|_| filters.weather).map(|sz| {
+            let name_h = s.size.y - if filters.base_level || hover.0 == Some(i) { font_px * 1.1 } else { 0.0 };
+            let at = Vec2::new(s.pos.x + s.size.x + 0.4 * font_px, s.pos.y + 0.5 * (name_h - sz.y));
+            Rect::from_corners(at, at + *sz)
+        });
+        income_at[i] = income.map(|r| r.min);
+        bonus_at[i] = bonus.map(|r| r.min);
+        layout[i] = LabelParts { name: block(s.pos), alt: alt_pos[i].map(block), income, bonus };
+    }
+    let mut order: Vec<usize> = (0..slots.len()).filter(|&i| visible[i]).collect();
+    order.sort_by_key(|&i| (selection.0 != Some(i), hover.0 != Some(i), i));
+    let shown = declutter(&layout, &order);
+    for &i in &order {
+        if shown[i].alt
+            && let (Some(s), Some(alt)) = (slots[i].as_mut(), alt_pos[i])
+        {
+            now_above[i] = (alt - s.above).length() < 0.5;
+            s.pos = alt;
+        }
     }
     *was_above = now_above;
+    for (part, mut node, mut vis, _, _) in &mut parts {
+        let i = part.planet;
+        let (on, at) = match part.kind {
+            LabelPartKind::Income => (shown.get(i).is_some_and(|x| x.income), income_at.get(i).copied().flatten()),
+            LabelPartKind::Bonus => (shown.get(i).is_some_and(|x| x.bonus), bonus_at.get(i).copied().flatten()),
+        };
+        match at.filter(|_| on && visible[i] && draw_planet_names()) {
+            Some(p) => {
+                node.left = Val::Px(p.x / us);
+                node.top = Val::Px(p.y / us);
+                vis.set_if_neq(Visibility::Inherited);
+            }
+            None => {
+                vis.set_if_neq(Visibility::Hidden);
+            }
+        }
+    }
 
     let draw_names = draw_planet_names();
     for (label, mut node, mut vis, _, _, _) in &mut labels {
@@ -930,6 +1066,7 @@ fn log_label_stats(
     panel: Res<PanelRect>,
     camera: Single<(&Camera, &GlobalTransform), With<GalaxyCamera>>,
     labels: Query<(&PlanetLabel, &Visibility)>,
+    texts: Query<(&ComputedNode, &UiGlobalTransform, &InheritedVisibility), Or<(With<PlanetLabel>, With<LabelPart>)>>,
     mut last: Local<(Option<GlobalTransform>, Vec<bool>, u32, u32)>,
 ) {
     if args.offscreen.is_none() {
@@ -965,7 +1102,15 @@ fn log_label_stats(
         named += u32::from(shown[i]);
         low_named += u32::from(lower && shown[i]);
     }
-    info!("labels: {named} of {on} on screen named, lower third {low_named} of {low_on}, toggles {toggles}, interface rects {}", panel.0.len());
+    // Names, income figures and bonus texts on screen that cover each other (glyph boxes, window px).
+    let boxes: Vec<Rect> = texts.iter().filter(|(n, _, v)| v.get() && n.size().x > 1.0).map(|(n, g, _)| Rect::from_center_size(g.translation, n.size())).collect();
+    let mut overlaps = 0;
+    for a in 0..boxes.len() {
+        for b in a + 1..boxes.len() {
+            overlaps += u32::from(!boxes[a].intersect(boxes[b]).is_empty());
+        }
+    }
+    info!("labels: {named} of {on} on screen named, lower third {low_named} of {low_on}, toggles {toggles}, interface rects {}, overlapping label texts {overlaps}", panel.0.len());
     *toggles = 0;
 }
 
@@ -1732,6 +1877,45 @@ fn make_starfield(width: u32, height: u32) -> Image {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn crowded_labels_drop_bonus_then_income_and_keep_every_name() {
+        let r = |x: f32, y: f32, w: f32, h: f32| Rect::new(x, y, x + w, y + h);
+        // Three planets in a row like Corulag, Anaxes and Brentaal near Coruscant: names 70 px wide, 30 px apart.
+        let parts: Vec<LabelParts> = (0..3)
+            .map(|k| {
+                let x = 100.0 + k as f32 * 30.0;
+                LabelParts { name: r(x, 100.0 + k as f32 * 8.0, 70.0, 12.0), alt: Some(r(x, 60.0 - k as f32 * 14.0, 70.0, 12.0)), income: Some(r(x + 40.0, 88.0 + k as f32 * 8.0, 24.0, 10.0)), bonus: Some(r(x + 72.0, 100.0 + k as f32 * 8.0, 90.0, 10.0)) }
+            })
+            .collect();
+        let shown = declutter(&parts, &[0, 1, 2]);
+        // Every name is shown; the ones that collide take the other side of their globe.
+        let names: Vec<Rect> = parts.iter().zip(&shown).map(|(p, s)| if s.alt { p.alt.unwrap() } else { p.name }).collect();
+        let mut all = names.clone();
+        for (p, s) in parts.iter().zip(&shown) {
+            all.extend(p.income.filter(|_| s.income));
+            all.extend(p.bonus.filter(|_| s.bonus));
+        }
+        for a in 0..all.len() {
+            for b in a + 1..all.len() {
+                assert!(!rects_touch(&all[a], &all[b]), "{:?} and {:?} overlap ({shown:?})", all[a], all[b]);
+            }
+        }
+        assert!(shown.iter().filter(|s| s.alt).count() >= 1, "{shown:?}");
+        // Bonus texts go before income figures.
+        let incomes = shown.iter().filter(|s| s.income).count();
+        let bonuses = shown.iter().filter(|s| s.bonus).count();
+        assert!(bonuses <= incomes, "{shown:?}");
+        // With room for everything nothing is dropped and nothing moves.
+        let apart: Vec<LabelParts> = (0..3).map(|k| LabelParts { name: r(k as f32 * 400.0, 100.0, 70.0, 12.0), alt: None, income: Some(r(k as f32 * 400.0 + 75.0, 88.0, 24.0, 10.0)), bonus: Some(r(k as f32 * 400.0 + 75.0, 100.0, 90.0, 10.0)) }).collect();
+        assert!(declutter(&apart, &[0, 1, 2]).iter().all(|s| *s == LabelShown { alt: false, income: true, bonus: true }));
+        // An income that only touches another planet's bonus stays: the bonus is the one that goes.
+        let pair = [
+            LabelParts { name: r(0.0, 0.0, 50.0, 12.0), alt: None, income: None, bonus: Some(r(60.0, 0.0, 100.0, 10.0)) },
+            LabelParts { name: r(0.0, 300.0, 50.0, 12.0), alt: None, income: Some(r(100.0, 0.0, 24.0, 10.0)), bonus: None },
+        ];
+        assert_eq!(declutter(&pair, &[0, 1]), vec![LabelShown::default(), LabelShown { income: true, ..default() }]);
+    }
 
     #[test]
     fn the_sector_shadow_follows_the_remake_profile() {
