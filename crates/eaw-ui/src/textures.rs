@@ -162,11 +162,19 @@ impl TextureLibrary {
             .rsplit_once('.')
             .map_or(name, |s| s.0)
             .replace('\\', "/");
-        [name.to_string(), format!("{stem}.dds"), format!("{stem}.tga")]
+        let found = [name.to_string(), format!("{stem}.dds"), format!("{stem}.tga")]
             .iter()
             .find_map(|n| self.fs.read(&format!("{TEXTURE_DIR}/{n}")).ok())
-            .and_then(|d| decode_texture(&d).ok())
+            .and_then(|d| decode_texture(&d).ok());
+        found.or_else(|| generic_repair_icon(name).and_then(|n| self.load(n)))
     }
+}
+
+/// The repair phases of the Remake (`Repair_Phase_2_Executor`, Eclipse, Piett, Viscount, Subjugator) name `I_Button_Repair_<Ship>.tga` as their
+/// `Icon_Name`, but no such texture ships with the mod or the base game. Estimate: the game draws the repair button's own icon, the base game's
+/// `I_BUTTON_REPAIR.TGA`, for them (the pad would otherwise be an empty disc).
+fn generic_repair_icon(name: &str) -> Option<&'static str> {
+    stem_key(name).starts_with("I_BUTTON_REPAIR_").then_some("I_BUTTON_REPAIR.TGA")
 }
 
 fn crop(src: &Rgba8, e: &MtdEntry) -> Rgba8 {
@@ -330,6 +338,15 @@ mod tests {
         assert_eq!(stem_key("I_Button_Build.tga"), "I_BUTTON_BUILD");
         assert_eq!(stem_key("Art\\Textures\\i_button_build.DDS"), "I_BUTTON_BUILD");
         assert_eq!(stem_key("  "), "");
+    }
+
+    #[test]
+    fn a_missing_ship_repair_icon_falls_back_to_the_repair_button() {
+        for n in ["I_Button_Repair_Executor.tga", "i_button_repair_piett.tga", "I_Button_Repair_Viscount.tga"] {
+            assert_eq!(generic_repair_icon(n), Some("I_BUTTON_REPAIR.TGA"), "{n}");
+        }
+        assert_eq!(generic_repair_icon("I_BUTTON_REPAIR.TGA"), None, "the generic icon itself has no fallback (no loop)");
+        assert_eq!(generic_repair_icon("I_Button_Build.tga"), None);
     }
 
     #[test]

@@ -455,6 +455,8 @@ build-menu filters, not a start mode. The mode is this project's own:
 * Data, repair (`Scripts/GameObject/Upgrade_Units.lua`): each `REPAIR_PHASE_<n>_<ship>` branch (19: Executor, Eclipse, Piett and Viscount
   phases 2 to 5, Subjugator 2 to 4) is read from that script. `Vessel_Upgrade_Template`, `Required_Orbiting_Units` the damaged phase, 140000 credits and
   200 s for the Viscount. It turns phase n of the ship in orbit into phase n - 1, like the hero upgrades.
+* Estimate, repair pad icon: the repair items name `I_Button_Repair_<Ship>.tga` as `Icon_Name`, a texture that ships neither with the mod nor with the
+  base game. The pad shows the base game's own repair button `I_BUTTON_REPAIR.TGA` (`eaw-ui` `generic_repair_icon`).
 * Data, auto-resolve: the object scripts exit outside space battles (`Get_Game_Mode() ~= "Space"`), so the Remake has no
   phase outcome without a tactical battle: an auto-resolved battle sets no level and a destroyed phase is lost (the
   plots run on its `STORY_LOSE_BATTLES` and find level 0).

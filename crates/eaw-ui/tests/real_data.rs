@@ -66,3 +66,14 @@ fn mega_texture_directory_and_components() {
     assert_eq!(zoom.tooltips, ["TEXT_TOOLTIP_ZOOM_BUTTON"]);
 }
 
+
+/// The six repair phases name `I_Button_Repair_<Ship>.tga`, which exists nowhere: the pad shows the base game's repair button instead of
+/// an empty disc.
+#[test]
+fn a_repair_phase_pad_has_an_icon() {
+    let Some(fs) = fs() else { return };
+    let lib = TextureLibrary::new_blocking(fs);
+    let Some(generic) = lib.load("I_BUTTON_REPAIR.TGA") else { return };
+    let phase = lib.load("I_Button_Repair_Executor.tga").expect("fallback icon");
+    assert_eq!((phase.width, phase.height), (generic.width, generic.height));
+}
