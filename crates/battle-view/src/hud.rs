@@ -613,7 +613,8 @@ pub(crate) fn heroes(
                     },
                     ImageNode::new(h),
                     BorderColor::all(Color::srgb(0.85, 0.95, 0.9)),
-                    GlobalZIndex(40),
+                    // A world overlay: under the interface like the other boxes (it had 40 and lay on the command bar).
+                    GlobalZIndex(eaw_ui::WORLD_OVERLAY_Z),
                     bevy::ui::FocusPolicy::Pass,
                     crate::control::PointerTransparent,
                 ));

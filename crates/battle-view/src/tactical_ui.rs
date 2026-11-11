@@ -1456,15 +1456,21 @@ fn sync_member_bars(
     );
 }
 
-/// A click on a hardpoint reticle sends the selected ships to attack that hardpoint.
+/// A click on a hardpoint reticle sends the selected ships to attack that hardpoint. Not while the cursor is on the interface: the reticles
+/// lie under the command bar and the panels ([`eaw_ui::WORLD_OVERLAY_Z`]), and a press there is the interface's.
 fn hardpoint_clicks(
     mut clicks: MessageReader<EawHardpointClicked>,
     rt: Res<BattleRuntime>,
     settings: Res<BattleViewSettings>,
     sel: Res<Selection>,
     ships: Res<RenderedShips>,
+    block: Res<control::UiBlock>,
     mut hardpoint_orders: MessageWriter<control::HardpointOrderIssued>,
 ) {
+    if block.0 {
+        clicks.clear();
+        return;
+    }
     for c in clicks.read() {
         let Some((target, hp)) = c.id.split_once(':').and_then(|(a, b)| Some((a.parse::<u32>().ok()?, b.parse::<u16>().ok()?))) else { continue };
         let mine = control::selected_mobile(&rt, &ships, &sel, settings.player_side);
@@ -2537,6 +2543,46 @@ mod retreat_tests {
         let last = last.unwrap();
         assert_eq!(last.alive.first().copied(), Some(2), "nobody jumped out");
         assert!(!last.over);
+    }
+
+    #[test]
+    fn a_click_on_a_reticle_under_the_interface_gives_no_order() {
+        // An own frigate selected, an enemy station with a reticle. The reticles are world overlays under the command bar and the
+        // panels: a press there belongs to the interface, so the reticle that lies under it gives no attack order.
+        let frigate = ShipDef { name: "frigate".into(), class: TargetClass::Frigate, hull: 1000.0, radius: 50.0, population: 1, ..ShipDef::default() };
+        let station = ShipDef { name: "station".into(), class: TargetClass::Structure, is_static: true, hull: 1.0e6, radius: 100.0, ..ShipDef::default() };
+        let cat = std::sync::Arc::new(Catalog::from_defs(vec![frigate, station], vec![]));
+        let side = |n: &str, units: Vec<UnitSetup>, structures| SideSetup { name: n.into(), units, structures, ai: false };
+        let b = Battle::new(BattleSetup {
+            sides: vec![side("Empire", vec![UnitSetup { ship: 0, count: 1, tag: 1 }], vec![]), side("Rebel", vec![], vec![1])],
+            catalog: cat.clone(),
+            config: BattleConfig { fog_of_war: false, ..BattleConfig::default() },
+        });
+        let sim = crate::sim::SimHandle::spawn(b);
+        sim.request(1);
+        let cur = sim.fetch(0, true).0.expect("snapshot");
+        let own = cur.ships.iter().find(|s| s.side == 0).map(|s| s.id).expect("own frigate");
+        let base = cur.ships.iter().find(|s| s.side == 1).map(|s| s.id).expect("station");
+        let mut rendered = RenderedShips::default();
+        rendered.0.insert(own, ShipRender::test_craft(own, 0, 0, u32::MAX, Vec3::ZERO, 1.0));
+        rendered.0.insert(base, ShipRender::test_craft(base, 1, 1, u32::MAX, Vec3::new(500.0, 0.0, 0.0), 1.0));
+        let mut app = App::new();
+        app.insert_resource(BattleRuntime::mock(sim, cat, Some(cur), Some("Empire")))
+            .insert_resource(BattleViewSettings::default())
+            .insert_resource(Selection { ships: vec![own], enemy: None })
+            .insert_resource(rendered)
+            .insert_resource(control::UiBlock(true, None))
+            .add_message::<EawHardpointClicked>()
+            .add_message::<control::HardpointOrderIssued>()
+            .add_systems(Update, hardpoint_clicks);
+        let click = |app: &mut App| {
+            app.world_mut().write_message(EawHardpointClicked { id: format!("{base}:0") });
+            app.update();
+            app.world_mut().resource_mut::<Messages<control::HardpointOrderIssued>>().drain().count()
+        };
+        assert_eq!(click(&mut app), 0, "the cursor is on the interface");
+        app.insert_resource(control::UiBlock(false, None));
+        assert_eq!(click(&mut app), 1, "the cursor is on the world");
     }
 
     #[test]

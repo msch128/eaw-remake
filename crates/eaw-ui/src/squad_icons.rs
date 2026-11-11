@@ -26,7 +26,7 @@ pub const SQUAD_ICON_DESIGN_PX: f32 = 11.4;
 const ART_PX: usize = 32;
 
 /// Draw order of the icon layer: below the command bar and the panels (they have none, which counts as 0), above the world.
-const ICON_LAYER_Z: i32 = -10;
+pub(crate) const ICON_LAYER_Z: i32 = -10;
 
 /// One squadron's icon.
 #[derive(Debug, Clone, PartialEq)]

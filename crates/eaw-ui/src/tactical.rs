@@ -671,6 +671,12 @@ pub(crate) fn tactical_clicks(
 #[derive(Component)]
 pub struct TacticalOverlayRoot;
 
+/// Draw order of the world overlays (brackets, bars, icon boxes, names, hardpoint reticles; the hero boxes of the host use it too): below
+/// every interface panel (the command bar, the minimap, the objectives and the hero portraits have none or a positive one) and above the
+/// squadron icons. They belong to the world, which lies under the interface: before, the layer had 50 and its boxes and bars were drawn
+/// over the command bar, the minimap and the unit panel.
+pub const WORLD_OVERLAY_Z: i32 = -5;
+
 /// One ship overlay node.
 #[derive(Component)]
 pub struct ShipOverlayNode {
@@ -709,7 +715,7 @@ pub(crate) fn spawn_overlay_layer(mut commands: Commands, settings: Res<EawUiSet
             ..default()
         },
         FocusPolicy::Pass,
-        GlobalZIndex(50),
+        GlobalZIndex(WORLD_OVERLAY_Z),
     ));
     if let Some(c) = settings.camera {
         e.insert(UiTargetCamera(c));
@@ -1500,6 +1506,18 @@ mod tests {
         app.init_resource::<CommandBarData>().insert_resource(TacticalData { active: true, ..tac }).add_systems(Update, tactical_sync);
         app.update();
         assert_eq!(app.world().resource::<CommandBarData>().selection[7].count, 94);
+    }
+
+    #[test]
+    fn world_overlays_lie_under_every_interface_panel() {
+        // The command bar, the minimap and the panels have no global z (0) or a positive one; the squadron icons lie at the bottom.
+        let mut app = App::new();
+        app.init_resource::<crate::EawUiSettings>().add_systems(Update, spawn_overlay_layer);
+        app.update();
+        let z: Vec<i32> = app.world_mut().query_filtered::<&GlobalZIndex, With<TacticalOverlayRoot>>().iter(app.world()).map(|z| z.0).collect();
+        assert_eq!(z, [WORLD_OVERLAY_Z]);
+        assert!(WORLD_OVERLAY_Z < 0, "under the command bar (0)");
+        assert!(WORLD_OVERLAY_Z > crate::squad_icons::ICON_LAYER_Z, "over the squadron icons");
     }
 
     #[test]
