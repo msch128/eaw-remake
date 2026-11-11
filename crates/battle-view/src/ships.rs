@@ -970,15 +970,15 @@ impl ShotSounds<'_> {
     }
 }
 
-/// Drives the explosion sequence of destroyed capital ships, and spawns drifting debris chunks (U68).
+/// Drives the explosion sequence of destroyed ships without a `Death_Clone`. What is drawn is the hull's own model and the unit's
+/// `Death_Explosions` particle systems, nothing else: the data's debris are the `Death_Clone` pieces and the hardpoints'
+/// `Death_Breakoff_Prop` models, and a ship that has neither leaves none.
 pub fn update_dying(
     mut commands: Commands,
     mut pulses: ResMut<crate::effects::BloomPulses>,
     time: Res<Time>,
     mut rt: ResMut<BattleRuntime>,
     mut q: Query<(Entity, &ShipView, &mut Dying, &mut Transform)>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     let dt = time.delta_secs().min(0.1) * rt.speed_factor();
     for (e, view, mut d, mut tf) in &mut q {
@@ -1015,55 +1015,6 @@ pub fn update_dying(
             if d.radius >= 40.0 {
                 pulses.flash(tf.translation, if d.radius >= 150.0 { 1.0 } else { 0.6 });
                 info!("battle: final explosion of a radius {:.0} ship at t={:.1}s, wreck stays {WRECK_SECONDS:.0}s", d.radius, rt.cur.as_ref().map_or(0.0, |c| c.time));
-            }
-            // U68: Break capital ships and frigates into drifting debris chunks
-            if d.radius >= 40.0 {
-                let num_chunks = if d.radius > 200.0 { 4 } else { 2 };
-                let chunk_size = d.radius * if num_chunks == 4 { 0.35 } else { 0.45 };
-                let offsets = [
-                    Vec3::new(chunk_size * 0.8, chunk_size * 0.2, 0.0),
-                    Vec3::new(-chunk_size * 0.8, -chunk_size * 0.2, 0.0),
-                    Vec3::new(0.0, chunk_size * 0.3, chunk_size * 0.6),
-                    Vec3::new(0.0, -chunk_size * 0.3, -chunk_size * 0.6),
-                ];
-                let drift_dirs = [
-                    Vec3::new(0.8, 0.2, 0.3).normalize(),
-                    Vec3::new(-0.7, -0.3, -0.4).normalize(),
-                    Vec3::new(0.1, 0.9, -0.5).normalize(),
-                    Vec3::new(-0.2, -0.8, 0.6).normalize(),
-                ];
-                for i in 0..num_chunks {
-                    // Irregular dark hull chunk (a squashed low-poly sphere), not a glowing box.
-                    let mesh = meshes.add(Sphere::new(chunk_size * 0.6).mesh().ico(1).unwrap());
-                    let mat = materials.add(StandardMaterial {
-                        base_color: Color::srgb(0.1, 0.1, 0.12),
-                        emissive: LinearRgba::new(CHUNK_EMBER.0, CHUNK_EMBER.1, CHUNK_EMBER.2, 1.0),
-                        perceptual_roughness: 0.8,
-                        ..default()
-                    });
-                    let world_offset = tf.rotation * offsets[i];
-                    let drift = tf.rotation * drift_dirs[i] * (15.0 + (i as f32) * 5.0);
-                    let ang_vel = Vec3::new(
-                        (0.03 + (i as f32) * 0.01) * if i % 2 == 0 { 1.0 } else { -1.0 },
-                        (0.02 + (i as f32) * 0.015) * if i / 2 == 0 { 1.0 } else { -1.0 },
-                        0.025,
-                    );
-                    commands.spawn((
-                        Name::new("ship_debris_chunk"),
-                        BattleEntity,
-                        Mesh3d(mesh),
-                        MeshMaterial3d(mat),
-                        Transform::from_translation(tf.translation + world_offset)
-                            .with_rotation(tf.rotation)
-                            .with_scale(Vec3::new(1.5, 0.7, 1.0 + 0.2 * i as f32)),
-                        DebrisChunk {
-                            timer: 30.0,
-                            max_time: 30.0,
-                            velocity: d.velocity + drift,
-                            angular_velocity: ang_vel,
-                        },
-                    ));
-                }
             }
             if d.radius >= 40.0 {
                 // The hull stays behind as a burning wreck (its own damage fires keep playing), drifting and tumbling slowly.
@@ -1292,43 +1243,6 @@ pub fn update_breakoff_props(
         tf.translation += prop.velocity * dt;
         let av = prop.angular_velocity * dt;
         tf.rotation = Quat::from_euler(EulerRot::XYZ, av.x, av.y, av.z) * tf.rotation;
-    }
-}
-
-/// Glow of a fresh debris chunk (linear RGB, a faint ember; it cools to black over the chunk lifetime). Look estimate.
-const CHUNK_EMBER: (f32, f32, f32) = (0.18, 0.05, 0.01);
-
-/// A drifting debris chunk from a destroyed ship hull (U68).
-#[derive(Component, Debug)]
-pub struct DebrisChunk {
-    pub timer: f32,
-    pub max_time: f32,
-    pub velocity: Vec3,
-    pub angular_velocity: Vec3,
-}
-
-/// Updates debris chunks: drifting, tumbling, and cooling emissive glow over 30s.
-pub fn update_debris_chunks(
-    mut commands: Commands,
-    time: Res<Time>,
-    rt: Res<BattleRuntime>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-    mut q: Query<(Entity, &mut DebrisChunk, &mut Transform, &MeshMaterial3d<StandardMaterial>)>,
-) {
-    let dt = time.delta_secs().min(0.1) * rt.speed_factor();
-    for (entity, mut chunk, mut tf, mat_handle) in &mut q {
-        chunk.timer -= dt;
-        if chunk.timer <= 0.0 {
-            commands.entity(entity).try_despawn();
-        } else {
-            tf.translation += chunk.velocity * dt;
-            let ang = chunk.angular_velocity * dt;
-            tf.rotation = Quat::from_euler(EulerRot::XYZ, ang.x, ang.y, ang.z) * tf.rotation;
-            if let Some(mut mat) = materials.get_mut(&mat_handle.0) {
-                let cool = (chunk.timer / chunk.max_time).clamp(0.0, 1.0);
-                mat.emissive = LinearRgba::new(CHUNK_EMBER.0 * cool, CHUNK_EMBER.1 * cool, CHUNK_EMBER.2 * cool, 1.0);
-            }
-        }
     }
 }
 
@@ -1701,21 +1615,6 @@ mod tests {
         app.world_mut().resource_mut::<Time>().advance_by(std::time::Duration::from_secs_f32(FLASH_WALL_SECONDS));
         app.update();
         assert!(app.world().get_entity(e).is_err());
-    }
-
-    #[test]
-    fn test_debris_chunk_cooling_and_drift() {
-        let chunk = DebrisChunk {
-            timer: 30.0,
-            max_time: 30.0,
-            velocity: Vec3::new(10.0, 5.0, -2.0),
-            angular_velocity: Vec3::new(0.04, 0.02, 0.01),
-        };
-        assert_eq!(chunk.timer, chunk.max_time);
-        let cool_initial = (chunk.timer / chunk.max_time).clamp(0.0, 1.0);
-        assert!((cool_initial - 1.0).abs() < 1e-5);
-        let cool_halfway = (15.0 / chunk.max_time).clamp(0.0, 1.0);
-        assert!((cool_halfway - 0.5).abs() < 1e-5);
     }
 
     #[test]
@@ -2337,5 +2236,88 @@ mod tests {
 
         let dying1 = world.get::<Dying>(e1).expect("ship1 is dying");
         assert_eq!(dying1.effect, crate::visuals::ship_death_effect(TargetClass::Frigate));
+    }
+
+    #[test]
+    fn a_dead_ship_leaves_its_explosion_and_its_hull_and_no_mesh_the_data_does_not_name() {
+        use battle_sim::{Battle, BattleConfig, BattleSetup, Catalog, ProjDef, ShipDef, SideSetup, UnitSetup};
+        use bevy::ecs::system::RunSystemOnce;
+
+        // A frigate without a `Death_Clone` (the Remake's `Nebulon_B_Frigate`: sim radius 99) and a station, at the end of their burn.
+        let defs = vec![
+            ShipDef { name: "frigate".into(), class: TargetClass::Frigate, hull: 1000.0, radius: 99.0, ..ShipDef::default() },
+            ShipDef { name: "station".into(), class: TargetClass::Structure, hull: 1000.0, radius: 600.0, ..ShipDef::default() },
+        ];
+        let catalog = std::sync::Arc::new(Catalog::from_defs(defs, vec![ProjDef { name: "laser".into(), ..ProjDef::default() }]));
+        let side = SideSetup { name: "rebel".into(), units: vec![UnitSetup { ship: 0, count: 1, tag: 1 }, UnitSetup { ship: 1, count: 1, tag: 2 }], structures: vec![], ai: false };
+        let sim = crate::sim::SimHandle::spawn(Battle::new(BattleSetup { sides: vec![side], catalog: catalog.clone(), config: BattleConfig::default() }));
+        sim.request(1);
+        let cur = sim.fetch(0, true).0.expect("snapshot");
+        let visuals = crate::visuals::VisualCatalog {
+            ships: vec![crate::visuals::ShipVisual::default(); 2],
+            team_colors: vec![Color::WHITE; 1],
+            proj_detonate: vec![None],
+            proj_detonate_armor: vec![None],
+            proj_detonate_shield: vec![None],
+        };
+
+        let mut world = World::new();
+        world.init_resource::<crate::effects::BloomPulses>();
+        world.init_resource::<Time>();
+        world.init_resource::<Assets<Mesh>>();
+        world.init_resource::<Assets<StandardMaterial>>();
+        world.resource_mut::<Time>().advance_by(std::time::Duration::from_millis(50));
+        let mut dying = Vec::new();
+        for s in &cur.ships {
+            let view = ShipView { id: s.id, def: s.def, side: 0, hp_applied: vec![], bones: None, hp_parts: vec![], attitude: Attitude::default(), born: 0.0, visual_radius: 0.0, shown: true };
+            let radius = catalog.ship(s.def).radius;
+            let burn = Dying { age: 10.0, duration: 10.0, velocity: Vec3::ZERO, tumble: Vec3::ZERO, next_boom: 1.0, radius, effect: "New_Space_Explosion_Medium_Heat".into(), seed: 7 };
+            dying.push(world.spawn((view, burn, Transform::from_translation(Vec3::new(radius * 10.0, 0.0, 0.0)))).id());
+        }
+        world.insert_resource(BattleRuntime {
+            sim,
+            catalog,
+            visuals: std::sync::Arc::new(visuals),
+            dt: 1.0 / 30.0,
+            clock: 0.0,
+            cur: Some(cur),
+            next: None,
+            alpha: 0.0,
+            fresh_events: vec![],
+            entities: HashMap::new(),
+            dying: HashSet::new(),
+            request: None,
+            player_faction: None,
+            start_alive: vec![2],
+            retreat_countdown: 0.0,
+            unit_cap: 0,
+            no_spawn_radius: 0.0,
+            reinforce_clearance: 0.0,
+            arena_half: 10_000.0,
+            fog_of_war: false,
+            speed: 1.0,
+            framed: false,
+            reported: false,
+            minimap_planets: vec![],
+            minimap_props: vec![],
+            minimap_tint: Color::BLACK,
+        });
+        // The effects the last explosion asks for (the unit's `Death_Explosions`).
+        #[derive(Resource, Default)]
+        struct Played(Vec<String>);
+        world.init_resource::<Played>();
+        world.add_observer(|ev: On<SpawnParticleEffect>, mut played: ResMut<Played>| played.0.push(ev.particle.clone()));
+
+        world.run_system_once(update_dying).expect("update_dying");
+        world.flush();
+
+        assert_eq!(world.resource::<Played>().0, vec!["New_Space_Explosion_Medium_Heat"; 2], "each plays its death effect once more");
+        for &e in &dying {
+            assert!(world.get::<Dying>(e).is_none() && world.get::<Wreck>(e).is_some(), "the hull burns on as a wreck");
+        }
+        // Nothing but the two hulls is left: no primitive mesh with a plain colour stands in for debris (the data's debris are the
+        // `Death_Clone` pieces and the `Death_Breakoff_Prop` models, drawn from their own files).
+        let meshes: Vec<String> = world.query::<(&Mesh3d, Option<&Name>)>().iter(&world).map(|(_, n)| n.map_or(String::new(), |n| n.to_string())).collect();
+        assert!(meshes.is_empty(), "meshes the data does not name: {meshes:?}");
     }
 }

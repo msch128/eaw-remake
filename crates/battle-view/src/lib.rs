@@ -567,7 +567,7 @@ impl Plugin for BattleViewPlugin {
                             ships::update_ships,
                             ships::update_arrival_flashes,
                             ships::update_departures,
-                            (ships::update_dying, ships::update_wrecks, ships::update_spinning_away, ships::update_debris_chunks, ships::update_breakoff_props, effects::bloom_pulse).chain(),
+                            (ships::update_dying, ships::update_wrecks, ships::update_spinning_away, ships::update_breakoff_props, effects::bloom_pulse).chain(),
                             ships::remove_after,
                             effects::update_projectiles,
                         )

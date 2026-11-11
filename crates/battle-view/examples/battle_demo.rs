@@ -836,8 +836,8 @@ fn capture_driver(
         bc.target_focus = center;
         bc.target_distance = (radius * 1.7).clamp(1500.0, 16000.0);
     }
-    // `SP_DEMO_SUPER`: the Death Star dish bone; `SP_DEMO_WRECK`: the first debris chunk of a dead ship.
-    for (var, bone, dist) in [("SP_DEMO_SUPER", "p_planet_deathstar_laser_large", 3000.0), ("SP_DEMO_WRECK", "ship_debris_chunk", 1500.0)] {
+    // `SP_DEMO_SUPER`: the Death Star dish bone.
+    for (var, bone, dist) in [("SP_DEMO_SUPER", "p_planet_deathstar_laser_large", 3000.0)] {
         if std::env::var_os(var).is_some()
             && let Some((_, g)) = named.iter().find(|(n, _)| n.as_str().eq_ignore_ascii_case(bone))
         {
