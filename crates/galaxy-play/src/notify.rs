@@ -1,5 +1,7 @@
 //! Turns simulation events into player notifications.
 
+use std::collections::HashMap;
+
 use bevy::prelude::Resource;
 use galaxy_sim::{CommandError, Event, FactionId, Galaxy, PlanetId, ProductionKind, World};
 
@@ -67,6 +69,18 @@ impl Notifications {
     }
 }
 
+/// Ships the player lost in a played battle, as the battle result screen counts them (battle id -> ships). The notice of the same battle
+/// says this number, not the simulation's own count, so the two never disagree.
+#[derive(Resource, Debug, Default)]
+pub struct BattleLossCounts(pub HashMap<u32, u32>);
+
+/// The line for a hero that came back (`galaxy-script` names the unit and the planet by object name): display names, like every notice.
+pub fn unit_returned_text(world: &World, names: &PlayCatalog, unit: &str, planet: &str) -> String {
+    let unit = world.unit_id(unit).map_or_else(|| crate::catalog::prettify(unit), |u| names.unit(u).to_owned());
+    let planet = world.planet_id(planet).map_or_else(|| crate::catalog::prettify(planet), |p| world.planets[p as usize].display_name.clone());
+    format!("{unit} has returned at {planet}.")
+}
+
 /// Wording of a refused order.
 pub fn describe_error(e: &CommandError) -> String {
     match e {
@@ -91,6 +105,7 @@ pub fn describe_event(
     galaxy: &Galaxy,
     human: Option<FactionId>,
     event: &Event,
+    shown_losses: &BattleLossCounts,
 ) -> Option<(NotificationKind, String, Option<PlanetId>)> {
     let planet = |p: PlanetId| world.planets[p as usize].display_name.clone();
     let me = |f: FactionId| human == Some(f);
@@ -114,8 +129,8 @@ pub fn describe_event(
         Event::BattlePending(b) if human.is_some_and(|h| b.factions.contains(&h)) => {
             Some((NotificationKind::BattlePending, format!("Battle at {}!", planet(b.planet)), Some(b.planet)))
         }
-        Event::BattleResolved { planet: p, winner, losses, .. } if human.is_some_and(|h| losses.iter().any(|(f, _)| *f == h) || *winner == Some(h)) => {
-            let lost = losses.iter().find(|(f, _)| Some(*f) == human).map_or(0, |&(_, n)| n);
+        Event::BattleResolved { id, planet: p, winner, losses } if human.is_some_and(|h| losses.iter().any(|(f, _)| *f == h) || *winner == Some(h)) => {
+            let lost = shown_losses.0.get(id).copied().unwrap_or_else(|| losses.iter().find(|(f, _)| Some(*f) == human).map_or(0, |&(_, n)| n));
             let verdict = match winner {
                 Some(w) if me(*w) => "Victory".to_owned(),
                 Some(w) => format!("Defeat by {}", names.faction(*w)),

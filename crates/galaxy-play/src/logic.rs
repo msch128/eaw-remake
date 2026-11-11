@@ -9,7 +9,7 @@ use crate::build_menu::{BuildMenu, build_command};
 use crate::catalog::PlayCatalog;
 use crate::driver::ResolveMode;
 use crate::geometry::{eta_seconds, flagship, split_half};
-use crate::notify::{NotificationKind, Notifications, describe_error, describe_event};
+use crate::notify::{BattleLossCounts, NotificationKind, Notifications, describe_error, describe_event, unit_returned_text};
 use crate::state::*;
 
 /// True while a battle involving the player waits for a decision that the plugin owns.
@@ -26,6 +26,7 @@ pub fn pump_snapshots(
     mut notes: ResMut<Notifications>,
     mut out: MessageWriter<PlayEvent>,
     cfg: Res<PlayConfig>,
+    shown_losses: Res<BattleLossCounts>,
 ) {
     let now = time.elapsed_secs_f64();
     notes.expire(now, cfg.notification_seconds);
@@ -37,13 +38,13 @@ pub fn pump_snapshots(
             if let galaxy_script::ScriptEvent::UnitSpawned { unit, planet, faction } = e
                 && player.0.is_some_and(|h| state.world.factions[h as usize].name.eq_ignore_ascii_case(faction))
             {
-                notes.push(NotificationKind::Campaign, format!("{} has returned at {}.", crate::catalog::prettify(unit), planet), None, now);
+                notes.push(NotificationKind::Campaign, unit_returned_text(&state.world, &catalog, unit, planet), None, now);
             }
             out.write(PlayEvent::Script(e.clone()));
         }
         for r in &s.saves {
             let text = match &r.result {
-                Ok(()) => format!("Game saved to {}", r.path.display()),
+                Ok(()) => "Game saved".to_owned(),
                 Err(e) => format!("Saving failed: {e}"),
             };
             notes.push(if r.result.is_ok() { NotificationKind::Campaign } else { NotificationKind::Error }, text, None, now);
@@ -64,7 +65,7 @@ pub fn pump_snapshots(
             }
         }
         for ev in &s.events {
-            if let Some((kind, text, planet)) = describe_event(&state.world, &catalog, &s.galaxy, player.0, ev) {
+            if let Some((kind, text, planet)) = describe_event(&state.world, &catalog, &s.galaxy, player.0, ev, &shown_losses) {
                 notes.push(kind, text, planet, now);
             }
             out.write(PlayEvent::Sim(ev.clone()));

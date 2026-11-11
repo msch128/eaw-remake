@@ -420,6 +420,7 @@ fn finish_battle_view(
     mut view: Option<ResMut<GalaxyView>>,
     bridge: Option<Res<crate::play::PlayBridge>>,
     mut anim: Option<ResMut<crate::galaxy_map::CaptureAnimations>>,
+    mut shown_losses: ResMut<galaxy_play::BattleLossCounts>,
 ) {
     let mut music = music;
     for f in finished.read() {
@@ -456,6 +457,8 @@ fn finish_battle_view(
         let side_losses = |i: Option<usize>| i.and_then(|i| f.losses.get(i)).cloned().unwrap_or_default();
         let enemy = (0..pending.0.sides.len()).find(|i| Some(*i) != mine);
         let yours = side_losses(mine);
+        // The galaxy notice of this battle ("Victory at ... (n ships lost)") says what the result screen lists.
+        shown_losses.0.insert(f.battle_id, yours.iter().map(|(_, n)| *n).sum());
         let enemy_losses = side_losses(enemy);
 
         let screen = Some(ResultScreen { planet: planet.to_uppercase(), won, seconds: f.result.duration, yours, enemy: enemy_losses });

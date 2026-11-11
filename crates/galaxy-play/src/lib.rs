@@ -47,7 +47,7 @@ pub use input::{PlayCursorBlocked, PlayCursorOverUi, PlayHover, PlayUiBlock};
 /// stop drawing.
 #[derive(Resource, Default, Debug, Clone, Copy)]
 pub struct PlayMapHidden(pub bool);
-pub use notify::{Notification, NotificationKind, Notifications};
+pub use notify::{BattleLossCounts, Notification, NotificationKind, Notifications};
 pub use state::{
     BattleChoice, BattleDialog, BattleSide, FleetRow, GameClock, PlayAction, PlayConfig, PlayEvent, PlayInit, PlayUiModel, PlayerFaction,
     PlayerSelection, SimState, SpeedModel, TopBarModel, ViewClock,
@@ -154,6 +154,7 @@ impl Plugin for GalaxyPlayPlugin {
         app.init_resource::<PlayConfig>()
             .init_resource::<PlayerSelection>()
             .init_resource::<Notifications>()
+            .init_resource::<notify::BattleLossCounts>()
             .init_resource::<PlayUiModel>()
             .init_resource::<PlayHover>()
             .init_resource::<PlayCursorBlocked>()
