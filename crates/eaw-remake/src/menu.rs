@@ -412,9 +412,14 @@ fn sync_pause_menu(
     }
 }
 
-/// The save/load dialog replaces the pause menu while it is open (no title or Quit showing through).
-fn hide_pause_under_slots(slots: Res<SlotScreen>, mut menus: Query<&mut Node, Or<(With<PauseMenu>, With<crate::battle_play::BattleMenuRoot>)>>) {
-    let display = if slots.0.is_some() { Display::None } else { Display::Flex };
+/// The save/load dialog and the options screen replace the pause menu while they are open (one screen at a time: no title or Quit
+/// showing through, no live button underneath). The "GAME PAUSED" tab of the map goes with it.
+fn hide_pause_under_slots(
+    slots: Res<SlotScreen>,
+    options: Res<OptionsOpen>,
+    mut menus: Query<&mut Node, Or<(With<PauseMenu>, With<crate::battle_play::BattleMenuRoot>, With<crate::play_ui::PauseBanner>)>>,
+) {
+    let display = if slots.0.is_some() || options.0 { Display::None } else { Display::Flex };
     for mut n in &mut menus {
         if n.display != display {
             n.display = display;
@@ -701,6 +706,23 @@ pub(crate) fn small_caps_label(parent: &mut ChildSpawnerCommands, text: &str, fo
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_options_screen_replaces_the_pause_menu_and_its_tab() {
+        let mut app = App::new();
+        app.init_resource::<SlotScreen>().init_resource::<OptionsOpen>().add_systems(Update, hide_pause_under_slots);
+        let menu = app.world_mut().spawn((Node::default(), PauseMenu)).id();
+        let tab = app.world_mut().spawn((Node::default(), crate::play_ui::PauseBanner)).id();
+        let shown = |app: &App| [menu, tab].map(|e| app.world().get::<Node>(e).unwrap().display);
+        app.update();
+        assert_eq!(shown(&app), [Display::Flex; 2], "pause menu alone");
+        app.world_mut().resource_mut::<OptionsOpen>().0 = true;
+        app.update();
+        assert_eq!(shown(&app), [Display::None; 2], "options open: one screen");
+        app.world_mut().resource_mut::<OptionsOpen>().0 = false;
+        app.update();
+        assert_eq!(shown(&app), [Display::Flex; 2], "options closed: back to the pause menu");
+    }
 
     #[test]
     fn battle_menu_spec_has_all_eaw_pause_actions() {
