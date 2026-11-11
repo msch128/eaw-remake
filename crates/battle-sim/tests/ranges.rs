@@ -111,3 +111,97 @@ fn a_homing_shot_inside_its_flight_distance_keeps_the_data_value() {
     assert!(longest > 1500.0, "torpedoes flew {longest}");
     assert!(longest <= 2500.0 + 500.0, "a torpedo launched at a target 2000 away flew {longest} from the ship (flight distance 2500, tubes up to 500 from the middle)");
 }
+
+/// Closes from 15000 with an attack order for 240 s. Returns (centre distance at the first damaging hit, projectile of that hit, distance
+/// where the ship came to rest, the largest excess of a shot's reach over its hardpoint's range). The reach of a shot is measured from the
+/// muzzle to the hardpoint of the target it is aimed at, or to 0.6 of the target's hit radius short of its middle: the larger of the two
+/// allowances is taken off here. The cruiser launches squadrons during the run, which the guns in reach of them fire at as well.
+fn approach(cat: &Arc<Catalog>, unit: &str) -> (f32, String, f32, f32) {
+    let (mut b, me, it) = duel(cat, unit, 15_000.0);
+    let def = cat.ship(b.ships[me as usize].def);
+    let (mut first, mut rest, mut excess) = (None, None, f32::MIN);
+    for step in 0..30 * 240 {
+        let dist = b.ships[me as usize].pos.dist(b.ships[it as usize].pos);
+        let before: Vec<Vec3> = b.ships.iter().map(|s| s.pos).collect();
+        for e in b.step().to_vec() {
+            match e {
+                Event::ProjectileFired { ship, hardpoint: Some(h), from, .. } if ship == me => {
+                    let target = b.ships[me as usize].hps[h as usize].target as usize;
+                    let tdef = cat.ship(b.ships[target].def);
+                    let hit_radius = if tdef.class as u8 >= TargetClass::Frigate as u8 { tdef.radius * 0.75 } else { tdef.radius };
+                    let at = before.get(target).copied().unwrap_or(b.ships[target].pos);
+                    excess = excess.max(from.dist(at) - (hit_radius * 0.6).max(tdef.hardpoint_reach) - def.hardpoints[h as usize].range);
+                }
+                Event::Hit { ship, attacker, projectile, damage, .. } if ship == it && attacker == me && damage > 0.0 && first.is_none() => {
+                    first = Some((dist, cat.projectiles[projectile as usize].name.clone()));
+                }
+                _ => {}
+            }
+        }
+        if rest.is_none() && step > 60 && b.ships[me as usize].speed < 0.5 {
+            rest = Some(b.ships[me as usize].pos.dist(b.ships[it as usize].pos));
+        }
+    }
+    let (d, p) = first.unwrap_or_else(|| panic!("{unit} never hit"));
+    (d, p, rest.unwrap_or_else(|| panic!("{unit} never stopped")), excess)
+}
+
+#[test]
+fn a_torpedo_tube_counts_its_warhead() {
+    // One tube: (20 + 400) every 45 s = 9.33 damage per second. It counted the torpedo's 20 alone (0.44), so the 182 tubes were 7% of the
+    // Torpedo Sphere's output and its stand-off came from its four quad turbolasers: 0.8 x 5000 = 4000. Now 0.8 x 10000 = 8000.
+    let Some((data, fs)) = load() else { return };
+    let cat = Catalog::build(&data, Some(&fs), &["Torpedo_Sphere"]);
+    let ts = cat.ship(cat.ship_id("Torpedo_Sphere").unwrap());
+    let tube = ts.hardpoints.iter().find(|h| h.name == "TorSph_01").expect("tube");
+    assert_eq!(cat.shot_damage(tube.projectile.unwrap()), 420.0);
+    assert!((tube.dps - 420.0 / 45.0).abs() < 1e-3, "{}", tube.dps);
+    assert_eq!(ts.hardpoints.iter().filter(|h| h.kind == HpKind::Weapon && h.range == 10_000.0).count(), 182);
+    assert_eq!(ts.preferred_range, 8000.0);
+}
+
+#[test]
+fn the_range_of_a_facing_hardpoint_is_not_a_weapon_range() {
+    // `Proj_Facing_Dummy` hardpoints: 50000 on the Annihilator and the Puifier, 9000 on the Executor, 9900 on the Torpedo Sphere. They turn
+    // the bow and count for no range: the longest weapon and the stand-off come from the damaging hardpoints.
+    let Some((data, fs)) = load() else { return };
+    let names = ["Annihilator_Super_Star_Destroyer", "Puifier_Super_Star_Destroyer", "Executor_Star_Dreadnought_P1", "Torpedo_Sphere"];
+    let cat = Catalog::build(&data, Some(&fs), &names);
+    let numbers: Vec<(f32, f32, f32, f32)> = names
+        .iter()
+        .map(|n| {
+            let d = cat.ship(cat.ship_id(n).unwrap());
+            let facing = d.hardpoints.iter().filter(|h| h.kind == HpKind::Facing).map(|h| h.range).fold(0.0, f32::max);
+            (facing, d.max_weapon_range, d.targeting_range, d.preferred_range)
+        })
+        .collect();
+    // (facing hardpoint, longest weapon, `Targeting_Max_Attack_Distance`, stand-off)
+    assert_eq!(numbers, vec![(50_000.0, 4500.0, 4400.0, 3325.0), (50_000.0, 6000.0, 4400.0, 4275.0), (9000.0, 11_000.0, 8900.0, 7200.0), (9900.0, 10_000.0, 9900.0, 8000.0)]);
+}
+
+#[test]
+fn the_big_ships_open_fire_and_stand_off_where_their_weapon_ranges_put_them() {
+    // Centre to centre against a standing Mon Calamari cruiser, closing from 15000 with an attack order. A range is measured from the muzzle
+    // (an Executor's bow guns are 4500 units ahead of its middle) to 0.6 of the target's hit radius short of its middle.
+    //   unit            first damaging hit              comes to rest
+    //   Torpedo Sphere  8169, a torpedo (was 5245,      8169 (was 3969: inside the reach of nothing but its 10 guns,
+    //                   a quad turbolaser)              out of the reach of its torpedoes' 2500 flight)
+    //   Annihilator     5556, ion cannon 4500           3201
+    //   Puifier         6158, heavy turbolaser 6000     4212
+    //   Executor        11951, turbolaser 9000          7179
+    let Some((data, fs)) = load() else { return };
+    let table = [
+        ("Torpedo_Sphere", 8169.0, "Proj_Proton_Torpedo_TS", 8169.0),
+        ("Annihilator_Super_Star_Destroyer", 5556.0, "Proj_Ship_Ion_Cannon_Large_Triple", 3201.0),
+        ("Puifier_Super_Star_Destroyer", 6158.0, "Proj_Ship_Turbolaser_Green_Heavy", 4212.0),
+        ("Executor_Star_Dreadnought_P1", 11_951.0, "Proj_Ship_Turbolaser_Green_Dual", 7179.0),
+    ];
+    for (unit, first, with, rest) in table {
+        let cat = Arc::new(Catalog::build(&data, Some(&fs), &[unit, TARGET]));
+        let (d, p, r, excess) = approach(&cat, unit);
+        assert!((d - first).abs() < 25.0 && p == with, "{unit}: first damaging hit at {d} with {p}");
+        assert!((r - rest).abs() < 25.0, "{unit}: came to rest at {r}");
+        // No shot left a hardpoint whose `Fire_Range_Distance` did not reach (the ship closes during a step: 5 units of slack).
+        assert!(excess <= 5.0, "{unit}: a hardpoint fired {excess} beyond its range");
+    }
+}

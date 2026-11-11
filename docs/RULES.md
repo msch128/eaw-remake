@@ -608,7 +608,10 @@ stays as a derived figure for bars and decisions (`ShipDef::hull` times the shar
   use in rocket mode stay silent when the unit has no `ROCKET_ATTACK` (`Broadside_Cruiser_DB`, whose ability is
   commented out).
 * Estimate: large ships close to the range that puts 80% of their weapon damage in reach (x0.95) and hold there; a
-  long-range specialist (e.g. a missile ship) holds at 0.8 of its longest range plus half the target radius. They turn
+  long-range specialist (e.g. a missile ship) holds at 0.8 of its longest range plus half the target radius. A shot
+  counts with the damage of its second-stage warhead (2.2), so the Torpedo Sphere holds at 0.8 x 10000 = 8000, where
+  its torpedoes are its whole output. Stand-off against a standing cruiser, centre to centre: Torpedo Sphere 8169,
+  Executor 7179, Puifier 4212, Annihilator 3201 (`tests/ranges.rs`; their longest weapons 10000, 11000, 6000, 4500). They turn
   to the bearing (bow, broadside or stern) at which the largest share of their hardpoint damage bears
   (`ShipDef::bearing_dps`, from the arcs; a damaged ship counts only the guns it still has), stop with an arrival speed
   profile (no overshoot) and restart at 1.12 x the standoff. Fighters and bombers are fired at but not chased unless

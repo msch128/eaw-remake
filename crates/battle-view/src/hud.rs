@@ -382,7 +382,7 @@ pub(crate) fn unit_tooltip(
                 .and_then(|g| g.objects.resolve(&hdef.name).and_then(|r| r.get("tooltip_text").or_else(|| r.get("text_id")).and_then(|v| v.split_whitespace().next().map(str::to_string))))
                 .and_then(|k| assets.as_ref().and_then(|a| a.text.get(k.trim()).map(str::to_string)))
                 .unwrap_or_else(|| hdef.name.replace('_', " "));
-            let dmg = hdef.projectile.and_then(|p| rt.catalog.projectiles.get(p as usize)).map(|p| p.damage);
+            let dmg = hdef.projectile.filter(|&p| (p as usize) < rt.catalog.projectiles.len()).map(|p| rt.catalog.shot_damage(p));
             let mut msg = name;
             // Data tooltips usually carry their own damage ("... - 100 DMG - ... - 65 DMG"); ours only fills the gap.
             if let Some(d) = dmg.filter(|_| !msg.to_ascii_uppercase().contains("DMG")) {

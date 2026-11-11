@@ -2321,9 +2321,8 @@ impl Catalog {
         let mut bearing_dps = [0.0f32; 24];
         for h in hardpoints.iter_mut().filter(|h| h.kind == HpKind::Weapon) {
             let Some(p) = h.projectile else { continue };
-            let pd = &self.projectiles[p as usize];
             let cycle = ((h.recharge_min + h.recharge_max) * 0.5 + (h.pulses - 1) as f32 * h.pulse_delay).max(0.2);
-            let dps = pd.damage * h.pulses as f32 / cycle;
+            let dps = self.shot_damage(p) * h.pulses as f32 / cycle;
             h.dps = dps;
             for (k, slot) in bearing_dps.iter_mut().enumerate() {
                 let a = k as f32 * std::f32::consts::TAU / 24.0;
@@ -2369,7 +2368,7 @@ impl Catalog {
             if let Some(p) = h.projectile {
                 let pd = &self.projectiles[p as usize];
                 let cycle = ((h.recharge_min + h.recharge_max) * 0.5 + (h.pulses - 1) as f32 * h.pulse_delay).max(0.2);
-                by_range.push((h.range, pd.damage * h.pulses as f32 / cycle, pd.hull_damage));
+                by_range.push((h.range, self.shot_damage(p) * h.pulses as f32 / cycle, pd.hull_damage));
             }
         }
         by_range.sort_by(|a, b| b.0.total_cmp(&a.0));
