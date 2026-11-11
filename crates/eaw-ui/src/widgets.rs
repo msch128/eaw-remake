@@ -845,6 +845,26 @@ impl Builder<'_> {
                 // The component asks for 8 pt, the original draws it like the other read-outs.
                 font.font_size = FontSize::Px(px * 0.8);
             }
+            // The read-out stays in its box: clipped as a last resort, and `fit::fit_fields` shrinks or shortens what is too wide.
+            let base_px = match self.world.entity(t).get::<TextFont>().map(|f| f.font_size) {
+                Some(FontSize::Px(px)) => px,
+                _ => def.font_size * 1.45,
+            };
+            if field != Field::PlanetName {
+                self.world.entity_mut(t).insert(crate::fit::FitText::new(base_px));
+            }
+            let text_box = self.world.entity(t).get::<ChildOf>().map(ChildOf::parent);
+            if let Some(b) = text_box
+                && let Some(mut n) = self.world.entity_mut(b).get_mut::<Node>()
+            {
+                n.overflow = Overflow::clip();
+                n.overflow_clip_margin = OverflowClipMargin::content_box();
+                // The data's `Text_Offset` already keeps the number off the frame (the original's margin); the extra 7 px of other
+                // right-justified texts would only take room from the number.
+                if def.right_justified {
+                    n.padding.right = Val::Px(0.0);
+                }
+            }
             if matches!(field, Field::Credits | Field::Income | Field::MonthIncome)
                 && let Some(tx) = self.credit_icon()
             {
@@ -852,6 +872,17 @@ impl Builder<'_> {
                 let icon = self.layer(holder, size, &tx, sz, Vec2::new(-size.x * 0.5 + sz.x * 0.5 + 2.0, 0.0), PALE);
                 if field == Field::Income {
                     self.world.entity_mut(icon).insert(BoundField(field));
+                }
+                // The symbol keeps its place at the left edge and the number keeps out of it: the text box starts after the symbol
+                // (its 2 px inset, its width and a 3 px gap), measured from where the text box itself starts.
+                if let Some(b) = text_box
+                    && let Some(mut n) = self.world.entity_mut(b).get_mut::<Node>()
+                {
+                    let box_left = match n.left {
+                        Val::Px(x) => x,
+                        _ => 0.0,
+                    };
+                    n.padding.left = Val::Px((2.0 + sz.x + 3.0 - box_left).max(0.0));
                 }
             }
             if let Some(icon) = def.icon.first().cloned()
@@ -1270,7 +1301,7 @@ pub(crate) fn button_visuals(
 pub(crate) fn bound_fields(
     fresh: Query<(), Added<BoundField>>,
     data: Res<CommandBarData>,
-    mut texts: Query<(Entity, &BoundField, &mut Text, Option<&mut TextColor>, Option<&Children>)>,
+    mut texts: Query<(Entity, &BoundField, &mut Text, Option<&mut TextColor>, Option<&Children>, Option<&mut crate::fit::FitText>)>,
     fonts: Query<&TextFont>,
     spans: Query<(), With<SmallCapsSpan>>,
     mut commands: Commands,
@@ -1278,11 +1309,20 @@ pub(crate) fn bound_fields(
     mut tex: ResMut<UiTextures>,
     db: Res<CommandBarDb>,
     mut images: ResMut<Assets<Image>>,
+    figures: Option<Res<crate::fit::FigureOverride>>,
 ) {
     if !data.is_changed() && fresh.is_empty() {
         return;
     }
-    for (entity, f, mut t, mut color, children) in &mut texts {
+    let shown;
+    let data = match figures {
+        Some(f) => {
+            shown = f.apply(&data);
+            &shown
+        }
+        None => &*data,
+    };
+    for (entity, f, mut t, mut color, children, fit) in &mut texts {
         if matches!(f.0, Field::PlanetName | Field::Income) && let (Some(c), Some(tc)) = (data.planet_color, color.as_deref_mut()) {
             tc.0 = c;
         }
@@ -1296,6 +1336,21 @@ pub(crate) fn bound_fields(
             Field::Pop => format!("{}/{}", data.pop_current, data.pop_cap),
             Field::Allegiance => String::new(),
         };
+        if let Some(mut fit) = fit {
+            // The full text first, then shorter forms of the same figure (`fit::fit_fields` picks the one that fits). Population, month
+            // and tech only shrink: "10K/10K" would hide whether the cap is reached.
+            let short = match f.0 {
+                Field::Credits => crate::fit::abbreviations(data.credits),
+                Field::Income if !data.planet_name.is_empty() => crate::fit::abbreviations(data.planet_income),
+                Field::MonthIncome => crate::fit::abbreviations(data.month_income),
+                _ => Vec::new(),
+            };
+            let mut all = vec![t.0.clone()];
+            all.extend(short.into_iter().filter(|x| *x != t.0));
+            if fit.candidates != all {
+                fit.candidates = all;
+            }
+        }
         if f.0 == Field::PlanetName
             && let Ok(font) = fonts.get(entity)
         {
@@ -1912,7 +1967,7 @@ pub(crate) fn tooltip(
     mut last: Local<(String, u8)>,
     mut commands: Commands,
     settings: Res<EawUiSettings>,
-    fields: Query<(&BoundField, &ComputedNode, &UiGlobalTransform, &InheritedVisibility)>,
+    fields: Query<(&BoundField, &ComputedNode, &UiGlobalTransform, &InheritedVisibility, Option<&crate::fit::FitText>)>,
 ) {
     let Ok((root, mut node, mut vis, own)) = tip.single_mut() else {
         return;
@@ -1958,8 +2013,18 @@ pub(crate) fn tooltip(
             (text, icon, Some((b, cn, gt, forced_hit)))
         }
         // A number of the info card (credits, income, tech, population) explains itself while the cursor is on it.
-        None => match cursor_phys.and_then(|c| fields.iter().find(|(_, n, g, v)| v.get() && n.contains_point(**g, c)).and_then(|(f, ..)| field_tip(f.0))) {
-            Some(t) => (t.to_owned(), None, None),
+        None => match cursor_phys.and_then(|c| fields.iter().find(|(_, n, g, v, _)| v.get() && n.contains_point(**g, c))).and_then(|(f, .., fit)| {
+            let mut t = field_tip(f.0)?.to_owned();
+            // A shortened figure ("10,9M") names its exact value on the card.
+            if let Some(fit) = fit.filter(|x| x.abbreviated())
+                && let Some(full) = fit.candidates.first()
+            {
+                t.push_str(&format!("
+@Exact	{full}"));
+            }
+            Some(t)
+        }) {
+            Some(t) => (t, None, None),
             None => (world_tip.text.clone().unwrap_or_default(), world_tip.icon.clone(), None),
         },
     };

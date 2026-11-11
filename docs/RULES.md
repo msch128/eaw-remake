@@ -1158,3 +1158,12 @@ Estimates and data that shape what the player sees and hears. Behaviour is in `b
   draws a squadron as its leader alone at 3.2% of the screen height (bounding sphere, Remake video b0703s, b0732s, b0760s: one
   silhouette per squadron at one screen size), never below its model scale and fixed beyond camera 7277 (the Remake's widest view);
   lone fighters and bombers too; the battle cam shows every craft at its model scale (Remake cinematic b0685s-b0695s).
+
+## 3.3 Bar headers and hover cards
+
+* Header read-outs (`eaw-ui/src/fit.rs`): the credit symbol of `Text_Credits`, `Text_Day_Credits` and
+  `Text_Planetary_Income` stays at its place at the left edge of the field and the number is right-aligned in the rest of
+  the field, which the field clips. Estimate: a number wider than that rest shrinks in steps of 4 % of the field's font size
+  down to 80 % of it; only below that it is shortened ("264,2K", "10,9M", then "11M"), and the hover card adds the exact
+  value. Month, tech and population only shrink. The same holds for the tactical header (`Text_Credits_tactical`,
+  `Text_Planetary_Pop`, `Text_Tactical_Tech`).

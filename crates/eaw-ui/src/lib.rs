@@ -20,6 +20,7 @@
 pub mod components;
 pub mod data;
 pub mod faction;
+pub mod fit;
 pub mod member_bars;
 pub mod panels;
 pub mod tactical;
@@ -226,6 +227,7 @@ impl Plugin for EawUiPlugin {
                     .chain(),
             )
             .add_systems(Update, (widgets::segment_bars, widgets::border_pieces.after(widgets::slots), widgets::ability_columns.after(widgets::slots), widgets::active_outlines.after(widgets::slots)));
+        app.add_systems(Update, fit::fit_fields.after(widgets::bound_fields).before(widgets::tooltip));
         app.add_systems(Update, squad_icons::squad_icon_nodes.after(widgets::ui_scale));
         member_bars::plugin(app);
     }

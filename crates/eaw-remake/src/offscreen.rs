@@ -48,6 +48,26 @@ pub struct OffscreenTarget {
 #[derive(Resource, Default)]
 pub struct CaptureGate(pub u32);
 
+/// `--hud-figures credits=n,income=n,planet=n,pop=a/b`: header figures shown instead of the game's (a look check of large numbers).
+fn parse_figures(spec: &str) -> Result<eaw_ui::fit::FigureOverride, String> {
+    let mut o = eaw_ui::fit::FigureOverride::default();
+    for part in spec.split(',').map(str::trim).filter(|p| !p.is_empty()) {
+        let (k, v) = part.split_once('=').ok_or_else(|| format!("`{part}` is not key=value"))?;
+        let num = |v: &str| v.trim().parse::<i64>().map_err(|e| format!("{k}: {e}"));
+        match k.trim() {
+            "credits" => o.credits = Some(num(v)?),
+            "income" => o.month_income = Some(num(v)?),
+            "planet" => o.planet_income = Some(num(v)?),
+            "pop" => {
+                let (a, b) = v.split_once('/').ok_or("pop needs a/b")?;
+                o.pop = Some((a.trim().parse().map_err(|e| format!("pop: {e}"))?, b.trim().parse().map_err(|e| format!("pop: {e}"))?));
+            }
+            other => return Err(format!("unknown figure `{other}` (credits, income, planet, pop)")),
+        }
+    }
+    Ok(o)
+}
+
 /// Progress and measurements of an offscreen run.
 #[derive(Resource)]
 struct OffscreenState {
@@ -97,6 +117,17 @@ fn fixed_step(args: &Args) -> Option<Duration> {
 
 /// Registers the offscreen target and the driver system on `app` (call before `run`).
 pub fn configure(app: &mut App, args: &Args, path: PathBuf) {
+    if let Some(spec) = args.hud_figures.as_deref() {
+        match parse_figures(spec) {
+            Ok(o) => {
+                app.insert_resource(o);
+            }
+            Err(e) => {
+                eprintln!("error: --hud-figures: {e}");
+                std::process::exit(2);
+            }
+        }
+    }
     let _ = TARGET_SIZE.set(args.size.unwrap_or((3840, 2160)));
     if let Some(step) = fixed_step(args) {
         app.insert_resource(TimeUpdateStrategy::ManualDuration(step));

@@ -134,6 +134,8 @@ pub struct Args {
     pub pointer: Option<String>,
     /// Offscreen only: give the player this many credits before the other scenario flags run (`--credits <n>`, a journaled cheat).
     pub credits: Option<u32>,
+    /// Offscreen only: header figures shown instead of the game's (`--hud-figures credits=n,income=n,planet=n,pop=a/b`), display only.
+    pub hud_figures: Option<String>,
 }
 
 impl Default for Args {
@@ -200,6 +202,7 @@ impl Default for Args {
             ground_up: false,
             pointer: None,
             credits: None,
+            hud_figures: None,
         }
     }
 }
@@ -262,6 +265,7 @@ OPTIONS:
   --pointer <steps>     Offscreen: synthetic cursor through the real input path; steps separated by ;, each <target>[!press|click|right]
                         with target x,y | node:<component> | planet:<name> | view:<orbital0|ground0|station>
   --credits <n>         Offscreen: give the player n credits first (a journaled cheat)
+  --hud-figures <list>  Offscreen: show these header figures instead of the game's (credits=n,income=n,planet=n,pop=a/b)
   --no-vsync             Disable vertical sync
   --no-audio             Do not open the audio device (implied by --volume 0); the audio logic and SP_AUDIO_LOG still run
   --fullscreen           Start in borderless fullscreen
@@ -376,6 +380,7 @@ impl Args {
                 "--tooltip" => out.tooltip = Some(it.next().ok_or("--tooltip needs a button name")?),
                 "--cheat-menu" => out.cheat_menu = true,
                 "--ground-up" => out.ground_up = true,
+                "--hud-figures" => out.hud_figures = Some(it.next().ok_or("--hud-figures needs a list")?),
                 "--pointer" => out.pointer = Some(it.next().ok_or("--pointer needs its steps")?),
                 "--credits" => {
                     let v = it.next().ok_or("--credits needs a value")?;
