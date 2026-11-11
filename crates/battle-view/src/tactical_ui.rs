@@ -66,8 +66,10 @@ impl Plugin for TacticalUiPlugin {
 /// Which ships each selection slot of the bar stands for (same order as [`TacticalData::selection`]).
 #[derive(Resource, Default, Debug, Clone)]
 pub struct TacticalUiState {
-    /// Ships per slot.
+    /// Ships per selection type (`TacticalData::selection`).
     pub groups: Vec<Vec<u32>>,
+    /// Ships per unit (a ship, or a squadron's craft) of each selection type, in the order of `TacticalUnit::units`.
+    pub units: Vec<Vec<Vec<u32>>>,
     /// A targeted ability waits for a click on the map: the ships of the slot and the ability type.
     pub pending_ability: Option<(Vec<u32>, String)>,
     /// The cursor label while a targeted ability is armed.
@@ -173,20 +175,41 @@ fn sync_data(
     }
     let mut selection = Vec::new();
     let mut groups = Vec::new();
+    let mut unit_ids = Vec::new();
     for (def, ids) in by_def {
         let sdef = rt.catalog.ship(def);
         let Some(mut unit) = TacticalUnit::from_game(&game, &assets.text, &textures, &sdef.name) else { continue };
-        let n = ids.len() as f32;
-        let (mut hull, mut shield) = (0.0, 0.0);
-        for id in &ids {
-            if let Some(s) = ships.0.get(id) {
-                hull += s.hull;
-                shield += s.shield;
+        // One unit per ship, a squadron's craft together (the bar gives each unit its own card).
+        let mut members: Vec<Vec<u32>> = Vec::new();
+        let mut squads: HashMap<u32, usize> = HashMap::new();
+        for &id in &ids {
+            match cur.ship(id).map(|s| s.squad).filter(|&q| q != u32::MAX) {
+                Some(q) => match squads.get(&q) {
+                    Some(&i) => members[i].push(id),
+                    None => {
+                        squads.insert(q, members.len());
+                        members.push(vec![id]);
+                    }
+                },
+                None => members.push(vec![id]),
             }
         }
-        unit.health = hull / n;
-        unit.shield = unit.shield.map(|_| shield / n);
-        unit.count = ids.len() as u32;
+        let shielded = unit.shield.is_some();
+        let health_of = |list: &[u32]| {
+            let (mut hull, mut shield, mut n) = (0.0, 0.0, 0.0f32);
+            for s in list.iter().filter_map(|id| ships.0.get(id)) {
+                hull += s.hull;
+                shield += s.shield;
+                n += 1.0;
+            }
+            let n = n.max(1.0);
+            eaw_ui::UnitStatus { health: hull / n, shield: shielded.then_some(shield / n) }
+        };
+        let all = health_of(&ids);
+        unit.health = all.health;
+        unit.shield = all.shield;
+        unit.count = members.len() as u32;
+        unit.units = members.iter().map(|m| health_of(m)).collect();
         if overview {
             unit.abilities.clear();
         }
@@ -205,11 +228,13 @@ fn sync_data(
         }
         selection.push(unit);
         groups.push(ids);
+        unit_ids.push(members);
     }
     // Bar sections in the Remake order (small ships, fighters, heroes, capitals); stable, so types keep their id order inside one.
-    let mut paired: Vec<_> = selection.into_iter().zip(groups).collect();
+    let mut paired: Vec<_> = selection.into_iter().zip(groups.into_iter().zip(unit_ids)).collect();
     paired.sort_by_key(|(u, _)| u.section);
-    let (selection, groups): (Vec<_>, Vec<_>) = paired.into_iter().unzip();
+    let (selection, rest): (Vec<_>, Vec<_>) = paired.into_iter().unzip();
+    let (groups, unit_ids): (Vec<_>, Vec<_>) = rest.into_iter().unzip();
 
     let retreat = retreat_state(status.over, cur.retreat_jump_in.get(player as usize).copied().flatten(), status.time, rt.retreat_countdown);
     let new = TacticalData {
@@ -224,6 +249,7 @@ fn sync_data(
         *tac = new;
     }
     state.groups = groups;
+    state.units = unit_ids;
 }
 
 /// Plays the `Click_SFX` an ability button names (`special_button_00` .. `special_button_23`).
@@ -367,12 +393,21 @@ fn handle_clicks(
         }
     }
     for c in slots.read() {
-        let Some(group) = state.groups.get(c.index) else { continue };
+        // The ships of the units the card stands for: one unit (ship or squadron), a stack of one type, or several types.
+        let group: Vec<u32> = if c.cards.len() > 1 {
+            c.cards.iter().filter_map(|&i| state.groups.get(i)).flatten().copied().collect()
+        } else {
+            let Some(units) = state.units.get(c.index) else { continue };
+            units.get(c.units.clone()).unwrap_or_default().iter().flatten().copied().collect()
+        };
+        if group.is_empty() {
+            continue;
+        }
         if c.shift {
             sel.ships.retain(|id| !group.contains(id));
         } else {
-            sel.ships = group.clone();
-            tac.focus = c.index;
+            sel.ships = group;
+            tac.focus = 0;
         }
     }
 }

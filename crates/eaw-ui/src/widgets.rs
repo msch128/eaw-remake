@@ -1176,7 +1176,12 @@ impl Builder<'_> {
                 FocusPolicy::Pass,
                 ChildOf(button),
             ));
-            let label_off = if def.text_offset2 != Vec2::ZERO {
+            let label_off = if s.kind == SlotKind::Select {
+                // The stack count of a unit card: `Text_Offset2` (0, -16) puts it on the card's health and shield bars (`s_health_NN` /
+                // `s_shield_NN`, 18 and 21 design px below the card centre, 8 px tall), which are drawn over it and cut the digits.
+                // Estimate: the same column, half as far down, so the digits sit on the foot of the icon right above the bars.
+                Vec2::new(def.text_offset2.x, def.text_offset2.y * 0.5)
+            } else if def.text_offset2 != Vec2::ZERO {
                 def.text_offset2
             } else if def.text_offset == Vec2::ZERO {
                 Vec2::new(0.0, -size.y * 0.5 - 6.0)
@@ -1521,10 +1526,15 @@ pub(crate) fn ability_columns(data: Res<CommandBarData>, mut buttons: Query<(&Sl
             _ => (24.0, 25.0),
         };
         let entry = data.abilities.get(slot.index).filter(|a| !a.icon.is_empty());
-        let (left, top, scale) = match entry.and_then(|a| homes.get(&(a.card * 2)).map(|c| (a, c.corner))) {
+        let (left, top, scale) = match entry.and_then(|a| homes.get(&(a.column * 2)).map(|c| (a, c.corner))) {
             Some((a, card_corner)) => {
-                let pitch = room(a.card).unwrap_or(2.0 * w + ABILITY_ICON_GAP + ABILITY_CARD_GAP);
-                let (left, row, scale) = ability_place(card_corner.x + w * 0.5, pitch, w, home.scale, a.nth, a.of);
+                // A card whose slots fill several columns has its buttons centred above all of them, with that much more room.
+                let span = a.span.max(1);
+                let last = centre(a.column + span - 1).unwrap_or(card_corner.x);
+                let column_room = room(a.column).unwrap_or(2.0 * w + ABILITY_ICON_GAP + ABILITY_CARD_GAP);
+                let pitch = column_room + (last - card_corner.x);
+                let (at, among) = if a.among > 0 { (a.at, a.among) } else { (a.nth, a.of) };
+                let (left, row, scale) = ability_place((card_corner.x + last) * 0.5 + w * 0.5, pitch, w, home.scale, at, among);
                 // The node scales around its centre, which stays on the shell's button row for the bottom row (the Remake's icon centres
                 // sit there, b0700); shift it so the scaled button's left edge lands where it belongs.
                 (left - w * (1.0 - scale) * 0.5, home.corner.y - row as f32 * (h * scale + ABILITY_ICON_GAP), scale)
@@ -2424,7 +2434,7 @@ mod tests {
                 app.world_mut().spawn((Slot { kind: SlotKind::Ability, index: i }, AbilityHome { corner: corner(i), scale: 0.8 }, node)).id()
             })
             .collect();
-        let entry = |card, nth, of| AbilityEntry { icon: "I_SA_HUNT.TGA".into(), card, nth, of, ..default() };
+        let entry = |card, nth, of| AbilityEntry { icon: "I_SA_HUNT.TGA".into(), card, column: card, span: 1, nth, of, ..default() };
         // Card 0 with two abilities, card 1 with one, card 2 with five.
         let mut abilities = vec![entry(0, 0, 2), entry(0, 1, 2), entry(1, 0, 1)];
         abilities.extend((0..5).map(|n| entry(2, n, 5)));
@@ -2462,6 +2472,14 @@ mod tests {
             assert_eq!((0..24).map(|i| at(&app, i)).collect::<Vec<_>>(), placed);
         }
         assert_eq!(app.world().resource::<Moves>().0, 0, "no layout writes while nothing moves");
+        // A card whose units fill columns 3..=5: its two buttons sit centred above column 4, at the full scale.
+        let mut abilities = vec![AbilityEntry { icon: "I_SA_HUNT.TGA".into(), card: 0, column: 3, span: 3, nth: 0, of: 2, ..default() }];
+        abilities.push(AbilityEntry { nth: 1, ..abilities[0].clone() });
+        abilities.resize(24, AbilityEntry::default());
+        app.world_mut().resource_mut::<CommandBarData>().abilities = abilities;
+        app.update();
+        assert!(((at(&app, 0).0 + at(&app, 1).1) * 0.5 - (380.0 + 55.0 * 4.0)).abs() < 1e-3, "{:?} {:?}", at(&app, 0), at(&app, 1));
+        assert!((at(&app, 0).1 - at(&app, 0).0 - 24.0 * 0.8).abs() < 1e-3);
     }
 
     #[test]

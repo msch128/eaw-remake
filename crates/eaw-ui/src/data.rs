@@ -91,7 +91,7 @@ pub struct SelectionEntry {
     pub health: f32,
     /// Shield 0..1 (`None` for units without shields).
     pub shield: Option<f32>,
-    /// Number of selected units of this type (shown when above 1).
+    /// Number of units the slot stands for (shown when above 1: a stack of one type when the selection has more units than slots).
     pub count: u32,
     /// Section of the bar (0 small ships, 1 fighters, 2 heroes, 3 capitals): neighbours of one section share one frame.
     pub section: u8,
@@ -114,12 +114,21 @@ pub struct AbilityEntry {
     pub kind: String,
     /// Tooltip text (already localized).
     pub tooltip: String,
-    /// Selection card (index into `TacticalData::selection`, the bar column) the ability belongs to.
+    /// Selection card (index into `TacticalData::selection`) the ability belongs to.
     pub card: usize,
+    /// First bar column of the card's slots; the buttons sit centred above `column .. column + span`.
+    pub column: usize,
+    /// Number of bar columns the card's slots take (0 counts as 1).
+    pub span: usize,
     /// Place of the ability among the abilities of its card.
     pub nth: usize,
     /// Number of abilities the card shows.
     pub of: usize,
+    /// Place of the button among all buttons above `column .. column + span`: types whose cards share a column (the bar's two rows) have
+    /// their buttons laid out together there, so they never sit on each other. With `among` 0 the place is `nth` of `of`.
+    pub at: usize,
+    /// Number of buttons above `column .. column + span` (0: see `at`).
+    pub among: usize,
 }
 
 /// Everything the command bars display (resource).

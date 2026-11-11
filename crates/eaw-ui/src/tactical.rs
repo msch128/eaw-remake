@@ -143,7 +143,16 @@ pub struct AbilityState {
     pub disabled: bool,
 }
 
-/// One selected unit (or a stack of identical units).
+/// Health of one unit of a selected type: one ship, or one squadron.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct UnitStatus {
+    /// Hull 0..1.
+    pub health: f32,
+    /// Shield 0..1 (`None` = no shields).
+    pub shield: Option<f32>,
+}
+
+/// One selected unit type with its units.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct TacticalUnit {
     /// Unit type (object name).
@@ -166,6 +175,125 @@ pub struct TacticalUnit {
     pub section: u8,
     /// Ability buttons (shown for the focused unit).
     pub abilities: Vec<AbilityState>,
+    /// Each unit of the type (a ship, or a squadron) with its own health; the bar gives each its own card while they fit. Empty:
+    /// `count` units at `health` / `shield`.
+    pub units: Vec<UnitStatus>,
+}
+
+impl TacticalUnit {
+    /// The units of the type: [`Self::units`], or `count` units at the type's health.
+    fn unit_list(&self) -> Vec<UnitStatus> {
+        if self.units.is_empty() {
+            vec![UnitStatus { health: self.health, shield: self.shield }; self.count.max(1) as usize]
+        } else {
+            self.units.clone()
+        }
+    }
+}
+
+/// Columns of the selection bar; each holds two unit cards (`s_select_{2c}` on top, `s_select_{2c+1}` below).
+pub const SELECT_COLUMNS: usize = 12;
+/// Unit cards of the selection bar.
+pub const SELECT_SLOTS: usize = SELECT_COLUMNS * 2;
+
+/// What one card of the selection bar stands for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SlotUnits {
+    /// Selection types (indices into [`TacticalData::selection`], ascending): one, or the rest of a selection with more types than cards.
+    pub cards: Vec<usize>,
+    /// Units of `cards[0]` the card shows (indices into its unit list); all units of every type for a card of several types.
+    pub units: std::ops::Range<usize>,
+}
+
+impl SlotUnits {
+    /// The first type the card stands for (its icon and bar section).
+    pub fn first(&self) -> usize {
+        self.cards[0]
+    }
+}
+
+/// Start slot of every type when type `i` takes `k[i]` cards, or `None` when they need more than [`SELECT_SLOTS`]. `align`: every type
+/// starts a column; `breaks`: every bar section starts a column (its own frame).
+fn place_types(k: &[usize], sections: &[u8], align: bool, breaks: bool) -> Option<Vec<usize>> {
+    let mut starts = Vec::with_capacity(k.len());
+    let mut slot = 0usize;
+    for (i, &n) in k.iter().enumerate() {
+        if i > 0 && (align || (breaks && sections[i] != sections[i - 1])) {
+            slot = slot.next_multiple_of(2);
+        }
+        starts.push(slot);
+        slot += n;
+    }
+    (slot <= SELECT_SLOTS).then_some(starts)
+}
+
+/// The cards of the selection bar (one entry per `s_select_NN`, `None` = empty), the Remake's two rows (video v0700s, n93 f0011): every
+/// unit (ship or squadron) has its own card with its own bars, filling a column top then bottom; the types of one bar section share a
+/// frame. When the units need more than the 24 cards (estimate, the data has no paging for this bar: `I_Tactical_Controls_New.ALO` has
+/// 24 `s_select_NN` and no scroll button), the largest groups are stacked: one card stands for several units of a type and shows their
+/// number (`s_select_NN` is a `TextButton`). If the types still do not fit, a type no longer starts its own column, then the sections no
+/// longer start their own; a selection of more than 24 types shows 23 and a last card for the rest (a click on it selects those).
+pub fn selection_layout(tac: &TacticalData) -> Vec<Option<SlotUnits>> {
+    let n_units: Vec<usize> = tac.selection.iter().map(|u| u.unit_list().len()).collect();
+    let sections: Vec<u8> = tac.selection.iter().map(|u| u.section).collect();
+    let mut out = vec![None; SELECT_SLOTS];
+    let fill = |out: &mut Vec<Option<SlotUnits>>, k: &[usize], starts: &[usize]| {
+        for (i, (&n, &start)) in k.iter().zip(starts).enumerate() {
+            let total = n_units[i];
+            for j in 0..n {
+                out[start + j] = Some(SlotUnits { cards: vec![i], units: j * total / n..(j + 1) * total / n });
+            }
+        }
+    };
+    for (align, breaks) in [(true, true), (false, true), (false, false)] {
+        let mut k = n_units.clone();
+        loop {
+            if let Some(starts) = place_types(&k, &sections, align, breaks) {
+                fill(&mut out, &k, &starts);
+                return out;
+            }
+            // Stack the largest group one card further (the later type on a tie, so the first types keep their cards longest).
+            let Some(i) = (0..k.len()).filter(|&i| k[i] > 1).max_by_key(|&i| (k[i], i)) else { break };
+            k[i] -= 1;
+        }
+    }
+    // More types than cards (estimate, the data has no rule for it): the heroes keep a card of their own first, then the capital ships, the
+    // small ships and the fighters; 23 types get one card each (their units stacked) and the last card stands for the other types (the
+    // first one's icon, the number of all their units; a click selects them all). The cards stay in bar order, the rest card where its
+    // first type would be.
+    let n = tac.selection.len();
+    let rank = |s: u8| match s {
+        2 => 0,
+        3 => 1,
+        0 => 2,
+        _ => 3,
+    };
+    let mut by_rank: Vec<usize> = (0..n).collect();
+    by_rank.sort_by_key(|&i| (rank(sections[i]), i));
+    let mut rest = by_rank.split_off(SELECT_SLOTS - 1);
+    rest.sort_unstable();
+    let mut cards: Vec<Vec<usize>> = by_rank.into_iter().map(|i| vec![i]).collect();
+    cards.push(rest);
+    cards.sort_by_key(|c| c[0]);
+    for (entry, c) in out.iter_mut().zip(cards) {
+        *entry = Some(SlotUnits { units: 0..n_units[c[0]], cards: c });
+    }
+    out
+}
+
+/// Bar columns (first, number) the cards of every selection type take in `layout`.
+fn card_columns(layout: &[Option<SlotUnits>], cards: usize) -> Vec<Option<(usize, usize)>> {
+    let mut cols: Vec<Option<(usize, usize)>> = vec![None; cards];
+    for (slot, s) in layout.iter().enumerate() {
+        let Some(s) = s.as_ref().filter(|s| s.cards.len() == 1) else { continue };
+        let c = slot / 2;
+        let e = &mut cols[s.first()];
+        *e = Some(match *e {
+            Some((first, _)) => (first, c - first + 1),
+            None => (c, 1),
+        });
+    }
+    cols
 }
 
 /// Bar section of a unit type: 0 small ships, 1 fighters and bombers, 2 heroes, 3 capital ships.
@@ -214,6 +342,7 @@ impl TacticalUnit {
                     ..default()
                 })
                 .collect(),
+            units: Vec::new(),
         })
     }
 }
@@ -323,15 +452,19 @@ pub struct EawAbilityClicked {
     pub ability: String,
 }
 
-/// A slot of the multi-selection grid was clicked (sub-select that unit type).
+/// A unit card of the selection bar was clicked (sub-select the units it stands for).
 #[derive(Message, Debug, Clone, PartialEq, Eq)]
 pub struct EawSelectionClicked {
-    /// Index into [`TacticalData::selection`].
+    /// Index into [`TacticalData::selection`] (the first type of the card).
     pub index: usize,
     /// Unit type.
     pub unit_type: String,
     /// Shift held (remove from / add to selection).
     pub shift: bool,
+    /// The types the card stands for (see [`SlotUnits::cards`]).
+    pub cards: Vec<usize>,
+    /// The units of `index` the card stands for (see [`SlotUnits::units`]); all units of every type when `cards` holds several.
+    pub units: std::ops::Range<usize>,
 }
 
 /// A hardpoint marker was clicked.
@@ -349,19 +482,51 @@ const ABILITY_BUTTONS: usize = 24;
 /// has two buttons per card); further abilities take the buttons other cards leave free. Before, buttons `2n` and `2n + 1` belonged to
 /// card `n`: a third ability never showed, and the buttons of neighbouring cards ran together into one evenly spaced row.
 pub fn ability_slots(tac: &TacticalData) -> Vec<AbilityEntry> {
-    let cards: Vec<&TacticalUnit> = tac.selection.iter().take(ABILITY_BUTTONS / 2).collect();
-    let mut shown: Vec<usize> = cards.iter().map(|u| u.abilities.len().min(2)).collect();
-    let mut spare = ABILITY_BUTTONS - shown.iter().sum::<usize>();
-    for (n, u) in shown.iter_mut().zip(&cards) {
+    ability_slots_for(tac, &selection_layout(tac))
+}
+
+/// [`ability_slots`] for the cards `layout` gives the selection: the buttons of a type sit above the columns of its cards.
+fn ability_slots_for(tac: &TacticalData, layout: &[Option<SlotUnits>]) -> Vec<AbilityEntry> {
+    let cols = card_columns(layout, tac.selection.len());
+    let cards: Vec<(usize, &TacticalUnit, (usize, usize))> = tac.selection.iter().enumerate().filter_map(|(i, u)| cols[i].map(|c| (i, u, c))).collect();
+    let mut spare = ABILITY_BUTTONS;
+    let mut shown: Vec<usize> = cards
+        .iter()
+        .map(|(_, u, _)| {
+            let n = u.abilities.len().min(2).min(spare);
+            spare -= n;
+            n
+        })
+        .collect();
+    for (n, (_, u, _)) in shown.iter_mut().zip(&cards) {
         let more = (u.abilities.len() - *n).min(spare);
         *n += more;
         spare -= more;
     }
+    // Types whose cards share a column (one on the top card, one on the bottom card) have one group of buttons over their joint columns.
+    let mut groups: Vec<(usize, usize, usize)> = Vec::new(); // (first column, end column, buttons)
+    let mut group_of = Vec::with_capacity(cards.len());
+    for (&(_, _, (column, span)), &n) in cards.iter().zip(&shown) {
+        let end = column + span.max(1);
+        match groups.last_mut() {
+            Some(g) if column < g.1 => {
+                g.1 = g.1.max(end);
+                g.2 += n;
+            }
+            _ => groups.push((column, end, n)),
+        }
+        group_of.push(groups.len() - 1);
+    }
+    let mut placed = vec![0usize; groups.len()];
     let mut abilities = vec![AbilityEntry::default(); ABILITY_BUTTONS];
     let mut slots = abilities.iter_mut();
-    for (card, (u, &of)) in cards.iter().zip(&shown).enumerate() {
+    for ((&(card, u, _), &of), &g) in cards.iter().zip(&shown).zip(&group_of) {
+        let (column, end, among) = groups[g];
+        let span = end - column;
         for (nth, a) in u.abilities.iter().take(of).enumerate() {
             let Some(slot) = slots.next() else { break };
+            let at = placed[g];
+            placed[g] += 1;
             *slot = AbilityEntry {
                 icon: a.def.icon.clone(),
                 ready: 1.0 - a.cooldown.clamp(0.0, 1.0),
@@ -370,8 +535,12 @@ pub fn ability_slots(tac: &TacticalData) -> Vec<AbilityEntry> {
                 kind: a.def.kind.clone(),
                 tooltip: a.def.tooltip(),
                 card,
+                column,
+                span,
                 nth,
                 of,
+                at,
+                among,
             };
         }
     }
@@ -383,22 +552,33 @@ pub(crate) fn tactical_sync(tac: Res<TacticalData>, mut bar: ResMut<CommandBarDa
     if !tac.is_changed() || !tac.active {
         return;
     }
-    // Selection cards: one per column, placed at s_select_{2*col}.
-    // Up to 12 columns (24 selection slots).
-    let mut selection = vec![SelectionEntry::default(); 24];
-    for (col, u) in tac.selection.iter().take(12).enumerate() {
-        selection[col * 2] = SelectionEntry {
-            icon: u.icon.clone(),
-            health: u.health,
-            shield: u.shield,
-            count: u.count,
-            section: u.section,
-            selected: col == tac.focus,
-        };
-    }
-    bar.selection = selection;
+    // Unit cards: every unit its own while they fit, column by column, top then bottom (`selection_layout`).
+    let layout = selection_layout(&tac);
+    let lists: Vec<Vec<UnitStatus>> = tac.selection.iter().map(TacticalUnit::unit_list).collect();
+    bar.selection = layout
+        .iter()
+        .map(|s| {
+            let Some(s) = s else { return SelectionEntry::default() };
+            let u = &tac.selection[s.first()];
+            let units: Vec<UnitStatus> = if s.cards.len() == 1 {
+                lists[s.first()][s.units.clone()].to_vec()
+            } else {
+                s.cards.iter().flat_map(|&c| lists[c].iter().copied()).collect()
+            };
+            let n = units.len().max(1) as f32;
+            let shielded: Vec<f32> = units.iter().filter_map(|x| x.shield).collect();
+            SelectionEntry {
+                icon: u.icon.clone(),
+                health: units.iter().map(|x| x.health).sum::<f32>() / n,
+                shield: (!shielded.is_empty()).then(|| shielded.iter().sum::<f32>() / shielded.len() as f32),
+                count: units.len() as u32,
+                section: u.section,
+                selected: s.cards.len() == 1 && s.first() == tac.focus,
+            }
+        })
+        .collect();
 
-    bar.abilities = ability_slots(&tac);
+    bar.abilities = ability_slots_for(&tac, &layout);
     bar.ability_column = 0;
     if let Some((cur, cap)) = tac.pop {
         bar.pop_current = cur;
@@ -468,15 +648,17 @@ pub(crate) fn tactical_clicks(
                 ability: a.kind.clone(),
             });
         }
-        if let Some(i) = c.name.strip_prefix("s_select_").and_then(|n| n.parse::<usize>().ok()) {
-            let group_idx = i / 2;
-            if let Some(u) = tac.selection.get(group_idx) {
-                selections.write(EawSelectionClicked {
-                    index: group_idx,
-                    unit_type: u.unit_type.clone(),
-                    shift: c.shift,
-                });
-            }
+        if let Some(i) = c.name.strip_prefix("s_select_").and_then(|n| n.parse::<usize>().ok())
+            && let Some(Some(s)) = selection_layout(&tac).get(i)
+            && let Some(u) = tac.selection.get(s.first())
+        {
+            selections.write(EawSelectionClicked {
+                index: s.first(),
+                unit_type: u.unit_type.clone(),
+                shift: c.shift,
+                cards: s.cards.clone(),
+                units: s.units.clone(),
+            });
         }
     }
 }
@@ -1223,6 +1405,119 @@ mod tests {
         let slots = shown(&ability_slots(&TacticalData { selection: some, ..default() }));
         assert_eq!(slots.len(), 24);
         assert_eq!(slots.iter().filter(|x| x.0 == 3).map(|x| x.2).collect::<Vec<_>>(), [4, 4, 4, 4]);
+    }
+
+    #[test]
+    fn types_that_share_a_column_lay_their_ability_buttons_out_together() {
+        // Two types on the top and bottom card of column 0 and a third in column 1, two abilities each: the four buttons over column 0
+        // are one row of places 0..4 (before, both pairs were centred on column 0 and drawn on each other).
+        let unit = |name: &str| TacticalUnit {
+            unit_type: name.into(),
+            abilities: (0..2).map(|i| AbilityState { def: AbilityDef { kind: format!("{name}{i}"), icon: format!("I_SA_{name}{i}.TGA"), ..default() }, ..default() }).collect(),
+            ..default()
+        };
+        let tac = TacticalData { selection: vec![unit("A"), unit("B"), unit("C")], ..default() };
+        let mut layout = vec![None; SELECT_SLOTS];
+        for (slot, t) in [(0, 0), (1, 1), (2, 2)] {
+            layout[slot] = Some(SlotUnits { cards: vec![t], units: 0..1 });
+        }
+        let placed: Vec<(usize, usize, usize, usize, usize)> =
+            ability_slots_for(&tac, &layout).iter().filter(|a| !a.icon.is_empty()).map(|a| (a.card, a.column, a.span, a.at, a.among)).collect();
+        assert_eq!(placed, [(0, 0, 1, 0, 4), (0, 0, 1, 1, 4), (1, 0, 1, 2, 4), (1, 0, 1, 3, 4), (2, 1, 1, 0, 2), (2, 1, 1, 1, 2)]);
+    }
+
+    /// `n` units of a type in bar section `section`.
+    fn units_of(name: &str, section: u8, n: u32) -> TacticalUnit {
+        TacticalUnit { unit_type: name.into(), icon: format!("I_{name}.TGA"), health: 1.0, count: n, section, ..default() }
+    }
+
+    /// (type, units) per card of the bar, `-` for an empty card.
+    fn cards(tac: &TacticalData) -> Vec<String> {
+        selection_layout(tac)
+            .iter()
+            .map(|s| s.as_ref().map_or("-".to_string(), |s| format!("{}:{}", tac.selection[s.first()].unit_type, s.units.len())))
+            .collect()
+    }
+
+    #[test]
+    fn every_unit_has_its_own_card_in_two_rows_while_they_fit() {
+        // Three squadrons, a hero and two Star Destroyers: six cards, each type from the top of its own column (Remake video v0700s).
+        let tac = TacticalData { selection: vec![units_of("TIE", 1, 3), units_of("Vader", 2, 1), units_of("ISD", 3, 2)], ..default() };
+        let c = cards(&tac);
+        assert_eq!(&c[..8], ["TIE:1", "TIE:1", "TIE:1", "-", "Vader:1", "-", "ISD:1", "ISD:1"]);
+        assert!(c[8..].iter().all(|s| s == "-"));
+        // The units keep their own health: the second card of the Star Destroyers shows the second one's.
+        let mut tac = tac;
+        tac.selection[2].units = vec![UnitStatus { health: 1.0, shield: Some(1.0) }, UnitStatus { health: 0.25, shield: Some(0.5) }];
+        let mut app = App::new();
+        app.init_resource::<CommandBarData>().insert_resource(TacticalData { active: true, ..tac }).add_systems(Update, tactical_sync);
+        app.update();
+        let bar = app.world().resource::<CommandBarData>();
+        assert_eq!((bar.selection[7].health, bar.selection[7].shield, bar.selection[7].count), (0.25, Some(0.5), 1));
+    }
+
+    #[test]
+    fn a_fleet_larger_than_the_bar_keeps_a_card_for_every_type_and_stacks_the_largest_groups() {
+        // The defence of Brentaal in the play test: 16 types, 915 craft in squadrons, two Super Star Destroyers and the heroes; the
+        // bar showed the first 12 types only.
+        let mut sel = vec![
+            units_of("Corvette", 0, 2), units_of("Lancer", 0, 3), units_of("Shuttle", 0, 6), units_of("Gunboat", 0, 7),
+            units_of("TIE_Fighter", 1, 40), units_of("TIE_Bomber", 1, 7), units_of("TIE_Interceptor", 1, 24), units_of("TIE_Defender", 1, 70),
+            units_of("TIE_Advanced", 1, 8), units_of("TIE_Hunter", 1, 16), units_of("Piett", 2, 1), units_of("Thrawn", 2, 1),
+            units_of("Victory", 3, 4), units_of("Dominator", 3, 1), units_of("Vindicator", 3, 1), units_of("Executor", 3, 2),
+        ];
+        let tac = TacticalData { selection: sel.clone(), ..default() };
+        let layout = selection_layout(&tac);
+        assert_eq!(layout.len(), SELECT_SLOTS);
+        for (t, u) in tac.selection.iter().enumerate() {
+            let mine: Vec<&SlotUnits> = layout.iter().flatten().filter(|s| s.cards == [t]).collect();
+            assert!(!mine.is_empty(), "{} has no card: {:?}", u.unit_type, cards(&tac));
+            // Every unit is on exactly one card.
+            assert_eq!(mine.iter().map(|s| s.units.len()).sum::<usize>(), u.count as usize, "{}", u.unit_type);
+        }
+        // The heroes and the single capital ships are not stacked; the 70 Defenders are.
+        let c = cards(&tac);
+        for one in ["Piett:1", "Thrawn:1", "Dominator:1", "Vindicator:1"] {
+            assert!(c.iter().any(|s| s == one), "{one} in {c:?}");
+        }
+        assert!(c.iter().any(|s| s.starts_with("TIE_Defender:") && s != "TIE_Defender:1"), "{c:?}");
+        // More types than cards (26): 23 of them have a card and one card stands for the rest. The heroes and every capital ship keep
+        // their own (the play test's fleet at Fresia had 28 types: the Executors and the heroes fell into the rest), the last fighter
+        // types share the rest card, which sits where they would.
+        sel.extend((0..10).map(|i| units_of(&format!("Extra{i}"), 3, 1)));
+        let tac = TacticalData { selection: sel, ..default() };
+        let layout = selection_layout(&tac);
+        assert!(layout.iter().all(Option::is_some));
+        let rest: Vec<&SlotUnits> = layout.iter().flatten().filter(|s| s.cards.len() > 1).collect();
+        assert_eq!(rest.len(), 1);
+        assert_eq!(rest[0].cards, [7, 8, 9], "TIE_Defender, TIE_Advanced and TIE_Hunter share the rest card");
+        assert_eq!(layout[7].as_ref().map(|s| s.cards.clone()), Some(vec![7, 8, 9]));
+        for (t, u) in tac.selection.iter().enumerate().filter(|(_, u)| u.section >= 2) {
+            assert!(layout.iter().flatten().any(|s| s.cards == [t]), "{} has no card of its own", u.unit_type);
+        }
+        // The rest card counts the units of all its types (70 + 8 + 16).
+        let mut app = App::new();
+        app.init_resource::<CommandBarData>().insert_resource(TacticalData { active: true, ..tac }).add_systems(Update, tactical_sync);
+        app.update();
+        assert_eq!(app.world().resource::<CommandBarData>().selection[7].count, 94);
+    }
+
+    #[test]
+    fn a_click_on_a_card_names_the_units_it_stands_for() {
+        let mut app = App::new();
+        app.init_resource::<CommandBarData>()
+            .insert_resource(TacticalData { active: true, selection: vec![units_of("Vader", 2, 1), units_of("ISD", 3, 3)], ..default() })
+            .add_message::<EawButtonClicked>()
+            .add_message::<EawAbilityClicked>()
+            .add_message::<EawSelectionClicked>()
+            .add_systems(Update, (tactical_sync, tactical_clicks));
+        app.update();
+        // ISD cards are s_select_02, _03 (column 1) and _04 (column 2).
+        app.world_mut().resource_mut::<Messages<EawButtonClicked>>().write(EawButtonClicked { entity: Entity::PLACEHOLDER, name: "s_select_03".into(), shift: false });
+        app.update();
+        let sel: Vec<_> = app.world_mut().resource_mut::<Messages<EawSelectionClicked>>().drain().collect();
+        assert_eq!(sel.len(), 1);
+        assert_eq!((sel[0].index, sel[0].cards.clone(), sel[0].units.clone()), (1, vec![1], 1..2));
     }
 
     #[test]
