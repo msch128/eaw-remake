@@ -108,7 +108,8 @@ fn begin_play(
         pick_planets: false,
         tactical_hook: true,
         sim: galaxy_sim::SimConfig {
-            debug_commands: args.grant_unit.is_some(),
+            // A play script may grant units too (`grant`, see `playscript.rs`).
+            debug_commands: args.grant_unit.is_some() || std::env::var_os("SP_PLAY_SCRIPT").is_some(),
             ground_up: options.ground_up || args.ground_up,
             faction_override: options.faction_override.clone(),
             ..default()

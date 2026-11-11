@@ -46,6 +46,7 @@ mod offscreen;
 mod options;
 mod planet_visual;
 mod play;
+mod playscript;
 mod play_ui;
 mod settings;
 mod ui;
@@ -250,6 +251,7 @@ fn add_game(app: &mut App, boot: Boot) {
         .insert_resource(GalaxyView::default())
         .add_systems(Startup, game::replay_startup_log)
         .add_plugins(input_test::plugin)
+        .add_plugins(playscript::plugin)
         .add_plugins(fleet_trace::plugin)
         .add_plugins(hero_heads::HeroHeadsPlugin)
         .add_plugins(ui_sounds::UiSoundsPlugin)
