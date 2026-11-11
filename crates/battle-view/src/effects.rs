@@ -200,6 +200,17 @@ pub fn spawn_special_weapon_beams(
     }
 }
 
+/// Projectile whose detonation particle the view plays for a hit of `carrier`. Where the data names another projectile as the detonation
+/// (a warhead, `ProjDef::detonate`), that one's particle is the explosion: the Torpedo Sphere's torpedo detonates into
+/// `Proj_Proton_Torpedo_TS_Damage`, whose particle is `Damage_proton_torpedo`.
+pub(crate) fn detonation_look(projectiles: &[battle_sim::ProjDef], carrier: ProjId, shield: bool) -> String {
+    let Some(def) = projectiles.get(carrier as usize) else {
+        return String::new();
+    };
+    let slot = if shield { def.detonate[3] } else { def.detonate[0].or(def.detonate[1]) };
+    slot.and_then(|id| projectiles.get(id as usize)).map(|p| p.name.clone()).unwrap_or_else(|| def.name.clone())
+}
+
 /// Spawns impact particles and shield flashes for the hit events of newly reached steps.
 pub fn impact_effects(
     mut commands: Commands,
@@ -232,6 +243,10 @@ pub fn impact_effects(
         let Some(def) = rt.catalog.projectiles.get(*projectile as usize) else {
             continue;
         };
+        // A warhead's explosion is drawn once, by the hit of the shot that carried it: not again for the warhead's own hit and for every ship
+        // its blast reached. Shields still flash for each of those.
+        let draw = !def.warhead;
+        let look = |shield: bool| detonation_look(&rt.catalog.projectiles, *projectile, shield);
         let at = sim_to_bevy(*pos);
         let center = rt
             .cur
@@ -249,10 +264,10 @@ pub fn impact_effects(
                         intensity: 1.0,
                     });
 
-                    if budget > 0 {
+                    if draw && budget > 0 {
                         budget -= 1;
                         commands.trigger(ProjectileImpact {
-                            projectile: def.name.clone(),
+                            projectile: look(true),
                             kind: ImpactKind::Shield,
                             position: at,
                             normal,
@@ -269,10 +284,10 @@ pub fn impact_effects(
                     .and_then(|s| s.hp_pos.get(*i as usize).copied().flatten());
                 let target_at = hp_world.unwrap_or_else(|| center + (at - center) * 0.4);
                 let hit_normal = (target_at - center).normalize_or_zero();
-                if budget > 0 {
+                if draw && budget > 0 {
                     budget -= 1;
                     commands.trigger(ProjectileImpact {
-                        projectile: def.name.clone(),
+                        projectile: look(false),
                         kind: ImpactKind::Hull,
                         position: target_at,
                         normal: if hit_normal.length_squared() > 1e-4 { hit_normal } else { normal },
@@ -292,10 +307,10 @@ pub fn impact_effects(
                     center + (at - center) * 0.35
                 };
                 let hit_normal = (target_at - center).normalize_or_zero();
-                if budget > 0 {
+                if draw && budget > 0 {
                     budget -= 1;
                     commands.trigger(ProjectileImpact {
-                        projectile: def.name.clone(),
+                        projectile: look(false),
                         kind: ImpactKind::Hull,
                         position: target_at,
                         normal: if hit_normal.length_squared() > 1e-4 { hit_normal } else { normal },
@@ -863,6 +878,16 @@ pub fn draw_gravity_wells(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_warhead_stage_names_the_explosion() {
+        let carrier = battle_sim::ProjDef { name: "Proj_Proton_Torpedo_TS".into(), detonate: [Some(1), Some(1), Some(1), None], ..Default::default() };
+        let stage = battle_sim::ProjDef { name: "Proj_Proton_Torpedo_TS_Damage".into(), ..Default::default() };
+        assert_eq!(detonation_look(&[carrier, stage], 0, false), "Proj_Proton_Torpedo_TS_Damage");
+        let plain = battle_sim::ProjDef { name: "Proj_Proton_Torpedo".into(), ..Default::default() };
+        assert_eq!(detonation_look(&[plain], 0, false), "Proj_Proton_Torpedo");
+        assert_eq!(detonation_look(&[], 0, false), "");
+    }
 
     #[test]
     fn test_special_beam_color_and_timing() {

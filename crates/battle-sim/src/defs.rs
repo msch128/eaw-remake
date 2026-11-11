@@ -1261,6 +1261,11 @@ pub struct ProjDef {
     pub ion_rate_cut: f32,
     /// Model name for the renderer.
     pub model: Option<String>,
+    /// Detonation object when it is itself a projectile (a second-stage warhead): [hull hit, armor hit, end of flight, shield absorb].
+    /// A particle name stays `None` (the view draws it). The warhead is applied once, where this projectile detonates.
+    pub detonate: [Option<ProjId>; 4],
+    /// True for a projectile another one names as its detonation object: it is never fired, it is what that shot does where it detonates.
+    pub warhead: bool,
 }
 
 /// Damage-type versus armor-type multipliers with dense indices.
@@ -2047,12 +2052,44 @@ impl Catalog {
         };
         proj_names.sort();
         proj_names.dedup();
+        // A detonation "particle" that names a Projectile is a second-stage warhead (Torpedo Sphere, Subjugator ion, boom-cannon mortar).
+        let detonation_tags = [
+            "projectile_object_detonation_particle",
+            "projectile_object_armor_reduced_detonation_particle",
+            "projectile_lifetime_detonation_particle",
+            "projectile_ground_detonation_particle",
+            "projectile_absorbed_by_shields_particle",
+        ];
+        let staged: Vec<String> = proj_names
+            .iter()
+            .filter_map(|pn| data.objects.projectile(pn))
+            .flat_map(|p| {
+                detonation_tags.iter().filter_map(|t| p.fields.get(*t).map(|v| v.trim().to_string()).filter(|v| !v.is_empty())).collect::<Vec<_>>()
+            })
+            .filter(|n| data.objects.projectile(n).is_some())
+            .collect();
+        proj_names.extend(staged);
+        proj_names.sort();
+        proj_names.dedup();
         for pn in &proj_names {
             if let Some(p) = data.objects.projectile(pn) {
                 let def = cat.proj_def(&p);
                 cat.proj_index.insert(pn.to_ascii_lowercase(), cat.projectiles.len() as ProjId);
                 cat.projectiles.push(def);
             }
+        }
+        let proj_index = cat.proj_index.clone();
+        for def in &mut cat.projectiles {
+            let Some(src) = data.objects.projectile(&def.name) else { continue };
+            let slot = |tag: &str| {
+                src.fields.get(tag).map(|v| v.trim()).filter(|v| !v.is_empty()).and_then(|n| proj_index.get(&n.to_ascii_lowercase()).copied())
+            };
+            let end = slot("projectile_lifetime_detonation_particle").or_else(|| slot("projectile_ground_detonation_particle"));
+            def.detonate = [slot("projectile_object_detonation_particle"), slot("projectile_object_armor_reduced_detonation_particle"), end, slot("projectile_absorbed_by_shields_particle")];
+        }
+        let staged: Vec<ProjId> = cat.projectiles.iter().flat_map(|p| p.detonate).flatten().collect();
+        for id in staged {
+            cat.projectiles[id as usize].warhead = true;
         }
 
         // Ship ids first (squadrons refer to members).
@@ -2175,6 +2212,8 @@ impl Catalog {
             ion_speed_cut: p.ion_stun_speed_reduction.clamp(0.0, 1.0),
             ion_rate_cut: p.ion_stun_shot_rate_reduction.clamp(0.0, 1.0),
             model: p.space_model.clone().filter(|_| f("scale_factor") >= 0.0),
+            detonate: [None; 4],
+            warhead: false,
         }
     }
 
@@ -2835,6 +2874,13 @@ impl Catalog {
     /// Ship id by case-insensitive name.
     pub fn ship_id(&self, name: &str) -> Option<ShipId> {
         self.ship_index.get(&name.trim().to_ascii_lowercase()).copied()
+    }
+
+    /// Damage one shot of projectile `p` brings to the ship it strikes: its own plus that of the warhead its detonation spawns
+    /// (`ProjDef::detonate`; the Torpedo Sphere's torpedo is 20 and its warhead 400).
+    pub fn shot_damage(&self, p: ProjId) -> f32 {
+        let pd = &self.projectiles[p as usize];
+        pd.damage + pd.detonate[0].or(pd.detonate[1]).or(pd.detonate[3]).map_or(0.0, |w| self.projectiles[w as usize].damage)
     }
 
     /// Projectile id by case-insensitive name.

@@ -1535,10 +1535,17 @@ impl Battle {
         };
         let mut keep = Vec::with_capacity(self.projectiles.len());
         let mut hits = Vec::new();
+        // Shots whose flight ended with a warhead to set off (`Projectile_Lifetime_Detonation_Particle` naming a projectile).
+        let mut ends = Vec::new();
         for (i, o) in outs.into_iter().enumerate() {
             match o {
                 Out::Fly => keep.push(self.projectiles[i]),
-                Out::Gone => {}
+                Out::Gone => {
+                    if let Some(warhead) = cat.projectiles[self.projectiles[i].def as usize].detonate[2] {
+                        ends.push(Projectile { def: warhead, ..self.projectiles[i] });
+                    }
+                }
+                // A shot a missile shield destroys does not detonate.
                 Out::Intercepted(pos) => {
                     if cfg.record_events {
                         self.events.push(Event::ProjectileIntercepted { projectile: self.projectiles[i].def, pos });
@@ -1549,7 +1556,11 @@ impl Battle {
         }
         self.projectiles = keep;
         for (p, ship, pos) in hits {
-            self.apply_hit(&p, ship, pos, &snaps);
+            self.apply_hit(&p, ship, pos);
+        }
+        // Nothing was struck: the warhead is its blast.
+        for q in ends {
+            self.apply_blast(&q, &cat.projectiles[q.def as usize], q.pos, NONE);
         }
 
         self.grid_cells = grid.cells;
@@ -1724,8 +1735,9 @@ impl Battle {
         Deflect::None
     }
 
-    /// Applies a projectile hit (and its area damage) to ships.
-    fn apply_hit(&mut self, p: &Projectile, ship: u32, pos: Vec3, snaps: &[Snap]) {
+    /// Applies a projectile hit to the ship it struck: its own damage, combat mod and area damage, then the same for the warhead its
+    /// detonation spawns there (`ProjDef::detonate`: a detonation "particle" that is itself a projectile).
+    fn apply_hit(&mut self, p: &Projectile, ship: u32, pos: Vec3) {
         let cat = self.catalog.clone();
         let pd = &cat.projectiles[p.def as usize];
         match self.redirect_roll(ship, p) {
@@ -1736,6 +1748,18 @@ impl Battle {
             }
             Deflect::None => {}
         }
+        // Which detonation the data means: the shield one only for a shot that hurts shields and met one. Read before the hit spends the shield.
+        let absorbed = pd.shield_damage && self.ships.get(ship as usize).is_some_and(|s| s.shield > 0.0);
+        self.strike(p, pd, ship, pos);
+        // The warhead is not a new shot: it is not blocked or reflected, and its own detonation is a particle the view draws.
+        let warhead = if absorbed { pd.detonate[3] } else { pd.detonate[0].or(pd.detonate[1]) };
+        if let Some(w) = warhead.filter(|&w| w != p.def) {
+            self.strike(&Projectile { def: w, ..*p }, &cat.projectiles[w as usize], ship, pos);
+        }
+    }
+
+    /// What projectile `p` of type `pd` does to the ship it struck at `pos`, and to the ships around.
+    fn strike(&mut self, p: &Projectile, pd: &ProjDef, ship: u32, pos: Vec3) {
         // The fired shot of a shot ability: the first hit of that projectile of the shooter on the target.
         let mut raw = pd.damage;
         if let Some(i) = self.shots.iter().position(|&(o, d, t, _, until)| o == p.owner && d == p.def && t == ship && until >= self.time) {
@@ -1743,19 +1767,34 @@ impl Battle {
         }
         self.damage_ship(ship, p.owner, pd, p.def, raw, pos, p.aim_hp);
         self.apply_combat_mod(p, pd, ship, pos);
-        if pd.blast_range > 0.0 && pd.blast_damage > 0.0 {
-            let mut near: Vec<(f32, u32)> = snaps
-                .iter()
-                .enumerate()
-                .filter(|(i, s)| s.alive && s.side != p.side && *i as u32 != ship && self.ships[*i].alive)
-                .map(|(i, s)| (s.pos.dist(pos) - s.radius, i as u32))
-                .filter(|&(d, _)| d <= pd.blast_range)
-                .collect();
-            near.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
-            for &(d, i) in near.iter().take(pd.blast_victims as usize) {
-                let falloff = 1.0 - (d.max(0.0) / pd.blast_range) * 0.5;
-                self.damage_ship(i, p.owner, pd, p.def, pd.blast_damage * falloff, pos, NO_HP);
-            }
+        self.apply_blast(p, pd, pos, ship);
+    }
+
+    /// Area damage of `p` around `pos`: the `Projectile_Blast_Area_Max_Victims` nearest enemies whose hit sphere reaches into
+    /// `Projectile_Blast_Area_Range`, full damage at the centre down to half at the edge (estimate). Enemies only: no space weapon of the data
+    /// carries a friendly-fire flag (`Projectile_Blast_Area_Immune_Faction` is set on three neutral ground objects only). `skip`: the struck
+    /// ship (it took the direct hit), or `NONE`.
+    fn apply_blast(&mut self, p: &Projectile, pd: &ProjDef, pos: Vec3, skip: u32) {
+        if pd.blast_range <= 0.0 || pd.blast_damage <= 0.0 {
+            return;
+        }
+        let cat = self.catalog.clone();
+        // The hit sphere projectile hits use: 0.75 of the radius from frigates up.
+        let reach = |s: &Ship| {
+            let d = cat.ship(s.def);
+            if d.class as u8 >= TargetClass::Frigate as u8 { d.radius * 0.75 } else { d.radius }
+        };
+        let mut near: Vec<(f32, u32)> = self
+            .ships
+            .iter()
+            .filter(|s| s.alive && !s.retreated && s.side != p.side && s.id != skip)
+            .map(|s| (s.pos.dist(pos) - reach(s), s.id))
+            .filter(|&(d, _)| d <= pd.blast_range)
+            .collect();
+        near.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+        for &(d, i) in near.iter().take(pd.blast_victims as usize) {
+            let falloff = 1.0 - (d.max(0.0) / pd.blast_range) * 0.5;
+            self.damage_ship(i, p.owner, pd, p.def, pd.blast_damage * falloff, pos, NO_HP);
         }
     }
 
@@ -3064,6 +3103,7 @@ impl Battle {
                 }
                 let pd = self.catalog.projectiles[proj as usize].clone();
                 let pos = self.ships[target as usize].pos;
+                let had_shield = self.ships[target as usize].shield > 0.0 && pd.shield_damage;
                 if self.config.record_events {
                     self.events.push(Event::SuperLaserFired { ship: shooter, target, at: pos });
                 }
@@ -3073,6 +3113,14 @@ impl Battle {
                     t.stun = t.stun.max(pd.ion_duration);
                     t.stun_speed_cut = t.stun_speed_cut.max(pd.ion_speed_cut);
                     t.stun_rate_cut = t.stun_rate_cut.max(pd.ion_rate_cut);
+                }
+                // The ion bolt's detonation is itself a projectile (`Proj_SBJ_Ion_Damage`): the same warhead a flown shot spawns.
+                let warhead = if had_shield { pd.detonate[3] } else { pd.detonate[0].or(pd.detonate[1]) };
+                if let Some(w) = warhead.filter(|&w| w != proj) {
+                    let side = self.ships[shooter as usize].side;
+                    let q = Projectile { pos, vel: Vec3::ZERO, def: w, side, owner: shooter, target, aim_hp: NO_HP, range_left: 0.0 };
+                    let wd = self.catalog.projectiles[w as usize].clone();
+                    self.strike(&q, &wd, target, pos);
                 }
                 continue;
             }
