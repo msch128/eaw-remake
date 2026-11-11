@@ -71,6 +71,9 @@ every owned planet, the planet's `Additional_Population_Capacity`, its star base
   free": an item the planet refuses for another reason (a missing shipyard, a star base level, no structure slot) is
   refused for that reason, and the menu keeps showing the missing requirement. A planet takes one star base level
   order at a time, a faction one tech level order (`CommandError::NoSlot`).
+  The production bar shows the space queue in its left strip and the ground queue in its right strip; only the first
+  entry of each shows its percentage and fill, a waiting entry shows its icon alone and says "(waiting)" in its tooltip
+  (`eaw_ui::QueueEntry::waiting`).
   Estimate: cost is paid when queued (the real game charges progressively). Cancelling gives back the share that is
   not built yet, so the whole price for a waiting item. A planet that changes its owner loses both queues.
 * A structure may be ordered when its `Required_Special_Structures` stand on the planet or wait before it in its own

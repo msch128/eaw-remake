@@ -188,6 +188,7 @@ fn sample_data(game: &alamo_data::GameData, faction: UiFaction) -> CommandBarDat
                 count: if i == 1 { 3 } else { 1 },
                 lane: 0,
                 tooltip: String::new(),
+                waiting: i > 0,
             })
             .collect(),
         pads: (0..16)

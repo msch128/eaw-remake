@@ -40,6 +40,21 @@ pub struct QueueEntry {
     pub count: u32,
     /// Tooltip text (empty keeps the slot's engine text).
     pub tooltip: String,
+    /// Waits behind the item being built: only the first item of a queue is built, so this one shows no percentage and no fill.
+    pub waiting: bool,
+}
+
+impl QueueEntry {
+    /// The fill (0..1) and the label under the icon: the production percentage of the item being built (the count of a stack in
+    /// front), only the count for an item that waits.
+    pub fn shown(&self) -> (f32, String) {
+        let count = (self.count > 1).then(|| format!("{}x", self.count));
+        if self.waiting {
+            return (0.0, count.unwrap_or_default());
+        }
+        let pct = format!("{}%", (self.progress.clamp(0.0, 1.0) * 100.0).floor() as u32);
+        (self.progress, count.map_or(pct.clone(), |c| format!("{c} {pct}")))
+    }
 }
 
 /// One build pad (`b_create_NN`): a unit or structure that can be produced.
@@ -196,4 +211,22 @@ pub struct WorldTooltip {
     pub text: Option<String>,
     /// Header icon (texture name).
     pub icon: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::QueueEntry;
+
+    /// The item being built shows how far it is; one waiting behind it shows no percentage and no fill, also when an older save had
+    /// built part of it.
+    #[test]
+    fn a_waiting_queue_entry_shows_no_progress() {
+        let built = QueueEntry { progress: 0.5, count: 1, ..Default::default() };
+        assert_eq!(built.shown(), (0.5, "50%".to_owned()));
+        let waiting = QueueEntry { progress: 0.3, count: 1, waiting: true, ..Default::default() };
+        assert_eq!(waiting.shown(), (0.0, String::new()));
+        let stack = QueueEntry { progress: 0.0, count: 3, waiting: true, ..Default::default() };
+        assert_eq!(stack.shown(), (0.0, "3x".to_owned()));
+        assert_eq!(QueueEntry { waiting: false, ..stack }.shown(), (0.0, "3x 0%".to_owned()));
+    }
 }

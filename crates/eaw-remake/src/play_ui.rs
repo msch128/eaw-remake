@@ -507,6 +507,8 @@ fn feed_bar(
                 progress: q.progress,
                 count: 1,
                 lane: side as u8,
+                // Only the first item of a queue is built: the ones behind it show no percentage.
+                waiting: !q.active,
                 tooltip: {
                     let mut t = q.name.to_uppercase();
                     if let Some(d) = target_object(&state.world, q.target).and_then(|n| lore(game, n)) {

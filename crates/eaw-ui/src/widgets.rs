@@ -1546,17 +1546,9 @@ pub(crate) fn slots(
         // (icon, progress, label, disabled, selected)
         let content: Option<(String, f32, String, bool, bool)> = match slot.kind {
             SlotKind::Queue => data.queue.get(slot.index).filter(|q| q.count > 0).map(|q| {
-                (
-                    q.icon.clone(),
-                    q.progress,
-                    // Like the Remake: the production percentage under the icon (the count of a stack in front).
-                    {
-                        let pct = format!("{}%", (q.progress.clamp(0.0, 1.0) * 100.0).floor() as u32);
-                        if q.count > 1 { format!("{}x {pct}", q.count) } else { pct }
-                    },
-                    false,
-                    false,
-                )
+                // Like the Remake: the production percentage under the icon of the item being built, none under a waiting one.
+                let (progress, label) = q.shown();
+                (q.icon.clone(), progress, label, false, false)
             }),
             SlotKind::Pad => data.pads.get(slot.index).map(|p| {
                 (

@@ -91,7 +91,7 @@ fn queue_entries(queue: &[(BuildId, f32)], catalog: &battle_sim::Catalog) -> Vec
         .map(|(k, &(item, left))| {
             let def = catalog.buildable(item);
             let progress = if k == 0 && def.time > 0.0 { (1.0 - left / def.time).clamp(0.0, 1.0) } else { 0.0 };
-            QueueEntry { icon: def.icon.clone().unwrap_or_default(), progress, lane: 0, count: 1, tooltip: String::new() }
+            QueueEntry { icon: def.icon.clone().unwrap_or_default(), progress, lane: 0, count: 1, tooltip: String::new(), ..Default::default() }
         })
         .collect()
 }
