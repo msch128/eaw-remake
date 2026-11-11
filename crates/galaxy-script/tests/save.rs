@@ -285,18 +285,16 @@ fn a_save_carries_the_names_behind_its_ids() {
     assert_eq!(back.header.names, file.header.names);
 }
 
-/// A save loads into the build that wrote it without a single id or value moving: saved again it is the same file, byte for byte, but for
-/// the two flags with which the story engine asks for a re-evaluation after every load.
+/// A save loads into the build that wrote it without a single id or value moving: saved again it is the same file, byte for byte. That
+/// includes the story engine, which goes on with the timers it was saved with.
 #[test]
 fn a_loaded_save_written_again_is_the_same_file() {
     let Some(c) = ctx() else { return };
     let (_, file, _) = played(&c);
     let loaded = ScriptedSim::from_save(file.clone(), c.fs.clone(), c.data.clone(), |_| {}).expect("load");
     assert!(loaded.load_warnings.is_empty(), "{:?}", loaded.load_warnings);
-    let mut again = loaded.to_save().unwrap();
-    assert!(again.state.runtime.story.dirty && again.state.runtime.story.next_due == Some(0.0), "a loaded story is due at once");
-    again.state.runtime.story.dirty = file.state.runtime.story.dirty;
-    again.state.runtime.story.next_due = file.state.runtime.story.next_due;
+    let again = loaded.to_save().unwrap();
+    assert_eq!((again.state.runtime.story.dirty, again.state.runtime.story.next_due), (file.state.runtime.story.dirty, file.state.runtime.story.next_due), "the story is due when it was due");
     let (before, after) = (serde_json::to_string(&file).unwrap(), serde_json::to_string(&again).unwrap());
     assert_eq!(after.len(), before.len());
     assert!(after == before, "the save changed in a round trip");

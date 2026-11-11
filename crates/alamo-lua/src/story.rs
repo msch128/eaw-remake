@@ -224,8 +224,8 @@ impl StoryEngine {
         if snap.plots.len() != self.plots.len() {
             warnings.push(format!("the save has {} story plots, the game {}", snap.plots.len(), self.plots.len()));
         }
-        self.dirty = true;
-        self.next_due = 0.0;
+        // The plots go on as they were saved. Only where a plot did not fit is everything looked at again.
+        (self.dirty, self.next_due) = if warnings.is_empty() { (snap.dirty, snap.next_due.unwrap_or(f64::INFINITY)) } else { (true, 0.0) };
         warnings
     }
 }
