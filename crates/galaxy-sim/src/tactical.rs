@@ -302,13 +302,15 @@ impl TacticalRequest {
 
     /// Builds the `battle-sim` setup. Fleet groups carry their group index as the tag; side `i` of the request is
     /// battle side `i`. Returns `None` if a unit has no definition in `catalog`. `ai` selects the sides the built-in
-    /// AI commands (a front end passes `false` for the human side); their AI calls their reserve in (`BattleConfig::ai_reserve`).
+    /// AI commands (a front end passes `false` for the human side). Every side's reserve goes into the battle (`BattleConfig::reserve`):
+    /// the AI calls its own in, the front end does it for the human side, and a side is not beaten while it has units waiting.
     pub fn battle_setup(&self, catalog: &Arc<Catalog>, config: BattleConfig, ai: impl Fn(usize) -> bool) -> Option<BattleSetup> {
         self.battle_setup_with(catalog, config, ai, false)
     }
 
     /// Like [`TacticalRequest::battle_setup`]; with `deploy_reserve` the reinforcement pool is deployed from the start (tag = `groups.len() + reserve index`)
-    /// instead of waiting for `Command::Reinforce` (headless battles, where the population cap does not apply).
+    /// instead of waiting for `Command::Reinforce`, above the population cap (for tools that want every unit on the field at once; the game and
+    /// [`run_headless`] keep the reserve outside).
     pub fn battle_setup_with(&self, catalog: &Arc<Catalog>, mut config: BattleConfig, ai: impl Fn(usize) -> bool, deploy_reserve: bool) -> Option<BattleSetup> {
         let mut sides = Vec::new();
         for (si, side) in self.sides.iter().enumerate() {
@@ -326,12 +328,13 @@ impl TacticalRequest {
                 for (ri, g) in side.reserve.iter().enumerate() {
                     units.push(UnitSetup { ship: catalog.ship_id(&g.name)?, count: g.count, tag: (side.groups.len() + ri) as u32 });
                 }
-            } else if ai(si) {
-                // The battle AI calls its reserve in itself (`ReinforceSpace.lua`); the results report them under `REINFORCE_TAG`. Units the
-                // catalog does not know cannot be called in.
-                let pool = side.reserve.iter().filter_map(|g| catalog.ship_id(&g.name).map(|id| (id, g.count))).collect();
-                config.ai_reserve.resize(self.sides.len(), Vec::new());
-                config.ai_reserve[si] = pool;
+            } else {
+                // The battle AI calls its reserve in itself (`ReinforceSpace.lua`), a front end calls the reserve of the side it commands; the
+                // results report them under `REINFORCE_TAG`. The reserve belongs to the battle, so a unit the catalog does not know fails the
+                // setup like one on the field.
+                let pool = side.reserve.iter().map(|g| catalog.ship_id(&g.name).map(|id| (id, g.count))).collect::<Option<Vec<_>>>()?;
+                config.reserve.resize(self.sides.len(), Vec::new());
+                config.reserve[si] = pool;
             }
             sides.push(SideSetup { name: side.faction_name.clone(), units, structures, ai: ai(si) });
             for (gi, g) in side.groups.iter().enumerate() {

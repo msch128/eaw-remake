@@ -149,14 +149,10 @@ fn fleet_strength(world: &World, f: &Fleet) -> f32 {
 fn defense_parts(world: &World, galaxy: &Galaxy, known: &[bool], planet: PlanetId, attacker: FactionId) -> Vec<(Source, u32)> {
     let ps = &galaxy.planets[planet as usize];
     let mut parts: Vec<(Source, u32)> = Vec::new();
-    let passive = world.passive_faction();
-    let mut units_left = u32::MAX;
     let mut starbase = ps.starbase;
-    if ps.owner.is_some() && ps.owner == passive {
+    if ps.owner.is_some() && ps.owner == world.passive_faction() {
         let tech = galaxy.factions.get(attacker as usize).map_or(1, |s| s.tech);
-        let (sb, max_units) = world.passive_defense_at(planet, ps.owner.unwrap_or(0), tech, ps.starbase);
-        starbase = sb;
-        units_left = max_units;
+        starbase = world.passive_defense_at(planet, ps.owner.unwrap_or(0), tech, ps.starbase);
     }
     if let Some(o) = ps.owner
         && galaxy.hostile(world, attacker, o)
@@ -170,15 +166,8 @@ fn defense_parts(world: &World, galaxy: &Galaxy, known: &[bool], planet: PlanetI
         }
     }
     for f in galaxy.fleets_at(planet).filter(|f| known[planet as usize] && galaxy.hostile(world, attacker, f.owner)) {
-        for (&u, &c) in &f.units {
-            let take = if Some(f.owner) == passive { c.min(units_left) } else { c };
-            if Some(f.owner) == passive {
-                units_left -= take;
-            }
-            if take > 0 {
-                parts.push((Source::Unit(u), take));
-            }
-        }
+        // Every unit of the fleets belongs to the battle (docs/RULES.md, "Whole fleets in battle").
+        parts.extend(f.units.iter().filter(|&(_, &c)| c > 0).map(|(&u, &c)| (Source::Unit(u), c)));
     }
     parts
 }

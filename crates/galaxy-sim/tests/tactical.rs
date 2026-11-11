@@ -51,7 +51,7 @@ fn pending(sim: &mut Sim) -> PendingBattle {
 }
 
 fn catalog_for(ctx: &Ctx, req: &TacticalRequest) -> Arc<Catalog> {
-    let names: Vec<&str> = req.sides.iter().flat_map(|s| s.groups.iter().map(|g| g.name.as_str())).collect();
+    let names: Vec<&str> = req.sides.iter().flat_map(|s| s.groups.iter().chain(&s.reserve).map(|g| g.name.as_str())).collect();
     Arc::new(Catalog::build(&ctx.data, Some(&ctx.fs), &names))
 }
 
@@ -668,6 +668,129 @@ fn a_pirate_star_base_with_its_garrison_counts_in_both_resolvers() {
     let (auto, tactical, auto_win) = pirate_planet_attack(&ctx, "MC-80_Star_Cruiser", 4);
     println!("4 x MC-80: auto alive {}/{} win {auto_win}, tactical survived {}/{}", auto.1, auto.0, tactical.1, tactical.0);
     assert!(auto_win && auto.1 == 4 && tactical.1 == 4);
+}
+
+/// A pirate planet with a map, its star base and two pirate fleets in orbit (3 Interceptor IV, then 2 IPV-1 and a Z-95 squadron), attacked by
+/// 4 MC-80s of the Rebels at tech 1. Returns the sim, the battle, the request, both pirate fleets, the planet and the factions (Rebel, Pirates).
+fn pirate_fleets_battle(ctx: &Ctx) -> (Sim, u32, TacticalRequest, [FleetId; 2], PlanetId, FactionId, FactionId) {
+    let mut sim = new_sim(ctx);
+    let w = sim.world().clone();
+    let (pirates, rebel) = (w.faction_id("Pirates").unwrap(), w.faction_id("Rebel").unwrap());
+    let target = {
+        let g = sim.galaxy();
+        (0..w.planets.len() as u32)
+            .find(|&p| g.planets[p as usize].owner == Some(pirates) && g.planets[p as usize].starbase.is_some() && w.planets[p as usize].space_map.is_some())
+            .expect("pirate planet with a star base")
+    };
+    sim.galaxy_mut().fleets.retain(|_, f| f.location != FleetLocation::AtPlanet(target));
+    sim.galaxy_mut().factions[rebel as usize].tech = 1;
+    let a = add_fleet(&mut sim, pirates, w.unit_id("Interceptor_IV").unwrap(), 3, target, target);
+    let b = add_fleet(&mut sim, pirates, w.unit_id("IPV1_System_Patrol_Craft").unwrap(), 2, target, target);
+    sim.galaxy_mut().fleets.get_mut(&b).unwrap().units.insert(w.unit_id("Z-95_Squadron").unwrap(), 1);
+    sim.galaxy_mut().sync_ships();
+    add_fleet(&mut sim, rebel, w.unit_id("MC-80_Star_Cruiser").unwrap(), 4, target, neighbour(&w, target));
+    let battle = pending(&mut sim);
+    let req = sim.tactical_setup(battle.id).unwrap();
+    (sim, battle.id, req, [a, b], target, rebel, pirates)
+}
+
+fn unit_count(l: &[TacticalGroup]) -> u32 {
+    l.iter().filter(|g| g.kind == GroupKind::Unit).map(|g| g.count).sum()
+}
+
+/// Pirate fleets in orbit after the battle at `target` and the battles that opened there again in 30 s.
+fn after_battle(sim: &mut Sim, target: PlanetId, pirates: FactionId) -> (usize, usize) {
+    let again = (0..30).flat_map(|_| sim.step(1.0)).filter(|e| matches!(e, Event::BattlePending(b) if b.planet == target)).count();
+    (sim.galaxy().fleets_at(target).filter(|f| f.owner == pirates).count(), again)
+}
+
+#[test]
+fn every_unit_of_several_pirate_fleets_takes_the_field_and_the_result_takes_all_of_them() {
+    let Some(ctx) = load() else { return };
+    let (mut sim, battle, req, fleets, target, rebel, pirates) = pirate_fleets_battle(&ctx);
+    let ps = req.sides.iter().position(|s| s.faction == pirates).unwrap();
+    let side = &req.sides[ps];
+    println!("pirates: {} on the field, {} in the reserve, cap {}", unit_count(&side.groups), unit_count(&side.reserve), side.unit_cap);
+    // No unit limit for the passive defender: the 6 units of both fleets (18 population) are on the field at once, under the cap of 600.
+    assert_eq!((unit_count(&side.groups), unit_count(&side.reserve), side.unit_cap), (6, 0, 600));
+    assert!(side.groups.iter().any(|g| g.kind == GroupKind::Starbase));
+    for f in fleets {
+        assert!(side.groups.iter().any(|g| g.fleet == Some(f)), "fleet {f} takes part");
+    }
+    let catalog = catalog_for(&ctx, &req);
+    let result = run_headless(&req, &catalog, None).expect("result");
+    println!("winner {:?} after {:.0} s, survived {:?}", result.winner, result.duration, result.survived[ps]);
+    let rs = req.sides.iter().position(|s| s.faction == rebel).unwrap();
+    assert_eq!(result.winner, Some(rs), "4 MC-80s beat a level 1 pirate base and 6 small ships");
+    let events = sim.apply_tactical_result(battle, &result).unwrap();
+    let lost = events.iter().find_map(|e| if let Event::BattleResolved { losses, .. } = e { losses.iter().find(|l| l.0 == pirates).map(|l| l.1) } else { None });
+    assert_eq!(lost, Some(6), "the galaxy result covers every pirate unit");
+    assert_eq!(after_battle(&mut sim, target, pirates), (0, 0), "no pirate fleet is left in orbit and no second battle opens");
+}
+
+#[test]
+fn a_side_whose_fleets_overflow_the_field_calls_its_reserve_in_and_falls_only_with_it() {
+    let Some(ctx) = load() else { return };
+    let (mut sim, battle, mut req, fleets, target, rebel, pirates) = pirate_fleets_battle(&ctx);
+    let ps = req.sides.iter().position(|s| s.faction == pirates).unwrap();
+    // The rule is the same at the cap of 600; a cap of 9 keeps the battle short: the 3 Interceptor IV of the first fleet (3 population each)
+    // fill the field, the second fleet (2 IPV-1, a Z-95 squadron, 3 each) waits in the reserve as `tactical_setup` would put it there.
+    for s in &mut req.sides {
+        s.unit_cap = 9;
+    }
+    let side = &mut req.sides[ps];
+    let (field, reserve): (Vec<_>, Vec<_>) = side.groups.drain(..).partition(|g| g.fleet != Some(fleets[1]));
+    side.groups = field;
+    side.reserve = reserve;
+    assert_eq!((unit_count(&req.sides[ps].groups), unit_count(&req.sides[ps].reserve)), (3, 3));
+    let catalog = catalog_for(&ctx, &req);
+    let mut most = 0;
+    let result = run_headless_observed(&req, &catalog, None, &mut |b: &battle_sim::Battle| most = most.max(b.pop_in_play(ps as u8))).expect("result");
+    let called: u32 = result.reserve_called[ps].iter().sum();
+    println!("winner {:?} after {:.0} s, reserve called {:?}, survived {:?}, most population in play {most}", result.winner, result.duration, result.reserve_called[ps], result.survived[ps]);
+    let rs = req.sides.iter().position(|s| s.faction == rebel).unwrap();
+    assert_eq!(result.winner, Some(rs));
+    assert_eq!(called, 3, "the pirate AI called its whole reserve in before it was beaten: the battle did not end while units waited");
+    assert!(most <= 9, "never above the cap: {most}");
+    // The galaxy froze the request with both fleets on the field: hand it the result in that shape (the reserve groups back in place).
+    let frozen = sim.tactical_setup(battle).unwrap();
+    let mut back = result.clone();
+    let (mut fi, mut ri) = (0, 0);
+    let (mut survived, mut retreated, mut health) = (Vec::new(), Vec::new(), Vec::new());
+    for g in &frozen.sides[ps].groups {
+        if g.fleet == Some(fleets[1]) {
+            let uncalled = g.count - result.reserve_called[ps][ri];
+            survived.push(result.reserve_survived[ps][ri] + uncalled);
+            retreated.push(0);
+            health.push(Vec::new());
+            ri += 1;
+        } else {
+            survived.push(result.survived[ps][fi]);
+            retreated.push(result.retreated[ps][fi]);
+            health.push(result.health.get(ps).and_then(|h| h.get(fi)).cloned().unwrap_or_default());
+            fi += 1;
+        }
+    }
+    (back.survived[ps], back.retreated[ps], back.reserve_called[ps], back.reserve_survived[ps]) = (survived, retreated, Vec::new(), Vec::new());
+    if let Some(h) = back.health.get_mut(ps) {
+        *h = health;
+    }
+    let events = sim.apply_tactical_result(battle, &back).unwrap();
+    let lost = events.iter().find_map(|e| if let Event::BattleResolved { losses, .. } = e { losses.iter().find(|l| l.0 == pirates).map(|l| l.1) } else { None });
+    assert_eq!(lost, Some(6), "the galaxy result covers the field and the reserve");
+    assert_eq!(after_battle(&mut sim, target, pirates), (0, 0));
+}
+
+#[test]
+fn auto_resolve_counts_every_unit_of_the_pirate_fleets() {
+    let Some(ctx) = load() else { return };
+    let (mut sim, battle, _, _, target, rebel, pirates) = pirate_fleets_battle(&ctx);
+    let events = sim.resolve_battle_auto(battle).expect("resolved");
+    let resolved = events.iter().find_map(|e| if let Event::BattleResolved { winner, losses, .. } = e { Some((*winner, losses.clone())) } else { None }).unwrap();
+    println!("auto-resolve: {resolved:?}");
+    assert_eq!(resolved.0, Some(rebel));
+    assert_eq!(resolved.1.iter().find(|l| l.0 == pirates).map(|l| l.1), Some(6), "all six pirate units fought and fell");
+    assert_eq!(after_battle(&mut sim, target, pirates), (0, 0));
 }
 
 #[test]

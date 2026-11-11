@@ -245,9 +245,8 @@ every owned planet, the planet's `Additional_Population_Capacity`, its star base
   sim): `combat_base_factor` 1.5 (star base, structures, garrison), `combat_efficiency` (0.5 fighters and bombers, 0.5
   corvettes, 1 frigates and capitals), `combat_escape` 0.12 (share of a losing fleet that retreats alive when its
   faction owns more than one planet). `combat_waves` (on): the first ships up to the population cap fight, the rest
-  arrive 2 rounds after room appears. Project rule: that cap stays 1000 per side. `USER_SPACE_UNIT_CAP` is
-  `galaxy-sim/src/world.rs` line 11, and `space_unit_cap` is set from it when the faction is built (line 832).
-  `Xml/FACTIONS.XML` `Space_Tactical_Unit_Cap` is 150, and 180 for 8 factions. With waves, winner agreement with the
+  arrive 2 rounds after room appears. The cap is 600 per side and every unit of the side's fleets at the planet takes part
+  (project rule "Whole fleets in battle", 2.8). With waves, winner agreement with the
   tactical sim on 40+ ship battles is 75 to 94% (noise floor about 0.2 in win share with 3 tactical seeds).
 * A tactical battle reports survivors per group; losses, star base and structures are applied like the statistical
   result. Units that left by `Retreat` count as survivors and escape (see 1.4). Estimate: damage is not carried over
@@ -326,6 +325,10 @@ without one, the best playable main faction):
   gets one more, picked deterministically (planet id and week) from the ship types that planet already fields (what
   the campaign data put there). A planet with none gets the three cheapest passive ship types. No heroes or planet
   destroyers.
+* Battles at a Pirate planet scale the star base to the attacker (`passive_defense_at`, the highest tech among the attackers):
+  the base of the chain at `clamp(tech, 1, planet cap)` (never above level 2 off Lehon). Every unit of the Pirate fleets in orbit
+  takes part, whatever the attacker's tech, under the same cap and reserve as any side (project rule "Whole fleets in battle",
+  2.8), in the tactical battle and in auto-resolve. A won battle at a Pirate planet leaves no Pirate ship in orbit.
 * Data for context: the Pirates' strength is mostly the start spawn (`Spawn_Starting_Forces_Web_Way.lua` gives each
   Pirate planet `Free_Random(2000, 3000)` x 0.5 combat power against 500 to 750 x modifier for main factions);
   `Pirates_Template` has no infrastructure, defensive or offensive budget and `Maintenance_Cost` 0.
@@ -822,10 +825,23 @@ with `speed_mult > 1.05` when fleeing or when the target is over twice the weapo
 ## 2.8 Reinforcements, unit cap, retreat, victory
 
 * Data: `Command::Reinforce` adds ships at the side's spawn after `reinforce_delay` (5 s = `Skirmish_Reinforcement_Delay_Frames`
-  150 at 30 fps) if the population of everything in play plus the request is within `unit_cap`. Project rule: `unit_cap` stays
-  1000 per side. `USER_SPACE_UNIT_CAP` is `galaxy-sim/src/world.rs` line 11, and `space_unit_cap` is set from it when the
-  faction is built (line 832). Data: `Xml/FACTIONS.XML` `Space_Tactical_Unit_Cap` is 150, and 180 for 8 factions. Units over the cap wait in a
-  reserve and are called in as losses make room.
+  150 at 30 fps) if the population of everything in play plus the request is within `unit_cap`.
+* Project rule "Whole fleets in battle":
+  1. Every unit of every fleet a side has at the planet belongs to the battle; no side has a unit limit of its own (the
+     Pirates included, 1.9).
+  2. The population cap is 600 per side (`USER_SPACE_UNIT_CAP`, `galaxy-sim/src/world.rs`; a faction's own
+     `Space_Tactical_Unit_Cap` applies when it is higher). Data: `Xml/FACTIONS.XML` `Space_Tactical_Unit_Cap` is 150, and
+     180 for 8 factions. Units up to the cap are on the field (in fleet order, `split_reserve`), everything above it is the
+     side's reserve (`BattleConfig::reserve`, for every side; a call takes the unit out of it). The reserve moves up as room
+     frees: the AI calls it in (fleet plan below, `ReinforceSpace.lua`), the player through the reinforcement bar.
+  3. A side is beaten only when its field units and its reserve are gone or have retreated (`Battle::reserve_left`; a reserve
+     unit too big for the cap does not count); a retreat takes the reserve along. Spawned units never count (below).
+  4. The galaxy result covers every unit, whether it entered or not: called units by their fate, uncalled ones survive with
+     their fleet. Auto-resolve counts the same units under the same cap (`combat_waves`, 1.5).
+  Saves keep no tactical set-up: a battle pending in a save is set up again under this rule when it is loaded.
+  Estimates: with nothing of its own left on the field, a side may place reinforcements anywhere outside the enemy no-spawn
+  zones (it sees nothing, the fog would lock its reserve out), and its AI calls the next unit at its reinforcement point even
+  when enemies hold it.
 * Positional reinforcements (`Command::ReinforceAt`): allowed when the position is inside the battle area, outside the
   no-spawn zone of every enemy structure and inside an area the side sees (`placement.rs`, shared with the UI). Zone
   radius: the structure's `Reinforcement_Prevention_Radius` where the data has it, else `no_spawn_radius` 2000
@@ -864,10 +880,10 @@ with `speed_mult > 1.05` when fleeing or when the target is over twice the weapo
   defender markers). The `Reinforcements_Starbase_*` scripts of the minor-faction star bases, the pirate
   `Reinforcements_Pirate_Base_Lv2` and the Warlord Voca's `Reinforcements_Voca_Warlord` are commented out in the data.
 * A side stays in the fight while any unit it brought lives (ships, squadrons, star base and structures of the setup,
-  and called-in reinforcements). Units spawned during the battle (a star base's garrison, squadrons a carrier
-  launches from its reserve) do not count and are removed with the loser. A side whose brought units are all
-  destroyed or retreated loses. A hand-made scenario without setup units counts any ship. Estimate: a battle is a
-  draw after `max_time` (60 min; the data has no limit, this guards headless runs).
+  called-in reinforcements) or its reserve can still be called in. Units spawned during the battle (a star base's garrison,
+  squadrons a carrier launches from its reserve) do not count and are removed with the loser. A side whose brought units are
+  all destroyed or retreated loses. A hand-made scenario without setup units counts any ship. Estimate: a battle is a draw
+  after `max_time` (60 min; the data has no limit, this guards headless runs).
 * Fog of war (`BattleConfig::fog_of_war`, default on): a ship sees `Space_FOW_Reveal_Range` (data, `ShipDef::sensor_range`,
   1250 where missing); an enemy it saw stays visible for `fog_linger` = `SpaceFOWRegrowTime` (15 s, data). Targeting
   only considers visible enemies. Data: `AIUsesFogOfWarSpace` False (`Xml/Gameconstants.xml`, `Catalog::ai_ignores_fog`),
@@ -1011,8 +1027,11 @@ Escort, Reinforce, Retreat); the engine part that matters here is implemented as
     so the priority sets still decide between classes. A defender that holds back focuses the enemy nearest its
     station; a non-aggressive defender guards its most damaged structure.
   * Estimate, search and reserve: with nothing in sight the fleet sweeps search points (90 s, then 45 s each).
-    `BattleConfig::ai_reserve` units arrive at the side's reinforcement point, or 1500 u behind the fleet when a
-    visible enemy is within 3000 u of it.
+    `BattleConfig::reserve` units arrive at the side's reinforcement point, or 1500 u behind the fleet when a
+    visible enemy is within 3000 u of it (at the point anyway when nothing of the side is left on the field).
+  * Data, reserve calls (`Want_To_Reinforce_Units`, `ReinforceSpace.lua`): while the cap has room and units wait, the AI calls
+    one unit (`TaskForce ... = 1`), then waits 15 s (`Sleep(15)`; `AotR_Reinforce_Units` excludes itself, so calls never
+    overlap): one unit every 15 s (`REINFORCE_EVERY`).
   * Data, corvettes: at contact a corvette of an attacking side follows `Service_Guard`: it attacks fighters, bombers
     and transports within its aggro range (longest weapon range, at least `SHIP_AGGRO_RANGE` 3500), else the enemy
     nearest its own frigate, capital ship or station, else stays beside that ship (150 u of room, estimate).

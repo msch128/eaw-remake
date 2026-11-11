@@ -172,7 +172,7 @@ fn the_pirates_rearm_with_the_players_tech_in_every_game_and_never_expand() {
 }
 
 #[test]
-fn passive_defense_scales_to_attacker_tech() {
+fn passive_defense_scales_its_star_base_and_fields_every_fleet_unit() {
     let Some(data) = load() else { return };
     let mut s = sim(&data, true);
     let w = s.world().clone();
@@ -187,37 +187,28 @@ fn passive_defense_scales_to_attacker_tech() {
     }
 
     let planet = (0..w.planets.len() as u32)
-        .find(|&p| w.real[p as usize] && s.galaxy().planets[p as usize].owner == Some(pirates))
-        .expect("pirate planet");
+        .find(|&p| w.real[p as usize] && s.galaxy().planets[p as usize].owner == Some(pirates) && s.galaxy().fleets_at(p).any(|f| f.owner == pirates))
+        .expect("pirate planet with a fleet");
+    let fleets: Vec<_> = s.galaxy().fleets_at(planet).filter(|f| f.owner == pirates).map(|f| f.id).collect();
+    let in_orbit: u32 = s.galaxy().fleets_at(planet).filter(|f| f.owner == pirates).map(|f| f.unit_count()).sum();
 
-    // Empire attacker is at Tech 1.
+    // Empire attacker is at Tech 1, the human at tech 5.
     s.galaxy_mut().factions[empire as usize].tech = 1;
-    let battle_low_tech = galaxy_sim::PendingBattle {
-        id: 100,
-        planet,
-        fleets: vec![],
-        factions: vec![empire, pirates],
-        defender: Some(pirates),
-        line_up: 0,
+    let side = |s: &galaxy_sim::Sim, id: u32, attacker| {
+        let battle = galaxy_sim::PendingBattle { id, planet, fleets: fleets.clone(), factions: vec![attacker, pirates], defender: Some(pirates), line_up: 0 };
+        s.battle_sides(&battle).into_iter().find(|x| x.faction == pirates).unwrap()
     };
-    let sides_low = s.battle_sides(&battle_low_tech);
-    let pirate_side_low = sides_low.iter().find(|s| s.faction == pirates).unwrap();
-
-    // Human attacker is at Tech 5.
-    let battle_high_tech = galaxy_sim::PendingBattle {
-        id: 101,
-        planet,
-        fleets: vec![],
-        factions: vec![human, pirates],
-        defender: Some(pirates),
-        line_up: 0,
+    let (low, high) = (side(&s, 100, empire), side(&s, 101, human));
+    let base_level = |x: &galaxy_sim::combat::SideInput| {
+        x.members.iter().find_map(|m| if let galaxy_sim::combat::Source::Starbase(sb) = m.source { w.starbase_chain(pirates).iter().position(|&c| c == sb) } else { None })
     };
-    let sides_high = s.battle_sides(&battle_high_tech);
-    let pirate_side_high = sides_high.iter().find(|s| s.faction == pirates).unwrap();
-
-    let low_units: u32 = pirate_side_low.members.iter().map(|m| m.count).sum();
-    let high_units: u32 = pirate_side_high.members.iter().map(|m| m.count).sum();
-    assert!(low_units < high_units, "Low tech attacker faces smaller pirate forces: {low_units} vs {high_units}");
+    let units = |x: &galaxy_sim::combat::SideInput| x.members.iter().filter(|m| matches!(m.source, galaxy_sim::combat::Source::Unit(_))).map(|m| m.count).sum::<u32>();
+    let defence = |x: &galaxy_sim::combat::SideInput| x.members.iter().filter(|m| !matches!(m.source, galaxy_sim::combat::Source::Unit(_))).map(|m| m.count).sum::<u32>();
+    println!("pirates in orbit {in_orbit}; tech 1: base {:?}, {} units; tech 5: base {:?}, {} units", base_level(&low), units(&low), base_level(&high), units(&high));
+    assert!(base_level(&low) < base_level(&high), "a low tech attacker meets a lower star base");
+    assert!(defence(&low) < defence(&high), "and a smaller base garrison: {} vs {}", defence(&low), defence(&high));
+    // Every unit of the pirate fleets in orbit belongs to the battle, whatever the attacker's tech (docs/RULES.md, "Whole fleets in battle").
+    assert_eq!((units(&low), units(&high)), (in_orbit, in_orbit));
 }
 
 #[test]

@@ -80,9 +80,11 @@ pub struct BattleConfig {
     pub start_health: Vec<StartHealth>,
     /// Stage carried squadron launches sequentially from hangar bay doors over time (defaults to true).
     pub staged_hangar_launch: bool,
-    /// Per side: units waiting outside the battle that the side's AI calls in one at a time while the population cap has room
-    /// (`Want_To_Reinforce_Units`; the galaxy's reinforcement pool). Missing entries mean none; sides without AI ignore it.
-    pub ai_reserve: Vec<Vec<(ShipId, u32)>>,
+    /// Per side: the units of its fleets waiting outside the battle (definition, count; the galaxy's reinforcement pool). They belong to the
+    /// battle: the side stays in the fight while any of them can still be called in (`Battle::reserve_left`), a call (`Command::Reinforce`,
+    /// `Command::ReinforceAt`) takes the units out of the pool, and a retreat takes the rest along. The AI of an AI side calls them in one at a
+    /// time while the population cap has room (`Want_To_Reinforce_Units`); a front end does it for a side it commands. Missing entries mean none.
+    pub reserve: Vec<Vec<(ShipId, u32)>>,
     /// Per side: the side defends the planet (`Variable_Self.IsDefender` of the AI retreat rule), with or without a station. Missing entries:
     /// a side that brought structures defends.
     pub defenders: Vec<bool>,
@@ -130,7 +132,7 @@ impl Default for BattleConfig {
             retreat_allowed: Vec::new(),
             start_health: Vec::new(),
             staged_hangar_launch: true,
-            ai_reserve: Vec::new(),
+            reserve: Vec::new(),
             defenders: Vec::new(),
             powers: Vec::new(),
             side_field_mods: Vec::new(),
@@ -853,6 +855,8 @@ pub struct Battle {
     pub(crate) globals: Vec<(String, i32)>,
     pub(crate) start_health_used: std::collections::HashMap<(u8, u32, ShipId), usize>,
     pub(crate) pending: Vec<Reinforcement>,
+    /// Per side: the units still waiting outside the battle (`BattleConfig::reserve` minus what was called in), in calling order.
+    pub(crate) reserve: Vec<Vec<(ShipId, u32)>>,
     pub(crate) events: Vec<Event>,
     pub(crate) tick: u64,
     pub(crate) time: f32,
@@ -907,7 +911,7 @@ pub struct Battle {
     pub(crate) field_grid: Option<crate::nav::NavGrid>,
     /// Per side: `(search point index, time it was set)` of the AI search for hidden enemies.
     pub(crate) search: Vec<(u32, f32)>,
-    /// Per side: the tactical AI's formation, priority target and reserve (see `ai.rs`).
+    /// Per side: the tactical AI's formation and priority target (see `ai.rs`).
     pub(crate) ai: Vec<crate::ai::AiSide>,
     /// Group moves under way, in the order they were given (see `formation.rs`).
     pub(crate) formations: Vec<crate::formation::Formation>,
@@ -965,6 +969,26 @@ impl Battle {
     /// Number of sides.
     pub fn side_count(&self) -> usize {
         self.sides.len()
+    }
+
+    /// Units of `side` still waiting outside the battle that can be called in (`BattleConfig::reserve` minus the calls so far). A unit whose
+    /// population alone is above the unit cap can never enter and is not counted. While this is above 0 the side is not beaten.
+    pub fn reserve_left(&self, side: u8) -> u32 {
+        let free = self.cheats.has_no_pop_cap(side);
+        self.reserve.get(side as usize).into_iter().flatten().filter(|&&(ship, _)| free || self.catalog.ship(ship).population <= self.config.unit_cap).map(|&(_, n)| n).sum()
+    }
+
+    /// Takes up to `count` units of `ship` out of the reserve of `side` (they were called in). A side without such units in its pool (a
+    /// hand-made scenario) loses nothing.
+    pub(crate) fn take_reserve(&mut self, side: u8, ship: ShipId, count: u32) {
+        let Some(pool) = self.reserve.get_mut(side as usize) else { return };
+        let mut left = count;
+        for entry in pool.iter_mut().filter(|e| e.0 == ship) {
+            let take = entry.1.min(left);
+            entry.1 -= take;
+            left -= take;
+        }
+        pool.retain(|e| e.1 > 0);
     }
 
     /// The ship that leads squadron `squad`: its first member alive (the member nearest the middle of the formation, see `lead_order`).

@@ -301,9 +301,9 @@ impl Sim {
         self.galaxy.sync_ships();
     }
 
-    /// For a battle where the passive faction is defending, scales its star base and garrison forces
-    /// to the attacker's tech level (so an AI at tech 1 is not blocked by a level 4 base scaled to the human player).
-    pub(crate) fn passive_defense_scaling(&self, battle: &crate::state::PendingBattle, passive: FactionId, current_sb: Option<StarbaseTypeId>) -> (Option<StarbaseTypeId>, u32) {
+    /// For a battle where the passive faction is defending, scales its star base to the attacker's tech level (so an AI at tech 1 is not
+    /// blocked by a level 4 base scaled to the human player). Its fleets in orbit all take part (docs/RULES.md, "Whole fleets in battle").
+    pub(crate) fn passive_defense_scaling(&self, battle: &crate::state::PendingBattle, passive: FactionId, current_sb: Option<StarbaseTypeId>) -> Option<StarbaseTypeId> {
         let attacker_tech = battle
             .factions
             .iter()
@@ -317,11 +317,10 @@ impl Sim {
 }
 
 impl World {
-    /// The star base and the garrison cap (units) the passive faction fields on `planet` against an attacker of tech level `attacker_tech`: the base
-    /// of its own chain at level `clamp(tech, 1, planet cap)` (never above level 2 off Lehon), `2 x tech` units.
-    pub(crate) fn passive_defense_at(&self, planet: PlanetId, passive: FactionId, attacker_tech: i32, current_sb: Option<StarbaseTypeId>) -> (Option<StarbaseTypeId>, u32) {
+    /// The star base the passive faction fields on `planet` against an attacker of tech level `attacker_tech`: the base of its own chain at
+    /// level `clamp(tech, 1, planet cap)` (never above level 2 off Lehon).
+    pub(crate) fn passive_defense_at(&self, planet: PlanetId, passive: FactionId, attacker_tech: i32, current_sb: Option<StarbaseTypeId>) -> Option<StarbaseTypeId> {
         let attacker_tech = attacker_tech.max(1);
-        let max_units = (PASSIVE_GARRISON_PER_TECH * attacker_tech) as u32;
         let chain = self.starbase_chain(passive);
         let p = planet;
         let is_lehon = self.planets.get(p as usize).is_some_and(|pl| pl.name.eq_ignore_ascii_case("Lehon"));
@@ -337,7 +336,7 @@ impl World {
         } else {
             current_sb
         };
-        (eff_sb, max_units)
+        eff_sb
     }
 }
 

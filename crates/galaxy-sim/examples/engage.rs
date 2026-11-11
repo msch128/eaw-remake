@@ -59,7 +59,7 @@ fn main() {
         }
         println!("data: the whole fleet has {shield_dps:.0} shield dps / {hull_dps:.0} hull dps against the station armor (every weapon in range, no misses). Station shield {:.0} with regen {:.0} per {}s = {:.0}/s, hull {:.0}", sbd.shield, sbd.shield_regen, w.config.week_seconds * 0.0 + 2.0, sbd.shield_regen / 2.0, sbd.hull);
     }
-    let names: Vec<&str> = req.sides.iter().flat_map(|s| s.groups.iter().map(|g| g.name.as_str())).collect();
+    let names: Vec<&str> = req.sides.iter().flat_map(|s| s.groups.iter().chain(&s.reserve).map(|g| g.name.as_str())).collect();
     let catalog = Arc::new(battle_sim::Catalog::build(&data, Some(&fs), &names));
     let arena = req.map.as_ref().and_then(|m| battle_sim::Arena::load(&data, &fs, m)).map(Arc::new);
     let mut last_station = f32::NAN;

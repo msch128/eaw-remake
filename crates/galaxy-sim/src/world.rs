@@ -7,8 +7,9 @@ use std::collections::{HashMap, HashSet};
 
 use alamo_data::{Campaign, GameData, ShipCategory};
 
-/// Population per side in a space battle (design rule, replaces the data's `Space_Tactical_Unit_Cap` when that is smaller).
-pub const USER_SPACE_UNIT_CAP: i32 = 1000;
+/// Population per side on the field of a space battle (project rule "Whole fleets in battle", docs/RULES.md; replaces the data's
+/// `Space_Tactical_Unit_Cap` of 150 / 180 when that is smaller). Units above it wait in the side's reserve.
+pub const USER_SPACE_UNIT_CAP: i32 = 600;
 
 /// OR of a `CategoryMask` token list.
 pub fn category_bits(tokens: &[String]) -> u32 {
@@ -867,8 +868,8 @@ impl World {
                 max_tech: cf.max_tech_level.unwrap_or(5),
                 home: cf.home_location.as_ref().and_then(|h| planet_index.get(&key(h)).copied()),
                 tech_upgrades: Vec::new(),
-                // Design rule: 1000 population per side in a space battle, so super ships (Purifier and Annihilator together) fit.
-                // The data's `Space_Tactical_Unit_Cap` (180 in Remake 4.0) is replaced on purpose.
+                // Project rule: 600 population per side on the field of a space battle (the Purifier and the Annihilator, 100 each, fit
+                // together with a full fleet). The data's `Space_Tactical_Unit_Cap` (150 / 180 in Remake 4.0) is replaced on purpose.
                 space_unit_cap: USER_SPACE_UNIT_CAP.max(def.space_unit_cap),
                 space_retreat_countdown: def.fields.get("space_retreat_countdown_seconds").and_then(|v| alamo_data::xml::parse_num(v)),
             });

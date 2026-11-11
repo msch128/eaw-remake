@@ -254,7 +254,7 @@ impl Battle {
             nav_grid: None,
             field_grid: None,
             search: vec![(0, 0.0); sides.len()],
-            ai: (0..sides.len()).map(|i| crate::ai::AiSide::new(config.ai_reserve.get(i).cloned().unwrap_or_default())).collect(),
+            ai: (0..sides.len()).map(|_| crate::ai::AiSide::new()).collect(),
             formations: Vec::new(),
             scripted: Vec::new(),
             scripts_seen: 0,
@@ -263,6 +263,7 @@ impl Battle {
             build_jobs: Vec::new(),
             built: vec![Vec::new(); sides.len()],
             debuffs: Vec::new(),
+            reserve: (0..sides.len()).map(|i| config.reserve.get(i).cloned().unwrap_or_default()).collect(),
             sides,
             ships: Vec::new(),
             projectiles: Vec::new(),
@@ -781,6 +782,11 @@ impl Battle {
         pop + self.pending.iter().filter(|r| r.side == side).map(|r| self.catalog.ship(r.ship).population * r.count as i32).sum::<i32>()
     }
 
+    /// Whether `count` more units of `ship` may enter for `side`: within the unit cap (`BattleConfig::unit_cap`) counted by [`Battle::pop_in_play`].
+    pub fn fits(&self, side: u8, ship: ShipId, count: u32) -> bool {
+        self.cheats.has_no_pop_cap(side) || self.pop_in_play(side) + self.catalog.ship(ship).population * count as i32 <= self.config.unit_cap
+    }
+
     /// Validates and executes a command for `side`.
     pub fn command(&mut self, side: u8, cmd: Command) -> Result<(), CommandError> {
         if self.over {
@@ -1003,18 +1009,17 @@ impl Battle {
             Command::CancelTacticalBuild { item } => self.cancel_build(side, item)?,
             Command::ReinforceAt { ship, count, pos, yaw_offset } => {
                 self.reinforcement_zone_check(side, pos)?;
-                let pop = self.catalog.ship(ship).population * count as i32;
-                if self.pop_in_play(side) + pop > self.config.unit_cap && !self.cheats.has_no_pop_cap(side) {
+                if !self.fits(side, ship, count) {
                     return Err(CommandError::UnitCap);
                 }
                 if self.config.record_events {
                     self.cmd_events.push(Event::ReinforcementsCalled { side, ship, count });
                 }
                 self.pending.push(Reinforcement { at: self.time + self.config.reinforce_delay, side, ship, count, pos: Some(pos), yaw_offset: yaw_offset.clamp(-0.27, 0.27) });
+                self.take_reserve(side, ship, count);
             }
             Command::Reinforce { ship, count } => {
-                let pop = self.catalog.ship(ship).population * count as i32;
-                if self.pop_in_play(side) + pop > self.config.unit_cap && !self.cheats.has_no_pop_cap(side) {
+                if !self.fits(side, ship, count) {
                     if self.config.record_events {
                         self.cmd_events.push(Event::ReinforcementsRefused { side, ship, count });
                     }
@@ -1024,6 +1029,7 @@ impl Battle {
                     self.cmd_events.push(Event::ReinforcementsCalled { side, ship, count });
                 }
                 self.pending.push(Reinforcement { at: self.time + self.config.reinforce_delay, side, ship, count, pos: None, yaw_offset: 0.0 });
+                self.take_reserve(side, ship, count);
             }
         }
         Ok(())
@@ -2092,6 +2098,8 @@ impl Battle {
         let due: Vec<u8> = (0..self.retreat_jump_at.len() as u8).filter(|&k| self.retreat_jump_at[k as usize].is_some_and(|t| self.time >= t)).collect();
         for side in due {
             self.retreat_jump_at[side as usize] = None;
+            // The units still waiting outside leave with the fleet: they never entered, so nothing reports them and the galaxy keeps them.
+            self.reserve[side as usize].clear();
             let cat = self.catalog.clone();
             let fate: Vec<(u32, bool)> = self
                 .ships
@@ -2145,7 +2153,7 @@ impl Battle {
             let stations = self.ships.iter().filter(|s| s.side == side && s.alive && cat.ship(s.def).is_static).count();
             let defender = self.config.defenders.get(si).copied().unwrap_or(!self.sides[si].structures.is_empty());
 
-            let waiting: f32 = self.ai[si].reserve.iter().map(|&(ship, k)| cat.ship(ship).ai_power * k as f32).sum::<f32>()
+            let waiting: f32 = self.reserve[si].iter().map(|&(ship, k)| cat.ship(ship).ai_power * k as f32).sum::<f32>()
                 + self.pending.iter().filter(|r| r.side == side).map(|r| cat.ship(r.ship).ai_power * r.count as f32).sum::<f32>();
             let present = self.side_force(side);
             let mine = present + 0.8 * waiting;
@@ -3294,9 +3302,10 @@ impl Battle {
             return;
         }
         let n = self.sides.len();
-        // A side is in the fight while anything it brought into the battle lives: the ships, squadrons, star base and structures of the setup (and
-        // called-in reinforcements). Units spawned during the battle (a station's garrison, squadrons a carrier launches from its reserve) do not count: EaW
-        // ends the battle when everything the sides brought is destroyed or has retreated, and the spawned units are removed with the loser.
+        // A side is in the fight while anything it brought to the battle is left: the ships, squadrons, star base and structures of the setup,
+        // called-in reinforcements, and the units of its fleets still waiting outside (`reserve_left`; a retreat takes them along). Units spawned
+        // during the battle (a station's garrison, squadrons a carrier launches from its reserve) do not count: EaW ends the battle when everything
+        // the sides brought is destroyed or has retreated, and the spawned units are removed with the loser.
         // A side without any setup unit (hand-made scenarios) is in the fight while any of its ships lives.
         let mut had_brought = vec![false; n];
         let mut brought_alive = vec![false; n];
@@ -3317,6 +3326,9 @@ impl Battle {
         let mut active: Vec<bool> = (0..n).map(|i| if had_brought[i] { brought_alive[i] } else { any_alive[i] }).collect();
         for r in &self.pending {
             active[r.side as usize] = true;
+        }
+        for (i, a) in active.iter_mut().enumerate() {
+            *a |= self.reserve_left(i as u8) > 0;
         }
         let left: Vec<usize> = (0..n).filter(|&i| active[i]).collect();
         if left.len() <= 1 {

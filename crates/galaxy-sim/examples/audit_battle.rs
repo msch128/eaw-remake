@@ -47,7 +47,7 @@ fn main() {
     }
     let battle = sim.step(1.0).into_iter().find_map(|e| if let Event::BattlePending(b) = e { Some(b) } else { None }).expect("pending battle");
     let req = sim.tactical_setup(battle.id).expect("request");
-    let names: Vec<&str> = req.sides.iter().flat_map(|s| s.groups.iter().map(|g| g.name.as_str())).collect();
+    let names: Vec<&str> = req.sides.iter().flat_map(|s| s.groups.iter().chain(&s.reserve).map(|g| g.name.as_str())).collect();
     for s in &req.sides {
         println!("side {} defender {} groups:", s.faction_name, s.defender);
         for g in &s.groups {

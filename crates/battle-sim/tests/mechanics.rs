@@ -249,7 +249,7 @@ fn the_ai_calls_its_reserve_in_while_the_unit_cap_has_room() {
     let weak = cat.ship_id("weak").unwrap();
     let mut c = cfg();
     c.unit_cap = 12;
-    c.ai_reserve = vec![vec![(weak, 3)]];
+    c.reserve = vec![vec![(weak, 3)]];
     let mut b = Battle::new(setup(cat, "weak", "gunner", 1, 1, c));
     let (mut called, mut arrived, mut most) = (0, 0, 0);
     for _ in 0..30 * 600 {
@@ -2037,7 +2037,7 @@ fn a_defender_without_a_station_leaves_after_30_s_and_its_reserve_counts() {
         // No room under the cap: the reserve stays outside the battle.
         c.unit_cap = 5;
         c.defenders = vec![defends, !defends];
-        c.ai_reserve = vec![vec![(cat.ship_id("weak").unwrap(), reserve)]];
+        c.reserve = vec![vec![(cat.ship_id("weak").unwrap(), reserve)]];
         let player = one_side(&cat, "strong", 2, false);
         let mut b = Battle::new(BattleSetup { sides: vec![one_side(&cat, "weak", 1, true), player], catalog: cat, config: c });
         for _ in 0..30 * 150 {

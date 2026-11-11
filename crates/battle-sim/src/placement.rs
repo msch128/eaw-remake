@@ -44,6 +44,7 @@ pub fn no_spawn_zones(side: u8, units: &[PlacementUnit]) -> Vec<(Vec3, f32)> {
 
 /// Whether `side` may call in reinforcements at `pos`: inside the battle area (`half` is the usable half size), outside every no-spawn zone of an
 /// enemy structure and, with fog of war, inside the sensor range of one of its own ships or a revealed area (`reveals`: centre, radius).
+/// A side with nothing alive in the battle sees nothing; its reserve must still be able to enter, so the fog does not limit it then (estimate).
 /// Population is checked separately (`Battle::pop_in_play` against the unit cap).
 pub fn placement_check(
     half: f32,
@@ -59,7 +60,8 @@ pub fn placement_check(
     if no_spawn_zones(side, units).iter().any(|&(c, r)| c.dist(pos) <= r) {
         return Err(CommandError::InNoSpawnZone);
     }
-    let seen = !fog || units.iter().any(|u| u.side == side && u.pos.dist(pos) <= u.sensor) || reveals.iter().any(|&(c, r)| c.dist(pos) <= r);
+    let blind = !units.iter().any(|u| u.side == side);
+    let seen = !fog || blind || units.iter().any(|u| u.side == side && u.pos.dist(pos) <= u.sensor) || reveals.iter().any(|&(c, r)| c.dist(pos) <= r);
     if !seen {
         return Err(CommandError::NotVisible);
     }

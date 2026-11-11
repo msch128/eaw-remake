@@ -1015,7 +1015,7 @@ impl Sim {
         for &fac in &battle.factions {
             let mut members = Vec::new();
             let is_passive_defense = Some(fac) == passive && passive_defense.is_some();
-            let mut passive_units_left = passive_defense.map_or(u32::MAX, |(_, max_units)| max_units);
+            // Every unit of the side's fleets at the planet belongs to the battle (docs/RULES.md, "Whole fleets in battle").
             // Deployment and reinforcement order follows the fleet slots 1, 2, 3.
             let mut order: Vec<FleetId> = battle.fleets.clone();
             order.sort_by_key(|id| self.galaxy.fleets.get(id).map_or((u8::MAX, *id), |f| (if f.slot == 0 { u8::MAX } else { f.slot }, *id)));
@@ -1024,22 +1024,13 @@ impl Sim {
                 if f.owner != fac || f.location != FleetLocation::AtPlanet(p) {
                     continue;
                 }
-                for (&u, &c) in f.units.iter().filter(|&(&u, _)| !w.is_agent(u)) {
-                    let take = if is_passive_defense {
-                        let t = c.min(passive_units_left);
-                        passive_units_left = passive_units_left.saturating_sub(t);
-                        t
-                    } else {
-                        c
-                    };
-                    if take > 0 {
-                        members.push(Member { source: Source::Unit(u), fleet: Some(f.id), count: take });
-                    }
+                for (&u, &c) in f.units.iter().filter(|&(&u, &c)| !w.is_agent(u) && c > 0) {
+                    members.push(Member { source: Source::Unit(u), fleet: Some(f.id), count: c });
                 }
             }
             if battle.defender == Some(fac) {
                 let effective_sb = if is_passive_defense {
-                    passive_defense.and_then(|(eff_sb, _)| eff_sb)
+                    passive_defense.flatten()
                 } else {
                     ps.starbase
                 };

@@ -58,6 +58,9 @@ pub(crate) const FOCUS_WEIGHT: f32 = 0.5;
 const REINFORCE_CLEAR: f32 = 3000.0;
 /// Estimate: when enemies hold the reinforcement point, units arrive this far behind the own fleet instead.
 const REINFORCE_BEHIND: f32 = 1500.0;
+/// Data: seconds between two reserve calls of an AI side. `ReinforceSpace.lua` brings one unit (`TaskForce ... = 1`) and sleeps 15 s before it
+/// exits, and the goal `AotR_Reinforce_Units` excludes itself (`Global_Exclusions`), so one call runs at a time.
+const REINFORCE_EVERY: f32 = 15.0;
 
 /// Tactical AI state of one side.
 #[derive(Debug, Clone, Default)]
@@ -75,16 +78,16 @@ pub(crate) struct AiSide {
     engaged: Vec<u32>,
     /// Closest any big ship came to the current search point so far.
     search_best: f32,
-    /// Units waiting outside the battle (definition, count), called in this order.
-    pub(crate) reserve: Vec<(ShipId, u32)>,
     /// Highest force of the side's ships (fighters and bombers left out) in this battle so far, for the retreat rule.
     pub(crate) peak: f32,
+    /// Battle time before which the side calls no further unit of its reserve in (`REINFORCE_EVERY` after the last call).
+    next_reinforce: f32,
 }
 
 impl AiSide {
-    /// A side whose AI may call in `reserve`.
-    pub(crate) fn new(reserve: Vec<(ShipId, u32)>) -> Self {
-        Self { focus: NONE, search_best: f32::MAX, reserve, ..Self::default() }
+    /// The state at the start of a battle.
+    pub(crate) fn new() -> Self {
+        Self { focus: NONE, search_best: f32::MAX, ..Self::default() }
     }
 }
 
@@ -696,17 +699,18 @@ impl Battle {
     }
 
     /// `ReinforceSpace.lua` / `Want_To_Reinforce_Units`: while the population cap has room, the next unit of the reserve that fits is called
-    /// in, one at a time, at the side's reinforcement point; when enemies hold that point it arrives behind the own fleet instead.
+    /// in, one every `REINFORCE_EVERY` seconds, at the side's reinforcement point; when enemies hold that point it arrives behind the own fleet instead. A side
+    /// with nothing left on the field and nothing on its way brings the next unit in at its reinforcement point whoever holds it: the reserve
+    /// is all that keeps it in the fight, and the fight has to be decided (estimate; the accepted call takes the unit out of `Battle::reserve`).
     fn ai_reinforce(&mut self, side: u8, enemies: &[u32], friendly: Vec3, enemy_at: Vec3) {
         let si = side as usize;
-        if self.ai[si].reserve.is_empty() {
+        if self.reserve[si].is_empty() || self.time < self.ai[si].next_reinforce {
             return;
         }
-        let room = self.config.unit_cap - self.pop_in_play(side);
-        let Some(k) = self.ai[si].reserve.iter().position(|&(ship, n)| n > 0 && self.catalog.ship(ship).population <= room) else { return };
-        let ship = self.ai[si].reserve[k].0;
+        let Some(ship) = self.reserve[si].iter().find(|&&(ship, n)| n > 0 && self.fits(side, ship, 1)).map(|r| r.0) else { return };
         let clear = |b: &Battle, p: Vec3| !enemies.iter().any(|&e| b.ships[e as usize].pos.dist(p) < REINFORCE_CLEAR);
-        let called = if clear(self, self.spawn_pos[si]) {
+        let field_empty = !self.pending.iter().any(|r| r.side == side) && !self.ships.iter().any(|s| s.side == side && s.alive && !s.retreated && s.group != NONE);
+        let called = if field_empty || clear(self, self.spawn_pos[si]) {
             self.command(side, Command::Reinforce { ship, count: 1 }).is_ok()
         } else {
             let back = friendly - enemy_at;
@@ -714,11 +718,7 @@ impl Battle {
             clear(self, pos) && self.command(side, Command::ReinforceAt { ship, count: 1, pos, yaw_offset: 0.0 }).is_ok()
         };
         if called {
-            let r = &mut self.ai[si].reserve;
-            r[k].1 -= 1;
-            if r[k].1 == 0 {
-                r.remove(k);
-            }
+            self.ai[si].next_reinforce = self.time + REINFORCE_EVERY;
         }
     }
 }
