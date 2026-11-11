@@ -347,7 +347,7 @@ fn marker_tooltip(upkeep: f32) -> String {
 }
 
 /// Rich tooltip of a build pad (format: see `eaw_ui::TooltipLayout`): name, lore, cost, time, population, upkeep and the reason when greyed out.
-fn pad_tooltip(o: &galaxy_play::BuildOption, week: f32, state: &SimState, game: Option<&alamo_data::GameData>, catalog: &galaxy_play::PlayCatalog, faction: Option<u32>) -> String {
+fn pad_tooltip(o: &galaxy_play::BuildOption, week: f32, state: &SimState, game: Option<&alamo_data::GameData>, catalog: &galaxy_play::PlayCatalog, faction: Option<u32>, planet: u32) -> String {
     let description = match o.target {
         BuildTarget::Tech(_) => {
             let level = faction.and_then(|f| state.galaxy().factions.get(f as usize)).map_or(2, |f| f.tech + 1);
@@ -371,15 +371,7 @@ fn pad_tooltip(o: &galaxy_play::BuildOption, week: f32, state: &SimState, game: 
     } else if upkeep > 0.5 {
         s.push_str(&format!("\n@Income\t+{upkeep:.0} credits per month"));
     }
-    // A structure that is not built yet: what it changes once it stands, worded so it is not mistaken for current income.
-    if let BuildTarget::Structure(id) = o.target {
-        let change = state.world.structures[id as usize].income_abs;
-        if change > 0.5 {
-            s.push_str(&format!("\n@Income\t+{change:.0} credits/month when built"));
-        } else if change < -0.5 && !mentioned {
-            s.push_str(&format!("\n@Upkeep\t{:.0} credits/month when built", -change));
-        }
-    }
+    s.push_str(&pad_effects(&state.world, o.target, planet, week, mentioned));
     // Every refusal on its own red line, in the game's words ("Required : Tech Level 3", "Required : Space Station Level 2", "Insufficient funds").
     if !o.availability.is_available() {
         if o.reasons.is_empty() {
@@ -388,6 +380,46 @@ fn pad_tooltip(o: &galaxy_play::BuildOption, week: f32, state: &SimState, game: 
         for r in &o.reasons {
             s.push_str(&format!("\n!{r}"));
         }
+    }
+    s
+}
+
+/// What an entry changes once it stands at `planet`, worded so it is not mistaken for current income: absolute income or upkeep,
+/// the planet income percentage with what it comes to at this planet's value, a market swing, and population cap.
+fn pad_effects(world: &galaxy_sim::World, target: BuildTarget, planet: u32, week: f32, upkeep_mentioned: bool) -> String {
+    let info = world.planets.get(planet as usize);
+    let value = info.map_or(0.0, |p| p.credit_value);
+    let mining = info.is_some_and(|p| p.mining_colony);
+    let (abs, pct, gamble, cap, when) = match target {
+        BuildTarget::Structure(id) => {
+            let st = &world.structures[id as usize];
+            let (abs, pct) = if mining { (st.income_abs + st.income_abs_mining, st.income_pct + st.income_pct_mining) } else { (st.income_abs, st.income_pct) };
+            (abs, pct, st.gamble, st.population_capacity, "when built")
+        }
+        BuildTarget::Starbase(id) => {
+            let b = &world.starbases[id as usize];
+            (b.income_abs, b.income_pct, None, b.population_capacity, "at this level")
+        }
+        // A ship's percentage counts at the owner's planet it orbits (`planet_income`); its absolute upkeep is listed above.
+        BuildTarget::Unit(id) => (0.0, world.units[id as usize].income_pct, world.units[id as usize].gamble, 0, "while it orbits an own planet"),
+        BuildTarget::Tech(_) => return String::new(),
+    };
+    let mut s = String::new();
+    if abs > 0.5 {
+        s.push_str(&format!("\n@Income\t+{abs:.0} credits/month {when}"));
+    } else if abs < -0.5 && !upkeep_mentioned {
+        s.push_str(&format!("\n@Upkeep\t{:.0} credits/month {when}", -abs));
+    }
+    if pct.abs() > 1e-4 {
+        // The card's value column is narrow: the condition goes into the label, the amount here after the percentage.
+        let here = if matches!(target, BuildTarget::Unit(_)) { String::new() } else { format!(" ({:+.0} here)", value * pct) };
+        s.push_str(&format!("\n@Planet income {when}\t{:+.0}%{here}", pct * 100.0));
+    }
+    if let Some(g) = gamble {
+        s.push_str(&format!("\n@Market swing, new every {}\t{:+.0}% to {:+.0}%", format_duration(g.interval, week), g.min * 100.0, g.max * 100.0));
+    }
+    if cap > 0 {
+        s.push_str(&format!("\n@Population cap\t+{cap} {when}"));
     }
     s
 }
@@ -443,6 +475,14 @@ fn feed_bar(
         space_tab: bar.space_tab,
         ..default()
     };
+    // The hover card of the month's income: its sources and sinks in whole credits that add up to the figure.
+    let whole = |lines: Vec<galaxy_play::income::IncomeLine>, total: i64| {
+        let credits = galaxy_play::income::whole_credits(&lines, total);
+        lines.into_iter().zip(credits).map(|(l, c)| (l.label, c)).collect::<Vec<_>>()
+    };
+    if let Some(me) = player.0 {
+        next.month_income_lines = whole(galaxy_play::income::faction_income_lines(&state.world, state.galaxy(), me), next.month_income);
+    }
     // With only a fleet selected the panel shows the planet it orbits.
     let mut focus = selection.planet.or_else(|| selection.fleets.first().and_then(|id| state.galaxy().fleets.get(id)).and_then(|f| f.planet()));
     // The planet card (name and income) follows the selection only: with nothing selected it is empty, like the original's.
@@ -470,7 +510,9 @@ fn feed_bar(
         // One number per planet: the live income of a planet the player owns (also with only a fleet there selected), else the planet's
         // listed credit value. It used to switch between the build menu's live figure and the static one with the selection.
         next.planet_income = if state.galaxy().planets[p as usize].owner == player.0 && player.0.is_some() {
-            state.world.planet_income(state.galaxy(), p).round() as i64
+            let income = state.world.planet_income(state.galaxy(), p).round() as i64;
+            next.planet_income_lines = whole(galaxy_play::income::planet_income_lines(&state.world, state.galaxy(), p), income);
+            income
         } else {
             bridge.sim_to_planet[p as usize].and_then(|i| view.planets.get(i)).map_or(0, |pv| i64::from(pv.income))
         };
@@ -546,7 +588,7 @@ fn feed_bar(
                 price: Some(o.cost.max(0.0) as u32),
                 disabled: !o.availability.is_available(),
                 building: menu.queue.iter().any(|q| q.target == o.target),
-                tooltip: pad_tooltip(o, week, &state, game, &catalog, player.0),
+                tooltip: pad_tooltip(o, week, &state, game, &catalog, player.0, menu.planet),
                 marker_tooltip: marker_tooltip(pad_upkeep(&state, o.target)),
                 upkeep: pad_upkeep(&state, o.target),
                 level: pad_level(&state, o.target).max(required_level(&o.availability)),
@@ -2695,6 +2737,39 @@ mod tests {
         assert!(text.ends_with("@Space station\tLevel 3\n@Building\tNothing"), "{text}");
     }
 
+
+    /// The pad of a building that pays a percentage names it and what it comes to at the planet (the Trade Hub showed no income line),
+    /// a gambling building its swing, a star base level its population cap.
+    #[test]
+    fn build_pads_name_percentage_income_swings_and_capacity() {
+        use alamo_fs::{GameFs, GameInstall};
+        let Some(install) = GameInstall::detect() else { return };
+        if !install.mod_data("1770851727").is_dir() {
+            eprintln!("skipping: Remake workshop mod not found");
+            return;
+        }
+        let data = alamo_data::load_galaxy(&GameFs::for_mod(&install, Some("1770851727")).unwrap()).0;
+        let campaign = data.campaign("GC_Full_Web_Way_Imperial").unwrap();
+        let sim = galaxy_sim::Sim::new(&data, campaign, galaxy_sim::SimConfig { victory_enabled: false, ..Default::default() }).unwrap();
+        let w = sim.world();
+        let corulag = w.planet_id("Corulag_WW").unwrap();
+        let value = w.planets[corulag as usize].credit_value;
+        let hub = w.structure_id("E_Trade_Hub").unwrap();
+        let st = &w.structures[hub as usize];
+        assert!(st.income_pct > 0.0, "the data's Trade Hub pays a share of the planet value");
+        let tip = pad_effects(w, BuildTarget::Structure(hub), corulag, 45.0, false);
+        let pct = format!("@Planet income when built\t{:+.0}% ({:+.0} here)", st.income_pct * 100.0, value * st.income_pct);
+        assert!(tip.contains(&pct), "{tip}");
+        if let Some(g) = st.gamble {
+            assert!(tip.contains(&format!("\t{:+.0}% to {:+.0}%", g.min * 100.0, g.max * 100.0)) && tip.contains("@Market swing, new every "), "{tip}");
+        }
+        let empire = w.faction_id("Empire").unwrap();
+        let sb = w.first_starbase[empire as usize].unwrap();
+        let cap = w.starbases[sb as usize].population_capacity;
+        if cap > 0 {
+            assert!(pad_effects(w, BuildTarget::Starbase(sb), corulag, 45.0, false).contains(&format!("@Population cap\t+{cap} at this level")));
+        }
+    }
 
     #[test]
     fn every_entry_of_a_real_space_menu_belongs_to_exactly_one_class_filter() {

@@ -1207,6 +1207,16 @@ Estimates and data that shape what the player sees and hears. Behaviour is in `b
   takes the other side of its globe when that is free, and a name is never dropped. Then every income figure that touches no
   placed name or figure is shown, then every bonus text that touches nothing placed: when space is short the bonus texts go
   first and the income figures next. Labels keep 2 px apart (estimate). Offscreen runs log the overlapping label texts.
+* The income figures explain themselves (`galaxy-play/src/income.rs`): the month income's hover card lists the planet values
+  (with the number of planets), the building and star base percentages, the market swings (trade hub, gambling heroes), the
+  ship percentages in orbit, building income, building upkeep, the share enemy agents siphon off and the share own agents
+  siphon in, ship upkeep and ship income, and the faction's `Credits_Accumulation_Factor`: the same sums as the simulation's
+  `refresh_economy`, in whole credits that add up to the figure shown (each line rounded down, the rest to the largest
+  remainders). The planet income's card lists that planet's share of the same lines.
+* A build pad names what the entry changes once it stands at the selected planet: absolute income or upkeep, the planet
+  income percentage with what it comes to at this planet's value (the Trade Hub: "+150% (+135 here)" at Anaxes), a market
+  swing with its interval, and population cap; star base levels the same "at this level", ships their percentage "while it
+  orbits an own planet". Every unmet requirement stays on its own red line in the game's words.
 
 ## 3.4 Bar buttons
 

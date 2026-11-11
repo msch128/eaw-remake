@@ -1448,6 +1448,17 @@ fn field_tip(f: Field) -> Option<&'static str> {
     })
 }
 
+/// Stat rows of an income hover card: one per line, signed and grouped like the header, and the total.
+fn income_rows(lines: &[(String, i64)], total: i64) -> String {
+    let signed = |v: i64| if v > 0 { format!("+{}", group_digits(v)) } else { group_digits(v) };
+    let mut t = String::new();
+    for (label, v) in lines {
+        t.push_str(&format!("\n@{label}\t{}", signed(*v)));
+    }
+    t.push_str(&format!("\n@Total\t{}", signed(total)));
+    t
+}
+
 fn group_digits(v: i64) -> String {
     let s = v.abs().to_string();
     if s.len() <= 4 {
@@ -2027,7 +2038,7 @@ pub(crate) fn tooltip(
     mut last: Local<(String, u8)>,
     mut commands: Commands,
     settings: Res<EawUiSettings>,
-    fields: Query<(&BoundField, &ComputedNode, &UiGlobalTransform, &InheritedVisibility, Option<&crate::fit::FitText>)>,
+    (fields, bar_data): (Query<(&BoundField, &ComputedNode, &UiGlobalTransform, &InheritedVisibility, Option<&crate::fit::FitText>)>, Option<Res<CommandBarData>>),
 ) {
     let Ok((root, mut node, mut vis, own)) = tip.single_mut() else {
         return;
@@ -2074,15 +2085,24 @@ pub(crate) fn tooltip(
             let icon = if over_marker { None } else { b.tooltip_icon.clone() };
             (text, icon, Some((b, cn, gt, forced_hit)))
         }
-        // A number of the info card (credits, income, tech, population) explains itself while the cursor is on it.
-        None => match cursor_phys.and_then(|c| fields.iter().find(|(_, n, g, v, _)| v.get() && n.contains_point(**g, c))).and_then(|(f, .., fit)| {
+        // A number of the info card (credits, income, tech, population) explains itself while the cursor is on it. Fields without a
+        // card (the planet name, whose box spans the planet income's row) do not take the cursor from them.
+        None => match cursor_phys.and_then(|c| fields.iter().find(|(f, n, g, v, _)| v.get() && field_tip(f.0).is_some() && n.contains_point(**g, c))).and_then(|(f, .., fit)| {
             let mut t = field_tip(f.0)?.to_owned();
+            // The income figures name their sources and sinks, in whole credits that add up to the figure.
+            let lines = match (f.0, bar_data.as_deref()) {
+                (Field::MonthIncome, Some(d)) => Some((&d.month_income_lines, d.month_income)),
+                (Field::Income, Some(d)) if !d.planet_income_lines.is_empty() => Some((&d.planet_income_lines, d.planet_income)),
+                _ => None,
+            };
+            if let Some((lines, total)) = lines.filter(|(l, _)| !l.is_empty()) {
+                t.push_str(&income_rows(lines, total));
+            }
             // A shortened figure ("10,9M") names its exact value on the card.
             if let Some(fit) = fit.filter(|x| x.abbreviated())
                 && let Some(full) = fit.candidates.first()
             {
-                t.push_str(&format!("
-@Exact	{full}"));
+                t.push_str(&format!("\n@Exact\t{full}"));
             }
             Some(t)
         }) {

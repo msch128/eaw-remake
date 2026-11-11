@@ -137,6 +137,10 @@ pub struct CommandBarData {
     pub month_income: i64,
     /// Progress through the current month, 0..1 (the green bar next to "MONTH").
     pub month_progress: f32,
+    /// Where [`CommandBarData::month_income`] comes from, whole credits that add up to it (hover card of the figure).
+    pub month_income_lines: Vec<(String, i64)>,
+    /// Where [`CommandBarData::planet_income`] comes from, for a planet of the player (hover card of the figure).
+    pub planet_income_lines: Vec<(String, i64)>,
     /// Colour of the planet name (owner relation); `None` keeps the data default.
     pub planet_color: Option<Color>,
     /// Galactic month counter, 1 for the first fiscal cycle (shown as "MONTH: n").

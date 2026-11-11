@@ -25,6 +25,7 @@ pub mod build_menu;
 pub mod catalog;
 pub mod driver;
 pub mod geometry;
+pub mod income;
 pub mod input;
 mod logic;
 pub mod carry;

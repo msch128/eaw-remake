@@ -173,6 +173,8 @@ fn sample_data(game: &alamo_data::GameData, faction: UiFaction) -> CommandBarDat
         day: 2,
         month_income: 4_634,
         month_progress: 0.4,
+        month_income_lines: vec![("Planet values (3 planets)".into(), 4_100), ("Building income".into(), 1_200), ("Ship upkeep".into(), -666)],
+        planet_income_lines: Vec::new(),
         planet_color: Some(Color::srgb(0.3, 1.0, 0.4)),
         tech_level: 3,
         pop_current: 42,
