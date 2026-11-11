@@ -708,6 +708,53 @@ pub(crate) fn tactical_clicks(
 #[derive(Component)]
 pub struct TacticalOverlayRoot;
 
+/// Interface that floats over the battlefield (hover cards, tooltips, the retreat question, banners, the objectives, the reinforcement
+/// window, the station's build buttons): the world overlays are not drawn where it lies. They lie under it already
+/// ([`WORLD_OVERLAY_Z`]), but most of these panels are see-through glass, and bright bars and flags showed through them across their
+/// text. The marked node and its visible descendants count.
+#[derive(Component, Debug, Clone, Copy, Default)]
+pub struct CoversWorld;
+
+/// Where [`CoversWorld`] interface lies this frame: rectangles in logical window pixels (y down, before the UI scale, like the projected
+/// world), the layout of the last frame.
+#[derive(Resource, Debug, Clone, Default, PartialEq)]
+pub struct WorldCover(pub Vec<Rect>);
+
+impl WorldCover {
+    /// Whether a world overlay with this box (logical window pixels) touches covering interface.
+    pub fn covers(&self, overlay: Rect) -> bool {
+        self.0.iter().any(|c| !c.intersect(overlay).is_empty())
+    }
+}
+
+/// Collects [`WorldCover`] from the visible [`CoversWorld`] nodes and their descendants.
+pub(crate) fn world_cover(
+    roots: Query<Entity, With<CoversWorld>>,
+    children: Query<&Children>,
+    nodes: Query<(&ComputedNode, &UiGlobalTransform, &InheritedVisibility, Option<&bevy::text::TextLayoutInfo>)>,
+    scale: Option<Res<UiScale>>,
+    mut out: ResMut<WorldCover>,
+) {
+    // Node sizes are physical pixels; `inverse_scale_factor` also divides by the UI scale, which logical window pixels do not.
+    let ui_scale = scale.map_or(1.0, |s| s.0);
+    let mut rects = Vec::new();
+    for root in &roots {
+        for e in std::iter::once(root).chain(children.iter_descendants(root)) {
+            let Ok((n, gt, vis, text)) = nodes.get(e) else { continue };
+            if !vis.get() || n.size().x <= 0.0 || n.size().y <= 0.0 {
+                continue;
+            }
+            // A text node counts as wide as its text (a banner spans the screen to centre a short line).
+            let size = text.filter(|t| t.size.x > 0.0).map_or(n.size(), |t| t.size.min(n.size()));
+            let k = n.inverse_scale_factor() * ui_scale;
+            rects.push(Rect::from_center_size(gt.translation * k, size * k));
+        }
+    }
+    if out.0 != rects {
+        out.0 = rects;
+    }
+}
+
 /// Draw order of the world overlays (brackets, bars, icon boxes, names, hardpoint reticles; the hero boxes of the host use it too): below
 /// every interface panel (the command bar, the minimap, the objectives and the hero portraits have none or a positive one) and above the
 /// squadron icons. They belong to the world, which lies under the interface: before, the layer had 50 and its boxes and bars were drawn
@@ -1606,6 +1653,30 @@ mod tests {
         assert_eq!(z, [WORLD_OVERLAY_Z]);
         assert!(WORLD_OVERLAY_Z < 0, "under the command bar (0)");
         assert!(WORLD_OVERLAY_Z > crate::squad_icons::ICON_LAYER_Z, "over the squadron icons");
+        // The see-through panels that float over the battlefield (the hover card, the tooltip, the retreat question, ...) also keep the
+        // overlays off: `WorldCover` holds the visible marked nodes and their descendants, in logical pixels, a banner's text as wide as
+        // its letters. A hidden one counts not.
+        let mut app = App::new();
+        app.init_resource::<WorldCover>().insert_resource(UiScale(2.0)).add_systems(Update, world_cover);
+        // inverse_scale_factor 0.25 = 1 / (window scale 2 x UI scale 2): logical window pixels are physical / 2.
+        let node = |centre: Vec2, size: Vec2, vis| (ComputedNode { size, inverse_scale_factor: 0.25, ..default() }, UiGlobalTransform::from_translation(centre), vis);
+        let card = app.world_mut().spawn((CoversWorld, node(Vec2::new(400.0, 1000.0), Vec2::new(800.0, 300.0), InheritedVisibility::VISIBLE))).id();
+        app.world_mut().spawn((node(Vec2::new(200.0, 1100.0), Vec2::new(100.0, 40.0), InheritedVisibility::VISIBLE), ChildOf(card)));
+        app.world_mut().spawn((CoversWorld, node(Vec2::new(1900.0, 100.0), Vec2::new(200.0, 200.0), InheritedVisibility::HIDDEN)));
+        let mut text = bevy::text::TextLayoutInfo::default();
+        text.size = Vec2::new(300.0, 50.0);
+        app.world_mut().spawn((CoversWorld, node(Vec2::new(1920.0, 90.0), Vec2::new(3840.0, 60.0), InheritedVisibility::VISIBLE), text));
+        app.update();
+        let cover = app.world().resource::<WorldCover>();
+        assert_eq!(cover.0, [
+            Rect::from_center_size(Vec2::new(200.0, 500.0), Vec2::new(400.0, 150.0)),
+            Rect::from_center_size(Vec2::new(100.0, 550.0), Vec2::new(50.0, 20.0)),
+            Rect::from_center_size(Vec2::new(960.0, 45.0), Vec2::new(150.0, 25.0)),
+        ]);
+        assert!(cover.covers(Rect::from_center_half_size(Vec2::new(390.0, 500.0), Vec2::splat(12.0))), "a bar on the card's edge");
+        assert!(!cover.covers(Rect::from_center_half_size(Vec2::new(500.0, 500.0), Vec2::splat(12.0))));
+        assert!(cover.covers(Rect::from_center_half_size(Vec2::new(950.0, 50.0), Vec2::splat(5.0))), "on the banner's letters");
+        assert!(!cover.covers(Rect::from_center_half_size(Vec2::new(100.0, 45.0), Vec2::splat(5.0))), "beside the banner's letters");
     }
 
     #[test]

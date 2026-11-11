@@ -166,6 +166,7 @@ pub fn spawn_hud(
     let mut bubble = commands.spawn((
         TacticalHud,
         AdvisorBubble,
+        eaw_ui::CoversWorld,
         Name::new("advisor bubble"),
         Node {
             position_type: PositionType::Absolute,
@@ -199,6 +200,7 @@ pub fn spawn_hud(
     let mut boxed = commands.spawn((
         TacticalHud,
         ObjectivesBox,
+        eaw_ui::CoversWorld,
         Name::new("mission objectives"),
         Node {
             position_type: PositionType::Absolute,
@@ -241,6 +243,7 @@ pub fn spawn_hud(
     let mut panel = commands.spawn((
         TacticalHud,
         UnitPanel,
+        eaw_ui::CoversWorld,
         Name::new("unit panel"),
         Node {
             position_type: PositionType::Absolute,
@@ -277,6 +280,7 @@ pub fn spawn_hud(
     let mut row = commands.spawn((
         TacticalHud,
         HeroRow,
+        eaw_ui::CoversWorld,
         Name::new("hero portraits"),
         Node {
             position_type: PositionType::Absolute,
@@ -297,6 +301,7 @@ fn hardpoint_tip(ui: &EawUiSettings) -> impl Bundle {
     (
         TacticalHud,
         HardpointTip,
+        eaw_ui::CoversWorld,
         Name::new("hardpoint tip"),
         Text::new(""),
         font(ui, 11.0),
@@ -689,12 +694,15 @@ pub(crate) fn hero_billboards(
     ships: Res<RenderedShips>,
     scale: Res<UiScale>,
     camera: Single<(&Camera, &GlobalTransform), With<crate::camera::BattleCamera>>,
+    cover: Res<eaw_ui::WorldCover>,
     mut boards: Query<(&HeroBillboard, &mut Node)>,
 ) {
     let (cam, gt) = *camera;
     let vp = cam.logical_viewport_size().unwrap_or(Vec2::new(1920.0, 1080.0));
     for (b, mut node) in &mut boards {
         let shown = ships.0.get(&b.0).and_then(|s| cam.world_to_viewport(gt, s.pos + Vec3::Y * s.radius * 0.5).ok()).filter(|p| p.x > 0.0 && p.y > 0.0 && p.x < vp.x && p.y < vp.y);
+        // The box (24 px, right of and above the point) is not drawn under covering interface.
+        let shown = shown.filter(|p| !cover.covers(Rect::from_corners(Vec2::new(p.x + 10.0 * scale.0, p.y - 30.0 * scale.0), Vec2::new(p.x + 34.0 * scale.0, p.y - 6.0 * scale.0))));
         match shown {
             Some(p) => {
                 node.display = Display::Flex;
@@ -726,5 +734,6 @@ mod tests {
         assert_eq!(layout.linebreak, bevy::text::LineBreak::NoWrap, "a wrapped second line ran out of the box");
         let node = world.get::<Node>(e).expect("node");
         assert_eq!((node.width, node.height), (Val::Auto, Val::Auto), "the box takes the size of its text");
+        assert!(world.get::<eaw_ui::CoversWorld>(e).is_some(), "world overlays are not drawn under the tip");
     }
 }

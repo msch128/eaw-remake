@@ -714,7 +714,7 @@ pub fn spawn_battle_banner(world: &mut World, spec: &BattleBannerSpec) -> Option
     shell.anchor = ShellAnchor::TopCenter;
     shell.offset = Vec2::new(0.0, -6.0);
     let root = spawn_shell(world, &shell)?;
-    world.entity_mut(root).insert(GlobalZIndex(500));
+    world.entity_mut(root).insert((GlobalZIndex(500), crate::tactical::CoversWorld));
     let (width, height) = {
         let n = world.get::<Node>(root)?;
         match (n.width, n.height) {

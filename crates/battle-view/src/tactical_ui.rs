@@ -701,6 +701,7 @@ fn reinforce_clicks(
                         spec.anchor = ShellAnchor::TopLeft;
                         spec.offset = Vec2::new(30.0, -60.0);
                         if let Some(e) = spawn_shell(world, &spec) {
+                            world.entity_mut(e).insert(eaw_ui::CoversWorld);
                             world.resource_mut::<ReinforceUi>().root = Some(e);
                         }
                     });
@@ -1353,6 +1354,7 @@ fn sync_overlays(
     settings: Res<BattleViewSettings>,
     assets: Option<Res<EawUiAssets>>,
     camera: Single<(&Camera, &GlobalTransform), With<BattleCamera>>,
+    cover: Res<eaw_ui::WorldCover>,
     mut out: ResMut<TacticalOverlays>,
     mut icon_names: Local<HashMap<u32, Option<String>>>,
 ) {
@@ -1363,7 +1365,8 @@ fn sync_overlays(
     let view = ScreenView { viewport, right: gt.right().into(), phys: cam.target_scaling_factor().unwrap_or(1.0).max(0.01), project: &project };
     let retreat_active = |side: u8| rt.cur.as_ref().and_then(|c| c.retreat_jump_in.get(side as usize).copied().flatten()).is_some();
     let inputs = UnitInputs { catalog: &rt.catalog, ships: &ships, sel: &sel, hover: &hover, player, assets: assets.as_deref(), retreat_active: &retreat_active };
-    let overlays = unit_overlays(&inputs, &mut icon_names, &view);
+    let mut overlays = unit_overlays(&inputs, &mut icon_names, &view);
+    overlays.retain(|o| !overlay_covered(&cover, o));
     let mut next = TacticalOverlays { ships: overlays, hardpoints: Vec::new() };
     // Hardpoint reticles on the ship under the cursor (own or enemy) or the selected enemy. They are clickable (attack that hardpoint) when
     // they belong to an enemy and own ships are selected.
@@ -1380,6 +1383,9 @@ fn sync_overlays(
                 continue;
             }
             let Some(p) = project(control::hardpoint_world(&rt, s, i)) else { continue };
+            if cover.covers(Rect::from_center_half_size(p, Vec2::splat(12.0))) {
+                continue;
+            }
             next.hardpoints.push(HardpointMarker {
                 id: hardpoint_id(s.id, i),
                 kind: reticle_kind(vis.hardpoints.get(i).and_then(|v| v.reticle[usize::from(s.side == player)].as_deref()), h.kind),
@@ -1394,6 +1400,19 @@ fn sync_overlays(
     if *out != next {
         *out = next;
     }
+}
+
+/// Whether covering interface ([`eaw_ui::CoversWorld`]) lies on a unit's overlay: a small one (an icon box, a squadron's box, a small ship's
+/// brackets) anywhere on its box, a big ship's brackets on its centre (a hover card on a corner of a Star Destroyer's brackets does not
+/// take them all away).
+fn overlay_covered(cover: &eaw_ui::WorldCover, o: &ShipOverlay) -> bool {
+    let half = if o.icon_only || o.squad_box || o.half_size <= 40.0 { o.half_size.max(12.0) } else { 1.0 };
+    cover.covers(Rect::from_center_half_size(o.screen_pos, Vec2::splat(half)))
+}
+
+/// Box of a small craft's bar and flag: the craft's drawn sphere, the bar below it and the flag to its right.
+fn member_bar_box(m: &MemberBar) -> Rect {
+    Rect::from_center_half_size(m.pos, Vec2::splat(m.radius.max(6.0) + 14.0))
 }
 
 /// Margin around the window inside which small craft still get a bar (logical px): a craft just off the edge keeps its bar sliding in.
@@ -1450,6 +1469,7 @@ fn sync_member_bars(
     rt: Res<BattleRuntime>,
     ships: Res<RenderedShips>,
     camera: Single<(&Camera, &GlobalTransform), With<BattleCamera>>,
+    cover: Res<eaw_ui::WorldCover>,
     mut out: ResMut<MemberBars>,
 ) {
     let (cam, gt) = *camera;
@@ -1466,6 +1486,7 @@ fn sync_member_bars(
         viewport,
         &mut out.items,
     );
+    out.items.retain(|m| !cover.covers(member_bar_box(m)));
 }
 
 /// A click on a hardpoint reticle sends the selected ships to attack that hardpoint. Not while the cursor is on the interface: the reticles
@@ -2010,6 +2031,7 @@ fn retreat_banner(
         (Some(text), Err(_)) => {
             let mut e = commands.spawn((
                 RetreatBanner,
+                eaw_ui::CoversWorld,
                 crate::hud::TacticalHud,
                 Name::new("retreat banner"),
                 Text::new(text),
@@ -2076,6 +2098,7 @@ fn death_star_gauge(
             let Some(image) = textures.get(&mut images, "ds_countdown.tga").map(|t| t.handle) else { return };
             let mut root = commands.spawn((
                 DeathStarGauge,
+                eaw_ui::CoversWorld,
                 crate::hud::TacticalHud,
                 Name::new("death star gauge"),
                 ImageNode::new(image),
@@ -2209,6 +2232,7 @@ fn pause_banner(
         (Some(text), Err(_)) => {
             let mut e = commands.spawn((
                 PauseBanner,
+                eaw_ui::CoversWorld,
                 crate::hud::TacticalHud,
                 Name::new("pause banner"),
                 Text::new(text),
@@ -2476,6 +2500,37 @@ mod tests {
         let inputs = UnitInputs { catalog, ships: &rendered, sel, hover, player: 0, assets: None, retreat_active: &no_retreat };
         let view = ScreenView { viewport: VIEWPORT, right: Vec3::X, phys: 1.0, project: &flat };
         unit_overlays(&inputs, &mut HashMap::new(), &view)
+    }
+
+    #[test]
+    fn covering_interface_keeps_small_overlays_and_bars_off_and_big_brackets_on_their_centre() {
+        // The hover card of the play test's frame: x 25..620, y 448..642 (logical px at 1080p).
+        let cover = eaw_ui::WorldCover(vec![Rect::new(25.0, 448.0, 620.0, 642.0)]);
+        let o = |x: f32, y: f32, half: f32, icon_only: bool| ShipOverlay {
+            id: 1,
+            screen_pos: Vec2::new(x, y),
+            half_size: half,
+            health: 1.0,
+            shield: None,
+            selected: true,
+            hovered: false,
+            enemy: false,
+            name: None,
+            always: false,
+            icon: None,
+            icon_only,
+            squad_box: false,
+        };
+        assert!(overlay_covered(&cover, &o(300.0, 600.0, 11.0, true)), "an icon box under the card");
+        assert!(overlay_covered(&cover, &o(630.0, 600.0, 11.0, true)), "an icon box on the card's edge");
+        assert!(!overlay_covered(&cover, &o(700.0, 600.0, 11.0, true)));
+        // A Star Destroyer's brackets (half 150) with a corner under the card stay; with the centre under it they go.
+        assert!(!overlay_covered(&cover, &o(700.0, 600.0, 150.0, false)));
+        assert!(overlay_covered(&cover, &o(500.0, 600.0, 150.0, false)));
+        // Squadron bars and flags (the frame: crossing the card's last lines) go, the ones beside it stay.
+        let bar = |x: f32| MemberBar { id: 1, pos: Vec2::new(x, 630.0), radius: 4.0, health: 1.0, shield: None };
+        assert!(cover.covers(member_bar_box(&bar(440.0))));
+        assert!(!cover.covers(member_bar_box(&bar(700.0))));
     }
 
     #[test]

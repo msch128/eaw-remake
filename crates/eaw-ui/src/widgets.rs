@@ -1980,6 +1980,7 @@ pub(crate) fn spawn_tooltip(mut commands: Commands, settings: Res<EawUiSettings>
     let camera = settings.camera;
     let mut tip = commands.spawn((
         Tooltip,
+        crate::tactical::CoversWorld,
         Name::new("EaW tooltip"),
         Node {
             position_type: PositionType::Absolute,

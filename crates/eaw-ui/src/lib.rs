@@ -51,7 +51,7 @@ pub use panels::{MinimapCameraQuad, MinimapFog};
 pub use tactical::{TacticalOverlayRoot, 
     AbilityDef, AbilityState, EawAbilityClicked, EawHardpointClicked, EawSelectionClicked,
     HardpointMarker, HardpointNode, RetreatState, SQUAD_BOX_DESIGN_PX, ShipOverlay, ShipOverlayNode, TacticalData, TacticalOverlays, TacticalUnit, ability_icon, ability_slots,
-    spawn_unit_panel, unit_abilities, hardpoint_reticle, bar_class, bar_color, SELECT_COLUMNS, SELECT_SLOTS, SlotUnits, UnitStatus, selection_layout, WORLD_OVERLAY_Z,
+    spawn_unit_panel, unit_abilities, hardpoint_reticle, bar_class, bar_color, SELECT_COLUMNS, SELECT_SLOTS, SlotUnits, UnitStatus, selection_layout, WORLD_OVERLAY_Z, CoversWorld, WorldCover,
 };
 pub use widgets::{
     CommandBarMode, CommandBarSpec, EawButton, EawCommandBar, EawPanel, ShellAnchor, ShellOpaque, ShellSpec,
@@ -187,6 +187,7 @@ impl Plugin for EawUiPlugin {
             .init_resource::<TacticalData>()
             .init_resource::<TacticalOverlays>()
             .init_resource::<SquadIcons>()
+            .init_resource::<tactical::WorldCover>()
             .init_resource::<panels::MinimapFog>()
             .init_resource::<panels::MinimapCameraQuad>()
             .add_message::<EawAbilityClicked>()
@@ -229,6 +230,8 @@ impl Plugin for EawUiPlugin {
             .add_systems(Update, (widgets::segment_bars, widgets::border_pieces.after(widgets::slots), widgets::ability_columns.after(widgets::slots), widgets::active_outlines.after(widgets::slots)));
         app.add_systems(Update, fit::fit_fields.after(widgets::bound_fields).before(widgets::tooltip));
         app.add_systems(Update, squad_icons::squad_icon_nodes.after(widgets::ui_scale));
+        // Last frame's layout, read before the hosts place this frame's world overlays.
+        app.add_systems(PreUpdate, tactical::world_cover);
         member_bars::plugin(app);
     }
 }
