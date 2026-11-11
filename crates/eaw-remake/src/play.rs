@@ -495,18 +495,21 @@ fn run_script(
             if script.granted_at.is_some_and(|g| script.frames < g + 5) {
                 return;
             }
-            if let Some(text) = &args.build {
+            if let Some(texts) = &args.build {
+                // Several orders may be given at once, comma separated; they are queued in that order.
                 let g = state.galaxy();
                 let menu = BuildMenu::for_planet(&world, g, &catalog, h, planet);
                 let available: Vec<_> = menu.map(|m| m.options.into_iter().filter(|o| o.availability.is_available()).collect()).unwrap_or_default();
-                match available.iter().find(|o| o.name.to_ascii_lowercase().contains(&text.to_ascii_lowercase())) {
-                    Some(o) => {
-                        info!("script: building {} at {}", o.name, world.planets[planet as usize].display_name);
-                        actions.write(PlayAction::Build { planet, target: o.target });
-                    }
-                    None => {
-                        let names: Vec<&str> = available.iter().map(|o| o.name.as_str()).collect();
-                        warn!("script: nothing buildable matching `{text}` at the selected planet (available: {})", names.join(", "));
+                for text in texts.split(',').map(str::trim).filter(|t| !t.is_empty()) {
+                    match available.iter().find(|o| o.name.to_ascii_lowercase().contains(&text.to_ascii_lowercase())) {
+                        Some(o) => {
+                            info!("script: building {} at {}", o.name, world.planets[planet as usize].display_name);
+                            actions.write(PlayAction::Build { planet, target: o.target });
+                        }
+                        None => {
+                            let names: Vec<&str> = available.iter().map(|o| o.name.as_str()).collect();
+                            warn!("script: nothing buildable matching `{text}` at the selected planet (available: {})", names.join(", "));
+                        }
                     }
                 }
             }

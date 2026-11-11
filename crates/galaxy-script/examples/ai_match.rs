@@ -2,7 +2,7 @@
 //! galaxy-sim's built-in AI).
 //!
 //! ```text
-//! ai_match [weeks] [campaign] [stub] [human=<faction>] [seed=<n>]
+//! ai_match [weeks] [campaign] [stub] [groundup] [human=<faction>] [seed=<n>]
 //! ```
 
 use std::collections::BTreeMap;
@@ -18,7 +18,7 @@ fn main() {
     let weeks: u64 = args.first().and_then(|a| a.parse().ok()).unwrap_or(20);
     let campaign_name = args
         .get(1)
-        .filter(|a| !a.contains('=') && a.as_str() != "stub" && a.as_str() != "nostrat")
+        .filter(|a| !a.contains('=') && !["stub", "nostrat", "groundup"].contains(&a.as_str()))
         .map_or("GC_Full_Web_Way_Rebel", String::as_str);
     let stub = args.iter().any(|a| a == "stub");
     let human = args.iter().find_map(|a| a.strip_prefix("human=")).unwrap_or("none").to_string();
@@ -34,7 +34,7 @@ fn main() {
         fs,
         data,
         &campaign,
-        SimConfig { victory_enabled: false, seed, ..SimConfig::default() },
+        SimConfig { victory_enabled: false, seed, ground_up: args.iter().any(|a| a == "groundup"), ..SimConfig::default() },
         ScriptedConfig {
             remake_ai: !stub,
             human: Some(human),

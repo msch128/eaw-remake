@@ -48,7 +48,7 @@ pub struct Args {
     /// Offscreen only: advance the galaxy by this many weeks before the capture (`--weeks <n>`).
     pub weeks: Option<u32>,
     /// Offscreen only: queue the first available build option containing this text at the
-    /// selected planet (`--build <text>`).
+    /// selected planet (`--build <text>`; several orders comma separated: `--build Squadron,Outpost`).
     pub build: Option<String>,
     /// Offscreen only: send the player's fleets parked at the selected planet to this planet
     /// (`--move <planet>`).
@@ -220,7 +220,7 @@ OPTIONS:
   --planet-view <planet> Offscreen: open the planet view of a planet (id or name) after the other scenario flags ran
   --zoom <0..1>          Offscreen: camera zoom, 0 closest, 1 farthest
   --weeks <n>            Offscreen: advance n galactic weeks before the capture
-  --build <text>         Offscreen: queue the first build option matching text at the selected planet
+  --build <text>[,<text>]  Offscreen: queue the first build option matching each text at the selected planet
   --move <planet>        Offscreen: send the fleets at the selected planet to another planet
   --drag-to <planet>     Offscreen: carry the fleets of the selected planet over another planet, as while dragging them
   --drag-pointer <planet>[:<pad>]  Offscreen: drag a fleet of the selected planet there with synthetic pointer input and drop it
