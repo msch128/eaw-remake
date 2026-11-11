@@ -145,9 +145,19 @@ fn main() {
     // Fleets. `SP_DEMO_STRAFE=<ship>`: that one ship of the Empire holds its place (no AI) while seven Rebel squadrons, sent at it at 1 s from 2200 units off its bow
     // (no AI either), attack it, for a close look at attack runs on a hull (`SP_DEMO_NOFOG=1 SP_DEMO_CLOSE=1 SP_DEMO_PITCH=9
     // SP_DEMO_DIST=950` frames a Star Destroyer from low down).
+    let parse_fleet = |var: &str| -> Vec<(String, u32)> {
+        std::env::var(var).unwrap_or_default().split(',').filter_map(|e| e.split_once(':').and_then(|(n, c)| Some((n.trim().to_string(), c.trim().parse().ok()?)))).collect()
+    };
+    // `SP_DEMO_LINEUP` / `SP_DEMO_FOES` replace the Empire / Rebel lists (`Name:count,...`), so a Torpedo Sphere, a bomber and a concussion ship can share one frame.
+    let lineup = parse_fleet("SP_DEMO_LINEUP");
+    let foes = parse_fleet("SP_DEMO_FOES");
+    let lineup_pairs: Vec<(&str, u32)> = lineup.iter().map(|(n, c)| (n.as_str(), *c)).collect();
+    let foe_pairs: Vec<(&str, u32)> = foes.iter().map(|(n, c)| (n.as_str(), *c)).collect();
     let strafe = std::env::var("SP_DEMO_STRAFE").ok();
     let strafe_fleet = strafe.as_deref().map(|n| [(n, 1u32)]);
-    let empire: &[(&str, u32)] = if let Some(f) = strafe_fleet.as_ref() {
+    let empire: &[(&str, u32)] = if !lineup_pairs.is_empty() {
+        &lineup_pairs
+    } else if let Some(f) = strafe_fleet.as_ref() {
         f
     } else if small {
         &[("Star_Destroyer", 1), ("TIE_Fighter_Squadron", 2)]
@@ -158,7 +168,9 @@ fn main() {
             ("TIE_Fighter_Squadron", 4),
         ]
     };
-    let rebel: &[(&str, u32)] = if strafe.is_some() {
+    let rebel: &[(&str, u32)] = if !foe_pairs.is_empty() {
+        &foe_pairs
+    } else if strafe.is_some() {
         &[("Y-Wing_Squadron", 3), ("X-Wing_Squadron", 2), ("B-Wing_Squadron", 2)]
     } else if std::env::var("STATION_ONLY").is_ok() {
         &[]
@@ -838,10 +850,11 @@ fn capture_driver(
     }
     if let Some(want) = std::env::var("SP_DEMO_PROJ").ok()
         && let Some(cur) = rt.cur.as_ref()
-        && let of_kind = cur.projectiles.iter().filter(|p| rt.catalog.projectiles.get(p.def as usize).is_some_and(|d| d.category.eq_ignore_ascii_case(&want))).collect::<Vec<_>>()
+        && let of_kind = cur.projectiles.iter().filter(|p| rt.catalog.projectiles.get(p.def as usize).is_some_and(|d| d.category.eq_ignore_ascii_case(&want) || d.name.eq_ignore_ascii_case(&want))).collect::<Vec<_>>()
         && let Some(p) = of_kind.first().copied()
     {
-        // Close view of the first projectile of the category (`missile`, `laser`, `rocket`); `SP_DEMO_PROJ_LOG=1` prints how many are in flight.
+        // Close view of the first projectile of the category (`missile`, `laser`, `rocket`) or of that exact name (`Proj_Proton_Torpedo_TS`);
+        // `SP_DEMO_PROJ_LOG=1` prints how many are in flight.
         if std::env::var_os("SP_DEMO_PROJ_LOG").is_some() && status.tick.is_multiple_of(30) {
             println!("demo proj {want}: {} in flight at t={:.1} first {:?}", of_kind.len(), cur.time, p.pos);
         }
