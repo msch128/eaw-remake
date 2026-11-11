@@ -2122,22 +2122,45 @@ fn victory_banner(
 #[derive(Component)]
 struct PauseBanner;
 
+/// Top of the "PAUSED" banner (UI px): 42 below the screen's top edge, or 8 below the retreat question when it is open (`question_bottom`,
+/// its lower edge). The question pauses the battle and lies at the top centre too: before, it covered the banner.
+fn pause_banner_top(question_bottom: Option<f32>) -> f32 {
+    question_bottom.map_or(42.0, |b| b + 8.0)
+}
+
 fn pause_banner(
     mut commands: Commands,
     ui: Res<eaw_ui::EawUiSettings>,
     settings: Res<BattleViewSettings>,
     status: Res<BattleStatus>,
-    mut banner: Query<(Entity, &mut Text), With<PauseBanner>>,
+    prompt: Res<crate::retreat_prompt::RetreatPrompt>,
+    nodes: Query<(&ComputedNode, &UiGlobalTransform, &InheritedVisibility)>,
+    children: Query<&Children>,
+    mut banner: Query<(Entity, &mut Text, &mut Node), With<PauseBanner>>,
 ) {
     let want = if settings.paused && !status.over {
         Some("P A U S E D")
     } else {
         None
     };
+    // The question's lower edge in UI px (node transforms and sizes are physical pixels): the lowest of its visible parts, the CANCEL
+    // button hangs below the banner's own box.
+    let question_bottom = prompt.root().and_then(|r| {
+        std::iter::once(r)
+            .chain(children.iter_descendants(r))
+            .filter_map(|e| nodes.get(e).ok())
+            .filter(|(n, _, v)| n.size().y > 0.0 && v.get())
+            .map(|(n, gt, _)| (gt.translation.y + n.size().y * 0.5) * n.inverse_scale_factor())
+            .reduce(f32::max)
+    });
+    let top = Val::Px(pause_banner_top(question_bottom));
     match (want, banner.single_mut()) {
-        (Some(text), Ok((_, mut t))) => {
+        (Some(text), Ok((_, mut t, mut node))) => {
             if t.0 != text {
                 t.0 = text.to_string();
+            }
+            if node.top != top {
+                node.top = top;
             }
         }
         (Some(text), Err(_)) => {
@@ -2151,7 +2174,7 @@ fn pause_banner(
                 TextShadow { offset: Vec2::splat(1.5), color: Color::BLACK },
                 Node {
                     position_type: PositionType::Absolute,
-                    top: Val::Px(42.0),
+                    top,
                     width: Val::Percent(100.0),
                     justify_content: JustifyContent::Center,
                     ..default()
@@ -2163,7 +2186,7 @@ fn pause_banner(
                 e.insert(UiTargetCamera(cam));
             }
         }
-        (None, Ok((e, _))) => commands.entity(e).despawn(),
+        (None, Ok((e, ..))) => commands.entity(e).despawn(),
         (None, Err(_)) => {}
     }
 }
@@ -2547,6 +2570,13 @@ mod retreat_tests {
         let last = last.unwrap();
         assert_eq!(last.alive.first().copied(), Some(2), "nobody jumped out");
         assert!(!last.over);
+    }
+
+    #[test]
+    fn the_paused_banner_moves_below_an_open_retreat_question() {
+        // Without the question: 42 px from the top. With it (the play test's question at 1080p reaches down to about 208 px): below it.
+        assert_eq!(pause_banner_top(None), 42.0);
+        assert_eq!(pause_banner_top(Some(208.0)), 216.0);
     }
 
     #[test]

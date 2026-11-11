@@ -25,6 +25,11 @@ impl RetreatPrompt {
     pub fn is_open(&self) -> bool {
         self.root.is_some() || self.requested
     }
+
+    /// Root node of the open question.
+    pub fn root(&self) -> Option<Entity> {
+        self.root
+    }
 }
 
 /// An answer to the retreat question.
