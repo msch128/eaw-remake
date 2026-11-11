@@ -266,6 +266,7 @@ fn cursor_blocked(
     bar: Query<(&ComputedNode, &UiGlobalTransform, Option<&eaw_ui::ShellOpaque>), With<EawCommandBar>>,
     backing: Query<(&ComputedNode, &UiGlobalTransform), With<crate::play_ui::BarBacking>>,
     cheat_panel: Query<(&ComputedNode, &UiGlobalTransform), With<crate::cheat_menu::CheatRoot>>,
+    hud_buttons: Query<(&Interaction, &InheritedVisibility), With<Button>>,
     droid_menu: Option<Res<crate::droid_menu::DroidMenuState>>,
     screen: Res<State<AppScreen>>,
     paused: Res<Paused>,
@@ -288,6 +289,10 @@ fn cursor_blocked(
             None => node.contains_point(*tf, p),
         }) || backing.iter().any(|(node, tf)| node.contains_point(*tf, p))
     });
+    // Every visible button of the interface (queue icons, zoom, minimap, hero and pad arrows ...) is a HUD part, also where it sits above
+    // the map outside the bar's art; the topmost node under the cursor is the one that is hovered or pressed.
+    let over_button = hud_buttons.iter().any(|(i, v)| *i != Interaction::None && v.get());
+    let over_bar = over_bar || over_button;
     let over_cheat = cheat_panel.iter().any(|(node, tf)| {
         cursor.is_some_and(|c| node.contains_point(*tf, c)) || phys_cursor.is_some_and(|p| node.contains_point(*tf, p))
     });
