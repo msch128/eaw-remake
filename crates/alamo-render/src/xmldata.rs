@@ -70,7 +70,9 @@ impl ParticleDef {
     }
 }
 
-/// Space unit fields needed for death sequences.
+/// Fields of an object that has a space model (a `SpaceUnit`, `UniqueUnit`, `StarBase`, `SpecialStructure`, ... : the element name is
+/// the object's class, and any class can stand in a space battle), needed for its hardpoint models and its death sequence. The variants
+/// of such objects are kept as well.
 #[derive(Debug, Clone, Default)]
 pub struct UnitDef {
     /// Object name.
@@ -127,7 +129,7 @@ pub struct XmlDefs {
     pub projectiles: HashMap<String, ProjectileDef>,
     /// Particle objects by lowercase name.
     pub particles: HashMap<String, ParticleDef>,
-    /// Space units by lowercase name.
+    /// Objects with a space model by lowercase name, whatever their class.
     pub units: HashMap<String, UnitDef>,
     /// Hardpoints by lowercase name.
     pub hardpoints: HashMap<String, HardpointDef>,
@@ -171,13 +173,13 @@ impl XmlDefs {
                 && !text.contains("<SpaceUnit ")
                 && !text.contains("<UniqueUnit ")
                 && !text.contains("<HardPoint ")
+                && !text.contains("Space_Model_Name")
             {
                 continue;
             }
             let text = strip_comments(&text);
             raw_hp.extend(blocks(&text, "HardPoint"));
-            raw_units.extend(blocks(&text, "SpaceUnit"));
-            raw_units.extend(blocks(&text, "UniqueUnit"));
+            raw_units.extend(unit_blocks(&text));
             raw_proj.extend(blocks(&text, "Projectile"));
             for b in blocks(&text, "Particle") {
                 let def = ParticleDef {
@@ -272,13 +274,19 @@ impl XmlDefs {
                 chain.push(cur);
             }
             let get = |tag: &str| chain.iter().find_map(|c| c.get(tag));
-            let death_clone =
-                get("Death_Clone").map(|v| v.rsplit(',').next().unwrap_or("").trim().to_string());
+            // Kept: the two unit classes as before, and every other object that has a space model, by itself or through its base.
+            let model = get("Space_Model_Name");
+            if model.is_none() && !matches!(b.kind.as_str(), "SpaceUnit" | "UniqueUnit") {
+                continue;
+            }
+            // `Damage_Normal, <clone>`: the clone follows the damage type. A value that is a damage type alone (`Damage_Normal`, in 6 places
+            // of the Remake's XML) names no clone.
+            let death_clone = get("Death_Clone").and_then(|v| v.split_once(',').map(|(_, clone)| clone.trim().to_string()));
             defs.units.insert(
                 b.name.to_ascii_lowercase(),
                 UnitDef {
                     name: b.name.clone(),
-                    model: get("Space_Model_Name"),
+                    model,
                     death_clone: death_clone.filter(|c| !c.is_empty()),
                     hardpoints: get("HardPoints")
                         .map(|v| {
@@ -355,6 +363,8 @@ impl XmlDefs {
 }
 
 struct RawBlock {
+    /// Element name: the object's class.
+    kind: String,
     name: String,
     tags: Vec<(String, String)>,
 }
@@ -412,10 +422,40 @@ fn blocks(text: &str, kind: &str) -> Vec<RawBlock> {
             .map_or(text.len(), |e| body_start + e);
         let body = &text[body_start..end];
         out.push(RawBlock {
+            kind: kind.to_string(),
             name,
             tags: tags(body),
         });
         pos = end.max(body_start);
+    }
+    out
+}
+
+/// Every named object of the file (`<Class Name="X"> ... </Class>`, the children of the root element) that can be a unit: all classes but
+/// the three read on their own (`Projectile`, `Particle`, `HardPoint`). Objects nested in a block (`<Unit_Abilities_Data>` entries) are
+/// part of that block. Only blocks that can have a space model are parsed: `SpaceUnit` and `UniqueUnit`, and of the other classes those
+/// that name a `Space_Model_Name` or are a variant of another type.
+fn unit_blocks(text: &str) -> Vec<RawBlock> {
+    let mut out = Vec::new();
+    let mut pos = 0;
+    while let Some(i) = text[pos..].find('<') {
+        let start = pos + i;
+        let Some(head_end) = text[start..].find('>') else { break };
+        let head = &text[start + 1..start + head_end];
+        let body_start = start + head_end + 1;
+        pos = body_start;
+        let kind = head.split_whitespace().next().unwrap_or("");
+        let named = head.split("Name=\"").nth(1).and_then(|r| r.split('"').next());
+        let Some(name) = named.filter(|_| !head.ends_with('/') && !kind.starts_with(['/', '!', '?'])) else { continue };
+        let close = format!("</{kind}>");
+        let end = text[body_start..].find(&close).map_or(text.len(), |e| body_start + e);
+        let body = &text[body_start..end];
+        pos = (end + close.len()).min(text.len());
+        let unit = matches!(kind, "SpaceUnit" | "UniqueUnit");
+        if matches!(kind, "Projectile" | "Particle" | "HardPoint") || !(unit || body.contains("Space_Model_Name") || body.contains("Variant_Of_Existing_Type")) {
+            continue;
+        }
+        out.push(RawBlock { kind: kind.to_string(), name: name.to_string(), tags: tags(body) });
     }
     out
 }
@@ -520,5 +560,29 @@ mod tests {
         let p = d.particle("SHIELD_HIT").unwrap();
         assert_eq!(p.lifetime_secs(), 3.0);
         assert_eq!(p.scale, 2.0);
+    }
+
+    #[test]
+    fn objects_of_every_class_with_a_space_model_are_units() {
+        let text = strip_comments(
+            r#"<Root>
+<StarBase Name="Base_1">
+  <Space_Model_Name>base.alo</Space_Model_Name>
+  <Death_Clone>Damage_Normal, Base_1_Clone</Death_Clone>
+  <Unit_Abilities_Data SubObjectList="Yes">
+    <Unit_Ability Name="Not_A_Unit"><Type>HUNT</Type></Unit_Ability>
+  </Unit_Abilities_Data>
+</StarBase>
+<StarBase Name="Base_2"><Variant_Of_Existing_Type>Base_1</Variant_Of_Existing_Type></StarBase>
+<GroundInfantry Name="Trooper"><Land_Model_Name>t.alo</Land_Model_Name></GroundInfantry>
+<SpaceUnit Name="Marker"><Is_Dummy>Yes</Is_Dummy></SpaceUnit>
+<Projectile Name="Bolt"><Space_Model_Name>w_laser.alo</Space_Model_Name></Projectile>
+<Faction Name="Empire" />
+</Root>"#,
+        );
+        let b = unit_blocks(&text);
+        let found: Vec<(&str, &str)> = b.iter().map(|b| (b.kind.as_str(), b.name.as_str())).collect();
+        assert_eq!(found, [("StarBase", "Base_1"), ("StarBase", "Base_2"), ("SpaceUnit", "Marker")]);
+        assert_eq!(b[0].get("Death_Clone").as_deref(), Some("Damage_Normal, Base_1_Clone"));
     }
 }
