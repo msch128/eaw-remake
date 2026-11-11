@@ -384,6 +384,13 @@ build-menu filters, not a start mode. The mode is this project's own:
   each AI faction buys tech, builds star bases and structures, queues the best durability x damage per credit ship,
   merges idle fleets and sends a fleet at the best-valued reachable planet whose defence (Lanchester estimate
   `sqrt(durability x dps)`) it exceeds by 1.5x.
+* Both AIs live with the two queues of a planet (section 1.3). Estimate: for the Remake AI a full queue is "busy", not
+  "cannot build" (`Refused::Busy`): a ship is ordered at the next planet that takes it and otherwise waits for a slot, a
+  required structure or star base level waits at its planet, and neither counts as a refusal that fails the force
+  (`TaskForceStats::queue_waits`; the job's own time limit still ends the wait). A star base level that already waits
+  at the planet stays "unavailable", as before. The classic AI orders its tech level at the best developed planet whose
+  queue takes it. Measured on `GC_Full_Web_Way_Rebel`, 40 weeks, all factions AI: production failures 126 -> 73, from
+  the Ground Up 103 -> 78; none of them names a full queue any more (24 and 28 before).
 * Difficulty: Easy, Normal and Hard are the `Xml/DifficultyAdjustments.xml` entries (data: credit, build time, battle
   multipliers, `Galactic_AI_Contrast_Multiplier`, `Galactic_AI_Goal_Cycle_Sleep_Duration`; the unit of the sleep is an
   estimate). Brutal is a project tier (estimate): Hard plus AI credits x4 (`BRUTAL_CREDIT_MULTIPLIER`, Hard is 3.0),

@@ -105,3 +105,100 @@ fn garrisons_leave_most_of_the_fleet_to_the_plans() {
     assert!(share > 0.0, "front planets keep a garrison");
     assert!(share <= galaxy_ai::taskforce::GARRISON_TOTAL_CAP + 1e-9, "garrisons held {:.0}% of a player's fleet strength", 100.0 * share);
 }
+
+/// A planet whose production queue is full is busy, not unable: the Remake AI is told so for a ship, an orbital structure and the star base
+/// level of a full space queue. What the planet could not build with an empty queue either stays "unavailable", and the ground queue answers
+/// for itself.
+#[test]
+fn a_full_queue_answers_busy_to_the_ai() {
+    use galaxy_ai::sim::{AiSim, Refused};
+    use galaxy_sim::{Command, Lane, Sim, UnitRole};
+    let Some(install) = GameInstall::detect() else { return };
+    if !install.mod_data("1770851727").is_dir() {
+        eprintln!("skipped: Remake mod not installed");
+        return;
+    }
+    let data = load_galaxy(&GameFs::for_mod(&install, Some("1770851727")).unwrap()).0;
+    let campaign = data.campaign("GC_Full_Web_Way_Rebel").unwrap();
+    let mut sim = Sim::new(&data, campaign, SimConfig { victory_enabled: false, ..SimConfig::default() }).unwrap();
+    let w = sim.world().clone();
+    let (empire, rebel, p) = (w.faction_id("Empire").unwrap(), w.faction_id("Rebel").unwrap(), w.planet_id("Coruscant_WW").unwrap());
+    sim.add_credits(empire, 1.0e9);
+    sim.set_tech_level(empire, 4);
+    sim.set_starbase(p, w.first_starbase[empire as usize].and_then(|b| w.starbases[b as usize].next));
+    let g = sim.galaxy();
+    let unit = |want: fn(&Result<(), galaxy_sim::CommandError>) -> bool| {
+        let u = w.buildable_units[empire as usize]
+            .iter()
+            .copied()
+            .find(|&u| w.units[u as usize].role == UnitRole::Ship && w.units[u as usize].limit_current.is_none() && want(&w.check_build_unit(g, empire, p, u)))
+            .expect("a ship of that kind");
+        w.units[u as usize].name.clone()
+    };
+    let structure = |orbital: bool| {
+        let s = (0..w.structures.len() as u32).find(|&s| w.structures[s as usize].orbital == orbital && w.check_build_structure(g, empire, p, s).is_ok()).expect("a structure to order");
+        w.structures[s as usize].name.clone()
+    };
+    let (ship, needs_more) = (unit(|r| r.is_ok()), unit(|r| matches!(r, Err(galaxy_sim::CommandError::RequirementsNotMet(_)))));
+    let (orbital, ground) = (structure(true), structure(false));
+
+    let (allies, mut pending) = (std::collections::HashSet::new(), Vec::new());
+    let mut ai = galaxy_script::ai::SimAdapter { sim: &mut sim, world: w.clone(), human: rebel, allies: &allies, pending: &mut pending };
+    assert_eq!(ai.can_build_unit(empire, p, &needs_more), Err(Refused::Unavailable));
+    assert_eq!((ai.can_build_unit(empire, p, &ship), ai.can_build_structure(empire, p, &orbital), ai.can_upgrade_starbase(empire, p)), (Ok(()), Ok(()), Ok(())));
+    for _ in 0..w.config.max_queue_len {
+        ai.queue_unit(empire, p, &ship).expect("queued");
+    }
+    assert_eq!(ai.can_build_unit(empire, p, &ship), Err(Refused::Busy));
+    assert_eq!(ai.queue_unit(empire, p, &ship), Err(Refused::Busy));
+    assert_eq!(ai.can_build_structure(empire, p, &orbital), Err(Refused::Busy));
+    assert_eq!(ai.queue_structure(empire, p, &orbital), Err(Refused::Busy));
+    assert_eq!(ai.can_upgrade_starbase(empire, p), Err(Refused::Busy));
+    assert_eq!(ai.can_build_unit(empire, p, &needs_more), Err(Refused::Unavailable), "a full queue does not make it buildable later");
+    assert_eq!(ai.can_build_structure(empire, p, &ground), Ok(()), "the ground queue is empty");
+    // A star base level that already waits is another answer: the planet is getting its level, there is nothing to wait for.
+    ai.sim.apply(Command::CancelProduction { faction: empire, planet: p, lane: Lane::Space, index: 4 }).expect("cancel");
+    ai.sim.apply(Command::CancelProduction { faction: empire, planet: p, lane: Lane::Space, index: 3 }).expect("cancel");
+    ai.queue_starbase(empire, p).expect("star base level");
+    assert_eq!(ai.can_upgrade_starbase(empire, p), Err(Refused::Unavailable));
+}
+
+/// From the Ground Up, where a great power starts with one or three planets and their queues fill up at once: a force whose ship, structure
+/// or star base level finds every queue full waits for a slot. No plan fails because of a full queue, and none waits until its time is up.
+#[test]
+fn a_full_queue_makes_a_force_wait_and_does_not_fail_it() {
+    let Some(install) = GameInstall::detect() else { return };
+    if !install.mod_data("1770851727").is_dir() {
+        eprintln!("skipped: Remake mod not installed");
+        return;
+    }
+    let fs: Arc<dyn FileSource> = Arc::new(GameFs::for_mod(&install, Some("1770851727")).unwrap());
+    let data = Arc::new(load_galaxy(&*fs).0);
+    let campaign = data.campaign("GC_Full_Web_Way_Rebel").unwrap().clone();
+    let mut sim = ScriptedSim::new(
+        fs,
+        data,
+        &campaign,
+        SimConfig { victory_enabled: false, ground_up: true, ..SimConfig::default() },
+        ScriptedConfig { remake_ai: true, human: Some("none".into()), game_scoring: false, ..ScriptedConfig::default() },
+    )
+    .unwrap();
+    let mut weeks = 0;
+    while weeks < 30 {
+        for e in sim.step(1.0).sim_events {
+            if let Event::WeekEnded { week } = e {
+                weeks = week;
+            }
+        }
+    }
+    let st = sim.ai_stats().expect("Remake AI is on");
+    let tf = &st.taskforces;
+    let full: Vec<_> = st.fast_failures.iter().filter(|((_, detail), _)| detail.contains("QueueFull")).collect();
+    let timed_out: Vec<_> = tf.failure_reasons.iter().filter(|(why, _)| why.ends_with(": deadline") || why.ends_with(": timeout")).collect();
+    let star_bases: Vec<_> = st.fast_failures.iter().filter(|((_, detail), _)| detail.contains("Star_Base")).map(|((_, detail), n)| (detail, n)).collect();
+    println!("30 weeks from the ground up: {} ships and {} structures queued, {} production failures, {} waits for a full queue", tf.ships_queued, tf.structures_queued, tf.production_failures, tf.queue_waits);
+    println!("star base plans that failed: {star_bases:?}");
+    assert!(full.is_empty(), "plans failed over a full queue: {full:?}");
+    assert!(timed_out.is_empty(), "produce jobs waited until their time was up: {timed_out:?}");
+    assert!(tf.queue_waits > 0, "the queues of a one-planet start fill up, so forces must have waited");
+}

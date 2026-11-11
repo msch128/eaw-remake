@@ -63,6 +63,8 @@ pub struct QueueView {
 pub enum Refused {
     /// Not enough credits (retry later).
     NoCredits,
+    /// The planet would take the order, but its production queue is full (retry later).
+    Busy,
     /// Requirements not met on this planet (tech, shipyard, slots, locks) or population/limit reached.
     Unavailable,
     /// Unknown name or other permanent problem.
@@ -157,6 +159,10 @@ pub trait AiSim {
     }
     /// Why the planet cannot take the ship, as a short phrase for diagnostics (`"ok"` when it can; empty when the host does not say).
     fn explain_build_unit(&self, _p: PlayerId, _pl: PlanetId, _unit: &str) -> String {
+        String::new()
+    }
+    /// Why the planet cannot take the structure or the next star base level, in the same words.
+    fn explain_build_structure(&self, _p: PlayerId, _pl: PlanetId, _structure: &str) -> String {
         String::new()
     }
     /// The same for structures.

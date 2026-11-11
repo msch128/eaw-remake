@@ -165,8 +165,10 @@ pub struct TaskForceStats {
     pub structures_queued: u32,
     /// Produce jobs that failed.
     pub production_failures: u32,
-    /// Why ship produce jobs failed (`unit: reason`).
+    /// Why produce jobs failed (`unit: reason`, `structure: type or reason`).
     pub failure_reasons: HashMap<String, u32>,
+    /// Ticks in which a produce job found a full queue at every planet that would build its item and waited for a slot.
+    pub queue_waits: u32,
     /// Moves ordered.
     pub moves: u32,
     /// Pincer attacks whose forces left together.
@@ -334,7 +336,7 @@ impl TaskForces {
         let built = sim.structures(planet);
         let can_queue = |ty: &String| {
             let ok = if sim.is_starbase_type(ty) { sim.can_upgrade_starbase(player, planet) } else { sim.can_build_structure(player, planet, ty) };
-            matches!(ok, Ok(()) | Err(Refused::NoCredits))
+            matches!(ok, Ok(()) | Err(Refused::NoCredits | Refused::Busy))
         };
         let builds = |reqs: &Requirements| {
             let mut groups = reqs.groups.iter().filter(|g| g.max > 0).peekable();
@@ -774,10 +776,10 @@ impl TaskForces {
             if info.is_hero && t.reqs.deny_hero {
                 continue;
             }
-            // Only ships some owned planet can build right now (tech, shipyard, slots); money may still be missing.
+            // Only ships some owned planet can build right now (tech, shipyard, slots); money or a free queue slot may still be missing.
             let buildable = safe_planets
                 .iter()
-                .any(|&pl| matches!(sim.can_build_unit(t.player, pl, &name), Ok(()) | Err(Refused::NoCredits)));
+                .any(|&pl| matches!(sim.can_build_unit(t.player, pl, &name), Ok(()) | Err(Refused::NoCredits | Refused::Busy)));
             if !buildable {
                 continue;
             }
@@ -1473,6 +1475,8 @@ impl TaskForces {
             planets.sort_by_key(|&p| dist[p as usize]);
             let mut queued = false;
             let mut no_credits = false;
+            // A planet that would build the unit but has a full queue: the unit waits for a slot, it was not refused.
+            let mut busy = false;
             let unit_cost = sim.unit_info(&unit).map_or(0.0, |u| u.cost);
             let affordable = self.allowance(player, plan).is_none_or(|a| a >= unit_cost);
             // A heavy faction saves for a costly ship like for a building (up to [`SHIP_SAVING_SHARE`] times its heaviness of the account cap); a swarm faction spends as the money arrives.
@@ -1503,12 +1507,14 @@ impl TaskForces {
                         no_credits = true;
                         break;
                     }
+                    Err(Refused::Busy) => busy = true,
                     Err(Refused::Unavailable) => {}
                     Err(Refused::Invalid) => break,
                 }
             }
             if !queued {
-                if no_credits {
+                if no_credits || busy {
+                    self.stats.queue_waits += u32::from(busy && !no_credits);
                     remaining.push(unit);
                 } else {
                     let n = j.refused.entry(key).or_default();
@@ -1516,10 +1522,13 @@ impl TaskForces {
                     if *n <= 3 {
                         remaining.push(unit);
                     } else {
-                        // Why every planet said no: the most common explanation over the player's planets.
+                        // Why every planet said no: the most common explanation over the planets that were asked (the safe ones).
                         let mut why: HashMap<String, u32> = HashMap::new();
-                        for &pl in snap.owned[player as usize].iter().take(40) {
+                        for &pl in snap.owned[player as usize].iter().filter(|&&p| safe[p as usize]).take(40) {
                             *why.entry(sim.explain_build_unit(player, pl, &unit)).or_default() += 1;
+                        }
+                        if why.is_empty() {
+                            why.insert("no safe planet".to_string(), 1);
                         }
                         let mut why: Vec<_> = why.into_iter().collect();
                         why.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
@@ -1668,7 +1677,11 @@ impl TaskForces {
         };
         let (player, plan, name) = (t.player, t.plan, t.name.clone());
         let fail = |me: &mut Self, j: &StructJob, what: &str| {
+            if std::env::var("AI_TRACE_FORCE").is_ok() {
+                eprintln!("structure production failed: plan {plan} tf {} planet {} {what}; waiting for {:?}, built {}, groups left {}", j.tf, j.planet, j.queued, j.built, j.groups.len());
+            }
             me.stats.production_failures += 1;
+            *me.stats.failure_reasons.entry(format!("structure: {what}")).or_default() += 1;
             if let Some(t) = me.forces.get_mut(&j.tf) {
                 t.result = Some(false);
             }
@@ -1706,13 +1719,16 @@ impl TaskForces {
                 j.groups.pop_front();
                 continue;
             }
-            // Types that could be queued here (money aside).
+            // Types that could be queued here (money aside), and whether one only waits for a slot of a full queue.
             let mut candidates: Vec<(&String, bool)> = Vec::new();
+            let mut busy = false;
             for ty in &group.types {
                 let starbase = sim.is_starbase_type(ty);
                 let ok = if starbase { sim.can_upgrade_starbase(player, j.planet) } else { sim.can_build_structure(player, j.planet, ty) };
-                if matches!(ok, Ok(()) | Err(Refused::NoCredits)) {
-                    candidates.push((ty, starbase));
+                match ok {
+                    Ok(()) | Err(Refused::NoCredits) => candidates.push((ty, starbase)),
+                    Err(Refused::Busy) => busy = true,
+                    Err(_) => {}
                 }
             }
             let Some(&(ty, starbase)) = candidates.first() else {
@@ -1720,7 +1736,13 @@ impl TaskForces {
                     j.groups.pop_front();
                     continue;
                 }
-                fail(self, &j, group.types.first().map_or("", String::as_str));
+                if busy {
+                    self.stats.queue_waits += 1;
+                    return Some(j);
+                }
+                let first = group.types.first().map_or("", String::as_str);
+                self.failure_detail.insert(plan, format!("refused: {} ({first})", sim.explain_build_structure(player, j.planet, first)));
+                fail(self, &j, first);
                 return None;
             };
             let cost_hint = if starbase {
@@ -1746,6 +1768,10 @@ impl TaskForces {
                     return Some(j);
                 }
                 Err(Refused::NoCredits) => return Some(j),
+                Err(Refused::Busy) if group.min > 0 => {
+                    self.stats.queue_waits += 1;
+                    return Some(j);
+                }
                 Err(_) => {
                     if group.min == 0 {
                         j.groups.pop_front();

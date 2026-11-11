@@ -30,6 +30,7 @@ fn power_of(w: &World, u: u32) -> f64 {
 fn refuse(e: CommandError) -> Refused {
     match e {
         CommandError::InsufficientCredits => Refused::NoCredits,
+        CommandError::QueueFull => Refused::Busy,
         CommandError::Invalid => Refused::Invalid,
         _ => Refused::Unavailable,
     }
@@ -190,6 +191,20 @@ impl AiSim for SimAdapter<'_> {
     fn explain_build_unit(&self, p: PlayerId, pl: PlanetId, unit: &str) -> String {
         let Some(&u) = self.world.unit_index.get(&unit.to_ascii_lowercase()) else { return "unknown unit".into() };
         match self.world.check_build_unit(self.sim.galaxy(), p, pl, u) {
+            Ok(()) => "ok".into(),
+            Err(CommandError::RequirementsNotMet(what)) => format!("needs {what}"),
+            Err(e) => format!("{e:?}"),
+        }
+    }
+    fn explain_build_structure(&self, p: PlayerId, pl: PlanetId, structure: &str) -> String {
+        let g = self.sim.galaxy();
+        let answer = if self.is_starbase_type(structure) {
+            self.world.check_upgrade_starbase(g, p, pl).map(|_| ())
+        } else {
+            let Some(&s) = self.world.structure_index.get(&structure.to_ascii_lowercase()) else { return "unknown structure".into() };
+            self.world.check_build_structure(g, p, pl, s)
+        };
+        match answer {
             Ok(()) => "ok".into(),
             Err(CommandError::RequirementsNotMet(what)) => format!("needs {what}"),
             Err(e) => format!("{e:?}"),
