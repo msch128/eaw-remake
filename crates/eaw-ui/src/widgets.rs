@@ -941,6 +941,11 @@ impl Builder<'_> {
                 ChildOf(self.root),
             ))
             .id();
+        if lname == "b_zoom" {
+            // The zoom button sits on the minimap's corner: it must be above the minimap click surface, whichever of the two the
+            // command bar lists first.
+            self.world.entity_mut(button).insert(ZIndex(1));
+        }
         if let Some(s) = slot {
             self.world.entity_mut(button).insert(s);
             if s.kind == SlotKind::Panel {

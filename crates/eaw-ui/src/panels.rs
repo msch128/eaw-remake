@@ -442,7 +442,8 @@ pub(crate) fn minimap_clicks(
         }
         let Some(n) = rel.normalized else { continue };
         // RelativeCursorPosition is centred and y-down: convert to 0..1, y up.
-        let normalized = Vec2::new(n.x + 0.5, 0.5 - n.y);
+        // A drag that leaves the minimap keeps pressing it: the position stays on the map.
+        let normalized = Vec2::new(n.x + 0.5, 0.5 - n.y).clamp(Vec2::ZERO, Vec2::ONE);
         let world = data
             .bounds
             .map_or(normalized, |b| minimap_to_world(b, normalized));

@@ -1127,10 +1127,15 @@ fn feed_minimap(
 }
 
 /// Click or drag on the minimap pans the map camera.
-fn minimap_pan(mut clicks: MessageReader<EawMinimapClicked>, mut camera: Single<&mut crate::camera::GalaxyCamera>) {
+fn minimap_pan(mut clicks: MessageReader<EawMinimapClicked>, mut camera: Single<&mut crate::camera::GalaxyCamera>, bounds: Res<crate::camera::CameraBounds>) {
     if let Some(c) = clicks.read().last() {
-        camera.target_focus = Vec3::new(c.world.x, 0.0, -c.world.y);
+        camera.target_focus = minimap_focus(c.world, &bounds);
     }
+}
+
+/// The camera focus for a minimap position: the map's margin around the planets is clickable but the camera never leaves the galaxy.
+fn minimap_focus(world: Vec2, bounds: &crate::camera::CameraBounds) -> Vec3 {
+    Vec3::new(world.x.clamp(bounds.min.x, bounds.max.x), 0.0, (-world.y).clamp(bounds.min.y, bounds.max.y))
 }
 
 /// Offscreen scenarios (`--battle-choice`): presses a button of the open battle dialog the way a
@@ -2567,6 +2572,14 @@ pub(crate) fn design_scale(window: Option<Vec2>, offscreen: Option<&OffscreenTar
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_minimap_click_never_moves_the_camera_out_of_the_galaxy() {
+        let bounds = crate::camera::CameraBounds { min: Vec2::new(-100.0, -50.0), max: Vec2::new(100.0, 50.0), ..default() };
+        assert_eq!(minimap_focus(Vec2::new(10.0, -20.0), &bounds), Vec3::new(10.0, 0.0, 20.0), "inside: unchanged (the minimap's y is the map's -z)");
+        assert_eq!(minimap_focus(Vec2::new(-400.0, 400.0), &bounds), Vec3::new(-100.0, 0.0, -50.0), "the corner of the minimap's margin");
+        assert_eq!(minimap_focus(Vec2::new(400.0, -400.0), &bounds), Vec3::new(100.0, 0.0, 50.0));
+    }
 
     #[test]
     fn strategic_opponent_is_the_main_rival() {
