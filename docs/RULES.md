@@ -345,6 +345,9 @@ build-menu filters, not a start mode. The mode is this project's own:
 * The human keeps 1 planet (its `Home_Location`); every other main faction keeps 3 (home plus the two nearest it
   owns). Released and unowned planets go to the passive Pirates. Minors keep theirs. Credits and tech are the
   campaign's values. The setup does not count as captured or lost planets in the statistics.
+* An all-AI game (`ScriptedConfig::human` "none") has no human in the sim either (`SimConfig::faction_override` "none",
+  `victory.active_player` empty): every main faction keeps 3 planets, and nothing treats the campaign's starting faction as
+  the human (research institute, fleet slots, the Pirates' measure in 1.9).
 * Valid starts: start planets keep the campaign's star base level (clamped to `Max_Space_Base`; a planet without a base
   gets level 1). Then `Sim::drop_invalid_structures` removes, until stable, every structure the build rules refuse in
   that state (tech above the faction's, star base level above the planet's, `Required_Planets` not containing the

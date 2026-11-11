@@ -238,6 +238,13 @@ impl ScriptedSim {
         sim_config: SimConfig,
         config: ScriptedConfig,
     ) -> Result<ScriptedSim, SimError> {
+        let mut sim_config = sim_config;
+        // An all-AI game (human "none") has no human player in the sim either: the "From the Ground Up" start, the Pirates' growth, the
+        // research institute and the fleet slot rules must not treat the campaign's starting faction as the human. A faction name that matches
+        // nothing leaves `victory.active_player` empty, and the world keeps the override in its config (a save of the game rebuilds it the same way).
+        if config.human.as_deref().is_some_and(|h| h.eq_ignore_ascii_case("none")) && sim_config.faction_override.is_none() {
+            sim_config.faction_override = Some("none".into());
+        }
         let sim = Sim::new(&data, campaign, sim_config)?;
         Ok(Self::from_sim(sim, fs, data, campaign, config))
     }
