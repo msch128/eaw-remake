@@ -77,3 +77,14 @@ fn a_repair_phase_pad_has_an_icon() {
     let phase = lib.load("I_Button_Repair_Executor.tga").expect("fallback icon");
     assert_eq!((phase.width, phase.height), (generic.width, generic.height));
 }
+
+/// The dialog emblems are bigger than the box that shows them (96 px): no enlargement.
+#[test]
+fn the_dialog_emblems_are_larger_than_their_box() {
+    let Some(fs) = fs() else { return };
+    let lib = TextureLibrary::new_blocking(fs);
+    for n in ["Rebel_Symbol.dds", "Empire_Symbol.dds", "Consortium_Symbol.dds"] {
+        let Some(t) = lib.load(n) else { return };
+        assert!(t.width >= 96 && t.height >= 96, "{n} is {}x{}", t.width, t.height);
+    }
+}

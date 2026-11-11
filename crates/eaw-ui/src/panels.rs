@@ -493,6 +493,16 @@ pub struct DialogButton {
     index: usize,
 }
 
+/// The emblem a dialog draws without a portrait. The command bar's own symbols are 21 by 21 (39 by 39 in the encyclopedia): shown in the dialog's
+/// 96 pixel box they were a blurred enlargement. The faction symbol textures are 264 by 264, so the box shows them reduced.
+fn faction_emblem(f: UiFaction) -> &'static str {
+    match f {
+        UiFaction::Rebel => "Rebel_Symbol.dds",
+        UiFaction::Empire => "Empire_Symbol.dds",
+        UiFaction::Underworld => "Consortium_Symbol.dds",
+    }
+}
+
 /// Panel colours of a faction skin: `(background, border, text accent)`.
 pub fn faction_colors(f: UiFaction) -> (Color, Color, Color) {
     match f {
@@ -535,15 +545,8 @@ pub fn spawn_dialog(world: &mut World, spec: &DialogSpec) -> Option<Entity> {
     } else {
         spec.buttons.iter().map(|b| resolve(world, b)).collect()
     };
-    // Portrait: explicit texture or the faction symbol from the command bar atlas.
-    let portrait_name = spec.portrait.clone().unwrap_or_else(|| {
-        match spec.faction {
-            UiFaction::Rebel => "i_button_command_bar_rebel_symbol.tga",
-            UiFaction::Empire => "i_button_command_bar_empire_symbol.tga",
-            UiFaction::Underworld => "i_button_command_bar_underworld_symbol.tga",
-        }
-        .to_string()
-    });
+    // Portrait: explicit texture or the faction's emblem.
+    let portrait_name = spec.portrait.clone().unwrap_or_else(|| faction_emblem(spec.faction).to_string());
     let portrait = {
         let mut textures = world.remove_resource::<UiTextures>()?;
         let tex = {
