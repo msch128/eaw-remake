@@ -1221,7 +1221,7 @@ struct UnitInputs<'a> {
 }
 
 /// The overlays of every visible unit: a picked unit (selected or under the cursor) shows its brackets and bars, a picked squadron the
-/// see-through box round the craft that stands for it (Remake video v0700s; its bar and flag are [`sync_member_bars`], like every
+/// rounded box with its icon art on the craft that stands for it (Remake video v0700s; its bar and flag are [`sync_member_bars`], like every
 /// squadron's), any other unit nobody picks only its icon box. An unpicked squadron has no overlay: its bar and flag mark it.
 fn unit_overlays(inp: &UnitInputs, icon_names: &mut HashMap<u32, Option<String>>, view: &ScreenView) -> Vec<ShipOverlay> {
     let (ships, sel, hover, player) = (inp.ships, inp.sel, inp.hover, inp.player);
@@ -1295,11 +1295,12 @@ fn unit_overlays(inp: &UnitInputs, icon_names: &mut HashMap<u32, Option<String>>
         {
             n.push_str(" [ENGINES DISABLED]");
         }
-        // The box with the unit icon marks tiny units and every other unit nobody has selected or hovered (so that no unit is invisible).
-        // A picked squadron's box is see-through: its craft is drawn at the original's screen size and shows inside it.
-        let marked = !is_squad && icon_box(false, selected || hovered, icon_only, edge_max);
-        let icon = marked.then(|| unit_icon_name(icon_names, inp.assets, def, first.def, false)).flatten();
-        if icon_only && icon.is_none() && !is_squad {
+        // The box with the unit icon marks tiny units and every other unit nobody has selected or hovered (so that no unit is invisible),
+        // and a picked squadron (its rounded box holds the unit's icon art, Remake video v0700s). A unit whose box would be all it shows
+        // and that names no icon gets no overlay: an empty frame marks nothing.
+        let marked = icon_box(is_squad, selected || hovered, icon_only, edge_max);
+        let icon = marked.then(|| unit_icon_name(icon_names, inp.assets, def, first.def, is_squad)).flatten();
+        if (icon_only || is_squad) && icon.is_none() {
             continue;
         }
         let n_live = live.len().max(1) as f32;
@@ -1317,7 +1318,7 @@ fn unit_overlays(inp: &UnitInputs, icon_names: &mut HashMap<u32, Option<String>>
             // Far zoom (units a few pixels wide): a small box with the unit icon marks the unit, as in the Remake (video b0700).
             icon,
             icon_only,
-            see_through: is_squad,
+            squad_box: is_squad,
         });
     }
     overlays
@@ -1330,7 +1331,7 @@ fn stand_in<'a>(members: impl Iterator<Item = &'a ShipRender>) -> Option<&'a Shi
 }
 
 /// Feeds eaw-ui's world-space overlays: selection brackets and bars of the ships and structures that are hovered or selected, the
-/// see-through box of a picked squadron and the hardpoint reticles of the ship under the cursor or the selected enemy. The bar and flag of
+/// icon box of a picked squadron and the hardpoint reticles of the ship under the cursor or the selected enemy. The bar and flag of
 /// every squadron are [`sync_member_bars`].
 #[allow(clippy::too_many_arguments)]
 fn sync_overlays(
@@ -2377,7 +2378,7 @@ mod tests {
         let key = |i: usize| unit_key(&ships[i], battle_sim::TargetClass::Fighter);
         let (own0, own1, enemy0) = (key(0), key(12), key(24));
         assert_ne!(own0, enemy0, "squadron 0 of the other side is another unit");
-        let boxed = |sel: Selection, hover: Hover| -> HashSet<u64> { overlays_of(&ships, &catalog, &sel, &hover).iter().filter(|o| o.see_through).map(|o| o.id).collect() };
+        let boxed = |sel: Selection, hover: Hover| -> HashSet<u64> { overlays_of(&ships, &catalog, &sel, &hover).iter().filter(|o| o.squad_box).map(|o| o.id).collect() };
         assert!(boxed(Selection::default(), Hover::default()).is_empty());
         assert_eq!(boxed(Selection { ships: vec![5], enemy: None }, Hover::default()), HashSet::from([own0]), "one selected craft stands for its squadron");
         assert_eq!(boxed(Selection::default(), Hover { ship: Some(7), ..Hover::default() }), HashSet::from([own0]), "so does the one under the cursor");
@@ -2419,7 +2420,7 @@ mod tests {
     }
 
     #[test]
-    fn a_picked_squadron_has_one_see_through_box_on_the_craft_that_stands_for_it() {
+    fn a_picked_squadron_has_one_box_with_its_icon_on_the_craft_that_stands_for_it() {
         let (ships, catalog) = field(40.0);
         let own0 = unit_key(&ships[0], battle_sim::TargetClass::Fighter);
         for (sel, hover) in [(Selection { ships: vec![5], enemy: None }, Hover::default()), (Selection::default(), Hover { ship: Some(5), ..Hover::default() })] {
@@ -2427,7 +2428,9 @@ mod tests {
             let boxed: Vec<&ShipOverlay> = overlays.iter().filter(|o| o.id == own0).collect();
             assert_eq!(boxed.len(), 1, "one box, not one per craft");
             let b = boxed[0];
-            assert!(b.see_through && b.icon.is_none() && b.icon_only && (b.selected || b.hovered), "{b:?}");
+            // The unit's icon art (no game data here: the generic fighter icon, which every squadron falls back to).
+            assert!(b.squad_box && b.icon_only && (b.selected || b.hovered), "{b:?}");
+            assert_eq!(b.icon.as_deref(), Some("I_BUTTON_UNIT_GENERIC_FIGHTER.TGA"));
             assert_eq!(b.screen_pos, Vec2::new(100.0, 300.0), "on the leader, the craft the tactical view draws");
         }
     }

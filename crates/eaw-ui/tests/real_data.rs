@@ -88,3 +88,17 @@ fn the_dialog_emblems_are_larger_than_their_box() {
         assert!(t.width >= 96 && t.height >= 96, "{n} is {}x{}", t.width, t.height);
     }
 }
+
+/// A picked squadron's box shows the unit's icon art (Remake video v0700s): the craft of the play test's battles name an `Icon_Name`
+/// that the texture library loads (before, the box had no art and showed the craft, a few pixels at the far zoom: an empty frame).
+#[test]
+fn every_squadron_craft_of_the_play_test_has_icon_art() {
+    let Some(fs) = fs() else { return };
+    let (game, _) = alamo_data::load_galaxy(&*fs);
+    let lib = TextureLibrary::new_blocking(fs);
+    for craft in ["TIE_Fighter", "TIE_Interceptor", "TIE_Bomber", "TIE_Fighter_G", "TIE_Fighter_181st_Soontir", "TIE_Advanced", "Z-95", "N1", "Skipray", "Skipray_E", "Tartan_Gunship", "Lambda_CT_G"] {
+        let Some(icon) = eaw_ui::unit_icon(&game, craft) else { panic!("{craft} names no Icon_Name") };
+        let t = lib.load(&icon).unwrap_or_else(|| panic!("{craft}: {icon} does not load"));
+        assert!(t.width >= 32 && t.height >= 32, "{craft}: {icon} is {}x{}", t.width, t.height);
+    }
+}

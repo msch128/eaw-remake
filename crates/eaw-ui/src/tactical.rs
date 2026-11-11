@@ -388,9 +388,11 @@ pub struct ShipOverlay {
     pub icon: Option<String>,
     /// Nobody selected or hovers the unit: only the icon box is drawn (no brackets, bars or flag).
     pub icon_only: bool,
-    /// The box of a picked squadron: a white frame with round corners round its craft, which shows through it (no icon art, no plate),
-    /// [`SQUAD_BOX_DESIGN_PX`] across (Remake video v0700s).
-    pub see_through: bool,
+    /// The box of a picked squadron: a white frame with round corners and the unit's icon art ([`Self::icon`]) on no plate,
+    /// [`SQUAD_BOX_DESIGN_PX`] across (Remake video v0700s: the same three-quarter art as the unit cards in every box, whatever way the
+    /// craft flies). Before, the box held no art and showed the craft through it: a few pixels at the far zoom, a TIE seen from above
+    /// next to nothing, so a dozen empty frames lay over a fight.
+    pub squad_box: bool,
 }
 
 /// Size of a picked squadron's box in design pixels: the Remake's measures 28 x 27 px at 1080p (video v0700s), 19.9 design px.
@@ -980,9 +982,12 @@ pub(crate) fn ship_overlays(
             continue; // positioned next frame, once its parts exist
         };
         let Ok(parts) = nodes.get(e) else { continue };
-        // Small units get an icon box (24 design px) instead of brackets; big ones keep brackets and carry the bars above.
-        let icon_mode = o.icon.is_some() || o.see_through;
-        let (half, w) = if o.see_through {
+        // Small units get an icon box (24 design px) instead of brackets; big ones keep brackets and carry the bars above. An icon whose
+        // art does not resolve leaves no empty frame: the box is not drawn (nor the whole overlay, when the box is all it shows).
+        let icon_mode = o.icon.is_some() || o.squad_box;
+        let art = if icon_mode { o.icon.as_deref().and_then(|name| textures.get(&mut images, name)) } else { None };
+        let boxed = art.is_some();
+        let (half, w) = if o.squad_box {
             (SQUAD_BOX_DESIGN_PX * 0.5 * s, SQUAD_BOX_DESIGN_PX * s)
         } else if icon_mode {
             (12.0 * s, 24.0 * s)
@@ -994,7 +999,8 @@ pub(crate) fn ship_overlays(
             node.top = px(o.screen_pos.y - half, s);
             node.width = px(w, s);
             node.height = px(w, s);
-            node.display = if o.selected || o.hovered || o.enemy || o.always || o.icon_only {
+            let only_box = o.icon_only || o.squad_box;
+            node.display = if (o.selected || o.hovered || o.enemy || o.always || o.icon_only) && (boxed || !only_box) {
                 Display::Flex
             } else {
                 Display::None
@@ -1019,20 +1025,20 @@ pub(crate) fn ship_overlays(
             }
         }
         if let Ok((mut n, img, bc, _)) = styles.get_mut(parts.icon) {
-            n.display = if icon_mode { Display::Flex } else { Display::None };
-            n.border_radius = if o.see_through { BorderRadius::all(Val::Px(4.0)) } else { BorderRadius::ZERO };
-            if let Some(mut img) = img {
-                if let Some(t) = o.icon.as_deref().and_then(|name| textures.get(&mut images, name)) {
-                    img.image = t.handle;
-                }
-                img.color = if o.see_through { Color::NONE } else { Color::WHITE };
+            n.display = if boxed { Display::Flex } else { Display::None };
+            n.border_radius = if o.squad_box { BorderRadius::all(Val::Px(4.0)) } else { BorderRadius::ZERO };
+            if let Some(mut img) = img
+                && let Some(t) = art
+            {
+                img.image = t.handle;
+                img.color = Color::WHITE;
             }
             if let Some(mut bc) = bc {
                 *bc = BorderColor::all(if o.enemy { accent } else { Color::WHITE });
             }
         }
         if let Ok(mut plate) = plates.get_mut(parts.icon) {
-            plate.0 = if o.see_through { Color::NONE } else { Color::srgba(0.0, 0.0, 0.0, 0.45) };
+            plate.0 = if o.squad_box { Color::NONE } else { Color::srgba(0.0, 0.0, 0.0, 0.45) };
         }
         let set = bar_set(&mut sets, &mut textures, &mut images, parts.class);
         if let Ok((_, Some(mut img), ..)) = styles.get_mut(parts.health_img) {
@@ -1506,6 +1512,53 @@ mod tests {
         app.init_resource::<CommandBarData>().insert_resource(TacticalData { active: true, ..tac }).add_systems(Update, tactical_sync);
         app.update();
         assert_eq!(app.world().resource::<CommandBarData>().selection[7].count, 94);
+    }
+
+    #[test]
+    fn a_picked_squadron_box_draws_its_icon_and_an_unresolved_icon_draws_no_frame() {
+        // An empty game file system with one icon registered: `I_BUTTON_UNIT_TIE.TGA` resolves, `I_BUTTON_UNIT_NONE.TGA` does not.
+        let dir = std::env::temp_dir().join("eaw-ui-overlay-icon-test");
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let fs = std::sync::Arc::new(alamo_fs::GameFs::from_stacks(&[vec![dir]]).expect("fs"));
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins).init_resource::<Assets<Image>>().init_resource::<UiScale>().init_resource::<crate::EawUiSettings>();
+        let mut textures = UiTextures::new(fs);
+        let icon = {
+            let mut images = app.world_mut().resource_mut::<Assets<Image>>();
+            let art = alamo_model::image::Rgba8 { width: 4, height: 4, pixels: vec![200; 64] };
+            textures.insert(&mut images, "I_BUTTON_UNIT_TIE.TGA", art).handle
+        };
+        app.insert_resource(textures);
+        app.world_mut().spawn((TacticalOverlayRoot, Node::default()));
+        let squad = |id: u64, icon: &str| ShipOverlay {
+            id,
+            screen_pos: Vec2::new(100.0 * id as f32, 300.0),
+            half_size: 11.0,
+            health: 1.0,
+            shield: None,
+            selected: true,
+            hovered: false,
+            enemy: false,
+            name: None,
+            always: false,
+            icon: Some(icon.into()),
+            icon_only: true,
+            squad_box: true,
+        };
+        app.insert_resource(TacticalOverlays { ships: vec![squad(1, "I_BUTTON_UNIT_TIE.TGA"), squad(2, "I_BUTTON_UNIT_NONE.TGA")], hardpoints: Vec::new() })
+            .add_systems(Update, ship_overlays);
+        app.update();
+        app.update();
+        let world = app.world_mut();
+        let found: Vec<(u64, Entity, Entity)> = world.query::<(Entity, &ShipOverlayNode)>().iter(world).map(|(e, n)| (n.id, e, n.icon)).collect();
+        let shown = |world: &World, e: Entity| world.get::<Node>(e).map(|n| n.display) != Some(Display::None);
+        let (_, tie, tie_icon) = *found.iter().find(|f| f.0 == 1).expect("overlay 1");
+        let (_, none, _) = *found.iter().find(|f| f.0 == 2).expect("overlay 2");
+        assert!(shown(world, tie) && shown(world, tie_icon), "the picked squadron shows its box");
+        let img = world.get::<ImageNode>(tie_icon).expect("icon image");
+        assert_eq!((img.image.id(), img.color), (icon.id(), Color::WHITE), "the unit's art, drawn as it is");
+        assert_eq!(world.get::<BackgroundColor>(tie_icon).map(|b| b.0), Some(Color::NONE), "no plate");
+        assert!(!shown(world, none), "an icon that does not resolve leaves no empty frame");
     }
 
     #[test]
