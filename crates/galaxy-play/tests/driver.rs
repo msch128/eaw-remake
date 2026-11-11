@@ -314,3 +314,45 @@ fn build_menus_have_no_duplicate_names() {
     assert!(menus > 0);
     assert!(dups.is_empty(), "{} duplicate names in {menus} menus, e.g. {:#?}", dups.len(), &dups[..dups.len().min(60)]);
 }
+
+/// A human Rebel fleet alone in orbit of an Empire planet without a star base whose ground holds `structure`. Plays `seconds` like the
+/// game (every battle dialog is answered with auto-resolve at once) and returns the number of dialogs and the owner at the end.
+fn lone_human_fleet_over(data: &GameData, structure: &str, seconds: u32) -> (u32, Option<FactionId>, FactionId) {
+    let mut sim = new_sim(data, 42);
+    let w = sim.world().clone();
+    let (rebel, empire) = (w.faction_id("Rebel").unwrap(), w.faction_id("Empire").unwrap());
+    let target = (0..w.planets.len() as u32).find(|&p| w.real[p as usize] && sim.galaxy().planets[p as usize].owner == Some(empire)).expect("an Empire planet");
+    sim.galaxy_mut().fleets.clear();
+    sim.galaxy_mut().battles.clear();
+    sim.set_starbase(target, None);
+    sim.galaxy_mut().planets[target as usize].structures = vec![w.structure_id(structure).expect(structure)];
+    sim.spawn_units(rebel, target, w.unit_id("MC-80_Star_Cruiser").unwrap(), 3);
+    let mut driver = SimDriver::spawn(sim, Some(rebel));
+    let mut last = driver.wait_initial();
+    let mut dialogs = 0;
+    for _ in 0..seconds {
+        driver.advance(1.0);
+        if let Some(s) = driver.wait_idle().pop() {
+            last = s;
+        }
+        for b in last.human_battles.clone() {
+            assert_eq!(b.planet, target, "{structure}: the only battle of the player is here");
+            dialogs += 1;
+            driver.resolve_battle(b.id, ResolveMode::Auto);
+            if let Some(s) = driver.wait_idle().pop() {
+                last = s;
+            }
+        }
+    }
+    (dialogs, last.galaxy.planets[target as usize].owner, rebel)
+}
+
+/// The player alone in orbit of a planet that has only a watchtower on the ground takes it without ever being asked to fight. Before,
+/// the battle dialog came back every tick and the planet stayed with its owner.
+#[test]
+fn the_player_takes_a_watchtower_planet_without_a_battle_dialog() {
+    let Some(data) = load() else { return };
+    let (dialogs, owner, rebel) = lone_human_fleet_over(&data, "Empire_Watchtower", 10);
+    assert_eq!(dialogs, 0, "a ground tower is nothing to fight in space");
+    assert_eq!(owner, Some(rebel));
+}

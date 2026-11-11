@@ -37,8 +37,8 @@ pub(crate) fn name_list(raw: &str) -> Vec<String> {
 struct StructRaw {
     groups: Vec<Vec<String>>,
     planets: Vec<String>,
-    /// Has space-side weapons (hardpoints or a ground-to-space special weapon).
-    space_reach: bool,
+    /// Armed: hardpoints (on the land map or in space) or a ground-to-space special weapon.
+    armed: bool,
     unlocks: Vec<String>,
     /// Names of the structures that stand in orbit in a battle in its place (see `StructureType::battle_form`).
     forms: Vec<String>,
@@ -236,7 +236,10 @@ impl World {
         let mut struct_raw: Vec<StructRaw> = Vec::new();
         for o in data.objects.iter().filter(|o| struct_kinds.contains(&o.kind.to_ascii_lowercase().as_str())) {
             let Some(def) = data.objects.structure(&o.name) else { continue };
-            let combat = (!def.hardpoints.is_empty()).then(|| {
+            // A structure stands in the space battle only if the data gives it a space side. A ground building (`DUMMY_GROUND_STRUCTURE` with a
+            // `LandBehavior` and no `SpaceBehavior`: watchtowers, fortresses, turret towers) has its hardpoints for the land map.
+            let in_space = def.fields.get("spacebehavior").is_some_and(|v| !v.trim().is_empty());
+            let combat = (in_space && !def.hardpoints.is_empty()).then(|| {
                 sb.stats(
                     def.hull,
                     def.shield_points,
@@ -255,12 +258,11 @@ impl World {
                 || def.source_file.to_ascii_lowercase().contains("/space/");
             let id = self.structures.len() as StructureTypeId;
             self.structure_index.insert(key(&def.name), id);
-            let reach = !def.hardpoints.is_empty() || yes("is_special_weapon_in_space");
+            let reach = (in_space && !def.hardpoints.is_empty()) || yes("is_special_weapon_in_space");
             struct_raw.push(StructRaw {
                 groups: parse_requirement(def.fields.get("required_special_structures").map_or("", String::as_str)),
                 planets: name_list(def.fields.get("required_planets").map_or("", String::as_str)),
-                // Space-side weapons: hardpoints, or a ground-to-space special weapon (hypervelocity gun, nuke launcher ...).
-                space_reach: reach,
+                armed: !def.hardpoints.is_empty() || yes("is_special_weapon_in_space"),
                 unlocks: def.unlocks.clone(),
                 forms: ["place_other_type_at_every_specific_marker_position", "tactical_additional_structure_type"]
                     .iter()
@@ -799,7 +801,7 @@ impl World {
             .map(|i| {
                 let st = &self.structures[i];
                 st.orbital
-                    || raw[i].space_reach
+                    || raw[i].armed
                     || st.income_abs > 0.0
                     || st.income_pct > 0.0
                     || st.income_abs_mining > 0.0

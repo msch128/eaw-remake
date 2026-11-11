@@ -163,8 +163,14 @@ every owned planet, the planet's `Additional_Population_Capacity`, its star base
 ## 1.5 Battles and auto-resolve
 
 * A battle starts when two hostile parties share a planet. Parties are the factions with fleets in orbit plus the
-  planet's owner if it has a star base or armed structures. Data: all factions are hostile to each other
-  (`Enemies` in `Xml/FACTIONS.XML` and `Xml/Factions_Minors.xml`).
+  planet's owner if it has a star base or structures that take part in a space battle. Data: all factions are hostile
+  to each other (`Enemies` in `Xml/FACTIONS.XML` and `Xml/Factions_Minors.xml`).
+* Data: a structure takes part in a space battle if the data gives it a space side: hardpoints together with a
+  `SpaceBehavior` (shipyards, Golan platforms, the Starforge: 137 types), or `Is_Special_Weapon_In_Space` (the six
+  ground-to-space weapons, 2.11). A ground building has a `LandBehavior` only (`Buildings/Ground/GC/Sectors/Watchtower.xml`,
+  `Fortress.xml`: `DUMMY_GROUND_STRUCTURE`, `LandBehavior` with `TURRET`, no `SpaceBehavior`); its hardpoints are for the
+  land map. 61 types: 23 watchtowers, 35 fortresses, `Rocket_Tower`, `Flak_Tower`, `Command_Center_U`. They are no party
+  in orbit, stop no fleet and are not in the battle. They stay in the build menus (1.3).
 * `Event::BattlePending` is emitted; the app plays a tactical battle or calls `resolve_battle_auto`.
 * Auto-resolve (`combat.rs`) is a statistical placeholder. Every ship, star base, armed structure and garrison
   squadron is a combatant with shield and hull from `Shield_Points` / `Tactical_Health`, and weapons aggregated per
@@ -205,8 +211,9 @@ forces), so the rule is derived from the Remake's own AI.
   `SpaceForce_Original_Target_Owner_Changed`: the engine changes the owner from space control alone.
 * Estimate: a planet changes owner after one hostile faction has been the only party in orbit for
   `capture_delay_seconds` (5 s) and the owner has no star base. Attackers must first destroy star base, armed
-  structures, garrison and defending fleets. Unowned planets are captured by any arriving fleet. If the real engine
-  requires a landing, `capture()` in `sim.rs` is the one place to change.
+  structures, garrison and defending fleets. Ground buildings (watchtowers, fortresses, turret towers) and
+  ground-to-space weapons do not hold a planet: nothing of them stands in orbit (1.5). Unowned planets are captured by
+  any arriving fleet. If the real engine requires a landing, `capture()` in `sim.rs` is the one place to change.
 * On capture the star base, structures and build queues are removed. Not modelled: `Planet_Surface_Accessible`,
   ground defenders, siege and bombardment, planet shields, story scripts that flip owners.
 

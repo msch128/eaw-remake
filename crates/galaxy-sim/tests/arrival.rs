@@ -118,3 +118,44 @@ fn a_planet_without_space_defenses_is_taken_by_the_capture_rule() {
     assert!(taken, "the lone fleet captures the undefended planet");
     assert_eq!(s.sim.galaxy().planets[s.target as usize].owner, Some(s.rebel));
 }
+
+/// Plays `seconds` the way the game does (one tick, then every pending battle is settled) and returns the battles that appeared at the
+/// target with the time they were created.
+fn play(sim: &mut Sim, target: PlanetId, seconds: u32) -> Vec<(f64, PendingBattle)> {
+    let mut seen = Vec::new();
+    for _ in 0..seconds {
+        for e in sim.step(1.0) {
+            if let Event::BattlePending(b) = e
+                && b.planet == target
+            {
+                seen.push((sim.galaxy().time, b));
+            }
+        }
+        for id in sim.pending_battles().iter().map(|b| b.id).collect::<Vec<_>>() {
+            sim.resolve_battle_auto(id);
+        }
+    }
+    seen
+}
+
+/// Watchtowers, fortresses and turret towers are ground buildings (`DUMMY_GROUND_STRUCTURE` with a `LandBehavior` and no `SpaceBehavior`):
+/// they are no party in orbit. A tower used to make its owner a defender that no space battle could destroy, so the game created a new
+/// battle every tick and the planet never fell.
+#[test]
+fn a_ground_tower_does_not_hold_the_orbit() {
+    let Some(data) = load() else { return };
+    for tower in ["Empire_Watchtower", "Empire_Fortress", "Rocket_Tower", "Flak_Tower"] {
+        let mut s = setup(&data, |sim, target, _| {
+            sim.set_starbase(target, None);
+            let w = sim.world().clone();
+            sim.galaxy_mut().planets[target as usize].structures = vec![w.structure_id(tower).expect(tower)];
+        });
+        let w = s.sim.world().clone();
+        assert!(!w.blockades(s.sim.galaxy(), s.target, s.rebel), "{tower} stops no fleet");
+        let battle = arrive(&mut s);
+        assert!(battle.is_none(), "{tower} has nothing in space to fight: {battle:?}");
+        let battles = play(&mut s.sim, s.target, 10);
+        assert!(battles.is_empty(), "{tower}: {} battles in 10 s", battles.len());
+        assert_eq!(s.sim.galaxy().planets[s.target as usize].owner, Some(s.rebel), "{tower}: the lone fleet takes the planet");
+    }
+}

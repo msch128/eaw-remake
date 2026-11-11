@@ -457,7 +457,8 @@ pub struct StructureType {
     /// Orbital structures always; a ground structure only if it affects the galactic game (income, population, space
     /// weapons or hardpoints, ship discounts, gambling income) or is a prerequisite of one. See docs/RULES.md, "Production".
     pub galactic: bool,
-    /// Space weapons or hardpoints (orbital structures with hardpoints, or ground-to-space special weapons).
+    /// Reaches ships in orbit: hardpoints of a structure that stands in the space battle (`SpaceBehavior`), or a ground-to-space special
+    /// weapon. The hardpoints of a ground building (watchtower, fortress, turret tower: `LandBehavior` only) are for the land map.
     pub space_reach: bool,
     /// The structure that stands in orbit during a space battle when this one has no weapons of its own (`Place_Other_Type_At_Every_Specific_Marker_Position`,
     /// `Tactical_Additional_Structure_Type`: Golan platform to its `*_Golan_N_Orbital`, Uplink Command to its control station). `combat` and
@@ -495,7 +496,7 @@ pub struct StructureType {
     pub locked: bool,
     /// True if the structure appears in a build menu.
     pub buildable: bool,
-    /// Combat numbers if the structure fights in space.
+    /// Combat numbers if the structure fights in space: it has hardpoints and the data gives it a `SpaceBehavior`.
     pub combat: Option<CombatStats>,
     /// `Reduce_Production_*_Ability` entries that apply to builds at the planet it stands on.
     pub prod_mods: Vec<ProductionMod>,
