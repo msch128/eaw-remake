@@ -256,28 +256,13 @@ impl Sim {
             if ps.owner != Some(passive) || ps.destroyed || !world.real[p as usize] {
                 continue;
             }
-            if !chain.is_empty() {
-                let is_lehon = world.planets[p as usize].name.to_ascii_lowercase().contains("lehon");
-                let max_sb = if is_lehon {
-                    world.planets[p as usize].max_space_base as usize
-                } else {
-                    // Non-Lehon pirate planets never get a Starforge (Pirate_Starbase_Lv3 is the Starforge model)
-                    (world.planets[p as usize].max_space_base as usize).min(2)
-                };
-                let effective_chain_len = chain.len().min(max_sb);
-                if effective_chain_len > 0 {
-                    let mut want = (tech.clamp(1, effective_chain_len as i32) - 1) as usize;
-                    let sb_name = &world.starbases[chain[want] as usize].name;
-                    if !is_lehon && (sb_name.eq_ignore_ascii_case("Pirate_Starbase_Lv3") || sb_name.to_ascii_lowercase().contains("starforge")) {
-                        want = want.min(1);
-                    }
-                    let have = ps.starbase.and_then(|s| chain.iter().position(|&c| c == s));
-                    if have.is_none_or(|h| h < want) {
-                        self.galaxy.planets[p as usize].starbase = Some(chain[want]);
-                    } else if !is_lehon && have.is_some_and(|h| h > 1) {
-                        // Downgrade any accidentally placed Starforge on non-Lehon planets
-                        self.galaxy.planets[p as usize].starbase = Some(chain[1.min(chain.len() - 1)]);
-                    }
+            if let Some(want) = world.passive_starbase_index(p, passive, tech) {
+                let have = ps.starbase.and_then(|s| chain.iter().position(|&c| c == s));
+                if have.is_none_or(|h| h < want) {
+                    self.galaxy.planets[p as usize].starbase = Some(chain[want]);
+                } else if !is_lehon(&world, p) && have.is_some_and(|h| h > 1) {
+                    // Downgrade any accidentally placed Starforge on non-Lehon planets
+                    self.galaxy.planets[p as usize].starbase = Some(chain[1.min(chain.len() - 1)]);
                 }
             }
             if with_garrison && !pool.is_empty() {
@@ -301,42 +286,31 @@ impl Sim {
         self.galaxy.sync_ships();
     }
 
-    /// For a battle where the passive faction is defending, scales its star base to the attacker's tech level (so an AI at tech 1 is not
-    /// blocked by a level 4 base scaled to the human player). Its fleets in orbit all take part (docs/RULES.md, "Whole fleets in battle").
-    pub(crate) fn passive_defense_scaling(&self, battle: &crate::state::PendingBattle, passive: FactionId, current_sb: Option<StarbaseTypeId>) -> Option<StarbaseTypeId> {
-        let attacker_tech = battle
-            .factions
-            .iter()
-            .filter(|&&f| f != passive)
-            .map(|&f| self.galaxy.factions.get(f as usize).map_or(1, |s| s.tech))
-            .max()
-            .unwrap_or(1)
-            .max(1);
-        self.world.passive_defense_at(battle.planet, passive, attacker_tech, current_sb)
-    }
+}
+
+/// Lehon holds the Pirates' Starforge (`Pirate_Starbase_Lv3`, `Required_Planets` of Starforge.xml); no other planet gets it.
+fn is_lehon(world: &World, p: PlanetId) -> bool {
+    world.planets[p as usize].name.to_ascii_lowercase().contains("lehon")
 }
 
 impl World {
-    /// The star base the passive faction fields on `planet` against an attacker of tech level `attacker_tech`: the base of its own chain at
-    /// level `clamp(tech, 1, planet cap)` (never above level 2 off Lehon).
-    pub(crate) fn passive_defense_at(&self, planet: PlanetId, passive: FactionId, attacker_tech: i32, current_sb: Option<StarbaseTypeId>) -> Option<StarbaseTypeId> {
-        let attacker_tech = attacker_tech.max(1);
+    /// The one star base curve of the passive faction (docs/RULES.md 1.9): on `planet` at measure `tech` it holds the base of its own chain at
+    /// level `clamp(tech, 1, Max_Space_Base)`, never above level 2 off Lehon. Index into [`World::starbase_chain`]; `None` without a chain or a slot.
+    /// The base on the map is the base in battle: nothing changes it at battle time, whoever attacks.
+    pub(crate) fn passive_starbase_index(&self, planet: PlanetId, passive: FactionId, tech: i32) -> Option<usize> {
         let chain = self.starbase_chain(passive);
-        let p = planet;
-        let is_lehon = self.planets.get(p as usize).is_some_and(|pl| pl.name.eq_ignore_ascii_case("Lehon"));
-        let eff_sb = if !chain.is_empty() {
-            let max_sb = if is_lehon { chain.len() } else { (self.planets[p as usize].max_space_base as usize).min(2) };
-            let effective_chain_len = chain.len().min(max_sb);
-            if effective_chain_len > 0 {
-                let want = (attacker_tech.clamp(1, effective_chain_len as i32) - 1) as usize;
-                Some(chain[want])
-            } else {
-                current_sb
-            }
-        } else {
-            current_sb
-        };
-        eff_sb
+        let lehon = is_lehon(self, planet);
+        let cap = if lehon { self.planets[planet as usize].max_space_base as usize } else { (self.planets[planet as usize].max_space_base as usize).min(2) };
+        let len = chain.len().min(cap);
+        if len == 0 {
+            return None;
+        }
+        let mut want = (tech.clamp(1, len as i32) - 1) as usize;
+        let name = &self.starbases[chain[want] as usize].name;
+        if !lehon && (name.eq_ignore_ascii_case("Pirate_Starbase_Lv3") || name.to_ascii_lowercase().contains("starforge")) {
+            want = want.min(1);
+        }
+        Some(want)
     }
 }
 

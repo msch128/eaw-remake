@@ -142,18 +142,14 @@ fn fleet_strength(world: &World, f: &Fleet) -> f32 {
 }
 
 /// What defends a planet against `attacker`, as the battle would field it: the owner's star base with its garrison and armed structures, and the
-/// hostile fleets in orbit. The passive faction's base and garrison scale to the attacker's tech level like in `Sim::battle_sides`.
+/// hostile fleets in orbit. The base on the map is the base in battle, the Pirates' too (docs/RULES.md 1.9).
 ///
 /// `known` is [`Galaxy::ai_knowledge`] of the attacker. At a planet it does not know, only what the map shows is used (**estimate**, labelled: the owner's star base and its
 /// garrison); fleets in orbit and armed structures stay hidden, so the AI can be surprised there.
 fn defense_parts(world: &World, galaxy: &Galaxy, known: &[bool], planet: PlanetId, attacker: FactionId) -> Vec<(Source, u32)> {
     let ps = &galaxy.planets[planet as usize];
     let mut parts: Vec<(Source, u32)> = Vec::new();
-    let mut starbase = ps.starbase;
-    if ps.owner.is_some() && ps.owner == world.passive_faction() {
-        let tech = galaxy.factions.get(attacker as usize).map_or(1, |s| s.tech);
-        starbase = world.passive_defense_at(planet, ps.owner.unwrap_or(0), tech, ps.starbase);
-    }
+    let starbase = ps.starbase;
     if let Some(o) = ps.owner
         && galaxy.hostile(world, attacker, o)
     {

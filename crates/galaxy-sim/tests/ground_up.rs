@@ -172,7 +172,7 @@ fn the_pirates_rearm_with_the_players_tech_in_every_game_and_never_expand() {
 }
 
 #[test]
-fn passive_defense_scales_its_star_base_and_fields_every_fleet_unit() {
+fn the_pirate_base_on_the_map_is_the_base_in_battle_and_in_the_ai_estimate_whatever_the_attacker() {
     let Some(data) = load() else { return };
     let mut s = sim(&data, true);
     let w = s.world().clone();
@@ -180,35 +180,62 @@ fn passive_defense_scales_its_star_base_and_fields_every_fleet_unit() {
     let human = w.victory.active_player.expect("human");
     let empire = w.faction_id("Empire").expect("empire");
 
-    // Human player reaches tech 5, so global pirate rearm builds bases and recruits garrisons.
+    // The human reaches tech 5: the Pirate bases rise to their planet's cap (level 2 off Lehon).
     s.galaxy_mut().factions[human as usize].tech = 5;
     for _ in 0..4 {
         s.step(w.config.week_seconds);
     }
-
     let planet = (0..w.planets.len() as u32)
-        .find(|&p| w.real[p as usize] && s.galaxy().planets[p as usize].owner == Some(pirates) && s.galaxy().fleets_at(p).any(|f| f.owner == pirates))
-        .expect("pirate planet with a fleet");
+        .find(|&p| w.real[p as usize] && s.galaxy().planets[p as usize].owner == Some(pirates) && w.starbase_level(s.galaxy(), p) == 2 && s.galaxy().fleets_at(p).any(|f| f.owner == pirates))
+        .expect("pirate planet with a level 2 base and a fleet");
+    let map_base = s.galaxy().planets[planet as usize].starbase;
     let fleets: Vec<_> = s.galaxy().fleets_at(planet).filter(|f| f.owner == pirates).map(|f| f.id).collect();
     let in_orbit: u32 = s.galaxy().fleets_at(planet).filter(|f| f.owner == pirates).map(|f| f.unit_count()).sum();
-
-    // Empire attacker is at Tech 1, the human at tech 5.
-    s.galaxy_mut().factions[empire as usize].tech = 1;
-    let side = |s: &galaxy_sim::Sim, id: u32, attacker| {
-        let battle = galaxy_sim::PendingBattle { id, planet, fleets: fleets.clone(), factions: vec![attacker, pirates], defender: Some(pirates), line_up: 0 };
+    let side = |s: &galaxy_sim::Sim, attacker| {
+        let battle = galaxy_sim::PendingBattle { id: 100, planet, fleets: fleets.clone(), factions: vec![attacker, pirates], defender: Some(pirates), line_up: 0 };
         s.battle_sides(&battle).into_iter().find(|x| x.faction == pirates).unwrap()
     };
-    let (low, high) = (side(&s, 100, empire), side(&s, 101, human));
-    let base_level = |x: &galaxy_sim::combat::SideInput| {
-        x.members.iter().find_map(|m| if let galaxy_sim::combat::Source::Starbase(sb) = m.source { w.starbase_chain(pirates).iter().position(|&c| c == sb) } else { None })
-    };
+    let base = |x: &galaxy_sim::combat::SideInput| x.members.iter().find_map(|m| if let galaxy_sim::combat::Source::Starbase(sb) = m.source { Some(sb) } else { None });
     let units = |x: &galaxy_sim::combat::SideInput| x.members.iter().filter(|m| matches!(m.source, galaxy_sim::combat::Source::Unit(_))).map(|m| m.count).sum::<u32>();
-    let defence = |x: &galaxy_sim::combat::SideInput| x.members.iter().filter(|m| !matches!(m.source, galaxy_sim::combat::Source::Unit(_))).map(|m| m.count).sum::<u32>();
-    println!("pirates in orbit {in_orbit}; tech 1: base {:?}, {} units; tech 5: base {:?}, {} units", base_level(&low), units(&low), base_level(&high), units(&high));
-    assert!(base_level(&low) < base_level(&high), "a low tech attacker meets a lower star base");
-    assert!(defence(&low) < defence(&high), "and a smaller base garrison: {} vs {}", defence(&low), defence(&high));
-    // Every unit of the pirate fleets in orbit belongs to the battle, whatever the attacker's tech (docs/RULES.md, "Whole fleets in battle").
-    assert_eq!((units(&low), units(&high)), (in_orbit, in_orbit));
+    let mut estimates = Vec::new();
+    for tech in [1, 5] {
+        // The attacker's own tech changes nothing: the base on the map fights, with every unit in orbit (docs/RULES.md 1.9 and 2.8).
+        s.galaxy_mut().factions[empire as usize].tech = tech;
+        let x = side(&s, empire);
+        assert_eq!(base(&x), map_base, "attacker at tech {tech}: the battle fields the map's base");
+        assert_eq!(units(&x), in_orbit);
+        estimates.push(galaxy_sim::ai::believed_defense(&w, s.galaxy(), empire, planet));
+    }
+    println!("map base {:?}, built-in AI estimate at attacker tech 1 / 5: {estimates:?}", map_base.map(|b| w.starbases[b as usize].name.clone()));
+    assert_eq!(estimates[0], estimates[1], "the AI's estimate does not depend on its own tech either");
+}
+
+#[test]
+fn the_tactical_battle_at_a_pirate_planet_fields_the_map_base() {
+    let Some(data) = load() else { return };
+    let campaign = data.campaign("GC_Full_Web_Way_Rebel").expect("campaign");
+    let mut s = Sim::new(&data, campaign, SimConfig { victory_enabled: false, ground_up: true, auto_resolve_battles: false, ..SimConfig::default() }).expect("sim");
+    let w = s.world().clone();
+    let pirates = w.passive_faction().expect("pirates");
+    let human = w.victory.active_player.expect("human");
+    let empire = w.faction_id("Empire").expect("empire");
+    s.galaxy_mut().factions[human as usize].tech = 5;
+    for _ in 0..4 {
+        s.step(w.config.week_seconds);
+    }
+    let planet = (0..w.planets.len() as u32)
+        .find(|&p| w.real[p as usize] && s.galaxy().planets[p as usize].owner == Some(pirates) && w.starbase_level(s.galaxy(), p) == 2 && w.planets[p as usize].space_map.is_some())
+        .expect("pirate planet with a level 2 base and a map");
+    let from = w.routes.iter().find_map(|r| (r.a == planet).then_some(r.b).or((r.b == planet).then_some(r.a))).expect("a route");
+    // An Empire fleet at tech 1 (the human is at 5) arrives.
+    s.galaxy_mut().factions[empire as usize].tech = 1;
+    let isd = w.unit_id("Star_Destroyer").unwrap();
+    let g = s.galaxy_mut();
+    let id = g.fleets.keys().max().copied().unwrap_or(0) + 1;
+    g.fleets.insert(id, Fleet { id, owner: empire, units: [(isd, 2)].into(), location: FleetLocation::AtPlanet(planet), previous_planet: from, slot: 0 });
+    let battle = s.step(1.0).into_iter().find_map(|e| if let Event::BattlePending(b) = e { Some(b) } else { None }).expect("battle");
+    let req = s.tactical_setup(battle.id).expect("request");
+    assert_eq!(req.starbase_level, 2, "the tactical battle fields the level 2 base the map shows");
 }
 
 #[test]

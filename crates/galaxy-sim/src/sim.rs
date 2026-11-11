@@ -1005,16 +1005,9 @@ impl Sim {
         let w = &*self.world;
         let p = battle.planet;
         let ps = &self.galaxy.planets[p as usize];
-        let passive = self.world.passive_faction();
-        let passive_defense = if battle.defender.is_some() && battle.defender == passive {
-            passive.map(|pf| self.passive_defense_scaling(battle, pf, ps.starbase))
-        } else {
-            None
-        };
         let mut sides: Vec<SideInput> = Vec::new();
         for &fac in &battle.factions {
             let mut members = Vec::new();
-            let is_passive_defense = Some(fac) == passive && passive_defense.is_some();
             // Every unit of the side's fleets at the planet belongs to the battle (docs/RULES.md, "Whole fleets in battle").
             // Deployment and reinforcement order follows the fleet slots 1, 2, 3.
             let mut order: Vec<FleetId> = battle.fleets.clone();
@@ -1029,12 +1022,8 @@ impl Sim {
                 }
             }
             if battle.defender == Some(fac) {
-                let effective_sb = if is_passive_defense {
-                    passive_defense.flatten()
-                } else {
-                    ps.starbase
-                };
-                if let Some(sb) = effective_sb {
+                // The base on the map fights, the Pirates' too (docs/RULES.md 1.9: no change at battle time).
+                if let Some(sb) = ps.starbase {
                     members.push(Member { source: Source::Starbase(sb), fleet: None, count: 1 });
                     for &(u, c) in &w.starbases[sb as usize].garrison {
                         members.push(Member { source: Source::Garrison(u), fleet: None, count: c });

@@ -325,9 +325,9 @@ without one, the best playable main faction):
   gets one more, picked deterministically (planet id and week) from the ship types that planet already fields (what
   the campaign data put there). A planet with none gets the three cheapest passive ship types. No heroes or planet
   destroyers.
-* Battles at a Pirate planet scale the star base to the attacker (`passive_defense_at`, the highest tech among the attackers):
-  the base of the chain at `clamp(tech, 1, planet cap)` (never above level 2 off Lehon). Every unit of the Pirate fleets in orbit
-  takes part, whatever the attacker's tech, under the same cap and reserve as any side (project rule "Whole fleets in battle",
+* Battles at a Pirate planet field the base the map shows, whoever attacks (`World::passive_starbase_index` is the one curve;
+  nothing changes it at battle time), so the built-in AI's `believed_defense`, the Remake AI's perception, the auto-resolve and
+  the tactical battle all see the same base. Every unit of the Pirate fleets in orbit takes part, whatever the attacker's tech, under the same cap and reserve as any side (project rule "Whole fleets in battle",
   2.8), in the tactical battle and in auto-resolve. A won battle at a Pirate planet leaves no Pirate ship in orbit.
 * Data for context: the Pirates' strength is mostly the start spawn (`Spawn_Starting_Forces_Web_Way.lua` gives each
   Pirate planet `Free_Random(2000, 3000)` x 0.5 combat power against 500 to 750 x modifier for main factions);
