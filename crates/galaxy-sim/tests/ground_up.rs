@@ -134,7 +134,7 @@ fn the_pirates_rearm_with_the_players_tech_in_every_game_and_never_expand() {
         let tech0 = s.galaxy().factions[human as usize].tech;
         let before: Vec<(usize, u32)> = planets.iter().map(|&p| pirate_state(&s, p)).collect();
         assert!(before.iter().all(|b| b.0 >= 1), "a base on every pirate planet from the start");
-        // The player reaches tech 4: after two weeks the bases follow and the garrisons grow by one per week up to 2 x tech.
+        // The player reaches tech 4: after two weeks the bases follow and the fleets grow by the weekly step (docs/RULES.md 1.9).
         s.galaxy_mut().factions[human as usize].tech = 4;
         for _ in 0..2 {
             s.step(w.config.week_seconds);
@@ -634,24 +634,35 @@ fn the_opposing_republic_or_cis_side_is_cut_to_three_planets() {
 }
 
 #[test]
-fn pirate_rearm_adds_only_the_ship_types_the_planet_already_fields() {
+fn pirate_growth_adds_only_types_of_the_pirate_roster_and_no_capital_ship() {
     let Some(data) = load() else { return };
     let mut s = sim(&data, false);
     let w = s.world().clone();
     let pirates = w.faction_id("Pirates").unwrap();
     let human = w.faction_id("Rebel").unwrap();
-    let types_at = |s: &Sim, p: u32| -> std::collections::BTreeSet<u32> {
-        s.galaxy().fleets.values().filter(|f| f.owner == pirates && f.location == FleetLocation::AtPlanet(p)).flat_map(|f| f.units.iter().filter(|(_, c)| **c > 0).map(|(u, _)| *u)).collect()
+    let types = |s: &Sim| -> BTreeMap<u32, u32> {
+        let mut m = BTreeMap::new();
+        for f in s.galaxy().fleets.values().filter(|f| f.owner == pirates) {
+            for (&u, &c) in &f.units {
+                *m.entry(u).or_default() += c;
+            }
+        }
+        m
     };
+    // Without the story scripts the roster is what the campaign data places (13 planets' Starting_Forces).
     s.step(w.config.week_seconds);
-    let planets: Vec<u32> = (0..w.planets.len() as u32).filter(|&p| w.real[p as usize] && s.galaxy().planets[p as usize].owner == Some(pirates) && !types_at(&s, p).is_empty()).collect();
-    assert!(!planets.is_empty());
-    let before: Vec<_> = planets.iter().map(|&p| types_at(&s, p)).collect();
+    let before = types(&s);
     s.galaxy_mut().factions[human as usize].tech = 5;
     for _ in 0..6 {
         s.step(w.config.week_seconds);
     }
-    for (i, &p) in planets.iter().enumerate() {
-        assert!(types_at(&s, p).is_subset(&before[i]), "planet {} got ship types it did not field: {:?} vs {:?}", w.planets[p as usize].name, types_at(&s, p), before[i]);
+    let after = types(&s);
+    let capital = |u: u32| matches!(w.units[u as usize].category, alamo_data::ShipCategory::Capital | alamo_data::ShipCategory::Super);
+    for (&u, &n) in &after {
+        assert!(before.contains_key(&u), "{} is not in the Pirates' roster", w.units[u as usize].name);
+        if capital(u) {
+            assert_eq!(n, before[&u], "the growth adds no {}", w.units[u as usize].name);
+        }
     }
+    assert!(after.values().sum::<u32>() > before.values().sum::<u32>(), "the fleets grow");
 }

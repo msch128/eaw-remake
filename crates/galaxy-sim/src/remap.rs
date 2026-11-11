@@ -384,11 +384,12 @@ impl Remap<'_> {
     }
 
     fn snapshot(&mut self, snap: SimSnapshot, fresh: &Galaxy) -> SimSnapshot {
-        let SimSnapshot { galaxy, ai, passive_types } = snap;
+        let SimSnapshot { galaxy, ai, passive_types, passive_start } = snap;
         SimSnapshot {
             galaxy: self.galaxy(galaxy, fresh),
             ai: ai.into_iter().map(|f| self.faction(f)).collect(),
             passive_types: passive_types.into_iter().map(|(p, types)| (self.planet(p), types.into_iter().map(|u| self.unit(u)).collect())).collect(),
+            passive_start: passive_start.into_iter().map(|(p, v)| (self.planet(p), v)).collect(),
         }
     }
 
@@ -530,7 +531,7 @@ mod tests {
     fn every_unit_id_of_a_state_follows_its_name() {
         // Saved with ["A", "B"]; now "B" is id 0 and "A" is id 3.
         let map = IdMap::new(&tables(&["A", "B"]), &tables(&["B", "New", "Newer", "A"]));
-        let before = SimSnapshot { galaxy: full_galaxy(), ai: vec![1], passive_types: BTreeMap::from([(1, vec![0, 1])]) };
+        let before = SimSnapshot { galaxy: full_galaxy(), ai: vec![1], passive_types: BTreeMap::from([(1, vec![0, 1])]), passive_start: BTreeMap::from([(1, 900.0)]) };
         let mut r = remap(&map);
         let after = r.snapshot(before.clone(), &Galaxy::sized(2, vec![FactionState::default(); 2], 1));
         assert_eq!(r.verdict(), None);
@@ -561,7 +562,7 @@ mod tests {
         fresh.planets[1].owner = Some(2);
         fresh.factions[2].credits = 777.0;
         let mut r = remap(&map);
-        let after = r.snapshot(SimSnapshot { galaxy: full_galaxy(), ai: vec![1], passive_types: BTreeMap::from([(1, vec![0])]) }, &fresh);
+        let after = r.snapshot(SimSnapshot { galaxy: full_galaxy(), ai: vec![1], passive_types: BTreeMap::from([(1, vec![0])]), passive_start: BTreeMap::from([(1, 900.0)]) }, &fresh);
         // The fleet sits in orbit, so no lane is needed.
         assert_eq!(r.verdict(), None);
         let g = &after.galaxy;
@@ -582,6 +583,7 @@ mod tests {
         assert_eq!((g.spy_reports[0].faction, g.spy_reports[0].planet), (1, 0));
         assert_eq!(after.ai, vec![0]);
         assert_eq!(after.passive_types.keys().copied().collect::<Vec<_>>(), vec![0]);
+        assert_eq!(after.passive_start, BTreeMap::from([(0, 900.0)]), "the Pirates' start values follow the planet names");
     }
 
     #[test]
@@ -590,7 +592,7 @@ mod tests {
         let now = NameTables { structures: names(&["Other"]), ..tables(&["A"]) };
         let map = IdMap::new(&saved, &now);
         let mut r = remap(&map);
-        r.snapshot(SimSnapshot { galaxy: full_galaxy(), ai: Vec::new(), passive_types: BTreeMap::new() }, &Galaxy::sized(2, vec![FactionState::default(); 2], 1));
+        r.snapshot(SimSnapshot { galaxy: full_galaxy(), ai: Vec::new(), passive_types: BTreeMap::new(), passive_start: BTreeMap::new() }, &Galaxy::sized(2, vec![FactionState::default(); 2], 1));
         let why = r.verdict().expect("refused");
         assert_eq!(why, "the save uses 2 objects this game data does not have: structure Mine, unit Old_Ship");
     }
@@ -600,7 +602,7 @@ mod tests {
     fn a_lost_name_nobody_uses_is_no_error() {
         let map = IdMap::new(&tables(&["A", "B", "Unused"]), &tables(&["A", "B"]));
         let mut r = remap(&map);
-        r.snapshot(SimSnapshot { galaxy: full_galaxy(), ai: Vec::new(), passive_types: BTreeMap::new() }, &Galaxy::sized(2, vec![FactionState::default(); 2], 1));
+        r.snapshot(SimSnapshot { galaxy: full_galaxy(), ai: Vec::new(), passive_types: BTreeMap::new(), passive_start: BTreeMap::new() }, &Galaxy::sized(2, vec![FactionState::default(); 2], 1));
         assert_eq!(r.verdict(), None);
     }
 
@@ -608,7 +610,7 @@ mod tests {
     fn an_id_outside_the_saved_table_is_refused() {
         let map = IdMap::new(&tables(&["A"]), &tables(&["A"]));
         let mut r = remap(&map);
-        r.snapshot(SimSnapshot { galaxy: full_galaxy(), ai: Vec::new(), passive_types: BTreeMap::new() }, &Galaxy::sized(2, vec![FactionState::default(); 2], 1));
+        r.snapshot(SimSnapshot { galaxy: full_galaxy(), ai: Vec::new(), passive_types: BTreeMap::new(), passive_start: BTreeMap::new() }, &Galaxy::sized(2, vec![FactionState::default(); 2], 1));
         assert!(r.verdict().unwrap().contains("unit #1 (not in the name table of the save)"));
     }
 
@@ -621,13 +623,13 @@ mod tests {
         // The lane lookup sees the planets of the world: Alpha is 1 and Beta 0 there.
         let lane = |saved: u32, from: PlanetId, to: PlanetId| if (from, to) == (1, 0) { Ok(saved + 10) } else { Err(format!("no lane from {from} to {to}")) };
         let mut r = Remap { map: &map, lane: &lane, missing: BTreeSet::new(), problems: Vec::new() };
-        let after = r.snapshot(SimSnapshot { galaxy: g.clone(), ai: Vec::new(), passive_types: BTreeMap::new() }, &Galaxy::sized(2, vec![FactionState::default(); 2], 1));
+        let after = r.snapshot(SimSnapshot { galaxy: g.clone(), ai: Vec::new(), passive_types: BTreeMap::new(), passive_start: BTreeMap::new() }, &Galaxy::sized(2, vec![FactionState::default(); 2], 1));
         assert_eq!(r.verdict(), None);
         assert_eq!(after.galaxy.fleets[&5].location, FleetLocation::Moving { from: 1, to: 0, route: 14, progress: 1.0, rest: vec![1] });
 
         let gone = |_: u32, _: PlanetId, _: PlanetId| Err("no lane joins them any more".to_string());
         let mut r = Remap { map: &map, lane: &gone, missing: BTreeSet::new(), problems: Vec::new() };
-        r.snapshot(SimSnapshot { galaxy: g, ai: Vec::new(), passive_types: BTreeMap::new() }, &Galaxy::sized(2, vec![FactionState::default(); 2], 1));
+        r.snapshot(SimSnapshot { galaxy: g, ai: Vec::new(), passive_types: BTreeMap::new(), passive_start: BTreeMap::new() }, &Galaxy::sized(2, vec![FactionState::default(); 2], 1));
         assert_eq!(r.verdict().as_deref(), Some("no lane joins them any more"));
     }
 }

@@ -207,11 +207,44 @@ impl Sim {
     }
 }
 
-/// Garrison units per level of the human player's tech that a passive planet holds before it stops growing (estimate: the user's rule, 2 x player tech).
-pub const PASSIVE_GARRISON_PER_TECH: i32 = 2;
+/// Credits the Pirate fleet of a planet grows by above its start value, by the measure (tech level 1 to 5; higher levels use the last entry).
+/// Estimate of the project rule "Pirates grow with the player" (docs/RULES.md 1.9), set from measured battles of the AI main fleets.
+pub const PASSIVE_GROWTH_CREDITS: [f32; 5] = [0.0, 8000.0, 14000.0, 18000.0, 24000.0];
+
+/// Units a Pirate planet gains at most per week while it is below its value (estimate, docs/RULES.md 1.9).
+pub const PASSIVE_GROWTH_UNITS_PER_WEEK: u32 = 2;
+
+/// Pick weights of the Pirates' space table in `Spawn_Starting_Forces_Web_Way.lua` / `Spawn_Neutral_Reinforcements_Web_Way.lua` (data): fighter and
+/// bomber squadrons 37, corvettes 40, frigates 16 (capitals 1.1 are left out: the growth adds none).
+const PIRATE_TABLE_WEIGHTS: [f32; 3] = [37.0, 40.0, 16.0];
+
+/// Frigate share of the units the growth adds at measure 5 (estimate); at measure 1 it is the data table's own share, 16 / 93.
+const PASSIVE_GROWTH_TOP_FRIGATE_SHARE: f32 = 0.08;
+
+/// Shares (squadrons, corvettes, frigates) of the units the Pirates' growth adds at measure `tech`: the frigate share falls linearly from the data
+/// table's 16 / 93 at tech 1 to 8% at tech 5, squadrons and corvettes share the rest 37 : 40 like the table.
+pub fn passive_growth_shares(tech: i32) -> [f32; 3] {
+    let [sq, co, fr] = PIRATE_TABLE_WEIGHTS;
+    let base = fr / (sq + co + fr);
+    let t = (tech.clamp(1, 5) - 1) as f32 / 4.0;
+    let frigates = base + (PASSIVE_GROWTH_TOP_FRIGATE_SHARE - base) * t;
+    [(1.0 - frigates) * sq / (sq + co), (1.0 - frigates) * co / (sq + co), frigates]
+}
+
+/// The growth class of a ship type: 0 squadron, 1 corvette, 2 frigate, 3 capital (the growth never adds one), `None` for anything else.
+fn growth_class(world: &World, u: UnitTypeId) -> Option<usize> {
+    use alamo_data::ShipCategory as C;
+    match world.units[u as usize].category {
+        C::Fighter | C::Bomber => Some(0),
+        C::Corvette => Some(1),
+        C::Frigate => Some(2),
+        C::Capital | C::Super => Some(3),
+        _ => None,
+    }
+}
 
 impl Sim {
-    /// The tech level the passive faction rearms to: the human player's (`victory.active_player`), else the best of the playable main factions.
+    /// The measure the Pirates grow with: the human player's tech (`victory.active_player`); in an all-AI game the best tech of the main factions.
     fn rearm_tech(&self) -> i32 {
         let world = &self.world;
         let tech = |f: FactionId| self.galaxy.factions.get(f as usize).map_or(1, |s| s.tech);
@@ -222,11 +255,11 @@ impl Sim {
         .max(1)
     }
 
-    /// The passive faction (Pirates) never expands but rearms with the player's tech (design rule, estimates in docs/RULES.md): every planet it holds gets the
-    /// star base of its own chain at level `clamp(player tech, 1, top level)` (raised, never lowered; applied at the start and every week), and
-    /// every week a planet with fewer than `2 x tech` passive units gets one more, picked deterministically from the ship types the passive faction fields
-    /// in the campaign (no heroes, no planet destroyers, cycling by planet and week). It costs nothing and the units never move because the faction
-    /// never gets orders.
+    /// The passive faction (Pirates) never expands but grows with the player (project rule "Pirates grow with the player", docs/RULES.md 1.9):
+    /// every planet it holds gets the star base of its own chain by [`World::passive_starbase_index`] (raised, never lowered; at the start and every
+    /// week), and every week (`with_garrison`) the Pirate fleet of each planet grows toward its start value plus [`PASSIVE_GROWTH_CREDITS`] by at
+    /// most [`PASSIVE_GROWTH_UNITS_PER_WEEK`] units: squadrons, corvettes and light frigates of the Pirates' roster by [`passive_growth_shares`],
+    /// never a capital ship. It costs nothing and the units never move because the faction never gets orders.
     pub(crate) fn rearm_passive(&mut self, with_garrison: bool) {
         let world = self.world.clone();
         let Some(passive) = world.passive_faction() else { return };
@@ -250,6 +283,18 @@ impl Sim {
                 })
                 .collect();
         }
+        // The roster the growth draws from: every type the Pirates field or fielded at any of their planets (`passive_types`, kept in saves).
+        if with_garrison {
+            self.remember_passive_types(passive, &pool);
+        }
+        let mut roster: Vec<UnitTypeId> = self.passive_types.values().flatten().copied().chain(pool.iter().copied()).collect();
+        roster.sort_unstable();
+        roster.dedup();
+        // Light frigates only: at most half the cost of the cheapest capital ship of the roster (estimate; all frigates if it has no capital).
+        let light = roster.iter().filter(|&&u| growth_class(&world, u) == Some(3)).map(|&u| world.units[u as usize].cost).fold(f32::INFINITY, f32::min) * 0.5;
+        let pools: [Vec<UnitTypeId>; 3] = std::array::from_fn(|k| roster.iter().copied().filter(|&u| growth_class(&world, u) == Some(k) && (k != 2 || world.units[u as usize].cost <= light)).collect());
+        let add = PASSIVE_GROWTH_CREDITS[(tech.clamp(1, PASSIVE_GROWTH_CREDITS.len() as i32) - 1) as usize];
+        let shares = passive_growth_shares(tech);
         let week = self.galaxy.week;
         for p in 0..world.planets.len() as PlanetId {
             let ps = &self.galaxy.planets[p as usize];
@@ -265,25 +310,48 @@ impl Sim {
                     self.galaxy.planets[p as usize].starbase = Some(chain[1.min(chain.len() - 1)]);
                 }
             }
-            if with_garrison && !pool.is_empty() {
-                let here: u32 = self.galaxy.fleets.values().filter(|f| f.owner == passive && f.location == crate::state::FleetLocation::AtPlanet(p)).map(|f| f.unit_count()).sum();
-                // The planet's own composition: the ship types it fields (remembered, so a planet that lost its ships keeps its types); a planet with none
-                // gets the cheapest passive ship types (estimate, docs/RULES.md).
-                let mut own: Vec<UnitTypeId> = self.passive_types.remove(&p).unwrap_or_default();
-                for f in self.galaxy.fleets.values().filter(|f| f.owner == passive && f.location == crate::state::FleetLocation::AtPlanet(p)) {
-                    own.extend(f.units.iter().filter(|(u, c)| **c > 0 && pool.contains(u)).map(|(u, _)| *u));
+            if !with_garrison || pools.iter().all(Vec::is_empty) {
+                continue;
+            }
+            // The planet's units by class and their value. Its start value is taken the first week the rule sees the planet (after the story's
+            // start spawn; a save from before the rule starts from what it holds at load), so nothing jumps.
+            let mut counts = [0u32; 3];
+            let mut value = 0.0;
+            for f in self.galaxy.fleets.values().filter(|f| f.owner == passive && f.location == crate::state::FleetLocation::AtPlanet(p)) {
+                for (&u, &n) in &f.units {
+                    value += world.units[u as usize].cost * n as f32;
+                    if let Some(k) = growth_class(&world, u).filter(|&k| k < 3) {
+                        counts[k] += n;
+                    }
                 }
-                own.sort_unstable();
-                own.dedup();
-                self.passive_types.insert(p, own.clone());
-                let planet_pool = if own.is_empty() { cheapest_types(&world, &pool, 3) } else { own };
-                if (here as i32) < PASSIVE_GARRISON_PER_TECH * tech {
-                    let pick = planet_pool[(p as usize + week as usize) % planet_pool.len()];
-                    crate::sim::add_units(&mut self.galaxy, passive, p, pick, 1);
+            }
+            let target = *self.passive_start.entry(p).or_insert(value) + add;
+            for i in 0..PASSIVE_GROWTH_UNITS_PER_WEEK {
+                if value >= target {
+                    break;
                 }
+                // The class furthest below its share, of those the roster has.
+                let n = counts.iter().sum::<u32>() as f32 + 1.0;
+                let Some(k) = (0..3).filter(|&k| !pools[k].is_empty()).max_by(|&a, &b| (shares[a] * n - counts[a] as f32).total_cmp(&(shares[b] * n - counts[b] as f32)).then(b.cmp(&a))) else { break };
+                let pick = pools[k][(p as usize + week as usize * PASSIVE_GROWTH_UNITS_PER_WEEK as usize + i as usize) % pools[k].len()];
+                crate::sim::add_units(&mut self.galaxy, passive, p, pick, 1);
+                counts[k] += 1;
+                value += world.units[pick as usize].cost;
             }
         }
         self.galaxy.sync_ships();
+    }
+
+    /// Remembers the ship types each Pirate planet fields (`passive_types`), so the roster keeps the types of planets that lost them.
+    fn remember_passive_types(&mut self, passive: FactionId, pool: &[UnitTypeId]) {
+        for f in self.galaxy.fleets.values().filter(|f| f.owner == passive) {
+            if let crate::state::FleetLocation::AtPlanet(p) = f.location {
+                let own = self.passive_types.entry(p).or_default();
+                own.extend(f.units.iter().filter(|(u, c)| **c > 0 && pool.contains(u)).map(|(u, _)| *u));
+                own.sort_unstable();
+                own.dedup();
+            }
+        }
     }
 
 }
@@ -312,12 +380,4 @@ impl World {
         }
         Some(want)
     }
-}
-
-/// The `n` cheapest of `pool` by build cost (ties by id).
-fn cheapest_types(world: &World, pool: &[UnitTypeId], n: usize) -> Vec<UnitTypeId> {
-    let mut v = pool.to_vec();
-    v.sort_by(|&a, &b| world.units[a as usize].cost.total_cmp(&world.units[b as usize].cost).then(a.cmp(&b)));
-    v.truncate(n.max(1));
-    v
 }

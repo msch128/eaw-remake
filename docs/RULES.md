@@ -315,23 +315,49 @@ range for planets and fleets, so the model is an estimate.
 ## 1.9 Pirates: the passive faction
 
 Project rule: the Pirates are passive in every game (`World::passive_faction`). They get no commands, are never run
-by the AI, never move, attack or expand and spend nothing. Other AIs still conquer Pirate planets. They rearm in
-`Sim::rearm_passive` (at the start and every week) with the tech level of the human player (`victory.active_player`;
-without one, the best playable main faction):
+by the AI, never move, attack or expand and spend nothing. Other AIs still conquer Pirate planets.
 
-* Star base: every Pirate planet gets the star base of the Pirates' own chain at level `clamp(player tech, 1, top of
-  the chain)` (3 levels in the data); raised, never lowered.
-* Garrison: every week a Pirate planet holding fewer than `PASSIVE_GARRISON_PER_TECH` (2, estimate) x player tech units
-  gets one more, picked deterministically (planet id and week) from the ship types that planet already fields (what
-  the campaign data put there). A planet with none gets the three cheapest passive ship types. No heroes or planet
-  destroyers.
-* Battles at a Pirate planet field the base the map shows, whoever attacks (`World::passive_starbase_index` is the one curve;
-  nothing changes it at battle time), so the built-in AI's `believed_defense`, the Remake AI's perception, the auto-resolve and
-  the tactical battle all see the same base. Every unit of the Pirate fleets in orbit takes part, whatever the attacker's tech, under the same cap and reserve as any side (project rule "Whole fleets in battle",
-  2.8), in the tactical battle and in auto-resolve. A won battle at a Pirate planet leaves no Pirate ship in orbit.
-* Data for context: the Pirates' strength is mostly the start spawn (`Spawn_Starting_Forces_Web_Way.lua` gives each
-  Pirate planet `Free_Random(2000, 3000)` x 0.5 combat power against 500 to 750 x modifier for main factions);
-  `Pirates_Template` has no infrastructure, defensive or offensive budget and `Maintenance_Cost` 0.
+What the data does:
+
+* Start fleets: the campaign's `Starting_Forces` place ships at 13 Pirate planets (Cato Neimoidia 118,600 credits with a
+  Lucrehulk); the story start (`Spawn_Starting_Forces_Web_Way.lua`) gives every Pirate planet `Free_Random(2000, 3000)` x
+  0.5 combat rating from its Pirates table. Ground Up `GC_Full_Web_Way_Rebel`: 106 Pirate planets, 717 units, median fleet
+  11,200 credits, 90th percentile 27,356.
+* Tech waves: `Spawn_Neutral_Reinforcements_Web_Way.lua` spawns on each of the 12 `*_Tech_2..5` events of Empire, Rebel and
+  Underworld `Free_Random(25, 50)` x 0.5 to 2 (12 to 100) combat rating per Pirate planet. `SpawnTableInsert` takes only units
+  whose rating fits the budget, and every unit of the table rates 100 or more, so the waves add next to nothing: 2 units in
+  60 all-AI weeks (3 seeds) with 8 tech events.
+* `Pirates_Template` has no infrastructure, defensive or offensive budget and `Maintenance_Cost` 0.
+
+Project rule "Pirates grow with the player" (`Sim::rearm_passive`, at the start and every week; one mechanism, the mod's
+waves stay as they are):
+
+* Measure T: the human player's tech (`victory.active_player`); in an all-AI game (1.10) the best tech of the main
+  factions. Never the attacker's tech: a weak AI does not meet tech 1 Pirates, a strong one does not meet stronger ones.
+* Star base: every Pirate planet holds the base of the Pirates' own chain at level `clamp(T, 1, Max_Space_Base)`, never
+  above level 2 off Lehon (level 3 is the Starforge, `Required_Planets` Lehon) (`World::passive_starbase_index`); raised,
+  never lowered. The base on the map is the base in battle, whoever attacks: nothing changes it at battle time, so the
+  built-in AI's `believed_defense`, the Remake AI's perception, the auto-resolve and the tactical battle see the same base.
+* Fleet: every week the Pirate fleet of each planet grows toward its start value plus `PASSIVE_GROWTH_CREDITS` (estimate:
+  0 / 8,000 / 14,000 / 18,000 / 24,000 credits at T 1 to 5) by at most `PASSIVE_GROWTH_UNITS_PER_WEEK` (2, estimate) units.
+  The start value is the planet's fleet value the first week the rule sees it (after the story start spawn; a save from
+  before the rule starts from what it holds at load, `SimSnapshot::passive_start`), so nothing jumps.
+* What grows: the types of the Pirates' own roster (what the data fields at their planets, `passive_types`), by the class
+  furthest below its share (`passive_growth_shares`, estimate): the frigate share falls from the data table's 16 / 93 (17%)
+  at T1 to 8% at T5, squadrons and corvettes share the rest 37 : 40 like the table (T5: 44% squadrons, 48% corvettes).
+  Frigates only light ones (at most half the cheapest capital of the roster: 7,000 credits, Dreadnaught, Nebulon-B,
+  Quasar). No capital ship is ever added; campaign strongholds grow by the same credits as any planet (Cato Neimoidia
+  118,600 -> 144,712 at T5, still 1 capital). No heroes or planet destroyers.
+* Pirate units galaxy-wide, Ground Up start + 18 weeks, all 106 planets held: 717 / 1,464 / 2,057 / 2,535 / 3,267 at T 1 to 5
+  (the former 2 x tech garrison: 705 / 724 / 782 / 909 / 1,089). Fleets keep units as counts per type, so the galaxy week
+  costs the same.
+* Measured (tests `galaxy-script/tests/pirates.rs`; main fleet = the costliest fleet a major AI held on reaching the level in
+  all-AI runs: T2 to T5 Empire, 83k / 92k / 108k / 85k credits): at the median planet (20k / 26k / 30k / 36k credits) the
+  main fleet wins every auto-resolve and the tactical battle, losing 11 / 8 / 9 / 1% of its credits there (former rule:
+  3 / 4 / 3 / 1%; the T5 fleet is mostly heroes); at the 90th percentile planet it still wins every auto-resolve. In 60
+  all-AI weeks the major factions take 10 / 6 / 7 Pirate planets (seeds 1 to 3; before the rule and the all-AI fix 12 / 13 / 13).
+* Every unit of the Pirate fleets in orbit takes part, whatever the attacker's tech, under the same cap and reserve as any
+  side (project rule "Whole fleets in battle", 2.8). A won battle at a Pirate planet leaves no Pirate ship in orbit.
 
 ## 1.10 "From the Ground Up" (`ground_up.rs`)
 

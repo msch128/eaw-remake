@@ -38,6 +38,7 @@ pub mod tactical;
 pub mod state;
 pub mod world;
 
+pub use ground_up::{PASSIVE_GROWTH_CREDITS, PASSIVE_GROWTH_UNITS_PER_WEEK, passive_growth_shares};
 pub use sim::{AutoPreview, Sim, SimSnapshot};
 pub use state::{
     Command, CommandError, CommandOk, Event, FactionState, FactionStats, ShipId, Fleet, FleetLocation, FLEET_SLOTS, Galaxy, Lane, LegacyLanes, PendingBattle, PlanetState,

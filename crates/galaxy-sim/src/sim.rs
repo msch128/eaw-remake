@@ -20,8 +20,10 @@ pub struct Sim {
     pub(crate) tactical_requests: BTreeMap<u32, crate::tactical::TacticalRequest>,
     /// Events produced by commands, delivered by the next [`Sim::step`].
     pub(crate) queued_events: Vec<Event>,
-    /// Ship types the passive faction has fielded at each of its planets (the campaign's own composition there); `rearm_passive` adds only these (part of [`SimSnapshot`]).
+    /// Ship types the passive faction has fielded at each of its planets; their union is the roster `rearm_passive` grows the Pirate fleets from (part of [`SimSnapshot`]).
     pub(crate) passive_types: BTreeMap<PlanetId, Vec<UnitTypeId>>,
+    /// Start value (credits) of the Pirate fleet of each passive planet, taken the first week the growth sees the planet (part of [`SimSnapshot`]).
+    pub(crate) passive_start: BTreeMap<PlanetId, f32>,
     /// Hulls a production upgrade swapped in during the current step. Story `UNIQUE_UNIT` of the same hull must not add a second one. Cleared at the start of the next step, so it is still set when the story reads the step's events.
     upgraded_to: Vec<(FactionId, UnitTypeId)>,
 }
@@ -59,7 +61,7 @@ impl Sim {
                 add_units(&mut galaxy, f, p, u, 1);
             }
         }
-        let mut sim = Sim { world, galaxy, ai: Vec::new(), tactical: None, arenas: std::collections::HashMap::new(), tactical_requests: BTreeMap::new(), queued_events: Vec::new(), passive_types: BTreeMap::new(), upgraded_to: Vec::new() };
+        let mut sim = Sim { world, galaxy, ai: Vec::new(), tactical: None, arenas: std::collections::HashMap::new(), tactical_requests: BTreeMap::new(), queued_events: Vec::new(), passive_types: BTreeMap::new(), passive_start: BTreeMap::new(), upgraded_to: Vec::new() };
         if sim.world.config.ground_up {
             let human = sim.world.victory.active_player;
             sim.apply_ground_up(human);
@@ -1662,12 +1664,15 @@ pub struct SimSnapshot {
     /// Ship types the passive faction fielded at each of its planets; older saves have none and rebuild them from the fleets present.
     #[serde(default)]
     pub passive_types: BTreeMap<PlanetId, Vec<UnitTypeId>>,
+    /// Start value of the Pirate fleet of each passive planet (docs/RULES.md 1.9); older saves have none and take what the planet holds at the first week after the load.
+    #[serde(default)]
+    pub passive_start: BTreeMap<PlanetId, f32>,
 }
 
 impl Sim {
     /// Copies the complete mutable state.
     pub fn snapshot(&self) -> SimSnapshot {
-        SimSnapshot { galaxy: self.galaxy.clone(), ai: self.ai.clone(), passive_types: self.passive_types.clone() }
+        SimSnapshot { galaxy: self.galaxy.clone(), ai: self.ai.clone(), passive_types: self.passive_types.clone(), passive_start: self.passive_start.clone() }
     }
 
     /// Replaces the mutable state with a snapshot taken from a sim built from the same data and campaign. Refuses a snapshot whose dimensions
@@ -1696,6 +1701,7 @@ impl Sim {
         w.sort_lanes(&mut self.galaxy);
         self.ai = snap.ai;
         self.passive_types = snap.passive_types;
+        self.passive_start = snap.passive_start;
         self.tactical_requests.clear();
         self.queued_events.clear();
         self.galaxy.sync_ships();
