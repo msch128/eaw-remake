@@ -63,8 +63,10 @@ visual change works. Write PNGs and traces to a scratch folder or `target/`, nev
 
 The app also takes scripted flags for reproducible scenes: `--campaign`, `--select`, `--zoom`, `--weeks`, `--build`,
 `--move`, `--hover`, `--stop-on-battle`, `--battle-choice fight|auto`, `--battle-auto`, `--battle-seconds`,
-`--battle-orders`, `--planet-view`, `--via-menu`, `--screen`, `--click`, `--grant-unit` with `--at`, `--save-to` and
-`--load-from`. `SP_DROID_TAB=history|tech|summary` opens a droid menu tab. `--help` lists the rest.
+`--battle-orders`, `--planet-view`, `--via-menu`, `--screen`, `--click`, `--grant-unit` with `--at`, `--credits`, `--save-to`
+and `--load-from`. `--pointer "<target>[!press|click|right];..."` puts a synthetic cursor on a point (`x,y`, `node:<component>`,
+`planet:<name>`, `view:orbital0`) through the real input path of an offscreen run, so a capture shows hover cards and the
+mouse-over and pressed art of a button. `SP_DROID_TAB=history|tech|summary` opens a droid menu tab. `--help` lists the rest.
 
 ### Look checks
 

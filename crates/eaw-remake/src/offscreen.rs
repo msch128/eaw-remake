@@ -44,6 +44,10 @@ pub struct OffscreenTarget {
     pub scale_factor: f32,
 }
 
+/// Number of scripted probes that still need frames before the capture (`--pointer`): the picture is taken once it is back at 0.
+#[derive(Resource, Default)]
+pub struct CaptureGate(pub u32);
+
 /// Progress and measurements of an offscreen run.
 #[derive(Resource)]
 struct OffscreenState {
@@ -123,6 +127,7 @@ pub fn configure(app: &mut App, args: &Args, path: PathBuf) {
             burst_left: args.burst,
             burst_saved: 0,
         })
+        .init_resource::<CaptureGate>()
         .add_systems(Last, (drive, log_planet_pixels).chain());
 }
 
@@ -171,7 +176,7 @@ fn drive(
     view: Res<GalaxyView>,
     bounds: Res<CameraBounds>,
     diagnostics: Res<DiagnosticsStore>,
-    hold: Res<crate::play::ScriptHold>,
+    (hold, gate): (Res<crate::play::ScriptHold>, Res<CaptureGate>),
     mut selection: ResMut<Selection>,
     mut planet_view: ResMut<crate::planet_view::PlanetViewState>,
     mut cam: Single<&mut GalaxyCamera>,
@@ -276,7 +281,7 @@ fn drive(
         st.burst_left -= 1;
         st.burst_saved += 1;
     }
-    if frame >= st.frames && st.frame_ms.len() as u32 >= st.frames / 2 && settled && view_ready && !st.capture_requested && st.burst_left == 0 {
+    if frame >= st.frames && st.frame_ms.len() as u32 >= st.frames / 2 && settled && view_ready && gate.0 == 0 && !st.capture_requested && st.burst_left == 0 {
         st.capture_requested = true;
         st.capture_time = Some(now);
         let path = st.path.clone();

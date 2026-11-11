@@ -129,6 +129,11 @@ pub struct Args {
     pub cheat_menu: bool,
     /// "From the Ground Up" start (`--ground-up`).
     pub ground_up: bool,
+    /// Offscreen only: a synthetic cursor on named points of the screen, through the real input path (`--pointer <steps>`, see
+    /// `pointer_probe.rs`).
+    pub pointer: Option<String>,
+    /// Offscreen only: give the player this many credits before the other scenario flags run (`--credits <n>`, a journaled cheat).
+    pub credits: Option<u32>,
 }
 
 impl Default for Args {
@@ -193,6 +198,8 @@ impl Default for Args {
             tooltip: None,
             cheat_menu: false,
             ground_up: false,
+            pointer: None,
+            credits: None,
         }
     }
 }
@@ -252,6 +259,9 @@ OPTIONS:
   --tooltip <button>    Offscreen: show the tooltip of a command bar button (b_create_00, queue00, ...)
   --cheat-menu          Offscreen: open the F2 cheat menu
   --ground-up           New game From the Ground Up (1 planet for you, 3 for the other great powers, the rest passive)
+  --pointer <steps>     Offscreen: synthetic cursor through the real input path; steps separated by ;, each <target>[!press|click|right]
+                        with target x,y | node:<component> | planet:<name> | view:<orbital0|ground0|station>
+  --credits <n>         Offscreen: give the player n credits first (a journaled cheat)
   --no-vsync             Disable vertical sync
   --no-audio             Do not open the audio device (implied by --volume 0); the audio logic and SP_AUDIO_LOG still run
   --fullscreen           Start in borderless fullscreen
@@ -366,6 +376,11 @@ impl Args {
                 "--tooltip" => out.tooltip = Some(it.next().ok_or("--tooltip needs a button name")?),
                 "--cheat-menu" => out.cheat_menu = true,
                 "--ground-up" => out.ground_up = true,
+                "--pointer" => out.pointer = Some(it.next().ok_or("--pointer needs its steps")?),
+                "--credits" => {
+                    let v = it.next().ok_or("--credits needs a value")?;
+                    out.credits = Some(v.parse().map_err(|e| format!("bad --credits: {e}"))?);
+                }
                 "--size" => {
                     let v = it.next().ok_or("--size needs WxH")?;
                     let (w, h) = v.split_once(['x', 'X']).ok_or("bad --size (use WxH)")?;

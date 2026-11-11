@@ -48,6 +48,7 @@ mod planet_visual;
 mod play;
 mod playscript;
 mod play_ui;
+mod pointer_probe;
 mod settings;
 mod ui;
 
@@ -262,6 +263,7 @@ fn add_game(app: &mut App, boot: Boot) {
         .add_plugins(galaxy_models::GalaxyModelsPlugin)
         .add_plugins(drag_demo::DragDemoPlugin)
         .add_plugins(label_probe::LabelProbePlugin)
+        .add_plugins(pointer_probe::PointerProbePlugin)
         .add_plugins((
             FlowPlugin,
             LoadingPlugin,

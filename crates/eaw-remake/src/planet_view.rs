@@ -784,6 +784,21 @@ enum Hover {
     Orbital(usize),
 }
 
+/// World point of a thing of the open view for the offscreen pointer (`--pointer view:orbital0|ground1|station`): the same points the
+/// hover picks from.
+pub(crate) fn probe_point(state: &PlanetViewState, what: &str) -> Option<Vec3> {
+    if !state.active {
+        return None;
+    }
+    if what == "station" {
+        return Some(PLAT + STATION_AT);
+    }
+    if let Some(i) = what.strip_prefix("orbital").and_then(|n| n.parse::<usize>().ok()) {
+        return state.orbital_slots.get(i).map(|p| *p + Vec3::new(0.0, 0.15, 0.0));
+    }
+    what.strip_prefix("ground").and_then(|n| n.parse::<usize>().ok()).and_then(|i| state.ground_slots.get(i)).map(|p| *p + Vec3::new(0.0, 0.2, 0.0))
+}
+
 /// The pointed-at thing: the closest screen point within `radius`.
 fn pick(points: &[(Hover, Vec2)], cursor: Vec2, radius: f32) -> Option<Hover> {
     points.iter().map(|(h, p)| (*h, p.distance(cursor))).filter(|(_, d)| *d <= radius).min_by(|a, b| a.1.total_cmp(&b.1)).map(|(h, _)| h)

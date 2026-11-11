@@ -429,7 +429,7 @@ fn run_script(
             std::process::exit(2);
         }
     }
-    let scripted = args.weeks.is_some() || args.build.is_some() || args.move_to.is_some() || args.grant_unit.is_some();
+    let scripted = args.weeks.is_some() || args.build.is_some() || args.move_to.is_some() || args.grant_unit.is_some() || args.credits.is_some();
     if !scripted {
         if hold.active {
             hold.active = false;
@@ -456,6 +456,11 @@ fn run_script(
             }
             script.phase = 1;
             actions.write(PlayAction::SetSpeedLevel(0));
+            // `--credits`: the treasury of the test, through the journaled cheat command, before anything is ordered.
+            if let Some(n) = args.credits {
+                info!("script: granting {n} credits");
+                actions.write(PlayAction::Cheat(galaxy_sim::cheats::Cheat::Credits(n)));
+            }
         }
         1 => {
             // The selection reaches the simulation through `sync_selection` one frame later.
