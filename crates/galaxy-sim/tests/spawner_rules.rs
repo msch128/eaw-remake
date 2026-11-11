@@ -45,7 +45,7 @@ fn income_buildings_do_not_stack_on_coruscant() {
 
     // Queue and complete the spawner
     sim.apply(Command::BuildStructure { faction: empire, planet: cor, structure: spawner }).expect("queue spawner");
-    sim.galaxy_mut().planets[cor as usize].queues[Lane::Structures as usize][0].remaining = 0.01;
+    sim.galaxy_mut().planets[cor as usize].queues[Lane::Ground as usize][0].remaining = 0.01;
     sim.step(1.0);
 
     // On completion, the base structure (Taxation_Agency_Urban) is placed, NOT the spawner
@@ -62,7 +62,7 @@ fn income_buildings_do_not_stack_on_coruscant() {
     // Upgrade Taxation_Agency_Urban to Administration_Office_Urban
     let upgrade_unit = w.unit_id("UPGRADE_TAXATION_AGENCY_URBAN").expect("upgrade dummy unit");
     sim.apply(Command::BuildUnit { faction: empire, planet: cor, unit: upgrade_unit }).expect("queue upgrade");
-    sim.galaxy_mut().planets[cor as usize].queues[Lane::Units as usize][0].remaining = 0.01;
+    sim.galaxy_mut().planets[cor as usize].queues[Lane::Ground as usize][0].remaining = 0.01;
     sim.step(1.0);
 
     assert!(sim.galaxy().planets[cor as usize].structures.contains(&office), "office placed by upgrade");
@@ -78,7 +78,7 @@ fn income_buildings_do_not_stack_on_coruscant() {
     // If forcefully queued and completed while office exists, it aborts and refunds 80% of cost (2800 * 0.8 = 2240)
     let spawner_cost = f64::from(w.structures[spawner as usize].cost);
     assert_eq!(spawner_cost, 2800.0);
-    sim.galaxy_mut().planets[cor as usize].queues[Lane::Structures as usize].push_back(galaxy_sim::ProductionItem {
+    sim.galaxy_mut().planets[cor as usize].queues[Lane::Ground as usize].push_back(galaxy_sim::ProductionItem {
         kind: ProductionKind::Structure(spawner),
         remaining: 0.01,
         total: 60.0,

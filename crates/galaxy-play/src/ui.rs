@@ -292,9 +292,8 @@ fn refresh_planet_panel(
             p.spawn(text("Production", 15.0, Color::srgb(1.0, 0.9, 0.5)));
             for (i, q) in menu.queue.iter().enumerate() {
                 let lane = match q.lane {
-                    Lane::Units => "U",
-                    Lane::Structures => "S",
-                    Lane::Base => "B",
+                    Lane::Space => "S",
+                    Lane::Ground => "G",
                 };
                 p.spawn((Node { flex_direction: FlexDirection::Column, ..default() }, children![
                     text(format!("[{lane}] {}", q.name), 13.0, if q.active { Color::WHITE } else { Color::srgb(0.6, 0.65, 0.7) }),

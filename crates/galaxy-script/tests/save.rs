@@ -1,12 +1,12 @@
 //! Save/load round trip against the real data: a loaded game continues exactly like the original.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::sync::Arc;
 
 use alamo_data::{GameData, load_galaxy};
 use alamo_fs::{FileSource, GameFs, GameInstall};
 use galaxy_script::{DifficultyTier, SaveError, SaveFile, ScriptedConfig, ScriptedSim};
-use galaxy_sim::{Command, HashEra, IdMap, NameTables, SimConfig};
+use galaxy_sim::{Command, HashEra, IdMap, Lane, LegacyLanes, NameTables, ProductionItem, ProductionKind, SimConfig};
 
 struct Ctx {
     fs: Arc<dyn FileSource>,
@@ -515,4 +515,109 @@ fn a_save_with_a_stale_hyperspace_slot_loads_and_is_tidied() {
     assert_eq!(loaded.state().sim.galaxy.hyperspace.get(&fleet), None);
     assert_eq!(loaded.checkpoint().galaxy_hash, before, "the state without the stale entry");
     assert_eq!(loaded.load_warnings, ["the ship lists of the save did not match its fleets and were tidied"]);
+}
+
+/// The three lanes a build before the two production queues kept the items of `queues` in: ships and other units, structures, star base and
+/// tech levels, each in its order.
+fn as_lanes(queues: &[VecDeque<ProductionItem>; 2]) -> LegacyLanes {
+    let mut lanes = LegacyLanes::default();
+    for item in queues.iter().flatten() {
+        let lane = match item.kind {
+            ProductionKind::Unit(_) => 0,
+            ProductionKind::Structure(_) => 1,
+            ProductionKind::Starbase(_) | ProductionKind::Tech(_) => 2,
+        };
+        lanes[lane].push_back(item.clone());
+    }
+    lanes
+}
+
+/// A save of a build from before the two production queues: every planet has three lanes (`queues`) and up to four of its items were being
+/// built at once: a ship, an orbital structure, a ground structure and a star base level. The checkpoint is the hash of that time, over the
+/// lanes. The file loads; the lanes are sorted into the space queue and the ground queue, what was being built first and what was waiting
+/// behind it, each in lane order; every item keeps what was built of it; from then on only the first item of each queue is built. Saved again, the file has the two queues and the checkpoint of this build.
+#[test]
+fn a_save_with_the_three_lanes_of_an_earlier_build_loads_into_the_two_queues() {
+    let Some(c) = ctx() else { return };
+    let mut sim = new_sim(&c, ScriptedConfig { game_scoring: false, ..ai_config() });
+    weeks(&mut sim, 2);
+    let w = sim.with_sim(|s| s.world().clone());
+    let p = w.planet_id("Coruscant_WW").unwrap() as usize;
+    let file = sim.to_save().unwrap();
+    assert!(file.state.sim.galaxy.planets.iter().any(|ps| ps.queues.iter().any(|q| !q.is_empty())), "the AI has orders waiting, or the test shows little");
+
+    // Coruscant with every lane busy, as the old build had it: the first ship, the first ground and the first orbital structure and the star
+    // base level were all being built.
+    let item = |kind: ProductionKind, remaining: f32, total: f32| ProductionItem { kind, remaining, total, cost: 1000.0 };
+    let unit = |name: &str| ProductionKind::Unit(w.unit_id(name).unwrap_or_else(|| panic!("{name}")));
+    let structure = |name: &str| ProductionKind::Structure(w.structure_id(name).unwrap_or_else(|| panic!("{name}")));
+    let base = ProductionKind::Starbase(w.starbases.iter().position(|b| b.name == "Empire_Star_Base_3").expect("Empire_Star_Base_3") as u32);
+    let coruscant: LegacyLanes = [
+        [item(unit("Vigil_Corvette"), 35.0, 45.0), item(unit("UPGRADE_MINING_COMPANY_E_URBAN"), 30.0, 30.0), item(unit("Gladiator_Star_Destroyer"), 75.0, 75.0)].into(),
+        [item(structure("TAXATION_AGENCY_URBAN_SPAWNER"), 50.0, 60.0), item(structure("E_Shipyard_3"), 240.0, 250.0), item(structure("Empire_Watchtower"), 15.0, 15.0)].into(),
+        [item(base.clone(), 80.0, 90.0)].into(),
+    ];
+    let mut old = file.state.sim.galaxy.clone();
+    for (i, ps) in old.planets.iter_mut().enumerate() {
+        ps.legacy_lanes = Some(if i == p { coruscant.clone() } else { as_lanes(&ps.queues) });
+        ps.queues = Default::default();
+    }
+    let old_hash = old.state_hash_of(HashEra::HeroGamble);
+    assert_eq!(old.hash_era(old_hash), Some(HashEra::HeroGamble));
+
+    // The file of the old build: `queues` with three lanes per planet, no `build_queues`, the checkpoint of its time.
+    let mut v = serde_json::to_value(&file).unwrap();
+    for (ps, state) in v["state"]["sim"]["galaxy"]["planets"].as_array_mut().unwrap().iter_mut().zip(&old.planets) {
+        let o = ps.as_object_mut().unwrap();
+        assert!(o.remove("build_queues").is_some());
+        o.insert("queues".into(), serde_json::to_value(state.legacy_lanes.as_ref().unwrap()).unwrap());
+    }
+    v["checkpoint"]["galaxy_hash"] = old_hash.into();
+    let old_file: SaveFile = serde_json::from_value(v.clone()).expect("the old field set parses");
+    assert_eq!(old_file.state.sim.galaxy, old);
+
+    let mut loaded = ScriptedSim::from_save(old_file, c.fs.clone(), c.data.clone(), |_| {}).unwrap_or_else(|e| panic!("the old save loads: {e}"));
+    assert!(loaded.load_warnings.is_empty(), "{:?}", loaded.load_warnings);
+    assert!(loaded.load_notes.iter().any(|n| n.contains("three production lanes of an earlier build")), "{:?}", loaded.load_notes);
+    let state = loaded.state().sim.galaxy;
+    assert!(state.planets.iter().all(|ps| ps.legacy_lanes.is_none()));
+    // Every planet but Coruscant has the queues the match was saved with: the lanes held nothing else.
+    for (i, (now, saved)) in state.planets.iter().zip(&file.state.sim.galaxy.planets).enumerate().filter(|(i, _)| *i != p) {
+        let by_lane = |q: &[VecDeque<ProductionItem>; 2]| -> Vec<ProductionItem> { as_lanes(q).into_iter().flatten().collect() };
+        assert_eq!(by_lane(&now.queues), by_lane(&saved.queues), "planet {}", w.planets[i].name);
+        assert!(now.queues.iter().enumerate().all(|(lane, q)| q.iter().all(|it| w.lane_of(&it.kind) as usize == lane)), "planet {}", w.planets[i].name);
+    }
+    // Coruscant: the corvette, the shipyard and the star base level were being built and lead the space queue, the destroyer waited; the
+    // agency was being built and leads the ground queue, the upgrade and the watchtower waited.
+    let got = |sim: &ScriptedSim, lane: Lane| sim.with_sim(|s| s.galaxy().planets[p].queues[lane as usize].iter().map(|i| (i.kind.clone(), i.remaining)).collect::<Vec<_>>());
+    assert_eq!(
+        got(&loaded, Lane::Space),
+        [(unit("Vigil_Corvette"), 35.0), (structure("E_Shipyard_3"), 240.0), (base.clone(), 80.0), (unit("Gladiator_Star_Destroyer"), 75.0)]
+    );
+    assert_eq!(
+        got(&loaded, Lane::Ground),
+        [(structure("TAXATION_AGENCY_URBAN_SPAWNER"), 50.0), (unit("UPGRADE_MINING_COMPANY_E_URBAN"), 30.0), (structure("Empire_Watchtower"), 15.0)]
+    );
+
+    // Played on, only the first of each queue is built; the shipyard, the star base level and the agency keep what the old build had built.
+    for _ in 0..5 {
+        loaded.step(1.0);
+    }
+    let (space, ground) = (got(&loaded, Lane::Space), got(&loaded, Lane::Ground));
+    assert_eq!((&space[0], &ground[0]), (&(unit("Vigil_Corvette"), 30.0), &(structure("TAXATION_AGENCY_URBAN_SPAWNER"), 45.0)));
+    assert_eq!(space[1..4], [(structure("E_Shipyard_3"), 240.0), (base, 80.0), (unit("Gladiator_Star_Destroyer"), 75.0)]);
+    assert_eq!(ground[1..3], [(unit("UPGRADE_MINING_COMPANY_E_URBAN"), 30.0), (structure("Empire_Watchtower"), 15.0)]);
+
+    // Saved again it is a file of this build.
+    let again = loaded.to_save().unwrap();
+    assert_eq!(again.state.sim.galaxy.hash_era(again.checkpoint.galaxy_hash), Some(HashEra::CURRENT));
+    let text = serde_json::to_string(&again).unwrap();
+    assert!(text.contains("\"build_queues\":[[") && !text.contains("\"queues\":"), "the three lanes are not written again");
+
+    // The same old file with an item moved to another lane is not the state its checkpoint was made of.
+    let lanes = v["state"]["sim"]["galaxy"]["planets"][p]["queues"].as_array_mut().unwrap();
+    let moved = lanes[2].as_array_mut().unwrap().remove(0);
+    lanes[0].as_array_mut().unwrap().push(moved);
+    let tampered: SaveFile = serde_json::from_value(v).unwrap();
+    assert!(matches!(ScriptedSim::from_save(tampered, c.fs.clone(), c.data.clone(), |_| {}), Err(SaveError::Corrupt { .. })));
 }

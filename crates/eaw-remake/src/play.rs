@@ -557,12 +557,16 @@ fn run_script(
 }
 
 /// True if the entry belongs to the space production tab: ships, star base, tech, research and orbital structures (shipyards, Major
-/// Construction Yards, refineries ...). Ground structures go to the ground tab. Decided by the structure data (`StructureType::orbital`).
+/// Construction Yards, refineries ...) with their upgrades. Ground structures, their upgrades and agents go to the planet tab. The tab is the
+/// side of the queue the order waits in, which the build tab of the object in the data decides (`World::on_ground_side`).
 pub fn on_space_tab(world: &galaxy_sim::World, menu_target: BuildTarget) -> bool {
-    match menu_target {
-        BuildTarget::Structure(s) => world.structures.get(s as usize).is_some_and(|st| st.orbital),
-        _ => true,
-    }
+    let kind = match menu_target {
+        BuildTarget::Unit(u) => galaxy_sim::ProductionKind::Unit(u),
+        BuildTarget::Structure(s) => galaxy_sim::ProductionKind::Structure(s),
+        BuildTarget::Starbase(b) => galaxy_sim::ProductionKind::Starbase(b),
+        BuildTarget::Tech(t) => galaxy_sim::ProductionKind::Tech(t),
+    };
+    !world.on_ground_side(&kind)
 }
 
 /// Offscreen `--via-menu`: walks main menu -> campaign list -> campaign like a player (the clicks

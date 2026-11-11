@@ -238,3 +238,50 @@ fn the_smuggler_is_on_the_rebel_menu_and_names_the_ground_base_level_it_lacks() 
     assert!(!entry.availability.is_available());
     assert!(entry.reasons.iter().any(|r| r == "Required : Ground Base Level 1"), "{:?}", entry.reasons);
 }
+
+/// The menu of a planet lists its two queues, the space queue first. Only the first entry of each is being built: the entries behind it
+/// are not active and show no progress, however long the game runs.
+#[test]
+fn the_menu_lists_two_queues_and_only_their_first_entries_are_built() {
+    use galaxy_sim::{Command, Lane};
+    let Some(install) = GameInstall::detect() else { return };
+    if !install.mod_data("1770851727").is_dir() {
+        eprintln!("skipping: Remake workshop mod not found");
+        return;
+    }
+    let data = load_galaxy(&GameFs::for_mod(&install, Some("1770851727")).unwrap()).0;
+    let campaign = data.campaign("GC_Full_Web_Way_Rebel").unwrap();
+    let mut sim = Sim::new(&data, campaign, SimConfig { victory_enabled: false, ..SimConfig::default() }).unwrap();
+    let w = sim.world().clone();
+    let names = PlayCatalog::from_data(&w, &data);
+    let (empire, p) = (w.faction_id("Empire").unwrap(), w.planet_id("Coruscant_WW").unwrap());
+    sim.add_credits(empire, 1.0e9);
+    let ship = w.unit_id("Victory_Destroyer").expect("Victory_Destroyer");
+    let structure = |sim: &Sim, orbital: bool| {
+        (0..w.structures.len() as u32).find(|&s| w.structures[s as usize].orbital == orbital && w.check_build_structure(sim.galaxy(), empire, p, s).is_ok()).expect("a structure to order")
+    };
+    sim.apply(Command::BuildUnit { faction: empire, planet: p, unit: ship }).expect("ship");
+    let orbital = structure(&sim, true);
+    sim.apply(Command::BuildStructure { faction: empire, planet: p, structure: orbital }).expect("orbital structure");
+    let mut ground = Vec::new();
+    for _ in 0..2 {
+        let s = structure(&sim, false);
+        sim.apply(Command::BuildStructure { faction: empire, planet: p, structure: s }).expect("ground structure");
+        ground.push(s);
+    }
+    sim.step(3.0);
+    let menu = BuildMenu::for_planet(&w, sim.galaxy(), &names, empire, p).expect("menu");
+    let shown: Vec<(Lane, BuildTarget, bool)> = menu.queue.iter().map(|q| (q.lane, q.target, q.active)).collect();
+    assert_eq!(
+        shown,
+        [
+            (Lane::Space, BuildTarget::Unit(ship), true),
+            (Lane::Space, BuildTarget::Structure(orbital), false),
+            (Lane::Ground, BuildTarget::Structure(ground[0]), true),
+            (Lane::Ground, BuildTarget::Structure(ground[1]), false),
+        ]
+    );
+    for q in &menu.queue {
+        assert_eq!(q.progress > 0.0, q.active, "{}: progress {}", q.name, q.progress);
+    }
+}

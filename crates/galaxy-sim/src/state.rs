@@ -93,16 +93,19 @@ pub struct ProductionItem {
     pub cost: f32,
 }
 
-/// Production lane of a planet; each lane builds one item at a time.
+/// One of the two production queues of a planet. Everything built at a planet waits in one of them, whatever it is, and only the first
+/// item of a queue is built. Which queue an item belongs to is [`crate::World::lane_of`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Lane {
-    /// Ships, squadrons, research and structure level swaps.
-    Units = 0,
-    /// Structures.
-    Structures = 1,
-    /// Star base and tech upgrades.
-    Base = 2,
+    /// The space queue: ships, squadrons, hero and ship upgrades, research, star base levels, tech levels, orbital structures and their upgrades.
+    Space = 0,
+    /// The ground queue: ground structures, their upgrades and agents.
+    Ground = 1,
 }
+
+/// The three production lanes a planet had before the two queues, in the order the saves of that time list them: ships and other units,
+/// structures, star base and tech levels.
+pub type LegacyLanes = [VecDeque<ProductionItem>; 3];
 
 /// Dynamic state of a planet.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -113,8 +116,14 @@ pub struct PlanetState {
     pub starbase: Option<StarbaseTypeId>,
     /// Built structures.
     pub structures: Vec<StructureTypeId>,
-    /// Build queues indexed by [`Lane`].
-    pub queues: [VecDeque<ProductionItem>; 3],
+    /// The space queue and the ground queue, indexed by [`Lane`]. A save names them `build_queues`: `queues` is what the builds before the
+    /// two queues called their three lanes.
+    #[serde(default, rename = "build_queues")]
+    pub queues: [VecDeque<ProductionItem>; 2],
+    /// The three lanes of a save from before the two queues, as the file holds them (its `queues`). `World::sort_lanes` moves the items into
+    /// `queues` when the save is loaded; a running game has none and none are written.
+    #[serde(default, rename = "queues", skip_serializing)]
+    pub legacy_lanes: Option<LegacyLanes>,
     /// Faction currently holding orbit uncontested and seconds accumulated.
     pub capture: Option<(FactionId, f32)>,
     /// Damage the star base carries over from battles (`None` = undamaged).
@@ -535,8 +544,11 @@ pub enum CommandError {
     PopulationCap,
     /// Build limit reached.
     BuildLimit,
-    /// All slots / queue positions are used.
+    /// No slot is free for it: the structure slots of the planet, the fleet slots, or an order of its kind is already waiting (one star
+    /// base level per planet, one tech level per faction).
     NoSlot,
+    /// The planet would take the order, but the production queue it belongs to is full. It is accepted once a slot is free.
+    QueueFull,
     /// The faction cannot build this object.
     NotAvailable,
     /// There is no hyperspace path to the destination.
@@ -952,7 +964,15 @@ impl Galaxy {
             if let Some(s) = &p.siphon {
                 (s.by, s.agent, s.share.to_bits(), s.cycles_left, s.cycle_end.to_bits()).hash(&mut h);
             }
-            for q in &p.queues {
+            // The builds before the two queues hashed three lanes per planet: those of their save while the state still holds them, and
+            // for a state that has none the two queues and an empty third lane.
+            let third = VecDeque::new();
+            let lanes: Vec<&VecDeque<ProductionItem>> = match &p.legacy_lanes {
+                _ if era >= HashEra::TwoQueues => p.queues.iter().collect(),
+                Some(lanes) => lanes.iter().collect(),
+                None => p.queues.iter().chain([&third]).collect(),
+            };
+            for q in lanes {
                 for it in q {
                     it.remaining.to_bits().hash(&mut h);
                 }
@@ -1004,13 +1024,15 @@ pub enum HashEra {
     /// Adds the hero gambling swing of every planet. The siphon and the spy reports came later and are hashed only when present, so they
     /// need no era of their own.
     HeroGamble,
+    /// A planet has two production queues (space, ground) where the earlier builds had three lanes.
+    TwoQueues,
 }
 
 impl HashEra {
     /// What this build writes.
-    pub const CURRENT: HashEra = HashEra::HeroGamble;
+    pub const CURRENT: HashEra = HashEra::TwoQueues;
     /// Every era, newest first.
-    pub const ALL: [HashEra; 3] = [HashEra::HeroGamble, HashEra::FleetSlots, HashEra::Unslotted];
+    pub const ALL: [HashEra; 4] = [HashEra::TwoQueues, HashEra::HeroGamble, HashEra::FleetSlots, HashEra::Unslotted];
 }
 
 /// Per-faction difficulty multipliers (`DifficultyAdjustments.xml`, see `alamo_data::DifficultyAdjustment`). Credits
@@ -1070,6 +1092,51 @@ mod tests {
         assert_eq!((p.hero_gamble, p.hero_gamble_at), (0.0, 0.0));
     }
 
+    /// A planet as this build writes it: the two queues are `build_queues`, and no lanes of an earlier build.
+    #[test]
+    fn a_planet_is_written_with_its_two_queues() {
+        let mut p = PlanetState::default();
+        p.queues[Lane::Ground as usize].push_back(ProductionItem { kind: ProductionKind::Structure(4), remaining: 20.0, total: 60.0, cost: 2000.0 });
+        let v = serde_json::to_value(&p).unwrap();
+        assert_eq!(v["build_queues"].as_array().map(Vec::len), Some(2));
+        assert_eq!(v["build_queues"][1][0]["remaining"], 20.0);
+        assert!(v.get("queues").is_none() && v.get("legacy_lanes").is_none(), "the three lanes are read, never written");
+        assert_eq!(serde_json::from_value::<PlanetState>(v).unwrap(), p);
+    }
+
+    /// A planet as the builds before the two queues wrote it: `queues` with three lanes. They are kept apart, in the order of the file.
+    #[test]
+    fn the_three_lanes_of_an_earlier_planet_state_are_kept_as_the_file_has_them() {
+        let item = |kind: ProductionKind, remaining: f32| ProductionItem { kind, remaining, total: 60.0, cost: 100.0 };
+        let lanes: LegacyLanes = [[item(ProductionKind::Unit(7), 12.5)].into(), [item(ProductionKind::Structure(4), 20.0), item(ProductionKind::Structure(9), 45.0)].into(), [item(ProductionKind::Starbase(3), 80.0)].into()];
+        let mut v = serde_json::to_value(PlanetState::default()).unwrap();
+        let o = v.as_object_mut().unwrap();
+        assert!(o.remove("build_queues").is_some());
+        o.insert("queues".into(), serde_json::to_value(&lanes).unwrap());
+        let p: PlanetState = serde_json::from_value(v).expect("the old field set still loads");
+        assert!(p.queues.iter().all(|q| q.is_empty()));
+        assert_eq!(p.legacy_lanes, Some(lanes));
+    }
+
+    /// The checkpoint of an earlier build covers its three lanes; the one of this build the two queues. A state without lanes is hashed
+    /// for an earlier era as if its third lane were empty, so a sorted state has one checkpoint per era as well.
+    #[test]
+    fn an_earlier_era_hashes_the_lanes_and_this_one_the_queues() {
+        let item = |remaining: f32| ProductionItem { kind: ProductionKind::Unit(7), remaining, total: 60.0, cost: 100.0 };
+        let mut old = small_galaxy();
+        old.planets[0].legacy_lanes = Some([[item(12.5)].into(), VecDeque::new(), [item(80.0)].into()]);
+        let mut other = old.clone();
+        other.planets[0].legacy_lanes = Some([[item(12.5)].into(), [item(80.0)].into(), VecDeque::new()]);
+        assert_ne!(old.state_hash_of(HashEra::HeroGamble), other.state_hash_of(HashEra::HeroGamble), "the lane of an item is part of the old checkpoint");
+        assert_eq!(old.state_hash(), other.state_hash(), "this era does not look at the lanes");
+        // Sorted into the queues, both are the same state.
+        let mut sorted = small_galaxy();
+        sorted.planets[0].queues[Lane::Space as usize] = [item(12.5), item(80.0)].into();
+        assert_ne!(sorted.state_hash(), old.state_hash());
+        assert_eq!(sorted.hash_era(sorted.state_hash()), Some(HashEra::TwoQueues));
+        assert_eq!(sorted.hash_era(sorted.state_hash_of(HashEra::HeroGamble)), Some(HashEra::HeroGamble));
+    }
+
     fn small_galaxy() -> Galaxy {
         let mut g = Galaxy::sized(2, vec![FactionState::default(); 2], 9);
         g.time = 61.0;
@@ -1123,6 +1190,8 @@ mod tests {
             (include_str!("../tests/data/galaxy_2026_10_09.json"), HashEra::Unslotted, 8582458208983620772_u64),
             (include_str!("../tests/data/galaxy_2026_10_17.json"), HashEra::FleetSlots, 92986603445415557),
             (include_str!("../tests/data/galaxy_2026_11_08.json"), HashEra::HeroGamble, 8936658278716100256),
+            // The same build generation with every lane busy: two ships, three structures (ground, orbital, ground) and a star base level.
+            (include_str!("../tests/data/galaxy_2026_11_10.json"), HashEra::HeroGamble, 12292670263881255531),
         ];
         for (text, era, checkpoint) in cases {
             let g: Galaxy = serde_json::from_str(text).unwrap_or_else(|e| panic!("{era:?}: {e}"));
@@ -1132,6 +1201,9 @@ mod tests {
             // What the build did not know yet starts empty.
             assert_eq!((g.planets[0].hero_gamble, g.planets[0].siphon, g.planets[0].last_space_battle, g.planets[0].battle_settled), (0.0, None, None, None), "{era:?}");
             assert_eq!(g.fleets[&3].slot, if era == HashEra::Unslotted { 0 } else { 2 }, "{era:?}");
+            // The lanes of the file are kept as they are until a load sorts them into the two queues (`World::sort_lanes`).
+            assert!(g.planets.iter().all(|p| p.legacy_lanes.is_some() && p.queues.iter().all(|q| q.is_empty())), "{era:?}");
+            assert_eq!(g.planets[0].legacy_lanes.as_ref().unwrap()[0][0].remaining, 12.5, "{era:?}");
         }
     }
 

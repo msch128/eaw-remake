@@ -44,7 +44,7 @@ impl World {
         if self.ground_base_level(galaxy, planet) < ut.req_ground_base {
             out.push(Unmet::GroundBaseLevel(ut.req_ground_base));
         }
-        out.extend(self.unmet_structures(ps, &ut.req_structures, false));
+        out.extend(self.unmet_structures(ps, &ut.req_structures, None));
         if let UnitRole::Upgrade { from, .. } = ut.role
             && !galaxy.fleets.values().any(|f| f.owner == faction && f.location == FleetLocation::AtPlanet(planet) && f.units.get(&from).is_some_and(|&n| n > 0))
         {
@@ -70,7 +70,7 @@ impl World {
         if self.starbase_level(galaxy, planet) < st.req_starbase {
             out.push(Unmet::StarBaseLevel(st.req_starbase));
         }
-        out.extend(self.unmet_structures(ps, &st.req_structures, true));
+        out.extend(self.unmet_structures(ps, &st.req_structures, Some(self.lane_of(&ProductionKind::Structure(structure)))));
         out
     }
 
@@ -83,16 +83,17 @@ impl World {
             out.push(Unmet::StarBaseLevel(up.req_starbase));
         }
         if self.tech_needs_institute(faction) {
-            out.extend(self.unmet_structures(ps, &up.req_structures, false));
+            out.extend(self.unmet_structures(ps, &up.req_structures, None));
         }
         out
     }
 
-    /// The requirement groups no structure of `ps` meets (structures: also none queued before the item, as in `check_build_structure`).
-    fn unmet_structures(&self, ps: &PlanetState, groups: &[Vec<StructureTypeId>], count_queued: bool) -> Vec<Unmet> {
-        let queued: Vec<StructureTypeId> = ps.queues[Lane::Structures as usize]
+    /// The requirement groups no structure of `ps` meets. With `queued_in`, structures waiting in that queue count as met (a structure order: also none
+    /// queued before it in its own queue, as in `check_build_structure`).
+    fn unmet_structures(&self, ps: &PlanetState, groups: &[Vec<StructureTypeId>], queued_in: Option<Lane>) -> Vec<Unmet> {
+        let queued: Vec<StructureTypeId> = queued_in
             .iter()
-            .filter(|_| count_queued)
+            .flat_map(|&lane| &ps.queues[lane as usize])
             .filter_map(|i| match i.kind {
                 ProductionKind::Structure(s) => Some(s),
                 _ => None,

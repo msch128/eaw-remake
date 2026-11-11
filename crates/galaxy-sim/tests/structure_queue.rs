@@ -48,11 +48,11 @@ fn ground_structures_queue_up_to_the_free_slots_and_chain_on_queued_prerequisite
     println!("queued {} ground structures: {names:?}", queued.len());
     assert!(queued.len() >= 2, "several ground structures queue at once: {names:?}");
     assert!(queued.len() as i32 <= slots);
-    let in_queue = |sim: &Sim| sim.galaxy().planets[p as usize].queues[Lane::Structures as usize].len();
+    let in_queue = |sim: &Sim| sim.galaxy().planets[p as usize].queues[Lane::Ground as usize].len();
     assert_eq!(in_queue(&sim), queued.len());
     // Cancelling the first one drops everything that needed it.
     let before = in_queue(&sim);
-    sim.apply(Command::CancelProduction { faction: empire, planet: p, lane: Lane::Structures, index: 0 }).unwrap();
+    sim.apply(Command::CancelProduction { faction: empire, planet: p, lane: Lane::Ground, index: 0 }).unwrap();
     assert!(in_queue(&sim) < before - 1, "the structures that needed the cancelled one leave the queue too ({before} -> {})", in_queue(&sim));
 }
 
@@ -163,18 +163,16 @@ fn orbital_and_ground_structures_build_in_parallel() {
     sim.apply(Command::BuildStructure { faction: empire, planet: p, structure: ground_s }).unwrap();
     sim.apply(Command::BuildStructure { faction: empire, planet: p, structure: orbital_s }).unwrap();
 
-    let q = &sim.galaxy().planets[p as usize].queues[Lane::Structures as usize];
-    assert_eq!(q.len(), 2);
-    let g_rem_before = q[0].remaining;
-    let o_rem_before = q[1].remaining;
+    // One is the first item of the ground queue, the other the first of the space queue.
+    let first = |sim: &Sim, lane: Lane| sim.galaxy().planets[p as usize].queues[lane as usize].front().map(|i| i.remaining);
+    let (g_rem_before, o_rem_before) = (first(&sim, Lane::Ground).expect("ground item"), first(&sim, Lane::Space).expect("orbital item"));
 
     // Step 5 seconds
     sim.step(5.0);
 
-    let q = &sim.galaxy().planets[p as usize].queues[Lane::Structures as usize];
-    assert_eq!(q.len(), 2, "both structures still building");
-    assert!((q[0].remaining - (g_rem_before - 5.0)).abs() < 0.1, "ground progressed by 5s");
-    assert!((q[1].remaining - (o_rem_before - 5.0)).abs() < 0.1, "orbital progressed by 5s in parallel");
+    let (g_rem, o_rem) = (first(&sim, Lane::Ground).expect("ground structure still building"), first(&sim, Lane::Space).expect("orbital structure still building"));
+    assert!((g_rem - (g_rem_before - 5.0)).abs() < 0.1, "ground progressed by 5s");
+    assert!((o_rem - (o_rem_before - 5.0)).abs() < 0.1, "orbital progressed by 5s in parallel");
 }
 
 #[test]
@@ -205,7 +203,7 @@ fn the_space_side_of_the_queue_holds_five_items_and_a_sixth_is_refused() {
     for _ in 0..5 {
         sim.apply(Command::BuildUnit { faction: empire, planet: p, unit }).unwrap();
     }
-    assert_eq!(sim.apply(Command::BuildUnit { faction: empire, planet: p, unit }), Err(CommandError::NoSlot), "the sixth ship has no queue slot");
+    assert_eq!(sim.apply(Command::BuildUnit { faction: empire, planet: p, unit }), Err(CommandError::QueueFull), "the sixth ship has no queue slot");
     assert_eq!(sim.world().queued_on_side(&sim.galaxy().planets[p as usize], false), 5);
     assert_eq!(sim.world().queued_on_side(&sim.galaxy().planets[p as usize], true), 0, "the ground side is separate");
 }

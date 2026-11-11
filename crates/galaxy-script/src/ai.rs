@@ -124,7 +124,7 @@ impl AiSim for SimAdapter<'_> {
     fn build_queue(&self, pl: PlanetId) -> Vec<QueueView> {
         let ps = &self.sim.galaxy().planets[pl as usize];
         let mut out = Vec::new();
-        for lane in [Lane::Units, Lane::Structures, Lane::Base] {
+        for lane in [Lane::Space, Lane::Ground] {
             for it in &ps.queues[lane as usize] {
                 let name = match &it.kind {
                     ProductionKind::Unit(u) => self.world.units[*u as usize].name.clone(),

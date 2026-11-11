@@ -392,7 +392,14 @@ impl ScriptedSim {
             sim.load_notes.push(format!("ids translated by name: the save knew {} unit types, {} structures and {} star bases, the game data has {}, {} and {}", saved.units.len(), saved.structures.len(), saved.starbases.len(), now.units.len(), now.structures.len(), now.starbases.len()));
             state
         };
-        // Equal to the checkpoint of the file unless ids moved.
+        // A save from before the two production queues holds three lanes per planet. They are sorted into the space queue and the ground
+        // queue here, after the file was verified as it is and its ids are those of this build.
+        let mut state = state;
+        if state.sim.galaxy.planets.iter().any(|p| p.legacy_lanes.is_some()) {
+            let moved = sim.with_sim(|s| s.world().sort_lanes(&mut state.sim.galaxy));
+            sim.load_notes.push(format!("the save has the three production lanes of an earlier build; their {moved} items now wait in the space queue and the ground queue of their planet"));
+        }
+        // Equal to the checkpoint of the file unless ids moved or lanes were sorted.
         let expected = state.sim.galaxy.state_hash_of(era);
         {
             let mut i = sim.inner.borrow_mut();

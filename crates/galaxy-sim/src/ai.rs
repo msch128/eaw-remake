@@ -36,9 +36,11 @@ fn plan_economy(world: &World, galaxy: &Galaxy, faction: FactionId, rng: &mut Rn
     // things: shipyards are expensive in the data, and an AI that never saves for one never fields a ship.
     let saving = shipyard_goal(world, galaxy, faction, &owned);
 
-    // Tech: buy the next level at the best developed planet.
-    if let Some(&p) = owned.iter().max_by_key(|&&p| (world.starbase_level(galaxy, p), std::cmp::Reverse(p)))
-        && let Ok(idx) = world.check_upgrade_tech(galaxy, faction, p)
+    // Tech: buy the next level at the best developed planet that takes the order (a full space queue does not).
+    if let Some((p, idx)) = owned
+        .iter()
+        .filter_map(|&p| world.check_upgrade_tech(galaxy, faction, p).ok().map(|idx| (p, idx)))
+        .max_by_key(|&(p, _)| (world.starbase_level(galaxy, p), std::cmp::Reverse(p)))
     {
         let cost = f64::from(world.tech_cost(galaxy, faction, idx));
         if cost <= budget && saving.is_none_or(|(goal, _)| budget - cost >= goal) {
@@ -57,8 +59,7 @@ fn plan_economy(world: &World, galaxy: &Galaxy, faction: FactionId, rng: &mut Rn
         let value = world.planets[p as usize].credit_value;
 
         // Star base first, then upgrades on valuable planets.
-        if ps.queues[Lane::Base as usize].is_empty()
-            && let Ok(next) = world.check_upgrade_starbase(galaxy, faction, p)
+        if let Ok(next) = world.check_upgrade_starbase(galaxy, faction, p)
         {
             let sb = &world.starbases[next as usize];
             let rich = budget > 60.0 * sb.cost as f64;
@@ -78,7 +79,8 @@ fn plan_economy(world: &World, galaxy: &Galaxy, faction: FactionId, rng: &mut Rn
 
         // Structures: prefer ones that unlock buildable units, then income.
         let has_unlocker = ps.structures.iter().any(|&s| world.structure_unlocks[s as usize] > 0);
-        if ps.queues[Lane::Structures as usize].is_empty() && (!has_unlocker || rng.unit() < 0.35) {
+        let structure_waiting = ps.queues.iter().flatten().any(|i| matches!(i.kind, ProductionKind::Structure(_)));
+        if !structure_waiting && (!has_unlocker || rng.unit() < 0.35) {
             let mut best: Option<(f32, StructureTypeId)> = None;
             for &s in &world.buildable_structures[faction as usize] {
                 let st = &world.structures[s as usize];
@@ -109,7 +111,8 @@ fn plan_economy(world: &World, galaxy: &Galaxy, faction: FactionId, rng: &mut Rn
         let crowded = fs.population_used * 2 >= fs.population_cap;
         // A rich faction keeps several ships in the queue.
         let allowed = 1 + (budget.max(0.0) / 40_000.0) as usize;
-        if ps.queues[Lane::Units as usize].len() < allowed.min(world.config.max_queue_len) && budget > 0.0 {
+        let ships_waiting = ps.queues[Lane::Space as usize].iter().filter(|i| matches!(i.kind, ProductionKind::Unit(_))).count();
+        if ships_waiting < allowed.min(world.config.max_queue_len) && budget > 0.0 {
             let mut best: Option<(f32, UnitTypeId)> = None;
             for &u in &world.buildable_units[faction as usize] {
                 let ut = &world.units[u as usize];

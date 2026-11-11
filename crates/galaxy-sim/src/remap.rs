@@ -195,12 +195,13 @@ impl Remap<'_> {
     }
 
     fn planet_state(&mut self, p: PlanetState) -> PlanetState {
-        let PlanetState { owner, starbase, structures, queues, capture, base_health, destroyed, gamble, gamble_at, siphon, hero_gamble, hero_gamble_at, last_space_battle, suspended_structures, battle_settled: _ } = p;
+        let PlanetState { owner, starbase, structures, queues, legacy_lanes, capture, base_health, destroyed, gamble, gamble_at, siphon, hero_gamble, hero_gamble_at, last_space_battle, suspended_structures, battle_settled: _ } = p;
         PlanetState {
             owner: owner.map(|f| self.faction(f)),
             starbase: starbase.map(|b| self.starbase(b)),
             structures: structures.into_iter().map(|s| self.structure(s)).collect(),
             queues: queues.map(|q| q.into_iter().map(|i| self.item(i)).collect()),
+            legacy_lanes: legacy_lanes.map(|lanes| lanes.map(|q| q.into_iter().map(|i| self.item(i)).collect())),
             capture: capture.map(|(f, t)| (self.faction(f), t)),
             base_health,
             destroyed,
@@ -498,10 +499,16 @@ mod tests {
             starbase: Some(0),
             structures: vec![0],
             queues: [
-                [ProductionItem { kind: ProductionKind::Unit(1), remaining: 3.0, total: 9.0, cost: 50.0 }].into(),
+                [
+                    ProductionItem { kind: ProductionKind::Unit(1), remaining: 3.0, total: 9.0, cost: 50.0 },
+                    ProductionItem { kind: ProductionKind::Starbase(0), remaining: 1.0, total: 2.0, cost: 5.0 },
+                    ProductionItem { kind: ProductionKind::Tech(2), remaining: 1.0, total: 2.0, cost: 5.0 },
+                ]
+                .into(),
                 [ProductionItem { kind: ProductionKind::Structure(0), remaining: 1.0, total: 2.0, cost: 5.0 }].into(),
-                [ProductionItem { kind: ProductionKind::Starbase(0), remaining: 1.0, total: 2.0, cost: 5.0 }, ProductionItem { kind: ProductionKind::Tech(2), remaining: 1.0, total: 2.0, cost: 5.0 }].into(),
             ],
+            // A state read from a save of before the two queues still has its three lanes.
+            legacy_lanes: Some([[ProductionItem { kind: ProductionKind::Unit(1), remaining: 4.0, total: 8.0, cost: 50.0 }].into(), VecDeque::new(), VecDeque::new()]),
             capture: Some((0, 2.5)),
             siphon: Some(ActiveSiphon { by: 0, agent: 1, share: 0.1, cycles_left: 2, cycle_end: 90.0 }),
             ..PlanetState::default()
@@ -536,11 +543,12 @@ mod tests {
         }
         g.hyperspace.get_mut(&5).unwrap().1 = 0;
         g.planets[1].queues[0][0].kind = ProductionKind::Unit(0);
+        g.planets[1].legacy_lanes.as_mut().unwrap()[0][0].kind = ProductionKind::Unit(0);
         g.planets[1].siphon.as_mut().unwrap().agent = 0;
         g.factions[1].built_lifetime = BTreeMap::from([(3, 4), (0, 1)]);
         expect.passive_types = BTreeMap::from([(1, vec![3, 0])]);
         assert_eq!(after, expect);
-        assert_eq!(after.galaxy.planets[1].queues[2][1].kind, ProductionKind::Tech(2), "a tech level is not a catalog id");
+        assert_eq!(after.galaxy.planets[1].queues[0][2].kind, ProductionKind::Tech(2), "a tech level is not a catalog id");
     }
 
     #[test]

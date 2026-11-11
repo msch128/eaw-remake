@@ -148,8 +148,9 @@ impl Sim {
                 g.factions[faction as usize].credits -= f64::from(cost);
                 g.factions[faction as usize].stats.credits_spent += f64::from(cost);
                 let t = secs * world.config.build_time_scale * g.factions[faction as usize].difficulty.build_time;
-                g.planets[planet as usize].queues[Lane::Units as usize].push_back(ProductionItem {
-                    kind: ProductionKind::Unit(unit),
+                let kind = ProductionKind::Unit(unit);
+                g.planets[planet as usize].queues[world.lane_of(&kind) as usize].push_back(ProductionItem {
+                    kind,
                     remaining: t,
                     total: t,
                     cost,
@@ -162,8 +163,9 @@ impl Sim {
                 g.factions[faction as usize].credits -= st.cost as f64;
                 g.factions[faction as usize].stats.credits_spent += f64::from(st.cost);
                 let t = st.build_time * world.config.build_time_scale * g.factions[faction as usize].difficulty.build_time;
-                g.planets[planet as usize].queues[Lane::Structures as usize].push_back(ProductionItem {
-                    kind: ProductionKind::Structure(structure),
+                let kind = ProductionKind::Structure(structure);
+                g.planets[planet as usize].queues[world.lane_of(&kind) as usize].push_back(ProductionItem {
+                    kind,
                     remaining: t,
                     total: t,
                     cost: st.cost,
@@ -176,8 +178,9 @@ impl Sim {
                 g.factions[faction as usize].credits -= sb.cost as f64;
                 g.factions[faction as usize].stats.credits_spent += f64::from(sb.cost);
                 let t = sb.build_time * world.config.build_time_scale * g.factions[faction as usize].difficulty.build_time;
-                g.planets[planet as usize].queues[Lane::Base as usize].push_back(ProductionItem {
-                    kind: ProductionKind::Starbase(next),
+                let kind = ProductionKind::Starbase(next);
+                g.planets[planet as usize].queues[world.lane_of(&kind) as usize].push_back(ProductionItem {
+                    kind,
                     remaining: t,
                     total: t,
                     cost: sb.cost,
@@ -191,8 +194,9 @@ impl Sim {
                 g.factions[faction as usize].credits -= cost as f64;
                 g.factions[faction as usize].stats.credits_spent += f64::from(cost);
                 let t = up.time * world.config.build_time_scale * g.factions[faction as usize].difficulty.build_time;
-                g.planets[planet as usize].queues[Lane::Base as usize].push_back(ProductionItem {
-                    kind: ProductionKind::Tech(idx),
+                let kind = ProductionKind::Tech(idx);
+                g.planets[planet as usize].queues[world.lane_of(&kind) as usize].push_back(ProductionItem {
+                    kind,
                     remaining: t,
                     total: t,
                     cost,
@@ -522,18 +526,18 @@ impl Sim {
                 g.factions[faction as usize].credits += refund;
                 g.factions[faction as usize].stats.credits_spent -= refund;
                 // Queued structures that needed the cancelled one (and nothing else provides it) cannot start any more: they go back too.
-                if lane == Lane::Structures {
+                if matches!(item.kind, ProductionKind::Structure(_)) {
                     let mut refunded = refund;
                     loop {
                         let ps = &mut g.planets[planet as usize];
-                        let orphan = (0..ps.queues[Lane::Structures as usize].len()).find(|&i| {
-                            let ProductionKind::Structure(s) = ps.queues[Lane::Structures as usize][i].kind else { return false };
+                        let orphan = (0..ps.queues[lane as usize].len()).find(|&i| {
+                            let ProductionKind::Structure(s) = ps.queues[lane as usize][i].kind else { return false };
                             let mut earlier = ps.clone();
-                            earlier.queues[Lane::Structures as usize].truncate(i);
-                            world.missing_structures_queued(&earlier, &world.structures[s as usize].req_structures).is_some()
+                            earlier.queues[lane as usize].truncate(i);
+                            world.missing_structures_queued(&earlier, lane, &world.structures[s as usize].req_structures).is_some()
                         });
                         let Some(i) = orphan else { break };
-                        let it = ps.queues[Lane::Structures as usize].remove(i).expect("index found above");
+                        let it = ps.queues[lane as usize].remove(i).expect("index found above");
                         let back = f64::from(it.cost) * f64::from(world.config.cancel_refund);
                         g.factions[faction as usize].credits += back;
                         g.factions[faction as usize].stats.credits_spent -= back;
@@ -663,70 +667,21 @@ impl Sim {
         }
     }
 
+    /// Builds the first item of the space queue and of the ground queue of every owned planet; whatever is behind it waits its turn.
     fn produce(&mut self, dt: f32, events: &mut Vec<Event>) {
         let world = self.world.clone();
         let w = &*world;
         for pi in 0..self.galaxy.planets.len() {
             let Some(owner) = self.galaxy.planets[pi].owner else { continue };
-            for lane in 0..3 {
-                if lane == Lane::Structures as usize {
-                    // Ground and orbital structures build in parallel: the first of each kind progresses simultaneously.
-                    let mut first_orbital = None;
-                    let mut first_ground = None;
-                    let q = &mut self.galaxy.planets[pi].queues[lane];
-                    for (idx, item) in q.iter_mut().enumerate() {
-                        if let ProductionKind::Structure(s) = item.kind {
-                            if w.structures[s as usize].orbital {
-                                if first_orbital.is_none() {
-                                    item.remaining -= dt;
-                                    first_orbital = Some((idx, item.remaining <= 0.0));
-                                }
-                            } else if first_ground.is_none() {
-                                item.remaining -= dt;
-                                first_ground = Some((idx, item.remaining <= 0.0));
-                            }
-                        } else if idx == 0 {
-                            item.remaining -= dt;
-                            first_orbital = Some((0, item.remaining <= 0.0));
-                            break;
-                        }
-                    }
-
-                    let mut completed = Vec::new();
-                    if let Some((idx, done)) = first_orbital {
-                        if done {
-                            completed.push(idx);
-                        }
-                    }
-                    if let Some((idx, done)) = first_ground {
-                        if done && !completed.contains(&idx) {
-                            completed.push(idx);
-                        }
-                    }
-                    completed.sort_unstable_by(|a, b| b.cmp(a));
-                    for idx in completed {
-                        let item = self.galaxy.planets[pi].queues[lane].remove(idx).expect("completed index exists");
-                        let planet = pi as PlanetId;
-                        self.complete_production_item(owner, planet, pi, item, w, events);
-                    }
-                } else {
-                    let done = {
-                        let q = &mut self.galaxy.planets[pi].queues[lane];
-                        match q.front_mut() {
-                            Some(item) => {
-                                item.remaining -= dt;
-                                item.remaining <= 0.0
-                            }
-                            None => false,
-                        }
-                    };
-                    if !done {
-                        continue;
-                    }
-                    let item = self.galaxy.planets[pi].queues[lane].pop_front().expect("front exists");
-                    let planet = pi as PlanetId;
-                    self.complete_production_item(owner, planet, pi, item, w, events);
+            for lane in [Lane::Space, Lane::Ground] {
+                let q = &mut self.galaxy.planets[pi].queues[lane as usize];
+                let Some(item) = q.front_mut() else { continue };
+                item.remaining -= dt;
+                if item.remaining > 0.0 {
+                    continue;
                 }
+                let item = q.pop_front().expect("front exists");
+                self.complete_production_item(owner, pi as PlanetId, pi, item, w, events);
             }
         }
     }
@@ -1736,7 +1691,8 @@ impl Sim {
     }
 
     /// Replaces the mutable state with a snapshot taken from a sim built from the same data and campaign. Refuses a snapshot whose dimensions
-    /// (planets, factions) do not fit this world, or that refers to units, structures or star bases this world does not have.
+    /// (planets, factions) do not fit this world, or that refers to units, structures or star bases this world does not have. A snapshot from
+    /// before the two production queues has its three lanes sorted into them ([`World::sort_lanes`]).
     pub fn restore(&mut self, snap: SimSnapshot) -> Result<(), String> {
         let w = self.world.clone();
         let g = &snap.galaxy;
@@ -1750,12 +1706,14 @@ impl Sim {
             ProductionKind::Starbase(b) => b >= bases,
             ProductionKind::Tech(_) => false,
         };
-        let bad = g.planets.iter().any(|p| p.structures.iter().any(|&s| s >= structs) || p.starbase.is_some_and(|b| b >= bases) || p.queues.iter().flatten().any(|i| bad_kind(&i.kind)))
+        let bad = g.planets.iter().any(|p| p.structures.iter().any(|&s| s >= structs) || p.starbase.is_some_and(|b| b >= bases) || p.queues.iter().chain(p.legacy_lanes.iter().flatten()).flatten().any(|i| bad_kind(&i.kind)))
             || g.fleets.values().any(|f| f.units.keys().any(|&u| u >= units) || f.owner as usize >= w.factions.len() || f.planet().is_some_and(|p| p as usize >= w.planets.len()));
         if bad {
             return Err("the save refers to units or structures the game data does not have".into());
         }
         self.galaxy = snap.galaxy;
+        // A save from before the two queues: its three lanes become the space queue and the ground queue.
+        w.sort_lanes(&mut self.galaxy);
         self.ai = snap.ai;
         self.passive_types = snap.passive_types;
         self.tactical_requests.clear();

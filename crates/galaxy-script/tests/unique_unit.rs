@@ -130,7 +130,7 @@ fn a_phase_repair_does_not_spawn_a_second_hull() {
     });
     sim.apply(Command::BuildUnit { faction: empire, planet: kuat, unit: item }).expect("repair queued");
     sim.with_sim_mut(|s| {
-        s.galaxy_mut().planets[kuat as usize].queues[Lane::Units as usize].back_mut().unwrap().remaining = 0.05;
+        s.galaxy_mut().planets[kuat as usize].queues[Lane::Space as usize].back_mut().unwrap().remaining = 0.05;
     });
     let started = sim.runtime_mut().load_story_plots("Story_Plots_Empire.xml", Some("Empire")).expect("plots");
     assert!(started >= 3, "vanilla empire plots include the dreadnought file, started {started}");
@@ -147,7 +147,7 @@ fn a_phase_repair_does_not_spawn_a_second_hull() {
                 }
             }
         }
-        s.galaxy_mut().planets[kuat as usize].queues[Lane::Units as usize].push_back(ProductionItem {
+        s.galaxy_mut().planets[kuat as usize].queues[Lane::Space as usize].push_back(ProductionItem {
             kind: ProductionKind::Unit(item),
             remaining: 0.05,
             total: 0.05,

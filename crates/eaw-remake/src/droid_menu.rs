@@ -1203,7 +1203,7 @@ fn render_summary_tab(
                                 SummaryView::Production => {
                                     row.spawn((Text::new(p_name), font(13.0), TextColor(Color::WHITE), Node { width: Val::Percent(25.0), ..default() }));
 
-                                    let space_prod = p_state.queues[Lane::Units as usize]
+                                    let space_prod = p_state.queues[Lane::Space as usize]
                                         .front()
                                         .map(|item| match item.kind {
                                             ProductionKind::Unit(u) => sim.world.units.get(u as usize).map(|d| d.name.clone()).unwrap_or_else(|| format!("Unit {u}")),
@@ -1213,9 +1213,10 @@ fn render_summary_tab(
                                         })
                                         .unwrap_or_else(|| "Idle".into());
 
-                                    let ground_prod = p_state.queues[Lane::Structures as usize]
+                                    let ground_prod = p_state.queues[Lane::Ground as usize]
                                         .front()
                                         .map(|item| match item.kind {
+                                            ProductionKind::Unit(u) => sim.world.units.get(u as usize).map(|d| d.name.clone()).unwrap_or_else(|| format!("Unit {u}")),
                                             ProductionKind::Structure(s) => sim.world.structures.get(s as usize).map(|d| d.name.clone()).unwrap_or_else(|| format!("Structure {s}")),
                                             _ => "Constructing".into(),
                                         })

@@ -64,9 +64,10 @@ fn pay(sim: &mut Sim, faction: FactionId, planet: PlanetId, unit: UnitTypeId) ->
 /// Credits the completing tick added beyond this tick's income. The 500 (or other) item price was already paid at queue.
 fn script_refund(sim: &mut Sim, faction: FactionId, planet: PlanetId) -> f64 {
     {
-        let q = &mut sim.galaxy_mut().planets[planet as usize].queues[Lane::Units as usize];
-        assert_eq!(q.len(), 1, "one queued swap");
-        q[0].remaining = 0.01;
+        // An orbital swap waits in the space queue, a ground one in the ground queue.
+        let ps = &mut sim.galaxy_mut().planets[planet as usize];
+        assert_eq!(ps.queues.iter().map(|q| q.len()).sum::<usize>(), 1, "one queued swap");
+        ps.queues.iter_mut().flatten().next().expect("counted above").remaining = 0.01;
     }
     let (per_tick, before) = {
         let fs = &sim.galaxy().factions[faction as usize];

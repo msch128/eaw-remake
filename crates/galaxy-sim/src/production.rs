@@ -50,10 +50,11 @@ impl World {
         (!missing.is_empty()).then(|| missing.join(", "))
     }
 
-    /// Like [`World::missing_structures`], but structures waiting in the planet's structure queue count as present: the queue is
-    /// worked off in order, so a requirement queued before an item is built by the time the item starts.
-    pub fn missing_structures_queued(&self, ps: &PlanetState, groups: &[Vec<StructureTypeId>]) -> Option<String> {
-        let queued: Vec<StructureTypeId> = ps.queues[Lane::Structures as usize]
+    /// Like [`World::missing_structures`], but structures waiting in the queue `lane` count as present: a queue is worked off in order, so a
+    /// requirement queued before an item of the same queue is built by the time the item starts. A structure waiting in the other queue does not
+    /// count (nothing says which of the two queues gets there first).
+    pub fn missing_structures_queued(&self, ps: &PlanetState, lane: Lane, groups: &[Vec<StructureTypeId>]) -> Option<String> {
+        let queued: Vec<StructureTypeId> = ps.queues[lane as usize]
             .iter()
             .filter_map(|i| match i.kind {
                 ProductionKind::Structure(s) => Some(s),
@@ -89,10 +90,46 @@ impl World {
         }
     }
 
-    /// Queued items on one side of the production bar (see [`World::on_ground_side`]). The bar has `max_queue_len` slots per side, so that is also
-    /// where an order for a ship or a structure stops being accepted.
+    /// The queue `kind` waits in: the ground queue for what is bought on the planet side of the production bar, the space queue for everything else.
+    pub fn lane_of(&self, kind: &ProductionKind) -> Lane {
+        if self.on_ground_side(kind) { Lane::Ground } else { Lane::Space }
+    }
+
+    /// Moves the three production lanes of a save from before the two queues ([`PlanetState::legacy_lanes`]) into the queues and returns how many
+    /// items it moved. Every item goes to its queue ([`World::lane_of`]) and keeps what was built of it. Up to four items of a planet were being
+    /// built at once in those builds: the first of the unit lane, the first orbital and the first ground structure of the structure lane, the
+    /// first of the star base and tech lane. They come first in their queue, in the order of the lanes (units, structures, star base and tech
+    /// levels), and what was waiting follows in the same order. From here on only the first item of each queue is built.
+    pub fn sort_lanes(&self, galaxy: &mut Galaxy) -> usize {
+        let mut moved = 0;
+        for ps in &mut galaxy.planets {
+            let Some(lanes) = ps.legacy_lanes.take() else { continue };
+            let mut waiting: [Vec<ProductionItem>; 2] = Default::default();
+            for (lane, items) in lanes.into_iter().enumerate() {
+                // The structure lane built one item per side at once, the other two lanes their first item.
+                let mut side_started = [false; 2];
+                for (i, item) in items.into_iter().enumerate() {
+                    let queue = self.lane_of(&item.kind) as usize;
+                    let was_built = if lane == 1 { !std::mem::replace(&mut side_started[queue], true) } else { i == 0 };
+                    if was_built {
+                        ps.queues[queue].push_back(item);
+                    } else {
+                        waiting[queue].push(item);
+                    }
+                    moved += 1;
+                }
+            }
+            for (queue, items) in waiting.into_iter().enumerate() {
+                ps.queues[queue].extend(items);
+            }
+        }
+        moved
+    }
+
+    /// Items in the queue of one side of the production bar (see [`World::on_ground_side`]). The bar has `max_queue_len` slots per side, so that is
+    /// also where an order stops being accepted, whatever it is for (`CommandError::QueueFull`).
     pub fn queued_on_side(&self, ps: &PlanetState, ground: bool) -> usize {
-        ps.queues.iter().flatten().filter(|i| self.on_ground_side(&i.kind) == ground).count()
+        ps.queues[if ground { Lane::Ground } else { Lane::Space } as usize].len()
     }
 
     /// Credits a sold structure pays back: half its build cost plus 1. The Remake script `Delete_Building` (libUpgradeFunctions.lua) gives
@@ -130,8 +167,10 @@ impl World {
                 .chain(ps.suspended_structures.iter())
                 .filter(|&&s| self.structures[s as usize].orbital == orbital)
                 .count() as i32,
-            queued: ps.queues[Lane::Structures as usize]
+            queued: ps
+                .queues
                 .iter()
+                .flatten()
                 .filter(|i| matches!(i.kind, ProductionKind::Structure(s) if self.structures[s as usize].orbital == orbital))
                 .count() as i32,
             total,
@@ -270,10 +309,6 @@ impl World {
                 return Err(CommandError::RequirementsNotMet("planet".into()));
             }
         }
-        // Items the bar hides (tech, locked, wrong planet) are refused as such even when the queue is full.
-        if self.queued_on_side(ps, ut.ground_side) >= self.config.max_queue_len {
-            return Err(CommandError::NoSlot);
-        }
         if self.starbase_level(galaxy, planet) < ut.req_starbase {
             return Err(CommandError::RequirementsNotMet(format!("star base level {}", ut.req_starbase)));
         }
@@ -312,15 +347,19 @@ impl World {
         {
             return Err(CommandError::RequirementsNotMet(format!("{} in orbit", self.units[from as usize].name)));
         }
-        // `Build_Max_Instances_Per_Planet` on a structure swap counts copies in this planet's ship queue. The finished item does not stay.
+        // `Build_Max_Instances_Per_Planet` on a structure swap counts copies in this planet's queues. The finished item does not stay.
         if let UnitRole::StructureSwap { max_per_planet: Some(max), .. } = ut.role
             && max >= 0
-            && ps.queues[Lane::Units as usize].iter().filter(|i| i.kind == ProductionKind::Unit(unit)).count() as i32 >= max
+            && ps.queues.iter().flatten().filter(|i| i.kind == ProductionKind::Unit(unit)).count() as i32 >= max
         {
             return Err(CommandError::BuildLimit);
         }
         if ut.population > 0 && fs.population_used + self.queued_population(galaxy, faction) + ut.population > fs.population_cap {
             return Err(CommandError::PopulationCap);
+        }
+        // Last but the price: a full queue is named only for an order the planet would take once a slot is free.
+        if self.queued_on_side(ps, ut.ground_side) >= self.config.max_queue_len {
+            return Err(CommandError::QueueFull);
         }
         if fs.credits < f64::from(self.unit_cost(galaxy, faction, planet, unit).0) {
             return Err(CommandError::InsufficientCredits);
@@ -363,14 +402,10 @@ impl World {
                 return Err(CommandError::RequirementsNotMet("planet".into()));
             }
         }
-        // Items the bar hides (tech, locked, wrong planet) are refused as such even when the queue is full.
-        if self.queued_on_side(ps, !st.orbital) >= self.config.max_queue_len {
-            return Err(CommandError::NoSlot);
-        }
         if self.starbase_level(galaxy, planet) < st.req_starbase {
             return Err(CommandError::RequirementsNotMet(format!("star base level {}", st.req_starbase)));
         }
-        if let Some(missing) = self.missing_structures_queued(ps, &st.req_structures) {
+        if let Some(missing) = self.missing_structures_queued(ps, self.lane_of(&ProductionKind::Structure(structure)), &st.req_structures) {
             return Err(CommandError::RequirementsNotMet(missing));
         }
         if st.limit_current.is_some() || st.limit_lifetime.is_some() {
@@ -395,8 +430,10 @@ impl World {
                 return Err(CommandError::BuildLimit);
             }
         }
-        let queued_same = ps.queues[Lane::Structures as usize]
+        let queued_same = ps
+            .queues
             .iter()
+            .flatten()
             .filter(|i| match i.kind {
                 ProductionKind::Structure(s) => s == structure || st.family.contains(&s),
                 _ => false,
@@ -413,6 +450,10 @@ impl World {
         let capacity = self.planet_capacity(galaxy, planet);
         if (if st.orbital { capacity.space } else { capacity.ground }).free() <= 0 {
             return Err(CommandError::NoSlot);
+        }
+        // Last but the price: a full queue is named only for an order the planet would take once a slot is free.
+        if self.queued_on_side(ps, !st.orbital) >= self.config.max_queue_len {
+            return Err(CommandError::QueueFull);
         }
         if fs.credits < st.cost as f64 {
             return Err(CommandError::InsufficientCredits);
@@ -438,7 +479,8 @@ impl World {
         if ps.owner != Some(faction) {
             return Err(CommandError::NotOwner);
         }
-        if !ps.queues[Lane::Base as usize].is_empty() {
+        // One level at a time: the next order would be for the level that is already waiting in the space queue.
+        if ps.queues.iter().flatten().any(|i| matches!(i.kind, ProductionKind::Starbase(_))) {
             return Err(CommandError::NoSlot);
         }
         let next = self.next_starbase(galaxy, faction, planet).ok_or(CommandError::NotAvailable)?;
@@ -449,6 +491,9 @@ impl World {
         }
         if sb.tech > fs.tech {
             return Err(CommandError::RequirementsNotMet(format!("tech level {}", sb.tech)));
+        }
+        if self.queued_on_side(ps, self.on_ground_side(&ProductionKind::Starbase(next))) >= self.config.max_queue_len {
+            return Err(CommandError::QueueFull);
         }
         if fs.credits < sb.cost as f64 {
             return Err(CommandError::InsufficientCredits);
@@ -496,10 +541,8 @@ impl World {
         if ps.owner != Some(faction) {
             return Err(CommandError::NotOwner);
         }
-        if !ps.queues[Lane::Base as usize].is_empty() {
-            return Err(CommandError::NoSlot);
-        }
-        if galaxy.planets.iter().any(|p| p.owner == Some(faction) && p.queues[Lane::Base as usize].iter().any(|i| matches!(i.kind, ProductionKind::Tech(_)))) {
+        // One tech level at a time per faction.
+        if galaxy.planets.iter().any(|p| p.owner == Some(faction) && p.queues.iter().flatten().any(|i| matches!(i.kind, ProductionKind::Tech(_)))) {
             return Err(CommandError::NoSlot);
         }
         let idx = (fs.tech - info.start_tech).max(0) as usize;
@@ -514,6 +557,9 @@ impl World {
             && let Some(missing) = self.missing_structures(ps, &up.req_structures)
         {
             return Err(CommandError::RequirementsNotMet(missing));
+        }
+        if self.queued_on_side(ps, self.on_ground_side(&ProductionKind::Tech(idx))) >= self.config.max_queue_len {
+            return Err(CommandError::QueueFull);
         }
         let cost = self.tech_cost(galaxy, faction, idx);
         if fs.credits < cost as f64 {

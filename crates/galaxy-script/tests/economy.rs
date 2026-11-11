@@ -7,7 +7,7 @@ use std::sync::Arc;
 use alamo_data::load_galaxy;
 use alamo_fs::{FileSource, GameFs, GameInstall};
 use galaxy_script::{ScriptedConfig, ScriptedSim};
-use galaxy_sim::{Command, Event, FactionId, FleetLocation, PlanetId, SimConfig, World};
+use galaxy_sim::{Command, Event, FactionId, FleetLocation, PlanetId, ProductionKind, SimConfig, World};
 
 struct Report {
     name: String,
@@ -75,8 +75,10 @@ fn decide(sim: &mut ScriptedSim, me: FactionId) {
     for p in g.owned_planets(me).collect::<Vec<PlanetId>>() {
         let ps = &g.planets[p as usize];
         let info = &w.planets[p as usize];
+        // One order of each kind at a time per planet (the kinds share the two queues of the planet).
+        let waiting = |want: fn(&ProductionKind) -> bool| ps.queues.iter().flatten().any(|i| want(&i.kind));
         // Structures: best income per credit, else population or unlocks.
-        if ps.queues[1].is_empty() {
+        if !waiting(|k| matches!(k, ProductionKind::Structure(_))) {
             let best = w.buildable_structures[me as usize]
                 .iter()
                 .copied()
@@ -95,8 +97,8 @@ fn decide(sim: &mut ScriptedSim, me: FactionId) {
                 spend -= f64::from(w.structures[s as usize].cost);
             }
         }
-        // Base lane: star base first, then tech.
-        if ps.queues[2].is_empty() {
+        // Star base first, then tech.
+        if !waiting(|k| matches!(k, ProductionKind::Starbase(_) | ProductionKind::Tech(_))) {
             if let Ok(next) = w.check_upgrade_starbase(g, me, p)
                 && f64::from(w.starbases[next as usize].cost) <= spend * 0.5
                 && sim.apply(Command::UpgradeStarbase { faction: me, planet: p }).is_ok()
@@ -110,7 +112,7 @@ fn decide(sim: &mut ScriptedSim, me: FactionId) {
             }
         }
         // Ships.
-        if ps.queues[0].is_empty() && spend > 15000.0 {
+        if !waiting(|k| matches!(k, ProductionKind::Unit(_))) && spend > 15000.0 {
             let best = w.buildable_units[me as usize]
                 .iter()
                 .copied()

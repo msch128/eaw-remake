@@ -61,10 +61,27 @@ every owned planet, the planet's `Additional_Population_Capacity`, its star base
 
 ## 1.3 Production
 
-* Three lanes per planet, one item at a time per lane: ships, research items and structure level swaps (lane 0),
-  structures (lane 1), star base and tech upgrades (lane 2). Estimate: cost is paid when queued (the real game
-  charges progressively). Structure swaps share the ship queue: the structure lane only advances a non-structure
-  when it is the first item, so an upgrade queued behind a real structure would never finish.
+* Two production queues per planet, the space queue and the ground queue (`galaxy_sim::Lane`, `Sim::produce`).
+  Everything built at a planet waits in one of them, whatever it is; the table below says which. Only the first item
+  of a queue is built, the items behind it wait in the order they were bought and start from zero when it is their
+  turn. Estimate (the original engine's behaviour, as played in the Remake; the data shows the two queues as the two
+  strips of the production bar, see the next point). A queue holds `SimConfig::max_queue_len` items (5, the slots
+  of a strip): a full queue refuses any further order for it, a star base level and a tech level included
+  (`CommandError::QueueFull`). That answer is given last but the price, so it always means "accepted once a slot is
+  free": an item the planet refuses for another reason (a missing shipyard, a star base level, no structure slot) is
+  refused for that reason, and the menu keeps showing the missing requirement. A planet takes one star base level
+  order at a time, a faction one tech level order (`CommandError::NoSlot`).
+  Estimate: cost is paid when queued (the real game charges progressively). Cancelling gives back the share that is
+  not built yet, so the whole price for a waiting item. A planet that changes its owner loses both queues.
+* A structure may be ordered when its `Required_Special_Structures` stand on the planet or wait before it in its own
+  queue (they are built by the time its turn comes); a requirement waiting in the other queue does not count.
+  Cancelling a queued structure also cancels the structures behind it that needed it.
+* Saves from before the two queues hold three lanes per planet (units; structures; star base and tech levels), of which
+  up to four items were built at once: the first of the unit lane, the first orbital and the first ground structure,
+  the first of the star base and tech lane. On load every item goes to its queue and keeps what was built of it
+  (`World::sort_lanes`): what was being built comes first, in the order of the lanes, what was waiting follows in the
+  same order. From then on only the first item of each queue is built. Such a load can leave more than five items in
+  a queue; they are worked off, and new orders are accepted again once fewer than five wait.
 * Sides of the production bar (`World::on_ground_side`). Data: the build tab of an object says on which side it is bought.
   `Build_Tab_Space_Units` and `Build_Tab_Space_Station` are the space side (`b_space_tab`, queue slots `queue00..04`,
   tooltip `TEXT_TOOLTIP_QUEUE_SPACE`, `Left_Queue_Tint`); `Build_Tab_Land_Units`, `Build_Tab_Special_Structures` and
@@ -149,7 +166,7 @@ every owned planet, the planet's `Additional_Population_Capacity`, its star base
   `(from build cost - to build cost) * 0.5 + 1` per structure replaced, or 1 credit when none was. Those costs are
   the structure objects' `Build_Cost_Credits`, not the item price (already paid at queue). The script does not copy
   health, and structures have no per-instance health here. `Build_Max_Instances_Per_Planet` caps how many of that
-  item sit in the planet's ship queue. `Required_Ground_Base_Level` is not enforced. `*_ORBITAL_DUMMY` objects are
+  item wait in the planet's queues. `Required_Ground_Base_Level` is not enforced. `*_ORBITAL_DUMMY` objects are
   not spawned, so the script's despawn of them does nothing.
 * Spawner buildings and building families (`Scripts/GameObject/Upgrade_*.lua`, `Check_For_Higher_Level` and `Set_Structure`
   in `Scripts/Library/libUpgradeFunctions.lua`). Spawner structures (`*_SPAWNER`) and their upgrade/downgrade chains form
@@ -439,8 +456,8 @@ build-menu filters, not a start mode. The mode is this project's own:
   capped at the highest `GroundBase` `Base_Level` (5). The build checks refuse a unit below its `Required_Ground_Base_Level`
   ("Required : Ground Base Level"). The only structure with the tag (`Space_Mode_Ground_Rebel_Ion_Cannon`) has `Tech_Level`
   99, so structures do not check it.
-* Estimate: agents are queued in the ship lane (the game has a ground queue this project does not model) and join the
-  idle fleet at the planet like ships. They move like any fleet.
+* Agents are bought on the planet tab and wait in the ground queue (data: `Build_Tab_Heroes`, section 1.3). Estimate: a
+  finished agent joins the idle fleet at the planet like a ship and moves like any fleet.
 * Estimate: agents never fight (`Combat_Power_Value` 0, `Is_Stealth_Company`). A fleet of agents only is no party of a
   battle, does not contest or capture a planet and does not blockade; in a mixed fleet the agents are not battle members
   and stay when the warships are lost. A faction whose fleets are all agents and that owns no planet is eliminated and

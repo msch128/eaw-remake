@@ -255,19 +255,19 @@ fn cancelling_production_refunds_the_unspent_cost() {
     let cost = f64::from(w.units[unit as usize].cost);
     assert!((start - credits(&sim) - 2.0 * cost).abs() < 1.0);
     // The second entry has not started: full refund.
-    let r = sim.apply(Command::CancelProduction { faction: empire, planet: home, lane: Lane::Units, index: 1 });
+    let r = sim.apply(Command::CancelProduction { faction: empire, planet: home, lane: Lane::Space, index: 1 });
     assert_eq!(r, Ok(CommandOk::Refunded(cost)));
     // Let the first one run for a while: partial refund of the rest.
     sim.step(w.units[unit as usize].build_time * w.config.build_time_scale * 0.5);
     let before = credits(&sim);
-    let Ok(CommandOk::Refunded(back)) = sim.apply(Command::CancelProduction { faction: empire, planet: home, lane: Lane::Units, index: 0 }) else { panic!("refund") };
+    let Ok(CommandOk::Refunded(back)) = sim.apply(Command::CancelProduction { faction: empire, planet: home, lane: Lane::Space, index: 0 }) else { panic!("refund") };
     assert!(back > 0.3 * cost && back < 0.7 * cost, "about half is back: {back} of {cost}");
     assert!((credits(&sim) - before - back).abs() < 1e-6);
-    assert!(sim.galaxy().planets[home as usize].queues[Lane::Units as usize].is_empty());
+    assert!(sim.galaxy().planets[home as usize].queues[Lane::Space as usize].is_empty());
     // Others' planets and bad indices are refused.
-    assert_eq!(sim.apply(Command::CancelProduction { faction: empire, planet: home, lane: Lane::Units, index: 5 }), Err(CommandError::Invalid));
+    assert_eq!(sim.apply(Command::CancelProduction { faction: empire, planet: home, lane: Lane::Space, index: 5 }), Err(CommandError::Invalid));
     let rebel = w.faction_id("Rebel").unwrap();
-    assert_eq!(sim.apply(Command::CancelProduction { faction: rebel, planet: home, lane: Lane::Units, index: 0 }), Err(CommandError::NotOwner));
+    assert_eq!(sim.apply(Command::CancelProduction { faction: rebel, planet: home, lane: Lane::Space, index: 0 }), Err(CommandError::NotOwner));
 }
 
 #[test]

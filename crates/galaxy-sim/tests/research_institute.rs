@@ -153,7 +153,7 @@ fn built_in_ai_plans_tech_at_the_discounted_maw_price() {
     sim.galaxy_mut().planets[maw as usize].owner = Some(empire);
     for planet in &mut sim.galaxy_mut().planets {
         if planet.owner == Some(empire) {
-            planet.queues[Lane::Base as usize].clear();
+            planet.queues[Lane::Space as usize].retain(|i| !matches!(i.kind, ProductionKind::Starbase(_) | ProductionKind::Tech(_)));
         }
     }
 
@@ -193,13 +193,13 @@ fn tech_level_clamped_to_campaign_max_tech() {
     sim.galaxy_mut().factions[rebel as usize].tech = 4;
     sim.galaxy_mut().factions[rebel as usize].credits = 1.0e6;
     let planet = sim.galaxy().owned_planets(rebel).find(|&p| w.starbase_level(sim.galaxy(), p) >= 1).expect("rebel planet");
-    sim.galaxy_mut().planets[planet as usize].queues[Lane::Base as usize].clear();
+    sim.galaxy_mut().planets[planet as usize].queues[Lane::Space as usize].clear();
     sim.apply(Command::UpgradeTech { faction: rebel, planet }).expect("queue tech 5");
 
     sim.set_tech_level(rebel, max_tech);
     assert_eq!(sim.galaxy().factions[rebel as usize].tech, 5);
 
-    sim.galaxy_mut().planets[planet as usize].queues[Lane::Base as usize][0].remaining = 0.01;
+    sim.galaxy_mut().planets[planet as usize].queues[Lane::Space as usize][0].remaining = 0.01;
     sim.step(1.0);
 
     assert_eq!(
@@ -209,3 +209,31 @@ fn tech_level_clamped_to_campaign_max_tech() {
     );
 }
 
+
+/// The space queue of the best developed planet is full: the built-in AI buys its tech level at the next planet that takes the order, where
+/// it starts at once, and does not wait for a slot at the first one.
+#[test]
+fn built_in_ai_buys_tech_elsewhere_when_the_best_planet_has_a_full_space_queue() {
+    let Some(data) = load("1770851727", &["1770851727"]) else { return };
+    let c = data.campaign("GC_Full_Web_Way_Imperial").unwrap();
+    let mut sim = Sim::new(&data, c, SimConfig { victory_enabled: false, faction_override: Some("Rebel".into()), ..SimConfig::default() }).unwrap();
+    let w = sim.world().clone();
+    let empire = w.faction_id("Empire").unwrap();
+    sim.add_credits(empire, 1.0e7);
+    let takes_tech = |sim: &Sim| -> Vec<u32> { sim.galaxy().owned_planets(empire).filter(|&p| w.check_upgrade_tech(sim.galaxy(), empire, p).is_ok()).collect() };
+    assert!(takes_tech(&sim).len() >= 2, "the Empire starts with several star base planets");
+    let best = sim.galaxy().owned_planets(empire).max_by_key(|&p| (w.starbase_level(sim.galaxy(), p), std::cmp::Reverse(p))).expect("planet");
+    assert!(takes_tech(&sim).contains(&best));
+    let ship = w.buildable_units[empire as usize]
+        .iter()
+        .copied()
+        .find(|&u| w.units[u as usize].role == UnitRole::Ship && w.units[u as usize].limit_current.is_none() && w.check_build_unit(sim.galaxy(), empire, best, u).is_ok())
+        .expect("a ship the planet can build");
+    for _ in 0..w.config.max_queue_len {
+        sim.apply(Command::BuildUnit { faction: empire, planet: best, unit: ship }).expect("queued");
+    }
+    assert_eq!(w.check_upgrade_tech(sim.galaxy(), empire, best), Err(CommandError::QueueFull));
+    let at: Vec<u32> = ai::plan(&w, sim.galaxy(), empire, &mut rng::Rng::new(1)).into_iter().filter_map(|c| if let Command::UpgradeTech { planet, .. } = c { Some(planet) } else { None }).collect();
+    assert_eq!(at.len(), 1, "one tech order");
+    assert!(at[0] != best && takes_tech(&sim).contains(&at[0]), "ordered at {} where the queue has room", w.planets[at[0] as usize].name);
+}

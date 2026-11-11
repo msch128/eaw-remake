@@ -84,11 +84,11 @@ pub(crate) struct BarState {
     /// Active class filter of the space tab (`None` = everything).
     pub(crate) class: Option<BarClass>,
     spawned: bool,
-    /// Space production tab (ships, star base, tech) instead of the planet tab (structures).
+    /// Space production tab (what waits in the space queue) instead of the planet tab (what waits in the ground queue).
     space_tab: bool,
     /// What each visible pad orders.
     pub(crate) pads: Vec<Option<BuildTarget>>,
-    /// Queue slots (empty ones are `None`): lane, position in the lane and the credits a cancel gives back.
+    /// Queue slots (empty ones are `None`): queue, position in the queue and the credits a cancel gives back.
     pub(crate) queue: Vec<Option<(galaxy_sim::Lane, u32, f32)>>,
     /// Page of the build pads (see `MAX_PADS`).
     page: usize,
@@ -484,15 +484,14 @@ fn feed_bar(
     bar.queue.clear();
     bar.pads.clear();
     if let Some(menu) = &model.planet {
-        // Two lanes of five slots: space items (ships, star base, tech) left, ground structures right.
+        // The two queues of the planet, five slots each: the space queue left, the ground queue right.
         let mut per_lane: std::collections::BTreeMap<u8, u32> = Default::default();
         let mut shown = [0usize; 2];
         next.queue = vec![QueueEntry::default(); QUEUE_LANE_SLOTS * 2];
         bar.queue = vec![None; QUEUE_LANE_SLOTS * 2];
         for q in &menu.queue {
             let index = per_lane.entry(q.lane as u8).or_insert(0);
-            // The lanes follow the tabs: space items and orbital structures left (blue), ground structures right (orange).
-            let side = usize::from(!on_space_tab(&state.world, q.target));
+            let side = q.lane as usize;
             let (lane_index, cancel_index) = (shown[side], *index);
             *index += 1;
             if lane_index >= QUEUE_LANE_SLOTS {
@@ -514,7 +513,9 @@ fn feed_bar(
                         t.push('\n');
                         t.push_str(d.trim());
                     }
-                    t.push_str(&format!("\n@Progress\t{:.0}%\n@Time left\t{}\n@Cancel\t{}", q.progress * 100.0, format_duration(q.remaining_seconds, week), cancel));
+                    // Only the first item of a queue is built; the others wait with whatever was built of them.
+                    let status = if q.active { "" } else { " (waiting)" };
+                    t.push_str(&format!("\n@Progress\t{:.0}%{status}\n@Time left\t{}\n@Cancel\t{}", q.progress * 100.0, format_duration(q.remaining_seconds, week), cancel));
                     t
                 },
             };
@@ -2693,6 +2694,35 @@ mod tests {
         assert_eq!(BarClass::of(BuildCategory::Tech, false), BarClass::Station);
         assert_eq!(BarClass::of(BuildCategory::Structures, false), BarClass::Station);
     }
+    /// A pad is on the tab of the queue its order waits in: the ground structure upgrades and the agents of the Remake are bought on the
+    /// planet tab (`Build_Tab_Land_Units`, `Build_Tab_Heroes`) and wait in the ground queue, everything else that is a unit on the space tab.
+    #[test]
+    fn a_build_item_is_on_the_tab_of_its_queue() {
+        use alamo_fs::{GameFs, GameInstall};
+        use galaxy_play::BuildTarget;
+        use galaxy_sim::{Lane, ProductionKind};
+        let Some(install) = GameInstall::detect() else { return };
+        if !install.mod_data("1770851727").is_dir() {
+            eprintln!("skipping: Remake workshop mod not found");
+            return;
+        }
+        let data = alamo_data::load_galaxy(&GameFs::for_mod(&install, Some("1770851727")).unwrap()).0;
+        let campaign = data.campaign("GC_Full_Web_Way_Rebel").unwrap();
+        let sim = galaxy_sim::Sim::new(&data, campaign, galaxy_sim::SimConfig { victory_enabled: false, ..Default::default() }).unwrap();
+        let w = sim.world();
+        let (mut space, mut ground) = (0, 0);
+        for &u in w.buildable_units.iter().flatten() {
+            let in_space_queue = w.lane_of(&ProductionKind::Unit(u)) == Lane::Space;
+            assert_eq!(crate::play::on_space_tab(w, BuildTarget::Unit(u)), in_space_queue, "{}", w.units[u as usize].name);
+            *(if in_space_queue { &mut space } else { &mut ground }) += 1;
+        }
+        assert!(space > 100 && ground >= 20, "{space} unit items on the space tab, {ground} on the planet tab");
+        for &s in w.buildable_structures.iter().flatten() {
+            assert_eq!(crate::play::on_space_tab(w, BuildTarget::Structure(s)), w.lane_of(&ProductionKind::Structure(s)) == Lane::Space, "{}", w.structures[s as usize].name);
+        }
+        assert!(crate::play::on_space_tab(w, BuildTarget::Starbase(0)) && crate::play::on_space_tab(w, BuildTarget::Tech(0)));
+    }
+
     #[test]
     fn capitalize_first_letter() {
         assert_eq!(capitalize("requires tech"), "Requires tech");

@@ -124,15 +124,15 @@ pub struct BuildOption {
 /// One entry of a production queue.
 #[derive(Debug, Clone, PartialEq)]
 pub struct QueueEntry {
-    /// Lane the entry sits in.
+    /// The queue the entry waits in.
     pub lane: Lane,
     /// What is built.
     pub target: BuildTarget,
     /// Display name.
     pub name: String,
-    /// 0..=1 progress (only the first entry of a lane progresses).
+    /// 0..=1 progress (only the first entry of a queue progresses).
     pub progress: f32,
-    /// Galactic seconds left once it is its lane's turn.
+    /// Galactic seconds left once it is its turn in the queue.
     pub remaining_seconds: f32,
     /// True for the item currently being built.
     pub active: bool,
@@ -161,7 +161,7 @@ pub struct BuildMenu {
     pub structures: Vec<String>,
     /// Orderable entries, sorted by category then cost.
     pub options: Vec<BuildOption>,
-    /// Queued items of all lanes (units, structures, base).
+    /// The items of the space queue, then those of the ground queue.
     pub queue: Vec<QueueEntry>,
 }
 
@@ -190,7 +190,7 @@ fn availability(err: Result<(), CommandError>) -> Option<Availability> {
         Err(CommandError::InsufficientCredits) => Some(Availability::NeedCredits),
         Err(CommandError::PopulationCap) => Some(Availability::PopulationCap),
         Err(CommandError::BuildLimit) => Some(Availability::Limit),
-        Err(CommandError::NoSlot) => Some(Availability::Full),
+        Err(CommandError::NoSlot | CommandError::QueueFull) => Some(Availability::Full),
         Err(CommandError::RequirementsNotMet(r)) if r.starts_with("tech level") || r == "locked" || r == "planet" || r.starts_with("this planet takes") => None,
         Err(CommandError::RequirementsNotMet(r)) => Some(Availability::Requires(r)),
         Err(_) => None,
@@ -383,31 +383,13 @@ impl BuildMenu {
 
         // Queues.
         let mut queue = Vec::new();
-        for (lane_idx, lane) in [Lane::Units, Lane::Structures, Lane::Base].into_iter().enumerate() {
-            let mut seen_orbital = false;
-            let mut seen_ground = false;
-            for (i, item) in ps.queues[lane_idx].iter().enumerate() {
+        for lane in [Lane::Space, Lane::Ground] {
+            for (i, item) in ps.queues[lane as usize].iter().enumerate() {
                 let (target, name) = match &item.kind {
                     ProductionKind::Unit(u) => (BuildTarget::Unit(*u), names.unit(*u).to_owned()),
                     ProductionKind::Structure(s) => (BuildTarget::Structure(*s), names.structure(*s).to_owned()),
                     ProductionKind::Starbase(b) => (BuildTarget::Starbase(*b), names.starbase(*b).to_owned()),
                     ProductionKind::Tech(t) => (BuildTarget::Tech(*t), format!("Tech level {}", finfo.start_tech + *t as i32 + 1)),
-                };
-                let active = if lane == Lane::Structures {
-                    match item.kind {
-                        ProductionKind::Structure(s) => {
-                            if world.structures[s as usize].orbital {
-                                if !seen_orbital { seen_orbital = true; true } else { false }
-                            } else if !seen_ground {
-                                seen_ground = true; true
-                            } else {
-                                false
-                            }
-                        }
-                        _ => i == 0,
-                    }
-                } else {
-                    i == 0
                 };
                 queue.push(QueueEntry {
                     lane,
@@ -415,7 +397,8 @@ impl BuildMenu {
                     name,
                     progress: if item.total > 0.0 { (1.0 - item.remaining / item.total).clamp(0.0, 1.0) } else { 1.0 },
                     remaining_seconds: item.remaining.max(0.0),
-                    active,
+                    // Only the first item of a queue is built; the others wait.
+                    active: i == 0,
                 });
             }
         }

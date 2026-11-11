@@ -1,0 +1,252 @@
+{
+  "ai_paused": false,
+  "ai_timer": 0.0,
+  "allied": [],
+  "battles": [],
+  "cheated": true,
+  "damage": {
+    "1": {
+      "hull": 0.5,
+      "shield": 1.0
+    }
+  },
+  "dest_slots": {},
+  "escaping": [],
+  "factions": [
+    {
+      "built_lifetime": {},
+      "credits": 0.0,
+      "difficulty": {
+        "ai_sight_hops": null,
+        "build_time": 1.0,
+        "credit": 1.0,
+        "damage": 1.0,
+        "health": 1.0,
+        "shield": 1.0
+      },
+      "eliminated": false,
+      "income_per_week": 0.0,
+      "planets_owned": 0,
+      "population_cap": 0,
+      "population_used": 0,
+      "powers": [],
+      "stats": {
+        "battles_lost": 0,
+        "battles_won": 0,
+        "credits_earned": 0.0,
+        "credits_spent": 0.0,
+        "planets_captured": 0,
+        "planets_lost": 0,
+        "ships_built": 0,
+        "ships_lost": 0,
+        "structures_built": 0
+      },
+      "story_locked": [],
+      "superweapon_ready_at": 0.0,
+      "tech": 0,
+      "unlocked": []
+    },
+    {
+      "built_lifetime": {
+        "7": 2
+      },
+      "credits": 26748.5,
+      "difficulty": {
+        "ai_sight_hops": null,
+        "build_time": 1.0,
+        "credit": 1.0,
+        "damage": 1.0,
+        "health": 1.0,
+        "shield": 1.0
+      },
+      "eliminated": false,
+      "income_per_week": 0.0,
+      "planets_owned": 0,
+      "population_cap": 0,
+      "population_used": 0,
+      "powers": [],
+      "stats": {
+        "battles_lost": 0,
+        "battles_won": 0,
+        "credits_earned": 0.0,
+        "credits_spent": 0.0,
+        "planets_captured": 0,
+        "planets_lost": 0,
+        "ships_built": 2,
+        "ships_lost": 0,
+        "structures_built": 0
+      },
+      "story_locked": [],
+      "superweapon_ready_at": 0.0,
+      "tech": 3,
+      "unlocked": [
+        "some_research"
+      ]
+    }
+  ],
+  "fleets": {
+    "3": {
+      "id": 3,
+      "location": {
+        "AtPlanet": 0
+      },
+      "owner": 1,
+      "previous_planet": 1,
+      "slot": 2,
+      "units": {
+        "11": 1,
+        "7": 2
+      }
+    },
+    "4": {
+      "id": 4,
+      "location": {
+        "Moving": {
+          "from": 1,
+          "progress": 3.5,
+          "rest": [],
+          "route": 0,
+          "to": 0
+        }
+      },
+      "owner": 0,
+      "previous_planet": 1,
+      "slot": 0,
+      "units": {
+        "5": 1
+      }
+    }
+  },
+  "hyperspace": {
+    "3": [
+      3,
+      11
+    ]
+  },
+  "merged_into": {},
+  "next_battle_id": 1,
+  "next_fleet_id": 5,
+  "next_ship_id": 5,
+  "planets": [
+    {
+      "base_health": null,
+      "capture": null,
+      "destroyed": false,
+      "gamble": -0.25,
+      "gamble_at": 1230.0,
+      "hero_gamble": 0.0,
+      "hero_gamble_at": 0.0,
+      "owner": 1,
+      "queues": [
+        [
+          {
+            "cost": 1500.0,
+            "kind": {
+              "Unit": 7
+            },
+            "remaining": 12.5,
+            "total": 40.0
+          },
+          {
+            "cost": 900.0,
+            "kind": {
+              "Unit": 11
+            },
+            "remaining": 30.0,
+            "total": 30.0
+          }
+        ],
+        [
+          {
+            "cost": 2000.0,
+            "kind": {
+              "Structure": 4
+            },
+            "remaining": 20.0,
+            "total": 60.0
+          },
+          {
+            "cost": 4000.0,
+            "kind": {
+              "Structure": 9
+            },
+            "remaining": 45.0,
+            "total": 90.0
+          },
+          {
+            "cost": 2500.0,
+            "kind": {
+              "Structure": 6
+            },
+            "remaining": 50.0,
+            "total": 50.0
+          }
+        ],
+        [
+          {
+            "cost": 3000.0,
+            "kind": {
+              "Starbase": 3
+            },
+            "remaining": 80.0,
+            "total": 120.0
+          }
+        ]
+      ],
+      "siphon": null,
+      "starbase": 2,
+      "structures": [
+        4,
+        4,
+        9
+      ]
+    },
+    {
+      "base_health": null,
+      "capture": null,
+      "destroyed": false,
+      "gamble": 0.0,
+      "gamble_at": 0.0,
+      "hero_gamble": 0.0,
+      "hero_gamble_at": 0.0,
+      "owner": null,
+      "queues": [
+        [],
+        [],
+        []
+      ],
+      "siphon": null,
+      "starbase": null,
+      "structures": []
+    }
+  ],
+  "rewarded": [],
+  "rng": 11400714819323198492,
+  "ships": {
+    "3": [
+      [
+        1,
+        7
+      ],
+      [
+        2,
+        7
+      ],
+      [
+        3,
+        11
+      ]
+    ],
+    "4": [
+      [
+        4,
+        5
+      ]
+    ]
+  },
+  "spy_reports": [],
+  "tick_accum": 0.0,
+  "time": 1206.0,
+  "week": 20,
+  "winner": null
+}
