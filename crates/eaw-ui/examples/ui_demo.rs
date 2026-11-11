@@ -549,6 +549,7 @@ fn spawn_panel(world: &mut World, name: &str, faction: UiFaction, game: &alamo_d
                 reinforcement_points: Some(3),
                 pop: Some((42, 100)),
                 retreat: RetreatState::Countdown(45.0),
+                retreat_tip: None,
             });
             world.insert_resource(TacticalOverlays {
                 ships: vec![

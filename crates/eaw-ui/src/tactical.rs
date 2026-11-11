@@ -463,6 +463,8 @@ pub struct TacticalData {
     pub pop: Option<(u32, u32)>,
     /// Retreat button.
     pub retreat: RetreatState,
+    /// Tooltip of the Retreat button (`TooltipLayout` text): what it does and, while it is unavailable, why and until when.
+    pub retreat_tip: Option<String>,
 }
 
 /// World-space overlays of the frame (own resource so that moving ships do not mark [`TacticalData`] changed).
@@ -620,16 +622,20 @@ pub(crate) fn tactical_sync(tac: Res<TacticalData>, mut bar: ResMut<CommandBarDa
 /// Reinforcement and retreat button states.
 pub(crate) fn tactical_buttons(
     tac: Res<TacticalData>,
-    mut buttons: Query<(&EawButton, &mut EawButtonState)>,
+    mut buttons: Query<(&mut EawButton, &mut EawButtonState)>,
 ) {
     if !tac.is_changed() || !tac.active {
         return;
     }
-    for (b, mut st) in &mut buttons {
-        match b.name.as_str() {
+    for (mut b, mut st) in &mut buttons {
+        let name = b.name.clone();
+        match name.as_str() {
             "b_retreat" => {
                 st.disabled = tac.retreat == RetreatState::Unavailable;
                 st.selected = matches!(tac.retreat, RetreatState::Countdown(_));
+                if b.tooltip_literal != tac.retreat_tip {
+                    b.tooltip_literal = tac.retreat_tip.clone();
+                }
             }
             "b_reinforcement" => st.disabled = tac.reinforcement_points.is_none(),
             _ => {}

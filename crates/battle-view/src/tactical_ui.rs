@@ -238,6 +238,15 @@ fn sync_data(
     let (groups, unit_ids): (Vec<_>, Vec<_>) = rest.into_iter().unzip();
 
     let retreat = retreat_state(status.over, cur.retreat_jump_in.get(player as usize).copied().flatten(), status.time, rt.retreat_countdown);
+    let text = |key: &str| assets.text.get(key).filter(|t| !t.is_empty()).map(str::to_string);
+    let why = if retreat_prevented(&rt, player) {
+        RetreatBlock::Prevented
+    } else if interdicted(&rt, player) {
+        RetreatBlock::Interdicted
+    } else {
+        RetreatBlock::None
+    };
+    let retreat_tip = retreat_tooltip(retreat, status.over, why, (rt.retreat_countdown - status.time).max(0.0), rt.player_faction.as_deref(), &text);
     let new = TacticalData {
         active: true,
         focus: if overview { usize::MAX } else { tac.focus.min(selection.len().saturating_sub(1)) },
@@ -245,6 +254,7 @@ fn sync_data(
         reinforcement_points: (!reinforce.rows.is_empty()).then(|| reinforce.rows.iter().map(|r| r.2).sum()),
         pop: Some((rt.cur.as_ref().and_then(|c| c.pop.get(player as usize).copied()).unwrap_or(0).max(0) as u32, rt.unit_cap.max(0) as u32)),
         retreat,
+        retreat_tip,
     };
     if *tac != new {
         *tac = new;
@@ -1887,6 +1897,39 @@ fn retreat_state(over: bool, jump_in: Option<f32>, time: f32, countdown: f32) ->
     }
 }
 
+/// What keeps the own side from retreating besides the clock.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RetreatBlock {
+    None,
+    /// An enemy gravity well (`TEXT_ENCYCLOPEDIA_RETREAT_UNAVAILABLE`).
+    Interdicted,
+    /// An own unit with `Retreat_Prevention_Ability`.
+    Prevented,
+}
+
+/// Tooltip of the Retreat button: `TEXT_TOOLTIP_RETREAT_BUTTON` ("Retreat from battle"), and while the button is dimmed why and until
+/// when: the data's `Space_Retreat_Allowed_Countdown_Seconds` (`left` seconds to go; the line is an
+/// estimate, the data has no text for it), the data's interdiction text, the hero who forbids it, or that the battle is over. Before,
+/// the dimmed button said only "Retreat from battle" and a click did nothing.
+fn retreat_tooltip(state: RetreatState, over: bool, block: RetreatBlock, left: f32, faction: Option<&str>, text: &dyn Fn(&str) -> Option<String>) -> Option<String> {
+    let title = text("TEXT_TOOLTIP_RETREAT_BUTTON").unwrap_or_else(|| "Retreat from battle".into());
+    let why = match (state, block) {
+        (RetreatState::Countdown(_), _) => return Some(format!("{title}\nClick to call the retreat off.")),
+        _ if over => "The battle is over.".to_string(),
+        (_, RetreatBlock::Prevented) => {
+            let (key, fallback) = retreat_prevented_text(faction);
+            text(key).unwrap_or_else(|| fallback.to_string())
+        }
+        (_, RetreatBlock::Interdicted) => text("TEXT_ENCYCLOPEDIA_RETREAT_UNAVAILABLE").unwrap_or_else(|| "Retreat is not possible due to hyperspace interdiction.".into()),
+        (RetreatState::Unavailable, RetreatBlock::None) => {
+            let s = left.ceil() as u32;
+            format!("Not possible yet: available in {}:{:02}.", s / 60, s % 60)
+        }
+        (RetreatState::Ready, RetreatBlock::None) => return Some(title),
+    };
+    Some(format!("{title}\n!{why}"))
+}
+
 /// What a press on the Retreat button does: while the jump countdown runs it calls the retreat off (EaW), otherwise it orders the retreat.
 fn retreat_press(state: RetreatState) -> Command {
     if matches!(state, RetreatState::Countdown(_)) { Command::CancelRetreat } else { Command::Retreat }
@@ -2570,6 +2613,23 @@ mod retreat_tests {
         let last = last.unwrap();
         assert_eq!(last.alive.first().copied(), Some(2), "nobody jumped out");
         assert!(!last.over);
+    }
+
+    #[test]
+    fn the_dimmed_retreat_button_says_why_and_until_when() {
+        let text = |k: &str| match k {
+            "TEXT_TOOLTIP_RETREAT_BUTTON" => Some("Retreat from battle".to_string()),
+            "TEXT_ENCYCLOPEDIA_RETREAT_UNAVAILABLE" => Some("Retreat is not possible due to hyperspace interdiction.".to_string()),
+            _ => None,
+        };
+        let tip = |state, over, block, left| retreat_tooltip(state, over, block, left, Some("Empire"), &text).unwrap();
+        // The play test: dimmed at t = 47 s, ready at 95 s (the countdown); 48 s to go.
+        assert_eq!(tip(RetreatState::Unavailable, false, RetreatBlock::None, 47.2), "Retreat from battle\n!Not possible yet: available in 0:48.");
+        assert_eq!(tip(RetreatState::Ready, false, RetreatBlock::None, 0.0), "Retreat from battle");
+        assert!(tip(RetreatState::Ready, false, RetreatBlock::Interdicted, 0.0).ends_with("!Retreat is not possible due to hyperspace interdiction."));
+        assert!(tip(RetreatState::Ready, false, RetreatBlock::Prevented, 0.0).contains("In our moment of triumph"));
+        assert!(tip(RetreatState::Unavailable, true, RetreatBlock::None, 0.0).ends_with("!The battle is over."));
+        assert!(tip(RetreatState::Countdown(12.0), false, RetreatBlock::None, 0.0).ends_with("Click to call the retreat off."));
     }
 
     #[test]
