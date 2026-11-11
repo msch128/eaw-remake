@@ -1,13 +1,13 @@
 //! The tactical build bar of the player's star base or station (`battle_sim::buildables`): while one of the player's structures that offers
 //! tactical builds is selected, the `i_build_buttons` shell (`Build_00` .. `Build_05`, group `Tactical Build Buttons` in
-//! `CommandBarComponents.xml`) shows the items `Battle::build_options` lists, with the item's `Icon_Name` and its price. A click buys the
-//! item (`Command::TacticalBuild`). The command bar's `tqueue00` .. `tqueue09` show the side's production queue (a click takes the item
-//! out again, `Command::CancelTacticalBuild`) and `Text_Credits_tactical` the credits left.
+//! `CommandBarComponents.xml`) shows the items `Battle::build_options` lists, one button per upgrade line in the station's data order, with
+//! the item's `Icon_Name`, its price or its progress, and a tooltip. A click buys the item (`Command::TacticalBuild`), or takes an item in
+//! production out again (`Command::CancelTacticalBuild`). `Text_Credits_tactical` shows the credits left.
 
 use bevy::prelude::*;
 use battle_sim::Command;
 use battle_sim::buildables::{BuildId, BuildOption};
-use eaw_ui::{EawButtonClicked, PanelData, PanelSlot, QueueEntry, ShellAnchor, ShellSpec, UiFaction, spawn_shell};
+use eaw_ui::{EawButtonClicked, PanelData, PanelSlot, ShellAnchor, ShellSpec, UiFaction, spawn_shell};
 
 use crate::control::Selection;
 use crate::{BattleRuntime, BattleViewSettings};
@@ -22,6 +22,8 @@ pub struct BuildBarUi {
     pub root: Option<Entity>,
     /// Item per button.
     pub items: Vec<BuildId>,
+    /// Per button: the item is in production and cannot be bought again, so a click takes it out of production (refund).
+    pub cancels: Vec<bool>,
     /// The structure the buttons belong to.
     pub station: Option<u32>,
     /// Offset of the shell's box from its origin (design px, read once after the spawn: the root's left / bottom at offset 0).
@@ -40,33 +42,73 @@ pub fn sort_options_by_data_order(
     station_buildable: &[(String, BuildId)],
     catalog: &battle_sim::Catalog,
 ) {
-    let position = |mut item: BuildId| -> usize {
-        let mut visited = [false; 256];
-        loop {
-            if let Some(pos) = station_buildable.iter().position(|&(_, b)| b == item) {
-                return pos;
-            }
-            if (item as usize) < visited.len() {
-                if visited[item as usize] {
-                    return usize::MAX;
-                }
-                visited[item as usize] = true;
-            }
-            let def = catalog.buildable(item);
-            if let Some(repl) = def.replaces {
-                item = repl;
-            } else if let Some(&prereq) = def.prerequisites.first() {
-                item = prereq;
-            } else {
-                return usize::MAX;
-            }
-        }
-    };
-    options.sort_by_key(|o| position(o.item));
+    options.sort_by_key(|o| data_position(o.item, station_buildable, catalog));
 }
 
-/// The build buttons: the item's icon, its price (none while it builds, the progress shows instead), greyed while it cannot be bought.
-fn button_slots(options: &[BuildOption], catalog: &battle_sim::Catalog) -> Vec<PanelSlot> {
+/// Place of `item` in the station's list: its own entry, or that of the level it follows (`Previous_Upgrade_Level_Type`, else its first
+/// prerequisite); `usize::MAX` when the chain reaches none.
+fn data_position(mut item: BuildId, station_buildable: &[(String, BuildId)], catalog: &battle_sim::Catalog) -> usize {
+    let mut visited = [false; 256];
+    loop {
+        if let Some(pos) = station_buildable.iter().position(|&(_, b)| b == item) {
+            return pos;
+        }
+        if (item as usize) < visited.len() {
+            if visited[item as usize] {
+                return usize::MAX;
+            }
+            visited[item as usize] = true;
+        }
+        let def = catalog.buildable(item);
+        if let Some(repl) = def.replaces {
+            item = repl;
+        } else if let Some(&prereq) = def.prerequisites.first() {
+            item = prereq;
+        } else {
+            return usize::MAX;
+        }
+    }
+}
+
+/// First level of the upgrade line `item` belongs to and how many levels lie below it (following `Previous_Upgrade_Level_Type`, else the
+/// first prerequisite).
+fn line_root(mut item: BuildId, catalog: &battle_sim::Catalog) -> (BuildId, usize) {
+    let mut depth = 0;
+    while depth < 64 {
+        let def = catalog.buildable(item);
+        match def.replaces.or_else(|| def.prerequisites.first().copied()) {
+            Some(below) => {
+                item = below;
+                depth += 1;
+            }
+            None => break,
+        }
+    }
+    (item, depth)
+}
+
+/// The item each build button shows: one button per upgrade line, in the order of the station's list (the lines keep their buttons when
+/// an item is bought: before, the next level appeared next to the one being built and pushed the other lines one button on). A line shows
+/// its level in production with its progress, otherwise the next level to buy.
+fn button_options(options: &[BuildOption], station_buildable: &[(String, BuildId)], catalog: &battle_sim::Catalog) -> Vec<BuildOption> {
+    let mut lines: Vec<((usize, BuildId), usize, &BuildOption)> = Vec::new();
+    for o in options {
+        let (root, depth) = line_root(o.item, catalog);
+        let key = (data_position(root, station_buildable, catalog), root);
+        let rank = depth + if o.progress.is_some() { 0 } else { 1 << 16 };
+        match lines.iter_mut().find(|l| l.0 == key) {
+            Some(l) if rank < l.1 => *l = (key, rank, o),
+            Some(_) => {}
+            None => lines.push((key, rank, o)),
+        }
+    }
+    lines.sort_by_key(|l| l.0);
+    lines.into_iter().map(|l| l.2.clone()).collect()
+}
+
+/// The build buttons: the item's icon, its price (none while it builds, the progress shows instead), greyed while it cannot be bought,
+/// and a tooltip with the item's name, effect, price and build time from the data (`tip`).
+fn button_slots(options: &[BuildOption], catalog: &battle_sim::Catalog, tip: &dyn Fn(&BuildOption) -> String) -> Vec<PanelSlot> {
     options
         .iter()
         .take(BUTTONS)
@@ -77,31 +119,50 @@ fn button_slots(options: &[BuildOption], catalog: &battle_sim::Catalog) -> Vec<P
                 label: if o.progress.is_some() { String::new() } else { def.cost.to_string() },
                 progress: o.progress.unwrap_or(0.0),
                 disabled: o.ready.is_err() && o.progress.is_none(),
+                tooltip: tip(o),
                 ..default()
             }
         })
         .collect()
 }
 
-/// The production queue slots: one per job, the first one with its progress.
-fn queue_entries(queue: &[(BuildId, f32)], catalog: &battle_sim::Catalog) -> Vec<QueueEntry> {
-    queue
-        .iter()
-        .enumerate()
-        .map(|(k, &(item, left))| {
-            let def = catalog.buildable(item);
-            let progress = if k == 0 && def.time > 0.0 { (1.0 - left / def.time).clamp(0.0, 1.0) } else { 0.0 };
-            QueueEntry { icon: def.icon.clone().unwrap_or_default(), progress, lane: 0, count: 1, tooltip: String::new(), ..Default::default() }
-        })
-        .collect()
+/// Tooltip of a build button: the item's `Text_ID` as the title, its `Encyclopedia_Text` (the effect), the price and the build time as stat
+/// rows, and why it cannot be bought now (`Build_NN`'s own `Tooltip_Text` keys) or that a click takes it out of production again.
+fn build_tooltip(o: &BuildOption, catalog: &battle_sim::Catalog, game: Option<&alamo_data::GameData>, text: &dyn Fn(&str) -> Option<String>) -> String {
+    let def = catalog.buildable(o.item);
+    let name = def.text_id.as_deref().and_then(text).unwrap_or_else(|| def.name.replace('_', " "));
+    let effect = game
+        .and_then(|g| g.objects.resolve(&def.name))
+        .and_then(|r| r.get("encyclopedia_text").and_then(|v| v.split_whitespace().next()).and_then(text))
+        .unwrap_or_default();
+    let mut tip = format!("{name}\n{effect}\n@Cost\t{} credits\n@Build time\t{:.0} s", def.cost, def.time);
+    if let Some(p) = o.progress {
+        tip.push_str(&format!("\n@In production\t{:.0}%", p * 100.0));
+    }
+    let why = match o.ready {
+        Err(battle_sim::CommandError::NotEnoughCredits) if o.progress.is_none() => text("TEXT_PRODUCTION_INSUFFICIENT_FUNDS"),
+        Err(battle_sim::CommandError::UnitCap) if o.progress.is_none() => text("TEXT_PRODUCTION_POP_CAP_REACHED"),
+        _ => None,
+    };
+    if let Some(w) = why {
+        tip.push_str(&format!("\n!{w}"));
+    }
+    if o.progress.is_some() && o.ready.is_err() {
+        tip.push_str("\nClick to cancel it.");
+    }
+    tip
 }
 
-/// Opens or closes the shell with the selection and fills its buttons, the queue and the credits.
+/// Opens or closes the shell with the selection and fills its buttons and the credits. The production shows on the buttons (the item in
+/// production of a line with its progress); the command bar's queue icons stay empty in a battle: they sat on the ability buttons of the
+/// unit bar.
+#[allow(clippy::too_many_arguments)]
 pub fn build_bar_sync(
     mut commands: Commands,
     rt: Res<BattleRuntime>,
     sel: Res<Selection>,
     settings: Res<BattleViewSettings>,
+    assets: Option<Res<eaw_ui::EawUiAssets>>,
     mut ui: ResMut<BuildBarUi>,
     mut panel: ResMut<PanelData>,
     mut bar: ResMut<eaw_ui::CommandBarData>,
@@ -141,12 +202,14 @@ pub fn build_bar_sync(
     }
     // The slots are filled once the shell exists: a change of `PanelData` before that reaches no button.
     if open && ui.root.is_some_and(|e| e != Entity::PLACEHOLDER) {
-        let mut options = snap.options.clone();
-        if let Some(s) = station_ship {
-            sort_options_by_data_order(&mut options, &rt.catalog.ship(s.def).buildable, &rt.catalog);
-        }
+        let station_list = station_ship.map(|s| rt.catalog.ship(s.def).buildable.clone()).unwrap_or_default();
+        let options = button_options(&snap.options, &station_list, &rt.catalog);
         ui.items = options.iter().take(BUTTONS).map(|o| o.item).collect();
-        let slots = button_slots(&options, &rt.catalog);
+        ui.cancels = options.iter().take(BUTTONS).map(|o| o.progress.is_some() && o.ready.is_err()).collect();
+        let game = assets.as_ref().and_then(|a| a.game.clone());
+        let text = |key: &str| assets.as_ref().and_then(|a| a.text.get(key.trim())).filter(|t| !t.is_empty()).map(str::to_string);
+        let tip = |o: &BuildOption| build_tooltip(o, &rt.catalog, game.as_deref(), &text);
+        let slots = button_slots(&options, &rt.catalog, &tip);
         for k in 0..BUTTONS {
             let name = format!("build_{k:02}");
             match slots.get(k) {
@@ -158,9 +221,8 @@ pub fn build_bar_sync(
             }
         }
     }
-    let queue = queue_entries(&snap.queue, &rt.catalog);
-    if bar.queue != queue {
-        bar.queue = queue;
+    if !bar.queue.is_empty() {
+        bar.queue.clear();
     }
     if bar.credits != snap.credits {
         bar.credits = snap.credits;
@@ -202,14 +264,16 @@ fn build_bar_follow(
     }
 }
 
-/// `Build_NN` buys its item, `tqueueNN` takes the queued job out again.
+/// `Build_NN` buys its item, or takes it out of production again when it is in production and cannot be bought twice (the queue icons
+/// that did that are not shown in a battle); `tqueueNN` takes the queued job out again.
 fn build_bar_clicks(mut clicks: MessageReader<EawButtonClicked>, rt: Res<BattleRuntime>, settings: Res<BattleViewSettings>, ui: Res<BuildBarUi>) {
     let player = settings.player_side;
     let Some(cur) = rt.cur.as_ref() else { return };
     for c in clicks.read() {
         if let Some(k) = c.name.strip_prefix("build_").and_then(|n| n.parse::<usize>().ok()) {
             if let Some(&item) = ui.items.get(k) {
-                rt.command(player, Command::TacticalBuild { item });
+                let command = if ui.cancels.get(k).copied().unwrap_or(false) { Command::CancelTacticalBuild { item } } else { Command::TacticalBuild { item } };
+                rt.command(player, command);
             }
         } else if let Some(k) = c.name.strip_prefix("tqueue").and_then(|n| n.parse::<usize>().ok())
             && let Some(&(item, _)) = cur.builds.get(player as usize).and_then(|b| b.queue.get(k))
@@ -224,6 +288,7 @@ fn build_bar_close(mut commands: Commands, mut ui: ResMut<BuildBarUi>, mut panel
         commands.entity(e).try_despawn();
     }
     ui.items.clear();
+    ui.cancels.clear();
     for k in 0..BUTTONS {
         panel.slots.remove(&format!("build_{k:02}"));
     }
@@ -269,9 +334,13 @@ mod tests {
         let cur = sim.fetch(0, true).0.expect("snapshot");
         let bar = &cur.builds[1];
         assert_eq!(bar.credits, 300);
-        let slots = button_slots(&bar.options, &cat);
+        let list = cat.ships[1].buildable.clone();
+        let no_text = |_: &str| None;
+        let tip = |o: &BuildOption| build_tooltip(o, &cat, None, &no_text);
+        let slots = button_slots(&button_options(&bar.options, &list, &cat), &cat, &tip);
         assert_eq!(slots.len(), 1, "the second level waits for the first");
         assert_eq!((slots[0].icon.as_str(), slots[0].label.as_str(), slots[0].disabled), ("i_multi_improved_weapons1.tga", "160", false));
+        assert_eq!(slots[0].tooltip, "weapons l1\n\n@Cost\t160 credits\n@Build time\t10 s");
         assert!(cur.builds[0].options.is_empty(), "the attacker has no station");
 
         sim.command(1, Command::TacticalBuild { item: 0 });
@@ -282,15 +351,35 @@ mod tests {
         let cur = sim.fetch(150, true).0.expect("snapshot");
         let bar = &cur.builds[1];
         assert_eq!(bar.credits, 140);
-        let slots = button_slots(&bar.options, &cat);
-        // Building: no price, half done; the next level shows, greyed (140 credits are too few).
-        assert_eq!((slots[0].label.as_str(), slots[0].disabled), ("", false));
+        assert_eq!(bar.queue.len(), 1);
+        // The sim offers the second level already (its prerequisite is in production), but the line keeps one button: the first level,
+        // building, no price, half done, the progress on the button (before, level 2 got a button of its own next to it and pushed the
+        // other lines one button on).
+        assert_eq!(bar.options.len(), 2);
+        let slots = button_slots(&button_options(&bar.options, &list, &cat), &cat, &tip);
+        assert_eq!(slots.len(), 1);
+        assert_eq!((slots[0].icon.as_str(), slots[0].label.as_str(), slots[0].disabled), ("i_multi_improved_weapons1.tga", "", false));
         assert!((slots[0].progress - 0.5).abs() < 0.02, "{}", slots[0].progress);
-        assert_eq!((slots[1].icon.as_str(), slots[1].disabled), ("i_multi_improved_weapons2.tga", true));
-        let queue = queue_entries(&bar.queue, &cat);
-        assert_eq!(queue.len(), 1);
-        assert_eq!(queue[0].icon, "i_multi_improved_weapons1.tga");
-        assert!((queue[0].progress - 0.5).abs() < 0.02);
+        assert!(slots[0].tooltip.contains("@In production\t50%") && slots[0].tooltip.ends_with("Click to cancel it."), "{}", slots[0].tooltip);
+    }
+
+    #[test]
+    fn every_upgrade_line_keeps_its_button_through_a_purchase() {
+        // Reactors L1 (0) and Armor L1 (1) in the station's list; Reactors L2 (2) follows L1. The play test at Brentaal: after a
+        // purchase the buttons changed places.
+        let frigate = ShipDef { name: "frigate".into(), class: TargetClass::Frigate, ..ShipDef::default() };
+        let station = ShipDef { name: "station".into(), class: TargetClass::Structure, buildable: vec![("empire".into(), 0), ("empire".into(), 1)], ..ShipDef::default() };
+        let mut cat = Catalog::from_defs(vec![frigate, station], vec![]);
+        let item = |name: &str, prerequisites: Vec<BuildId>, replaces| BuildableDef { name: name.into(), cost: 100, time: 10.0, prerequisites, replaces, ..BuildableDef::default() };
+        cat.buildables = vec![item("reactors_l1", vec![], None), item("armor_l1", vec![], None), item("reactors_l2", vec![0], Some(0))];
+        let list = cat.ships[1].buildable.clone();
+        let opt = |item, progress: Option<f32>| BuildOption { item, ready: if progress.is_some() { Err(battle_sim::CommandError::BuildLimit) } else { Ok(()) }, progress };
+        let shown = |options: &[BuildOption]| button_options(options, &list, &cat).iter().map(|o| (o.item, o.progress)).collect::<Vec<_>>();
+        assert_eq!(shown(&[opt(1, None), opt(0, None)]), [(0, None), (1, None)]);
+        // Reactors L1 bought: it stays on the first button with its progress, Armor keeps the second; L2 waits for L1.
+        assert_eq!(shown(&[opt(1, None), opt(2, None), opt(0, Some(0.3))]), [(0, Some(0.3)), (1, None)]);
+        // L1 finished: L2 takes the first button.
+        assert_eq!(shown(&[opt(1, None), opt(2, None)]), [(2, None), (1, None)]);
     }
 
     #[test]

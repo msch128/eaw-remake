@@ -1067,8 +1067,11 @@ impl Builder<'_> {
                     .flatten()
             })
             .and_then(|n| self.tex(n));
-        // The selection and ability slots have dynamic icons driven by SlotPart::Icon, so skip static icon layer.
-        if let Some(t) = icon_tex.as_ref().filter(|_| !slot.is_some_and(|s| matches!(s.kind, SlotKind::Select | SlotKind::Ability))) {
+        // The selection and ability slots have dynamic icons driven by SlotPart::Icon, so skip static icon layer. So do the tactical build
+        // buttons, which show the station's items: `Build_01` names `i_button_sell.tga` as its own icon, which lay as a blue pill behind
+        // the first buttons of every station's build bar.
+        let data_icon = slot.is_some_and(|s| matches!(s.kind, SlotKind::Select | SlotKind::Ability)) || lname.starts_with("build_0");
+        if let Some(t) = icon_tex.as_ref().filter(|_| !data_icon) {
             let sz = scaled(t);
             layers.icon = Some(self.layer(button, size, t, sz, def.icon_offset, tint));
         }
@@ -1661,6 +1664,7 @@ pub(crate) fn slots(
             SlotKind::Ability => data.abilities.get(slot.index).filter(|a| !a.icon.is_empty()).map(|a| a.tooltip.clone()).filter(|t| !t.is_empty()),
             SlotKind::Pad => data.pads.get(slot.index).map(|p| p.tooltip.clone()).filter(|t| !t.is_empty()),
             SlotKind::Queue => data.queue.get(slot.index).filter(|q| q.count > 0).map(|q| q.tooltip.clone()).filter(|t| !t.is_empty()),
+            SlotKind::Panel => pname.and_then(|n| panel.slots.get(&n.0)).map(|s| s.tooltip.clone()).filter(|t| !t.is_empty()),
             _ => None,
         };
         // A slot only explains what the data puts in it: the shell's own tooltip key of a slot (a pad's is the production queue text)
@@ -1672,6 +1676,7 @@ pub(crate) fn slots(
             SlotKind::Ability => data.abilities.get(slot.index).filter(|a| !a.icon.is_empty()).map(|a| a.icon.clone()),
             SlotKind::Pad => data.pads.get(slot.index).map(|p| p.icon.clone()),
             SlotKind::Queue => data.queue.get(slot.index).filter(|q| q.count > 0).map(|q| q.icon.clone()),
+            SlotKind::Panel => pname.and_then(|n| panel.slots.get(&n.0)).filter(|s| !s.tooltip.is_empty()).map(|s| s.icon.clone()),
             _ => None,
         }
         .filter(|i| !i.is_empty());

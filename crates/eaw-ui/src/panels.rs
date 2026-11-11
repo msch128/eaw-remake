@@ -49,6 +49,8 @@ pub struct PanelSlot {
     pub selected: bool,
     /// How the icon is drawn (fleet boxes of the planet view draw units bare and heroes as round portraits).
     pub look: SlotLook,
+    /// Tooltip text (title line, body, `@` stat rows, `!` warnings: `TooltipLayout`); empty: none.
+    pub tooltip: String,
 }
 
 /// Content of all shell panels, keyed by lower-cased component name (resource).
