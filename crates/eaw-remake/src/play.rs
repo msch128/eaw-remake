@@ -726,12 +726,15 @@ fn log_play_flow(
     mut events: MessageReader<PlayEvent>,
     state: Option<Res<SimState>>,
     selection: Res<PlayerSelection>,
+    mut repeats: Local<Option<galaxy_sim::BattleRepeats>>,
 ) {
     let Some(state) = state else {
         actions.clear();
         events.clear();
+        *repeats = None;
         return;
     };
+    let repeats = repeats.get_or_insert_with(|| galaxy_sim::BattleRepeats::for_world(&state.world));
     let name = |p: PlanetId| state.world.planets[p as usize].display_name.clone();
     for a in actions.read() {
         match a {
@@ -751,11 +754,32 @@ fn log_play_flow(
             PlayEvent::CommandRejected { command, error } => warn!("play: order refused: {command:?}: {error:?}"),
             PlayEvent::Sim(galaxy_sim::Event::FleetArrived { fleet, planet }) => info!("play: fleet {fleet} arrived at {}", name(*planet)),
             PlayEvent::Sim(galaxy_sim::Event::BattlePending(b)) => {
-                info!("play: battle {} pending at {} between factions {:?} (human involved: {})", b.id, name(b.planet), b.factions, state.current.human_battles.iter().any(|h| h.id == b.id))
+                let (alarm, line) = battle_log(repeats.see(state.current.time, b), b.id, &name(b.planet));
+                if let Some(alarm) = alarm {
+                    warn!("{alarm}");
+                }
+                if line {
+                    info!("play: battle {} pending at {} between factions {:?} (human involved: {})", b.id, name(b.planet), b.factions, state.current.human_battles.iter().any(|h| h.id == b.id))
+                }
             }
             PlayEvent::TacticalReady(r) => info!("play: tactical fight {} ready ({} sides)", r.battle_id, r.sides.len()),
             _ => {}
         }
+    }
+}
+
+/// What the log says about a battle that appeared: a warning if there is one, and whether the battle gets its usual line. A battle that comes
+/// back at a planet with the same line-up (the simulation's repeat rule, `SimConfig::battle_repeat_seconds`, is there to prevent it) is
+/// reported at its first repeat and at every tenfold after that; the repeats in between are counted, not written.
+fn battle_log(sighting: galaxy_sim::Sighting, id: u32, planet: &str) -> (Option<String>, bool) {
+    use galaxy_sim::Sighting;
+    match sighting {
+        Sighting::Fresh { after_repeats: 0 } => (None, true),
+        Sighting::Fresh { after_repeats } => (Some(format!("play: the battle at {planet} had come back {after_repeats} times with the same line-up")), true),
+        Sighting::Repeat { nth } if nth == 1 || (nth >= 10 && nth == 10u32.pow(nth.ilog10())) => {
+            (Some(format!("play: battle {id} at {planet} repeats the last one there with the same line-up ({nth} so far); repeats are counted, not logged")), false)
+        }
+        Sighting::Repeat { .. } => (None, false),
     }
 }
 
@@ -785,6 +809,29 @@ mod tests {
         assert_eq!(auto_resolve_line(1, true, None), Some(G::BattleEnded));
         // Not part of the battle: silent.
         assert_eq!(auto_resolve_line(2, false, Some(0)), None);
+    }
+
+    /// A battle that comes back every tick writes three lines in a thousand ticks instead of a thousand, and the count is in them.
+    #[test]
+    fn a_repeating_battle_is_logged_once_and_then_counted() {
+        let mut watch = galaxy_sim::BattleRepeats::new(10.0);
+        let battle = |id| galaxy_sim::PendingBattle { id, planet: 3, fleets: vec![9], factions: vec![4, 10], defender: Some(4), line_up: 77 };
+        let (mut warnings, mut lines) = (Vec::new(), 0);
+        for tick in 0..1000u32 {
+            let (alarm, line) = battle_log(watch.see(f64::from(tick), &battle(tick)), tick, "Ringo Vinda");
+            warnings.extend(alarm);
+            lines += u32::from(line);
+        }
+        assert_eq!(lines, 1, "only the first battle gets the usual line");
+        assert_eq!(warnings.len(), 3, "{warnings:?}");
+        assert!(warnings[0].contains("battle 1 at Ringo Vinda") && warnings[0].contains("(1 so far)"), "{}", warnings[0]);
+        assert!(warnings[1].contains("(10 so far)") && warnings[2].contains("(100 so far)"));
+        assert_eq!(watch.total(), 999);
+        // The next battle with another line-up is normal again and says how long the run was.
+        let changed = galaxy_sim::PendingBattle { line_up: 78, ..battle(1000) };
+        let (alarm, line) = battle_log(watch.see(1000.0, &changed), 1000, "Ringo Vinda");
+        assert!(line && alarm.unwrap().contains("999 times"));
+        assert_eq!(battle_log(galaxy_sim::Sighting::Fresh { after_repeats: 0 }, 1, "x"), (None, true));
     }
 
     #[test]
