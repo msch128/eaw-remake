@@ -178,8 +178,9 @@ sim events into story notifications (planet captured, construction complete, tec
 scripts at their `ServiceRate` in game time. `SimHost` implements `alamo_lua::ScriptHost`; scripts change the sim only through galaxy-sim's public
 API, so the sim stays script-agnostic. `ai.rs` implements `galaxy_ai::AiSim` so the Remake AI drives the AI factions. Defaults: Remake AI plus
 strategic layer at Normal difficulty. `save.rs` writes snapshot saves (sim state, story and Lua globals, AI memory; format-versioned, with the
-name tables of the world); Lua coroutines cannot be serialised, so a loaded game restarts its scripts and AI plans and is not bit-identical to
-the original run. All player input goes through `ScriptedSim` so saves stay consistent.
+name tables of the world, and where each thread of a long-lived script waits). A Lua 5.1 coroutine cannot be serialised, so a load runs every
+saved thread back to the frames it waited in with the game shut off and sets its locals there (`alamo_lua::persist`); AI plans start anew, so a
+loaded game is not bit-identical to the original run. All player input goes through `ScriptedSim` so saves stay consistent.
 
 Saves stay loadable by later builds. A field added to a saved struct (`galaxy_sim::state`, `SimSnapshot`, `SimConfig`, `ScriptedConfig`,
 `alamo_lua::persist`, `galaxy_ai::AiMemory`) carries `#[serde(default)]`, so a file without it loads with the default. The checkpoint of a save

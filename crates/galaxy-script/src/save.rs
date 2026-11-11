@@ -6,13 +6,13 @@
 //! * a checkpoint: state hash, time, week and a per-faction summary (readable without loading the game, for save lists);
 //! * the state: the complete galaxy-sim state ([`galaxy_sim::SimSnapshot`]: planets, queues, fleets, damage, statistics, RNG, cooldowns), the script runtime
 //!   ([`alamo_lua::RuntimeSnapshot`]: story plots with event states, counters and timers - hero respawn timers live there -, `GlobalValue` store, story flags,
-//!   the saved global variables of the long-lived scripts) and the Remake AI memory ([`galaxy_ai::AiMemory`]).
+//!   the saved global variables of the long-lived scripts and where each of their threads waits) and the Remake AI memory ([`galaxy_ai::AiMemory`]).
 //!
-//! Loading builds the match as at the start (campaign, story scripts, AI players), then replaces the state. What a snapshot cannot hold: Lua coroutines
-//! (their locals and the point where they sleep) and with them the AI plans in flight. Long-lived scripts restart from the top of their main loop with
-//! their saved globals; an AI plan that was running is gone, its ships and queued items stay and the goals start new plans. Events that were produced but
-//! not yet reported by `step` and frozen tactical set-ups are not saved (a pending tactical battle is set up again from the state).
-//! A continuation from a loaded game is therefore *not* bit-identical to the game that was saved.
+//! Loading builds the match as at the start (campaign, story scripts, AI players), then replaces the state. A long-lived script is run back to where
+//! each of its threads waited, with the game shut off (`alamo_lua::persist`): it goes on in the state, the loop and the `Sleep` it was in, and its
+//! entry code does not reach the game a second time. What a snapshot cannot hold: the AI plans in flight (an AI plan that was running is gone, its ships
+//! and queued items stay and the goals start new plans), events that were produced but not yet reported by `step` and frozen tactical set-ups (a pending
+//! tactical battle is set up again from the state). A continuation from a loaded game is therefore *not* bit-identical to the game that was saved.
 //!
 //! Ids are indices into catalogs that are rebuilt from the game data on every start, so they move when a build reads more of the data or the
 //! mod changes. A load therefore compares the name tables of the file with those of the match and, where they differ, rewrites every id by
@@ -227,7 +227,7 @@ fn translate(sim: &ScriptedSim, map: &IdMap, state: GameState) -> Result<(GameSt
     let GameState { sim: snapshot, mut runtime, script_clock, mut ai, allies } = state;
     let snapshot = sim.inner.borrow().sim.remap_snapshot(snapshot, map).map_err(SaveError::DataMismatch)?;
     let mut warnings = Vec::new();
-    let gone: usize = runtime.scripts.iter_mut().flat_map(|s| s.globals.iter_mut()).map(|(_, v)| remap_handles(v, map)).sum();
+    let gone: usize = runtime.scripts.iter_mut().flat_map(|s| s.values_mut()).map(|v| remap_handles(v, map)).sum();
     if gone > 0 {
         warnings.push(format!("{gone} script references to objects the game data no longer has were cleared"));
     }

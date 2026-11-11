@@ -513,6 +513,25 @@ build-menu filters, not a start mode. The mode is this project's own:
   phase outcome without a tactical battle: an auto-resolved battle sets no level and a destroyed phase is lost (the
   plots run on its `STORY_LOSE_BATTLES` and find level 0).
 
+## 1.16 Scripts in a saved game (`alamo-lua` `persist.rs`)
+
+* Data, engine contract: the engine saves the Lua coroutines of a script with the game (`Scripts/Library/PGBase.lua`:
+  `Sleep` keeps its start time in `ThreadValue` because the persistence code does not keep locals across a yield), so a
+  loaded script goes on at the instruction it stopped at. A story script saved in a state of `PGStateMachine.lua` stays
+  in that state's update loop: its `OnEnter` does not run again, the units and rewards of that entry are not given twice,
+  a `Sleep` goes on with the time it had left and a loop with its saved counter.
+* Project rule, how: a save keeps, per thread of a long-lived script (story scripts, `GameScoring`), the global
+  function it runs, its arguments, its `ThreadValue` store and the Lua frames it waits in (source, line, locals). A load
+  runs each thread from its start with the game shut off (no spawn, credit, reward, message or AI call reaches the game;
+  story, `GlobalValue` store, story flags, random generator and globals are put back afterwards) until it waits in the
+  saved frames, and sets its locals and `ThreadValue` store there. Waits passed on the way count as over. Script timing
+  after a load is that of the game that was not saved (next service time and back-off are saved too).
+* A change of state asked for after the state machine's last wait (`NextState` set by a story event) happens when the
+  loaded game goes on, with the `OnExit` of the saved state and the `OnEnter` of the new one, once.
+* A script that had ended does not run in the loaded game.
+* Saves of builds before 2026-11-11 hold no threads: `main` runs with the game shut off to its first wait and the
+  threads that part starts to theirs, so the entry code of the saved state does not reach the game again.
+
 # Part 2: Space battles (`battle-sim`)
 
 Everything is derived from the Remake data plus the `.alo` models for hardpoint positions. Values the engine defines

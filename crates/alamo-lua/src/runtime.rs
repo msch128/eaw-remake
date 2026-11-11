@@ -14,6 +14,7 @@
 //!   `ScriptExit` is called the script ends. A Lua error ends the script and is recorded in
 //!   [`ScriptRuntime::errors`].
 //! * Story plots (see [`crate::story`]) call `Story_Event_Trigger(name)` in the plot's script.
+//! * A save keeps where every thread of a long-lived script waits; a load runs each one back there (see [`crate::persist`]).
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
@@ -22,12 +23,12 @@ use std::sync::Arc;
 
 use alamo_data::xml;
 use alamo_fs::{FileSource, normalize};
-use mlua::{Function, Lua, MultiValue, Table, Thread, ThreadStatus, Value};
+use mlua::{Function, Lua, LuaOptions, MultiValue, StdLib, Table, Thread, ThreadStatus, Value};
 
-use crate::api::{self, NewThread, Shared};
+use crate::api::{self, NewThread, Resuming, Shared};
 use crate::handles::{Handle, HandleData, Kind};
 use crate::host::{PlayerId, ScriptHost};
-use crate::persist::{LuaVal, RuntimeSnapshot, ScriptSnapshot};
+use crate::persist::{FrameSnapshot, LuaVal, RuntimeSnapshot, ScriptSnapshot, ThreadSnapshot};
 use crate::story::{Fired, Plot, StoryEngine};
 
 /// Value for a global handed to a new script instance.
@@ -58,6 +59,163 @@ struct ThreadSlot {
     id: i64,
     thread: Thread,
     first_args: Option<MultiValue>,
+    /// The global function it runs and its arguments, as a save keeps them (long-lived scripts only).
+    start: Option<Start>,
+    /// It has been resumed at least once.
+    started: bool,
+}
+
+/// The global function a thread runs (`None`: a function no global names) and the arguments of its first call.
+type Start = (Option<String>, Vec<Option<LuaVal>>);
+
+impl ThreadSlot {
+    fn new(id: i64, thread: Thread, first_args: Option<MultiValue>, start: Option<Start>) -> Self {
+        Self { id, thread, first_args, start, started: false }
+    }
+}
+
+/// Registry keys of a long-lived state: the stack reader, the checked local setter and the `ThreadValue` store of the prelude.
+const STACK: &str = "alamo_stack";
+const SET_LOCAL: &str = "alamo_set_local";
+const THREAD_VALUES: &str = "alamo_thread_values";
+
+/// Reads the Lua frames a suspended coroutine waits in (innermost first, C frames left out), and sets a local of one of them if its slot
+/// still has the saved name. Gets the `debug` library, which the scripts do not see.
+const STACK_TOOLS: &str = r#"
+local debug = ...
+local getinfo, getlocal, setlocal = debug.getinfo, debug.getlocal, debug.setlocal
+local function stack(co)
+  local frames, level = {}, 0
+  while true do
+    local info = getinfo(co, level, "Sl")
+    if info == nil then break end
+    if info.what ~= "C" then
+      local names, values, i = {}, {}, 1
+      while true do
+        local name, value = getlocal(co, level, i)
+        if name == nil then break end
+        names[i], values[i] = name, value
+        i = i + 1
+      end
+      frames[#frames + 1] = { level = level, source = info.source, defined = info.linedefined, line = info.currentline, names = names, values = values, n = i - 1 }
+    end
+    level = level + 1
+  end
+  return frames
+end
+local function set_local(co, level, i, name, value)
+  if getlocal(co, level, i) == name then setlocal(co, level, i, value) end
+end
+return stack, set_local
+"#;
+
+/// Yields a thread may pass on a load before the runtime stops looking for the one it was saved in.
+const RESUME_LIMIT: usize = 20_000;
+/// A thread that waits in the same wrong place this often in a row on a load is stuck there (a wait on something that is not the time).
+const RESUME_STUCK: usize = 64;
+/// What `GetCurrentTime` jumps on a load at every wait a thread passes on the way to the saved one: every `Sleep` on the way is over.
+const RESUME_JUMP: f64 = 1.0e6;
+
+/// A Lua state for a long-lived script: the standard libraries plus `debug`, which only the runtime uses (to read and set where a thread
+/// waits, for saves). Scripts do not see it, and they cannot load C modules.
+fn long_lived_lua() -> mlua::Result<Lua> {
+    // SAFETY: `debug` is the only library beyond `StdLib::ALL_SAFE`. It is taken out of the globals and `package.loaded` before any script
+    // code runs and stays reachable only from the two runtime functions in the registry; C modules cannot be loaded (no `loadlib`, an empty
+    // `cpath`, and `require` is the runtime's own).
+    let lua = unsafe { Lua::unsafe_new_with(StdLib::ALL_SAFE | StdLib::DEBUG, LuaOptions::default()) };
+    let g = lua.globals();
+    let debug: Table = g.get("debug")?;
+    g.raw_remove("debug")?;
+    if let Value::Table(package) = g.get::<Value>("package")? {
+        if let Value::Table(loaded) = package.get::<Value>("loaded")? {
+            loaded.raw_remove("debug")?;
+        }
+        package.raw_remove("loadlib")?;
+        package.raw_set("cpath", "")?;
+    }
+    let (stack, set_local): (Function, Function) = lua.load(STACK_TOOLS).set_name("<stack tools>").call(debug)?;
+    lua.set_named_registry_value(STACK, stack)?;
+    lua.set_named_registry_value(SET_LOCAL, set_local)?;
+    Ok(lua)
+}
+
+/// A frame read by the stack tools, with its level in the coroutine.
+struct LiveFrame {
+    level: i64,
+    frame: FrameSnapshot,
+}
+
+/// The Lua frames `thread` waits in, innermost first.
+fn stack_of(lua: &Lua, thread: &Thread) -> mlua::Result<Vec<LiveFrame>> {
+    let read: Function = lua.named_registry_value(STACK)?;
+    let frames: Table = read.call(thread.clone())?;
+    let mut out = Vec::new();
+    for fr in frames.sequence_values::<Table>() {
+        let fr = fr?;
+        let (names, values): (Table, Table) = (fr.get("names")?, fr.get("values")?);
+        let n: u32 = fr.get("n")?;
+        let mut locals = Vec::new();
+        for i in 1..=n {
+            let name: String = names.raw_get(i)?;
+            // Temporaries of the expression being evaluated are no variables of the script.
+            if name.starts_with("(*") {
+                continue;
+            }
+            match values.raw_get::<Value>(i)? {
+                Value::Nil => locals.push((i, name, None)),
+                v => {
+                    if let Some(v) = crate::persist::value_of(&v) {
+                        locals.push((i, name, Some(v)));
+                    }
+                }
+            }
+        }
+        let frame = FrameSnapshot { source: fr.get("source")?, defined: fr.get("defined")?, line: fr.get("line")?, locals };
+        out.push(LiveFrame { level: fr.get("level")?, frame });
+    }
+    Ok(out)
+}
+
+/// The thread waits in the saved frames.
+fn same_stack(live: &[LiveFrame], saved: &[FrameSnapshot]) -> bool {
+    live.len() == saved.len() && live.iter().zip(saved).all(|(l, s)| l.frame.same_place(s))
+}
+
+/// The thread waits in calls of the saved functions, at other lines.
+fn same_functions(live: &[LiveFrame], saved: &[FrameSnapshot]) -> bool {
+    live.len() == saved.len() && live.iter().zip(saved).all(|(l, s)| l.frame.same_function(s))
+}
+
+/// What a save keeps of a thread of a long-lived script.
+fn thread_snapshot(lua: &Lua, t: &ThreadSlot) -> Option<ThreadSnapshot> {
+    let (function, args) = t.start.clone()?;
+    let store: Table = lua.named_registry_value(THREAD_VALUES).ok()?;
+    let values = store.raw_get::<Value>(t.id as f64).ok().and_then(|v| crate::persist::value_of(&v));
+    let stack = if t.started { stack_of(lua, &t.thread).ok()?.into_iter().map(|l| l.frame).collect() } else { Vec::new() };
+    Some(ThreadSnapshot { id: t.id, function, args, values, stack })
+}
+
+/// Sets the `ThreadValue` store of thread `id` (`None`: empty).
+fn set_thread_values(lua: &Lua, sh: &Rc<RefCell<Shared>>, script: usize, id: i64, values: Option<&LuaVal>) -> mlua::Result<()> {
+    let store: Table = lua.named_registry_value(THREAD_VALUES)?;
+    let v = match values {
+        Some(v) => crate::persist::from_val(lua, sh, script, v)?,
+        None => Value::Nil,
+    };
+    store.raw_set(id as f64, v)
+}
+
+/// Where a load brought a thread of a script.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Resumed {
+    /// It waits where it was saved.
+    There,
+    /// It waits at its first wait (a save without threads).
+    First,
+    /// It could not be brought there; it waits at the nearest place found.
+    Near,
+    /// It ended on the way: it does not run in the loaded game.
+    Gone,
 }
 
 struct Instance {
@@ -146,6 +304,8 @@ impl ScriptRuntime {
             next_thread: 0,
             story: StoryEngine::default(),
             story_flags: HashSet::new(),
+            resuming: None,
+            sink: api::Sink,
         };
         Self {
             shared: Rc::new(RefCell::new(shared)),
@@ -303,12 +463,14 @@ impl ScriptRuntime {
             .resolve_script(name)
             .ok_or_else(|| format!("script not found: {name}"))?;
         let id = self.scripts.len();
-        let lua = Lua::new();
+        // A long-lived script can be saved: its state can read where its threads wait. An AI plan is not saved.
+        let lua = if plan.is_none() { long_lived_lua().map_err(|e| format!("{name}: {e}"))? } else { Lua::new() };
         self.shared.borrow_mut().script_names.push(name.to_string());
         let sh = self.shared.clone();
         let setup = || -> mlua::Result<Vec<ThreadSlot>> {
             api::install(&lua, &sh, id)?;
-            load_cached(&lua, &sh, "<prelude>", || Ok(api::PRELUDE.to_string()))?;
+            let thread_values = load_cached(&lua, &sh, "<prelude>", || Ok(api::PRELUDE.to_string()))?;
+            lua.set_named_registry_value(THREAD_VALUES, thread_values)?;
             install_require(&lua, &sh, id)?;
             let g = lua.globals();
             let script_handle = crate::handles::make(
@@ -421,15 +583,11 @@ impl ScriptRuntime {
                             s.next_thread += 1;
                             s.next_thread
                         };
-                        threads.push(ThreadSlot { id: tid, thread: lua.create_thread(f)?, first_args: None });
+                        threads.push(ThreadSlot::new(tid, lua.create_thread(f)?, None, None));
                     }
                 }
             } else if let Value::Function(main) = g.get::<Value>("main")? {
-                threads.push(ThreadSlot {
-                    id: 0,
-                    thread: lua.create_thread(main)?,
-                    first_args: None,
-                });
+                threads.push(ThreadSlot::new(0, lua.create_thread(main)?, None, Some((Some("main".into()), Vec::new()))));
             }
             Ok(threads)
         };
@@ -546,52 +704,323 @@ impl ScriptRuntime {
         story_flags.sort();
         let mut scripts = Vec::new();
         for (index, inst) in self.scripts.iter().enumerate() {
-            let (Some(lua), None, true) = (&inst.lua, inst.plan, inst.alive) else { continue };
-            let mut globals: Vec<(String, LuaVal)> = crate::persist::globals_of(lua).into_iter().filter(|(k, v)| inst.baseline.get(k) != Some(v)).collect();
-            if globals.is_empty() {
+            if inst.plan.is_some() {
                 continue;
             }
+            let name = sh.script_names[index].clone();
+            let Some(lua) = inst.lua.as_ref().filter(|_| inst.alive) else {
+                scripts.push(ScriptSnapshot { index, name, globals: Vec::new(), threads: Some(Vec::new()), service: None, ended: true });
+                continue;
+            };
+            let mut globals: Vec<(String, LuaVal)> = crate::persist::globals_of(lua).into_iter().filter(|(k, v)| inst.baseline.get(k) != Some(v)).collect();
             globals.sort_by(|a, b| a.0.cmp(&b.0));
-            scripts.push(ScriptSnapshot { index, name: sh.script_names[index].clone(), globals });
+            let threads = inst.threads.iter().filter_map(|t| thread_snapshot(lua, t)).collect();
+            scripts.push(ScriptSnapshot { index, name, globals, threads: Some(threads), service: Some((inst.next_service, inst.idle)), ended: false });
         }
-        RuntimeSnapshot { time: sh.time, rng: sh.rng, global_values, story_flags, types: sh.types.clone(), story: sh.story.snapshot(), scripts }
+        RuntimeSnapshot {
+            time: sh.time,
+            rng: sh.rng,
+            global_values,
+            story_flags,
+            types: sh.types.clone(),
+            story: sh.story.snapshot(),
+            scripts,
+            next_thread: Some(sh.next_thread),
+        }
     }
 
-    /// Puts a snapshot into a runtime that was just set up like the saved one (same story plots and long-lived scripts, nothing serviced yet).
-    /// Returns warnings about parts that did not fit.
+    /// Puts a snapshot into a runtime that was just set up like the saved one (same story plots and long-lived scripts, nothing serviced yet),
+    /// and runs every saved thread back to where it waited (see [`crate::persist`]). Returns warnings about parts that did not fit.
     pub fn restore(&mut self, snap: &RuntimeSnapshot) -> Vec<String> {
         let mut warnings = Vec::new();
         {
             let mut sh = self.shared.borrow_mut();
             sh.time = snap.time;
-            sh.rng = snap.rng;
-            sh.global_values = snap.global_values.iter().cloned().collect();
-            sh.story_flags = snap.story_flags.iter().cloned().collect();
             sh.types = snap.types.clone();
-            warnings.extend(sh.story.restore(&snap.story));
+            let ids = snap.scripts.iter().flat_map(|s| s.threads.iter().flatten().map(|t| t.id));
+            sh.next_thread = snap.next_thread.unwrap_or(0).max(ids.max().unwrap_or(0)).max(sh.next_thread);
         }
+        warnings.extend(self.restore_shared(snap));
         for s in &snap.scripts {
             let name_ok = self.shared.borrow().script_names.get(s.index).is_some_and(|n| *n == s.name);
             let Some(lua) = self.scripts.get(s.index).filter(|_| name_ok).and_then(|i| i.lua.clone()) else {
                 warnings.push(format!("script {} of the save is not running in this game", s.name));
                 continue;
             };
-            for (k, v) in &s.globals {
-                match crate::persist::from_val(&lua, &self.shared, s.index, v) {
-                    Ok(val) => {
-                        if let Err(e) = lua.globals().set(k.as_str(), val) {
-                            warnings.push(format!("{}: global {k}: {e}", s.name));
-                        }
-                    }
-                    Err(e) => warnings.push(format!("{}: global {k}: {e}", s.name)),
-                }
+            if s.ended {
+                let inst = &mut self.scripts[s.index];
+                inst.alive = false;
+                inst.threads.clear();
+                continue;
+            }
+            if let Err(e) = self.put_globals(s, &lua) {
+                warnings.push(format!("{}: {e}", s.name));
+            }
+            if let Some((next, idle)) = s.service {
+                let inst = &mut self.scripts[s.index];
+                (inst.next_service, inst.idle) = (next, idle);
+            }
+            // Each script runs back against the state of the save, not against what the runs of the scripts before it did.
+            self.restore_shared(snap);
+            if let Err(e) = self.resume_script(s, &lua, &mut warnings) {
+                warnings.push(format!("{}: {e}", s.name));
+            }
+            // What the runs did to the globals is undone.
+            if let Err(e) = self.put_globals(s, &lua) {
+                warnings.push(format!("{}: {e}", s.name));
             }
         }
+        // And what they did to the story, the `GlobalValue` store, the story flags and the random generator.
+        self.restore_shared(snap);
+        {
+            let mut sh = self.shared.borrow_mut();
+            sh.pending_fired.clear();
+            sh.killed.clear();
+            sh.exit.clear();
+            sh.new_threads.clear();
+            sh.wake = false;
+        }
+        self.sweep_finished_plans();
         let now = snap.time;
         for inst in &mut self.scripts {
             inst.next_service = inst.next_service.max(now);
         }
         warnings
+    }
+
+    /// The state of the snapshot that scripts change: story, `GlobalValue` store, story flags, random generator.
+    fn restore_shared(&mut self, snap: &RuntimeSnapshot) -> Vec<String> {
+        let mut sh = self.shared.borrow_mut();
+        sh.rng = snap.rng;
+        sh.global_values = snap.global_values.iter().cloned().collect();
+        sh.story_flags = snap.story_flags.iter().cloned().collect();
+        sh.story.restore(&snap.story)
+    }
+
+    /// Sets the globals of a script to the saved ones: a global the save names gets its saved value, a saveable one it does not name the
+    /// value it had when the script was set up (or nil). Globals that already have that value are left alone (tables keep their identity).
+    fn put_globals(&self, s: &ScriptSnapshot, lua: &Lua) -> mlua::Result<()> {
+        let baseline = &self.scripts[s.index].baseline;
+        let mut want: HashMap<&str, &LuaVal> = baseline.iter().map(|(k, v)| (k.as_str(), v)).collect();
+        want.extend(s.globals.iter().filter(|(k, _)| !crate::persist::is_library(k)).map(|(k, v)| (k.as_str(), v)));
+        let now = crate::persist::globals_of(lua);
+        let g = lua.globals();
+        for (k, v) in &want {
+            if now.get(*k) != Some(*v) {
+                g.set(*k, crate::persist::from_val(lua, &self.shared, s.index, v)?)?;
+            }
+        }
+        for k in now.keys().filter(|k| !want.contains_key(k.as_str())) {
+            g.set(k.as_str(), Value::Nil)?;
+        }
+        Ok(())
+    }
+
+    /// Runs the threads of a loaded script back to where they waited when it was saved (see [`crate::persist`]).
+    fn resume_script(&mut self, s: &ScriptSnapshot, lua: &Lua, warnings: &mut Vec<String>) -> mlua::Result<()> {
+        let sid = s.index;
+        let Some(saved) = &s.threads else {
+            // A save of a build that kept no threads: `main` and the threads it starts go to their first wait.
+            self.shared.borrow_mut().resuming = Some(Resuming { offset: 0.0, threads: None });
+            let mut i = 0;
+            while i < self.scripts[sid].threads.len() {
+                let resumed = self.resume_thread(sid, i, None, s, lua);
+                self.settle(sid, &mut i, resumed, s, warnings);
+            }
+            self.shared.borrow_mut().resuming = None;
+            return Ok(());
+        };
+        // The threads as saved, `main` the fresh one of the set-up.
+        let mut main = self.scripts[sid].threads.drain(..).find(|t| t.id == 0);
+        let mut threads = Vec::new();
+        for t in saved {
+            let Some(function) = t.function.as_deref() else {
+                warnings.push(format!("{}: thread {} runs a function no global names, it cannot be started again", s.name, t.id));
+                continue;
+            };
+            let slot = match main.take().filter(|_| t.id == 0) {
+                Some(m) => m,
+                None => {
+                    let Value::Function(f) = lua.globals().get::<Value>(function)? else {
+                        warnings.push(format!("{}: thread {} runs {function}, which is not a function in this game", s.name, t.id));
+                        continue;
+                    };
+                    let args = t.args.iter().map(|v| v.as_ref().map_or(Ok(Value::Nil), |v| crate::persist::from_val(lua, &self.shared, sid, v))).collect::<mlua::Result<MultiValue>>()?;
+                    ThreadSlot::new(t.id, lua.create_thread(f)?, Some(args), Some((Some(function.to_string()), t.args.clone())))
+                }
+            };
+            threads.push(slot);
+        }
+        self.scripts[sid].threads = threads;
+        // `Create_Thread` in the code that runs again hands out the saved threads.
+        let claims: Vec<(String, i64)> = saved.iter().filter(|t| t.id != 0).filter_map(|t| Some((t.function.clone()?, t.id))).collect();
+        self.shared.borrow_mut().resuming = Some(Resuming { offset: 0.0, threads: Some(claims) });
+        let mut i = 0;
+        while i < self.scripts[sid].threads.len() {
+            let id = self.scripts[sid].threads[i].id;
+            let Some(t) = saved.iter().find(|t| t.id == id) else {
+                i += 1;
+                continue;
+            };
+            let resumed = if t.stack.is_empty() { Ok(Resumed::There) } else { self.resume_thread(sid, i, Some(&t.stack), s, lua) };
+            if !matches!(resumed, Ok(Resumed::Gone) | Err(_)) {
+                set_thread_values(lua, &self.shared, sid, id, t.values.as_ref())?;
+            }
+            self.settle(sid, &mut i, resumed, s, warnings);
+        }
+        self.shared.borrow_mut().resuming = None;
+        Ok(())
+    }
+
+    /// Keeps thread `i` of a loaded script or drops it, by how its run went.
+    fn settle(&mut self, sid: usize, i: &mut usize, resumed: mlua::Result<Resumed>, s: &ScriptSnapshot, warnings: &mut Vec<String>) {
+        let id = self.scripts[sid].threads[*i].id;
+        match resumed {
+            Ok(Resumed::There | Resumed::First) => *i += 1,
+            Ok(Resumed::Near) => {
+                warnings.push(format!("{}: thread {id} was not found where it waited when saved; it goes on from the nearest place", s.name));
+                *i += 1;
+            }
+            Ok(Resumed::Gone) => {
+                warnings.push(format!("{}: thread {id} ended before it got back to where it waited when saved; it does not run", s.name));
+                self.scripts[sid].threads.remove(*i);
+            }
+            Err(e) => {
+                warnings.push(format!("{}: thread {id}: {e}", s.name));
+                self.scripts[sid].threads.remove(*i);
+            }
+        }
+        if self.scripts[sid].threads.is_empty() {
+            self.scripts[sid].alive = false;
+        }
+    }
+
+    /// Runs thread `i` of script `sid` with the game shut off until it waits in the saved frames (`target`, innermost first) and sets its
+    /// locals to the saved ones; `None`: until its first wait. A thread that never gets there is run again to the nearest place found.
+    fn resume_thread(&mut self, sid: usize, i: usize, target: Option<&[FrameSnapshot]>, s: &ScriptSnapshot, lua: &Lua) -> mlua::Result<Resumed> {
+        let Some(target) = target else {
+            self.prepare_run(sid, i, s, lua)?;
+            return Ok(match self.resume_once(sid, i, lua)? {
+                Some(_) => Resumed::First,
+                None => Resumed::Gone,
+            });
+        };
+        self.prepare_run(sid, i, s, lua)?;
+        let (mut near, mut last, mut repeats) = (None, None, 0);
+        for k in 0..RESUME_LIMIT {
+            let Some(live) = self.resume_once(sid, i, lua)? else { break };
+            if same_stack(&live, target) {
+                self.set_locals(sid, i, &live, target, lua)?;
+                return Ok(Resumed::There);
+            }
+            if near.is_none() && same_functions(&live, target) {
+                near = Some(k);
+            }
+            let here: Vec<(String, i32, i32)> = live.iter().map(|l| (l.frame.source.clone(), l.frame.defined, l.frame.line)).collect();
+            repeats = if last.as_ref() == Some(&here) { repeats + 1 } else { 0 };
+            if repeats >= RESUME_STUCK {
+                break;
+            }
+            last = Some(here);
+        }
+        // Not found: from the top again, to the first wait in the saved functions or else the first wait.
+        let stop = near.unwrap_or(0);
+        let Some((Some(function), args)) = self.scripts[sid].threads[i].start.clone() else { return Ok(Resumed::Gone) };
+        let Value::Function(f) = lua.globals().get::<Value>(function.as_str())? else { return Ok(Resumed::Gone) };
+        let first = args.iter().map(|v| v.as_ref().map_or(Ok(Value::Nil), |v| crate::persist::from_val(lua, &self.shared, sid, v))).collect::<mlua::Result<MultiValue>>()?;
+        {
+            let slot = &mut self.scripts[sid].threads[i];
+            slot.thread = lua.create_thread(f)?;
+            slot.first_args = Some(first);
+            slot.started = false;
+        }
+        self.prepare_run(sid, i, s, lua)?;
+        for k in 0..=stop {
+            let Some(live) = self.resume_once(sid, i, lua)? else { return Ok(Resumed::Gone) };
+            if k == stop {
+                if same_functions(&live, target) {
+                    self.set_locals(sid, i, &live, target, lua)?;
+                }
+                return Ok(Resumed::Near);
+            }
+        }
+        Ok(Resumed::Gone)
+    }
+
+    /// Before a thread of a loaded script runs back: the globals are the saved ones, its `ThreadValue` store is empty (as when it started),
+    /// and the state machine of `main` stays in its saved state (a change of state asked for after its last wait happens when the game goes
+    /// on, with the `OnExit` of the saved state).
+    fn prepare_run(&mut self, sid: usize, i: usize, s: &ScriptSnapshot, lua: &Lua) -> mlua::Result<()> {
+        self.put_globals(s, lua)?;
+        let id = self.scripts[sid].threads[i].id;
+        set_thread_values(lua, &self.shared, sid, id, None)?;
+        if id == 0 {
+            let g = lua.globals();
+            let current: Value = g.get("CurrentState")?;
+            if !current.is_nil() && g.get::<Value>("StateMachine")?.is_table() {
+                g.set("NextState", current)?;
+            }
+        }
+        if let Some(r) = self.shared.borrow_mut().resuming.as_mut() {
+            r.offset = 0.0;
+        }
+        Ok(())
+    }
+
+    /// Resumes thread `i` of a loaded script once with the game shut off. `Some(frames)` where it waits now, `None` if it ended.
+    fn resume_once(&mut self, sid: usize, i: usize, lua: &Lua) -> mlua::Result<Option<Vec<LiveFrame>>> {
+        let (tid, thread, args) = {
+            let slot = &mut self.scripts[sid].threads[i];
+            slot.started = true;
+            (slot.id, slot.thread.clone(), slot.first_args.take())
+        };
+        self.shared.borrow_mut().current_thread = tid;
+        let result = thread.resume::<MultiValue>(args.unwrap_or_default());
+        {
+            let mut sh = self.shared.borrow_mut();
+            sh.current_thread = -1;
+            sh.killed.clear();
+            sh.exit.clear();
+            // Every wait on the way to the saved one is over.
+            if let Some(r) = sh.resuming.as_mut() {
+                r.offset += RESUME_JUMP;
+            }
+        }
+        self.adopt_threads(sid);
+        let vals = result?;
+        if thread.status() != ThreadStatus::Resumable || matches!(vals.iter().next(), Some(Value::Boolean(false))) {
+            return Ok(None);
+        }
+        stack_of(lua, &thread).map(Some)
+    }
+
+    /// Sets the locals of the frames thread `i` waits in to the saved ones (a local that has its saved value already is left alone).
+    fn set_locals(&self, sid: usize, i: usize, live: &[LiveFrame], saved: &[FrameSnapshot], lua: &Lua) -> mlua::Result<()> {
+        let set: Function = lua.named_registry_value(SET_LOCAL)?;
+        let thread = &self.scripts[sid].threads[i].thread;
+        for (l, s) in live.iter().zip(saved) {
+            for (slot, name, value) in &s.locals {
+                let now = l.frame.locals.iter().find(|x| x.0 == *slot && x.1 == *name).map(|x| &x.2);
+                if now == Some(value) {
+                    continue;
+                }
+                let v = value.as_ref().map_or(Ok(Value::Nil), |v| crate::persist::from_val(lua, &self.shared, sid, v))?;
+                set.call::<()>((thread.clone(), l.level, *slot, name.as_str(), v))?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Takes the threads a resume of script `sid` created into its list.
+    fn adopt_threads(&mut self, sid: usize) {
+        let created: Vec<NewThread> = std::mem::take(&mut self.shared.borrow_mut().new_threads);
+        let long_lived = self.scripts[sid].plan.is_none();
+        for nt in created {
+            if nt.script == sid {
+                let start = long_lived.then(|| (nt.function, nt.args.iter().map(crate::persist::value_of).collect()));
+                self.scripts[sid].threads.push(ThreadSlot::new(nt.id, nt.thread, Some(nt.args), start));
+            }
+        }
     }
 
     /// Reports a story occurrence from the game (`STORY_CONQUER`, `STORY_CONSTRUCT`, ...).
@@ -736,6 +1165,7 @@ impl ScriptRuntime {
         while i < self.scripts[sid].threads.len() {
             let (tid, thread, args) = {
                 let slot = &mut self.scripts[sid].threads[i];
+                slot.started = true;
                 (slot.id, slot.thread.clone(), slot.first_args.take())
             };
             self.shared.borrow_mut().current_thread = tid;
@@ -756,17 +1186,7 @@ impl ScriptRuntime {
                     break;
                 }
             };
-            // Adopt threads created meanwhile.
-            let created: Vec<NewThread> = std::mem::take(&mut self.shared.borrow_mut().new_threads);
-            for nt in created {
-                if nt.script == sid {
-                    self.scripts[sid].threads.push(ThreadSlot {
-                        id: nt.id,
-                        thread: nt.thread,
-                        first_args: Some(nt.args),
-                    });
-                }
-            }
+            self.adopt_threads(sid);
             let killed: Vec<(usize, i64)> = std::mem::take(&mut self.shared.borrow_mut().killed);
             let exit = self.shared.borrow_mut().exit.remove(&sid);
             if exit || (tid == 0 && finished) {

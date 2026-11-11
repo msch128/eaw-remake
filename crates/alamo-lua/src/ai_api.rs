@@ -85,7 +85,7 @@ pub(crate) fn call_taskforce(lua: &Lua, h: &HandleData, name: &str, args: &[Valu
         return Ok(Value::Boolean(true));
     }
     let hargs: Vec<HostValue> = args.iter().map(|a| to_host(sh, a)).collect();
-    let ret = sh.borrow_mut().host.taskforce_call(h.handle.id, name, &hargs);
+    let ret = sh.borrow_mut().host_mut().taskforce_call(h.handle.id, name, &hargs);
     match ret {
         Some(v) => from_host(lua, sh, h.script, v),
         None => {
@@ -99,7 +99,7 @@ pub(crate) fn call_taskforce(lua: &Lua, h: &HandleData, name: &str, args: &[Valu
 pub(crate) fn call_block(lua: &Lua, h: &HandleData, name: &str) -> mlua::Result<Value> {
     let _ = lua;
     let sh = &h.shared;
-    let (finished, result) = sh.borrow_mut().host.block_status(h.handle.id);
+    let (finished, result) = sh.borrow_mut().host_mut().block_status(h.handle.id);
     Ok(match name {
         "IsFinished" => Value::Boolean(finished),
         "Result" => result.map_or(Value::Nil, Value::Boolean),
@@ -116,7 +116,7 @@ pub(crate) fn install(lua: &Lua, sh: &Sh, script: usize) -> mlua::Result<()> {
         let f = lua.create_function(move |lua, args: MultiValue| -> mlua::Result<Value> {
             hit(&shc, name);
             let hargs: Vec<HostValue> = args.iter().map(|a| to_host(&shc, a)).collect();
-            let ret = shc.borrow_mut().host.ai_call(name, &hargs);
+            let ret = shc.borrow_mut().host_mut().ai_call(name, &hargs);
             match ret {
                 Some(v) => from_host(lua, &shc, script, v),
                 None => {
@@ -137,7 +137,7 @@ pub(crate) fn install(lua: &Lua, sh: &Sh, script: usize) -> mlua::Result<()> {
         lua.create_function(move |lua, args: MultiValue| -> mlua::Result<Value> {
             hit(&shc, "FindTarget");
             let hargs: Vec<HostValue> = args.iter().skip(1).map(|a| to_host(&shc, a)).collect();
-            let ret = shc.borrow_mut().host.ai_call("FindTarget", &hargs);
+            let ret = shc.borrow_mut().host_mut().ai_call("FindTarget", &hargs);
             match ret {
                 Some(v) => from_host(lua, &shc, script, v),
                 None => {
@@ -154,7 +154,7 @@ pub(crate) fn install(lua: &Lua, sh: &Sh, script: usize) -> mlua::Result<()> {
         lua.create_function(move |lua, args: MultiValue| -> mlua::Result<Value> {
             hit(&shc, "FindTarget.Reachable_Target");
             let hargs: Vec<HostValue> = args.iter().map(|a| to_host(&shc, a)).collect();
-            let ret = shc.borrow_mut().host.ai_call("FindTarget.Reachable_Target", &hargs);
+            let ret = shc.borrow_mut().host_mut().ai_call("FindTarget.Reachable_Target", &hargs);
             match ret {
                 Some(v) => from_host(lua, &shc, script, v),
                 None => {

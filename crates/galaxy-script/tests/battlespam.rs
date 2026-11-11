@@ -102,13 +102,16 @@ fn the_save_plays_on_without_repeated_battles() {
     let mut watch = BattleRepeats::for_world(&w);
     let mut per_planet: BTreeMap<PlanetId, u32> = BTreeMap::new();
     let mut repeated = Vec::new();
+    let mut captured: BTreeMap<PlanetId, u32> = BTreeMap::new();
     for _ in 0..60 {
         let events = l.sim.step(1.0).sim_events;
         let now = l.sim.with_sim(|s| s.galaxy().time);
         repeated.extend(watch.check(now, &events));
         for e in &events {
-            if let Event::BattlePending(b) = e {
-                *per_planet.entry(b.planet).or_default() += 1;
+            match e {
+                Event::BattlePending(b) => *per_planet.entry(b.planet).or_default() += 1,
+                Event::PlanetCaptured { planet, .. } if stuck.contains_key(planet) => *captured.entry(*planet).or_default() += 1,
+                _ => {}
             }
         }
         for id in l.sim.with_sim(|s| s.pending_battles().iter().map(|b| b.id).collect::<Vec<_>>()) {
@@ -118,11 +121,13 @@ fn the_save_plays_on_without_repeated_battles() {
     let name = |f: Option<FactionId>| f.map(|f| w.factions[f as usize].name.clone()).unwrap_or_default();
     let after: Vec<Option<FactionId>> = l.sim.with_sim(|s| stuck.keys().map(|&p| s.galaxy().planets[p as usize].owner).collect());
     for ((&p, old), new) in stuck.keys().zip(&before).zip(&after) {
-        println!("{}: {} -> {}, {} battles in 60 s", w.planets[p as usize].name, name(*old), name(*new), per_planet.get(&p).copied().unwrap_or(0));
+        println!("{}: {} -> {}, {} battles and {} captures in 60 s", w.planets[p as usize].name, name(*old), name(*new), per_planet.get(&p).copied().unwrap_or(0), captured.get(&p).copied().unwrap_or(0));
     }
     println!("battles in 60 s: {} at {} planets, most at one planet {}", per_planet.values().sum::<u32>(), per_planet.len(), per_planet.values().max().copied().unwrap_or(0));
     assert!(repeated.is_empty(), "battles created again with the same line-up: {repeated:?}");
     // Six battles a minute at one planet would be one per `battle_repeat_seconds`: a fight that goes on. It was 60 (one per tick) at nine planets.
     assert!(per_planet.values().all(|&n| n <= 6), "{per_planet:?}");
-    assert_eq!(before.iter().zip(&after).filter(|(a, b)| a != b).count(), 9, "every occupied planet changed hands");
+    // Changed hands at least once: an owner may take its planet back within the minute (Lantillies_WW is captured twice and ends Hapan,
+    // as saved).
+    assert_eq!(captured.len(), 9, "every occupied planet changed hands: {captured:?}");
 }

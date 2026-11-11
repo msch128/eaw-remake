@@ -21,5 +21,5 @@ pub use host::{HostValue, PlanEvent, TaskForceSpec,
     GameMode, MockHost, ObjectFilter, ObjectId, ObjectInfo, PlayerId, PlayerInfo, ScriptHost,
     SpawnAt, StoryReward,
 };
-pub use persist::{LuaVal, RuntimeSnapshot, ScriptSnapshot};
+pub use persist::{FrameSnapshot, LuaVal, RuntimeSnapshot, ScriptSnapshot, ThreadSnapshot};
 pub use runtime::{ScriptError, ScriptRuntime, ScriptValue};

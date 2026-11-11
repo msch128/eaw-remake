@@ -51,7 +51,23 @@ pub struct NewThread {
     pub thread: Thread,
     /// Arguments for the first resume.
     pub args: MultiValue,
+    /// Name of the global function it runs: what a save keeps of it.
+    pub function: Option<String>,
 }
+
+/// A script of a loaded game is being brought back to where it was saved (see [`crate::persist`]).
+pub struct Resuming {
+    /// Added to `GetCurrentTime`: every wait passed on the way to the saved one counts as over.
+    pub offset: f64,
+    /// The saved threads of the script, by function name, that `Create_Thread` hands out instead of starting new ones. `None` for a save
+    /// that kept no threads: `Create_Thread` starts them.
+    pub threads: Option<Vec<(String, i64)>>,
+}
+
+/// Where the game-changing calls of a script go while it is [`Resuming`]: nowhere.
+pub struct Sink;
+
+impl ScriptHost for Sink {}
 
 /// State shared by the runtime and all script instances.
 pub struct Shared {
@@ -116,9 +132,19 @@ pub struct Shared {
     pub story: StoryEngine,
     /// Story flags (`Check_Story_Flag`).
     pub story_flags: HashSet<String>,
+    /// Set while a loaded script runs back to where it was saved: what it does does not reach the game ([`Shared::host_mut`]); the runtime
+    /// puts its own state back afterwards.
+    pub resuming: Option<Resuming>,
+    /// The host of a resuming script.
+    pub sink: Sink,
 }
 
 impl Shared {
+    /// The host for calls that change the game: [`Sink`] while a script is [`Resuming`].
+    pub fn host_mut(&mut self) -> &mut dyn ScriptHost {
+        if self.resuming.is_some() { &mut self.sink } else { &mut *self.host }
+    }
+
     /// Interns a type name.
     pub fn type_id(&mut self, name: &str) -> u64 {
         if let Some(i) = self.types.iter().position(|t| t.eq_ignore_ascii_case(name)) {
@@ -141,7 +167,7 @@ impl Shared {
     /// (read by `Check_Story_Flag`). Graph rewards are already applied; the host is told so it can log them.
     pub fn apply_rewards(&mut self, f: &crate::story::Fired) {
         if let Some((dialog, chapter)) = &f.dialog {
-            self.host
+            self.host_mut()
                 .story_dialog(dialog, *chapter, &f.event, f.faction.as_deref());
         }
         for r in &f.host_rewards {
@@ -151,11 +177,11 @@ impl Shared {
                 self.wake = true;
                 self.story_flags.insert(if faction.is_empty() { flag } else { format!("{flag}|{faction}") });
             }
-            self.host.story_reward(&story_reward(r, f));
+            self.host_mut().story_reward(&story_reward(r, f));
         }
         // The engine already applied these. The host only records them.
         for r in &f.graph_rewards {
-            self.host.story_reward(&story_reward(r, f));
+            self.host_mut().story_reward(&story_reward(r, f));
         }
     }
 
@@ -493,17 +519,17 @@ pub(crate) fn call_method(
                 }
                 "Give_Money" => {
                     let amount = a(0).and_then(to_f64).unwrap_or(0.0) as f32;
-                    sh.borrow_mut().host.give_money(pid, amount);
+                    sh.borrow_mut().host_mut().give_money(pid, amount);
                     Ok(Value::Nil)
                 }
                 "Set_Tech_Level" => {
                     let lvl = a(0).and_then(to_f64).unwrap_or(0.0) as i32;
-                    sh.borrow_mut().host.set_tech_level(pid, lvl);
+                    sh.borrow_mut().host_mut().set_tech_level(pid, lvl);
                     Ok(Value::Nil)
                 }
                 "Make_Ally" => {
                     if let Some(o) = a(0).and_then(as_handle) {
-                        sh.borrow_mut().host.make_ally(pid, o.handle.id as PlayerId);
+                        sh.borrow_mut().host_mut().make_ally(pid, o.handle.id as PlayerId);
                     }
                     Ok(Value::Nil)
                 }
@@ -568,13 +594,13 @@ pub(crate) fn call_method(
                     ))
                 }
                 "Despawn" => {
-                    sh.borrow_mut().host.despawn(id);
+                    sh.borrow_mut().host_mut().despawn(id);
                     Ok(Value::Nil)
                 }
                 "Change_Owner" => {
                     if let Some(p) = a(0).and_then(as_handle) {
                         sh.borrow_mut()
-                            .host
+                            .host_mut()
                             .change_owner(id, p.handle.id as PlayerId);
                     }
                     Ok(Value::Nil)
@@ -582,7 +608,7 @@ pub(crate) fn call_method(
                 "Move_To" => {
                     if let Some(t) = a(0).and_then(as_handle) {
                         sh.borrow_mut()
-                            .host
+                            .host_mut()
                             .move_to(id, SpawnAt::Planet(t.handle.id));
                     }
                     Ok(Value::Nil)
@@ -695,7 +721,7 @@ fn spawn_units(lua: &Lua, sh: &Sh, script: usize, args: &[Value]) -> mlua::Resul
     };
     let mut out = Vec::new();
     for t in types {
-        let id = sh.borrow_mut().host.spawn(&t, at, owner);
+        let id = sh.borrow_mut().host_mut().spawn(&t, at, owner);
         if let Some(id) = id {
             out.push(handle_value(lua, sh, script, Kind::Object, id)?);
         }
@@ -783,7 +809,8 @@ pub fn install(lua: &Lua, sh: &Sh, script: usize) -> mlua::Result<()> {
             "__call",
             lua.create_function(move |_, _: MultiValue| {
                 counter.set(counter.get() + 1);
-                Ok(shc2.borrow().time)
+                let s = shc2.borrow();
+                Ok(s.time + s.resuming.as_ref().map_or(0.0, |r| r.offset))
             })?,
         )?;
         t.set_metatable(Some(mt))?;
@@ -829,7 +856,7 @@ pub fn install(lua: &Lua, sh: &Sh, script: usize) -> mlua::Result<()> {
             if name == "ScriptError" || name == "MessageBox" {
                 s.push_log(format!("[{who}] {name}: {text}"));
             }
-            s.host.log(&who, &text);
+            s.host_mut().log(&who, &text);
             Ok(Value::Nil)
         })?;
         g.set(name, f)?;
@@ -837,7 +864,7 @@ pub fn install(lua: &Lua, sh: &Sh, script: usize) -> mlua::Result<()> {
     def!(sh, "Game_Message", |lua, args| {
         let _ = lua;
         let text = args.first().and_then(to_string).unwrap_or_default();
-        sh.borrow_mut().host.message(&text);
+        sh.borrow_mut().host_mut().message(&text);
         Ok(Value::Nil)
     });
     def!(sh, "Get_Game_Mode", |lua, args| {
@@ -883,6 +910,29 @@ pub fn install(lua: &Lua, sh: &Sh, script: usize) -> mlua::Result<()> {
                     },
                     _ => return Ok(Value::Nil),
                 };
+                // The global that names the function: what a save keeps of the thread.
+                let function = match args.first() {
+                    Some(Value::String(s)) => Some(s.to_string_lossy().to_string()),
+                    _ => lua.globals().pairs::<String, Value>().flatten().find_map(|(k, v)| match v {
+                        Value::Function(g) if g.to_pointer() == f.to_pointer() => Some(k),
+                        _ => None,
+                    }),
+                };
+                // A loaded script that runs back to where it was saved gets the thread it started then; the save brings that thread back.
+                // One that has ended meanwhile is not started again.
+                let claimed = {
+                    let mut s = shc2.borrow_mut();
+                    match s.resuming.as_mut().and_then(|r| r.threads.as_mut()) {
+                        Some(saved) => {
+                            let at = saved.iter().position(|(name, _)| Some(name) == function.as_ref());
+                            Some(at.map_or(i64::MAX, |i| saved.remove(i).1))
+                        }
+                        None => None,
+                    }
+                };
+                if let Some(id) = claimed {
+                    return handle_value(lua, &shc2, script, Kind::Thread, id as u64);
+                }
                 let rest: Vec<Value> = args.into_iter().skip(1).collect();
                 let thread = lua.create_thread(f)?;
                 let id = {
@@ -895,6 +945,7 @@ pub fn install(lua: &Lua, sh: &Sh, script: usize) -> mlua::Result<()> {
                     id,
                     thread,
                     args: MultiValue::from_iter(rest),
+                    function,
                 });
                 handle_value(lua, &shc2, script, Kind::Thread, id as u64)
             })?,
@@ -1357,6 +1408,8 @@ ThreadValue = setmetatable({}, { __call = function(_, key) return tv()[key] end 
 ThreadValue.Get = function(key) return tv()[key] end
 ThreadValue.Set = function(key, value) tv()[key] = value end
 ThreadValue.Reset = function() thread_values[GetThreadID()] = nil end
+-- For saves: the runtime reads and sets the store of each thread.
+return thread_values
 
 
 "#;
