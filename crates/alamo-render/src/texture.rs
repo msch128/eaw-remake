@@ -185,8 +185,6 @@ pub fn solid(rgba: [u8; 4]) -> Image {
 #[derive(Resource, Default)]
 pub struct TextureCache {
     by_name: HashMap<String, Option<Handle<Image>>>,
-    fallback: Option<Handle<Image>>,
-    fallback_grey: Option<Handle<Image>>,
     /// Names that could not be loaded (for diagnostics).
     pub missing: Vec<String>,
 }
@@ -207,14 +205,14 @@ impl TextureCache {
         let handle = match read_texture_file(fs, name) {
             // A data gap (the file exists in no layer): logged once, not an error of ours.
             None => {
-                info!("texture {name}: absent in data, using the neutral fallback");
+                info!("texture {name}: absent in data");
                 self.missing.push(name.to_string());
                 None
             }
             Some(d) => match image_from_bytes(&d) {
                 Ok(img) => Some(images.add(img)),
                 Err(e) => {
-                    warn!("texture {name}: undecodable ({e}), using the neutral fallback");
+                    warn!("texture {name}: undecodable ({e})");
                     self.missing.push(name.to_string());
                     None
                 }
@@ -236,12 +234,6 @@ impl TextureCache {
             self.missing.push(name.to_string());
         }
         self.by_name.insert(key, image.map(|i| images.add(i)));
-    }
-    /// Neutral placeholder for textures that cannot be loaded: black for additive (sky, glow) shaders, mid grey
-    /// otherwise, never a loud colour (the miss is logged).
-    pub fn fallback(&mut self, images: &mut Assets<Image>, black: bool) -> Handle<Image> {
-        let slot = if black { &mut self.fallback } else { &mut self.fallback_grey };
-        slot.get_or_insert_with(|| images.add(solid(if black { [0, 0, 0, 255] } else { [128, 128, 128, 255] }))).clone()
     }
 
     /// Number of distinct textures requested so far.

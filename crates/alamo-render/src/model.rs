@@ -298,6 +298,8 @@ pub struct ModelCache {
     preparsed: HashMap<String, Model>,
     materials: HashMap<(String, usize, usize, [u32; 3]), Handle<AlamoMaterial>>,
     logged_shaders: HashSet<String>,
+    /// Models that could not be read or parsed (lower-case path): nothing is drawn for them, the error is logged the first time only.
+    failed: HashSet<String>,
 }
 
 impl ModelCache {
@@ -394,6 +396,72 @@ pub fn select_lod(model: &Model, lod: LodSelect) -> Vec<bool> {
     }
     chosen
 }
+
+/// True for a mesh the renderer builds parts for: it has geometry and is neither a shadow volume nor made of collision sub-meshes only.
+/// A mesh the data marks hidden is built too (shield bubbles and the meshes animations switch on) and starts invisible.
+pub fn is_render_mesh(mesh: &alamo_model::alo::Mesh) -> bool {
+    !(mesh.is_shadow_volume() || is_collision_only(mesh) || mesh.sub_meshes.is_empty())
+}
+
+/// What the renderer does with one sub-mesh of a model, decided from its material alone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PartDraw {
+    /// Drawn with this shader flavour.
+    Draw(ShaderKind),
+    /// Not drawn; the text says why.
+    Nothing(&'static str),
+}
+
+/// How a sub-mesh with material `m` is drawn; `base_resolved` says whether its `BaseTexture` could be loaded.
+///
+/// A part is drawn only as its data describes it. Left out are: collision and shadow volume geometry (`MeshCollision*`,
+/// `MeshShadowVolume`, `RSkinShadowVolume`), a shader this renderer does not know, a part whose base texture is named but cannot be
+/// loaded, and a surface (lit, alpha blended or planet shader) that names no base texture at all: the exporter's helper boxes with
+/// `alDefault.fx`. None of them is drawn in a stand-in colour; the loader logs each once. `MeshSolidColor` is a plain colour by its
+/// data, and glows and shields without a base texture keep their own colour and wave textures.
+pub fn part_draw(m: &Material, base_resolved: bool) -> PartDraw {
+    let shader = normalize_shader(&m.shader);
+    if shader.starts_with("meshcollision") {
+        return PartDraw::Nothing("collision geometry");
+    }
+    if shader.ends_with("shadowvolume") {
+        return PartDraw::Nothing("shadow volume");
+    }
+    let Some(kind) = shader_kind(&shader) else {
+        return PartDraw::Nothing("unknown shader");
+    };
+    let named = m.texture("BaseTexture").is_some_and(|t| !t.trim().is_empty());
+    if named && !base_resolved {
+        return PartDraw::Nothing("base texture not found");
+    }
+    if !named && matches!(kind, ShaderKind::Lit | ShaderKind::Alpha | ShaderKind::Planet) {
+        return PartDraw::Nothing("no base texture named");
+    }
+    PartDraw::Draw(kind)
+}
+
+/// The flavour of a shader by its normalized name ([`normalize_shader`]); `None` for a shader this renderer does not know.
+fn shader_kind(shader: &str) -> Option<ShaderKind> {
+    Some(match shader {
+        "planet" | "planet_deathstar" => ShaderKind::Planet,
+        // Scrolling nebula cloud: additive, texture times vertex color (the per-vertex wave
+        // distortion of the original is not reproduced).
+        "nebula" => ShaderKind::Additive,
+        s if s.contains("additive") => ShaderKind::Additive,
+        s if s.contains("shield") => ShaderKind::Shield,
+        "meshsolidcolor" => ShaderKind::Solid,
+        s if s.contains("alpha") => ShaderKind::Alpha,
+        s if s.contains("gloss")
+            || s.contains("bump")
+            || s == "aldefault"
+            || s == "default"
+            || s.starts_with("meshgloss")
+            || s.starts_with("rskin")
+            || s.starts_with("mesh") => ShaderKind::Lit,
+        _ => return None,
+    })
+}
+
 fn is_collision_only(mesh: &alamo_model::alo::Mesh) -> bool {
     !mesh.sub_meshes.is_empty()
         && mesh.sub_meshes.iter().all(|s| {
@@ -450,31 +518,16 @@ pub fn describe_material(
     let mut flags = 0;
     let mut colorize = false;
     let bump = shader.contains("bump");
-    let known = |k: ShaderKind, p: &mut AlamoParams| p.kind = k as u32;
-
-    match shader.as_str() {
-        "planet" | "planet_deathstar" => known(ShaderKind::Planet, &mut p),
-        // Scrolling nebula cloud: additive, texture times vertex color (the per-vertex wave
-        // distortion of the original is not reproduced).
-        "nebula" => {
-            known(ShaderKind::Additive, &mut p);
-            flags |= FLAG_VERTEX_COLOR;
-        }
-        s if s.contains("additive") => known(ShaderKind::Additive, &mut p),
-        s if s.contains("shield") => known(ShaderKind::Shield, &mut p),
-        "meshsolidcolor" => known(ShaderKind::Solid, &mut p),
-        s if s.contains("alpha") => {
-            known(ShaderKind::Alpha, &mut p);
-            flags |= FLAG_ALPHA_FROM_BASE;
-        }
-        s if s.contains("gloss")
-            || bump
-            || s == "aldefault"
-            || s == "default"
-            || s.starts_with("meshgloss")
-            || s.starts_with("rskin")
-            || s.starts_with("mesh") => {}
-        other => note_unknown(other),
+    match shader_kind(&shader) {
+        Some(kind) => p.kind = kind as u32,
+        // The loader leaves such a part out ([`part_draw`]).
+        None => note_unknown(&shader),
+    }
+    if shader == "nebula" {
+        flags |= FLAG_VERTEX_COLOR;
+    }
+    if p.kind == ShaderKind::Alpha as u32 {
+        flags |= FLAG_ALPHA_FROM_BASE;
     }
     if p.kind == ShaderKind::Lit as u32 || p.kind == ShaderKind::Alpha as u32 {
         if shader.contains("colorize") {
@@ -664,7 +717,20 @@ pub struct LoaderParams<'w> {
     defs: Res<'w, XmlDefs>,
 }
 
-fn load_model(p: &mut LoaderParams, key: &str) -> Result<Arc<CachedModel>, String> {
+/// Loads (or returns the cached) model `key`. A model that cannot be read or parsed is not drawn: the error comes back the first
+/// time (`Err(Some(..))`, for the log) and as `Err(None)` after that, without reading the file again.
+fn load_model(p: &mut LoaderParams, key: &str) -> Result<Arc<CachedModel>, Option<String>> {
+    let lower = key.to_ascii_lowercase();
+    if p.cache.failed.contains(&lower) {
+        return Err(None);
+    }
+    load_model_once(p, key).map_err(|e| {
+        p.cache.failed.insert(lower);
+        Some(e)
+    })
+}
+
+fn load_model_once(p: &mut LoaderParams, key: &str) -> Result<Arc<CachedModel>, String> {
     if let Some(m) = p.cache.models.get(&key.to_ascii_lowercase()) {
         return Ok(m.clone());
     }
@@ -690,7 +756,7 @@ fn load_model(p: &mut LoaderParams, key: &str) -> Result<Arc<CachedModel>, Strin
 
     let mut meshes = Vec::new();
     for (mi, mesh) in model.meshes.iter().enumerate() {
-        if mesh.is_shadow_volume() || is_collision_only(mesh) || mesh.sub_meshes.is_empty() {
+        if !is_render_mesh(mesh) {
             continue;
         }
         let bone = model.bone_of_object(mi);
@@ -716,20 +782,26 @@ fn load_model(p: &mut LoaderParams, key: &str) -> Result<Arc<CachedModel>, Strin
                     let t0 = std::time::Instant::now();
                     let r = textures.get(&fs.0, images, name);
                     t_tex += t0.elapsed();
-                    r.or_else(|| {
-                        // Missing base textures get the loud placeholder, others are ignored.
-                        name.to_ascii_lowercase()
-                            .contains("texture")
-                            .then(|| None)
-                            .flatten()
-                    })
+                    r
                 },
-                |shader| {
-                    if cache.logged_shaders.insert(shader.to_string()) {
-                        info!("unknown EaW shader `{shader}`, rendering it as a plain lit mesh");
-                    }
-                },
+                |_| {},
             );
+            // A part is drawn as its data describes it or not at all, never in a stand-in colour.
+            if let PartDraw::Nothing(why) = part_draw(&sub.material, material.base.is_some()) {
+                // Geometry that is never drawn is not worth a line; a missing texture or shader is, once per model and name.
+                let base = sub.material.texture("BaseTexture").unwrap_or_default();
+                let what = format!("{key}|{}|{base}", sub.material.shader).to_ascii_lowercase();
+                let gap = matches!(why, "unknown shader" | "base texture not found");
+                if gap && cache.logged_shaders.insert(what) {
+                    info!(
+                        "model {key}: mesh `{}` is not drawn ({why}; shader `{}`, base texture `{}`)",
+                        mesh.name,
+                        sub.material.shader,
+                        sub.material.texture("BaseTexture").unwrap_or_default()
+                    );
+                }
+                continue;
+            }
             let mut material = material;
             if material.shader_kind() == ShaderKind::Shield && !mesh.hidden {
                 // A shield-shader mesh that is visible at rest (engine glow cone, sails, hangar force field) is tinted by its `Color`
@@ -749,11 +821,6 @@ fn load_model(p: &mut LoaderParams, key: &str) -> Result<Arc<CachedModel>, Strin
             if mesh.name.to_ascii_lowercase().starts_with("atmosphere") {
                 // The additive atmosphere ring is brighter in the original than the plain texture product (Remake video: wide pale-blue haze at the limb).
                 material.params.diffuse *= Vec4::new(ATMOSPHERE_RING_GAIN, ATMOSPHERE_RING_GAIN, ATMOSPHERE_RING_GAIN, 1.0);
-            }
-            if material.base.is_none() && sub.material.texture("BaseTexture").is_some() {
-                // Additive shaders (sky, glows) get black, lit surfaces a neutral grey so a hull never turns black.
-                let additive = sub.material.shader.to_ascii_lowercase().contains("additive");
-                material.base = Some(p.textures.fallback(&mut p.images, additive));
             }
             let handle = p.meshes.add(build_mesh(sub));
             parts.push(CachedPart {
@@ -870,11 +937,14 @@ pub fn spawn_models(
         let cached = match load_model(&mut loader, &key) {
             Ok(c) => c,
             Err(error) => {
-                error!("{error}");
+                // Nothing is drawn in place of a model that cannot be loaded; it is said once.
+                if let Some(e) = &error {
+                    error!("{e}; the model is not drawn");
+                }
                 commands.entity(root).insert(AlamoLoadFailed);
                 commands.trigger(ModelLoadFailed {
                     entity: root,
-                    error,
+                    error: error.unwrap_or_else(|| format!("{key} could not be loaded")),
                 });
                 continue;
             }
@@ -1286,6 +1356,55 @@ mod tests {
         assert_ne!(kind("MeshGloss.fx").1 & FLAG_SPEC_FROM_BASE_ALPHA, 0);
         assert_eq!(kind("Nebula.fx").0, ShaderKind::Additive as u32);
         assert_eq!(kind("Tree.fx").3, 1);
+    }
+
+    #[test]
+    fn a_part_is_drawn_as_its_data_says_or_not_at_all() {
+        let textured = |s: &str| material(s, &[("BaseTexture", ParamValue::Texture("hull.dds".into()))]);
+        let plain = |s: &str| material(s, &[]);
+        // Resolved art is drawn in its shader's flavour.
+        assert_eq!(part_draw(&textured("MeshBumpColorize.fx"), true), PartDraw::Draw(ShaderKind::Lit));
+        assert_eq!(part_draw(&textured("MeshAdditive.fx"), true), PartDraw::Draw(ShaderKind::Additive));
+        // A named base texture that cannot be loaded: no part, whatever the shader (it was a grey or black stand-in).
+        for s in ["MeshBumpColorize.fx", "RSkinAlpha.fx", "MeshAdditive.fx", "Planet.fx"] {
+            assert_eq!(part_draw(&textured(s), false), PartDraw::Nothing("base texture not found"), "{s}");
+        }
+        // A shader this renderer does not know: no part (it was a plain lit mesh).
+        assert_eq!(part_draw(&textured("Tree.fx"), true), PartDraw::Nothing("unknown shader"));
+        // Collision and shadow geometry, also as one sub-mesh of a mesh that has drawn ones, and the skinned shadow volumes.
+        assert_eq!(part_draw(&plain("MeshCollision.fx"), false), PartDraw::Nothing("collision geometry"));
+        assert_eq!(part_draw(&plain("MeshShadowVolume.fx"), false), PartDraw::Nothing("shadow volume"));
+        assert_eq!(part_draw(&plain("RSkinShadowVolume.fx"), false), PartDraw::Nothing("shadow volume"));
+        // A surface without any base texture is an exporter helper (`alDefault.fx` boxes): no part.
+        for s in ["alDefault.fx", "MeshGloss.fx", "MeshAlpha.fx"] {
+            assert_eq!(part_draw(&plain(s), false), PartDraw::Nothing("no base texture named"), "{s}");
+        }
+        // A plain colour by its data, and the shield bubbles and glows that have no base texture, stay.
+        assert_eq!(part_draw(&plain("MeshSolidColor.fx"), false), PartDraw::Draw(ShaderKind::Solid));
+        assert_eq!(part_draw(&plain("MeshShield.fx"), false), PartDraw::Draw(ShaderKind::Shield));
+        assert_eq!(part_draw(&plain("MeshAdditive.fx"), false), PartDraw::Draw(ShaderKind::Additive));
+    }
+
+    #[test]
+    fn a_model_that_cannot_be_loaded_is_reported_once_and_not_read_again() {
+        use bevy::ecs::system::RunSystemOnce;
+        let mut world = World::new();
+        world.insert_resource(AlamoFs(Arc::new(GameFs::new(&[]).unwrap())));
+        world.init_resource::<ModelCache>();
+        world.init_resource::<TextureCache>();
+        world.init_resource::<Assets<Image>>();
+        world.init_resource::<Assets<Mesh>>();
+        world.init_resource::<Assets<AlamoMaterial>>();
+        world.init_resource::<Assets<SkinnedMeshInverseBindposes>>();
+        world.init_resource::<AlamoRenderSettings>();
+        world.init_resource::<XmlDefs>();
+        let load = |world: &mut World| {
+            world.run_system_once(|mut p: LoaderParams| load_model(&mut p, "Art/Models/Not_In_Any_Layer.alo").map(|_| ())).unwrap()
+        };
+        // The first try says why (the caller logs it); every later one is a quiet miss, and nothing is drawn either time.
+        assert!(matches!(load(&mut world), Err(Some(e)) if e.contains("Not_In_Any_Layer")));
+        assert_eq!(load(&mut world), Err(None));
+        assert_eq!(world.resource::<ModelCache>().model_count(), 0);
     }
 
     #[test]

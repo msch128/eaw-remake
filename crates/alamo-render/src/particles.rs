@@ -255,18 +255,58 @@ impl EmitterRuntime {
         }
     }
 
-    /// Works out `route` from the emitter's data (its texture name was lower-cased, and the three kinds that draw nothing looked up, for every
+    /// Works out `route` from the emitter's data (its texture name was lower-cased, and the kinds that draw nothing looked up, for every
     /// emitter with quads in every frame before: a string allocation each).
     fn ensure_route(&mut self, e: &Emitter) {
         if matches!(self.route, Routing::Unknown) {
-            self.route = if is_distortion(e) || is_light_volume(e) || matches!(e.blend, BlendMode::Mesh) {
-                Routing::Skip
-            } else {
-                Routing::Draw { texture: e.texture.to_ascii_lowercase(), blend: e.blend }
+            self.route = match emitter_draw(e) {
+                EmitterDraw::Nothing(why) => {
+                    // An emitter type or texture name this renderer cannot draw is said once per type (the kinds left out by rule are not).
+                    static SAID: std::sync::Mutex<Vec<BlendMode>> = std::sync::Mutex::new(Vec::new());
+                    if matches!(e.blend, BlendMode::Other(_)) || e.texture.trim().is_empty() {
+                        let mut said = SAID.lock().unwrap_or_else(|p| p.into_inner());
+                        if !said.contains(&e.blend) {
+                            said.push(e.blend);
+                            info!("particle emitter `{}` ({:?}, texture `{}`) is not drawn: {why}", e.name, e.blend, e.texture);
+                        }
+                    }
+                    Routing::Skip
+                }
+                EmitterDraw::Sprites => Routing::Draw { texture: e.texture.to_ascii_lowercase(), blend: e.blend },
             };
         }
     }
+}
 
+/// What the renderer does with an emitter, decided from its data alone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EmitterDraw {
+    /// Textured sprites, blended as [`Emitter::blend`] says (the batch stays hidden if the texture cannot be loaded).
+    Sprites,
+    /// Nothing is drawn; the text says why.
+    Nothing(&'static str),
+}
+
+/// How an emitter is drawn. Sprites are drawn only in the blend modes this renderer has (additive, alpha, the additive corona of a small
+/// light, the frame emitters read as additive): an emitter of any other type draws nothing instead of being drawn in a guessed mode.
+pub fn emitter_draw(e: &Emitter) -> EmitterDraw {
+    if is_distortion(e) {
+        return EmitterDraw::Nothing("heat haze distorts the background in the original");
+    }
+    if is_light_volume(e) {
+        return EmitterDraw::Nothing("a light volume, not a sprite");
+    }
+    if e.texture.trim().is_empty() {
+        return EmitterDraw::Nothing("no texture named");
+    }
+    match e.blend {
+        BlendMode::Additive | BlendMode::Alpha | BlendMode::Light | BlendMode::Frames => EmitterDraw::Sprites,
+        BlendMode::Mesh => EmitterDraw::Nothing("emitter type 11, not a sprite"),
+        BlendMode::Other(_) => EmitterDraw::Nothing("emitter type without a blend mode here"),
+    }
+}
+
+impl EmitterRuntime {
     fn restart(&mut self) {
         self.time = 0.0;
         self.spawn_acc = 0.0;
@@ -1578,6 +1618,24 @@ mod tests {
         let steps = simulate(tall, false, GlobalTransform::IDENTITY, 1, 0.016);
         let spread = |f: fn(&Vec3) -> f32| steps[0].iter().map(f).fold(0.0f32, |m, v| m.max(v.abs()));
         assert!(spread(|p| p.y) > 300.0 && spread(|p| p.x) <= 1.0 && spread(|p| p.z) <= 1.0, "{:?}", steps[0]);
+    }
+
+    #[test]
+    fn an_emitter_is_drawn_in_a_blend_mode_this_renderer_has_or_not_at_all() {
+        let of = |blend: BlendMode, texture: &str| {
+            let mut e = one_particle(exact([0.0; 3]), exact([0.0; 3]));
+            e.blend = blend;
+            e.texture = texture.into();
+            emitter_draw(&e)
+        };
+        for blend in [BlendMode::Additive, BlendMode::Alpha, BlendMode::Frames, BlendMode::Light] {
+            assert_eq!(of(blend, "p_particle_master.tga"), EmitterDraw::Sprites, "{blend:?}");
+        }
+        // A type without a blend mode here was drawn additively by guess. An emitter without a texture name has nothing to draw.
+        assert_eq!(of(BlendMode::Other(7), "p_particle_master.tga"), EmitterDraw::Nothing("emitter type without a blend mode here"));
+        assert_eq!(of(BlendMode::Additive, " "), EmitterDraw::Nothing("no texture named"));
+        assert!(matches!(of(BlendMode::Mesh, "p_particle_master.tga"), EmitterDraw::Nothing(_)));
+        assert!(matches!(of(BlendMode::Additive, "p_heat_distort.tga"), EmitterDraw::Nothing(_)));
     }
 
     /// A looping engine emitter as the Eclipse's `engine_core` is authored: not in bursts, `max_particles` 1 (the editor default, unused),

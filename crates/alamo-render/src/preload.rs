@@ -186,13 +186,13 @@ fn decode_new(fs: &GameFs, claimed: &Mutex<Claims>, names: Vec<String>) -> Vec<(
         let img = match read_texture_file(fs, &name) {
             // A data gap (the file exists in no layer): logged once, not an error of ours.
             None => {
-                info!("texture {name}: absent in data, using the neutral fallback");
+                info!("texture {name}: absent in data");
                 None
             }
             Some(d) => match image_from_bytes(&d) {
                 Ok(i) => Some(i),
                 Err(e) => {
-                    warn!("texture {name}: undecodable ({e}), using the neutral fallback");
+                    warn!("texture {name}: undecodable ({e})");
                     None
                 }
             },
