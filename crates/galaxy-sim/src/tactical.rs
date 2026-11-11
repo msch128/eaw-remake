@@ -414,6 +414,38 @@ impl TacticalRequest {
         Some(TacticalResult { winner: result.winner.map(|w| w as usize), survived, retreated, duration: result.duration, health, reserve_called: res_called, reserve_survived: res_survived, attrition_credits: result.attrition_credits.clone(), globals: result.globals.clone() })
     }
 
+    /// The galaxy units every side lost in `result`, by object name in first-seen order: units of its fleets destroyed on the field or after
+    /// being called in (retreated ones survive), and its star base and structures. Squadrons a carrier or a station launched in the battle are
+    /// not units of a fleet and never count; [`Sim::apply_tactical_result`] takes exactly these units out of the galaxy.
+    pub fn losses(&self, result: &TacticalResult) -> Vec<Vec<(String, u32)>> {
+        let row = |rows: &Vec<Vec<u32>>, si: usize, i: usize| rows.get(si).and_then(|r| r.get(i)).copied();
+        self.sides
+            .iter()
+            .enumerate()
+            .map(|(si, side)| {
+                let mut out: Vec<(String, u32)> = Vec::new();
+                let mut add = |name: &str, n: u32| {
+                    if n == 0 {
+                        return;
+                    }
+                    match out.iter_mut().find(|x| x.0 == name) {
+                        Some(x) => x.1 += n,
+                        None => out.push((name.to_owned(), n)),
+                    }
+                };
+                for (gi, g) in side.groups.iter().enumerate() {
+                    let total = if g.kind == GroupKind::Starbase { 1 } else { g.count };
+                    add(&g.name, total - row(&result.survived, si, gi).unwrap_or(total).min(total));
+                }
+                for (ri, g) in side.reserve.iter().enumerate() {
+                    let called = row(&result.reserve_called, si, ri).unwrap_or(0).min(g.count);
+                    add(&g.name, called - row(&result.reserve_survived, si, ri).unwrap_or(0).min(called));
+                }
+                out
+            })
+            .collect()
+    }
+
     /// Total units per `(source, fleet)` of a side including its reserve, in first-seen order (a group split by the cap is one member again).
     fn merged_members(&self, si: usize) -> Vec<(Source, Option<FleetId>, u32)> {
         let mut out: Vec<(Source, Option<FleetId>, u32)> = Vec::new();

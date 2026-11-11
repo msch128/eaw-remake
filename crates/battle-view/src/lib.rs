@@ -357,7 +357,8 @@ pub struct BattleFinished {
     pub battle_id: u32,
     /// Survivors and winner.
     pub result: TacticalResult,
-    /// Per battle side: the ships it lost as `(definition name, count)`, spawned squadrons and stations included.
+    /// Per battle side: the galaxy units it lost as `(object name, count)` (`TacticalRequest::losses`: units of its fleets, star base,
+    /// structures; squadrons launched in the battle are not counted), the same units the galaxy takes away when it applies `result`.
     pub losses: Vec<Vec<(String, u32)>>,
 }
 
@@ -816,7 +817,7 @@ fn report_outcome(
         return;
     }
     rt.reported = true;
-    let losses = rt.cur.as_ref().map(|c| c.losses.iter().map(|side| side.iter().map(|&(d, n)| (rt.catalog.ship(d).name.clone(), n)).collect()).collect()).unwrap_or_default();
+    let losses = request.losses(&result);
     out.write(BattleFinished { battle_id: request.battle_id, result, losses });
 }
 

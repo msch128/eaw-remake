@@ -438,13 +438,14 @@ fn finish_battle_view(
             voice.write(alamo_audio::plugin::GalaxyAudio { faction, event: if won { alamo_audio::GalaxyEvent::BattleEnded } else { alamo_audio::GalaxyEvent::Defeated } });
         }
         info!("battle: over after {:.0} s, winner side {:?}, survivors {:?}", f.result.duration, f.result.winner, f.result.survived);
-        // Result screen: ships at the start and survivors per side.
+        // Result text: the galaxy units of every side (field and reserve) and how many of them it lost, as the result screen lists them.
         let mut lines = Vec::new();
         for (si, side) in pending.0.sides.iter().enumerate() {
-            let total: u32 = side.groups.iter().map(|g| g.count).sum();
-            let alive: u32 = side.groups.iter().enumerate().map(|(gi, _)| f.result.survived.get(si).and_then(|r| r.get(gi)).copied().unwrap_or(0)).sum();
-            lines.push(format!("{}: {} of {} units survived (lost {})", side.faction_name, alive, total, total.saturating_sub(alive)));
+            let total: u32 = side.groups.iter().chain(&side.reserve).map(|g| if g.kind == galaxy_sim::GroupKind::Starbase { 1 } else { g.count }).sum();
+            let lost: u32 = f.losses.get(si).map_or(0, |l| l.iter().map(|x| x.1).sum());
+            lines.push(format!("{}: {} of {} units survived (lost {})", side.faction_name, total.saturating_sub(lost), total, lost));
         }
+        info!("battle: result {}", lines.join(" | "));
         let planet = pending.0.planet_name.trim_end_matches("_WW").replace('_', " ");
         let winner = f.result.winner.and_then(|w| pending.0.sides.get(w)).map(|s| s.faction_name.clone());
         let title = match (&winner, f.result.winner.and_then(|w| pending.0.sides.get(w)).map(|s| Some(s.faction) == player.0)) {

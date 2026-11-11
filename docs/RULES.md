@@ -884,6 +884,12 @@ with `speed_mult > 1.05` when fleeing or when the target is over twice the weapo
   squadrons a carrier launches from its reserve) do not count and are removed with the loser. A side whose brought units are
   all destroyed or retreated loses. A hand-made scenario without setup units counts any ship. Estimate: a battle is a draw
   after `max_time` (60 min; the data has no limit, this guards headless runs).
+* Result screen: it lists per side the galaxy units it lost (`TacticalRequest::losses`: fleet units destroyed on the field
+  or after being called in, the star base, structures), the units the galaxy takes away; craft launched in the battle by
+  carriers and stations are not listed. The log line of the battle (`BattleResolved`, "N ships lost") counts the same fleet
+  units. Reference: in a recorded Remake 4.0 campaign the result screen after a battle at a pirate base (Byss) lists the
+  fleet ships and the base (Acclamator-class, Pirate Asteroid Base, Trireme-class) and no fighters, although the base and
+  the Imperial carriers had squadrons out in that fight.
 * Fog of war (`BattleConfig::fog_of_war`, default on): a ship sees `Space_FOW_Reveal_Range` (data, `ShipDef::sensor_range`,
   1250 where missing); an enemy it saw stays visible for `fog_linger` = `SpaceFOWRegrowTime` (15 s, data). Targeting
   only considers visible enemies. Data: `AIUsesFogOfWarSpace` False (`Xml/Gameconstants.xml`, `Catalog::ai_ignores_fog`),

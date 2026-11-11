@@ -120,6 +120,18 @@ fn the_won_battle_at_fresia_is_over_once_and_the_planet_falls() {
     assert!(result.survived[ps].iter().all(|&n| n == 0), "nothing of the pirates is left: {:?}", result.survived[ps]);
     let events = s.with_sim_mut(|sim| sim.apply_tactical_result(battle, &result)).expect("applied");
     assert!(events.iter().any(|e| matches!(e, Event::BattleWon { faction, .. } if *faction == empire)));
+    // The result screen lists the galaxy units each side lost, the ones the galaxy takes away (`BattleResolved`): craft that carriers and the
+    // pirate star base launched in the battle are not units of a fleet.
+    let losses = req.losses(&result);
+    let resolved = events.iter().find_map(|e| if let Event::BattleResolved { losses, .. } = e { Some(losses.clone()) } else { None }).expect("resolved");
+    println!("losses on the result screen {losses:?}, in the galaxy {resolved:?}");
+    for (si, side) in req.sides.iter().enumerate() {
+        let units = |kind: GroupKind| side.groups.iter().chain(&side.reserve).filter(move |g| g.kind == kind).map(|g| g.name.as_str()).collect::<Vec<_>>();
+        assert!(losses[si].iter().all(|(n, _)| units(GroupKind::Unit).contains(&n.as_str()) || units(GroupKind::Starbase).contains(&n.as_str())), "only galaxy units: {:?}", losses[si]);
+        let ships: u32 = losses[si].iter().filter(|(n, _)| units(GroupKind::Unit).contains(&n.as_str())).map(|x| x.1).sum();
+        assert_eq!(ships, resolved.iter().find(|l| l.0 == side.faction).map_or(0, |l| l.1), "{}: the screen and the galaxy count the same ships", side.faction_name);
+    }
+    assert_eq!(losses[ps].iter().map(|x| x.1).sum::<u32>(), 7, "six fleet units and the star base");
     s.with_sim(|sim| {
         let g = sim.galaxy();
         assert!(!g.fleets.contains_key(&defender), "the pirate fleet is destroyed, all of it");

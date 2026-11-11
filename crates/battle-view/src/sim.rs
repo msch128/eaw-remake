@@ -116,8 +116,6 @@ pub struct Snapshot {
     pub alive: Vec<u32>,
     /// Population per side as the unit cap counts it (`Battle::pop_in_play`: what lives plus what is on its way).
     pub pop: Vec<i32>,
-    /// Once the battle is over: per side the ships it lost, by definition `(def, count)` (destroyed, not retreated; spawned squadrons and stations included).
-    pub losses: Vec<Vec<(battle_sim::ShipId, u32)>>,
     /// Per side: seconds until its retreat jump (`None` when no retreat was ordered).
     pub retreat_jump_in: Vec<Option<f32>>,
     /// Initial spawn / arrival yaw for each side.
@@ -201,7 +199,6 @@ fn snapshot(battle: &Battle, events: Vec<Event>, step_ms: f32) -> Snapshot {
         result,
         alive,
         pop: (0..battle.side_count() as u8).map(|s| battle.pop_in_play(s)).collect(),
-        losses: if battle.is_over() { lost_ships(battle) } else { Vec::new() },
         retreat_jump_in: (0..battle.side_count() as u8).map(|s| battle.retreat_jump_in(s)).collect(),
         spawn_yaw: (0..battle.side_count() as u8).map(|s| battle.spawn_yaw(s)).collect(),
         builds: (0..battle.side_count() as u8).map(|s| BuildBarSnap { credits: battle.credits(s), options: battle.build_options(s), queue: battle.build_queue(s) }).collect(),
@@ -379,55 +376,9 @@ impl Drop for SimHandle {
 
 
 
-/// The units every side lost, by definition: a squadron counts once when all of its fighters are dead and none retreated (not once per
-/// fighter); ships without a squadron count one by one.
-fn lost_ships(battle: &Battle) -> Vec<Vec<(battle_sim::ShipId, u32)>> {
-    lost_units(battle.side_count(), battle.ships.iter().map(|s| (s.side, s.def, s.squad, s.alive, s.retreated)))
-}
-
-/// `ships` is `(side, definition, squad, alive, retreated)` per ship.
-fn lost_units(
-    sides: usize,
-    ships: impl Iterator<Item = (u8, battle_sim::ShipId, u32, bool, bool)>,
-) -> Vec<Vec<(battle_sim::ShipId, u32)>> {
-    let mut out: Vec<std::collections::BTreeMap<battle_sim::ShipId, u32>> = vec![Default::default(); sides];
-    // squad -> (side, definition of the first member, any member alive or retreated)
-    let mut squads: std::collections::BTreeMap<u32, (u8, battle_sim::ShipId, bool)> = Default::default();
-    for (side, def, squad, alive, retreated) in ships {
-        if squad == battle_sim::NONE {
-            if !alive && !retreated {
-                if let Some(m) = out.get_mut(side as usize) {
-                    *m.entry(def).or_default() += 1;
-                }
-            }
-            continue;
-        }
-        squads.entry(squad).or_insert((side, def, false)).2 |= alive || retreated;
-    }
-    for (side, def, present) in squads.into_values() {
-        if !present {
-            if let Some(m) = out.get_mut(side as usize) {
-                *m.entry(def).or_default() += 1;
-            }
-        }
-    }
-    out.into_iter().map(|m| m.into_iter().collect()).collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn squadron_counts_once_and_station_counts() {
-        let none = battle_sim::NONE;
-        // side 0: squad 7 of 4 fighters (def 5) all dead, squad 8 of 2 with one alive; side 1: a dead station (def 9) and a retreated ship
-        let mut ships: Vec<(u8, u32, u32, bool, bool)> = (0..4).map(|_| (0, 5, 7, false, false)).collect();
-        ships.extend([(0, 5, 8, false, false), (0, 5, 8, true, false), (1, 9, none, false, false), (1, 3, none, false, true)]);
-        let lost = lost_units(2, ships.into_iter());
-        assert_eq!(lost[0], vec![(5, 1)]);
-        assert_eq!(lost[1], vec![(9, 1)]);
-    }
 
     #[test]
     fn fetch_after_done_returns_terminal_snapshot_without_blocking() {
