@@ -4956,10 +4956,14 @@ type Squadrons = Vec<(ShipId, u32)>;
 const MISS_FLY_ON: f32 = 1200.0;
 
 /// Distance a freshly fired projectile may fly: the data value, but never less than `MISS_FLY_ON` past its target.
-/// Guided (turning) and weaving projectiles keep the data value, as do beams (a flight distance of a few units).
+/// Weaving projectiles keep the data value, as do beams (a flight distance of a few units). A guided (turning) projectile keeps it too
+/// while its target is inside it; fired at a target farther away (the hardpoint's `Fire_Range_Distance` allowed the shot) it flies to the
+/// target and `MISS_FLY_ON` beyond, like a bolt. A third of the mod's mounted weapon hardpoints out-range their projectile's
+/// `Projectile_Max_Flight_Distance` (1661 of 5161, 214 of them homing: the Torpedo Sphere's 182 tubes at 10000 fire a torpedo of 2500),
+/// so the fire range is read as the weapon's reach and the flight distance as where a shot that found nothing ends (estimate).
 fn flight_range(pd: &ProjDef, target_dist: Option<f32>) -> f32 {
     match target_dist {
-        Some(d) if pd.turn_rate <= 0.0 && pd.rocket_weave <= 0.0 && pd.max_distance >= 10.0 => pd.max_distance.max(d + MISS_FLY_ON),
+        Some(d) if pd.rocket_weave <= 0.0 && pd.max_distance >= 10.0 && (pd.turn_rate <= 0.0 || d > pd.max_distance) => pd.max_distance.max(d + MISS_FLY_ON),
         _ => pd.max_distance,
     }
 }
@@ -4997,6 +5001,9 @@ mod flight_range_tests {
         assert_eq!(flight_range(&light, None), 600.0);
         let homing = ProjDef { max_distance: 600.0, turn_rate: 1.0, ..ProjDef::default() };
         assert_eq!(flight_range(&homing, Some(500.0)), 600.0);
+        assert_eq!(flight_range(&homing, Some(900.0)), 900.0 + MISS_FLY_ON, "a homing shot fired at a target beyond its flight distance reaches it");
+        let weaving = ProjDef { max_distance: 600.0, rocket_weave: 0.2, ..ProjDef::default() };
+        assert_eq!(flight_range(&weaving, Some(900.0)), 600.0);
         let beam = ProjDef { max_distance: 1.0, ..ProjDef::default() };
         assert_eq!(flight_range(&beam, Some(500.0)), 1.0);
     }
