@@ -1192,6 +1192,11 @@ Estimates and data that shape what the player sees and hears. Behaviour is in `b
   down to 80 % of it; only below that it is shortened ("264,2K", "10,9M", then "11M"), and the hover card adds the exact
   value. Month, tech and population only shrink. The same holds for the tactical header (`Text_Credits_tactical`,
   `Text_Planetary_Pop`, `Text_Tactical_Tech`).
+* World hover cards keep their place next to the advisor droid unless that covers what they explain. The planet close-up
+  names what each card must leave visible: the hovered building, station or fleet box icon (its model's fitted size plus
+  its ring), the open sell box, and the hovered building's row (station with the orbital buildings, or the ground
+  buildings). The card then moves right of, left of, above or below them, 8 px away and 4 px inside the screen
+  (estimates), giving up the row first and the sell box next when the screen has no such place.
 
 ## 3.4 Bar buttons
 

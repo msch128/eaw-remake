@@ -211,6 +211,10 @@ pub struct WorldTooltip {
     pub text: Option<String>,
     /// Header icon (texture name).
     pub icon: Option<String>,
+    /// Window rectangles (physical px) the card must not cover, most important first: the thing under the cursor, then what
+    /// belongs to it (a sell box, its neighbours). The card keeps its anchor when that covers none of them; otherwise it moves
+    /// next to them, dropping the least important rectangles first when no place on screen clears them all.
+    pub avoid: Vec<Rect>,
 }
 
 #[cfg(test)]

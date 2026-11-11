@@ -2047,6 +2047,8 @@ pub(crate) fn tooltip(
             }
         }
     }
+    // The card explains something outside the bar (a [`WorldTooltip`]).
+    let mut from_world = false;
     // (text, icon, hovered bar button)
     let (text, icon, button) = match hit {
         Some((e, b, cn, gt, forced_hit)) => {
@@ -2085,7 +2087,10 @@ pub(crate) fn tooltip(
             Some(t)
         }) {
             Some(t) => (t, None, None),
-            None => (world_tip.text.clone().unwrap_or_default(), world_tip.icon.clone(), None),
+            None => {
+                from_world = true;
+                (world_tip.text.clone().unwrap_or_default(), world_tip.icon.clone(), None)
+            }
         },
     };
     if text.is_empty() {
@@ -2162,6 +2167,23 @@ pub(crate) fn tooltip(
                 let cursor_ui = w.physical_cursor_position().map(|p| p * inv);
                 let at = cursor_ui.map_or(Vec2::ZERO, |p| p + Vec2::new(14.0, 18.0));
                 let at = clamp_to_screen(at, cursor_ui.unwrap_or(at), Vec2::new(tip_w, tip_h), Vec2::new(screen_w, screen_h));
+                node.left = Val::Px(at.x);
+                node.top = Val::Px(at.y);
+                node.bottom = Val::Auto;
+            }
+            // A world card moves off the thing it explains (and what belongs to it) once its size is known.
+            if from_world && !world_tip.avoid.is_empty() && tip_h > 1.0 {
+                let left = match node.left {
+                    Val::Px(x) => x,
+                    _ => 4.0,
+                };
+                let top = match (node.top, node.bottom) {
+                    (Val::Px(y), _) => y,
+                    (_, Val::Px(b)) => screen_h - b - tip_h,
+                    _ => 4.0,
+                };
+                let avoid: Vec<Rect> = world_tip.avoid.iter().map(|r| Rect { min: r.min * inv, max: r.max * inv }).collect();
+                let at = clear_spot(Vec2::new(left, top), Vec2::new(tip_w, tip_h), &avoid, Vec2::new(screen_w, screen_h));
                 node.left = Val::Px(at.x);
                 node.top = Val::Px(at.y);
                 node.bottom = Val::Auto;
@@ -2245,6 +2267,43 @@ pub fn clamp_to_screen(anchor: Vec2, cursor: Vec2, size: Vec2, screen: Vec2) -> 
         p.y = p.y.max(4.0);
     }
     p
+}
+
+/// Top left corner (UI px) for a card of `size` that keeps `anchor` when it covers none of `avoid` and otherwise sits next to
+/// them: right of, left of, above or below their union, then the same around each rectangle alone, centred on it where the screen
+/// allows. When no spot clears every rectangle the least important (last) ones are dropped until one does; with only the first
+/// left and still no spot, the clamped anchor is used. Distances: 8 px from what it clears, 4 px from the screen edge (estimates).
+pub(crate) fn clear_spot(anchor: Vec2, size: Vec2, avoid: &[Rect], screen: Vec2) -> Vec2 {
+    const GAP: f32 = 8.0;
+    const EDGE: f32 = 4.0;
+    let clamp = |p: Vec2| Vec2::new(p.x.clamp(EDGE, (screen.x - size.x - EDGE).max(EDGE)), p.y.clamp(EDGE, (screen.y - size.y - EDGE).max(EDGE)));
+    let fits = |p: Vec2| p.x >= EDGE - 0.01 && p.y >= EDGE - 0.01 && p.x + size.x <= screen.x - EDGE + 0.01 && p.y + size.y <= screen.y - EDGE + 0.01;
+    let clear = |p: Vec2, rects: &[Rect]| rects.iter().all(|r| p.x >= r.max.x || p.x + size.x <= r.min.x || p.y >= r.max.y || p.y + size.y <= r.min.y);
+    let start = clamp(anchor);
+    for keep in (1..=avoid.len()).rev() {
+        let rects = &avoid[..keep];
+        if clear(start, rects) {
+            return start;
+        }
+        let union = rects.iter().skip(1).fold(rects[0], |u, r| u.union(*r));
+        for r in std::iter::once(union).chain(rects.iter().copied()) {
+            let mid = r.center() - size * 0.5;
+            let spots = [
+                Vec2::new(r.max.x + GAP, mid.y),
+                Vec2::new(r.min.x - GAP - size.x, mid.y),
+                Vec2::new(mid.x, r.min.y - GAP - size.y),
+                Vec2::new(mid.x, r.max.y + GAP),
+            ];
+            // Off-centre along the free axis is fine, off the screen on the axis that clears is not.
+            for (i, s) in spots.into_iter().enumerate() {
+                let p = if i < 2 { Vec2::new(s.x, clamp(s).y) } else { Vec2::new(clamp(s).x, s.y) };
+                if fits(p) && clear(p, rects) {
+                    return p;
+                }
+            }
+        }
+    }
+    start
 }
 
 /// Roman numeral of a small level ("" for 0).
@@ -2428,6 +2487,33 @@ mod tests {
         let p2 = clamp_to_screen(Vec2::new(1900.0, 1000.0), Vec2::new(1800.0, 950.0), size, screen);
         assert!(p2.x + size.x <= screen.x);
         assert!(p2.y >= 4.0 && p2.y + size.y <= screen.y);
+    }
+
+    #[test]
+    fn a_card_never_covers_what_it_explains() {
+        let screen = Vec2::new(1920.0, 1080.0);
+        let card = Vec2::new(480.0, 300.0);
+        let overlaps = |p: Vec2, r: &Rect| p.x < r.max.x && p.x + card.x > r.min.x && p.y < r.max.y && p.y + card.y > r.min.y;
+        let on_screen = |p: Vec2| p.x >= 4.0 && p.y >= 4.0 && p.x + card.x <= screen.x - 4.0 && p.y + card.y <= screen.y - 4.0;
+        // The droid anchor (lower left) is kept when it covers nothing.
+        let anchor = Vec2::new(120.0, 380.0);
+        assert_eq!(clear_spot(anchor, card, &[Rect::new(1200.0, 300.0, 1260.0, 360.0)], screen), anchor);
+        assert_eq!(clear_spot(anchor, card, &[], screen), anchor);
+        // Planet view at 1080p: a hovered orbital building of the row left of the board, the sell box at the cursor, the whole row.
+        let hovered = Rect::new(505.0, 515.0, 560.0, 575.0);
+        let sell = Rect::new(532.0, 550.0, 676.0, 582.0);
+        let row = Rect::new(320.0, 420.0, 620.0, 640.0);
+        let p = clear_spot(anchor, card, &[hovered, sell, row], screen);
+        assert!(on_screen(p), "{p}");
+        for r in [hovered, sell, row] {
+            assert!(!overlaps(p, &r), "{p} covers {r:?}");
+        }
+        // A card too tall to clear the whole row still clears the thing under the cursor and stays on screen.
+        let tall = Vec2::new(480.0, 1000.0);
+        let wide_row = Rect::new(0.0, 420.0, 1920.0, 640.0);
+        let p = clear_spot(anchor, tall, &[hovered, wide_row], screen);
+        assert!(p.x >= 4.0 && p.y >= 4.0 && p.x + tall.x <= screen.x - 4.0 && p.y + tall.y <= screen.y - 4.0, "{p}");
+        assert!(!(p.x < hovered.max.x && p.x + tall.x > hovered.min.x && p.y < hovered.max.y && p.y + tall.y > hovered.min.y), "{p}");
     }
 
     #[test]

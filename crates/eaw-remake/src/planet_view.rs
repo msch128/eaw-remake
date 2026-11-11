@@ -870,9 +870,13 @@ fn view_tooltip(
     window: Option<Single<&Window, With<bevy::window::PrimaryWindow>>>,
     cam: Single<(&Camera, &GlobalTransform), With<GalaxyCamera>>,
     slot_nodes: Query<(&eaw_ui::panels::PanelSlotName, &ComputedNode, &UiGlobalTransform, &InheritedVisibility)>,
+    sell_box: Query<(&ComputedNode, &UiGlobalTransform), With<SellDialogRoot>>,
     mut tip: ResMut<eaw_ui::WorldTooltip>,
 ) {
     if !state.active || state.blend < 1.0 {
+        if !tip.avoid.is_empty() {
+            tip.avoid.clear();
+        }
         return;
     }
     let (Some(sim), Some(cat), Some(bridge)) = (sim, catalog, bridge) else { return };
@@ -880,6 +884,9 @@ fn view_tooltip(
     let game = assets.as_deref().and_then(|a| a.game.as_deref());
     let forced = std::env::var("SP_PLANET_VIEW_HOVER").ok();
     let mut text = None;
+    // What the card must not cover (physical px): the thing under the cursor first, then the sell box, then the thing's group.
+    let mut avoid: Vec<Rect> = Vec::new();
+    let node_rect = |n: &ComputedNode, g: &UiGlobalTransform| Rect::from_center_size(g.translation, n.size());
 
     // Unit icons of the orbit boxes.
     let unit_name = match (&forced, window.as_ref().and_then(|w| w.physical_cursor_position())) {
@@ -887,7 +894,13 @@ fn view_tooltip(
         (None, Some(c)) => slot_nodes
             .iter()
             .find(|(_, n, g, v)| v.get() && n.size().x > 4.0 && n.contains_point(**g, c))
-            .and_then(|(name, ..)| orbit.as_ref().and_then(|o| o.0.get(&name.0.to_ascii_lowercase()).cloned())),
+            .and_then(|(name, n, g, _)| {
+                let unit = orbit.as_ref().and_then(|o| o.0.get(&name.0.to_ascii_lowercase()).cloned());
+                if unit.is_some() {
+                    avoid.push(node_rect(n, g));
+                }
+                unit
+            }),
         _ => None,
     };
     if let Some(n) = unit_name {
@@ -914,6 +927,20 @@ fn view_tooltip(
             }
             _ => None,
         };
+        if let Some(h) = hover {
+            let (camera, gt) = *cam;
+            let sf = window.as_ref().map_or(1.0, |w| w.scale_factor());
+            let boxed = |h: Hover| scene_box(&state, h).and_then(|(c, half)| screen_box(|p| camera.world_to_viewport(gt, p).ok().map(|v| v * sf), c, half));
+            avoid.extend(boxed(h));
+            // The rest of its row: the station with the orbital buildings, the ground buildings together.
+            let group: Vec<Hover> = match h {
+                Hover::Ground(_) => (0..state.ground_slots.len()).map(Hover::Ground).collect(),
+                _ => (0..state.orbital_slots.len()).map(Hover::Orbital).chain(std::iter::once(Hover::Station)).collect(),
+            };
+            if let Some(all) = group.into_iter().filter_map(boxed).reduce(|a, b| a.union(b)) {
+                avoid.push(all);
+            }
+        }
         let ps = sim.galaxy().planets.get(sp as usize);
         let cap = sim.world.planet_capacity(sim.galaxy(), sp);
         let nth = |orbital: bool, n: usize| {
@@ -955,11 +982,37 @@ fn view_tooltip(
             None => None,
         };
     }
-    if let Some(t) = text
-        && tip.text.as_deref() != Some(t.as_str())
-    {
-        tip.text = Some(t);
+    // The open sell box stays reachable: right after the thing it sells.
+    if let Ok((n, g)) = sell_box.single() {
+        avoid.insert(avoid.len().min(1), node_rect(n, g));
     }
+    if tip.text != text {
+        tip.text = text;
+    }
+    if tip.avoid != avoid {
+        tip.avoid = avoid;
+    }
+}
+
+/// World centre and half size of what stands at a hover point of the scene: the model a slot holds (or would hold) with its ring.
+fn scene_box(state: &PlanetViewState, h: Hover) -> Option<(Vec3, f32)> {
+    // `FitModel` radii of `view_dynamic` (0.22 ground, 0.17 orbital, 0.5 station) plus a little for the ring and the spin.
+    match h {
+        Hover::Ground(i) => state.ground_slots.get(i).map(|p| (*p + Vec3::new(0.0, 0.12, 0.06), 0.26)),
+        Hover::Orbital(i) => state.orbital_slots.get(i).map(|p| (*p + Vec3::new(0.0, 0.12, 0.06), 0.2)),
+        Hover::Station => Some((PLAT + STATION_AT, 0.55)),
+    }
+}
+
+/// Screen rectangle of a world cube (centre, half size) through `project`; `None` when a corner is behind the camera.
+fn screen_box(project: impl Fn(Vec3) -> Option<Vec2>, centre: Vec3, half: f32) -> Option<Rect> {
+    let mut r: Option<Rect> = None;
+    for k in 0..8 {
+        let corner = centre + Vec3::new(if k & 1 == 0 { -half } else { half }, if k & 2 == 0 { -half } else { half }, if k & 4 == 0 { -half } else { half });
+        let p = project(corner)?;
+        r = Some(r.map_or(Rect::from_center_size(p, Vec2::ZERO), |r| r.union_point(p)));
+    }
+    r
 }
 
 /// Runs after the generic hover text, which clears the tooltip whenever the map has nothing under the cursor.
