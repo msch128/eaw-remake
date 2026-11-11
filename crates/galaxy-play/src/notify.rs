@@ -22,7 +22,7 @@ pub enum NotificationKind {
     PlanetLost,
     /// A fleet reached its destination.
     FleetArrived,
-    /// Weekly income report.
+    /// Income report at the end of a month (fiscal cycle).
     Income,
     /// A faction was wiped out or the game ended.
     Campaign,
@@ -99,6 +99,12 @@ pub fn describe_error(e: &CommandError) -> String {
     }
 }
 
+/// The advisor line at the end of a fiscal cycle. The Remake calls that cycle a month (`TEXT_CYCLES` "Month", `TEXT_LOG_CYCLE_01`
+/// "Month ##0"); `month` is the simulation's week counter, `income` what one cycle pays.
+pub fn month_end_line(month: u64, income: f64, credits: f64) -> String {
+    format!("Month {month}: income {income:+.0} credits/month, treasury {credits:.0}.")
+}
+
 /// What a simulation event means for the player, if anything.
 pub fn describe_event(
     world: &World,
@@ -159,11 +165,7 @@ pub fn describe_event(
         Event::WeekEnded { week } => {
             let h = human?;
             let fs = &galaxy.factions[h as usize];
-            Some((
-                NotificationKind::Income,
-                format!("Week {week}: income {:+.0} credits/week, treasury {:.0}.", fs.income_per_week, fs.credits),
-                None,
-            ))
+            Some((NotificationKind::Income, month_end_line(*week, fs.income_per_week, fs.credits), None))
         }
         Event::AgentUsed { faction, planet: p, unit } if me(*faction) => {
             let what = if world.units.get(*unit as usize).is_some_and(|u| u.siphon.is_some()) { "is siphoning credits at" } else { "reports from" };
@@ -188,5 +190,11 @@ mod tests {
         assert_eq!(n.list.len(), 64);
         n.expire(99.0, 5.0);
         assert!(n.list.iter().all(|x| x.created > 94.0));
+    }
+
+    #[test]
+    fn the_cycle_end_line_counts_months() {
+        assert_eq!(month_end_line(130, -67998.4, 77220229.0), "Month 130: income -67998 credits/month, treasury 77220229.");
+        assert_eq!(month_end_line(1, 1540.0, 41540.0), "Month 1: income +1540 credits/month, treasury 41540.");
     }
 }

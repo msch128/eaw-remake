@@ -18,17 +18,20 @@ and here. Known holes are in [KNOWN-GAPS.md](KNOWN-GAPS.md).
 
 ## 1.1 Time
 
-* Data: one galactic week is `Xml/Gameconstants.xml` `Fiscal_Cycle_Time_In_Secs`, 45.0. `SimConfig::week_seconds` defaults to 0,
-  and `World::build` copies that constant into it. The week counter, `WeekEnded`, the command-bar month (4 weeks), ETAs, the
-  built-in AI reserve `SAVING_WEEKS`, the repair estimate `repair_*_per_week` and the week stored in a save all follow
-  `week_seconds`. A save header stores the resolved length, so an old save keeps the week it was written with (the previous
-  60 s estimate). A Star Destroyer (`Build_Time_Seconds` 70) takes 70/45 of a week. Story timers, build times and AI ticks
-  (`ai_interval_seconds` 10 s) stay in the seconds the data gives them.
+* Data: one galactic month is `Xml/Gameconstants.xml` `Fiscal_Cycle_Time_In_Secs`, 45.0. The Remake's texts call that cycle a
+  month (`TEXT_CYCLES` "Month", `TEXT_LOG_CYCLE_01` "Month ##0", `TEXT_TOOLTIP_TOTAL_INCOME` "Total credit income per month",
+  "credits per month" in every `TEXT_TOOLTIP_UPKEEP_*`), and its header counts "MONTH: 1" from the start of a campaign. In the
+  code the same cycle is still named a week: `SimConfig::week_seconds` defaults to 0, and `World::build` copies the constant into
+  it. The week counter, `WeekEnded`, ETAs, the built-in AI reserve `SAVING_WEEKS`, the repair estimate `repair_*_per_week` and
+  the week stored in a save all follow `week_seconds`. A save header stores the resolved length, so an old save keeps the week it
+  was written with (the previous 60 s estimate). A Star Destroyer (`Build_Time_Seconds` 70) takes 70/45 of a month. Story timers,
+  build times and AI ticks (`ai_interval_seconds` 10 s) stay in the seconds the data gives them.
 * Data: the same constant is `World::fiscal_cycle_seconds`, which is how long one payment of the income figure takes, and the
   siphon cycle (§1.14). Income still accrues every tick (`tick_seconds` = 1 s). For a new match the week and that cycle are
-  one clock, so the HUD `Credits N (+X/wk)` and the week-end line "income +X credits/week" pay X over one displayed week. A
-  month is four weeks (180 s) and shows 4×X, which is what those 180 s pay. An old save whose header still says 60 s keeps a
-  60 s week while income stays on the 45 s cycle.
+  one clock. Everything the player reads uses the one unit, the month: the header "MONTH: n" (n = completed cycles + 1) with
+  the income one cycle pays next to it and a bar for the progress of the running cycle, the advisor line "Month n: income +X
+  credits/month" at the end of cycle n, durations ("1.6 months"), upkeep and income lines ("credits per month") and the save
+  slot line. An old save whose header still says 60 s keeps a 60 s month counter while income stays on the 45 s cycle.
 * Data, not used by the galactic layer: `Xml/Gameconstants.xml` has `Object_Max_Speed_Multiplier_Galactic` (5.0),
   `Fleet_Maintenance_Update_Delay_Seconds`, `Space_Retreat_Allowed_Countdown_Seconds` (60) and
   `Space_Capture_Allowed_Countdown_Seconds` (1); the last two are tactical-mode values.

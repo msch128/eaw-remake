@@ -28,6 +28,7 @@ mod fleet_trace;
 mod flow;
 mod galaxy_map;
 mod hero_heads;
+mod hud_text;
 mod ui_sounds;
 mod planet_fleets;
 mod planet_view;
@@ -47,8 +48,8 @@ mod options;
 mod planet_visual;
 mod play;
 mod playscript;
-mod play_ui;
 mod pointer_probe;
+mod play_ui;
 mod settings;
 mod ui;
 
@@ -262,8 +263,8 @@ fn add_game(app: &mut App, boot: Boot) {
         .add_plugins(droid_menu::plugin)
         .add_plugins(galaxy_models::GalaxyModelsPlugin)
         .add_plugins(drag_demo::DragDemoPlugin)
-        .add_plugins(label_probe::LabelProbePlugin)
         .add_plugins(pointer_probe::PointerProbePlugin)
+        .add_plugins(label_probe::LabelProbePlugin)
         .add_plugins((
             FlowPlugin,
             LoadingPlugin,

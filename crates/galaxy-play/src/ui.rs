@@ -189,13 +189,13 @@ fn update_dynamic(model: Res<PlayUiModel>, mut q: Query<(&Dynamic, Option<&mut T
     for (d, text, node) in &mut q {
         let t = &model.top;
         match (d, text, node) {
-            (Dynamic::Credits, Some(mut x), _) => x.0 = format!("Credits {} ({:+}/wk)", thousands(t.credits as i64), t.income_per_week as i64),
+            (Dynamic::Credits, Some(mut x), _) => x.0 = format!("Credits {} ({:+}/month)", thousands(t.credits as i64), t.income_per_week as i64),
             (Dynamic::Pop, Some(mut x), _) => x.0 = format!("Pop {}/{}", t.population_used, t.population_cap),
             (Dynamic::Planets, Some(mut x), _) => x.0 = format!("Planets {}", t.planets),
             (Dynamic::Week, Some(mut x), _) => {
                 x.0 = match &t.winner {
                     Some(w) => format!("{w} wins!"),
-                    None => format!("Week {}", t.week + 1),
+                    None => format!("Month {}", t.week + 1),
                 }
             }
             (Dynamic::Hint, Some(mut x), _) => x.0 = model.route_hint.clone().unwrap_or_default(),
@@ -276,7 +276,7 @@ fn refresh_planet_panel(
         p.spawn(text(menu.planet_name.clone(), 20.0, Color::WHITE));
         p.spawn(text(
             format!(
-                "Income {}/wk | Base: {} | Orbit {}/{} | Ground {}/{}",
+                "Income {}/month | Base: {} | Orbit {}/{} | Ground {}/{}",
                 menu.income as i64,
                 menu.starbase_name.as_deref().unwrap_or("none"),
                 menu.space_slots.0,

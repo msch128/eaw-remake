@@ -377,7 +377,7 @@ fn update_window(
                     bevy::text::LetterSpacing::Rem(0.08),
                 ));
                 hdr.spawn((
-                    Text::new(format!("WEEK {:.0}", sim.current.galaxy.week())),
+                    Text::new(format!("MONTH {}", sim.current.galaxy.week() + 1)),
                     font(15.0),
                     TextColor(cyan),
                     bevy::text::LetterSpacing::Rem(0.05),
@@ -624,7 +624,7 @@ fn render_log_tab(
                     ));
 
                     let hints = [
-                        "1. ECONOMY: Build mining facilities on high-yield planets to ensure sustainable credit inflow each galactic week.",
+                        "1. ECONOMY: Build mining facilities on high-yield planets to ensure sustainable credit inflow each galactic month.",
                         "2. INFRASTRUCTURE: Upgrade orbital starbases to unlock heavier capital cruisers and station defense batteries.",
                         "3. ORBITAL DEFENSE: Position fleets onto planetary circles to instantly intercept invading hostile battle groups.",
                         "4. REINFORCEMENTS: During space combat, call in reserve squadrons dynamically into flanking sensor positions.",
@@ -704,17 +704,12 @@ fn render_log_tab(
                         },
                     ));
 
-                    // The recorded advisor messages, newest first, grouped by month.
+                    // The recorded advisor messages, newest first, each with the galactic month (fiscal cycle) it was said in.
                     if advisor_log.entries.is_empty() {
                         col.spawn((Text::new("No advisor reports yet."), font(12.0), TextColor(Color::srgb(0.7, 0.8, 0.9))));
                     }
-                    let mut month = u64::MAX;
                     for (week, text) in advisor_log.entries.iter().rev().take(14) {
-                        if week / 4 != month {
-                            month = week / 4;
-                            col.spawn((Text::new(format!("MONTH {}", month + 1)), font(12.0), TextColor(blue)));
-                        }
-                        col.spawn((Text::new(format!("[WEEK {:02}] {text}", week + 1)), font(12.0), TextColor(Color::srgb(0.7, 0.8, 0.9))));
+                        col.spawn((Text::new(format!("[MONTH {:02}] {text}", week + 1)), font(12.0), TextColor(Color::srgb(0.7, 0.8, 0.9))));
                     }
                 });
         });
@@ -843,7 +838,7 @@ fn render_history_tab(
                 });
 
             chart.spawn((
-                Text::new("RECORDED ACROSS RECENT GALACTIC WEEKS FROM ORBITAL SENSORS"),
+                Text::new("RECORDED ACROSS RECENT GALACTIC MONTHS FROM ORBITAL SENSORS"),
                 font(12.0),
                 TextColor(blue),
                 Node {
@@ -1165,7 +1160,7 @@ fn render_summary_tab(
                     SummaryView::Economy => {
                         hdr.spawn((Text::new("PLANET"), font(13.5), TextColor(cyan), Node { width: Val::Percent(25.0), ..default() }));
                         hdr.spawn((Text::new("STARBASE LEVEL"), font(13.5), TextColor(cyan), Node { width: Val::Percent(25.0), ..default() }));
-                        hdr.spawn((Text::new("WEEKLY REVENUE"), font(13.5), TextColor(cyan), Node { width: Val::Percent(25.0), ..default() }));
+                        hdr.spawn((Text::new("MONTHLY REVENUE"), font(13.5), TextColor(cyan), Node { width: Val::Percent(25.0), ..default() }));
                         hdr.spawn((Text::new("STRUCTURES"), font(13.5), TextColor(cyan), Node { width: Val::Percent(25.0), ..default() }));
                     }
                 }
@@ -1452,7 +1447,7 @@ fn draw_line_chart(
                 }
             });
             col.spawn((
-                Text::new(format!("WEEK {} - WEEK {}", samples[0].week as u32, samples[n - 1].week as u32)),
+                Text::new(format!("MONTH {} - MONTH {}", samples[0].week as u32 + 1, samples[n - 1].week as u32 + 1)),
                 font(11.0),
                 TextColor(Color::srgb(0.6, 0.7, 0.85)),
             ));

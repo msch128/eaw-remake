@@ -180,9 +180,10 @@ fn content_label(name: String, content: crate::game::Content) -> String {
     }
 }
 
-/// One list line. The week is the galaxy's own counter, the number the game shows and logs while playing.
+/// One list line. `i.week` is the galaxy's counter of completed fiscal cycles; the line shows the month the header showed when the game
+/// was saved ("MONTH: n", n = completed cycles + 1).
 fn slot_line(prefix: &str, name: &str, i: &SlotInfo, note: &str) -> String {
-    format!("{prefix} - {name}, week {}, {}{note}", i.week, i.difficulty)
+    format!("{prefix} - {name}, month {}, {}{note}", i.week + 1, i.difficulty)
 }
 
 /// The slot list. `only_campaign`: in a running game only saves of this campaign can be loaded.
@@ -423,7 +424,7 @@ mod tests {
     #[test]
     fn slot_line_shows_the_in_game_week() {
         let i = SlotInfo { campaign: "X".into(), content: crate::game::Content::Remake, week: 1, difficulty: "Brutal".into(), ground_up: false };
-        assert_eq!(slot_line("Slot 2", "Ground Up", &i, ""), "Slot 2 - Ground Up, week 1, Brutal");
+        assert_eq!(slot_line("Slot 2", "Ground Up", &i, ""), "Slot 2 - Ground Up, month 2, Brutal");
     }
 
     #[test]

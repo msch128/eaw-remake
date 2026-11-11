@@ -338,9 +338,9 @@ fn tech_unlocks(state: &SimState, catalog: &galaxy_play::PlayCatalog, faction: O
 /// Tooltip of the small upkeep / income marker on a pad.
 fn marker_tooltip(upkeep: f32) -> String {
     if upkeep < -0.5 {
-        format!("Upkeep\nThis unit costs {:.0} credits per week for as long as it exists. The upkeep is deducted from your income every week, so a big fleet lowers your income.\n", -upkeep)
+        format!("Upkeep\nThis unit costs {:.0} credits per month for as long as it exists. The upkeep is deducted from your income every month, so a big fleet lowers your income.\n", -upkeep)
     } else if upkeep > 0.5 {
-        format!("Income bonus\nThis unit adds {upkeep:.0} credits per week to your income for as long as it exists.\n")
+        format!("Income bonus\nThis unit adds {upkeep:.0} credits per month to your income for as long as it exists.\n")
     } else {
         String::new()
     }
@@ -367,17 +367,17 @@ fn pad_tooltip(o: &galaxy_play::BuildOption, week: f32, state: &SimState, game: 
     let upkeep = pad_upkeep(state, o.target);
     let mentioned = description.as_deref().is_some_and(|d| d.to_ascii_lowercase().contains("upkeep"));
     if upkeep < -0.5 && !mentioned {
-        s.push_str(&format!("\n@Upkeep\t{:.0} credits per week", -upkeep));
+        s.push_str(&format!("\n@Upkeep\t{:.0} credits per month", -upkeep));
     } else if upkeep > 0.5 {
-        s.push_str(&format!("\n@Income\t+{upkeep:.0} credits per week"));
+        s.push_str(&format!("\n@Income\t+{upkeep:.0} credits per month"));
     }
     // A structure that is not built yet: what it changes once it stands, worded so it is not mistaken for current income.
     if let BuildTarget::Structure(id) = o.target {
         let change = state.world.structures[id as usize].income_abs;
         if change > 0.5 {
-            s.push_str(&format!("\n@Income\t+{change:.0} credits/week when built"));
+            s.push_str(&format!("\n@Income\t+{change:.0} credits/month when built"));
         } else if change < -0.5 && !mentioned {
-            s.push_str(&format!("\n@Upkeep\t{:.0} credits/week when built", -change));
+            s.push_str(&format!("\n@Upkeep\t{:.0} credits/month when built", -change));
         }
     }
     // Every refusal on its own red line, in the game's words ("Required : Tech Level 3", "Required : Space Station Level 2", "Insufficient funds").
@@ -430,11 +430,13 @@ fn feed_bar(
     }
     let game = assets.as_ref().and_then(|a| a.game.clone());
     let game = game.as_deref();
+    // One month of the header is one fiscal cycle, and its income figure is what that cycle pays (`hud_text::month_clock`).
+    let (month, month_progress) = crate::hud_text::month_clock(state.current.week, state.current.time, state.world.config.week_seconds);
     let mut next = CommandBarData {
         credits: model.top.credits as i64,
-        day: (state.current.time / f64::from(state.world.config.week_seconds) / 4.0) as u32 + 1,
-        month_income: (model.top.income_per_week * 4.0) as i64,
-        month_progress: ((state.current.time / f64::from(state.world.config.week_seconds) / 4.0).fract()) as f32,
+        day: month,
+        month_income: model.top.income_per_week as i64,
+        month_progress,
         tech_level: state.galaxy().factions.get(state.world.victory.active_player.unwrap_or(0) as usize).map_or(0, |f| f.tech.max(0) as u32),
         pop_current: model.top.population_used.max(0) as u32,
         pop_cap: model.top.population_cap.max(0) as u32,
@@ -879,7 +881,7 @@ fn refresh_texts(
     } else if paused {
         (String::new(), Color::NONE)
     } else {
-        (format!("Week {}   x{}", model.top.week + 1, model.speed.rate), Color::srgb(0.85, 0.92, 1.0))
+        (format!("Month {}   x{}", model.top.week + 1, model.speed.rate), Color::srgb(0.85, 0.92, 1.0))
     };
     if text.0 != s {
         text.0 = s;
@@ -1197,7 +1199,7 @@ fn loading_overlay(
         return;
     }
     let (label, fraction) = match progress {
-        Some(p) => (format!("Loading save - week {} ({:.0}%)", p.week + 1, p.fraction() * 100.0), p.fraction()),
+        Some(p) => (format!("Loading save - month {} ({:.0}%)", p.week + 1, p.fraction() * 100.0), p.fraction()),
         None => ("Preparing galaxy...".to_owned(), 0.05),
     };
     if overlay.is_empty() {
@@ -1702,7 +1704,7 @@ fn show_end_dialog(world: &mut World) {
         )
     } else {
         format!(
-            "Weeks played: {weeks}\nPlanets held: {planets} of {total}\nBattles won: {}   lost: {}\nShips built: {}   lost: {}\nCredits: {}",
+            "Months played: {weeks}\nPlanets held: {planets} of {total}\nBattles won: {}   lost: {}\nShips built: {}   lost: {}\nCredits: {}",
             stats.battles_won,
             stats.battles_lost,
             stats.ships_built,

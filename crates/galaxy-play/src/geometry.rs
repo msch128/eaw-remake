@@ -230,10 +230,11 @@ pub fn split_half(fleet: &Fleet) -> Vec<(UnitTypeId, u32)> {
     take
 }
 
-/// Formats galactic seconds as weeks given the week length (`"2.3 weeks"`, `"45 s"`).
+/// Formats galactic seconds as galactic months given the length of one (`"2.3 months"`, `"45 s"`). The Remake calls its fiscal cycle a
+/// month (`TEXT_CYCLES`); internally that cycle is still the `week` of the simulation.
 pub fn format_duration(secs: f32, week_seconds: f32) -> String {
     if secs >= week_seconds * 0.5 {
-        format!("{:.1} wk", secs / week_seconds)
+        format!("{:.1} months", secs / week_seconds)
     } else {
         format!("{:.0} s", secs.max(0.0))
     }
@@ -265,7 +266,7 @@ mod tests {
     #[test]
     fn durations() {
         assert_eq!(format_duration(20.0, 60.0), "20 s");
-        assert_eq!(format_duration(90.0, 60.0), "1.5 wk");
+        assert_eq!(format_duration(90.0, 60.0), "1.5 months");
     }
 }
 

@@ -52,7 +52,7 @@ pub fn pump_snapshots(
         }
         for r in &s.loads {
             let text = match &r.result {
-                Ok(w) => format!("Game loaded (week {w})"),
+                Ok(w) => format!("Game loaded (month {})", w + 1),
                 Err(e) => format!("Loading failed: {e}"),
             };
             notes.push(if r.result.is_ok() { NotificationKind::Campaign } else { NotificationKind::Error }, text, None, now);

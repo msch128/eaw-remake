@@ -86,8 +86,8 @@ Each crate's `src/lib.rs` (or `main.rs`) starts with a `//!` module doc that say
 * Saved structs: every new field gets `#[serde(default)]`, and ids in a save are tied to names (the header's name
   tables), so a larger catalog or a new field never refuses an existing save. Add a save test with the old field set.
 * Category lists use the bit masks of `XML/Enum/GAMEOBJECTCATEGORYTYPE.XML`; do not map category names by hand.
-* Time on the galactic map: one displayed week is the data's fiscal cycle (`Fiscal_Cycle_Time_In_Secs`). Tests that
-  mean an amount of time count seconds, not weeks.
+* Time on the galactic map: one displayed month is the data's fiscal cycle (`Fiscal_Cycle_Time_In_Secs`; the Remake's texts
+  call it a month, the code a week). Tests that mean an amount of time count seconds, not weeks.
 
 ## Build and verify
 

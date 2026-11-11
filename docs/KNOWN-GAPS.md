@@ -123,7 +123,7 @@ data are labelled in [RULES.md](RULES.md).
 - **Lane and slot textures from the game are not used; lanes are drawn as additive ribbons.** Observe: compare the galaxy lanes with the Remake. Where: `crates/eaw-remake/src/galaxy_map.rs` (`spawn_lanes`, `lane.wgsl`).
 - **Starting-force names are prettified object ids where no text id exists; `Camera_Shift_*` and `Camera_Distance` constants are unused.** Observe: open a planet's starting forces in the info panel. Where: `crates/eaw-remake/src/game.rs` (`display_name`) (unverified).
 - **Title screen camera framing is not tuned per map (one map shows mostly nebula).** Observe: cycle the menu map. Where: `crates/eaw-remake/src/menu_scene.rs` (unverified).
-- **The three numbers on the top-left galaxy card were not seen to show hover cards in a window** (planet income per week, income per month, credits). Observe: hover each number. Where: `crates/eaw-remake/src/play_ui.rs`. (unverified)
+- **The three numbers on the top-left galaxy card were not seen to show hover cards in a window** (planet income, income per month, credits). Observe: hover each number. Where: `crates/eaw-remake/src/play_ui.rs`. (unverified)
 - **New game screen: the side dropdown starts empty and Start is disabled with no hint why.** Observe: Galactic Conquest, pick a campaign, pick no side. Where: `crates/eaw-remake/src/menu.rs`. (unverified)
 - **Planet labels overlap near the capital in the Clone Wars galaxy** (Coruscant, Corulag, Anaxes, Brentaal). Observe: Clone Wars content, Shatterpoint, zoom out. Where: `crates/eaw-remake/src/galaxy_map.rs`. (unverified)
 - **The briefing screen art is generic** (an Imperial Star Destroyer for any matchup). Observe: BEGIN a battle as the Underworld. Where: `crates/eaw-remake/src/battle_play.rs`.

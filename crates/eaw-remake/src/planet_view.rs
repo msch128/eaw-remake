@@ -816,9 +816,9 @@ fn structure_tip(world: &galaxy_sim::World, cat: &PlayCatalog, game: Option<&ala
     t.push_str(&format!("\n@Cost\t{:.0} credits", st.cost));
     let mentioned = description.as_deref().is_some_and(|d| d.to_ascii_lowercase().contains("upkeep"));
     if st.income_abs < -0.5 && !mentioned {
-        t.push_str(&format!("\n@Upkeep\t{:.0} credits per week", -st.income_abs));
+        t.push_str(&format!("\n@Upkeep\t{:.0} credits per month", -st.income_abs));
     } else if st.income_abs > 0.5 {
-        t.push_str(&format!("\n@Income\t+{:.0} credits per week", st.income_abs));
+        t.push_str(&format!("\n@Income\t+{:.0} credits per month", st.income_abs));
     }
     if st.income_pct.abs() > 1e-4 {
         t.push_str(&format!("\n@Planet income\t{:+.0}%", st.income_pct * 100.0));
@@ -851,7 +851,7 @@ Drag it out to empty the slot.".to_owned();
     }
     let mentioned = description.as_deref().is_some_and(|d| d.to_ascii_lowercase().contains("upkeep"));
     if ut.upkeep < -0.5 && !mentioned {
-        t.push_str(&format!("\n@Upkeep\t{:.0} credits per week", -ut.upkeep));
+        t.push_str(&format!("\n@Upkeep\t{:.0} credits per month", -ut.upkeep));
     }
     t
 }
@@ -945,7 +945,7 @@ fn view_tooltip(
                 }
                 t.push_str(&format!("\n@Level\t{} of {}", cap.starbase_level, cap.starbase_max));
                 if b.income_abs.abs() > 0.5 {
-                    t.push_str(&format!("\n@Income\t{:+.0} credits per week", b.income_abs));
+                    t.push_str(&format!("\n@Income\t{:+.0} credits per month", b.income_abs));
                 }
                 if b.population_capacity > 0 {
                     t.push_str(&format!("\n@Population cap\t+{}", b.population_capacity));

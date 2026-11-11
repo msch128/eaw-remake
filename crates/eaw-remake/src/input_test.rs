@@ -356,7 +356,7 @@ fn drive(
                     let title = tipctx.parts.iter().find(|p| *p.0 == eaw_ui::TipPart::Title).map(|p| p.1.0.clone()).unwrap_or_default();
                     let body = tipctx.parts.iter().find(|p| *p.0 == eaw_ui::TipPart::Body).map(|p| p.1.0.clone()).unwrap_or_default();
                     info!("ui-test: marker tooltip: {title:?} / {body:?}");
-                    let ok = (title == "Upkeep" || title == "Income bonus") && body.contains("credits per week");
+                    let ok = (title == "Upkeep" || title == "Income bonus") && body.contains("credits per month");
                     finish(&mut st, "upkeep-marker-tooltip-explains", ok);
                     st.phase = 142;
                     st.t = 0;

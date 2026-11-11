@@ -1324,9 +1324,9 @@ pub(crate) fn bound_fields(
 fn field_tip(f: Field) -> Option<&'static str> {
     Some(match f {
         Field::Credits => "Credits\nYour treasury: the credits you can spend right now.",
-        Field::MonthIncome => "Income per month\nCredits your empire earns per galactic month (4 weeks), upkeep already deducted.",
-        Field::Income => "Planet income\nCredits per week the selected planet yields.",
-        Field::Day => "Galactic month\nThe bar shows how far the current month has progressed.",
+        Field::MonthIncome => "Income per month\nCredits your empire earns per galactic month, upkeep already deducted.",
+        Field::Income => "Planet income\nCredits per month the selected planet yields.",
+        Field::Day => "Galactic month\nOne month is one fiscal cycle: your planets pay their income once per month. The bar shows how far the current month has progressed.",
         Field::TechLevel => "Tech level\nYour current technology level.",
         Field::Pop => "Population\nUnits you field, out of the population cap.",
         Field::PlanetName | Field::Allegiance => return None,
