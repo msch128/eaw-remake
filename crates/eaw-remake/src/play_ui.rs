@@ -566,13 +566,15 @@ fn feed_bar(
                 },
             };
         }
-        // The ground/structure tab lists only what can be ordered (or is short of credits, a full queue ...),
-        // like the Remake's single row: structures behind a missing requirement stay hidden (v0260-v0450).
+        // Both tabs list only what can be ordered (or is short of credits, population, a full queue ...) and the next star base
+        // level, like the Remake: an entry behind a missing requirement stays hidden. The ground tab's single row (v0260-v0450),
+        // and the space tab at a level 1 Space Colony without yards (v0140s): probe, Space Colony level 2 and Satellite Grid only,
+        // no ship that needs a yard and no yard that needs level 2.
         let listed: Vec<_> = menu
             .options
             .iter()
             .filter(|o| on_space_tab(&state.world, o.target) == space_tab && (!space_tab || class.is_none_or(|c| c.matches(o.category, is_hero(&state.world, o.target)))))
-            .filter(|o| space_tab || !matches!(o.availability, galaxy_play::Availability::Requires(_)))
+            .filter(|o| !matches!(o.availability, galaxy_play::Availability::Requires(_)))
             .collect();
         // Pages of MAX_PADS entries (the shell has that many pad slots); the page arrows above the pads step through them.
         let size = pad_page_size();

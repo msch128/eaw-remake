@@ -1217,6 +1217,9 @@ Estimates and data that shape what the player sees and hears. Behaviour is in `b
   income percentage with what it comes to at this planet's value (the Trade Hub: "+150% (+135 here)" at Anaxes), a market
   swing with its interval, and population cap; star base levels the same "at this level", ships their percentage "while it
   orbits an own planet". Every unmet requirement stays on its own red line in the game's words.
+* The build bar lists, on both tabs, only what can be ordered (or is short of credits, population or queue room) and the next
+  star base level; an entry behind a missing structure, star base level, orbiting unit or tech level is not shown, as in the
+  Remake (video v0140s: a level 1 Space Colony without yards offers the probe, Space Colony level 2 and the Satellite Grid).
 
 ## 3.4 Bar buttons
 
