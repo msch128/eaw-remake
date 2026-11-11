@@ -684,20 +684,51 @@ fn galactic_hotkeys(
     }
 }
 
-/// Keeps the pressed look of the four filter toggles in line with [`crate::galaxy_map::MapFilters`].
-fn sync_filter_buttons(filters: Res<crate::galaxy_map::MapFilters>, bar: Res<BarState>, mut buttons: Query<(&eaw_ui::EawButton, &mut eaw_ui::EawButtonState)>) {
-    for (b, mut st) in &mut buttons {
-        let on = match b.name.as_str() {
-            "b_filters0" => filters.credits,
-            "b_filters1" => filters.base_level,
-            "b_filters2" => filters.weather,
-            "b_filters3" => filters.heroes,
-            n => match BarClass::from_button(n) {
-                Some(c) => bar.class == Some(c),
-                None => continue,
-            },
+/// What the galaxy bar's `<Toggle>` buttons stand for this frame; a toggle is "on" while its state is.
+#[derive(Debug, Clone, Copy, Default)]
+struct ToggleStates {
+    /// Time stopped by the player (clock level 0), not by a menu.
+    paused: bool,
+    /// A clock level above the first (the fast forward button's `i_button_command_bar_ff_press` art).
+    fast: bool,
+    objectives_open: bool,
+    droid_open: bool,
+}
 
-        };
+/// Whether the galaxy bar button `name` is on, `None` for a button that is not a toggle with a state of its own.
+fn toggle_on(name: &str, filters: &crate::galaxy_map::MapFilters, class: Option<BarClass>, s: ToggleStates) -> Option<bool> {
+    Some(match name {
+        "b_filters0" => filters.credits,
+        "b_filters1" => filters.base_level,
+        "b_filters2" => filters.weather,
+        "b_filters3" => filters.heroes,
+        "b_play_pause" => s.paused,
+        "b_fast_forward" => s.fast,
+        "b_story_arc_g" => s.objectives_open,
+        "b_droid_help" => s.droid_open,
+        n => class == Some(BarClass::from_button(n)?),
+    })
+}
+
+/// Keeps the "on" look of the galaxy bar's toggles in line with what they switch: the four map filters
+/// ([`crate::galaxy_map::MapFilters`]), the unit class filters, pause, fast forward, the objectives window and the droid menu. A toggle
+/// flips its own look when clicked; this puts it back when the state changes another way (hotkey, a window's close button).
+fn sync_filter_buttons(
+    filters: Res<crate::galaxy_map::MapFilters>,
+    bar: Res<BarState>,
+    clock: Option<Res<GameClock>>,
+    objectives: Option<Res<ObjectivesWindow>>,
+    droid: Option<Res<crate::droid_menu::DroidMenuState>>,
+    mut buttons: Query<(&eaw_ui::EawButton, &mut eaw_ui::EawButtonState)>,
+) {
+    let s = ToggleStates {
+        paused: clock.as_ref().is_some_and(|c| c.override_multiplier.is_none() && c.level == 0),
+        fast: clock.as_ref().is_some_and(|c| c.override_multiplier.is_none() && c.level > 1),
+        objectives_open: objectives.is_some_and(|w| w.open),
+        droid_open: droid.is_some_and(|d| d.open),
+    };
+    for (b, mut st) in &mut buttons {
+        let Some(on) = toggle_on(&b.name, &filters, bar.class, s) else { continue };
         if st.selected != on {
             st.selected = on;
         }
@@ -2582,6 +2613,28 @@ pub(crate) fn design_scale(window: Option<Vec2>, offscreen: Option<&OffscreenTar
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_galaxy_toggle_follows_its_state() {
+        let mut f = crate::galaxy_map::MapFilters::default();
+        let off = ToggleStates::default();
+        for n in ["b_filters0", "b_filters1", "b_filters2", "b_filters3", "b_play_pause", "b_fast_forward", "b_story_arc_g", "b_droid_help", "b_filters_station"] {
+            assert_eq!(toggle_on(n, &f, None, off), Some(false), "{n} starts off");
+        }
+        f.credits = true;
+        f.base_level = true;
+        f.weather = true;
+        f.heroes = true;
+        let on = ToggleStates { paused: true, fast: true, objectives_open: true, droid_open: true };
+        for n in ["b_filters0", "b_filters1", "b_filters2", "b_filters3", "b_play_pause", "b_fast_forward", "b_story_arc_g", "b_droid_help"] {
+            assert_eq!(toggle_on(n, &f, None, on), Some(true), "{n} on");
+        }
+        // One class filter at a time.
+        assert_eq!(toggle_on("b_filters_frigate", &f, Some(BarClass::Frigate), off), Some(true));
+        assert_eq!(toggle_on("b_filters_capital", &f, Some(BarClass::Frigate), off), Some(false));
+        // A button without a state of its own is left alone.
+        assert_eq!(toggle_on("b_planet_tab", &f, None, on), None);
+    }
 
     #[test]
     fn a_minimap_click_never_moves_the_camera_out_of_the_galaxy() {

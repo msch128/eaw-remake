@@ -1786,12 +1786,27 @@ fn command_buttons_state(
     sel: Res<Selection>,
     ships: Res<RenderedShips>,
     settings: Res<BattleViewSettings>,
+    hud: Res<crate::hud::HudState>,
     mut buttons: Query<(&eaw_ui::EawButton, &mut eaw_ui::EawButtonState, &mut Node)>,
 ) {
     let any = !control::selected_mobile(&rt, &ships, &sel, settings.player_side).is_empty();
     for (b, mut st, mut node) in &mut buttons {
         if b.name.starts_with("c_button") && st.disabled == any {
             st.disabled = !any;
+        }
+        // The bar's `<Toggle>` buttons show "on" while their state is (a toggle flips its look when clicked; the hotkeys and the
+        // objectives box's own close change the state too). The droid button asks for one hint, it has no state to stay on.
+        let on = match b.name.as_str() {
+            "b_play_pause_t" => Some(settings.paused),
+            "b_fast_forward_t" => Some(settings.speed > 1.5),
+            "b_story_arc_t" => Some(hud.objectives),
+            "b_droid_help_tactical" => Some(false),
+            _ => None,
+        };
+        if let Some(on) = on
+            && st.selected != on
+        {
+            st.selected = on;
         }
         // Galaxy leftovers of the shared shell (superweapon / bombardment / landing panels) have no place in a space battle.
         if matches!(b.name.as_str(), "sl_switch" | "pb_switch" | "deathstar_switch") && node.display != Display::None {

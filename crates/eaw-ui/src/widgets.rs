@@ -77,6 +77,42 @@ pub struct ButtonLayers {
     over: Option<Entity>,
     selected: Option<Entity>,
     disabled: Option<Entity>,
+    /// `<Click_Shift>` of the component.
+    click_shift: bool,
+    /// The mouse-over art is the icon itself (the Remake's HD filter, order and option buttons): the over layer is drawn brighter.
+    over_is_icon: bool,
+}
+
+/// Design px the art of a `<Click_Shift>` button moves right and down while it is pressed or on. Estimate from the Remake video
+/// (v0530 against v0240, the credit filter on and off): the pressed filter button sits about 1/10 of its width to the right and 1/20
+/// of its height lower, about 1.5 and 1 px of its 15 design px.
+pub const CLICK_SHIFT_PX: Vec2 = Vec2::new(1.5, 1.0);
+/// Brightness of the over layer when it is the icon itself (estimate: the data draws the same texture again on top,
+/// `<Swap_Texture>` False, which the HD icons' opaque pixels do not show).
+pub const OVER_BRIGHTEN: f32 = 1.6;
+
+/// How a button looks this frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) struct ButtonLook {
+    /// The art sits [`CLICK_SHIFT_PX`] lower right.
+    pub shifted: bool,
+    /// The mouse-over layer shows.
+    pub over: bool,
+    /// The selected layer replaces the icon.
+    pub selected: bool,
+}
+
+/// The look of a button from its data flags and its state: a `<Click_Shift>` button is shifted while the mouse holds it down and,
+/// for a `<Toggle>`, while it is on; the mouse-over art shows while hovered unless the selected art replaces the icon (and the
+/// over art is distinct from the icon, in which case it still shows so a hovered toggle that is on reacts too).
+pub(crate) fn button_look(click_shift: bool, held: bool, on: bool, hover: bool, disabled: bool, has_selected: bool, over_is_icon: bool) -> ButtonLook {
+    let pressed = held || on;
+    let selected = !disabled && pressed && has_selected;
+    ButtonLook {
+        shifted: click_shift && !disabled && pressed,
+        over: hover && !disabled && (!selected || over_is_icon),
+        selected,
+    }
 }
 
 /// Place of an ability button in the shell: its top left corner (design px), and the `<Scale>` of its component, at which
@@ -993,7 +1029,10 @@ impl Builder<'_> {
             self.hide(button);
         }
 
-        let mut layers = ButtonLayers::default();
+        let mut layers = ButtonLayers { click_shift: def.click_shift, ..default() };
+        // The Remake's HD buttons name the icon as their mouse-over art; it is drawn brighter so hovering shows.
+        let first = |l: &[String]| CommandBarComponent::pick(l, fi).map(|n| n.to_ascii_lowercase());
+        layers.over_is_icon = !def.swap_texture && first(&def.mouse_over).is_some() && first(&def.mouse_over) == first(&def.icon);
         let mut icon_px = 40.0f32;
         let tint = def.color.map_or(Color::WHITE, rgba);
         // Texture size x Scale, but never much larger than the component rectangle (some panels
@@ -1047,7 +1086,13 @@ impl Builder<'_> {
         }
         if let Some(t) = CommandBarComponent::pick(&def.mouse_over, fi).and_then(|n| self.tex(n)) {
             let sz = layer_size(&t);
-            let e = self.layer(button, size, &t, sz, def.mouse_over_offset, tint);
+            let over_tint = if layers.over_is_icon {
+                let l = tint.to_linear();
+                Color::LinearRgba(LinearRgba::new(l.red * OVER_BRIGHTEN, l.green * OVER_BRIGHTEN, l.blue * OVER_BRIGHTEN, l.alpha))
+            } else {
+                tint
+            };
+            let e = self.layer(button, size, &t, sz, def.mouse_over_offset, over_tint);
             self.hide(e);
             layers.over = Some(e);
         }
@@ -1261,15 +1306,30 @@ pub(crate) fn button_clicks(
 /// Swaps the state layers of buttons.
 #[allow(clippy::type_complexity)]
 pub(crate) fn button_visuals(
-    buttons: Query<
-        (&ButtonLayers, &Interaction, &EawButtonState, &EawButton),
+    mut buttons: Query<
+        (Entity, &ButtonLayers, &Interaction, &EawButtonState, &EawButton, Option<&mut UiTransform>),
         Or<(Changed<Interaction>, Changed<EawButtonState>)>,
     >,
     mut nodes: Query<&mut Node>,
     mut images: Query<&mut ImageNode>,
+    mut commands: Commands,
 ) {
-    for (l, i, st, b) in &buttons {
+    for (entity, l, i, st, b, ui_tf) in &mut buttons {
         let hover = matches!(i, Interaction::Hovered | Interaction::Pressed) || st.force_hover;
+        let look = button_look(l.click_shift, matches!(i, Interaction::Pressed), st.selected, hover, st.disabled, l.selected.is_some(), l.over_is_icon);
+        // `<Click_Shift>`: the whole button (frame, icon and every state layer) moves; only the translation is ours, a scale stays.
+        let shift = if look.shifted { Val2::px(CLICK_SHIFT_PX.x, CLICK_SHIFT_PX.y) } else { Val2::ZERO };
+        match ui_tf {
+            Some(mut t) => {
+                if t.translation != shift {
+                    t.translation = shift;
+                }
+            }
+            None if look.shifted => {
+                commands.entity(entity).insert(UiTransform::from_translation(shift));
+            }
+            None => {}
+        }
         let pressed = matches!(i, Interaction::Pressed) || st.selected;
         let set = |nodes: &mut Query<&mut Node>, e: Option<Entity>, on: bool| {
             if let Some(e) = e
@@ -1292,7 +1352,7 @@ pub(crate) fn button_visuals(
         set(&mut nodes, l.disabled, show_disabled);
         set(&mut nodes, l.selected, show_selected);
         set(&mut nodes, l.icon, !show_disabled && !show_selected);
-        set(&mut nodes, l.over, hover && !st.disabled && !show_selected);
+        set(&mut nodes, l.over, look.over);
     }
 }
 
@@ -2384,6 +2444,23 @@ mod tests {
             assert!(t.contains('\n'), "{f:?}: title line plus explanation");
         }
         assert!(field_tip(Field::PlanetName).is_none());
+    }
+
+    #[test]
+    fn filter_toggles_show_hover_press_and_on() {
+        // b_filters0: Click_Shift, Toggle, the icon as mouse-over and selected art.
+        let look = |held, on, hover| button_look(true, held, on, hover, false, true, true);
+        assert_eq!(look(false, false, false), ButtonLook::default());
+        assert_eq!(look(false, false, true), ButtonLook { over: true, ..default() }, "hover: the brighter icon, no shift");
+        assert_eq!(look(true, false, true), ButtonLook { shifted: true, over: true, selected: true }, "held down: shifted");
+        assert_eq!(look(false, true, false), ButtonLook { shifted: true, selected: true, over: false }, "on: stays shifted");
+        assert_eq!(look(false, true, true), ButtonLook { shifted: true, selected: true, over: true }, "on and hovered: shifted and brighter");
+        // A disabled button neither moves nor lights up.
+        assert_eq!(button_look(true, true, true, true, true, true, true), ButtonLook::default());
+        // A pad (distinct mouse-over art, no Toggle): the selected art hides the over art, as before.
+        assert_eq!(button_look(true, true, false, true, false, true, false), ButtonLook { shifted: true, over: false, selected: true });
+        // Without Click_Shift nothing moves.
+        assert!(!button_look(false, true, true, false, false, true, false).shifted);
     }
 
     #[test]

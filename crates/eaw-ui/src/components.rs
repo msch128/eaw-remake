@@ -112,6 +112,8 @@ pub struct CommandBarComponent {
     pub selected_alpha: bool,
     /// `<Swap_Texture>`.
     pub swap_texture: bool,
+    /// `<Click_Shift>`: the button's art moves while it is pressed (and while a toggle is on).
+    pub click_shift: bool,
     /// `<Hidden>`.
     pub hidden: bool,
     /// `<Disabled>`.
@@ -205,6 +207,7 @@ impl CommandBarComponent {
             tab: flag("tab"),
             selected_alpha: flag("selected_alpha"),
             swap_texture: flag("swap_texture"),
+            click_shift: flag("click_shift"),
             hidden: flag("hidden"),
             start_disabled: flag("disabled"),
             drag_and_drop: flag("drag_and_drop"),

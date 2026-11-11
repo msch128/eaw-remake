@@ -894,7 +894,10 @@ fn update_labels(
         }
     }
 
-    // Structure slot pips: space row (towers) above the ground row (troopers), centred under the name, as in the game.
+    // Structure slot pips: space row (towers) above the ground row (troopers), centred under the name, as in the game. They are the
+    // base level filter's overlay (`TEXT_TOOLTIP_BASE_LEVEL_FILTER` "Display/Hide a planet's space station level and ground structure
+    // slots"): the Remake frames show none with the filter off, neither close up (video 4:00) nor on a selected planet (frame 03),
+    // and every planet's with it on (frame 04). The hovered planet shows its own (estimate).
     let pip_h = (font_px * 0.95).round().max(6.0);
     let pip_w = pip_h;
     if (*last_font - font_px).abs() > 0.1 {
@@ -906,7 +909,7 @@ fn update_labels(
     }
     for (row, mut node, mut vis) in &mut pip_rows {
         match slots.get(row.planet).copied().flatten() {
-            Some(s) if visible[row.planet] && (filters.base_level || zoom_out < 0.3 || selection.0 == Some(row.planet) || hover.0 == Some(row.planet)) => {
+            Some(s) if visible[row.planet] && (filters.base_level || hover.0 == Some(row.planet)) => {
                 let width = row.count as f32 * (pip_w + 1.0);
                 node.left = Val::Px((s.pos.x + (s.size.x - width) * 0.5) / us);
                 node.top = Val::Px((s.pos.y + font_px * 1.15 + (1 - row.row) as f32 * (pip_h + 2.0)) / us);

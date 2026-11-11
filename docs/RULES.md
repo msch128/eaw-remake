@@ -1192,3 +1192,20 @@ Estimates and data that shape what the player sees and hears. Behaviour is in `b
   down to 80 % of it; only below that it is shortened ("264,2K", "10,9M", then "11M"), and the hover card adds the exact
   value. Month, tech and population only shrink. The same holds for the tactical header (`Text_Credits_tactical`,
   `Text_Planetary_Pop`, `Text_Tactical_Tech`).
+
+## 3.4 Bar buttons
+
+* Button states (`eaw-ui/src/widgets.rs`): a `<Click_Shift>` button moves its art 1.5 / 1 design px right and down while the
+  mouse holds it and, for a `<Toggle>`, while it is on (estimate from the Remake video: the credit filter on at 5:30 against
+  off at 2:40). Where `<Mouse_Over_Texture_Name>` is the icon itself (`<Swap_Texture>` False: the filters `b_filters0..3`
+  with `i_button_command_bar_filter1..4`, play / pause, fast forward, droid and holocron buttons) the mouse-over layer is that
+  icon at 1.6x brightness (estimate); a distinct over texture (`i_button_command_bar_filter_over` of the class filters) is
+  drawn as it is. `<Selected_Texture_Name>` replaces the icon while pressed or on (`i_button_command_bar_ff_press`,
+  `I_BUTTON_FILTER_*_PRESSED`, `i_button_command_bar_holocron_press`, `i_button_command_bar_help_press`).
+* A toggle is on while its state is, whatever changed it: the four map filters, the class filters, pause (clock level 0),
+  fast forward (a level above the first), the objectives window and the droid menu on the galactic bar; pause, 2x speed and
+  the objectives box on the tactical bar. The tactical droid button asks for one hint and never stays on.
+* Map filters (`TEXT_TOOLTIP_*_FILTER`): credits show each planet's income next to its name; base level shows the space
+  station and ground structure slot pips under every name (only then: the Remake frames show none with the filter off,
+  close up or on a selected planet; the hovered planet shows its own, estimate); weather / ability shows the planet's
+  ability text; heroes raises the hero figures by a quarter of the planet's pad radius (estimate, see KNOWN-GAPS).
