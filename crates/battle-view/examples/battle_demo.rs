@@ -38,6 +38,9 @@ static BUILD_ORDERED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicB
 static ABILITY_USED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 static RETREAT_ORDERED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 static STRAFE_ORDERED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static ATTACK_ORDERED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// `SP_DEMO_ATTACK`: the Rebel ship type that is called in next and the battle time of that call.
+static REINFORCE_AT: std::sync::Mutex<Option<(battle_sim::ShipId, f32)>> = std::sync::Mutex::new(None);
 static BOOM_AT: std::sync::Mutex<Option<Vec3>> = std::sync::Mutex::new(None);
 /// Where the first ship of `SP_DEMO_DEATH` size died, and the demo frame it died in.
 static DEATH_AT: std::sync::Mutex<Option<(Vec3, u32)>> = std::sync::Mutex::new(None);
@@ -612,6 +615,36 @@ fn capture_driver(
         let ships: Vec<u32> = cur.ships.iter().filter(|s| s.side == 1).map(|s| s.id).collect();
         rt.command(1, battle_sim::Command::Attack { ships, target });
         STRAFE_ORDERED.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+    // `SP_DEMO_ATTACK=<name>@<secs>`: at that battle time every Empire ship is ordered to attack the first Rebel unit whose definition name
+    // contains the text (with `SP_DEMO_IDLE=0` nothing else gives the Empire orders). `SP_DEMO_ATTACK_REINFORCE=<secs>`: from that battle time
+    // the Rebels call in one more of their
+    // largest ship every 10 s, so that a star base (`--station`) dies while Rebel ships still fight: the battle goes on and its death plays.
+    if ATTACK_ORDERED.load(std::sync::atomic::Ordering::Relaxed)
+        && let Some(cur) = rt.cur.as_ref()
+        && !cur.over
+    {
+        let mut next = REINFORCE_AT.lock().unwrap();
+        if let Some((def, at)) = *next
+            && cur.time >= at
+        {
+            rt.command(1, battle_sim::Command::Reinforce { ship: def, count: 1 });
+            *next = Some((def, at + 10.0));
+        }
+    }
+    if !ATTACK_ORDERED.load(std::sync::atomic::Ordering::Relaxed)
+        && let Some((name, at)) = std::env::var("SP_DEMO_ATTACK").ok().and_then(|v| v.split_once('@').map(|(k, t)| (k.to_ascii_lowercase(), t.parse::<f32>().unwrap_or(0.0))))
+        && let Some(cur) = rt.cur.as_ref()
+        && cur.time >= at
+        && let Some(target) = cur.ships.iter().find(|s| s.side == 1 && rt.catalog.ship(s.def).name.to_ascii_lowercase().contains(&name))
+    {
+        let ships: Vec<u32> = cur.ships.iter().filter(|s| s.side == 0).map(|s| s.id).collect();
+        println!("demo attack: {} ships on {}", ships.len(), rt.catalog.ship(target.def).name);
+        rt.command(0, battle_sim::Command::Attack { ships, target: target.id });
+        ATTACK_ORDERED.store(true, std::sync::atomic::Ordering::Relaxed);
+        let largest = cur.ships.iter().filter(|s| s.side == 1 && s.id != target.id).max_by(|a, b| rt.catalog.ship(a.def).radius.total_cmp(&rt.catalog.ship(b.def).radius));
+        let from = std::env::var("SP_DEMO_ATTACK_REINFORCE").ok().and_then(|v| v.parse::<f32>().ok());
+        *REINFORCE_AT.lock().unwrap() = largest.zip(from).map(|(s, t)| (s.def, t));
     }
     // `SP_DEMO_BUILD=<secs>`: from that battle time the player's station stays selected (its build bar opens), and the first item it offers
     // is bought once.
