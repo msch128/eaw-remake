@@ -319,7 +319,7 @@ impl TacticalUnit {
         textures: &UiTextures,
         unit_type: &str,
     ) -> Option<Self> {
-        let def = game.objects.space_unit(unit_type)?;
+        let Some(def) = game.objects.space_unit(unit_type) else { return Self::structure_from_game(game, text, textures, unit_type) };
         Some(Self {
             unit_type: def.name.clone(),
             name: def
@@ -342,6 +342,35 @@ impl TacticalUnit {
                     ..default()
                 })
                 .collect(),
+            units: Vec::new(),
+        })
+    }
+
+    /// The card of a star base or another structure of a space battle (`StarBase`, `SpaceStructure`, ...: no space unit kind, so
+    /// [`Self::from_game`] found none and selecting the own station left the bar empty). Name, icon, hull and shields come from the
+    /// object's own `Text_ID`, `Icon_Name`, `Tactical_Health` and `Shield_Points`; it sits in the capital ships' section.
+    fn structure_from_game(game: &GameData, text: &TextTable, textures: &UiTextures, unit_type: &str) -> Option<Self> {
+        if !game.objects.is_structure(unit_type) {
+            return None;
+        }
+        let r = game.objects.resolve(unit_type)?;
+        let number = |tag: &str| r.get(tag).and_then(|v| v.parse::<f32>().ok()).unwrap_or(0.0);
+        let (hull, shield) = match game.objects.star_base(unit_type) {
+            Some(b) => (b.hull, b.shield_points),
+            None => (number("tactical_health"), number("shield_points")),
+        };
+        let name = r.get("text_id").and_then(|t| t.split_whitespace().next()).and_then(|t| text.get(t)).unwrap_or(unit_type).to_string();
+        Some(Self {
+            unit_type: unit_type.to_string(),
+            name,
+            icon: crate::unit_icon(game, unit_type).unwrap_or_default(),
+            health: 1.0,
+            shield: (shield > 0.0).then_some(1.0),
+            hull_points: hull,
+            shield_points: shield,
+            count: 1,
+            section: 3,
+            abilities: unit_abilities(game, text, textures, unit_type).into_iter().map(|def| AbilityState { def, ..default() }).collect(),
             units: Vec::new(),
         })
     }

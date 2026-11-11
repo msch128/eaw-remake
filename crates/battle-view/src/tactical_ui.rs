@@ -169,7 +169,8 @@ fn sync_data(
     // Nothing of ours selected: the bar shows the whole fleet as cards (no abilities); a click on a card selects that type.
     let overview = by_def.is_empty();
     if overview {
-        for s in cur.ships.iter().filter(|s| s.side == player) {
+        // The fleet: stations and other structures get their card when they are selected.
+        for s in cur.ships.iter().filter(|s| s.side == player && !rt.catalog.ship(s.def).is_static) {
             by_def.entry(s.def).or_default().push(s.id);
         }
     }

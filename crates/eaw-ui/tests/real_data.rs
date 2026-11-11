@@ -102,3 +102,19 @@ fn every_squadron_craft_of_the_play_test_has_icon_art() {
         assert!(t.width >= 32 && t.height >= 32, "{craft}: {icon} is {}x{}", t.width, t.height);
     }
 }
+
+/// Selecting the own star base gives it a card in the unit bar (play test, Brentaal: the bar stayed empty). A `StarBase` is no space unit
+/// kind, so the card is built from the object's own `Text_ID`, `Icon_Name`, `Tactical_Health` and `Shield_Points`.
+#[test]
+fn a_star_base_has_a_unit_card() {
+    let Some(fs) = fs() else { return };
+    let (game, _) = alamo_data::load_galaxy(&*fs);
+    let Ok(text) = alamo_data::text::TextTable::load(&*fs, "Text/MasterTextFile_ENGLISH.DAT") else { return };
+    let textures = eaw_ui::textures::UiTextures::new(fs.clone());
+    for base in ["Empire_Star_Base_3", "Pirate_Starbase_Lv1"] {
+        let card = eaw_ui::TacticalUnit::from_game(&game, &text, &textures, base).unwrap_or_else(|| panic!("{base} has no card"));
+        assert!(!card.icon.is_empty() && TextureLibrary::new_blocking(fs.clone()).load(&card.icon).is_some(), "{base}: icon {:?}", card.icon);
+        assert!(card.hull_points > 0.0 && card.shield.is_some(), "{base}: {card:?}");
+        assert_ne!(card.name, base, "{base}: the name comes from its text");
+    }
+}
