@@ -270,26 +270,7 @@ pub fn spawn_hud(
     commands.spawn((UnitPanelStats, Text::new(""), font(&ui, 11.0), TextColor(Color::srgb(0.3, 1.0, 0.4)), ChildOf(panel)));
 
     // Hardpoint tooltip ("Quad Turbo Laser Battery - 120 DMG - 100%"), follows the cursor.
-    let mut tip = commands.spawn((
-        TacticalHud,
-        HardpointTip,
-        Name::new("hardpoint tip"),
-        Text::new(""),
-        font(&ui, 11.0),
-        TextColor(Color::srgb(0.9, 1.0, 0.95)),
-        Node {
-            position_type: PositionType::Absolute,
-            display: Display::None,
-            padding: UiRect::axes(Val::Px(6.0), Val::Px(3.0)),
-            border: UiRect::all(Val::Px(1.0)),
-            ..default()
-        },
-        BackgroundColor(Color::srgba(0.03, 0.12, 0.14, 0.92)),
-        BorderColor::all(Color::srgb(0.3, 0.85, 0.95)),
-        GlobalZIndex(80),
-        bevy::ui::FocusPolicy::Pass,
-        crate::control::PointerTransparent,
-    ));
+    let mut tip = commands.spawn(hardpoint_tip(&ui));
     target(&mut tip);
 
     // Hero portraits, top right.
@@ -307,6 +288,33 @@ pub fn spawn_hud(
         GlobalZIndex(60),
     ));
     target(&mut row);
+}
+
+/// The hardpoint tooltip ("Quad Turbo Laser Battery - 120 DMG - 100%"): one line, the box as wide as its text (the Remake's, video
+/// b0853s). Before, the text wrapped where the box met the screen edge while the box kept the height of one line, so "100%" stood below
+/// its border.
+fn hardpoint_tip(ui: &EawUiSettings) -> impl Bundle {
+    (
+        TacticalHud,
+        HardpointTip,
+        Name::new("hardpoint tip"),
+        Text::new(""),
+        font(ui, 11.0),
+        TextLayout::no_wrap(),
+        TextColor(Color::srgb(0.9, 1.0, 0.95)),
+        Node {
+            position_type: PositionType::Absolute,
+            display: Display::None,
+            padding: UiRect::axes(Val::Px(6.0), Val::Px(3.0)),
+            border: UiRect::all(Val::Px(1.0)),
+            ..default()
+        },
+        BackgroundColor(Color::srgba(0.03, 0.12, 0.14, 0.92)),
+        BorderColor::all(Color::srgb(0.3, 0.85, 0.95)),
+        GlobalZIndex(80),
+        bevy::ui::FocusPolicy::Pass,
+        crate::control::PointerTransparent,
+    )
 }
 
 /// The unit panel (icon, name, class, description, hull and shield) for the ship under the cursor and the hardpoint tooltip for a reticle.
@@ -704,4 +712,19 @@ pub fn remove_hud(mut commands: Commands, hud: Query<Entity, With<TacticalHud>>,
         commands.entity(e).try_despawn();
     }
     *state = HudState::default();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_hardpoint_tip_is_one_line_in_a_box_as_wide_as_its_text() {
+        let mut world = World::new();
+        let e = world.spawn(hardpoint_tip(&EawUiSettings::default())).id();
+        let layout = world.get::<TextLayout>(e).expect("text layout");
+        assert_eq!(layout.linebreak, bevy::text::LineBreak::NoWrap, "a wrapped second line ran out of the box");
+        let node = world.get::<Node>(e).expect("node");
+        assert_eq!((node.width, node.height), (Val::Auto, Val::Auto), "the box takes the size of its text");
+    }
 }
