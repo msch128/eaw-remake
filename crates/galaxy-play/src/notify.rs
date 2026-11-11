@@ -77,8 +77,7 @@ pub struct BattleLossCounts(pub HashMap<u32, u32>);
 /// The line for a hero that came back (`galaxy-script` names the unit and the planet by object name): display names, like every notice.
 pub fn unit_returned_text(world: &World, names: &PlayCatalog, unit: &str, planet: &str) -> String {
     let unit = world.unit_id(unit).map_or_else(|| crate::catalog::prettify(unit), |u| names.unit(u).to_owned());
-    let planet = world.planet_id(planet).map_or_else(|| crate::catalog::prettify(planet), |p| world.planets[p as usize].display_name.clone());
-    format!("{unit} has returned at {planet}.")
+    format!("{unit} has returned at {}.", planet_label(world, planet))
 }
 
 /// Wording of a refused order.
@@ -105,8 +104,32 @@ pub fn month_end_line(month: u64, income: f64, credits: f64) -> String {
     format!("Month {month}: income {income:+.0} credits/month, treasury {credits:.0}.")
 }
 
+/// The name the player reads for a planet a script names by its object name (`Coruscant_WW` -> "The Coruscant System").
+pub fn planet_label(world: &World, object: &str) -> String {
+    world.planet_id(object).map_or_else(|| crate::catalog::prettify(object), |p| world.planets[p as usize].display_name.clone())
+}
+
 /// What a simulation event means for the player, if anything.
+///
+/// A planet without a name is not on the map: the faction holding planets of the Web Way campaigns (`Rebel_Dummy_WW` ...) have
+/// `Text_ID` `TEXT_PLANET_NONE` (three spaces), `Show_Name` No and an invisible model, and a story reward hands each AI its own at
+/// the start. Events there say nothing to the player, so they make no notice (they made ": Control changed from ..." lines).
 pub fn describe_event(
+    world: &World,
+    names: &PlayCatalog,
+    galaxy: &Galaxy,
+    human: Option<FactionId>,
+    event: &Event,
+    shown_losses: &BattleLossCounts,
+) -> Option<(NotificationKind, String, Option<PlanetId>)> {
+    let line = describe_any(world, names, galaxy, human, event, shown_losses)?;
+    match line.2 {
+        Some(p) if world.planets.get(p as usize).is_none_or(|x| x.display_name.trim().is_empty()) => None,
+        _ => Some(line),
+    }
+}
+
+fn describe_any(
     world: &World,
     names: &PlayCatalog,
     galaxy: &Galaxy,

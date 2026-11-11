@@ -38,7 +38,7 @@ pub fn pump_snapshots(
             if let galaxy_script::ScriptEvent::UnitSpawned { unit, planet, faction } = e
                 && player.0.is_some_and(|h| state.world.factions[h as usize].name.eq_ignore_ascii_case(faction))
             {
-                notes.push(NotificationKind::Campaign, unit_returned_text(&state.world, &catalog, unit, planet), None, now);
+                notes.push(NotificationKind::Campaign, unit_returned_text(&state.world, &catalog, unit, planet), state.world.planet_id(planet), now);
             }
             out.write(PlayEvent::Script(e.clone()));
         }
