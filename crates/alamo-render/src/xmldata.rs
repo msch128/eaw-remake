@@ -85,6 +85,9 @@ pub struct UnitDef {
     pub death_explosions: Vec<String>,
     /// `HardPoints`: names of the hardpoints of this unit.
     pub hardpoints: Vec<String>,
+    /// The other particle objects the battle view plays for this object: `Debris_Attached_Particle` (the fire a break-off prop carries
+    /// while it drifts), `Spin_Away_On_Death_Explosion` and `Asteroid_Damage_Hit_Particles`.
+    pub other_particles: Vec<String>,
 }
 
 /// A `<HardPoint>`: a weapon, shield generator or art piece attached to a ship bone.
@@ -304,6 +307,10 @@ impl XmlDefs {
                                 .collect()
                         })
                         .unwrap_or_default(),
+                    other_particles: ["Debris_Attached_Particle", "Spin_Away_On_Death_Explosion", "Asteroid_Damage_Hit_Particles"]
+                        .into_iter()
+                        .filter_map(|tag| get(tag).map(|v| v.trim().to_string()).filter(|v| !v.is_empty()))
+                        .collect(),
                 },
             );
         }
