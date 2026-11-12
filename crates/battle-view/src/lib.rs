@@ -867,6 +867,18 @@ fn clock_speed(picture: f32, over: bool) -> f32 {
     if over { 0.0 } else { picture }
 }
 
+/// Ships as circles on the plane (Bevy x, z), for [`camera::start_distance_for_hulls`]: the model's extent where it is larger than the
+/// collision radius (an Executor's collision radius is clamped far below its hull).
+fn start_hulls<'a>(catalog: &Catalog, ships: impl Iterator<Item = &'a sim::ShipSnap>) -> Vec<(Vec2, f32)> {
+    ships
+        .map(|s| {
+            let p = convert::sim_to_bevy(s.pos);
+            let d = catalog.ship(s.def);
+            (Vec2::new(p.x, p.z), d.radius.max(d.model_extent))
+        })
+        .collect()
+}
+
 /// Advances the battle clock and fetches the snapshots around it.
 fn advance_clock(
     time: Res<Time>,
@@ -929,6 +941,10 @@ fn advance_clock(
             let wanted = radius * 1.2 / (fov * 0.5).tan() / cam.pitch.sin().abs().max(0.3);
             // Fits the core, at most the data's default distance: a closer cap left a scattered fleet out of the picture (QA round 2).
             let mut distance = wanted.clamp(START_DISTANCE_MIN, START_DISTANCE_MAX);
+            // An own hull in the core too big for that picture (an Executor filled the whole first frame) widens it, up to the data's
+            // farthest overview.
+            let own_hulls: Vec<(Vec2, f32)> = start_hulls(&rt.catalog, cur.ships.iter().filter(|s| s.side == settings.player_side));
+            distance = camera::start_distance_for_hulls(distance, Vec2::new(center.x, center.z), core_radius, &own_hulls, fov, cam.pitch);
             if let Some((d, pitch)) = test_camera() {
                 distance = d.clamp(cam.min_distance, cam.max_distance);
                 if let Some(p) = pitch {

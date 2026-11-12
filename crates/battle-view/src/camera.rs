@@ -327,6 +327,19 @@ pub fn fleet_core(points: &[Vec3]) -> Option<(Vec3, f32)> {
     Some((centre, radius))
 }
 
+/// Opening distance once the player's own hulls are counted: `base` (the fleet core's framing), widened so that the biggest own hull
+/// in the core (its centre within the core radius plus its own) fits the picture the way the core does, at most
+/// [`START_DISTANCE_HULL_MAX`]. `hulls` are ship centres on the plane (Bevy x, z) with their radius. With two Executors (model extent
+/// in the thousands) in the core the first picture at the data's 2000 showed one hull and nothing else.
+pub fn start_distance_for_hulls(base: f32, core: Vec2, core_radius: f32, hulls: &[(Vec2, f32)], fov: f32, pitch: f32) -> f32 {
+    let biggest = hulls.iter().filter(|(c, r)| c.distance(core) <= core_radius + r).map(|(_, r)| *r).fold(0.0, f32::max);
+    let fit = biggest * 1.2 / (fov * 0.5).tan() / pitch.sin().abs().max(0.3);
+    base.max(fit.min(START_DISTANCE_HULL_MAX))
+}
+
+/// Farthest opening distance for a fleet with a huge hull: `Tactical_Overview_Distance2` 6000 of TacticalCameras.xml.
+pub const START_DISTANCE_HULL_MAX: f32 = 6000.0;
+
 /// Camera hotkeys on the battle plane: Page Up centres on the selection (also a [`FocusCamera`] request), Home on the fleet, End resets the view.
 pub fn focus_camera(
     keys: Res<ButtonInput<KeyCode>>,
@@ -415,6 +428,22 @@ pub fn sky_follow(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_huge_own_hull_in_the_fleet_widens_the_opening_view() {
+        let (fov, pitch) = (60f32.to_radians(), 60f32.to_radians());
+        let core = Vec2::new(-637.0, 6393.0);
+        // Star Destroyers (radius 450) in the core keep the data's 2000.
+        let isds = [(Vec2::new(-600.0, 6000.0), 450.0), (Vec2::new(-200.0, 6900.0), 450.0)];
+        assert_eq!(start_distance_for_hulls(2000.0, core, 1819.0, &isds, fov, pitch), 2000.0);
+        // An Executor 2,568 units from the core centre (Fresia, two Executors in the fleet) widens it so that the hull fits.
+        let executor = (Vec2::new(-387.0, 8961.0), 2500.0);
+        let d = start_distance_for_hulls(2000.0, core, 1819.0, &[isds[0], executor], fov, pitch);
+        assert!(d > 5000.0 && d <= START_DISTANCE_HULL_MAX, "{d}");
+        // Never farther than the data's overview distance, and a hull far outside the core does not count.
+        assert_eq!(start_distance_for_hulls(2000.0, core, 1819.0, &[(core, 9000.0)], fov, pitch), START_DISTANCE_HULL_MAX);
+        assert_eq!(start_distance_for_hulls(2000.0, core, 1819.0, &[(core + Vec2::new(9000.0, 0.0), 2500.0)], fov, pitch), 2000.0);
+    }
 
     #[test]
     fn fleet_core_ignores_far_outliers() {

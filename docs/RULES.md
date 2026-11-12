@@ -1243,6 +1243,11 @@ Estimates and data that shape what the player sees and hears. Behaviour is in `b
   centre on screen (hidden while it is off screen).
 * Data, tactical camera: pitch 60, fov 60 (`TacticalCameras.xml`); `Tactical_Min/Max_Scroll_Speed` 1000/4000,
   `Push_Scroll_Speed_Modifier` 2.0, `Tactical_Edge_Scroll_Region` 2 (4.0 `Gameconstants.xml`); zoom-out cap 6000.
+  The opening view looks at the dense core of the player's fleet from at most `Distance_Default` 2000. Estimate: when an
+  own hull in the core is too big for that picture (its model extent, not the clamped collision radius) the view widens
+  until it fits the way the core does, at most `Tactical_Overview_Distance2` 6000 (two Executors in the core filled
+  the first picture with one hull); a Star Destroyer stays at 2000 and may be cut at the bottom, as in the Remake's own
+  battle start (reference video, 640 s).
 * Data, galaxy camera: `GMC_InitialPullbackDistance` 470, `GMC_ZoomedPitchAngleDegrees` -20, `GMC_ZoomTime` 1.0 s,
   `GMC_ZoomedPullbackPlanetRadiusFraction` 6.0 (the app does not read all of them yet, see KNOWN-GAPS).
 * Estimate: wheel zoom keeps the point under the cursor fixed (factor 0.3 per notch); fleet carry pops 28% in 0.3 s,
