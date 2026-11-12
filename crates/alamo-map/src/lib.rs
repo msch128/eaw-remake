@@ -99,7 +99,8 @@ pub struct Light {
     pub yaw: f32,
     /// Elevation in radians; positive = above the horizon **(guess: sunset maps have small positive values for the main light)**.
     pub pitch: f32,
-    /// Per-light scalar stored next to the colours (probably an intensity) **(guess)**.
+    /// Intensity: the renderer lights with colour times intensity (maps switch a light off with 0 and keep its colour, e.g.
+    /// Taris' white fills), see `alamo_render::map_light_color`.
     pub scalar: f32,
 }
 

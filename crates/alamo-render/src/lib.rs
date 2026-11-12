@@ -38,7 +38,10 @@ use bevy::prelude::*;
 
 pub use animation::{AlamoAnimation, AnimationIndex, AnimationSettings, TurretAim};
 pub use hardpoints::{AimTurrets, HardpointDestroyed};
-pub use lighting::{SunLight, spawn_sun, spawn_sun_shadowed};
+pub use lighting::{
+    EffectiveLight, LIGHTING_BUFFER, MapLighting, SunLight, map_light_color, sh_clamped_cosine, shade_map_lit, spawn_sun,
+    spawn_sun_shadowed,
+};
 pub use lod::LodSettings;
 pub use model::{
     AlamoBillboard, AlamoBone, AlamoFs, AlamoHardpoint, AlamoModel, AlamoModelLoaded, AlamoPart,
@@ -86,6 +89,7 @@ impl Plugin for AlamoRenderPlugin {
                     model::update_billboards.before(TransformSystems::Propagate),
                 ),
             );
+        lighting::build(app);
         particles::build(app);
         app.add_systems(
             PostUpdate,

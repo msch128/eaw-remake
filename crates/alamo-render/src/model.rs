@@ -616,6 +616,7 @@ pub fn describe_material(
             normal,
             cloud,
             cloud_normal,
+            lighting: crate::lighting::LIGHTING_BUFFER,
         },
         colorize,
     )

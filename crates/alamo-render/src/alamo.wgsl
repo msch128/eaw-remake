@@ -30,9 +30,25 @@ const FLAG_FLIP_GREEN: u32 = 32u;
 const FLAG_SHIELD_HITS: u32 = 64u;
 const FLAG_SHADOWS: u32 = 128u;
 
-// Overbright of the lit hull term (modulate-2x style): the Remake video shows sunlit Star Destroyer hulls near white,
-// while hull albedo is mid grey (about 0.55 fully lit).
+// Galaxy look of the lit hull term (no `MapLighting` sun in the scene): an overbright tuned against the Remake galaxy frames.
 const LIT_GAIN: f32 = 1.4;
+
+// A space map's sun with `MapLighting` switches the lit meshes to the original's mesh shader model, read from the shipped
+// `Art/Shaders/MeshBumpColorize.fxo` (ps_2_0 and its vs_1_1, see `crates/alamo-render/src/lighting.rs`):
+//   albedo = lerp(base, base * Colorization, base.a)
+//   v0     = saturate(Diffuse * m_sphFill(n) + Emissive)            (vertex colour register, clamped to 0..1)
+//   rgb    = 2 * albedo * (Diffuse * m_light0Diffuse * saturate(n.L) + v0) + Specular * m_light0Specular * pow(saturate(n.H), 16) * mask
+// The lights arrive in `effective` units with the shader's doubling folded in: the sun and fill colours are 2 x colour x intensity.
+struct AlamoLighting {
+    // rgb: the map's sun specular colour (`m_light0Specular`).
+    sun_specular: vec4<f32>,
+    // x: 1 = map lighting (the original's model), 0 = galaxy look.
+    mode: vec4<f32>,
+}
+
+// Fixed specular exponent of MeshBumpColorize / MeshGloss (`def c5, -0.5, 16.0` / four squarings in the vertex shader); the
+// material's `Shininess` is not read by these shaders.
+const MAP_SPECULAR_POWER: f32 = 16.0;
 
 struct AlamoParams {
     diffuse: vec4<f32>,
@@ -65,6 +81,25 @@ struct AlamoParams {
 @group(#{MATERIAL_BIND_GROUP}) @binding(6) var cloud_samp: sampler;
 @group(#{MATERIAL_BIND_GROUP}) @binding(7) var cloud_normal_tex: texture_2d<f32>;
 @group(#{MATERIAL_BIND_GROUP}) @binding(8) var cloud_normal_samp: sampler;
+@group(#{MATERIAL_BIND_GROUP}) @binding(9) var<storage, read> lighting: AlamoLighting;
+
+fn map_lighting() -> bool {
+    return lighting.mode.x > 0.5;
+}
+
+// The original's fill term `m_sphFill`: the map ambient plus each fill light projected into second-order spherical harmonics.
+// The order-2 projection of a clamped cosine is 1/4 + c/2 + 5/16 P2(c) = 3/32 + c/2 + 15/32 c^2 (c = n.l): 1.06 facing the
+// light, 0.09 side on, 0.06 facing away. Fill colours arrive doubled (see `AlamoLighting`), so they are halved here.
+fn sh_fill(n: vec3<f32>) -> vec3<f32> {
+    var sum = ambient_color();
+    let count = min(lights.n_directional_lights, 3u);
+    for (var i = 1u; i < count; i = i + 1u) {
+        let l = lights.directional_lights[i];
+        let c = dot(n, normalize(l.direction_to_light));
+        sum += 0.5 * l.color.rgb * view.exposure * (3.0 / 32.0 + 0.5 * c + 15.0 / 32.0 * c * c);
+    }
+    return sum;
+}
 
 fn to_linear(c: vec3<f32>) -> vec3<f32> {
     return pow(max(c, vec3<f32>(0.0)), vec3<f32>(2.2));
@@ -355,13 +390,15 @@ fn shade(in: VertexOutput, front: bool) -> vec4<f32> {
             spec_mask = nm.a;
         }
     }
-    var albedo = base.rgb * mat.diffuse.rgb * vcol.rgb;
+    // The surface colour (team colour applied), then times the material's `Diffuse`.
+    var surface = base.rgb * vcol.rgb;
     if has(FLAG_COLORIZE) {
-        albedo = mix(albedo, albedo * mat.colorization.rgb, base.a);
+        surface = mix(surface, surface * mat.colorization.rgb, base.a);
         if !has(FLAG_NORMAL_MAP) {
             spec_mask = 0.0;
         }
     }
+    let albedo = surface * mat.diffuse.rgb;
     var shadow = 1.0;
     if has(FLAG_SHADOWS) && lights.n_directional_lights > 0u {
         let view_z = dot(vec4<f32>(
@@ -374,9 +411,17 @@ fn shade(in: VertexOutput, front: bool) -> vec4<f32> {
     }
     let ndl = saturate(dot(n, L)) * shadow;
     let H = normalize(L + V);
-    let spec = mat.specular.rgb * spec_mask * pow(saturate(dot(n, H)), filtered_shininess(n, max(mat.shininess, 1.0), tvar)) * sun * step(0.0, dot(N, L)) * shadow;
-    // Emissive is the self-illumination of the base texture.
-    rgb = min(albedo * saturate3(amb + sun * ndl + fill_light(n)) * LIT_GAIN, vec3<f32>(1.0)) + spec + mat.emissive.rgb * base.rgb;
+    if map_lighting() {
+        // The original's model (see `AlamoLighting`): Diffuse scales the sun term and, inside the clamp, the fill term.
+        let v0 = saturate3(mat.diffuse.rgb * sh_fill(n) + mat.emissive.rgb);
+        let spec = mat.specular.rgb * lighting.sun_specular.rgb * spec_mask
+            * pow(saturate(dot(n, H)), filtered_shininess(n, MAP_SPECULAR_POWER, tvar)) * step(0.0, dot(N, L)) * shadow;
+        rgb = min(albedo * sun * ndl + surface * 2.0 * v0, vec3<f32>(1.0)) + spec;
+    } else {
+        let spec = mat.specular.rgb * spec_mask * pow(saturate(dot(n, H)), filtered_shininess(n, max(mat.shininess, 1.0), tvar)) * sun * step(0.0, dot(N, L)) * shadow;
+        // Emissive is the self-illumination of the base texture.
+        rgb = min(albedo * saturate3(amb + sun * ndl + fill_light(n)) * LIT_GAIN, vec3<f32>(1.0)) + spec + mat.emissive.rgb * base.rgb;
+    }
     if mat.kind == KIND_ALPHA {
         alpha = mat.diffuse.a;
         if has(FLAG_ALPHA_FROM_BASE) {

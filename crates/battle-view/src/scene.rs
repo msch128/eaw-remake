@@ -3,7 +3,7 @@
 use alamo_data::GameData;
 use alamo_fs::FileSource;
 use alamo_map::{ObjectClass, SpaceMap};
-use alamo_render::{AlamoModel, AlamoModelLoaded, spawn_sun};
+use alamo_render::{AlamoModel, AlamoModelLoaded, MapLighting, map_light_color, spawn_sun};
 use bevy::camera::Exposure;
 use bevy::light::GlobalAmbientLight;
 use bevy::prelude::*;
@@ -48,8 +48,10 @@ pub struct SpaceScene {
     pub bounds_max: Vec2,
     /// Sun and the two fill lights.
     pub lights: [SceneLight; 3],
-    /// Ambient colour.
+    /// Ambient colour (as stored: the shaders add it to the fill term, which they double).
     pub ambient: Vec3,
+    /// Specular colour of the sun (`m_light0Specular`).
+    pub sun_specular: Vec3,
     /// Skydome model (e.g. `AAA_STARS_DENSE.ALO`).
     pub skydome: Option<String>,
     /// Skydome rotation (Euler degrees, map space).
@@ -86,6 +88,7 @@ impl SpaceScene {
                 },
             ],
             ambient: Vec3::splat(0.12),
+            sun_specular: Vec3::ONE,
             skydome: None,
             skydome_rotation: [0.0; 3],
             nebula: None,
@@ -113,12 +116,8 @@ impl SpaceScene {
             let to_light = map_to_bevy(l.direction_to_light());
             SceneLight {
                 direction: -to_light,
-                // The TED scalar weighs the light, relative to 0.5 (full strength: the original shaders double the stored value).
-                // Low scalars (asteroid fields at 0.05-0.2) made maps unplayably dark with a linear weight, so the weight is
-                // a square root of the ratio, kept within 0.3..1.4 while a zero scalar still switches the light off. Only the sun
-                // uses it: the fill lights stay linear so tinted fills (Coruscant) do not grow.
-                // `SP_LIGHT_MODE=old` restores the linear weight (2 x scalar), `=raw` ignores the scalar.
-                color: Vec3::from(l.color) * if i == 0 { light_gain(l.scalar) } else { l.scalar * 2.0 },
+                // Colour times intensity, doubled as the mesh shaders double it (`alamo_render::map_light_color`).
+                color: map_light_color(Vec3::from(l.color), l.scalar),
             }
         };
         let exists = |model: &str| {
@@ -187,7 +186,8 @@ impl SpaceScene {
             bounds_min: Vec2::new(map.bounds.inner_min[0], map.bounds.inner_min[1]),
             bounds_max: Vec2::new(map.bounds.inner_max[0], map.bounds.inner_max[1]),
             lights: [light(0), light(1), light(2)],
-            ambient: ambient_floor(Vec3::from(env.ambient)),
+            ambient: Vec3::from(env.ambient),
+            sun_specular: Vec3::from(env.sun_specular),
             skydome: name_or(&env.skydome),
             skydome_rotation: env.skydome_rotation_deg,
             nebula: name_or(&env.nebula),
@@ -224,7 +224,7 @@ pub fn spawn_scene(commands: &mut Commands, scene: &SpaceScene, sky_radius: f32,
     } else {
         spawn_sun(commands, sun.direction, 1.0, sun_color)
     };
-    commands.entity(sun_entity).insert(BattleEntity);
+    commands.entity(sun_entity).insert((BattleEntity, MapLighting { sun_specular: scene.sun_specular }));
     // The map's two fill lights are plain directional lights after the sun; the Alamo shader adds their diffuse term.
     for (i, fill) in scene.lights.iter().enumerate().skip(1) {
         if fill.color.max_element() < 0.02 {
@@ -479,21 +479,6 @@ pub fn update_atmosphere_glow(
     }
 }
 
-/// Brightness weight of a map light from its TED scalar (see [`SceneLight`]).
-fn light_gain(scalar: f32) -> f32 {
-    match std::env::var("SP_LIGHT_MODE").as_deref() {
-        Ok("old") => scalar * 2.0,
-        Ok("raw") => 1.0,
-        _ if scalar <= 0.0 => 0.0,
-        _ => (scalar / 0.5).sqrt().clamp(0.3, 1.4),
-    }
-}
-
-/// Keeps a faint ambient term on maps that define almost none, so unlit hulls and rocks stay readable.
-fn ambient_floor(a: Vec3) -> Vec3 {
-    if std::env::var("SP_LIGHT_MODE").is_ok() { a } else { a.max(Vec3::splat(0.05)) }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -558,5 +543,46 @@ mod tests {
         let srgba = atmo_color.to_srgba();
         assert!(srgba.blue > 0.9, "cyan-blue rayleigh scattering tint");
         assert!(srgba.alpha > 0.3 && srgba.alpha < 0.5, "soft additive translucency");
+    }
+
+    /// A campaign space map with its object names resolved, or `None` without the Remake installed.
+    fn real_map(name: &str) -> Option<(SpaceScene, alamo_map::Environment)> {
+        let install = alamo_fs::GameInstall::detect().filter(|i| i.mod_data("1770851727").is_dir())?;
+        let fs = alamo_fs::GameFs::for_mod(&install, Some("1770851727")).expect("game files");
+        let (data, _) = alamo_data::load_galaxy(&fs);
+        let path = format!("Art/Maps/{name}");
+        let map = SpaceMap::parse(&alamo_fs::FileSource::read(&fs, &path).expect("map")).expect("parse");
+        let scene = SpaceScene::load(&fs, &data, &path).expect("scene");
+        Some((scene, map.environment))
+    }
+
+    #[test]
+    fn a_map_light_reaches_the_renderer_as_colour_times_intensity() {
+        // Fresia (sun intensity 0.56), Taris (Empress Teta: pink sun, white fills at intensity 0, red ambient) and GVulcano (Arda: sun
+        // from straight below at 0.25). Before, the sun took the square root of its intensity (Fresia 1.06 instead of 1.12) and the
+        // ambient a floor of 0.05.
+        for name in ["_Space_Planet_Fresia_01.ted", "_SPACE_PLANET_TARIS_01.ted", "_SPACE_PLANET_GVULCANO.ted"] {
+            let Some((scene, env)) = real_map(name) else { return };
+            for (i, l) in env.lights.iter().enumerate() {
+                let want = Vec3::from(l.color) * 2.0 * l.scalar;
+                assert!((scene.lights[i].color - want).abs().max_element() < 1e-5, "{name} light {i}: {} != {want}", scene.lights[i].color);
+            }
+            assert_eq!(scene.ambient, Vec3::from(env.ambient), "{name}: the ambient as stored");
+            assert_eq!(scene.sun_specular, Vec3::from(env.sun_specular), "{name}: the sun's specular colour");
+        }
+        let Some((taris, _)) = real_map("_SPACE_PLANET_TARIS_01.ted") else { return };
+        assert_eq!((taris.lights[1].color, taris.lights[2].color), (Vec3::ZERO, Vec3::ZERO), "Taris' fills are off");
+    }
+
+    #[test]
+    fn the_map_sun_carries_the_map_lighting_model() {
+        let mut world = World::new();
+        let mut scene = SpaceScene::empty();
+        scene.sun_specular = Vec3::new(0.79, 0.92, 1.0);
+        spawn_scene(&mut world.commands(), &scene, 1000.0, false);
+        world.flush();
+        let mut q = world.query::<(&MapLighting, &alamo_render::SunLight)>();
+        let found: Vec<_> = q.iter(&world).map(|(m, _)| m.sun_specular).collect();
+        assert_eq!(found, vec![Vec3::new(0.79, 0.92, 1.0)], "one map sun with the map's specular colour");
     }
 }

@@ -1317,3 +1317,26 @@ Estimates and data that shape what the player sees and hears. Behaviour is in `b
   station and ground structure slot pips under every name (only then: the Remake frames show none with the filter off,
   close up or on a selected planet; the hovered planet shows its own, estimate); weather / ability shows the planet's
   ability text; heroes raises the hero figures by a quarter of the planet's pad radius (estimate, see KNOWN-GAPS).
+
+## 3.6 Map lighting (`alamo-render` `lighting.rs`, `alamo.wgsl`)
+
+* Data: a space map's `.ted` lighting chunk gives the sun and two fill lights (colour, intensity, direction), the sun's
+  specular colour and the ambient colour. The mesh shaders are read from the shipped effect files with `fx_disasm`
+  (its constant table names the registers). `MeshBumpColorize.fxo` (ps_2_0) computes
+  `2 * albedo * (Diffuse * m_light0Diffuse * m_lightScale * saturate(n.L) + v0) + pow(saturate(n.H), 16) * Specular *
+  m_light0Specular * NormalTexture.a`, with `v0 = saturate(Diffuse * m_lightScale * m_sphFill(n) + Emissive)` from the
+  vertex shader (a colour output, clamped to 0..1) and `albedo = lerp(base, base * Colorization, base.a)`. The specular
+  exponent is the shader's constant 16, not the material's `Shininess`. `MeshGloss.fxo` doubles the same way
+  (`mul r0.xyz_x2`). No mesh shader reads `m_lightAmbient` (only `Planet.fxo`), so the ambient is part of `m_sphFill`.
+* Estimate `map_light_color`: `m_light0Diffuse` and each fill light are the light's colour times its intensity; the
+  renderer folds the shader's doubling into the colour (2 x colour x intensity). Maps switch lights off by intensity
+  alone (Taris keeps white fills at intensity 0). Before, the sun took the square root of its intensity (kept within
+  0.3..1.4) and the ambient a floor of 0.05; both are gone.
+* Estimate `sh_clamped_cosine`: `m_sphFill` is the ambient plus each fill light projected into second-order spherical
+  harmonics, the clamped cosine `3/32 + c/2 + 15/32 c^2` (1.06 facing the light, 0.09 side on, 0.06 facing away).
+* Estimate: `m_lightScale` is 1 (the effect file's default `1, 1, 1, 1`); `m_light0Specular` is the sun specular
+  colour as stored (not scaled by the intensity).
+* The galaxy map has no map sun (`MapLighting`) and keeps its own calibrated look (lit gain 1.4, see KNOWN-GAPS).
+* No brightness or tint bound of our own: maps whose data gives a strong look (a sun from below, a coloured sun without
+  fill) render as their data says. `cargo run -p battle-view --example map_light_census` lists every campaign space map
+  with the shade of a grey hull; the maps with a strong look are in KNOWN-GAPS.

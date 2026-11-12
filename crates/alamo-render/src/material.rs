@@ -10,6 +10,7 @@ use bevy::render::render_resource::{
     AsBindGroup, BlendComponent, BlendFactor, BlendOperation, BlendState,
     RenderPipelineDescriptor, ShaderType, SpecializedMeshPipelineError,
 };
+use bevy::render::storage::ShaderBuffer;
 use bevy::shader::ShaderRef;
 
 /// Path of the embedded WGSL source.
@@ -161,6 +162,9 @@ pub struct AlamoMaterial {
     #[texture(7)]
     #[sampler(8)]
     pub cloud_normal: Option<Handle<Image>>,
+    /// The scene's lighting model, one buffer shared by every material ([`crate::lighting::LIGHTING_BUFFER`]).
+    #[storage(9, read_only)]
+    pub lighting: Handle<ShaderBuffer>,
 }
 
 impl AlamoMaterial {
@@ -256,6 +260,7 @@ mod tests {
             normal: None,
             cloud: None,
             cloud_normal: None,
+            lighting: crate::lighting::LIGHTING_BUFFER,
         }
     }
 
