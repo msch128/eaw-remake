@@ -987,7 +987,22 @@ fn refresh_texts(
 }
 
 /// Opens the dialog for a battle that waits for the player.
+/// While the battle result is on screen (or about to open) the next battle's banner waits: one that came up with the result is taken
+/// down and opens again, still undecided, once the result is closed. True while it waits.
+fn hold_banner_for_result(world: &mut World) -> bool {
+    let showing = world.contains_resource::<crate::battle_play::BattleSummary>() || world.query_filtered::<(), With<ResultRoot>>().iter(world).next().is_some();
+    if showing && let Some((_, banner)) = world.get_resource_mut::<BattleDialogState>().and_then(|mut d| d.open.take()) {
+        if let Ok(e) = world.get_entity_mut(banner) {
+            e.despawn();
+        }
+    }
+    showing
+}
+
 fn battle_dialog(world: &mut World, mut gone_frames: Local<u32>) {
+    if hold_banner_for_result(world) {
+        return;
+    }
     let Some(model) = world.get_resource::<PlayUiModel>() else { return };
     let wanted = model.battle.clone();
     let open = world.resource::<BattleDialogState>().open;
@@ -1590,10 +1605,17 @@ fn save_toast(mut events: MessageReader<galaxy_play::PlayEvent>, mut toast: ResM
     }
 }
 
-fn draw_toast(time: Res<Time>, mut toast: ResMut<Toast>, mut tip: Single<(&mut Text, &mut Visibility), With<ToastText>>) {
+/// Seconds a toast with `left` seconds still shows after a frame of `dt`, and whether it is drawn. Behind the battle result (`modal`) it
+/// waits hidden with its time standing still: "Game saved" lay under the result's planet name.
+fn toast_step(left: f32, dt: f32, modal: bool) -> (f32, bool) {
+    if modal || left <= 0.0 { (left, false) } else { (left - dt, true) }
+}
+
+fn draw_toast(time: Res<Time>, mut toast: ResMut<Toast>, mut tip: Single<(&mut Text, &mut Visibility), With<ToastText>>, result: Query<(), With<ResultRoot>>) {
     let (text, vis) = &mut *tip;
-    if toast.1 > 0.0 {
-        toast.1 -= time.delta_secs();
+    let (left, shown) = toast_step(toast.1, time.delta_secs(), !result.is_empty());
+    toast.1 = left;
+    if shown {
         if text.0 != toast.0 {
             text.0 = toast.0.clone();
         }
@@ -2120,6 +2142,9 @@ fn spawn_result_screen(world: &mut World, s: &crate::battle_play::BattleSummary)
                 ..default()
             },
             BackgroundColor(Color::srgba(0.0, 0.01, 0.04, 0.55)),
+            // A modal screen: the galaxy shows through dimmed as in the Remake (its result over the map, video 1000 s / 1480 s), but no
+            // button behind it is hovered or pressed.
+            bevy::ui::FocusPolicy::Block,
             GlobalZIndex(600),
         ))
         .id();
@@ -2657,6 +2682,53 @@ pub(crate) fn design_scale(window: Option<Vec2>, offscreen: Option<&OffscreenTar
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The battle result screen of `screen` in a world with the mod's text data (`None` without the mod): its root.
+    fn result_screen(screen: crate::battle_play::ResultScreen) -> Option<(World, Entity)> {
+        use alamo_fs::{GameFs, GameInstall};
+        let install = GameInstall::detect()?;
+        if !install.mod_data("1770851727").is_dir() {
+            return None;
+        }
+        let fs = std::sync::Arc::new(GameFs::for_mod(&install, Some("1770851727")).ok()?);
+        let text = alamo_data::text::TextTable::load(&*fs, "Text/MasterTextFile_ENGLISH.DAT").ok()?;
+        let mut world = World::new();
+        world.insert_resource(EawUiAssets { fs, text, game: None });
+        let summary = crate::battle_play::BattleSummary { title: String::new(), text: String::new(), screen: Some(screen) };
+        assert!(spawn_result_screen(&mut world, &summary));
+        let root = world.query_filtered::<Entity, With<ResultRoot>>().single(&world).unwrap();
+        Some((world, root))
+    }
+
+    #[test]
+    fn the_battle_result_takes_every_click_behind_it() {
+        let screen = crate::battle_play::ResultScreen { planet: "FRESIA".into(), won: Some(true), seconds: 255.0, yours: vec![], enemy: vec![] };
+        let Some((world, root)) = result_screen(screen) else { return };
+        assert_eq!(world.get::<bevy::ui::FocusPolicy>(root), Some(&bevy::ui::FocusPolicy::Block), "no galaxy button behind it is hovered or pressed");
+    }
+
+    #[test]
+    fn the_next_battle_banner_waits_until_the_result_is_closed() {
+        let mut world = World::new();
+        let banner = world.spawn_empty().id();
+        world.insert_resource(BattleDialogState { open: Some((7, banner)), decided: None });
+        let result = world.spawn(ResultRoot).id();
+        assert!(hold_banner_for_result(&mut world), "a result on screen holds the banner");
+        assert!(world.get_entity(banner).is_err(), "a banner that came up with the result is taken down");
+        assert_eq!(world.resource::<BattleDialogState>().open, None, "and opens again once the result is closed");
+        assert_eq!(world.resource::<BattleDialogState>().decided, None, "the battle is still undecided");
+        world.despawn(result);
+        assert!(!hold_banner_for_result(&mut world));
+        world.insert_resource(crate::battle_play::BattleSummary { title: String::new(), text: String::new(), screen: None });
+        assert!(hold_banner_for_result(&mut world), "a result about to open holds it too");
+    }
+
+    #[test]
+    fn a_toast_waits_until_the_result_is_closed() {
+        assert_eq!(toast_step(3.0, 1.0, true), (3.0, false), "hidden, its time stands still");
+        assert_eq!(toast_step(3.0, 1.0, false), (2.0, true));
+        assert_eq!(toast_step(0.0, 1.0, false), (0.0, false));
+    }
 
     #[test]
     fn every_galaxy_toggle_follows_its_state() {

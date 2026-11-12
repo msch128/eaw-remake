@@ -274,6 +274,7 @@ fn cursor_blocked(
     planet_view: Option<Res<crate::planet_view::PlanetViewState>>,
     mut blocked: ResMut<PlayCursorBlocked>,
     mut over_ui: ResMut<galaxy_play::PlayCursorOverUi>,
+    result: Query<(), With<crate::play_ui::ResultRoot>>,
 ) {
     // The planet close-up has its own pointer handling (slots, drag and drop); no map box selection behind it.
     let in_planet_view = planet_view.is_some_and(|v| v.active);
@@ -297,7 +298,8 @@ fn cursor_blocked(
         cursor.is_some_and(|c| node.contains_point(*tf, c)) || phys_cursor.is_some_and(|p| node.contains_point(*tf, p))
     });
     let loading = state.is_some_and(|s| s.current.loading);
-    let modal = in_droid_menu || in_planet_view || loading || paused.0 || *screen.get() != AppScreen::Galaxy;
+    // The battle result is a modal screen: the map behind it takes no selection, drag or order.
+    let modal = in_droid_menu || in_planet_view || loading || paused.0 || !result.is_empty() || *screen.get() != AppScreen::Galaxy;
     let value = over_bar || over_cheat || modal;
     if blocked.0 != value {
         blocked.0 = value;
@@ -862,5 +864,19 @@ mod tests {
         world.resource_mut::<Paused>().0 = true;
         world.run_system_once(tooltip_suppress).unwrap();
         assert!(world.resource::<eaw_ui::TooltipSuppress>().0);
+    }
+
+    #[test]
+    fn the_map_takes_no_clicks_behind_the_battle_result() {
+        let mut world = World::new();
+        world.insert_resource(State::new(AppScreen::Galaxy));
+        world.insert_resource(Paused(false));
+        world.init_resource::<PlayCursorBlocked>();
+        world.init_resource::<galaxy_play::PlayCursorOverUi>();
+        world.run_system_once(cursor_blocked).unwrap();
+        assert!(!world.resource::<PlayCursorBlocked>().0, "the open map takes the pointer");
+        world.spawn(crate::play_ui::ResultRoot);
+        world.run_system_once(cursor_blocked).unwrap();
+        assert!(world.resource::<PlayCursorBlocked>().0, "no map selection, drag or order through the result screen");
     }
 }

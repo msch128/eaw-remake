@@ -918,7 +918,10 @@ with `speed_mult > 1.05` when fleeing or when the target is over twice the weapo
   carriers and stations are not listed. The log line of the battle (`BattleResolved`, "N ships lost") counts the same fleet
   units. Reference: in a recorded Remake 4.0 campaign the result screen after a battle at a pirate base (Byss) lists the
   fleet ships and the base (Acclamator-class, Pirate Asteroid Base, Trireme-class) and no fighters, although the base and
-  the Imperial carriers had squadrons out in that fight.
+  the Imperial carriers had squadrons out in that fight. The screen is modal: in that recording it is a framed panel
+  over the galaxy, which shows through dimmed (frames at 1000 s and 1480 s), so ours stays translucent; nothing behind
+  it takes the pointer (map, buttons, hover cards), and the next battle's banner and the toasts ("Game saved") wait until
+  RETURN TO GALACTIC closes it.
 * Fog of war (`BattleConfig::fog_of_war`, default on): a ship sees `Space_FOW_Reveal_Range` (data, `ShipDef::sensor_range`,
   1250 where missing); an enemy it saw stays visible for `fog_linger` = `SpaceFOWRegrowTime` (15 s, data). Targeting
   only considers visible enemies. Data: `AIUsesFogOfWarSpace` False (`Xml/Gameconstants.xml`, `Catalog::ai_ignores_fog`),
