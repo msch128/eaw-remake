@@ -119,6 +119,31 @@ fn usage_name(usage: u32) -> &'static str {
         .unwrap_or("usage")
 }
 
+/// The `CTAB` comment of a shader blob (D3DXSHADER_CONSTANTTABLE: size, creator, version, count, info offset, ...; each info: name
+/// offset, register set u16, register index u16, register count u16, reserved u16, type offset, default offset; offsets from the table
+/// start): one line per constant, `; c3..c3 = Colorization`.
+fn constant_table(t: &[u8]) -> String {
+    let cstr = |o: usize| -> String {
+        t.get(o..).map(|s| s.iter().take_while(|&&b| b != 0).map(|&b| b as char).collect()).unwrap_or_default()
+    };
+    let half = |o: usize| u16::from_le_bytes([t[o], t[o + 1]]) as usize;
+    if t.len() < 28 {
+        return String::new();
+    }
+    let (count, info) = (word(t, 12) as usize, word(t, 16) as usize);
+    let mut out = String::new();
+    for i in 0..count {
+        let e = info + i * 20;
+        if e + 20 > t.len() {
+            break;
+        }
+        let set = ["b", "i", "c", "s"].get(half(e + 4)).copied().unwrap_or("?");
+        let (index, n) = (half(e + 6), half(e + 8));
+        out.push_str(&format!("   ; {set}{index}..{set}{} = {}\n", index + n.max(1) - 1, cstr(word(t, e) as usize)));
+    }
+    out
+}
+
 /// Disassembles the blob at `start`; returns the text and the offset after its end token.
 fn disassemble(d: &[u8], start: usize) -> Option<(String, usize)> {
     let version = word(d, start);
@@ -135,8 +160,12 @@ fn disassemble(d: &[u8], start: usize) -> Option<(String, usize)> {
         match op {
             0xffff => return Some((out, p + 4)),
             0xfffe => {
-                // Comment block (the constant table): skip.
-                p += 4 + ((token >> 16) & 0x7fff) as usize * 4;
+                // Comment block: the constant table (`CTAB`) names the registers the effect fills.
+                let words = ((token >> 16) & 0x7fff) as usize;
+                if words >= 2 && p + 8 + (words - 1) * 4 <= d.len() && &d[p + 4..p + 8] == b"CTAB" {
+                    out.push_str(&constant_table(&d[p + 8..p + 4 + words * 4]));
+                }
+                p += 4 + words * 4;
                 continue;
             }
             97.. => return None,
@@ -192,9 +221,31 @@ fn main() {
     }
     let install = GameInstall::detect().expect("Empire at War install not found");
     let fs = GameFs::for_mod(&install, Some("1770851727")).expect("file system");
-    for path in &paths {
+    // `--strings`: the effect's own text (parameter names, semantics, annotations), each followed by the next eight words as floats,
+    // where the effect stores the parameter's default value.
+    let strings = paths.iter().any(|p| p == "--strings");
+    for path in paths.iter().filter(|p| *p != "--strings") {
         let d = fs.read(path).expect("read");
         println!("===== {path}");
+        if strings {
+            let mut p = 0;
+            while p < d.len() {
+                let run = d[p..].iter().take_while(|b| b.is_ascii_graphic() || **b == b' ').count();
+                if run >= 3 {
+                    let text: String = d[p..p + run].iter().map(|&b| b as char).collect();
+                    let next = (p + run + 1).next_multiple_of(4);
+                    let floats: Vec<String> = (0..8)
+                        .filter(|i| next + i * 4 + 4 <= d.len())
+                        .map(|i| format!("{:.3}", f32::from_bits(word(&d, next + i * 4))))
+                        .collect();
+                    println!("{p:#06x} {text:<40} {}", floats.join(" "));
+                    p += run;
+                } else {
+                    p += 1;
+                }
+            }
+            continue;
+        }
         let mut p = 8;
         while p + 8 < d.len() {
             let version = word(&d, p);
