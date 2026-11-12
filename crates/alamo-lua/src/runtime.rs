@@ -1030,6 +1030,13 @@ impl ScriptRuntime {
         self.dispatch(fired);
     }
 
+    /// Reports a story occurrence of one faction to that faction's plots only (`STORY_TECH_LEVEL`: the plot owner's tech level).
+    pub fn story_notify_for(&mut self, kind: &str, param: &str, faction: &str) {
+        let now = self.time();
+        let fired = self.shared.borrow_mut().story.notify_for(&[kind], param, faction, now);
+        self.dispatch(fired);
+    }
+
     /// Reports a finished space battle of `faction` (`STORY_WIN_BATTLES` / `STORY_LOSE_BATTLES`).
     pub fn story_battle(&mut self, won: bool, faction: &str) {
         let now = self.time();

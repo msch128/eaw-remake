@@ -576,6 +576,8 @@ impl ScriptedSim {
     fn notify_story(&mut self, events: &[Event]) {
         // Collect first: notifications call back into the host, which borrows the shared state.
         let mut notes: Vec<(&'static str, String)> = Vec::new();
+        // `(position in notes, faction, level)`.
+        let mut tech_notes: Vec<(usize, String, String)> = Vec::new();
         let mut battles: Vec<(bool, String)> = Vec::new();
         let mut globals: Vec<(String, i32)> = Vec::new();
         {
@@ -606,9 +608,14 @@ impl ScriptedSim {
                                 .push(("STORY_CONSTRUCT", w.structures[*st as usize].name.clone())),
                             ProductionKind::Starbase(sb) => notes
                                 .push(("STORY_CONSTRUCT", w.starbases[*sb as usize].name.clone())),
-                            ProductionKind::Tech(_) => {
-                                let level = s.sim.galaxy().factions[*faction as usize].tech;
-                                notes.push(("STORY_TECH_LEVEL", level.to_string()));
+                            // The level the faction reached, for its own plots only: `STORY_TECH_LEVEL` is the plot owner's level
+                            // (`Tech_Levels_<F>_WW.xml` belongs to the human's faction and hands the others its levels).
+                            // `Tech(n)` is the step from `start_tech + n` to the next level (one event per level, also when a reward
+                            // raises several at once).
+                            ProductionKind::Tech(idx) => {
+                                let info = &w.factions[*faction as usize];
+                                let level = info.start_tech + *idx as i32 + 1;
+                                tech_notes.push((notes.len(), info.name.clone(), level.to_string()));
                             }
                         }
                     }
@@ -619,8 +626,16 @@ impl ScriptedSim {
         for (key, value) in globals {
             self.runtime.set_global_value(&key, f64::from(value));
         }
-        for (kind, param) in notes {
+        // In event order: a tech level goes out where it happened among the other notes.
+        let mut tech_notes = tech_notes.into_iter().peekable();
+        for (i, (kind, param)) in notes.into_iter().enumerate() {
+            while let Some((_, faction, level)) = tech_notes.next_if(|t| t.0 == i) {
+                self.runtime.story_notify_for("STORY_TECH_LEVEL", &level, &faction);
+            }
             self.runtime.story_notify(kind, &param);
+        }
+        for (_, faction, level) in tech_notes {
+            self.runtime.story_notify_for("STORY_TECH_LEVEL", &level, &faction);
         }
         if !battles.is_empty()
             && let Some(ai) = self.inner.borrow_mut().ai.as_mut()

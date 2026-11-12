@@ -356,6 +356,19 @@ impl StoryEngine {
         out
     }
 
+    /// [`StoryEngine::notify`] for something that happened to `faction` only: the plots of other owners do not see it
+    /// (`STORY_TECH_LEVEL` is the plot owner's own tech level). Plots without an owner see it as with `notify`.
+    pub fn notify_for(&mut self, kinds: &[&str], param: &str, faction: &str, now: f64) -> Vec<Fired> {
+        let mut out = Vec::new();
+        for pi in 0..self.plots.len() {
+            if self.plots[pi].faction.as_deref().is_none_or(|f| f.eq_ignore_ascii_case(faction)) {
+                self.update_plot(pi, now, Some((kinds, param)), &mut out);
+            }
+        }
+        out.extend(self.tick(now));
+        out
+    }
+
     /// Reports a finished battle of `faction` (`kind` is `STORY_WIN_BATTLES` or `STORY_LOSE_BATTLES`). Events with `FILTER_FRIENDLY_ONLY`
     /// count the battles of the plot's own faction; `Event_Param1` is the number needed, `Event_Param2` the mode (only `SPACE` counts here).
     pub fn notify_battle(&mut self, kind: &str, faction: &str, now: f64) -> Vec<Fired> {
@@ -673,6 +686,25 @@ mod tests {
         assert!(s.notify_battle("STORY_WIN_BATTLES", "Empire", 5.0).is_empty(), "the counter starts again");
         assert!(s.notify_battle("STORY_WIN_BATTLES", "Rebel", 6.0).is_empty());
         assert_eq!(s.notify_battle("STORY_WIN_BATTLES", "Rebel", 7.0).len(), 1);
+    }
+
+    /// `STORY_TECH_LEVEL` is the plot owner's level (`Research/Story/Tech_Levels_R_WW.xml` is the Rebel player's plot): another faction
+    /// reaching the level fires nothing.
+    #[test]
+    fn tech_level_events_follow_the_plot_factions_own_level() {
+        let p = plot(
+            r#"<Story>
+            <Event Name="Rebel_Tech_2"><Event_Type>STORY_TECH_LEVEL</Event_Type><Event_Param1>2</Event_Param1></Event>
+            <Event Name="E_Tech-2_Auto"><Event_Type>STORY_TRIGGER</Event_Type><Reward_Type>SET_TECH_LEVEL</Reward_Type><Reward_Param1>Empire</Reward_Param1><Reward_Param2>2</Reward_Param2><Prereq>Rebel_Tech_2</Prereq></Event>
+            </Story>"#,
+        );
+        let mut s = StoryEngine::default();
+        s.activate(p, 0, Some("Rebel".into()), 0.0);
+        s.tick(0.0);
+        assert!(s.notify_for(&["STORY_TECH_LEVEL"], "2", "Empire", 1.0).is_empty(), "the Empire's level is not the Rebel's");
+        assert!(s.notify_for(&["STORY_TECH_LEVEL"], "3", "rebel", 2.0).is_empty(), "another level");
+        let names: Vec<_> = s.notify_for(&["STORY_TECH_LEVEL"], "2", "rebel", 3.0).into_iter().map(|f| f.event).collect();
+        assert_eq!(names, vec!["Rebel_Tech_2", "E_Tech-2_Auto"]);
     }
 
     #[test]
