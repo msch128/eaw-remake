@@ -182,6 +182,38 @@ fn without_a_human_the_levels_come_from_the_engines_timer_estimate() {
     assert_eq!(curve, pinned, "all-AI tech curve, seed 1");
 }
 
+/// `STORY_TECH_LEVEL` is the plot owner's level: in an all-AI `GC_Full_Web_Way_Rebel` game the Empire buying tech level 2 must not
+/// fire the Rebel plot's `Rebel_Tech_2` (which would hand the Underworld level 2 through `U_Tech-2_Auto`). It did before the
+/// level was sent only to the plots of its faction.
+#[test]
+fn in_an_all_ai_game_the_empires_level_does_not_fire_the_rebel_tech_plot() {
+    let Some(c) = ctx() else { return };
+    let mut sim = game(&c, "GC_Full_Web_Way_Rebel", "none", 1);
+    let empire: FactionId = sim.with_sim(|s| s.world().faction_index["empire"]);
+    sim.with_sim_mut(|s| {
+        s.add_credits(empire, 100_000.0);
+        let planets: Vec<u32> = s.galaxy().owned_planets(empire).collect();
+        assert!(planets.iter().any(|&p| s.apply(Command::UpgradeTech { faction: empire, planet: p }).is_ok()), "the Empire orders tech level 2");
+    });
+    let mut done = false;
+    let mut week = 0;
+    while !done && week < 9 {
+        for e in sim.step(1.0).sim_events {
+            match e {
+                Event::WeekEnded { week: w } => week = w,
+                Event::TechAdvanced { faction, level: 2 } if faction == empire => done = true,
+                _ => {}
+            }
+        }
+    }
+    assert!(done, "the Empire's level 2 completes before week 9 (the engine's own estimate starts in week 10)");
+    for _ in 0..5 {
+        sim.step(1.0);
+    }
+    let tech = all_tech(&sim);
+    assert_eq!((tech["empire"], tech["underworld"], tech["rebel"]), (2, 1, 1), "only the Empire is at level 2: {tech:?}");
+}
+
 /// A human who has lost (eliminated; the "Stay on the map" continuation) is still the game's human: the engine's estimate stays off,
 /// and with no one left to reach a level the plot hands out nothing more, so the AI factions keep the levels they had. Here they had
 /// tech 1 and keep it for 30 weeks.

@@ -462,9 +462,16 @@ build-menu filters, not a start mode. The mode is this project's own:
   as well, even Minor Factions."; `UPGRADE_TECH_DISC_ALL` and `_WARN` in every `*_Tech-N` item's encyclopedia text) and
   has no notice when an enemy gains a level: `RHD_` / `EHD_` / `UHD_Enemy_Gain_Tech_Level` are commented out in
   `SFXEventsHUD.xml` and `SFXEvents_Exp_HUD.xml`, so we add none.
-* `STORY_TECH_LEVEL` goes only to the plots of the faction whose level rose (as `STORY_WIN_BATTLES` with
-  `FILTER_FRIENDLY_ONLY`). Before, any faction's level fired every plot: in all-AI games the Empire's level fired the
-  Rebel plot and raised the Empire and the Underworld together.
+* Story events that count only the plot faction's own doing: `STORY_TECH_LEVEL` (the owner's level) and every event with
+  `FILTER_FRIENDLY_ONLY` (in the loaded Web Way plots: the `STORY_WIN_BATTLES` / `STORY_LOSE_BATTLES` checks of
+  `Story_SSD_*_Damage.xml`, `STORY_CONSTRUCT` of `Piett_Executor_P1` and of `Rebel_Shield_Upgrade`). They fire only for
+  that faction's level, build or battle. Before, any faction's level fired every plot: in all-AI games the Empire's
+  level fired the Rebel plot and raised the Empire and the Underworld together. Every other kind matches whoever did
+  it: `STORY_CONSTRUCT` without the filter (hero upgrades, all named objects only their own faction builds),
+  `STORY_TACTICAL_DESTROY` (the human's `Story_SSD_*_Damage.xml` follows enemy super ship phases), `STORY_CONQUER` (no
+  loaded plot uses it), the GUI events and Lua `Story_Event` (`STORY_AI_NOTIFICATION`, `STORY_GENERIC`,
+  `STORY_CLICK_GUI`, only in the human's own plots). The human and AI plots of the three `GC_Full_Web_Way_*` campaigns
+  use no other kind besides `STORY_TRIGGER` and `STORY_ELAPSED`.
 * Estimate (`galaxy-ai` engine, the only AI research there is): in a game with no human at all nothing would ever raise a
   level, so every 4 weeks an AI faction with more than 20000 credits orders the next level at its best planet, level
   L + 1 only from week 10 x L on. Off whenever the game has a human, also one who has been eliminated: in the "Stay on the

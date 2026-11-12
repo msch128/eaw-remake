@@ -21,6 +21,13 @@ fn split_prereq(text: &str) -> Vec<String> {
     text.split(|c: char| c == ',' || c.is_whitespace()).filter(|t| !t.is_empty()).map(str::to_string).collect()
 }
 
+/// Events that count only what the plot's own faction does: its tech level (`STORY_TECH_LEVEL`), and any event that says so
+/// with `FILTER_FRIENDLY_ONLY`. `STORY_TACTICAL_DESTROY` is not one of them: the human's `Story_SSD_*_Damage.xml` follows the
+/// phases of enemy super ships.
+fn owner_only(ev: &PlotEvent) -> bool {
+    ev.kind.eq_ignore_ascii_case("STORY_TECH_LEVEL") || ev.params.iter().any(|p| p.trim().eq_ignore_ascii_case("FILTER_FRIENDLY_ONLY"))
+}
+
 /// True when there is no prerequisite, or one whole tag has fired.
 fn prereqs_ready(groups: &[Vec<String>], fired: impl Fn(&str) -> bool) -> bool {
     groups.is_empty() || groups.iter().any(|g| g.iter().all(|p| fired(p)))
@@ -356,14 +363,15 @@ impl StoryEngine {
         out
     }
 
-    /// [`StoryEngine::notify`] for something that happened to `faction` only: the plots of other owners do not see it
-    /// (`STORY_TECH_LEVEL` is the plot owner's own tech level). Plots without an owner see it as with `notify`.
+    /// [`StoryEngine::notify`] for something `faction` did (reached a tech level, built an object). Events that count only the plot
+    /// owner's own doing match only in the plots of that faction: `STORY_TECH_LEVEL` (the owner's level) and every event with
+    /// `FILTER_FRIENDLY_ONLY` among its parameters (`STORY_CONSTRUCT` of `Piett_Executor_P1`, `Rebel_Shield_Upgrade`). The others
+    /// match in every plot, as with `notify`; so do all events of plots without an owner.
     pub fn notify_for(&mut self, kinds: &[&str], param: &str, faction: &str, now: f64) -> Vec<Fired> {
         let mut out = Vec::new();
         for pi in 0..self.plots.len() {
-            if self.plots[pi].faction.as_deref().is_none_or(|f| f.eq_ignore_ascii_case(faction)) {
-                self.update_plot(pi, now, Some((kinds, param)), &mut out);
-            }
+            let own = self.plots[pi].faction.as_deref().is_none_or(|f| f.eq_ignore_ascii_case(faction));
+            self.update_plot_by(pi, now, Some((kinds, param)), own, &mut out);
         }
         out.extend(self.tick(now));
         out
@@ -398,6 +406,18 @@ impl StoryEngine {
         pi: usize,
         now: f64,
         notify: Option<(&[&str], &str)>,
+        out: &mut Vec<Fired>,
+    ) {
+        self.update_plot_by(pi, now, notify, true, out);
+    }
+
+    /// `own`: the notification is the plot owner's own doing; false makes the owner-only events (see [`owner_only`]) ignore it.
+    fn update_plot_by(
+        &mut self,
+        pi: usize,
+        now: f64,
+        notify: Option<(&[&str], &str)>,
+        own: bool,
         out: &mut Vec<Fired>,
     ) {
         let n = self.plots[pi].plot.events.len();
@@ -440,7 +460,8 @@ impl StoryEngine {
                     notify.is_some_and(|(_, param)| param == "{0}battle") && r.battles[ei] >= need.max(1)
                 }
                 _ => notify.is_some_and(|(kinds, param)| {
-                    (kinds.is_empty() || kinds.iter().any(|k| k.eq_ignore_ascii_case(&ev.kind)))
+                    (own || !owner_only(ev))
+                        && (kinds.is_empty() || kinds.iter().any(|k| k.eq_ignore_ascii_case(&ev.kind)))
                         && (ev.name.eq_ignore_ascii_case(param)
                             || ev
                                 .params
@@ -705,6 +726,24 @@ mod tests {
         assert!(s.notify_for(&["STORY_TECH_LEVEL"], "3", "rebel", 2.0).is_empty(), "another level");
         let names: Vec<_> = s.notify_for(&["STORY_TECH_LEVEL"], "2", "rebel", 3.0).into_iter().map(|f| f.event).collect();
         assert_eq!(names, vec!["Rebel_Tech_2", "E_Tech-2_Auto"]);
+    }
+
+    /// `STORY_CONSTRUCT` with `FILTER_FRIENDLY_ONLY` (`Story_SandBox_Rebel_Shield_Upgrade.xml`) counts only the plot faction's
+    /// own build; without the filter (the hero upgrades of `Story_Sandbox_Hero_Timers_*.xml`) anyone's build counts, as before.
+    #[test]
+    fn friendly_only_construct_events_count_the_plot_factions_own_builds() {
+        let p = plot(
+            r#"<Story>
+            <Event Name="Own"><Event_Type>STORY_CONSTRUCT</Event_Type><Event_Param1>Rebel_Shield_Upgrade</Event_Param1><Event_Param2>1</Event_Param2><Event_Param3>FILTER_FRIENDLY_ONLY</Event_Param3></Event>
+            <Event Name="Any"><Event_Type>STORY_CONSTRUCT</Event_Type><Event_Param1>Ackbar_Upgrade</Event_Param1><Event_Param2>1</Event_Param2></Event>
+            </Story>"#,
+        );
+        let mut s = StoryEngine::default();
+        s.activate(p, 0, Some("Rebel".into()), 0.0);
+        s.tick(0.0);
+        assert!(s.notify_for(&["STORY_CONSTRUCT"], "Rebel_Shield_Upgrade", "Empire", 1.0).is_empty(), "another faction's build");
+        assert_eq!(s.notify_for(&["STORY_CONSTRUCT"], "Ackbar_Upgrade", "Empire", 2.0).len(), 1, "no filter: anyone's build");
+        assert_eq!(s.notify_for(&["STORY_CONSTRUCT"], "Rebel_Shield_Upgrade", "Rebel", 3.0).len(), 1);
     }
 
     #[test]
