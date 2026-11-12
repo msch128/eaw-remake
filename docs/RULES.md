@@ -153,8 +153,8 @@ every owned planet, the planet's `Additional_Population_Capacity`, its star base
   (`Research/Units/Upgrade_Dummies.xml`). Data: time 300 / 450 / 600 / 750 s, star base level 1, and the faction's
   `<F>_Research_Institute` on the planet where it is bought. Data: the price is the object's `Build_Cost_Credits`
   (20000 / 30000 / 40000 / 50000 for levels 2 to 5, 1000 for `CIS_Tech-1` and `Republic_Tech-1`). The institute
-  requirement binds only the human player because the Remake scripts lock the institute for the AI; the built-in AI
-  buys levels at any star base planet (estimate). Tech level cannot exceed the campaign faction's `Max_Tech_Level`
+  requirement binds only the human player because the Remake scripts lock the institute for the AI; where our AIs buy
+  levels themselves (the all-AI estimate and the classic AI, section 1.12) they do so at any star base planet (estimate). Tech level cannot exceed the campaign faction's `Max_Tech_Level`
   (data: `Campaigns_*.xml` `Max_Tech_Level`, default 5); completing a queued tech item clamps to that ceiling.
   The `Research_<F>_Shipyard_N` units have empty names and no effect.
 * Technology price discounts: `Reduce_Technology_Price_Ability` on planets (The Maw 33%, Scarif 25% in Remake 4.0 data) reduces tech level upgrade prices for the owner of the planet. Stacking follows `Stacking_Category` (strongest in category wins, categories multiply); both Maw and Scarif share category 0 so controlling both gives 33% discount. The build menu, the charge (`World::tech_cost`) and the built-in AI (`ai::plan`) all use that price. Empire's level-2 upgrade is 20000 credits, 13400 at The Maw.
@@ -326,7 +326,9 @@ What the data does:
 * Tech waves: `Spawn_Neutral_Reinforcements_Web_Way.lua` spawns on each of the 12 `*_Tech_2..5` events of Empire, Rebel and
   Underworld `Free_Random(25, 50)` x 0.5 to 2 (12 to 100) combat rating per Pirate planet. `SpawnTableInsert` takes only units
   whose rating fits the budget, and every unit of the table rates 100 or more, so the waves add next to nothing: 2 units in
-  60 all-AI weeks (3 seeds) with 8 tech events.
+  60 all-AI weeks (3 seeds) with 8 tech events. Since `STORY_TECH_LEVEL` counts only the plot faction's own level (1.12)
+  the all-AI `GC_Full_Web_Way_Rebel` events are the AI Rebel's levels 2 to 4, 9 in the 3 seeds; Pirate units added
+  outside the week tick (start spawn included) 765 / 767 / 767, before 767 / 765 / 767.
 * `Pirates_Template` has no infrastructure, defensive or offensive budget and `Maintenance_Cost` 0.
 
 Project rule "Pirates grow with the player" (`Sim::rearm_passive`, at the start and every week; one mechanism, the mod's
@@ -443,8 +445,33 @@ build-menu filters, not a start mode. The mode is this project's own:
 * Strategy layer (`strategy.rs`, all weights are estimates): see [ARCHITECTURE.md](ARCHITECTURE.md), galaxy-ai.
 * Data: the 4.0 AI budget gives the `Hero` category 0% and the only hero goals are `Remove_Corruption` and the Death
   Star, so the AI keeps heroes at home.
-* Estimate: AI tech research. The Remake has no galactic research plan; with no human player the engine queues levels
-  on a timer.
+* How AI tech works in the Remake (data, not a defect; do not "fix" it): the AI factions never research. The human's plot
+  of every `GC_Full_Web_Way_*` campaign (`Story_Plots_<F>_Web_Way_Full.xml`) loads `Research/Story/Tech_Levels_<F>_WW.xml`:
+  when the human player reaches level N (`STORY_TECH_LEVEL`, the plot owner's own level), its `STORY_TRIGGER` events give
+  the other two majors level N and the minors the levels listed for N (`SET_TECH_LEVEL`; e.g. with a Rebel human CIS 2 at
+  Rebel 3 and 3 at Rebel 4, Republic, Warlords, Mandalorians, Hapan and Cartels 2 at 2 and 3 at 3, Sith 2 at 3 and 3 at 5,
+  CSA 2 at 3 and 3 at 4). The AI's plots (`Story_Plots_<F>_Ai_Web_Way_Full.xml`) have no tech events, and
+  `Story_SandBox_*_Ai_Locks.xml` (`Lock_Research_Institute`) locks the research institute that every `*_Tech-N` item needs.
+  The vanilla AI equations for tech (`Empire_Should_Upgrade_Tech`, `TechUpgradeBudgetRequirement`) need
+  `E_Ground_Research_Facility` or Death Star parts, which 4.0 does not offer (`Tech_Level` 99), so the `MajorItem` budget
+  share is 0 and no AI saves for a level. So an idle human keeps every AI at tech 1 (60 weeks, all three human factions),
+  and a researching human takes them along in the same step (`galaxy-script/tests/tech_followers.rs`). The AI uses a level
+  as soon as it has it: the ship types of the level enter its build choice that week (shipyards, star base levels and
+  credits permitting). The mod tells the player in its texts (`TEXT_NEW_INTRO_WW_OVERHAUL_8`: "Instead of researching
+  Tech Levels, you now Escalate the War. When you gain access to new tiers of units, your enemies across the galaxy will
+  as well, even Minor Factions."; `UPGRADE_TECH_DISC_ALL` and `_WARN` in every `*_Tech-N` item's encyclopedia text) and
+  has no notice when an enemy gains a level: `RHD_` / `EHD_` / `UHD_Enemy_Gain_Tech_Level` are commented out in
+  `SFXEventsHUD.xml` and `SFXEvents_Exp_HUD.xml`, so we add none.
+* `STORY_TECH_LEVEL` goes only to the plots of the faction whose level rose (as `STORY_WIN_BATTLES` with
+  `FILTER_FRIENDLY_ONLY`). Before, any faction's level fired every plot: in all-AI games the Empire's level fired the
+  Rebel plot and raised the Empire and the Underworld together.
+* Estimate (`galaxy-ai` engine, the only AI research there is): in a game with no human at all nothing would ever raise a
+  level, so every 4 weeks an AI faction with more than 20000 credits orders the next level at its best planet, level
+  L + 1 only from week 10 x L on. Off whenever the game has a human, also one who has been eliminated: in the "Stay on the
+  map" continuation after a defeat nobody reaches a level any more and the AIs keep the levels they had (the original ends
+  the campaign there, so the data says nothing about it). All-AI `GC_Full_Web_Way_Rebel` Ground Up, seed 1: Rebel levels
+  2/3/4 in weeks 20/34/49, Empire 18/34/49, Underworld 20/34/49 and 5 in week 57. The classic AI (`ai.rs`) still buys
+  levels on its own, also with a human (estimate of that option).
 * Estimate (`SYNC_ASSEMBLE_CONVERGES_ON_TARGET`): `Produce_Force(stage, true)` brings the force to the plan's target.
   The second argument is undocumented; `PGTaskForce.lua` passes it only in `SynchronizedAssemble`. Sources: the
   Remake's `Conquer_To_Unite_Territory_Ground.lua` tests `Planet_Has_Friendly_Space_Force_In_Orbit` on the target and

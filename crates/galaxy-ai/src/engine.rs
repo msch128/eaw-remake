@@ -417,11 +417,13 @@ impl AiEngine {
                 self.task_forces.set_believed(b.player, believed);
             }
         }
-        // Tech upgrades. In the Remake data the AI has no galactic research plan: `Story/Tech_Levels_*.xml` slave the AI factions' tech level to the one a player
-        // reaches (`STORY_TECH_LEVEL` events -> `SET_TECH_LEVEL` rewards, run by galaxy-script), the Empire's own chain needs land-base research buildings that do not
-        // exist in the space-only game. So with a human player the AI follows the human through the story scripts. Only in games without any human (AI vs AI,
-        // spectating) nothing would ever advance, so there this fallback (an **estimate**) applies: every 4 weeks a faction with more than 20000 credits tries
-        // the next level at its best planet, level L only from week 10 x L on.
+        // Tech upgrades. In the Remake data the AI never researches: `Research/Story/Tech_Levels_<F>_WW.xml` (the human's plot) hands the other factions the
+        // levels it names when the human reaches a level (`STORY_TECH_LEVEL` of the human -> `SET_TECH_LEVEL`, run by galaxy-script), and
+        // `Story_SandBox_*_Ai_Locks.xml` locks the research institute every `*_Tech-N` item needs for the AI; the vanilla Empire chain
+        // (`Empire_Should_Upgrade_Tech`) needs `E_Ground_Research_Facility`, `Tech_Level` 99 in 4.0. So with a human player, also one who has been
+        // eliminated, the AI follows the human only (docs/RULES.md 1.12). Only in games without any human (all AI) nothing would ever advance, so there this
+        // fallback (an **estimate**) applies: every 4 weeks a faction with more than 20000 credits tries the next level at its best planet, level L + 1 only
+        // from week 10 x L on.
         let week_seconds = if snap.weeks > 0.0 { snap.time / snap.weeks } else { sim.week_seconds() };
         for bi in 0..self.brains.len() {
             let (player, next) = (self.brains[bi].player, self.brains[bi].next_tech);
