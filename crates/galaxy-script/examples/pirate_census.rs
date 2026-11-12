@@ -1,8 +1,10 @@
 //! Measurement tool for the Pirates' growth (docs/RULES.md 1.9): Pirate fleets over a headless Remake-AI game.
-//! `pirate_census <weeks> <seed> [campaign] [groundup] [human=<faction>|none] [pace] [every=<n>] [load=<save.json>]`
+//! `pirate_census <weeks> <seed> [campaign] [groundup] [human=<faction>|none] [pace] [research] [every=<n>] [load=<save.json>]`
 //! Per 5 weeks: Pirate planets, units by category, AI power per planet, star base levels, the major factions' tech, units the
 //! week tick added (the Pirates' growth) and units added outside it (the story scripts), captures of Pirate planets; the costliest fleet
 //! of every major faction when its tech rises (`FLEET` lines, the input of `pirate_battles`). `pace`: the idle human's tech follows the best AI.
+//! `research`: the human builds its research institute and buys every next tech level it can. `TECH` lines: every tech level a faction
+//! reaches; at the end the units the major factions completed, by the unit's tech level.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -11,7 +13,7 @@ use std::time::Instant;
 use alamo_data::load_galaxy;
 use alamo_fs::{FileSource, GameFs, GameInstall};
 use galaxy_script::{DifficultyTier, ScriptedConfig, ScriptedSim};
-use galaxy_sim::{Event, FleetLocation, Sim, SimConfig};
+use galaxy_sim::{Command, Event, FleetLocation, ProductionKind, Sim, SimConfig};
 
 fn pirate_units(s: &Sim, pirates: u32) -> BTreeMap<u32, BTreeMap<u32, u32>> {
     let mut m: BTreeMap<u32, BTreeMap<u32, u32>> = BTreeMap::new();
@@ -110,7 +112,13 @@ fn main() {
     report(&sim, 0, 0, 0);
     // `pace`: the (idle) human's tech follows the best major AI faction, as a human who keeps pace would.
     let pace = args.iter().any(|a| a == "pace");
+    // `research`: the human gives the orders a researching player gives: its `<F>_Research_Institute` at the first planet that
+    // takes it, then every next tech level as soon as a planet's queue and the credits allow (through the same commands as the UI).
+    let research = args.iter().any(|a| a == "research");
     let mut last_tech: BTreeMap<u32, i32> = BTreeMap::new();
+    let mut last_refusal = String::new();
+    // Units the major factions completed, by the unit's tech level.
+    let mut built_by_tech: BTreeMap<String, BTreeMap<i32, u32>> = BTreeMap::new();
     while done < weeks {
         sim.with_sim_mut(|s| {
             let w = s.world().clone();
@@ -118,6 +126,46 @@ fn main() {
                 let best = w.main_factions.iter().filter(|&&f| f != h).map(|&f| s.galaxy().factions[f as usize].tech).max().unwrap_or(1);
                 let t = &mut s.galaxy_mut().factions[h as usize].tech;
                 *t = (*t).max(best);
+            }
+            if research && let Some(h) = w.victory.active_player {
+                let prefix = w.factions[h as usize].name.chars().next().unwrap_or('X');
+                let institute = w.structure_index.get(&format!("{prefix}_research_institute").to_ascii_lowercase()).copied();
+                let planets: Vec<u32> = s.galaxy().owned_planets(h).collect();
+                let has = |s: &Sim, st: u32| {
+                    planets.iter().any(|&p| {
+                        let ps = &s.galaxy().planets[p as usize];
+                        ps.structures.contains(&st) || ps.queues.iter().flatten().any(|i| i.kind == ProductionKind::Structure(st))
+                    })
+                };
+                let mut why = Vec::new();
+                if let Some(st) = institute
+                    && !has(s, st)
+                {
+                    for &p in &planets {
+                        match s.apply(Command::BuildStructure { faction: h, planet: p, structure: st }) {
+                            Ok(_) => break,
+                            Err(e) => why.push(format!("institute {}: {e:?}", w.planets[p as usize].name)),
+                        }
+                    }
+                    // The institute asks for a star base level: the first planet's base goes up (a refused order is only reported).
+                    if !has(s, st)
+                        && let Some(&p) = planets.first()
+                        && let Err(e) = s.apply(Command::UpgradeStarbase { faction: h, planet: p })
+                    {
+                        why.push(format!("star base {}: {e:?}", w.planets[p as usize].name));
+                    }
+                }
+                for &p in &planets {
+                    match s.apply(Command::UpgradeTech { faction: h, planet: p }) {
+                        Ok(_) => break,
+                        Err(e) => why.push(format!("tech {}: {e:?}", w.planets[p as usize].name)),
+                    }
+                }
+                let why = format!("{institute:?} {why:?}");
+                if why != last_refusal {
+                    println!("RESEARCH week {done}: {why}");
+                    last_refusal = why;
+                }
             }
             // The main fleet (largest by AI power) of every major faction when its tech rises.
             for &f in &w.main_factions {
@@ -144,6 +192,13 @@ fn main() {
                 Event::PlanetCaptured { new_owner, old_owner: Some(o), .. } if *o == pirates => {
                     *captures.entry(names[*new_owner as usize].clone()).or_default() += 1;
                 }
+                Event::ConstructionComplete { faction, kind: ProductionKind::Unit(u), .. } => sim.with_sim(|s| {
+                    let w = s.world();
+                    if w.main_factions.contains(faction) {
+                        *built_by_tech.entry(names[*faction as usize].clone()).or_default().entry(w.units[*u as usize].tech).or_default() += 1;
+                    }
+                }),
+                Event::TechAdvanced { faction, level } => println!("TECH week {done} {} -> {level}", names[*faction as usize]),
                 Event::WeekEnded { week } => {
                     done = *week;
                     week_tick = true;
@@ -177,6 +232,7 @@ fn main() {
             report(&sim, done, added_week, added_other);
         }
     }
+    println!("units built by the major factions, by unit tech level: {built_by_tech:?}");
     println!("captures of pirate planets by faction: {captures:?}");
     println!("added in week-tick steps by category: {added_by_cat_week:?}");
     println!("added in other steps by category: {added_by_cat_other:?}");
