@@ -96,21 +96,26 @@ fn view_factor(elevation: f32) -> f32 {
 }
 
 
+/// Opacity share of the shroud: [`view_factor`] of the camera, none while a battle camera mode runs and none once the battle is over.
+/// A battle that is over has no fog of war: a side without ships left has no sensors, so the whole arena counted as unseen and a grey
+/// veil lay over the picture under the defeat banner (and over every corner no ship saw under the victory banner).
+fn shroud_factor(elevation: f32, action_cam: bool, battle_over: bool) -> f32 {
+    if action_cam || battle_over { 0.0 } else { view_factor(elevation) }
+}
+
 /// Fades the shroud out as the view flattens: a plane seen nearly edge-on reads as a solid bright band across the picture (low pitch,
 /// the movie and cinematic cameras). Full strength from about 49 degrees down onto the plane, gone below about 26 degrees; hidden while
-/// a battle camera mode runs.
+/// a battle camera mode runs and once the battle is over.
 pub(crate) fn fade_fog_shroud(
     shroud: Option<ResMut<TacticalFogShroud>>,
     camera: Option<Single<&Transform, With<crate::camera::BattleCamera>>>,
     action: Option<Res<crate::camera::ActionCam>>,
+    status: Option<Res<crate::BattleStatus>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     let (Some(mut shroud), Some(camera)) = (shroud, camera) else { return };
     let elevation = camera.forward().y.abs().clamp(0.0, 1.0).asin();
-    let mut factor = view_factor(elevation);
-    if action.is_some_and(|a| a.active) {
-        factor = 0.0;
-    }
+    let factor = shroud_factor(elevation, action.is_some_and(|a| a.active), status.is_some_and(|s| s.over));
     if (factor - shroud.shown).abs() < 0.01 {
         return;
     }
@@ -213,6 +218,14 @@ pub(crate) fn update_fog_shroud(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn no_shroud_once_the_battle_is_over() {
+        let steep = 60f32.to_radians();
+        assert_eq!(shroud_factor(steep, false, false), 1.0, "the normal view keeps the haze while the battle runs");
+        assert_eq!(shroud_factor(steep, false, true), 0.0, "no veil under the victory / defeat banner");
+        assert_eq!(shroud_factor(steep, true, false), 0.0, "a battle camera mode hides it too");
+    }
 
     #[test]
     fn shroud_fades_out_as_the_view_flattens() {

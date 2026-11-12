@@ -452,7 +452,7 @@ impl BattleRuntime {
         request.result_from(&self.catalog, &self.sim.progress()?)
     }
 
-    /// Speed multiplier of the battle clock (0 while paused).
+    /// Speed multiplier of the picture's own pace (0 while paused; unlike the battle clock it keeps running once the battle is over).
     pub fn speed_factor(&self) -> f32 {
         self.speed
     }
@@ -855,6 +855,18 @@ fn test_camera() -> Option<(f32, Option<f32>)> {
     Some((distance, parts.next().flatten()))
 }
 
+/// Pace of what the picture plays on its own (hulls burning out, wrecks, spinning fighters, break-off props): 0 while paused or warming
+/// up. It does not stop when the battle ends: the last ship dies on the step that ends the battle, and on a stopped pace its death froze
+/// half way under the victory banner.
+fn picture_speed(paused: bool, warming: bool, speed: f32) -> f32 {
+    if paused || warming { 0.0 } else { speed }
+}
+
+/// Pace of the battle clock: the picture's pace, and 0 once the battle is over (the sim stands at its last step).
+fn clock_speed(picture: f32, over: bool) -> f32 {
+    if over { 0.0 } else { picture }
+}
+
 /// Advances the battle clock and fetches the snapshots around it.
 fn advance_clock(
     time: Res<Time>,
@@ -867,10 +879,10 @@ fn advance_clock(
 ) {
     // The battle stands while the loading screen still warms up what it can bring in later.
     let warming = warmup.is_some_and(|w| !w.done());
-    rt.speed = if settings.paused || status.over || warming { 0.0 } else { settings.speed };
+    rt.speed = picture_speed(settings.paused, warming, settings.speed);
     let step = rt.dt as f64;
     let dt_real = (time.delta_secs() as f64).min(0.1);
-    rt.clock += dt_real * rt.speed as f64;
+    rt.clock += dt_real * clock_speed(rt.speed, status.over) as f64;
     let tick = (rt.clock / step).floor() as u64;
     rt.sim.request(tick + 3);
     let fetch_started = std::time::Instant::now();
@@ -945,5 +957,21 @@ fn advance_clock(
     rt.cur = Some(cur);
     rt.next = next;
     rt.alpha = alpha;
+}
+
+#[cfg(test)]
+mod speed_tests {
+    use super::*;
+
+    #[test]
+    fn death_visuals_keep_playing_after_the_battle_ends() {
+        // The battle clock stands at the last step, the picture's own pace (a hull burning out, a wreck drifting) does not.
+        let picture = picture_speed(false, false, 2.0);
+        assert_eq!(picture, 2.0);
+        assert_eq!(clock_speed(picture, false), 2.0);
+        assert_eq!(clock_speed(picture, true), 0.0, "the sim stands at its last step");
+        assert_eq!(picture_speed(true, false, 2.0), 0.0, "a pause stops them");
+        assert_eq!(picture_speed(false, true, 2.0), 0.0, "so does the warm-up");
+    }
 }
 

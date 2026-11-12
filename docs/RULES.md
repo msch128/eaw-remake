@@ -1137,8 +1137,11 @@ Kept in `sim.rs` and `defs.rs`; they shape how ships move, never damage, health,
 | No-spawn radius | `no_spawn_radius` 2000 u | taken from the AI equations' "near" |
 
 The hold of the victory/defeat banner before the summary (`OUTCOME_HOLD_SECONDS` in `battle-view`, 5 s) is a project
-rule, not an engine value. Visual-only effects (ribbons, debris, glow, ripples, sensor rings, hyperspace tunnel) do not
-change simulation state.
+rule, not an engine value. During the hold the battle clock stands at the last step, but what the picture plays on its
+own pace keeps playing (a hull burning out, wrecks drifting, fighters spinning away, break-off props, a `Death_Clone`
+breaking up), and the fog-of-war haze is gone: a battle that is over has no fog of war (a side with no ships left has
+no sensors, and the whole arena lay under the haze). Visual-only effects (ribbons, debris, glow, ripples, sensor rings,
+hyperspace tunnel) do not change simulation state.
 
 ## 2.14 Performance and determinism
 
