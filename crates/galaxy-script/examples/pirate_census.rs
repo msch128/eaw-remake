@@ -3,8 +3,10 @@
 //! Per 5 weeks: Pirate planets, units by category, AI power per planet, star base levels, the major factions' tech, units the
 //! week tick added (the Pirates' growth) and units added outside it (the story scripts), captures of Pirate planets; the costliest fleet
 //! of every major faction when its tech rises (`FLEET` lines, the input of `pirate_battles`). `pace`: the idle human's tech follows the best AI.
-//! `research`: the human builds its research institute and buys every next tech level it can. `TECH` lines: every tech level a faction
-//! reaches; at the end the units the major factions completed, by the unit's tech level.
+//! `research`: the human builds its research institute and buys every next tech level it can; `research=<n>`: at most one level order
+//! every n weeks; `grant`: the human gets the credits a level order lacks (counted). `TECH` lines: every tech level a faction reaches;
+//! `AIFLEET` lines (every 10 weeks): the majors' units by tech level and the Remake AI's budget shares and accounts; at the end the units
+//! the major factions completed by the unit's tech level and the first of each level (`FIRST`).
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -110,15 +112,33 @@ fn main() {
         });
     };
     report(&sim, 0, 0, 0);
+    // Every faction's tech level (the human marked), at the start and at the end.
+    let all_tech = |sim: &ScriptedSim, week: u64| {
+        sim.with_sim(|s| {
+            let (w, g) = (s.world(), s.galaxy());
+            let list: Vec<String> = (0..w.factions.len())
+                .map(|f| format!("{}{}={}", w.factions[f].name, if w.victory.active_player == Some(f as u32) { "(human)" } else { "" }, g.factions[f].tech))
+                .collect();
+            println!("ALLTECH week {week}: {}", list.join(" "));
+        })
+    };
+    all_tech(&sim, start_week);
     // `pace`: the (idle) human's tech follows the best major AI faction, as a human who keeps pace would.
     let pace = args.iter().any(|a| a == "pace");
     // `research`: the human gives the orders a researching player gives: its `<F>_Research_Institute` at the first planet that
     // takes it, then every next tech level as soon as a planet's queue and the credits allow (through the same commands as the UI).
-    let research = args.iter().any(|a| a == "research");
+    // `research=<n>`: the same, but a level is ordered at most every n weeks (a player who researches at that pace).
+    let research_every: Option<u64> = args.iter().find_map(|a| if a == "research" { Some(0) } else { a.strip_prefix("research=").and_then(|n| n.parse().ok()) });
+    let research = research_every.is_some();
+    let mut last_order: Option<u64> = None;
+    let grant = args.iter().any(|a| a == "grant");
+    let mut granted = 0.0f64;
     let mut last_tech: BTreeMap<u32, i32> = BTreeMap::new();
     let mut last_refusal = String::new();
     // Units the major factions completed, by the unit's tech level.
     let mut built_by_tech: BTreeMap<String, BTreeMap<i32, u32>> = BTreeMap::new();
+    // The week and the type of the first unit of each tech level a major faction completed.
+    let mut first_built: BTreeMap<(String, i32), (u64, String)> = BTreeMap::new();
     while done < weeks {
         sim.with_sim_mut(|s| {
             let w = s.world().clone();
@@ -155,9 +175,27 @@ fn main() {
                         why.push(format!("star base {}: {e:?}", w.planets[p as usize].name));
                     }
                 }
-                for &p in &planets {
+                let due = match (last_order, research_every) {
+                    (Some(at), Some(n)) => done >= at + n,
+                    _ => true,
+                };
+                // `grant`: the human gets the credits its next level lacks (a player with more planets than the idle start's one), logged.
+                if due && grant {
+                    let fs = &s.galaxy().factions[h as usize];
+                    let idx = (fs.tech - w.factions[h as usize].start_tech).max(0) as usize;
+                    let lack = f64::from(w.tech_cost(s.galaxy(), h, idx)) - fs.credits;
+                    if fs.tech < w.factions[h as usize].max_tech && lack > 0.0 {
+                        s.add_credits(h, lack);
+                        granted += lack;
+                    }
+                }
+                for &p in planets.iter().filter(|_| due) {
                     match s.apply(Command::UpgradeTech { faction: h, planet: p }) {
-                        Ok(_) => break,
+                        Ok(_) => {
+                            last_order = Some(done);
+                            println!("ORDER week {done}: tech level {} at {}", s.galaxy().factions[h as usize].tech + 1, w.planets[p as usize].name);
+                            break;
+                        }
                         Err(e) => why.push(format!("tech {}: {e:?}", w.planets[p as usize].name)),
                     }
                 }
@@ -195,7 +233,9 @@ fn main() {
                 Event::ConstructionComplete { faction, kind: ProductionKind::Unit(u), .. } => sim.with_sim(|s| {
                     let w = s.world();
                     if w.main_factions.contains(faction) {
-                        *built_by_tech.entry(names[*faction as usize].clone()).or_default().entry(w.units[*u as usize].tech).or_default() += 1;
+                        let t = w.units[*u as usize].tech;
+                        *built_by_tech.entry(names[*faction as usize].clone()).or_default().entry(t).or_default() += 1;
+                        first_built.entry((names[*faction as usize].clone(), t)).or_insert((done, w.units[*u as usize].name.clone()));
                     }
                 }),
                 Event::TechAdvanced { faction, level } => println!("TECH week {done} {} -> {level}", names[*faction as usize]),
@@ -230,9 +270,65 @@ fn main() {
         if done % every == 0 && done != last_report {
             last_report = done;
             report(&sim, done, added_week, added_other);
+            if done % 10 == 0 {
+                // What the major factions field by unit tech level, and what the Remake AI budgets and holds per category.
+                let mem = sim.ai_memory();
+                sim.with_sim(|s| {
+                    let (w, g) = (s.world(), s.galaxy());
+                    for &f in &w.main_factions {
+                        let mut by_tech: BTreeMap<i32, u32> = BTreeMap::new();
+                        for fl in g.fleets.values().filter(|x| x.owner == f) {
+                            for (&u, &n) in &fl.units {
+                                *by_tech.entry(w.units[u as usize].tech).or_default() += n;
+                            }
+                        }
+                        let budget = mem.as_ref().map(|m| {
+                            let fr: Vec<String> = m.brains.iter().filter(|b| b.player == f).flat_map(|b| b.fractions.iter().map(|(c, v)| format!("{c}={v:.2}"))).collect();
+                            let acc: Vec<String> = m.task_forces.accounts.iter().filter(|(p, _, v)| *p == f && *v > 0.5).map(|(_, c, v)| format!("{c}={v:.0}")).collect();
+                            format!("fractions [{}] accounts [{}] credits {:.0}", fr.join(" "), acc.join(" "), g.factions[f as usize].credits)
+                        });
+                        // Ship types of each tech level some owned planet takes now (credits and a free slot aside), and what blocks the ones
+                        // of the faction's own level elsewhere.
+                        let mut can: BTreeMap<i32, u32> = BTreeMap::new();
+                        let mut blocked: BTreeMap<String, u32> = BTreeMap::new();
+                        let tech = g.factions[f as usize].tech;
+                        for &u in &w.buildable_units[f as usize] {
+                            let ut = &w.units[u as usize];
+                            if !matches!(ut.role, galaxy_sim::UnitRole::Ship) {
+                                continue;
+                            }
+                            let mut first_err = None;
+                            let ok = g.owned_planets(f).any(|p| match w.check_build_unit(g, f, p, u) {
+                                Ok(()) | Err(galaxy_sim::CommandError::InsufficientCredits | galaxy_sim::CommandError::NoSlot) => true,
+                                Err(e) => {
+                                    first_err.get_or_insert(format!("{e:?}"));
+                                    false
+                                }
+                            });
+                            if ok {
+                                *can.entry(ut.tech).or_default() += 1;
+                            } else if ut.tech == tech && tech >= 2 {
+                                *blocked.entry(first_err.unwrap_or_default()).or_default() += 1;
+                            }
+                        }
+                        println!(
+                            "AIFLEET week {done} {} tech {tech}: units by tech {by_tech:?}; buildable ship types by tech {can:?}, own-level types blocked {blocked:?}; {}",
+                            w.factions[f as usize].name,
+                            budget.unwrap_or_default()
+                        );
+                    }
+                });
+            }
         }
     }
+    all_tech(&sim, done);
     println!("units built by the major factions, by unit tech level: {built_by_tech:?}");
+    if grant {
+        println!("credits granted to the human for its tech levels: {granted:.0}");
+    }
+    for ((f, t), (week, unit)) in &first_built {
+        println!("FIRST {f} tech {t} week {week} {unit}");
+    }
     println!("captures of pirate planets by faction: {captures:?}");
     println!("added in week-tick steps by category: {added_by_cat_week:?}");
     println!("added in other steps by category: {added_by_cat_other:?}");
