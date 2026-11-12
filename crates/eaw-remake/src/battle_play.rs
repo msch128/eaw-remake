@@ -801,23 +801,7 @@ fn battle_shot(
     if args.battle_fightcam {
         let frames = shot.frames;
         let placed = *shot.fight_at.get_or_insert_with(|| {
-            // Closest pair of opposing ships: that is where the shooting is.
-            let player = settings.player_side;
-            // Prefer big ships (capitals show the fires, shields and wrecks); fall back to anything.
-            let closest = |min_radius: f32| {
-                let mut best: Option<(f32, Vec3)> = None;
-                for a in ships.0.values().filter(|s| s.side == player && s.radius >= min_radius) {
-                    for b in ships.0.values().filter(|s| s.side != player && s.radius >= min_radius) {
-                        let d = a.pos.distance(b.pos);
-                        if best.is_none_or(|(bd, _)| d < bd) {
-                            best = Some((d, (a.pos + b.pos) * 0.5));
-                        }
-                    }
-                }
-                best
-            };
-            // The last big explosion wins, then the closest pair of big ships.
-            if let Some(mid) = pulses.last_big.or_else(|| closest(40.0).or_else(|| closest(0.0)).map(|(_, m)| m)) {
+            if let Some(mid) = fight_focus(&fight_ships(&ships), settings.player_side, pulses.last_big) {
                 let y = cam.focus.y;
                 cam.focus = Vec3::new(mid.x, y, mid.z);
                 cam.target_focus = cam.focus;
@@ -1062,6 +1046,55 @@ fn test_ability(
     }
 }
 
+/// What the fight cameras need to know of a living ship.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct FightShip {
+    pub side: u8,
+    pub radius: f32,
+    /// The player's side sees it (false for enemies in the fog of war).
+    pub visible: bool,
+    pub pos: Vec3,
+}
+
+fn fight_ships(ships: &battle_view::RenderedShips) -> Vec<FightShip> {
+    ships.0.values().map(|s| FightShip { side: s.side, radius: s.radius, visible: s.visible, pos: s.pos }).collect()
+}
+
+/// A seen ship closer than this to a big explosion makes that explosion a fight worth showing.
+const FIGHT_BLAST_NEAR: f32 = 1000.0;
+
+/// Where a camera that shows the fight looks (`--battle-fightcam`, `SP_TEST_CAM=fight`): the last big explosion when a ship the player sees
+/// is near it, else the middle of the closest pair of an own ship and an enemy the player sees, big ships (radius 40 and more: fires,
+/// shields, wrecks) first. Enemies in the fog of war do not count: the closest pair overall often had its enemy unseen, and the picture
+/// showed the grey haze with shots coming in from outside. `None` without a seen enemy.
+pub(crate) fn fight_focus(ships: &[FightShip], player: u8, last_big: Option<Vec3>) -> Option<Vec3> {
+    let seen = |s: &&FightShip| s.side == player || s.visible;
+    if let Some(blast) = last_big
+        && ships.iter().filter(seen).any(|s| s.pos.distance(blast) <= FIGHT_BLAST_NEAR)
+    {
+        return Some(blast);
+    }
+    let closest = |min_radius: f32| {
+        let mut best: Option<(f32, Vec3, Vec3)> = None;
+        for a in ships.iter().filter(|s| s.side == player && s.radius >= min_radius) {
+            for b in ships.iter().filter(|s| s.side != player && s.visible && s.radius >= min_radius) {
+                let d = a.pos.distance(b.pos);
+                if best.is_none_or(|(bd, ..)| d < bd) {
+                    best = Some((d, a.pos, b.pos));
+                }
+            }
+        }
+        // Both fit in the 900-unit picture: their middle. Farther apart they are not fighting yet (a star base is seen from the start):
+        // the own ship, so the picture shows ships and not the empty space between the fleets.
+        best.map(|(d, own, enemy)| if d <= FIGHT_PAIR_SPAN { (own + enemy) * 0.5 } else { own })
+    };
+    closest(40.0).or_else(|| closest(0.0))
+}
+
+/// Farthest apart an own ship and an enemy can be and still share the fight camera's picture (900 units away at fov 60 it is about
+/// 1,850 units wide at 16:9). Estimate.
+const FIGHT_PAIR_SPAN: f32 = 1500.0;
+
 /// Test hook (`SP_TEST_CAM=fight`): from battle second 5 on the camera, and with it the sound listener, follows the fight like a player watching it does: once a battle
 /// second it picks the middle of the closest pair of ships of opposing sides (big ships first, as `--battle-fightcam`), and eases there. Scripted runs have no way to move
 /// the camera, so without it the listener stays where the fleets started and the shots it hears later are thousands of units away.
@@ -1077,20 +1110,8 @@ fn test_camera(
         return;
     }
     if aim.is_none_or(|(at, _)| status.time >= at + 1.0) {
-        let player = settings.player_side;
-        let closest = |min_radius: f32| {
-            let mut best: Option<(f32, Vec3)> = None;
-            for a in ships.0.values().filter(|s| s.side == player && s.radius >= min_radius) {
-                for b in ships.0.values().filter(|s| s.side != player && s.radius >= min_radius) {
-                    let d = a.pos.distance(b.pos);
-                    if best.is_none_or(|(bd, _)| d < bd) {
-                        best = Some((d, (a.pos + b.pos) * 0.5));
-                    }
-                }
-            }
-            best
-        };
-        *aim = Some((status.time, closest(40.0).or_else(|| closest(0.0)).map_or_else(|| aim.map_or(cam.focus, |a| a.1), |(_, mid)| mid)));
+        let to = fight_focus(&fight_ships(&ships), settings.player_side, None).unwrap_or_else(|| aim.map_or(cam.focus, |a| a.1));
+        *aim = Some((status.time, to));
     }
     if let Some((_, to)) = *aim {
         let focus = Vec3::new(cam.focus.x, cam.focus.y, cam.focus.z).lerp(Vec3::new(to.x, cam.focus.y, to.z), 0.1);
@@ -1167,7 +1188,28 @@ fn abort_due(after: Option<f32>, battle_time: f32, clicks_done: bool) -> bool {
 
 #[cfg(test)]
 mod script_tests {
-    use super::{BattleShot, SHOT_WRITE_FRAMES, abort_due};
+    use super::{BattleShot, FightShip, SHOT_WRITE_FRAMES, abort_due, fight_focus};
+    use bevy::math::Vec3;
+
+    #[test]
+    fn the_fight_camera_frames_a_pair_the_player_sees() {
+        let ship = |side: u8, radius: f32, visible: bool, x: f32| FightShip { side, radius, visible, pos: Vec3::new(x, 0.0, 0.0) };
+        // An enemy frigate in the fog is the closest, a seen one is farther: the camera goes where the player sees the fight.
+        let ships = [ship(0, 100.0, true, 0.0), ship(1, 100.0, false, 300.0), ship(1, 100.0, true, 1000.0)];
+        assert_eq!(fight_focus(&ships, 0, None), Some(Vec3::new(500.0, 0.0, 0.0)));
+        // A big explosion in the fog with nobody seen near it is not a fight to show.
+        assert_eq!(fight_focus(&ships, 0, Some(Vec3::new(9000.0, 0.0, 0.0))), Some(Vec3::new(500.0, 0.0, 0.0)));
+        // One next to a seen ship is.
+        assert_eq!(fight_focus(&ships, 0, Some(Vec3::new(900.0, 0.0, 50.0))), Some(Vec3::new(900.0, 0.0, 50.0)));
+        // Big ships first, fighters when no big pair is seen; nothing without a seen enemy.
+        let small = [ship(0, 100.0, true, 0.0), ship(1, 5.0, true, 200.0), ship(1, 100.0, true, 1400.0)];
+        assert_eq!(fight_focus(&small, 0, None), Some(Vec3::new(700.0, 0.0, 0.0)));
+        // A pair too far apart for one picture is not a fight yet: the camera shows the own ship heading in, not the empty middle.
+        let apart = [ship(0, 100.0, true, 0.0), ship(1, 100.0, true, 4000.0)];
+        assert_eq!(fight_focus(&apart, 0, None), Some(Vec3::ZERO));
+        assert_eq!(fight_focus(&small[..2], 0, None), Some(Vec3::new(100.0, 0.0, 0.0)));
+        assert_eq!(fight_focus(&[ship(0, 100.0, true, 0.0), ship(1, 100.0, false, 10.0)], 0, None), None);
+    }
 
     #[test]
     fn the_mid_battle_picture_counts_as_written_a_few_frames_after_its_request() {
