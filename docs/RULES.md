@@ -357,7 +357,8 @@ waves stay as they are):
   all-AI runs: T2 to T5 Empire, 83k / 92k / 108k / 85k credits): at the median planet (20k / 26k / 30k / 36k credits) the
   main fleet wins every auto-resolve and the tactical battle, losing 11 / 8 / 9 / 1% of its credits there (former rule:
   3 / 4 / 3 / 1%; the T5 fleet is mostly heroes); at the 90th percentile planet it still wins every auto-resolve. In 60
-  all-AI weeks the major factions take 10 / 6 / 7 Pirate planets (seeds 1 to 3; before the rule and the all-AI fix 12 / 13 / 13).
+  all-AI weeks the major factions take 11 / 6 / 6 Pirate planets (seeds 1 to 3; 10 / 6 / 7 before `STORY_TECH_LEVEL` counted
+  only the plot faction's level, 1.12; before the rule and the all-AI fix 12 / 13 / 13).
 * Every unit of the Pirate fleets in orbit takes part, whatever the attacker's tech, under the same cap and reserve as any
   side (project rule "Whole fleets in battle", 2.8). A won battle at a Pirate planet leaves no Pirate ship in orbit.
 

@@ -441,6 +441,7 @@ fn in_sixty_all_ai_weeks_the_major_factions_still_take_pirate_planets() {
         assert!(majors >= 4, "seed {seed}: the major factions still take Pirate planets: {majors}");
         total += majors;
     }
-    // Measured before the rule: 12 / 13 / 13 (38); with it: 10 / 6 / 7 (23). At least half of the old rate.
+    // Measured before the rule: 12 / 13 / 13 (38); with it: 10 / 6 / 7 (23); since STORY_TECH_LEVEL counts only the plot faction's
+    // level (the all-AI tech curve moved, RULES.md 1.12): 11 / 6 / 6 (23). At least half of the old rate.
     assert!(total >= 19, "the major factions took {total} Pirate planets over 3 seeds");
 }
