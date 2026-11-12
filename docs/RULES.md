@@ -957,6 +957,11 @@ with `speed_mult > 1.05` when fleeing or when the target is over twice the weapo
   over the galaxy, which shows through dimmed (frames at 1000 s and 1480 s), so ours stays translucent; nothing behind
   it takes the pointer (map, buttons, hover cards), and the next battle's banner and the toasts ("Game saved") wait until
   RETURN TO GALACTIC closes it.
+* End banner and headline: `TEXT_WIN_TACTICAL` ("WE ARE VICTORIOUS!") / `TEXT_LOSE_TACTICAL` ("WE HAVE BEEN DEFEATED!")
+  over the battle, `TEXT_WIN_BATTLE` / `TEXT_LOST_BATTLE` on the result screen; a draw has no line in the data. Data: a
+  retreat is a lost battle. The text data has no retreat result line, and in the recorded Remake campaign a retreat
+  (Retreat lit, the units leave, the result lists one lost unit of the force) ends with "WE HAVE BEEN DEFEATED!" and
+  "You have lost the battle!" (frames at 1450-1480 s). The retreated units survive and fly home (1.4).
 * Fog of war (`BattleConfig::fog_of_war`, default on): a ship sees `Space_FOW_Reveal_Range` (data, `ShipDef::sensor_range`,
   1250 where missing); an enemy it saw stays visible for `fog_linger` = `SpaceFOWRegrowTime` (15 s, data). Targeting
   only considers visible enemies. Data: `AIUsesFogOfWarSpace` False (`Xml/Gameconstants.xml`, `Catalog::ai_ignores_fog`),

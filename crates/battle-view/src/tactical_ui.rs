@@ -2134,23 +2134,37 @@ fn death_star_gauge(
 #[derive(Component)]
 struct VictoryBanner;
 
+/// Letter-spaced banner text: one space between letters, three between words.
+fn spaced(text: &str) -> String {
+    text.to_uppercase().split_whitespace().map(|w| w.chars().map(String::from).collect::<Vec<_>>().join(" ")).collect::<Vec<_>>().join("   ")
+}
+
+/// The banner over the end of a battle: `TEXT_WIN_TACTICAL` / `TEXT_LOSE_TACTICAL` of the text data (`text` looks a key up). A side
+/// that left by retreating lost the battle: the Remake shows its defeat banner and "You have lost the battle!" after a retreat
+/// (reference video, 1450-1480 s: Retreat lit, the units leave, then both texts; the data has no retreat line). The data has no
+/// draw line either.
+fn outcome_banner(over: bool, winner: Option<u8>, player: u8, text: impl Fn(&str) -> Option<String>) -> Option<String> {
+    if !over {
+        return None;
+    }
+    let line = |key: &str, english: &str| spaced(&text(key).filter(|t| !t.trim().is_empty()).unwrap_or_else(|| english.to_owned()));
+    Some(match winner {
+        Some(w) if w == player => line("TEXT_WIN_TACTICAL", "We are victorious!"),
+        Some(_) => line("TEXT_LOSE_TACTICAL", "We have been defeated!"),
+        None => spaced("Draw"),
+    })
+}
+
 fn victory_banner(
     mut commands: Commands,
     ui: Res<eaw_ui::EawUiSettings>,
     settings: Res<BattleViewSettings>,
     status: Res<BattleStatus>,
+    assets: Option<Res<EawUiAssets>>,
     mut banner: Query<(Entity, &mut Text), With<VictoryBanner>>,
 ) {
-    let want = if status.over {
-        match status.winner {
-            Some(w) if w == settings.player_side => Some("W E   A R E   V I C T O R I O U S !"),
-            Some(_) => Some("D E F E A T E D"),
-            None => Some("D R A W"),
-        }
-    } else {
-        None
-    };
-    match (want, banner.single_mut()) {
+    let want = outcome_banner(status.over, status.winner, settings.player_side, |k| assets.as_ref().and_then(|a| a.text.get(k)).map(str::to_owned));
+    match (want.as_deref(), banner.single_mut()) {
         (Some(text), Ok((_, mut t))) => {
             if t.0 != text {
                 t.0 = text.to_string();
@@ -2270,6 +2284,31 @@ fn game_font(ui: &eaw_ui::EawUiSettings, size: f32) -> TextFont {
 mod tests {
     use super::*;
     use std::collections::HashSet;
+
+    #[test]
+    fn the_end_banner_says_the_data_text_and_a_retreat_reads_as_a_defeat() {
+        let data = |key: &str| match key {
+            "TEXT_WIN_TACTICAL" => Some("WE ARE VICTORIOUS!".to_owned()),
+            "TEXT_LOSE_TACTICAL" => Some("WE HAVE BEEN DEFEATED!".to_owned()),
+            _ => None,
+        };
+        assert_eq!(outcome_banner(false, Some(0), 0, data), None, "nothing while the battle runs");
+        assert_eq!(outcome_banner(true, Some(0), 0, data).as_deref(), Some("W E   A R E   V I C T O R I O U S !"));
+        // A side that jumped out lost the battle: the Remake shows its defeat banner after a retreat (reference video, 1450-1470 s).
+        assert_eq!(outcome_banner(true, Some(1), 0, data).as_deref(), Some("W E   H A V E   B E E N   D E F E A T E D !"));
+        assert_eq!(outcome_banner(true, None, 0, data).as_deref(), Some("D R A W"));
+        assert_eq!(outcome_banner(true, Some(1), 0, |_| None).as_deref(), Some("W E   H A V E   B E E N   D E F E A T E D !"), "the English text without the data");
+    }
+
+    /// The Remake's text data (skipped without the game files) has both banner lines.
+    #[test]
+    fn the_remake_text_data_has_the_end_banner_lines() {
+        let Some(install) = alamo_fs::GameInstall::detect().filter(|i| i.mod_data("1770851727").is_dir()) else { return };
+        let fs = alamo_fs::GameFs::for_mod(&install, Some("1770851727")).expect("game files");
+        let text = alamo_data::text::TextTable::load(&fs, "Text/MasterTextFile_ENGLISH.DAT").expect("text");
+        assert_eq!(text.get("TEXT_WIN_TACTICAL"), Some("WE ARE VICTORIOUS!"));
+        assert_eq!(text.get("TEXT_LOSE_TACTICAL"), Some("WE HAVE BEEN DEFEATED!"));
+    }
 
     #[test]
     fn an_ability_button_plays_its_click_sfx_and_the_radar_and_hardpoints_stay_silent() {
